@@ -31,6 +31,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
 
 /// 由 agent_loop 直接处理、不需要 Tool trait 实现的"虚拟工具"。
 /// `enabled_tools` 包含其名字时注入定义到 ModelRequest.tools。
+/// 这里只放**用户可选**的 hosted 工具（如 image_generation 由模型 provider 端运行）。
 pub fn hosted_tool_definitions(filter: &[String]) -> Vec<ToolDefinition> {
     let mut defs = Vec::new();
     if filter.iter().any(|name| name == IMAGE_GENERATION_TOOL_NAME) {
@@ -40,10 +41,18 @@ pub fn hosted_tool_definitions(filter: &[String]) -> Vec<ToolDefinition> {
             parameters: serde_json::json!({"type": "object"}),
         });
     }
-    if filter.iter().any(|name| name == ASK_TOOL_NAME) {
-        defs.push(ask_tool_definition());
-    }
     defs
+}
+
+/// 内置工具定义：每次 ModelRequest 都自动注入，不在 UI 工具菜单里出现，
+/// 用户也无法关闭。当前包含 `ask`；未来加 `bash` / `read` / `write` 等。
+///
+/// 内置工具特征：
+/// - 不依赖 provider 能力，agent_loop 自己处理
+/// - 与 HITL 紧密耦合（ask 走 QuestionGate；bash/write 等走 PermissionGate）
+/// - 是「agent 能力」的一部分，不该让用户误以为关掉会有性能收益
+pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
+    vec![ask_tool_definition()]
 }
 
 /// `ask` 工具的 schema：让 agent 主动向用户提问，2-5 个候选选项。
@@ -93,6 +102,8 @@ pub struct ToolInfo {
     pub icon: String,
 }
 
+/// 暴露给 UI 的工具菜单。**内置工具**（ask、未来的 bash / read / write）
+/// 默认开启且不可见，**不出现**在这个列表中。
 pub fn tool_manifest() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
@@ -109,11 +120,6 @@ pub fn tool_manifest() -> Vec<ToolInfo> {
             name: IMAGE_GENERATION_TOOL_NAME.into(),
             description: "生成图片".into(),
             icon: "image".into(),
-        },
-        ToolInfo {
-            name: ASK_TOOL_NAME.into(),
-            description: "向用户提问".into(),
-            icon: "help-circle".into(),
         },
     ]
 }

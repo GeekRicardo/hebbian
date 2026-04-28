@@ -199,10 +199,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn parse_cli() -> Result<Cli, Box<dyn std::error::Error>> {
-    let mut data_dir = env::var_os("AICLIENT_DATA_DIR")
+    let mut data_dir = env::var_os("HEBBIAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(default_data_dir);
-    let mut session_id = env::var("AICLIENT_SESSION_ID").ok();
+    let mut session_id = env::var("HEBBIAN_SESSION_ID").ok();
     let mut message = "Search today's weather in Nanshan, Shenzhen.".to_string();
     let mut stream = true;
     let mut enabled_tools = vec!["web_search".to_string(), "web_fetch".to_string()];
@@ -283,8 +283,8 @@ fn print_help() {
         "Usage: cargo run -p hebbian --example app_send_message -- [options]\n\
          \n\
          Options:\n\
-           --data-dir <path>       App data dir. Defaults to AICLIENT_DATA_DIR or platform data dir.\n\
-           --session-id <id>       Session to mutate. Defaults to AICLIENT_SESSION_ID or latest session.\n\
+           --data-dir <path>       App data dir. Defaults to HEBBIAN_DATA_DIR or platform data dir.\n\
+           --session-id <id>       Session to mutate. Defaults to HEBBIAN_SESSION_ID or latest session.\n\
            --message <text>        User message to append and send.\n\
            --enabled-tools <csv>   Enabled tool names. Default: web_search,web_fetch.\n\
            --no-tools              Send without tools.\n\

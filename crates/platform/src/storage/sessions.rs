@@ -481,7 +481,7 @@ mod tests {
 
     fn temp_data_dir(name: &str) -> std::path::PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("aiclient-sessions-{name}-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("hebbian-sessions-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create temp data dir");
         dir
     }

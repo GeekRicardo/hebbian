@@ -748,7 +748,7 @@ mod tests {
 
     fn temp_data_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "aiclient-interrupted-output-test-{}",
+            "hebbian-interrupted-output-test-{}",
             sessions::new_id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

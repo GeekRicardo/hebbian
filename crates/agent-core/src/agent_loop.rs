@@ -18,7 +18,7 @@ use crate::{
     hooks::{HookManager, HookPoint},
     run_state::RunState,
     tools::{
-        hosted_tool_definitions,
+        builtin_tool_definitions, hosted_tool_definitions,
         permissions::{PermissionDecision, PermissionGate},
         question::QuestionGate,
         registry::ToolRegistry,
@@ -145,13 +145,13 @@ pub async fn run_loop(
             .trigger(&HookPoint::BeforeTurn { turn: turn_index })
             .await;
 
-        let tool_defs = if enabled_tools.is_empty() {
-            Vec::new()
-        } else {
-            let mut defs = registry.definitions(enabled_tools);
-            defs.extend(hosted_tool_definitions(enabled_tools));
-            defs
-        };
+        // 内置工具（ask / 未来的 bash 等）每轮都注入；用户可选工具按 enabled_tools 过滤
+        let mut tool_defs = builtin_tool_definitions();
+        if !enabled_tools.is_empty() {
+            tool_defs.extend(registry.definitions(enabled_tools));
+            tool_defs.extend(hosted_tool_definitions(enabled_tools));
+        }
+        let has_tools = !tool_defs.is_empty();
 
         let req = ModelRequest {
             model: String::new(),
@@ -170,8 +170,9 @@ pub async fn run_loop(
         let stream_tool_call_offset = tool_call_dispatch_offset;
         let on_event_for_stream = on_event.clone();
         let state_for_stream = state.clone();
-        let response = if stream && (enabled_tools.is_empty() || client.supports_streaming_tools())
-        {
+        // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
+        // anthropic / gemini 默认不支持流式工具调用，含工具时只能用 complete 路径。
+        let response = if stream && (!has_tools || client.supports_streaming_tools()) {
             client
                 .stream(req, cancel.clone(), &move |stream_event: ModelStreamEvent| {
                     let payload = match stream_event {
