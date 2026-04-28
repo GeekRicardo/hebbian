@@ -236,6 +236,19 @@ export type ApprovalDecisionPayload =
   | { kind: "deny" }
   | { kind: "deny_with_feedback"; feedback: string };
 
+/** agent 主动向用户提问（ask 工具） */
+export interface PendingQuestion {
+  requestId: string;
+  question: string;
+  options: { label: string; description: string }[];
+}
+
+/** 用户对一次提问的回应 */
+export type QuestionAnswerPayload =
+  | { kind: "selected"; label: string }
+  | { kind: "custom"; text: string }
+  | { kind: "cancelled" };
+
 /** 工具元信息（list_tools 命令返回） */
 export interface ToolInfo {
   name: string;

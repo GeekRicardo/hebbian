@@ -41,3 +41,6 @@ docs/hebbian-harness-detailed-design.md
 
 # Python venv
 scripts/.venv/
+
+# IDE 自动保存的对话截图
+image/

@@ -43,7 +43,7 @@ $CLI                              # Ctrl+D 或 /exit 退出
 # 2) 单次 query：发起一次请求，流式输出后退出
 $CLI "用一句话介绍 Hebbian 学习规则"
 $CLI "搜一下 wikipedia" --tools web_search,web_fetch
-$CLI "用 ask 工具问我想去哪玩" --tools ask    # agent 主动提问，2-5 选项 + 自由输入，ESC 取消
+$CLI "用 ask 工具问我想去哪玩"                 # ask 是内置工具，无需 --tools 启用
 
 # 3) JSON 多轮上下文：吃下完整对话历史，跑最后一条 user message
 $CLI --json '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"嗨"},{"role":"user","content":"刚才我说啥"}]}'
@@ -53,7 +53,7 @@ $CLI --json -                     # 从 stdin 读 JSON
 --provider <id>                   # 默认用 desktop 里配过的 default provider
 -m / --model <name>
 -s / --system <text>
---tools web_search,web_fetch,ask  # 内置工具
+--tools web_search,web_fetch     # 用户可选工具（菜单里列出）；ask 等内置工具默认开启
 --mock                            # 不调真实模型，输出固定假回复
 --data-dir <path>                 # 默认与 desktop 共享 ~/Library/Application Support/dev.ricardo.hebbian/
 ```
@@ -162,9 +162,10 @@ hebbian/
 │   │       ├── turn_context.rs   TurnContext（model / tools / 预算 / 策略）
 │   │       ├── definition.rs     AgentDefinition, CompactionPolicy, PermissionPolicy
 │   │       ├── tools/
-│   │       │   ├── mod.rs        Tool trait + 内置工具
+│   │       │   ├── mod.rs        Tool trait / default_tools / builtin_tool_definitions（ask 等内置）
 │   │       │   ├── registry.rs   ToolRegistry
-│   │       │   └── permissions.rs PermissionGate（三态 + oneshot waiter）
+│   │       │   ├── permissions.rs PermissionGate（三态 + oneshot waiter）
+│   │       │   └── question.rs   QuestionGate（ask 工具的 oneshot waiter）
 │   │       ├── context/
 │   │       │   ├── transcript.rs Transcript
 │   │       │   ├── budget.rs     token 估算
@@ -216,7 +217,8 @@ CLI 和 desktop 共享同一套 `protocol` crate。所有 surface 通过两个�
 pub enum Op {
     StartRun { agent, input, turn_overrides, parent },
     SendUserMessage { run_id, input },
-    Approve { request_id, decision },
+    Approve { request_id, decision },           // 工具审批回应
+    AnswerQuestion { request_id, answer },      // ask 工具的回应
     Interrupt { run_id },
     Subscribe { run_id, since_seq },
     Compact { run_id },
@@ -233,13 +235,26 @@ pub enum EventPayload {
     TurnStarted / TurnFinished,
     TextDelta / TextDone / Reasoning,
     ToolCallDelta / ToolCallStarted / ToolCallFinished,
-    PermissionRequested / PermissionResolved,     // HITL
+    PermissionRequested / PermissionResolved,         // HITL：工具审批
+    UserQuestionRequested / UserQuestionAnswered,     // HITL：ask 工具
     ContextCompacted,
     Log,
 }
 ```
 
 desktop 通过 Tauri IPC `Channel<EngineEvent>` 把协议事件转译给前端；CLI 直接调 `Harness::spawn_run` 后订阅事件流渲染到终端。
+
+---
+
+## 工具系统
+
+| 类别 | 暴露给 UI 工具菜单 | 用户可关 | 例子 | 实现位置 |
+|------|--------|---------|------|---------|
+| **内置（builtin）** | ❌ | ❌ | `ask`（未来 `bash` / `read` / `write`） | `agent_loop` 直接派发 + `QuestionGate` / `PermissionGate` |
+| **用户可选（registry）** | ✅ | ✅ | `web_search`、`web_fetch` | `Tool` trait 实现，`ToolRegistry` 注册 |
+| **Hosted（provider 端运行）** | ✅ | ✅ | `image_generation` | 仅传 schema 给 provider，结果由 provider 返回 |
+
+每轮 ModelRequest 的 tools = builtin（永远）+ registry 中 enabled 的 + hosted 中 enabled 的。
 
 ---
 
@@ -288,10 +303,12 @@ data_dir/
 | 3 | `PermissionDecision` 三态 | ✓ |
 | 4 | oneshot waiter HITL 通路 | ✓ |
 | 5 | Harness `spawn_run` + `subscribe` actor 模式 | ✓（旧 `run()` 已删除） |
-| 6 | `TurnContext` 抽象 | ✓（结构已立，loop 还在用 LoopParams） |
+| 6 | `TurnContext` 抽象 | ◐（结构已立，loop 还在用 LoopParams） |
 | 7 | 10 个 hook 点位 | ✓ |
 | 8 | Tool trait `classify` / `ToolCtx` / `ToolResult` | ☐ |
-| 9 | Desktop 审批 UI | ☐（core 已通，前端待消费 `permission_requested`） |
+| 9 | Desktop 工具审批弹窗（PermissionApprovalPopup） | ✓ |
+| 10 | Ask 提问通路：`QuestionGate` + `ask` 内置工具 + `UserQuestion*` 协议 + CLI inquire 渲染 + Desktop `UserQuestionPopup` | ✓ |
+| 11 | 内置工具与用户可选工具分离（`builtin_tool_definitions` 永远注入） | ✓ |
 
 M2 ~ M4：persistence / memory / observability / multi-agent / channels / TUI / server / sandbox / MCP —— 见架构文档路线图。
 

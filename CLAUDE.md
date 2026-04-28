@@ -94,6 +94,7 @@ hebbian/
 │   │   │   ├── ChatView.tsx     主对话视图
 │   │   │   ├── ChatInput.tsx    输入框（含工具菜单）
 │   │   │   ├── PermissionApprovalPopup.tsx  ★ HITL 审批弹窗（挂在 ChatInput 上方）
+│   │   │   ├── UserQuestionPopup.tsx         ★ Ask 提问弹窗（选项 + 自由输入 + ESC 取消）
 │   │   │   ├── MessageBubble.tsx
 │   │   │   ├── Sidebar.tsx
 │   │   │   └── ...

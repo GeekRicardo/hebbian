@@ -4,6 +4,7 @@ import { Sparkles, ChevronDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
+import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
@@ -447,6 +448,7 @@ export function ChatView() {
       </div>
 
       <PermissionApprovalPopup />
+      <UserQuestionPopup />
 
       <ChatInput
         onSend={handleSend}

@@ -4,10 +4,12 @@ import type {
   EngineEvent,
   MessageAttachment,
   PendingApproval,
+  PendingQuestion,
   Prompt,
   PromptsFile,
   Provider,
   ProvidersFile,
+  QuestionAnswerPayload,
   SearchHit,
   Session,
   SessionMeta,
@@ -198,6 +200,9 @@ interface AppState {
   // HITL — 当前一轮 run 中悬挂的审批请求
   pendingApproval: PendingApproval | null;
   resolveApproval: (decision: ApprovalDecisionPayload) => Promise<void>;
+  // HITL — 当前一轮 run 中悬挂的 agent 提问（ask 工具）
+  pendingQuestion: PendingQuestion | null;
+  resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
 
   // actions
   init: () => Promise<void>;
@@ -300,6 +305,25 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       // 失败时恢复弹窗，让用户重试
       set({ pendingApproval: pending });
+      throw e;
+    }
+  },
+
+  pendingQuestion: null,
+  async resolveQuestion(answer: QuestionAnswerPayload) {
+    const pending = get().pendingQuestion;
+    if (!pending) return;
+    set({ pendingQuestion: null });
+    try {
+      const text =
+        answer.kind === "selected"
+          ? answer.label
+          : answer.kind === "custom"
+            ? answer.text
+            : undefined;
+      await api.answerQuestion(pending.requestId, answer.kind, text);
+    } catch (e) {
+      set({ pendingQuestion: pending });
       throw e;
     }
   },
@@ -524,14 +548,23 @@ export const useStore = create<AppState>((set, get) => ({
             });
           }
           if (e.type === "permission_resolved") {
-            // 后端已 resolve，关闭弹窗（如果还在的话）
             if (get().pendingApproval?.requestId === e.request_id) {
               set({ pendingApproval: null });
             }
           }
-          // ask 工具的 UI 还未实装：直接自动 cancel，避免 agent 永远等用户回应
           if (e.type === "user_question_requested") {
-            api.answerQuestion(e.request_id, "cancelled").catch(() => {});
+            set({
+              pendingQuestion: {
+                requestId: e.request_id,
+                question: e.question,
+                options: e.options,
+              },
+            });
+          }
+          if (e.type === "user_question_answered") {
+            if (get().pendingQuestion?.requestId === e.request_id) {
+              set({ pendingQuestion: null });
+            }
           }
         },
       );

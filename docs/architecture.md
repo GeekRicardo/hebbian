@@ -400,6 +400,25 @@ pub struct ToolResult {
 
 **演进顺序**：先补 `classify`（HITL 必需），再补 `ToolCtx`（multi-agent 必需），最后补 `BlobRef`（长上下文必需）。
 
+#### 三类工具的边界
+
+每轮 ModelRequest.tools 由这三类按需组合而成：
+
+| 类别 | 暴露给 UI | 用户可关 | 调用执行点 | 例子 |
+|------|----------|---------|-----------|------|
+| **Builtin** | ❌ | ❌ | `agent_loop` 直接派发（绕过 ToolRegistry） | `ask`，未来 `bash` / `read` / `write` |
+| **Registry** | ✅ | ✅ | `Tool::execute()` 本地运行 | `web_search`、`web_fetch` |
+| **Hosted** | ✅ | ✅ | provider 端运行，core 只传 schema | `image_generation` |
+
+**为什么内置工具不走 Tool trait**：内置工具的"执行"通常是与 HITL 紧耦合的等待操作（ask 等用户回应、bash 等审批过程），这与 `Tool::execute(input) -> AppResult<String>` 的同步纯函数契约不符。强行套进去会让 trait 退化成「空 execute + 真实逻辑藏在外部」，反而难懂。
+
+**实现约定**（见 [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)）：
+
+- `default_tools()` → registry 中的 Tool trait 实现
+- `hosted_tool_definitions(filter)` → provider 端工具的 schema
+- `builtin_tool_definitions()` → 内置工具的 schema（每轮强制注入）
+- `tool_manifest()` → 给 UI 工具菜单的元信息（**不**含 builtin）
+
 ### 3.5 Permission Gate
 
 详见 §11，本节只列结构。
@@ -955,15 +974,21 @@ configs/
 
 这是生产可用 agent 系统的核心拼图，独立成章。
 
-### 11.1 三个层次的 HITL
+### 11.1 四个层次的 HITL
 
-| 层次 | 目的 | 触发 | 阻塞性 |
-|------|------|------|--------|
-| **L1 Inline 审批** | "可以执行这个工具吗？" | tool 调用前 | 阻塞该 tool（其他 tool 仍并行） |
-| **L2 Plan 审批** | "可以按这个计划继续吗？" | run 中段或开头 | 阻塞 run |
-| **L3 终端确认** | "这次结果接受吗？" | run 结束前 | 阻塞 run finalize |
+| 层次 | 目的 | 触发 | 阻塞性 | 状态 |
+|------|------|------|--------|------|
+| **L1 Inline 审批** | "可以执行这个工具吗？" | tool 调用前（destructive） | 阻塞该 tool（其他 tool 仍并行） | ✓ |
+| **L1' Ask 提问** | "agent 主动问你拿建议" | agent 自己调 `ask` 工具 | 阻塞该工具 | ✓ |
+| **L2 Plan 审批** | "可以按这个计划继续吗？" | run 中段或开头 | 阻塞 run | ☐ |
+| **L3 终端确认** | "这次结果接受吗？" | run 结束前 | 阻塞 run finalize | ☐ |
 
-L1 是 Hebbian 当前最缺的、也是最先必须做的。
+L1 与 L1' 共享 oneshot waiter 模式，但走不同的 Gate：
+
+- **L1**：`PermissionGate`，回应是 `ApprovalDecision`（Allow / Deny / Allow & Remember / Deny with Feedback）
+- **L1'**：`QuestionGate`，回应是 `UserAnswer`（Selected{label} / Custom{text} / Cancelled）
+
+两者协议层独立（不同的 Op variant、不同的 Event variant），UI 层独立（不同的弹窗 / 命令）。
 
 ### 11.2 L1：Tool 审批协议
 
@@ -1061,9 +1086,54 @@ match decision {
 - 显示已等待时长
 - 取消 run 按钮始终可用
 
-**现状**：`AgentEventPayload::PermissionRequested` 已经定义，但 loop 里从未发出过这个事件，gate 也只有 Allowed/Denied 两态。
+**现状**：L1 闭环已实现（gate 三态 → emit Requested → Op::Approve → resolve waiter）。Desktop 用 [PermissionApprovalPopup](src/desktop/ui/components/PermissionApprovalPopup.tsx) 实装。持久化到 rollout 是 M2 范围。
 
-**演进里程碑**：HITL 闭环（gate 三态 → emit Requested → Op::Approve → resolve waiter → 持久化）是阶段一的关键交付。
+### 11.7 L1' Ask 提问协议（agent 主动问用户）
+
+参考 codex 的 `RequestUserInputEvent` + claude-code-haha 的 `AskUserQuestionTool`：agent 在执行过程中可以**主动**调用一个内置 `ask` 工具，向用户发起问题并等待回应。这与「审批」的语义本质不同——审批是用户对 agent 行为的拒绝/允许，ask 是 agent 向用户求助。
+
+**协议**（[crates/protocol/src/permission.rs](crates/protocol/src/permission.rs)）：
+
+```rust
+pub struct QuestionOption {
+    pub label: String,        // 短标签（按钮文字）
+    pub description: String,  // 详细说明（可选）
+}
+
+pub enum UserAnswer {
+    Selected { label: String },  // 选了某个固定选项
+    Custom { text: String },     // 自由输入框写的文字
+    Cancelled,                   // ESC / 关闭弹窗
+}
+
+// EventPayload 新增两个变体
+UserQuestionRequested { request_id, question, options },
+UserQuestionAnswered { request_id, answer },
+
+// Op 新增
+AnswerQuestion { request_id, answer },
+```
+
+**Schema 约束**：`ask` 工具 input 强制要求 2-5 个选项。无论选项穷尽与否，UI 总会额外提供一个「自由输入框」让用户写其他意见。
+
+**实现**（[crates/agent-core/src/tools/question.rs](crates/agent-core/src/tools/question.rs)）：
+
+- `QuestionGate`：与 `PermissionGate` 平行，同样 `Mutex<HashMap<id, oneshot::Sender>>` 模式
+- `agent_loop` 在派发处特判 `call.name == ASK_TOOL_NAME`：绕过 `ToolRegistry`，调 `dispatch_ask_call`：emit `UserQuestionRequested` → await waiter → 把 `UserAnswer` 转成 `tool_result.content` 回灌 transcript
+- `Harness::answer_question(run_id, request_id, answer)` / `Op::AnswerQuestion` 双入口（actor 队列与直接调用都行）
+- run interrupt 时 `cancel_all_pending()` 把所有未决问题标 `Cancelled`
+
+**关键设计选择**：
+
+1. **不做成 Tool trait 实现**：因为 `ask` 的"执行"本质是「emit 事件 → 等用户」而非纯函数计算，与 `Tool::execute(input) -> AppResult<String>` 的同步契约不符
+2. **不复用 PermissionGate**：审批和提问的 UI / decision 类型不同，复用会让 `PermissionKind` 变得臃肿
+3. **是 builtin 不是用户可选**：agent 的提问能力不应该被用户「关掉」（与 web_search 性质不同）
+
+**UI 规约**：
+
+- TUI（CLI）：`inquire::Select` 列表 + `↑↓` 选项 + 「其他（自由输入）」末项，**ESC** 取消
+- Desktop（计划）：与 `PermissionApprovalPopup` 类似的小弹窗，挂在 ChatInput 上方；按钮列表 + textarea + ESC 关闭
+- Desktop UI [UserQuestionPopup](src/desktop/ui/components/UserQuestionPopup.tsx)：选项卡片 + 末项「其他」内嵌 textarea；右下「取消 / 提交」；ESC 取消；Cmd/Ctrl+Enter 提交
 
 ---
 
@@ -1140,15 +1210,17 @@ crates/*/src/**/tests.rs        单元测试（贴近模块）
 
 | # | 工作 | 涉及 |
 |---|------|------|
-| 1 | 抽 `crates/protocol`，迁移 `AgentEvent`，新增 `Submission/Op` | protocol、agent-core、apps/desktop |
-| 2 | `seq` 改为每 run 私有 | agent-core/agent_loop |
-| 3 | `PermissionDecision` 三态化（Allowed / Denied / NeedsApproval） | agent-core/tools/permissions |
-| 4 | Loop 实现"挂起等审批"通路（oneshot waiter） | agent-core/agent_loop, harness |
-| 5 | Harness 改为 `submit/subscribe` actor 模式 | agent-core/harness |
-| 6 | `TurnContext` 抽象，替换零散参数 | agent-core |
-| 7 | 全套 hook 点位（BeforeRun/AfterRun/BeforeTurn/AfterTurn/BeforeModelCall/AfterModelCall） | agent-core/hooks |
-| 8 | Tool trait 加 `classify`、`ToolCtx`、`ToolResult` | agent-core/tools |
-| 9 | Desktop 前端审批 UI + Op 翻译层 | apps/desktop, src/desktop/ui |
+| 1 | 抽 `crates/protocol`，迁移 `AgentEvent`，新增 `Submission/Op` | ✓ |
+| 2 | `seq` 改为每 run 私有 | ✓ |
+| 3 | `PermissionDecision` 三态化（Allowed / Denied / NeedsApproval） | ✓ |
+| 4 | Loop 实现"挂起等审批"通路（oneshot waiter） | ✓ |
+| 5 | Harness 改为 `spawn_run/subscribe` actor 模式（旧 `run()` 已删） | ✓ |
+| 6 | `TurnContext` 抽象，替换零散参数 | ◐（结构已立，loop 仍用 LoopParams） |
+| 7 | 全套 hook 点位（BeforeRun/AfterRun/BeforeTurn/AfterTurn/BeforeModelCall/AfterModelCall） | ✓ |
+| 8 | Tool trait 加 `classify`、`ToolCtx`、`ToolResult` | ☐ |
+| 9 | Desktop 前端审批 UI（PermissionApprovalPopup）+ Op 翻译层 | ✓ |
+| 10 | **L1' Ask 提问**：`QuestionGate` + `ask` 内置工具 + UserQuestion 协议 + AnswerQuestion Op + 双 surface UI | ✓ |
+| 11 | 内置工具与用户可选工具分离（`builtin_tool_definitions` 每轮强制注入） | ✓ |
 
 ### 阶段二：生产可用基础设施
 
@@ -1189,9 +1261,9 @@ crates/*/src/**/tests.rs        单元测试（贴近模块）
 
 ## 15. 落地路线图（4 个里程碑）
 
-### M1：HITL 闭环（2-3 周）
-**目标**：Desktop 上能看到"AI 想跑 X 工具，是否允许"对话框，能 Allow / Deny / Always Allow，能持久化。
-- 阶段一 #1 ~ #9
+### M1：HITL 闭环（**已完成 9/11**）
+**目标**：Desktop 上能看到"AI 想跑 X 工具，是否允许"对话框，能 Allow / Deny / Always Allow；agent 也能反过来用 `ask` 工具向用户提问（2-5 选项 + 自由输入）。
+- 阶段一 #1 ~ #11；剩余：#6 TurnContext 收口、#8 Tool trait 升级、Desktop 端 Ask 弹窗 UI
 
 ### M2：可持久 / 可观测（2-3 周）
 **目标**：platform 拆分完成；崩溃后能 Resume；Inspector 能看 token / cost / tool timeline；记忆能注入。
@@ -1213,23 +1285,22 @@ crates/*/src/**/tests.rs        单元测试（贴近模块）
 
 ```rust
 // crates/protocol/src/lib.rs
-pub mod ids;          // RunId / TurnId / SubmissionId / PermissionRequestId / MessageId / AgentRef / ProjectId
-pub mod submission;   // Submission, Op, ApprovalDecision, TurnOverrides
-pub mod event;        // Event, EventPayload, StopReason, RiskLevel
-pub mod context;      // TurnContext, TurnContextSummary, ContextPolicy, TokenBudget
-pub mod permission;   // PermissionKind, PermissionScope, ApprovalPolicy, PermissionRule
-pub mod tool;         // ToolSpec, ToolClassification, ToolResultSummary
-pub mod usage;        // Usage, UsageTotals, ModelSelector
-pub mod error;        // ErrorReport
-pub mod trace;        // TraceContext (W3C)
+pub mod ids;          // RunId / TurnId / SubmissionId / PermissionRequestId / MessageId / AgentRef
+pub mod submission;   // Submission, Op, UserInput, TurnOverrides
+pub mod event;        // Event, EventPayload, StopReason, RiskLevel, LogLevel
+pub mod context;      // ContextPolicy, TokenBudget, TurnOverrides
+pub mod permission;   // ApprovalDecision, PermissionKind, PermissionScope,
+                      // QuestionOption, UserAnswer
+pub mod error;        // ErrorReport, ErrorKind
 ```
 
-四个最不可漂移的 enum：
+五个最不可漂移的 enum：
 
 ```rust
-pub enum Op { /* 见 §2.1 */ }
+pub enum Op { /* 见 §2.1，含 Approve / AnswerQuestion 两个 HITL 回应入口 */ }
 pub enum EventPayload { /* 见 §2.2 */ }
-pub enum ApprovalDecision { /* 见 §2.1 */ }
+pub enum ApprovalDecision { AllowOnce, AllowAndRemember{scope}, Deny, DenyWithFeedback{feedback} }
+pub enum UserAnswer    { Selected{label}, Custom{text}, Cancelled }
 pub enum ContextPolicy { /* 见 §3.6 */ }
 ```
 
