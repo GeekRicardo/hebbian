@@ -52,9 +52,10 @@ hebbian/
 │   │       ├── turn_context.rs  TurnContext（结构已立，loop 还在用 LoopParams）
 │   │       ├── definition.rs    AgentDefinition / CompactionPolicy / PermissionPolicy
 │   │       ├── tools/
-│   │       │   ├── mod.rs       Tool trait + default_tools()（web_search / web_fetch）
+│   │       │   ├── mod.rs       Tool trait + default_tools / ASK_TOOL_NAME / ask_tool_definition
 │   │       │   ├── registry.rs  ToolRegistry
-│   │       │   └── permissions.rs PermissionGate（三态 + oneshot waiter + learned rules）
+│   │       │   ├── permissions.rs PermissionGate（三态 + oneshot waiter + learned rules）
+│   │       │   └── question.rs  ★ QuestionGate（ask 工具的 oneshot waiter，与 PermissionGate 平行）
 │   │       ├── context/
 │   │       │   ├── transcript.rs Transcript / from_session
 │   │       │   ├── budget.rs    token 估算
@@ -253,6 +254,9 @@ cargo build -p hebbian-cli
 
 # CLI 验证 tool call 流式渲染
 ./target/debug/hebbian-cli "搜一下 wikipedia" --tools web_search,web_fetch
+
+# CLI 验证 ask 工具：agent 主动向用户提问（2-5 选项 + 自由输入框，ESC 取消）
+./target/debug/hebbian-cli "用 ask 工具问我想去哪玩" --tools ask
 ```
 
 CLI 与 desktop **共享同一个 data_dir**（macOS：`~/Library/Application Support/dev.ricardo.hebbian/`），desktop 配过的 provider / OAuth 凭据 CLI 直接复用。
@@ -338,6 +342,7 @@ pub enum EventPayload {
 - **不要重新生成已有文件**：先 Read，按需 Edit；尤其 `chat.rs` 已经 990+ 行，重写代价很大
 - **CLI 可以做端到端验证**，比启动 `pnpm tauri dev` 快得多
 - **加新 EventPayload 变体后**：同步更新 [src/desktop/ui/types.ts](src/desktop/ui/types.ts) 的 `EngineEvent` union、[chat.rs](apps/desktop/src/chat.rs) 的 `agent_event_to_engine_event` 映射、[apps/cli/src/render.rs](apps/cli/src/render.rs) 的 `TurnRenderer::on_event` 渲染逻辑——三处任一漏改都会导致信息丢失
+- **HITL 二态**：审批走 [PermissionGate](crates/agent-core/src/tools/permissions.rs)（destructive 工具拦截），ask 走 [QuestionGate](crates/agent-core/src/tools/question.rs)（agent 主动提问）。两者共用 oneshot waiter 模式，但 surface 端是两个独立 Tauri 命令（`approve_permission` / `answer_question`）。新增需要 HITL 的协议时优先看哪个 gate 模式更贴合。
 
 ## graphify
 

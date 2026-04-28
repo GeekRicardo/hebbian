@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::future::join_all;
+use futures_util::future::{join_all, BoxFuture};
 use protocol::{
-    AgentRef, ApprovalDecision, ErrorReport, Event, EventPayload, PermissionKind, RiskLevel, RunId,
-    StopReason,
+    AgentRef, ApprovalDecision, ErrorReport, Event, EventPayload, PermissionKind, QuestionOption,
+    RiskLevel, RunId, StopReason, UserAnswer,
 };
+use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -19,7 +20,9 @@ use crate::{
     tools::{
         hosted_tool_definitions,
         permissions::{PermissionDecision, PermissionGate},
+        question::QuestionGate,
         registry::ToolRegistry,
+        ASK_TOOL_NAME,
     },
 };
 use model_gateway::{
@@ -38,6 +41,7 @@ pub struct LoopParams<'a> {
     pub client: &'a dyn ModelClient,
     pub registry: Arc<ToolRegistry>,
     pub gate: Arc<PermissionGate>,
+    pub question_gate: Arc<QuestionGate>,
     pub hooks: Arc<HookManager>,
     pub transcript: &'a mut Transcript,
     pub enabled_tools: &'a [String],
@@ -47,6 +51,13 @@ pub struct LoopParams<'a> {
     pub state: Arc<RunState>,
     pub agent: AgentRef,
     pub parent: Option<RunId>,
+}
+
+/// agent 调 `ask` 工具时模型实际传入的 input 结构
+#[derive(Debug, Deserialize)]
+struct AskInput {
+    question: String,
+    options: Vec<QuestionOption>,
 }
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -64,6 +75,7 @@ pub async fn run_loop(
         client,
         registry,
         gate,
+        question_gate,
         hooks,
         transcript,
         enabled_tools,
@@ -96,6 +108,7 @@ pub async fn run_loop(
         if cancellation::is_cancelled(&cancel) {
             debug!("run cancelled");
             gate.cancel_all_pending();
+            question_gate.cancel_all_pending();
             break Err(ModelError::Cancelled);
         }
 
@@ -254,12 +267,29 @@ pub async fn run_loop(
                 iteration += 1;
 
                 // —— 派发工具：每个 call 一个 future，futures 并发执行 ——
-                let mut tool_tasks = Vec::new();
+                type TaskFuture = BoxFuture<'static, Result<(usize, ToolResult), ModelError>>;
+                let mut tool_tasks: Vec<TaskFuture> = Vec::new();
                 for (call_index, call) in calls.iter().enumerate() {
                     let dispatch_index = tool_call_dispatch_offset + call_index;
                     if cancellation::is_cancelled(&cancel) {
                         gate.cancel_all_pending();
+                        question_gate.cancel_all_pending();
                         break;
+                    }
+
+                    // —— 特判 ask：走 QuestionGate 而非 PermissionGate ——
+                    if call.name == ASK_TOOL_NAME {
+                        let task = dispatch_ask_call(
+                            call.clone(),
+                            call_index,
+                            dispatch_index,
+                            question_gate.clone(),
+                            state.clone(),
+                            on_event.clone(),
+                            cancel.clone(),
+                        );
+                        tool_tasks.push(task);
+                        continue;
                     }
 
                     let decision = gate.check(&call.name, &call.input);
@@ -282,7 +312,7 @@ pub async fn run_loop(
                     let state_local = state.clone();
                     let cancel_local = cancel.clone();
 
-                    tool_tasks.push(async move {
+                    tool_tasks.push(Box::pin(async move {
                         let approved: Result<(), String> = match decision {
                             PermissionDecision::Approved => Ok(()),
                             PermissionDecision::Denied { reason } => Err(reason),
@@ -384,7 +414,7 @@ pub async fn run_loop(
                                 content,
                             },
                         ))
-                    });
+                    }));
                 }
 
                 let mut results: Vec<(usize, ToolResult)> = Vec::new();
@@ -444,4 +474,132 @@ pub async fn run_loop(
     hooks.trigger(&HookPoint::AfterRun).await;
 
     result
+}
+
+/// 派发一次 `ask` 工具调用：解析 input → 校验选项数 → 通过 QuestionGate
+/// 等待用户回应 → 把答案作为 ToolResult 返回。
+fn dispatch_ask_call(
+    call: model_gateway::types::ToolCall,
+    call_index: usize,
+    dispatch_index: usize,
+    question_gate: Arc<QuestionGate>,
+    state: Arc<RunState>,
+    on_event: EventSink,
+    cancel: CancelFlag,
+) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
+    Box::pin(async move {
+        // 解析 input
+        let parsed: Result<AskInput, _> = serde_json::from_value(call.input.clone());
+        let (question, options) = match parsed {
+            Ok(input) if input.options.len() >= 2 && input.options.len() <= 5 => {
+                (input.question, input.options)
+            }
+            Ok(input) => {
+                let err = format!(
+                    "ask 工具要求提供 2-5 个选项，实际给了 {} 个",
+                    input.options.len()
+                );
+                return finish_ask_with_error(
+                    call,
+                    call_index,
+                    dispatch_index,
+                    state,
+                    on_event,
+                    err,
+                );
+            }
+            Err(e) => {
+                let err = format!("ask 工具 input 解析失败：{e}");
+                return finish_ask_with_error(
+                    call,
+                    call_index,
+                    dispatch_index,
+                    state,
+                    on_event,
+                    err,
+                );
+            }
+        };
+
+        // emit ToolCallStarted（与普通工具一致的视觉，便于 UI 渲染）
+        on_event(state.event(EventPayload::ToolCallStarted {
+            index: dispatch_index,
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            input: call.input.clone(),
+        }));
+
+        // 创建 pending question + emit UserQuestionRequested
+        let (request_id, waiter) = question_gate.create_pending();
+        on_event(state.event(EventPayload::UserQuestionRequested {
+            request_id: request_id.clone(),
+            question: question.clone(),
+            options: options.clone(),
+        }));
+
+        // 等用户回应
+        let answer = match waiter.await {
+            Ok(a) => a,
+            Err(_) => UserAnswer::Cancelled,
+        };
+
+        // emit UserQuestionAnswered（让 surface 关闭弹窗）
+        on_event(state.event(EventPayload::UserQuestionAnswered {
+            request_id,
+            answer: answer.clone(),
+        }));
+
+        if cancellation::is_cancelled(&cancel) {
+            return Err(ModelError::Cancelled);
+        }
+
+        let content = answer.to_agent_text();
+        on_event(state.event(EventPayload::ToolCallFinished {
+            index: dispatch_index,
+            call_id: call.id.clone(),
+            result: content.clone(),
+            duration_ms: 0,
+            truncated: false,
+        }));
+
+        Ok((
+            call_index,
+            ToolResult {
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                content,
+            },
+        ))
+    })
+}
+
+fn finish_ask_with_error(
+    call: model_gateway::types::ToolCall,
+    call_index: usize,
+    dispatch_index: usize,
+    state: Arc<RunState>,
+    on_event: EventSink,
+    error: String,
+) -> Result<(usize, ToolResult), ModelError> {
+    on_event(state.event(EventPayload::ToolCallStarted {
+        index: dispatch_index,
+        call_id: call.id.clone(),
+        name: call.name.clone(),
+        input: call.input.clone(),
+    }));
+    on_event(state.event(EventPayload::ToolCallFinished {
+        index: dispatch_index,
+        call_id: call.id.clone(),
+        result: error.clone(),
+        duration_ms: 0,
+        truncated: false,
+    }));
+    Ok((
+        call_index,
+        ToolResult {
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            content: error,
+        },
+    ))
 }

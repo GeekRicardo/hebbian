@@ -290,8 +290,32 @@ fn approve_permission(
         },
         other => return Err(AppError::msg(format!("未知 decision: {other}"))),
     };
-    hitl.resolve(&request_id, decision)
+    hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
+}
+
+/// 用户回应一次 agent 提问（ask 工具）。
+///
+/// `kind` 取值：`"selected"` / `"custom"` / `"cancelled"`
+/// `text` 在 `selected` 时是 label，在 `custom` 时是用户输入，在 `cancelled` 时忽略。
+#[tauri::command]
+fn answer_question(
+    hitl: State<'_, Arc<HitlState>>,
+    request_id: String,
+    kind: String,
+    text: Option<String>,
+) -> AppResult<()> {
+    let answer = match kind.as_str() {
+        "selected" => protocol::UserAnswer::Selected {
+            label: text.unwrap_or_default(),
+        },
+        "custom" => protocol::UserAnswer::Custom {
+            text: text.unwrap_or_default(),
+        },
+        "cancelled" => protocol::UserAnswer::Cancelled,
+        other => return Err(AppError::msg(format!("未知 kind: {other}"))),
+    };
+    hitl.answer_question(&request_id, answer).map_err(AppError::msg)
 }
 
 #[tauri::command]
@@ -447,6 +471,7 @@ pub fn run() {
             send_message,
             cancel_message,
             approve_permission,
+            answer_question,
             generate_session_title,
             list_tools,
             oauth_codex_start,

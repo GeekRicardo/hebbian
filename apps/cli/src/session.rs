@@ -7,16 +7,16 @@ use agent_core::{
     context::transcript::Transcript,
     definition::AgentDefinition,
     harness::RunParams,
-    tools::permissions::PermissionGate,
+    tools::{permissions::PermissionGate, question::QuestionGate},
     Harness,
 };
 use anyhow::{anyhow, Result};
 use model_gateway::client::ModelClient;
 use colored::Colorize;
-use protocol::{AgentRef, ApprovalDecision, EventPayload};
+use protocol::{AgentRef, ApprovalDecision, EventPayload, QuestionOption, UserAnswer};
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-use crate::render::{TurnEnd, TurnRenderer};
+use crate::render::{RendererAction, TurnRenderer};
 
 pub struct Session {
     harness: Arc<Harness>,
@@ -140,12 +140,14 @@ impl Session {
         let mut events = self.harness.subscribe();
         let cancel: platform::CancelFlag = Arc::new(AtomicBool::new(false));
         let gate = Arc::new(PermissionGate::new(self.definition.permission_policy.clone()));
+        let question_gate = Arc::new(QuestionGate::new());
 
         let run_id = self.harness.spawn_run(
             self.client.clone(),
             RunParams {
                 agent: AgentRef::new(&self.definition.id),
                 gate: gate.clone(),
+                question_gate,
                 transcript: self.transcript.clone(),
                 enabled_tools: self.enabled_tools.clone(),
                 compaction_policy: self.definition.compaction_policy.clone(),
@@ -159,13 +161,13 @@ impl Session {
         let outcome = loop {
             let event = match events.recv().await {
                 Ok(e) => e,
-                Err(_) => break TurnEnd::Failed("事件流意外关闭".into()),
+                Err(_) => break Outcome::Failed("事件流意外关闭".into()),
             };
             if event.run_id != run_id {
                 continue;
             }
 
-            // HITL 自动批准（如果启用）
+            // 工具审批：默认 auto-approve
             if self.auto_approve {
                 if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
                     let _ = self.harness.resolve_permission(
@@ -176,22 +178,95 @@ impl Session {
                 }
             }
 
-            if let Some(end) = renderer.on_event(&event) {
-                break end;
+            match renderer.on_event(&event) {
+                RendererAction::Continue => {}
+                RendererAction::AwaitQuestion {
+                    request_id,
+                    question,
+                    options,
+                } => {
+                    let answer = ask_user_in_terminal(question, options).await;
+                    let _ = self
+                        .harness
+                        .answer_question(&run_id, &request_id, answer);
+                    // 继续监听后续事件
+                }
+                RendererAction::Done(text) => break Outcome::Done(text),
+                RendererAction::Failed(e) => break Outcome::Failed(e),
+                RendererAction::Cancelled => break Outcome::Cancelled,
             }
         };
 
         match outcome {
-            TurnEnd::Done(text) => {
+            Outcome::Done(text) => {
                 if !text.is_empty() {
                     self.transcript.push_assistant(text, Vec::new());
                 }
                 Ok(())
             }
-            TurnEnd::Failed(err) => Err(anyhow!(err)),
-            TurnEnd::Cancelled => Err(anyhow!("已取消")),
+            Outcome::Failed(err) => Err(anyhow!(err)),
+            Outcome::Cancelled => Err(anyhow!("已取消")),
         }
     }
+}
+
+enum Outcome {
+    Done(String),
+    Failed(String),
+    Cancelled,
+}
+
+/// 用 inquire 弹一个 select + 自由输入。
+///
+/// - 方向键选择，Enter 确认
+/// - **ESC 取消**（返回 `UserAnswer::Cancelled`）
+/// - 选「其他（自由输入）」会继续弹 Text 输入框
+async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) -> UserAnswer {
+    use colored::Colorize;
+    println!();
+    println!("{} {}", "🤔".cyan(), question.bold());
+
+    // 把 (label, description) 转成 inquire 显示文本
+    const OTHER_LABEL: &str = "其他（自由输入）";
+    let display_items: Vec<String> = options
+        .iter()
+        .map(|opt| {
+            if opt.description.is_empty() {
+                opt.label.clone()
+            } else {
+                format!("{} — {}", opt.label, opt.description)
+            }
+        })
+        .chain(std::iter::once(OTHER_LABEL.to_string()))
+        .collect();
+
+    let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
+
+    // inquire 是同步阻塞的，跑在 spawn_blocking 里
+    tokio::task::spawn_blocking(move || {
+        let select = inquire::Select::new("选择一项（ESC 取消）：", display_items.clone())
+            .with_help_message("↑↓ 选择，Enter 确认，ESC 取消");
+        match select.prompt() {
+            Ok(choice) => {
+                if choice == OTHER_LABEL {
+                    match inquire::Text::new("请输入：").prompt() {
+                        Ok(text) if !text.trim().is_empty() => UserAnswer::Custom { text },
+                        _ => UserAnswer::Cancelled,
+                    }
+                } else if let Some(idx) =
+                    display_items.iter().position(|d| d == &choice)
+                {
+                    let label = labels.get(idx).cloned().unwrap_or(choice);
+                    UserAnswer::Selected { label }
+                } else {
+                    UserAnswer::Selected { label: choice }
+                }
+            }
+            Err(_) => UserAnswer::Cancelled, // ESC / Ctrl+C
+        }
+    })
+    .await
+    .unwrap_or(UserAnswer::Cancelled)
 }
 
 fn print_banner(client: &Arc<dyn ModelClient>, tools: &[String]) {

@@ -14,5 +14,7 @@ pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
 pub use event::{Event, EventPayload, RiskLevel, StopReason};
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
-pub use permission::{ApprovalDecision, PermissionKind, PermissionScope};
+pub use permission::{
+    ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,
+};
 pub use submission::{Op, Submission, UserInput};

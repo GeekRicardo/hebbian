@@ -1,4 +1,5 @@
 pub mod permissions;
+pub mod question;
 pub mod registry;
 pub mod web_fetch;
 pub mod web_search;
@@ -8,6 +9,10 @@ use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
 use serde_json::Value;
 
 use platform::AppResult;
+
+/// 内置 ask 工具的名称。agent_loop 识别这个名字后绕过 ToolRegistry，
+/// 走 QuestionGate 通路。
+pub const ASK_TOOL_NAME: &str = "ask";
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -24,15 +29,60 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
     ]
 }
 
+/// 由 agent_loop 直接处理、不需要 Tool trait 实现的"虚拟工具"。
+/// `enabled_tools` 包含其名字时注入定义到 ModelRequest.tools。
 pub fn hosted_tool_definitions(filter: &[String]) -> Vec<ToolDefinition> {
+    let mut defs = Vec::new();
     if filter.iter().any(|name| name == IMAGE_GENERATION_TOOL_NAME) {
-        vec![ToolDefinition {
+        defs.push(ToolDefinition {
             name: IMAGE_GENERATION_TOOL_NAME.to_string(),
             description: "生成或编辑图片".into(),
             parameters: serde_json::json!({"type": "object"}),
-        }]
-    } else {
-        Vec::new()
+        });
+    }
+    if filter.iter().any(|name| name == ASK_TOOL_NAME) {
+        defs.push(ask_tool_definition());
+    }
+    defs
+}
+
+/// `ask` 工具的 schema：让 agent 主动向用户提问，2-5 个候选选项。
+pub fn ask_tool_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: ASK_TOOL_NAME.to_string(),
+        description: "向用户提问以澄清需求或获取决策。务必同时给出 2-5 个候选选项 \
+                      （label 控制在 12 字以内）；用户除了选项之外总能自由输入其他意见，\
+                      所以选项不必穷尽所有可能。"
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "required": ["question", "options"],
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "提给用户的问题。简短直接，避免冗长背景。"
+                },
+                "options": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 5,
+                    "items": {
+                        "type": "object",
+                        "required": ["label"],
+                        "properties": {
+                            "label": {
+                                "type": "string",
+                                "description": "选项的简短文字（按钮文字），1-12 字。"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "可选的详细说明。"
+                            }
+                        }
+                    }
+                }
+            }
+        }),
     }
 }
 
@@ -59,6 +109,11 @@ pub fn tool_manifest() -> Vec<ToolInfo> {
             name: IMAGE_GENERATION_TOOL_NAME.into(),
             description: "生成图片".into(),
             icon: "image".into(),
+        },
+        ToolInfo {
+            name: ASK_TOOL_NAME.into(),
+            description: "向用户提问".into(),
+            icon: "help-circle".into(),
         },
     ]
 }

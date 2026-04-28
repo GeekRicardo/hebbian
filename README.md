@@ -43,6 +43,7 @@ $CLI                              # Ctrl+D 或 /exit 退出
 # 2) 单次 query：发起一次请求，流式输出后退出
 $CLI "用一句话介绍 Hebbian 学习规则"
 $CLI "搜一下 wikipedia" --tools web_search,web_fetch
+$CLI "用 ask 工具问我想去哪玩" --tools ask    # agent 主动提问，2-5 选项 + 自由输入，ESC 取消
 
 # 3) JSON 多轮上下文：吃下完整对话历史，跑最后一条 user message
 $CLI --json '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"嗨"},{"role":"user","content":"刚才我说啥"}]}'
@@ -52,7 +53,7 @@ $CLI --json -                     # 从 stdin 读 JSON
 --provider <id>                   # 默认用 desktop 里配过的 default provider
 -m / --model <name>
 -s / --system <text>
---tools web_search,web_fetch
+--tools web_search,web_fetch,ask  # 内置工具
 --mock                            # 不调真实模型，输出固定假回复
 --data-dir <path>                 # 默认与 desktop 共享 ~/Library/Application Support/dev.ricardo.hebbian/
 ```
@@ -78,7 +79,7 @@ pnpm build
 | **OAuth 登录** | Anthropic 账号、Codex Device Flow、Gemini CLI 凭据导入 |
 | **Agent 循环** | tool call + iteration 内自动推理，最大 10 轮 |
 | **流式输出** | SSE 逐字追加，broadcast 事件总线给多 surface |
-| **Human-in-the-Loop** | 三态权限门：Approved / Denied / NeedsApproval（async oneshot waiter） |
+| **Human-in-the-Loop** | 工具审批三态门 + agent 主动提问（`ask` 工具，2-5 选项 + 自由输入框，ESC 取消） |
 | **Hooks** | BeforeRun / AfterRun / BeforeTurn / AfterTurn / BeforeModelCall / AfterModelCall / BeforeToolCall / AfterToolCall / BeforePermissionRequest / OnContextCompaction |
 | **Per-run seq** | 事件流 seq 在每个 run 内单调递增，可断线重连 |
 | **会话持久化** | session JSON，按 updated_at 倒序，支持搜索 / fork / 重新生成 |

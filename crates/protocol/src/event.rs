@@ -79,7 +79,7 @@ pub enum EventPayload {
         truncated: bool,
     },
 
-    // —— 人机协作 ——
+    // —— 人机协作：审批 ——
     PermissionRequested {
         request_id: PermissionRequestId,
         kind: PermissionKind,
@@ -89,6 +89,17 @@ pub enum EventPayload {
     PermissionResolved {
         request_id: PermissionRequestId,
         decision: ApprovalDecision,
+    },
+
+    // —— 人机协作：agent 主动提问 ——
+    UserQuestionRequested {
+        request_id: PermissionRequestId,
+        question: String,
+        options: Vec<crate::permission::QuestionOption>,
+    },
+    UserQuestionAnswered {
+        request_id: PermissionRequestId,
+        answer: crate::permission::UserAnswer,
     },
 
     // —— 上下文 ——

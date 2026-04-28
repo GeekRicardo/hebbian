@@ -206,6 +206,18 @@ export type EngineEvent =
       request_id: string;
       decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback";
     }
+  | {
+      type: "user_question_requested";
+      request_id: string;
+      question: string;
+      options: { label: string; description: string }[];
+    }
+  | {
+      type: "user_question_answered";
+      request_id: string;
+      kind: "selected" | "custom" | "cancelled";
+      text: string;
+    }
   | { type: "error"; message: string };
 
 /** 一次待审批请求（HITL） */

@@ -6,7 +6,7 @@ use agent_core::{
     definition::AgentDefinition,
     harness::RunParams,
     hooks::HookManager,
-    tools::permissions::PermissionGate,
+    tools::{permissions::PermissionGate, question::QuestionGate},
     types::{AgentEvent, AgentEventPayload},
     Harness,
 };
@@ -99,6 +99,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let harness = Harness::new(agent_core::tools::default_tools(), HookManager::empty());
     let definition = AgentDefinition::default();
     let gate = Arc::new(PermissionGate::new(definition.permission_policy.clone()));
+    let question_gate = Arc::new(QuestionGate::new());
 
     // 必须在 spawn_run 之前 subscribe，否则错过 RunStarted 等早期事件
     let mut events_rx = harness.subscribe();
@@ -113,6 +114,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         RunParams {
             agent: AgentRef::new(&definition.id),
             gate: gate.clone(),
+            question_gate: question_gate.clone(),
             transcript,
             enabled_tools: args.enabled_tools.clone(),
             compaction_policy: definition.compaction_policy.clone(),
@@ -132,7 +134,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
 
     let cleanup_hitl = || {
         if let Some(hitl) = &args.hitl {
-            hitl.unregister_gate(&gate);
+            hitl.unregister_approval_gate(&gate);
+            hitl.unregister_question_gate(&question_gate);
         }
     };
 
@@ -151,10 +154,16 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         if let EventPayload::TextDelta { text } = &event.payload {
             partial_output.push_str(text);
         }
-        if let (Some(hitl), EventPayload::PermissionRequested { request_id, .. }) =
-            (&args.hitl, &event.payload)
-        {
-            hitl.register(request_id.0.clone(), Arc::clone(&gate));
+        if let Some(hitl) = &args.hitl {
+            match &event.payload {
+                EventPayload::PermissionRequested { request_id, .. } => {
+                    hitl.register_approval(request_id.0.clone(), Arc::clone(&gate));
+                }
+                EventPayload::UserQuestionRequested { request_id, .. } => {
+                    hitl.register_question(request_id.0.clone(), Arc::clone(&question_gate));
+                }
+                _ => {}
+            }
         }
         record_assistant_part_event(&mut parts, &event);
         record_tool_event(&mut tool_calls, &event);
@@ -646,6 +655,33 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 }
             },
         }),
+        UserQuestionRequested {
+            request_id,
+            question,
+            options,
+        } => Some(EngineEvent::UserQuestionRequested {
+            request_id: request_id.0.clone(),
+            question: question.clone(),
+            options: options
+                .iter()
+                .map(|o| crate::engine::QuestionOptionDto {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect(),
+        }),
+        UserQuestionAnswered { request_id, answer } => {
+            let (kind, text) = match answer {
+                protocol::UserAnswer::Selected { label } => ("selected", label.clone()),
+                protocol::UserAnswer::Custom { text } => ("custom", text.clone()),
+                protocol::UserAnswer::Cancelled => ("cancelled", String::new()),
+            };
+            Some(EngineEvent::UserQuestionAnswered {
+                request_id: request_id.0.clone(),
+                kind: kind.to_string(),
+                text,
+            })
+        }
         _ => None,
     }
 }

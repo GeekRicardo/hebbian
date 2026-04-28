@@ -62,6 +62,12 @@ pub enum Op {
         decision: ApprovalDecision,
     },
 
+    /// 回应一次 agent 主动提问
+    AnswerQuestion {
+        request_id: PermissionRequestId,
+        answer: crate::permission::UserAnswer,
+    },
+
     /// 中断 run（含级联取消子 run）
     Interrupt { run_id: RunId },
 

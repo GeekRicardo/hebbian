@@ -529,6 +529,10 @@ export const useStore = create<AppState>((set, get) => ({
               set({ pendingApproval: null });
             }
           }
+          // ask 工具的 UI 还未实装：直接自动 cancel，避免 agent 永远等用户回应
+          if (e.type === "user_question_requested") {
+            api.answerQuestion(e.request_id, "cancelled").catch(() => {});
+          }
         },
       );
       const fresh = await api.getSession(cur.id);

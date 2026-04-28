@@ -135,6 +135,18 @@ export const api = {
       feedback: feedback ?? null,
     }),
 
+  /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */
+  answerQuestion: (
+    requestId: string,
+    kind: "selected" | "custom" | "cancelled",
+    text?: string
+  ) =>
+    invoke<void>("answer_question", {
+      requestId,
+      kind,
+      text: text ?? null,
+    }),
+
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),
 

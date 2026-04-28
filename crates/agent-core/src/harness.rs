@@ -11,7 +11,7 @@ use crate::{
     definition::CompactionPolicy,
     hooks::HookManager,
     run_state::RunState,
-    tools::{permissions::PermissionGate, registry::ToolRegistry, Tool},
+    tools::{permissions::PermissionGate, question::QuestionGate, registry::ToolRegistry, Tool},
 };
 use model_gateway::client::ModelClient;
 use platform::CancelFlag;
@@ -21,6 +21,7 @@ struct RunHandle {
     #[allow(dead_code)]
     state: Arc<RunState>,
     gate: Arc<PermissionGate>,
+    question_gate: Arc<QuestionGate>,
     cancel: CancelFlag,
 }
 
@@ -28,6 +29,7 @@ struct RunHandle {
 pub struct RunParams {
     pub agent: AgentRef,
     pub gate: Arc<PermissionGate>,
+    pub question_gate: Arc<QuestionGate>,
     /// 调用方组装好的完整 transcript（含 system + 历史 + 当前 user message）
     pub transcript: Transcript,
     pub enabled_tools: Vec<String>,
@@ -93,6 +95,7 @@ impl Harness {
         let handle = Arc::new(RunHandle {
             state: state.clone(),
             gate: params.gate.clone(),
+            question_gate: params.question_gate.clone(),
             cancel: params.cancel.clone(),
         });
         self.runs.lock().unwrap().insert(run_id.clone(), handle);
@@ -109,6 +112,7 @@ impl Harness {
         let RunParams {
             agent,
             gate,
+            question_gate,
             mut transcript,
             enabled_tools,
             compaction_policy,
@@ -122,6 +126,7 @@ impl Harness {
                 client: client.as_ref(),
                 registry,
                 gate,
+                question_gate,
                 hooks,
                 transcript: &mut transcript,
                 enabled_tools: &enabled_tools,
@@ -169,6 +174,24 @@ impl Harness {
         Ok(())
     }
 
+    /// 直接回应一次 agent 提问。
+    pub fn answer_question(
+        &self,
+        run_id: &RunId,
+        request_id: &protocol::PermissionRequestId,
+        answer: protocol::UserAnswer,
+    ) -> Result<(), HarnessError> {
+        let handle = self
+            .runs
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .cloned()
+            .ok_or(HarnessError::RunNotFound)?;
+        handle.question_gate.answer(request_id, answer);
+        Ok(())
+    }
+
     /// 中断某个 run（设置 cancel flag + 解除所有挂起 waiter）
     pub fn interrupt(&self, run_id: &RunId) -> Result<(), HarnessError> {
         let handle = self
@@ -182,6 +205,7 @@ impl Harness {
             .cancel
             .store(true, std::sync::atomic::Ordering::SeqCst);
         handle.gate.cancel_all_pending();
+        handle.question_gate.cancel_all_pending();
         Ok(())
     }
 }
@@ -197,10 +221,15 @@ async fn run_actor_loop(
                 request_id,
                 decision,
             } => {
-                // request_id 全局唯一；遍历所有 run 让对应的 gate 处理（其他 gate 找不到会无操作）
                 let handles: Vec<_> = runs.lock().unwrap().values().cloned().collect();
                 for handle in handles {
                     handle.gate.resolve(&request_id, decision.clone(), None);
+                }
+            }
+            Op::AnswerQuestion { request_id, answer } => {
+                let handles: Vec<_> = runs.lock().unwrap().values().cloned().collect();
+                for handle in handles {
+                    handle.question_gate.answer(&request_id, answer.clone());
                 }
             }
             Op::Interrupt { run_id } => {
@@ -210,6 +239,7 @@ async fn run_actor_loop(
                         .cancel
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     handle.gate.cancel_all_pending();
+                    handle.question_gate.cancel_all_pending();
                     let _ = event_tx.send(Event::now(
                         run_id,
                         u64::MAX,

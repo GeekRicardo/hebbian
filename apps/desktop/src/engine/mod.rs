@@ -42,7 +42,28 @@ pub enum EngineEvent {
         request_id: String,
         decision: String, // "allow_once" / "allow_and_remember" / "deny" / "deny_with_feedback"
     },
+    /// agent 主动向用户提问（ask 工具）。前端弹出选项 + 自由输入框，用户回应通过
+    /// `answer_question` Tauri 命令回到 core。
+    UserQuestionRequested {
+        request_id: String,
+        question: String,
+        options: Vec<QuestionOptionDto>,
+    },
+    /// 用户已回应提问。前端关闭弹窗。
+    UserQuestionAnswered {
+        request_id: String,
+        /// "selected" / "custom" / "cancelled"
+        kind: String,
+        /// selected 时是 label，custom 时是 text，cancelled 时为空
+        text: String,
+    },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QuestionOptionDto {
+    pub label: String,
+    pub description: String,
 }

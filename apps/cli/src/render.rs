@@ -5,13 +5,11 @@
 use std::io::{self, Write};
 
 use colored::Colorize;
-use protocol::{Event, EventPayload};
+use protocol::{Event, EventPayload, PermissionRequestId, QuestionOption};
 
 /// 累积一次 turn 的渲染状态（跨 event）
 pub struct TurnRenderer {
-    /// 当前是否处在文本流（用于决定要不要在 ToolCall 前加换行）
     streaming_text: bool,
-    /// 当前 turn 的最终文本（来自 TextDone 或累积的 TextDelta）
     accumulated_text: String,
 }
 
@@ -23,38 +21,33 @@ impl TurnRenderer {
         }
     }
 
-    /// 处理一个事件。返回 `Some(text)` 表示 turn 已结束，附带最终 assistant 文本。
-    pub fn on_event(&mut self, event: &Event) -> Option<TurnEnd> {
+    /// 处理一个事件，返回 session 应做的下一步动作。
+    pub fn on_event(&mut self, event: &Event) -> RendererAction {
         match &event.payload {
-            EventPayload::RunStarted { .. } => {
-                // 不显式打印开始；让首个 TextDelta 自己开场
-                None
-            }
+            EventPayload::RunStarted { .. } => RendererAction::Continue,
             EventPayload::TurnStarted { turn, .. } => {
                 if *turn > 0 {
-                    // 多轮 tool call 之间的视觉分隔
                     println!();
                 }
-                None
+                RendererAction::Continue
             }
             EventPayload::TextDelta { text } => {
                 print!("{}", text);
                 io::stdout().flush().ok();
                 self.accumulated_text.push_str(text);
                 self.streaming_text = true;
-                None
+                RendererAction::Continue
             }
             EventPayload::TextDone { full_text } => {
                 if self.streaming_text {
                     println!();
                     self.streaming_text = false;
                 }
-                // TextDone 通常只有非流式 provider 才发，stream 模式下 full_text 会与累积一致
                 if !full_text.is_empty() && self.accumulated_text.is_empty() {
                     println!("{}", full_text);
                     self.accumulated_text = full_text.clone();
                 }
-                None
+                RendererAction::Continue
             }
             EventPayload::ToolCallStarted { name, input, .. } => {
                 if self.streaming_text {
@@ -63,7 +56,7 @@ impl TurnRenderer {
                 }
                 let summary = summarize_input(input);
                 println!("{} {}{}", "🔧".yellow(), name.yellow().bold(), summary.dimmed());
-                None
+                RendererAction::Continue
             }
             EventPayload::ToolCallFinished {
                 result,
@@ -80,16 +73,15 @@ impl TurnRenderer {
                     preview.dimmed(),
                     suffix.dimmed(),
                 );
-                None
+                RendererAction::Continue
             }
             EventPayload::PermissionRequested { summary, .. } => {
                 if self.streaming_text {
                     println!();
                     self.streaming_text = false;
                 }
-                // 仅打印一行通知；具体审批由 main loop 自动处理或交互处理
                 println!("  {} {}", "⏸".yellow(), summary.yellow());
-                None
+                RendererAction::Continue
             }
             EventPayload::PermissionResolved { decision, .. } => {
                 let label = match decision {
@@ -103,7 +95,31 @@ impl TurnRenderer {
                     }
                 };
                 println!("  {label}");
-                None
+                RendererAction::Continue
+            }
+            EventPayload::UserQuestionRequested {
+                request_id,
+                question,
+                options,
+            } => {
+                if self.streaming_text {
+                    println!();
+                    self.streaming_text = false;
+                }
+                RendererAction::AwaitQuestion {
+                    request_id: request_id.clone(),
+                    question: question.clone(),
+                    options: options.clone(),
+                }
+            }
+            EventPayload::UserQuestionAnswered { answer, .. } => {
+                let label = match answer {
+                    protocol::UserAnswer::Selected { label } => format!("✓ {label}"),
+                    protocol::UserAnswer::Custom { text } => format!("✓ 自由输入：{text}"),
+                    protocol::UserAnswer::Cancelled => "✗ 用户取消".to_string(),
+                };
+                println!("  {}", label.green());
+                RendererAction::Continue
             }
             EventPayload::ContextCompacted {
                 before_tokens,
@@ -113,7 +129,7 @@ impl TurnRenderer {
                     "  {}",
                     format!("[上下文压缩 {before_tokens}→{after_tokens} tokens]").dimmed()
                 );
-                None
+                RendererAction::Continue
             }
             EventPayload::RunFinished {
                 total_input_tokens,
@@ -132,28 +148,35 @@ impl TurnRenderer {
                         .dimmed()
                     );
                 }
-                Some(TurnEnd::Done(std::mem::take(&mut self.accumulated_text)))
+                RendererAction::Done(std::mem::take(&mut self.accumulated_text))
             }
             EventPayload::RunFailed { error } => {
                 if self.streaming_text {
                     println!();
                 }
                 eprintln!("{} {}", "错误:".red().bold(), error.message.red());
-                Some(TurnEnd::Failed(error.message.clone()))
+                RendererAction::Failed(error.message.clone())
             }
             EventPayload::RunCancelled => {
                 if self.streaming_text {
                     println!();
                 }
                 eprintln!("{}", "[已取消]".dimmed());
-                Some(TurnEnd::Cancelled)
+                RendererAction::Cancelled
             }
-            _ => None,
+            _ => RendererAction::Continue,
         }
     }
 }
 
-pub enum TurnEnd {
+/// session 主循环消费 `RendererAction` 决定下一步：继续、问用户、或终止。
+pub enum RendererAction {
+    Continue,
+    AwaitQuestion {
+        request_id: PermissionRequestId,
+        question: String,
+        options: Vec<QuestionOption>,
+    },
     Done(String),
     Failed(String),
     Cancelled,
@@ -161,8 +184,9 @@ pub enum TurnEnd {
 
 fn summarize_input(input: &serde_json::Value) -> String {
     let s = input.to_string();
-    if s.len() > 80 {
-        format!("({}…)", &s[..80])
+    if s.chars().count() > 80 {
+        let snippet: String = s.chars().take(80).collect();
+        format!("({snippet}…)")
     } else {
         format!("({s})")
     }
