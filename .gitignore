@@ -38,3 +38,6 @@ AGENTS.md
 docs/todos.md
 docs/随记.md
 docs/hebbian-harness-detailed-design.md
+
+# Python venv
+scripts/.venv/

@@ -20,7 +20,6 @@
 | Rust | 1.80+ | `rustup` stable |
 | Node.js | 18+ | 推荐 22 |
 | pnpm | 8+ | `npm i -g pnpm` |
-| Python | 3.10+ | 跑 `scripts/test.py` 协议验证 |
 | Xcode CLT | — | macOS：`xcode-select --install` |
 
 ### Desktop 模式
@@ -32,39 +31,34 @@ pnpm tauri dev          # 首次 Rust 编译约 3–5 分钟
 pnpm tauri build        # 产出在 apps/desktop/target/release/bundle/
 ```
 
-### CLI 模式
+### CLI / TUI 模式
 
 ```bash
 cargo build -p hebbian-cli
 CLI=./target/debug/hebbian-cli
 
-# 真实模型：自动用 desktop 里配过的默认 provider + 默认 model
-$CLI run "你好"
+# 1) 交互 loop（默认）：rustyline readline，多 turn 上下文累积
+$CLI                              # Ctrl+D 或 /exit 退出
 
-# 指定 provider + model（与 desktop 共享 data_dir）
-$CLI run "你好" --provider <provider-id> --model claude-sonnet-4.5
+# 2) 单次 query：发起一次请求，流式输出后退出
+$CLI "用一句话介绍 Hebbian 学习规则"
+$CLI "搜一下 wikipedia" --tools web_search,web_fetch
 
-# 启用工具
-$CLI run "搜索一下 Hebbian rule" --tools web_search,web_fetch
+# 3) JSON 多轮上下文：吃下完整对话历史，跑最后一条 user message
+$CLI --json '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"嗨"},{"role":"user","content":"刚才我说啥"}]}'
+$CLI --json -                     # 从 stdin 读 JSON
 
-# Mock provider（无需配 API key，用于协议测试）
-$CLI run "你好" --mock
-$CLI run "用工具" --mock --mock-tool-call --mock-needs-approval
-
-# 交互模式：从 stdin 读 Submission，stdout 输出 Event NDJSON
-echo '{"id":"s","op":{"type":"start_run","agent":"default","input":{"text":"hi"}}}' \
-  | $CLI interactive --mock --auto-approve
+# 共享选项
+--provider <id>                   # 默认用 desktop 里配过的 default provider
+-m / --model <name>
+-s / --system <text>
+--tools web_search,web_fetch
+--mock                            # 不调真实模型，输出固定假回复
+--data-dir <path>                 # 默认与 desktop 共享 ~/Library/Application Support/dev.ricardo.hebbian/
 ```
 
-输出格式：每行一个 `protocol::Event` JSON，写到 stdout；tracing 日志走 stderr。
-管道接 `jq` 或 `python3 -c "import json; ..."` 解析。
-
-### 协议验证
-
-```bash
-python3 scripts/test.py
-# 4 个用例：seq 单调、Run/Turn 配对、TextDelta 累加、HITL 时序
-```
+终端中流式逐字输出文本、工具调用以彩色 `🔧 web_search(...)` 显示、stderr 输出耗时 / token 用量。
+管道（`| jq`、`| less`）时自动禁用 ANSI 颜色（依赖 `colored` crate 的 tty 检测）。
 
 ### 单项检查
 
@@ -142,10 +136,12 @@ hebbian/
 │   │       ├── engine/mod.rs     EngineEvent（Tauri Channel）
 │   │       └── window_control.rs 窗口管理、全局快捷键
 │   │
-│   └── cli/                      ★ Rust CLI / 协议测试 harness
+│   └── cli/                      ★ 终端 surface（loop / 单次 / JSON 多轮）
 │       └── src/
-│           ├── main.rs           run / interactive 两个子命令
-│           └── mock_provider.rs  确定性 mock，用于无网络协议测试
+│           ├── main.rs           入口、模式分派、ModelClient 构建
+│           ├── session.rs        Session：transcript、单 turn 跑通、loop 交互
+│           ├── render.rs         Event → 终端彩色输出
+│           └── mock_provider.rs  无网络环境下的固定假回复
 │
 ├── crates/
 │   ├── protocol/                 ★ 协议层（所有人都依赖它）
@@ -159,7 +155,7 @@ hebbian/
 │   │
 │   ├── agent-core/               ★ 产品核心 / Harness
 │   │   └── src/
-│   │       ├── harness.rs        Harness（submit/subscribe + 旧 run() 共存）
+│   │       ├── harness.rs        Harness（spawn_run + subscribe，actor 风格）
 │   │       ├── agent_loop.rs     主循环（HITL waiter / 工具并发 / hook 触发）
 │   │       ├── run_state.rs      RunState（per-run seq + turn 计数）
 │   │       ├── turn_context.rs   TurnContext（model / tools / 预算 / 策略）
@@ -198,9 +194,6 @@ hebbian/
 │   ├── store/useStore.ts         Zustand 全局状态
 │   ├── api/tauri.ts              invoke 封装 + Channel 流式订阅
 │   └── components/
-│
-├── scripts/
-│   └── test.py                   ★ 协议事件流验证器（4 个用例）
 │
 ├── docs/
 │   └── architecture.md           完整架构设计文档（含 4 个里程碑路线图）
@@ -245,7 +238,7 @@ pub enum EventPayload {
 }
 ```
 
-CLI `interactive` 模式直接收发这两个 JSON 协议；desktop 通过 Tauri IPC Channel 转译。
+desktop 通过 Tauri IPC `Channel<EngineEvent>` 把协议事件转译给前端；CLI 直接调 `Harness::spawn_run` 后订阅事件流渲染到终端。
 
 ---
 
@@ -293,7 +286,7 @@ data_dir/
 | 2 | per-run seq | ✓ |
 | 3 | `PermissionDecision` 三态 | ✓ |
 | 4 | oneshot waiter HITL 通路 | ✓ |
-| 5 | Harness `submit/subscribe` actor 模式 | ✓（与旧 `run()` 共存） |
+| 5 | Harness `spawn_run` + `subscribe` actor 模式 | ✓（旧 `run()` 已删除） |
 | 6 | `TurnContext` 抽象 | ✓（结构已立，loop 还在用 LoopParams） |
 | 7 | 10 个 hook 点位 | ✓ |
 | 8 | Tool trait `classify` / `ToolCtx` / `ToolResult` | ☐ |

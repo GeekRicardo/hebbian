@@ -1,34 +1,19 @@
-//! 用于协议测试的确定性 mock provider。
+//! 用于无网络环境快速验证的 mock provider。
 //!
-//! 行为：
-//! - 第一次调用：发出几段 TextDelta，可选发出一个 ToolCall
-//! - 后续调用（如果上一轮有 tool call）：发出最终回答 Done
-//!
-//! 不依赖网络、确定可重放。
-
-use std::sync::atomic::{AtomicUsize, Ordering};
+//! 输出固定的流式文本，不调用任何工具。`--mock` 启用。
 
 use async_trait::async_trait;
 use model_gateway::{
     client::ModelClient,
-    types::{
-        ModelError, ModelRequest, ModelResponse, ModelStreamEvent, ToolCall, ToolCallStreamDelta,
-        Usage,
-    },
+    types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage},
 };
 use platform::CancelFlag;
 
-pub struct MockClient {
-    pub emit_tool_call: bool,
-    calls: AtomicUsize,
-}
+pub struct MockClient;
 
 impl MockClient {
-    pub fn new(emit_tool_call: bool) -> Self {
-        Self {
-            emit_tool_call,
-            calls: AtomicUsize::new(0),
-        }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -47,53 +32,41 @@ impl ModelClient for MockClient {
         _req: ModelRequest,
         _cancel: CancelFlag,
     ) -> Result<ModelResponse, ModelError> {
-        // 非 stream 路径不支持
         Err(ModelError::Other("mock provider 仅支持 stream".into()))
     }
 
     async fn stream(
         &self,
-        _req: ModelRequest,
+        req: ModelRequest,
         _cancel: CancelFlag,
         on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
     ) -> Result<ModelResponse, ModelError> {
-        let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        // 模拟流式延迟
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // 把最后一条 user 消息回显出来，便于人眼验证多 turn 上下文传对了没
+        let last_user = req
+            .entries
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                model_gateway::types::TranscriptEntry::User(u) => Some(u.text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
 
-        if n == 0 && self.emit_tool_call {
+        let chunks = [
+            "[mock] 收到：".to_string(),
+            format!("「{last_user}」"),
+            " — 这是一条假回复。".to_string(),
+        ];
+        let mut full = String::new();
+        for chunk in &chunks {
             on_event(ModelStreamEvent::TextDelta {
-                text: "我先调用一下工具：".into(),
+                text: chunk.clone(),
             });
-            on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
-                index: 0,
-                id: Some("call_mock_1".into()),
-                name: Some("mock_tool".into()),
-                arguments_delta: Some("{\"q\":\"hello\"}".into()),
-            }));
-            return Ok(ModelResponse::ToolCalls {
-                text: String::new(),
-                calls: vec![ToolCall {
-                    id: "call_mock_1".into(),
-                    name: "mock_tool".into(),
-                    input: serde_json::json!({"q": "hello"}),
-                }],
-                attachments: Vec::new(),
-                usage: Usage {
-                    input_tokens: 10,
-                    output_tokens: 5,
-                },
-            });
+            full.push_str(chunk);
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         }
-
-        on_event(ModelStreamEvent::TextDelta {
-            text: "你好".into(),
-        });
-        on_event(ModelStreamEvent::TextDelta {
-            text: "，世界！".into(),
-        });
         Ok(ModelResponse::Done {
-            text: "你好，世界！".into(),
+            text: full,
             attachments: Vec::new(),
             usage: Usage {
                 input_tokens: 8,

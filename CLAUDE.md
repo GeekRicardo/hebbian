@@ -26,10 +26,12 @@ hebbian/
 │   │       ├── title_gen.rs     会话标题自动生成
 │   │       └── window_control.rs 窗口管理 / 全局快捷键
 │   │
-│   └── cli/                     ★ Rust CLI / 协议 harness（mock + 真实 provider）
+│   └── cli/                     ★ 终端 surface（loop / 单次 / JSON 多轮）
 │       └── src/
-│           ├── main.rs          run / interactive 子命令
-│           └── mock_provider.rs 确定性 mock client
+│           ├── main.rs          入口、模式分派、ModelClient 构建
+│           ├── session.rs       Session：transcript、单 turn、loop 交互（rustyline）
+│           ├── render.rs        Event → 终端彩色输出（colored crate）
+│           └── mock_provider.rs 无网络环境固定假回复
 │
 ├── crates/
 │   ├── protocol/                ★ 唯一被所有人依赖的协议 crate
@@ -99,9 +101,6 @@ hebbian/
 │   │   └── types.ts             EngineEvent / PendingApproval / ApprovalDecisionPayload
 │   └── bridge/tauri.ts          invoke 封装（含 approvePermission）
 │
-├── scripts/
-│   └── test.py                  ★ Python 协议验证器（4 个用例，跑 hebbian-cli）
-│
 ├── docs/
 │   └── architecture.md          ★ 唯一权威架构文档（M1-M4 路线图）
 │
@@ -131,7 +130,8 @@ hebbian/
 | 9 | Desktop 审批 UI + Op 翻译层 | ✓（[PermissionApprovalPopup](src/desktop/ui/components/PermissionApprovalPopup.tsx)） |
 
 ### M2 / M3 / M4 全部未做
-persistence / memory / observability / multi-agent / channels / TUI / server / sandbox / MCP — 见架构文档。
+persistence / memory / observability / multi-agent / channels / server / sandbox / MCP — 见架构文档。
+（注：CLI 已经是 TUI 的雏形，但 ratatui 全屏式 TUI 仍在 M3 范围。）
 
 ---
 
@@ -241,21 +241,21 @@ cargo check --workspace
 # TS 类型检查
 pnpm exec tsc --noEmit
 
-# 协议端到端验证（4 用例：seq 单调 / Run/Turn 配对 / TextDelta 累加 / HITL 时序）
-cargo build -p hebbian-cli && python3 scripts/test.py
-
 # 桌面 dev 模式
 pnpm tauri dev
 
-# CLI 快速验证（mock，无需 API key）
-./target/debug/hebbian-cli run "你好" --mock
-./target/debug/hebbian-cli run "用工具" --mock --mock-tool-call --mock-needs-approval
+# CLI 三种模式（默认 loop / 单次 / JSON 多轮）
+cargo build -p hebbian-cli
+./target/debug/hebbian-cli                                              # 默认 loop（rustyline）
+./target/debug/hebbian-cli "你好"                                        # 单次 query
+./target/debug/hebbian-cli --json '{"messages":[{"role":"user","content":"hi"}]}'  # JSON 多轮
+./target/debug/hebbian-cli "你好" --mock                                 # 不调真实模型
 
-# CLI 真实跑（自动用 desktop 的 default provider）
-./target/debug/hebbian-cli run "你好"
+# CLI 验证 tool call 流式渲染
+./target/debug/hebbian-cli "搜一下 wikipedia" --tools web_search,web_fetch
 ```
 
-CLI 与 desktop **共享同一个 data_dir**（macOS：`~/Library/Application Support/dev.ricardo.hebbian/`）。
+CLI 与 desktop **共享同一个 data_dir**（macOS：`~/Library/Application Support/dev.ricardo.hebbian/`），desktop 配过的 provider / OAuth 凭据 CLI 直接复用。
 
 ---
 
@@ -281,7 +281,7 @@ pub enum EventPayload {
 }
 ```
 
-改协议前先想清楚兼容性。`scripts/test.py` 会断言协议不变量。
+改协议前先想清楚兼容性。手动验证：跑 `hebbian-cli "你好" --mock` 看事件流是否完整。
 
 ---
 
@@ -332,12 +332,12 @@ pub enum EventPayload {
 
 ## 给后续 agent 的提醒
 
-- **改协议前先跑 `python3 scripts/test.py`**，把不变量打出来再改
+- **改协议前先跑一遍三种 CLI 模式**：`hebbian-cli "..." --mock` / `hebbian-cli --json '...' --mock` / `hebbian-cli --mock`（loop），看事件流是否完整
 - **agent-core 改完先 `cargo check -p agent-core --tests`**：测试已存在并会被 cargo 检查
 - **desktop 改完跑 `cargo check -p hebbian` 和 `pnpm exec tsc --noEmit`**
 - **不要重新生成已有文件**：先 Read，按需 Edit；尤其 `chat.rs` 已经 990+ 行，重写代价很大
 - **CLI 可以做端到端验证**，比启动 `pnpm tauri dev` 快得多
-- **加新 EventPayload 变体后**：同步更新 [src/desktop/ui/types.ts](src/desktop/ui/types.ts) 的 `EngineEvent` union 与 [chat.rs](apps/desktop/src/chat.rs) 的 `agent_event_to_engine_event` 映射，否则前端拿不到
+- **加新 EventPayload 变体后**：同步更新 [src/desktop/ui/types.ts](src/desktop/ui/types.ts) 的 `EngineEvent` union、[chat.rs](apps/desktop/src/chat.rs) 的 `agent_event_to_engine_event` 映射、[apps/cli/src/render.rs](apps/cli/src/render.rs) 的 `TurnRenderer::on_event` 渲染逻辑——三处任一漏改都会导致信息丢失
 
 ## graphify
 
