@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+target/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Rust / Cargo
+Cargo.lock.bak
+
+# Tauri generated files
+apps/desktop/gen/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor
+.idea/
+.vscode/settings.json
+
+graphify-out/
+.claude/
+.cursor/
+.omx/
+
+# claude-mem 自动生成的记忆缓存
+AGENTS.md
+
+# 个人开发笔记 / 早期设计稿（最终设计在 docs/architecture.md）
+docs/todos.md
+docs/随记.md
+docs/hebbian-harness-detailed-design.md

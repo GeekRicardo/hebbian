@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "apps/cli",
+    "apps/desktop",
+    "crates/agent-core",
+    "crates/model-gateway",
+    "crates/platform",
+    "crates/protocol",
+]
+resolver = "2"

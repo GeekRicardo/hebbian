@@ -1,0 +1,718 @@
+import { create } from "zustand";
+import type {
+  ApprovalDecisionPayload,
+  EngineEvent,
+  MessageAttachment,
+  PendingApproval,
+  Prompt,
+  PromptsFile,
+  Provider,
+  ProvidersFile,
+  SearchHit,
+  Session,
+  SessionMeta,
+  StreamingAssistantPart,
+  ToolInfo,
+} from "@/desktop/ui/types";
+import { api } from "@/desktop/bridge/tauri";
+import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
+
+const LAST_PROMPT_ID_KEY = "lastPromptId";
+const LAST_PROVIDER_ID_KEY = "lastProviderId";
+const LAST_MODEL_KEY = "lastModel";
+const USER_AVATAR_KEY = "userAvatar";
+
+function readStoredValue(key: string) {
+  return localStorage.getItem(key) ?? "";
+}
+
+function persistLastSessionConfig(config: {
+  providerId?: string | null;
+  model?: string | null;
+  promptId?: string | null;
+}) {
+  if (config.providerId !== undefined) {
+    localStorage.setItem(LAST_PROVIDER_ID_KEY, config.providerId ?? "");
+  }
+  if (config.model !== undefined) {
+    localStorage.setItem(LAST_MODEL_KEY, config.model ?? "");
+  }
+  if (config.promptId !== undefined) {
+    localStorage.setItem(LAST_PROMPT_ID_KEY, config.promptId ?? "");
+  }
+}
+
+function cloneStreamingParts(
+  parts: StreamingAssistantPart[]
+): StreamingAssistantPart[] {
+  return parts.map((part) => ({ ...part }));
+}
+
+function applyTextDelta(
+  parts: StreamingAssistantPart[],
+  text: string
+): StreamingAssistantPart[] {
+  if (!text) return parts;
+  const next = cloneStreamingParts(parts);
+  const last = next[next.length - 1];
+  if (last?.type === "text") {
+    last.text += text;
+  } else {
+    next.push({ type: "text", text });
+  }
+  return next;
+}
+
+function toolPartIndex(
+  parts: StreamingAssistantPart[],
+  index: number,
+  id?: string | null
+) {
+  if (id) {
+    const byId = parts.findIndex(
+      (part) => part.type === "tool_call" && part.id === id
+    );
+    if (byId >= 0) return byId;
+  }
+  return parts.findIndex(
+    (part) => part.type === "tool_call" && part.index === index
+  );
+}
+
+function ensureToolPart(
+  parts: StreamingAssistantPart[],
+  index: number,
+  id?: string | null,
+  name?: string | null
+): [StreamingAssistantPart[], number] {
+  const next = cloneStreamingParts(parts);
+  const existing = toolPartIndex(next, index, id);
+  if (existing >= 0) return [next, existing];
+
+  next.push({
+    type: "tool_call",
+    index,
+    id,
+    name,
+    arguments: "",
+    status: "streaming",
+  });
+  return [next, next.length - 1];
+}
+
+function applyToolCallDelta(
+  parts: StreamingAssistantPart[],
+  event: Extract<EngineEvent, { type: "tool_call_delta" }>
+): StreamingAssistantPart[] {
+  const [next, pos] = ensureToolPart(
+    parts,
+    event.index,
+    event.id,
+    event.name
+  );
+  const call = next[pos];
+  if (call.type !== "tool_call") return next;
+  next[pos] = {
+    ...call,
+    id: event.id ?? call.id,
+    name: event.name ?? call.name,
+    arguments: call.arguments + (event.arguments_delta ?? ""),
+    status: call.status === "done" ? "done" : "streaming",
+  };
+  return next;
+}
+
+function applyToolStart(
+  parts: StreamingAssistantPart[],
+  event: Extract<EngineEvent, { type: "tool_start" }>
+): StreamingAssistantPart[] {
+  const [next, pos] = ensureToolPart(parts, event.index, event.id, event.name);
+  const call = next[pos];
+  if (call.type !== "tool_call") return next;
+  next[pos] = {
+    ...call,
+    id: event.id,
+    name: event.name,
+    input: event.input,
+    status: "running",
+  };
+  return next;
+}
+
+function applyToolDone(
+  parts: StreamingAssistantPart[],
+  event: Extract<EngineEvent, { type: "tool_done" }>
+): StreamingAssistantPart[] {
+  const [next, pos] = ensureToolPart(parts, event.index, event.id);
+  const call = next[pos];
+  if (call.type !== "tool_call") return next;
+  next[pos] = {
+    ...call,
+    id: event.id,
+    result: event.result,
+    duration_ms: event.duration_ms,
+    status: "done",
+  };
+  return next;
+}
+
+interface AppState {
+  // providers
+  providersFile: ProvidersFile;
+  // prompts
+  promptsFile: PromptsFile;
+  prompts: Prompt[];
+  pendingPromptId: string;
+  userAvatar: string;
+  // sessions
+  sessions: SessionMeta[];
+  currentSession: Session | null;
+
+  // streaming
+  streamingMessageId: string | null;
+  streamingText: string;
+  streamingParts: StreamingAssistantPart[];
+  activeRequestId: string | null;
+
+  // UI
+  providerDialogOpen: boolean;
+  settingsOpen: boolean;
+  promptsDialogOpen: boolean;
+
+  // search
+  searchQuery: string;
+  searchResults: SearchHit[] | null;
+  searchCaseSensitive: boolean;
+  searchRegex: boolean;
+  searching: boolean;
+
+  // theme
+  theme: "light" | "dark";
+
+  // tools — Agent 工具系统
+  /** 所有可用工具的元信息（从后端加载） */
+  availableTools: ToolInfo[];
+  /** 当前对话启用的工具名称集合 */
+  enabledTools: Set<string>;
+
+  // HITL — 当前一轮 run 中悬挂的审批请求
+  pendingApproval: PendingApproval | null;
+  resolveApproval: (decision: ApprovalDecisionPayload) => Promise<void>;
+
+  // actions
+  init: () => Promise<void>;
+  refreshProviders: () => Promise<void>;
+  saveProviders: (file: ProvidersFile) => Promise<void>;
+  upsertProvider: (p: Provider) => Promise<void>;
+  refreshPrompts: () => Promise<void>;
+  upsertPrompt: (p: Prompt) => Promise<void>;
+  deletePrompt: (id: string) => Promise<void>;
+  setDefaultPrompt: (id: string | null) => Promise<void>;
+
+  refreshSessions: () => Promise<void>;
+  openSession: (id: string) => Promise<void>;
+  newSession: (opts?: {
+    providerId?: string;
+    model?: string;
+    promptId?: string;
+  }) => Promise<void>;
+  renameSession: (id: string, title: string) => Promise<void>;
+  deleteSession: (id: string) => Promise<void>;
+  forkSession: (msgId: string) => Promise<void>;
+  regenerateTitle: () => Promise<void>;
+
+  sendUserMessage: (content: string, attachments?: MessageAttachment[]) => Promise<void>;
+  cancelStreaming: () => Promise<void>;
+  regenerateFrom: (assistantMsgId: string) => Promise<void>;
+  updateCurrentConfig: (patch: {
+    provider_id?: string;
+    model?: string;
+    system_prompt?: string;
+    prompt_id?: string;
+    stream?: boolean;
+  }) => Promise<void>;
+  switchProviderModel: (providerId: string, model: string) => Promise<void>;
+
+  setProviderDialogOpen: (v: boolean) => void;
+  setSettingsOpen: (v: boolean) => void;
+  setPromptsDialogOpen: (v: boolean) => void;
+  setPendingPromptId: (v: string) => void;
+  setUserAvatar: (v: string) => void;
+  toggleTheme: () => void;
+
+  runSearch: (
+    query: string,
+    caseSensitive?: boolean,
+    regex?: boolean
+  ) => Promise<void>;
+  clearSearch: () => void;
+
+  /** 开启或关闭某个工具 */
+  toggleTool: (name: string) => void;
+
+  pickDefaultProvider: () => Provider | undefined;
+}
+
+function applyTheme(t: "light" | "dark") {
+  if (t === "dark") document.documentElement.classList.add("dark");
+  else document.documentElement.classList.remove("dark");
+}
+
+export const useStore = create<AppState>((set, get) => ({
+  providersFile: { providers: [], default_provider_id: null },
+  promptsFile: { prompts: [], default_prompt_id: null },
+  prompts: [],
+  pendingPromptId: readStoredValue(LAST_PROMPT_ID_KEY),
+  userAvatar: readStoredValue(USER_AVATAR_KEY),
+  sessions: [],
+  currentSession: null,
+  streamingMessageId: null,
+  streamingText: "",
+  streamingParts: [],
+  activeRequestId: null,
+  providerDialogOpen: false,
+  settingsOpen: false,
+  promptsDialogOpen: false,
+  searchQuery: "",
+  searchResults: null,
+  searchCaseSensitive: false,
+  searchRegex: false,
+  searching: false,
+  theme: (localStorage.getItem("theme") as any) ?? "light",
+  availableTools: [],
+  // 默认只开启搜索/抓取；生图等额外工具需要用户手动开启
+  enabledTools: new Set<string>(
+    JSON.parse(localStorage.getItem("enabledTools") ?? '["web_search","web_fetch"]')
+  ),
+
+  pendingApproval: null,
+  async resolveApproval(decision: ApprovalDecisionPayload) {
+    const pending = get().pendingApproval;
+    if (!pending) return;
+    // 乐观清空，避免双击
+    set({ pendingApproval: null });
+    try {
+      await api.approvePermission(
+        pending.requestId,
+        decision.kind,
+        decision.kind === "deny_with_feedback" ? decision.feedback : undefined
+      );
+    } catch (e) {
+      // 失败时恢复弹窗，让用户重试
+      set({ pendingApproval: pending });
+      throw e;
+    }
+  },
+
+  async init() {
+    applyTheme(get().theme);
+    await Promise.all([
+      get().refreshProviders(),
+      get().refreshPrompts(),
+      get().refreshSessions(),
+      // 加载工具清单（失败不影响主流程）
+      api.listTools().then((tools) => set({ availableTools: tools })).catch(() => {}),
+    ]);
+    const first = get().sessions[0];
+    if (first) await get().openSession(first.id);
+  },
+
+  async refreshProviders() {
+    const file = await api.getProviders();
+    set({ providersFile: file });
+  },
+
+  async saveProviders(file) {
+    await api.saveProviders(file);
+    set({ providersFile: file });
+  },
+
+  async upsertProvider(p) {
+    await api.upsertProvider(p);
+    await get().refreshProviders();
+  },
+
+  async refreshPrompts() {
+    const f = await api.listPrompts();
+    set((state) => ({
+      promptsFile: f,
+      prompts: f.prompts,
+      pendingPromptId:
+        state.pendingPromptId &&
+        f.prompts.some((prompt) => prompt.id === state.pendingPromptId)
+          ? state.pendingPromptId
+          : f.default_prompt_id || "",
+    }));
+  },
+
+  async upsertPrompt(p) {
+    await api.upsertPrompt(p);
+    await get().refreshPrompts();
+  },
+
+  async deletePrompt(id) {
+    await api.deletePrompt(id);
+    await get().refreshPrompts();
+  },
+
+  async setDefaultPrompt(id) {
+    const f = await api.setDefaultPrompt(id);
+    set({
+      promptsFile: f,
+      prompts: f.prompts,
+      pendingPromptId: f.default_prompt_id ?? "",
+    });
+  },
+
+  async refreshSessions() {
+    const list = await api.listSessions();
+    set({ sessions: list });
+  },
+
+  async openSession(id) {
+    const s = await api.getSession(id);
+    persistLastSessionConfig({
+      providerId: s.provider_id,
+      model: s.model,
+      promptId: s.prompt_id ?? "",
+    });
+    set({
+      currentSession: s,
+      pendingPromptId: s.prompt_id ?? "",
+      streamingMessageId: null,
+      streamingText: "",
+      streamingParts: [],
+    });
+  },
+
+  async newSession(opts) {
+    const p =
+      (opts?.providerId &&
+        get().providersFile.providers.find((x) => x.id === opts.providerId)) ||
+      get().pickDefaultProvider();
+    if (!p) throw new Error("请先配置一个供应商");
+    const m = opts?.model || p.default_model || p.models[0] || "";
+    if (!m) throw new Error("请先为供应商填写至少一个模型");
+    const requestedPromptId =
+      opts?.promptId ?? get().promptsFile.default_prompt_id ?? get().pendingPromptId;
+    const matchedPrompt = requestedPromptId
+      ? get().prompts.find((x) => x.id === requestedPromptId)
+      : undefined;
+    const promptId = matchedPrompt?.id ?? null;
+    const prompt = matchedPrompt?.content;
+    const s = await api.createSession(p.id, m, prompt ?? null, promptId);
+    persistLastSessionConfig({
+      providerId: s.provider_id,
+      model: s.model,
+      promptId: s.prompt_id ?? "",
+    });
+    set({
+      currentSession: s,
+      pendingPromptId: s.prompt_id ?? "",
+      streamingParts: [],
+    });
+    await get().refreshSessions();
+  },
+
+  async renameSession(id, title) {
+    await api.renameSession(id, title);
+    await get().refreshSessions();
+    if (get().currentSession?.id === id) {
+      set({ currentSession: { ...get().currentSession!, title } });
+    }
+  },
+
+  async deleteSession(id) {
+    await api.deleteSession(id);
+    const wasCurrent = get().currentSession?.id === id;
+    await get().refreshSessions();
+    if (wasCurrent) {
+      const next = get().sessions[0];
+      if (next) await get().openSession(next.id);
+      else set({ currentSession: null });
+    }
+  },
+
+  async forkSession(msgId) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const s = await api.forkSession(cur.id, msgId);
+    await get().refreshSessions();
+    persistLastSessionConfig({
+      providerId: s.provider_id,
+      model: s.model,
+      promptId: s.prompt_id ?? "",
+    });
+    set({
+      currentSession: s,
+      pendingPromptId: s.prompt_id ?? "",
+      streamingParts: [],
+    });
+  },
+
+  async regenerateTitle() {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const s = await api.generateSessionTitle(cur.id);
+    set({ currentSession: s });
+    await get().refreshSessions();
+  },
+
+  async sendUserMessage(content, attachments = []) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const tempId = "streaming";
+    const requestId =
+      crypto.randomUUID?.() ??
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    set({
+      currentSession: appendOptimisticUserMessage(cur, content, attachments, {
+        id: `pending-user-${requestId}`,
+        now: Date.now(),
+      }),
+      streamingMessageId: tempId,
+      streamingText: "",
+      streamingParts: [],
+      activeRequestId: requestId,
+    });
+    try {
+      const isFirstRound = cur.messages.every((m) => m.role !== "user");
+      // 把 enabledTools Set 转为字符串数组传给后端
+      const enabledTools = Array.from(get().enabledTools);
+      await api.sendMessage(
+        cur.id,
+        content,
+        attachments,
+        cur.stream,
+        enabledTools,
+        requestId,
+        (e: EngineEvent) => {
+          if (get().activeRequestId !== requestId) return;
+          if (e.type === "text_delta") {
+            set({
+              streamingText: get().streamingText + e.text,
+              streamingParts: applyTextDelta(get().streamingParts, e.text),
+            });
+          }
+          if (e.type === "tool_call_delta") {
+            set({
+              streamingParts: applyToolCallDelta(
+                get().streamingParts,
+                e
+              ),
+            });
+          }
+          if (e.type === "tool_start") {
+            set({
+              streamingParts: applyToolStart(get().streamingParts, e),
+            });
+          }
+          if (e.type === "tool_done") {
+            set({
+              streamingParts: applyToolDone(get().streamingParts, e),
+            });
+          }
+          if (e.type === "permission_requested") {
+            set({
+              pendingApproval: {
+                requestId: e.request_id,
+                toolName: e.tool_name,
+                input: e.input,
+                summary: e.summary,
+                risk: e.risk,
+              },
+            });
+          }
+          if (e.type === "permission_resolved") {
+            // 后端已 resolve，关闭弹窗（如果还在的话）
+            if (get().pendingApproval?.requestId === e.request_id) {
+              set({ pendingApproval: null });
+            }
+          }
+        },
+      );
+      const fresh = await api.getSession(cur.id);
+      set({
+        currentSession: fresh,
+        streamingMessageId: null,
+        streamingText: "",
+        streamingParts: [],
+        activeRequestId: null,
+      });
+      await get().refreshSessions();
+
+      // 首轮对话完成后自动生成标题（失败不影响主流程）
+      if (isFirstRound) {
+        api
+          .generateSessionTitle(cur.id)
+          .then((s) => {
+            if (get().currentSession?.id === s.id) {
+              set({ currentSession: s });
+            }
+            get().refreshSessions();
+          })
+          .catch(() => {
+            /* ignore */
+          });
+      }
+    } catch (err: any) {
+      set({
+        streamingMessageId: null,
+        streamingText: "",
+        streamingParts: [],
+        activeRequestId: null,
+      });
+      if (String(err?.message ?? err).includes("请求已中断")) {
+        const current = get().currentSession;
+        if (current) {
+          const fresh = await api.getSession(current.id);
+          set({ currentSession: fresh });
+          await get().refreshSessions();
+        }
+        return;
+      }
+      try {
+        const fresh = await api.getSession(cur.id);
+        if (get().currentSession?.id === cur.id) {
+          set({ currentSession: fresh });
+        }
+        await get().refreshSessions();
+      } catch {
+        if (get().currentSession?.id === cur.id) {
+          set({ currentSession: cur });
+        }
+      }
+      throw err;
+    }
+  },
+
+  async cancelStreaming() {
+    const requestId = get().activeRequestId;
+    const current = get().currentSession;
+    if (!requestId) return;
+
+    set({
+      streamingMessageId: null,
+      streamingText: "",
+      streamingParts: [],
+      activeRequestId: null,
+    });
+    await api.cancelMessage(requestId);
+    if (current) {
+      const fresh = await api.getSession(current.id);
+      set({ currentSession: fresh });
+      await get().refreshSessions();
+    }
+  },
+
+  async regenerateFrom(assistantMsgId) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const idx = cur.messages.findIndex((m) => m.id === assistantMsgId);
+    if (idx < 1) return;
+    const prevUser = cur.messages[idx - 1];
+    if (prevUser.role !== "user") return;
+    await api.truncateInclusive(cur.id, prevUser.id);
+    const refreshed = await api.getSession(cur.id);
+    set({ currentSession: refreshed });
+    await get().sendUserMessage(prevUser.content, prevUser.attachments ?? []);
+  },
+
+  async updateCurrentConfig(patch) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const s = await api.updateSessionConfig(cur.id, patch);
+    persistLastSessionConfig({
+      providerId: s.provider_id,
+      model: s.model,
+      promptId: s.prompt_id ?? "",
+    });
+    set({ currentSession: s, pendingPromptId: s.prompt_id ?? "" });
+    await get().refreshSessions();
+  },
+
+  async switchProviderModel(providerId, model) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const s = await api.switchProviderModel(cur.id, providerId, model);
+    persistLastSessionConfig({
+      providerId: s.provider_id,
+      model: s.model,
+      promptId: s.prompt_id ?? "",
+    });
+    set({ currentSession: s, pendingPromptId: s.prompt_id ?? "" });
+    await get().refreshSessions();
+  },
+
+  setProviderDialogOpen(v) {
+    set({ providerDialogOpen: v });
+  },
+  setSettingsOpen(v) {
+    set({ settingsOpen: v });
+  },
+  setPromptsDialogOpen(v) {
+    set({ promptsDialogOpen: v });
+  },
+  setPendingPromptId(v) {
+    localStorage.setItem(LAST_PROMPT_ID_KEY, v);
+    set({ pendingPromptId: v });
+  },
+  setUserAvatar(v) {
+    localStorage.setItem(USER_AVATAR_KEY, v);
+    set({ userAvatar: v });
+  },
+
+  async runSearch(query, caseSensitive, regex) {
+    const cs = caseSensitive ?? get().searchCaseSensitive;
+    const re = regex ?? get().searchRegex;
+    set({ searchQuery: query, searchCaseSensitive: cs, searchRegex: re });
+    if (!query.trim()) {
+      set({ searchResults: null, searching: false });
+      return;
+    }
+    set({ searching: true });
+    try {
+      const hits = await api.searchSessions(query, cs, re);
+      set({ searchResults: hits, searching: false });
+    } catch (e) {
+      set({ searching: false });
+      throw e;
+    }
+  },
+  clearSearch() {
+    set({ searchQuery: "", searchResults: null, searching: false });
+  },
+
+  toggleTool(name) {
+    const next = new Set(get().enabledTools);
+    if (next.has(name)) {
+      next.delete(name);
+    } else {
+      next.add(name);
+    }
+    // 持久化到 localStorage，下次启动保持用户选择
+    localStorage.setItem("enabledTools", JSON.stringify(Array.from(next)));
+    set({ enabledTools: next });
+  },
+
+  toggleTheme() {
+    const next = get().theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    localStorage.setItem("theme", next);
+    set({ theme: next });
+  },
+
+  pickDefaultProvider() {
+    const { providers, default_provider_id } = get().providersFile;
+    const lastProviderId = readStoredValue(LAST_PROVIDER_ID_KEY);
+    if (lastProviderId) {
+      const p = providers.find((x) => x.id === lastProviderId);
+      if (p) return p;
+    }
+    if (default_provider_id) {
+      const p = providers.find((x) => x.id === default_provider_id);
+      if (p && p.api_key) return p;
+    }
+    return providers.find((p) => !!p.api_key) || providers[0];
+  },
+}));

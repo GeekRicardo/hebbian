@@ -1,0 +1,11 @@
+{
+  "identifier": "desktop-default",
+  "description": "Default capability for the main desktop window.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:default",
+    "opener:default"
+  ]
+}
