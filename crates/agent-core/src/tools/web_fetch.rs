@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::Tool;
+use super::{Tool, ToolClass};
 use async_trait::async_trait;
 use platform::{AppError, AppResult};
 use reqwest::{
@@ -101,6 +101,10 @@ impl Tool for WebFetchTool {
         }
 
         fetch_page(url, prompt).await
+    }
+
+    fn classify(&self, _input: &Value) -> ToolClass {
+        ToolClass::Network
     }
 }
 

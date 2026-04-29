@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::Tool;
+use super::{Tool, ToolClass};
 use async_trait::async_trait;
 use platform::{AppError, AppResult};
 use reqwest::Url;
@@ -62,6 +62,10 @@ impl Tool for WebSearchTool {
     async fn execute(&self, input: Value) -> AppResult<String> {
         let input = parse_search_input(&input)?;
         search_duckduckgo(&input).await
+    }
+
+    fn classify(&self, _input: &Value) -> ToolClass {
+        ToolClass::Network
     }
 }
 

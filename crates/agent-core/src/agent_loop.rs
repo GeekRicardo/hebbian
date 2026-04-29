@@ -1,13 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::future::{join_all, BoxFuture};
-use protocol::{
-    AgentRef, ApprovalDecision, ErrorReport, Event, EventPayload, PermissionKind, QuestionOption,
-    RiskLevel, RunId, StopReason, UserAnswer,
-};
-use serde::Deserialize;
-use tracing::{debug, info, warn};
+use protocol::{AgentRef, ErrorReport, Event, EventPayload, RunId, StopReason};
+use tracing::{debug, info};
 
 use crate::{
     context::{
@@ -15,37 +10,33 @@ use crate::{
         transcript::Transcript,
     },
     definition::CompactionPolicy,
+    dispatch::ToolDispatcher,
     hooks::{HookManager, HookPoint},
     run_state::RunState,
     tools::{
-        builtin_tool_definitions, hosted_tool_definitions,
-        permissions::{PermissionDecision, PermissionGate},
-        question::QuestionGate,
-        registry::ToolRegistry,
-        ASK_TOOL_NAME,
+        ask_only_definitions, hitl::HitlGate, hosted_tool_definitions, registry::ToolRegistry,
+        BUILTIN_TOOL_NAMES,
     },
+    workspace::Workspace,
 };
 use model_gateway::{
     client::ModelClient,
-    types::{
-        AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, ToolResult,
-    },
+    types::{AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
 use platform::{runtime as cancellation, CancelFlag};
 
-const MAX_TOOL_ITERATIONS: u32 = 10;
-const MAX_TOOL_RESULT_INLINE: usize = 6_000;
+const MAX_TOOL_ITERATIONS: u32 = 100;
 
 /// 运行 agent loop 的入参集合
 pub struct LoopParams<'a> {
     pub client: &'a dyn ModelClient,
     pub registry: Arc<ToolRegistry>,
-    pub gate: Arc<PermissionGate>,
-    pub question_gate: Arc<QuestionGate>,
+    pub hitl: Arc<HitlGate>,
     pub hooks: Arc<HookManager>,
     pub transcript: &'a mut Transcript,
     pub enabled_tools: &'a [String],
     pub compaction_policy: &'a CompactionPolicy,
+    pub workspace: Arc<Workspace>,
     pub stream: bool,
     pub cancel: CancelFlag,
     pub state: Arc<RunState>,
@@ -53,11 +44,18 @@ pub struct LoopParams<'a> {
     pub parent: Option<RunId>,
 }
 
-/// agent 调 `ask` 工具时模型实际传入的 input 结构
-#[derive(Debug, Deserialize)]
-struct AskInput {
-    question: String,
-    options: Vec<QuestionOption>,
+/// 把 user system prompt + workspace XML 拼成最终 system 字段。
+/// 每轮重拼，所以运行时 `add_allowed_dir` 后下一轮立刻反映。
+fn build_system_prompt(user_system: Option<&str>, workspace: &Workspace) -> String {
+    let mut s = String::new();
+    if let Some(u) = user_system {
+        if !u.is_empty() {
+            s.push_str(u);
+            s.push_str("\n\n");
+        }
+    }
+    s.push_str(&workspace.to_system_xml());
+    s
 }
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -74,12 +72,12 @@ pub async fn run_loop(
     let LoopParams {
         client,
         registry,
-        gate,
-        question_gate,
+        hitl,
         hooks,
         transcript,
         enabled_tools,
         compaction_policy,
+        workspace,
         stream,
         cancel,
         state,
@@ -95,7 +93,6 @@ pub async fn run_loop(
         agent: agent.clone(),
         parent,
     });
-    hooks.trigger(&HookPoint::BeforeRun).await;
 
     let run_start = Instant::now();
     let mut iteration: u32 = 0;
@@ -107,8 +104,7 @@ pub async fn run_loop(
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
             debug!("run cancelled");
-            gate.cancel_all_pending();
-            question_gate.cancel_all_pending();
+            hitl.cancel_all_pending();
             break Err(ModelError::Cancelled);
         }
 
@@ -127,12 +123,19 @@ pub async fn run_loop(
                 after_tokens = compaction_result.after_tokens,
                 "context compacted"
             );
+            let before_tokens = compaction_result.before_tokens;
+            let after_tokens = compaction_result.after_tokens;
             transcript.entries = compaction_result.entries;
             emit(EventPayload::ContextCompacted {
-                before_tokens: compaction_result.before_tokens,
-                after_tokens: compaction_result.after_tokens,
+                before_tokens,
+                after_tokens,
             });
-            hooks.trigger(&HookPoint::OnContextCompaction).await;
+            hooks
+                .trigger(&HookPoint::OnCompaction {
+                    before_tokens,
+                    after_tokens,
+                })
+                .await;
         }
 
         let turn_index = state.next_turn();
@@ -141,21 +144,25 @@ pub async fn run_loop(
             turn_id: turn_id.clone(),
             turn: turn_index,
         });
-        hooks
-            .trigger(&HookPoint::BeforeTurn { turn: turn_index })
-            .await;
 
-        // 内置工具（ask / 未来的 bash 等）每轮都注入；用户可选工具按 enabled_tools 过滤
-        let mut tool_defs = builtin_tool_definitions();
+        // 内置工具每轮都自动注入：ask + Bash/Read/Write/Grep/Skill。
+        // 用户可选工具按 enabled_tools 过滤。
+        let mut tool_defs = ask_only_definitions();
+        let mut all_filter: Vec<String> =
+            BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
+        all_filter.extend(enabled_tools.iter().cloned());
+        tool_defs.extend(registry.definitions(&all_filter));
         if !enabled_tools.is_empty() {
-            tool_defs.extend(registry.definitions(enabled_tools));
             tool_defs.extend(hosted_tool_definitions(enabled_tools));
         }
         let has_tools = !tool_defs.is_empty();
 
+        // system prompt：用户提供的 + workspace XML，每轮重拼以反映运行时新增的 allowed_dirs
+        let combined_system = build_system_prompt(transcript.system.as_deref(), &workspace);
+
         let req = ModelRequest {
             model: String::new(),
-            system: transcript.system.clone(),
+            system: Some(combined_system),
             entries: transcript.entries.clone(),
             tools: tool_defs,
             max_tokens: 8192,
@@ -172,29 +179,37 @@ pub async fn run_loop(
         let state_for_stream = state.clone();
         // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
         // anthropic / gemini 默认不支持流式工具调用，含工具时只能用 complete 路径。
-        let response = if stream && (!has_tools || client.supports_streaming_tools()) {
+        let response_result = if stream && (!has_tools || client.supports_streaming_tools()) {
             client
-                .stream(req, cancel.clone(), &move |stream_event: ModelStreamEvent| {
-                    let payload = match stream_event {
-                        ModelStreamEvent::TextDelta { text } => EventPayload::TextDelta { text },
-                        ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
-                            index: stream_tool_call_offset + delta.index,
-                            id: delta.id,
-                            name: delta.name,
-                            arguments_delta: delta.arguments_delta,
-                        },
-                    };
-                    on_event_for_stream(state_for_stream.event(payload));
-                })
-                .await?
+                .stream(
+                    req,
+                    cancel.clone(),
+                    &move |stream_event: ModelStreamEvent| {
+                        let payload = match stream_event {
+                            ModelStreamEvent::TextDelta { text } => {
+                                EventPayload::TextDelta { text }
+                            }
+                            ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
+                                index: stream_tool_call_offset + delta.index,
+                                id: delta.id,
+                                name: delta.name,
+                                arguments_delta: delta.arguments_delta,
+                            },
+                        };
+                        on_event_for_stream(state_for_stream.event(payload));
+                    },
+                )
+                .await
         } else {
-            client.complete(req, cancel.clone()).await?
+            client.complete(req, cancel.clone()).await
         };
 
         let call_duration_ms = call_start.elapsed().as_millis() as u64;
-        hooks
-            .trigger(&HookPoint::AfterModelCall { turn: turn_index })
-            .await;
+
+        let response = match response_result {
+            Ok(response) => response,
+            Err(e) => break Err(e),
+        };
 
         match response {
             ModelResponse::Done {
@@ -220,9 +235,6 @@ pub async fn run_loop(
                     turn: turn_index,
                     stop_reason: StopReason::EndTurn,
                 });
-                hooks
-                    .trigger(&HookPoint::AfterTurn { turn: turn_index })
-                    .await;
 
                 transcript.push_assistant(text.clone(), Vec::new());
                 let mut all_attachments = output_attachments;
@@ -254,192 +266,38 @@ pub async fn run_loop(
 
                 if iteration >= MAX_TOOL_ITERATIONS {
                     let msg = format!("已达到最大工具调用轮数 {MAX_TOOL_ITERATIONS}");
-                    warn!(max_iterations = MAX_TOOL_ITERATIONS, "max iterations");
+                    tracing::warn!(max_iterations = MAX_TOOL_ITERATIONS, "max iterations");
                     emit(EventPayload::TurnFinished {
                         turn_id: turn_id.clone(),
                         turn: turn_index,
                         stop_reason: StopReason::MaxIterations,
                     });
-                    hooks
-                        .trigger(&HookPoint::AfterTurn { turn: turn_index })
-                        .await;
                     break Err(ModelError::Other(msg));
                 }
                 iteration += 1;
 
-                // —— 派发工具：每个 call 一个 future，futures 并发执行 ——
-                type TaskFuture = BoxFuture<'static, Result<(usize, ToolResult), ModelError>>;
-                let mut tool_tasks: Vec<TaskFuture> = Vec::new();
-                for (call_index, call) in calls.iter().enumerate() {
-                    let dispatch_index = tool_call_dispatch_offset + call_index;
-                    if cancellation::is_cancelled(&cancel) {
-                        gate.cancel_all_pending();
-                        question_gate.cancel_all_pending();
-                        break;
-                    }
+                let dispatcher = ToolDispatcher {
+                    registry: registry.clone(),
+                    hitl: hitl.clone(),
+                    workspace: workspace.clone(),
+                    state: state.clone(),
+                    sink: on_event.clone(),
+                    cancel: cancel.clone(),
+                };
 
-                    // —— 特判 ask：走 QuestionGate 而非 PermissionGate ——
-                    if call.name == ASK_TOOL_NAME {
-                        let task = dispatch_ask_call(
-                            call.clone(),
-                            call_index,
-                            dispatch_index,
-                            question_gate.clone(),
-                            state.clone(),
-                            on_event.clone(),
-                            cancel.clone(),
-                        );
-                        tool_tasks.push(task);
-                        continue;
-                    }
-
-                    let decision = gate.check(&call.name, &call.input);
-
-                    if let PermissionDecision::NeedsApproval { request_id, .. } = &decision {
-                        emit(EventPayload::PermissionRequested {
-                            request_id: request_id.clone(),
-                            kind: PermissionKind::ToolCall {
-                                tool_name: call.name.clone(),
-                                input: call.input.clone(),
-                            },
-                            summary: format!("工具 {} 请求执行", call.name),
-                            risk: RiskLevel::Medium,
+                let results = match dispatcher.run_calls(&calls, tool_call_dispatch_offset).await {
+                    Ok(results) => results,
+                    Err(e) => {
+                        emit(EventPayload::TurnFinished {
+                            turn_id: turn_id.clone(),
+                            turn: turn_index,
+                            stop_reason: StopReason::Cancelled,
                         });
+                        break Err(e);
                     }
+                };
 
-                    let call = call.clone();
-                    let tool = registry.find(&call.name);
-                    let on_event_local = on_event.clone();
-                    let state_local = state.clone();
-                    let cancel_local = cancel.clone();
-
-                    tool_tasks.push(Box::pin(async move {
-                        let approved: Result<(), String> = match decision {
-                            PermissionDecision::Approved => Ok(()),
-                            PermissionDecision::Denied { reason } => Err(reason),
-                            PermissionDecision::NeedsApproval { request_id, waiter } => {
-                                match waiter.await {
-                                    Ok(decision) => {
-                                        on_event_local(state_local.event(
-                                            EventPayload::PermissionResolved {
-                                                request_id,
-                                                decision: decision.clone(),
-                                            },
-                                        ));
-                                        match decision {
-                                            ApprovalDecision::AllowOnce
-                                            | ApprovalDecision::AllowAndRemember { .. } => Ok(()),
-                                            ApprovalDecision::Deny => Err("用户拒绝".into()),
-                                            ApprovalDecision::DenyWithFeedback { feedback } => {
-                                                Err(feedback)
-                                            }
-                                        }
-                                    }
-                                    Err(_) => Err("审批通道已关闭".into()),
-                                }
-                            }
-                        };
-
-                        if cancellation::is_cancelled(&cancel_local) {
-                            return Err::<(usize, ToolResult), ModelError>(ModelError::Cancelled);
-                        }
-
-                        if let Err(reason) = approved {
-                            warn!(tool = %call.name, %reason, "tool denied");
-                            let denied_content = format!("工具调用被拒绝: {reason}");
-                            on_event_local(state_local.event(EventPayload::ToolCallStarted {
-                                index: dispatch_index,
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                input: call.input.clone(),
-                            }));
-                            on_event_local(state_local.event(EventPayload::ToolCallFinished {
-                                index: dispatch_index,
-                                call_id: call.id.clone(),
-                                result: denied_content.clone(),
-                                duration_ms: 0,
-                                truncated: false,
-                            }));
-                            return Ok((
-                                call_index,
-                                ToolResult {
-                                    call_id: call.id.clone(),
-                                    name: call.name.clone(),
-                                    content: denied_content,
-                                },
-                            ));
-                        }
-
-                        on_event_local(state_local.event(EventPayload::ToolCallStarted {
-                            index: dispatch_index,
-                            call_id: call.id.clone(),
-                            name: call.name.clone(),
-                            input: call.input.clone(),
-                        }));
-
-                        let tool_start = Instant::now();
-                        let output = match tool {
-                            Some(tool) => {
-                                tool.execute(call.input.clone()).await.unwrap_or_else(|e| {
-                                    warn!(tool = %call.name, error = %e, "tool exec error");
-                                    format!("工具执行错误: {e}")
-                                })
-                            }
-                            None => {
-                                warn!(tool = %call.name, "tool not in registry");
-                                format!("未找到工具: {}", call.name)
-                            }
-                        };
-                        let duration_ms = tool_start.elapsed().as_millis() as u64;
-
-                        let truncated = output.len() > MAX_TOOL_RESULT_INLINE;
-                        let content = if truncated {
-                            format!("{}…[已截断]", &output[..MAX_TOOL_RESULT_INLINE])
-                        } else {
-                            output
-                        };
-
-                        on_event_local(state_local.event(EventPayload::ToolCallFinished {
-                            index: dispatch_index,
-                            call_id: call.id.clone(),
-                            result: content.clone(),
-                            duration_ms,
-                            truncated,
-                        }));
-
-                        Ok::<(usize, ToolResult), ModelError>((
-                            call_index,
-                            ToolResult {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                content,
-                            },
-                        ))
-                    }));
-                }
-
-                let mut results: Vec<(usize, ToolResult)> = Vec::new();
-                for outcome in join_all(tool_tasks).await {
-                    match outcome {
-                        Ok(pair) => results.push(pair),
-                        Err(e) => {
-                            emit(EventPayload::TurnFinished {
-                                turn_id: turn_id.clone(),
-                                turn: turn_index,
-                                stop_reason: StopReason::Cancelled,
-                            });
-                            return Err(e);
-                        }
-                    }
-                }
-
-                results.sort_by_key(|(index, _)| *index);
-                transcript.push_tool_results(
-                    results
-                        .into_iter()
-                        .map(|(_, result)| result)
-                        .collect::<Vec<_>>(),
-                );
+                transcript.push_tool_results(results);
                 tool_call_dispatch_offset += calls.len();
 
                 emit(EventPayload::TurnFinished {
@@ -447,9 +305,6 @@ pub async fn run_loop(
                     turn: turn_index,
                     stop_reason: StopReason::EndTurn,
                 });
-                hooks
-                    .trigger(&HookPoint::AfterTurn { turn: turn_index })
-                    .await;
             }
         }
     };
@@ -472,135 +327,79 @@ pub async fn run_loop(
             });
         }
     }
-    hooks.trigger(&HookPoint::AfterRun).await;
-
     result
 }
 
-/// 派发一次 `ask` 工具调用：解析 input → 校验选项数 → 通过 QuestionGate
-/// 等待用户回应 → 把答案作为 ToolResult 返回。
-fn dispatch_ask_call(
-    call: model_gateway::types::ToolCall,
-    call_index: usize,
-    dispatch_index: usize,
-    question_gate: Arc<QuestionGate>,
-    state: Arc<RunState>,
-    on_event: EventSink,
-    cancel: CancelFlag,
-) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
-    Box::pin(async move {
-        // 解析 input
-        let parsed: Result<AskInput, _> = serde_json::from_value(call.input.clone());
-        let (question, options) = match parsed {
-            Ok(input) if input.options.len() >= 2 && input.options.len() <= 5 => {
-                (input.question, input.options)
-            }
-            Ok(input) => {
-                let err = format!(
-                    "ask 工具要求提供 2-5 个选项，实际给了 {} 个",
-                    input.options.len()
-                );
-                return finish_ask_with_error(
-                    call,
-                    call_index,
-                    dispatch_index,
-                    state,
-                    on_event,
-                    err,
-                );
-            }
-            Err(e) => {
-                let err = format!("ask 工具 input 解析失败：{e}");
-                return finish_ask_with_error(
-                    call,
-                    call_index,
-                    dispatch_index,
-                    state,
-                    on_event,
-                    err,
-                );
-            }
-        };
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use model_gateway::types::{ModelRequest, ModelResponse, ModelStreamEvent};
+    use std::sync::{atomic::AtomicBool, Mutex};
 
-        // emit ToolCallStarted（与普通工具一致的视觉，便于 UI 渲染）
-        on_event(state.event(EventPayload::ToolCallStarted {
-            index: dispatch_index,
-            call_id: call.id.clone(),
-            name: call.name.clone(),
-            input: call.input.clone(),
-        }));
+    struct FailingModelClient;
 
-        // 创建 pending question + emit UserQuestionRequested
-        let (request_id, waiter) = question_gate.create_pending();
-        on_event(state.event(EventPayload::UserQuestionRequested {
-            request_id: request_id.clone(),
-            question: question.clone(),
-            options: options.clone(),
-        }));
-
-        // 等用户回应
-        let answer = match waiter.await {
-            Ok(a) => a,
-            Err(_) => UserAnswer::Cancelled,
-        };
-
-        // emit UserQuestionAnswered（让 surface 关闭弹窗）
-        on_event(state.event(EventPayload::UserQuestionAnswered {
-            request_id,
-            answer: answer.clone(),
-        }));
-
-        if cancellation::is_cancelled(&cancel) {
-            return Err(ModelError::Cancelled);
+    #[async_trait]
+    impl ModelClient for FailingModelClient {
+        fn provider_id(&self) -> &str {
+            "test"
         }
 
-        let content = answer.to_agent_text();
-        on_event(state.event(EventPayload::ToolCallFinished {
-            index: dispatch_index,
-            call_id: call.id.clone(),
-            result: content.clone(),
-            duration_ms: 0,
-            truncated: false,
-        }));
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            Err(ModelError::Other("model rejected request".to_string()))
+        }
 
-        Ok((
-            call_index,
-            ToolResult {
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                content,
+        async fn stream(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            Err(ModelError::Other("model rejected request".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn model_call_error_emits_run_failed_before_returning() {
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("hi".to_string(), Vec::new());
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_for_sink = Arc::clone(&events);
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+
+        let result = run_loop(
+            LoopParams {
+                client: &FailingModelClient,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
             },
-        ))
-    })
-}
+            Arc::new(move |event| {
+                events_for_sink.lock().unwrap().push(event.payload);
+            }),
+        )
+        .await;
 
-fn finish_ask_with_error(
-    call: model_gateway::types::ToolCall,
-    call_index: usize,
-    dispatch_index: usize,
-    state: Arc<RunState>,
-    on_event: EventSink,
-    error: String,
-) -> Result<(usize, ToolResult), ModelError> {
-    on_event(state.event(EventPayload::ToolCallStarted {
-        index: dispatch_index,
-        call_id: call.id.clone(),
-        name: call.name.clone(),
-        input: call.input.clone(),
-    }));
-    on_event(state.event(EventPayload::ToolCallFinished {
-        index: dispatch_index,
-        call_id: call.id.clone(),
-        result: error.clone(),
-        duration_ms: 0,
-        truncated: false,
-    }));
-    Ok((
-        call_index,
-        ToolResult {
-            call_id: call.id.clone(),
-            name: call.name.clone(),
-            content: error,
-        },
-    ))
+        assert!(matches!(result, Err(ModelError::Other(_))));
+        let events = events.lock().unwrap();
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, EventPayload::RunFailed { .. })));
+    }
 }

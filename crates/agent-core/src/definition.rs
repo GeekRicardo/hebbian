@@ -45,8 +45,14 @@ pub struct PermissionPolicy {
 impl Default for PermissionPolicy {
     fn default() -> Self {
         Self {
-            auto_approve: vec!["web_search".into(), "web_fetch".into()],
-            always_ask: vec![],
+            auto_approve: vec![
+                "web_search".into(),
+                "web_fetch".into(),
+                "Read".into(),
+                "Grep".into(),
+                "Skill".into(),
+            ],
+            always_ask: vec!["Bash".into(), "Write".into()],
             default_action: DefaultPermission::Auto,
         }
     }

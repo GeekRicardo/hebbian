@@ -11,7 +11,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
-use tauri::{AppHandle, Manager, Window, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -19,6 +19,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "hebbian-status";
 #[cfg(target_os = "macos")]
 const TOGGLE_MAIN_WINDOW_MENU_ID: &str = "toggle_main_window";
+#[cfg(target_os = "macos")]
+const OPEN_SETTINGS_MENU_ID: &str = "open_settings";
 #[cfg(target_os = "macos")]
 const QUIT_MENU_ID: &str = "quit_app";
 #[cfg(target_os = "macos")]
@@ -176,9 +178,26 @@ fn create_tray(app: &AppHandle) -> Result<()> {
         true,
         None::<&str>,
     )?;
+    let settings_item = MenuItem::with_id(
+        app,
+        OPEN_SETTINGS_MENU_ID,
+        "设置…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, QUIT_MENU_ID, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle_item, &separator, &quit_item])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &toggle_item,
+            &settings_item,
+            &separator,
+            &separator2,
+            &quit_item,
+        ],
+    )?;
 
     let icon = tray_animation_frame(0).or_else(|err| {
         eprintln!("Failed to load animated tray icon, falling back to default: {err:#}");
@@ -264,6 +283,17 @@ fn handle_tray_menu_event(app: &AppHandle, event_id: &str) {
         TOGGLE_MAIN_WINDOW_MENU_ID => {
             if let Err(err) = toggle_main_window(app) {
                 eprintln!("Failed to toggle main window from tray: {err:#}");
+            }
+        }
+        OPEN_SETTINGS_MENU_ID => {
+            // 显示主窗口并通知前端打开设置面板
+            if let Err(err) = show_main_window(app) {
+                eprintln!("Failed to show main window: {err:#}");
+            }
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                if let Err(err) = window.emit("hebbian://open-settings", ()) {
+                    eprintln!("Failed to emit open-settings event: {err:#}");
+                }
             }
         }
         QUIT_MENU_ID => app.exit(0),

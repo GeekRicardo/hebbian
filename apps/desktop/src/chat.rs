@@ -2,29 +2,32 @@ use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hitl::HitlState;
 use agent_core::{
+    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
     context::transcript::Transcript,
     definition::AgentDefinition,
-    harness::RunParams,
     hooks::HookManager,
-    tools::{permissions::PermissionGate, question::QuestionGate},
+    tools::{hitl::HitlGate, skill::default_skill_dirs},
     types::{AgentEvent, AgentEventPayload},
-    Harness,
+    workspace::Workspace,
 };
+use async_trait::async_trait;
 use model_gateway::{self, config::Provider};
 use platform::{
-    attachments::MessageAttachment,
-    storage::sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
     CancelFlag,
+    attachments::MessageAttachment,
+    config::settings as global_settings,
+    storage::sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
 };
-use protocol::{AgentRef, EventPayload};
-use std::{collections::HashMap, path::Path, sync::Arc};
-use tauri::{ipc::Channel, AppHandle, Manager};
-
-enum RunOutcome {
-    Done,
-    Cancelled,
-    Failed(String),
-}
+use protocol::{
+    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
+    UserAnswer,
+};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tauri::{AppHandle, Manager, ipc::Channel};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -96,123 +99,105 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
 
     let client = build_client(provider, model)?;
 
-    let harness = Harness::new(agent_core::tools::default_tools(), HookManager::empty());
+    // Workspace：session 字段优先；没设则用全局设置；都没设则 ~/
+    let settings = global_settings::load(data_dir);
+    let workdir = session
+        .workdir
+        .clone()
+        .or_else(|| settings.conversation.workdir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let allowed_dirs = session
+        .allowed_dirs
+        .clone()
+        .unwrap_or_else(|| settings.conversation.allowed_dirs.clone());
+    let workspace = Workspace::new(workdir.clone(), allowed_dirs);
+
+    let configured_skill_dirs = session
+        .skill_dirs
+        .clone()
+        .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
+    let skill_dirs = if configured_skill_dirs.is_empty() {
+        default_skill_dirs(&workdir)
+    } else {
+        configured_skill_dirs
+    };
+
+    let harness = Arc::new(Harness::new(
+        agent_core::tools::default_tools(workspace.clone(), &skill_dirs),
+        HookManager::empty(),
+    ));
     let definition = AgentDefinition::default();
-    let gate = Arc::new(PermissionGate::new(definition.permission_policy.clone()));
-    let question_gate = Arc::new(QuestionGate::new());
 
-    // 必须在 spawn_run 之前 subscribe，否则错过 RunStarted 等早期事件
-    let mut events_rx = harness.subscribe();
+    let session_enabled_tools = session
+        .enabled_tools
+        .clone()
+        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
+    let effective_enabled_tools = if args.enabled_tools.is_empty() {
+        session_enabled_tools
+    } else {
+        args.enabled_tools.clone()
+    };
 
-    // 组装 transcript：历史 + 当前 user message
-    let mut transcript =
-        Transcript::from_session(session.system_prompt.clone(), &prior_session.messages);
-    transcript.push_user(args.user_content.clone(), args.attachments);
-
-    let run_id = harness.spawn_run(
-        client,
-        RunParams {
-            agent: AgentRef::new(&definition.id),
-            gate: gate.clone(),
-            question_gate: question_gate.clone(),
-            transcript,
-            enabled_tools: args.enabled_tools.clone(),
-            compaction_policy: definition.compaction_policy.clone(),
-            stream: args.stream,
-            cancel: args.cancel_flag.clone(),
-            parent: None,
+    let mut core_session = CoreSession::new(
+        harness,
+        SessionConfig {
+            definition,
+            workspace,
+            client,
+            enabled_tools: effective_enabled_tools,
+            initial_transcript: Transcript::from_session(
+                session.system_prompt.clone(),
+                &prior_session.messages,
+            ),
+            recorder: None,
         },
     );
+    core_session.append_user(args.user_content.clone(), args.attachments);
 
-    // 同步累积状态。事件经 broadcast 串行送达，无需 Mutex。
-    let mut partial_output = String::new();
-    let mut tool_calls: Vec<MessageToolCall> = Vec::new();
-    let mut parts = AssistantPartsRecorder::default();
-    let mut output_attachments: Vec<MessageAttachment> = Vec::new();
-    let mut total_input_tokens: u64 = 0;
-    let mut total_output_tokens: u64 = 0;
+    let mut handle = core_session.run_with(args.cancel_flag.clone());
+    let hitl = handle.hitl().clone();
 
-    let cleanup_hitl = || {
-        if let Some(hitl) = &args.hitl {
-            hitl.unregister_approval_gate(&gate);
-            hitl.unregister_question_gate(&question_gate);
-        }
-    };
+    let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event);
+    let summary = handle.drive(&mut observer).await;
+    if let Some(state) = &args.hitl {
+        state.forget(&hitl);
+    }
 
-    let outcome: RunOutcome = loop {
-        let event = match events_rx.recv().await {
-            Ok(e) => e,
-            Err(_) => {
-                cleanup_hitl();
-                return Err(AppError::msg("事件流意外关闭"));
-            }
-        };
-        if event.run_id != run_id {
-            continue;
-        }
+    let DesktopObserver {
+        mut parts,
+        partial_output,
+        tool_calls,
+        output_attachments,
+        ..
+    } = observer;
 
-        if let EventPayload::TextDelta { text } = &event.payload {
-            partial_output.push_str(text);
-        }
-        if let Some(hitl) = &args.hitl {
-            match &event.payload {
-                EventPayload::PermissionRequested { request_id, .. } => {
-                    hitl.register_approval(request_id.0.clone(), Arc::clone(&gate));
-                }
-                EventPayload::UserQuestionRequested { request_id, .. } => {
-                    hitl.register_question(request_id.0.clone(), Arc::clone(&question_gate));
-                }
-                _ => {}
-            }
-        }
-        record_assistant_part_event(&mut parts, &event);
-        record_tool_event(&mut tool_calls, &event);
-        if let Some(ev) = agent_event_to_engine_event(&event) {
-            emit_event(ev);
-        }
-
-        match event.payload {
-            EventPayload::RunFinished {
-                total_input_tokens: i,
-                total_output_tokens: o,
-                ..
-            } => {
-                total_input_tokens = i;
-                total_output_tokens = o;
-                break RunOutcome::Done;
-            }
-            EventPayload::RunFailed { error } => {
-                break RunOutcome::Failed(error.message);
-            }
-            EventPayload::RunCancelled => {
-                break RunOutcome::Cancelled;
-            }
-            EventPayload::TextDone { full_text } => {
-                // 收尾用：保留最后一段 assistant 文本作为 fallback content
-                output_attachments.clear();
-                let _ = full_text;
-            }
-            _ => {}
-        }
-    };
-
-    cleanup_hitl();
-
-    let _ = total_input_tokens; // 暂不记录到 session
-    let _ = total_output_tokens;
-
-    let final_text = match outcome {
-        RunOutcome::Done => parts.last_text_snapshot(),
-        RunOutcome::Cancelled => {
-            persist_interrupted_assistant_output(data_dir, &args.session_id, &partial_output)?;
+    match summary.outcome {
+        TurnOutcome::Done => {}
+        TurnOutcome::Cancelled => {
+            persist_interrupted_assistant_output(
+                data_dir,
+                &args.session_id,
+                &partial_output,
+                &parts.parts,
+                &tool_calls,
+            )?;
             return Err(AppError::msg("请求已中断"));
         }
-        RunOutcome::Failed(error) => {
-            persist_failed_assistant_output(data_dir, &args.session_id, &partial_output, &error)?;
+        TurnOutcome::Failed(error) => {
+            persist_failed_assistant_output(
+                data_dir,
+                &args.session_id,
+                &partial_output,
+                &parts.parts,
+                &tool_calls,
+                &error,
+            )?;
             return Err(AppError::msg(error));
         }
-    };
+    }
 
+    let final_text = parts.last_text_snapshot();
     parts.append_final_text_if_missing(&final_text);
     let assistant_parts = parts.parts.clone();
     let assistant_content = text_from_parts(&assistant_parts)
@@ -234,23 +219,95 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     Ok(assistant_msg)
 }
 
+/// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
+/// 把每个事件翻译成 `EngineEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
+struct DesktopObserver<'a> {
+    parts: AssistantPartsRecorder,
+    partial_output: String,
+    tool_calls: Vec<MessageToolCall>,
+    output_attachments: Vec<MessageAttachment>,
+    hitl_state: Option<Arc<HitlState>>,
+    hitl: Arc<HitlGate>,
+    emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+}
+
+impl<'a> DesktopObserver<'a> {
+    fn new(
+        hitl_state: Option<Arc<HitlState>>,
+        hitl: Arc<HitlGate>,
+        emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+    ) -> Self {
+        Self {
+            parts: AssistantPartsRecorder::default(),
+            partial_output: String::new(),
+            tool_calls: Vec::new(),
+            output_attachments: Vec::new(),
+            hitl_state,
+            hitl,
+            emit,
+        }
+    }
+}
+
+#[async_trait]
+impl<'a> TurnObserver for DesktopObserver<'a> {
+    fn on_event(&mut self, event: &AgentEvent) {
+        if let EventPayload::TextDelta { text } = &event.payload {
+            self.partial_output.push_str(text);
+        }
+        if let EventPayload::TextDone { full_text } = &event.payload {
+            // complete 路径只发 TextDone 不发 TextDelta；补一次 append 避免落盘空文本。
+            if !full_text.is_empty() {
+                if !self.parts.last_text_snapshot().ends_with(full_text.as_str()) {
+                    self.parts.append_text(full_text);
+                }
+                if self.partial_output.is_empty() {
+                    self.partial_output.push_str(full_text);
+                }
+            }
+        }
+        record_assistant_part_event(&mut self.parts, event);
+        record_tool_event(&mut self.tool_calls, event);
+        if let Some(ev) = agent_event_to_engine_event(event) {
+            (self.emit)(ev);
+        }
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &PermissionRequestId,
+        _kind: &PermissionKind,
+        _summary: &str,
+    ) -> Option<ApprovalDecision> {
+        if let Some(state) = &self.hitl_state {
+            state.track(request_id.0.clone(), Arc::clone(&self.hitl));
+        }
+        None
+    }
+
+    async fn on_question(
+        &mut self,
+        request_id: &PermissionRequestId,
+        _question: &str,
+        _options: &[QuestionOption],
+    ) -> Option<UserAnswer> {
+        if let Some(state) = &self.hitl_state {
+            state.track(request_id.0.clone(), Arc::clone(&self.hitl));
+        }
+        None
+    }
+}
+
 fn persist_interrupted_assistant_output(
     data_dir: &std::path::Path,
     session_id: &str,
     partial_output: &str,
+    parts: &[MessagePart],
+    tool_calls: &[MessageToolCall],
 ) -> AppResult<Session> {
     let mut session = sessions::load(data_dir, session_id)?;
-    if !partial_output.is_empty() {
-        session.messages.push(Message {
-            id: sessions::new_id(),
-            role: Role::Assistant,
-            content: partial_output.to_string(),
-            attachments: Vec::new(),
-            tool_calls: Vec::new(),
-            parts: Vec::new(),
-            created_at: chrono::Utc::now().timestamp_millis(),
-            meta: None,
-        });
+    if let Some(message) = assistant_message_from_partial(partial_output, parts, tool_calls) {
+        session.messages.push(message);
     }
     session.messages.push(Message {
         id: sessions::new_id(),
@@ -269,20 +326,90 @@ fn persist_failed_assistant_output(
     data_dir: &std::path::Path,
     session_id: &str,
     partial_output: &str,
+    parts: &[MessagePart],
+    tool_calls: &[MessageToolCall],
     error: &str,
 ) -> AppResult<Session> {
     let mut session = sessions::load(data_dir, session_id)?;
-    session.messages.push(Message {
+    session.messages.push(failed_assistant_message(
+        partial_output,
+        parts,
+        tool_calls,
+        error,
+    ));
+    sessions::save(data_dir, session)
+}
+
+fn assistant_message_from_partial(
+    partial_output: &str,
+    parts: &[MessagePart],
+    tool_calls: &[MessageToolCall],
+) -> Option<Message> {
+    let assistant_parts = normalized_partial_parts(partial_output, parts);
+    let assistant_content = text_from_parts(&assistant_parts)
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| partial_output.to_string());
+
+    if assistant_content.is_empty() && assistant_parts.is_empty() && tool_calls.is_empty() {
+        return None;
+    }
+
+    Some(Message {
         id: sessions::new_id(),
         role: Role::Assistant,
-        content: format_failed_assistant_content(partial_output, error),
+        content: assistant_content,
         attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
+        tool_calls: tool_calls.to_vec(),
+        parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
-    });
-    sessions::save(data_dir, session)
+    })
+}
+
+fn failed_assistant_message(
+    partial_output: &str,
+    parts: &[MessagePart],
+    tool_calls: &[MessageToolCall],
+    error: &str,
+) -> Message {
+    let mut assistant_parts = normalized_partial_parts(partial_output, parts);
+    let error_marker = format!("[请求失败：{}]", error.trim());
+    if !error_marker.trim().is_empty() {
+        if !assistant_parts.is_empty() {
+            assistant_parts.push(MessagePart::Text {
+                text: format!("\n\n{error_marker}"),
+            });
+        } else {
+            assistant_parts.push(MessagePart::Text { text: error_marker });
+        }
+    }
+    let assistant_content = text_from_parts(&assistant_parts)
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| format_failed_assistant_content(partial_output, error));
+
+    Message {
+        id: sessions::new_id(),
+        role: Role::Assistant,
+        content: assistant_content,
+        attachments: Vec::new(),
+        tool_calls: tool_calls.to_vec(),
+        parts: assistant_parts,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: None,
+    }
+}
+
+fn normalized_partial_parts(partial_output: &str, parts: &[MessagePart]) -> Vec<MessagePart> {
+    if !parts.is_empty() {
+        return parts.to_vec();
+    }
+    if partial_output.is_empty() {
+        Vec::new()
+    } else {
+        vec![MessagePart::Text {
+            text: partial_output.to_string(),
+        }]
+    }
 }
 
 fn format_failed_assistant_content(partial_output: &str, error: &str) -> String {
@@ -625,18 +752,37 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             summary,
             risk,
         } => {
-            let (tool_name, tool_input) = match kind {
-                agent_core::types::PermissionKind::ToolCall { tool_name, input } => {
-                    (tool_name.clone(), input.clone())
+            let (kind_str, tool_name, tool_input, paths) = match kind {
+                agent_core::types::PermissionKind::ToolCall { tool_name, input } => (
+                    "tool_call",
+                    tool_name.clone(),
+                    input.clone(),
+                    Vec::<String>::new(),
+                ),
+                agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
+                    "path_access",
+                    tool_name.clone(),
+                    serde_json::Value::Null,
+                    paths.clone(),
+                ),
+                agent_core::types::PermissionKind::Plan { .. } => {
+                    ("plan", String::new(), serde_json::Value::Null, Vec::new())
                 }
-                _ => (String::new(), serde_json::Value::Null),
+                agent_core::types::PermissionKind::ContinueLongRun { .. } => (
+                    "continue_long_run",
+                    String::new(),
+                    serde_json::Value::Null,
+                    Vec::new(),
+                ),
             };
             Some(EngineEvent::PermissionRequested {
                 request_id: request_id.0.clone(),
+                kind: kind_str.into(),
                 tool_name,
                 input: tool_input,
                 summary: summary.clone(),
                 risk: format!("{risk:?}").to_lowercase(),
+                paths,
             })
         }
         PermissionResolved {
@@ -686,7 +832,6 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
     }
 }
 
-use async_trait::async_trait;
 use model_gateway::{
     client::{DynModelClient, ModelClient},
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
@@ -955,7 +1100,8 @@ mod tests {
         )
         .unwrap();
 
-        persist_interrupted_assistant_output(&data_dir, &session.id, "partial answer").unwrap();
+        persist_interrupted_assistant_output(&data_dir, &session.id, "partial answer", &[], &[])
+            .unwrap();
 
         let saved = sessions::load(&data_dir, &session.id).unwrap();
         assert_eq!(saved.messages.len(), 2);
@@ -986,6 +1132,8 @@ mod tests {
             &data_dir,
             &session.id,
             "partial answer",
+            &[],
+            &[],
             "HTTP 400: missing name",
         )
         .unwrap();
@@ -995,6 +1143,66 @@ mod tests {
         assert_eq!(saved.messages[0].role, Role::Assistant);
         assert!(saved.messages[0].content.contains("partial answer"));
         assert!(saved.messages[0].content.contains("HTTP 400: missing name"));
+
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn persist_failed_output_preserves_structured_parts_and_tool_calls() {
+        let data_dir = temp_data_dir();
+        let session = sessions::create(
+            &data_dir,
+            "openai".to_string(),
+            "gpt-test".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        let parts = vec![
+            MessagePart::Text {
+                text: "准备执行".to_string(),
+            },
+            MessagePart::ToolCall {
+                id: "call_bash".to_string(),
+                name: "Bash".to_string(),
+                input: serde_json::json!({"command": "pwd"}),
+                arguments: "{\"command\":\"pwd\"}".to_string(),
+                result: Some("/tmp\n".to_string()),
+                duration_ms: Some(12),
+            },
+        ];
+        let calls = vec![MessageToolCall {
+            id: "call_bash".to_string(),
+            name: "Bash".to_string(),
+            input: serde_json::json!({"command": "pwd"}),
+            result: Some("/tmp\n".to_string()),
+            duration_ms: Some(12),
+        }];
+
+        persist_failed_assistant_output(
+            &data_dir,
+            &session.id,
+            "准备执行",
+            &parts,
+            &calls,
+            "provider refused follow-up",
+        )
+        .unwrap();
+
+        let saved = sessions::load(&data_dir, &session.id).unwrap();
+        assert_eq!(saved.messages.len(), 1);
+        let message = &saved.messages[0];
+        assert_eq!(message.role, Role::Assistant);
+        assert_eq!(message.tool_calls.len(), 1);
+        assert_eq!(message.tool_calls[0].name, "Bash");
+        assert_eq!(message.parts.len(), 3);
+        assert!(matches!(
+            &message.parts[1],
+            MessagePart::ToolCall { name, result, .. }
+                if name == "Bash" && result.as_deref() == Some("/tmp\n")
+        ));
+        assert!(message.content.contains("准备执行"));
+        assert!(message.content.contains("provider refused follow-up"));
 
         std::fs::remove_dir_all(data_dir).unwrap();
     }

@@ -13,7 +13,7 @@ use crate::{
         ToolCall, ToolCallStreamDelta, Usage,
     },
 };
-use platform::{runtime as cancellation, CancelFlag};
+use platform::CancelFlag;
 
 pub struct OpenAiClient {
     provider: Provider,
@@ -81,21 +81,23 @@ impl ModelClient for OpenAiClient {
 
         let body = proto::build_body(&req, false);
 
-        let future = async {
-            let resp = apply_auth(self.http.post(self.chat_url()), &self.provider)
-                .json(&body)
-                .send()
-                .await?;
-            let status = resp.status().as_u16();
-            let text = resp.text().await?;
-            if status >= 400 {
-                return Err(ModelError::Http { status, body: text });
+        super::retry_request(cancel, || {
+            let body = body.clone();
+            async move {
+                let resp = apply_auth(self.http.post(self.chat_url()), &self.provider)
+                    .json(&body)
+                    .send()
+                    .await?;
+                let status = resp.status().as_u16();
+                let text = resp.text().await?;
+                if status >= 400 {
+                    return Err(ModelError::Http { status, body: text });
+                }
+                let v: Value = serde_json::from_str(&text)?;
+                Ok(proto::parse_response(&v))
             }
-            let v: Value = serde_json::from_str(&text)?;
-            Ok(proto::parse_response(&v))
-        };
-
-        wait_or_cancel(future, cancel).await
+        })
+        .await
     }
 
     async fn stream(
@@ -113,23 +115,22 @@ impl ModelClient for OpenAiClient {
 
         let body = proto::build_body(&req, true);
 
-        let resp = wait_or_cancel(
-            async {
+        let resp = super::retry_request(cancel.clone(), || {
+            let body = body.clone();
+            async move {
                 let r = apply_auth(self.http.post(self.chat_url()), &self.provider)
                     .json(&body)
                     .send()
                     .await?;
-                Ok::<_, ModelError>(r)
-            },
-            cancel.clone(),
-        )
+                let status = r.status().as_u16();
+                if status >= 400 {
+                    let body = r.text().await?;
+                    return Err(ModelError::Http { status, body });
+                }
+                Ok(r)
+            }
+        })
         .await?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let body = resp.text().await?;
-            return Err(ModelError::Http { status, body });
-        }
 
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
@@ -330,26 +331,31 @@ impl OpenAiClient {
         codex_oauth: bool,
     ) -> Result<ModelResponse, ModelError> {
         let body = proto::build_responses_body(&req, false, codex_oauth);
+        let has_image_generation_tool = has_image_generation_tool(&req.tools);
+        let model = req.model.clone();
 
-        let future = async {
-            let resp = apply_auth(self.http.post(self.responses_url()), &self.provider)
-                .json(&body)
-                .send()
-                .await?;
-            let status = resp.status().as_u16();
-            let text = resp.text().await?;
-            if status >= 400 {
-                return Err(responses_http_error(
-                    status,
-                    text,
-                    has_image_generation_tool(&req.tools),
-                    &req.model,
-                ));
+        super::retry_request(cancel, || {
+            let body = body.clone();
+            let model = model.clone();
+            async move {
+                let resp = apply_auth(self.http.post(self.responses_url()), &self.provider)
+                    .json(&body)
+                    .send()
+                    .await?;
+                let status = resp.status().as_u16();
+                let text = resp.text().await?;
+                if status >= 400 {
+                    return Err(responses_http_error(
+                        status,
+                        text,
+                        has_image_generation_tool,
+                        &model,
+                    ));
+                }
+                parse_responses_body_or_sse(&text)
             }
-            parse_responses_body_or_sse(&text)
-        };
-
-        wait_or_cancel(future, cancel).await
+        })
+        .await
     }
 
     async fn stream_responses(
@@ -360,29 +366,31 @@ impl OpenAiClient {
         codex_oauth: bool,
     ) -> Result<ModelResponse, ModelError> {
         let body = proto::build_responses_body(&req, true, codex_oauth);
+        let has_image_generation_tool = has_image_generation_tool(&req.tools);
+        let model = req.model.clone();
 
-        let resp = wait_or_cancel(
-            async {
+        let resp = super::retry_request(cancel.clone(), || {
+            let body = body.clone();
+            let model = model.clone();
+            async move {
                 let r = apply_auth(self.http.post(self.responses_url()), &self.provider)
                     .json(&body)
                     .send()
                     .await?;
-                Ok::<_, ModelError>(r)
-            },
-            cancel.clone(),
-        )
+                let status = r.status().as_u16();
+                if status >= 400 {
+                    let body = r.text().await?;
+                    return Err(responses_http_error(
+                        status,
+                        body,
+                        has_image_generation_tool,
+                        &model,
+                    ));
+                }
+                Ok(r)
+            }
+        })
         .await?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let body = resp.text().await?;
-            return Err(responses_http_error(
-                status,
-                body,
-                has_image_generation_tool(&req.tools),
-                &req.model,
-            ));
-        }
 
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
@@ -826,20 +834,6 @@ fn parse_responses_frame(frame: &str) -> Result<ParsedResponsesFrame, ModelError
         }
         proto::ResponsesSseEvent::Failed(message) => Err(ModelError::Other(message)),
         proto::ResponsesSseEvent::Ignore => Ok(ParsedResponsesFrame::Ignore),
-    }
-}
-
-async fn wait_or_cancel<T, F>(fut: F, cancel: CancelFlag) -> Result<T, ModelError>
-where
-    F: std::future::Future<Output = Result<T, ModelError>>,
-{
-    tokio::select! {
-        res = fut => res,
-        _ = async {
-            while !cancellation::is_cancelled(&cancel) {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        } => Err(ModelError::Cancelled),
     }
 }
 

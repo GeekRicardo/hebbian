@@ -18,12 +18,14 @@ use std::sync::Arc;
 
 use agent_core::{
     hooks::HookManager,
-    tools::{default_tools, Tool},
-    Harness,
+    tools::{default_tools, skill::default_skill_dirs, Tool},
+    workspace::Workspace,
+    Harness, Recorder,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use clap::Parser;
+use model_gateway::config::{Provider, ProvidersFile};
 use model_gateway::{
     client::{DynModelClient, ModelClient},
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
@@ -34,7 +36,7 @@ mod mock_provider;
 mod render;
 mod session;
 
-use session::{ConvoInput, Session};
+use session::{CliSession, ConvoInput};
 
 #[derive(Parser, Debug)]
 #[command(name = "hebbian-cli", about = "Hebbian agent 终端 surface")]
@@ -50,9 +52,17 @@ struct Cli {
     #[arg(long)]
     mock: bool,
 
-    /// provider id（与 desktop 共享 data_dir）
+    /// provider id/name，或 name/model_id 临时覆盖本次调用
     #[arg(long)]
     provider: Option<String>,
+
+    /// 设置后续默认 provider/model：--provider set name/model_id
+    #[arg(long, hide = true)]
+    provider_set: Option<String>,
+
+    /// provider 管理命令：--providers list
+    #[arg(long)]
+    providers: Option<String>,
 
     /// 模型 id
     #[arg(long, short = 'm')]
@@ -66,6 +76,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     tools: Vec<String>,
 
+    /// 额外允许访问的目录（可重复）。不传则用全局 settings.conversation.allowed_dirs。
+    #[arg(long = "allowed-dir", value_name = "DIR")]
+    allowed_dirs: Vec<PathBuf>,
+
     /// data dir（默认与 desktop 共享：~/Library/Application Support/dev.ricardo.hebbian/）
     #[arg(long)]
     data_dir: Option<PathBuf>,
@@ -73,27 +87,69 @@ struct Cli {
     /// 收到 PermissionRequested 时自动允许
     #[arg(long, default_value_t = true)]
     auto_approve: bool,
+
+    /// 不把事件流落盘（默认会写到 data_dir/sessions/<ts>-<uuid>.jsonl）
+    #[arg(long)]
+    no_record: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_provider_args(std::env::args()));
 
-    let (harness, client) = build_harness_and_client(BuildOpts {
-        mock: cli.mock,
-        provider: cli.provider.clone(),
-        model: cli.model.clone(),
-        data_dir: cli.data_dir.clone(),
-    })
+    // 不再用 --workdir：直接用 CLI 进程当前目录
+    let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // allowed_dirs：CLI 参数优先，否则用全局 settings 默认
+    let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
+
+    if let Some(command) = &cli.providers {
+        return handle_providers_command(command, &data_dir);
+    }
+    if let Some(target) = &cli.provider_set {
+        return set_default_provider_model(&data_dir, target);
+    }
+
+    let settings = platform::config::settings::load(&data_dir);
+    let allowed_dirs = if !cli.allowed_dirs.is_empty() {
+        cli.allowed_dirs.clone()
+    } else {
+        settings.conversation.allowed_dirs.clone()
+    };
+    let enabled_tools = if !cli.tools.is_empty() {
+        cli.tools.clone()
+    } else {
+        settings.conversation.enabled_tools.clone()
+    };
+    let workspace = Workspace::new(workdir.clone(), allowed_dirs);
+
+    let built = build_harness_and_client(
+        BuildOpts {
+            mock: cli.mock,
+            provider: cli.provider.clone(),
+            model: cli.model.clone(),
+            data_dir: Some(data_dir.clone()),
+        },
+        workspace.clone(),
+    )
     .await?;
 
-    let mut session = Session::new(
-        harness,
-        client,
+    let recorder = if cli.no_record {
+        None
+    } else {
+        Some(Recorder::open(rollout_path(&data_dir)).await?)
+    };
+
+    let mut session = CliSession::new(
+        built.harness,
+        built.client,
         cli.system.clone(),
-        cli.tools.clone(),
+        enabled_tools,
         cli.auto_approve,
+        workspace,
+        built.provider_display,
+        recorder,
     );
 
     match (cli.prompt, cli.json) {
@@ -107,6 +163,28 @@ async fn main() -> Result<()> {
         }
         (Some(_), Some(_)) => unreachable!("clap 通过 conflicts_with 已阻止"),
     }
+}
+
+fn normalize_provider_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut iter = args.into_iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--provider" && iter.peek().map(String::as_str) == Some("set") {
+            out.push("--provider-set".to_string());
+            let _ = iter.next();
+            if let Some(target) = iter.next() {
+                out.push(target);
+            }
+        } else if arg == "--provider=set" {
+            out.push("--provider-set".to_string());
+            if let Some(target) = iter.next() {
+                out.push(target);
+            }
+        } else {
+            out.push(arg);
+        }
+    }
+    out
 }
 
 fn read_json_arg(arg: &str) -> Result<String> {
@@ -138,40 +216,161 @@ struct BuildOpts {
     data_dir: Option<PathBuf>,
 }
 
+struct BuiltClient {
+    harness: Harness,
+    client: Arc<dyn ModelClient>,
+    provider_display: String,
+}
+
 async fn build_harness_and_client(
     opts: BuildOpts,
-) -> Result<(Harness, Arc<dyn ModelClient>)> {
-    let tools: Vec<Box<dyn Tool>> = default_tools();
+    workspace: Arc<Workspace>,
+) -> Result<BuiltClient> {
+    let skill_dirs = default_skill_dirs(workspace.workdir());
+    let tools: Vec<Box<dyn Tool>> = default_tools(workspace, &skill_dirs);
     let harness = Harness::new(tools, HookManager::empty());
 
     if opts.mock {
-        return Ok((harness, Arc::new(mock_provider::MockClient::new())));
+        return Ok(BuiltClient {
+            harness,
+            client: Arc::new(mock_provider::MockClient::new()),
+            provider_display: "mock·mock".to_string(),
+        });
     }
 
-    let data_dir = opts.data_dir.unwrap_or_else(default_data_dir);
+    let data_dir = opts.data_dir.clone().unwrap_or_else(default_data_dir);
     std::fs::create_dir_all(&data_dir).ok();
 
-    let provider_id = opts
-        .provider
-        .or_else(|| {
-            model_gateway::config::load(&data_dir)
-                .ok()
-                .and_then(|f| f.default_provider_id)
-        })
-        .ok_or_else(|| anyhow!("未指定 --provider 且无默认 provider（先在 desktop 配一个）"))?;
-    let provider = model_gateway::config::get(&data_dir, &provider_id)
-        .map_err(|e| anyhow!("加载 provider 失败：{e}"))?;
+    let file =
+        model_gateway::config::load(&data_dir).map_err(|e| anyhow!("加载 providers：{e}"))?;
+    let selection =
+        resolve_runtime_selection(&file, opts.provider.as_deref(), opts.model.as_deref())?;
+    let provider = selection.provider;
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(&data_dir, provider)
         .await
         .map_err(|e| anyhow!("刷新 token 失败：{e}"))?;
-    let model = opts
-        .model
-        .or_else(|| provider.default_model.clone())
-        .ok_or_else(|| anyhow!("未指定 --model 且 provider 无默认 model"))?;
+    let model = selection.model;
+    let provider_name = provider.name.clone();
 
     let inner = model_gateway::build_client(provider).map_err(|e| anyhow!("build client：{e}"))?;
-    let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(inner, model));
-    Ok((harness, client))
+    let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(inner, model.clone()));
+    Ok(BuiltClient {
+        harness,
+        client,
+        provider_display: format!("{provider_name}·{model}"),
+    })
+}
+
+struct RuntimeSelection {
+    provider: Provider,
+    model: String,
+}
+
+fn resolve_runtime_selection(
+    file: &ProvidersFile,
+    provider_arg: Option<&str>,
+    model_arg: Option<&str>,
+) -> Result<RuntimeSelection> {
+    let (provider_key, model_from_provider_arg) = match provider_arg {
+        Some(arg) => parse_provider_model_target(arg),
+        None => (
+            file.default_provider_id.as_deref().ok_or_else(|| {
+                anyhow!("未指定 --provider 且无默认 provider（先在 desktop 配一个）")
+            })?,
+            None,
+        ),
+    };
+    let provider = find_provider(file, provider_key)?.clone();
+    let model = model_arg
+        .map(str::to_string)
+        .or_else(|| model_from_provider_arg.map(str::to_string))
+        .or_else(|| provider.default_model.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "未指定 model。可用 --provider {}/<model_id> 或 --model <model_id>",
+                provider.name
+            )
+        })?;
+    Ok(RuntimeSelection { provider, model })
+}
+
+fn parse_provider_model_target(target: &str) -> (&str, Option<&str>) {
+    target
+        .rsplit_once('/')
+        .map(|(provider, model)| (provider, Some(model)))
+        .unwrap_or((target, None))
+}
+
+fn find_provider<'a>(file: &'a ProvidersFile, key: &str) -> Result<&'a Provider> {
+    file.providers
+        .iter()
+        .find(|provider| provider.id == key || provider.name == key)
+        .ok_or_else(|| anyhow!("provider 不存在：{key}"))
+}
+
+fn handle_providers_command(command: &str, data_dir: &std::path::Path) -> Result<()> {
+    match command {
+        "list" => list_providers(data_dir),
+        other => Err(anyhow!("未知 --providers 命令：{other}（目前支持 list）")),
+    }
+}
+
+fn list_providers(data_dir: &std::path::Path) -> Result<()> {
+    let file = model_gateway::config::load(data_dir).map_err(|e| anyhow!("加载 providers：{e}"))?;
+    if file.providers.is_empty() {
+        println!("No providers configured.");
+        return Ok(());
+    }
+
+    for provider in &file.providers {
+        let default_provider = file.default_provider_id.as_deref() == Some(provider.id.as_str());
+        let marker = if default_provider { "*" } else { " " };
+        let default_model = provider.default_model.as_deref().unwrap_or("-");
+        println!(
+            "{marker} {} ({}) · default={}",
+            provider.name, provider.id, default_model
+        );
+        for model in &provider.models {
+            let model_marker = if provider.default_model.as_deref() == Some(model.as_str()) {
+                "*"
+            } else {
+                "-"
+            };
+            println!("    {model_marker} {}/{}", provider.name, model);
+        }
+        if provider.models.is_empty() && provider.default_model.is_some() {
+            println!("    * {}/{}", provider.name, default_model);
+        }
+    }
+    Ok(())
+}
+
+fn set_default_provider_model(data_dir: &std::path::Path, target: &str) -> Result<()> {
+    let (provider_key, model) = parse_provider_model_target(target);
+    let model = model.ok_or_else(|| anyhow!("--provider set 需要格式：name/model_id"))?;
+    let mut file =
+        model_gateway::config::load(data_dir).map_err(|e| anyhow!("加载 providers：{e}"))?;
+    let provider = file
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == provider_key || provider.name == provider_key)
+        .ok_or_else(|| anyhow!("provider 不存在：{provider_key}"))?;
+    provider.default_model = Some(model.to_string());
+    let provider_id = provider.id.clone();
+    let provider_name = provider.name.clone();
+    file.default_provider_id = Some(provider_id);
+    model_gateway::config::save(data_dir, &file).map_err(|e| anyhow!("保存 providers：{e}"))?;
+    println!("Default provider set to {provider_name}·{model}");
+    Ok(())
+}
+
+/// 本次 CLI 启动的事件日志路径：`<data_dir>/sessions/<ts>-<uuid>.jsonl`。
+fn rollout_path(data_dir: &std::path::Path) -> PathBuf {
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+    let uuid = uuid::Uuid::new_v4();
+    data_dir
+        .join("sessions")
+        .join(format!("rollout-{ts}-{uuid}.jsonl"))
 }
 
 /// 与 desktop 共享同一 data_dir（Tauri bundle id：dev.ricardo.hebbian）

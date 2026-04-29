@@ -7,8 +7,16 @@ use crate::types::ModelError;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use platform::{runtime as cancellation, CancelFlag};
+#[cfg(not(test))]
+use rand::Rng;
 use reqwest::RequestBuilder;
 use std::time::Duration;
+
+const DEFAULT_MAX_RETRIES: u32 = 4;
+#[cfg(not(test))]
+const BASE_RETRY_DELAY: Duration = Duration::from_millis(500);
+#[cfg(not(test))]
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
 
 pub fn build_http_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -86,6 +94,71 @@ where
     }
 }
 
+pub(crate) async fn retry_request<T, Op, Fut>(
+    cancel: CancelFlag,
+    mut op: Op,
+) -> Result<T, ModelError>
+where
+    Op: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ModelError>>,
+{
+    let mut attempt = 0u32;
+    loop {
+        if cancellation::is_cancelled(&cancel) {
+            return Err(ModelError::Cancelled);
+        }
+
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                attempt += 1;
+                if attempt > DEFAULT_MAX_RETRIES || !is_retryable_model_error(&err) {
+                    return Err(err);
+                }
+
+                sleep_or_cancel(retry_delay(attempt), cancel.clone()).await?;
+            }
+        }
+    }
+}
+
+fn is_retryable_model_error(err: &ModelError) -> bool {
+    match err {
+        ModelError::Http { status, body } => {
+            matches!(*status, 408 | 409 | 429 | 500..=599)
+                || body.contains("\"type\":\"overloaded_error\"")
+                || body.contains("overloaded_error")
+        }
+        ModelError::Request(err) => err.is_connect() || err.is_timeout(),
+        ModelError::Json(_) | ModelError::Cancelled | ModelError::Other(_) => false,
+    }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    #[cfg(test)]
+    {
+        let _ = attempt;
+        return Duration::from_millis(1);
+    }
+
+    #[cfg(not(test))]
+    {
+        let exponent = attempt.saturating_sub(1).min(10);
+        let base_ms = (BASE_RETRY_DELAY.as_millis() as u64)
+            .saturating_mul(2u64.saturating_pow(exponent))
+            .min(MAX_RETRY_DELAY.as_millis() as u64);
+        let jitter_ms = rand::thread_rng().gen_range(0..=(base_ms / 4).max(1));
+        Duration::from_millis(base_ms + jitter_ms)
+    }
+}
+
+async fn sleep_or_cancel(delay: Duration, cancel: CancelFlag) -> Result<(), ModelError> {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Ok(()),
+        _ = wait_for_cancel(cancel) => Err(ModelError::Cancelled),
+    }
+}
+
 async fn wait_for_cancel(cancel: CancelFlag) {
     while !cancellation::is_cancelled(&cancel) {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -110,5 +183,53 @@ mod tests {
 
         assert!(matches!(result, Err(ModelError::Cancelled)));
         assert!(cancel.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn retry_request_retries_transient_http_errors() {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts_for_op = Arc::clone(&attempts);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let result = retry_request(cancel, move || {
+            let attempts = Arc::clone(&attempts_for_op);
+            async move {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt < 2 {
+                    Err(ModelError::Http {
+                        status: 500,
+                        body: "server busy".to_string(),
+                    })
+                } else {
+                    Ok("ok")
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_request_does_not_retry_client_errors() {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts_for_op = Arc::clone(&attempts);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let result = retry_request(cancel, move || {
+            let attempts = Arc::clone(&attempts_for_op);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(ModelError::Http {
+                    status: 400,
+                    body: "unsupported model".to_string(),
+                })
+            }
+        })
+        .await;
+
+        assert!(matches!(result, Err(ModelError::Http { status: 400, .. })));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

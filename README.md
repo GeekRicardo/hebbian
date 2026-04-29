@@ -26,9 +26,9 @@
 
 ```bash
 git clone <repo-url> && cd hebbian
-pnpm install
-pnpm tauri dev          # 首次 Rust 编译约 3–5 分钟
-pnpm tauri build        # 产出在 apps/desktop/target/release/bundle/
+pnpm --dir apps/desktop install
+pnpm --dir apps/desktop tauri dev     # 首次 Rust 编译约 3–5 分钟
+pnpm --dir apps/desktop tauri build   # 产出在 target/release/bundle/
 ```
 
 ### CLI / TUI 模式
@@ -65,8 +65,8 @@ $CLI --json -                     # 从 stdin 读 JSON
 
 ```bash
 cargo check --workspace
-pnpm exec tsc --noEmit
-pnpm build
+pnpm --dir apps/desktop exec tsc --noEmit
+pnpm --dir apps/desktop build
 ```
 
 ---
@@ -129,13 +129,33 @@ pnpm build
 ```
 hebbian/
 ├── apps/
-│   ├── desktop/                  Tauri 桌面应用壳
-│   │   └── src/
-│   │       ├── lib.rs            Tauri 命令注册（IPC 入口）
-│   │       ├── chat.rs           Harness 桥接，AgentEvent → EngineEvent
-│   │       ├── title_gen.rs      会话标题自动生成
-│   │       ├── engine/mod.rs     EngineEvent（Tauri Channel）
-│   │       └── window_control.rs 窗口管理、全局快捷键
+│   ├── desktop/                  Tauri + React 桌面应用
+│   │   ├── frontend/             Vite / React 前端
+│   │   │   ├── index.html        Vite 入口
+│   │   │   └── src/
+│   │   │       ├── App.tsx
+│   │   │       ├── main.tsx
+│   │   │       ├── index.css
+│   │   │       ├── assets/       品牌与动效资源
+│   │   │       └── desktop/
+│   │   │           ├── bridge/   Tauri invoke + Channel 封装
+│   │   │           └── ui/       React 组件、store、lib、types
+│   │   ├── src/                  Tauri Rust 端
+│   │   │   ├── lib.rs            Tauri 命令注册（IPC 入口）
+│   │   │   ├── chat.rs           Harness 桥接，AgentEvent → EngineEvent
+│   │   │   ├── hitl.rs           Desktop HITL request/response 桥接
+│   │   │   ├── title_gen.rs      会话标题自动生成
+│   │   │   ├── engine/mod.rs     EngineEvent（Tauri Channel）
+│   │   │   └── window_control.rs 窗口管理、全局快捷键
+│   │   ├── tauri.conf.json       Desktop 构建配置
+│   │   ├── package.json          Desktop 前端脚本与依赖
+│   │   ├── pnpm-lock.yaml        Desktop 前端锁文件
+│   │   ├── vite.config.ts        Vite root / alias / dist 配置
+│   │   ├── tsconfig.json         TypeScript include / path alias
+│   │   ├── tailwind.config.cjs   Tailwind content 扫描前端路径
+│   │   ├── postcss.config.cjs    PostCSS 插件配置
+│   │   ├── capabilities/         Tauri 权限 capability
+│   │   └── icons/                App / tray 图标资源
 │   │
 │   └── cli/                      ★ 终端 surface（loop / 单次 / JSON 多轮）
 │       └── src/
@@ -191,17 +211,10 @@ hebbian/
 │           ├── storage/sessions.rs  ← 计划迁出到 crates/persistence
 │           └── config/prompts.rs    ← 计划迁出到 crates/config
 │
-├── src/                          前端 React
-│   ├── App.tsx
-│   ├── store/useStore.ts         Zustand 全局状态
-│   ├── api/tauri.ts              invoke 封装 + Channel 流式订阅
-│   └── components/
-│
 ├── docs/
 │   └── architecture.md           完整架构设计文档（含 4 个里程碑路线图）
 │
-├── Cargo.toml                    workspace 根
-├── package.json
+├── Cargo.toml                    Rust workspace 根
 └── README.md                     本文件
 ```
 

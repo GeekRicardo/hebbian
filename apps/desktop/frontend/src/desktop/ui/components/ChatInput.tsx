@@ -3,11 +3,6 @@ import {
   GripHorizontal,
   Loader2,
   Paperclip,
-  Search,
-  Globe,
-  Image as ImageIcon,
-  ChevronDown,
-  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
@@ -37,13 +32,6 @@ const KEY = "chatInputHeight";
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
-// 工具名称 → lucide 图标的映射
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  web_search: <Search className="w-3.5 h-3.5" />,
-  web_fetch: <Globe className="w-3.5 h-3.5" />,
-  image_generation: <ImageIcon className="w-3.5 h-3.5" />,
-};
-
 export function ChatInput({
   onSend,
   onCancel,
@@ -65,32 +53,14 @@ export function ChatInput({
     return Number.isFinite(n) && n >= MIN_H && n <= MAX_H ? n : 120;
   });
   const [manual, setManual] = useState(false);
-  // 控制工具下拉面板的显示
-  const [toolMenuOpen, setToolMenuOpen] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draggingRef = useRef<{ startY: number; startH: number } | null>(null);
-  const toolMenuRef = useRef<HTMLDivElement>(null);
   const compositionRef = useRef({
     isComposing: false,
     lastCompositionEndAt: 0,
   });
-
-  const availableTools = useStore((s) => s.availableTools);
-  const enabledTools = useStore((s) => s.enabledTools);
-  const toggleTool = useStore((s) => s.toggleTool);
-
-  // 点击工具菜单外部时关闭
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (toolMenuRef.current && !toolMenuRef.current.contains(e.target as Node)) {
-        setToolMenuOpen(false);
-      }
-    }
-    if (toolMenuOpen) document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, [toolMenuOpen]);
 
   // 未手动调整高度时，按内容自适应
   useLayoutEffect(() => {
@@ -286,8 +256,6 @@ export function ChatInput({
     }
   }, [height, manual]);
 
-  // 当前是否有任何工具启用
-  const hasEnabledTools = enabledTools.size > 0;
   const inputDisabled = disabled || isStreaming;
   const canSubmit =
     isStreaming ||
@@ -339,81 +307,6 @@ export function ChatInput({
                 e.currentTarget.value = "";
               }}
             />
-          {/* ── 工具选择下拉按钮（输入框左侧） ── */}
-          {availableTools.length > 0 && (
-            <div className="relative self-end pb-2 pl-2" ref={toolMenuRef}>
-              <button
-                type="button"
-                onClick={() => setToolMenuOpen((v) => !v)}
-                title={hasEnabledTools ? "工具已启用，点击管理" : "点击启用 AI 工具"}
-                className={cn(
-                  "h-8 px-2 rounded-md inline-flex items-center gap-1 text-xs font-medium transition-colors",
-                  hasEnabledTools
-                    ? "bg-primary/10 text-primary hover:bg-primary/20"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
-              >
-                <Wrench className="w-3.5 h-3.5" />
-                {/* 显示启用数量徽标 */}
-                {hasEnabledTools && (
-                  <span className="leading-none">{enabledTools.size}</span>
-                )}
-                <ChevronDown
-                  className={cn(
-                    "w-3 h-3 transition-transform",
-                    toolMenuOpen && "rotate-180"
-                  )}
-                />
-              </button>
-
-              {/* ── 工具下拉菜单 ── */}
-              {toolMenuOpen && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-lg border border-border bg-popover shadow-lg z-50 overflow-hidden">
-                  <div className="px-3 py-2 text-xs font-semibold text-muted-foreground border-b border-border">
-                    Agent 工具
-                  </div>
-                  {availableTools.map((tool) => {
-                    const enabled = enabledTools.has(tool.name);
-                    return (
-                      <button
-                        key={tool.name}
-                        type="button"
-                        onClick={() => toggleTool(tool.name)}
-                        className={cn(
-                          "w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors",
-                          enabled
-                            ? "bg-primary/5 text-foreground"
-                            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                        )}
-                      >
-                        {/* 工具图标 */}
-                        <span className="shrink-0 text-muted-foreground">
-                          {TOOL_ICONS[tool.name] ?? <Wrench className="w-3.5 h-3.5" />}
-                        </span>
-                        <span className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{tool.description}</div>
-                          <div className="text-[11px] text-muted-foreground/70 mt-0.5 truncate">
-                            {tool.name}
-                          </div>
-                        </span>
-                        {/* 开关指示点 */}
-                        <span
-                          className={cn(
-                            "w-2 h-2 rounded-full shrink-0",
-                            enabled ? "bg-primary" : "bg-muted-foreground/30"
-                          )}
-                        />
-                      </button>
-                    );
-                  })}
-                  <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-t border-border">
-                    启用后 AI 可自动调用工具
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
           <textarea
             ref={textareaRef}
             value={value}
@@ -477,16 +370,9 @@ export function ChatInput({
 
         <div className="flex items-center justify-between mt-1.5 px-1 text-[11px] text-muted-foreground">
           <span>
-            {hasEnabledTools ? (
-              <>
-                <span className="text-primary font-medium">Agent 模式</span>
-                {" · "}已启用 {enabledTools.size} 个工具
-              </>
-            ) : (
-              attachments.length > 0
-                ? `已添加 ${attachments.length} 个附件`
-                : "支持 Markdown · Cmd/Ctrl+F 搜索当前对话"
-            )}
+            {attachments.length > 0
+              ? `已添加 ${attachments.length} 个附件`
+              : ""}
           </span>
           <span>Enter 发送 · Shift+Enter 换行</span>
         </div>

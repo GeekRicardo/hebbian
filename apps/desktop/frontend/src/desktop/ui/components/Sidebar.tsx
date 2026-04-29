@@ -6,7 +6,6 @@ import {
   Sun,
   Trash2,
   Edit3,
-  Bot,
   Sparkles,
   Search,
   X,
@@ -75,8 +74,7 @@ export function Sidebar() {
     renameSession,
     regenerateTitle,
     setProviderDialogOpen,
-    setSettingsOpen,
-    setPromptsDialogOpen,
+    setAppSettingsOpen,
     newSession,
     toggleTheme,
     theme,
@@ -431,16 +429,8 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setPromptsDialogOpen(true)}
-          title="Agent 管理"
-        >
-          <Bot className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setSettingsOpen(true)}
-          title="当前对话设置"
+          onClick={() => setAppSettingsOpen(true)}
+          title="设置（通用 / 对话 / Agent）"
         >
           <Settings className="w-4 h-4" />
         </Button>

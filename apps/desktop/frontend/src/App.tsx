@@ -5,6 +5,7 @@ import { ChatView } from "@/desktop/ui/components/ChatView";
 import { ProvidersDialog } from "@/desktop/ui/components/ProvidersDialog";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
 import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
+import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
       <ProvidersDialog />
       <SessionSettingsDialog />
       <PromptsDialog />
+      <AppSettingsDialog />
       <Toaster
         theme={theme}
         position="top-center"

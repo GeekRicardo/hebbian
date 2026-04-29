@@ -1,57 +1,68 @@
-//! 终端会话上下文：维持 transcript、跑 turn、loop 交互。
+//! 终端 surface：每条 user message 一个 turn，复用 [`agent_core::Session`]。
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use agent_core::{
-    context::transcript::Transcript,
-    definition::AgentDefinition,
-    harness::RunParams,
-    tools::{permissions::PermissionGate, question::QuestionGate},
-    Harness,
+    context::transcript::Transcript, definition::AgentDefinition, workspace::Workspace, Harness,
+    Recorder, Session, SessionConfig, TurnObserver, TurnOutcome,
 };
 use anyhow::{anyhow, Result};
-use model_gateway::client::ModelClient;
+use async_trait::async_trait;
 use colored::Colorize;
-use protocol::{AgentRef, ApprovalDecision, EventPayload, QuestionOption, UserAnswer};
-use rustyline::{error::ReadlineError, DefaultEditor};
+use model_gateway::client::ModelClient;
+use protocol::{
+    ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
+    UserAnswer,
+};
+use rustyline::{
+    error::ReadlineError, Cmd, ConditionalEventHandler, DefaultEditor, Event, EventContext,
+    EventHandler, KeyEvent, Movement, RepeatCount,
+};
 
-use crate::render::{RendererAction, TurnRenderer};
+use crate::render::TurnRenderer;
 
-pub struct Session {
-    harness: Arc<Harness>,
-    client: Arc<dyn ModelClient>,
-    definition: AgentDefinition,
-    transcript: Transcript,
-    enabled_tools: Vec<String>,
+pub struct CliSession {
+    inner: Session,
     auto_approve: bool,
+    provider_display: String,
 }
 
-impl Session {
+impl CliSession {
     pub fn new(
         harness: Harness,
         client: Arc<dyn ModelClient>,
         system: Option<String>,
         enabled_tools: Vec<String>,
         auto_approve: bool,
+        workspace: Arc<Workspace>,
+        provider_display: String,
+        recorder: Option<Recorder>,
     ) -> Self {
+        let definition = AgentDefinition::default();
+        let inner = Session::new(
+            Arc::new(harness),
+            SessionConfig {
+                definition,
+                workspace,
+                client,
+                enabled_tools,
+                initial_transcript: Transcript::new(system),
+                recorder,
+            },
+        );
         Self {
-            harness: Arc::new(harness),
-            client,
-            definition: AgentDefinition::default(),
-            transcript: Transcript::new(system),
-            enabled_tools,
+            inner,
             auto_approve,
+            provider_display,
         }
     }
 
-    /// 单次：发起一条 user message，渲染流式回复，结束后退出
+    /// 单次：发起一条 user message，渲染流式回复，结束后退出。
     pub async fn run_single(&mut self, user_input: String) -> Result<()> {
-        self.run_one_turn(user_input).await?;
-        Ok(())
+        self.run_one_turn(user_input).await
     }
 
-    /// JSON 多轮：把历史 messages 压入 transcript，最后一条作为当前轮 user
+    /// JSON 多轮：把历史 messages 压入 transcript，最后一条作为当前轮 user。
     pub async fn run_with_history(&mut self, mut messages: Vec<ConvoMessage>) -> Result<()> {
         if messages.is_empty() {
             return Err(anyhow!("messages 为空"));
@@ -63,30 +74,28 @@ impl Session {
                 last.role
             ));
         }
+        let transcript = self.inner.transcript_mut();
         for m in messages {
             match m.role.as_str() {
-                "user" => self.transcript.push_user(m.content, Vec::new()),
-                "assistant" => self.transcript.push_assistant(m.content, Vec::new()),
+                "user" => transcript.push_user(m.content, Vec::new()),
+                "assistant" => transcript.push_assistant(m.content, Vec::new()),
                 "system" => {
-                    // 把 system 拼接到 transcript.system
-                    let cur = self.transcript.system.clone().unwrap_or_default();
-                    let next = if cur.is_empty() {
+                    let cur = transcript.system.clone().unwrap_or_default();
+                    transcript.system = Some(if cur.is_empty() {
                         m.content
                     } else {
                         format!("{cur}\n\n{}", m.content)
-                    };
-                    self.transcript.system = Some(next);
+                    });
                 }
                 other => return Err(anyhow!("不支持的 role: {other}")),
             }
         }
-        self.run_one_turn(last.content).await?;
-        Ok(())
+        self.run_one_turn(last.content).await
     }
 
-    /// loop 交互：rustyline 读输入，每行一个 turn，直到 Ctrl+D
+    /// loop 交互：rustyline 读输入，每行一个 turn，直到 Ctrl+D。
     pub async fn run_loop(&mut self) -> Result<()> {
-        print_banner(&self.client, &self.enabled_tools);
+        print_banner(&self.provider_display, self.inner.enabled_tools());
 
         let mut rl = DefaultEditor::new()?;
         let history_path = dirs::cache_dir()
@@ -95,6 +104,10 @@ impl Session {
         if let Some(path) = &history_path {
             let _ = rl.load_history(path);
         }
+        rl.bind_sequence(
+            KeyEvent::ctrl('C'),
+            EventHandler::Conditional(Box::new(CtrlCHandler)),
+        );
 
         loop {
             let prompt = format!("{} ", "›".cyan().bold());
@@ -114,11 +127,10 @@ impl Session {
                     println!();
                 }
                 Err(ReadlineError::Interrupted) => {
-                    // Ctrl+C：清空当前行，继续
-                    continue;
+                    println!();
+                    break;
                 }
                 Err(ReadlineError::Eof) => {
-                    // Ctrl+D：退出
                     println!();
                     break;
                 }
@@ -132,88 +144,76 @@ impl Session {
         Ok(())
     }
 
-    /// 单 turn 核心：push user → spawn run → 渲染事件 → push assistant
+    /// 单 turn 核心：append user → run → 把事件循环交给 driver → commit assistant。
     async fn run_one_turn(&mut self, user_input: String) -> Result<()> {
-        self.transcript.push_user(user_input, Vec::new());
-
-        // 必须在 spawn_run 之前订阅
-        let mut events = self.harness.subscribe();
-        let cancel: platform::CancelFlag = Arc::new(AtomicBool::new(false));
-        let gate = Arc::new(PermissionGate::new(self.definition.permission_policy.clone()));
-        let question_gate = Arc::new(QuestionGate::new());
-
-        let run_id = self.harness.spawn_run(
-            self.client.clone(),
-            RunParams {
-                agent: AgentRef::new(&self.definition.id),
-                gate: gate.clone(),
-                question_gate,
-                transcript: self.transcript.clone(),
-                enabled_tools: self.enabled_tools.clone(),
-                compaction_policy: self.definition.compaction_policy.clone(),
-                stream: true,
-                cancel,
-                parent: None,
-            },
-        );
-
-        let mut renderer = TurnRenderer::new();
-        let outcome = loop {
-            let event = match events.recv().await {
-                Ok(e) => e,
-                Err(_) => break Outcome::Failed("事件流意外关闭".into()),
-            };
-            if event.run_id != run_id {
-                continue;
-            }
-
-            // 工具审批：默认 auto-approve
-            if self.auto_approve {
-                if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
-                    let _ = self.harness.resolve_permission(
-                        &event.run_id,
-                        request_id,
-                        ApprovalDecision::AllowOnce,
-                    );
-                }
-            }
-
-            match renderer.on_event(&event) {
-                RendererAction::Continue => {}
-                RendererAction::AwaitQuestion {
-                    request_id,
-                    question,
-                    options,
-                } => {
-                    let answer = ask_user_in_terminal(question, options).await;
-                    let _ = self
-                        .harness
-                        .answer_question(&run_id, &request_id, answer);
-                    // 继续监听后续事件
-                }
-                RendererAction::Done(text) => break Outcome::Done(text),
-                RendererAction::Failed(e) => break Outcome::Failed(e),
-                RendererAction::Cancelled => break Outcome::Cancelled,
-            }
+        self.inner.append_user(user_input, Vec::new());
+        let mut handle = self.inner.run();
+        let mut observer = CliObserver {
+            renderer: TurnRenderer::new(),
+            auto_approve: self.auto_approve,
         };
+        let summary = handle.drive(&mut observer).await;
 
-        match outcome {
-            Outcome::Done(text) => {
+        match summary.outcome {
+            TurnOutcome::Done => {
+                let text = observer.renderer.take_final_text();
                 if !text.is_empty() {
-                    self.transcript.push_assistant(text, Vec::new());
+                    self.inner.commit_assistant(text, Vec::new());
                 }
                 Ok(())
             }
-            Outcome::Failed(err) => Err(anyhow!(err)),
-            Outcome::Cancelled => Err(anyhow!("已取消")),
+            TurnOutcome::Failed(err) => Err(anyhow!(err)),
+            TurnOutcome::Cancelled => Err(anyhow!("已取消")),
         }
     }
 }
 
-enum Outcome {
-    Done(String),
-    Failed(String),
-    Cancelled,
+struct CliObserver {
+    renderer: TurnRenderer,
+    auto_approve: bool,
+}
+
+#[async_trait]
+impl TurnObserver for CliObserver {
+    fn on_event(&mut self, event: &AgentEvent) {
+        self.renderer.on_event(event);
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        _request_id: &PermissionRequestId,
+        _kind: &PermissionKind,
+        _summary: &str,
+    ) -> Option<ApprovalDecision> {
+        self.auto_approve.then_some(ApprovalDecision::AllowOnce)
+    }
+
+    async fn on_question(
+        &mut self,
+        _request_id: &PermissionRequestId,
+        question: &str,
+        options: &[QuestionOption],
+    ) -> Option<UserAnswer> {
+        Some(ask_user_in_terminal(question.to_string(), options.to_vec()).await)
+    }
+}
+
+struct CtrlCHandler;
+
+impl ConditionalEventHandler for CtrlCHandler {
+    fn handle(
+        &self,
+        _evt: &Event,
+        _n: RepeatCount,
+        _positive: bool,
+        ctx: &EventContext,
+    ) -> Option<Cmd> {
+        if ctx.line().is_empty() {
+            Some(Cmd::Interrupt)
+        } else {
+            Some(Cmd::Kill(Movement::WholeBuffer))
+        }
+    }
 }
 
 /// 用 inquire 弹一个 select + 自由输入。
@@ -222,11 +222,9 @@ enum Outcome {
 /// - **ESC 取消**（返回 `UserAnswer::Cancelled`）
 /// - 选「其他（自由输入）」会继续弹 Text 输入框
 async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) -> UserAnswer {
-    use colored::Colorize;
     println!();
     println!("{} {}", "🤔".cyan(), question.bold());
 
-    // 把 (label, description) 转成 inquire 显示文本
     const OTHER_LABEL: &str = "其他（自由输入）";
     let display_items: Vec<String> = options
         .iter()
@@ -242,7 +240,6 @@ async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) ->
 
     let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
 
-    // inquire 是同步阻塞的，跑在 spawn_blocking 里
     tokio::task::spawn_blocking(move || {
         let select = inquire::Select::new("选择一项（ESC 取消）：", display_items.clone())
             .with_help_message("↑↓ 选择，Enter 确认，ESC 取消");
@@ -253,43 +250,39 @@ async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) ->
                         Ok(text) if !text.trim().is_empty() => UserAnswer::Custom { text },
                         _ => UserAnswer::Cancelled,
                     }
-                } else if let Some(idx) =
-                    display_items.iter().position(|d| d == &choice)
-                {
+                } else if let Some(idx) = display_items.iter().position(|d| d == &choice) {
                     let label = labels.get(idx).cloned().unwrap_or(choice);
                     UserAnswer::Selected { label }
                 } else {
                     UserAnswer::Selected { label: choice }
                 }
             }
-            Err(_) => UserAnswer::Cancelled, // ESC / Ctrl+C
+            Err(_) => UserAnswer::Cancelled,
         }
     })
     .await
     .unwrap_or(UserAnswer::Cancelled)
 }
 
-fn print_banner(client: &Arc<dyn ModelClient>, tools: &[String]) {
-    let provider = client.provider_id();
+fn print_banner(provider_display: &str, tools: &[String]) {
     let tool_str = if tools.is_empty() {
-        "none".dimmed().to_string()
+        "built-in".cyan().to_string()
     } else {
-        tools.join(", ").cyan().to_string()
+        format!("built-in + {}", tools.join(", "))
+            .cyan()
+            .to_string()
     };
     eprintln!("{}", "Hebbian CLI".bold());
     eprintln!(
         "  provider: {} · tools: {}",
-        provider.cyan(),
+        provider_display.cyan(),
         tool_str,
     );
-    eprintln!(
-        "  {}",
-        "Ctrl+D 退出 · /exit 退出 · 上下文跨 turn 自动累积".dimmed()
-    );
+    eprintln!("  {}", "Ctrl+C / Ctrl+D / /exit 退出".dimmed());
     eprintln!();
 }
 
-/// JSON 多轮上下文输入格式
+/// JSON 多轮上下文输入格式。
 #[derive(serde::Deserialize)]
 pub struct ConvoInput {
     pub messages: Vec<ConvoMessage>,

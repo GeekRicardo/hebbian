@@ -10,7 +10,7 @@ use crate::{
         has_image_generation_tool, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage,
     },
 };
-use platform::{runtime as cancellation, CancelFlag};
+use platform::CancelFlag;
 
 pub struct GeminiClient {
     provider: Provider,
@@ -59,21 +59,24 @@ impl ModelClient for GeminiClient {
         let url = self.url(&req.model, false);
         let body = proto::build_body(&req);
 
-        let future = async {
-            let resp = apply_auth(self.http.post(&url), &self.provider)
-                .json(&body)
-                .send()
-                .await?;
-            let status = resp.status().as_u16();
-            let text = resp.text().await?;
-            if status >= 400 {
-                return Err(ModelError::Http { status, body: text });
+        super::retry_request(cancel, || {
+            let body = body.clone();
+            let url = url.clone();
+            async move {
+                let resp = apply_auth(self.http.post(&url), &self.provider)
+                    .json(&body)
+                    .send()
+                    .await?;
+                let status = resp.status().as_u16();
+                let text = resp.text().await?;
+                if status >= 400 {
+                    return Err(ModelError::Http { status, body: text });
+                }
+                let v: Value = serde_json::from_str(&text)?;
+                Ok(proto::parse_response(&v))
             }
-            let v: Value = serde_json::from_str(&text)?;
-            Ok(proto::parse_response(&v))
-        };
-
-        wait_or_cancel(future, cancel).await
+        })
+        .await
     }
 
     async fn stream(
@@ -86,23 +89,23 @@ impl ModelClient for GeminiClient {
         let url = self.url(&req.model, true);
         let body = proto::build_body(&req);
 
-        let resp = wait_or_cancel(
-            async {
+        let resp = super::retry_request(cancel.clone(), || {
+            let body = body.clone();
+            let url = url.clone();
+            async move {
                 let r = apply_auth(self.http.post(&url), &self.provider)
                     .json(&body)
                     .send()
                     .await?;
-                Ok::<_, ModelError>(r)
-            },
-            cancel.clone(),
-        )
+                let status = r.status().as_u16();
+                if status >= 400 {
+                    let body = r.text().await?;
+                    return Err(ModelError::Http { status, body });
+                }
+                Ok(r)
+            }
+        })
         .await?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let body = resp.text().await?;
-            return Err(ModelError::Http { status, body });
-        }
 
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
@@ -154,18 +157,4 @@ fn reject_image_generation_tool(req: &ModelRequest) -> Result<(), ModelError> {
         ));
     }
     Ok(())
-}
-
-async fn wait_or_cancel<T, F>(fut: F, cancel: CancelFlag) -> Result<T, ModelError>
-where
-    F: std::future::Future<Output = Result<T, ModelError>>,
-{
-    tokio::select! {
-        res = fut => res,
-        _ = async {
-            while !cancellation::is_cancelled(&cancel) {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        } => Err(ModelError::Cancelled),
-    }
 }

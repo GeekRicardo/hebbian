@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
+  AppSettings,
   AuthUrlResult,
   CodexTokenInfo,
   DeviceCodeInfo,
@@ -149,6 +150,43 @@ export const api = {
 
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),
+
+  // ── settings ──
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  saveSettings: (settings: AppSettings) =>
+    invoke<void>("save_settings", { settings }),
+
+  /** 更新对话级设置；任一字段不传 = 保持原值，传 null = 清空（回退全局默认） */
+  updateSessionSettings: (
+    id: string,
+    patch: {
+      workdir?: string | null;
+      allowed_dirs?: string[] | null;
+      enabled_tools?: string[] | null;
+      skill_dirs?: string[] | null;
+    }
+  ) =>
+    invoke<Session>("update_session_settings", {
+      id,
+      ...("workdir" in patch ? { workdir: patch.workdir } : {}),
+      ...("allowed_dirs" in patch ? { allowedDirs: patch.allowed_dirs } : {}),
+      ...("enabled_tools" in patch ? { enabledTools: patch.enabled_tools } : {}),
+      ...("skill_dirs" in patch ? { skillDirs: patch.skill_dirs } : {}),
+    }),
+
+  /** PathAccess 审批专用：scope 决定持久化到哪。"this_project" = session，"all_project" = 全局，"once" = 只放行本次 */
+  approvePathAccess: (
+    requestId: string,
+    paths: string[],
+    scope: "once" | "this_project" | "all_project",
+    sessionId: string | null
+  ) =>
+    invoke<void>("approve_path_access", {
+      requestId,
+      paths,
+      scope,
+      sessionId,
+    }),
 
   // oauth — OpenAI/Codex Device flow
   oauthCodexStart: () => invoke<DeviceCodeInfo>("oauth_codex_start"),

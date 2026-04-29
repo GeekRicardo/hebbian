@@ -88,6 +88,18 @@ pub struct Session {
     pub stream: bool,
     #[serde(default)]
     pub messages: Vec<Message>,
+    /// 对话工作目录。`None` = 用全局默认（通常 `~/`）。
+    #[serde(default)]
+    pub workdir: Option<PathBuf>,
+    /// 对话允许访问的额外目录。`None` = 用全局默认。
+    #[serde(default)]
+    pub allowed_dirs: Option<Vec<PathBuf>>,
+    /// 对话启用的非内置工具（来自 `tool_manifest`）。`None` = 用全局默认。
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    /// 对话使用的 skill 目录列表。`None` = 用全局默认。
+    #[serde(default)]
+    pub skill_dirs: Option<Vec<PathBuf>>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -252,6 +264,10 @@ pub fn create(
         prompt_id,
         stream: true,
         messages: Vec::new(),
+        workdir: None,
+        allowed_dirs: None,
+        enabled_tools: None,
+        skill_dirs: None,
         created_at: now(),
         updated_at: now(),
     };
@@ -297,6 +313,10 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         prompt_id: src.prompt_id,
         stream: src.stream,
         messages: msgs,
+        workdir: src.workdir,
+        allowed_dirs: src.allowed_dirs,
+        enabled_tools: src.enabled_tools,
+        skill_dirs: src.skill_dirs,
         created_at: now(),
         updated_at: now(),
     };

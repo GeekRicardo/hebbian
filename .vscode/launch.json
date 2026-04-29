@@ -1,0 +1,60 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Desktop: Tauri app",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["run", "-p", "hebbian"],
+        "filter": {
+          "name": "hebbian",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      },
+      "preLaunchTask": "desktop:vite-dev"
+    },
+    {
+      "name": "CLI: interactive",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["run", "-p", "hebbian-cli"],
+        "filter": {
+          "name": "hebbian-cli",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "name": "CLI: mock one-shot",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["run", "-p", "hebbian-cli"],
+        "filter": {
+          "name": "hebbian-cli",
+          "kind": "bin"
+        }
+      },
+      "args": ["--mock", "用一句话介绍 Hebbian"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      }
+    }
+  ]
+}

@@ -19,12 +19,16 @@ use model_gateway::{
     health::{self as provider_health, ProviderModelTestResult},
 };
 use platform::{
-    config::prompts::{self as prompts, Prompt, PromptsFile},
+    config::{
+        prompts::{self as prompts, Prompt, PromptsFile},
+        settings::{self as settings_store, Settings},
+    },
     runtime as cancellation,
     storage::sessions::{
         self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta,
     },
 };
+use std::path::PathBuf;
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 fn data_dir(app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -315,7 +319,8 @@ fn answer_question(
         "cancelled" => protocol::UserAnswer::Cancelled,
         other => return Err(AppError::msg(format!("未知 kind: {other}"))),
     };
-    hitl.answer_question(&request_id, answer).map_err(AppError::msg)
+    hitl.answer_question(&request_id, answer)
+        .map_err(AppError::msg)
 }
 
 #[tauri::command]
@@ -337,6 +342,103 @@ async fn generate_session_title(app: AppHandle, id: String) -> AppResult<Session
 #[tauri::command]
 fn list_tools() -> Vec<ToolInfo> {
     tools::tool_manifest()
+}
+
+// ========== Settings ==========
+
+#[tauri::command]
+fn get_settings(app: AppHandle) -> AppResult<Settings> {
+    Ok(settings_store::load(&data_dir(&app)?))
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
+    settings_store::save(&data_dir(&app)?, &settings)
+}
+
+/// 更新对话级设置（workdir / allowed_dirs / enabled_tools / skill_dirs）。
+/// 任一字段传 `null` = 清空（回退到全局默认）。
+#[tauri::command]
+fn update_session_settings(
+    app: AppHandle,
+    id: String,
+    workdir: Option<Option<PathBuf>>,
+    allowed_dirs: Option<Option<Vec<PathBuf>>>,
+    enabled_tools: Option<Option<Vec<String>>>,
+    skill_dirs: Option<Option<Vec<PathBuf>>>,
+) -> AppResult<Session> {
+    let dd = data_dir(&app)?;
+    let mut s = sessions::load(&dd, &id)?;
+    if let Some(v) = workdir {
+        s.workdir = v;
+    }
+    if let Some(v) = allowed_dirs {
+        s.allowed_dirs = v;
+    }
+    if let Some(v) = enabled_tools {
+        s.enabled_tools = v;
+    }
+    if let Some(v) = skill_dirs {
+        s.skill_dirs = v;
+    }
+    sessions::save(&dd, s)
+}
+
+/// 审批越界路径并落盘到 session（this-project）或全局 settings（all-project）。
+/// 在 UI 用户点击 "this-project" / "all-project" 按钮时调用，
+/// 内部会先把目录加进对应存储，再 resolve `request_id`（AllowOnce 语义即可生效本轮）。
+#[tauri::command]
+fn approve_path_access(
+    app: AppHandle,
+    hitl: State<'_, Arc<HitlState>>,
+    request_id: String,
+    paths: Vec<PathBuf>,
+    scope: String,
+    session_id: Option<String>,
+) -> AppResult<()> {
+    let dd = data_dir(&app)?;
+    match scope.as_str() {
+        "this_project" => {
+            let session_id = session_id.ok_or_else(|| {
+                AppError::msg("approve_path_access: this_project 需要 session_id")
+            })?;
+            let mut s = sessions::load(&dd, &session_id)?;
+            let mut existing = s.allowed_dirs.unwrap_or_default();
+            for p in &paths {
+                if !existing.iter().any(|d| d == p) {
+                    existing.push(p.clone());
+                }
+            }
+            s.allowed_dirs = Some(existing);
+            sessions::save(&dd, s)?;
+        }
+        "all_project" => {
+            let mut settings = settings_store::load(&dd);
+            for p in &paths {
+                if !settings.conversation.allowed_dirs.iter().any(|d| d == p) {
+                    settings.conversation.allowed_dirs.push(p.clone());
+                }
+            }
+            settings_store::save(&dd, &settings)?;
+        }
+        "once" => {
+            // 不持久化，仅放行本次
+        }
+        other => return Err(AppError::msg(format!("未知 scope: {other}"))),
+    }
+    // resolve gate；workspace.add_allowed_dir 已经由 agent_loop 在 AllowAndRemember 时执行
+    let scope_enum = match scope.as_str() {
+        "all_project" => protocol::PermissionScope::Global,
+        "this_project" => protocol::PermissionScope::Session,
+        _ => protocol::PermissionScope::Run,
+    };
+    let decision = if scope == "once" {
+        protocol::ApprovalDecision::AllowOnce
+    } else {
+        protocol::ApprovalDecision::AllowAndRemember { scope: scope_enum }
+    };
+    hitl.resolve_approval(&request_id, decision)
+        .map_err(AppError::msg)
 }
 
 // ========== OAuth ==========
@@ -474,6 +576,10 @@ pub fn run() {
             answer_question,
             generate_session_title,
             list_tools,
+            get_settings,
+            save_settings,
+            update_session_settings,
+            approve_path_access,
             oauth_codex_start,
             oauth_codex_poll,
             oauth_codex_refresh,

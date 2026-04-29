@@ -153,8 +153,31 @@ export interface Session {
   prompt_id?: string | null;
   stream: boolean;
   messages: Message[];
+  /** 对话工作目录。null = 用全局默认（通常 ~/）。 */
+  workdir?: string | null;
+  /** 对话允许访问的额外目录。null = 用全局默认。 */
+  allowed_dirs?: string[] | null;
+  /** 对话启用的非内置工具。null = 用全局默认。 */
+  enabled_tools?: string[] | null;
+  /** 对话使用的 skill 目录列表。null = 用全局默认。 */
+  skill_dirs?: string[] | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface AppSettings {
+  general: {
+    launch_at_login: boolean;
+  };
+  conversation: {
+    workdir?: string | null;
+    allowed_dirs: string[];
+    enabled_tools: string[];
+    skill_dirs: string[];
+  };
+  agents: {
+    default_prompt_id?: string | null;
+  };
 }
 
 export interface SessionMeta {
@@ -200,6 +223,9 @@ export type EngineEvent =
       input: unknown;
       summary: string;
       risk: "low" | "medium" | "high" | "critical";
+      /** 当 kind=PathAccess 时附带越界路径列表 */
+      paths?: string[];
+      kind?: "tool_call" | "path_access" | "plan" | "continue_long_run";
     }
   | {
       type: "permission_resolved";
@@ -227,6 +253,9 @@ export interface PendingApproval {
   input: unknown;
   summary: string;
   risk: "low" | "medium" | "high" | "critical";
+  /** PathAccess 类审批专用：越界路径列表 */
+  paths?: string[];
+  kind: "tool_call" | "path_access" | "plan" | "continue_long_run";
 }
 
 /** 用户对审批的回应 */

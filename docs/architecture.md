@@ -1,12 +1,68 @@
 # Hebbian 架构
 
-> 本文是 Hebbian 项目的目标架构。它直接面向实现，每一节都包含三类信息：
+> 本文是 Hebbian 项目的目标架构。前半（设计前言）说明项目为什么这样切，后半（§0 起）描述这套切分落到代码上长什么样。每一节包含三类信息：
 >
 > - **职责**：这一层对外提供什么能力，对内拆成什么子模块。
 > - **现状**：仓库里当下的实现位置，列出关键 trait / struct / 文件路径。
 > - **差距与演进**：要达到生产可用还需要补什么、按什么顺序补。
->
-> 项目的核心判断是 **Agent = Model + Harness**：模型是可替换的，harness 是产品本体。本文不解释为什么如此，只描述这个判断落到代码上长什么样。
+
+---
+
+## 设计前言：这个项目为什么要这样做
+
+这部分不是抽象架构原则，而是项目一开始就应该被保留下来的设计动机。
+
+### 核心判断
+
+- 借鉴 `claude-code-haha` 与 `codex`，但不照搬它们的实现细节，借鉴背后的 **harness engineering** 思路。
+- App 里目前只有一个 agent 页面入口，但这个页面只是入口，不应该成为 agent 本体。
+- 这个项目不会只停留在桌面窗口，必须能自然长出 TUI / server / ACP / Slack / Webhook 等外部 channel。
+- 前期架构必须既**足够简单**，又**天然可扩展**。
+
+### 这里说的「简单」不是功能弱
+
+- 不过度设计，不过度抽象
+- 不一开始就做插件系统、复杂 DAG、agent team、scheduler、memory graph
+- 不把 UI、运行时、模型访问、工具、权限、状态混在一起
+- 先把真正长期稳定的边界切清楚
+
+> **简单的结构，清楚的边界，稳定的协议，后续可扩展的核心。**
+
+### 最重要的产品判断
+
+> **Agent = Model + Harness**
+
+模型不是产品，真正可扩展、可复用、可持续演化的是外层那一层 harness：上下文管理、工具系统、权限控制、状态机、事件流、验证、恢复、记忆、运行时边界。
+
+- UI surface 只是入口
+- Agent harness 才是产品核心
+- Runtime / Model adapters 负责连接 Claude / Codex / Gemini / 未来更多 provider
+
+### 必须坚持的方向
+
+当前只保留一个 agent 页面入口是为了先把核心跑通；从架构上，这个入口绝不能和 agent 本体绑死。
+
+正确方向：
+
+- **一个稳定的 Agent Core / Harness**
+- **一个统一的 Model Gateway**
+- **多个可替换的 Surface**（Desktop / TUI / Server / CLI）
+- **多个可扩展的 Channel**（Slack / Webhook / Cron / ACP / workflow）
+
+接任何新入口，都不是重写 agent，而只是给同一个核心增加新的适配层。
+
+### 本文回答的本质问题
+
+不是「当前 Tauri 工程怎么分目录」，而是：
+
+1. 哪一层才是产品核心？
+2. 哪一层只是入口壳？
+3. provider / oauth / protocol 应该归在哪？
+4. subagent / multi-agent 将来怎么自然长出来？
+5. context / memory / hooks / observability 应该挂在哪一层？
+6. 扩展到 TUI / server / ACP / channel 时，哪些部分应该完全不用重写？
+
+如果后面的任何设计违背了这段前言，就说明架构开始偏了。
 
 ---
 
@@ -73,7 +129,7 @@ hebbian/
 │   ├── channels/          差距：未建立
 │   └── sandbox/           差距：未建立（可选，按 surface 引入）
 │
-├── src/desktop/ui/        现状：React 组件、Tauri bridge、store
+├── apps/desktop/frontend/ 现状：React 组件、Tauri bridge、store
 ├── configs/               差距：agent 角色定义、permission policy、hooks
 ├── docs/                  现状：本文档、随记、todos
 └── tests/                 差距：当前为空
@@ -251,104 +307,164 @@ pub enum EventPayload {
 
 Core 是产品本体。它解决"一个 agent 如何可靠地从输入跑到输出"，包含 7 个紧密耦合的子系统。
 
-### 3.1 Harness
+### 3.1 Harness 与 Session / RunHandle
 
-`Harness` 是 Core 的对外门面。它持有：
+Core 暴露三层对象，职责清晰、生命周期递进：
 
-- 一个 `Submission` 接收端（在 actor task 里循环消费）
-- 一张 `RunRegistry`：`RunId -> RunHandle`
-- 一个 `Event` 广播总线（`tokio::sync::broadcast`），任何 surface 通过 `Subscribe` 拿到 receiver
-- 依赖注入：`ModelClient`、`ToolRegistry`、`MemoryStore`、`HookManager`、`PermissionPolicy`、`PersistenceStore`
+```text
+Harness    长生命周期工厂      持有 ToolRegistry / HookManager / Gateway 依赖
+  └── Session   会话上下文       持有 transcript / workspace / definition / client
+        └── RunHandle  一次 run 的句柄  独占事件流 + 控制方法
+```
 
 ```rust
 // crates/agent-core/src/harness.rs
 pub struct Harness {
-    runtime: Arc<HarnessRuntime>,    // 持有所有依赖与 RunRegistry
-    submit_tx: mpsc::Sender<Submission>,
+    registry: Arc<ToolRegistry>,
+    hooks: Arc<HookManager>,
+    blob_store: Arc<dyn BlobStore>,
+    persistence: Arc<dyn PersistenceStore>,
+    submit_tx: mpsc::Sender<Submission>,   // wire 协议入口（远端/跨进程用）
 }
 
 impl Harness {
-    pub fn submit(&self, op: Op) -> Result<SubmissionId> { ... }
-    pub fn subscribe(&self, run: &RunId, since_seq: Option<u64>) -> EventStream { ... }
-    pub fn handle(&self) -> HarnessHandle { ... }   // 给 channel/tool 用的轻量句柄
+    pub fn session(&self, config: SessionConfig) -> Session;
+    pub fn submit(&self, op: Op) -> Result<SubmissionId>;          // 只在远端/跨进程入口走
+    pub fn subscribe(&self, run: &RunId, since_seq: Option<u64>) -> EventStream;  // 断线重连
+}
+
+pub struct Session {
+    transcript: Transcript,
+    workspace: Arc<Workspace>,
+    definition: AgentDefinition,
+    client: Arc<dyn ModelClient>,
+}
+
+impl Session {
+    pub fn append_user(&mut self, text: String, attachments: Vec<MessageAttachment>);
+    pub fn run(&mut self) -> RunHandle;                           // 内部用累积的 transcript
+    pub fn snapshot(&self) -> SessionSnapshot;                    // 落盘 / fork
+}
+
+pub struct RunHandle {
+    run_id: RunId,
+    events: mpsc::Receiver<Event>,                                // 独享流，无需 filter run_id
+    control: RunControl,                                          // 内部持 gate / cancel
+}
+
+impl RunHandle {
+    pub fn id(&self) -> &RunId;
+    pub async fn recv(&mut self) -> Option<Event>;
+    pub fn resolve(&self, request_id: &PermissionRequestId, decision: ApprovalDecision);
+    pub fn answer(&self, request_id: &PermissionRequestId, answer: UserAnswer);
+    pub fn interrupt(&self);
+    pub async fn drive<O: TurnObserver>(self, observer: &mut O) -> TurnSummary;
+}
+
+impl Drop for RunHandle {
+    fn drop(&mut self) { self.control.cancel(); }                 // drop 即取消，避免泄漏
 }
 ```
 
 设计要点：
 
-- Harness 只暴露 **submit / subscribe** 两个动词。所有更复杂的交互都是 Op 的不同 variant。
-- `HarnessHandle` 是 clone 友好的轻量句柄，传给工具、子 agent、channel adapter，避免循环引用。
+- **本进程内调用拿 `RunHandle`**，`RunId` 只在跨进程场景使用（resume / SSE 重连 / channel adapter）。
+- **`Session` 是 transcript 的唯一所有者**。`run()` 内部把 transcript 借给 agent loop，run 结束后 transcript 已就绪，外面直接读取。
+- **`Harness` 跨 session 共享**。Surface 持有一个 Harness 实例，每个对话一个 Session，每条 user message 一个 RunHandle。
+- **`HitlGate` / `CancelFlag` 封装在 RunHandle 内部**，公共 API 上看不到。
+- **`submit(Op)` 用于跨进程入口**：Server / Channel / 远端恢复走它，本地走 `session.run()`。
 
-**现状**：`crates/agent-core/src/harness.rs` 已有 `Harness` 结构，但目前是"调一次 run 一个生命周期"的模式（`pub async fn run(...)`），没有 SQ/EQ 队列也没有 `RunRegistry`。
+`TurnObserver` 是 surface 接入 RunHandle 的标准方式（避免每个 surface 重写事件循环）：
 
-**演进**：把 `run()` 拆成 `submit()` + 内部 actor。同一个 Harness 实例必须能同时持有多个并发 run。
-
-### 3.2 Run / Turn / Step：三级生命周期
-
-```text
-Run     一次完整对话（可能跨多 turn，可被中断、压缩、fork、resume）
- └── Turn   一次"用户输入 → 助手最终输出"的往返
-      └── Step   一次模型调用 + 0..N 个 tool 执行
+```rust
+#[async_trait]
+pub trait TurnObserver: Send {
+    fn on_text_delta(&mut self, text: &str) {}
+    fn on_tool_started(&mut self, call: &ToolCallView) {}
+    fn on_tool_finished(&mut self, result: &ToolResultView) {}
+    fn on_compaction(&mut self, info: &CompactionInfo) {}
+    async fn on_permission_request(&mut self, req: PermissionRequest) -> ApprovalDecision;
+    async fn on_question(&mut self, q: UserQuestion) -> UserAnswer;
+}
 ```
 
-**Turn 必须显式持有 TurnContext**（这一点直接借自 codex）：
+CLI 实现 = 终端渲染 + inquire 选择器；Desktop 实现 = 翻 EngineEvent + 注册 HitlState。事件循环、`run_id` 过滤、HITL 路由全在 `RunHandle::drive()` 里完成，surface 不再持有循环代码。
+
+### 3.2 Session / Run / Turn / Step：四级生命周期
+
+```text
+Session   会话           transcript / workspace / definition / client 的容器
+ └── Run        一次执行    run() 调用 → 直到 RunFinished/Failed/Cancelled
+      └── Turn       一次往返   "用户输入 → 助手最终输出"
+           └── Step       一次步进  模型调用 + 0..N 个 tool 并发执行
+```
+
+**Turn 显式持有 TurnContext**（借鉴 codex）：
 
 ```rust
 pub struct TurnContext {
-    pub model: ModelSelector,           // 这个 turn 用哪个 model
-    pub tools: ToolSetSnapshot,         // 这个 turn 启用哪些 tool
-    pub approval: ApprovalPolicy,       // 这个 turn 的审批策略
-    pub sandbox: SandboxPolicy,         // 这个 turn 的沙箱策略
+    pub model: ModelSelector,           // 本 turn 用的 model（可逐 turn 切换）
+    pub tools: ToolSetSnapshot,         // 本 turn 启用的 tools
+    pub approval: ApprovalPolicy,
+    pub sandbox: SandboxPolicy,
     pub context_policy: ContextPolicy,  // 给子 agent 用
     pub budget: TokenBudget,
-    pub cwd: Option<PathBuf>,
+    pub iteration_budget: u32,          // tool 迭代上限
 }
 ```
 
 意义：
 
-- 同一个 run 的不同 turn 可以切换 model（"先 Sonnet 草拟、再 Opus 审"）
-- Fork / Rollback 时不需要重建配置——直接复制 `TurnContext`
-- 所有审批与沙箱判定都在 `TurnContext` 范围内做，避免隐式全局状态
+- 同一个 Session 的不同 turn 可以切换 model（"先 Sonnet 草拟、再 Opus 审"）
+- Fork / Rollback 复制 `TurnContext` 即可重建配置
+- 审批 / 沙箱 / 预算都限定在 `TurnContext` 范围，无隐式全局状态
 
-**现状**：`agent_loop.rs` 直接接收一堆参数（`enabled_tools`, `compaction_policy`, `stream`, ...），没有 `TurnContext` 这个抽象。
-
-**演进**：把这些参数收拢成 `TurnContext`，由 `Op::StartRun.turn_overrides` 和 `AgentDefinition` 共同决定。
+`TurnContext` 由三处合并产生：`AgentDefinition` 默认值 → Session 配置 → `Op::StartRun.turn_overrides` / `session.run_with(overrides)` 临时覆盖。
 
 ### 3.3 Agent Loop
 
-Loop 是 Core 中最稳定、也是最容易被乱改的部分。规约如下：
+Loop 由几个职责单一的对象组合而成：
 
-```text
-loop:
-  1. 检查取消
-  2. 触发 BeforeTurn hooks（含 memory 注入）
-  3. 检查 token budget，必要时调用 Context Engine 压缩
-  4. 组装 ModelRequest（system + transcript + tools）
-  5. 调用 Gateway，按 stream 转发 TextDelta / ToolCallDelta
-  6. 模型返回：
-     - Done → 触发 AfterTurn hooks → 返回
-     - ToolCalls → 进入 7
-  7. 对每个 tool call：
-     - 触发 BeforeToolCall hooks
-     - 询问 PermissionGate（可能挂起等待 Approve）
-     - 在 sandbox 里执行
-     - 触发 AfterToolCall hooks
-     - 把结果写回 transcript
-  8. iteration += 1，回到 1
-  9. 达到 MAX_ITERATIONS 时不直接 fail，而是询问用户是否继续
+```rust
+pub struct AgentLoop<'a> {
+    transcript: &'a mut Transcript,
+    compactor: ContextCompactor,
+    dispatcher: ToolDispatcher,         // path 审批 → 工具审批 → 执行 → emit 全在它内部
+    hooks: &'a HookManager,
+    sink: EventSink,
+    state: Arc<RunState>,
+}
+
+impl AgentLoop<'_> {
+    pub async fn run(mut self, ctx: TurnContext) -> Result<TurnSummary, LoopError>;
+}
+
+pub enum LoopError {
+    Model(ModelError),
+    Cancelled,
+    MaxIterations { limit: u32 },
+    Tool(ToolDispatchError),
+}
 ```
 
-**现状**（`crates/agent-core/src/agent_loop.rs`）：
+`ToolDispatcher` 单独负责「派发一组 tool call 并发返回 `Vec<ToolResult>`」：路径审批、工具审批、ask 提问、超时、cancel、emit 全在它内部，run loop 只看到 `Vec<ToolResult>`。`LoopError` 把模型错误 / 取消 / 迭代超限 / 工具失败拆开，surface 拿到能给用户精确提示。
 
-- 已有 1、3、4、5、6、7 的主体（含工具并发执行 `join_all`）
-- hooks 在 BeforeTool / AfterTool 已挂上
-- 压缩在循环顶端做，使用 `compact_structural`
-- **缺**：BeforeTurn / AfterTurn hook 点
-- **缺**：超过 `MAX_TOOL_ITERATIONS=10` 直接 `RunFailed`，没有"询问继续"的口子（详见 §11.5）
-- **缺**：permission gate 当前只有 Allowed / Denied 两态，没有"挂起等用户审批"的第三态
+```text
+turn:
+  1. 触发 BeforeModelCall（hook 可改 ModelRequest，见 §3.8）
+  2. 组装 ModelRequest（带 prompt cache 边界，见 §3.6）
+  3. 调用 Gateway，按 stream 转发 TextDelta / ToolCallDelta
+  4. 模型返回：
+     - Done → push_assistant → 返回 Finished
+     - ToolCalls → 5
+  5. ToolDispatcher.dispatch(calls)：
+     - ReadOnly tools 并发执行
+     - NeedsApproval / NeedsHumanInput 串行 await（见 §11）
+     - 全部完成后写回 transcript
+  6. iteration += 1；超 budget 时 emit ContinueLongRun 审批（见 §11.5）
+```
 
-**演进**：
+`PermissionDecision` 三态：
 
 ```rust
 pub enum PermissionDecision {
@@ -358,7 +474,7 @@ pub enum PermissionDecision {
 }
 ```
 
-当 loop 拿到 `NeedsApproval` 时：发出 `PermissionRequested` 事件 → 在 `Run` 状态里登记一个 oneshot waiter → 暂停该 tool 的执行 → 直到 `Op::Approve` 到达 → resolve waiter → 继续。**注意**：同一 turn 内的其他 tool call 应该并行不阻塞，每个 tool 各自挂自己的 waiter。
+NeedsApproval 触发流：emit `PermissionRequested` → `RunHandle.control` 登记 oneshot waiter → 该 tool future await → 用户回应 → resolve waiter → 继续执行。同 turn 内多个工具的 waiter 互相独立，但**串行 await**——见 §11.2 的并发规则。
 
 ### 3.4 Tool 系统
 
@@ -366,77 +482,108 @@ pub enum PermissionDecision {
 // crates/agent-core/src/tools/mod.rs
 #[async_trait]
 pub trait Tool: Send + Sync {
-    fn spec(&self) -> &ToolSpec;          // name + description + JSON schema
-    fn classify(&self, input: &Value) -> ToolClassification;  // ReadOnly / Mutating / Destructive / Network
+    fn spec(&self) -> &ToolSpec;                              // name + description + JSON schema
+    fn classify(&self, input: &Value) -> ToolClass;           // 自报 HITL 需求与并发策略
+    fn affected_paths(&self, input: &Value) -> Vec<PathBuf> { Vec::new() }
     async fn invoke(&self, ctx: ToolCtx<'_>, input: Value) -> ToolResult;
+}
+
+pub enum ToolClass {
+    ReadOnly,                                                 // 并发执行，免审批
+    Network,                                                  // 默认询问（远端 channel 强制 ask）
+    Mutating { risk: RiskLevel },                             // 串行执行，按 policy 询问
+    Destructive { risk: RiskLevel },                          // 串行 + 默认 ask
+    NeedsHumanInput { kind: HumanInputKind },                 // 走 HitlGate.ask 路径（如 ask 工具）
 }
 
 pub struct ToolCtx<'a> {
     pub run_id: &'a RunId,
     pub turn_ctx: &'a TurnContext,
-    pub harness: &'a HarnessHandle,       // 让工具可以 spawn 子 run
+    pub harness: &'a HarnessHandle,                           // 让工具可 spawn 子 run
     pub cancel: CancelFlag,
-    pub blob_store: &'a dyn BlobStore,    // 用来把大输出落 blob
+    pub blob_store: &'a dyn BlobStore,
 }
 
 pub struct ToolResult {
-    pub content: ToolContent,             // Text / Json / BlobRef / Multi
-    pub metadata: ToolMetadata,           // 是否截断、原始大小、外链等
+    pub call_id: String,
+    pub name: String,
+    pub outcome: ToolOutcome,
+    pub metadata: ToolMetadata,                               // 截断标记、原始大小、外链等
+}
+
+pub enum ToolOutcome {
+    Ok { content: ToolContent, attachments: Vec<MessageAttachment> },
+    Denied { reason: DenyReason },                            // 路径越界 / 权限被拒
+    Failed { error: String },                                 // 执行异常
+}
+
+pub enum ToolContent {
+    Text(String),
+    Json(Value),
+    BlobRef { id: BlobId, preview: String, mime: String },
+    Multi(Vec<ToolContent>),
 }
 ```
 
 设计要点：
 
-- **`classify` 是权限系统的核心输入**。`Destructive` 默认需要审批，`ReadOnly` 默认放行。
-- `ToolResult` 不强制把所有内容塞进 transcript：网页正文、大文件、长日志默认走 `BlobRef`，transcript 里只放 preview + ref。这是 Context Engine 第一层压缩（见 §3.6）。
-- 工具通过 `ctx.harness` 可以 `submit(StartRun {...})` 起子 agent —— `spawn_agent` 工具不再是特殊魔法，而是普通工具。
+- **`classify` 是权限与并发的统一入口**。Dispatcher 按 ToolClass 决定要不要并发、要不要走 HitlGate、走哪条 HITL 路径。
+- **`NeedsHumanInput` 是普通工具分类**，`ask` 是其中一个实例（不再特判 `call.name == ASK_TOOL_NAME`）。
+- **`ToolOutcome` 把"被拒/失败/正常"在协议层分开**。模型 prompt 层做格式化，UI 直接根据 outcome 染色，统计层能算成功率。
+- **`ToolContent::BlobRef`** 是 Context Engine 第一层压缩入口。超阈值的输出由 dispatcher 自动落 blob，transcript 只见 preview + ref。
+- 工具通过 `ctx.harness` 可以 `submit(StartRun {...})` 起子 agent，`spawn_agent` 是 ReadOnly 类的普通工具。
 
-**现状**：
+#### 三类工具的来源
 
-- `Tool` trait 已有 `name / description / parameters_schema / execute(input) -> AppResult<String>`
-- 已实现的工具：`web_fetch`、`web_search`
-- **缺**：`classify` 方法、`ToolCtx` 上下文、`ToolResult` 结构（当前直接返回 `String`）
-- **缺**：`BlobStore` 接入（大输出现在直接被截断到 6000 字符塞回 transcript）
+每轮 ModelRequest.tools 由这三类组合：
 
-**演进顺序**：先补 `classify`（HITL 必需），再补 `ToolCtx`（multi-agent 必需），最后补 `BlobRef`（长上下文必需）。
+| 类别 | 暴露给 UI | 用户可关 | 注入策略 | 例子 |
+|------|----------|---------|---------|------|
+| **Builtin** | ❌ | ❌ | 每轮强制注入 | `ask`、`bash`、`read`、`write`、`grep` |
+| **Optional** | ✅ | ✅ | 按 `enabled_tools` 过滤 | `web_search`、`web_fetch` |
+| **Hosted** | ✅ | ✅ | 按 `enabled_tools` 过滤，仅传 schema | `image_generation` |
 
-#### 三类工具的边界
+三类工具都实现同一个 `Tool` trait——`classify` 决定 HITL 路径，`invoke` 决定执行方式：
 
-每轮 ModelRequest.tools 由这三类按需组合而成：
+- 普通工具（read/grep/web_*）`invoke` 跑本地逻辑
+- `ask` 工具 `classify` 返回 `NeedsHumanInput { kind: Question }`，`invoke` 由 dispatcher 接管走 HitlGate
+- Hosted 工具 `invoke` 永远不会被调（provider 端执行），core 只读它的 spec
 
-| 类别 | 暴露给 UI | 用户可关 | 调用执行点 | 例子 |
-|------|----------|---------|-----------|------|
-| **Builtin** | ❌ | ❌ | `agent_loop` 直接派发（绕过 ToolRegistry） | `ask`，未来 `bash` / `read` / `write` |
-| **Registry** | ✅ | ✅ | `Tool::execute()` 本地运行 | `web_search`、`web_fetch` |
-| **Hosted** | ✅ | ✅ | provider 端运行，core 只传 schema | `image_generation` |
+**注册约定**（[crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)）：
 
-**为什么内置工具不走 Tool trait**：内置工具的"执行"通常是与 HITL 紧耦合的等待操作（ask 等用户回应、bash 等审批过程），这与 `Tool::execute(input) -> AppResult<String>` 的同步纯函数契约不符。强行套进去会让 trait 退化成「空 execute + 真实逻辑藏在外部」，反而难懂。
+- `default_tools()` → 全部内置 Tool 实现
+- `hosted_tool_definitions(filter)` → provider 端工具 schema
+- `tool_manifest()` → UI 工具菜单元信息（仅 Optional + Hosted）
 
-**实现约定**（见 [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)）：
+### 3.5 HitlGate
 
-- `default_tools()` → registry 中的 Tool trait 实现
-- `hosted_tool_definitions(filter)` → provider 端工具的 schema
-- `builtin_tool_definitions()` → 内置工具的 schema（每轮强制注入）
-- `tool_manifest()` → 给 UI 工具菜单的元信息（**不**含 builtin）
-
-### 3.5 Permission Gate
-
-详见 §11，本节只列结构。
+`HitlGate` 是 HITL 的统一通道：审批（destructive 工具）、提问（ask 工具）、路径越界、长 run 续跑都走它。详见 §11，本节只列结构。
 
 ```rust
-pub struct PermissionGate {
+pub struct HitlGate {
     policy: ApprovalPolicy,
-    rules: Vec<PermissionRule>,           // 用户/项目/会话级累积
-    pending: Mutex<HashMap<PermissionRequestId, oneshot::Sender<ApprovalDecision>>>,
+    rules: Vec<PermissionRule>,                       // 用户/项目/会话级累积
+    pending: Mutex<HashMap<PermissionRequestId, PendingHitl>>,
 }
 
-impl PermissionGate {
-    pub async fn check(&self, tool: &dyn Tool, input: &Value, ctx: &TurnContext)
-        -> PermissionDecision { ... }
+enum PendingHitl {
+    Approval(oneshot::Sender<ApprovalDecision>),
+    Question(oneshot::Sender<UserAnswer>),
+}
 
-    pub fn resolve(&self, req: PermissionRequestId, decision: ApprovalDecision);
+impl HitlGate {
+    pub fn check(&self, tool: &dyn Tool, input: &Value, ctx: &TurnContext) -> PermissionDecision;
+    pub fn ask(&self, question: String, options: Vec<QuestionOption>) -> QuestionPending;
+    pub fn request_path_access(&self, tool: &str, paths: Vec<PathBuf>) -> ApprovalPending;
+    pub fn request_continue(&self, iteration: u32) -> ApprovalPending;
+
+    pub fn resolve(&self, req: &PermissionRequestId, decision: ApprovalDecision);
+    pub fn answer(&self, req: &PermissionRequestId, answer: UserAnswer);
+    pub fn cancel_all_pending(&self);
 }
 ```
+
+四种 pending 共用同一张 `pending` 表，靠 `PermissionRequestId` 命名空间统一调度；surface 通过 `EventPayload` 的 kind 字段判断该用审批 UI 还是提问 UI。
 
 ### 3.6 Context Engine
 
@@ -477,7 +624,25 @@ impl ContextEngine {
 
 - **压缩必须可见**：每次压缩发 `ContextCompacted { strategy, before_tokens, after_tokens, summary_msg_id }`。
 - **压缩可追溯**：摘要 message 持有原始 message id 范围，调试时可展开。
-- **子 agent 继承不是复制 transcript**：是按 `ContextPolicy` 投影。
+- **子 agent 继承按 `ContextPolicy` 投影**生成新 transcript（拷贝、摘要、按 id 选择三选一）。
+
+#### Prompt cache 边界
+
+`prepare_for_model()` 输出的 `ContextSnapshot` 把内容分成三段，让 provider 层精确告诉模型 API "缓存到这里"：
+
+```text
+[ STABLE   ]   AgentDefinition.system_prompt + 内置工具 spec
+———— cache breakpoint A ————
+[ SEMI     ]   workspace XML（allowed_dirs / cwd）
+———— cache breakpoint B ————
+[ MUTABLE  ]   transcript history + 当前 turn input
+```
+
+- STABLE 段在 Session 生命周期内不变，命中长效缓存
+- SEMI 段在用户授权新路径时变动，单次 turn 内稳定
+- MUTABLE 段每轮变化
+
+`ModelRequest` 携带 `cache_breakpoints: Vec<usize>`，Anthropic / OpenAI 协议层翻译成各自的 `cache_control` 标记。token 成本相比每轮整段重拼可降低 30-90%。
 
 #### `ContextPolicy` 枚举
 
@@ -495,7 +660,7 @@ pub enum ContextPolicy {
 
 ### 3.7 Multi-Agent Runtime
 
-子 agent 不是"工具技巧"，是 Core 协议的一等公民。
+子 agent 是 Core 协议的一等公民，通过普通工具（`spawn_agent` / `spawn_parallel`）触发。
 
 ```rust
 // crates/agent-core/src/multi_agent/mod.rs
@@ -530,19 +695,14 @@ pub enum Aggregator {
 
 ### 3.8 Hooks
 
-Hook 是 Core 的官方扩展点，用于注入"非 agent loop 主线"的关注点：memory、observability、自定义审计、shell 命令包装。
+Hook 是 Core 唯一的**可改变行为**的扩展点。观察类需求一律走 Event 流（surface 订阅 EventStream / observability crate 接 Signal），Hook 只保留四个能改控制流或数据的拦截点：
 
 ```rust
 pub enum HookPoint {
-    BeforeRun, AfterRun,
-    BeforeTurn, AfterTurn,
-    BeforeModelCall, AfterModelCall,
-    BeforeToolCall { tool: String },
-    AfterToolCall { tool: String },
-    BeforePermissionRequest,
-    OnContextCompaction,
-    OnMemoryWriteCandidate,
-    OnError,
+    BeforeModelCall { turn: u32 },          // 改 ModelRequest（注入记忆 / 改 system prefix / 加 tool）
+    OnPermissionCheck { tool: String },     // 旁路 HitlGate（学习规则 / 自动审批 / 强制询问）
+    OnToolResult { tool: String },          // 改写 ToolResult（截短 / 落 blob / 脱敏）
+    OnCompaction { strategy: CompactionStrategy },  // 自定义压缩
 }
 
 #[async_trait]
@@ -553,14 +713,12 @@ pub trait Hook: Send + Sync {
 
 pub enum HookOutcome {
     Continue,
-    Modify(HookPatch),                              // 改 transcript / 加 system prefix / 改 input
-    Block { reason: String },                       // 拦截这次操作
+    Modify(HookPatch),                       // 改 transcript / system / input / result / decision
+    Block { reason: String },                // 拦截这次操作
 }
 ```
 
-Memory 写入和注入应该实现成两个内置 hook，而不是写死在 loop 里。
-
-**现状**：`hooks/manager.rs` 与 `HookPoint` 已存在，loop 里挂了 `BeforeTool / AfterTool`。**缺** `BeforeRun / AfterRun / BeforeTurn / AfterTurn / BeforeModelCall / AfterModelCall` 等点位。
+Memory 注入与写候选实现为 `BeforeModelCall` / `OnToolResult` 两个内置 hook。Run / Turn 级生命周期监听通过订阅 `RunStarted / TurnStarted / RunFinished` 等事件实现，不再开 hook 点位。
 
 ---
 
@@ -840,37 +998,55 @@ UI 配套：一个 `Inspector` 组件，订阅同一条 EventStream 渲染：
 
 ### 9.1 Surface 共同规约
 
-- 启动时获取 `HarnessHandle`
-- 把用户输入翻译成 `Op`，调 `submit()`
-- 调 `subscribe()` 拿 `EventStream`，渲染
-- 不持有任何 agent 业务状态
+Surface 只做四件事：
 
-### 9.2 Desktop（现状重点）
+1. 启动时拿一个 `Harness` 实例（共享）
+2. 用 `harness.session(config)` 为每个对话建一个 `Session`
+3. 用户消息进来：`session.append_user(...)` → `session.run()` 拿 `RunHandle`
+4. 实现 `TurnObserver`，调 `handle.drive(&mut observer).await` 跑完一轮
+
+```rust
+#[async_trait]
+pub trait TurnObserver: Send {
+    fn on_text_delta(&mut self, text: &str) {}
+    fn on_tool_started(&mut self, call: &ToolCallView) {}
+    fn on_tool_finished(&mut self, result: &ToolResultView) {}
+    fn on_compaction(&mut self, info: &CompactionInfo) {}
+    async fn on_permission_request(&mut self, req: PermissionRequest) -> ApprovalDecision;
+    async fn on_question(&mut self, q: UserQuestion) -> UserAnswer;
+}
+```
+
+事件循环、`run_id` 过滤、HITL 路由、终止条件都在 `RunHandle::drive()` 内部完成。Surface 不写循环、不持有 gate Arc、不调 `resolve_permission` 反查。
+
+跨进程入口（HTTP / SSE / 远端 channel）走 `harness.submit(Op)` + `harness.subscribe(run_id, since_seq)` 的协议路径，本地不走。
+
+### 9.2 Desktop
 
 ```text
 apps/desktop/
 ├── src/                          Tauri Rust 端
 │   ├── main.rs / lib.rs          Tauri 启动 + command 注册
-│   ├── bridge.rs                 Op ↔ Tauri command 的薄翻译层
-│   └── chat.rs                   现状：直接调用 harness.run()，演进为 submit/subscribe
+│   ├── bridge.rs                 Tauri command ↔ Session/RunHandle 的薄翻译
+│   ├── observer.rs               TauriObserver 实现 TurnObserver
+│   ├── session_store.rs          SessionId → Session 注册表（持有 Harness 共享）
+│   └── chat.rs                   send_message / approve_permission / answer_question 路由
+├── frontend/
+│   ├── index.html                Vite 入口
+│   └── src/                      React 前端源码
+│       ├── ui/                   React 组件
+│       ├── bridge/tauri.ts       IPC 封装
+│       └── store/                前端状态
+├── package.json                  Desktop 前端脚本与依赖
+├── pnpm-lock.yaml                Desktop 前端锁文件
+├── vite.config.ts                Vite root / alias / dist 配置
+├── tsconfig.json                 TypeScript include / path alias
+├── tailwind.config.cjs           Tailwind content 扫描前端路径
+├── postcss.config.cjs            PostCSS 插件配置
 └── ...
-src/desktop/                       前端
-├── ui/                            React 组件
-├── bridge/tauri.ts                IPC 封装
-└── store/                         前端状态
 ```
 
-**现状**：
-
-- Tauri command 已有：`get_providers`、`save_providers`、`upsert_provider`、`list_provider_presets`、`fetch_provider_models`、`test_provider_model`、`list_prompts`、`upsert_prompt`、`delete_prompt`、`set_default_prompt`、`list_sessions`、`send_message`
-- 流式：`Channel<EngineEvent>` 已通
-- **缺** Inspector UI、permission approval UI
-
-**演进重点**：
-
-- `send_message` 拆成多个 `submit(Op::*)` 包装
-- 新建 `bridge.rs`，让 Tauri command 只做 Op 翻译，不调业务
-- 前端订阅 `EventStream`，permission UI 直接消费 `PermissionRequested` 事件
+`TauriObserver` 把 `on_*` 回调翻译成 `EngineEvent`，通过 `Channel<EngineEvent>` 发给 React。前端 `pendingApproval` 改为 `pendingHitl: PendingHitl[]` 队列（与 §11.2 的并发规则配套）。
 
 ### 9.3 TUI（未来）
 
@@ -976,48 +1152,48 @@ configs/
 
 ### 11.1 四个层次的 HITL
 
-| 层次 | 目的 | 触发 | 阻塞性 | 状态 |
-|------|------|------|--------|------|
-| **L1 Inline 审批** | "可以执行这个工具吗？" | tool 调用前（destructive） | 阻塞该 tool（其他 tool 仍并行） | ✓ |
-| **L1' Ask 提问** | "agent 主动问你拿建议" | agent 自己调 `ask` 工具 | 阻塞该工具 | ✓ |
-| **L2 Plan 审批** | "可以按这个计划继续吗？" | run 中段或开头 | 阻塞 run | ☐ |
-| **L3 终端确认** | "这次结果接受吗？" | run 结束前 | 阻塞 run finalize | ☐ |
+| 层次 | 目的 | 触发 | 阻塞性 | 走的 Gate 路径 |
+|------|------|------|--------|---------|
+| **L1 工具审批** | "可以执行这个工具吗？" | `Tool::classify` 返回 `Mutating/Destructive/Network` 且 policy 命中 | 阻塞该 tool 与同 turn 后续 tools | `HitlGate.check` → ApprovalDecision |
+| **L1' 路径审批** | "可以访问 workspace 外的路径吗？" | `Tool::affected_paths` 越界 | 阻塞该 tool | `HitlGate.request_path_access` → ApprovalDecision |
+| **L1'' Ask 提问** | "agent 想问你拿建议" | `Tool::classify` 返回 `NeedsHumanInput` | 阻塞该 tool | `HitlGate.ask` → UserAnswer |
+| **L2 Plan 审批** | "可以按这个计划继续吗？" | `submit_plan` 工具 | 阻塞 run | `HitlGate.check` (kind=Plan) |
+| **L3 长 run 续跑** | "已迭代 N 轮，继续？" | `iteration > budget` | 阻塞 run | `HitlGate.request_continue` → ApprovalDecision |
 
-L1 与 L1' 共享 oneshot waiter 模式，但走不同的 Gate：
+四种路径共用 `HitlGate` 内部状态机（同一张 pending 表 + oneshot），通过 `EventPayload` 的 `kind` 字段告诉 surface 该用哪种 UI 呈现。
 
-- **L1**：`PermissionGate`，回应是 `ApprovalDecision`（Allow / Deny / Allow & Remember / Deny with Feedback）
-- **L1'**：`QuestionGate`，回应是 `UserAnswer`（Selected{label} / Custom{text} / Cancelled）
-
-两者协议层独立（不同的 Op variant、不同的 Event variant），UI 层独立（不同的弹窗 / 命令）。
-
-### 11.2 L1：Tool 审批协议
+### 11.2 协议流（统一）
 
 ```text
-loop ──(检测到 destructive 工具)──► PermissionGate.check
-PermissionGate ──► 无明确规则 ──► NeedsApproval { request_id, kind }
-loop ──► emit PermissionRequested 事件 + 在 Run 上挂 oneshot waiter
-                       │
-                       │ (该 tool 的执行 future 在 waiter 上 await)
-                       │
-Surface 渲染审批 UI ──► 用户点击 ──► Op::Approve { request_id, decision }
-                       │
-Harness ──► PermissionGate.resolve(request_id, decision)
-                       │
-                       │ ──► oneshot waiter 收到 decision
-                       │
-loop ──► 根据 decision：
-          AllowOnce            → 执行该 tool
-          AllowAndRemember     → 写入会话/项目级规则后执行
-          Deny                 → 不执行；把"被用户拒绝"作为 ToolResult 回灌
-          DenyWithFeedback(s)  → 同上，把 s 作为 user message 注入下一轮
+ToolDispatcher ──(decision := HitlGate.check / ask / request_path_access)──►
+   ├─ Allowed                ──► 直接执行
+   ├─ Denied { reason }      ──► ToolOutcome::Denied 回灌 transcript
+   └─ NeedsApproval { id }   ──► emit PermissionRequested|UserQuestionRequested
+                                   │
+                                   │ (该 tool future await waiter)
+                                   │
+       Surface(TurnObserver) ──► 渲染 → 用户回应 → handle.resolve(id, decision)
+                                                       │
+       HitlGate.resolve / answer ──► oneshot 唤醒 waiter
+                                   │
+ToolDispatcher ──► 根据回应：
+   AllowOnce            → 执行
+   AllowAndRemember     → 持久化规则后执行
+   Deny / Cancelled     → ToolOutcome::Denied
+   DenyWithFeedback(s)  → ToolOutcome::Denied + 把 s 作为 user message 注入下一轮
 ```
 
-要点：
+并发规则：
 
-- **同 turn 多个 tool call 各自挂自己的 waiter**，互不阻塞
-- **超时**：每个 PermissionRequest 默认 5 分钟超时，超时按策略处理（Slack 默认 deny，Desktop 默认仍等待）
-- **取消传播**：`Op::Interrupt` 必须级联 cancel 所有挂起的 waiter
-- **持久化**：审批结果作为 `PermissionResolved` 事件写入 rollout，replay 时不重复询问
+- **`ReadOnly` 工具同 turn 内并发执行**（`join_all`）
+- **任意需要 HITL 的工具串行执行**：每次只有一个 pending request 出现在 surface 上
+- 串行的根本原因：UI 单审批模型 + 用户精力分配；并发审批的 UX 复杂度远超收益
+
+其他规约：
+
+- **超时**：每个 pending 默认 5 分钟，超时按 channel 策略处理（远端 channel 默认 Deny，Desktop 默认继续等待）
+- **取消传播**：`RunHandle::interrupt()` 级联 `HitlGate.cancel_all_pending()`
+- **持久化**：审批/回应作为 `PermissionResolved` / `UserQuestionAnswered` 事件写入 rollout，replay 不重复询问
 
 ### 11.3 ApprovalPolicy
 
@@ -1058,20 +1234,16 @@ pub struct PermissionRule {
 - `submit_plan` 的执行就是 emit `PermissionRequested { kind: Plan, ... }` 并 await
 - 用户审批后才允许调用其他写工具
 
-### 11.5 L3：超长 Run 的兜底
+### 11.5 L3：长 run 续跑
 
-`MAX_TOOL_ITERATIONS=10` 这种硬上限应该改为可配置，且达到时不直接失败：
+`TurnContext.iteration_budget` 配置工具迭代上限。达到时走 `HitlGate.request_continue`：
 
 ```rust
-// 当前
-return Err(ModelError::Other(format!("已达到最大工具调用轮数 {}", MAX_TOOL_ITERATIONS)));
-
-// 演进
-emit PermissionRequested { kind: ContinueLongRun, summary: "已迭代 10 轮，是否继续？", risk: Medium }
+emit PermissionRequested { kind: ContinueLongRun { iteration }, summary: "已迭代 N 轮，是否继续？", risk: Medium }
 await ApprovalDecision
 match decision {
-    AllowOnce => { iteration_budget += 10; continue; }
-    AllowAndRemember(scope) => { TurnContext.iteration_budget = unlimited (in scope); continue; }
+    AllowOnce => { iteration_budget += N; continue; }
+    AllowAndRemember(scope) => { TurnContext.iteration_budget = unlimited within scope; continue; }
     Deny => { graceful finish with partial result; }
 }
 ```
@@ -1086,11 +1258,9 @@ match decision {
 - 显示已等待时长
 - 取消 run 按钮始终可用
 
-**现状**：L1 闭环已实现（gate 三态 → emit Requested → Op::Approve → resolve waiter）。Desktop 用 [PermissionApprovalPopup](src/desktop/ui/components/PermissionApprovalPopup.tsx) 实装。持久化到 rollout 是 M2 范围。
+### 11.7 Ask 提问协议（agent 主动问用户）
 
-### 11.7 L1' Ask 提问协议（agent 主动问用户）
-
-参考 codex 的 `RequestUserInputEvent` + claude-code-haha 的 `AskUserQuestionTool`：agent 在执行过程中可以**主动**调用一个内置 `ask` 工具，向用户发起问题并等待回应。这与「审批」的语义本质不同——审批是用户对 agent 行为的拒绝/允许，ask 是 agent 向用户求助。
+Agent 在执行过程中可以主动调用 `ask` 工具向用户发起问题。`ask` 是普通 Tool 实现，`classify` 返回 `NeedsHumanInput { kind: Question }`，dispatcher 见到此分类后调 `HitlGate.ask` 走问答路径。
 
 **协议**（[crates/protocol/src/permission.rs](crates/protocol/src/permission.rs)）：
 
@@ -1114,26 +1284,18 @@ UserQuestionAnswered { request_id, answer },
 AnswerQuestion { request_id, answer },
 ```
 
-**Schema 约束**：`ask` 工具 input 强制要求 2-5 个选项。无论选项穷尽与否，UI 总会额外提供一个「自由输入框」让用户写其他意见。
+**Schema 约束**：`ask` 工具 input 要求 2-5 个选项。UI 始终额外提供一个「自由输入框」收纳其他意见。
 
-**实现**（[crates/agent-core/src/tools/question.rs](crates/agent-core/src/tools/question.rs)）：
+**关键设计点**：
 
-- `QuestionGate`：与 `PermissionGate` 平行，同样 `Mutex<HashMap<id, oneshot::Sender>>` 模式
-- `agent_loop` 在派发处特判 `call.name == ASK_TOOL_NAME`：绕过 `ToolRegistry`，调 `dispatch_ask_call`：emit `UserQuestionRequested` → await waiter → 把 `UserAnswer` 转成 `tool_result.content` 回灌 transcript
-- `Harness::answer_question(run_id, request_id, answer)` / `Op::AnswerQuestion` 双入口（actor 队列与直接调用都行）
-- run interrupt 时 `cancel_all_pending()` 把所有未决问题标 `Cancelled`
-
-**关键设计选择**：
-
-1. **不做成 Tool trait 实现**：因为 `ask` 的"执行"本质是「emit 事件 → 等用户」而非纯函数计算，与 `Tool::execute(input) -> AppResult<String>` 的同步契约不符
-2. **不复用 PermissionGate**：审批和提问的 UI / decision 类型不同，复用会让 `PermissionKind` 变得臃肿
-3. **是 builtin 不是用户可选**：agent 的提问能力不应该被用户「关掉」（与 web_search 性质不同）
+1. **`ask` 是普通 Tool**，靠 `ToolClass::NeedsHumanInput` 让 dispatcher 走 HitlGate
+2. **审批与提问共用 HitlGate**：同一张 pending 表，靠 EventPayload 的 kind 字段路由 UI
+3. **`ask` 是 builtin**，每轮强制注入；用户在工具菜单中无法关闭
 
 **UI 规约**：
 
-- TUI（CLI）：`inquire::Select` 列表 + `↑↓` 选项 + 「其他（自由输入）」末项，**ESC** 取消
-- Desktop（计划）：与 `PermissionApprovalPopup` 类似的小弹窗，挂在 ChatInput 上方；按钮列表 + textarea + ESC 关闭
-- Desktop UI [UserQuestionPopup](src/desktop/ui/components/UserQuestionPopup.tsx)：选项卡片 + 末项「其他」内嵌 textarea；右下「取消 / 提交」；ESC 取消；Cmd/Ctrl+Enter 提交
+- CLI：`inquire::Select` 列表 + `↑↓` 选项 + 末项「其他（自由输入）」，**ESC** 取消
+- Desktop：[UserQuestionPopup](../apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx) 选项卡片 + 末项「其他」内嵌 textarea；右下「取消 / 提交」；ESC 取消；Cmd/Ctrl+Enter 提交
 
 ---
 
@@ -1202,80 +1364,82 @@ crates/*/src/**/tests.rs        单元测试（贴近模块）
 
 ---
 
-## 14. 当前 → 目标的差距清单
+## 14. 工作清单
 
 按优先级排序，每条都是可独立交付的工作单元。
 
-### 阶段一：Core 闭环可用（HITL 必须）
+### 阶段一：Core API 收敛
 
 | # | 工作 | 涉及 |
 |---|------|------|
-| 1 | 抽 `crates/protocol`，迁移 `AgentEvent`，新增 `Submission/Op` | ✓ |
-| 2 | `seq` 改为每 run 私有 | ✓ |
-| 3 | `PermissionDecision` 三态化（Allowed / Denied / NeedsApproval） | ✓ |
-| 4 | Loop 实现"挂起等审批"通路（oneshot waiter） | ✓ |
-| 5 | Harness 改为 `spawn_run/subscribe` actor 模式（旧 `run()` 已删） | ✓ |
-| 6 | `TurnContext` 抽象，替换零散参数 | ◐（结构已立，loop 仍用 LoopParams） |
-| 7 | 全套 hook 点位（BeforeRun/AfterRun/BeforeTurn/AfterTurn/BeforeModelCall/AfterModelCall） | ✓ |
-| 8 | Tool trait 加 `classify`、`ToolCtx`、`ToolResult` | ☐ |
-| 9 | Desktop 前端审批 UI（PermissionApprovalPopup）+ Op 翻译层 | ✓ |
-| 10 | **L1' Ask 提问**：`QuestionGate` + `ask` 内置工具 + UserQuestion 协议 + AnswerQuestion Op + 双 surface UI | ✓ |
-| 11 | 内置工具与用户可选工具分离（`builtin_tool_definitions` 每轮强制注入） | ✓ |
+| 1 | `crates/protocol` 抽出，`Submission/Op/Event` 集中 | protocol |
+| 2 | per-run `seq`，由 `RunState` 维护 | agent-core |
+| 3 | `PermissionDecision` 三态 + oneshot waiter HITL 通路 | agent-core |
+| 4 | `RunHandle` 取代 `RunId` 反查：events 独享 mpsc + control 内化 gate/cancel | agent-core |
+| 5 | `Session` 上升为 agent-core 一等公民：transcript / workspace / definition / client 内化 | agent-core |
+| 6 | `TurnObserver` trait + `RunHandle::drive(&mut observer)`：surface 不再写事件循环 | agent-core, apps/* |
+| 7 | `TurnContext` 收拢零散参数（model / tools / approval / sandbox / budget / iteration_budget） | agent-core |
+| 8 | `Tool::classify` + `ToolCtx` + `ToolResult { outcome: Ok / Denied / Failed }` | agent-core |
+| 9 | `HitlGate` 合并 PermissionGate + QuestionGate，统一 pending 表 | agent-core |
+| 10 | `AgentLoop` 拆为 `ContextCompactor / ToolDispatcher` 等子对象，移除 800 行长函数 | agent-core |
+| 11 | `LoopError` 分类型（Model / Cancelled / MaxIterations / Tool） | agent-core |
+| 12 | `ask` 改为普通 Tool 实现（`NeedsHumanInput` 分类） | agent-core/tools |
+| 13 | Hook 缩到 4 个拦截点（BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction） | agent-core/hooks |
+| 14 | Desktop pending 改队列模型，与 ToolClass 串行规则配套 | apps/desktop |
 
-### 阶段二：生产可用基础设施
-
-| # | 工作 | 涉及 |
-|---|------|------|
-| 10 | **拆 platform**：`storage/sessions` → 新 `crates/persistence`；`config/prompts` → 新 `crates/config` | platform、persistence、config、agent-core、apps/desktop |
-| 11 | `crates/persistence` 加 JSONL rollout（与 #10 在同一 crate） | persistence、agent-core |
-| 12 | Resume / Fork / Rollback 三个 Op 落地 | persistence、agent-core |
-| 13 | `crates/memory` fs 后端 + 内置注入/写候选 hook | memory、agent-core |
-| 14 | `crates/observability` 标准 Signal + Inspector UI 雏形 | observability、apps/desktop |
-| 15 | `platform/blob.rs` + 工具结果落 blob | platform、agent-core |
-| 16 | 完整的 LLM 摘要压缩（L3） | agent-core/context |
-| 17 | Model Gateway 加 routing / retry / cost | model-gateway |
-| 18 | AgentDefinition YAML 加载 + 内置 5 个角色（在 `crates/config` 里做） | config、configs/ |
-
-### 阶段三：多 agent 与扩展入口
+### 阶段二：性能与可观测
 
 | # | 工作 | 涉及 |
 |---|------|------|
-| 19 | `RunTree` + `spawn_agent` 工具 + `ContextPolicy::Isolated` | agent-core/multi_agent |
-| 20 | `spawn_parallel` + `JoinAll/JoinFirst` | agent-core/multi_agent |
-| 21 | InheritSummary / InheritSelected 上下文继承 | agent-core/context |
-| 22 | `apps/server` HTTP + SSE | apps/server |
-| 23 | `crates/channels` 框架 + Slack 适配 | channels |
-| 24 | `apps/tui` 最小可用 | apps/tui |
+| 15 | Prompt cache 边界：`ContextSnapshot` 三段切分 + provider 层 cache_control | agent-core/context, model-gateway |
+| 16 | `platform/blob.rs` + `ToolContent::BlobRef` 自动落 blob | platform, agent-core |
+| 17 | LLM 摘要压缩（L3）：`Compactor` trait + 默认实现 | agent-core/context |
+| 18 | `crates/observability` 标准 Signal + Inspector UI | observability, apps/desktop |
+| 19 | Model Gateway routing / retry / cost 字段 | model-gateway |
 
-### 阶段四：扩展与硬化
+### 阶段三：持久化与扩展入口
 
 | # | 工作 | 涉及 |
 |---|------|------|
-| 25 | `crates/sandbox` Seatbelt/Landlock 实现 | sandbox |
-| 26 | Bash / Write / Edit 内置工具（带 sandbox） | agent-core/tools |
-| 27 | MCP client（支持外部工具） | agent-core/tools 或独立 crate |
-| 28 | OpenTelemetry exporter | observability |
-| 29 | Plan 审批模式（L2 HITL） | agent-core, configs |
+| 20 | 拆 platform：`storage/sessions` → `crates/persistence`；`config/prompts` → `crates/config` | platform → persistence/config |
+| 21 | JSONL rollout + Resume / Fork / Rollback Op 实现 | persistence, agent-core |
+| 22 | `crates/memory` fs 后端 + Memory Hook（BeforeModelCall 注入 / OnToolResult 写候选） | memory, agent-core |
+| 23 | `AgentDefinition` YAML 加载 + 内置 5 个角色 | config, configs/ |
+| 24 | `apps/server` HTTP + SSE：`submit(Op)` + `subscribe(run_id, since_seq)` 路径打通 | apps/server |
+| 25 | `crates/channels` 框架 + Slack 适配 | channels |
+| 26 | `apps/tui` 最小可用 | apps/tui |
+
+### 阶段四：多 agent 与硬化
+
+| # | 工作 | 涉及 |
+|---|------|------|
+| 27 | `RunTree` + `spawn_agent` / `spawn_parallel` 工具 | agent-core/multi_agent |
+| 28 | `ContextPolicy::Isolated / InheritSummary / InheritSelected` 投影 | agent-core/context |
+| 29 | `crates/sandbox` Seatbelt/Landlock 实现 | sandbox |
+| 30 | Bash / Write / Edit 内置工具（带 sandbox） | agent-core/tools |
+| 31 | MCP client | agent-core/tools 或独立 crate |
+| 32 | OpenTelemetry exporter | observability |
+| 33 | Plan 审批模式（L2 HITL，`submit_plan` 工具） | agent-core, configs |
 
 ---
 
-## 15. 落地路线图（4 个里程碑）
+## 15. 里程碑
 
-### M1：HITL 闭环（**已完成 9/11**）
-**目标**：Desktop 上能看到"AI 想跑 X 工具，是否允许"对话框，能 Allow / Deny / Always Allow；agent 也能反过来用 `ask` 工具向用户提问（2-5 选项 + 自由输入）。
-- 阶段一 #1 ~ #11；剩余：#6 TurnContext 收口、#8 Tool trait 升级、Desktop 端 Ask 弹窗 UI
+### M1：Core API 收敛
+**目标**：Surface 端不写事件循环，不持有 gate Arc，不调反查 API；core 内部 agent_loop 拆解为子对象、Tool 自报 HITL 类型、HitlGate 合并、Hook 收敛到 4 个拦截点。
+- 阶段一 #1 ~ #14
 
-### M2：可持久 / 可观测（2-3 周）
-**目标**：platform 拆分完成；崩溃后能 Resume；Inspector 能看 token / cost / tool timeline；记忆能注入。
-- 阶段二 #10 ~ #18
+### M2：性能与可观测
+**目标**：prompt cache 命中率显著提升；长输出落 blob；Inspector 看得见 token / cost / tool timeline；L3 压缩可用。
+- 阶段二 #15 ~ #19
 
-### M3：多 agent + Server（3-4 周）
-**目标**：能从 Desktop / TUI / HTTP 三种 surface 起 run；能 spawn 子 agent；Slack channel 能跑。
-- 阶段三 #19 ~ #24
+### M3：持久化与扩展入口
+**目标**：platform 拆分完成；崩溃后能 Resume / Fork / Rollback；记忆通过 Hook 注入；Desktop / TUI / HTTP / Slack 任一入口都能起 run。
+- 阶段三 #20 ~ #26
 
-### M4：生产硬化（持续）
-**目标**：能安全跑 Bash 工具；接入 MCP；OTel 上链路。
-- 阶段四 #25 ~ #29
+### M4：多 agent 与硬化
+**目标**：父子 run + 三种协作模式；Bash / Write / Edit 在 sandbox 内可用；接入 MCP 与 OTel。
+- 阶段四 #27 ~ #33
 
 ---
 
@@ -1310,22 +1474,27 @@ pub enum ContextPolicy { /* 见 §3.6 */ }
 
 | 术语 | 含义 |
 |------|------|
-| **Submission / Op** | 外界进入 Core 的统一请求 |
+| **Submission / Op** | 跨进程入口的统一请求 |
 | **Event / EventPayload** | Core 向外的统一输出 |
-| **Run** | 一次完整对话，由若干 Turn 组成 |
+| **Session** | agent-core 的会话对象，持有 transcript / workspace / definition / client |
+| **Run** | 一次执行（一条 user message → 终止），由若干 Turn 组成 |
 | **Turn** | 一次"用户输入 → 助手最终输出"的往返 |
 | **Step** | 一次模型调用 + 工具执行批 |
-| **TurnContext** | 一次 Turn 的所有显式参数（model/tools/approval/sandbox/budget） |
-| **Harness** | Core 对外的门面，只有 submit/subscribe |
+| **TurnContext** | 一次 Turn 的所有显式参数（model / tools / approval / sandbox / budget / iteration_budget） |
+| **Harness** | Core 工厂，跨 session 共享 ToolRegistry / HookManager / Gateway 依赖 |
 | **HarnessHandle** | 给工具/channel 用的轻量 clone 句柄 |
-| **RunTree** | 父子 run 的关系图 |
+| **RunHandle** | 一次 run 的本地句柄，独享事件流 + 控制方法，drop 即取消 |
+| **TurnObserver** | Surface 接入 RunHandle 的 trait，封装事件渲染 + HITL 回调 |
+| **HitlGate** | HITL 统一通道：审批 / 提问 / 路径 / 续跑共用同一张 pending 表 |
+| **ToolClass** | 工具自报的分类：ReadOnly / Network / Mutating / Destructive / NeedsHumanInput |
+| **ToolOutcome** | ToolResult 的三种结局：Ok / Denied / Failed |
 | **ContextPolicy** | 子 agent 如何继承父上下文 |
 | **ApprovalPolicy** | 工具审批的整体策略 |
-| **PermissionRule** | 单条匹配工具+input 的规则 |
+| **PermissionRule** | 单条匹配工具 + input 的规则 |
 | **SandboxPolicy** | 工具执行时的资源/能力限制 |
 | **MemoryStore** | 记忆后端 trait |
 | **RolloutStore** | 事件持久化后端 trait |
 | **EventLog** | 单个 run 的 jsonl 文件 |
-| **Surface** | 用户主动入口（Desktop/TUI/Server） |
-| **Channel** | 自动/外部入口（Slack/Webhook/Cron） |
+| **Surface** | 用户主动入口（Desktop / TUI / Server / CLI） |
+| **Channel** | 自动/外部入口（Slack / Webhook / Cron） |
 | **EventSource** | Submission 的来源标识，用于审计与策略分支 |

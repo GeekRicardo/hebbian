@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "dev.ricardo.hebbian",
   "build": {
-    "beforeDevCommand": "cd .. && node node_modules/vite/bin/vite.js --port 1420 --strictPort",
-    "beforeBuildCommand": "cd .. && node node_modules/vite/bin/vite.js build",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "../../dist"
+    "frontendDist": "dist"
   },
   "app": {
     "windows": [

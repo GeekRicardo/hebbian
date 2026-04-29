@@ -1,18 +1,55 @@
-pub mod permissions;
-pub mod question;
+pub mod bash;
+pub mod grep;
+pub mod hitl;
+pub mod read;
 pub mod registry;
+pub mod skill;
 pub mod web_fetch;
 pub mod web_search;
+pub mod write;
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
+use protocol::RiskLevel;
 use serde_json::Value;
 
 use platform::AppResult;
 
-/// 内置 ask 工具的名称。agent_loop 识别这个名字后绕过 ToolRegistry，
-/// 走 QuestionGate 通路。
+use crate::workspace::Workspace;
+
+/// 内置 ask 工具的名称。
 pub const ASK_TOOL_NAME: &str = "ask";
+
+/// 工具自报的语义分类。Dispatcher 据此决定并发策略与 HITL 路径。
+#[derive(Debug, Clone)]
+pub enum ToolClass {
+    /// 只读：可与同 turn 内其他 ReadOnly 工具并发执行，免审批。
+    ReadOnly,
+    /// 网络访问：远端 channel 强制 ask，本地按 policy 决定。
+    Network,
+    /// 在 workspace 内修改文件：串行执行，按 policy 询问。
+    Mutating { risk: RiskLevel },
+    /// 破坏性操作（执行命令、删除等）：串行执行，默认询问。
+    Destructive { risk: RiskLevel },
+    /// 走 HitlGate.ask 路径，向用户求助。
+    NeedsHumanInput { kind: HumanInputKind },
+}
+
+#[derive(Debug, Clone)]
+pub enum HumanInputKind {
+    /// 选项 + 自由输入（ask 工具）
+    Question,
+}
+
+impl ToolClass {
+    /// 是否允许与同 turn 内其他工具并发执行。
+    pub fn is_concurrent_safe(&self) -> bool {
+        matches!(self, ToolClass::ReadOnly)
+    }
+}
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -20,13 +57,41 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
     async fn execute(&self, input: Value) -> AppResult<String>;
+
+    /// 工具的语义分类。默认 ReadOnly；有副作用的工具必须覆盖。
+    fn classify(&self, _input: &Value) -> ToolClass {
+        ToolClass::ReadOnly
+    }
+
+    /// 该工具调用涉及的文件系统路径（用于 workspace 越界审批）。
+    /// 默认空 = 与文件系统无关的工具（如 web_search）。
+    fn affected_paths(&self, _input: &Value) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
-pub fn default_tools() -> Vec<Box<dyn Tool>> {
+/// 构造内置 + 用户可选工具：
+/// - 内置：Bash / Read / Write / Grep / Skill（与 ask 一起每次自动注入）
+/// - 用户可选：web_search / web_fetch（按 enabled_tools 过滤）
+pub fn default_tools(workspace: Arc<Workspace>, skill_dirs: &[PathBuf]) -> Vec<Box<dyn Tool>> {
+    let skills = skill::load_skills(skill_dirs);
     vec![
+        Box::new(bash::BashTool::new(workspace.clone())),
+        Box::new(read::ReadTool::new(workspace.clone())),
+        Box::new(write::WriteTool::new(workspace.clone())),
+        Box::new(grep::GrepTool::new(workspace)),
+        Box::new(skill::SkillTool::new(skills)),
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
     ]
+}
+
+/// 内置工具名（每次 ModelRequest 自动注入；不在 UI 工具菜单中暴露）。
+/// 顺序与 `default_tools` 中的注册顺序对齐。
+pub const BUILTIN_TOOL_NAMES: &[&str] = &["Bash", "Read", "Write", "Grep", "Skill"];
+
+pub fn is_builtin_tool(name: &str) -> bool {
+    name == ASK_TOOL_NAME || BUILTIN_TOOL_NAMES.contains(&name)
 }
 
 /// 由 agent_loop 直接处理、不需要 Tool trait 实现的"虚拟工具"。
@@ -45,13 +110,15 @@ pub fn hosted_tool_definitions(filter: &[String]) -> Vec<ToolDefinition> {
 }
 
 /// 内置工具定义：每次 ModelRequest 都自动注入，不在 UI 工具菜单里出现，
-/// 用户也无法关闭。当前包含 `ask`；未来加 `bash` / `read` / `write` 等。
+/// 用户也无法关闭。
 ///
 /// 内置工具特征：
-/// - 不依赖 provider 能力，agent_loop 自己处理
-/// - 与 HITL 紧密耦合（ask 走 QuestionGate；bash/write 等走 PermissionGate）
 /// - 是「agent 能力」的一部分，不该让用户误以为关掉会有性能收益
-pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
+/// - 与 HITL 紧密耦合（统一走 `HitlGate`：ask 走提问通路，Bash/Write 等走审批通路）
+///
+/// `ask` 的定义在这里硬编码；其他内置工具（Bash/Read/Write/Grep/Skill）
+/// 由 `ToolRegistry` 持有实现，`registry.builtin_definitions()` 读取它们的 schema。
+pub fn ask_only_definitions() -> Vec<ToolDefinition> {
     vec![ask_tool_definition()]
 }
 
@@ -102,7 +169,7 @@ pub struct ToolInfo {
     pub icon: String,
 }
 
-/// 暴露给 UI 的工具菜单。**内置工具**（ask、未来的 bash / read / write）
+/// 暴露给 UI 的工具菜单。**内置工具**（ask / Bash / Read / Write / Grep / Skill）
 /// 默认开启且不可见，**不出现**在这个列表中。
 pub fn tool_manifest() -> Vec<ToolInfo> {
     vec![

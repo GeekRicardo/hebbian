@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use protocol::{AgentRef, Event, EventPayload, Op, RunId, Submission};
-use tokio::sync::{broadcast, mpsc};
+use async_trait::async_trait;
+use protocol::{
+    AgentRef, ApprovalDecision, Event, EventPayload, Op, PermissionKind, PermissionRequestId,
+    QuestionOption, RunId, Submission, SubmissionId, UserAnswer,
+};
+use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::{
@@ -10,99 +14,92 @@ use crate::{
     context::transcript::Transcript,
     definition::CompactionPolicy,
     hooks::HookManager,
+    recorder::Recorder,
     run_state::RunState,
-    tools::{permissions::PermissionGate, question::QuestionGate, registry::ToolRegistry, Tool},
+    tools::{hitl::HitlGate, registry::ToolRegistry, Tool},
+    workspace::Workspace,
 };
 use model_gateway::client::ModelClient;
 use platform::CancelFlag;
 
-/// 一个进行中的 run 的运行时句柄
-struct RunHandle {
-    #[allow(dead_code)]
-    state: Arc<RunState>,
-    gate: Arc<PermissionGate>,
-    question_gate: Arc<QuestionGate>,
+/// 注册表里登记一次 run 的运行时控制点（供跨进程 `Op::Approve` / `Op::Interrupt` 反查）。
+struct RunRegistration {
+    hitl: Arc<HitlGate>,
     cancel: CancelFlag,
 }
 
 /// 启动一次 run 所需的全部上下文。
 pub struct RunParams {
     pub agent: AgentRef,
-    pub gate: Arc<PermissionGate>,
-    pub question_gate: Arc<QuestionGate>,
+    pub hitl: Arc<HitlGate>,
     /// 调用方组装好的完整 transcript（含 system + 历史 + 当前 user message）
     pub transcript: Transcript,
     pub enabled_tools: Vec<String>,
     pub compaction_policy: CompactionPolicy,
+    /// 本对话的 workspace（workdir + allowed_dirs）。每个对话独立。
+    pub workspace: Arc<Workspace>,
     pub stream: bool,
     pub cancel: CancelFlag,
     pub parent: Option<RunId>,
+    /// 可选的事件持久化。给定后所有事件 fire-and-forget 追加进 jsonl。
+    pub recorder: Option<Recorder>,
 }
 
-/// Harness 是 Core 对外的门面。
+/// Core 对外门面。
 ///
-/// 单一交互范式：
-/// - **`subscribe()`** 订阅事件流（broadcast，多 surface 可同时订阅）
-/// - **`spawn_run(client, params)`** 异步启动一个 run，立刻返回 `RunId`，事件走广播
-/// - **`submit(submission)`** 用协议 `Op` 投递控制指令（Approve / Interrupt 等）
+/// `spawn_run` 返回 [`RunHandle`]，在它上面 `recv()` 拿事件、调 `resolve_permission` /
+/// `answer_question` / `interrupt` 控制 run。每个 run 独享一条 mpsc，事件按时间顺序到达，
+/// 不需要按 `run_id` 过滤。
 ///
-/// 调用约定：**先 `subscribe()` 再 `spawn_run()`**，否则可能错过早期事件
-/// （broadcast 容量 1024 通常够用，但务必先订阅）。
+/// 跨进程协议入口走 [`Harness::submit`]：actor 处理 `Op::Approve / AnswerQuestion / Interrupt`。
 pub struct Harness {
     registry: Arc<ToolRegistry>,
     hooks: Arc<HookManager>,
-    runs: Arc<Mutex<HashMap<RunId, Arc<RunHandle>>>>,
+    runs: Arc<Mutex<HashMap<RunId, Arc<RunRegistration>>>>,
     submit_tx: mpsc::UnboundedSender<Submission>,
-    event_tx: broadcast::Sender<Event>,
 }
 
 impl Harness {
     pub fn new(tools: Vec<Box<dyn Tool>>, hooks: HookManager) -> Self {
         let (submit_tx, submit_rx) = mpsc::unbounded_channel::<Submission>();
-        let (event_tx, _) = broadcast::channel::<Event>(1024);
 
         let harness = Self {
             registry: Arc::new(ToolRegistry::new(tools)),
             hooks: Arc::new(hooks),
             runs: Arc::new(Mutex::new(HashMap::new())),
             submit_tx,
-            event_tx: event_tx.clone(),
         };
 
         let runs = harness.runs.clone();
-        let event_tx_for_actor = event_tx;
         tokio::spawn(async move {
-            run_actor_loop(submit_rx, runs, event_tx_for_actor).await;
+            run_actor_loop(submit_rx, runs).await;
         });
 
         harness
     }
 
-    /// 订阅事件总线。返回的 receiver 收到所有 run 的所有事件；
-    /// 调用方按 `event.run_id` 过滤。
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.event_tx.subscribe()
-    }
-
-    /// 异步启动一个 run。立刻返回 `RunId`，事件流走 `subscribe()`。
-    ///
-    /// `client` 是本次 run 用的模型；不同 session 可以传不同 client。
-    /// `params.gate` 让调用方提前持有 gate Arc，便于外部 `gate.resolve()` 接入 HITL。
-    pub fn spawn_run(&self, client: Arc<dyn ModelClient>, params: RunParams) -> RunId {
+    /// 启动一个 run，立即返回独享句柄。
+    pub fn spawn_run(&self, client: Arc<dyn ModelClient>, params: RunParams) -> RunHandle {
         let run_id = RunId::new();
         let state = Arc::new(RunState::new(run_id.clone()));
 
-        let handle = Arc::new(RunHandle {
-            state: state.clone(),
-            gate: params.gate.clone(),
-            question_gate: params.question_gate.clone(),
-            cancel: params.cancel.clone(),
-        });
-        self.runs.lock().unwrap().insert(run_id.clone(), handle);
+        // 注册到全局 runs 表，让 actor 能反查（处理 Op::Approve / Op::Interrupt）。
+        self.runs.lock().unwrap().insert(
+            run_id.clone(),
+            Arc::new(RunRegistration {
+                hitl: params.hitl.clone(),
+                cancel: params.cancel.clone(),
+            }),
+        );
 
-        let event_tx = self.event_tx.clone();
+        // 双路 sink：本 run 独享 mpsc + 可选 jsonl 持久化。
+        let (run_tx, run_rx) = mpsc::unbounded_channel::<Event>();
+        let recorder = params.recorder.clone();
         let sink: EventSink = Arc::new(move |event: Event| {
-            let _ = event_tx.send(event);
+            if let Some(rec) = &recorder {
+                rec.write(&event);
+            }
+            let _ = run_tx.send(event);
         });
 
         let registry = self.registry.clone();
@@ -111,26 +108,30 @@ impl Harness {
         let run_id_for_task = run_id.clone();
         let RunParams {
             agent,
-            gate,
-            question_gate,
+            hitl,
             mut transcript,
             enabled_tools,
             compaction_policy,
+            workspace,
             stream,
             cancel,
             parent,
+            recorder: _,
         } = params;
+
+        let hitl_for_handle = hitl.clone();
+        let cancel_for_handle = cancel.clone();
 
         tokio::spawn(async move {
             let params = LoopParams {
                 client: client.as_ref(),
                 registry,
-                gate,
-                question_gate,
+                hitl,
                 hooks,
                 transcript: &mut transcript,
                 enabled_tools: &enabled_tools,
                 compaction_policy: &compaction_policy,
+                workspace,
                 stream,
                 cancel,
                 state,
@@ -143,77 +144,187 @@ impl Harness {
             runs.lock().unwrap().remove(&run_id_for_task);
         });
 
-        run_id
+        RunHandle {
+            run_id,
+            events: run_rx,
+            hitl: hitl_for_handle,
+            cancel: cancel_for_handle,
+        }
     }
 
-    /// 投递一个控制指令。当前 actor 处理 `Approve` / `Interrupt`；
+    /// 投递一个协议指令。当前 actor 处理 `Approve` / `AnswerQuestion` / `Interrupt`。
     /// `StartRun` 等需要 surface 自行解析后调 `spawn_run`。
-    pub fn submit(&self, submission: Submission) -> Result<protocol::SubmissionId, HarnessError> {
+    pub fn submit(&self, submission: Submission) -> Result<SubmissionId, HarnessError> {
         let id = submission.id.clone();
         self.submit_tx
             .send(submission)
             .map_err(|_| HarnessError::Closed)?;
         Ok(id)
     }
+}
 
-    /// 直接 resolve 某次审批（不走 submit 队列，常用于桌面 surface 持有 gate Arc 的场景）。
+/// 一次 run 的本地句柄：独享事件流 + 控制方法。
+///
+/// 由 `Harness::spawn_run` 返回，在 `recv()` 上消费事件直到 `RunFinished` /
+/// `RunFailed` / `RunCancelled`。
+pub struct RunHandle {
+    run_id: RunId,
+    events: mpsc::UnboundedReceiver<Event>,
+    hitl: Arc<HitlGate>,
+    cancel: CancelFlag,
+}
+
+impl RunHandle {
+    pub fn id(&self) -> &RunId {
+        &self.run_id
+    }
+
+    /// 拉取下一个事件。run 结束（task drop sink）后返回 `None`。
+    pub async fn recv(&mut self) -> Option<Event> {
+        self.events.recv().await
+    }
+
     pub fn resolve_permission(
         &self,
-        run_id: &RunId,
-        request_id: &protocol::PermissionRequestId,
-        decision: protocol::ApprovalDecision,
-    ) -> Result<(), HarnessError> {
-        let handle = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(run_id)
-            .cloned()
-            .ok_or(HarnessError::RunNotFound)?;
-        handle.gate.resolve(request_id, decision, None);
-        Ok(())
+        request_id: &PermissionRequestId,
+        decision: ApprovalDecision,
+    ) {
+        self.hitl.resolve(request_id, decision, None);
     }
 
-    /// 直接回应一次 agent 提问。
-    pub fn answer_question(
-        &self,
-        run_id: &RunId,
-        request_id: &protocol::PermissionRequestId,
-        answer: protocol::UserAnswer,
-    ) -> Result<(), HarnessError> {
-        let handle = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(run_id)
-            .cloned()
-            .ok_or(HarnessError::RunNotFound)?;
-        handle.question_gate.answer(request_id, answer);
-        Ok(())
+    pub fn answer_question(&self, request_id: &PermissionRequestId, answer: UserAnswer) {
+        self.hitl.answer(request_id, answer);
     }
 
-    /// 中断某个 run（设置 cancel flag + 解除所有挂起 waiter）
-    pub fn interrupt(&self, run_id: &RunId) -> Result<(), HarnessError> {
-        let handle = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(run_id)
-            .cloned()
-            .ok_or(HarnessError::RunNotFound)?;
-        handle
-            .cancel
+    pub fn interrupt(&self) {
+        self.cancel
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        handle.gate.cancel_all_pending();
-        handle.question_gate.cancel_all_pending();
-        Ok(())
+        self.hitl.cancel_all_pending();
+    }
+
+    /// 暴露 hitl 给 surface 注册到全局桥接（如 Desktop 的 `HitlState`）。
+    pub fn hitl(&self) -> &Arc<HitlGate> {
+        &self.hitl
+    }
+
+    /// 把事件循环的全部样板（recv + filter + 终止判定 + HITL 路由）交给 driver，
+    /// surface 只实现 [`TurnObserver`]：渲染事件 + 给 HITL 回应。
+    pub async fn drive<O: TurnObserver>(&mut self, observer: &mut O) -> TurnSummary {
+        loop {
+            let Some(event) = self.recv().await else {
+                return TurnSummary::failed("事件流意外关闭");
+            };
+            observer.on_event(&event);
+
+            match &event.payload {
+                EventPayload::PermissionRequested {
+                    request_id,
+                    kind,
+                    summary,
+                    ..
+                } => {
+                    if let Some(decision) = observer
+                        .on_permission_request(request_id, kind, summary)
+                        .await
+                    {
+                        self.resolve_permission(request_id, decision);
+                    }
+                }
+                EventPayload::UserQuestionRequested {
+                    request_id,
+                    question,
+                    options,
+                } => {
+                    if let Some(answer) =
+                        observer.on_question(request_id, question, options).await
+                    {
+                        self.answer_question(request_id, answer);
+                    }
+                }
+                EventPayload::RunFinished {
+                    total_input_tokens,
+                    total_output_tokens,
+                    ..
+                } => {
+                    return TurnSummary {
+                        outcome: TurnOutcome::Done,
+                        usage: Some(UsageTotals {
+                            input: *total_input_tokens,
+                            output: *total_output_tokens,
+                        }),
+                    };
+                }
+                EventPayload::RunFailed { error } => {
+                    return TurnSummary::failed(&error.message);
+                }
+                EventPayload::RunCancelled => {
+                    return TurnSummary {
+                        outcome: TurnOutcome::Cancelled,
+                        usage: None,
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Surface 接入 [`RunHandle::drive`] 的统一回调点。
+///
+/// `on_permission_request` / `on_question` 返回 `Some(decision)` 由 driver 自动 resolve，
+/// 返回 `None` 表示 surface 自己异步处理（如 Desktop 通过 Tauri command 链路）。
+#[async_trait]
+pub trait TurnObserver: Send {
+    /// 任意事件的渲染 / 累积。终止事件（RunFinished/Failed/Cancelled）也会先回调一次。
+    fn on_event(&mut self, event: &Event);
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &PermissionRequestId,
+        kind: &PermissionKind,
+        summary: &str,
+    ) -> Option<ApprovalDecision>;
+
+    async fn on_question(
+        &mut self,
+        request_id: &PermissionRequestId,
+        question: &str,
+        options: &[QuestionOption],
+    ) -> Option<UserAnswer>;
+}
+
+/// 一次 run 跑完后的总结。
+#[derive(Debug, Clone)]
+pub struct TurnSummary {
+    pub outcome: TurnOutcome,
+    pub usage: Option<UsageTotals>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TurnOutcome {
+    Done,
+    Failed(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UsageTotals {
+    pub input: u64,
+    pub output: u64,
+}
+
+impl TurnSummary {
+    fn failed(msg: &str) -> Self {
+        Self {
+            outcome: TurnOutcome::Failed(msg.to_string()),
+            usage: None,
+        }
     }
 }
 
 async fn run_actor_loop(
     mut submit_rx: mpsc::UnboundedReceiver<Submission>,
-    runs: Arc<Mutex<HashMap<RunId, Arc<RunHandle>>>>,
-    event_tx: broadcast::Sender<Event>,
+    runs: Arc<Mutex<HashMap<RunId, Arc<RunRegistration>>>>,
 ) {
     while let Some(submission) = submit_rx.recv().await {
         match submission.op {
@@ -221,30 +332,24 @@ async fn run_actor_loop(
                 request_id,
                 decision,
             } => {
-                let handles: Vec<_> = runs.lock().unwrap().values().cloned().collect();
-                for handle in handles {
-                    handle.gate.resolve(&request_id, decision.clone(), None);
+                let entries: Vec<_> = runs.lock().unwrap().values().cloned().collect();
+                for entry in entries {
+                    entry.hitl.resolve(&request_id, decision.clone(), None);
                 }
             }
             Op::AnswerQuestion { request_id, answer } => {
-                let handles: Vec<_> = runs.lock().unwrap().values().cloned().collect();
-                for handle in handles {
-                    handle.question_gate.answer(&request_id, answer.clone());
+                let entries: Vec<_> = runs.lock().unwrap().values().cloned().collect();
+                for entry in entries {
+                    entry.hitl.answer(&request_id, answer.clone());
                 }
             }
             Op::Interrupt { run_id } => {
-                let handle = runs.lock().unwrap().get(&run_id).cloned();
-                if let Some(handle) = handle {
-                    handle
+                let entry = runs.lock().unwrap().get(&run_id).cloned();
+                if let Some(entry) = entry {
+                    entry
                         .cancel
                         .store(true, std::sync::atomic::Ordering::SeqCst);
-                    handle.gate.cancel_all_pending();
-                    handle.question_gate.cancel_all_pending();
-                    let _ = event_tx.send(Event::now(
-                        run_id,
-                        u64::MAX,
-                        EventPayload::RunCancelled,
-                    ));
+                    entry.hitl.cancel_all_pending();
                 }
             }
             other => {

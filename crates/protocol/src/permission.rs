@@ -37,6 +37,11 @@ pub enum PermissionKind {
         tool_name: String,
         input: serde_json::Value,
     },
+    /// workspace 越界路径访问审批（Bash/Read/Write/Grep）
+    PathAccess {
+        tool_name: String,
+        paths: Vec<String>,
+    },
     /// 计划审批（"按这个计划继续吗？"）
     Plan { steps: Vec<String> },
     /// 长 run 继续审批

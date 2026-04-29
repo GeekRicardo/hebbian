@@ -29,7 +29,7 @@ hebbian/
 │   └── cli/                     ★ 终端 surface（loop / 单次 / JSON 多轮）
 │       └── src/
 │           ├── main.rs          入口、模式分派、ModelClient 构建
-│           ├── session.rs       Session：transcript、单 turn、loop 交互（rustyline）
+│           ├── session.rs       CliSession（包 agent_core::Session）+ CliObserver（TurnObserver 实现）
 │           ├── render.rs        Event → 终端彩色输出（colored crate）
 │           └── mock_provider.rs 无网络环境固定假回复
 │
@@ -45,26 +45,26 @@ hebbian/
 │   │
 │   ├── agent-core/              ★ 产品核心 / Harness
 │   │   └── src/
-│   │       ├── lib.rs           pub use Harness, RunState, TurnContext
-│   │       ├── harness.rs       Harness（统一 spawn_run + subscribe + submit 风格）
-│   │       ├── agent_loop.rs    主循环（HITL waiter / 工具并发 / 10 个 hook 触发点）
+│   │       ├── lib.rs           pub use Harness / RunHandle / Session / TurnObserver / TurnSummary
+│   │       ├── harness.rs       Harness + RunHandle + TurnObserver trait + drive() 事件循环
+│   │       ├── session.rs       Session（transcript / workspace / definition / client 容器）
+│   │       ├── agent_loop.rs    turn/step 主循环；工具派发委托给 dispatch.rs
+│   │       ├── dispatch.rs      ToolDispatcher（路径审批 / 工具审批 / ask / 执行 / emit）
 │   │       ├── run_state.rs     RunState（per-run seq + turn 计数 + event 工厂）
 │   │       ├── turn_context.rs  TurnContext（结构已立，loop 还在用 LoopParams）
 │   │       ├── definition.rs    AgentDefinition / CompactionPolicy / PermissionPolicy
 │   │       ├── tools/
-│   │       │   ├── mod.rs       Tool trait + default_tools / ASK_TOOL_NAME / ask_tool_definition
+│   │       │   ├── mod.rs       Tool trait + ToolClass + default_tools + ASK_TOOL_NAME
 │   │       │   ├── registry.rs  ToolRegistry
-│   │       │   ├── permissions.rs PermissionGate（三态 + oneshot waiter + learned rules）
-│   │       │   └── question.rs  ★ QuestionGate（ask 工具的 oneshot waiter，与 PermissionGate 平行）
+│   │       │   └── hitl.rs      ★ HitlGate：审批/提问/路径/续跑共用一张 pending 表
 │   │       ├── context/
 │   │       │   ├── transcript.rs Transcript / from_session
 │   │       │   ├── budget.rs    token 估算
 │   │       │   └── compaction.rs 结构化裁剪（L3 LLM 摘要未实现）
 │   │       ├── hooks/
-│   │       │   ├── mod.rs       Hook trait + HookManager
-│   │       │   └── types.rs     HookPoint × 10（BeforeRun/AfterRun/BeforeTurn/AfterTurn/
-│   │       │                    BeforeModelCall/AfterModelCall/BeforeToolCall/AfterToolCall/
-│   │       │                    BeforePermissionRequest/OnContextCompaction）
+│   │       │   ├── mod.rs       Hook trait + HookManager（骨架，等真正 hook 接入）
+│   │       │   └── types.rs     HookPoint × 4（BeforeModelCall / OnPermissionCheck /
+│   │       │                    OnToolResult / OnCompaction）
 │   │       └── types.rs         protocol facade（向后兼容旧 import 路径）
 │   │
 │   ├── model-gateway/           ★ 统一模型访问
@@ -117,19 +117,24 @@ hebbian/
 
 完整路线图见 [docs/architecture.md §14-15](docs/architecture.md)。当前进度：
 
-### M1 — Core 闭环可用 + HITL（**已完成 7/9**）
+### M1 — Core API 收敛（**已完成 12/14**）
 
 | # | 项 | 状态 |
 |---|---|---|
 | 1 | `crates/protocol` + `Submission/Op` | ✓ |
 | 2 | per-run seq | ✓（`RunState::next_seq`） |
-| 3 | `PermissionDecision` 三态 | ✓ |
-| 4 | oneshot waiter HITL 通路 | ✓ |
-| 5 | Harness `spawn_run` + `subscribe` actor 风格 | ✓（旧 `run()` / `run_with_gate` 已删除，统一新 API） |
-| 6 | `TurnContext` 抽象 | ◐（结构已立，loop 还在用 `LoopParams`） |
-| 7 | 10 个 hook 点位 | ✓ |
-| 8 | Tool trait `classify` / `ToolCtx` / `ToolResult` | ✗ |
-| 9 | Desktop 审批 UI + Op 翻译层 | ✓（[PermissionApprovalPopup](src/desktop/ui/components/PermissionApprovalPopup.tsx)） |
+| 3 | `PermissionDecision` 三态 + oneshot waiter | ✓ |
+| 4 | `RunHandle` 取代 RunId 反查（独享 mpsc + 控制方法） | ✓ |
+| 5 | `Session` 上升为 agent-core 一等公民 | ✓ |
+| 6 | `TurnObserver` trait + `RunHandle::drive` 接管事件循环 | ✓ |
+| 7 | `TurnContext` 抽象 | ◐（结构已立，loop 还在用 `LoopParams`） |
+| 8 | `Tool::classify` + `ToolClass` 自报分类 | ✓ |
+| 9 | `HitlGate` 合并审批/提问/路径/续跑 | ✓ |
+| 10 | `ToolDispatcher` 抽出（agent_loop 从 800→405 行） | ✓ |
+| 11 | `LoopError` 分类型（Model / Cancelled / MaxIterations / Tool） | ✗ |
+| 12 | Hook 缩减到 4 个能改 state 的拦截点 | ✓ |
+| 13 | `ask` 改为普通 Tool（`NeedsHumanInput`） | ✗（仍在 dispatch 里特判 `ASK_TOOL_NAME`） |
+| 14 | Desktop 审批 UI + Op 翻译层 | ✓（[PermissionApprovalPopup](src/desktop/ui/components/PermissionApprovalPopup.tsx)） |
 
 ### M2 / M3 / M4 全部未做
 persistence / memory / observability / multi-agent / channels / server / sandbox / MCP — 见架构文档。
@@ -137,100 +142,100 @@ persistence / memory / observability / multi-agent / channels / server / sandbox
 
 ---
 
-## HITL 完整数据流（重点，刚完成）
+## HITL 完整数据流
 
 ```
 [模型请求执行 destructive 工具]
        ↓
-agent_loop: gate.check(tool_name, input)
+ToolDispatcher: hitl.check(tool_name, &class)
        ↓
-PermissionGate: 三态判断
+HitlGate: ToolClass + policy + learned 三层判断
        ↓
   返回 NeedsApproval { request_id, waiter: oneshot::Receiver }
        ↓
-agent_loop emit Event::PermissionRequested { request_id, kind, ... }
+dispatch.rs emit Event::PermissionRequested { request_id, kind, ... }
        ↓
-       ├─→ harness.event_tx broadcast → CLI 订阅者 / 测试
+       ├─→ run mpsc → RunHandle.recv() → surface
+       │   └─→ surface 端 TurnObserver::on_permission_request 回调
+       │         ├─ CLI: 返回 Some(AllowOnce)（auto_approve）
+       │         └─ Desktop: state.track(request_id, hitl) + 返回 None
+       │           ↓
+       │           useStore.pendingApproval ← <PermissionApprovalPopup />
+       │           ↓
+       │           [用户点击按钮] → api.approvePermission(...)
+       │           ↓
+       │           Tauri command approve_permission
+       │           ↓
+       │           HitlState::resolve_approval → hitl.resolve(...)
+       │           ↓
+       │           oneshot::Sender 推送 → waiter 唤醒
        │
-       └─→ chat.rs 的 on_event 回调
-              ↓
-              ① 把 (request_id → gate_arc) 注册进 Tauri State<HitlState>
-              ② 通过 Channel<EngineEvent> 转发 PermissionRequested 给前端
-                     ↓
-                     useStore: set pendingApproval = { requestId, toolName, ... }
-                     ↓
-                     <PermissionApprovalPopup /> 渲染（挂在 ChatInput 上方）
-                     ↓
-                     [用户点击按钮]
-                     ↓
-                     resolveApproval({ kind: "allow_once" | ... })
-                     ↓
-                     api.approvePermission(requestId, decision, feedback?)
-                     ↓
-                     Tauri command approve_permission
-                     ↓
-                     HitlState::resolve(request_id, ApprovalDecision)
-                     ↓
-                     gate.resolve(request_id, decision, None)
-                     ↓
-                     oneshot::Sender 推送 → waiter 唤醒
+       └─→ harness.event_tx broadcast（debug / observability 用）
        ↓
-agent_loop 收到 ApprovalDecision，决定执行 / 跳过工具
-agent_loop emit Event::PermissionResolved
+ToolDispatcher 收到 ApprovalDecision，决定执行 / 跳过
+emit Event::PermissionResolved
        ↓
-chat.rs: hitl.unregister_gate（清理）
-前端: pendingApproval = null（关闭弹窗）
+run 结束后 surface 调 hitl_state.forget(&hitl) 清理映射
 ```
 
 **关键文件**：
-- 后端订阅 loop：[apps/desktop/src/chat.rs](apps/desktop/src/chat.rs) `send_and_save_in_data_dir_with_client_factory`（搜 `spawn_run`）
-- HITL 桥接：[apps/desktop/src/hitl.rs](apps/desktop/src/hitl.rs)
+- TurnObserver / RunHandle：[crates/agent-core/src/harness.rs](crates/agent-core/src/harness.rs)
+- HitlGate：[crates/agent-core/src/tools/hitl.rs](crates/agent-core/src/tools/hitl.rs)
+- 派发 + 审批 emit：[crates/agent-core/src/dispatch.rs](crates/agent-core/src/dispatch.rs)
+- CLI Observer：[apps/cli/src/session.rs](apps/cli/src/session.rs) 搜 `CliObserver`
+- Desktop Observer：[apps/desktop/src/chat.rs](apps/desktop/src/chat.rs) 搜 `DesktopObserver`
+- Desktop HITL 桥接：[apps/desktop/src/hitl.rs](apps/desktop/src/hitl.rs)
 - Tauri 命令：[apps/desktop/src/lib.rs](apps/desktop/src/lib.rs) `approve_permission`
-- Gate 三态：[crates/agent-core/src/tools/permissions.rs](crates/agent-core/src/tools/permissions.rs)
 - 弹窗组件：[src/desktop/ui/components/PermissionApprovalPopup.tsx](src/desktop/ui/components/PermissionApprovalPopup.tsx)
 - store action：[src/desktop/ui/store/useStore.ts](src/desktop/ui/store/useStore.ts) 搜 `pendingApproval`
 
 ---
 
-## Harness API（surface 与 core 唯一接口）
+## Harness API（本地调用：`Session` + `RunHandle` + `TurnObserver`）
 
 ```rust
-// 1. 构造（只传 tools / hooks，不绑定 client）
-let harness = Harness::new(default_tools(), HookManager::empty());
+// 1. 构造 Harness（持有 tools / hooks，跨 session 共享）
+let harness = Arc::new(Harness::new(default_tools(workspace, &skill_dirs), HookManager::empty()));
 
-// 2. ★ 必须先订阅再 spawn，否则丢失 RunStarted
-let mut events = harness.subscribe();
+// 2. 建一个 Session（持有 transcript / workspace / definition / client）
+let mut session = Session::new(harness, SessionConfig {
+    definition,
+    workspace,
+    client,
+    enabled_tools,
+    initial_transcript: Transcript::new(system_prompt),
+});
 
-// 3. 启动 run（异步，立刻返回 RunId）
-let run_id = harness.spawn_run(
-    client,                              // 本次 run 用的 ModelClient
-    RunParams {
-        agent: AgentRef::new("default"),
-        gate: Arc::new(PermissionGate::new(policy)),  // 持有 Arc 以便外部 resolve
-        transcript,                                    // 已组装好的 Transcript
-        enabled_tools, compaction_policy,
-        stream: true, cancel, parent: None,
-    },
-);
+// 3. 追加 user message → 起 run → 拿独享 handle
+session.append_user(user_input, attachments);
+let mut handle = session.run();          // 或 run_with(cancel) 接入外部 cancel
 
-// 4. 消费事件流直到 run 终止
-while let Ok(event) = events.recv().await {
-    if event.run_id != run_id { continue; }   // 多 run 共享一个 broadcast
-    match event.payload {
-        EventPayload::RunFinished { .. } => break,
-        EventPayload::RunFailed { .. }   => break,
-        EventPayload::RunCancelled       => break,
-        _ => { /* 累积 / 转发 */ }
-    }
+// 4. 实现 TurnObserver，让 driver 接管事件循环
+struct MyObserver { /* 渲染状态 */ }
+#[async_trait]
+impl TurnObserver for MyObserver {
+    fn on_event(&mut self, event: &Event) { /* 渲染 / 累积 */ }
+    async fn on_permission_request(&mut self, _id, _kind, _summary)
+        -> Option<ApprovalDecision> { Some(ApprovalDecision::AllowOnce) }
+    async fn on_question(&mut self, _id, q, opts)
+        -> Option<UserAnswer> { Some(ask_user(q, opts).await) }
 }
 
-// 控制指令（HITL / 中断）
-harness.resolve_permission(&run_id, &request_id, decision)?;
-harness.interrupt(&run_id)?;
-harness.submit(Submission::new(Op::Approve { .. }))?;  // 协议化路径
+let summary = handle.drive(&mut observer).await;
+match summary.outcome {
+    TurnOutcome::Done       => session.commit_assistant(text, vec![]),
+    TurnOutcome::Failed(e)  => /* ... */,
+    TurnOutcome::Cancelled  => /* ... */,
+}
 ```
 
-`Harness` 不持有 `ModelClient`，每次 `spawn_run` 显式传 client——这样 desktop 的多 session 多 provider 场景天然支持。
+要点：
+
+- **本地路径不再用 `RunId` 反查**。`spawn_run`/`session.run()` 返回 `RunHandle`，所有控制方法挂在它上：
+  `handle.recv() / resolve_permission(id, d) / answer_question(id, a) / interrupt() / id() / hitl()`。
+- **不需要先 subscribe 再 spawn**：`RunHandle` 自带独享 mpsc，事件按时间顺序到达，不需要按 `run_id` 过滤。
+- **跨进程 / 多观察者** 才走 `harness.subscribe()` + `harness.submit(Op)`：broadcast 总线收所有 run 的事件，actor 处理 `Op::Approve / AnswerQuestion / Interrupt`。
+- **`Harness` 不持有 `ModelClient`**：client 在 `Session` 内，多 session 多 provider 天然隔离。
 
 ---
 
@@ -305,12 +310,13 @@ pub enum EventPayload {
 ## 必须遵守的设计规则
 
 1. **`providers` 和 `oauth` 必须在 `model-gateway/` 下**，绝不出现在 agent-core / apps 根下
-2. **UI surface 不编排 agent**。Tauri command 是薄翻译层，把请求转成 `Op` 或直接调 `Harness::run_with_gate`
-3. **输出只消费 Event 流**：`AgentEvent → EngineEvent` 是 chat.rs 的唯一职责
-4. **子 agent 上下文继承默认 `Isolated`**，显式 `InheritRecent` / `InheritSummary` 才能继承
-5. **HITL 走 oneshot waiter**，不能用 sleep 轮询；新增审批类型在 `PermissionKind` 加 variant
-6. **压缩 / 记忆走 hook 机制**，不硬编码进 loop
-7. **per-run seq**：永远从 `RunState::next_seq()` 取，绝不重新引入全局 `static AtomicU64`
+2. **UI surface 不编排 agent**。Tauri command 是薄翻译层，业务逻辑全在 `agent_core::Session` / `RunHandle` / `TurnObserver`
+3. **surface 端事件循环走 `RunHandle::drive(&mut observer)`**，不要自己写 `recv()` + filter + 终止判定
+4. **HITL 走 `HitlGate` 一张表**：`open_approval` / `open_question` / `resolve` / `answer` / `cancel_all_pending`；新增审批类型在 `PermissionKind` 加 variant
+5. **工具自报 `ToolClass`**：destructive 工具必须 override `Tool::classify`；ReadOnly 是默认值
+6. **per-run seq**：永远从 `RunState::next_seq()` 取，绝不重新引入全局 `static AtomicU64`
+7. **子 agent 上下文继承默认 `Isolated`**，显式 `InheritRecent` / `InheritSummary` 才能继承
+8. **Hook 只在能改 state 的点位触发**（4 个：`BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction`）；纯观察走 Event 流
 
 ---
 
@@ -327,11 +333,15 @@ pub enum EventPayload {
 
 ## 下一步可优先做的事（M1 收尾 + M2 起步）
 
-1. **M1 #6 完结 TurnContext**：把 `agent_loop::LoopParams` 进一步合进 `TurnContext`
-2. **M1 #8 Tool trait 升级**：加 `classify(&self, input)` 方法（默认 ReadOnly），HITL 默认放行 ReadOnly 工具
-3. **M2 #10 拆 platform**：`crates/platform/src/storage/sessions.rs` → `crates/persistence`；`crates/platform/src/config/prompts.rs` → `crates/config`
-4. **M2 #15 BlobStore**：长 tool 输出（如 web_fetch 整页）落 blob，transcript 只放 preview + ref
-5. **修 model-gateway 的 stream 路径 usage 统计**：当前 `RunFinished.total_*_tokens` 在真实 provider 下显示 0
+1. **M1 #7 完结 TurnContext**：把 `agent_loop::LoopParams` 进一步合进 `TurnContext`
+2. **M1 #11 `LoopError` 分类型**：把 `Cancelled` / `MaxIterations` 从 `ModelError::Other` 拆出来
+3. **M1 #13 `ask` 改为普通 Tool**：让 `Tool::classify` 返回 `NeedsHumanInput`，dispatch 不再特判 `ASK_TOOL_NAME`
+4. **`ToolResult.outcome` 拆 Ok / Denied / Failed**：当前错误以字符串塞 content，UI 没法染色，统计层算不出成功率
+5. **prompt cache 边界**：`ContextSnapshot` 三段切分（STABLE / SEMI / MUTABLE）+ provider 层 `cache_control`
+6. **`MAX_TOOL_RESULT_INLINE` 改 BlobStore**：长 tool 输出（如 web_fetch 整页）落 blob，transcript 只放 preview + ref
+7. **拆 platform**：`storage/sessions.rs` → `crates/persistence`；`config/prompts.rs` → `crates/config`
+8. **修 model-gateway 的 stream 路径 usage 统计**：当前 `RunFinished.total_*_tokens` 在真实 provider 下显示 0
+9. **`mpsc::unbounded` 加上限**：surface 慢消费时 buffer 会无限涨，换成 `bounded(1024)` + 满了丢非关键事件
 
 ---
 
@@ -340,10 +350,11 @@ pub enum EventPayload {
 - **改协议前先跑一遍三种 CLI 模式**：`hebbian-cli "..." --mock` / `hebbian-cli --json '...' --mock` / `hebbian-cli --mock`（loop），看事件流是否完整
 - **agent-core 改完先 `cargo check -p agent-core --tests`**：测试已存在并会被 cargo 检查
 - **desktop 改完跑 `cargo check -p hebbian` 和 `pnpm exec tsc --noEmit`**
-- **不要重新生成已有文件**：先 Read，按需 Edit；尤其 `chat.rs` 已经 990+ 行，重写代价很大
+- **不要重新生成已有文件**：先 Read，按需 Edit；尤其 `chat.rs` 已经 1000+ 行，重写代价很大
 - **CLI 可以做端到端验证**，比启动 `pnpm tauri dev` 快得多
 - **加新 EventPayload 变体后**：同步更新 [src/desktop/ui/types.ts](src/desktop/ui/types.ts) 的 `EngineEvent` union、[chat.rs](apps/desktop/src/chat.rs) 的 `agent_event_to_engine_event` 映射、[apps/cli/src/render.rs](apps/cli/src/render.rs) 的 `TurnRenderer::on_event` 渲染逻辑——三处任一漏改都会导致信息丢失
-- **HITL 二态**：审批走 [PermissionGate](crates/agent-core/src/tools/permissions.rs)（destructive 工具拦截），ask 走 [QuestionGate](crates/agent-core/src/tools/question.rs)（agent 主动提问）。两者共用 oneshot waiter 模式，但 surface 端是两个独立 Tauri 命令（`approve_permission` / `answer_question`）。新增需要 HITL 的协议时优先看哪个 gate 模式更贴合。
+- **HITL 协议入口**：审批 / 提问 / 路径越界 / 长 run 续跑都走同一个 [HitlGate](crates/agent-core/src/tools/hitl.rs)。审批用 `open_approval` + `resolve`，提问用 `open_question` + `answer`，surface 端两条 Tauri 命令分别叫 `approve_permission` / `answer_question`。新增需要 HITL 的协议时按这两条路径中哪条更贴合选。
+- **TurnObserver 是 surface 的标准接入点**：实现三个回调（`on_event` / `on_permission_request` / `on_question`），在 [harness.rs](crates/agent-core/src/harness.rs) 找 `TurnObserver` trait。本地 surface 在 `on_*` 里返回 `Some(decision)` 让 driver 自动 resolve，远端 / 异步链路返回 `None` 自己处理。
 
 ## graphify
 

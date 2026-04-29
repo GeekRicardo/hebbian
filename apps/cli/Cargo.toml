@@ -24,3 +24,6 @@ dirs = "5"
 rustyline = "14"
 colored = "2"
 inquire = "0.7"
+terminal-spinners = "0.3.2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }

@@ -29,13 +29,18 @@ pub enum EngineEvent {
         duration_ms: u64,
     },
     /// 工具需要用户审批（HITL）。前端弹出审批 UI 后通过
-    /// `approve_permission` 命令回应。
+    /// `approve_permission` / `approve_path_access` 命令回应。
     PermissionRequested {
         request_id: String,
+        /// "tool_call" / "path_access" / "plan" / "continue_long_run"
+        kind: String,
         tool_name: String,
         input: Value,
         summary: String,
         risk: String,
+        /// PathAccess 时的越界路径列表
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        paths: Vec<String>,
     },
     /// 审批已被回应（无论 approve / deny）。前端关闭弹窗。
     PermissionResolved {

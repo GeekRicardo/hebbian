@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Bot, Zap } from "lucide-react";
+import { Bot, RotateCcw, Zap } from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Label, Select, Textarea } from "@/desktop/ui/components/ui/input";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
+import {
+  DirListField,
+  DirPicker,
+  ToolToggleList,
+} from "@/desktop/ui/components/workspaceFields";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
+import { api } from "@/desktop/bridge/tauri";
 
 export function SessionSettingsDialog() {
   const {
@@ -16,6 +22,9 @@ export function SessionSettingsDialog() {
     providersFile,
     prompts,
     updateCurrentConfig,
+    appSettings,
+    refreshAppSettings,
+    availableTools,
   } = useStore();
 
   const [providerId, setProviderId] = useState("");
@@ -24,6 +33,12 @@ export function SessionSettingsDialog() {
   const [promptId, setPromptId] = useState("");
   const [stream, setStream] = useState(true);
 
+  // workspace 覆盖：null = 用全局默认；undefined = 字段被首次打开时还没初始化
+  const [workdir, setWorkdir] = useState<string | null>(null);
+  const [allowedDirs, setAllowedDirs] = useState<string[] | null>(null);
+  const [skillDirs, setSkillDirs] = useState<string[] | null>(null);
+  const [enabledTools, setEnabledTools] = useState<string[] | null>(null);
+
   useEffect(() => {
     if (settingsOpen && currentSession) {
       setProviderId(currentSession.provider_id);
@@ -31,12 +46,19 @@ export function SessionSettingsDialog() {
       setSystemPrompt(currentSession.system_prompt ?? "");
       setPromptId(currentSession.prompt_id ?? "");
       setStream(currentSession.stream);
+      setWorkdir(currentSession.workdir ?? null);
+      setAllowedDirs(currentSession.allowed_dirs ?? null);
+      setSkillDirs(currentSession.skill_dirs ?? null);
+      setEnabledTools(currentSession.enabled_tools ?? null);
+      // 拉一次全局 settings 用作 placeholder
+      refreshAppSettings().catch(() => {});
     }
-  }, [settingsOpen, currentSession]);
+  }, [settingsOpen, currentSession, refreshAppSettings]);
 
   const provider = providersFile.providers.find((p) => p.id === providerId);
 
   async function handleSave() {
+    if (!currentSession) return;
     try {
       await updateCurrentConfig({
         provider_id: providerId,
@@ -44,6 +66,13 @@ export function SessionSettingsDialog() {
         system_prompt: systemPrompt,
         prompt_id: promptId,
         stream,
+      });
+      // 单独保存 workspace 字段；空数组也算"明确清空覆盖"，需要传 null
+      await api.updateSessionSettings(currentSession.id, {
+        workdir,
+        allowed_dirs: allowedDirs,
+        skill_dirs: skillDirs,
+        enabled_tools: enabledTools,
       });
       toast.success("已更新");
       setSettingsOpen(false);
@@ -59,6 +88,12 @@ export function SessionSettingsDialog() {
   }
 
   if (!currentSession) return null;
+
+  const globalDefaults = appSettings?.conversation;
+  const inheritedAllowedDirs = globalDefaults?.allowed_dirs ?? [];
+  const inheritedSkillDirs = globalDefaults?.skill_dirs ?? [];
+  const inheritedEnabledTools = globalDefaults?.enabled_tools ?? [];
+  const inheritedWorkdir = globalDefaults?.workdir ?? "~/";
 
   return (
     <Dialog
@@ -194,6 +229,93 @@ export function SessionSettingsDialog() {
               )}
             />
           </button>
+        </div>
+
+        {/* ── Workspace 覆盖 ── */}
+        <div className="space-y-4 border-t border-border pt-4">
+          <div className="text-xs text-muted-foreground">
+            以下字段留空 = 继承全局设置；任意改动都会成为本对话的覆盖。
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>工作目录（workdir）</Label>
+              {workdir !== null && (
+                <button
+                  type="button"
+                  onClick={() => setWorkdir(null)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                  title="恢复使用全局默认"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  恢复默认
+                </button>
+              )}
+            </div>
+            <DirPicker
+              value={workdir ?? ""}
+              onChange={(v) => setWorkdir(v || null)}
+              placeholder={inheritedWorkdir}
+            />
+          </div>
+
+          <DirListField
+            label="允许访问的目录"
+            dirs={allowedDirs ?? []}
+            inheritedDirs={allowedDirs === null ? inheritedAllowedDirs : undefined}
+            onChange={(dirs) => setAllowedDirs(dirs)}
+            trailing={
+              allowedDirs !== null && (
+                <button
+                  type="button"
+                  onClick={() => setAllowedDirs(null)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  恢复默认
+                </button>
+              )
+            }
+          />
+
+          <DirListField
+            label="Skill 目录"
+            dirs={skillDirs ?? []}
+            inheritedDirs={skillDirs === null ? inheritedSkillDirs : undefined}
+            onChange={(dirs) => setSkillDirs(dirs)}
+            trailing={
+              skillDirs !== null && (
+                <button
+                  type="button"
+                  onClick={() => setSkillDirs(null)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  恢复默认
+                </button>
+              )
+            }
+          />
+
+          <ToolToggleList
+            label="启用的工具"
+            availableTools={availableTools}
+            enabled={enabledTools}
+            inheritedEnabled={inheritedEnabledTools}
+            onChange={(next) => setEnabledTools(next)}
+            trailing={
+              enabledTools !== null && (
+                <button
+                  type="button"
+                  onClick={() => setEnabledTools(null)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  恢复默认
+                </button>
+              )
+            }
+          />
         </div>
       </div>
     </Dialog>

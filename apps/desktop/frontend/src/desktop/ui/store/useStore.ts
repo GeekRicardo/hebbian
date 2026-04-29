@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  AppSettings,
   ApprovalDecisionPayload,
   EngineEvent,
   MessageAttachment,
@@ -199,9 +200,11 @@ interface AppState {
 
   // HITL — 当前一轮 run 中悬挂的审批请求
   pendingApproval: PendingApproval | null;
+  pendingApprovalQueue: PendingApproval[];
   resolveApproval: (decision: ApprovalDecisionPayload) => Promise<void>;
   // HITL — 当前一轮 run 中悬挂的 agent 提问（ask 工具）
   pendingQuestion: PendingQuestion | null;
+  pendingQuestionQueue: PendingQuestion[];
   resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
 
   // actions
@@ -241,6 +244,21 @@ interface AppState {
   setProviderDialogOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setPromptsDialogOpen: (v: boolean) => void;
+  /** 应用级设置窗口（通用 / 对话 / agent 三个 tab） */
+  appSettingsOpen: boolean;
+  setAppSettingsOpen: (v: boolean) => void;
+  appSettings: AppSettings | null;
+  refreshAppSettings: () => Promise<void>;
+  saveAppSettings: (settings: AppSettings) => Promise<void>;
+  /** 更新当前对话的设置（workdir / allowed_dirs / enabled_tools / skill_dirs） */
+  updateCurrentSessionSettings: (patch: {
+    workdir?: string | null;
+    allowed_dirs?: string[] | null;
+    enabled_tools?: string[] | null;
+    skill_dirs?: string[] | null;
+  }) => Promise<void>;
+  /** PathAccess 审批专用 */
+  resolvePathAccess: (scope: "once" | "this_project" | "all_project") => Promise<void>;
   setPendingPromptId: (v: string) => void;
   setUserAvatar: (v: string) => void;
   toggleTheme: () => void;
@@ -291,11 +309,16 @@ export const useStore = create<AppState>((set, get) => ({
   ),
 
   pendingApproval: null,
+  pendingApprovalQueue: [],
   async resolveApproval(decision: ApprovalDecisionPayload) {
     const pending = get().pendingApproval;
     if (!pending) return;
     // 乐观清空，避免双击
-    set({ pendingApproval: null });
+    const next = get().pendingApprovalQueue[0] ?? null;
+    set({
+      pendingApproval: next,
+      pendingApprovalQueue: get().pendingApprovalQueue.slice(1),
+    });
     try {
       await api.approvePermission(
         pending.requestId,
@@ -304,16 +327,26 @@ export const useStore = create<AppState>((set, get) => ({
       );
     } catch (e) {
       // 失败时恢复弹窗，让用户重试
-      set({ pendingApproval: pending });
+      set((state) => ({
+        pendingApproval: pending,
+        pendingApprovalQueue: next
+          ? [next, ...state.pendingApprovalQueue]
+          : state.pendingApprovalQueue,
+      }));
       throw e;
     }
   },
 
   pendingQuestion: null,
+  pendingQuestionQueue: [],
   async resolveQuestion(answer: QuestionAnswerPayload) {
     const pending = get().pendingQuestion;
     if (!pending) return;
-    set({ pendingQuestion: null });
+    const next = get().pendingQuestionQueue[0] ?? null;
+    set({
+      pendingQuestion: next,
+      pendingQuestionQueue: get().pendingQuestionQueue.slice(1),
+    });
     try {
       const text =
         answer.kind === "selected"
@@ -323,7 +356,12 @@ export const useStore = create<AppState>((set, get) => ({
             : undefined;
       await api.answerQuestion(pending.requestId, answer.kind, text);
     } catch (e) {
-      set({ pendingQuestion: pending });
+      set((state) => ({
+        pendingQuestion: pending,
+        pendingQuestionQueue: next
+          ? [next, ...state.pendingQuestionQueue]
+          : state.pendingQuestionQueue,
+      }));
       throw e;
     }
   },
@@ -498,17 +536,21 @@ export const useStore = create<AppState>((set, get) => ({
       streamingText: "",
       streamingParts: [],
       activeRequestId: requestId,
+      pendingApproval: null,
+      pendingApprovalQueue: [],
+      pendingQuestion: null,
+      pendingQuestionQueue: [],
     });
     try {
       const isFirstRound = cur.messages.every((m) => m.role !== "user");
-      // 把 enabledTools Set 转为字符串数组传给后端
-      const enabledTools = Array.from(get().enabledTools);
+      // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
+      // 工具的开关现在统一在「设置 → 对话设置」配置。
       await api.sendMessage(
         cur.id,
         content,
         attachments,
         cur.stream,
-        enabledTools,
+        [],
         requestId,
         (e: EngineEvent) => {
           if (get().activeRequestId !== requestId) return;
@@ -517,6 +559,20 @@ export const useStore = create<AppState>((set, get) => ({
               streamingText: get().streamingText + e.text,
               streamingParts: applyTextDelta(get().streamingParts, e.text),
             });
+          }
+          // complete 路径（不支持 stream tools 的 provider）只发 text_done；
+          // 这里把 full_text 一次性同步进 streamingText，避免界面上空白。
+          if (e.type === "text_done") {
+            const cur = get().streamingText;
+            if (!cur || !e.full_text.endsWith(cur)) {
+              const delta = cur ? "" : e.full_text;
+              set({
+                streamingText: e.full_text,
+                streamingParts: delta
+                  ? applyTextDelta(get().streamingParts, delta)
+                  : get().streamingParts,
+              });
+            }
           }
           if (e.type === "tool_call_delta") {
             set({
@@ -537,34 +593,74 @@ export const useStore = create<AppState>((set, get) => ({
             });
           }
           if (e.type === "permission_requested") {
-            set({
-              pendingApproval: {
+            const approval: PendingApproval = {
                 requestId: e.request_id,
                 toolName: e.tool_name,
                 input: e.input,
                 summary: e.summary,
                 risk: e.risk,
-              },
-            });
+                paths: e.paths ?? [],
+                kind: e.kind ?? "tool_call",
+            };
+            set((state) =>
+              state.pendingApproval
+                ? {
+                    pendingApprovalQueue: [
+                      ...state.pendingApprovalQueue,
+                      approval,
+                    ],
+                  }
+                : { pendingApproval: approval }
+            );
           }
           if (e.type === "permission_resolved") {
-            if (get().pendingApproval?.requestId === e.request_id) {
-              set({ pendingApproval: null });
-            }
+            set((state) => {
+              if (state.pendingApproval?.requestId === e.request_id) {
+                const next = state.pendingApprovalQueue[0] ?? null;
+                return {
+                  pendingApproval: next,
+                  pendingApprovalQueue: state.pendingApprovalQueue.slice(1),
+                };
+              }
+              return {
+                pendingApprovalQueue: state.pendingApprovalQueue.filter(
+                  (item) => item.requestId !== e.request_id
+                ),
+              };
+            });
           }
           if (e.type === "user_question_requested") {
-            set({
-              pendingQuestion: {
+            const question: PendingQuestion = {
                 requestId: e.request_id,
                 question: e.question,
                 options: e.options,
-              },
-            });
+            };
+            set((state) =>
+              state.pendingQuestion
+                ? {
+                    pendingQuestionQueue: [
+                      ...state.pendingQuestionQueue,
+                      question,
+                    ],
+                  }
+                : { pendingQuestion: question }
+            );
           }
           if (e.type === "user_question_answered") {
-            if (get().pendingQuestion?.requestId === e.request_id) {
-              set({ pendingQuestion: null });
-            }
+            set((state) => {
+              if (state.pendingQuestion?.requestId === e.request_id) {
+                const next = state.pendingQuestionQueue[0] ?? null;
+                return {
+                  pendingQuestion: next,
+                  pendingQuestionQueue: state.pendingQuestionQueue.slice(1),
+                };
+              }
+              return {
+                pendingQuestionQueue: state.pendingQuestionQueue.filter(
+                  (item) => item.requestId !== e.request_id
+                ),
+              };
+            });
           }
         },
       );
@@ -575,6 +671,10 @@ export const useStore = create<AppState>((set, get) => ({
         streamingText: "",
         streamingParts: [],
         activeRequestId: null,
+        pendingApproval: null,
+        pendingApprovalQueue: [],
+        pendingQuestion: null,
+        pendingQuestionQueue: [],
       });
       await get().refreshSessions();
 
@@ -598,6 +698,10 @@ export const useStore = create<AppState>((set, get) => ({
         streamingText: "",
         streamingParts: [],
         activeRequestId: null,
+        pendingApproval: null,
+        pendingApprovalQueue: [],
+        pendingQuestion: null,
+        pendingQuestionQueue: [],
       });
       if (String(err?.message ?? err).includes("请求已中断")) {
         const current = get().currentSession;
@@ -633,6 +737,10 @@ export const useStore = create<AppState>((set, get) => ({
       streamingText: "",
       streamingParts: [],
       activeRequestId: null,
+      pendingApproval: null,
+      pendingApprovalQueue: [],
+      pendingQuestion: null,
+      pendingQuestionQueue: [],
     });
     await api.cancelMessage(requestId);
     if (current) {
@@ -689,6 +797,59 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setPromptsDialogOpen(v) {
     set({ promptsDialogOpen: v });
+  },
+
+  appSettingsOpen: false,
+  setAppSettingsOpen(v) {
+    set({ appSettingsOpen: v });
+  },
+  appSettings: null,
+  async refreshAppSettings() {
+    const s = await api.getSettings();
+    set({ appSettings: s });
+  },
+  async saveAppSettings(settings: AppSettings) {
+    await api.saveSettings(settings);
+    set({ appSettings: settings });
+  },
+  async updateCurrentSessionSettings(patch) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const updated = await api.updateSessionSettings(cur.id, patch);
+    set({ currentSession: updated });
+  },
+  async resolvePathAccess(scope) {
+    const pending = get().pendingApproval;
+    if (!pending) return;
+    const sessionId = get().currentSession?.id ?? null;
+    const next = get().pendingApprovalQueue[0] ?? null;
+    set({
+      pendingApproval: next,
+      pendingApprovalQueue: get().pendingApprovalQueue.slice(1),
+    });
+    try {
+      await api.approvePathAccess(
+        pending.requestId,
+        pending.paths ?? [],
+        scope,
+        sessionId
+      );
+      // 重新拉一下 session（this_project 时 allowed_dirs 已落盘）
+      if (scope === "this_project" && sessionId) {
+        const fresh = await api.getSession(sessionId);
+        set({ currentSession: fresh });
+      } else if (scope === "all_project") {
+        await get().refreshAppSettings();
+      }
+    } catch (e) {
+      set((state) => ({
+        pendingApproval: pending,
+        pendingApprovalQueue: next
+          ? [next, ...state.pendingApprovalQueue]
+          : state.pendingApprovalQueue,
+      }));
+      throw e;
+    }
   },
   setPendingPromptId(v) {
     localStorage.setItem(LAST_PROMPT_ID_KEY, v);
