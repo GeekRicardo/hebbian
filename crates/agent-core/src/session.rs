@@ -12,7 +12,11 @@ use platform::{attachments::MessageAttachment, CancelFlag};
 use protocol::AgentRef;
 
 use crate::{
-    context::transcript::Transcript,
+    context::{
+        budget,
+        compaction::{compact_with_llm, CompactionResult},
+        transcript::Transcript,
+    },
     definition::AgentDefinition,
     harness::{Harness, RunHandle, RunParams},
     recorder::Recorder,
@@ -20,7 +24,25 @@ use crate::{
     workspace::Workspace,
 };
 use model_gateway::client::ModelClient;
-use model_gateway::types::ToolCall;
+use model_gateway::types::{ModelError, ToolCall};
+
+/// 当前会话的上下文用量快照。surface 端用来渲染输入框旁的环形进度条。
+#[derive(Debug, Clone, Copy)]
+pub struct ContextUsage {
+    pub used_tokens: usize,
+    pub budget_tokens: usize,
+}
+
+impl ContextUsage {
+    /// 0.0 ~ 1.0+ 的占用比例（>1 说明已超预算）。
+    pub fn ratio(&self) -> f32 {
+        if self.budget_tokens == 0 {
+            0.0
+        } else {
+            self.used_tokens as f32 / self.budget_tokens as f32
+        }
+    }
+}
 
 /// 创建 [`Session`] 所需的配置。
 pub struct SessionConfig {
@@ -99,6 +121,35 @@ impl Session {
     /// 用默认参数启动 run（fresh hitl + 内部新建 cancel flag）。
     pub fn run(&self) -> RunHandle {
         self.run_with(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// 计算当前 transcript 的上下文占用，用 [`AgentDefinition::compaction_policy.token_budget`]
+    /// 作为分母。surface 端用来渲染输入框旁的环形进度条。
+    pub fn context_usage(&self) -> ContextUsage {
+        let used = budget::estimate_transcript_tokens(
+            self.transcript.system.as_deref(),
+            &self.transcript.entries,
+        );
+        ContextUsage {
+            used_tokens: used,
+            budget_tokens: self.definition.compaction_policy.token_budget,
+        }
+    }
+
+    /// 主动压缩：调一次模型把当前 transcript 浓缩成一份摘要，
+    /// 用 `[前情概要 + assistant 确认]` 替换原 entries。
+    /// 失败时不改动 transcript，原样返回错误。
+    pub async fn compact(
+        &mut self,
+        custom_instructions: Option<&str>,
+    ) -> Result<CompactionResult, ModelError> {
+        let system = self.transcript.system.clone();
+        let entries = self.transcript.entries.clone();
+        let result =
+            compact_with_llm(self.client.as_ref(), system.as_deref(), entries, custom_instructions)
+                .await?;
+        self.transcript.entries = result.entries.clone();
+        Ok(result)
     }
 
     /// 用调用方提供的 cancel 启动 run（接入外部取消机制）。

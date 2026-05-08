@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use model_gateway::types::{AssistantEntry, ToolCall, ToolResult, TranscriptEntry, UserEntry};
 use platform::attachments::MessageAttachment;
-use platform::storage::sessions::{Message, MessagePart, Role};
+use platform::storage::sessions::{Message, MessageMeta, MessagePart, Role};
 
 #[derive(Debug, Clone)]
 pub struct PendingToolCall {
@@ -33,8 +33,33 @@ impl Transcript {
     }
 
     pub fn from_session(system: Option<String>, messages: &[Message]) -> Self {
+        // 找到最近一次 CompactBoundary：之前的消息全部跳过，summary 作为前情提要注入。
+        let boundary = messages.iter().rposition(|m| {
+            matches!(
+                m.meta,
+                Some(MessageMeta::CompactBoundary { .. })
+            )
+        });
+
         let mut t = Self::new(system);
-        for msg in messages {
+        if let Some(idx) = boundary {
+            if let Some(MessageMeta::CompactBoundary { summary, .. }) = &messages[idx].meta {
+                if !summary.trim().is_empty() {
+                    t.entries.push(TranscriptEntry::User(UserEntry {
+                        text: format!("[前情概要]\n{summary}"),
+                        attachments: Vec::new(),
+                    }));
+                    t.entries.push(TranscriptEntry::Assistant(AssistantEntry {
+                        text: "已收到前情概要，将基于此继续。".to_string(),
+                        reasoning: String::new(),
+                        tool_calls: Vec::new(),
+                    }));
+                }
+            }
+        }
+
+        let start = boundary.map(|i| i + 1).unwrap_or(0);
+        for msg in &messages[start..] {
             match msg.role {
                 Role::User => t.entries.push(TranscriptEntry::User(UserEntry {
                     text: msg.content.clone(),

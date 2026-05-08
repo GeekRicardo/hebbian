@@ -3,6 +3,7 @@ import type {
   AppSettings,
   AuthUrlResult,
   CodexTokenInfo,
+  ContextUsage,
   DeviceCodeInfo,
   EngineEvent,
   FetchedModel,
@@ -123,6 +124,17 @@ export const api = {
 
   cancelMessage: (requestId: string) =>
     invoke<boolean>("cancel_message", { requestId }),
+
+  /** 当前 session 的上下文用量（用于输入框旁的环形进度条） */
+  getContextUsage: (sessionId: string) =>
+    invoke<ContextUsage>("get_context_usage", { sessionId }),
+
+  /** 主动压缩当前 session 的上下文。返回压缩后的用量。 */
+  compactSession: (sessionId: string, customInstructions?: string) =>
+    invoke<ContextUsage>("compact_session", {
+      sessionId,
+      customInstructions: customInstructions ?? null,
+    }),
 
   /** 用户回应一次工具审批请求（HITL） */
   approvePermission: (

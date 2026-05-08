@@ -110,7 +110,17 @@ impl CliSession {
         );
 
         loop {
-            let prompt = format!("{} ", "›".cyan().bold());
+            let usage = self.inner.context_usage();
+            let pct = (usage.ratio() * 100.0).round() as u32;
+            let pct_label = format!("[{pct}%]");
+            let pct_colored = if pct >= 90 {
+                pct_label.red().bold().to_string()
+            } else if pct >= 70 {
+                pct_label.yellow().to_string()
+            } else {
+                pct_label.dimmed().to_string()
+            };
+            let prompt = format!("{} {} ", pct_colored, "›".cyan().bold());
             match rl.readline(&prompt) {
                 Ok(line) => {
                     let trimmed = line.trim();
@@ -119,6 +129,14 @@ impl CliSession {
                     }
                     if matches!(trimmed, "/exit" | "/quit" | "/q") {
                         break;
+                    }
+                    if let Some(args) = trimmed.strip_prefix("/compact") {
+                        let _ = rl.add_history_entry(line.as_str());
+                        if let Err(e) = self.run_compact(args.trim()).await {
+                            eprintln!("{} {e}", "错误:".red());
+                        }
+                        println!();
+                        continue;
                     }
                     let _ = rl.add_history_entry(line.as_str());
                     if let Err(e) = self.run_one_turn(line).await {
@@ -140,6 +158,33 @@ impl CliSession {
 
         if let Some(path) = &history_path {
             let _ = rl.save_history(path);
+        }
+        Ok(())
+    }
+
+    /// /compact：调一次模型把整段 transcript 浓缩成摘要。
+    async fn run_compact(&mut self, custom_instructions: &str) -> Result<()> {
+        eprintln!("{}", "正在压缩上下文…".dimmed());
+        let custom = if custom_instructions.is_empty() {
+            None
+        } else {
+            Some(custom_instructions)
+        };
+        let result = self
+            .inner
+            .compact(custom)
+            .await
+            .map_err(|e| anyhow!("压缩失败：{e}"))?;
+        eprintln!(
+            "{} {} → {} tokens",
+            "✔ 已压缩".green().bold(),
+            result.before_tokens,
+            result.after_tokens,
+        );
+        if !result.summary.is_empty() {
+            eprintln!("{}", "──── 摘要 ────".dimmed());
+            eprintln!("{}", result.summary);
+            eprintln!("{}", "──────────────".dimmed());
         }
         Ok(())
     }
@@ -288,7 +333,10 @@ fn print_banner(provider_display: &str, tools: &[String]) {
         provider_display.cyan(),
         tool_str,
     );
-    eprintln!("  {}", "Ctrl+C / Ctrl+D / /exit 退出".dimmed());
+    eprintln!(
+        "  {}",
+        "/compact [指令] 主动压缩上下文 · Ctrl+C / Ctrl+D / /exit 退出".dimmed()
+    );
     eprintln!();
 }
 

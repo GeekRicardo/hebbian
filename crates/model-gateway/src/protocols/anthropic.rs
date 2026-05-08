@@ -30,7 +30,83 @@ pub fn build_body(req: &ModelRequest, stream: bool, claude_code_oauth: bool) -> 
         body["tools"] = json!(tool_defs(&req.tools));
     }
 
+    // ── Prompt cache 标记 ─────────────────────────────────────────────────
+    // Anthropic 支持最多 4 个 `cache_control: { type: "ephemeral" }` 标记，
+    // 落到任意 content block 上后，从开头到该 block 的所有内容都会被缓存
+    // （5 分钟 TTL；Claude 4 系列上 ~10% 折扣命中读、写入加价）。
+    //
+    // 我们贴 2 个标记：
+    //   1. system 末尾 —— 最稳定的前缀，几乎所有轮都能命中
+    //   2. 倒数第二条 messages 里最后一个 block —— 把"上一轮已经发过的历史"
+    //      整段标缓存，让本轮第一次发就把它写进缓存，下一轮 0 成本读出来
+    apply_cache_control(&mut body);
+
     body
+}
+
+/// 把 `cache_control: ephemeral` 打到 system 末尾 + 倒数第二条 message 的尾 block。
+/// 必须发生在 `system` / `messages` 都已写入 body 之后。
+fn apply_cache_control(body: &mut Value) {
+    // system 兼容两种形态：纯字符串 or [content blocks]。
+    // Anthropic cache_control 必须挂在 block object 上，所以纯字符串得升格成 block。
+    if let Some(sys) = body.get_mut("system") {
+        match sys {
+            Value::String(s) => {
+                let text = std::mem::take(s);
+                *sys = json!([{
+                    "type": "text",
+                    "text": text,
+                    "cache_control": { "type": "ephemeral" }
+                }]);
+            }
+            Value::Array(arr) if !arr.is_empty() => {
+                if let Some(last) = arr.last_mut() {
+                    if let Some(obj) = last.as_object_mut() {
+                        obj.insert(
+                            "cache_control".to_string(),
+                            json!({ "type": "ephemeral" }),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 把 cache_control 贴到「倒数第二条 message」的最后一个 content block 上。
+    // 这样从 system 到这条消息为止的所有内容都会缓存；下一轮第一条新 user 消息就
+    // 能命中这一段。如果消息只有 1 条，没法贴第二个标记，跳过。
+    if let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        if msgs.len() >= 2 {
+            let idx = msgs.len() - 2;
+            let target = &mut msgs[idx];
+            // content 可能是 string，也可能是 [block]；统一升格成 [block] 后挂标记
+            if let Some(obj) = target.as_object_mut() {
+                let content = obj.entry("content").or_insert(Value::Null);
+                match content {
+                    Value::String(s) => {
+                        let text = std::mem::take(s);
+                        *content = json!([{
+                            "type": "text",
+                            "text": text,
+                            "cache_control": { "type": "ephemeral" }
+                        }]);
+                    }
+                    Value::Array(arr) if !arr.is_empty() => {
+                        if let Some(last) = arr.last_mut() {
+                            if let Some(block) = last.as_object_mut() {
+                                block.insert(
+                                    "cache_control".to_string(),
+                                    json!({ "type": "ephemeral" }),
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
@@ -226,9 +302,16 @@ pub fn parse_stream_delta(event_type: &str, data: &str) -> Option<AnthropicStrea
 }
 
 fn parse_usage(v: &Value) -> Usage {
+    let raw_input = v["usage"]["input_tokens"].as_u64().unwrap_or(0);
+    let cache_read = v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    let cache_creation = v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+    // Anthropic 把 cache_read / cache_creation 单列、不计入 input_tokens；
+    // 我们对齐 OpenAI / DeepSeek 的口径，把三者相加暴露成 input_tokens 总数。
     Usage {
-        input_tokens: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
+        input_tokens: raw_input + cache_read + cache_creation,
         output_tokens: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: cache_read,
+        cache_creation_tokens: cache_creation,
     }
 }
 
@@ -260,6 +343,7 @@ mod tests {
             })],
             tools: vec![],
             max_tokens: 4096,
+            reasoning: None,
         };
 
         let body = build_body(&req, false, false);
@@ -291,6 +375,7 @@ mod tests {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 1024,
+            reasoning: None,
         };
 
         let body = build_body(&req, false, true);
@@ -312,6 +397,7 @@ mod tests {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 1024,
+            reasoning: None,
         };
 
         let body = build_body(&req, false, true);
@@ -329,6 +415,7 @@ mod tests {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 1024,
+            reasoning: None,
         };
 
         let body = build_body(&req, false, false);

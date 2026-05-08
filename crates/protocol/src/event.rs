@@ -28,6 +28,12 @@ pub enum EventPayload {
     RunFinished {
         total_input_tokens: u64,
         total_output_tokens: u64,
+        /// 命中前缀缓存读出的 token 数（已计入 `total_input_tokens`）。
+        #[serde(default)]
+        total_cache_read_tokens: u64,
+        /// 写入前缀缓存的 token 数（Anthropic 专属，已计入 `total_input_tokens`）。
+        #[serde(default)]
+        total_cache_creation_tokens: u64,
         duration_ms: u64,
     },
     RunFailed {

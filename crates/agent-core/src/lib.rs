@@ -17,6 +17,6 @@ pub use harness::{
 };
 pub use recorder::Recorder;
 pub use run_state::RunState;
-pub use session::{Session, SessionConfig};
+pub use session::{ContextUsage, Session, SessionConfig};
 pub use turn_context::TurnContext;
 pub use workspace::Workspace;

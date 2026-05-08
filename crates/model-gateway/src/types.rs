@@ -133,11 +133,23 @@ pub struct AssistantOutput {
     pub attachments: Vec<MessageAttachment>,
 }
 
-/// Token 用量统计
+/// Token 用量统计。
+///
+/// `input_tokens` / `output_tokens` 始终是「计费 token」总数（与 provider 账单对齐）。
+/// `cache_read_tokens` 是命中缓存读出来的部分，**已计入** `input_tokens`，单独展示
+/// 给用户用来评估缓存命中率（命中越高越省钱）。`cache_creation_tokens` 是这次写入
+/// 缓存花的输入（只在 Anthropic 上有意义；OpenAI / DeepSeek 没有显式 creation 计费）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// 命中前缀缓存的部分，**已包含在 `input_tokens` 中**。
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// 写入前缀缓存的部分，**已包含在 `input_tokens` 中**。
+    /// Anthropic 的 `cache_creation_input_tokens`；其他 provider 通常为 0。
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
 }
 
 impl Usage {
@@ -148,6 +160,8 @@ impl Usage {
     pub fn accumulate(&mut self, other: &Usage) {
         self.input_tokens += other.input_tokens;
         self.output_tokens += other.output_tokens;
+        self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_creation_tokens += other.cache_creation_tokens;
     }
 }
 

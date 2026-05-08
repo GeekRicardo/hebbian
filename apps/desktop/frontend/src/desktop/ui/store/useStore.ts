@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   AppSettings,
   ApprovalDecisionPayload,
+  ContextUsage,
   EngineEvent,
   MessageAttachment,
   PendingApproval,
@@ -217,6 +218,13 @@ interface AppState {
   /** 当前对话启用的工具名称集合 */
   enabledTools: Set<string>;
 
+  // 上下文用量（输入框旁环形进度条数据）
+  contextUsage: ContextUsage | null;
+  /** 是否正在执行 /compact */
+  compacting: boolean;
+  refreshContextUsage: () => Promise<void>;
+  compactCurrentSession: (customInstructions?: string) => Promise<void>;
+
   // HITL — 当前一轮 run 中悬挂的审批请求
   pendingApproval: PendingApproval | null;
   pendingApprovalQueue: PendingApproval[];
@@ -334,6 +342,34 @@ export const useStore = create<AppState>((set, get) => ({
   enabledTools: new Set<string>(
     JSON.parse(localStorage.getItem("enabledTools") ?? '["web_search","web_fetch"]')
   ),
+
+  contextUsage: null,
+  compacting: false,
+  async refreshContextUsage() {
+    const cur = get().currentSession;
+    if (!cur) {
+      set({ contextUsage: null });
+      return;
+    }
+    try {
+      const usage = await api.getContextUsage(cur.id);
+      set({ contextUsage: usage });
+    } catch {
+      // 静默失败：拿不到用量也别影响正常流程
+    }
+  },
+  async compactCurrentSession(customInstructions?: string) {
+    const cur = get().currentSession;
+    if (!cur || get().compacting) return;
+    set({ compacting: true });
+    try {
+      const usage = await api.compactSession(cur.id, customInstructions);
+      const fresh = await api.getSession(cur.id);
+      set({ contextUsage: usage, currentSession: fresh });
+    } finally {
+      set({ compacting: false });
+    }
+  },
 
   pendingApproval: null,
   pendingApprovalQueue: [],
@@ -472,6 +508,7 @@ export const useStore = create<AppState>((set, get) => ({
       streamingText: "",
       streamingParts: [],
     });
+    get().refreshContextUsage();
   },
 
   async newSession(opts) {
@@ -709,6 +746,7 @@ export const useStore = create<AppState>((set, get) => ({
         pendingQuestionQueue: [],
       });
       await get().refreshSessions();
+      get().refreshContextUsage();
 
       // 首轮对话完成后自动生成标题（失败不影响主流程）
       if (isFirstRound) {

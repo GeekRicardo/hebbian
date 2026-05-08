@@ -11,6 +11,7 @@ import {
   type ChatInputHistoryState,
 } from "@/desktop/ui/components/chatInputHistory";
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
+import { ContextRing } from "@/desktop/ui/components/ContextRing";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
@@ -62,6 +63,25 @@ export function ChatInput({
     lastCompositionEndAt: 0,
   });
 
+  const contextUsage = useStore((s) => s.contextUsage);
+  const compacting = useStore((s) => s.compacting);
+  const compactCurrentSession = useStore((s) => s.compactCurrentSession);
+
+  async function runCompact(customInstructions: string) {
+    if (compacting) return;
+    setSending(true);
+    setValue("");
+    setHistoryState({ index: null });
+    try {
+      await compactCurrentSession(customInstructions || undefined);
+      toast.success("上下文已压缩");
+    } catch (e: any) {
+      toast.error(e?.message || "压缩失败");
+    } finally {
+      setSending(false);
+    }
+  }
+
   // 未手动调整高度时，按内容自适应
   useLayoutEffect(() => {
     if (manual) return;
@@ -87,6 +107,11 @@ export function ChatInput({
   async function submit() {
     const v = value.trim();
     if ((!v && attachments.length === 0) || sending || isStreaming) return;
+    if (v.startsWith("/compact")) {
+      const args = v.slice("/compact".length).trim();
+      await runCompact(args);
+      return;
+    }
     setSending(true);
     setValue("");
     const queuedAttachments = attachments;
@@ -336,6 +361,20 @@ export function ChatInput({
             >
               <Paperclip className="w-4 h-4" />
             </button>
+            {contextUsage && (
+              <ContextRing
+                used={contextUsage.used_tokens}
+                budget={contextUsage.budget_tokens}
+                onClick={() => runCompact("")}
+                title={
+                  compacting
+                    ? "正在压缩…"
+                    : `上下文 ${Math.round(
+                        (contextUsage.used_tokens / Math.max(contextUsage.budget_tokens, 1)) * 100
+                      )}% · 点击运行 /compact`
+                }
+              />
+            )}
             <button
               type="button"
               onClick={isStreaming ? cancel : submit}

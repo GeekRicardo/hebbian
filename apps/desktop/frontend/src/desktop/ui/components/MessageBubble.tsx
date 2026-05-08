@@ -68,6 +68,18 @@ interface Props {
     activeLocalIdx: number | null;
     matchBaseIdx: number;
   };
+  /** 处于最近一次 /compact 之前的消息：模型已看不到，UI 上淡化。 */
+  archived?: boolean;
+  /** 仅 compact_boundary：摘要是否展开（点击主体切换） */
+  summaryExpanded?: boolean;
+  /** 仅 compact_boundary：点击分隔条主体切换摘要展示 */
+  onToggleSummary?: () => void;
+  /** 仅 compact_boundary：原始历史是否展开（点击「历史对话」按钮切换） */
+  historyExpanded?: boolean;
+  /** 仅 compact_boundary：点击「历史对话」按钮切换 */
+  onToggleHistory?: () => void;
+  /** 仅 compact_boundary：该 boundary 折叠了多少条原始历史消息 */
+  archivedCount?: number;
 }
 
 interface ToolCallItem {
@@ -788,6 +800,12 @@ export const MessageBubble = memo(function MessageBubble({
   onEdit,
   streamingParts,
   find,
+  archived,
+  summaryExpanded,
+  onToggleSummary,
+  historyExpanded,
+  onToggleHistory,
+  archivedCount,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
@@ -883,6 +901,61 @@ export const MessageBubble = memo(function MessageBubble({
           </span>
         </div>
         <div className="flex-1 h-px bg-border" />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "compact_boundary") {
+    const { before_tokens, after_tokens, summary } = message.meta;
+    const summaryOn = !!summaryExpanded;
+    const historyOn = !!historyExpanded;
+    const count = archivedCount ?? 0;
+    return (
+      <div className="px-6 py-3 flex flex-col items-stretch gap-2 text-[11px] text-muted-foreground select-none">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-border" />
+          <button
+            type="button"
+            onClick={onToggleSummary}
+            title={summaryOn ? "点击折叠压缩摘要" : "点击查看压缩摘要"}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+          >
+            {summaryOn ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            <span className="font-medium text-foreground/70">上下文已压缩</span>
+            <span className="tabular-nums">
+              {before_tokens} → {after_tokens} tokens
+            </span>
+          </button>
+          {count > 0 && (
+            <button
+              type="button"
+              onClick={onToggleHistory}
+              title={
+                historyOn
+                  ? "点击折叠原始历史对话"
+                  : `点击展开 ${count} 条原始历史对话`
+              }
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-1 transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+            >
+              {historyOn ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+              <span>历史对话 · {count}</span>
+            </button>
+          )}
+          <div className="flex-1 h-px bg-border" />
+        </div>
+        {summaryOn && summary && (
+          <div className="mx-auto max-w-3xl w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px] leading-relaxed text-foreground whitespace-pre-wrap">
+            {summary}
+          </div>
+        )}
       </div>
     );
   }
@@ -1022,9 +1095,11 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div
+      title={archived ? "已被压缩，模型不再读取此消息（点击右上角圆环可再次压缩）" : undefined}
       className={cn(
         "group relative flex gap-3 px-6 py-4",
-        isUser ? "bg-background" : "bg-accent/30"
+        isUser ? "bg-background" : "bg-accent/30",
+        archived && "opacity-50 hover:opacity-100 transition-opacity"
       )}
     >
       <div

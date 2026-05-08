@@ -272,6 +272,21 @@ fn cancel_message(request_id: String) -> bool {
     cancellation::cancel(&request_id)
 }
 
+#[tauri::command]
+fn get_context_usage(app: AppHandle, session_id: String) -> AppResult<chat::ContextUsageDto> {
+    chat::context_usage(&data_dir(&app)?, &session_id)
+}
+
+#[tauri::command]
+async fn compact_session(
+    app: AppHandle,
+    session_id: String,
+    custom_instructions: Option<String>,
+) -> AppResult<chat::ContextUsageDto> {
+    let dd = data_dir(&app)?;
+    chat::compact_session(&dd, &session_id, custom_instructions).await
+}
+
 /// 用户在 UI 中点击审批按钮后调用。
 ///
 /// `decision` 取值：`"allow_once"` / `"allow_and_remember"` / `"deny"` / `"deny_with_feedback"`
@@ -579,6 +594,8 @@ pub fn run() {
             switch_provider_model,
             send_message,
             cancel_message,
+            get_context_usage,
+            compact_session,
             approve_permission,
             answer_question,
             generate_session_title,

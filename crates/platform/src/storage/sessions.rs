@@ -25,6 +25,13 @@ pub enum MessageMeta {
         to_model: String,
     },
     Interrupted,
+    /// 上下文压缩的分界标记。LLM 看到的 transcript 会跳过此标记之前的所有消息，
+    /// 并把 `summary` 作为前情概要注入；标记之后的消息正常参与对话。
+    CompactBoundary {
+        summary: String,
+        before_tokens: usize,
+        after_tokens: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,8 +111,40 @@ pub struct Session {
     /// 对话使用的 skill 目录列表。`None` = 用全局默认。
     #[serde(default)]
     pub skill_dirs: Option<Vec<PathBuf>>,
+    /// 整个对话累计的 token 用量。每次 run 结束由 surface 累加进 session.json，
+    /// 用来在输入框旁的 TokenStatsPanel 直接展示，无需重跑。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_stats: Option<TokenStats>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// 对话级 token 累计。
+///
+/// `input_tokens` / `output_tokens` 与 provider 账单对齐；
+/// `cache_read_tokens` / `cache_creation_tokens` **已包含在** `input_tokens` 内，
+/// 单独展示给用户评估缓存命中率。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct TokenStats {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    /// run 总轮数（含 failed / cancelled）
+    #[serde(default)]
+    pub run_count: u64,
+}
+
+impl TokenStats {
+    pub fn accumulate(&mut self, delta: TokenStats) {
+        self.input_tokens += delta.input_tokens;
+        self.output_tokens += delta.output_tokens;
+        self.cache_read_tokens += delta.cache_read_tokens;
+        self.cache_creation_tokens += delta.cache_creation_tokens;
+        self.run_count += delta.run_count;
+    }
 }
 
 fn default_stream() -> bool {
@@ -272,6 +311,7 @@ pub fn create(
         allowed_dirs: None,
         enabled_tools: None,
         skill_dirs: None,
+        token_stats: None,
         created_at: now(),
         updated_at: now(),
     };
@@ -321,6 +361,7 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         allowed_dirs: src.allowed_dirs,
         enabled_tools: src.enabled_tools,
         skill_dirs: src.skill_dirs,
+        token_stats: src.token_stats,
         created_at: now(),
         updated_at: now(),
     };

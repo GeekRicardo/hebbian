@@ -16,7 +16,9 @@ use platform::{
     CancelFlag,
     attachments::MessageAttachment,
     config::settings as global_settings,
-    storage::sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
+    storage::sessions::{
+        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
+    },
 };
 use protocol::{
     ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
@@ -162,6 +164,22 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let summary = handle.drive(&mut observer).await;
     if let Some(state) = &args.hitl {
         state.forget(&hitl);
+    }
+
+    // 不论 Done / Cancelled / Failed 都把这一轮的 token 用量累加进 session.json，
+    // 让前端 TokenStatsPanel 即使在中断/失败的情况下也能反映已扣费的部分。
+    if let Some(usage) = summary.usage {
+        accumulate_session_tokens(
+            data_dir,
+            &args.session_id,
+            TokenStats {
+                input_tokens: usage.input,
+                output_tokens: usage.output,
+                cache_read_tokens: usage.cache_read,
+                cache_creation_tokens: usage.cache_creation,
+                run_count: 1,
+            },
+        );
     }
 
     let DesktopObserver {
@@ -672,6 +690,91 @@ fn empty_tool_call() -> MessageToolCall {
     }
 }
 
+/// 当前会话的上下文用量。前端用来渲染输入框旁的环形进度条。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextUsageDto {
+    pub used_tokens: usize,
+    pub budget_tokens: usize,
+}
+
+/// 把这一轮 run 的 token delta 累加进 session.json 的 token_stats 字段。
+/// 失败不传染（拿不到 session 文件 / 序列化失败也不能影响主请求结果）。
+fn accumulate_session_tokens(data_dir: &Path, session_id: &str, delta: TokenStats) {
+    let Ok(mut session) = sessions::load(data_dir, session_id) else {
+        return;
+    };
+    let mut stats = session.token_stats.unwrap_or_default();
+    stats.accumulate(delta);
+    session.token_stats = Some(stats);
+    let _ = sessions::save(data_dir, session);
+}
+
+/// 计算指定 session 的上下文用量。直接复用 [`agent_core::context::budget`]
+/// 估算器，与发起 run 时看到的口径一致。
+pub fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
+    let session = sessions::load(data_dir, session_id)?;
+    let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
+    let used = agent_core::context::budget::estimate_transcript_tokens(
+        transcript.system.as_deref(),
+        &transcript.entries,
+    );
+    let budget = AgentDefinition::default().compaction_policy.token_budget;
+    Ok(ContextUsageDto {
+        used_tokens: used,
+        budget_tokens: budget,
+    })
+}
+
+/// 主动压缩：调一次模型把当前 transcript 浓缩成摘要，然后在 session 里
+/// 追加一条 [`Role::Marker`] + [`MessageMeta::CompactBoundary`] 标记，
+/// 后续读取该 session 时 `Transcript::from_session` 会跳过标记之前的所有消息。
+pub async fn compact_session(
+    data_dir: &Path,
+    session_id: &str,
+    custom_instructions: Option<String>,
+) -> AppResult<ContextUsageDto> {
+    let session = sessions::load(data_dir, session_id)?;
+    let provider = model_gateway::config::get(data_dir, &session.provider_id)?;
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
+    let model = session.model.clone();
+    let inner = model_gateway::build_client(provider)
+        .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
+    let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(inner, model));
+
+    let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
+    let result = agent_core::context::compaction::compact_with_llm(
+        client.as_ref(),
+        transcript.system.as_deref(),
+        transcript.entries,
+        custom_instructions.as_deref(),
+    )
+    .await
+    .map_err(|e| AppError::msg(format!("压缩失败: {e}")))?;
+
+    let marker = Message {
+        id: sessions::new_id(),
+        role: Role::Marker,
+        content: result.summary.clone(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: Some(MessageMeta::CompactBoundary {
+            summary: result.summary.clone(),
+            before_tokens: result.before_tokens,
+            after_tokens: result.after_tokens,
+        }),
+    };
+    sessions::append_message(data_dir, session_id, marker)?;
+
+    Ok(ContextUsageDto {
+        used_tokens: result.after_tokens,
+        budget_tokens: AgentDefinition::default().compaction_policy.token_budget,
+    })
+}
+
 pub async fn send_once(
     provider: &Provider,
     model: &str,
@@ -705,6 +808,7 @@ pub async fn send_once(
         entries,
         tools: Vec::new(),
         max_tokens: 4096,
+        reasoning: None,
     };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     match client

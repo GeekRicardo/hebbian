@@ -182,9 +182,13 @@ pub fn parse_stream_delta(data: &str) -> Option<String> {
 
 fn parse_usage(v: &Value) -> Usage {
     let meta = &v["usageMetadata"];
+    // Gemini implicit caching：`cachedContentTokenCount` 是命中显式缓存的部分；
+    // 已计入 `promptTokenCount`。implicit cache 命中也会通过这个字段返回。
     Usage {
         input_tokens: meta["promptTokenCount"].as_u64().unwrap_or(0),
         output_tokens: meta["candidatesTokenCount"].as_u64().unwrap_or(0),
+        cache_read_tokens: meta["cachedContentTokenCount"].as_u64().unwrap_or(0),
+        cache_creation_tokens: 0,
     }
 }
 
@@ -216,6 +220,7 @@ mod tests {
             })],
             tools: vec![],
             max_tokens: 4096,
+            reasoning: None,
         };
 
         let body = build_body(&req);

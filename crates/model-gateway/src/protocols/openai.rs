@@ -721,16 +721,33 @@ fn parse_tool_calls(tool_calls: &Value) -> Vec<ToolCall> {
 }
 
 fn parse_usage(v: &Value) -> Usage {
+    let usage = &v["usage"];
+    // OpenAI Chat Completions：`prompt_tokens_details.cached_tokens` 是命中缓存读出的部分；
+    // 已经计入 `prompt_tokens`，所以不用再加。
+    // DeepSeek（OpenAI 兼容路径）：用 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，
+    // 这两个字段加起来 = `prompt_tokens`，hit 部分对应缓存命中。
+    let cached = usage["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+        .unwrap_or(0);
     Usage {
-        input_tokens: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
-        output_tokens: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+        input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0),
+        output_tokens: usage["completion_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: cached,
+        cache_creation_tokens: 0,
     }
 }
 
 fn parse_responses_usage(v: &Value) -> Usage {
+    let usage = &v["usage"];
+    let cached = usage["input_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .unwrap_or(0);
     Usage {
-        input_tokens: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
-        output_tokens: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
+        input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
+        output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+        cache_read_tokens: cached,
+        cache_creation_tokens: 0,
     }
 }
 
@@ -748,6 +765,7 @@ mod responses_tests {
             entries: vec![TranscriptEntry::User(UserEntry::text("hello"))],
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, false, true);
@@ -774,6 +792,7 @@ mod responses_tests {
                 parameters: json!({"type": "object"}),
             }],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);
@@ -795,6 +814,7 @@ mod responses_tests {
                 parameters: json!({"type": "object"}),
             }],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);
@@ -814,6 +834,7 @@ mod responses_tests {
                 parameters: json!({"type": "object"}),
             }],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);
@@ -843,6 +864,7 @@ mod responses_tests {
             })],
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, false, false);
@@ -884,6 +906,7 @@ mod responses_tests {
             entries,
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);
@@ -921,6 +944,7 @@ mod responses_tests {
             ],
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);
@@ -982,6 +1006,7 @@ mod responses_tests {
             ],
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, false);
@@ -1024,6 +1049,7 @@ mod responses_tests {
             ],
             tools: vec![],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         let body = build_responses_body(&req, true, true);

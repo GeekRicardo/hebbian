@@ -77,7 +77,28 @@ export type MessageMeta =
     }
   | {
       type: "interrupted";
+    }
+  | {
+      type: "compact_boundary";
+      summary: string;
+      before_tokens: number;
+      after_tokens: number;
     };
+
+/** 当前 session 的上下文用量（来自 get_context_usage / compact_session） */
+export interface ContextUsage {
+  used_tokens: number;
+  budget_tokens: number;
+}
+
+/** 整个 session 累积的 token 用量（落盘在 session.json 的 token_stats 字段） */
+export interface TokenStats {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  run_count: number;
+}
 
 export interface Message {
   id: string;
@@ -171,6 +192,8 @@ export interface Session {
   enabled_tools?: string[] | null;
   /** 对话使用的 skill 目录列表。null = 用全局默认。 */
   skill_dirs?: string[] | null;
+  /** 整个对话累计 token 用量（含缓存命中 / 写入）；新建对话时为 null。 */
+  token_stats?: TokenStats | null;
   created_at: number;
   updated_at: number;
 }

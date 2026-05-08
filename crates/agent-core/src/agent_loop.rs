@@ -7,6 +7,7 @@ use tracing::{debug, info};
 use crate::{
     context::{
         compaction::{compact_structural, needs_compaction},
+        microcompact::{microcompact, MicrocompactPolicy},
         transcript::Transcript,
     },
     definition::CompactionPolicy,
@@ -100,12 +101,26 @@ pub async fn run_loop(
     let mut output_attachments = Vec::new();
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+    let mut total_cache_read_tokens: u64 = 0;
+    let mut total_cache_creation_tokens: u64 = 0;
 
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
             debug!("run cancelled");
             hitl.cancel_all_pending();
             break Err(ModelError::Cancelled);
+        }
+
+        // Microcompact：每轮模型请求前先把超阈值的老 tool_result 影子化为占位符。
+        // 不消耗模型调用，只改 transcript entries，幂等。
+        let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
+        if mc_report.shadowed_count > 0 {
+            tracing::info!(
+                shadowed = mc_report.shadowed_count,
+                kept = mc_report.kept_count,
+                total = mc_report.total_compactable,
+                "microcompact shadowed old tool results"
+            );
         }
 
         if needs_compaction(
@@ -166,6 +181,7 @@ pub async fn run_loop(
             entries: transcript.entries.clone(),
             tools: tool_defs,
             max_tokens: 8192,
+            reasoning: None,
         };
 
         debug!(iteration, "calling model");
@@ -231,6 +247,8 @@ pub async fn run_loop(
                 );
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
+                total_cache_read_tokens += usage.cache_read_tokens;
+                total_cache_creation_tokens += usage.cache_creation_tokens;
 
                 emit(EventPayload::TextDone {
                     full_text: text.clone(),
@@ -263,6 +281,8 @@ pub async fn run_loop(
                 );
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
+                total_cache_read_tokens += usage.cache_read_tokens;
+                total_cache_creation_tokens += usage.cache_creation_tokens;
 
                 // 走 stream 路径时，TextDelta 已经一段段经 provider 流出来了；
                 // 再 emit 一次会把整段正文重复喷给 surface（且 provider 端的
@@ -324,6 +344,8 @@ pub async fn run_loop(
             emit(EventPayload::RunFinished {
                 total_input_tokens,
                 total_output_tokens,
+                total_cache_read_tokens,
+                total_cache_creation_tokens,
                 duration_ms,
             });
         }

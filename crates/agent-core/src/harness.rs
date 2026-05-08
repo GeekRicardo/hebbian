@@ -238,6 +238,8 @@ impl RunHandle {
                 EventPayload::RunFinished {
                     total_input_tokens,
                     total_output_tokens,
+                    total_cache_read_tokens,
+                    total_cache_creation_tokens,
                     ..
                 } => {
                     return TurnSummary {
@@ -245,6 +247,8 @@ impl RunHandle {
                         usage: Some(UsageTotals {
                             input: *total_input_tokens,
                             output: *total_output_tokens,
+                            cache_read: *total_cache_read_tokens,
+                            cache_creation: *total_cache_creation_tokens,
                         }),
                     };
                 }
@@ -305,6 +309,8 @@ pub enum TurnOutcome {
 pub struct UsageTotals {
     pub input: u64,
     pub output: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
 }
 
 impl TurnSummary {

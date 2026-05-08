@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Sparkles, ChevronDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { TokenStatsPanel } from "./TokenStatsPanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
@@ -48,6 +49,27 @@ export function ChatView() {
   const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(
     () => new Set()
   );
+
+  // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
+  // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
+  // - expandedHistories：「历史对话」按钮点击后展开压缩前的原始消息
+  const [expandedSummaries, setExpandedSummaries] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [expandedHistories, setExpandedHistories] = useState<Set<string>>(
+    () => new Set()
+  );
+  function toggleIn(
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
+    id: string
+  ) {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // ==== 对话内查找状态 ====
   const [findOpen, setFindOpen] = useState(false);
@@ -182,6 +204,37 @@ export function ChatView() {
     .filter((m) => m.role === "user")
     .map((m) => m.content);
 
+  // 每条 compact_boundary 之前的消息默认折叠：模型已不再读，需要点击分隔条展开。
+  // 多次压缩时每条 boundary 独立展开/折叠。
+  const boundaryIndices: number[] = [];
+  currentSession.messages.forEach((m, i) => {
+    if (m.meta?.type === "compact_boundary") boundaryIndices.push(i);
+  });
+  const lastCompactBoundaryIdx =
+    boundaryIndices.length > 0
+      ? boundaryIndices[boundaryIndices.length - 1]
+      : -1;
+
+  // 找到指定消息归属的 boundary id（它之后最近的一个 boundary 的 message id）。
+  // 没有则返回 null（属于最后一段，不会被折叠）。
+  function nextBoundaryId(idx: number): string | null {
+    const next = boundaryIndices.find((b) => b > idx);
+    return next === undefined ? null : currentSession!.messages[next].id;
+  }
+
+  // 每条 boundary 折叠了多少条历史消息（含 marker 之前同段所有非 marker 消息）。
+  const boundaryArchivedCounts: Record<string, number> = {};
+  let prevBoundaryEnd = -1;
+  for (const b of boundaryIndices) {
+    const id = currentSession.messages[b].id;
+    let count = 0;
+    for (let j = prevBoundaryEnd + 1; j < b; j++) {
+      if (currentSession.messages[j].role !== "marker") count++;
+    }
+    boundaryArchivedCounts[id] = count;
+    prevBoundaryEnd = b;
+  }
+
   // 最近一条 user 消息：允许「编辑后重跑」；
   // 若它之后没有 assistant 回复（被中断 / 失败），还允许「重新生成」。
   let lastUserMsgId: string | null = null;
@@ -262,7 +315,6 @@ export function ChatView() {
   async function handleSwitch(providerId: string, model: string) {
     try {
       await switchProviderModel(providerId, model);
-      setPickerOpen(false);
     } catch (e: any) {
       toast.error(e.message || String(e));
     }
@@ -484,6 +536,14 @@ export function ChatView() {
         )}
         <div>
           {currentSession.messages.map((m, i) => {
+            const isBoundary = m.meta?.type === "compact_boundary";
+            // 非 boundary 消息：归属下一个 boundary，未展开"历史对话"则不渲染
+            if (!isBoundary) {
+              const owner = nextBoundaryId(i);
+              if (owner !== null && !expandedHistories.has(owner)) {
+                return null;
+              }
+            }
             const isLatestUser = m.role === "user" && m.id === lastUserMsgId;
             const onRegenerate =
               m.role === "assistant"
@@ -502,6 +562,16 @@ export function ChatView() {
               onFork={handleFork}
               onRegenerate={onRegenerate}
               onEdit={onEdit}
+              archived={lastCompactBoundaryIdx > 0 && i < lastCompactBoundaryIdx}
+              summaryExpanded={isBoundary && expandedSummaries.has(m.id)}
+              onToggleSummary={
+                isBoundary ? () => toggleIn(setExpandedSummaries, m.id) : undefined
+              }
+              historyExpanded={isBoundary && expandedHistories.has(m.id)}
+              onToggleHistory={
+                isBoundary ? () => toggleIn(setExpandedHistories, m.id) : undefined
+              }
+              archivedCount={isBoundary ? boundaryArchivedCounts[m.id] : undefined}
               find={
                 findOpen && findQuery
                   ? {
@@ -539,12 +609,19 @@ export function ChatView() {
       <PermissionApprovalPopup />
       <UserQuestionPopup />
 
-      <ChatInput
-        onSend={handleSend}
-        onCancel={handleCancel}
-        isStreaming={isStreaming}
-        userMessageHistory={userMessageHistory}
-      />
+      <div className="flex items-end gap-2">
+        <div className="flex-1 min-w-0">
+          <ChatInput
+            onSend={handleSend}
+            onCancel={handleCancel}
+            isStreaming={isStreaming}
+            userMessageHistory={userMessageHistory}
+          />
+        </div>
+        <div className="pr-3 pb-5 shrink-0">
+          <TokenStatsPanel stats={currentSession.token_stats ?? null} />
+        </div>
+      </div>
     </div>
   );
 }
