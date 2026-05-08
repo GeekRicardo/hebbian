@@ -18,6 +18,9 @@ import {
   Loader2,
   Wrench,
   Brain,
+  Table as TableIcon,
+  Braces,
+  FileJson,
 } from "lucide-react";
 import type {
   Message,
@@ -233,13 +236,325 @@ function ToolStatusIcon({ status }: { status: ToolCallItem["status"] }) {
   return <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />;
 }
 
+function previewArgValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+// 切多段连续 JSON：兼容 stream 拼接出 `{"a":1}{"b":2}` 这种形态。
+// 用栈做花括号 / 中括号匹配，遇到未闭合就停下，已切出的段照样返回。
+function splitJsonSegments(s: string): string[] {
+  const out: string[] = [];
+  const n = s.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && /\s/.test(s[i])) i++;
+    if (i >= n) break;
+    if (s[i] !== "{" && s[i] !== "[") return out;
+    const start = i;
+    let depth = 0;
+    let inStr = false;
+    let escape = false;
+    for (; i < n; i++) {
+      const ch = s[i];
+      if (inStr) {
+        if (escape) escape = false;
+        else if (ch === "\\") escape = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === "{" || ch === "[") depth++;
+      else if (ch === "}" || ch === "]") {
+        depth--;
+        if (depth === 0) {
+          i++;
+          out.push(s.slice(start, i));
+          break;
+        }
+      }
+    }
+    if (depth !== 0) break;
+  }
+  return out;
+}
+
+function buildArgsPreview(
+  argumentsText: string
+): Array<{ key: string; value: string }> {
+  const trimmed = argumentsText.trim();
+  if (!trimmed) return [];
+
+  const collect = (
+    value: unknown,
+    out: Array<{ key: string; value: string }>
+  ) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        out.push({ key: k, value: previewArgValue(v) });
+      }
+    }
+  };
+
+  // 1) 直接整段 parse —— 大多数完整 tool_call 走这里
+  try {
+    const parsed = JSON.parse(trimmed);
+    const entries: Array<{ key: string; value: string }> = [];
+    collect(parsed, entries);
+    if (entries.length > 0) return entries;
+  } catch {
+    // fallthrough
+  }
+
+  // 2) 拆多段连续 JSON —— 兼容 stream / 后端拼接异常
+  const segments = splitJsonSegments(trimmed);
+  if (segments.length > 0) {
+    const entries: Array<{ key: string; value: string }> = [];
+    for (const seg of segments) {
+      try {
+        collect(JSON.parse(seg), entries);
+      } catch {
+        // 单段坏掉就跳过，剩下的还能展示
+      }
+    }
+    if (entries.length > 0) return entries;
+  }
+
+  return [{ key: "", value: trimmed.replace(/\s+/g, " ") }];
+}
+
+function JsonPrimitive({ value }: { value: unknown }) {
+  if (value === null)
+    return <span className="text-muted-foreground">null</span>;
+  if (value === undefined)
+    return <span className="text-muted-foreground">undefined</span>;
+  if (typeof value === "boolean")
+    return <span className="text-foreground/90">{String(value)}</span>;
+  if (typeof value === "number")
+    return <span className="text-foreground/90">{value}</span>;
+  if (typeof value === "string")
+    return (
+      <span className="break-words text-emerald-700 dark:text-emerald-400">
+        {JSON.stringify(value)}
+      </span>
+    );
+  return <span>{String(value)}</span>;
+}
+
+function JsonKeyLabel({ keyLabel }: { keyLabel: string | number | null }) {
+  if (keyLabel === null) return null;
+  if (typeof keyLabel === "number") {
+    return (
+      <>
+        <span className="text-muted-foreground/70">{keyLabel}</span>
+        <span className="mr-1 text-muted-foreground/70">:</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="text-foreground/85">&quot;{keyLabel}&quot;</span>
+      <span className="mr-1 text-muted-foreground/70">:</span>
+    </>
+  );
+}
+
+function JsonNode({
+  value,
+  level,
+  keyLabel,
+}: {
+  value: unknown;
+  level: number;
+  keyLabel: string | number | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const indent = { paddingLeft: level * 14 } as const;
+  const composite =
+    value !== null && typeof value === "object" && !(value instanceof Date);
+
+  if (!composite) {
+    return (
+      <div style={indent} className="flex items-baseline">
+        <span className="inline-block w-3.5 shrink-0" />
+        <JsonKeyLabel keyLabel={keyLabel} />
+        <JsonPrimitive value={value} />
+      </div>
+    );
+  }
+
+  const isArray = Array.isArray(value);
+  const entries: Array<[string | number, unknown]> = isArray
+    ? (value as unknown[]).map((v, i) => [i, v])
+    : Object.entries(value as Record<string, unknown>);
+  const [openBracket, closeBracket] = isArray ? ["[", "]"] : ["{", "}"];
+
+  return (
+    <div>
+      <div style={indent} className="flex items-baseline">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={open ? "折叠" : "展开"}
+          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded hover:bg-accent"
+        >
+          {open ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
+        <JsonKeyLabel keyLabel={keyLabel} />
+        <span>{openBracket}</span>
+        {!open && (
+          <>
+            {entries.length > 0 && (
+              <span className="mx-1 italic text-muted-foreground">
+                {entries.length} {isArray ? "项" : "键"}
+              </span>
+            )}
+            <span>{closeBracket}</span>
+          </>
+        )}
+      </div>
+      {open && (
+        <>
+          {entries.map(([k, v]) => (
+            <JsonNode
+              key={String(k)}
+              value={v}
+              level={level + 1}
+              keyLabel={k}
+            />
+          ))}
+          <div style={indent} className="flex items-baseline">
+            <span className="inline-block w-3.5 shrink-0" />
+            <span>{closeBracket}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function JsonView({ value }: { value: unknown }) {
+  return (
+    <div className="max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 px-2 py-2 font-mono text-[12px] leading-relaxed text-foreground">
+      <JsonNode value={value} level={0} keyLabel={null} />
+    </div>
+  );
+}
+
+function ArgsTable({
+  entries,
+}: {
+  entries: Array<{ key: string; value: string }>;
+}) {
+  return (
+    <div className="max-h-56 overflow-auto rounded-md border border-border bg-muted/40">
+      <table className="w-full table-fixed text-[11px]">
+        <tbody>
+          {entries.map((row, i) => (
+            <tr
+              key={i}
+              className="border-b border-border/40 last:border-b-0 align-top"
+            >
+              <td className="w-1/4 min-w-[64px] break-all px-2 py-1 font-medium text-foreground/85">
+                {row.key || "—"}
+              </td>
+              <td className="px-2 py-1 text-muted-foreground whitespace-pre-wrap break-words">
+                {row.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ToolCallDetail({ call }: { call: ToolCallItem }) {
+  const entries = buildArgsPreview(call.argumentsText);
+  const tableable = entries.length > 0 && entries.some((e) => e.key !== "");
+  const [argsRaw, setArgsRaw] = useState(false);
+  const showRaw = argsRaw || !tableable;
+
+  return (
+    <div className="rounded-md border border-border bg-background/70 p-3 text-xs shadow-sm">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Wrench className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="truncate font-medium">
+            {call.name || "工具调用"}
+          </span>
+          {call.id && (
+            <span className="truncate text-[10px] text-muted-foreground">
+              {call.id}
+            </span>
+          )}
+        </div>
+        {call.durationMs !== undefined && call.durationMs !== null && (
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            {(call.durationMs / 1000).toFixed(1)}s
+          </span>
+        )}
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <div className="min-w-0">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              入参
+            </div>
+            {tableable && (
+              <button
+                type="button"
+                onClick={() => setArgsRaw((v) => !v)}
+                title={showRaw ? "切换为表格" : "切换为原文"}
+                aria-label={showRaw ? "切换为表格" : "切换为原文"}
+                className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {showRaw ? (
+                  <TableIcon className="h-3 w-3" />
+                ) : (
+                  <Braces className="h-3 w-3" />
+                )}
+              </button>
+            )}
+          </div>
+          {showRaw ? (
+            <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+              {call.argumentsText || "等待入参…"}
+            </pre>
+          ) : (
+            <ArgsTable entries={entries} />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            返回值
+          </div>
+          <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+            {call.result || "等待返回…"}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ToolCallStrip({
   calls,
-  expandedKey,
+  expandedKeys,
   onToggle,
 }: {
   calls: ToolCallItem[];
-  expandedKey: string | null;
+  expandedKeys: Set<string>;
   onToggle: (key: string) => void;
 }) {
   if (calls.length === 0) return null;
@@ -247,74 +562,49 @@ function ToolCallStrip({
   return (
     <div className="mt-3 space-y-2">
       {calls.map((call) => {
-        const active = call.key === expandedKey;
+        const active = expandedKeys.has(call.key);
         const label = call.name || "工具调用";
+        // 按钮右侧只展示 prompt 字段（约定：tool_call 普遍带 `prompt`），
+        // 其它参数留给用户点开后自己查看。
+        const promptEntry = buildArgsPreview(call.argumentsText).find(
+          (e) => e.key === "prompt"
+        );
         return (
           <div key={call.key} className="space-y-1.5">
-            <button
-              type="button"
-              onClick={() => onToggle(call.key)}
-              className={cn(
-                "inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors",
-                active
-                  ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+            <div className="flex w-full items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onToggle(call.key)}
+                className={cn(
+                  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors",
+                  active
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+                )}
+                title={label}
+              >
+                <Wrench className="h-3.5 w-3.5 shrink-0" />
+                <span className="max-w-[180px] truncate font-medium">
+                  {label}
+                </span>
+                <ToolStatusIcon status={call.status} />
+                <span className="shrink-0 text-[10px]">
+                  {statusLabel(call.status)}
+                </span>
+                {active ? (
+                  <ChevronDown className="h-3 w-3 shrink-0" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 shrink-0" />
+                )}
+              </button>
+              {promptEntry && (
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                  {promptEntry.value}
+                </span>
               )}
-              title={label}
-            >
-              <Wrench className="h-3.5 w-3.5 shrink-0" />
-              <span className="max-w-[180px] truncate font-medium">{label}</span>
-              <ToolStatusIcon status={call.status} />
-              <span className="shrink-0 text-[10px]">
-                {statusLabel(call.status)}
-              </span>
-              {active ? (
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              ) : (
-                <ChevronRight className="h-3 w-3 shrink-0" />
-              )}
-            </button>
+            </div>
 
-            {active && (
-              <div className="rounded-md border border-border bg-background/70 p-3 text-xs shadow-sm">
-                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <Wrench className="h-3.5 w-3.5 shrink-0 text-primary" />
-                    <span className="truncate font-medium">
-                      {call.name || "工具调用"}
-                    </span>
-                    {call.id && (
-                      <span className="truncate text-[10px] text-muted-foreground">
-                        {call.id}
-                      </span>
-                    )}
-                  </div>
-                  {call.durationMs !== undefined && call.durationMs !== null && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {(call.durationMs / 1000).toFixed(1)}s
-                    </span>
-                  )}
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  <div className="min-w-0">
-                    <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-                      入参
-                    </div>
-                    <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-                      {call.argumentsText || "等待入参…"}
-                    </pre>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-                      返回值
-                    </div>
-                    <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-                      {call.result || "等待返回…"}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            )}
+            {active && <ToolCallDetail call={call} />}
           </div>
         );
       })}
@@ -386,11 +676,11 @@ function ReasoningBlock({
   if (!trimmed && !streaming) return null;
 
   return (
-    <div className="rounded-md border border-border/60 bg-muted/30">
+    <div className="space-y-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
       >
         <Brain className="h-3.5 w-3.5 shrink-0" />
         <span className="font-medium">
@@ -399,17 +689,26 @@ function ReasoningBlock({
         {streaming && (
           <span className="ml-1 inline-flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
         )}
-        <span className="ml-auto">
-          {open ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </span>
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
       </button>
       {open && (
-        <div className="border-t border-border/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
-          {text || (streaming ? "▍" : "")}
+        <div className="border-l border-border/50 pl-3 text-[12px] leading-relaxed text-muted-foreground break-words">
+          {text ? (
+            <div className="markdown-segment">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {text}
+              </ReactMarkdown>
+            </div>
+          ) : streaming ? (
+            "▍"
+          ) : null}
         </div>
       )}
     </div>
@@ -419,12 +718,12 @@ function ReasoningBlock({
 function AssistantParts({
   parts,
   streaming,
-  expandedKey,
+  expandedKeys,
   onToggle,
 }: {
   parts: AssistantRenderPart[];
   streaming?: boolean;
-  expandedKey: string | null;
+  expandedKeys: Set<string>;
   onToggle: (key: string) => void;
 }) {
   if (parts.length === 0) {
@@ -459,7 +758,7 @@ function AssistantParts({
           <ToolCallStrip
             key={part.key}
             calls={part.calls}
-            expandedKey={expandedKey}
+            expandedKeys={expandedKeys}
             onToggle={onToggle}
           />
         );
@@ -479,8 +778,11 @@ export const MessageBubble = memo(function MessageBubble({
   find,
 }: Props) {
   const [copied, setCopied] = useState(false);
-  const [expandedToolCall, setExpandedToolCall] = useState<string | null>(null);
+  const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
+    () => new Set()
+  );
   const [showRawText, setShowRawText] = useState(false);
+  const [showRawJson, setShowRawJson] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement>(null);
 
@@ -565,6 +867,8 @@ export const MessageBubble = memo(function MessageBubble({
         {highlight(message.content, matches, find!.activeLocalIdx, message.id)}
       </div>
     );
+  } else if (showRawJson) {
+    body = <JsonView value={message} />;
   } else if (showRawText && canToggleRawText) {
     body = (
       <div className="whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-foreground">
@@ -591,9 +895,14 @@ export const MessageBubble = memo(function MessageBubble({
       <AssistantParts
         parts={assistantParts}
         streaming={streaming}
-        expandedKey={expandedToolCall}
+        expandedKeys={expandedToolCalls}
         onToggle={(key) =>
-          setExpandedToolCall((current) => (current === key ? null : key))
+          setExpandedToolCalls((current) => {
+            const next = new Set(current);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+          })
         }
       />
     );
@@ -606,35 +915,36 @@ export const MessageBubble = memo(function MessageBubble({
         isUser ? "bg-background" : "bg-accent/30"
       )}
     >
-      {canToggleRawText && (
-        <div
-          ref={actionMenuRef}
-          className={cn(
-            "absolute right-4 top-3 z-20 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
-            actionMenuOpen && "opacity-100"
-          )}
+      <div
+        ref={actionMenuRef}
+        className={cn(
+          "absolute right-4 top-3 z-20 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+          actionMenuOpen && "opacity-100"
+        )}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setActionMenuOpen((open) => !open);
+          }}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="消息操作"
+          title="消息操作"
         >
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              setActionMenuOpen((open) => !open);
-            }}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-            aria-label="消息操作"
-            title="消息操作"
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+        {actionMenuOpen && (
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="absolute right-0 mt-1 w-40 rounded-md border border-border bg-card py-1 text-xs shadow-lg"
           >
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
-          {actionMenuOpen && (
-            <div
-              onClick={(event) => event.stopPropagation()}
-              className="absolute right-0 mt-1 w-32 rounded-md border border-border bg-card py-1 text-xs shadow-lg"
-            >
+            {canToggleRawText && (
               <button
                 type="button"
                 onClick={() => {
                   setShowRawText((show) => !show);
+                  setShowRawJson(false);
                   setActionMenuOpen(false);
                 }}
                 className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -642,10 +952,22 @@ export const MessageBubble = memo(function MessageBubble({
                 <FileText className="h-3.5 w-3.5" />
                 <span>{showRawText ? "显示渲染" : "显示原文"}</span>
               </button>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setShowRawJson((show) => !show);
+                setShowRawText(false);
+                setActionMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <FileJson className="h-3.5 w-3.5" />
+              <span>{showRawJson ? "显示渲染" : "显示原始 JSON"}</span>
+            </button>
+          </div>
+        )}
+      </div>
       <div className="shrink-0 flex w-7 flex-col items-center gap-1.5">
         <AvatarPreview
           value={isUser ? userAvatar : prompt?.avatar}
