@@ -240,20 +240,19 @@ pub async fn claude_oauth_exchange(session_id: &str, code: &str) -> AppResult<Im
 }
 
 pub async fn claude_oauth_refresh(refresh_token: &str) -> AppResult<ImportedToken> {
-    let body = serde_json::json!({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLAUDE_CLIENT_ID,
-    });
-
+    // platform.claude.com 的 OAuth token 端点要求 application/x-www-form-urlencoded，
+    // 用 JSON 会直接返回 400 invalid_grant（社区 #1 故障原因）。
     let client = reqwest::Client::builder()
-        .user_agent("axios/1.13.6")
+        .user_agent("claude-cli/1.0.0 (external, cli)")
         .build()?;
     let resp = client
         .post(CLAUDE_TOKEN_URL)
         .header("Accept", "application/json, text/plain, */*")
-        .header("Content-Type", "application/json")
-        .json(&body)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", CLAUDE_CLIENT_ID),
+        ])
         .send()
         .await?;
     let status = resp.status();
@@ -872,23 +871,79 @@ struct ClaudeOAuthEntry {
     subscription_type: Option<String>,
 }
 
+/// 从 Claude Code 本地凭据导入。
+///
+/// 兼容三种存储位置（按优先级）：
+/// 1. macOS Keychain：service `Claude Code-credentials`（新版 Claude Code 默认走这里）
+/// 2. `~/.claude/.credentials.json`（老版本 / 非 macOS）
+/// 3. `~/.config/claude/.credentials.json`（XDG 路径，少数 Linux 发行版）
+///
+/// JSON schema 兼容 `claudeAiOauth` 与 `claude.ai_oauth` 两种 key 名。
 pub fn claude_code_import() -> AppResult<ImportedToken> {
-    let home = dirs::home_dir().ok_or_else(|| AppError::msg("无法确定 HOME 目录"))?;
-    let path = home.join(".claude").join(".credentials.json");
-    if !path.exists() {
-        return Err(AppError::msg(format!(
-            "未找到 {} — 请先在终端运行 `claude` 并完成登录",
-            path.display()
-        )));
+    let mut tried: Vec<String> = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        match read_claude_credentials_from_keychain() {
+            Ok(Some(text)) => return parse_claude_credentials_json(&text),
+            Ok(None) => tried.push("macOS Keychain (Claude Code-credentials)".into()),
+            Err(e) => tried.push(format!("macOS Keychain 读取失败: {e}")),
+        }
     }
-    let text = std::fs::read_to_string(&path)?;
-    let v: Value =
-        serde_json::from_str(&text).map_err(|e| AppError::msg(format!("解析凭据文件失败: {e}")))?;
+
+    let home = dirs::home_dir().ok_or_else(|| AppError::msg("无法确定 HOME 目录"))?;
+    for candidate in [
+        home.join(".claude").join(".credentials.json"),
+        home.join(".config").join("claude").join(".credentials.json"),
+    ] {
+        if candidate.exists() {
+            let text = std::fs::read_to_string(&candidate)?;
+            return parse_claude_credentials_json(&text);
+        }
+        tried.push(candidate.display().to_string());
+    }
+
+    Err(AppError::msg(format!(
+        "未找到 Claude Code 凭据 — 请先在终端运行 `claude` 并完成登录。\n已尝试的位置：\n  - {}",
+        tried.join("\n  - ")
+    )))
+}
+
+#[cfg(target_os = "macos")]
+fn read_claude_credentials_from_keychain() -> AppResult<Option<String>> {
+    let output = std::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .map_err(|e| AppError::msg(format!("调用 security 命令失败: {e}")))?;
+
+    if !output.status.success() {
+        // Keychain 中没有这个 entry，让调用方走文件回退；不视为错误。
+        return Ok(None);
+    }
+
+    let text = String::from_utf8(output.stdout)
+        .map_err(|e| AppError::msg(format!("Keychain 输出非 UTF-8: {e}")))?
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text))
+}
+
+fn parse_claude_credentials_json(text: &str) -> AppResult<ImportedToken> {
+    let v: Value = serde_json::from_str(text)
+        .map_err(|e| AppError::msg(format!("解析 Claude 凭据失败: {e}")))?;
     let entry = v
         .get("claudeAiOauth")
         .or_else(|| v.get("claude.ai_oauth"))
         .cloned()
-        .ok_or_else(|| AppError::msg("凭据文件中找不到 claudeAiOauth 节点"))?;
+        .ok_or_else(|| AppError::msg("凭据中找不到 claudeAiOauth 节点"))?;
     let parsed: ClaudeOAuthEntry = serde_json::from_value(entry)
         .map_err(|e| AppError::msg(format!("凭据结构不符合预期: {e}")))?;
     let access_token = parsed
