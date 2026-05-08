@@ -30,6 +30,8 @@ export function ChatView() {
     cancelStreaming,
     forkSession,
     regenerateFrom,
+    regenerateFromUser,
+    editAndRerun,
     regenerateTitle,
     setProviderDialogOpen,
     setSettingsOpen,
@@ -180,6 +182,24 @@ export function ChatView() {
     .filter((m) => m.role === "user")
     .map((m) => m.content);
 
+  // 最近一条 user 消息：允许「编辑后重跑」；
+  // 若它之后没有 assistant 回复（被中断 / 失败），还允许「重新生成」。
+  let lastUserMsgId: string | null = null;
+  let lastUserHasAssistantAfter = false;
+  for (let i = currentSession.messages.length - 1; i >= 0; i--) {
+    const m = currentSession.messages[i];
+    if (m.role === "user") {
+      lastUserMsgId = m.id;
+      for (let j = i + 1; j < currentSession.messages.length; j++) {
+        if (currentSession.messages[j].role === "assistant") {
+          lastUserHasAssistantAfter = true;
+          break;
+        }
+      }
+      break;
+    }
+  }
+
   async function handleSend(content: string, attachments: MessageAttachment[]) {
     try {
       await sendUserMessage(content, attachments);
@@ -209,6 +229,23 @@ export function ChatView() {
       await regenerateFrom(msgId);
     } catch (e: any) {
       toast.error(e.message || String(e));
+    }
+  }
+  async function handleRegenerateUser(msgId: string) {
+    if (isStreaming) return;
+    try {
+      await regenerateFromUser(msgId);
+    } catch (e: any) {
+      toast.error(e.message || String(e));
+    }
+  }
+  async function handleEditUser(msgId: string, nextContent: string) {
+    if (isStreaming) throw new Error("生成中，无法编辑消息");
+    try {
+      await editAndRerun(msgId, nextContent);
+    } catch (e: any) {
+      toast.error(e.message || String(e));
+      throw e;
     }
   }
   async function handleRegenTitle() {
@@ -446,14 +483,25 @@ export function ChatView() {
           </div>
         )}
         <div>
-          {currentSession.messages.map((m, i) => (
+          {currentSession.messages.map((m, i) => {
+            const isLatestUser = m.role === "user" && m.id === lastUserMsgId;
+            const onRegenerate =
+              m.role === "assistant"
+                ? handleRegenerate
+                : isLatestUser && !lastUserHasAssistantAfter && !isStreaming
+                  ? handleRegenerateUser
+                  : undefined;
+            const onEdit =
+              isLatestUser && !isStreaming ? handleEditUser : undefined;
+            return (
             <MessageBubble
               key={m.id}
               message={m}
               prompt={activePrompt}
               userAvatar={userAvatar}
               onFork={handleFork}
-              onRegenerate={m.role === "assistant" ? handleRegenerate : undefined}
+              onRegenerate={onRegenerate}
+              onEdit={onEdit}
               find={
                 findOpen && findQuery
                   ? {
@@ -469,7 +517,8 @@ export function ChatView() {
                   : undefined
               }
             />
-          ))}
+            );
+          })}
           {isStreaming && (
             <MessageBubble
               streaming

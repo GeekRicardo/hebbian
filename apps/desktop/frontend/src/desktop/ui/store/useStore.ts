@@ -251,6 +251,14 @@ interface AppState {
   sendUserMessage: (content: string, attachments?: MessageAttachment[]) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
+  /** 用同样内容重跑指定的 user 消息（被中断或失败时用）。 */
+  regenerateFromUser: (userMsgId: string) => Promise<void>;
+  /** 编辑指定 user 消息后重跑：截断到该消息（不含其本身之后的内容），再发送新内容。 */
+  editAndRerun: (
+    userMsgId: string,
+    content: string,
+    attachments?: MessageAttachment[]
+  ) => Promise<void>;
   updateCurrentConfig: (patch: {
     provider_id?: string;
     model?: string;
@@ -775,6 +783,28 @@ export const useStore = create<AppState>((set, get) => ({
     const refreshed = await api.getSession(cur.id);
     set({ currentSession: refreshed });
     await get().sendUserMessage(prevUser.content, prevUser.attachments ?? []);
+  },
+
+  async regenerateFromUser(userMsgId) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const target = cur.messages.find((m) => m.id === userMsgId);
+    if (!target || target.role !== "user") return;
+    await api.truncateInclusive(cur.id, userMsgId);
+    const refreshed = await api.getSession(cur.id);
+    set({ currentSession: refreshed });
+    await get().sendUserMessage(target.content, target.attachments ?? []);
+  },
+
+  async editAndRerun(userMsgId, content, attachments) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const target = cur.messages.find((m) => m.id === userMsgId);
+    if (!target || target.role !== "user") return;
+    await api.truncateInclusive(cur.id, userMsgId);
+    const refreshed = await api.getSession(cur.id);
+    set({ currentSession: refreshed });
+    await get().sendUserMessage(content, attachments ?? target.attachments ?? []);
   },
 
   async updateCurrentConfig(patch) {

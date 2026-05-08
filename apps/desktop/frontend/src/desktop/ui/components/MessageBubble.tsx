@@ -21,6 +21,8 @@ import {
   Table as TableIcon,
   Braces,
   FileJson,
+  Pencil,
+  X,
 } from "lucide-react";
 import type {
   Message,
@@ -47,7 +49,16 @@ interface Props {
   prompt?: Prompt;
   userAvatar?: string;
   onFork?: (id: string) => void;
+  /**
+   * 重新生成。对 assistant 消息：以前一条 user 消息为锚重跑。
+   * 对 user 消息：用同样内容 + 附件重跑（被中断 / 失败时可见）。
+   */
   onRegenerate?: (id: string) => void;
+  /**
+   * 编辑当前 user 消息的文本后重跑。仅在最近一条 user 消息上提供。
+   * 附件复用原消息的附件（编辑只动文本）。
+   */
+  onEdit?: (id: string, nextContent: string) => void | Promise<void>;
   streamingParts?: StreamingAssistantPart[];
   /** 若提供则进入"查找模式"，以纯文本 + 高亮渲染 */
   find?: {
@@ -774,6 +785,7 @@ export const MessageBubble = memo(function MessageBubble({
   userAvatar,
   onFork,
   onRegenerate,
+  onEdit,
   streamingParts,
   find,
 }: Props) {
@@ -785,6 +797,48 @@ export const MessageBubble = memo(function MessageBubble({
   const [showRawJson, setShowRawJson] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 编辑态打开时自动 focus + 末尾光标
+  useEffect(() => {
+    if (!editing) return;
+    const ta = editTextareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    const len = ta.value.length;
+    ta.setSelectionRange(len, len);
+  }, [editing]);
+
+  function startEdit() {
+    setEditDraft(message.content);
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setEditDraft("");
+  }
+
+  async function commitEdit() {
+    if (!onEdit) return;
+    const next = editDraft.trim();
+    if (!next || submittingEdit) return;
+    if (next === message.content.trim()) {
+      cancelEdit();
+      return;
+    }
+    setSubmittingEdit(true);
+    try {
+      await onEdit(message.id, next);
+      // 提交成功后该消息会被 truncate 并重发，组件会被卸载，无需手动收尾
+    } catch {
+      // 失败时让用户继续编辑：保留草稿
+      setSubmittingEdit(false);
+    }
+  }
 
   useEffect(() => {
     if (!actionMenuOpen) return;
@@ -873,6 +927,64 @@ export const MessageBubble = memo(function MessageBubble({
     body = (
       <div className="whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-foreground">
         {rawText}
+      </div>
+    );
+  } else if (isUser && editing) {
+    body = (
+      <div className="space-y-2">
+        <textarea
+          ref={editTextareaRef}
+          value={editDraft}
+          onChange={(e) => setEditDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              cancelEdit();
+            } else if (
+              (e.metaKey || e.ctrlKey) &&
+              e.key === "Enter" &&
+              !submittingEdit
+            ) {
+              e.preventDefault();
+              void commitEdit();
+            }
+          }}
+          rows={Math.min(12, Math.max(2, editDraft.split("\n").length))}
+          disabled={submittingEdit}
+          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-[14px] leading-relaxed text-foreground outline-none focus:border-primary disabled:opacity-60"
+          placeholder="编辑消息…"
+        />
+        <div className="flex items-center justify-end gap-2 text-xs">
+          <span className="mr-auto text-[11px] text-muted-foreground">
+            ⌘/Ctrl + Enter 保存并重跑 · Esc 取消
+          </span>
+          <button
+            type="button"
+            onClick={cancelEdit}
+            disabled={submittingEdit}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
+          >
+            <X className="h-3.5 w-3.5" />
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void commitEdit()}
+            disabled={
+              submittingEdit ||
+              !editDraft.trim() ||
+              editDraft.trim() === message.content.trim()
+            }
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+          >
+            {submittingEdit ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="h-3.5 w-3.5" />
+            )}
+            保存并重跑
+          </button>
+        </div>
       </div>
     );
   } else if (isUser) {
@@ -1013,7 +1125,7 @@ export const MessageBubble = memo(function MessageBubble({
           variant={isUser ? "compact" : "gallery"}
           className="mt-2"
         />
-        {!streaming && (
+        {!streaming && !editing && (
           <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-2 -ml-1.5">
             <button
               onClick={handleCopy}
@@ -1036,11 +1148,21 @@ export const MessageBubble = memo(function MessageBubble({
                 <span>分叉</span>
               </button>
             )}
-            {!isUser && onRegenerate && (
+            {isUser && onEdit && (
+              <button
+                onClick={startEdit}
+                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
+                title="编辑后重跑"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>编辑</span>
+              </button>
+            )}
+            {onRegenerate && (
               <button
                 onClick={() => onRegenerate(message.id)}
                 className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
-                title="重新生成"
+                title={isUser ? "用同样内容重跑" : "重新生成"}
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>重新生成</span>
