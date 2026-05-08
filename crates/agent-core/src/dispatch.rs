@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use futures_util::future::{join_all, BoxFuture};
 use protocol::{
-    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
-    RiskLevel, UserAnswer,
+    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, RiskLevel,
+    UserAnswer,
 };
 use serde::Deserialize;
 use tokio::sync::oneshot;
@@ -150,7 +150,14 @@ impl ToolDispatcher {
                 match await_path_decision(&sink, &state, &workspace, p).await {
                     Ok(()) => {}
                     Err(reason) => {
-                        return Ok(deny_tool(call, call_index, dispatch_index, &state, &sink, reason));
+                        return Ok(deny_tool(
+                            call,
+                            call_index,
+                            dispatch_index,
+                            &state,
+                            &sink,
+                            reason,
+                        ));
                     }
                 }
             }
@@ -159,7 +166,14 @@ impl ToolDispatcher {
             match await_permission_decision(&sink, &state, permission).await {
                 Ok(()) => {}
                 Err(reason) => {
-                    return Ok(deny_tool(call, call_index, dispatch_index, &state, &sink, reason));
+                    return Ok(deny_tool(
+                        call,
+                        call_index,
+                        dispatch_index,
+                        &state,
+                        &sink,
+                        reason,
+                    ));
                 }
             }
 
@@ -188,12 +202,7 @@ impl ToolDispatcher {
             };
             let duration_ms = started.elapsed().as_millis() as u64;
 
-            let truncated = raw.len() > MAX_TOOL_RESULT_INLINE;
-            let content = if truncated {
-                format!("{}…[已截断]", &raw[..MAX_TOOL_RESULT_INLINE])
-            } else {
-                raw
-            };
+            let (content, truncated) = truncate_tool_result(raw);
 
             sink(state.event(EventPayload::ToolCallFinished {
                 index: dispatch_index,
@@ -436,6 +445,19 @@ fn finish_ask_with_error(
     )
 }
 
+fn truncate_tool_result(raw: String) -> (String, bool) {
+    if raw.len() <= MAX_TOOL_RESULT_INLINE {
+        return (raw, false);
+    }
+
+    let mut end = MAX_TOOL_RESULT_INLINE;
+    while end > 0 && !raw.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    (format!("{}…[已截断]", &raw[..end]), true)
+}
+
 fn parse_ask_input(input: &serde_json::Value) -> Result<(String, Vec<QuestionOption>), String> {
     let parsed: AskInput = serde_json::from_value(input.clone())
         .map_err(|e| format!("ask 工具 input 解析失败：{e}"))?;
@@ -446,4 +468,24 @@ fn parse_ask_input(input: &serde_json::Value) -> Result<(String, Vec<QuestionOpt
         ));
     }
     Ok((parsed.question, parsed.options))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_tool_result_preserves_utf8_char_boundaries() {
+        let raw = format!("{}中", "a".repeat(MAX_TOOL_RESULT_INLINE - 1));
+        assert!(raw.len() > MAX_TOOL_RESULT_INLINE);
+        assert!(!raw.is_char_boundary(MAX_TOOL_RESULT_INLINE));
+
+        let (content, truncated) = truncate_tool_result(raw);
+
+        assert!(truncated);
+        assert_eq!(
+            content,
+            format!("{}…[已截断]", "a".repeat(MAX_TOOL_RESULT_INLINE - 1))
+        );
+    }
 }

@@ -53,9 +53,21 @@ impl Transcript {
     }
 
     pub fn push_assistant(&mut self, text: String, tool_calls: Vec<ToolCall>) {
+        self.push_assistant_with_reasoning(text, String::new(), tool_calls);
+    }
+
+    /// 带 reasoning 的 push（DeepSeek 等需要回喂思维链的 provider）。
+    /// 普通 push_assistant 是 reasoning="" 的快捷方式。
+    pub fn push_assistant_with_reasoning(
+        &mut self,
+        text: String,
+        reasoning: String,
+        tool_calls: Vec<ToolCall>,
+    ) {
         self.entries
             .push(TranscriptEntry::Assistant(AssistantEntry {
                 text,
+                reasoning,
                 tool_calls,
             }));
     }
@@ -90,6 +102,7 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
         .collect();
     entries.push(TranscriptEntry::Assistant(AssistantEntry {
         text: msg.content.clone(),
+        reasoning: String::new(),
         tool_calls: tool_calls.clone(),
     }));
 
@@ -111,6 +124,9 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
 
 fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart]) {
     let mut text = String::new();
+    // 把同一轮内的 reasoning 段拼起来回填，让 DeepSeek 等 thinking-aware provider
+    // 在多轮 + tool_call 场景里看到自己上一轮的推理链，避免重复思考或丢上下文。
+    let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
     let mut tool_results = Vec::new();
 
@@ -118,9 +134,28 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
         match part {
             MessagePart::Text { text: next_text } => {
                 if !tool_calls.is_empty() {
-                    flush_assistant_turn(entries, &mut text, &mut tool_calls, &mut tool_results);
+                    flush_assistant_turn(
+                        entries,
+                        &mut text,
+                        &mut reasoning,
+                        &mut tool_calls,
+                        &mut tool_results,
+                    );
                 }
                 text.push_str(next_text);
+            }
+            MessagePart::Reasoning { text: next_reasoning } => {
+                if !tool_calls.is_empty() {
+                    // reasoning 出现在工具调用之后罕见；如果发生，先把当前 turn 落桶。
+                    flush_assistant_turn(
+                        entries,
+                        &mut text,
+                        &mut reasoning,
+                        &mut tool_calls,
+                        &mut tool_results,
+                    );
+                }
+                reasoning.push_str(next_reasoning);
             }
             MessagePart::ToolCall {
                 id,
@@ -146,10 +181,17 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
     }
 
     if !tool_calls.is_empty() {
-        flush_assistant_turn(entries, &mut text, &mut tool_calls, &mut tool_results);
-    } else if !text.is_empty() {
+        flush_assistant_turn(
+            entries,
+            &mut text,
+            &mut reasoning,
+            &mut tool_calls,
+            &mut tool_results,
+        );
+    } else if !text.is_empty() || !reasoning.is_empty() {
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
             text,
+            reasoning,
             tool_calls: Vec::new(),
         }));
     }
@@ -158,11 +200,13 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
 fn flush_assistant_turn(
     entries: &mut Vec<TranscriptEntry>,
     text: &mut String,
+    reasoning: &mut String,
     tool_calls: &mut Vec<ToolCall>,
     tool_results: &mut Vec<ToolResult>,
 ) {
     entries.push(TranscriptEntry::Assistant(AssistantEntry {
         text: std::mem::take(text),
+        reasoning: std::mem::take(reasoning),
         tool_calls: std::mem::take(tool_calls),
     }));
     if !tool_results.is_empty() {

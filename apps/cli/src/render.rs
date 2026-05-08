@@ -20,6 +20,7 @@ use terminal_spinners::{SpinnerData, STAR, STAR2};
 /// 累积一次 turn 的渲染状态（跨 event）
 pub struct TurnRenderer {
     streaming_text: bool,
+    streaming_reasoning: bool,
     accumulated_text: String,
     run_spinner: Option<ToolSpinner>,
     tool_spinners: HashMap<String, ToolSpinner>,
@@ -30,6 +31,7 @@ impl TurnRenderer {
     pub fn new() -> Self {
         Self {
             streaming_text: false,
+            streaming_reasoning: false,
             accumulated_text: String::new(),
             run_spinner: None,
             tool_spinners: HashMap::new(),
@@ -49,11 +51,29 @@ impl TurnRenderer {
             }
             EventPayload::TextDelta { text } => {
                 self.stop_run_spinner();
+                if self.streaming_reasoning {
+                    let _guard = self.output_lock.lock().ok();
+                    println!();
+                    self.streaming_reasoning = false;
+                }
                 let _guard = self.output_lock.lock().ok();
                 print!("{}", text);
                 io::stdout().flush().ok();
                 self.accumulated_text.push_str(text);
                 self.streaming_text = true;
+            }
+            EventPayload::Reasoning { text } => {
+                self.stop_run_spinner();
+                self.stop_tool_spinners();
+                let _guard = self.output_lock.lock().ok();
+                if !self.streaming_reasoning {
+                    // 推理开始：先把 spinner 行清干净，再起一行
+                    print!("\r\x1b[2K{}", "💭 ".dimmed());
+                    self.streaming_reasoning = true;
+                }
+                // 推理段以淡色斜体展示，与正文留出视觉差异
+                print!("{}", text.dimmed().italic());
+                io::stdout().flush().ok();
             }
             EventPayload::TextDone { full_text } => {
                 self.stop_run_spinner();
@@ -209,10 +229,11 @@ impl TurnRenderer {
     }
 
     fn flush_streaming_line(&mut self) {
-        if self.streaming_text {
+        if self.streaming_text || self.streaming_reasoning {
             let _guard = self.output_lock.lock().ok();
             println!();
             self.streaming_text = false;
+            self.streaming_reasoning = false;
         }
     }
 

@@ -135,6 +135,7 @@ impl ModelClient for OpenAiClient {
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
+        let mut full_reasoning = String::new();
         let mut tool_call_parts = Vec::new();
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
@@ -157,6 +158,12 @@ impl ModelClient for OpenAiClient {
                             continue;
                         }
                         if let Some(parsed) = proto::parse_chat_stream_frame(data) {
+                            if let Some(delta) = parsed.reasoning_delta {
+                                full_reasoning.push_str(&delta);
+                                on_event(ModelStreamEvent::ReasoningDelta {
+                                    text: delta,
+                                });
+                            }
                             if let Some(delta) = parsed.text_delta {
                                 on_event(ModelStreamEvent::TextDelta {
                                     text: delta.clone(),
@@ -183,12 +190,14 @@ impl ModelClient for OpenAiClient {
         if calls.is_empty() {
             Ok(ModelResponse::Done {
                 text: full,
+                reasoning: full_reasoning,
                 attachments: Vec::new(),
                 usage: Usage::default(),
             })
         } else {
             Ok(ModelResponse::ToolCalls {
                 text: full,
+                reasoning: full_reasoning,
                 calls,
                 attachments: Vec::new(),
                 usage: Usage::default(),
@@ -395,6 +404,7 @@ impl OpenAiClient {
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
+        let mut full_reasoning = String::new();
         let mut output_items = ResponsesOutputAccumulator::default();
         let mut completed: Option<Value> = None;
 
@@ -408,6 +418,10 @@ impl OpenAiClient {
                             text: delta.clone(),
                         });
                         full.push_str(&delta);
+                    }
+                    ParsedResponsesFrame::ReasoningDelta(delta) => {
+                        full_reasoning.push_str(&delta);
+                        on_event(ModelStreamEvent::ReasoningDelta { text: delta });
                     }
                     ParsedResponsesFrame::OutputItemAdded { output_index, item }
                     | ParsedResponsesFrame::OutputItemDone { output_index, item } => {
@@ -471,18 +485,27 @@ impl OpenAiClient {
         match parsed {
             ModelResponse::Done {
                 text,
+                reasoning,
                 attachments,
                 usage,
             } => {
+                // 流式累积的 reasoning 优先级最高
+                let final_reasoning = if !full_reasoning.is_empty() {
+                    full_reasoning
+                } else {
+                    reasoning
+                };
                 if full.is_empty() {
                     Ok(ModelResponse::Done {
                         text,
+                        reasoning: final_reasoning,
                         attachments,
                         usage,
                     })
                 } else {
                     Ok(ModelResponse::Done {
                         text: full,
+                        reasoning: final_reasoning,
                         attachments,
                         usage,
                     })
@@ -495,6 +518,7 @@ impl OpenAiClient {
 
 enum ParsedResponsesFrame {
     Delta(String),
+    ReasoningDelta(String),
     OutputItemAdded {
         output_index: Option<usize>,
         item: Value,
@@ -755,7 +779,9 @@ fn parse_responses_body_or_sse(body: &str) -> Result<ModelResponse, ModelError> 
                 &arguments,
             ),
             ParsedResponsesFrame::Completed(response) => completed = Some(response),
-            ParsedResponsesFrame::Delta(_) | ParsedResponsesFrame::Ignore => {}
+            ParsedResponsesFrame::Delta(_)
+            | ParsedResponsesFrame::ReasoningDelta(_)
+            | ParsedResponsesFrame::Ignore => {}
         }
     }
 
@@ -801,6 +827,9 @@ fn parse_responses_frame(frame: &str) -> Result<ParsedResponsesFrame, ModelError
     let data = data_lines.join("\n");
     match proto::parse_responses_sse_event(event_name, &data) {
         proto::ResponsesSseEvent::TextDelta(delta) => Ok(ParsedResponsesFrame::Delta(delta)),
+        proto::ResponsesSseEvent::ReasoningDelta(delta) => {
+            Ok(ParsedResponsesFrame::ReasoningDelta(delta))
+        }
         proto::ResponsesSseEvent::OutputItemAdded { output_index, item } => {
             Ok(ParsedResponsesFrame::OutputItemAdded { output_index, item })
         }
@@ -879,6 +908,7 @@ mod tests {
             id: "openai".into(),
             name: "OpenAI".into(),
             kind: ProviderKind::Openai,
+            enabled: true,
             auth_mode: AuthMode::ApiKey,
             base_url: "https://api.openai.com/v1".into(),
             api_key: "test".into(),

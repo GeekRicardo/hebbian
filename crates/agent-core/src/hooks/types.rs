@@ -15,10 +15,7 @@ pub enum HookPoint {
     /// 工具审批检查时：可旁路 HitlGate（学习规则 / 自动审批 / 强制询问）。
     OnPermissionCheck { tool_name: String, input: Value },
     /// 工具执行返回后：可改写 ToolResult（截短 / 落 blob / 脱敏）。
-    OnToolResult {
-        tool_name: String,
-        content: String,
-    },
+    OnToolResult { tool_name: String, content: String },
     /// 上下文压缩发生时：可替换默认压缩策略。
     OnCompaction {
         before_tokens: usize,

@@ -44,6 +44,10 @@ pub enum MessagePart {
     Text {
         text: String,
     },
+    /// 模型的思维链 / 推理过程。落盘后 UI 以折叠块呈现。
+    Reasoning {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,

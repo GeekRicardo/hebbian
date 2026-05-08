@@ -13,6 +13,11 @@ import {
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import { api } from "@/desktop/bridge/tauri";
+import type { Provider } from "@/desktop/ui/types";
+
+function isProviderEnabled(provider: Provider) {
+  return provider.enabled !== false;
+}
 
 export function SessionSettingsDialog() {
   const {
@@ -56,6 +61,9 @@ export function SessionSettingsDialog() {
   }, [settingsOpen, currentSession, refreshAppSettings]);
 
   const provider = providersFile.providers.find((p) => p.id === providerId);
+  const selectableProviders = providersFile.providers.filter(
+    (p) => isProviderEnabled(p) || p.id === providerId
+  );
 
   async function handleSave() {
     if (!currentSession) return;
@@ -120,13 +128,14 @@ export function SessionSettingsDialog() {
               onChange={(e) => {
                 const id = e.target.value;
                 setProviderId(id);
-                const p = providersFile.providers.find((x) => x.id === id);
+                const p = selectableProviders.find((x) => x.id === id);
                 if (p) setModel(p.default_model || p.models[0] || "");
               }}
             >
-              {providersFile.providers.map((p) => (
+              {selectableProviders.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.kind})
+                  {p.name} ({p.kind}
+                  {p.enabled === false ? "，已停用" : ""})
                 </option>
               ))}
             </Select>

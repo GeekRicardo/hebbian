@@ -54,7 +54,11 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
 fn entry_to_message(entry: &TranscriptEntry) -> Option<Value> {
     match entry {
         TranscriptEntry::User(user) => Some(json!({"role": "user", "content": user_content(user)})),
-        TranscriptEntry::Assistant(AssistantEntry { text, tool_calls }) => {
+        TranscriptEntry::Assistant(AssistantEntry {
+            text,
+            tool_calls,
+            ..
+        }) => {
             if tool_calls.is_empty() {
                 Some(json!({"role": "assistant", "content": text}))
             } else {
@@ -168,6 +172,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         }
         ModelResponse::ToolCalls {
             text,
+            reasoning: String::new(),
             calls,
             attachments: Vec::new(),
             usage,
@@ -183,27 +188,40 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         }
         ModelResponse::Done {
             text,
+            reasoning: String::new(),
             attachments: Vec::new(),
             usage,
         }
     }
 }
 
-/// 从 Anthropic SSE 事件中提取文本增量
-pub fn parse_stream_delta(event_type: &str, data: &str) -> Option<String> {
+/// Anthropic SSE 流增量。`text_delta` 是普通输出，`thinking_delta` 是
+/// extended thinking（启用了 `thinking` 后才出现）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnthropicStreamDelta {
+    Text(String),
+    Thinking(String),
+}
+
+pub fn parse_stream_delta(event_type: &str, data: &str) -> Option<AnthropicStreamDelta> {
     if event_type != "content_block_delta" {
         return None;
     }
     let v: Value = serde_json::from_str(data).ok()?;
-    if v["type"] == "content_block_delta" {
-        let delta = v["delta"]["text"].as_str()?;
-        if delta.is_empty() {
-            None
-        } else {
-            Some(delta.to_string())
-        }
-    } else {
-        None
+    if v["type"] != "content_block_delta" {
+        return None;
+    }
+    match v["delta"]["type"].as_str() {
+        Some("text_delta") | None => v["delta"]["text"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| AnthropicStreamDelta::Text(s.to_string())),
+        Some("thinking_delta") => v["delta"]["thinking"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| AnthropicStreamDelta::Thinking(s.to_string())),
+        // signature_delta / input_json_delta 等暂时不传给上层
+        _ => None,
     }
 }
 

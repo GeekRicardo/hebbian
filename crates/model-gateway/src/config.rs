@@ -10,6 +10,9 @@ pub enum ProviderKind {
     Openai,
     Anthropic,
     Gemini,
+    /// DeepSeek `chat.deepseek.com` 网页端协议（PoW + 路径式 SSE），
+    /// 用账号登录拿到的 token 走这一路。
+    Deepseek,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,11 +30,17 @@ impl Default for AuthMode {
     }
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: String,
     pub name: String,
     pub kind: ProviderKind,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub auth_mode: AuthMode,
     pub base_url: String,
@@ -94,6 +103,9 @@ pub struct ProviderPreset {
     pub kind: ProviderKind,
     pub base_url: &'static str,
     pub models: &'static [&'static str],
+    /// 该预设的默认模型；为空时由前端按惯例选 models[0]。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<&'static str>,
     pub website: &'static str,
     pub note: &'static str,
 }
@@ -111,17 +123,48 @@ pub const PRESETS: &[ProviderPreset] = &[
             "o1-mini",
             "o1-preview",
         ],
+        default_model: Some("gpt-4o"),
         website: "https://platform.openai.com/api-keys",
         note: "官方 OpenAI 接口",
     },
     ProviderPreset {
         id: "deepseek",
-        name: "DeepSeek",
+        name: "DeepSeek (API Key)",
         kind: ProviderKind::Openai,
-        base_url: "https://api.deepseek.com/v1",
-        models: &["deepseek-chat", "deepseek-reasoner"],
+        // 与 deepseek-tui 对齐：beta endpoint 默认对所有地区开放，
+        // 解锁 strict tool mode 等 beta 特性。`api.deepseek.com/v1` 仍可手动改回。
+        base_url: "https://api.deepseek.com/beta",
+        // V4 家族（1M 上下文，支持 reasoning_content 思维链）
+        models: &[
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro-search",
+            "deepseek-v4-flash-search",
+            "deepseek-v4-vision",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
+        default_model: Some("deepseek-v4-pro"),
         website: "https://platform.deepseek.com/",
-        note: "深度求索，OpenAI 兼容",
+        note: "深度求索 V4 系列（1M 上下文 · 支持 thinking · beta endpoint，含 strict tool）",
+    },
+    ProviderPreset {
+        id: "deepseek_web",
+        name: "DeepSeek (账号登录)",
+        kind: ProviderKind::Deepseek,
+        base_url: "https://chat.deepseek.com",
+        models: &[
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro-search",
+            "deepseek-v4-flash-search",
+            "deepseek-v4-vision",
+            "deepseek-v4-pro-nothinking",
+            "deepseek-v4-flash-nothinking",
+        ],
+        default_model: Some("deepseek-v4-pro"),
+        website: "https://chat.deepseek.com/",
+        note: "用 chat.deepseek.com 账号登录（带 PoW + 路径式 SSE），免 API Key",
     },
     ProviderPreset {
         id: "zhipu_glm",
@@ -129,6 +172,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://open.bigmodel.cn/api/paas/v4",
         models: &["glm-4.6", "glm-4-plus", "glm-4-air", "glm-4-flash"],
+        default_model: Some("glm-4.6"),
         website: "https://open.bigmodel.cn/",
         note: "智谱 AI，OpenAI 兼容",
     },
@@ -142,6 +186,7 @@ pub const PRESETS: &[ProviderPreset] = &[
             "moonshot-v1-32k",
             "kimi-k2-0711-preview",
         ],
+        default_model: Some("moonshot-v1-128k"),
         website: "https://platform.moonshot.cn/",
         note: "月之暗面 Kimi，OpenAI 兼容",
     },
@@ -151,6 +196,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         models: &["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"],
+        default_model: Some("qwen-plus"),
         website: "https://bailian.console.aliyun.com/",
         note: "通义千问，OpenAI 兼容端点",
     },
@@ -160,6 +206,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://ark.cn-beijing.volces.com/api/v3",
         models: &["doubao-seed-1-6", "doubao-pro-256k", "doubao-1-5-pro-32k"],
+        default_model: Some("doubao-seed-1-6"),
         website: "https://console.volcengine.com/ark",
         note: "字节跳动豆包，OpenAI 兼容",
     },
@@ -169,6 +216,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://api.siliconflow.cn/v1",
         models: &["Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3"],
+        default_model: Some("deepseek-ai/DeepSeek-V3"),
         website: "https://cloud.siliconflow.cn/",
         note: "硅基流动，多模型聚合",
     },
@@ -178,6 +226,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://api.minimaxi.com/v1",
         models: &["MiniMax-M1", "abab6.5s-chat"],
+        default_model: Some("MiniMax-M1"),
         website: "https://www.minimaxi.com/",
         note: "MiniMax，OpenAI 兼容",
     },
@@ -187,6 +236,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Openai,
         base_url: "https://api.stepfun.com/v1",
         models: &["step-2-16k", "step-1-flash"],
+        default_model: Some("step-2-16k"),
         website: "https://platform.stepfun.com/",
         note: "阶跃星辰，OpenAI 兼容",
     },
@@ -201,6 +251,7 @@ pub const PRESETS: &[ProviderPreset] = &[
             "claude-haiku-4-5",
             "claude-3-5-sonnet-latest",
         ],
+        default_model: Some("claude-sonnet-4-5"),
         website: "https://console.anthropic.com/",
         note: "官方 Anthropic 接口",
     },
@@ -210,6 +261,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Anthropic,
         base_url: "https://open.bigmodel.cn/api/anthropic",
         models: &["glm-4.6", "glm-4-plus"],
+        default_model: Some("glm-4.6"),
         website: "https://open.bigmodel.cn/",
         note: "智谱提供的 Anthropic 兼容端点",
     },
@@ -219,6 +271,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Anthropic,
         base_url: "https://api.moonshot.cn/anthropic",
         models: &["kimi-k2-0711-preview"],
+        default_model: Some("kimi-k2-0711-preview"),
         website: "https://platform.moonshot.cn/",
         note: "Moonshot 提供的 Anthropic 兼容端点",
     },
@@ -227,7 +280,8 @@ pub const PRESETS: &[ProviderPreset] = &[
         name: "DeepSeek (Anthropic 入口)",
         kind: ProviderKind::Anthropic,
         base_url: "https://api.deepseek.com/anthropic",
-        models: &["deepseek-chat"],
+        models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
+        default_model: Some("deepseek-v4-pro"),
         website: "https://platform.deepseek.com/",
         note: "DeepSeek 提供的 Anthropic 兼容端点",
     },
@@ -237,6 +291,7 @@ pub const PRESETS: &[ProviderPreset] = &[
         kind: ProviderKind::Anthropic,
         base_url: "https://www.packyapi.com",
         models: &["claude-sonnet-4-5", "claude-opus-4-5"],
+        default_model: Some("claude-sonnet-4-5"),
         website: "https://www.packycode.com/",
         note: "第三方 Claude 代理",
     },
@@ -251,6 +306,7 @@ pub const PRESETS: &[ProviderPreset] = &[
             "gemini-1.5-pro",
             "gemini-1.5-flash",
         ],
+        default_model: Some("gemini-2.0-flash"),
         website: "https://aistudio.google.com/apikey",
         note: "Google AI Studio API Key",
     },

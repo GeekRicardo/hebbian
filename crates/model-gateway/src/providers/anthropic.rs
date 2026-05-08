@@ -97,6 +97,7 @@ impl ModelClient for AnthropicClient {
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
+        let mut full_reasoning = String::new();
         let mut current_event_type = String::new();
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
@@ -121,11 +122,18 @@ impl ModelClient for AnthropicClient {
                         if data.is_empty() {
                             continue;
                         }
-                        if let Some(delta) = proto::parse_stream_delta(&current_event_type, data) {
-                            on_event(ModelStreamEvent::TextDelta {
-                                text: delta.clone(),
-                            });
-                            full.push_str(&delta);
+                        match proto::parse_stream_delta(&current_event_type, data) {
+                            Some(proto::AnthropicStreamDelta::Text(delta)) => {
+                                on_event(ModelStreamEvent::TextDelta {
+                                    text: delta.clone(),
+                                });
+                                full.push_str(&delta);
+                            }
+                            Some(proto::AnthropicStreamDelta::Thinking(delta)) => {
+                                full_reasoning.push_str(&delta);
+                                on_event(ModelStreamEvent::ReasoningDelta { text: delta });
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -134,6 +142,7 @@ impl ModelClient for AnthropicClient {
 
         Ok(ModelResponse::Done {
             text: full,
+            reasoning: full_reasoning,
             attachments: Vec::new(),
             usage: Usage::default(),
         })

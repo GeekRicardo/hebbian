@@ -25,9 +25,13 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
             TranscriptEntry::User(user) => {
                 messages.push(json!({"role": "user", "content": chat_user_content(user)}));
             }
-            TranscriptEntry::Assistant(AssistantEntry { text, tool_calls }) => {
-                if tool_calls.is_empty() {
-                    messages.push(json!({"role": "assistant", "content": text}));
+            TranscriptEntry::Assistant(AssistantEntry {
+                text,
+                reasoning,
+                tool_calls,
+            }) => {
+                let mut msg = if tool_calls.is_empty() {
+                    json!({"role": "assistant", "content": text})
                 } else {
                     let calls: Vec<Value> = tool_calls
                         .iter()
@@ -42,12 +46,19 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
                             })
                         })
                         .collect();
-                    messages.push(json!({
+                    json!({
                         "role": "assistant",
                         "content": if text.is_empty() { Value::Null } else { json!(text) },
                         "tool_calls": calls
-                    }));
+                    })
+                };
+                // DeepSeek (api.deepseek.com/beta) 等 thinking-aware 后端要求把
+                // 上一轮的 reasoning_content 回填，否则带 tool_calls 的多轮场景会
+                // 报错 / 丢推理链。其它 provider 见到这个字段会无视。
+                if !reasoning.is_empty() {
+                    msg["reasoning_content"] = Value::String(reasoning.clone());
                 }
+                messages.push(msg);
             }
             TranscriptEntry::ToolResults(results) => {
                 for ToolResult {
@@ -90,7 +101,9 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
                     "content": responses_user_content(user)
                 }));
             }
-            TranscriptEntry::Assistant(AssistantEntry { text, tool_calls }) => {
+            TranscriptEntry::Assistant(AssistantEntry {
+                text, tool_calls, ..
+            }) => {
                 if !text.is_empty() {
                     input.push(json!({
                         "type": "message",
@@ -329,11 +342,20 @@ pub fn parse_response(v: &Value) -> ModelResponse {
     let finish = v["choices"][0]["finish_reason"].as_str().unwrap_or("");
     let usage = parse_usage(v);
 
+    // 非流式响应里 DeepSeek 把推理放在 message.reasoning_content
+    let reasoning = msg
+        .get("reasoning_content")
+        .or_else(|| msg.get("reasoning"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
     if finish == "tool_calls" {
         let calls = parse_tool_calls(&msg["tool_calls"]);
         let text = msg["content"].as_str().unwrap_or("").to_string();
         ModelResponse::ToolCalls {
             text,
+            reasoning,
             calls,
             attachments: Vec::new(),
             usage,
@@ -342,6 +364,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         let text = msg["content"].as_str().unwrap_or("").to_string();
         ModelResponse::Done {
             text,
+            reasoning,
             attachments: Vec::new(),
             usage,
         }
@@ -402,12 +425,14 @@ pub fn parse_responses_response(v: &Value) -> ModelResponse {
     if calls.is_empty() {
         ModelResponse::Done {
             text,
+            reasoning: String::new(),
             attachments,
             usage,
         }
     } else {
         ModelResponse::ToolCalls {
             text,
+            reasoning: String::new(),
             calls,
             attachments,
             usage,
@@ -483,6 +508,8 @@ fn generated_image_name(index: usize, media_type: &str) -> String {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatStreamFrame {
     pub text_delta: Option<String>,
+    /// DeepSeek / Qwen / GLM-thinking 等：`delta.reasoning_content`（部分实现叫 `reasoning`）。
+    pub reasoning_delta: Option<String>,
     pub tool_calls: Vec<ChatStreamToolCallDelta>,
 }
 
@@ -499,6 +526,12 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
     let delta = v["choices"].as_array()?.first()?.get("delta")?;
     let text_delta = delta["content"]
         .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let reasoning_delta = delta
+        .get("reasoning_content")
+        .or_else(|| delta.get("reasoning"))
+        .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
@@ -526,11 +559,12 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
         })
         .unwrap_or_default();
 
-    if text_delta.is_none() && tool_calls.is_empty() {
+    if text_delta.is_none() && reasoning_delta.is_none() && tool_calls.is_empty() {
         None
     } else {
         Some(ChatStreamFrame {
             text_delta,
+            reasoning_delta,
             tool_calls,
         })
     }
@@ -538,6 +572,7 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
 
 pub enum ResponsesSseEvent {
     TextDelta(String),
+    ReasoningDelta(String),
     OutputItemAdded {
         output_index: Option<usize>,
         item: Value,
@@ -583,6 +618,13 @@ pub fn parse_responses_sse_event(event_name: &str, data: &str) -> ResponsesSseEv
             .as_str()
             .filter(|s| !s.is_empty())
             .map(|s| ResponsesSseEvent::TextDelta(s.to_string()))
+            .unwrap_or(ResponsesSseEvent::Ignore),
+        "response.reasoning_text.delta"
+        | "response.reasoning_summary_text.delta"
+        | "response.reasoning.delta" => v["delta"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| ResponsesSseEvent::ReasoningDelta(s.to_string()))
             .unwrap_or(ResponsesSseEvent::Ignore),
         "response.output_item.added" => match v.get("item").cloned() {
             Some(mut item) => {
@@ -831,7 +873,7 @@ mod responses_tests {
                 } else {
                     TranscriptEntry::Assistant(AssistantEntry {
                         text: format!("assistant {i}"),
-                        tool_calls: Vec::new(),
+                        ..Default::default()
                     })
                 }
             })
@@ -864,6 +906,7 @@ mod responses_tests {
                 TranscriptEntry::User(UserEntry::text("search rust docs")),
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
+                    reasoning: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_1".into(),
                         name: "web_search".into(),
@@ -896,6 +939,7 @@ mod responses_tests {
                 TranscriptEntry::User(UserEntry::text("first")),
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
+                    reasoning: String::new(),
                     tool_calls: vec![
                         ToolCall {
                             id: "call_1".into(),
@@ -923,6 +967,7 @@ mod responses_tests {
                 ]),
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
+                    reasoning: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_3".into(),
                         name: "web_search".into(),
@@ -964,6 +1009,7 @@ mod responses_tests {
                 TranscriptEntry::User(UserEntry::text("first")),
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
+                    reasoning: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_1".into(),
                         name: "web_search".into(),

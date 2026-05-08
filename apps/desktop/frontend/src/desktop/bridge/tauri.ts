@@ -229,4 +229,22 @@ export const api = {
     }),
   oauthGeminiCliImport: () =>
     invoke<ImportedToken>("oauth_gemini_cli_import"),
+
+  // DeepSeek 账号登录（chat.deepseek.com 入口），返回 token，前端把它写入
+  // provider.api_key 作为 Bearer。
+  deepseekLogin: (input: DeepseekLoginInput) =>
+    invoke<DeepseekLoginToken>("deepseek_login", { input }),
 };
+
+export interface DeepseekLoginInput {
+  email?: string | null;
+  mobile?: string | null;
+  area_code?: string | null;
+  password: string;
+  device_id?: string | null;
+}
+
+export interface DeepseekLoginToken {
+  token: string;
+  login: string;
+}

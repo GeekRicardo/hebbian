@@ -37,9 +37,13 @@ impl UserEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AssistantEntry {
     pub text: String,
+    /// 上一轮模型的思维链 / 推理过程（DeepSeek `reasoning_content` /
+    /// chat.deepseek.com `<think>` block 等），下一轮重发时回填给模型。
+    /// 不参与 UI 显示——UI 走 `MessagePart::Reasoning`。
+    pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
 }
 
@@ -68,6 +72,9 @@ pub struct ToolCallStreamDelta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelStreamEvent {
     TextDelta { text: String },
+    /// 思维链 / 推理过程增量。Anthropic 的 `thinking_delta`、
+    /// OpenAI / DeepSeek / Qwen 等的 `reasoning_content` 都映射到这一路。
+    ReasoningDelta { text: String },
     ToolCallDelta(ToolCallStreamDelta),
 }
 
@@ -97,11 +104,15 @@ pub struct ModelRequest {
 pub enum ModelResponse {
     Done {
         text: String,
+        /// 这一轮累计的思维链。对接 transcript 时会回填，让下一轮模型看到。
+        #[doc(hidden)]
+        reasoning: String,
         attachments: Vec<MessageAttachment>,
         usage: Usage,
     },
     ToolCalls {
         text: String,
+        reasoning: String,
         calls: Vec<ToolCall>,
         attachments: Vec<MessageAttachment>,
         usage: Usage,

@@ -184,11 +184,7 @@ impl RunHandle {
         self.events.recv().await
     }
 
-    pub fn resolve_permission(
-        &self,
-        request_id: &PermissionRequestId,
-        decision: ApprovalDecision,
-    ) {
+    pub fn resolve_permission(&self, request_id: &PermissionRequestId, decision: ApprovalDecision) {
         self.hitl.resolve(request_id, decision, None);
     }
 
@@ -197,8 +193,7 @@ impl RunHandle {
     }
 
     pub fn interrupt(&self) {
-        self.cancel
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         self.hitl.cancel_all_pending();
     }
 
@@ -235,8 +230,7 @@ impl RunHandle {
                     question,
                     options,
                 } => {
-                    if let Some(answer) =
-                        observer.on_question(request_id, question, options).await
+                    if let Some(answer) = observer.on_question(request_id, question, options).await
                     {
                         self.answer_question(request_id, answer);
                     }

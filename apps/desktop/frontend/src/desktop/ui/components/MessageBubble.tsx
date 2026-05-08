@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   Loader2,
   Wrench,
+  Brain,
 } from "lucide-react";
 import type {
   Message,
@@ -68,6 +69,7 @@ interface ToolCallItem {
 
 type AssistantRenderPart =
   | { type: "text"; key: string; text: string }
+  | { type: "reasoning"; key: string; text: string; streaming: boolean }
   | { type: "tool_group"; key: string; calls: ToolCallItem[] };
 
 function formatJsonLike(value: unknown): string {
@@ -154,7 +156,8 @@ function pushToolGroup(
 
 function buildAssistantRenderParts(
   message: Message,
-  streamingParts?: StreamingAssistantPart[]
+  streamingParts?: StreamingAssistantPart[],
+  streaming?: boolean
 ): AssistantRenderPart[] {
   const out: AssistantRenderPart[] = [];
   const pendingTools: ToolCallItem[] = [];
@@ -164,6 +167,17 @@ function buildAssistantRenderParts(
       if (part.type === "text") {
         pushToolGroup(out, pendingTools);
         out.push({ type: "text", key: `stream-text-${index}`, text: part.text });
+      } else if (part.type === "reasoning") {
+        pushToolGroup(out, pendingTools);
+        // 流式时如果末尾就是这一段 reasoning，认为还在写入；
+        // 一旦后面有 text/tool 段，就视为已完成、默认折叠。
+        const isLast = index === streamingParts.length - 1;
+        out.push({
+          type: "reasoning",
+          key: `stream-reasoning-${index}`,
+          text: part.text,
+          streaming: !!streaming && isLast,
+        });
       } else {
         pendingTools.push(normalizeStreamingToolPart(part, index));
       }
@@ -177,6 +191,14 @@ function buildAssistantRenderParts(
       if (part.type === "text") {
         pushToolGroup(out, pendingTools);
         out.push({ type: "text", key: `saved-text-${index}`, text: part.text });
+      } else if (part.type === "reasoning") {
+        pushToolGroup(out, pendingTools);
+        out.push({
+          type: "reasoning",
+          key: `saved-reasoning-${index}`,
+          text: part.text,
+          streaming: false,
+        });
       } else {
         pendingTools.push(normalizeSavedToolPart(part, index));
       }
@@ -347,6 +369,53 @@ const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
   typeof ReactMarkdown
 >["components"];
 
+function ReasoningBlock({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
+  // 流式时默认展开、写完默认折叠
+  const [open, setOpen] = useState(streaming);
+  useEffect(() => {
+    if (streaming) setOpen(true);
+  }, [streaming]);
+
+  const trimmed = text.trim();
+  if (!trimmed && !streaming) return null;
+
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        <Brain className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium">
+          {streaming ? "思考中…" : "思考过程"}
+        </span>
+        {streaming && (
+          <span className="ml-1 inline-flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+        )}
+        <span className="ml-auto">
+          {open ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-border/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
+          {text || (streaming ? "▍" : "")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssistantParts({
   parts,
   streaming,
@@ -364,25 +433,37 @@ function AssistantParts({
 
   return (
     <div className="space-y-3">
-      {parts.map((part) =>
-        part.type === "text" ? (
-          <div key={part.key} className="markdown-segment">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-            >
-              {part.text || (streaming ? "▍" : "")}
-            </ReactMarkdown>
-          </div>
-        ) : (
+      {parts.map((part) => {
+        if (part.type === "text") {
+          return (
+            <div key={part.key} className="markdown-segment">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {part.text || (streaming ? "▍" : "")}
+              </ReactMarkdown>
+            </div>
+          );
+        }
+        if (part.type === "reasoning") {
+          return (
+            <ReasoningBlock
+              key={part.key}
+              text={part.text}
+              streaming={part.streaming}
+            />
+          );
+        }
+        return (
           <ToolCallStrip
             key={part.key}
             calls={part.calls}
             expandedKey={expandedKey}
             onToggle={onToggle}
           />
-        )
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -451,7 +532,11 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   const isUser = message.role === "user";
-  const assistantParts = buildAssistantRenderParts(message, streamingParts);
+  const assistantParts = buildAssistantRenderParts(
+    message,
+    streamingParts,
+    streaming
+  );
   const rawText = getMessageRawText(message);
   const canToggleRawText = !streaming && canShowRawMessage(message);
 

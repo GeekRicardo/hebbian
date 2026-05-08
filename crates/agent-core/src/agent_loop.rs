@@ -179,7 +179,8 @@ pub async fn run_loop(
         let state_for_stream = state.clone();
         // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
         // anthropic / gemini 默认不支持流式工具调用，含工具时只能用 complete 路径。
-        let response_result = if stream && (!has_tools || client.supports_streaming_tools()) {
+        let used_stream_path = stream && (!has_tools || client.supports_streaming_tools());
+        let response_result = if used_stream_path {
             client
                 .stream(
                     req,
@@ -188,6 +189,9 @@ pub async fn run_loop(
                         let payload = match stream_event {
                             ModelStreamEvent::TextDelta { text } => {
                                 EventPayload::TextDelta { text }
+                            }
+                            ModelStreamEvent::ReasoningDelta { text } => {
+                                EventPayload::Reasoning { text }
                             }
                             ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
                                 index: stream_tool_call_offset + delta.index,
@@ -214,6 +218,7 @@ pub async fn run_loop(
         match response {
             ModelResponse::Done {
                 text,
+                reasoning,
                 attachments,
                 usage,
             } => {
@@ -236,7 +241,7 @@ pub async fn run_loop(
                     stop_reason: StopReason::EndTurn,
                 });
 
-                transcript.push_assistant(text.clone(), Vec::new());
+                transcript.push_assistant_with_reasoning(text.clone(), reasoning, Vec::new());
                 let mut all_attachments = output_attachments;
                 all_attachments.extend(attachments);
                 break Ok(AssistantOutput {
@@ -246,6 +251,7 @@ pub async fn run_loop(
             }
             ModelResponse::ToolCalls {
                 text,
+                reasoning,
                 calls,
                 attachments,
                 usage,
@@ -258,11 +264,14 @@ pub async fn run_loop(
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
 
-                if !text.is_empty() {
+                // 走 stream 路径时，TextDelta 已经一段段经 provider 流出来了；
+                // 再 emit 一次会把整段正文重复喷给 surface（且 provider 端的
+                // sieve 等增量过滤也会被绕开）。仅在 complete 路径下补发。
+                if !used_stream_path && !text.is_empty() {
                     emit(EventPayload::TextDelta { text: text.clone() });
                 }
                 output_attachments.extend(attachments);
-                transcript.push_assistant(text, calls.clone());
+                transcript.push_assistant_with_reasoning(text, reasoning, calls.clone());
 
                 if iteration >= MAX_TOOL_ITERATIONS {
                     let msg = format!("已达到最大工具调用轮数 {MAX_TOOL_ITERATIONS}");

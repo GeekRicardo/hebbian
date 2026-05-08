@@ -1,3 +1,5 @@
+pub mod deepseek;
+pub mod deepseek_pow;
 pub mod refresh;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

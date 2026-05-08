@@ -323,7 +323,7 @@ export function ChatInput({
             placeholder="输入消息，Enter 发送，Shift+Enter 换行…"
             rows={1}
             style={manual ? { height } : undefined}
-            className="flex-1 resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[48px] overflow-y-auto"
+            className="flex-1 resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
           />
 
           <div className="flex items-center gap-1 pr-2 pb-2">
@@ -374,7 +374,6 @@ export function ChatInput({
               ? `已添加 ${attachments.length} 个附件`
               : ""}
           </span>
-          <span>Enter 发送 · Shift+Enter 换行</span>
         </div>
       </div>
     </div>

@@ -139,7 +139,9 @@ impl Tool for BashTool {
     }
 
     fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Destructive { risk: RiskLevel::High }
+        ToolClass::Destructive {
+            risk: RiskLevel::High,
+        }
     }
 }
 

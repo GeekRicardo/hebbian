@@ -522,6 +522,13 @@ async fn oauth_gemini_cli_import() -> AppResult<oauth::ImportedToken> {
     oauth::gemini_cli_import().await
 }
 
+#[tauri::command]
+async fn deepseek_login(
+    input: oauth::deepseek::DeepseekLoginInput,
+) -> AppResult<oauth::deepseek::DeepseekLoginToken> {
+    oauth::deepseek::deepseek_login(input).await
+}
+
 // ========== App startup ==========
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -593,6 +600,7 @@ pub fn run() {
             oauth_gemini_exchange,
             oauth_gemini_refresh,
             oauth_gemini_cli_import,
+            deepseek_login,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

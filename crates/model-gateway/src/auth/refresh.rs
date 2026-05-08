@@ -98,6 +98,7 @@ mod tests {
             id: "anthropic-oauth".into(),
             name: "Claude".into(),
             kind: ProviderKind::Anthropic,
+            enabled: true,
             auth_mode: AuthMode::OauthClaudeCode,
             base_url: "https://api.anthropic.com".into(),
             api_key: "old".into(),

@@ -102,7 +102,9 @@ impl Tool for WriteTool {
     }
 
     fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Mutating { risk: RiskLevel::Medium }
+        ToolClass::Mutating {
+            risk: RiskLevel::Medium,
+        }
     }
 }
 

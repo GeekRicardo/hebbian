@@ -33,7 +33,11 @@ fn entry_to_content(entry: &TranscriptEntry) -> Option<Value> {
             "role": "user",
             "parts": user_parts(user)
         })),
-        TranscriptEntry::Assistant(AssistantEntry { text, tool_calls }) => {
+        TranscriptEntry::Assistant(AssistantEntry {
+            text,
+            tool_calls,
+            ..
+        }) => {
             if tool_calls.is_empty() {
                 Some(json!({
                     "role": "model",
@@ -133,6 +137,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
                 .collect();
             return ModelResponse::ToolCalls {
                 text: String::new(),
+                reasoning: String::new(),
                 calls,
                 attachments: Vec::new(),
                 usage,
@@ -145,12 +150,14 @@ pub fn parse_response(v: &Value) -> ModelResponse {
             .join("");
         ModelResponse::Done {
             text,
+            reasoning: String::new(),
             attachments: Vec::new(),
             usage,
         }
     } else {
         ModelResponse::Done {
             text: String::new(),
+            reasoning: String::new(),
             attachments: Vec::new(),
             usage,
         }

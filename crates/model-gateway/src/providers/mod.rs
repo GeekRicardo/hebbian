@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod deepseek;
 pub mod gemini;
 pub mod openai;
 
@@ -70,6 +71,19 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                 .header("x-goog-api-client", "GeminiCLI/1.0");
         }
         (ProviderKind::Gemini, _) => {}
+        (ProviderKind::Deepseek, _) => {
+            // chat.deepseek.com web 协议：Bearer + 客户端指纹头（与 ds2api/internal/deepseek/protocol/constants.go 对齐）
+            req = req
+                .bearer_auth(&provider.api_key)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .header("accept-charset", "UTF-8")
+                .header("Host", "chat.deepseek.com")
+                .header("User-Agent", "DeepSeek/2.0.4 Android/35")
+                .header("x-client-platform", "android")
+                .header("x-client-version", "2.0.4")
+                .header("x-client-locale", "zh_CN");
+        }
     }
     for (k, v) in &provider.extra_headers {
         req = req.header(k.as_str(), v.as_str());

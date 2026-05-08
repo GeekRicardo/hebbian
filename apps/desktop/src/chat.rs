@@ -443,6 +443,18 @@ impl AssistantPartsRecorder {
         }
     }
 
+    fn append_reasoning(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        match self.parts.last_mut() {
+            Some(MessagePart::Reasoning { text: existing }) => existing.push_str(text),
+            _ => self.parts.push(MessagePart::Reasoning {
+                text: text.to_string(),
+            }),
+        }
+    }
+
     fn append_final_text_if_missing(&mut self, final_text: &str) {
         if final_text.is_empty() {
             return;
@@ -565,6 +577,7 @@ impl AssistantPartsRecorder {
 fn record_assistant_part_event(parts: &mut AssistantPartsRecorder, event: &AgentEvent) {
     match &event.payload {
         AgentEventPayload::TextDelta { text } => parts.append_text(text),
+        AgentEventPayload::Reasoning { text } => parts.append_reasoning(text),
         AgentEventPayload::ToolCallDelta {
             index,
             id,
@@ -680,6 +693,7 @@ pub async fn send_once(
             })),
             Role::Assistant => Some(TranscriptEntry::Assistant(AssistantEntry {
                 text: m.content.clone(),
+                reasoning: String::new(),
                 tool_calls: Vec::new(),
             })),
             _ => None,
@@ -709,6 +723,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
         TextDone { full_text } => Some(EngineEvent::TextDone {
             full_text: full_text.clone(),
         }),
+        Reasoning { text } => Some(EngineEvent::Reasoning { text: text.clone() }),
         ToolCallDelta {
             index,
             id,
@@ -908,6 +923,7 @@ mod tests {
                     id: "openai".to_string(),
                     name: "OpenAI".to_string(),
                     kind: ProviderKind::Openai,
+                    enabled: true,
                     auth_mode: AuthMode::ApiKey,
                     base_url: "https://example.test/v1".to_string(),
                     api_key: "test".to_string(),
@@ -971,6 +987,7 @@ mod tests {
                     }));
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
+                        reasoning: String::new(),
                         calls: vec![
                             ToolCall {
                                 id: "call_a".to_string(),
@@ -993,6 +1010,7 @@ mod tests {
                     });
                     Ok(ModelResponse::Done {
                         text: "后说".to_string(),
+                        reasoning: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -1043,6 +1061,7 @@ mod tests {
                     }));
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
+                        reasoning: String::new(),
                         calls: vec![ToolCall {
                             id: "call_first".to_string(),
                             name: "missing_first".to_string(),
@@ -1064,6 +1083,7 @@ mod tests {
                     }));
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
+                        reasoning: String::new(),
                         calls: vec![ToolCall {
                             id: "call_second".to_string(),
                             name: "missing_second".to_string(),
@@ -1079,6 +1099,7 @@ mod tests {
                     });
                     Ok(ModelResponse::Done {
                         text: "结束".to_string(),
+                        reasoning: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })

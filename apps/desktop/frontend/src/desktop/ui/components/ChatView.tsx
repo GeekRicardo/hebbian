@@ -10,7 +10,11 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
-import type { MessageAttachment } from "@/desktop/ui/types";
+import type { MessageAttachment, Provider } from "@/desktop/ui/types";
+
+function isProviderEnabled(provider: Provider) {
+  return provider.enabled !== false;
+}
 
 export function ChatView() {
   const {
@@ -39,6 +43,9 @@ export function ChatView() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [titleLoading, setTitleLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   // ==== 对话内查找状态 ====
   const [findOpen, setFindOpen] = useState(false);
@@ -165,6 +172,7 @@ export function ChatView() {
   const promptSummary = activePrompt?.name ?? "无 Agent";
   const isStreaming = !!streamingMessageId;
   const providers = providersFile.providers;
+  const enabledProviders = providers.filter(isProviderEnabled);
   const currentProvider = providers.find(
     (p) => p.id === currentSession.provider_id
   );
@@ -241,7 +249,7 @@ export function ChatView() {
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full relative">
       <header
-        className="h-14 shrink-0 pl-4 pr-4 flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-md drag-region"
+        className="relative z-50 h-14 shrink-0 pl-4 pr-4 flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-md drag-region"
         data-tauri-drag-region
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -307,7 +315,17 @@ export function ChatView() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setPickerOpen((v) => !v);
+              setPickerOpen((open) => {
+                const nextOpen = !open;
+                if (nextOpen) {
+                  const firstProviderId = enabledProviders[0]?.id;
+                  setExpandedProviderIds((ids) => {
+                    if (!firstProviderId || ids.has(firstProviderId)) return ids;
+                    return new Set([...ids, firstProviderId]);
+                  });
+                }
+                return nextOpen;
+              });
             }}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background hover:bg-accent px-2.5 py-1 text-xs no-drag"
           >
@@ -320,15 +338,16 @@ export function ChatView() {
           {pickerOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="absolute top-full right-0 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-card shadow-lg z-50 animate-slide-up"
+              className="absolute top-full right-0 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-card shadow-lg z-[90] animate-slide-up"
             >
-              {providers.length === 0 && (
+              {enabledProviders.length === 0 && (
                 <div className="p-4 text-xs text-muted-foreground text-center">
-                  还没有配置供应商
+                  没有已启用的供应商
                 </div>
               )}
-              {providers.map((p) => {
+              {enabledProviders.map((p) => {
                 const isActiveProvider = p.id === currentSession.provider_id;
+                const expanded = expandedProviderIds.has(p.id);
                 const models =
                   p.models.length > 0
                     ? p.models
@@ -340,34 +359,55 @@ export function ChatView() {
                     key={p.id}
                     className="border-b border-border last:border-b-0"
                   >
-                    <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground bg-accent/30 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedProviderIds((ids) => {
+                          const next = new Set(ids);
+                          if (next.has(p.id)) next.delete(p.id);
+                          else next.add(p.id);
+                          return next;
+                        })
+                      }
+                      className="w-full px-3 py-1.5 text-[11px] font-semibold text-foreground bg-muted hover:bg-accent flex items-center justify-between transition-colors"
+                    >
                       <span>{p.name}</span>
-                      <span className="text-[10px] opacity-60 uppercase">
+                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground uppercase">
                         {p.kind}
+                        <ChevronDown
+                          className={cn(
+                            "h-3 w-3 transition-transform",
+                            !expanded && "-rotate-90"
+                          )}
+                        />
                       </span>
-                    </div>
-                    {models.length === 0 && (
+                    </button>
+                    {expanded && models.length === 0 && (
                       <div className="px-3 py-2 text-xs text-muted-foreground italic">
                         （无模型）
                       </div>
                     )}
-                    {models.map((m) => {
-                      const act =
-                        isActiveProvider && m === currentSession.model;
-                      return (
-                        <button
-                          key={`${p.id}-${m}`}
-                          onClick={() => handleSwitch(p.id, m)}
-                          className={cn(
-                            "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between",
-                            act && "bg-primary/10 text-primary"
-                          )}
-                        >
-                          <span className="truncate">{m}</span>
-                          {act && <span className="text-xs">✓</span>}
-                        </button>
-                      );
-                    })}
+                    {expanded && models.length > 0 && (
+                      <div>
+                        {models.map((m) => {
+                          const act =
+                            isActiveProvider && m === currentSession.model;
+                          return (
+                            <button
+                              key={`${p.id}-${m}`}
+                              onClick={() => handleSwitch(p.id, m)}
+                              className={cn(
+                                "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between",
+                                act && "bg-primary/10 text-primary"
+                              )}
+                            >
+                              <span className="truncate">{m}</span>
+                              {act && <span className="text-xs">✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -19,5 +19,8 @@ pub fn build_client(provider: Provider) -> Result<DynModelClient, ModelError> {
             provider,
         )?)),
         ProviderKind::Gemini => Ok(Arc::new(providers::gemini::GeminiClient::new(provider)?)),
+        ProviderKind::Deepseek => Ok(Arc::new(providers::deepseek::DeepseekClient::new(
+            provider,
+        )?)),
     }
 }

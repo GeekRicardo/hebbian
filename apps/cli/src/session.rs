@@ -176,6 +176,16 @@ struct CliObserver {
 #[async_trait]
 impl TurnObserver for CliObserver {
     fn on_event(&mut self, event: &AgentEvent) {
+        if std::env::var_os("HEBBIAN_DUMP_EVENTS").is_some() {
+            // 只 dump 关键 payload 类型，不打印用户内容
+            let tag = match &event.payload {
+                protocol::EventPayload::TextDelta { text } => format!("TextDelta(len={})", text.len()),
+                protocol::EventPayload::Reasoning { text } => format!("Reasoning(len={})", text.len()),
+                protocol::EventPayload::TextDone { full_text } => format!("TextDone(len={})", full_text.len()),
+                other => format!("{:?}", std::mem::discriminant(other)),
+            };
+            eprintln!("[event] {tag}");
+        }
         self.renderer.on_event(event);
     }
 

@@ -10,6 +10,11 @@ pub enum EngineEvent {
     TextDone {
         full_text: String,
     },
+    /// 模型的思维链 / 推理过程增量（DeepSeek `reasoning_content`、
+    /// Anthropic `thinking_delta` 等）。前端通常以折叠块单独渲染。
+    Reasoning {
+        text: String,
+    },
     ToolCallDelta {
         index: usize,
         id: Option<String>,

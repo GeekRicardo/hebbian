@@ -143,6 +143,7 @@ impl ModelClient for GeminiClient {
 
         Ok(ModelResponse::Done {
             text: full,
+            reasoning: String::new(),
             attachments: Vec::new(),
             usage: Usage::default(),
         })

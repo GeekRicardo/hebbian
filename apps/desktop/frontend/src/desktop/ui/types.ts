@@ -1,4 +1,4 @@
-export type ProviderKind = "openai" | "anthropic" | "gemini";
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "deepseek";
 
 export type AuthMode =
   | "api_key"
@@ -10,6 +10,7 @@ export interface Provider {
   id: string;
   name: string;
   kind: ProviderKind;
+  enabled?: boolean;
   auth_mode: AuthMode;
   base_url: string;
   api_key: string;
@@ -32,6 +33,7 @@ export interface ProviderPreset {
   kind: ProviderKind;
   base_url: string;
   models: string[];
+  default_model?: string | null;
   website: string;
   note: string;
 }
@@ -104,6 +106,10 @@ export type MessagePart =
       text: string;
     }
   | {
+      type: "reasoning";
+      text: string;
+    }
+  | {
       type: "tool_call";
       id: string;
       name: string;
@@ -116,6 +122,10 @@ export type MessagePart =
 export type StreamingAssistantPart =
   | {
       type: "text";
+      text: string;
+    }
+  | {
+      type: "reasoning";
       text: string;
     }
   | {
@@ -201,6 +211,7 @@ export interface SearchHit extends SessionMeta {
 export type EngineEvent =
   | { type: "text_delta"; text: string }
   | { type: "text_done"; full_text: string }
+  | { type: "reasoning"; text: string }
   | {
       type: "tool_call_delta";
       index: number;

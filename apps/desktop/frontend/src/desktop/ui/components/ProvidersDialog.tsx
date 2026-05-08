@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   Globe,
   Boxes,
   Check,
+  GripVertical,
   Download,
   LogIn,
   Package,
@@ -19,6 +20,7 @@ import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Input, Label, SecretInput, Select, Textarea } from "@/desktop/ui/components/ui/input";
 import { OAuthDialog } from "./OAuthDialog";
+import { DeepseekLoginDialog } from "./DeepseekLoginDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import type {
@@ -36,6 +38,7 @@ const OFFICIAL_BASE_URLS: Record<ProviderKind, string> = {
   openai: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com",
   gemini: "https://generativelanguage.googleapis.com",
+  deepseek: "https://chat.deepseek.com",
 };
 
 const CODEX_OAUTH_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -45,6 +48,7 @@ const SUPPORTED_AUTH_MODES: Record<ProviderKind, AuthMode[]> = {
   openai: ["api_key", "oauth_codex"],
   anthropic: ["api_key", "oauth_claude_code"],
   gemini: ["api_key", "oauth_gemini_cli"],
+  deepseek: ["api_key"],
 };
 
 function normalizeBaseUrl(baseUrl: string) {
@@ -65,6 +69,16 @@ function shouldAutoReplaceBaseUrl(baseUrl: string) {
 
 function getCompatibleAuthMode(kind: ProviderKind, authMode: AuthMode) {
   return SUPPORTED_AUTH_MODES[kind].includes(authMode) ? authMode : "api_key";
+}
+
+function isDeepseekProvider(p: Provider | null | undefined) {
+  if (!p) return false;
+  const url = (p.base_url || "").toLowerCase();
+  return (
+    url.includes("deepseek.com") ||
+    p.id.toLowerCase().includes("deepseek") ||
+    p.name.toLowerCase().includes("deepseek")
+  );
 }
 
 function modelsToText(models: string[]) {
@@ -117,8 +131,11 @@ export function ProvidersDialog() {
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[] | null>(null);
   const [oauthOpen, setOauthOpen] = useState(false);
   const [oauthMode, setOauthMode] = useState<AuthMode | null>(null);
+  const [deepseekLoginOpen, setDeepseekLoginOpen] = useState(false);
   const [modelsText, setModelsText] = useState("");
   const [headersText, setHeadersText] = useState("");
+  const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null);
+  const draggingProviderIdRef = useRef<string | null>(null);
   const [testingModel, setTestingModel] = useState(false);
   const [modelTest, setModelTest] = useState<{
     providerId: string;
@@ -161,6 +178,7 @@ export function ProvidersDialog() {
       name: "新供应商",
       kind,
       auth_mode: "api_key",
+      enabled: true,
       base_url: getOfficialBaseUrl(kind),
       api_key: "",
       refresh_token: null,
@@ -190,7 +208,7 @@ export function ProvidersDialog() {
       kind: preset.kind,
       base_url: preset.base_url,
       models: [...preset.models],
-      default_model: preset.models[0] ?? null,
+      default_model: preset.default_model || preset.models[0] || null,
     });
     setDraft({ ...draft, providers: [...draft.providers, p] });
     setSelectedId(p.id);
@@ -229,6 +247,67 @@ export function ProvidersDialog() {
 
   function setDefault(id: string | null) {
     setDraft({ ...draft, default_provider_id: id });
+  }
+
+  function selectProvider(p: Provider) {
+    setSelectedId(p.id);
+    setModelsText(modelsToText(p.models));
+    setHeadersText(headersToText(p.extra_headers));
+    setFetchedModels(null);
+    setModelTest(null);
+  }
+
+  function moveProvider(dragId: string, overId: string, placement: "before" | "after") {
+    setDraft((currentDraft) => {
+      if (dragId === overId) return currentDraft;
+      const from = currentDraft.providers.findIndex((p) => p.id === dragId);
+      const to = currentDraft.providers.findIndex((p) => p.id === overId);
+      if (from < 0 || to < 0) return currentDraft;
+      if (from < to && placement === "before") return currentDraft;
+      if (from > to && placement === "after") return currentDraft;
+
+      const providers = [...currentDraft.providers];
+      const [moved] = providers.splice(from, 1);
+      const overIndex = providers.findIndex((p) => p.id === overId);
+      providers.splice(placement === "after" ? overIndex + 1 : overIndex, 0, moved);
+      return { ...currentDraft, providers };
+    });
+  }
+
+  function updateProviderDrag(clientX: number, clientY: number) {
+    const dragId = draggingProviderIdRef.current;
+    if (!dragId) return;
+    const target = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLElement>("[data-provider-id]");
+    const overId = target?.dataset.providerId;
+    if (!target || !overId || overId === dragId) return;
+
+    const rect = target.getBoundingClientRect();
+    const placement = clientY > rect.top + rect.height / 2 ? "after" : "before";
+    moveProvider(dragId, overId, placement);
+  }
+
+  function startProviderDrag(e: React.PointerEvent, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const provider = draft.providers.find((p) => p.id === id);
+    if (!provider) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    draggingProviderIdRef.current = id;
+    setDraggingProviderId(id);
+    selectProvider(provider);
+  }
+
+  function finishProviderDrag(e: React.PointerEvent) {
+    if (!draggingProviderIdRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if ((e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    }
+    draggingProviderIdRef.current = null;
+    setDraggingProviderId(null);
   }
 
   async function fetchModels() {
@@ -359,7 +438,13 @@ export function ProvidersDialog() {
   }
 
   const kindLabel = (k: ProviderKind) =>
-    k === "openai" ? "OpenAI 兼容" : k === "anthropic" ? "Anthropic" : "Gemini";
+    k === "openai"
+      ? "OpenAI 兼容"
+      : k === "anthropic"
+        ? "Anthropic"
+        : k === "deepseek"
+          ? "DeepSeek 网页"
+          : "Gemini";
   const modelForTest = current ? getModelForTest(current) : "";
 
   return (
@@ -426,24 +511,32 @@ export function ProvidersDialog() {
                 {draft.providers.map((p) => (
                   <li
                     key={p.id}
-                    onClick={() => {
-                      setSelectedId(p.id);
-                      setModelsText(modelsToText(p.models));
-                      setHeadersText(headersToText(p.extra_headers));
-                      setFetchedModels(null);
-                      setModelTest(null);
-                    }}
+                    data-provider-id={p.id}
+                    onPointerMove={(e) => updateProviderDrag(e.clientX, e.clientY)}
+                    onClick={() => selectProvider(p)}
                     className={cn(
-                      "px-3 py-2 rounded-md cursor-pointer flex items-center justify-between gap-2",
+                      "px-2 py-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition-colors",
                       selectedId === p.id
                         ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50"
+                        : "hover:bg-accent/50",
+                      draggingProviderId === p.id && "opacity-60"
                     )}
                   >
+                    <GripVertical
+                      className="h-4 w-4 shrink-0 cursor-grab touch-none text-muted-foreground/60 active:cursor-grabbing"
+                      onPointerDown={(e) => startProviderDrag(e, p.id)}
+                      onPointerMove={(e) => updateProviderDrag(e.clientX, e.clientY)}
+                      onPointerUp={finishProviderDrag}
+                      onPointerCancel={finishProviderDrag}
+                      aria-hidden="true"
+                    />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm truncate">{p.name}</div>
                       <div className="text-[11px] text-muted-foreground flex items-center gap-1">
                         <span>{kindLabel(p.kind)}</span>
+                        {p.enabled === false && (
+                          <span className="text-muted-foreground">已停用</span>
+                        )}
                         {!p.api_key && (
                           <span className="text-amber-500">未填 Key</span>
                         )}
@@ -492,6 +585,19 @@ export function ProvidersDialog() {
                         <option value="gemini">Google Gemini</option>
                       </Select>
                     </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={current.enabled !== false}
+                        onChange={(e) =>
+                          updateCurrent({ enabled: e.target.checked })
+                        }
+                      />
+                      启用
+                    </label>
                   </div>
 
                   <div className="space-y-1.5">
@@ -566,6 +672,21 @@ export function ProvidersDialog() {
                           : "由 OAuth 自动填入，也可手动粘贴"
                       }
                     />
+                    {isDeepseekProvider(current) && (
+                      <div className="flex items-center justify-between gap-2 pt-0.5">
+                        <p className="text-[11px] text-muted-foreground">
+                          没有 API Key？可直接用 DeepSeek 账号登录获取 token。
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setDeepseekLoginOpen(true)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] hover:bg-accent text-primary"
+                        >
+                          <LogIn className="w-3 h-3" />
+                          用账号登录 DeepSeek
+                        </button>
+                      </div>
+                    )}
                     {current.account_id && (
                       <p className="text-[11px] text-muted-foreground">
                         已绑定账号：{current.account_id}
@@ -728,6 +849,38 @@ export function ProvidersDialog() {
         mode={oauthMode}
         onOpenChange={(v) => setOauthOpen(v)}
         onSuccess={onOAuthSuccess}
+      />
+
+      <DeepseekLoginDialog
+        open={deepseekLoginOpen}
+        onOpenChange={setDeepseekLoginOpen}
+        onSuccess={(result) => {
+          // 登录得到的 token 只能给 chat.deepseek.com web 协议用，
+          // 必须把 provider 切到 deepseek kind + base_url。
+          const next = {
+            api_key: result.token,
+            account_id: result.login,
+            auth_mode: "api_key" as AuthMode,
+            kind: "deepseek" as ProviderKind,
+            base_url: "https://chat.deepseek.com",
+          };
+          updateCurrent(next);
+          // 默认补一份模型清单（如果当前模型字段为空）
+          if (current && current.models.length === 0) {
+            const defaults = [
+              "deepseek-v4-pro",
+              "deepseek-v4-flash",
+              "deepseek-v4-pro-search",
+              "deepseek-v4-flash-search",
+              "deepseek-v4-vision",
+            ];
+            updateCurrent({
+              models: defaults,
+              default_model: "deepseek-v4-pro",
+            });
+            setModelsText(modelsToText(defaults));
+          }
+        }}
       />
     </>
   );

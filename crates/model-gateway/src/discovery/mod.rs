@@ -141,5 +141,23 @@ pub async fn fetch(provider: &Provider) -> platform::AppResult<Vec<FetchedModel>
             }
             Ok(out)
         }
+        ProviderKind::Deepseek => {
+            // chat.deepseek.com web 协议没有「列模型」端点，给出固定清单。
+            Ok([
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+                "deepseek-v4-pro-search",
+                "deepseek-v4-flash-search",
+                "deepseek-v4-vision",
+                "deepseek-v4-pro-nothinking",
+                "deepseek-v4-flash-nothinking",
+            ]
+            .iter()
+            .map(|id| FetchedModel {
+                id: (*id).to_string(),
+                owned_by: Some("DeepSeek Web".to_string()),
+            })
+            .collect())
+        }
     }
 }

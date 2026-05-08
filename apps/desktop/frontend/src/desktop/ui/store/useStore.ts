@@ -66,6 +66,25 @@ function applyTextDelta(
   return next;
 }
 
+/**
+ * 推理（thinking）增量：贴在最近一段 reasoning 上；如果末尾不是
+ * reasoning 就开新段，让正文段不会被推理打断顺序。
+ */
+function applyReasoningDelta(
+  parts: StreamingAssistantPart[],
+  text: string
+): StreamingAssistantPart[] {
+  if (!text) return parts;
+  const next = cloneStreamingParts(parts);
+  const last = next[next.length - 1];
+  if (last?.type === "reasoning") {
+    last.text += text;
+  } else {
+    next.push({ type: "reasoning", text });
+  }
+  return next;
+}
+
 function toolPartIndex(
   parts: StreamingAssistantPart[],
   index: number,
@@ -574,6 +593,11 @@ export const useStore = create<AppState>((set, get) => ({
               });
             }
           }
+          if (e.type === "reasoning") {
+            set({
+              streamingParts: applyReasoningDelta(get().streamingParts, e.text),
+            });
+          }
           if (e.type === "tool_call_delta") {
             set({
               streamingParts: applyToolCallDelta(
@@ -729,25 +753,15 @@ export const useStore = create<AppState>((set, get) => ({
 
   async cancelStreaming() {
     const requestId = get().activeRequestId;
-    const current = get().currentSession;
     if (!requestId) return;
 
-    set({
-      streamingMessageId: null,
-      streamingText: "",
-      streamingParts: [],
-      activeRequestId: null,
-      pendingApproval: null,
-      pendingApprovalQueue: [],
-      pendingQuestion: null,
-      pendingQuestionQueue: [],
-    });
+    // 只发取消信号，**不在这里清掉 streamingParts / 也不 reload session**：
+    // - 后端要花一两百 ms 才能把 partial output 落盘并返回「请求已中断」；
+    // - 这中间 streamingParts 还得继续显示用户已经看到的内容；
+    // - 落盘完后 sendUserMessage 的 .catch 会拉到带 partial 的最新 session，
+    //   再统一清理 streaming 状态。提前 reload 会读到尚未 persist 的旧状态、
+    //   把已经流到屏幕上的内容“吞掉”。
     await api.cancelMessage(requestId);
-    if (current) {
-      const fresh = await api.getSession(current.id);
-      set({ currentSession: fresh });
-      await get().refreshSessions();
-    }
   },
 
   async regenerateFrom(assistantMsgId) {
@@ -901,7 +915,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   pickDefaultProvider() {
-    const { providers, default_provider_id } = get().providersFile;
+    const { providers: allProviders, default_provider_id } = get().providersFile;
+    const providers = allProviders.filter((provider) => provider.enabled !== false);
     const lastProviderId = readStoredValue(LAST_PROVIDER_ID_KEY);
     if (lastProviderId) {
       const p = providers.find((x) => x.id === lastProviderId);

@@ -45,8 +45,12 @@ fn entry_tokens(entry: &TranscriptEntry) -> usize {
                 .sum();
             estimate_tokens(&user.text) + attachment_tokens + 4
         }
-        TranscriptEntry::Assistant(AssistantEntry { text, tool_calls }) => {
-            let mut n = estimate_tokens(text) + 4;
+        TranscriptEntry::Assistant(AssistantEntry {
+            text,
+            reasoning,
+            tool_calls,
+        }) => {
+            let mut n = estimate_tokens(text) + estimate_tokens(reasoning) + 4;
             for c in tool_calls {
                 n += estimate_tokens(&c.name) + estimate_tokens(&c.input.to_string()) + 8;
             }

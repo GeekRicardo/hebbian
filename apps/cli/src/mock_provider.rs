@@ -67,6 +67,7 @@ impl ModelClient for MockClient {
         }
         Ok(ModelResponse::Done {
             text: full,
+            reasoning: String::new(),
             attachments: Vec::new(),
             usage: Usage {
                 input_tokens: 8,
