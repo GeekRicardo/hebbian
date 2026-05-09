@@ -79,6 +79,8 @@ export function Sidebar() {
     newSession,
     toggleTheme,
     theme,
+    runningSessions,
+    unreadFinishedSessions,
   } = useStore();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -315,6 +317,10 @@ export function Sidebar() {
                   const active = currentSession?.id === s.id;
                   const regenerating = regeneratingId === s.id;
                   const snippet = (s as any).snippet as string | undefined;
+                  // 后台运行 + 未在前台 → 呼吸点；后台跑完未查看 → 静态点；
+                  // 当前查看中无论运行与否都不显示。
+                  const running = runningSessions.has(s.id) && !active;
+                  const unread = !active && !running && unreadFinishedSessions.has(s.id);
                   return (
                     <li key={s.id}>
                       <div
@@ -327,6 +333,16 @@ export function Sidebar() {
                         )}
                       >
                         <div className="flex items-center justify-between gap-2">
+                          {(running || unread) && (
+                            <span
+                              className={cn(
+                                "h-2 w-2 shrink-0 rounded-full bg-primary",
+                                running && "animate-breathe"
+                              )}
+                              title={running ? "后台正在运行" : "运行已完成，未查看"}
+                              aria-label={running ? "running" : "unread"}
+                            />
+                          )}
                           {renamingId === s.id ? (
                             <input
                               autoFocus

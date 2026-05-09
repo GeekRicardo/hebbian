@@ -163,6 +163,152 @@ function applyToolStart(
   return next;
 }
 
+function removeFromSet<T>(s: Set<T>, item: T): Set<T> {
+  if (!s.has(item)) return s;
+  const next = new Set(s);
+  next.delete(item);
+  return next;
+}
+
+/**
+ * 单个 session 在跑时的所有"软状态"（流式正文 / 推理 / 工具 / HITL）。
+ * 全局字段（`streamingText` 等）只是 currentSession 这个槽的只读镜像。
+ * 这样切到别的会话时，当前会话的状态不会被新会话的流冲掉，
+ * 切回来还能看到原来的进度。
+ */
+type SessionStream = {
+  requestId: string;
+  streamingMessageId: string | null;
+  streamingText: string;
+  streamingParts: StreamingAssistantPart[];
+  pendingApproval: PendingApproval | null;
+  pendingApprovalQueue: PendingApproval[];
+  pendingQuestion: PendingQuestion | null;
+  pendingQuestionQueue: PendingQuestion[];
+};
+
+const EMPTY_MIRROR = {
+  streamingMessageId: null as string | null,
+  streamingText: "",
+  streamingParts: [] as StreamingAssistantPart[],
+  activeRequestId: null as string | null,
+  pendingApproval: null as PendingApproval | null,
+  pendingApprovalQueue: [] as PendingApproval[],
+  pendingQuestion: null as PendingQuestion | null,
+  pendingQuestionQueue: [] as PendingQuestion[],
+};
+
+function mirrorFromSlot(slot: SessionStream | undefined) {
+  if (!slot) return { ...EMPTY_MIRROR };
+  return {
+    streamingMessageId: slot.streamingMessageId,
+    streamingText: slot.streamingText,
+    streamingParts: slot.streamingParts,
+    activeRequestId: slot.requestId,
+    pendingApproval: slot.pendingApproval,
+    pendingApprovalQueue: slot.pendingApprovalQueue,
+    pendingQuestion: slot.pendingQuestion,
+    pendingQuestionQueue: slot.pendingQuestionQueue,
+  };
+}
+
+function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
+  if (e.type === "text_delta") {
+    if (!e.text) return slot;
+    return {
+      ...slot,
+      streamingText: slot.streamingText + e.text,
+      streamingParts: applyTextDelta(slot.streamingParts, e.text),
+    };
+  }
+  if (e.type === "text_done") {
+    if (!slot.streamingText || !e.full_text.endsWith(slot.streamingText)) {
+      const delta = slot.streamingText ? "" : e.full_text;
+      return {
+        ...slot,
+        streamingText: e.full_text,
+        streamingParts: delta
+          ? applyTextDelta(slot.streamingParts, delta)
+          : slot.streamingParts,
+      };
+    }
+    return slot;
+  }
+  if (e.type === "reasoning") {
+    return { ...slot, streamingParts: applyReasoningDelta(slot.streamingParts, e.text) };
+  }
+  if (e.type === "tool_call_delta") {
+    return { ...slot, streamingParts: applyToolCallDelta(slot.streamingParts, e) };
+  }
+  if (e.type === "tool_start") {
+    return { ...slot, streamingParts: applyToolStart(slot.streamingParts, e) };
+  }
+  if (e.type === "tool_done") {
+    return { ...slot, streamingParts: applyToolDone(slot.streamingParts, e) };
+  }
+  if (e.type === "permission_requested") {
+    const approval: PendingApproval = {
+      requestId: e.request_id,
+      toolName: e.tool_name,
+      input: e.input,
+      summary: e.summary,
+      risk: e.risk,
+      paths: e.paths ?? [],
+      kind: e.kind ?? "tool_call",
+      fingerprint: e.fingerprint ?? null,
+    };
+    if (slot.pendingApproval) {
+      return { ...slot, pendingApprovalQueue: [...slot.pendingApprovalQueue, approval] };
+    }
+    return { ...slot, pendingApproval: approval };
+  }
+  if (e.type === "permission_resolved") {
+    if (slot.pendingApproval?.requestId === e.request_id) {
+      const next = slot.pendingApprovalQueue[0] ?? null;
+      return {
+        ...slot,
+        pendingApproval: next,
+        pendingApprovalQueue: slot.pendingApprovalQueue.slice(1),
+      };
+    }
+    return {
+      ...slot,
+      pendingApprovalQueue: slot.pendingApprovalQueue.filter(
+        (it) => it.requestId !== e.request_id
+      ),
+    };
+  }
+  if (e.type === "user_question_requested") {
+    const q: PendingQuestion = {
+      requestId: e.request_id,
+      question: e.question,
+      options: e.options,
+      multi: e.multi ?? false,
+    };
+    if (slot.pendingQuestion) {
+      return { ...slot, pendingQuestionQueue: [...slot.pendingQuestionQueue, q] };
+    }
+    return { ...slot, pendingQuestion: q };
+  }
+  if (e.type === "user_question_answered") {
+    if (slot.pendingQuestion?.requestId === e.request_id) {
+      const next = slot.pendingQuestionQueue[0] ?? null;
+      return {
+        ...slot,
+        pendingQuestion: next,
+        pendingQuestionQueue: slot.pendingQuestionQueue.slice(1),
+      };
+    }
+    return {
+      ...slot,
+      pendingQuestionQueue: slot.pendingQuestionQueue.filter(
+        (it) => it.requestId !== e.request_id
+      ),
+    };
+  }
+  return slot;
+}
+
 function applyToolDone(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_done" }>
@@ -192,11 +338,22 @@ interface AppState {
   sessions: SessionMeta[];
   currentSession: Session | null;
 
-  // streaming
+  /**
+   * 每个 session 当前的流式 / HITL 软状态，按 sessionId 分槽。
+   * 切换会话时不动这里的内容，只是把全局镜像换成新会话槽的副本。
+   */
+  sessionStreams: Record<string, SessionStream>;
+
+  // streaming —— 全局字段是 sessionStreams[currentSession.id] 的镜像
   streamingMessageId: string | null;
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
   activeRequestId: string | null;
+
+  /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
+  runningSessions: Set<string>;
+  /** 后台跑完但用户尚未查看的会话 id 集合，用于 Sidebar 静态点。 */
+  unreadFinishedSessions: Set<string>;
 
   // UI
   providerDialogOpen: boolean;
@@ -329,10 +486,13 @@ export const useStore = create<AppState>((set, get) => ({
   userAvatar: readStoredValue(USER_AVATAR_KEY),
   sessions: [],
   currentSession: null,
+  sessionStreams: {},
   streamingMessageId: null,
   streamingText: "",
   streamingParts: [],
   activeRequestId: null,
+  runningSessions: new Set<string>(),
+  unreadFinishedSessions: new Set<string>(),
   providerDialogOpen: false,
   settingsOpen: false,
   promptsDialogOpen: false,
@@ -379,14 +539,21 @@ export const useStore = create<AppState>((set, get) => ({
   pendingApproval: null,
   pendingApprovalQueue: [],
   async resolveApproval(decision: ApprovalDecisionPayload) {
-    const pending = get().pendingApproval;
-    if (!pending) return;
-    // 乐观清空，避免双击
-    const next = get().pendingApprovalQueue[0] ?? null;
-    set({
-      pendingApproval: next,
-      pendingApprovalQueue: get().pendingApprovalQueue.slice(1),
-    });
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    const slot = get().sessionStreams[sessionId];
+    const pending = slot?.pendingApproval;
+    if (!slot || !pending) return;
+    const nextSlot: SessionStream = {
+      ...slot,
+      pendingApproval: slot.pendingApprovalQueue[0] ?? null,
+      pendingApprovalQueue: slot.pendingApprovalQueue.slice(1),
+    };
+    set((state) => ({
+      sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
+      ...mirrorFromSlot(nextSlot),
+    }));
     try {
       await api.approvePermission(
         pending.requestId,
@@ -395,13 +562,24 @@ export const useStore = create<AppState>((set, get) => ({
         decision.kind === "allow_and_remember" ? decision.pattern ?? null : null
       );
     } catch (e) {
-      // 失败时恢复弹窗，让用户重试
-      set((state) => ({
-        pendingApproval: pending,
-        pendingApprovalQueue: next
-          ? [next, ...state.pendingApprovalQueue]
-          : state.pendingApprovalQueue,
-      }));
+      // 失败时恢复 slot 上的弹窗，让用户重试
+      set((state) => {
+        const live = state.sessionStreams[sessionId];
+        if (!live) return state;
+        const restored: SessionStream = {
+          ...live,
+          pendingApproval: pending,
+          pendingApprovalQueue: live.pendingApproval
+            ? [live.pendingApproval, ...live.pendingApprovalQueue]
+            : live.pendingApprovalQueue,
+        };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
+          ...(isForeground ? mirrorFromSlot(restored) : {}),
+        };
+      });
       throw e;
     }
   },
@@ -409,13 +587,21 @@ export const useStore = create<AppState>((set, get) => ({
   pendingQuestion: null,
   pendingQuestionQueue: [],
   async resolveQuestion(answer: QuestionAnswerPayload) {
-    const pending = get().pendingQuestion;
-    if (!pending) return;
-    const next = get().pendingQuestionQueue[0] ?? null;
-    set({
-      pendingQuestion: next,
-      pendingQuestionQueue: get().pendingQuestionQueue.slice(1),
-    });
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    const slot = get().sessionStreams[sessionId];
+    const pending = slot?.pendingQuestion;
+    if (!slot || !pending) return;
+    const nextSlot: SessionStream = {
+      ...slot,
+      pendingQuestion: slot.pendingQuestionQueue[0] ?? null,
+      pendingQuestionQueue: slot.pendingQuestionQueue.slice(1),
+    };
+    set((state) => ({
+      sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
+      ...mirrorFromSlot(nextSlot),
+    }));
     try {
       const payload: { text?: string; labels?: string[] } | undefined =
         answer.kind === "selected"
@@ -427,12 +613,23 @@ export const useStore = create<AppState>((set, get) => ({
               : undefined;
       await api.answerQuestion(pending.requestId, answer.kind, payload);
     } catch (e) {
-      set((state) => ({
-        pendingQuestion: pending,
-        pendingQuestionQueue: next
-          ? [next, ...state.pendingQuestionQueue]
-          : state.pendingQuestionQueue,
-      }));
+      set((state) => {
+        const live = state.sessionStreams[sessionId];
+        if (!live) return state;
+        const restored: SessionStream = {
+          ...live,
+          pendingQuestion: pending,
+          pendingQuestionQueue: live.pendingQuestion
+            ? [live.pendingQuestion, ...live.pendingQuestionQueue]
+            : live.pendingQuestionQueue,
+        };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
+          ...(isForeground ? mirrorFromSlot(restored) : {}),
+        };
+      });
       throw e;
     }
   },
@@ -509,13 +706,12 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
-    set({
+    set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
-      streamingMessageId: null,
-      streamingText: "",
-      streamingParts: [],
-    });
+      unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
+      ...mirrorFromSlot(state.sessionStreams[id]),
+    }));
     get().refreshContextUsage();
   },
 
@@ -540,11 +736,13 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
-    set({
+    // 新建 session 几乎不可能有残留 slot，但保险起见还是从 slot 镜像（一般是空），
+    // 这样不会被旧 session 残留的 streamingMessageId / pendingApproval 串味。
+    set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
-      streamingParts: [],
-    });
+      ...mirrorFromSlot(state.sessionStreams[s.id]),
+    }));
     await get().refreshSessions();
   },
 
@@ -559,6 +757,18 @@ export const useStore = create<AppState>((set, get) => ({
   async deleteSession(id) {
     await api.deleteSession(id);
     const wasCurrent = get().currentSession?.id === id;
+    set((state) => {
+      const { [id]: _drop, ...restStreams } = state.sessionStreams;
+      const next: Partial<AppState> = {
+        sessionStreams: restStreams,
+        runningSessions: removeFromSet(state.runningSessions, id),
+        unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
+      };
+      if (wasCurrent) {
+        Object.assign(next, mirrorFromSlot(undefined));
+      }
+      return next as AppState;
+    });
     await get().refreshSessions();
     if (wasCurrent) {
       const next = get().sessions[0];
@@ -577,11 +787,11 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
-    set({
+    set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
-      streamingParts: [],
-    });
+      ...mirrorFromSlot(state.sessionStreams[s.id]),
+    }));
   },
 
   async regenerateTitle() {
@@ -595,24 +805,31 @@ export const useStore = create<AppState>((set, get) => ({
   async sendUserMessage(content, attachments = []) {
     const cur = get().currentSession;
     if (!cur) return;
+    const sessionId = cur.id;
     const tempId = "streaming";
     const requestId =
       crypto.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    set({
-      currentSession: appendOptimisticUserMessage(cur, content, attachments, {
-        id: `pending-user-${requestId}`,
-        now: Date.now(),
-      }),
+    const initialSlot: SessionStream = {
+      requestId,
       streamingMessageId: tempId,
       streamingText: "",
       streamingParts: [],
-      activeRequestId: requestId,
       pendingApproval: null,
       pendingApprovalQueue: [],
       pendingQuestion: null,
       pendingQuestionQueue: [],
-    });
+    };
+    set((state) => ({
+      currentSession: appendOptimisticUserMessage(cur, content, attachments, {
+        id: `pending-user-${requestId}`,
+        now: Date.now(),
+      }),
+      sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
+      runningSessions: new Set(state.runningSessions).add(sessionId),
+      // sessionId === currentSession.id（这一刻一定是前台），同步镜像
+      ...mirrorFromSlot(initialSlot),
+    }));
     try {
       const isFirstRound = cur.messages.every((m) => m.role !== "user");
       // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
@@ -625,143 +842,55 @@ export const useStore = create<AppState>((set, get) => ({
         [],
         requestId,
         (e: EngineEvent) => {
-          if (get().activeRequestId !== requestId) return;
-          if (e.type === "text_delta") {
-            set({
-              streamingText: get().streamingText + e.text,
-              streamingParts: applyTextDelta(get().streamingParts, e.text),
-            });
-          }
-          // complete 路径（不支持 stream tools 的 provider）只发 text_done；
-          // 这里把 full_text 一次性同步进 streamingText，避免界面上空白。
-          if (e.type === "text_done") {
-            const cur = get().streamingText;
-            if (!cur || !e.full_text.endsWith(cur)) {
-              const delta = cur ? "" : e.full_text;
-              set({
-                streamingText: e.full_text,
-                streamingParts: delta
-                  ? applyTextDelta(get().streamingParts, delta)
-                  : get().streamingParts,
-              });
-            }
-          }
-          if (e.type === "reasoning") {
-            set({
-              streamingParts: applyReasoningDelta(get().streamingParts, e.text),
-            });
-          }
-          if (e.type === "tool_call_delta") {
-            set({
-              streamingParts: applyToolCallDelta(
-                get().streamingParts,
-                e
-              ),
-            });
-          }
-          if (e.type === "tool_start") {
-            set({
-              streamingParts: applyToolStart(get().streamingParts, e),
-            });
-          }
-          if (e.type === "tool_done") {
-            set({
-              streamingParts: applyToolDone(get().streamingParts, e),
-            });
-          }
-          if (e.type === "permission_requested") {
-            const approval: PendingApproval = {
-                requestId: e.request_id,
-                toolName: e.tool_name,
-                input: e.input,
-                summary: e.summary,
-                risk: e.risk,
-                paths: e.paths ?? [],
-                kind: e.kind ?? "tool_call",
-                fingerprint: e.fingerprint ?? null,
+          set((state) => {
+            const slot = state.sessionStreams[sessionId];
+            // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
+            if (!slot || slot.requestId !== requestId) return state;
+            const updated = applyEventToSlot(slot, e);
+            if (updated === slot) return state;
+            const isForeground = state.currentSession?.id === sessionId;
+            return {
+              ...state,
+              sessionStreams: {
+                ...state.sessionStreams,
+                [sessionId]: updated,
+              },
+              ...(isForeground ? mirrorFromSlot(updated) : {}),
             };
-            set((state) =>
-              state.pendingApproval
-                ? {
-                    pendingApprovalQueue: [
-                      ...state.pendingApprovalQueue,
-                      approval,
-                    ],
-                  }
-                : { pendingApproval: approval }
-            );
-          }
-          if (e.type === "permission_resolved") {
-            set((state) => {
-              if (state.pendingApproval?.requestId === e.request_id) {
-                const next = state.pendingApprovalQueue[0] ?? null;
-                return {
-                  pendingApproval: next,
-                  pendingApprovalQueue: state.pendingApprovalQueue.slice(1),
-                };
-              }
-              return {
-                pendingApprovalQueue: state.pendingApprovalQueue.filter(
-                  (item) => item.requestId !== e.request_id
-                ),
-              };
-            });
-          }
-          if (e.type === "user_question_requested") {
-            const question: PendingQuestion = {
-                requestId: e.request_id,
-                question: e.question,
-                options: e.options,
-                multi: e.multi ?? false,
-            };
-            set((state) =>
-              state.pendingQuestion
-                ? {
-                    pendingQuestionQueue: [
-                      ...state.pendingQuestionQueue,
-                      question,
-                    ],
-                  }
-                : { pendingQuestion: question }
-            );
-          }
-          if (e.type === "user_question_answered") {
-            set((state) => {
-              if (state.pendingQuestion?.requestId === e.request_id) {
-                const next = state.pendingQuestionQueue[0] ?? null;
-                return {
-                  pendingQuestion: next,
-                  pendingQuestionQueue: state.pendingQuestionQueue.slice(1),
-                };
-              }
-              return {
-                pendingQuestionQueue: state.pendingQuestionQueue.filter(
-                  (item) => item.requestId !== e.request_id
-                ),
-              };
-            });
-          }
+          });
         },
       );
-      const fresh = await api.getSession(cur.id);
-      set({
-        currentSession: fresh,
-        streamingMessageId: null,
-        streamingText: "",
-        streamingParts: [],
-        activeRequestId: null,
-        pendingApproval: null,
-        pendingApprovalQueue: [],
-        pendingQuestion: null,
-        pendingQuestionQueue: [],
-      });
+      const stillForeground = get().currentSession?.id === sessionId;
+      if (stillForeground) {
+        const fresh = await api.getSession(sessionId);
+        set((state) => {
+          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+          return {
+            currentSession: fresh,
+            sessionStreams: rest,
+            runningSessions: removeFromSet(state.runningSessions, sessionId),
+            ...mirrorFromSlot(undefined),
+          };
+        });
+        get().refreshContextUsage();
+      } else {
+        set((state) => {
+          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+          return {
+            sessionStreams: rest,
+            runningSessions: removeFromSet(state.runningSessions, sessionId),
+            unreadFinishedSessions: new Set(state.unreadFinishedSessions).add(
+              sessionId
+            ),
+          };
+        });
+      }
       await get().refreshSessions();
-      get().refreshContextUsage();
 
       // 首轮对话完成后自动生成标题（失败不影响主流程）
       if (isFirstRound) {
         api
-          .generateSessionTitle(cur.id)
+          .generateSessionTitle(sessionId)
           .then((s) => {
             if (get().currentSession?.id === s.id) {
               set({ currentSession: s });
@@ -773,42 +902,53 @@ export const useStore = create<AppState>((set, get) => ({
           });
       }
     } catch (err: any) {
-      set({
-        streamingMessageId: null,
-        streamingText: "",
-        streamingParts: [],
-        activeRequestId: null,
-        pendingApproval: null,
-        pendingApprovalQueue: [],
-        pendingQuestion: null,
-        pendingQuestionQueue: [],
+      const stillForeground = get().currentSession?.id === sessionId;
+      // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread
+      set((state) => {
+        const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+        const next: Partial<AppState> = {
+          sessionStreams: rest,
+          runningSessions: removeFromSet(state.runningSessions, sessionId),
+        };
+        if (stillForeground) {
+          Object.assign(next, mirrorFromSlot(undefined));
+        } else {
+          next.unreadFinishedSessions = new Set(state.unreadFinishedSessions).add(
+            sessionId
+          );
+        }
+        return next as AppState;
       });
       if (String(err?.message ?? err).includes("请求已中断")) {
-        const current = get().currentSession;
-        if (current) {
-          const fresh = await api.getSession(current.id);
+        if (stillForeground) {
+          const fresh = await api.getSession(sessionId);
           set({ currentSession: fresh });
-          await get().refreshSessions();
         }
+        await get().refreshSessions();
         return;
       }
       try {
-        const fresh = await api.getSession(cur.id);
-        if (get().currentSession?.id === cur.id) {
+        const fresh = await api.getSession(sessionId);
+        if (get().currentSession?.id === sessionId) {
           set({ currentSession: fresh });
         }
         await get().refreshSessions();
       } catch {
-        if (get().currentSession?.id === cur.id) {
+        if (get().currentSession?.id === sessionId) {
           set({ currentSession: cur });
         }
       }
-      throw err;
+      // 后台失败不向 UI 抛错（用户视野不在这里，吐 toast 也无意义）
+      if (stillForeground) throw err;
     }
   },
 
   async cancelStreaming() {
-    const requestId = get().activeRequestId;
+    // 只取消"用户当前在看的"那个会话的 run。后台的 run 不动，避免误杀。
+    const cur = get().currentSession;
+    if (!cur) return;
+    const slot = get().sessionStreams[cur.id];
+    const requestId = slot?.requestId ?? get().activeRequestId;
     if (!requestId) return;
 
     // 只发取消信号，**不在这里清掉 streamingParts / 也不 reload session**：
@@ -816,7 +956,7 @@ export const useStore = create<AppState>((set, get) => ({
     // - 这中间 streamingParts 还得继续显示用户已经看到的内容；
     // - 落盘完后 sendUserMessage 的 .catch 会拉到带 partial 的最新 session，
     //   再统一清理 streaming 状态。提前 reload 会读到尚未 persist 的旧状态、
-    //   把已经流到屏幕上的内容“吞掉”。
+    //   把已经流到屏幕上的内容"吞掉"。
     await api.cancelMessage(requestId);
   },
 
@@ -915,14 +1055,21 @@ export const useStore = create<AppState>((set, get) => ({
     set({ currentSession: updated });
   },
   async resolvePathAccess(scope) {
-    const pending = get().pendingApproval;
-    if (!pending) return;
-    const sessionId = get().currentSession?.id ?? null;
-    const next = get().pendingApprovalQueue[0] ?? null;
-    set({
-      pendingApproval: next,
-      pendingApprovalQueue: get().pendingApprovalQueue.slice(1),
-    });
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    const slot = get().sessionStreams[sessionId];
+    const pending = slot?.pendingApproval;
+    if (!slot || !pending) return;
+    const nextSlot: SessionStream = {
+      ...slot,
+      pendingApproval: slot.pendingApprovalQueue[0] ?? null,
+      pendingApprovalQueue: slot.pendingApprovalQueue.slice(1),
+    };
+    set((state) => ({
+      sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
+      ...mirrorFromSlot(nextSlot),
+    }));
     try {
       await api.approvePathAccess(
         pending.requestId,
@@ -931,19 +1078,32 @@ export const useStore = create<AppState>((set, get) => ({
         sessionId
       );
       // 重新拉一下 session（this_project 时 allowed_dirs 已落盘）
-      if (scope === "this_project" && sessionId) {
+      if (scope === "this_project") {
         const fresh = await api.getSession(sessionId);
-        set({ currentSession: fresh });
+        if (get().currentSession?.id === sessionId) {
+          set({ currentSession: fresh });
+        }
       } else if (scope === "all_project") {
         await get().refreshAppSettings();
       }
     } catch (e) {
-      set((state) => ({
-        pendingApproval: pending,
-        pendingApprovalQueue: next
-          ? [next, ...state.pendingApprovalQueue]
-          : state.pendingApprovalQueue,
-      }));
+      set((state) => {
+        const live = state.sessionStreams[sessionId];
+        if (!live) return state;
+        const restored: SessionStream = {
+          ...live,
+          pendingApproval: pending,
+          pendingApprovalQueue: live.pendingApproval
+            ? [live.pendingApproval, ...live.pendingApprovalQueue]
+            : live.pendingApprovalQueue,
+        };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
+          ...(isForeground ? mirrorFromSlot(restored) : {}),
+        };
+      });
       throw e;
     }
   },
