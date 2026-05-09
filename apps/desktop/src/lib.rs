@@ -239,15 +239,39 @@ fn switch_provider_model(
 ) -> AppResult<Session> {
     let dd = data_dir(&app)?;
     let cur = sessions::load(&dd, &id)?;
-    let from_provider = providers::get(&dd, &cur.provider_id)
-        .map(|p| p.name)
-        .unwrap_or_else(|_| cur.provider_id.clone());
-    let to_provider = providers::get(&dd, &new_provider_id)
-        .map(|p| p.name)
-        .unwrap_or_else(|_| new_provider_id.clone());
+    let cur_provider = providers::get(&dd, &cur.provider_id).ok();
+    let new_provider = providers::get(&dd, &new_provider_id).ok();
+    let from_provider = cur_provider
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| cur.provider_id.clone());
+    let to_provider = new_provider
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| new_provider_id.clone());
 
     if cur.provider_id == new_provider_id && cur.model == new_model {
         return Ok(cur);
+    }
+
+    // 锁定模型系列：一旦会话开始有真实对话，就不允许 DeepSeek 与其他系列互切
+    // （DeepSeek web 协议的 prompt / tool_call / thinking 编码与 OpenAI/Anthropic
+    // 完全不同，跨系列重放历史会让模型脑补伪角色头）。新会话（还没产生任何
+    // user/assistant 消息）不受限。
+    let has_real_turn = cur
+        .messages
+        .iter()
+        .any(|m| matches!(m.role, sessions::Role::User | sessions::Role::Assistant));
+    if has_real_turn {
+        if let (Some(c), Some(n)) = (cur_provider.as_ref(), new_provider.as_ref()) {
+            let cur_is_ds = matches!(c.kind, providers::ProviderKind::Deepseek);
+            let new_is_ds = matches!(n.kind, providers::ProviderKind::Deepseek);
+            if cur_is_ds != new_is_ds {
+                return Err(AppError::msg(
+                    "本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。",
+                ));
+            }
+        }
     }
 
     let meta = MessageMeta::Switch {

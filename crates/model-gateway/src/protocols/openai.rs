@@ -102,7 +102,66 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
         }
     }
 
+    apply_deepseek_compat(&mut body, req);
+
     body
+}
+
+// ── DeepSeek (api.deepseek.com/beta) OpenAI-compat patch ──────────────────────
+//
+// DeepSeek 的 thinking-aware 模型在 chat completions 里有自己的协议方言（与
+// openhanako provider-compat/deepseek.js 一致）：
+//   - `thinking: { type: "enabled" | "disabled" }` 显式开关
+//   - `reasoning_effort` 命名空间只有 `high` / `max`（其它档位钳到 high）
+//   - 思考模式下 `max_tokens` 至少 32768，否则 server 直接拒；effort=max 抬到
+//     131072，effort=high 抬到 65536（够长输出 + 留出推理预算）
+//
+// `deepseek-v4-*-nothinking` / `-search` / `-vision` 等不参与思考的模型保持原样。
+const DEEPSEEK_HIGH_THINKING_BUDGET: u32 = 32_768;
+const DEEPSEEK_HIGH_SAFE_MAX_TOKENS: u32 = 65_536;
+const DEEPSEEK_MAX_SAFE_MAX_TOKENS: u32 = 131_072;
+
+fn is_deepseek_thinking_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    if m.contains("nothinking") {
+        return false;
+    }
+    m.starts_with("deepseek-v4") || m == "deepseek-reasoner"
+}
+
+fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) {
+    if !is_deepseek_thinking_model(&req.model) {
+        return;
+    }
+    let Some(map) = body.as_object_mut() else {
+        return;
+    };
+    let enabled = req.reasoning.as_ref().is_some_and(|c| c.is_enabled());
+    if !enabled {
+        map.insert("thinking".into(), json!({ "type": "disabled" }));
+        map.remove("reasoning_effort");
+        return;
+    }
+    let effort = req
+        .reasoning
+        .as_ref()
+        .map(|c| c.effective_effort().deepseek_effort())
+        .unwrap_or("high");
+    let desired = if effort == "max" {
+        DEEPSEEK_MAX_SAFE_MAX_TOKENS
+    } else {
+        DEEPSEEK_HIGH_SAFE_MAX_TOKENS
+    };
+    map.insert("reasoning_effort".into(), json!(effort));
+    map.insert("thinking".into(), json!({ "type": "enabled" }));
+    // 用户显式给了 ≥ 32768 的预算就尊重；否则按 effort 抬到 65536 / 131072
+    // 让思考模式有足够输出空间，避免 server 因 max_tokens < thinking 预算直接 400。
+    let target = if req.max_tokens > DEEPSEEK_HIGH_THINKING_BUDGET {
+        req.max_tokens
+    } else {
+        desired
+    };
+    map.insert("max_tokens".into(), json!(target));
 }
 
 pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool) -> Value {
@@ -1202,5 +1261,120 @@ mod responses_tests {
             }
             other => panic!("expected Done response, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod deepseek_compat_tests {
+    use super::*;
+    use crate::types::{TranscriptEntry, UserEntry};
+    use platform::reasoning::{ReasoningConfig, ReasoningEffort};
+
+    fn req_for(model: &str, reasoning: Option<ReasoningConfig>, max_tokens: u32) -> ModelRequest {
+        ModelRequest {
+            model: model.into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens,
+            reasoning,
+        }
+    }
+
+    #[test]
+    fn deepseek_v4_pro_extra_effort_goes_to_max_with_131072_budget() {
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+        assert_eq!(body["reasoning_effort"], "max");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["max_tokens"], 131_072);
+    }
+
+    #[test]
+    fn deepseek_v4_high_effort_uses_high_with_65536_budget() {
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::High),
+            long_context: None,
+        };
+        let body = build_body(&req_for("deepseek-v4-flash", Some(cfg), 8192), false);
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["max_tokens"], 65_536);
+    }
+
+    #[test]
+    fn deepseek_v4_low_medium_clamp_to_high() {
+        for level in [ReasoningEffort::Low, ReasoningEffort::Medium] {
+            let cfg = ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(level),
+                long_context: None,
+            };
+            let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+            assert_eq!(body["reasoning_effort"], "high", "effort={level:?}");
+        }
+    }
+
+    #[test]
+    fn deepseek_thinking_preserves_user_max_tokens_above_threshold() {
+        // 调用方已经给了 ≥ 32768 的 max_tokens，就不再被 patch 抬升（用户显式指定优先）。
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 100_000), false);
+        assert_eq!(body["max_tokens"], 100_000);
+    }
+
+    #[test]
+    fn deepseek_nothinking_model_skipped_entirely() {
+        // -nothinking 后缀的模型不要被 patch，否则 server 会拒掉 thinking 字段。
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let body = build_body(
+            &req_for("deepseek-v4-pro-nothinking", Some(cfg), 8192),
+            false,
+        );
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn deepseek_thinking_disabled_emits_explicit_off() {
+        // 用户显式关思考时，要发 thinking.disabled 而不是省略字段
+        // （openhanako 行为：让 server 知道是显式关，避免被默认拉起 thinking）。
+        let cfg = ReasoningConfig {
+            enabled: Some(false),
+            effort: None,
+            long_context: None,
+        };
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn non_deepseek_models_untouched() {
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let body = build_body(&req_for("gpt-5.4", Some(cfg.clone()), 8192), false);
+        assert!(body.get("thinking").is_none());
+        // gpt-5.4 走的是 openai 自己的 reasoning_effort 注入路径
+        assert_eq!(body["reasoning_effort"], "xhigh");
+
+        let body = build_body(&req_for("claude-4.7-opus", Some(cfg), 8192), false);
+        assert!(body.get("thinking").is_none());
     }
 }

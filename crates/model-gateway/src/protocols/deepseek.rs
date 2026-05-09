@@ -118,21 +118,28 @@ pub fn build_prompt(req: &ModelRequest, tools: &[ToolDefinition]) -> String {
                 out.push_str("\n\n");
             }
             TranscriptEntry::ToolResults(results) => {
+                // chat.deepseek.com 模型只在 ### User / Assistant / System
+                // 这三种角色头上训练过；曾经用过的 ### Tool Result 是新角色头，
+                // 模型会把它当成"脚本继续模拟"——开始伪造 ### Tool Result /
+                // ### Assistant / ### Tool Output 等头部续写整段历史，导致后续
+                // tool_call 永远生成不到 <tool_calls> wrapper 里。
+                // 把 tool_result 全部包进一段 ### User 里规避。
+                out.push_str("### User\n");
                 for ToolResult {
                     call_id,
                     name,
                     content,
                 } in results
                 {
-                    out.push_str("### Tool Result\n");
                     out.push_str(&format!(
                         "<tool_result tool=\"{}\" call_id=\"{}\">\n",
                         xml_escape_attr(name),
                         xml_escape_attr(call_id),
                     ));
                     out.push_str(content);
-                    out.push_str("\n</tool_result>\n\n");
+                    out.push_str("\n</tool_result>\n");
                 }
+                out.push('\n');
             }
         }
     }
@@ -682,47 +689,30 @@ struct Range {
     end: usize,
 }
 
+/// 匹配 reasoning 段的闭合标签。模型有时会写成 `</think>` / `</thinking>` /
+/// `</thought>` / `</think_block>` 等变体——我们都当成有效闭合，否则状态机
+/// 会卡在 thinking，后续的 assistant 正文（含 `<tool_calls>` wrapper）会被错
+/// 当成 reasoning 渲染、且永远进不到 tool_call 解析。
+///
+/// 匹配规则：`</think` 开头（大小写不敏感），后面跟 ≤16 字节的任意内容，
+/// 直到第一个 `>`。16 字节足够覆盖常见变体且不会把后文整段吞掉。
 fn find_close_think(s: &str) -> Option<Range> {
+    const TAG_PREFIX: &str = "</think";
+    const MAX_TAIL: usize = 16;
     let lower = s.to_lowercase();
-    let needle = "</think>";
-    if let Some(pos) = lower.find(needle) {
-        return Some(Range {
-            start: pos,
-            end: pos + needle.len(),
-        });
-    }
-    // 容错 `< / think >` 形式
-    let mut i = 0;
-    while let Some(lt) = lower[i..].find('<') {
-        let lt = i + lt;
-        let rest = &lower[lt..];
-        let j = 1;
-        if rest[j..].trim_start().starts_with('/') {
-            // skip whitespace
-            let after_lt = &rest[1..];
-            let after_lt_trim_start = after_lt.trim_start_matches(' ');
-            if let Some(slash_off) = after_lt_trim_start.strip_prefix('/') {
-                let body = slash_off.trim_start_matches(' ');
-                if body.starts_with("think") {
-                    let after_kw = &body["think".len()..];
-                    if let Some(gt_off) = after_kw.find('>') {
-                        let total_len = (after_lt_trim_start.len() - body.len())
-                            + 1 // '/'
-                            + (slash_off.len() - body.len()) // ' '
-                            + "think".len()
-                            + gt_off
-                            + 1; // '>'
-                        // 这个分支基本只为兜底，简化处理：直接用 ASCII 长度近似。
-                        let end = lt + 1 + (after_lt.len() - after_lt_trim_start.len()) + total_len;
-                        if end <= s.len() {
-                            return Some(Range { start: lt, end });
-                        }
-                    }
-                }
-            }
-            let _ = j;
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find(TAG_PREFIX) {
+        let start = search_from + rel;
+        let after = start + TAG_PREFIX.len();
+        let tail = &s[after..];
+        let limit = tail.len().min(MAX_TAIL);
+        if let Some(gt) = tail[..limit].find('>') {
+            return Some(Range {
+                start,
+                end: after + gt + 1,
+            });
         }
-        i = lt + 1;
+        search_from = start + TAG_PREFIX.len();
     }
     None
 }
@@ -772,6 +762,26 @@ const OPEN_MARKERS: &[&str] = &["<tool_calls>", "<|DSML|tool_calls>"];
 const CLOSE_MARKERS: &[&str] = &["</tool_calls>", "</|DSML|tool_calls>"];
 /// 最长 open marker 长度 + 余量，作为 streaming 时的 hold 窗口。
 const HOLD_WINDOW: usize = 24;
+
+/// 模型自爆时常见的伪角色头——遇到任何一个就当本轮结束，截断 stream。
+/// 这些是 prompt 模板用过 / 模型容易脑补出来的形态：`### User` / `### Assistant`
+/// 是 prompt 的真实角色；`### Tool Result` / `### Tool Output` 是模型在续写
+/// "对话脚本"时常见的捏造。
+const FAKE_ROLE_HEADERS: &[&str] = &[
+    "\n### User",
+    "\n### Assistant",
+    "\n### System",
+    "\n### Tool",
+];
+
+/// 在 `text` 里找最早的伪角色头位置，返回应该保留的字节数。
+/// 没找到时返回 `None`。
+pub(crate) fn find_fake_role_header_cut(text: &str) -> Option<usize> {
+    FAKE_ROLE_HEADERS
+        .iter()
+        .filter_map(|m| text.find(m))
+        .min()
+}
 
 impl ToolCallSieve {
     pub fn new() -> Self {
@@ -946,6 +956,42 @@ fn find_after(s: &str, needle: &str, from: usize) -> Option<usize> {
     s[from..].find(needle).map(|i| from + i)
 }
 
+/// 在 `body[start..]` 内按深度找与已打开标签匹配的闭合位置（绝对 index）。
+/// 调用方已经消费了一个 open，所以初始 depth = 1；CDATA 内文本会被跳过，避免误匹配。
+fn find_matching_close(
+    body: &str,
+    start: usize,
+    open_tag: &str,
+    close_tag: &str,
+) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut i = start;
+    while i < body.len() {
+        let next_cdata = find_after(body, "<![CDATA[", i);
+        let next_open = find_after(body, open_tag, i);
+        let next_close = find_after(body, close_tag, i);
+        let min = [next_cdata, next_open, next_close]
+            .iter()
+            .filter_map(|x| *x)
+            .min()?;
+        if Some(min) == next_cdata {
+            let body_start = min + "<![CDATA[".len();
+            let end = find_after(body, "]]>", body_start)?;
+            i = end + "]]>".len();
+        } else if Some(min) == next_open {
+            depth += 1;
+            i = min + open_tag.len();
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                return Some(min);
+            }
+            i = min + close_tag.len();
+        }
+    }
+    None
+}
+
 fn parse_invoke_params(body: &str) -> Value {
     let mut obj = serde_json::Map::new();
     let mut i = 0usize;
@@ -974,13 +1020,15 @@ fn parse_invoke_params(body: &str) -> Value {
             + 1
             + open_close
             + 1;
-        let Some(close_rel) = body[abs_value_start..].find("</parameter>") else {
+        // 关键：模型在 array<object> 时常会嵌套 <parameter name="...">，必须按深度找匹配 </parameter>
+        let Some(close_abs) = find_matching_close(body, abs_value_start, "<parameter", "</parameter>")
+        else {
             break;
         };
-        let value_str = &body[abs_value_start..abs_value_start + close_rel];
+        let value_str = &body[abs_value_start..close_abs];
         let value = parse_param_value(value_str);
         obj.insert(key, value);
-        i = abs_value_start + close_rel + "</parameter>".len();
+        i = close_abs + "</parameter>".len();
     }
     Value::Object(obj)
 }
@@ -991,21 +1039,35 @@ fn parse_param_value(raw: &str) -> Value {
     if let Some(inner) = strip_cdata(trimmed) {
         return Value::String(inner);
     }
-    // 多个 <item>... </item> → array
-    if trimmed.starts_with("<item>") {
+    // 多个 <item>... </item> → array（兼容 <item attr="..."> 写法）
+    if trimmed.starts_with("<item>") || trimmed.starts_with("<item ") {
         let mut items = Vec::new();
         let mut idx = 0;
-        while let Some(start) = find_after(trimmed, "<item>", idx) {
-            let body_start = start + "<item>".len();
-            let Some(end_rel) = trimmed[body_start..].find("</item>") else {
+        while let Some(start) = find_after(trimmed, "<item", idx) {
+            // 容忍 <item> 上的属性：跳到首个 '>' 作为 open 标签结束
+            let Some(open_end_rel) = trimmed[start..].find('>') else {
                 break;
             };
-            let inner = &trimmed[body_start..body_start + end_rel];
+            let body_start = start + open_end_rel + 1;
+            let Some(close_abs) =
+                find_matching_close(trimmed, body_start, "<item", "</item>")
+            else {
+                break;
+            };
+            let inner = &trimmed[body_start..close_abs];
             items.push(parse_param_value(inner));
-            idx = body_start + end_rel + "</item>".len();
+            idx = close_abs + "</item>".len();
         }
         if !items.is_empty() {
             return Value::Array(items);
+        }
+    }
+    // 模型也常用 <parameter name="..."> 写嵌套对象（与外层一致），优先按 invoke 参数风格解析
+    if trimmed.contains("<parameter") {
+        if let Value::Object(map) = parse_invoke_params(trimmed) {
+            if !map.is_empty() {
+                return Value::Object(map);
+            }
         }
     }
     // 嵌套对象 <field>...</field>
@@ -1334,5 +1396,145 @@ mod tests {
         assert_eq!(model_type_for("deepseek-v4-flash"), "default");
         assert_eq!(model_type_for("deepseek-v4-pro"), "expert");
         assert_eq!(model_type_for("deepseek-v4-vision"), "vision");
+    }
+
+    /// 真实复现：ask 工具 options 是 array<object>，模型按外层一致风格在 <item> 里继续
+    /// 写 <parameter name="label">...</parameter>。早期 parser 用 `find("</parameter>")`
+    /// 找闭合，会被内层 label 的 </parameter> 截断 → options 退化成 String → 反序列化失败。
+    #[test]
+    fn extract_ask_tool_with_nested_array_of_objects() {
+        let s = r#"<tool_calls>
+  <invoke name="ask">
+    <parameter name="question"><![CDATA[你想做什么？]]></parameter>
+    <parameter name="options" type="array">
+      <item>
+        <parameter name="label" type="string"><![CDATA[选项 A]]></parameter>
+        <parameter name="description" type="string"><![CDATA[A 的说明]]></parameter>
+      </item>
+      <item>
+        <parameter name="label" type="string"><![CDATA[选项 B]]></parameter>
+        <parameter name="description" type="string"><![CDATA[某个已有应用或网站，我想找回之前的生成版本]]></parameter>
+      </item>
+    </parameter>
+    <parameter name="multi">false</parameter>
+  </invoke>
+</tool_calls>"#;
+        let (_rest, calls) = extract_tool_calls(s);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "ask");
+        assert_eq!(calls[0].input["question"], "你想做什么？");
+        assert_eq!(calls[0].input["multi"], false);
+        let options = calls[0].input["options"]
+            .as_array()
+            .expect("options should be array");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["label"], "选项 A");
+        assert_eq!(options[0]["description"], "A 的说明");
+        assert_eq!(options[1]["label"], "选项 B");
+        assert_eq!(
+            options[1]["description"],
+            "某个已有应用或网站，我想找回之前的生成版本"
+        );
+    }
+
+    /// 兼容路径：模型若用「tag-as-key」风格写嵌套对象（<label>...</label>），仍能解析。
+    #[test]
+    fn extract_ask_tool_with_tag_as_key_objects() {
+        let s = r#"<tool_calls>
+  <invoke name="ask">
+    <parameter name="question"><![CDATA[Q]]></parameter>
+    <parameter name="options">
+      <item><label><![CDATA[A]]></label><description><![CDATA[da]]></description></item>
+      <item><label><![CDATA[B]]></label><description><![CDATA[db]]></description></item>
+    </parameter>
+  </invoke>
+</tool_calls>"#;
+        let (_rest, calls) = extract_tool_calls(s);
+        assert_eq!(calls.len(), 1);
+        let options = calls[0].input["options"].as_array().unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0]["label"], "A");
+        assert_eq!(options[1]["description"], "db");
+    }
+
+    #[test]
+    fn tool_results_render_under_user_role_header() {
+        // 防回归：tool_results 一定要包在 ### User 段里，绝不能再用 ### Tool Result。
+        // 之前用 ### Tool Result 会让 deepseek 模型在第二轮开始伪造对话脚本，
+        // 后续 tool_call 永远进不到 <tool_calls> wrapper 里。
+        use crate::types::{
+            AssistantEntry, ModelRequest, ToolCall, ToolResult, TranscriptEntry, UserEntry,
+        };
+        let req = ModelRequest {
+            system: Some("sys".into()),
+            entries: vec![
+                TranscriptEntry::User(UserEntry {
+                    text: "查一下".into(),
+                    attachments: Vec::new(),
+                }),
+                TranscriptEntry::Assistant(AssistantEntry {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    tool_calls: vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "Bash".into(),
+                        input: serde_json::json!({"command": "ls"}),
+                    }],
+                }),
+                TranscriptEntry::ToolResults(vec![ToolResult {
+                    call_id: "call_1".into(),
+                    name: "Bash".into(),
+                    content: "a.txt\nb.txt".into(),
+                }]),
+            ],
+            tools: Vec::new(),
+            model: "deepseek-v4".into(),
+            max_tokens: 1024,
+            reasoning: None,
+        };
+        let prompt = build_prompt(&req, &[]);
+        assert!(
+            !prompt.contains("### Tool Result"),
+            "tool_result 必须包在 ### User 里，不能再造 ### Tool Result 角色头\n实际:\n{prompt}",
+        );
+        assert!(prompt.contains("### User\n<tool_result"));
+    }
+
+    #[test]
+    fn close_think_tolerates_common_misspellings() {
+        // 模型常见把闭合写成 </thinking> / </thought> / </think_block>，
+        // 都应当被识别为 reasoning 段闭合，否则后续正文会被错渲染成「思考过程」。
+        for (s, expected_after) in [
+            ("abc</think>def", "def"),
+            ("abc</thinking>def", "def"),
+            ("abc</think_block>def", "def"),
+            ("abc</Think>def", "def"),
+            ("abc</think >def", "def"),
+        ] {
+            let r = find_close_think(s).unwrap_or_else(|| panic!("未识别: {s}"));
+            assert_eq!(&s[r.end..], expected_after, "case: {s}");
+        }
+        assert!(find_close_think("没有闭合标签").is_none());
+        // 不要把整段后续吞掉：tag 内文超过 MAX_TAIL 字节就不当作闭合
+        assert!(find_close_think("abc</think 我要写一段超长的描述继续等等等等等等>def").is_none());
+    }
+
+    #[test]
+    fn fake_role_header_cut_detects_common_hallucinations() {
+        // 模型自爆开始续写对话脚本时常见的几种伪角色头都要能命中。
+        let cases = [
+            "正文\n### User\n伪造的下一轮",
+            "正文\n### Assistant\n伪造续写",
+            "正文\n### Tool Result\nfake",
+            "正文\n### Tool Output\nfake",
+            "正文\n### System\nfake",
+        ];
+        for s in cases {
+            let cut = find_fake_role_header_cut(s).expect(s);
+            assert_eq!(&s[..cut], "正文", "{s}");
+        }
+        assert!(find_fake_role_header_cut("没有伪头部，只是普通正文").is_none());
+        // 不要误伤句中提到的 "### " —— 必须以 \n 起始
+        assert!(find_fake_role_header_cut("行内提到 ### User 不是新行").is_none());
     }
 }

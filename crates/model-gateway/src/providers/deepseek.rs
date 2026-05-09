@@ -196,10 +196,22 @@ impl ModelClient for DeepseekClient {
                     eprintln!("[deepseek::sse] {data}");
                 }
                 if let Some(parsed) = proto::parse_sse_line(data, thinking_enabled, &mut state) {
+                    let mut role_header_truncated = false;
                     for part in parsed.parts {
                         match part {
                             proto::DeepseekChunkPart::Text(s) => {
                                 full.push_str(&s);
+                                // 模型一旦开始伪造 "### User" / "### Assistant" /
+                                // "### System" / "### Tool" 这类角色头（实测会在工具
+                                // 链多轮里"续写整段对话脚本"），把 full 截到该位置、
+                                // 丢掉 sieve pending 并停流，再走正常 finalize → 解析。
+                                if let Some(cut) = proto::find_fake_role_header_cut(&full) {
+                                    full.truncate(cut);
+                                    let _ = sieve.finalize();
+                                    finished = true;
+                                    role_header_truncated = true;
+                                    break;
+                                }
                                 let safe = sieve.push(&s);
                                 if !safe.is_empty() {
                                     on_event(ModelStreamEvent::TextDelta { text: safe });
@@ -213,6 +225,9 @@ impl ModelClient for DeepseekClient {
                     }
                     if parsed.finished {
                         finished = true;
+                    }
+                    if role_header_truncated {
+                        break;
                     }
                 }
             }
