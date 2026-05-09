@@ -40,9 +40,23 @@ export function SessionSettingsDialog() {
 
   // workspace 覆盖：null = 用全局默认；undefined = 字段被首次打开时还没初始化
   const [workdir, setWorkdir] = useState<string | null>(null);
+  // allowedDirs 是给 DirListField 的"扁平视图"——initial(可改) + 已宣告 runtime + 待宣告 pending
+  // 都合到一个数组里，对话已开始时整个列表被 lockedDirs 标记成只读，仅"添加"按钮可用。
   const [allowedDirs, setAllowedDirs] = useState<string[] | null>(null);
   const [skillDirs, setSkillDirs] = useState<string[] | null>(null);
   const [enabledTools, setEnabledTools] = useState<string[] | null>(null);
+
+  // 对话是否已经发出过 user message——只有非空才需要锁定 / 走 pending 通道。
+  const conversationStarted = !!currentSession?.messages?.some(
+    (m) => m.role === "user"
+  );
+
+  // 对话已开始时，session.allowed_dirs（initial）+ runtime_allowed_dirs + pending 全部锁定，
+  // 用户只能通过点 "+" 追加（保存时后端把新增项落到 pending_runtime_allowed_dirs）。
+  const sessionRuntimeDirs = [
+    ...(currentSession?.runtime_allowed_dirs ?? []),
+    ...(currentSession?.pending_runtime_allowed_dirs ?? []),
+  ];
 
   useEffect(() => {
     if (settingsOpen && currentSession) {
@@ -52,7 +66,17 @@ export function SessionSettingsDialog() {
       setPromptId(currentSession.prompt_id ?? "");
       setStream(currentSession.stream);
       setWorkdir(currentSession.workdir ?? null);
-      setAllowedDirs(currentSession.allowed_dirs ?? null);
+      // 把 initial / announced / pending 拼成扁平视图供 DirListField 渲染
+      const initial = currentSession.allowed_dirs ?? null;
+      const runtimeDirs = [
+        ...(currentSession.runtime_allowed_dirs ?? []),
+        ...(currentSession.pending_runtime_allowed_dirs ?? []),
+      ];
+      if (initial === null && runtimeDirs.length === 0) {
+        setAllowedDirs(null);
+      } else {
+        setAllowedDirs([...(initial ?? []), ...runtimeDirs]);
+      }
       setSkillDirs(currentSession.skill_dirs ?? null);
       setEnabledTools(currentSession.enabled_tools ?? null);
       // 拉一次全局 settings 用作 placeholder
@@ -273,8 +297,23 @@ export function SessionSettingsDialog() {
             dirs={allowedDirs ?? []}
             inheritedDirs={allowedDirs === null ? inheritedAllowedDirs : undefined}
             onChange={(dirs) => setAllowedDirs(dirs)}
+            lockedDirs={
+              // 对话已开始：当前 session 持久化里已知的目录全部 locked。
+              // 用户在 UI 里新加的（还在 state 里、还没保存）不在 locked 里，可删。
+              conversationStarted
+                ? [
+                    ...(currentSession.allowed_dirs ?? []),
+                    ...sessionRuntimeDirs,
+                  ]
+                : undefined
+            }
+            lockedHint={
+              conversationStarted
+                ? "对话已开始，已生效的目录不能再移除；新追加项会在下一条消息发送时通过 <workspace-update> 通知模型，不会改 system prompt。"
+                : undefined
+            }
             trailing={
-              allowedDirs !== null && (
+              !conversationStarted && allowedDirs !== null && (
                 <button
                   type="button"
                   onClick={() => setAllowedDirs(null)}

@@ -5,6 +5,7 @@
 //!
 //! [`RunParams`]: crate::harness::RunParams
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -85,8 +86,15 @@ impl Session {
         self.recorder.as_ref()
     }
 
+    /// 追加一条 user 消息到 transcript。
+    ///
+    /// 如果 workspace 有"运行时新增、还没通知模型"的允许目录（`runtime_pending`），
+    /// 这里会把它们 drain 出来，包成 `<workspace-update>` 段拼到 user content 头部，
+    /// 让模型知道访问范围扩大了——同时保持 system prompt 字节恒定，prompt cache 不破。
     pub fn append_user(&mut self, text: String, attachments: Vec<MessageAttachment>) {
-        self.transcript.push_user(text, attachments);
+        let pending = self.workspace.take_pending_announcement();
+        let final_text = prepend_workspace_update(text, &pending);
+        self.transcript.push_user(final_text, attachments);
     }
 
     /// run 结束 Done 后调用，把最终 assistant 文本与 tool_calls 落入 transcript。
@@ -170,5 +178,42 @@ impl Session {
                 recorder: self.recorder.clone(),
             },
         )
+    }
+}
+
+/// 把"对话开始后追加的允许目录"包成 `<workspace-update>` 前置到 user content。
+/// `pending` 为空时原样返回 `text`，避免无谓改写消息内容。
+fn prepend_workspace_update(text: String, pending: &[PathBuf]) -> String {
+    if pending.is_empty() {
+        return text;
+    }
+    let mut s = String::from("<workspace-update>\n");
+    s.push_str("以下目录已被加入本次对话的允许访问范围（运行时追加）：\n");
+    for p in pending {
+        s.push_str(&format!("  - {}\n", p.display()));
+    }
+    s.push_str("</workspace-update>\n\n");
+    s.push_str(&text);
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepend_workspace_update_noop_when_empty() {
+        let out = prepend_workspace_update("hi".into(), &[]);
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn prepend_workspace_update_lists_each_path() {
+        let pending = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let out = prepend_workspace_update("hi".into(), &pending);
+        assert!(out.starts_with("<workspace-update>"));
+        assert!(out.contains("- /a"));
+        assert!(out.contains("- /b"));
+        assert!(out.ends_with("hi"));
     }
 }

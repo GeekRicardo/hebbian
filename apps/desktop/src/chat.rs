@@ -124,11 +124,19 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .or_else(|| settings.conversation.workdir.clone())
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    let allowed_dirs = session
+    // initial = session 起始时锁定的允许目录（首条 user message 之前可改的部分），
+    // 缺省时回退到全局默认；runtime_announced 是已经通知模型的运行时追加；
+    // runtime_pending 是这次 send_message 时要在 user message 头部补充宣告的部分。
+    let initial_allowed_dirs = session
         .allowed_dirs
         .clone()
         .unwrap_or_else(|| settings.conversation.allowed_dirs.clone());
-    let workspace = Workspace::new(workdir.clone(), allowed_dirs);
+    let workspace = Workspace::with_runtime_state(
+        workdir.clone(),
+        initial_allowed_dirs,
+        session.runtime_allowed_dirs.clone(),
+        session.pending_runtime_allowed_dirs.clone(),
+    );
 
     let configured_skill_dirs = session
         .skill_dirs
@@ -160,7 +168,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         harness,
         SessionConfig {
             definition,
-            workspace,
+            workspace: workspace.clone(),
             client,
             enabled_tools: effective_enabled_tools,
             initial_transcript: Transcript::from_session(
@@ -196,6 +204,11 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             },
         );
     }
+
+    // 把 workspace 运行时状态（已宣告 + 仍 pending）写回 session.json。
+    // - append_user 已经把上一轮的 pending drain 进 announced，下一轮也能恢复
+    // - 本轮 AllowAndRemember 审批新增的目录此时仍在 pending，下一条 user message 会通知模型
+    persist_workspace_runtime_dirs(data_dir, &args.session_id, &workspace);
 
     let DesktopObserver {
         mut parts,
@@ -711,6 +724,23 @@ fn empty_tool_call() -> MessageToolCall {
 pub struct ContextUsageDto {
     pub used_tokens: usize,
     pub budget_tokens: usize,
+}
+
+/// 把 workspace 运行时状态写回 session.json。
+/// `runtime_announced` = 已通知模型的运行时追加目录；`runtime_pending` = 还没通知的，
+/// 下次 send_message 时再次构造的 workspace 会带着它们继续 drain 注入。
+/// 失败不传染：仅尽力持久化，session 文件不可读时直接放弃。
+fn persist_workspace_runtime_dirs(
+    data_dir: &Path,
+    session_id: &str,
+    workspace: &agent_core::workspace::Workspace,
+) {
+    let Ok(mut session) = sessions::load(data_dir, session_id) else {
+        return;
+    };
+    session.runtime_allowed_dirs = workspace.runtime_announced_snapshot();
+    session.pending_runtime_allowed_dirs = workspace.runtime_pending_snapshot();
+    let _ = sessions::save(data_dir, session);
 }
 
 /// 把这一轮 run 的 token delta 累加进 session.json 的 token_stats 字段。

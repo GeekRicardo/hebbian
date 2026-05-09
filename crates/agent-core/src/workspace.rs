@@ -1,35 +1,72 @@
 //! Workspace：单次对话的文件访问边界。
 //!
-//! 每个对话有独立的 workspace（默认 `~/`），用户可以在对话设置里追加
-//! `allowed_dirs`。Bash / Read / Write / Grep 的所有文件路径都必须落在
-//! `workdir ∪ allowed_dirs` 任一目录的子树内；越界路径由 agent_loop 走
-//! `PermissionGate` 走审批流程，用户可选择「允许一次」或「允许并加入 allowed_dirs」。
+//! 每个对话有独立的 workspace（默认 `~/`）。允许目录分三层：
 //!
-//! 内部用 `RwLock` 包 allowed_dirs，所以审批通过后可以**运行时**追加目录，
-//! 同一 run 后续工具调用立即生效。
+//! - **initial**：对话起始时锁定的快照。**只有这一层会进 system prompt 的
+//!   `<workspace>` XML**——保持每轮 system 段字节恒定，避免破坏 prompt cache。
+//! - **runtime_announced**：对话开始之后追加的目录，且已经通过上一条 user message
+//!   的 `<workspace-update>` 通知过模型。仅用于 `allows()` 判定。
+//! - **runtime_pending**：刚追加、还没通知模型的目录。下一次 [`take_pending_announcement`]
+//!   会把它们 drain 出来供上层注入到下条 user message，然后移入 announced。
+//!
+//! 任何运行时新增（用户在对话设置里追加 / `AllowAndRemember` 审批通过）都先进
+//! pending，**不会**改 system prompt，从而保持 prompt prefix 缓存命中。
+//!
+//! [`take_pending_announcement`]: Workspace::take_pending_announcement
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug)]
 pub struct Workspace {
     workdir: PathBuf,
-    allowed_dirs: RwLock<Vec<PathBuf>>,
+    /// 对话起始时确定，整个生命周期不变。进 system XML。
+    initial_allowed_dirs: Vec<PathBuf>,
+    /// 已通知模型的运行时追加目录。仅 `allows()` 使用。
+    runtime_announced: RwLock<Vec<PathBuf>>,
+    /// 还没通知模型的运行时追加目录。下次 user message 注入。
+    runtime_pending: Mutex<Vec<PathBuf>>,
 }
 
 impl Workspace {
-    /// 默认 workspace：`~/`，无额外允许目录
+    /// 默认 workspace：`~/`，无额外允许目录。
     pub fn home_default() -> Arc<Self> {
-        Arc::new(Self {
-            workdir: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
-            allowed_dirs: RwLock::new(Vec::new()),
-        })
+        Self::with_runtime_state(
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
-    pub fn new(workdir: impl Into<PathBuf>, allowed_dirs: Vec<PathBuf>) -> Arc<Self> {
+    /// 全新会话使用：只给 initial。
+    pub fn new(workdir: impl Into<PathBuf>, initial_allowed_dirs: Vec<PathBuf>) -> Arc<Self> {
+        Self::with_runtime_state(workdir, initial_allowed_dirs, Vec::new(), Vec::new())
+    }
+
+    /// 从持久化恢复：把上次落盘的 announced + pending 一并塞回来。
+    /// 三个集合之间相互去重——pending 中已存在于 initial / announced 的项会被剔除，
+    /// announced 中已存在于 initial 的项也会被剔除，避免重复通知 / 重复 allows() 检查。
+    pub fn with_runtime_state(
+        workdir: impl Into<PathBuf>,
+        initial_allowed_dirs: Vec<PathBuf>,
+        runtime_announced: Vec<PathBuf>,
+        runtime_pending: Vec<PathBuf>,
+    ) -> Arc<Self> {
+        let initial = dedup(initial_allowed_dirs);
+        let announced: Vec<PathBuf> = dedup(runtime_announced)
+            .into_iter()
+            .filter(|p| !initial.contains(p))
+            .collect();
+        let pending: Vec<PathBuf> = dedup(runtime_pending)
+            .into_iter()
+            .filter(|p| !initial.contains(p) && !announced.contains(p))
+            .collect();
         Arc::new(Self {
             workdir: workdir.into(),
-            allowed_dirs: RwLock::new(allowed_dirs),
+            initial_allowed_dirs: initial,
+            runtime_announced: RwLock::new(announced),
+            runtime_pending: Mutex::new(pending),
         })
     }
 
@@ -37,30 +74,90 @@ impl Workspace {
         &self.workdir
     }
 
-    pub fn allowed_dirs_snapshot(&self) -> Vec<PathBuf> {
-        self.allowed_dirs.read().unwrap().clone()
+    pub fn initial_allowed_dirs(&self) -> &[PathBuf] {
+        &self.initial_allowed_dirs
     }
 
-    /// 运行时扩展允许目录（用户审批 AllowAndRemember 时调用）
+    pub fn runtime_announced_snapshot(&self) -> Vec<PathBuf> {
+        self.runtime_announced.read().unwrap().clone()
+    }
+
+    pub fn runtime_pending_snapshot(&self) -> Vec<PathBuf> {
+        self.runtime_pending.lock().unwrap().clone()
+    }
+
+    /// initial + announced + pending 合并去重，UI / 描述用。
+    pub fn allowed_dirs_snapshot(&self) -> Vec<PathBuf> {
+        let mut out = self.initial_allowed_dirs.clone();
+        for p in self.runtime_announced.read().unwrap().iter() {
+            if !out.contains(p) {
+                out.push(p.clone());
+            }
+        }
+        for p in self.runtime_pending.lock().unwrap().iter() {
+            if !out.contains(p) {
+                out.push(p.clone());
+            }
+        }
+        out
+    }
+
+    /// 运行时扩展允许目录：已存在则跳过，否则进 pending（下次 user message 通知模型）。
     pub fn add_allowed_dir(&self, path: impl Into<PathBuf>) {
         let path = path.into();
-        let mut dirs = self.allowed_dirs.write().unwrap();
-        if !dirs.iter().any(|d| d == &path) {
-            dirs.push(path);
+        if self.initial_allowed_dirs.iter().any(|d| d == &path) {
+            return;
+        }
+        if self.runtime_announced.read().unwrap().iter().any(|d| d == &path) {
+            return;
+        }
+        let mut pending = self.runtime_pending.lock().unwrap();
+        if !pending.iter().any(|d| d == &path) {
+            pending.push(path);
         }
     }
 
-    /// 判断路径是否在允许范围内。先 canonicalize 再做前缀匹配，
-    /// 防止 `..` 绕过；canonicalize 失败时退回到原始路径（处理"打算写入
-    /// 但还未创建"的场景，由父目录守住边界）。
+    /// 把 pending 全部移入 announced，返回被移走的列表（顺序保留）。
+    /// 上层在 `Session::append_user` 之前调用，用于在下条 user message 头部
+    /// 注入 `<workspace-update>` 通知模型。
+    pub fn take_pending_announcement(&self) -> Vec<PathBuf> {
+        let mut pending = self.runtime_pending.lock().unwrap();
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        let drained: Vec<PathBuf> = pending.drain(..).collect();
+        let mut announced = self.runtime_announced.write().unwrap();
+        for p in &drained {
+            if !announced.iter().any(|d| d == p) {
+                announced.push(p.clone());
+            }
+        }
+        drained
+    }
+
+    /// 路径是否在允许范围内：先 canonicalize 再做前缀匹配，防止 `..` 绕过。
+    /// canonicalize 失败时退回到 `canonicalize_lossy`（处理"打算写入但还未创建"的场景）。
     pub fn allows(&self, path: &Path) -> bool {
         let canon = canonicalize_lossy(path);
         if canon.starts_with(canonicalize_lossy(&self.workdir)) {
             return true;
         }
-        let dirs = self.allowed_dirs.read().unwrap();
-        dirs.iter()
-            .any(|root| canon.starts_with(canonicalize_lossy(root)))
+        for root in &self.initial_allowed_dirs {
+            if canon.starts_with(canonicalize_lossy(root)) {
+                return true;
+            }
+        }
+        for root in self.runtime_announced.read().unwrap().iter() {
+            if canon.starts_with(canonicalize_lossy(root)) {
+                return true;
+            }
+        }
+        for root in self.runtime_pending.lock().unwrap().iter() {
+            if canon.starts_with(canonicalize_lossy(root)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// 给 Bash 用：解析 cwd 字段。未指定 → workdir。
@@ -71,37 +168,52 @@ impl Workspace {
         }
     }
 
-    /// 注入到 system prompt 的 XML 片段
+    /// 注入到 system prompt 的 XML 片段。
+    /// **只渲染 initial**——保证 system 段在对话内字节恒定，prompt cache 不被运行时变更击穿。
     pub fn to_system_xml(&self) -> String {
         let mut s = String::from("<workspace>\n");
         s.push_str(&format!(
             "  <workdir>{}</workdir>\n",
             self.workdir.display()
         ));
-        let dirs = self.allowed_dirs.read().unwrap();
-        for d in dirs.iter() {
+        for d in &self.initial_allowed_dirs {
             s.push_str(&format!("  <allowed_dir>{}</allowed_dir>\n", d.display()));
         }
         s.push_str(
             "  <note>读写、Bash 工具默认只能在以上目录中操作。\
-             越界访问会触发用户审批；如需长期允许，请在对话设置里追加 allowed_dirs。</note>\n",
+             越界访问会触发用户审批；如需长期允许，请在对话设置里追加 allowed_dirs。\
+             对话开始后追加的允许目录会通过下一条用户消息中的 \
+             &lt;workspace-update&gt; 单独通知。</note>\n",
         );
         s.push_str("</workspace>");
         s
     }
 
-    /// UI/错误提示用的人类可读描述
+    /// UI/错误提示用的人类可读描述。
     pub fn describe(&self) -> String {
         let mut s = format!("workdir: {}", self.workdir.display());
-        let dirs = self.allowed_dirs.read().unwrap();
-        if !dirs.is_empty() {
+        let all = self.allowed_dirs_snapshot();
+        if !all.is_empty() {
             s.push_str("\nallowed_dirs:");
-            for d in dirs.iter() {
+            for d in &all {
                 s.push_str(&format!("\n  - {}", d.display()));
             }
         }
         s
     }
+}
+
+fn dedup(mut v: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen: Vec<PathBuf> = Vec::with_capacity(v.len());
+    v.retain(|p| {
+        if seen.iter().any(|s| s == p) {
+            false
+        } else {
+            seen.push(p.clone());
+            true
+        }
+    });
+    v
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -164,13 +276,49 @@ mod tests {
     }
 
     #[test]
-    fn system_xml_includes_dirs() {
+    fn add_allowed_dir_lands_in_pending_until_announced() {
         let tmp = tempfile::tempdir().unwrap();
         let extra = tempfile::tempdir().unwrap();
-        let ws = Workspace::new(tmp.path(), vec![extra.path().to_path_buf()]);
+        let ws = Workspace::new(tmp.path(), Vec::new());
+
+        ws.add_allowed_dir(extra.path());
+        assert!(ws.runtime_announced_snapshot().is_empty());
+        assert_eq!(ws.runtime_pending_snapshot().len(), 1);
+
+        let drained = ws.take_pending_announcement();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(ws.runtime_announced_snapshot().len(), 1);
+        assert!(ws.runtime_pending_snapshot().is_empty());
+
+        // 再 take 不会重复
+        assert!(ws.take_pending_announcement().is_empty());
+    }
+
+    #[test]
+    fn add_allowed_dir_skips_existing_in_initial_or_announced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let already = tempfile::tempdir().unwrap();
+        let ws = Workspace::with_runtime_state(
+            tmp.path(),
+            vec![already.path().to_path_buf()],
+            Vec::new(),
+            Vec::new(),
+        );
+        ws.add_allowed_dir(already.path());
+        assert!(ws.runtime_pending_snapshot().is_empty());
+    }
+
+    #[test]
+    fn system_xml_only_includes_initial_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let initial = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(tmp.path(), vec![initial.path().to_path_buf()]);
+        ws.add_allowed_dir(runtime.path());
+
         let xml = ws.to_system_xml();
-        assert!(xml.contains("<workspace>"));
-        assert!(xml.contains(&tmp.path().to_string_lossy().to_string()));
-        assert!(xml.contains(&extra.path().to_string_lossy().to_string()));
+        assert!(xml.contains(&initial.path().to_string_lossy().to_string()));
+        // runtime pending 不进 system XML，缓存才不会破
+        assert!(!xml.contains(&runtime.path().to_string_lossy().to_string()));
     }
 }

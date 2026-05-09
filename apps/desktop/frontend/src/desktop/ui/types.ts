@@ -212,8 +212,16 @@ export interface Session {
   messages: Message[];
   /** 对话工作目录。null = 用全局默认（通常 ~/）。 */
   workdir?: string | null;
-  /** 对话允许访问的额外目录。null = 用全局默认。 */
+  /**
+   * 对话起始时的允许目录覆盖。null = 用全局默认。
+   * 一旦本对话发出过 user message，UI 不再允许从这里删除条目（破坏 prompt cache + 已生效行为）。
+   * 运行时新增的允许目录请使用 `runtime_allowed_dirs` / `pending_runtime_allowed_dirs`。
+   */
   allowed_dirs?: string[] | null;
+  /** 对话开始之后追加、已通过 `<workspace-update>` 通知模型的允许目录。UI 只读。 */
+  runtime_allowed_dirs?: string[];
+  /** 对话开始之后追加、还没通知模型的允许目录。下次发消息时随 user message 注入。UI 只读。 */
+  pending_runtime_allowed_dirs?: string[];
   /** 对话启用的非内置工具。null = 用全局默认。 */
   enabled_tools?: string[] | null;
   /** 对话使用的 skill 目录列表。null = 用全局默认。 */
@@ -222,6 +230,8 @@ export interface Session {
   reasoning?: ReasoningConfig | null;
   /** 整个对话累计 token 用量（含缓存命中 / 写入）；新建对话时为 null。 */
   token_stats?: TokenStats | null;
+  /** 创建该 session 的 surface："desktop" / "cli"。老对话可能为 null/undefined。 */
+  source?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -251,6 +261,8 @@ export interface SessionMeta {
   message_count: number;
   /** YYYY-MM-DD 本地日期，前端分组用 */
   date: string;
+  /** 创建该 session 的 surface："desktop" / "cli"。Sidebar 用于显示徽章。 */
+  source?: string | null;
 }
 
 export interface SearchHit extends SessionMeta {

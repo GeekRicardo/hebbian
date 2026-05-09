@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Folder, Plus, X } from "lucide-react";
+import { Folder, Lock, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Input, Label } from "@/desktop/ui/components/ui/input";
@@ -49,6 +49,9 @@ export function DirPicker({
  *
  * - `dirs`：当前生效的目录列表。
  * - `inheritedDirs`：当 `dirs.length === 0` 时显示这些灰色条目，提示"用全局默认"。
+ * - `lockedDirs`：这些条目仅展示，不可删除（用于"对话已开始后锁定的目录"等场景）。
+ *   `dirs` 里凡是出现在 `lockedDirs` 中的项，会渲染锁图标且没有移除按钮。
+ * - `lockedHint`：当存在 locked 条目时，在列表上方显示的一行提示。
  */
 export function DirListField({
   label,
@@ -57,6 +60,8 @@ export function DirListField({
   inheritedDirs,
   emptyHint,
   trailing,
+  lockedDirs,
+  lockedHint,
 }: {
   label: string;
   dirs: string[];
@@ -64,8 +69,12 @@ export function DirListField({
   inheritedDirs?: string[];
   emptyHint?: string;
   trailing?: React.ReactNode;
+  lockedDirs?: string[];
+  lockedHint?: string;
 }) {
   const showingInherited = dirs.length === 0 && (inheritedDirs?.length ?? 0) > 0;
+  const lockedSet = useMemo(() => new Set(lockedDirs ?? []), [lockedDirs]);
+  const hasLocked = (lockedDirs?.length ?? 0) > 0;
 
   async function add() {
     try {
@@ -93,6 +102,9 @@ export function DirListField({
           </Button>
         </div>
       </div>
+      {hasLocked && lockedHint && !showingInherited && (
+        <div className="text-[11px] text-muted-foreground/80 px-1">{lockedHint}</div>
+      )}
       {dirs.length === 0 && !showingInherited ? (
         <div className="text-xs text-muted-foreground/70 italic px-2 py-3 border border-dashed border-border rounded-md text-center">
           {emptyHint ?? "暂无"}
@@ -101,6 +113,7 @@ export function DirListField({
         <ul className="space-y-1">
           {(showingInherited ? inheritedDirs! : dirs).map((d, i) => {
             const inherited = showingInherited;
+            const locked = !inherited && lockedSet.has(d);
             return (
               <li
                 key={`${d}-${i}`}
@@ -108,16 +121,30 @@ export function DirListField({
                   "flex items-center gap-2 px-2 py-1 rounded-md group",
                   inherited
                     ? "bg-muted/20 text-muted-foreground italic"
-                    : "bg-muted/40"
+                    : locked
+                      ? "bg-muted/30"
+                      : "bg-muted/40"
                 )}
+                title={locked ? "对话已开始，此目录不能再移除" : undefined}
               >
-                <Folder
+                {locked ? (
+                  <Lock className="w-3.5 h-3.5 shrink-0 text-muted-foreground/70" />
+                ) : (
+                  <Folder
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0",
+                      inherited
+                        ? "text-muted-foreground/60"
+                        : "text-muted-foreground"
+                    )}
+                  />
+                )}
+                <span
                   className={cn(
-                    "w-3.5 h-3.5 shrink-0",
-                    inherited ? "text-muted-foreground/60" : "text-muted-foreground"
+                    "flex-1 truncate text-xs font-mono",
+                    locked && "text-muted-foreground"
                   )}
-                />
-                <span className="flex-1 truncate text-xs font-mono">
+                >
                   {d}
                   {inherited && (
                     <span className="ml-1.5 not-italic font-sans text-[10px] text-muted-foreground/70">
@@ -125,7 +152,7 @@ export function DirListField({
                     </span>
                   )}
                 </span>
-                {!inherited && (
+                {!inherited && !locked && (
                   <button
                     type="button"
                     onClick={() => onChange(dirs.filter((_, j) => j !== i))}

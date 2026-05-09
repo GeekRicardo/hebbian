@@ -1,15 +1,17 @@
 //! 终端 surface：每条 user message 一个 turn，复用 [`agent_core::Session`]。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_core::{
     context::transcript::Transcript, definition::AgentDefinition, workspace::Workspace, Harness,
-    Recorder, Session, SessionConfig, TurnObserver, TurnOutcome,
+    Session, SessionConfig, TurnObserver, TurnOutcome,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use colored::Colorize;
 use model_gateway::client::ModelClient;
+use platform::storage::sessions::{self, Message as StoredMessage, Role as StoredRole};
 use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
     UserAnswer,
@@ -21,10 +23,25 @@ use rustyline::{
 
 use crate::render::TurnRenderer;
 
+/// 把每个 turn 落盘到 `<data_dir>/sessions/<date>/<id>.jsonl`。
+pub struct SessionPersist {
+    pub data_dir: PathBuf,
+    pub session_id: String,
+    /// `--history` 加载时的历史消息，构造 transcript 时填进去。
+    pub seed_messages: Vec<StoredMessage>,
+}
+
 pub struct CliSession {
     inner: Session,
     auto_approve: bool,
     provider_display: String,
+    persist: Option<PersistRef>,
+}
+
+/// `SessionPersist` 在构造完 transcript 后剩下的部分（不再持有 seed_messages）。
+struct PersistRef {
+    data_dir: PathBuf,
+    session_id: String,
 }
 
 impl CliSession {
@@ -36,9 +53,19 @@ impl CliSession {
         auto_approve: bool,
         workspace: Arc<Workspace>,
         provider_display: String,
-        recorder: Option<Recorder>,
+        persist: Option<SessionPersist>,
     ) -> Self {
         let definition = AgentDefinition::default();
+        let (initial_transcript, persist_ref) = match persist {
+            Some(p) => (
+                Transcript::from_session(system, &p.seed_messages),
+                Some(PersistRef {
+                    data_dir: p.data_dir,
+                    session_id: p.session_id,
+                }),
+            ),
+            None => (Transcript::new(system), None),
+        };
         let inner = Session::new(
             Arc::new(harness),
             SessionConfig {
@@ -46,14 +73,54 @@ impl CliSession {
                 workspace,
                 client,
                 enabled_tools,
-                initial_transcript: Transcript::new(system),
-                recorder,
+                initial_transcript,
+                recorder: None,
             },
         );
         Self {
             inner,
             auto_approve,
             provider_display,
+            persist: persist_ref,
+        }
+    }
+
+    fn persist_user(&self, content: &str) {
+        if let Some(p) = &self.persist {
+            let msg = StoredMessage {
+                id: sessions::new_id(),
+                role: StoredRole::User,
+                content: content.to_string(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+            };
+            if let Err(e) = sessions::append_message(&p.data_dir, &p.session_id, msg) {
+                eprintln!("{} 保存 user 消息失败：{e}", "warn:".yellow());
+            }
+        }
+    }
+
+    fn persist_assistant(&self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        if let Some(p) = &self.persist {
+            let msg = StoredMessage {
+                id: sessions::new_id(),
+                role: StoredRole::Assistant,
+                content: content.to_string(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+            };
+            if let Err(e) = sessions::append_message(&p.data_dir, &p.session_id, msg) {
+                eprintln!("{} 保存 assistant 消息失败：{e}", "warn:".yellow());
+            }
         }
     }
 
@@ -191,6 +258,7 @@ impl CliSession {
 
     /// 单 turn 核心：append user → run → 把事件循环交给 driver → commit assistant。
     async fn run_one_turn(&mut self, user_input: String) -> Result<()> {
+        self.persist_user(&user_input);
         self.inner.append_user(user_input, Vec::new());
         let mut handle = self.inner.run();
         let mut observer = CliObserver {
@@ -203,7 +271,8 @@ impl CliSession {
             TurnOutcome::Done => {
                 let text = observer.renderer.take_final_text();
                 if !text.is_empty() {
-                    self.inner.commit_assistant(text, Vec::new());
+                    self.inner.commit_assistant(text.clone(), Vec::new());
+                    self.persist_assistant(&text);
                 }
                 Ok(())
             }

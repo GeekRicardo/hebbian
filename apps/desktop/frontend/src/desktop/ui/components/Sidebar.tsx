@@ -12,6 +12,7 @@ import {
   CaseSensitive,
   Command,
   Regex,
+  Terminal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -398,6 +399,15 @@ export function Sidebar() {
                         </div>
                         <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
                           <span className="truncate">{s.model}</span>
+                          {s.source === "cli" && (
+                            <span
+                              className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-primary/10 text-primary border border-primary/20 shrink-0"
+                              title="本对话由 hebbian-cli 创建"
+                            >
+                              <Terminal className="w-2.5 h-2.5" />
+                              CLI
+                            </span>
+                          )}
                           <span className="ml-auto shrink-0">
                             {formatTime(s.updated_at)}
                           </span>

@@ -427,6 +427,12 @@ fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
 
 /// 更新对话级设置（workdir / allowed_dirs / enabled_tools / skill_dirs）。
 /// 任一字段传 `null` = 清空（回退到全局默认）。
+///
+/// `allowed_dirs` 的特殊语义：
+/// - 对话还没发出过 user message → 直接覆盖 `s.allowed_dirs`（initial 集合可任意改）
+/// - 对话已开始 → `s.allowed_dirs` 锁定，**禁止删除任何已存在的目录**（initial / 已宣告 / 待宣告）；
+///   新增的目录追加到 `pending_runtime_allowed_dirs`，下次 send_message 时通过
+///   `<workspace-update>` 段告诉模型，**不会改 system prompt**，因此 prompt cache 不破。
 #[tauri::command]
 fn update_session_settings(
     app: AppHandle,
@@ -442,7 +448,7 @@ fn update_session_settings(
         s.workdir = v;
     }
     if let Some(v) = allowed_dirs {
-        s.allowed_dirs = v;
+        apply_allowed_dirs_update(&mut s, v)?;
     }
     if let Some(v) = enabled_tools {
         s.enabled_tools = v;
@@ -451,6 +457,51 @@ fn update_session_settings(
         s.skill_dirs = v;
     }
     sessions::save(&dd, s)
+}
+
+/// `update_session_settings` 中 `allowed_dirs` 字段的处理逻辑，单独拆出来便于测试。
+fn apply_allowed_dirs_update(
+    session: &mut Session,
+    new_value: Option<Vec<PathBuf>>,
+) -> AppResult<()> {
+    let conversation_started = session
+        .messages
+        .iter()
+        .any(|m| matches!(m.role, Role::User));
+
+    if !conversation_started {
+        // 还没发过消息：自由覆盖 initial。新值同时也代表"用户期望本对话起始集"，
+        // runtime / pending 应该是空（无消息时不可能产生）但稳妥起见也清一遍。
+        session.allowed_dirs = new_value;
+        session.runtime_allowed_dirs.clear();
+        session.pending_runtime_allowed_dirs.clear();
+        return Ok(());
+    }
+
+    // 对话已开始：锁定 initial。新值必须是当前所有已知目录的超集，新增项进 pending。
+    let target: Vec<PathBuf> = new_value.unwrap_or_default();
+    let initial: Vec<PathBuf> = session.allowed_dirs.clone().unwrap_or_default();
+    let announced: Vec<PathBuf> = session.runtime_allowed_dirs.clone();
+    let pending: Vec<PathBuf> = session.pending_runtime_allowed_dirs.clone();
+
+    for known in initial.iter().chain(announced.iter()).chain(pending.iter()) {
+        if !target.iter().any(|p| p == known) {
+            return Err(AppError::msg(format!(
+                "对话开始后不能移除已允许的目录：{}",
+                known.display()
+            )));
+        }
+    }
+
+    for d in target {
+        let existed = initial.iter().any(|p| p == &d)
+            || announced.iter().any(|p| p == &d)
+            || pending.iter().any(|p| p == &d);
+        if !existed {
+            session.pending_runtime_allowed_dirs.push(d);
+        }
+    }
+    Ok(())
 }
 
 /// 审批越界路径并落盘到 session（this-project）或全局 settings（all-project）。

@@ -20,10 +20,11 @@ use agent_core::{
     hooks::HookManager,
     tools::{default_tools, skill::default_skill_dirs, Tool},
     workspace::Workspace,
-    Harness, Recorder,
+    Harness,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::Local;
 use clap::Parser;
 use model_gateway::config::{Provider, ProvidersFile};
 use model_gateway::{
@@ -31,13 +32,14 @@ use model_gateway::{
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
 use platform::reasoning::{ReasoningConfig, ReasoningEffort};
+use platform::storage::sessions::{self, Session};
 use platform::CancelFlag;
 
 mod mock_provider;
 mod render;
 mod session;
 
-use session::{CliSession, ConvoInput};
+use session::{CliSession, ConvoInput, SessionPersist};
 
 #[derive(Parser, Debug)]
 #[command(name = "hebbian-cli", about = "Hebbian agent 终端 surface")]
@@ -89,9 +91,18 @@ struct Cli {
     #[arg(long, default_value_t = true)]
     auto_approve: bool,
 
-    /// 不把事件流落盘（默认会写到 data_dir/sessions/<ts>-<uuid>.jsonl）
+    /// 不把对话写入 `<data_dir>/sessions/`。`--mock` 也隐含 `--no-record`。
     #[arg(long)]
     no_record: bool,
+
+    /// 加载已有 session 续聊。值是 `list_sessions` 显示的 id。
+    /// 与 `--json` 互斥（JSON 多轮自带 messages，不需要再 seed）。
+    #[arg(long, value_name = "SESSION_ID", conflicts_with = "json")]
+    history: Option<String>,
+
+    /// 打印 `<data_dir>/sessions/` 里的所有 session 列表，然后退出。
+    #[arg(long)]
+    list_history: bool,
 
     /// 开启 thinking / reasoning（claude-opus-4* / claude-sonnet-4* / gpt-5* / o-series）
     #[arg(long)]
@@ -121,18 +132,33 @@ async fn main() -> Result<()> {
     let _otel_guard = observability::init("hebbian-cli", "warn");
     let cli = Cli::parse_from(normalize_provider_args(std::env::args()));
 
+    // 让 sessions::create 写入的 jsonl Meta.source = "cli"
+    sessions::set_default_source("cli");
+
     // 不再用 --workdir：直接用 CLI 进程当前目录
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // allowed_dirs：CLI 参数优先，否则用全局 settings 默认
     let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
 
+    if cli.list_history {
+        return print_history_list(&data_dir);
+    }
     if let Some(command) = &cli.providers {
         return handle_providers_command(command, &data_dir);
     }
     if let Some(target) = &cli.provider_set {
         return set_default_provider_model(&data_dir, target);
     }
+
+    // 如果 --history，先把已有 session 加载出来。后续 provider/model/system 都可由它兜底。
+    let existing: Option<Session> = match &cli.history {
+        Some(id) => Some(
+            sessions::load(&data_dir, id)
+                .map_err(|e| anyhow!("加载 session {id} 失败：{e}"))?,
+        ),
+        None => None,
+    };
 
     let settings = platform::config::settings::load(&data_dir);
     let allowed_dirs = if !cli.allowed_dirs.is_empty() {
@@ -160,30 +186,66 @@ async fn main() -> Result<()> {
     let built = build_harness_and_client(
         BuildOpts {
             mock: cli.mock,
-            provider: cli.provider.clone(),
-            model: cli.model.clone(),
+            // existing session 的 provider/model 作为兜底
+            provider: cli
+                .provider
+                .clone()
+                .or_else(|| existing.as_ref().map(|s| s.provider_id.clone())),
+            model: cli
+                .model
+                .clone()
+                .or_else(|| existing.as_ref().map(|s| s.model.clone())),
             data_dir: Some(data_dir.clone()),
-            reasoning,
+            reasoning: reasoning.clone(),
         },
         workspace.clone(),
     )
     .await?;
 
-    let recorder = if cli.no_record {
-        None
+    // 是否落盘对话：--no-record 跳过；--json 跳过（一次性测试）。
+    // mock 默认仍落盘，方便开发调试；不想落盘加 --no-record。
+    let persist = !cli.no_record && cli.json.is_none();
+    let session_record = if persist {
+        Some(match existing {
+            Some(s) => s,
+            None => sessions::create_with_source(
+                &data_dir,
+                built
+                    .provider_id
+                    .clone()
+                    .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
+                built
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
+                cli.system.clone(),
+                None,
+                "cli".to_string(),
+            )
+            .map_err(|e| anyhow!("创建 session 失败：{e}"))?,
+        })
     } else {
-        Some(Recorder::open(rollout_path(&data_dir)).await?)
+        None
     };
+
+    let system = cli
+        .system
+        .clone()
+        .or_else(|| session_record.as_ref().and_then(|s| s.system_prompt.clone()));
 
     let mut session = CliSession::new(
         built.harness,
         built.client,
-        cli.system.clone(),
+        system,
         enabled_tools,
         cli.auto_approve,
         workspace,
         built.provider_display,
-        recorder,
+        session_record.map(|s| SessionPersist {
+            data_dir: data_dir.clone(),
+            session_id: s.id,
+            seed_messages: s.messages,
+        }),
     );
 
     match (cli.prompt, cli.json) {
@@ -197,6 +259,29 @@ async fn main() -> Result<()> {
         }
         (Some(_), Some(_)) => unreachable!("clap 通过 conflicts_with 已阻止"),
     }
+}
+
+fn print_history_list(data_dir: &std::path::Path) -> Result<()> {
+    let metas = sessions::list(data_dir).map_err(|e| anyhow!("读 sessions：{e}"))?;
+    if metas.is_empty() {
+        println!("（无 session）");
+        return Ok(());
+    }
+    for m in &metas {
+        let when = chrono::DateTime::<Local>::from(
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(m.updated_at as u64),
+        );
+        println!(
+            "{:>3} 条  {}  {}/{}  {}  {}",
+            m.message_count,
+            when.format("%Y-%m-%d %H:%M"),
+            m.provider_id,
+            m.model,
+            m.id,
+            m.title,
+        );
+    }
+    Ok(())
 }
 
 fn normalize_provider_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -245,6 +330,8 @@ struct BuiltClient {
     harness: Harness,
     client: Arc<dyn ModelClient>,
     provider_display: String,
+    provider_id: Option<String>,
+    model: Option<String>,
 }
 
 async fn build_harness_and_client(
@@ -260,6 +347,8 @@ async fn build_harness_and_client(
             harness,
             client: Arc::new(mock_provider::MockClient::new()),
             provider_display: "mock·mock".to_string(),
+            provider_id: None,
+            model: None,
         });
     }
 
@@ -276,6 +365,7 @@ async fn build_harness_and_client(
         .map_err(|e| anyhow!("刷新 token 失败：{e}"))?;
     let model = selection.model;
     let provider_name = provider.name.clone();
+    let provider_id = provider.id.clone();
 
     let inner = model_gateway::build_client(provider).map_err(|e| anyhow!("build client：{e}"))?;
     let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::with_reasoning(
@@ -287,6 +377,8 @@ async fn build_harness_and_client(
         harness,
         client,
         provider_display: format!("{provider_name}·{model}"),
+        provider_id: Some(provider_id),
+        model: Some(model),
     })
 }
 
@@ -391,15 +483,6 @@ fn set_default_provider_model(data_dir: &std::path::Path, target: &str) -> Resul
     model_gateway::config::save(data_dir, &file).map_err(|e| anyhow!("保存 providers：{e}"))?;
     println!("Default provider set to {provider_name}·{model}");
     Ok(())
-}
-
-/// 本次 CLI 启动的事件日志路径：`<data_dir>/sessions/<ts>-<uuid>.jsonl`。
-fn rollout_path(data_dir: &std::path::Path) -> PathBuf {
-    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S");
-    let uuid = uuid::Uuid::new_v4();
-    data_dir
-        .join("sessions")
-        .join(format!("rollout-{ts}-{uuid}.jsonl"))
 }
 
 /// 与 desktop 共享同一 data_dir（Tauri bundle id：dev.ricardo.hebbian）
