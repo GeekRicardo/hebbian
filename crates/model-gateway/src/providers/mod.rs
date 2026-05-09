@@ -20,9 +20,17 @@ const BASE_RETRY_DELAY: Duration = Duration::from_millis(500);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
 
 pub fn build_http_client() -> reqwest::Result<reqwest::Client> {
+    // 用 connect_timeout + read_timeout 替代 total timeout：
+    // - `.timeout()` 是「整个请求」（含 stream body 接收）的总时长，长 SSE 流（thinking
+    //   模式 / 多工具轮 / 长上下文）很容易超过 120s 触发"error decoding response body"。
+    // - `.connect_timeout()`：握手 + TLS 阶段超时（避免 DNS/TCP 卡死）。
+    // - `.read_timeout()`（reqwest 0.12+）：「两个 chunk 之间」的最大空闲时间，给 SSE
+    //   足够空间——只要服务端持续在 push token 就不会触发。
     reqwest::Client::builder()
         .user_agent("Hebbian/0.1")
-        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(180))
+        .pool_idle_timeout(Duration::from_secs(90))
         .build()
 }
 
