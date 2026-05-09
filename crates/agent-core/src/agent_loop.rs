@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use observability::{attr, metrics};
 use protocol::{AgentRef, ErrorReport, Event, EventPayload, RunId, StopReason};
-use tracing::{debug, info};
+use tracing::{debug, field::Empty, info, Instrument};
 
 use crate::{
     context::{
@@ -62,9 +63,16 @@ fn build_system_prompt(user_system: Option<&str>, workspace: &Workspace) -> Stri
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
 #[tracing::instrument(
+    name = "run",
     level = "info",
     skip_all,
-    fields(run_id = %params.state.run_id, agent = %params.agent)
+    fields(
+        hebbian.run.id = %params.state.run_id,
+        hebbian.agent.id = %params.agent,
+        hebbian.run.parent_id = ?params.parent,
+        hebbian.run.outcome = Empty,
+        hebbian.run.iterations = Empty,
+    )
 )]
 pub async fn run_loop(
     params: LoopParams<'_>,
@@ -115,12 +123,20 @@ pub async fn run_loop(
         // 不消耗模型调用，只改 transcript entries，幂等。
         let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
         if mc_report.shadowed_count > 0 {
-            tracing::info!(
-                shadowed = mc_report.shadowed_count,
-                kept = mc_report.kept_count,
-                total = mc_report.total_compactable,
-                "microcompact shadowed old tool results"
-            );
+            tracing::info_span!(
+                "microcompact",
+                hebbian.microcompact.shadowed = mc_report.shadowed_count,
+                hebbian.microcompact.kept = mc_report.kept_count,
+                hebbian.microcompact.total = mc_report.total_compactable,
+            )
+            .in_scope(|| {
+                tracing::info!(
+                    shadowed = mc_report.shadowed_count,
+                    kept = mc_report.kept_count,
+                    total = mc_report.total_compactable,
+                    "microcompact shadowed old tool results"
+                );
+            });
         }
 
         if needs_compaction(
@@ -128,19 +144,28 @@ pub async fn run_loop(
             &transcript.entries,
             compaction_policy,
         ) {
+            let compaction_span = tracing::info_span!(
+                "compaction",
+                hebbian.compaction.before_tokens = Empty,
+                hebbian.compaction.after_tokens = Empty,
+            );
+            let _enter = compaction_span.enter();
             let compaction_result = compact_structural(
                 transcript.system.as_deref(),
                 transcript.entries.clone(),
                 compaction_policy,
             );
-            info!(
-                before_tokens = compaction_result.before_tokens,
-                after_tokens = compaction_result.after_tokens,
-                "context compacted"
-            );
             let before_tokens = compaction_result.before_tokens;
             let after_tokens = compaction_result.after_tokens;
+            compaction_span.record(attr::COMPACTION_BEFORE_TOKENS, before_tokens);
+            compaction_span.record(attr::COMPACTION_AFTER_TOKENS, after_tokens);
+            info!(
+                before_tokens,
+                after_tokens,
+                "context compacted"
+            );
             transcript.entries = compaction_result.entries;
+            drop(_enter);
             emit(EventPayload::ContextCompacted {
                 before_tokens,
                 after_tokens,
@@ -155,6 +180,14 @@ pub async fn run_loop(
 
         let turn_index = state.next_turn();
         let turn_id = protocol::TurnId::new();
+        let turn_span = tracing::info_span!(
+            "turn",
+            hebbian.turn.index = turn_index,
+            hebbian.turn.id = %turn_id,
+            hebbian.turn.stop_reason = Empty,
+            hebbian.turn.tool_calls = Empty,
+        );
+        let turn_started = Instant::now();
         emit(EventPayload::TurnStarted {
             turn_id: turn_id.clone(),
             turn: turn_index,
@@ -219,9 +252,13 @@ pub async fn run_loop(
                         on_event_for_stream(state_for_stream.event(payload));
                     },
                 )
+                .instrument(turn_span.clone())
                 .await
         } else {
-            client.complete(req, cancel.clone()).await
+            client
+                .complete(req, cancel.clone())
+                .instrument(turn_span.clone())
+                .await
         };
 
         let call_duration_ms = call_start.elapsed().as_millis() as u64;
@@ -261,6 +298,12 @@ pub async fn run_loop(
                 emit(EventPayload::TextDone {
                     full_text: text.clone(),
                 });
+                turn_span.record(attr::STOP_REASON, "end_turn");
+                metrics::record_turn_duration(
+                    turn_index,
+                    "end_turn",
+                    turn_started.elapsed().as_millis() as f64,
+                );
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
@@ -309,6 +352,12 @@ pub async fn run_loop(
                 if iteration >= MAX_TOOL_ITERATIONS {
                     let msg = format!("已达到最大工具调用轮数 {MAX_TOOL_ITERATIONS}");
                     tracing::warn!(max_iterations = MAX_TOOL_ITERATIONS, "max iterations");
+                    turn_span.record(attr::STOP_REASON, "max_iterations");
+                    metrics::record_turn_duration(
+                        turn_index,
+                        "max_iterations",
+                        turn_started.elapsed().as_millis() as f64,
+                    );
                     emit(EventPayload::TurnFinished {
                         turn_id: turn_id.clone(),
                         turn: turn_index,
@@ -317,6 +366,7 @@ pub async fn run_loop(
                     break Err(ModelError::Other(msg));
                 }
                 iteration += 1;
+                turn_span.record("hebbian.turn.tool_calls", calls.len());
 
                 let dispatcher = ToolDispatcher {
                     registry: registry.clone(),
@@ -327,9 +377,19 @@ pub async fn run_loop(
                     cancel: cancel.clone(),
                 };
 
-                let results = match dispatcher.run_calls(&calls, tool_call_dispatch_offset).await {
+                let results = match dispatcher
+                    .run_calls(&calls, tool_call_dispatch_offset)
+                    .instrument(turn_span.clone())
+                    .await
+                {
                     Ok(results) => results,
                     Err(e) => {
+                        turn_span.record(attr::STOP_REASON, "cancelled");
+                        metrics::record_turn_duration(
+                            turn_index,
+                            "cancelled",
+                            turn_started.elapsed().as_millis() as f64,
+                        );
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -342,6 +402,12 @@ pub async fn run_loop(
                 transcript.push_tool_results(results);
                 tool_call_dispatch_offset += calls.len();
 
+                turn_span.record(attr::STOP_REASON, "end_turn");
+                metrics::record_turn_duration(
+                    turn_index,
+                    "end_turn",
+                    turn_started.elapsed().as_millis() as f64,
+                );
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
@@ -352,8 +418,13 @@ pub async fn run_loop(
     };
 
     let duration_ms = run_start.elapsed().as_millis() as u64;
+    let run_span = tracing::Span::current();
+    run_span.record("hebbian.run.iterations", iteration);
+    let agent_id = agent.0.as_str();
     match &result {
         Ok(_) => {
+            run_span.record("hebbian.run.outcome", attr::run_outcome::DONE);
+            metrics::record_run_outcome(attr::run_outcome::DONE, agent_id, duration_ms as f64);
             emit(EventPayload::RunFinished {
                 total_input_tokens,
                 total_output_tokens,
@@ -363,9 +434,13 @@ pub async fn run_loop(
             });
         }
         Err(ModelError::Cancelled) => {
+            run_span.record("hebbian.run.outcome", attr::run_outcome::CANCELLED);
+            metrics::record_run_outcome(attr::run_outcome::CANCELLED, agent_id, duration_ms as f64);
             emit(EventPayload::RunCancelled);
         }
         Err(e) => {
+            run_span.record("hebbian.run.outcome", attr::run_outcome::FAILED);
+            metrics::record_run_outcome(attr::run_outcome::FAILED, agent_id, duration_ms as f64);
             emit(EventPayload::RunFailed {
                 error: ErrorReport::other(e.to_string()),
             });

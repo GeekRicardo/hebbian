@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 agent-core = { path = "../../crates/agent-core" }
 model-gateway = { path = "../../crates/model-gateway" }
+observability = { path = "../../crates/observability" }
 platform = { path = "../../crates/platform" }
 protocol = { path = "../../crates/protocol" }
 serde = { version = "1", features = ["derive"] }

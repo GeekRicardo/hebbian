@@ -598,19 +598,15 @@ async fn deepseek_login(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("agent_core=debug,warn")),
-        )
-        .with_target(true)
-        .compact()
-        .init();
+    // 同步入口：observability::init 内部用独占 tokio runtime 跑 OTel 导出 task，
+    // 与 Tauri 的 runtime 完全隔离。OTEL_EXPORTER_OTLP_ENDPOINT 未设时只装日志。
+    let otel_guard = observability::init("hebbian-desktop", "agent_core=debug,warn");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(HitlState::default()))
+        .manage(otel_guard)
         .setup(|app| {
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))

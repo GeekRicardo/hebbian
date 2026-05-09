@@ -4,6 +4,7 @@ members = [
     "apps/desktop",
     "crates/agent-core",
     "crates/model-gateway",
+    "crates/observability",
     "crates/platform",
     "crates/protocol",
 ]

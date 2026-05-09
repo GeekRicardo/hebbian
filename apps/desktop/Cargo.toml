@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 agent-core = { path = "../../crates/agent-core" }
 model-gateway = { path = "../../crates/model-gateway" }
+observability = { path = "../../crates/observability" }
 platform = { path = "../../crates/platform" }
 protocol = { path = "../../crates/protocol" }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }

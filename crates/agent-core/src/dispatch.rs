@@ -16,13 +16,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::future::{join_all, BoxFuture};
+use observability::{attr, metrics};
 use protocol::{
     ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, RiskLevel,
     UserAnswer,
 };
 use serde::Deserialize;
 use tokio::sync::oneshot;
-use tracing::warn;
+use tracing::{field::Empty, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
@@ -30,10 +31,30 @@ use crate::{
     tools::{
         hitl::{HitlGate, PermissionDecision},
         registry::ToolRegistry,
-        ASK_TOOL_NAME,
+        ToolClass, ASK_TOOL_NAME,
     },
     workspace::Workspace,
 };
+
+fn tool_class_label(class: &ToolClass) -> &'static str {
+    match class {
+        ToolClass::ReadOnly => "read_only",
+        ToolClass::Network => "network",
+        ToolClass::Mutating { .. } => "mutating",
+        ToolClass::Destructive { .. } => "destructive",
+        ToolClass::NeedsHumanInput { .. } => "needs_human_input",
+    }
+}
+
+fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
+    match d {
+        ApprovalDecision::AllowOnce => "allow_once",
+        ApprovalDecision::AllowAndRemember { .. } => "allow_and_remember",
+        ApprovalDecision::Deny => "deny",
+        ApprovalDecision::DenyWithFeedback { .. } => "deny_with_feedback",
+    }
+}
+
 use model_gateway::types::{ModelError, ToolCall, ToolResult};
 use platform::{runtime as cancellation, CancelFlag};
 
@@ -129,6 +150,8 @@ impl ToolDispatcher {
             .as_ref()
             .map(|t| t.classify(&call.input))
             .unwrap_or(crate::tools::ToolClass::ReadOnly);
+        let class_label = tool_class_label(&class);
+        let tool_found = tool.is_some();
         let permission = self.hitl.check(&call.name, &class);
         if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
             self.emit(EventPayload::PermissionRequested {
@@ -147,12 +170,25 @@ impl ToolDispatcher {
         let cancel = self.cancel.clone();
         let workspace = self.workspace.clone();
 
-        Box::pin(async move {
-            // 路径审批
-            if let Some(p) = path_pending {
-                match await_path_decision(&sink, &state, &workspace, p).await {
-                    Ok(()) => {}
-                    Err(reason) => {
+        let tool_span = tracing::info_span!(
+            "tool.call",
+            otel.kind = "internal",
+            hebbian.tool.name = %call.name,
+            hebbian.tool.call_id = %call.id,
+            hebbian.tool.class = class_label,
+            hebbian.tool.outcome = Empty,
+            hebbian.tool.truncated = Empty,
+            hebbian.tool.result_bytes = Empty,
+            hebbian.tool.duration_ms = Empty,
+        );
+
+        Box::pin(
+            async move {
+                // 路径审批（带 permission.check 子 span）
+                if let Some(p) = path_pending {
+                    let outcome = await_path_decision(&sink, &state, &workspace, p).await;
+                    if let Err(reason) = outcome {
+                        record_tool_outcome(attr::outcome::DENIED, &call.name, 0.0, false, 0);
                         return Ok(deny_tool(
                             call,
                             call_index,
@@ -163,67 +199,86 @@ impl ToolDispatcher {
                         ));
                     }
                 }
-            }
 
-            // 工具审批
-            match await_permission_decision(&sink, &state, permission).await {
-                Ok(()) => {}
-                Err(reason) => {
-                    return Ok(deny_tool(
-                        call,
-                        call_index,
-                        dispatch_index,
-                        &state,
-                        &sink,
-                        reason,
-                    ));
+                // 工具审批
+                match await_permission_decision(&sink, &state, permission).await {
+                    Ok(()) => {}
+                    Err(reason) => {
+                        record_tool_outcome(attr::outcome::DENIED, &call.name, 0.0, false, 0);
+                        return Ok(deny_tool(
+                            call,
+                            call_index,
+                            dispatch_index,
+                            &state,
+                            &sink,
+                            reason,
+                        ));
+                    }
                 }
-            }
 
-            if cancellation::is_cancelled(&cancel) {
-                return Err(ModelError::Cancelled);
-            }
-
-            // 执行
-            sink(state.event(EventPayload::ToolCallStarted {
-                index: dispatch_index,
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
-            }));
-
-            let started = Instant::now();
-            let raw = match tool {
-                Some(t) => t.execute(call.input.clone()).await.unwrap_or_else(|e| {
-                    warn!(tool = %call.name, error = %e, "tool exec error");
-                    format!("工具执行错误: {e}")
-                }),
-                None => {
-                    warn!(tool = %call.name, "tool not in registry");
-                    format!("未找到工具: {}", call.name)
+                if cancellation::is_cancelled(&cancel) {
+                    return Err(ModelError::Cancelled);
                 }
-            };
-            let duration_ms = started.elapsed().as_millis() as u64;
 
-            let (content, truncated) = truncate_tool_result(raw);
-
-            sink(state.event(EventPayload::ToolCallFinished {
-                index: dispatch_index,
-                call_id: call.id.clone(),
-                result: content.clone(),
-                duration_ms,
-                truncated,
-            }));
-
-            Ok((
-                call_index,
-                ToolResult {
+                // 执行
+                sink(state.event(EventPayload::ToolCallStarted {
+                    index: dispatch_index,
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    content,
-                },
-            ))
-        })
+                    input: call.input.clone(),
+                }));
+
+                let started = Instant::now();
+                let (raw, exec_failed) = match tool {
+                    Some(t) => match t.execute(call.input.clone()).await {
+                        Ok(s) => (s, false),
+                        Err(e) => {
+                            warn!(tool = %call.name, error = %e, "tool exec error");
+                            (format!("工具执行错误: {e}"), true)
+                        }
+                    },
+                    None => {
+                        warn!(tool = %call.name, "tool not in registry");
+                        (format!("未找到工具: {}", call.name), true)
+                    }
+                };
+                let duration_ms = started.elapsed().as_millis() as u64;
+
+                let (content, truncated) = truncate_tool_result(raw);
+                let outcome = if !tool_found {
+                    attr::outcome::NOT_FOUND
+                } else if exec_failed {
+                    attr::outcome::FAILED
+                } else {
+                    attr::outcome::OK
+                };
+                record_tool_outcome(
+                    outcome,
+                    &call.name,
+                    duration_ms as f64,
+                    truncated,
+                    content.len(),
+                );
+
+                sink(state.event(EventPayload::ToolCallFinished {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    result: content.clone(),
+                    duration_ms,
+                    truncated,
+                }));
+
+                Ok((
+                    call_index,
+                    ToolResult {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content,
+                    },
+                ))
+            }
+            .instrument(tool_span),
+        )
     }
 
     /// `ask` 工具派发：emit UserQuestionRequested + await UserAnswer。
@@ -238,65 +293,102 @@ impl ToolDispatcher {
         let sink = self.sink.clone();
         let cancel = self.cancel.clone();
 
-        Box::pin(async move {
-            let (question, options, multi) = match parse_ask_input(&call.input) {
-                Ok(parts) => parts,
-                Err(err) => {
-                    return Ok(finish_ask_with_error(
-                        call,
-                        call_index,
-                        dispatch_index,
-                        &state,
-                        &sink,
-                        err,
-                    ));
-                }
-            };
+        let tool_span = tracing::info_span!(
+            "tool.call",
+            otel.kind = "internal",
+            hebbian.tool.name = %call.name,
+            hebbian.tool.call_id = %call.id,
+            hebbian.tool.class = "needs_human_input",
+            hebbian.tool.outcome = Empty,
+        );
 
-            sink(state.event(EventPayload::ToolCallStarted {
-                index: dispatch_index,
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
-            }));
+        Box::pin(
+            async move {
+                let (question, options, multi) = match parse_ask_input(&call.input) {
+                    Ok(parts) => parts,
+                    Err(err) => {
+                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                        return Ok(finish_ask_with_error(
+                            call,
+                            call_index,
+                            dispatch_index,
+                            &state,
+                            &sink,
+                            err,
+                        ));
+                    }
+                };
 
-            let (request_id, waiter) = hitl.open_question();
-            sink(state.event(EventPayload::UserQuestionRequested {
-                request_id: request_id.clone(),
-                question,
-                options,
-                multi,
-            }));
-
-            let answer = waiter.await.unwrap_or(UserAnswer::Cancelled);
-
-            sink(state.event(EventPayload::UserQuestionAnswered {
-                request_id,
-                answer: answer.clone(),
-            }));
-
-            if cancellation::is_cancelled(&cancel) {
-                return Err(ModelError::Cancelled);
-            }
-
-            let content = answer.to_agent_text();
-            sink(state.event(EventPayload::ToolCallFinished {
-                index: dispatch_index,
-                call_id: call.id.clone(),
-                result: content.clone(),
-                duration_ms: 0,
-                truncated: false,
-            }));
-
-            Ok((
-                call_index,
-                ToolResult {
+                sink(state.event(EventPayload::ToolCallStarted {
+                    index: dispatch_index,
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    content,
-                },
-            ))
-        })
+                    input: call.input.clone(),
+                }));
+
+                let (request_id, waiter) = hitl.open_question();
+                sink(state.event(EventPayload::UserQuestionRequested {
+                    request_id: request_id.clone(),
+                    question,
+                    options,
+                    multi,
+                }));
+
+                // permission.check 子 span：记录 ask 等待时长
+                let permission_span = tracing::info_span!(
+                    "permission.check",
+                    hebbian.permission.kind = "ask",
+                    hebbian.permission.request_id = %request_id,
+                    hebbian.permission.decision = Empty,
+                );
+                let wait_started = Instant::now();
+                let answer = waiter.instrument(permission_span.clone()).await
+                    .unwrap_or(UserAnswer::Cancelled);
+                let wait_ms = wait_started.elapsed().as_millis() as f64;
+                let answer_label = match &answer {
+                    UserAnswer::Selected { .. } => "selected",
+                    UserAnswer::SelectedMulti { .. } => "selected_multi",
+                    UserAnswer::Custom { .. } => "custom",
+                    UserAnswer::Cancelled => "cancelled",
+                };
+                permission_span.record(attr::PERMISSION_DECISION, answer_label);
+                metrics::record_permission_wait("ask", answer_label, wait_ms);
+
+                sink(state.event(EventPayload::UserQuestionAnswered {
+                    request_id,
+                    answer: answer.clone(),
+                }));
+
+                if cancellation::is_cancelled(&cancel) {
+                    return Err(ModelError::Cancelled);
+                }
+
+                let content = answer.to_agent_text();
+                let outcome = if matches!(answer, UserAnswer::Cancelled) {
+                    attr::outcome::DENIED
+                } else {
+                    attr::outcome::OK
+                };
+                record_tool_outcome(outcome, &call.name, wait_ms, false, content.len());
+                sink(state.event(EventPayload::ToolCallFinished {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    result: content.clone(),
+                    duration_ms: 0,
+                    truncated: false,
+                }));
+
+                Ok((
+                    call_index,
+                    ToolResult {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content,
+                    },
+                ))
+            }
+            .instrument(tool_span),
+        )
     }
 
     /// 申请越界路径访问审批：开 pending + emit `PermissionRequested { kind: PathAccess }`。
@@ -342,7 +434,20 @@ async fn await_path_decision(
         waiter,
     } = pending;
 
-    let decision = waiter.await.map_err(|_| "路径审批通道已关闭".to_string())?;
+    let permission_span = tracing::info_span!(
+        "permission.check",
+        hebbian.permission.kind = "path_access",
+        hebbian.permission.request_id = %request_id,
+        hebbian.permission.decision = Empty,
+    );
+    let wait_started = Instant::now();
+    let decision_result = waiter.instrument(permission_span.clone()).await;
+    let wait_ms = wait_started.elapsed().as_millis() as f64;
+    let decision = decision_result.map_err(|_| "路径审批通道已关闭".to_string())?;
+    let decision_label = approval_decision_label(&decision);
+    permission_span.record(attr::PERMISSION_DECISION, decision_label);
+    metrics::record_permission_wait("path_access", decision_label, wait_ms);
+
     sink(state.event(EventPayload::PermissionResolved {
         request_id,
         decision: decision.clone(),
@@ -370,7 +475,20 @@ async fn await_permission_decision(
         PermissionDecision::Approved => Ok(()),
         PermissionDecision::Denied { reason } => Err(reason),
         PermissionDecision::NeedsApproval { request_id, waiter } => {
-            let outcome = waiter.await.map_err(|_| "审批通道已关闭".to_string())?;
+            let permission_span = tracing::info_span!(
+                "permission.check",
+                hebbian.permission.kind = "tool_call",
+                hebbian.permission.request_id = %request_id,
+                hebbian.permission.decision = Empty,
+            );
+            let wait_started = Instant::now();
+            let outcome_result = waiter.instrument(permission_span.clone()).await;
+            let wait_ms = wait_started.elapsed().as_millis() as f64;
+            let outcome = outcome_result.map_err(|_| "审批通道已关闭".to_string())?;
+            let decision_label = approval_decision_label(&outcome);
+            permission_span.record(attr::PERMISSION_DECISION, decision_label);
+            metrics::record_permission_wait("tool_call", decision_label, wait_ms);
+
             sink(state.event(EventPayload::PermissionResolved {
                 request_id,
                 decision: outcome.clone(),
@@ -382,6 +500,21 @@ async fn await_permission_decision(
             }
         }
     }
+}
+
+fn record_tool_outcome(
+    outcome: &str,
+    tool: &str,
+    duration_ms: f64,
+    truncated: bool,
+    bytes: usize,
+) {
+    let span = tracing::Span::current();
+    span.record(attr::TOOL_OUTCOME, outcome);
+    span.record(attr::TOOL_TRUNCATED, truncated);
+    span.record(attr::TOOL_RESULT_SIZE, bytes as i64);
+    span.record(attr::TOOL_NAME, tool);
+    metrics::record_tool_duration(tool, outcome, duration_ms);
 }
 
 /// 把"被拒"渲染为 ToolStarted/Finished + ToolResult，让 transcript 一致。

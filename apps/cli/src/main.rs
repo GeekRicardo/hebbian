@@ -118,7 +118,7 @@ fn parse_effort(s: &str) -> Result<ReasoningEffort, String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    let _otel_guard = observability::init("hebbian-cli", "warn");
     let cli = Cli::parse_from(normalize_provider_args(std::env::args()));
 
     // 不再用 --workdir：直接用 CLI 进程当前目录
@@ -231,16 +231,6 @@ fn read_json_arg(arg: &str) -> Result<String> {
     } else {
         Ok(arg.to_string())
     }
-}
-
-fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
 }
 
 struct BuildOpts {
