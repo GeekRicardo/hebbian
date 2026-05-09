@@ -13,6 +13,7 @@ import {
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
 import { ContextRing } from "@/desktop/ui/components/ContextRing";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
+import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -63,9 +64,12 @@ export function ChatInput({
     lastCompositionEndAt: 0,
   });
 
-  const contextUsage = useStore((s) => s.contextUsage);
   const compacting = useStore((s) => s.compacting);
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
+  const tokenStats = useStore(
+    (s) => s.currentSession?.token_stats ?? null
+  );
+  const contextUsage = useStore((s) => s.contextUsage);
 
   async function runCompact(customInstructions: string) {
     if (compacting) return;
@@ -302,12 +306,13 @@ export function ChatInput({
           <GripHorizontal className="w-4 h-4 text-muted-foreground/60 group-hover:text-muted-foreground transition-colors" />
         </div>
 
+        <div className="flex items-end gap-1">
         <div
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDraggingFiles(false)}
           className={cn(
-            "relative rounded-xl border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring transition",
+            "flex-1 min-w-0 relative rounded-xl border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring transition",
             draggingFiles && "border-primary ring-2 ring-primary/30",
             disabled && "opacity-60"
           )}
@@ -361,20 +366,6 @@ export function ChatInput({
             >
               <Paperclip className="w-4 h-4" />
             </button>
-            {contextUsage && (
-              <ContextRing
-                used={contextUsage.used_tokens}
-                budget={contextUsage.budget_tokens}
-                onClick={() => runCompact("")}
-                title={
-                  compacting
-                    ? "正在压缩…"
-                    : `上下文 ${Math.round(
-                        (contextUsage.used_tokens / Math.max(contextUsage.budget_tokens, 1)) * 100
-                      )}% · 点击运行 /compact`
-                }
-              />
-            )}
             <button
               type="button"
               onClick={isStreaming ? cancel : submit}
@@ -404,6 +395,24 @@ export function ChatInput({
               )}
             </button>
           </div>
+          </div>
+        </div>
+
+          {/* 紧贴输入框右侧的状态条：左 = TokenStats（hover 浮出统计），
+              右 = ContextRing（hover 显示百分比，点击运行 /compact）。
+              默认无边框，hover 才出方形大圆角边框，让视觉重量给输入框本身。 */}
+          <div className="flex items-center gap-0.5 pb-2 shrink-0">
+            <TokenStatsPanel stats={tokenStats} />
+            {contextUsage && (
+              <ContextRing
+                used={contextUsage.used_tokens}
+                budget={contextUsage.budget_tokens}
+                onClick={() => {
+                  if (compacting) return;
+                  void runCompact("");
+                }}
+              />
+            )}
           </div>
         </div>
 

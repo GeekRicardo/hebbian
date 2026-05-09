@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import { Sparkles, ChevronDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
-import { TokenStatsPanel } from "./TokenStatsPanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
@@ -609,19 +608,12 @@ export function ChatView() {
       <PermissionApprovalPopup />
       <UserQuestionPopup />
 
-      <div className="flex items-end gap-2">
-        <div className="flex-1 min-w-0">
-          <ChatInput
-            onSend={handleSend}
-            onCancel={handleCancel}
-            isStreaming={isStreaming}
-            userMessageHistory={userMessageHistory}
-          />
-        </div>
-        <div className="pr-3 pb-5 shrink-0">
-          <TokenStatsPanel stats={currentSession.token_stats ?? null} />
-        </div>
-      </div>
+      <ChatInput
+        onSend={handleSend}
+        onCancel={handleCancel}
+        isStreaming={isStreaming}
+        userMessageHistory={userMessageHistory}
+      />
     </div>
   );
 }
