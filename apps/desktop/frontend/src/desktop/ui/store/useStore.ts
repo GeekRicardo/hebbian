@@ -12,6 +12,7 @@ import type {
   Provider,
   ProvidersFile,
   QuestionAnswerPayload,
+  ReasoningConfig,
   SearchHit,
   Session,
   SessionMeta,
@@ -273,8 +274,12 @@ interface AppState {
     system_prompt?: string;
     prompt_id?: string;
     stream?: boolean;
+    /** 设为对象更新；设为 null 显式清空。`undefined` 不动。 */
+    reasoning?: ReasoningConfig | null;
   }) => Promise<void>;
   switchProviderModel: (providerId: string, model: string) => Promise<void>;
+  /** 仅更新当前 session 的推理配置；传 null 重置为「沿用模型默认」。 */
+  setReasoning: (reasoning: ReasoningConfig | null) => Promise<void>;
 
   setProviderDialogOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
@@ -856,6 +861,10 @@ export const useStore = create<AppState>((set, get) => ({
     });
     set({ currentSession: s, pendingPromptId: s.prompt_id ?? "" });
     await get().refreshSessions();
+  },
+
+  async setReasoning(reasoning) {
+    await get().updateCurrentConfig({ reasoning });
   },
 
   async switchProviderModel(providerId, model) {

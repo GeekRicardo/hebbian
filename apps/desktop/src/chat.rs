@@ -66,11 +66,19 @@ pub async fn send_and_save_in_data_dir(
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
 ) -> AppResult<Message> {
-    send_and_save_in_data_dir_with_client_factory(data_dir, args, emit_event, |provider, model| {
-        let client = model_gateway::build_client(provider)
-            .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
-        Ok(Arc::new(ModelWithName::new(client, model)) as Arc<dyn ModelClient>)
-    })
+    send_and_save_in_data_dir_with_client_factory(
+        data_dir,
+        args,
+        emit_event,
+        |provider, model, reasoning| {
+            let client = model_gateway::build_client(provider)
+                .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
+            Ok(
+                Arc::new(ModelWithName::with_reasoning(client, model, reasoning))
+                    as Arc<dyn ModelClient>,
+            )
+        },
+    )
     .await
 }
 
@@ -78,7 +86,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     data_dir: &Path,
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
-    build_client: impl Fn(Provider, String) -> AppResult<Arc<dyn ModelClient>> + Send + Sync,
+    build_client: impl Fn(
+            Provider,
+            String,
+            Option<platform::ReasoningConfig>,
+        ) -> AppResult<Arc<dyn ModelClient>>
+        + Send
+        + Sync,
 ) -> AppResult<Message> {
     let prior_session = sessions::load(data_dir, &args.session_id)?;
     let user_msg = Message {
@@ -98,8 +112,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .await
         .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
     let model = session.model.clone();
+    let reasoning = session.reasoning.clone();
 
-    let client = build_client(provider, model)?;
+    let client = build_client(provider, model, reasoning)?;
 
     // Workspace：session 字段优先；没设则用全局设置；都没设则 ~/
     let settings = global_settings::load(data_dir);
@@ -308,6 +323,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         request_id: &PermissionRequestId,
         _question: &str,
         _options: &[QuestionOption],
+        _multi: bool,
     ) -> Option<UserAnswer> {
         if let Some(state) = &self.hitl_state {
             state.track(request_id.0.clone(), Arc::clone(&self.hitl));
@@ -953,21 +969,42 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
 
 use model_gateway::{
     client::{DynModelClient, ModelClient},
-    types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
+    types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent, ReasoningConfig},
 };
 
 struct ModelWithName {
     inner: DynModelClient,
     model: String,
+    /// 由 session 注入的推理配置；无则保持上游默认。
+    reasoning: Option<ReasoningConfig>,
 }
 
 impl ModelWithName {
     fn new(inner: DynModelClient, model: String) -> Self {
-        Self { inner, model }
+        Self {
+            inner,
+            model,
+            reasoning: None,
+        }
+    }
+
+    fn with_reasoning(
+        inner: DynModelClient,
+        model: String,
+        reasoning: Option<ReasoningConfig>,
+    ) -> Self {
+        Self {
+            inner,
+            model,
+            reasoning,
+        }
     }
 
     fn patch_model(&self, mut req: ModelRequest) -> ModelRequest {
         req.model = self.model.clone();
+        if req.reasoning.is_none() {
+            req.reasoning = self.reasoning.clone();
+        }
         req
     }
 }
@@ -1358,7 +1395,7 @@ mod tests {
                     hitl: None,
                 },
                 |_| {},
-                |_provider, _model| {
+                |_provider, _model, _reasoning| {
                     Ok(Arc::new(OrderedPartsClient {
                         calls: AtomicUsize::new(0),
                     }) as Arc<dyn ModelClient>)
@@ -1416,7 +1453,7 @@ mod tests {
                     hitl: None,
                 },
                 |_| {},
-                |_provider, _model| {
+                |_provider, _model, _reasoning| {
                     Ok(Arc::new(RepeatedLocalIndexClient {
                         calls: AtomicUsize::new(0),
                     }) as Arc<dyn ModelClient>)

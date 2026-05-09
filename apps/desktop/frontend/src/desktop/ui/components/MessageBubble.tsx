@@ -249,6 +249,17 @@ function statusLabel(status: ToolCallItem["status"]) {
   return "生成参数";
 }
 
+function formatReasoningLabel(
+  cfg: import("@/desktop/ui/types").ReasoningConfig | null | undefined
+): string {
+  if (!cfg) return "默认";
+  const enabled = cfg.enabled ?? false;
+  const effortText = cfg.effort ?? "extra";
+  const long = cfg.long_context ? " · 1M" : "";
+  if (!enabled) return `thinking off${long}`;
+  return `thinking · ${effortText}${long}`;
+}
+
 function ToolStatusIcon({ status }: { status: ToolCallItem["status"] }) {
   if (status === "done") {
     return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
@@ -898,6 +909,26 @@ export const MessageBubble = memo(function MessageBubble({
           <Ban className="w-3 h-3 text-destructive" />
           <span className="font-medium text-foreground/70">
             当前对话已打断
+          </span>
+        </div>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "reasoning_switch") {
+    const { from, to } = message.meta;
+    return (
+      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+        <div className="flex-1 h-px bg-border" />
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
+          <ArrowRightLeft className="w-3 h-3" />
+          <span className="font-medium text-foreground/70">
+            {formatReasoningLabel(from)}
+          </span>
+          <span>→</span>
+          <span className="font-medium text-primary">
+            {formatReasoningLabel(to)}
           </span>
         </div>
         <div className="flex-1 h-px bg-border" />

@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use parking_lot::Mutex as SyncMutex;
 use platform::AppResult;
 
-use super::claude_oauth_refresh;
+use super::{claude_code_import, claude_oauth_refresh};
 use crate::config::{self, AuthMode, Provider, ProviderKind};
 
 /// 距离过期时间小于这个值就提前刷新，避免请求发到一半 token 失效。
@@ -75,9 +75,29 @@ pub async fn ensure_fresh_provider_token(
         .clone()
         .expect("needs_refresh 已检查过 refresh_token 非空");
 
-    let refreshed = claude_oauth_refresh(&refresh_token).await?;
+    let refreshed = match claude_oauth_refresh(&refresh_token).await {
+        Ok(t) => t,
+        Err(refresh_err) => {
+            // refresh 失败的常见原因是 refresh_token 已被 Anthropic 服务端 revoke
+            // （政策更新或长期未用）。此时如果用户本机装了 Claude Code 且最近登录过，
+            // 直接从 keychain / ~/.claude/.credentials.json 读最新凭据顶上去，比让用户
+            // 在 UI 里重走一遍 OAuth 友好得多。读取顺序与 claude_code_import 一致。
+            tracing::warn!(
+                error = %refresh_err,
+                "Claude OAuth refresh 失败，尝试从本地 Claude Code 凭据恢复"
+            );
+            match claude_code_import() {
+                Ok(imported) if !imported.access_token.is_empty() => {
+                    tracing::info!("已从本地 Claude Code 凭据恢复 access_token");
+                    imported
+                }
+                _ => return Err(refresh_err),
+            }
+        }
+    };
+
     provider.api_key = refreshed.access_token;
-    if let Some(rt) = refreshed.refresh_token {
+    if let Some(rt) = refreshed.refresh_token.filter(|s| !s.is_empty()) {
         provider.refresh_token = Some(rt);
     }
     if refreshed.expires_at.is_some() {

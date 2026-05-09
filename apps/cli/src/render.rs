@@ -193,6 +193,7 @@ impl TurnRenderer {
                 total_input_tokens,
                 total_output_tokens,
                 duration_ms,
+                ..
             } => {
                 self.stop_all_spinners();
                 self.flush_streaming_line();

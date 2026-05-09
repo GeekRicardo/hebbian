@@ -250,6 +250,14 @@ pub async fn run_loop(
                 total_cache_read_tokens += usage.cache_read_tokens;
                 total_cache_creation_tokens += usage.cache_creation_tokens;
 
+                // 非流式路径：reasoning 一次性带回，需要补发一个 Reasoning 事件让 UI 渲染。
+                // 流式路径下 stream provider 已经分段 emit 过 ReasoningDelta，这里 reasoning
+                // 通常是空字符串，跳过即可。
+                if !used_stream_path && !reasoning.is_empty() {
+                    emit(EventPayload::Reasoning {
+                        text: reasoning.clone(),
+                    });
+                }
                 emit(EventPayload::TextDone {
                     full_text: text.clone(),
                 });
@@ -287,6 +295,11 @@ pub async fn run_loop(
                 // 走 stream 路径时，TextDelta 已经一段段经 provider 流出来了；
                 // 再 emit 一次会把整段正文重复喷给 surface（且 provider 端的
                 // sieve 等增量过滤也会被绕开）。仅在 complete 路径下补发。
+                if !used_stream_path && !reasoning.is_empty() {
+                    emit(EventPayload::Reasoning {
+                        text: reasoning.clone(),
+                    });
+                }
                 if !used_stream_path && !text.is_empty() {
                     emit(EventPayload::TextDelta { text: text.clone() });
                 }

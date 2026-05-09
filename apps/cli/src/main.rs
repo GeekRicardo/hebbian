@@ -30,6 +30,7 @@ use model_gateway::{
     client::{DynModelClient, ModelClient},
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
+use platform::reasoning::{ReasoningConfig, ReasoningEffort};
 use platform::CancelFlag;
 
 mod mock_provider;
@@ -91,6 +92,28 @@ struct Cli {
     /// 不把事件流落盘（默认会写到 data_dir/sessions/<ts>-<uuid>.jsonl）
     #[arg(long)]
     no_record: bool,
+
+    /// 开启 thinking / reasoning（claude-opus-4* / claude-sonnet-4* / gpt-5* / o-series）
+    #[arg(long)]
+    thinking: bool,
+
+    /// 思考强度 low|medium|high|extra（默认 extra）
+    #[arg(long, value_parser = parse_effort, default_value = "extra")]
+    effort: ReasoningEffort,
+
+    /// Anthropic 1M 上下文 beta header
+    #[arg(long = "long-context")]
+    long_context: bool,
+}
+
+fn parse_effort(s: &str) -> Result<ReasoningEffort, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "low" => Ok(ReasoningEffort::Low),
+        "medium" | "med" => Ok(ReasoningEffort::Medium),
+        "high" => Ok(ReasoningEffort::High),
+        "extra" | "xhigh" => Ok(ReasoningEffort::Extra),
+        other => Err(format!("无效 effort：{other}（low|medium|high|extra）")),
+    }
 }
 
 #[tokio::main]
@@ -124,12 +147,23 @@ async fn main() -> Result<()> {
     };
     let workspace = Workspace::new(workdir.clone(), allowed_dirs);
 
+    let reasoning = if cli.thinking || cli.long_context {
+        Some(ReasoningConfig {
+            enabled: cli.thinking.then_some(true),
+            effort: Some(cli.effort),
+            long_context: cli.long_context.then_some(true),
+        })
+    } else {
+        None
+    };
+
     let built = build_harness_and_client(
         BuildOpts {
             mock: cli.mock,
             provider: cli.provider.clone(),
             model: cli.model.clone(),
             data_dir: Some(data_dir.clone()),
+            reasoning,
         },
         workspace.clone(),
     )
@@ -214,6 +248,7 @@ struct BuildOpts {
     provider: Option<String>,
     model: Option<String>,
     data_dir: Option<PathBuf>,
+    reasoning: Option<ReasoningConfig>,
 }
 
 struct BuiltClient {
@@ -253,7 +288,11 @@ async fn build_harness_and_client(
     let provider_name = provider.name.clone();
 
     let inner = model_gateway::build_client(provider).map_err(|e| anyhow!("build client：{e}"))?;
-    let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(inner, model.clone()));
+    let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::with_reasoning(
+        inner,
+        model.clone(),
+        opts.reasoning.clone(),
+    ));
     Ok(BuiltClient {
         harness,
         client,
@@ -380,18 +419,39 @@ fn default_data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".hebbian"))
 }
 
-/// 把 model id 注入每次请求（与 desktop 的 ModelWithName 同思路）
+/// 把 model id + reasoning 配置注入每次请求（与 desktop 的 ModelWithName 同思路）
 struct NamedModelClient {
     inner: DynModelClient,
     model: String,
+    reasoning: Option<ReasoningConfig>,
 }
 
 impl NamedModelClient {
     fn new(inner: DynModelClient, model: String) -> Self {
-        Self { inner, model }
+        Self {
+            inner,
+            model,
+            reasoning: None,
+        }
     }
+
+    fn with_reasoning(
+        inner: DynModelClient,
+        model: String,
+        reasoning: Option<ReasoningConfig>,
+    ) -> Self {
+        Self {
+            inner,
+            model,
+            reasoning,
+        }
+    }
+
     fn patch(&self, mut req: ModelRequest) -> ModelRequest {
         req.model = self.model.clone();
+        if req.reasoning.is_none() {
+            req.reasoning = self.reasoning.clone();
+        }
         req
     }
 }

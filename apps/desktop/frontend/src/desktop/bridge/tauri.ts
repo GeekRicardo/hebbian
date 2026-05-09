@@ -16,6 +16,7 @@ import type {
   ProviderModelTestResult,
   ProviderPreset,
   ProvidersFile,
+  ReasoningConfig,
   SearchHit,
   Session,
   SessionMeta,
@@ -80,16 +81,22 @@ export const api = {
       system_prompt?: string;
       prompt_id?: string;
       stream?: boolean;
+      /** 设为对象更新；设为 null 显式清空。 */
+      reasoning?: ReasoningConfig | null;
     }
-  ) =>
-    invoke<Session>("update_session_config", {
+  ) => {
+    const reasoningGiven = Object.prototype.hasOwnProperty.call(patch, "reasoning");
+    return invoke<Session>("update_session_config", {
       id,
       providerId: patch.provider_id ?? null,
       model: patch.model ?? null,
       systemPrompt: patch.system_prompt ?? null,
       promptId: patch.prompt_id ?? null,
       stream: patch.stream ?? null,
-    }),
+      reasoning: reasoningGiven && patch.reasoning != null ? patch.reasoning : null,
+      clearReasoning: reasoningGiven && patch.reasoning == null,
+    });
+  },
   switchProviderModel: (id: string, providerId: string, model: string) =>
     invoke<Session>("switch_provider_model", {
       id,

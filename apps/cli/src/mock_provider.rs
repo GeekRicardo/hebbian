@@ -72,6 +72,8 @@ impl ModelClient for MockClient {
             usage: Usage {
                 input_tokens: 8,
                 output_tokens: 4,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             },
         })
     }

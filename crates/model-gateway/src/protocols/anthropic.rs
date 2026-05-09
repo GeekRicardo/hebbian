@@ -5,6 +5,7 @@ use crate::types::{
     AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
+use platform::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -14,12 +15,87 @@ const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI 
 pub fn build_body(req: &ModelRequest, stream: bool, claude_code_oauth: bool) -> Value {
     let messages: Vec<Value> = req.entries.iter().filter_map(entry_to_message).collect();
 
+    // 三种 thinking schema 互不兼容，按模型家族走不同分支。
+    // 见 platform::reasoning::AnthropicThinkingMode。
+    let mut max_tokens = req.max_tokens;
+    let mut thinking_block: Option<Value> = None;
+    let mut output_config: Option<Value> = None;
+    let mut suppress_sampling = false;
+
+    if let (Some(cfg), Some(mode)) = (
+        req.reasoning.as_ref(),
+        anthropic_thinking_mode(&req.model),
+    ) {
+        if cfg.is_enabled() {
+            let effort = cfg.effective_effort();
+            match mode {
+                AnthropicThinkingMode::Opus47Adaptive => {
+                    // Opus 4.7：
+                    // - adaptive + display:summarized 在 stream 模式下不发 thinking_delta（实测）
+                    // - 退化成 enabled + budget_tokens
+                    // - **必须**显式 display:"summarized"，否则 4.7 默认 display=omitted，
+                    //   stream 同样不发 thinking_delta。
+                    let budget = effort.anthropic_legacy_budget_tokens();
+                    if max_tokens <= budget {
+                        max_tokens = budget.saturating_add(1024);
+                    }
+                    thinking_block = Some(json!({
+                        "type": "enabled",
+                        "budget_tokens": budget,
+                        "display": "summarized",
+                    }));
+                }
+                AnthropicThinkingMode::Adaptive46 => {
+                    // Opus/Sonnet 4.6：实测 API 不接受 thinking.adaptive.effort 字段
+                    // （400 invalid_request_error: "Extra inputs are not permitted"），
+                    // 没找到公开的 effort 控制点，退化成 legacy enabled + budget_tokens
+                    // —— 这条路 4.6 仍然支持，且可控 budget。
+                    let budget = effort.anthropic_legacy_budget_tokens();
+                    if max_tokens <= budget {
+                        max_tokens = budget.saturating_add(1024);
+                    }
+                    thinking_block = Some(json!({
+                        "type": "enabled",
+                        "budget_tokens": budget,
+                    }));
+                }
+                AnthropicThinkingMode::LegacyEnabled => {
+                    let budget = effort.anthropic_legacy_budget_tokens();
+                    // budget_tokens 必须 < max_tokens；给输出留至少 1024 余量。
+                    if max_tokens <= budget {
+                        max_tokens = budget.saturating_add(1024);
+                    }
+                    thinking_block = Some(json!({
+                        "type": "enabled",
+                        "budget_tokens": budget,
+                    }));
+                }
+            }
+        }
+    }
+
     let mut body = json!({
         "model": req.model,
-        "max_tokens": req.max_tokens,
+        "max_tokens": max_tokens,
         "messages": messages,
         "stream": stream,
     });
+
+    if let Some(t) = thinking_block {
+        body["thinking"] = t;
+    }
+    if let Some(oc) = output_config {
+        body["output_config"] = oc;
+    }
+    if suppress_sampling {
+        // Opus 4.7 在 adaptive 模式下显式拒绝 temperature/top_p/top_k。
+        // 我们当前不主动注入这些字段，但万一上游 wrapper 透传了，统一抹掉。
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("temperature");
+            obj.remove("top_p");
+            obj.remove("top_k");
+        }
+    }
 
     body["system"] = build_system(req.system.as_deref(), claude_code_oauth);
     if body["system"].is_null() {
@@ -230,73 +306,129 @@ pub fn parse_response(v: &Value) -> ModelResponse {
     let stop_reason = v["stop_reason"].as_str().unwrap_or("");
     let usage = parse_usage(v);
 
-    if stop_reason == "tool_use" {
-        let mut text = String::new();
-        let mut calls = Vec::new();
-        if let Some(content) = v["content"].as_array() {
-            for block in content {
-                match block["type"].as_str() {
-                    Some("text") => text.push_str(block["text"].as_str().unwrap_or("")),
-                    Some("tool_use") => calls.push(ToolCall {
-                        id: block["id"].as_str().unwrap_or("").to_string(),
-                        name: block["name"].as_str().unwrap_or("").to_string(),
-                        input: block["input"].clone(),
-                    }),
-                    _ => {}
+    // 解析所有 content block —— thinking / text / tool_use 都要捕获。
+    // 之前漏了 thinking block，开了 extended thinking 拿不到推理文本。
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut calls = Vec::new();
+    if let Some(arr) = v["content"].as_array() {
+        for block in arr {
+            match block["type"].as_str() {
+                Some("text") => text.push_str(block["text"].as_str().unwrap_or("")),
+                Some("thinking") => {
+                    // adaptive 模式下可能是 summary，legacy enabled 模式下是完整推理；
+                    // 字段名都是 `thinking`。
+                    if let Some(s) = block["thinking"].as_str() {
+                        reasoning.push_str(s);
+                    } else if let Some(s) = block["summary"].as_str() {
+                        reasoning.push_str(s);
+                    }
                 }
+                Some("tool_use") => calls.push(ToolCall {
+                    id: block["id"].as_str().unwrap_or("").to_string(),
+                    name: block["name"].as_str().unwrap_or("").to_string(),
+                    input: block["input"].clone(),
+                }),
+                _ => {}
             }
         }
+    }
+
+    if stop_reason == "tool_use" {
         ModelResponse::ToolCalls {
             text,
-            reasoning: String::new(),
+            reasoning,
             calls,
             attachments: Vec::new(),
             usage,
         }
     } else {
-        let mut text = String::new();
-        if let Some(arr) = v["content"].as_array() {
-            for block in arr {
-                if block["type"] == "text" {
-                    text.push_str(block["text"].as_str().unwrap_or(""));
-                }
-            }
-        }
         ModelResponse::Done {
             text,
-            reasoning: String::new(),
+            reasoning,
             attachments: Vec::new(),
             usage,
         }
     }
 }
 
-/// Anthropic SSE 流增量。`text_delta` 是普通输出，`thinking_delta` 是
-/// extended thinking（启用了 `thinking` 后才出现）。
+/// Anthropic SSE 流事件解析结果。所有 `content_block_*` / `message_delta` 都打到这里。
+///
+/// - `Text` / `Thinking`：`content_block_delta` 里的文本增量。
+/// - `ToolUseStart`：`content_block_start` 里 type=tool_use，给上层 ID/name/index。
+/// - `ToolInputJsonDelta`：`content_block_delta.delta.type=input_json_delta`，
+///   是 tool_use 入参 JSON 的字符串增量（**不是**结构化的，要拼起来 parse）。
+/// - `MessageDelta`：`message_delta` 事件，带 stop_reason 等。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnthropicStreamDelta {
-    Text(String),
-    Thinking(String),
+pub enum AnthropicStreamEvent {
+    Text {
+        index: usize,
+        delta: String,
+    },
+    Thinking {
+        index: usize,
+        delta: String,
+    },
+    ToolUseStart {
+        index: usize,
+        id: String,
+        name: String,
+    },
+    ToolInputJsonDelta {
+        index: usize,
+        partial_json: String,
+    },
+    MessageDelta {
+        stop_reason: Option<String>,
+    },
 }
 
-pub fn parse_stream_delta(event_type: &str, data: &str) -> Option<AnthropicStreamDelta> {
-    if event_type != "content_block_delta" {
-        return None;
-    }
+pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStreamEvent> {
     let v: Value = serde_json::from_str(data).ok()?;
-    if v["type"] != "content_block_delta" {
-        return None;
-    }
-    match v["delta"]["type"].as_str() {
-        Some("text_delta") | None => v["delta"]["text"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| AnthropicStreamDelta::Text(s.to_string())),
-        Some("thinking_delta") => v["delta"]["thinking"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(|s| AnthropicStreamDelta::Thinking(s.to_string())),
-        // signature_delta / input_json_delta 等暂时不传给上层
+    match event_type {
+        "content_block_start" => {
+            let index = v["index"].as_u64()? as usize;
+            let block = &v["content_block"];
+            match block["type"].as_str()? {
+                "tool_use" => {
+                    let id = block["id"].as_str().unwrap_or("").to_string();
+                    let name = block["name"].as_str().unwrap_or("").to_string();
+                    Some(AnthropicStreamEvent::ToolUseStart { index, id, name })
+                }
+                // text / thinking 的 start 没文本载荷，跳过；后续靠 *_delta 补内容
+                _ => None,
+            }
+        }
+        "content_block_delta" => {
+            let index = v["index"].as_u64()? as usize;
+            match v["delta"]["type"].as_str() {
+                Some("text_delta") | None => v["delta"]["text"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| AnthropicStreamEvent::Text {
+                        index,
+                        delta: s.to_string(),
+                    }),
+                Some("thinking_delta") => v["delta"]["thinking"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| AnthropicStreamEvent::Thinking {
+                        index,
+                        delta: s.to_string(),
+                    }),
+                Some("input_json_delta") => v["delta"]["partial_json"]
+                    .as_str()
+                    .map(|s| AnthropicStreamEvent::ToolInputJsonDelta {
+                        index,
+                        partial_json: s.to_string(),
+                    }),
+                // signature_delta 等暂时不上抛
+                _ => None,
+            }
+        }
+        "message_delta" => Some(AnthropicStreamEvent::MessageDelta {
+            stop_reason: v["delta"]["stop_reason"].as_str().map(String::from),
+        }),
         _ => None,
     }
 }

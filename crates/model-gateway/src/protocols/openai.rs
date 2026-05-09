@@ -8,6 +8,7 @@ use crate::types::{
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
 use platform::attachments::MessageAttachment;
+use platform::reasoning::openai_supports_reasoning;
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,16 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
 
     if !req.tools.is_empty() {
         body["tools"] = json!(tool_defs(&req.tools));
+    }
+
+    // gpt-5 / o-series 支持 reasoning_effort（顶层字段，chat completions 形态）。
+    // 5.4 / 5.5 / codex-max 走 xhigh，其它（含 o-series）钳到 high。o1-mini 直接跳过整个字段。
+    if let Some(cfg) = req.reasoning.as_ref() {
+        if cfg.is_enabled() && openai_supports_reasoning(&req.model) {
+            body["reasoning_effort"] = json!(cfg
+                .effective_effort()
+                .openai_effort_for_model(&req.model));
+        }
     }
 
     body
@@ -177,6 +188,15 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
             obj.entry("tools".to_string()).or_insert(json!([]));
             obj.entry("parallel_tool_calls".to_string())
                 .or_insert(json!(false));
+        }
+    }
+
+    // Responses API 用嵌套对象 reasoning.effort（gpt-5 / o-series）。
+    if let Some(cfg) = req.reasoning.as_ref() {
+        if cfg.is_enabled() && openai_supports_reasoning(&req.model) {
+            body["reasoning"] = json!({
+                "effort": cfg.effective_effort().openai_effort_for_model(&req.model),
+            });
         }
     }
 

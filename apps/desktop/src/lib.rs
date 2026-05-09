@@ -181,6 +181,9 @@ fn update_session_config(
     system_prompt: Option<String>,
     prompt_id: Option<String>,
     stream: Option<bool>,
+    reasoning: Option<platform::ReasoningConfig>,
+    // clear_reasoning：显式重置推理配置；当 reasoning=None 且这里传 Some(true) 时清空。
+    clear_reasoning: Option<bool>,
 ) -> AppResult<Session> {
     let dd = data_dir(&app)?;
     let mut s = sessions::load(&dd, &id)?;
@@ -198,6 +201,31 @@ fn update_session_config(
     }
     if let Some(st) = stream {
         s.stream = st;
+    }
+    let prev_reasoning = s.reasoning.clone();
+    if let Some(r) = reasoning {
+        s.reasoning = Some(r);
+    } else if clear_reasoning.unwrap_or(false) {
+        s.reasoning = None;
+    }
+    if prev_reasoning != s.reasoning {
+        // 把 reasoning 切换当作模型切换的轻量版本——往对话流里插一条 marker，
+        // 让 UI 渲染分割线，从这条之后的回复里都是新参数下产生的。
+        sessions::insert_reasoning_switch_marker(
+            &dd,
+            &id,
+            prev_reasoning,
+            s.reasoning.clone(),
+        )?;
+        // 上面 marker 写入后再 reload 一次，避免覆盖 marker。
+        let mut latest = sessions::load(&dd, &id)?;
+        latest.system_prompt = s.system_prompt.clone();
+        latest.prompt_id = s.prompt_id.clone();
+        latest.stream = s.stream;
+        latest.reasoning = s.reasoning.clone();
+        latest.provider_id = s.provider_id.clone();
+        latest.model = s.model.clone();
+        return sessions::save(&dd, latest);
     }
     sessions::save(&dd, s)
 }
@@ -233,6 +261,21 @@ fn switch_provider_model(
     let mut updated = sessions::load(&dd, &id)?;
     updated.provider_id = new_provider_id;
     updated.model = new_model;
+    let supports = platform::reasoning::anthropic_supports_thinking(&updated.model)
+        || platform::reasoning::openai_supports_reasoning(&updated.model);
+    if supports {
+        // 首次切到支持推理的模型：默认 thinking on + extra effort（用户可在 UI 改）
+        if updated.reasoning.is_none() {
+            updated.reasoning = Some(platform::ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(platform::ReasoningEffort::Extra),
+                long_context: None,
+            });
+        }
+    } else {
+        // 切到不支持的模型：丢掉旧 reasoning，避免遗留 thinking 字段被 server 拒。
+        updated.reasoning = None;
+    }
     sessions::save(&dd, updated)
 }
 

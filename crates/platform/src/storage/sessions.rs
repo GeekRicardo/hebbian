@@ -32,6 +32,14 @@ pub enum MessageMeta {
         before_tokens: usize,
         after_tokens: usize,
     },
+    /// 推理参数变化标记（thinking on/off、effort 档位、1M 上下文）。
+    /// `None` 表示之前没有 reasoning 配置（沿用模型默认）。
+    ReasoningSwitch {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<crate::reasoning::ReasoningConfig>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<crate::reasoning::ReasoningConfig>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +119,11 @@ pub struct Session {
     /// 对话使用的 skill 目录列表。`None` = 用全局默认。
     #[serde(default)]
     pub skill_dirs: Option<Vec<PathBuf>>,
+    /// 推理 / thinking 配置。`None` = 沿用模型默认（多数模型默认关闭）。
+    /// 在 desktop 选模型时，对支持 thinking 的模型（claude-opus-4 / gpt-5 等）
+    /// 默认填 `Some({enabled: true, effort: Extra})`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
     /// 整个对话累计的 token 用量。每次 run 结束由 surface 累加进 session.json，
     /// 用来在输入框旁的 TokenStatsPanel 直接展示，无需重跑。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,6 +324,7 @@ pub fn create(
         allowed_dirs: None,
         enabled_tools: None,
         skill_dirs: None,
+        reasoning: None,
         token_stats: None,
         created_at: now(),
         updated_at: now(),
@@ -339,6 +353,17 @@ pub fn insert_switch_marker(data_dir: &Path, id: &str, meta: MessageMeta) -> App
     save(data_dir, s)
 }
 
+/// 推理参数切换的 marker（thinking on/off / effort / 1M context）。
+/// 仅当 `from != to` 才该调用——上层负责对比并决定是否插入。
+pub fn insert_reasoning_switch_marker(
+    data_dir: &Path,
+    id: &str,
+    from: Option<crate::reasoning::ReasoningConfig>,
+    to: Option<crate::reasoning::ReasoningConfig>,
+) -> AppResult<Session> {
+    insert_switch_marker(data_dir, id, MessageMeta::ReasoningSwitch { from, to })
+}
+
 pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppResult<Session> {
     let src = load(data_dir, session_id)?;
     let mut msgs = Vec::new();
@@ -361,6 +386,7 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         allowed_dirs: src.allowed_dirs,
         enabled_tools: src.enabled_tools,
         skill_dirs: src.skill_dirs,
+        reasoning: src.reasoning,
         token_stats: src.token_stats,
         created_at: now(),
         updated_at: now(),

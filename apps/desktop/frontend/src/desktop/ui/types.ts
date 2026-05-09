@@ -83,6 +83,11 @@ export type MessageMeta =
       summary: string;
       before_tokens: number;
       after_tokens: number;
+    }
+  | {
+      type: "reasoning_switch";
+      from?: ReasoningConfig | null;
+      to?: ReasoningConfig | null;
     };
 
 /** 当前 session 的上下文用量（来自 get_context_usage / compact_session） */
@@ -175,6 +180,27 @@ export type MessageAttachment =
       data: string;
     };
 
+/**
+ * 推理强度。Anthropic 翻译成 budget_tokens（Extra ≈ 32k），
+ * OpenAI 翻译成 reasoning_effort（Extra 钳到 high）。
+ */
+export type ReasoningEffort = "low" | "medium" | "high" | "extra";
+
+export interface ReasoningConfig {
+  /**
+   * 是否启用 thinking / reasoning。`undefined` = 沿用模型默认。
+   * 对支持 thinking 的模型（claude-opus-4 / gpt-5 等），UI 默认填 true。
+   */
+  enabled?: boolean;
+  /** 推理强度。`undefined` = 默认 extra。 */
+  effort?: ReasoningEffort;
+  /**
+   * Anthropic 1M 上下文开关。仅对 Sonnet 4 / Sonnet 4.5 / Opus 4.x 老型号有意义；
+   * 4.6+ 默认 1M，此开关被服务端忽略。`undefined` = 不传 beta header。
+   */
+  long_context?: boolean;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -192,6 +218,8 @@ export interface Session {
   enabled_tools?: string[] | null;
   /** 对话使用的 skill 目录列表。null = 用全局默认。 */
   skill_dirs?: string[] | null;
+  /** 推理 / thinking 配置。undefined = 沿用模型默认。 */
+  reasoning?: ReasoningConfig | null;
   /** 整个对话累计 token 用量（含缓存命中 / 写入）；新建对话时为 null。 */
   token_stats?: TokenStats | null;
   created_at: number;

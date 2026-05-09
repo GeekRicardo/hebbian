@@ -10,7 +10,107 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
-import type { MessageAttachment, Provider } from "@/desktop/ui/types";
+import {
+  DEFAULT_REASONING,
+  REASONING_EFFORT_LABEL,
+  REASONING_EFFORT_ORDER,
+  effortDisplay,
+  modelExposesLongContextToggle,
+  modelSupportsReasoning,
+} from "@/desktop/ui/lib/reasoning";
+import type {
+  MessageAttachment,
+  Provider,
+  ReasoningConfig,
+  ReasoningEffort,
+} from "@/desktop/ui/types";
+
+function ReasoningControls({
+  providerKind,
+  model,
+  reasoning,
+  onChange,
+}: {
+  providerKind: string;
+  model: string;
+  reasoning: ReasoningConfig;
+  onChange: (next: ReasoningConfig) => void;
+}) {
+  const enabled = reasoning.enabled ?? true;
+  const effort: ReasoningEffort = reasoning.effort ?? "extra";
+  const longContext = reasoning.long_context ?? false;
+  const showLongContext = modelExposesLongContextToggle(providerKind, model);
+  const showReasoning = modelSupportsReasoning(providerKind, model);
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="px-3 py-2 border-t border-border bg-muted/40 space-y-2"
+    >
+      {showReasoning && (
+        <>
+          <label className="flex items-center justify-between text-[11px]">
+            <span className="text-muted-foreground">启用 thinking</span>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) =>
+                onChange({ ...reasoning, enabled: e.target.checked })
+              }
+              className="h-3.5 w-3.5 cursor-pointer accent-primary"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span
+              className="text-muted-foreground shrink-0"
+              title={`实际发送：${effortDisplay(providerKind, model, effort)}`}
+            >
+              思考强度
+            </span>
+            <div className="inline-flex rounded-md border border-border overflow-hidden">
+              {REASONING_EFFORT_ORDER.map((level) => {
+                const active = effort === level;
+                return (
+                  <button
+                    key={level}
+                    type="button"
+                    disabled={!enabled}
+                    onClick={() => onChange({ ...reasoning, effort: level })}
+                    title={`实际发送：${effortDisplay(providerKind, model, level)}`}
+                    className={cn(
+                      "px-2 py-0.5 text-[10px] transition-colors",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background hover:bg-accent",
+                      !enabled && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    {REASONING_EFFORT_LABEL[level]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+      {showLongContext && (
+        <label
+          className="flex items-center justify-between text-[11px]"
+          title="开启后请求会带 anthropic-beta: context-1m-2025-08-07，把 Sonnet/Opus 旧版本上下文从 200k 抬到 1M"
+        >
+          <span className="text-muted-foreground">1M 上下文</span>
+          <input
+            type="checkbox"
+            checked={longContext}
+            onChange={(e) =>
+              onChange({ ...reasoning, long_context: e.target.checked })
+            }
+            className="h-3.5 w-3.5 cursor-pointer accent-primary"
+          />
+        </label>
+      )}
+    </div>
+  );
+}
 
 function isProviderEnabled(provider: Provider) {
   return provider.enabled !== false;
@@ -35,6 +135,7 @@ export function ChatView() {
     regenerateTitle,
     setProviderDialogOpen,
     setSettingsOpen,
+    setReasoning,
     switchProviderModel,
     newSession,
     pendingPromptId,
@@ -312,6 +413,8 @@ export function ChatView() {
     }
   }
   async function handleSwitch(providerId: string, model: string) {
+    // 不在这里关闭 picker：切完模型用户通常还要继续配 thinking / effort。
+    // 关闭由「点 picker 外部」的全局监听器负责（见 setPickerOpen 的 useEffect）。
     try {
       await switchProviderModel(providerId, model);
     } catch (e: any) {
@@ -480,18 +583,40 @@ export function ChatView() {
                         {models.map((m) => {
                           const act =
                             isActiveProvider && m === currentSession.model;
+                          // 选中的模型才显示控件；reasoning 或 1M context 任一支持就展示。
+                          const showControls =
+                            act &&
+                            (modelSupportsReasoning(p.kind, m) ||
+                              modelExposesLongContextToggle(p.kind, m));
                           return (
-                            <button
-                              key={`${p.id}-${m}`}
-                              onClick={() => handleSwitch(p.id, m)}
-                              className={cn(
-                                "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between",
-                                act && "bg-primary/10 text-primary"
+                            <div key={`${p.id}-${m}`}>
+                              <button
+                                onClick={() => handleSwitch(p.id, m)}
+                                className={cn(
+                                  "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between",
+                                  act && "bg-primary/10 text-primary"
+                                )}
+                              >
+                                <span className="truncate">{m}</span>
+                                {act && <span className="text-xs">✓</span>}
+                              </button>
+                              {showControls && (
+                                <ReasoningControls
+                                  providerKind={p.kind}
+                                  model={m}
+                                  reasoning={
+                                    currentSession.reasoning ?? DEFAULT_REASONING
+                                  }
+                                  onChange={(next) => {
+                                    void setReasoning(next).catch((e: unknown) => {
+                                      const msg =
+                                        e instanceof Error ? e.message : String(e);
+                                      toast.error(msg);
+                                    });
+                                  }}
+                                />
                               )}
-                            >
-                              <span className="truncate">{m}</span>
-                              {act && <span className="text-xs">✓</span>}
-                            </button>
+                            </div>
                           );
                         })}
                       </div>

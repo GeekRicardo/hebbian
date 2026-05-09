@@ -3,6 +3,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use platform::attachments::MessageAttachment;
+pub use platform::{ReasoningConfig, ReasoningEffort};
 
 pub const IMAGE_GENERATION_TOOL_NAME: &str = "image_generation";
 
@@ -97,6 +98,9 @@ pub struct ModelRequest {
     pub entries: Vec<TranscriptEntry>,
     pub tools: Vec<ToolDefinition>,
     pub max_tokens: u32,
+    /// 推理 / thinking 行为。`None` = 沿用模型默认（多数模型默认关闭）。
+    /// 由 surface 层（[`ModelWithName`] 等 wrapper）按 session 配置注入。
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 /// 模型完成响应

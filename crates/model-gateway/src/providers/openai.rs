@@ -930,6 +930,7 @@ mod tests {
                 parameters: json!({"type": "object"}),
             }],
             max_tokens: 8192,
+            reasoning: None,
         };
 
         assert!(client.should_use_responses(&req));

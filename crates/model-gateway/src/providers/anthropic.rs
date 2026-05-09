@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use serde_json::Value;
+use reqwest::RequestBuilder;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use tracing::debug;
 
 use crate::config::{AuthMode, Provider};
 use crate::{
@@ -7,10 +10,32 @@ use crate::{
     protocols::anthropic as proto,
     providers::apply_auth,
     types::{
-        has_image_generation_tool, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage,
+        has_image_generation_tool, ModelError, ModelRequest, ModelResponse, ModelStreamEvent,
+        ToolCall, ToolCallStreamDelta, Usage,
     },
 };
+use platform::reasoning::{anthropic_long_context_uses_beta, ANTHROPIC_LONG_CONTEXT_BETA};
 use platform::CancelFlag;
+
+/// 给 Anthropic 请求按需附加 beta 特性头。当前只处理 1M context（其余 beta
+/// 由 [`apply_auth`] 在 OAuth 分支里固定带上）。
+fn apply_optional_betas(req: RequestBuilder, attach_long_context: bool) -> RequestBuilder {
+    if !attach_long_context {
+        return req;
+    }
+    // 重复传 anthropic-beta 是允许的：服务端对所有出现的值取并集。
+    req.header("anthropic-beta", ANTHROPIC_LONG_CONTEXT_BETA)
+}
+
+/// 从 [`ModelRequest`] 算出本次请求是否需要 1M context beta header。
+fn needs_long_context_beta(req: &ModelRequest) -> bool {
+    let wants_long = req
+        .reasoning
+        .as_ref()
+        .map(|r| r.wants_long_context())
+        .unwrap_or(false);
+    wants_long && anthropic_long_context_uses_beta(&req.model)
+}
 
 pub struct AnthropicClient {
     provider: Provider,
@@ -30,6 +55,56 @@ impl AnthropicClient {
         )
     }
 
+    /// 走 `complete()` 拿到完整响应后，把 reasoning / text / tool_use 一次性 emit
+    /// 成 stream events，让上层 (`agent_loop`) 看起来像走了 stream 路径。
+    /// 用于 Opus 4.7 + thinking 这种 stream 模式服务端不发 thinking_delta 的场景。
+    async fn complete_then_emit(
+        &self,
+        req: ModelRequest,
+        cancel: CancelFlag,
+        on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+    ) -> Result<ModelResponse, ModelError> {
+        tracing::info!(model = %req.model, "anthropic: 4.7 thinking → complete_then_emit");
+        let resp = self.complete(req, cancel).await?;
+        match &resp {
+            ModelResponse::Done { text, reasoning, .. } => {
+                tracing::info!(reasoning_len = reasoning.len(), text_len = text.len(), "anthropic complete_then_emit: Done");
+                if !reasoning.is_empty() {
+                    on_event(ModelStreamEvent::ReasoningDelta {
+                        text: reasoning.clone(),
+                    });
+                }
+                if !text.is_empty() {
+                    on_event(ModelStreamEvent::TextDelta { text: text.clone() });
+                }
+            }
+            ModelResponse::ToolCalls {
+                text,
+                reasoning,
+                calls,
+                ..
+            } => {
+                if !reasoning.is_empty() {
+                    on_event(ModelStreamEvent::ReasoningDelta {
+                        text: reasoning.clone(),
+                    });
+                }
+                if !text.is_empty() {
+                    on_event(ModelStreamEvent::TextDelta { text: text.clone() });
+                }
+                for (i, call) in calls.iter().enumerate() {
+                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                        index: i,
+                        id: Some(call.id.clone()),
+                        name: Some(call.name.clone()),
+                        arguments_delta: Some(call.input.to_string()),
+                    }));
+                }
+            }
+        }
+        Ok(resp)
+    }
+
     fn is_claude_code_oauth(&self) -> bool {
         matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode)
     }
@@ -41,21 +116,37 @@ impl ModelClient for AnthropicClient {
         &self.provider.id
     }
 
+    fn supports_streaming_tools(&self) -> bool {
+        // Anthropic SSE 已经能流式发 tool_use（content_block_start + input_json_delta）；
+        // 我们的 stream() 实现支持解析这两种，所以可以让 agent_loop 在带 tools 的 turn
+        // 也走流式路径，从而实时拿到 thinking_delta。
+        true
+    }
+
     async fn complete(
         &self,
         req: ModelRequest,
         cancel: CancelFlag,
     ) -> Result<ModelResponse, ModelError> {
         reject_image_generation_tool(&req)?;
+        tracing::info!(model = %req.model, "anthropic complete: dispatched");
         let body = proto::build_body(&req, false, self.is_claude_code_oauth());
+        let attach_long = needs_long_context_beta(&req);
+
+        if let Some(thinking) = body.get("thinking") {
+            debug!(model = %req.model, thinking = %thinking, "anthropic complete: thinking field");
+        }
 
         super::retry_request(cancel, || {
             let body = body.clone();
             async move {
-                let resp = apply_auth(self.http.post(self.messages_url()), &self.provider)
-                    .json(&body)
-                    .send()
-                    .await?;
+                let resp = apply_optional_betas(
+                    apply_auth(self.http.post(self.messages_url()), &self.provider),
+                    attach_long,
+                )
+                .json(&body)
+                .send()
+                .await?;
                 let status = resp.status().as_u16();
                 let text = resp.text().await?;
                 if status >= 400 {
@@ -74,16 +165,43 @@ impl ModelClient for AnthropicClient {
         cancel: CancelFlag,
         on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
     ) -> Result<ModelResponse, ModelError> {
+        // Opus 4.7 在 stream 模式下不发 thinking_delta（实测：只有 signature_delta），
+        // 即使显式 display:"summarized" 也没用。要拿到 thinking 文本只能走 complete()。
+        // 这里检查到「4.7 + thinking 启用」就回退到 complete，保证 thinking 能落地；
+        // 拿到完整 reasoning 后一次性 emit ReasoningDelta，再分别 emit text 和 tool_use。
+        if matches!(
+            platform::reasoning::anthropic_thinking_mode(&req.model),
+            Some(platform::reasoning::AnthropicThinkingMode::Opus47Adaptive)
+        ) && req
+            .reasoning
+            .as_ref()
+            .map(|r| r.is_enabled())
+            .unwrap_or(false)
+        {
+            return self.complete_then_emit(req, cancel, on_event).await;
+        }
+
         reject_image_generation_tool(&req)?;
         let body = proto::build_body(&req, true, self.is_claude_code_oauth());
+        let attach_long = needs_long_context_beta(&req);
+        tracing::info!(
+            model = %req.model,
+            stream = %body.get("stream").map(|v| v.to_string()).unwrap_or_default(),
+            thinking = %body.get("thinking").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
+            output_config = %body.get("output_config").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
+            "anthropic stream: dispatched"
+        );
 
         let resp = super::retry_request(cancel.clone(), || {
             let body = body.clone();
             async move {
-                let r = apply_auth(self.http.post(self.messages_url()), &self.provider)
-                    .json(&body)
-                    .send()
-                    .await?;
+                let r = apply_optional_betas(
+                    apply_auth(self.http.post(self.messages_url()), &self.provider),
+                    attach_long,
+                )
+                .json(&body)
+                .send()
+                .await?;
                 let status = r.status().as_u16();
                 if status >= 400 {
                     let body = r.text().await?;
@@ -96,9 +214,20 @@ impl ModelClient for AnthropicClient {
 
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
-        let mut full = String::new();
+        let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut current_event_type = String::new();
+        let mut thinking_deltas_seen: u64 = 0;
+
+        // tool_use 累积：按 Anthropic content block index 跟踪每个 tool 的 id/name/args。
+        // 用 BTreeMap 保留 index 顺序；ToolCallStreamDelta.index 同时透给上层。
+        struct ToolAccum {
+            id: String,
+            name: String,
+            args: String,
+        }
+        let mut tools: BTreeMap<usize, ToolAccum> = BTreeMap::new();
+        let mut stop_reason: Option<String> = None;
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -122,26 +251,104 @@ impl ModelClient for AnthropicClient {
                         if data.is_empty() {
                             continue;
                         }
-                        match proto::parse_stream_delta(&current_event_type, data) {
-                            Some(proto::AnthropicStreamDelta::Text(delta)) => {
+                        let Some(parsed) = proto::parse_stream_event(&current_event_type, data)
+                        else {
+                            tracing::trace!(
+                                event_type = %current_event_type,
+                                data = %data.chars().take(200).collect::<String>(),
+                                "anthropic stream: unparsed event"
+                            );
+                            continue;
+                        };
+                        match parsed {
+                            proto::AnthropicStreamEvent::Text { delta, .. } => {
                                 on_event(ModelStreamEvent::TextDelta {
                                     text: delta.clone(),
                                 });
-                                full.push_str(&delta);
+                                full_text.push_str(&delta);
                             }
-                            Some(proto::AnthropicStreamDelta::Thinking(delta)) => {
+                            proto::AnthropicStreamEvent::Thinking { delta, .. } => {
+                                if thinking_deltas_seen == 0 {
+                                    debug!("anthropic stream: first thinking_delta arrived");
+                                }
+                                thinking_deltas_seen += 1;
                                 full_reasoning.push_str(&delta);
                                 on_event(ModelStreamEvent::ReasoningDelta { text: delta });
                             }
-                            None => {}
+                            proto::AnthropicStreamEvent::ToolUseStart { index, id, name } => {
+                                tools.insert(
+                                    index,
+                                    ToolAccum {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        args: String::new(),
+                                    },
+                                );
+                                // 通知 surface 一次 ToolCallDelta（携带 id/name），让 UI 立刻
+                                // 起一条 tool 行；后续 input_json_delta 会持续灌 args。
+                                on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                                    index,
+                                    id: Some(id),
+                                    name: Some(name),
+                                    arguments_delta: None,
+                                }));
+                            }
+                            proto::AnthropicStreamEvent::ToolInputJsonDelta {
+                                index,
+                                partial_json,
+                            } => {
+                                if let Some(acc) = tools.get_mut(&index) {
+                                    acc.args.push_str(&partial_json);
+                                }
+                                on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                                    index,
+                                    id: None,
+                                    name: None,
+                                    arguments_delta: Some(partial_json),
+                                }));
+                            }
+                            proto::AnthropicStreamEvent::MessageDelta { stop_reason: sr } => {
+                                if sr.is_some() {
+                                    stop_reason = sr;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
+        if body.get("thinking").is_some() {
+            debug!(
+                thinking_deltas_seen,
+                reasoning_chars = full_reasoning.len(),
+                "anthropic stream: finished"
+            );
+        }
+
+        // 拼成 ModelResponse：stop_reason=tool_use 走 ToolCalls 分支。
+        if stop_reason.as_deref() == Some("tool_use") && !tools.is_empty() {
+            let calls: Vec<ToolCall> = tools
+                .into_values()
+                .map(|t| ToolCall {
+                    id: t.id,
+                    name: t.name,
+                    // input_json_delta 拼回来的字符串是合法 JSON；解析失败时退化成
+                    // 字符串 value，agent_loop 仍能把原文作为 arguments 传给 tool。
+                    input: serde_json::from_str(&t.args).unwrap_or(json!(t.args)),
+                })
+                .collect();
+            return Ok(ModelResponse::ToolCalls {
+                text: full_text,
+                reasoning: full_reasoning,
+                calls,
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            });
+        }
+
         Ok(ModelResponse::Done {
-            text: full,
+            text: full_text,
             reasoning: full_reasoning,
             attachments: Vec::new(),
             usage: Usage::default(),

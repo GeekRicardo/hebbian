@@ -27,6 +27,7 @@ pub fn build_probe_request(model: impl Into<String>) -> ModelRequest {
         entries: vec![TranscriptEntry::User(UserEntry::text(PROBE_PROMPT))],
         tools: Vec::new(),
         max_tokens: PROBE_MAX_TOKENS,
+        reasoning: None,
     }
 }
 
