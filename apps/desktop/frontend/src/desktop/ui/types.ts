@@ -288,6 +288,12 @@ export type EngineEvent =
       /** 当 kind=PathAccess 时附带越界路径列表 */
       paths?: string[];
       kind?: "tool_call" | "path_access" | "plan" | "continue_long_run";
+      /**
+       * 命令级记忆指纹（仅 BashTool 当前会带）：完整规范化命令字符串，
+       * 例如 `"git status -uno README.md"`。UI 据此切 token 渲染
+       * "记住 git status / 记住 git" 两档按钮。
+       */
+      fingerprint?: string | null;
     }
   | {
       type: "permission_resolved";
@@ -319,12 +325,22 @@ export interface PendingApproval {
   /** PathAccess 类审批专用：越界路径列表 */
   paths?: string[];
   kind: "tool_call" | "path_access" | "plan" | "continue_long_run";
+  /** 命令级记忆指纹（BashTool 会带），用于 UI 渲染前缀按钮 */
+  fingerprint?: string | null;
 }
 
 /** 用户对审批的回应 */
 export type ApprovalDecisionPayload =
   | { kind: "allow_once" }
-  | { kind: "allow_and_remember" }
+  | {
+      kind: "allow_and_remember";
+      /**
+       * 命令级记忆前缀。给 `"git status"` 表示之后所有 `git status*` 都直接放行；
+       * 给 `"git"` 表示所有 `git *` 直接放行；不传退回工具名级记忆（对 Bash 等会被
+       * 后端兜回 AllowOnce）。
+       */
+      pattern?: string | null;
+    }
   | { kind: "deny" }
   | { kind: "deny_with_feedback"; feedback: string };
 

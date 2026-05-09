@@ -334,17 +334,21 @@ async fn compact_session(
 ///
 /// `decision` 取值：`"allow_once"` / `"allow_and_remember"` / `"deny"` / `"deny_with_feedback"`
 /// `feedback` 仅在 `deny_with_feedback` 时使用。
+/// `pattern` 仅在 `allow_and_remember` 时有意义：传命令前缀（如 `"git status"` / `"git"`）
+/// 启用命令级记忆；不传则做工具名级记忆（对 Bash 等会被 hitl 黑名单兜回 AllowOnce）。
 #[tauri::command]
 fn approve_permission(
     hitl: State<'_, Arc<HitlState>>,
     request_id: String,
     decision: String,
     feedback: Option<String>,
+    pattern: Option<String>,
 ) -> AppResult<()> {
     let decision = match decision.as_str() {
         "allow_once" => protocol::ApprovalDecision::AllowOnce,
         "allow_and_remember" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Session,
+            pattern,
         },
         "deny" => protocol::ApprovalDecision::Deny,
         "deny_with_feedback" => protocol::ApprovalDecision::DenyWithFeedback {
@@ -500,7 +504,11 @@ fn approve_path_access(
     let decision = if scope == "once" {
         protocol::ApprovalDecision::AllowOnce
     } else {
-        protocol::ApprovalDecision::AllowAndRemember { scope: scope_enum }
+        // 路径越界审批不在工具/命令维度，pattern 永远 None
+        protocol::ApprovalDecision::AllowAndRemember {
+            scope: scope_enum,
+            pattern: None,
+        }
     };
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)

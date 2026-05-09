@@ -152,13 +152,19 @@ impl ToolDispatcher {
             .unwrap_or(crate::tools::ToolClass::ReadOnly);
         let class_label = tool_class_label(&class);
         let tool_found = tool.is_some();
-        let permission = self.hitl.check(&call.name, &class);
+        let fingerprint = tool
+            .as_ref()
+            .and_then(|t| t.permission_fingerprint(&call.input));
+        let permission = self
+            .hitl
+            .check(&call.name, &class, fingerprint.as_deref());
         if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
             self.emit(EventPayload::PermissionRequested {
                 request_id: request_id.clone(),
                 kind: PermissionKind::ToolCall {
                     tool_name: call.name.clone(),
                     input: call.input.clone(),
+                    fingerprint: fingerprint.clone(),
                 },
                 summary: format!("工具 {} 请求执行", call.name),
                 risk: RiskLevel::Medium,
@@ -393,7 +399,9 @@ impl ToolDispatcher {
 
     /// 申请越界路径访问审批：开 pending + emit `PermissionRequested { kind: PathAccess }`。
     fn request_path_approval(&self, tool_name: &str, paths: Vec<PathBuf>) -> PathApproval {
-        let (request_id, waiter) = self.hitl.open_approval();
+        // 路径越界不在工具维度，AllowAndRemember 在外层把路径加进 workspace.allowed_dirs，
+        // 不通过 hitl learned 表，所以传 None。
+        let (request_id, waiter) = self.hitl.open_approval(None, None);
         let path_strings: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
         let summary = if path_strings.len() == 1 {
             format!("工具 {tool_name} 想访问越界路径：{}", path_strings[0])

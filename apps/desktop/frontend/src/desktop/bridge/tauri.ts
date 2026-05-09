@@ -147,12 +147,14 @@ export const api = {
   approvePermission: (
     requestId: string,
     decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback",
-    feedback?: string
+    feedback?: string,
+    pattern?: string | null
   ) =>
     invoke<void>("approve_permission", {
       requestId,
       decision,
       feedback: feedback ?? null,
+      pattern: pattern ?? null,
     }),
 
   /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */

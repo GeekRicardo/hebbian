@@ -3,6 +3,8 @@ pub mod grep;
 pub mod hitl;
 pub mod read;
 pub mod registry;
+pub mod safe_commands;
+pub mod shell_parse;
 pub mod skill;
 pub mod web_fetch;
 pub mod web_search;
@@ -67,6 +69,15 @@ pub trait Tool: Send + Sync {
     /// 默认空 = 与文件系统无关的工具（如 web_search）。
     fn affected_paths(&self, _input: &Value) -> Vec<PathBuf> {
         Vec::new()
+    }
+
+    /// 用于「命令级记忆」的指纹。返回 `Some(s)` 时 HitlGate 会用 `s` 做前缀匹配，
+    /// 让用户可以记住 `git status` 这类粒度而非仅记住 "Bash" 工具名。
+    ///
+    /// 实现要点：返回应已剥离引号、规范化空白；token 间用单空格分隔即可（HitlGate
+    /// 按空白 token 边界匹配）。返回 `None` 表示不支持命令级记忆——记忆仍按工具名落库。
+    fn permission_fingerprint(&self, _input: &Value) -> Option<String> {
+        None
     }
 }
 

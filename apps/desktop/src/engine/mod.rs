@@ -46,6 +46,10 @@ pub enum EngineEvent {
         /// PathAccess 时的越界路径列表
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         paths: Vec<String>,
+        /// ToolCall 时的命令级记忆指纹（[`protocol::PermissionKind::ToolCall::fingerprint`]）。
+        /// 仅 BashTool 当前会带，UI 据此渲染"记住 git status / 记住 git"两档按钮。
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        fingerprint: Option<String>,
     },
     /// 审批已被回应（无论 approve / deny）。前端关闭弹窗。
     PermissionResolved {

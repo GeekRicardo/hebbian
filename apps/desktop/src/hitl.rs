@@ -39,7 +39,6 @@ impl HitlState {
         gate.resolve(
             &protocol::PermissionRequestId::from_raw(request_id),
             decision,
-            None,
         );
         Ok(())
     }

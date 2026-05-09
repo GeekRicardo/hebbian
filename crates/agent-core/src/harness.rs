@@ -185,7 +185,7 @@ impl RunHandle {
     }
 
     pub fn resolve_permission(&self, request_id: &PermissionRequestId, decision: ApprovalDecision) {
-        self.hitl.resolve(request_id, decision, None);
+        self.hitl.resolve(request_id, decision);
     }
 
     pub fn answer_question(&self, request_id: &PermissionRequestId, answer: UserAnswer) {
@@ -338,7 +338,7 @@ async fn run_actor_loop(
             } => {
                 let entries: Vec<_> = runs.lock().unwrap().values().cloned().collect();
                 for entry in entries {
-                    entry.hitl.resolve(&request_id, decision.clone(), None);
+                    entry.hitl.resolve(&request_id, decision.clone());
                 }
             }
             Op::AnswerQuestion { request_id, answer } => {

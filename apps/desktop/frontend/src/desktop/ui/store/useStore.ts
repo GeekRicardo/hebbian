@@ -391,7 +391,8 @@ export const useStore = create<AppState>((set, get) => ({
       await api.approvePermission(
         pending.requestId,
         decision.kind,
-        decision.kind === "deny_with_feedback" ? decision.feedback : undefined
+        decision.kind === "deny_with_feedback" ? decision.feedback : undefined,
+        decision.kind === "allow_and_remember" ? decision.pattern ?? null : null
       );
     } catch (e) {
       // 失败时恢复弹窗，让用户重试
@@ -677,6 +678,7 @@ export const useStore = create<AppState>((set, get) => ({
                 risk: e.risk,
                 paths: e.paths ?? [],
                 kind: e.kind ?? "tool_call",
+                fingerprint: e.fingerprint ?? null,
             };
             set((state) =>
               state.pendingApproval

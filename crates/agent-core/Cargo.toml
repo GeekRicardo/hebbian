@@ -21,6 +21,7 @@ tracing = "0.1"
 chrono = "0.4"
 thiserror = "1"
 dirs = "5"
+shlex = "1"
 
 [dev-dependencies]
 tempfile = "3"

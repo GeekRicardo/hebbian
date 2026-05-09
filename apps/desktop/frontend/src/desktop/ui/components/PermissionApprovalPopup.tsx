@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Check,
   FolderOpen,
@@ -10,6 +10,30 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+
+/**
+ * 把 BashTool 推送的命令指纹切成"前缀按钮"。
+ *
+ * 例：`"git status -uno README"` → `{ sub: "git status", root: "git" }`
+ * 例：`"ls -la"`                  → `{ sub: null, root: "ls" }`
+ *
+ * 切 token 后过滤掉 flag（`-` 开头），只保留位置参数；用户选 sub 前缀时记 `(root, sub)`，
+ * 选 root 前缀时记单 token，两者都靠 HitlGate 的空白 token 边界匹配命中后续命令。
+ */
+function parseBashPrefixes(
+  fingerprint: string | null | undefined
+): { sub: string | null; root: string } | null {
+  if (!fingerprint) return null;
+  const tokens = fingerprint
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t && !t.startsWith("-"));
+  if (tokens.length === 0) return null;
+  return {
+    sub: tokens.length >= 2 ? `${tokens[0]} ${tokens[1]}` : null,
+    root: tokens[0],
+  };
+}
 
 const RISK_STYLE: Record<
   "low" | "medium" | "high" | "critical",
@@ -84,6 +108,14 @@ export function PermissionApprovalPopup() {
       : pending.input
         ? JSON.stringify(pending.input, null, 2)
         : "";
+
+  const bashPrefixes = useMemo(
+    () =>
+      pending.toolName === "Bash"
+        ? parseBashPrefixes(pending.fingerprint)
+        : null,
+    [pending.toolName, pending.fingerprint]
+  );
 
   return (
     <div className="px-4 pb-2">
@@ -221,18 +253,69 @@ export function PermissionApprovalPopup() {
                 <Check className="w-3.5 h-3.5" />
                 允许此次
               </button>
-              <button
-                type="button"
-                onClick={() => send({ kind: "allow_and_remember" })}
-                disabled={submitting}
-                className={cn(
-                  "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                  "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                )}
-                title="本会话内不再询问此工具"
-              >
-                总是允许
-              </button>
+              {/*
+                Bash 工具有命令指纹时只展示前缀按钮，避免工具名级"总是允许"
+                让后续 `rm -rf /` 也免审批。其他工具退回工具名级"总是允许"。
+              */}
+              {bashPrefixes ? (
+                <>
+                  {bashPrefixes.sub && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        send({
+                          kind: "allow_and_remember",
+                          pattern: bashPrefixes.sub,
+                        })
+                      }
+                      disabled={submitting}
+                      className={cn(
+                        "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                        "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                      )}
+                      title={`本会话内 ${bashPrefixes.sub}* 都不再询问`}
+                    >
+                      始终允许{" "}
+                      <code className="font-mono text-[12px]">
+                        {bashPrefixes.sub} *
+                      </code>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        kind: "allow_and_remember",
+                        pattern: bashPrefixes.root,
+                      })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title={`本会话内所有 ${bashPrefixes.root}* 都不再询问（含子命令）`}
+                  >
+                    始终允许{" "}
+                    <code className="font-mono text-[12px]">
+                      {bashPrefixes.root} *
+                    </code>
+                  </button>
+                </>
+              ) : pending.toolName !== "Bash" ? (
+                <button
+                  type="button"
+                  onClick={() => send({ kind: "allow_and_remember" })}
+                  disabled={submitting}
+                  className={cn(
+                    "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                    "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                  )}
+                  title="本会话内不再询问此工具"
+                >
+                  总是允许
+                </button>
+              ) : null}
               <div className="flex-1" />
               <button
                 type="button"

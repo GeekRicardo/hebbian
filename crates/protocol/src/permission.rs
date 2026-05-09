@@ -7,7 +7,18 @@ pub enum ApprovalDecision {
     /// 批准这一次
     AllowOnce,
     /// 批准并记住（同 scope 内的同类调用以后不再问）
-    AllowAndRemember { scope: PermissionScope },
+    ///
+    /// `pattern` 控制记忆粒度：
+    /// - `None` → 工具名级（旧行为，对 Bash 类工具被 hitl 黑名单兜回 AllowOnce）
+    /// - `Some("git status")` → 命令前缀级，匹配 `git status` / `git status -uno` 等
+    /// - `Some("git")` → 根命令级，匹配所有以 `git ` 开头的命令
+    ///
+    /// 命中前缀的判定见 [`crate::permission`] 文档（按空白 token 边界匹配）。
+    AllowAndRemember {
+        scope: PermissionScope,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
     /// 拒绝
     Deny,
     /// 拒绝并把反馈作为 user message 注入下一轮
@@ -36,6 +47,11 @@ pub enum PermissionKind {
     ToolCall {
         tool_name: String,
         input: serde_json::Value,
+        /// 命令级记忆指纹（来自 [`crate::permission`] 文档：BashTool 给 `"git status -uno"`）。
+        /// UI 据此渲染"记住 `git status` / 记住 `git`"两档按钮；
+        /// `None` 时退回工具名级"总是允许 Bash"按钮。
+        #[serde(default)]
+        fingerprint: Option<String>,
     },
     /// workspace 越界路径访问审批（Bash/Read/Write/Grep）
     PathAccess {

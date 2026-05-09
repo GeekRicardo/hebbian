@@ -887,27 +887,38 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             summary,
             risk,
         } => {
-            let (kind_str, tool_name, tool_input, paths) = match kind {
-                agent_core::types::PermissionKind::ToolCall { tool_name, input } => (
+            let (kind_str, tool_name, tool_input, paths, fingerprint) = match kind {
+                agent_core::types::PermissionKind::ToolCall {
+                    tool_name,
+                    input,
+                    fingerprint,
+                } => (
                     "tool_call",
                     tool_name.clone(),
                     input.clone(),
                     Vec::<String>::new(),
+                    fingerprint.clone(),
                 ),
                 agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
                     "path_access",
                     tool_name.clone(),
                     serde_json::Value::Null,
                     paths.clone(),
+                    None,
                 ),
-                agent_core::types::PermissionKind::Plan { .. } => {
-                    ("plan", String::new(), serde_json::Value::Null, Vec::new())
-                }
+                agent_core::types::PermissionKind::Plan { .. } => (
+                    "plan",
+                    String::new(),
+                    serde_json::Value::Null,
+                    Vec::new(),
+                    None,
+                ),
                 agent_core::types::PermissionKind::ContinueLongRun { .. } => (
                     "continue_long_run",
                     String::new(),
                     serde_json::Value::Null,
                     Vec::new(),
+                    None,
                 ),
             };
             Some(EngineEvent::PermissionRequested {
@@ -918,6 +929,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 summary: summary.clone(),
                 risk: format!("{risk:?}").to_lowercase(),
                 paths,
+                fingerprint,
             })
         }
         PermissionResolved {

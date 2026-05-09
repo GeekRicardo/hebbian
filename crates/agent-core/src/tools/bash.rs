@@ -1,8 +1,12 @@
 //! Bash 工具：在用户机器上跑 shell 命令。
 //!
-//! - destructive：默认走 PermissionGate（`PermissionPolicy::always_ask` 含 "Bash"）
+//! - 分类按命令本身决定（[`Self::classify`]）：
+//!   - 解析 shell line，全部子命令命中 [`safe_commands`] 白名单且无危险结构 → `ReadOnly`，自动放行
+//!   - 否则 → `Destructive`，走 HITL 审批
 //! - cwd 必须在 workspace 范围内，越界直接拒绝
 //! - 输出 stdout + stderr 合并，超长会截断
+//!
+//! [`safe_commands`]: super::safe_commands
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -16,7 +20,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::time;
 
-use super::{Tool, ToolClass};
+use super::{safe_commands, shell_parse, Tool, ToolClass};
 use crate::workspace::Workspace;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -138,9 +142,42 @@ impl Tool for BashTool {
         vec![self.workspace.resolve_cwd(input["cwd"].as_str())]
     }
 
-    fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Destructive {
+    /// 用于命令级记忆的指纹：把第一段命令规范化成 `"root sub ..."` 形式（剥引号、
+    /// 单空格连接），让 `git status -uno` 和 `git status README` 共用 `"git status"`
+    /// 前缀。复合命令（含 `&&` `|` 等）取首段；解析失败 → 退回原始 command。
+    fn permission_fingerprint(&self, input: &Value) -> Option<String> {
+        let raw = input["command"].as_str()?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        match shell_parse::parse(raw) {
+            Ok(parsed) if !parsed.commands.is_empty() => {
+                // 取首段并按空格 join argv，规避原命令里的多空格 / 引号差异
+                Some(parsed.commands[0].argv.join(" "))
+            }
+            _ => Some(raw.to_string()),
+        }
+    }
+
+    /// 解析命令文本，全部子命令安全且无危险结构 → ReadOnly（直接放行），
+    /// 否则 Destructive（走审批）。解析失败一律按不安全处理。
+    fn classify(&self, input: &Value) -> ToolClass {
+        let destructive = ToolClass::Destructive {
             risk: RiskLevel::High,
+        };
+        let Some(line) = input["command"].as_str() else {
+            return destructive;
+        };
+        let Ok(parsed) = shell_parse::parse(line) else {
+            return destructive;
+        };
+        if parsed.dangerous || parsed.commands.is_empty() {
+            return destructive;
+        }
+        if parsed.commands.iter().all(safe_commands::is_safe) {
+            ToolClass::ReadOnly
+        } else {
+            destructive
         }
     }
 }
@@ -203,5 +240,68 @@ mod tests {
             .execute(json!({"command": "sleep 5", "timeout_secs": 1}))
             .await;
         assert!(res.is_err());
+    }
+
+    fn class_of(line: &str) -> ToolClass {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = BashTool::new(workspace_at(tmp.path()));
+        tool.classify(&json!({"command": line}))
+    }
+
+    #[test]
+    fn classify_ls_is_readonly() {
+        assert!(matches!(class_of("ls -la"), ToolClass::ReadOnly));
+    }
+
+    #[test]
+    fn classify_git_status_is_readonly() {
+        assert!(matches!(class_of("git status -uno"), ToolClass::ReadOnly));
+    }
+
+    #[test]
+    fn classify_pipe_of_safe_commands_is_readonly() {
+        assert!(matches!(
+            class_of("git log --oneline | head -5"),
+            ToolClass::ReadOnly
+        ));
+    }
+
+    #[test]
+    fn classify_compound_with_unsafe_step_is_destructive() {
+        // cd 不在白名单 → 整体 destructive
+        assert!(matches!(
+            class_of("cd foo && rm -rf bar"),
+            ToolClass::Destructive { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_redirection_is_destructive() {
+        assert!(matches!(
+            class_of("echo hi > /tmp/x"),
+            ToolClass::Destructive { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_command_substitution_is_destructive() {
+        assert!(matches!(
+            class_of("echo $(whoami)"),
+            ToolClass::Destructive { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_unknown_root_is_destructive() {
+        assert!(matches!(
+            class_of("./scripts/foo.sh"),
+            ToolClass::Destructive { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_malformed_input_is_destructive() {
+        // 引号未闭合
+        assert!(matches!(class_of("echo 'hi"), ToolClass::Destructive { .. }));
     }
 }
