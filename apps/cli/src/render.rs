@@ -171,6 +171,9 @@ impl TurnRenderer {
             EventPayload::UserQuestionAnswered { answer, .. } => {
                 let label = match answer {
                     protocol::UserAnswer::Selected { label } => format!("✓ {label}"),
+                    protocol::UserAnswer::SelectedMulti { labels } => {
+                        format!("✓ 多选：{}", labels.join("、"))
+                    }
                     protocol::UserAnswer::Custom { text } => format!("✓ 自由输入：{text}"),
                     protocol::UserAnswer::Cancelled => "✗ 用户取消".to_string(),
                 };

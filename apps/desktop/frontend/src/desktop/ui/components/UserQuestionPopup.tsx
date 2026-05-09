@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleHelp, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -9,32 +9,37 @@ const OTHER_KEY = "__other__";
 /**
  * agent 主动提问弹窗（ask 工具）。挂在 ChatInput 上方。
  *
- * 设计：
- * - 选项可点击，最后一项是 "其他"，选中时露出 textarea
- * - 右下角：取消 / 提交
- * - ESC = 取消
+ * 单选：点击切换选中，最后一项 "其他" 选中时露出 textarea；ESC 取消。
+ * 多选（`pending.multi=true`）：点击勾选/取消勾选，可多个；不提供 "其他" 自由输入。
+ * 选项均按 `1./2./3.` 编号显示，跟终端模式风格一致。
  */
 export function UserQuestionPopup() {
   const pending = useStore((s) => s.pendingQuestion);
   const resolveQuestion = useStore((s) => s.resolveQuestion);
 
+  // 单选状态：label 或 OTHER_KEY
   const [selected, setSelected] = useState<string | null>(null);
+  // 多选状态：勾选的 label 集合（按勾选顺序保存）
+  const [multiSelected, setMultiSelected] = useState<string[]>([]);
   const [otherText, setOtherText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const otherInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // 切换 question 时重置选择
+  const isMulti = !!pending?.multi;
+
+  // 切换 question 时重置
   useEffect(() => {
     setSelected(null);
+    setMultiSelected([]);
     setOtherText("");
   }, [pending?.requestId]);
 
-  // 选中 "其他" 时自动聚焦输入框
+  // 单选 + "其他" 时自动聚焦输入框
   useEffect(() => {
-    if (selected === OTHER_KEY) {
+    if (!isMulti && selected === OTHER_KEY) {
       otherInputRef.current?.focus();
     }
-  }, [selected]);
+  }, [isMulti, selected]);
 
   // ESC 取消
   useEffect(() => {
@@ -50,7 +55,21 @@ export function UserQuestionPopup() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.requestId]);
 
+  const canSubmit = useMemo(() => {
+    if (submitting) return false;
+    if (isMulti) return multiSelected.length > 0;
+    if (!selected) return false;
+    if (selected === OTHER_KEY) return otherText.trim().length > 0;
+    return true;
+  }, [isMulti, multiSelected, selected, otherText, submitting]);
+
   if (!pending) return null;
+
+  function toggleMulti(label: string) {
+    setMultiSelected((prev) =>
+      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
+    );
+  }
 
   async function cancel() {
     setSubmitting(true);
@@ -64,17 +83,16 @@ export function UserQuestionPopup() {
   }
 
   async function submit() {
-    if (!selected) return;
+    if (!canSubmit) return;
     let payload: Parameters<typeof resolveQuestion>[0];
-    if (selected === OTHER_KEY) {
-      const text = otherText.trim();
-      if (!text) {
-        otherInputRef.current?.focus();
-        return;
-      }
-      payload = { kind: "custom", text };
-    } else {
+    if (isMulti) {
+      payload = { kind: "selected_multi", labels: multiSelected };
+    } else if (selected === OTHER_KEY) {
+      payload = { kind: "custom", text: otherText.trim() };
+    } else if (selected) {
       payload = { kind: "selected", label: selected };
+    } else {
+      return;
     }
     setSubmitting(true);
     try {
@@ -86,124 +104,157 @@ export function UserQuestionPopup() {
     }
   }
 
-  const canSubmit =
-    !!selected &&
-    (selected !== OTHER_KEY || otherText.trim().length > 0) &&
-    !submitting;
-
   return (
-    <div className="max-w-3xl mx-auto px-4 pb-2">
-      <div
-        className={cn(
-          "rounded-lg border border-border bg-popover shadow-lg overflow-hidden",
-          "animate-in fade-in slide-in-from-bottom-2 duration-150"
-        )}
-      >
-        {/* 头部 */}
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/40">
-          <CircleHelp className="w-4 h-4 text-primary shrink-0" />
-          <span className="text-sm font-medium flex-1 truncate">
-            {pending.question}
-          </span>
-          <span className="text-[11px] text-muted-foreground/80">
-            ESC 取消
-          </span>
-        </div>
+    <div className="px-4 pb-2">
+      <div className="max-w-3xl mx-auto pr-[50px]">
+        <div
+          className={cn(
+            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden",
+            "animate-in fade-in slide-in-from-bottom-2 duration-150"
+          )}
+        >
+          {/* 头部 */}
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/40">
+            <CircleHelp className="w-3.5 h-3.5 text-primary shrink-0" />
+            <span className="text-sm font-medium flex-1 truncate">
+              {pending.question}
+            </span>
+            {isMulti && (
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium">
+                多选
+              </span>
+            )}
+            <span className="text-[11px] text-muted-foreground/80">
+              ESC 取消
+            </span>
+          </div>
 
-        {/* 选项列表 */}
-        <div className="px-2 py-2 flex flex-col gap-1">
-          {pending.options.map((opt) => {
-            const isSelected = selected === opt.label;
-            return (
+          {/* 选项列表 */}
+          <div className="px-1.5 py-1.5 flex flex-col gap-px">
+            {pending.options.map((opt, idx) => {
+              const checked = isMulti
+                ? multiSelected.includes(opt.label)
+                : selected === opt.label;
+              return (
+                <button
+                  key={`${idx}-${opt.label}`}
+                  type="button"
+                  onClick={() =>
+                    isMulti ? toggleMulti(opt.label) : setSelected(opt.label)
+                  }
+                  disabled={submitting}
+                  aria-pressed={checked}
+                  className={cn(
+                    "w-full text-left px-2 py-1 rounded-md transition-colors text-sm border flex items-start gap-2",
+                    checked
+                      ? "border-primary bg-primary/10"
+                      : "border-transparent hover:bg-muted"
+                  )}
+                >
+                  {isMulti ? (
+                    <span
+                      className={cn(
+                        "mt-[3px] inline-flex items-center justify-center w-3.5 h-3.5 rounded border text-[10px] leading-none shrink-0",
+                        checked
+                          ? "bg-primary border-primary text-primary-foreground"
+                          : "border-muted-foreground/40"
+                      )}
+                      aria-hidden
+                    >
+                      {checked ? "✓" : ""}
+                    </span>
+                  ) : null}
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-[12px] tabular-nums select-none leading-5",
+                      checked ? "text-primary" : "text-muted-foreground"
+                    )}
+                  >
+                    {idx + 1}.
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <div className="font-medium leading-5">{opt.label}</div>
+                    {opt.description && (
+                      <div className="text-[12px] text-muted-foreground leading-4">
+                        {opt.description}
+                      </div>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* "其他"：仅单选模式提供 */}
+            {!isMulti && (
               <button
-                key={opt.label}
                 type="button"
-                onClick={() => setSelected(opt.label)}
+                onClick={() => setSelected(OTHER_KEY)}
                 disabled={submitting}
                 className={cn(
-                  "w-full text-left px-3 py-2 rounded-md transition-colors text-sm",
-                  "border",
-                  isSelected
+                  "w-full text-left px-2 py-1 rounded-md transition-colors text-sm border",
+                  selected === OTHER_KEY
                     ? "border-primary bg-primary/10"
-                    : "border-transparent hover:bg-muted"
+                    : "border-dashed border-muted-foreground/30 hover:bg-muted"
                 )}
               >
-                <div className="font-medium">{opt.label}</div>
-                {opt.description && (
-                  <div className="text-[12px] text-muted-foreground mt-0.5">
-                    {opt.description}
+                {selected === OTHER_KEY ? (
+                  <textarea
+                    ref={otherInputRef}
+                    value={otherText}
+                    onChange={(e) => setOtherText(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        submit();
+                      }
+                    }}
+                    placeholder="其他回答…（Cmd/Ctrl+Enter 提交）"
+                    rows={2}
+                    className="w-full resize-none rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  />
+                ) : (
+                  <div className="text-muted-foreground text-[13px] leading-5">
+                    其他回答…
                   </div>
                 )}
               </button>
-            );
-          })}
+            )}
+          </div>
 
-          {/* 其他选项：选中时露 textarea */}
-          <button
-            type="button"
-            onClick={() => setSelected(OTHER_KEY)}
-            disabled={submitting}
-            className={cn(
-              "w-full text-left px-3 py-2 rounded-md transition-colors text-sm border",
-              selected === OTHER_KEY
-                ? "border-primary bg-primary/10"
-                : "border-dashed border-muted-foreground/30 hover:bg-muted"
+          {/* 底部按钮 */}
+          <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-border bg-background/60">
+            {isMulti && multiSelected.length > 0 && (
+              <span className="text-[11px] text-muted-foreground pl-1">
+                已选 {multiSelected.length} 项
+              </span>
             )}
-          >
-            <div className="text-muted-foreground text-[12px] mb-1">
-              其他
-            </div>
-            {selected === OTHER_KEY ? (
-              <textarea
-                ref={otherInputRef}
-                value={otherText}
-                onChange={(e) => setOtherText(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    submit();
-                  }
-                }}
-                placeholder="输入你的回答…（Cmd/Ctrl+Enter 提交）"
-                rows={2}
-                className="w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
-              />
-            ) : (
-              <div className="text-muted-foreground text-[13px]">
-                自由输入回答…
-              </div>
-            )}
-          </button>
-        </div>
-
-        {/* 底部按钮 */}
-        <div className="flex items-center gap-2 px-2 py-2 border-t border-border bg-background/60">
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={cancel}
-            disabled={submitting}
-            className={cn(
-              "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-              "text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-            )}
-          >
-            <X className="w-3.5 h-3.5" />
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSubmit}
-            className={cn(
-              "h-8 px-3 rounded-md text-sm font-medium inline-flex items-center gap-1.5 transition-colors",
-              "bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-            )}
-          >
-            <Send className="w-3.5 h-3.5" />
-            提交
-          </button>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={submitting}
+              className={cn(
+                "h-7 px-2.5 rounded-md text-[13px] inline-flex items-center gap-1 transition-colors",
+                "text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+              )}
+            >
+              <X className="w-3.5 h-3.5" />
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              className={cn(
+                "h-7 px-2.5 rounded-md text-[13px] font-medium inline-flex items-center gap-1 transition-colors",
+                "bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+              )}
+            >
+              <Send className="w-3.5 h-3.5" />
+              提交
+            </button>
+          </div>
         </div>
       </div>
     </div>

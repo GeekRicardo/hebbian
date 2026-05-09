@@ -58,13 +58,17 @@ pub enum EngineEvent {
         request_id: String,
         question: String,
         options: Vec<QuestionOptionDto>,
+        /// 是否允许多选
+        #[serde(default)]
+        multi: bool,
     },
     /// 用户已回应提问。前端关闭弹窗。
     UserQuestionAnswered {
         request_id: String,
-        /// "selected" / "custom" / "cancelled"
+        /// "selected" / "selected_multi" / "custom" / "cancelled"
         kind: String,
-        /// selected 时是 label，custom 时是 text，cancelled 时为空
+        /// selected 时是 label，selected_multi 时是 "、" 拼接的 labels，
+        /// custom 时是 text，cancelled 时为空
         text: String,
     },
     Error {

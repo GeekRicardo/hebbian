@@ -940,6 +940,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             request_id,
             question,
             options,
+            multi,
         } => Some(EngineEvent::UserQuestionRequested {
             request_id: request_id.0.clone(),
             question: question.clone(),
@@ -950,10 +951,14 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                     description: o.description.clone(),
                 })
                 .collect(),
+            multi: *multi,
         }),
         UserQuestionAnswered { request_id, answer } => {
             let (kind, text) = match answer {
                 protocol::UserAnswer::Selected { label } => ("selected", label.clone()),
+                protocol::UserAnswer::SelectedMulti { labels } => {
+                    ("selected_multi", labels.join("、"))
+                }
                 protocol::UserAnswer::Custom { text } => ("custom", text.clone()),
                 protocol::UserAnswer::Cancelled => ("cancelled", String::new()),
             };

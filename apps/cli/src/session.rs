@@ -248,8 +248,9 @@ impl TurnObserver for CliObserver {
         _request_id: &PermissionRequestId,
         question: &str,
         options: &[QuestionOption],
+        multi: bool,
     ) -> Option<UserAnswer> {
-        Some(ask_user_in_terminal(question.to_string(), options.to_vec()).await)
+        Some(ask_user_in_terminal(question.to_string(), options.to_vec(), multi).await)
     }
 }
 
@@ -271,32 +272,73 @@ impl ConditionalEventHandler for CtrlCHandler {
     }
 }
 
-/// 用 inquire 弹一个 select + 自由输入。
+/// 用 inquire 弹一个 select / multi-select + 自由输入。
 ///
-/// - 方向键选择，Enter 确认
+/// - 单选：方向键选择，Enter 确认
+/// - 多选（`multi = true`）：Space 勾选，Enter 确认
 /// - **ESC 取消**（返回 `UserAnswer::Cancelled`）
-/// - 选「其他（自由输入）」会继续弹 Text 输入框
-async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) -> UserAnswer {
+/// - 单选模式选「其他（自由输入）」会继续弹 Text 输入框；多选模式不提供该项
+async fn ask_user_in_terminal(
+    question: String,
+    options: Vec<QuestionOption>,
+    multi: bool,
+) -> UserAnswer {
     println!();
     println!("{} {}", "🤔".cyan(), question.bold());
 
-    const OTHER_LABEL: &str = "其他（自由输入）";
+    let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
     let display_items: Vec<String> = options
         .iter()
-        .map(|opt| {
+        .enumerate()
+        .map(|(i, opt)| {
+            let prefix = format!("{}.", i + 1);
             if opt.description.is_empty() {
-                opt.label.clone()
+                format!("{prefix} {}", opt.label)
             } else {
-                format!("{} — {}", opt.label, opt.description)
+                format!("{prefix} {} — {}", opt.label, opt.description)
             }
         })
-        .chain(std::iter::once(OTHER_LABEL.to_string()))
         .collect();
 
-    let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
+    if multi {
+        let display_items_for_task = display_items.clone();
+        let labels_for_task = labels.clone();
+        return tokio::task::spawn_blocking(move || {
+            let prompt = inquire::MultiSelect::new(
+                "勾选（Space 选中，Enter 确认，ESC 取消）：",
+                display_items_for_task.clone(),
+            )
+            .with_help_message("↑↓ 移动，Space 勾选，Enter 确认，ESC 取消");
+            match prompt.prompt() {
+                Ok(choices) => {
+                    let picked: Vec<String> = choices
+                        .iter()
+                        .filter_map(|c| {
+                            display_items_for_task
+                                .iter()
+                                .position(|d| d == c)
+                                .and_then(|idx| labels_for_task.get(idx).cloned())
+                        })
+                        .collect();
+                    if picked.is_empty() {
+                        UserAnswer::Cancelled
+                    } else {
+                        UserAnswer::SelectedMulti { labels: picked }
+                    }
+                }
+                Err(_) => UserAnswer::Cancelled,
+            }
+        })
+        .await
+        .unwrap_or(UserAnswer::Cancelled);
+    }
+
+    const OTHER_LABEL: &str = "其他（自由输入）";
+    let mut single_items = display_items.clone();
+    single_items.push(OTHER_LABEL.to_string());
 
     tokio::task::spawn_blocking(move || {
-        let select = inquire::Select::new("选择一项（ESC 取消）：", display_items.clone())
+        let select = inquire::Select::new("选择一项（ESC 取消）：", single_items.clone())
             .with_help_message("↑↓ 选择，Enter 确认，ESC 取消");
         match select.prompt() {
             Ok(choice) => {
@@ -305,7 +347,7 @@ async fn ask_user_in_terminal(question: String, options: Vec<QuestionOption>) ->
                         Ok(text) if !text.trim().is_empty() => UserAnswer::Custom { text },
                         _ => UserAnswer::Cancelled,
                     }
-                } else if let Some(idx) = display_items.iter().position(|d| d == &choice) {
+                } else if let Some(idx) = single_items.iter().position(|d| d == &choice) {
                     let label = labels.get(idx).cloned().unwrap_or(choice);
                     UserAnswer::Selected { label }
                 } else {

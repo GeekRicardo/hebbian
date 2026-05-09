@@ -64,8 +64,10 @@ pub struct QuestionOption {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserAnswer {
-    /// 选了某个固定选项（带回 label）
+    /// 单选：选了某个固定选项（带回 label）
     Selected { label: String },
+    /// 多选：选了若干固定选项（带回 labels，按用户勾选顺序）
+    SelectedMulti { labels: Vec<String> },
     /// 用户在自由输入框写的文字
     Custom { text: String },
     /// 用户取消（TUI 中按 ESC、UI 关闭弹窗等）
@@ -77,6 +79,13 @@ impl UserAnswer {
     pub fn to_agent_text(&self) -> String {
         match self {
             UserAnswer::Selected { label } => format!("用户选择：{label}"),
+            UserAnswer::SelectedMulti { labels } => {
+                if labels.is_empty() {
+                    "[用户未选任何选项]".to_string()
+                } else {
+                    format!("用户选择（多选）：{}", labels.join("、"))
+                }
+            }
             UserAnswer::Custom { text } => format!("用户输入：{text}"),
             UserAnswer::Cancelled => "[用户取消了提问]".to_string(),
         }

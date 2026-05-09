@@ -128,7 +128,7 @@ pub fn ask_tool_definition() -> ToolDefinition {
         name: ASK_TOOL_NAME.to_string(),
         description: "向用户提问以澄清需求或获取决策。务必同时给出 2-5 个候选选项 \
                       （label 控制在 12 字以内）；用户除了选项之外总能自由输入其他意见，\
-                      所以选项不必穷尽所有可能。"
+                      所以选项不必穷尽所有可能。需要让用户多选时把 `multi` 设为 true。"
             .into(),
         parameters: serde_json::json!({
             "type": "object",
@@ -156,6 +156,11 @@ pub fn ask_tool_definition() -> ToolDefinition {
                             }
                         }
                     }
+                },
+                "multi": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "是否允许用户多选。true=允许勾选多个选项；缺省 false（单选）。"
                 }
             }
         }),

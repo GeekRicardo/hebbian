@@ -229,8 +229,11 @@ impl RunHandle {
                     request_id,
                     question,
                     options,
+                    multi,
                 } => {
-                    if let Some(answer) = observer.on_question(request_id, question, options).await
+                    if let Some(answer) = observer
+                        .on_question(request_id, question, options, *multi)
+                        .await
                     {
                         self.answer_question(request_id, answer);
                     }
@@ -288,6 +291,7 @@ pub trait TurnObserver: Send {
         request_id: &PermissionRequestId,
         question: &str,
         options: &[QuestionOption],
+        multi: bool,
     ) -> Option<UserAnswer>;
 }
 

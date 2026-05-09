@@ -299,11 +299,12 @@ export type EngineEvent =
       request_id: string;
       question: string;
       options: { label: string; description: string }[];
+      multi?: boolean;
     }
   | {
       type: "user_question_answered";
       request_id: string;
-      kind: "selected" | "custom" | "cancelled";
+      kind: "selected" | "selected_multi" | "custom" | "cancelled";
       text: string;
     }
   | { type: "error"; message: string };
@@ -332,11 +333,14 @@ export interface PendingQuestion {
   requestId: string;
   question: string;
   options: { label: string; description: string }[];
+  /** 是否允许多选 */
+  multi: boolean;
 }
 
 /** 用户对一次提问的回应 */
 export type QuestionAnswerPayload =
   | { kind: "selected"; label: string }
+  | { kind: "selected_multi"; labels: string[] }
   | { kind: "custom"; text: string }
   | { kind: "cancelled" };
 

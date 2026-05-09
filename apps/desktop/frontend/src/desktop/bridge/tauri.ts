@@ -158,13 +158,14 @@ export const api = {
   /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */
   answerQuestion: (
     requestId: string,
-    kind: "selected" | "custom" | "cancelled",
-    text?: string
+    kind: "selected" | "selected_multi" | "custom" | "cancelled",
+    payload?: { text?: string; labels?: string[] }
   ) =>
     invoke<void>("answer_question", {
       requestId,
       kind,
-      text: text ?? null,
+      text: payload?.text ?? null,
+      labels: payload?.labels ?? null,
     }),
 
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */

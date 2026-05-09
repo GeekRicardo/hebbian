@@ -416,13 +416,15 @@ export const useStore = create<AppState>((set, get) => ({
       pendingQuestionQueue: get().pendingQuestionQueue.slice(1),
     });
     try {
-      const text =
+      const payload: { text?: string; labels?: string[] } | undefined =
         answer.kind === "selected"
-          ? answer.label
-          : answer.kind === "custom"
-            ? answer.text
-            : undefined;
-      await api.answerQuestion(pending.requestId, answer.kind, text);
+          ? { text: answer.label }
+          : answer.kind === "selected_multi"
+            ? { labels: answer.labels }
+            : answer.kind === "custom"
+              ? { text: answer.text }
+              : undefined;
+      await api.answerQuestion(pending.requestId, answer.kind, payload);
     } catch (e) {
       set((state) => ({
         pendingQuestion: pending,
@@ -708,6 +710,7 @@ export const useStore = create<AppState>((set, get) => ({
                 requestId: e.request_id,
                 question: e.question,
                 options: e.options,
+                multi: e.multi ?? false,
             };
             set((state) =>
               state.pendingQuestion

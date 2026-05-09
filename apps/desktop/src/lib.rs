@@ -358,18 +358,25 @@ fn approve_permission(
 
 /// 用户回应一次 agent 提问（ask 工具）。
 ///
-/// `kind` 取值：`"selected"` / `"custom"` / `"cancelled"`
-/// `text` 在 `selected` 时是 label，在 `custom` 时是用户输入，在 `cancelled` 时忽略。
+/// `kind` 取值：`"selected"` / `"selected_multi"` / `"custom"` / `"cancelled"`
+/// - `selected` → `text` 为单个 label
+/// - `selected_multi` → `labels` 为勾选的 label 列表
+/// - `custom` → `text` 为用户输入
+/// - `cancelled` → 字段忽略
 #[tauri::command]
 fn answer_question(
     hitl: State<'_, Arc<HitlState>>,
     request_id: String,
     kind: String,
     text: Option<String>,
+    labels: Option<Vec<String>>,
 ) -> AppResult<()> {
     let answer = match kind.as_str() {
         "selected" => protocol::UserAnswer::Selected {
             label: text.unwrap_or_default(),
+        },
+        "selected_multi" => protocol::UserAnswer::SelectedMulti {
+            labels: labels.unwrap_or_default(),
         },
         "custom" => protocol::UserAnswer::Custom {
             text: text.unwrap_or_default(),

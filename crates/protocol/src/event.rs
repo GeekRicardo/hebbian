@@ -102,6 +102,9 @@ pub enum EventPayload {
         request_id: PermissionRequestId,
         question: String,
         options: Vec<crate::permission::QuestionOption>,
+        /// 是否允许多选（true = 用户可勾选多个选项）
+        #[serde(default)]
+        multi: bool,
     },
     UserQuestionAnswered {
         request_id: PermissionRequestId,

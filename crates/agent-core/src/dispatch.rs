@@ -44,6 +44,9 @@ const MAX_TOOL_RESULT_INLINE: usize = 6_000;
 struct AskInput {
     question: String,
     options: Vec<QuestionOption>,
+    /// 是否允许多选；缺省 false（单选）。
+    #[serde(default)]
+    multi: bool,
 }
 
 /// 一次越界路径审批的待解条目。
@@ -236,7 +239,7 @@ impl ToolDispatcher {
         let cancel = self.cancel.clone();
 
         Box::pin(async move {
-            let (question, options) = match parse_ask_input(&call.input) {
+            let (question, options, multi) = match parse_ask_input(&call.input) {
                 Ok(parts) => parts,
                 Err(err) => {
                     return Ok(finish_ask_with_error(
@@ -262,6 +265,7 @@ impl ToolDispatcher {
                 request_id: request_id.clone(),
                 question,
                 options,
+                multi,
             }));
 
             let answer = waiter.await.unwrap_or(UserAnswer::Cancelled);
@@ -458,7 +462,9 @@ fn truncate_tool_result(raw: String) -> (String, bool) {
     (format!("{}…[已截断]", &raw[..end]), true)
 }
 
-fn parse_ask_input(input: &serde_json::Value) -> Result<(String, Vec<QuestionOption>), String> {
+fn parse_ask_input(
+    input: &serde_json::Value,
+) -> Result<(String, Vec<QuestionOption>, bool), String> {
     let parsed: AskInput = serde_json::from_value(input.clone())
         .map_err(|e| format!("ask 工具 input 解析失败：{e}"))?;
     if !(2..=5).contains(&parsed.options.len()) {
@@ -467,7 +473,7 @@ fn parse_ask_input(input: &serde_json::Value) -> Result<(String, Vec<QuestionOpt
             parsed.options.len()
         ));
     }
-    Ok((parsed.question, parsed.options))
+    Ok((parsed.question, parsed.options, parsed.multi))
 }
 
 #[cfg(test)]
