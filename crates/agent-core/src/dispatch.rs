@@ -23,7 +23,7 @@ use protocol::{
 };
 use serde::Deserialize;
 use tokio::sync::oneshot;
-use tracing::{field::Empty, warn, Instrument};
+use tracing::{field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
@@ -158,17 +158,45 @@ impl ToolDispatcher {
         let permission = self
             .hitl
             .check(&call.name, &class, fingerprint.as_deref());
-        if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
-            self.emit(EventPayload::PermissionRequested {
-                request_id: request_id.clone(),
-                kind: PermissionKind::ToolCall {
-                    tool_name: call.name.clone(),
-                    input: call.input.clone(),
-                    fingerprint: fingerprint.clone(),
-                },
-                summary: format!("工具 {} 请求执行", call.name),
-                risk: RiskLevel::Medium,
-            });
+        match &permission {
+            PermissionDecision::Approved => {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    class = class_label,
+                    fingerprint = fingerprint.as_deref().unwrap_or(""),
+                    "tool_call approved (auto)"
+                );
+            }
+            PermissionDecision::Denied { reason } => {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    class = class_label,
+                    %reason,
+                    "tool_call denied by policy"
+                );
+            }
+            PermissionDecision::NeedsApproval { request_id, .. } => {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    class = class_label,
+                    request_id = %request_id,
+                    fingerprint = fingerprint.as_deref().unwrap_or(""),
+                    "tool_call needs human approval"
+                );
+                self.emit(EventPayload::PermissionRequested {
+                    request_id: request_id.clone(),
+                    kind: PermissionKind::ToolCall {
+                        tool_name: call.name.clone(),
+                        input: call.input.clone(),
+                        fingerprint: fingerprint.clone(),
+                    },
+                    summary: format!("工具 {} 请求执行", call.name),
+                    risk: RiskLevel::Medium,
+                });
+            }
         }
 
         let state = self.state.clone();
@@ -227,6 +255,12 @@ impl ToolDispatcher {
                 }
 
                 // 执行
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    input = %call.input,
+                    "tool_call executing"
+                );
                 sink(state.event(EventPayload::ToolCallStarted {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -266,6 +300,15 @@ impl ToolDispatcher {
                     content.len(),
                 );
 
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    outcome,
+                    duration_ms,
+                    truncated,
+                    bytes = content.len(),
+                    "tool_call finished"
+                );
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -620,6 +663,75 @@ fn parse_ask_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run_state::RunState;
+    use crate::tools::bash::BashTool;
+    use crate::tools::registry::ToolRegistry;
+    use crate::workspace::Workspace;
+    use model_gateway::types::ToolCall;
+    use protocol::RunId;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// 端到端复现 desktop 路径：dispatch 一个 Bash destructive 调用 → emit 收到
+    /// PermissionRequested → 模拟 surface 通过 hitl gate resolve → waiter 唤醒 → 命令执行。
+    /// 用来兜底"审批后卡住"这类回归。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn destructive_bash_resolves_after_approval() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![Box::new(BashTool::new(
+            workspace.clone(),
+            crate::tools::background::BackgroundShells::new(),
+        ))
+            as Box<dyn crate::tools::Tool>]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: hitl.clone(),
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "echo hi && touch a.txt", "cwd": tmp.path() }),
+        };
+
+        // 模拟 surface：等到 PermissionRequested 事件到达后，调 hitl.resolve(AllowOnce)
+        let hitl_for_surface = hitl.clone();
+        let surface = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
+                    hitl_for_surface.resolve(request_id, ApprovalDecision::AllowOnce);
+                    break;
+                }
+            }
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            dispatcher.run_calls(&[call], 0),
+        )
+        .await
+        .expect("dispatch 在 5s 内应当完成（不应卡在审批）");
+
+        let results = result.expect("dispatch 不应返回错误");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Bash");
+
+        surface.await.unwrap();
+    }
 
     #[test]
     fn truncate_tool_result_preserves_utf8_char_boundaries() {

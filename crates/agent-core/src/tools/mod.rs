@@ -1,6 +1,9 @@
+pub mod background;
 pub mod bash;
+pub mod bash_output;
 pub mod grep;
 pub mod hitl;
+pub mod kill_shell;
 pub mod read;
 pub mod registry;
 pub mod safe_commands;
@@ -82,12 +85,18 @@ pub trait Tool: Send + Sync {
 }
 
 /// 构造内置 + 用户可选工具：
-/// - 内置：Bash / Read / Write / Grep / Skill（与 ask 一起每次自动注入）
+/// - 内置：Bash / BashOutput / KillShell / Read / Write / Grep / Skill（与 ask 一起每次自动注入）
 /// - 用户可选：web_search / web_fetch（按 enabled_tools 过滤）
+///
+/// `BashTool` / `BashOutputTool` / `KillShellTool` 共享同一个 [`background::BackgroundShells`]
+/// 注册表：超时或 `run_in_background=true` 时进程转后台，其余两个工具按 task_id 增量查询 / 终止。
 pub fn default_tools(workspace: Arc<Workspace>, skill_dirs: &[PathBuf]) -> Vec<Box<dyn Tool>> {
     let skills = skill::load_skills(skill_dirs);
+    let shells = background::BackgroundShells::new();
     vec![
-        Box::new(bash::BashTool::new(workspace.clone())),
+        Box::new(bash::BashTool::new(workspace.clone(), shells.clone())),
+        Box::new(bash_output::BashOutputTool::new(shells.clone())),
+        Box::new(kill_shell::KillShellTool::new(shells)),
         Box::new(read::ReadTool::new(workspace.clone())),
         Box::new(write::WriteTool::new(workspace.clone())),
         Box::new(grep::GrepTool::new(workspace)),
@@ -99,7 +108,15 @@ pub fn default_tools(workspace: Arc<Workspace>, skill_dirs: &[PathBuf]) -> Vec<B
 
 /// 内置工具名（每次 ModelRequest 自动注入；不在 UI 工具菜单中暴露）。
 /// 顺序与 `default_tools` 中的注册顺序对齐。
-pub const BUILTIN_TOOL_NAMES: &[&str] = &["Bash", "Read", "Write", "Grep", "Skill"];
+pub const BUILTIN_TOOL_NAMES: &[&str] = &[
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Read",
+    "Write",
+    "Grep",
+    "Skill",
+];
 
 pub fn is_builtin_tool(name: &str) -> bool {
     name == ASK_TOOL_NAME || BUILTIN_TOOL_NAMES.contains(&name)
