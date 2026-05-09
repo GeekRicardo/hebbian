@@ -13,8 +13,8 @@ use colored::Colorize;
 use model_gateway::client::ModelClient;
 use platform::storage::sessions::{self, Message as StoredMessage, Role as StoredRole};
 use protocol::{
-    ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
-    UserAnswer,
+    ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, PermissionScope,
+    QuestionOption, UserAnswer,
 };
 use rustyline::{
     error::ReadlineError, Cmd, ConditionalEventHandler, DefaultEditor, Event, EventContext,
@@ -306,10 +306,13 @@ impl TurnObserver for CliObserver {
     async fn on_permission_request(
         &mut self,
         _request_id: &PermissionRequestId,
-        _kind: &PermissionKind,
-        _summary: &str,
+        kind: &PermissionKind,
+        summary: &str,
     ) -> Option<ApprovalDecision> {
-        self.auto_approve.then_some(ApprovalDecision::AllowOnce)
+        if self.auto_approve {
+            return Some(ApprovalDecision::AllowOnce);
+        }
+        Some(prompt_approval_in_terminal(kind.clone(), summary.to_string()).await)
     }
 
     async fn on_question(
@@ -428,6 +431,101 @@ async fn ask_user_in_terminal(
     })
     .await
     .unwrap_or(UserAnswer::Cancelled)
+}
+
+/// 终端里弹审批选单，用 inquire + spawn_blocking。
+///
+/// - `Bash` 类带 `fingerprint` 的工具会多一档「始终允许 `<前缀>`」/「始终允许 `<root>`
+///   所有子命令」，与 desktop UI 行为一致；记住的粒度由 [`HitlGate`] 用前缀 token 匹配。
+/// - 其它工具（无 fingerprint）只有「始终允许工具 X（会话级）」一档。
+/// - 路径越界 / 计划 / 长 run 续跑只给「允许一次 / 拒绝」。
+/// - ESC 或选「拒绝」都返回 [`ApprovalDecision::Deny`]。
+async fn prompt_approval_in_terminal(
+    kind: PermissionKind,
+    summary: String,
+) -> ApprovalDecision {
+    enum Choice {
+        Once,
+        RememberPattern(String),
+        RememberTool,
+        Deny,
+    }
+
+    println!();
+    let header = match &kind {
+        PermissionKind::ToolCall { tool_name, .. } => format!("🔒 审批：调用 {tool_name}"),
+        PermissionKind::PathAccess { tool_name, paths } => {
+            format!("🔒 审批：{tool_name} 越界访问 {} 个路径", paths.len())
+        }
+        PermissionKind::Plan { .. } => "🔒 审批：执行计划".to_string(),
+        PermissionKind::ContinueLongRun { iterations_used } => {
+            format!("🔒 审批：已运行 {iterations_used} 轮，是否继续")
+        }
+    };
+    println!("{}", header.yellow().bold());
+    if !summary.is_empty() {
+        println!("   {}", summary.dimmed());
+    }
+
+    let mut choices: Vec<(String, Choice)> =
+        vec![("✓ 允许一次".to_string(), Choice::Once)];
+
+    if let PermissionKind::ToolCall {
+        tool_name,
+        fingerprint,
+        ..
+    } = &kind
+    {
+        match fingerprint {
+            Some(fp) if !fp.trim().is_empty() => {
+                let fp = fp.trim().to_string();
+                choices.push((
+                    format!("✓ 始终允许 `{fp}`（项目级）"),
+                    Choice::RememberPattern(fp.clone()),
+                ));
+                let tokens: Vec<&str> = fp.split_whitespace().collect();
+                if tokens.len() >= 2 {
+                    let root = tokens[0].to_string();
+                    choices.push((
+                        format!("✓ 始终允许 `{root}` 所有子命令（项目级）"),
+                        Choice::RememberPattern(root),
+                    ));
+                }
+            }
+            _ => {
+                choices.push((
+                    format!("✓ 始终允许工具 {tool_name}（会话级）"),
+                    Choice::RememberTool,
+                ));
+            }
+        }
+    }
+    choices.push(("✗ 拒绝".to_string(), Choice::Deny));
+
+    tokio::task::spawn_blocking(move || {
+        let display: Vec<String> = choices.iter().map(|(s, _)| s.clone()).collect();
+        let pick = inquire::Select::new("请选择（ESC = 拒绝）：", display.clone())
+            .with_help_message("↑↓ 选择，Enter 确认，ESC 拒绝")
+            .prompt();
+        let idx = pick.ok().and_then(|c| display.iter().position(|d| d == &c));
+        let choice = idx
+            .and_then(|i| choices.into_iter().nth(i).map(|(_, c)| c))
+            .unwrap_or(Choice::Deny);
+        match choice {
+            Choice::Once => ApprovalDecision::AllowOnce,
+            Choice::RememberPattern(pattern) => ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Project,
+                pattern: Some(pattern),
+            },
+            Choice::RememberTool => ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: None,
+            },
+            Choice::Deny => ApprovalDecision::Deny,
+        }
+    })
+    .await
+    .unwrap_or(ApprovalDecision::Deny)
 }
 
 fn print_banner(provider_display: &str, tools: &[String]) {
