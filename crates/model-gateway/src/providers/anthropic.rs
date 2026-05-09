@@ -228,6 +228,9 @@ impl ModelClient for AnthropicClient {
         }
         let mut tools: BTreeMap<usize, ToolAccum> = BTreeMap::new();
         let mut stop_reason: Option<String> = None;
+        // Anthropic 流的 usage 分两次到：message_start 给输入 / 缓存命中 / 缓存写入，
+        // message_delta 给最终 output_tokens。最后合并成完整 Usage 跟着 ModelResponse 回去。
+        let mut usage = Usage::default();
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -307,9 +310,21 @@ impl ModelClient for AnthropicClient {
                                     arguments_delta: Some(partial_json),
                                 }));
                             }
-                            proto::AnthropicStreamEvent::MessageDelta { stop_reason: sr } => {
+                            proto::AnthropicStreamEvent::MessageStart { usage: u } => {
+                                usage = u;
+                            }
+                            proto::AnthropicStreamEvent::MessageDelta {
+                                stop_reason: sr,
+                                usage: u,
+                            } => {
                                 if sr.is_some() {
                                     stop_reason = sr;
+                                }
+                                if let Some(delta_usage) = u {
+                                    // message_delta 带终态 output_tokens；输入 / 缓存沿用 message_start。
+                                    if delta_usage.output_tokens > 0 {
+                                        usage.output_tokens = delta_usage.output_tokens;
+                                    }
                                 }
                             }
                         }
@@ -343,7 +358,7 @@ impl ModelClient for AnthropicClient {
                 reasoning: full_reasoning,
                 calls,
                 attachments: Vec::new(),
-                usage: Usage::default(),
+                usage,
             });
         }
 
@@ -351,7 +366,7 @@ impl ModelClient for AnthropicClient {
             text: full_text,
             reasoning: full_reasoning,
             attachments: Vec::new(),
-            usage: Usage::default(),
+            usage,
         })
     }
 }

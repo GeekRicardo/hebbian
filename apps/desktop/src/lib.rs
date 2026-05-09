@@ -400,12 +400,41 @@ async fn generate_session_title(app: AppHandle, id: String) -> AppResult<Session
     if !has_user {
         return Ok(s);
     }
-    let provider = providers::get(&dd, &s.provider_id)?;
-    let provider = oauth::refresh::ensure_fresh_provider_token(&dd, provider)
-        .await
-        .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
-    let title = title_gen::generate(&provider, &s.model, &s.messages).await?;
+
+    // 决定用谁来生成标题：优先用 ProvidersFile 中标记为「标题生成模型」的 provider，
+    // 否则回退到 session 自己的 provider/model。
+    let providers_file = providers::load(&dd)?;
+    let title_provider = providers_file.providers.into_iter().find(|p| {
+        p.enabled
+            && p.title_gen_enabled
+            && p.title_gen_model.as_deref().is_some_and(|m| !m.is_empty())
+    });
+
+    let (provider, model) = match title_provider {
+        Some(p) => {
+            let model = p.title_gen_model.clone().unwrap_or_default();
+            (p, model)
+        }
+        None => (providers::get(&dd, &s.provider_id)?, s.model.clone()),
+    };
+
+    let title = match try_generate_title(&dd, provider, &model, &s.messages).await {
+        Some(t) => t,
+        None => title_gen::fallback_from_first_user(&s.messages),
+    };
     sessions::rename(&dd, &id, title)
+}
+
+async fn try_generate_title(
+    dd: &std::path::Path,
+    provider: model_gateway::config::Provider,
+    model: &str,
+    messages: &[platform::storage::sessions::Message],
+) -> Option<String> {
+    let provider = oauth::refresh::ensure_fresh_provider_token(dd, provider)
+        .await
+        .ok()?;
+    title_gen::generate(&provider, model, messages).await.ok()
 }
 
 #[tauri::command]

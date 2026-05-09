@@ -358,7 +358,9 @@ pub fn parse_response(v: &Value) -> ModelResponse {
 /// - `ToolUseStart`：`content_block_start` 里 type=tool_use，给上层 ID/name/index。
 /// - `ToolInputJsonDelta`：`content_block_delta.delta.type=input_json_delta`，
 ///   是 tool_use 入参 JSON 的字符串增量（**不是**结构化的，要拼起来 parse）。
-/// - `MessageDelta`：`message_delta` 事件，带 stop_reason 等。
+/// - `MessageStart` / `MessageDelta`：`message_start` 给初始 input/cache token 和占位
+///   output_tokens；`message_delta` 给最终 output_tokens 等终态字段。两者合并才是
+///   完整 usage。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnthropicStreamEvent {
     Text {
@@ -378,8 +380,12 @@ pub enum AnthropicStreamEvent {
         index: usize,
         partial_json: String,
     },
+    MessageStart {
+        usage: Usage,
+    },
     MessageDelta {
         stop_reason: Option<String>,
+        usage: Option<Usage>,
     },
 }
 
@@ -426,8 +432,18 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
                 _ => None,
             }
         }
+        "message_start" => {
+            // message_start.message.usage：入参 + 缓存命中/写入；output_tokens 是占位，
+            // 等 message_delta 再覆盖。
+            let message = v.get("message")?;
+            Some(AnthropicStreamEvent::MessageStart {
+                usage: parse_usage(message),
+            })
+        }
         "message_delta" => Some(AnthropicStreamEvent::MessageDelta {
             stop_reason: v["delta"]["stop_reason"].as_str().map(String::from),
+            // message_delta.usage 只带 output_tokens 终态；缺省时该 SSE 没有 usage。
+            usage: v.get("usage").map(|_| parse_usage(&v)),
         }),
         _ => None,
     }

@@ -128,6 +128,8 @@ mod tests {
             extra_headers: BTreeMap::new(),
             models: vec![],
             default_model: None,
+            title_gen_enabled: false,
+            title_gen_model: None,
         }
     }
 

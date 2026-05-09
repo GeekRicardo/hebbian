@@ -180,6 +180,16 @@ pub fn parse_stream_delta(data: &str) -> Option<String> {
     }
 }
 
+/// Gemini 流式响应中 `usageMetadata` 会随多帧增量更新，最后一帧给完整终态；
+/// 调用侧每帧都跑一次、保留最新的非空结果即可。
+pub fn parse_stream_usage(data: &str) -> Option<Usage> {
+    let v: Value = serde_json::from_str(data).ok()?;
+    if v.get("usageMetadata").is_none() {
+        return None;
+    }
+    Some(parse_usage(&v))
+}
+
 fn parse_usage(v: &Value) -> Usage {
     let meta = &v["usageMetadata"];
     // Gemini implicit caching：`cachedContentTokenCount` 是命中显式缓存的部分；

@@ -110,6 +110,8 @@ impl ModelClient for GeminiClient {
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut full = String::new();
+        // Gemini 把 usageMetadata 跨多帧推增量，留最新一份即可。
+        let mut usage = Usage::default();
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -136,6 +138,9 @@ impl ModelClient for GeminiClient {
                             });
                             full.push_str(&delta);
                         }
+                        if let Some(u) = proto::parse_stream_usage(data) {
+                            usage = u;
+                        }
                     }
                 }
             }
@@ -145,7 +150,7 @@ impl ModelClient for GeminiClient {
             text: full,
             reasoning: String::new(),
             attachments: Vec::new(),
-            usage: Usage::default(),
+            usage,
         })
     }
 }

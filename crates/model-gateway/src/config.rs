@@ -57,6 +57,13 @@ pub struct Provider {
     pub models: Vec<String>,
     #[serde(default)]
     pub default_model: Option<String>,
+    /// 是否把这个 provider 用作「标题生成模型」。整个配置最多一个 provider 应该勾上；
+    /// 多于一个时 desktop 会取第一个匹配。
+    #[serde(default)]
+    pub title_gen_enabled: bool,
+    /// 配合 `title_gen_enabled` 的具体模型 id（必须在 `models` 列表里）。
+    #[serde(default)]
+    pub title_gen_model: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

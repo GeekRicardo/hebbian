@@ -756,7 +756,8 @@ fn accumulate_session_tokens(data_dir: &Path, session_id: &str, delta: TokenStat
 }
 
 /// 计算指定 session 的上下文用量。直接复用 [`agent_core::context::budget`]
-/// 估算器，与发起 run 时看到的口径一致。
+/// 估算器，与发起 run 时看到的口径一致。分母按 session 当前 provider+model
+/// 的 context window 取，provider 已删等场景兜底 200k。
 pub fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id)?;
     let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
@@ -764,7 +765,9 @@ pub fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsag
         transcript.system.as_deref(),
         &transcript.entries,
     );
-    let budget = AgentDefinition::default().compaction_policy.token_budget;
+    let budget = model_gateway::config::get(data_dir, &session.provider_id)
+        .map(|p| model_gateway::context_window::context_window_for(p.kind, &session.model))
+        .unwrap_or(200_000);
     Ok(ContextUsageDto {
         used_tokens: used,
         budget_tokens: budget,
@@ -785,6 +788,8 @@ pub async fn compact_session(
         .await
         .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
     let model = session.model.clone();
+    let budget_tokens =
+        model_gateway::context_window::context_window_for(provider.kind, &model);
     let inner = model_gateway::build_client(provider)
         .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
     let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(inner, model));
@@ -817,7 +822,7 @@ pub async fn compact_session(
 
     Ok(ContextUsageDto {
         used_tokens: result.after_tokens,
-        budget_tokens: AgentDefinition::default().compaction_policy.token_budget,
+        budget_tokens,
     })
 }
 
@@ -1121,6 +1126,8 @@ mod tests {
                     extra_headers: BTreeMap::new(),
                     models: vec!["gpt-test".to_string()],
                     default_model: Some("gpt-test".to_string()),
+                    title_gen_enabled: false,
+                    title_gen_model: None,
                 }],
                 default_provider_id: Some("openai".to_string()),
             },

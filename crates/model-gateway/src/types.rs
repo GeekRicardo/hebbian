@@ -143,7 +143,7 @@ pub struct AssistantOutput {
 /// `cache_read_tokens` 是命中缓存读出来的部分，**已计入** `input_tokens`，单独展示
 /// 给用户用来评估缓存命中率（命中越高越省钱）。`cache_creation_tokens` 是这次写入
 /// 缓存花的输入（只在 Anthropic 上有意义；OpenAI / DeepSeek 没有显式 creation 计费）。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,

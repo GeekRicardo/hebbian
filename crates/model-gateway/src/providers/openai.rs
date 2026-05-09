@@ -137,6 +137,9 @@ impl ModelClient for OpenAiClient {
         let mut full = String::new();
         let mut full_reasoning = String::new();
         let mut tool_call_parts = Vec::new();
+        // OpenAI Chat Completions：开了 stream_options.include_usage 后，最后一帧
+        // `choices` 为空、只带 `usage`。多次出现以最新一次为准。
+        let mut usage = Usage::default();
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -180,6 +183,9 @@ impl ModelClient for OpenAiClient {
                                 );
                                 apply_tool_call_delta(&mut tool_call_parts, delta);
                             }
+                            if let Some(u) = parsed.usage {
+                                usage = u;
+                            }
                         }
                     }
                 }
@@ -192,7 +198,7 @@ impl ModelClient for OpenAiClient {
                 text: full,
                 reasoning: full_reasoning,
                 attachments: Vec::new(),
-                usage: Usage::default(),
+                usage,
             })
         } else {
             Ok(ModelResponse::ToolCalls {
@@ -200,7 +206,7 @@ impl ModelClient for OpenAiClient {
                 reasoning: full_reasoning,
                 calls,
                 attachments: Vec::new(),
-                usage: Usage::default(),
+                usage,
             })
         }
     }
@@ -918,6 +924,8 @@ mod tests {
             extra_headers: Default::default(),
             models: Vec::new(),
             default_model: None,
+            title_gen_enabled: false,
+            title_gen_model: None,
         })
         .unwrap();
         let req = ModelRequest {

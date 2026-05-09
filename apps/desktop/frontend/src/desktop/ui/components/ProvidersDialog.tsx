@@ -187,8 +187,34 @@ export function ProvidersDialog() {
       extra_headers: {},
       models: [],
       default_model: null,
+      title_gen_enabled: false,
+      title_gen_model: null,
       ...overrides,
     };
+  }
+
+  /**
+   * 切换「标题生成模型」开关：
+   * - 关闭：仅清掉当前 provider 的 title_gen 字段
+   * - 打开：把其他 provider 的 title_gen_enabled 全部置 false（互斥）
+   */
+  function toggleTitleGen(enabled: boolean) {
+    if (!current) return;
+    setDraft((d) => ({
+      ...d,
+      providers: d.providers.map((p) => {
+        if (p.id === current.id) {
+          return {
+            ...p,
+            title_gen_enabled: enabled,
+            title_gen_model: enabled
+              ? (p.title_gen_model ?? p.default_model ?? p.models[0] ?? null)
+              : null,
+          };
+        }
+        return enabled ? { ...p, title_gen_enabled: false } : p;
+      }),
+    }));
   }
 
   function addBlank() {
@@ -819,6 +845,38 @@ export function ProvidersDialog() {
                         </option>
                       ))}
                     </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={current.title_gen_enabled === true}
+                        onChange={(e) => toggleTitleGen(e.target.checked)}
+                        disabled={current.models.length === 0}
+                      />
+                      <span>标题生成模型</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        勾选后用此供应商为新对话生成标题（全局唯一）
+                      </span>
+                    </label>
+                    {current.title_gen_enabled && (
+                      <Select
+                        value={current.title_gen_model ?? ""}
+                        onChange={(e) =>
+                          updateCurrent({
+                            title_gen_model: e.target.value || null,
+                          })
+                        }
+                      >
+                        <option value="">（请选择模型）</option>
+                        {current.models.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
                   </div>
 
                   <div className="pt-2 flex items-center justify-between border-t border-border">

@@ -20,6 +20,10 @@ export interface Provider {
   extra_headers: Record<string, string>;
   models: string[];
   default_model?: string | null;
+  /** 是否把这个 provider 用作「标题生成模型」。整份配置最多一个 provider 应该勾上。 */
+  title_gen_enabled?: boolean;
+  /** 配合 title_gen_enabled 的具体模型 id（必须出现在 `models` 列表中）。 */
+  title_gen_model?: string | null;
 }
 
 export interface ProvidersFile {

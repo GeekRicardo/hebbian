@@ -82,6 +82,12 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
         "stream": stream,
     });
 
+    if stream {
+        // OpenAI / OpenAI 兼容（DeepSeek、Qwen 等）：默认流式不带 usage，必须显式
+        // 打开 include_usage，最后一帧才会出 `usage`（choices 为空）。
+        body["stream_options"] = json!({ "include_usage": true });
+    }
+
     if !req.tools.is_empty() {
         body["tools"] = json!(tool_defs(&req.tools));
     }
@@ -531,6 +537,9 @@ pub struct ChatStreamFrame {
     /// DeepSeek / Qwen / GLM-thinking 等：`delta.reasoning_content`（部分实现叫 `reasoning`）。
     pub reasoning_delta: Option<String>,
     pub tool_calls: Vec<ChatStreamToolCallDelta>,
+    /// 启用了 `stream_options.include_usage` 后的最后一帧：`choices` 为空、`usage`
+    /// 字段填了终态计数。中间帧的 usage 通常是空，按需返回。
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -543,49 +552,70 @@ pub struct ChatStreamToolCallDelta {
 
 pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
     let v: Value = serde_json::from_str(data).ok()?;
-    let delta = v["choices"].as_array()?.first()?.get("delta")?;
-    let text_delta = delta["content"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-    let reasoning_delta = delta
-        .get("reasoning_content")
-        .or_else(|| delta.get("reasoning"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
 
-    let tool_calls: Vec<ChatStreamToolCallDelta> = delta["tool_calls"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .enumerate()
-                .map(|(fallback_index, item)| ChatStreamToolCallDelta {
-                    index: item["index"]
-                        .as_u64()
-                        .map(|index| index as usize)
-                        .unwrap_or(fallback_index),
-                    id: item["id"].as_str().map(|s| s.to_string()),
-                    name: item["function"]["name"]
-                        .as_str()
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|s| s.to_string()),
-                    arguments: item["function"]["arguments"]
-                        .as_str()
-                        .map(|s| s.to_string()),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // include_usage=true 时，最后一帧 `choices` 为空，只带 `usage`；这种帧也要返回。
+    let usage = v
+        .get("usage")
+        .filter(|u| !u.is_null())
+        .map(|_| parse_usage(&v));
 
-    if text_delta.is_none() && reasoning_delta.is_none() && tool_calls.is_empty() {
+    let delta_opt = v
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("delta"));
+
+    let (text_delta, reasoning_delta, tool_calls) = if let Some(delta) = delta_opt {
+        let text_delta = delta["content"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let reasoning_delta = delta
+            .get("reasoning_content")
+            .or_else(|| delta.get("reasoning"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let tool_calls: Vec<ChatStreamToolCallDelta> = delta["tool_calls"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(fallback_index, item)| ChatStreamToolCallDelta {
+                        index: item["index"]
+                            .as_u64()
+                            .map(|index| index as usize)
+                            .unwrap_or(fallback_index),
+                        id: item["id"].as_str().map(|s| s.to_string()),
+                        name: item["function"]["name"]
+                            .as_str()
+                            .filter(|s| !s.trim().is_empty())
+                            .map(|s| s.to_string()),
+                        arguments: item["function"]["arguments"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (text_delta, reasoning_delta, tool_calls)
+    } else {
+        (None, None, Vec::new())
+    };
+
+    if text_delta.is_none()
+        && reasoning_delta.is_none()
+        && tool_calls.is_empty()
+        && usage.is_none()
+    {
         None
     } else {
         Some(ChatStreamFrame {
             text_delta,
             reasoning_delta,
             tool_calls,
+            usage,
         })
     }
 }

@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod client;
 pub mod config;
+pub mod context_window;
 pub mod discovery;
 pub mod health;
 pub mod instrument;
