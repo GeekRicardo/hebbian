@@ -73,6 +73,17 @@ export function PermissionApprovalPopup() {
   const [feedback, setFeedback] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // ⚠️ hook 必须在组件顶层、所有提前 return 之前调用——把 useMemo 放在 `if (!pending)`
+  // 之后会让 hook 调用次数随 pending 变化，React 抛"Rendered more hooks than during
+  // the previous render"，弹窗会被 unmount，用户根本看不到按钮 → 看起来"卡住等返回"。
+  const bashPrefixes = useMemo(
+    () =>
+      pending && pending.toolName === "Bash"
+        ? parseBashPrefixes(pending.fingerprint)
+        : null,
+    [pending?.toolName, pending?.fingerprint]
+  );
+
   if (!pending) return null;
 
   const isPathAccess = pending.kind === "path_access";
@@ -108,14 +119,6 @@ export function PermissionApprovalPopup() {
       : pending.input
         ? JSON.stringify(pending.input, null, 2)
         : "";
-
-  const bashPrefixes = useMemo(
-    () =>
-      pending.toolName === "Bash"
-        ? parseBashPrefixes(pending.fingerprint)
-        : null,
-    [pending.toolName, pending.fingerprint]
-  );
 
   return (
     <div className="px-4 pb-2">
