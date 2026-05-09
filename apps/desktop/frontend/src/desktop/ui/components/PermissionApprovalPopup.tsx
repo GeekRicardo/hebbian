@@ -86,13 +86,14 @@ export function PermissionApprovalPopup() {
         : "";
 
   return (
-    <div className="max-w-3xl mx-auto px-4 pb-2">
-      <div
-        className={cn(
-          "rounded-lg border border-border bg-popover shadow-lg overflow-hidden",
-          "animate-in fade-in slide-in-from-bottom-2 duration-150"
-        )}
-      >
+    <div className="px-4 pb-2">
+      <div className="max-w-3xl mx-auto pr-[50px]">
+        <div
+          className={cn(
+            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden",
+            "animate-in fade-in slide-in-from-bottom-2 duration-150"
+          )}
+        >
         {/* 头部 */}
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/40">
           <Shield className="w-4 h-4 text-primary shrink-0" />
@@ -284,6 +285,7 @@ export function PermissionApprovalPopup() {
               </button>
             </>
           )}
+        </div>
         </div>
       </div>
     </div>
