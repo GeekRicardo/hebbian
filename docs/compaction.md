@@ -324,6 +324,8 @@ compact_structural ──────► 结构化裁剪保留最近 N 轮    �
 
 **注意**：超 budget 的自动路径还是结构化裁剪而非 LLM 摘要。把它也接上 LLM 摘要列在演进路线 #1。
 
+**已知漂移点**：[`CompactionStrategy::LlmSummary`](../crates/agent-core/src/definition.rs) enum 选项已存在但 agent_loop 未消费——目前 strategy 字段无论填什么，超 budget 自动路径都走 `compact_structural`。enum 形同虚设；要么接到 agent_loop（演进 #1 顺手做），要么先删。
+
 **Microcompact 白名单**（[microcompact.rs `COMPACTABLE_TOOLS`](../crates/agent-core/src/context/microcompact.rs)）：
 `Bash` / `Read` / `Grep` / `Glob` / `Write` / `Edit` / `web_fetch` / `web_search`。
 这些工具结果"看过就没用"且占 token 大头；`ask` / TodoWrite / Skill 等状态型工具不在白名单。

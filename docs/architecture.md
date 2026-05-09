@@ -161,14 +161,15 @@ apps/*    ──►  agent-core, channels（按需）, sandbox（按需）
 
 | 项 | 现状 | 演进 |
 |----|------|------|
-| `crates/protocol` | 不存在 | 从 `agent-core/types.rs` 抽出 `AgentEvent`，并新增 `Submission/Op` |
-| `crates/platform` 边界 | 混着业务持久化（`storage/sessions`、`config/prompts`） | 瘦身为纯工具箱；业务部分迁出 |
-| `crates/config` | 不存在 | 新建，吞下 `platform/config/prompts`，未来加 `agent_defs / permissions / hooks` |
-| `crates/persistence` | 不存在 | 新建，吞下 `platform/storage/sessions`，新增 `rollout / snapshot / replay` |
-| `crates/memory` | 不存在 | 阶段二建立 |
-| `crates/observability` | 不存在 | 阶段二，先并入 platform 也可接受 |
+| `crates/protocol` | ✓ 已建（`Submission/Op/Event/EventPayload/PermissionKind/...`） | — |
+| `crates/agent-core` | ✓ harness / session / agent_loop / dispatch / recorder / context（含 microcompact + compact_with_llm）/ workspace（三层目录）/ tools / hooks 全在 | — |
+| `crates/platform` 边界 | 仍混着 `storage/sessions`、`config/{prompts,settings}`、`reasoning` | 瘦身为纯工具箱；业务部分迁出 |
+| `crates/config` | 不存在 | 新建，吞下 `platform/config/prompts` + `settings`，未来加 `agent_defs / permissions / hooks` |
+| `crates/persistence` | 不存在 | 新建，吞下 `platform/storage/sessions`；事件 jsonl rollout 已在 `agent-core/recorder.rs`（CLI 默认开 / desktop 未接） |
+| `crates/observability` | ✓ 已建（tracing + OTLP exporter + GenAI 语义属性 + 业务 metrics） | — |
+| `crates/memory` | 不存在 | 阶段二仍未建立 |
 | `crates/channels` | 不存在 | 阶段三 |
-| `apps/tui`、`apps/server` | 不存在 | 阶段三/四 |
+| `apps/tui`、`apps/server` | 不存在；CLI 已是 readline 雏形 | 阶段三/四 |
 
 ---
 
@@ -285,21 +286,25 @@ pub enum EventPayload {
 
 设计要点：
 
-- **`seq` 单调递增**。任何持久化与重放都靠它。**注意**：现状 `agent-core/agent_loop.rs` 使用全局 `static AtomicU64 SEQ`，这是个隐患——多 run 并发时 seq 不再 per-run 单调。**演进**：将 `seq` 移到 `Run` 状态对象上，每个 run 一个独立计数器。
-- **`TurnContextSummary` 必须出现在 `RunStarted` 里**：这是断线重连的元信息（用了什么模型、什么 approval policy、什么 sandbox 配置）。
+- **`seq` 单调递增**。任何持久化与重放都靠它。✓ 已落到 `RunState::next_seq()`（每 run 私有 `AtomicU64`）。
+- **`TurnContextSummary` 必须出现在 `RunStarted` 里**：当前实际只发了 `agent` + `parent`，`turn_ctx` 摘要待补。
 - 事件粒度要细到能完整回放 UI（包括思考流、压缩事件、记忆注入），但**避免每个 token 一个事件**——文本流走 `TextDelta`，按片段 batch。
 
 ### 2.3 与现状的差距
 
 | 项 | 现状 | 演进 |
 |----|------|------|
-| 协议位置 | 在 `agent-core/types.rs` | 抽到 `crates/protocol` |
-| `Submission/Op` | 不存在；当前由 Tauri command 触发 | 新建；Tauri command 改为 `Submission` 的薄包装 |
-| `seq` 来源 | 全局 `AtomicU64` | 改成每 run 私有 |
-| `RunStarted` 元信息 | 仅 run_id | 增加 `agent`、`parent`、`turn_ctx` |
-| `ChildRunSpawned/Finished` | 不存在 | multi-agent 阶段补 |
-| `PermissionResolved` | 不存在（只有 Requested） | HITL 闭环必备 |
-| `Reasoning` | 不存在 | 接入 Anthropic 思考流时补 |
+| 协议位置 | ✓ 已抽到 `crates/protocol` | — |
+| `Submission/Op` | ✓ 已建；Tauri command 仍是各自实现，没改成 `Submission` 薄包装；本地路径直接调 `Session::run` / `RunHandle::*` | 跨进程入口（server / channel）补 `Submission → Op` 翻译 |
+| `seq` 来源 | ✓ `RunState::next_seq()` 每 run 私有 | — |
+| `RunStarted` 元信息 | 仅 `agent` + `parent` | 补 `turn_ctx`（model / approval policy / sandbox 摘要） |
+| `PermissionResolved` | ✓ 已发 | — |
+| `UserQuestionRequested / UserQuestionAnswered` | ✓ 已加（ask 工具走这条） | — |
+| `Reasoning` | ✓ 已加（流式 `ReasoningDelta` + 非流式回填都已接） | — |
+| `ChildRunSpawned / Finished` | 不存在 | multi-agent 阶段补 |
+| `MemoryInjected` | 不存在 | memory 阶段补 |
+| `RolledBack / Forked` | 不存在 | persistence + 时间线 UI 阶段补 |
+| `HookFired` | 不存在 | observability 已经覆盖大部分 hook 触发，event 上是否需要重复发待定 |
 
 ---
 
@@ -615,9 +620,10 @@ impl ContextEngine {
 
 | 层 | 触发时机 | 做什么 | 现状 |
 |----|---------|--------|------|
-| **L1 BlobRef 降维** | 工具结果产生时 | 大输出落 blob，transcript 只留 preview | 缺 |
-| **L2 结构化裁剪** | budget 超阈值 | 保留 system、最近 N 条、未闭合 tool loop、所有 user 消息；裁掉冗余 tool result | 现状是简单截断 |
-| **L3 摘要式压缩** | L2 后仍超 | 调小模型把中段历史摘成一条 system-prefix message | 已有 `compact_structural`，**未实现 LLM 摘要** |
+| **L0 Microcompact**（学 Claude Code） | 每轮模型请求前自动跑 | 累计可压缩 tool result（Bash/Read/Grep/Glob/web_*/Write/Edit）超阈值后，把"最近 K 个之外"的 content 替换为 `[结果已被压缩]` 占位符 | ✓ [`microcompact`](../crates/agent-core/src/context/microcompact.rs)（默认 trigger=12 / keep=5） |
+| **L1 BlobRef 降维** | 工具结果产生时 | 大输出落 blob，transcript 只留 preview | 缺（仅 `MAX_TOOL_RESULT_INLINE = 6000` 字节硬截断） |
+| **L2 结构化裁剪** | budget 超阈值 | 保留 system + 最近 N 轮，裁掉早期 entries | ✓ [`compact_structural`](../crates/agent-core/src/context/compaction.rs) |
+| **L3 摘要式压缩** | 用户主动触发 / L2 后仍超 | 调一次模型把整段历史摘成 `[前情概要]` + assistant ack 替换原 entries | ✓ [`compact_with_llm`](../crates/agent-core/src/context/compaction.rs)；`Session::compact` / desktop `compact_session` Tauri 命令 / CLI `/compact [指令]` 已接；agent_loop 内仍 hardcode 调 L2，未根据 `CompactionStrategy::LlmSummary` 切换 |
 | **L4 投影式继承** | 子 agent / fork 时 | 按 `ContextPolicy` 投影出新 transcript | 缺 |
 
 设计要点：
@@ -758,9 +764,9 @@ model-gateway/src/
 
 **现状**：
 
-- `protocols/`、`providers/`、`auth/refresh`、`discovery/` 已有
-- ModelClient trait 已定义且基本符合上述形态
-- **缺** `registry`、`routing`、`retry`：当前由 chat.rs 直接选 provider，没有抽象层
+- `protocols/`、`providers/`（4 家：openai / anthropic / gemini / deepseek）、`auth/refresh`、`discovery/`、`health.rs`、`context_window.rs`、`instrument.rs`（自动 span + metrics 装饰器）、`build_client()` 工厂全已落地
+- ModelClient trait 已定义；`InstrumentedClient` 在 [`build_client`](../crates/model-gateway/src/lib.rs) 内自动包一层
+- **缺** `registry`、`routing`、`retry`：当前 surface 直接 `build_client(provider)`，没有抽象层；推理参数靠各 surface 自己写 `ModelWithName`/`NamedModelClient` 包装
 
 ### 4.3 Provider × Auth × Protocol 的三轴模型
 
@@ -776,10 +782,13 @@ Auth       = 凭据获取方式（api_key, oauth-pkce, device-flow, vertex-sa, a
 
 | 项 | 现状 | 演进 |
 |----|------|------|
-| Routing | 不存在，硬编码三个 provider | 增加 `ModelSelector { provider, model, fallback }` |
+| Routing | 不存在；`build_client(provider)` 一对一 | 增加 `ModelSelector { provider, model, fallback }` |
 | Retry | 不存在 | 标准退避 + 区分可重试错误（429 / 5xx / 网络） |
-| Cost / Usage 标准化 | `Usage` 结构有 input/output tokens，无成本 | 接入 pricing table，事件里带 cost |
-| Health check | `health.rs` 已有雏形 | 暴露给 Surface 用于 provider dropdown |
+| Cost / Usage 标准化 | `Usage` 已带 `input/output/cache_read/cache_creation tokens`（4 家齐了）；无成本 | 接入 pricing table，事件里带 cost |
+| Reasoning 配置 | ✓ `platform::reasoning::ReasoningConfig`（thinking + effort + 1M context）覆盖 Anthropic 三套 schema + OpenAI xhigh 分档 | — |
+| Streaming usage 统计 | ✓ Anthropic `message_start` / `message_delta` 双段已合并；OpenAI / Gemini / DeepSeek stream 也有 usage | — |
+| Health check | `health.rs` 已暴露给 desktop "测试模型" 按钮 | — |
+| ModelClient 包装重复 | desktop / cli 各自写 `ModelWithName` / `NamedModelClient` 注入 model + reasoning | 提一个 `ModelClientExt::with_model_and_reasoning` 进 model-gateway |
 
 ---
 
@@ -871,8 +880,10 @@ platform/src/
 | `runtime.rs`（CancelFlag 注册表） | 真·工具，但有全局状态 | 留下 trait 与类型，全局表随 harness actor 化删除 |
 | `error.rs` | 真·工具 | 保留 |
 | `attachments.rs` | 半工具半业务 | 保留（消息附件是通用数据类型） |
+| `reasoning.rs`（`ReasoningConfig` + 各家 schema 适配） | 半工具半业务（serde 类型 + 模型家族判定 helper） | 当前合理：被 model-gateway 与 storage/sessions 共同依赖；待 routing 引入后可下沉到 model-gateway 或 config |
 | `config/prompts.rs` | **业务**：系统提示词配置 | **迁出 → `crates/config`** |
-| `storage/sessions.rs` | **业务**：对话会话持久化 | **迁出 → `crates/persistence`** |
+| `config/settings.rs` | **业务**：全局/对话默认设置 | **迁出 → `crates/config`** |
+| `storage/sessions.rs` | **业务**：对话会话持久化（含 marker / token_stats / runtime_allowed_dirs / fork / truncate / search） | **迁出 → `crates/persistence`** |
 | 缺：`blob.rs` | 真·工具 | 新建（阶段二，工具长输出降维需要） |
 | 缺：`fs/atomic.rs` | 真·工具 | 新建（多 crate 写文件都需要原子语义） |
 
@@ -905,55 +916,122 @@ configs/                        仓库内置默认值
 
 ---
 
-## 7. Persistence：Rollout 与 Resume
+## 7. Persistence：Rollout v1（jsonl 单源）
 
-生产 agent 必须能从崩溃中恢复、能从历史回放、能 fork。
+生产 agent 必须能从崩溃中恢复、能从历史回放、能 fork。Hebbian 选 **JSONL** —— 单文件流式追加、崩溃只丢最后一行、易 grep/jq、不需要 schema migration、行级粒度天然适合后续切 SQLite/DuckDB（一行 = 一行表）。
 
-### 7.1 设计
+### 7.1 落地形态（现状已发布）
 
-`crates/persistence` 同时承担两件事——把 platform 现在错位的会话持久化也吞进来：
-
-```text
-persistence/src/
-├── sessions.rs                  原 platform/storage/sessions.rs
-│                                Session / Message / MessageToolCall 持久化
-├── rollout.rs                   新增：JSONL 事件日志（崩溃恢复、replay 用）
-├── snapshot.rs                  新增：transcript 阶段性 snapshot
-└── store.rs                     trait：SessionStore / RolloutStore
-```
-
-```rust
-// crates/persistence/src/rollout.rs
-pub trait RolloutStore: Send + Sync {
-    async fn open(&self, run: &RunId) -> RolloutWriter;
-    async fn replay(&self, run: &RunId, since_seq: Option<u64>) -> EventStream;
-    async fn list(&self, filter: RolloutFilter) -> Vec<RolloutSummary>;
-}
-```
-
-格式选 **JSONL**（每行一个 `Event`）：
-
-- 流式追加，崩溃只丢最后一行
-- 易于 grep / jq 调试
-- 不需要 schema migration
+实现位于 [`crates/platform/src/storage/sessions.rs`](../crates/platform/src/storage/sessions.rs)。**desktop 与 CLI 共享同一份 store**，`<data_dir>` 在 macOS 是 `~/Library/Application Support/dev.ricardo.hebbian/`。
 
 ```text
-~/.hebbian/rollouts/
-└── <date>/
-    └── <run_id>.jsonl                    每行一个 Event
-└── snapshots/
-    └── <run_id>-<turn>.json              定期 snapshot transcript
+<data_dir>/sessions/
+├── 2026-05-09/
+│   ├── <session_id>.jsonl                每个 session 一份 jsonl
+│   └── <session_id>.json.bak             老 .json 自动迁移后的备份（可手动删）
+└── ...
 ```
 
-### 7.2 三个核心操作
+### 7.2 行格式（`RolloutLine` enum）
 
-- **Resume**：读 `<run_id>.jsonl`，重放到 `RunRegistry`，恢复 transcript。模型调用未完成的 turn 重新发起。
-- **Fork**：读 `<run_id>.jsonl` 到 `at_turn`，复制为新 `RunId`，新建 jsonl 文件。
-- **Rollback**：在 jsonl 末尾追加一个 `RolledBack` 事件，截断 transcript 视图（不物理删除）。
+每行一个 `RolloutLine` JSON，`#[serde(tag = "type")]` 区分变体：
 
-**现状**：完全不存在；当前 `chat.rs` 只把对话存进 `Session`（轻量持久化），没有事件级别。
+```jsonc
+// 第 1 行：身份 + 起始时刻可变状态快照（必须、唯一一行）
+{"type":"meta","schema":1,"id":"...","source":"desktop|cli",
+ "created_at":..., "forked_from":null,
+ "title":"新对话","provider_id":"...","model":"...","stream":true,
+ "system_prompt":"...","prompt_id":"...","workdir":"...",
+ "allowed_dirs":[...],"runtime_allowed_dirs":[...],"pending_runtime_allowed_dirs":[...],
+ "enabled_tools":[...],"skill_dirs":[...],"reasoning":{...},"token_stats":{...}}
 
-**演进顺序**：先做 RolloutWriter（即时落盘）→ 再做 Replay → 再做 Fork/Rollback。
+// 之后任意顺序、任意数量：
+{"type":"message","id":"...","role":"user|assistant|marker|system","content":"...",
+ "attachments":[...],"tool_calls":[...],"parts":[...],"created_at":...,"meta":{...}}
+
+{"type":"meta_update","at":1715251200000,
+ "title":"新标题",                                  // 任意 mutable 字段，缺省的不变
+ "token_stats":{...},
+ "runtime_allowed_dirs":[...]}
+
+{"type":"event","payload":{...}}                  // 原始 protocol::Event 透传，预留
+```
+
+**字段语义：**
+
+| 行类型 | 内容 | 写入时机 | 数量 |
+|---|---|---|---|
+| `meta` | 不可变身份 (`id` / `source` / `created_at` / `forked_from` / `schema`) + 起始可变快照 | session 创建 / `save` 全量重写 | 每文件 1 行（重写时刷新） |
+| `message` | 用户/助手/marker 消息全量 | 消息提交时 append | 每条消息 1 行 |
+| `meta_update` | 任意 mutable 字段的 partial patch（last-wins by field） | rename / token_stats 累加 / 状态切换 | 每次变更 1 行 |
+| `event` | 原始 `protocol::Event` 透传，给 replay/audit 用 | **当前不写**（schema 已留位）| - |
+
+### 7.3 读写流程
+
+**写：**
+- `create()` / `save()` = 全量重写（meta 行 + 所有 message 行），等价于 compaction；丢弃过去的 `meta_update` 历史
+- `append_message(id, msg)` = append 1 行 `message`
+- `rename(id, title)` / token 累加 / etc. = append 1 行 `meta_update`
+- `fork(...)` = 新建 jsonl，meta 头里 `forked_from = 父 id`
+- `truncate_*` = 用 `save` 全量重写
+
+**读（fold）：**
+
+```text
+session = empty
+for line in jsonl:
+  meta(m)         → 应用所有快照字段（schema 校验）
+  message(msg)    → push 进 messages
+  meta_update(u)  → 按字段覆盖
+  event(_)        → 跳过（当前 UI 不消费）
+session.updated_at = max(所有行的时间戳)
+```
+
+读 schema 比当前 `ROLLOUT_SCHEMA` 高的文件 → 报错让用户升级，**绝不静默降级**。
+
+### 7.4 兼容老 `.json`
+
+老格式（整 Session 一份 JSON，无 jsonl）仍可读：
+
+- `load(id)` 优先找 `<id>.jsonl`；找不到回落到 `<id>.json` + `serde_json::from_slice`
+- 任何写操作（`save` / `append_message` / `rename`）触发 lazy 迁移：`read .json → write .jsonl → mv .json .json.bak`
+- `list()` 同时扫两种扩展名；同 id 共存时 jsonl 优先
+
+孤儿事件流（早期 CLI 直接用 `Recorder` 写的 `rollout-<ts>-<uuid>.jsonl`）按文件名前缀过滤掉，不让 list 试图把它解析成 RolloutLine。
+
+### 7.5 三个核心操作的现状
+
+- ✓ **Resume**：CLI `--history <session_id>` 从 jsonl fold 出 `Session`，回填 transcript 续聊；desktop sidebar 直接 `sessions::load` 渲染历史
+- ✓ **Fork**：消息级 `sessions::fork(parent_id, up_to_message_id)` 复制到新 jsonl，meta 头记 `forked_from`
+- ✓ **Truncate**：`truncate_after` / `truncate_inclusive` 走 save 重写
+- ◐ **Rollback**：目前 truncate 是消息级，事件级 `RolledBack` 还没接（依赖 §7.6 event 行落地）
+
+### 7.6 `event` 行的预留语义
+
+`RolloutLine::Event` 是 schema 上预留的「**原始事件流**」 —— 每个 `protocol::Event`（`TextDelta` / `ToolCallStarted` / `Reasoning` / `PermissionRequested` / …）一行。
+
+跟 `message` 行的区别：
+
+| | `message` | `event` |
+|---|---|---|
+| 内容 | 一条已落定的对话消息 | streaming 过程中的单个事件 |
+| 数量 | 1 turn ≈ 2 行 | 1 turn ≈ 几百~几千行 |
+| 用途 | 喂下次模型 + UI 渲染（**transcript**） | debug / replay / 审计 / 训练数据（**过程录像**） |
+
+**为什么预留但不写：** 体积大、当前没消费者；schema 已留好，开启时只需在 `Recorder` 把 Event 包成 `RolloutLine::Event` append 到同一个 jsonl，加 `--record-events` flag 默认关闭。
+
+**未来的消费场景：**
+- Turn replay UI（每个 token / tool call 时序回放）
+- 权限审计日志（谁在什么时候同意/拒绝了什么）
+- TTFT / streaming 抖动 / tool 失败率等指标
+- 完整模型 IO 训练数据导出
+
+### 7.7 演进方向（未做，按需推进）
+
+1. **抽 `RolloutStore` trait**：当前是直接函数 IO，引入第二个后端（SQLite / DuckDB）时再抽，避免空 trait
+2. **拆 `crates/persistence`**：把 `platform/storage/sessions.rs` 整体迁出（`platform` 只留 attachments / cancel / config）
+3. **开 event 行**：见 §7.6，附 replay loader
+4. **事件级 rollback**：在 jsonl 末尾追加 `meta_update` 表示截断点，UI 视图按截断点呈现，物理 jsonl 不删
 
 ---
 
@@ -975,22 +1053,40 @@ pub enum Signal {
 }
 ```
 
-实现：
+实现（[`crates/observability`](../crates/observability/)）：
 
-- **logs**：`tracing` + `tracing-subscriber`（已用）
-- **metrics**：默认 `tracing` 字段；可选 `metrics` crate + Prometheus exporter
-- **traces**：`tracing` span，带 `run_id / turn / step` 字段；可选 OpenTelemetry exporter
+- ✓ **logs**：`tracing` + `tracing-subscriber::fmt`（stderr，env-filter 控制级别）
+- ✓ **metrics**：`opentelemetry` + OTLP HTTP exporter；业务 metrics 工厂在 [`metrics.rs`](../crates/observability/src/metrics.rs)：
+  - `record_run_outcome(outcome, agent_id, duration_ms)`
+  - `record_turn_duration(turn_index, stop_reason, duration_ms)`
+  - `record_tool_duration(tool, outcome, duration_ms)`
+  - `record_permission_wait(kind, decision, wait_ms)`
+  - `record_model_call(system, model, streaming, duration_ms)` + `record_token_usage(...)`
+- ✓ **traces**：`tracing-opentelemetry` 把 `tracing` span 镜像成 OTel span，结构如下（与 Langfuse 对齐）：
 
-UI 配套：一个 `Inspector` 组件，订阅同一条 EventStream 渲染：
+```text
+run                                ← agent-core::harness::spawn_run
+├── turn                           ← agent-core::agent_loop 每轮
+│   ├── compaction          (条件触发)
+│   ├── microcompact        (条件触发)
+│   ├── model.request              ← model-gateway::InstrumentedClient
+│   │     attrs: gen_ai.system / .request.model / .usage.* / hebbian.streaming
+│   ├── tool.call                  ← agent-core::dispatch 每个 call
+│   │   ├── permission.check (条件触发)
+│   │     attrs: tool.name / .class / .outcome / .duration_ms
+```
 
-- Run tree（含子 run）
-- Token / cost 时间线
-- Tool timeline（含权限等待时长）
-- Compaction blocks
-- Memory inject panel
-- Hook firing list
+- ✓ **零网络副作用启动**：未设 `OTEL_EXPORTER_OTLP_ENDPOINT` 时只装 stderr 日志
+- ✓ **同步入口 + 独占 runtime**：`init()` 是同步函数，可在 Tauri sync `run()` 之前直接调；OTel 批处理跑在 observability 内部独占 multi-thread runtime（1 worker），与 surface runtime 完全隔离
+- ✓ **GenAI semantic conventions** 属性常量在 [`attr.rs`](../crates/observability/src/attr.rs)
 
-**现状**：仅 `tracing` 调用散布在 agent_loop。**缺**：标准 Signal、Inspector UI、cost 计算。
+**仍缺**：
+
+- Inspector UI（surface 内嵌的 trace 浏览器）
+- Cost 计算（pricing table）
+- `Signal` 枚举/标准化抽象（当前是直接调 `record_*` 函数）
+
+UI 配套（未来）：订阅同一条 EventStream 渲染 Run tree / Token 时间线 / Tool timeline / Compaction blocks / Memory inject panel / Hook firing list。
 
 ---
 
@@ -1368,78 +1464,88 @@ crates/*/src/**/tests.rs        单元测试（贴近模块）
 
 按优先级排序，每条都是可独立交付的工作单元。
 
-### 阶段一：Core API 收敛
+### 阶段一：Core API 收敛（**M1 完成 11/14**）
 
-| # | 工作 | 涉及 |
-|---|------|------|
-| 1 | `crates/protocol` 抽出，`Submission/Op/Event` 集中 | protocol |
-| 2 | per-run `seq`，由 `RunState` 维护 | agent-core |
-| 3 | `PermissionDecision` 三态 + oneshot waiter HITL 通路 | agent-core |
-| 4 | `RunHandle` 取代 `RunId` 反查：events 独享 mpsc + control 内化 gate/cancel | agent-core |
-| 5 | `Session` 上升为 agent-core 一等公民：transcript / workspace / definition / client 内化 | agent-core |
-| 6 | `TurnObserver` trait + `RunHandle::drive(&mut observer)`：surface 不再写事件循环 | agent-core, apps/* |
-| 7 | `TurnContext` 收拢零散参数（model / tools / approval / sandbox / budget / iteration_budget） | agent-core |
-| 8 | `Tool::classify` + `ToolCtx` + `ToolResult { outcome: Ok / Denied / Failed }` | agent-core |
-| 9 | `HitlGate` 合并 PermissionGate + QuestionGate，统一 pending 表 | agent-core |
-| 10 | `AgentLoop` 拆为 `ContextCompactor / ToolDispatcher` 等子对象，移除 800 行长函数 | agent-core |
-| 11 | `LoopError` 分类型（Model / Cancelled / MaxIterations / Tool） | agent-core |
-| 12 | `ask` 改为普通 Tool 实现（`NeedsHumanInput` 分类） | agent-core/tools |
-| 13 | Hook 缩到 4 个拦截点（BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction） | agent-core/hooks |
-| 14 | Desktop pending 改队列模型，与 ToolClass 串行规则配套 | apps/desktop |
+| # | 工作 | 涉及 | 状态 |
+|---|------|------|------|
+| 1 | `crates/protocol` 抽出，`Submission/Op/Event` 集中 | protocol | ✓ |
+| 2 | per-run `seq`，由 `RunState` 维护 | agent-core | ✓ |
+| 3 | `PermissionDecision` 三态 + oneshot waiter HITL 通路 | agent-core | ✓ |
+| 4 | `RunHandle` 取代 `RunId` 反查：events 独享 mpsc + control 内化 gate/cancel | agent-core | ✓ |
+| 5 | `Session` 上升为 agent-core 一等公民：transcript / workspace / definition / client 内化 | agent-core | ✓ |
+| 6 | `TurnObserver` trait + `RunHandle::drive(&mut observer)`：surface 不再写事件循环 | agent-core, apps/* | ✓ |
+| 7 | `TurnContext` 收拢零散参数（model / tools / approval / sandbox / budget / iteration_budget） | agent-core | ◐ struct 已立、lib.rs pub use，但**无人 import**；agent_loop 仍用 `LoopParams` |
+| 8 | `Tool::classify` + `ToolCtx` + `ToolResult { outcome: Ok / Denied / Failed }` | agent-core | ◐ classify ✓；`ToolResult.outcome` 三态未拆，错误仍以字符串塞 content |
+| 9 | `HitlGate` 合并 PermissionGate + QuestionGate，统一 pending 表 | agent-core | ✓ |
+| 10 | `AgentLoop` 拆为 `ContextCompactor / ToolDispatcher` 等子对象，移除 800 行长函数 | agent-core | ✓（ToolDispatcher 已抽，agent_loop ~525 行 / dispatch ~630 行） |
+| 11 | `LoopError` 分类型（Model / Cancelled / MaxIterations / Tool） | agent-core | ◐ `Cancelled` 已拆，`MaxIterations` 仍塞在 `ModelError::Other(String)` |
+| 12 | `ask` 改为普通 Tool 实现（`NeedsHumanInput` 分类） | agent-core/tools | ✗ ToolClass::NeedsHumanInput 已加，但 dispatch 仍按 `ASK_TOOL_NAME` 字符串特判 |
+| 13 | Hook 缩到 4 个拦截点（BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction） | agent-core/hooks | ✓ |
+| 14 | Desktop pending 改队列模型，与 ToolClass 串行规则配套 | apps/desktop | ✓ |
 
-### 阶段二：性能与可观测
+### 阶段二：性能与可观测（**M2 部分完成**）
 
-| # | 工作 | 涉及 |
-|---|------|------|
-| 15 | Prompt cache 边界：`ContextSnapshot` 三段切分 + provider 层 cache_control | agent-core/context, model-gateway |
-| 16 | `platform/blob.rs` + `ToolContent::BlobRef` 自动落 blob | platform, agent-core |
-| 17 | LLM 摘要压缩（L3）：`Compactor` trait + 默认实现 | agent-core/context |
-| 18 | `crates/observability` 标准 Signal + Inspector UI | observability, apps/desktop |
-| 19 | Model Gateway routing / retry / cost 字段 | model-gateway |
+| # | 工作 | 涉及 | 状态 |
+|---|------|------|------|
+| 15 | Prompt cache 边界：`ContextSnapshot` 三段切分 + provider 层 cache_control | agent-core/context, model-gateway | ✗ |
+| 16 | `platform/blob.rs` + `ToolContent::BlobRef` 自动落 blob | platform, agent-core | ✗ 仍是 `MAX_TOOL_RESULT_INLINE = 6000` 硬截断 |
+| 17 | LLM 摘要压缩（L3）：`Compactor` trait + 默认实现 | agent-core/context | ◐ `compact_with_llm` ✓；`Session::compact` / `compact_session` Tauri / CLI `/compact` 已接；agent_loop 内仍 hardcode 调 L2，`CompactionStrategy::LlmSummary` 选项形同虚设 |
+| 17b | Microcompact（每轮模型请求前自动影子化老 tool result） | agent-core/context | ✓ [`microcompact`](../crates/agent-core/src/context/microcompact.rs)（默认 trigger=12 / keep=5） |
+| 17c | 事件 jsonl 落盘（rollout） | agent-core | ✓ [`Recorder`](../crates/agent-core/src/recorder.rs)；CLI 默认开 / desktop 未接 |
+| 18 | `crates/observability` 标准 Signal + Inspector UI | observability, apps/desktop | ◐ observability crate ✓（tracing + OTLP + GenAI 语义属性 + 业务 metrics 工厂全有）；Inspector UI ✗；标准 `Signal` enum ✗（直接调函数） |
+| 19 | Model Gateway routing / retry / cost 字段 | model-gateway | ✗ Cost ✗ / Routing ✗ / Retry ✗；`Usage.cache_*` ✓；DeepSeek provider ✓；reasoning 抽象 ✓ |
 
-### 阶段三：持久化与扩展入口
+### 阶段三：持久化与扩展入口（**未开始**）
 
-| # | 工作 | 涉及 |
-|---|------|------|
-| 20 | 拆 platform：`storage/sessions` → `crates/persistence`；`config/prompts` → `crates/config` | platform → persistence/config |
-| 21 | JSONL rollout + Resume / Fork / Rollback Op 实现 | persistence, agent-core |
-| 22 | `crates/memory` fs 后端 + Memory Hook（BeforeModelCall 注入 / OnToolResult 写候选） | memory, agent-core |
-| 23 | `AgentDefinition` YAML 加载 + 内置 5 个角色 | config, configs/ |
-| 24 | `apps/server` HTTP + SSE：`submit(Op)` + `subscribe(run_id, since_seq)` 路径打通 | apps/server |
-| 25 | `crates/channels` 框架 + Slack 适配 | channels |
-| 26 | `apps/tui` 最小可用 | apps/tui |
+| # | 工作 | 涉及 | 状态 |
+|---|------|------|------|
+| 20 | 拆 platform：`storage/sessions` → `crates/persistence`；`config/{prompts,settings}` → `crates/config` | platform → persistence/config | ✗ |
+| 21 | Resume / Fork / Rollback Op 实现 | persistence, agent-core | ◐ jsonl rollout ✓；Op 路径全部落 `tracing::debug!`，未实现；desktop messages 级 fork/truncate 已有 |
+| 22 | `crates/memory` fs 后端 + Memory Hook（BeforeModelCall 注入 / OnToolResult 写候选） | memory, agent-core | ✗ |
+| 23 | `AgentDefinition` YAML 加载 + 内置 5 个角色 | config, configs/ | ✗（当前 surface 直接 `AgentDefinition::default()`） |
+| 24 | `apps/server` HTTP + SSE：`submit(Op)` + `subscribe(run_id, since_seq)` 路径打通 | apps/server | ✗ |
+| 25 | `crates/channels` 框架 + Slack 适配 | channels | ✗ |
+| 26 | `apps/tui` 最小可用 | apps/tui | ✗（CLI 是 readline 雏形，非全屏 ratatui） |
 
-### 阶段四：多 agent 与硬化
+### 阶段四：多 agent 与硬化（**未开始**）
 
-| # | 工作 | 涉及 |
-|---|------|------|
-| 27 | `RunTree` + `spawn_agent` / `spawn_parallel` 工具 | agent-core/multi_agent |
-| 28 | `ContextPolicy::Isolated / InheritSummary / InheritSelected` 投影 | agent-core/context |
-| 29 | `crates/sandbox` Seatbelt/Landlock 实现 | sandbox |
-| 30 | Bash / Write / Edit 内置工具（带 sandbox） | agent-core/tools |
-| 31 | MCP client | agent-core/tools 或独立 crate |
-| 32 | OpenTelemetry exporter | observability |
-| 33 | Plan 审批模式（L2 HITL，`submit_plan` 工具） | agent-core, configs |
+| # | 工作 | 涉及 | 状态 |
+|---|------|------|------|
+| 27 | `RunTree` + `spawn_agent` / `spawn_parallel` 工具 | agent-core/multi_agent | ✗ |
+| 28 | `ContextPolicy::Isolated / InheritSummary / InheritSelected` 投影 | agent-core/context | ✗（enum 已定义在 protocol，运行时无 projection） |
+| 29 | `crates/sandbox` Seatbelt/Landlock 实现 | sandbox | ✗ |
+| 30 | Bash / Write / Edit 内置工具（带 sandbox） | agent-core/tools | ◐ Bash / Write / Read / Grep / Skill 已实现，**无 sandbox**；越界路径走 HitlGate 审批 |
+| 31 | MCP client | agent-core/tools 或独立 crate | ✗ |
+| 32 | OpenTelemetry exporter | observability | ✓（已合并入 #18，OTLP HTTP exporter） |
+| 33 | Plan 审批模式（L2 HITL，`submit_plan` 工具） | agent-core, configs | ✗（PermissionKind::Plan 已定义，未发起） |
 
 ---
 
 ## 15. 里程碑
 
-### M1：Core API 收敛
+### M1：Core API 收敛 — **进行中（11/14）**
 **目标**：Surface 端不写事件循环，不持有 gate Arc，不调反查 API；core 内部 agent_loop 拆解为子对象、Tool 自报 HITL 类型、HitlGate 合并、Hook 收敛到 4 个拦截点。
-- 阶段一 #1 ~ #14
 
-### M2：性能与可观测
+剩余 3 项：#7 TurnContext 收尾或删除、#11 `MaxIterations` 拆出独立 LoopError、#12 `ask` 改普通 Tool。
+另有半完成：#8 `ToolResult.outcome` 三态拆分。
+
+### M2：性能与可观测 — **进行中（observability ✓ / rollout ✓ / L3 部分 / blob ✗）**
 **目标**：prompt cache 命中率显著提升；长输出落 blob；Inspector 看得见 token / cost / tool timeline；L3 压缩可用。
-- 阶段二 #15 ~ #19
 
-### M3：持久化与扩展入口
+进展：
+
+- ✓ observability crate（tracing + OTLP + 业务 metrics 工厂）
+- ✓ Microcompact + 事件 jsonl rollout（Recorder）
+- ✓ LLM 摘要式 compact（用户主动）
+- ✗ prompt cache 三段切分 / BlobStore / Inspector UI / cost / agent_loop 内自动 L3
+
+### M3：持久化与扩展入口 — **未开始**
 **目标**：platform 拆分完成；崩溃后能 Resume / Fork / Rollback；记忆通过 Hook 注入；Desktop / TUI / HTTP / Slack 任一入口都能起 run。
-- 阶段三 #20 ~ #26
 
-### M4：多 agent 与硬化
-**目标**：父子 run + 三种协作模式；Bash / Write / Edit 在 sandbox 内可用；接入 MCP 与 OTel。
-- 阶段四 #27 ~ #33
+注：jsonl rollout 已在 agent-core 落地，留给 M3 的是迁出到 `crates/persistence` + Replay/Fork/Rollback Op 路径打通 + memory + AgentDefinition YAML + server/channels/tui。
+
+### M4：多 agent 与硬化 — **未开始**
+**目标**：父子 run + 三种协作模式；Bash / Write / Edit 在 sandbox 内可用；接入 MCP 与 OTel（OTel 已先做）。
 
 ---
 

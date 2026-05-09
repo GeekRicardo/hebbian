@@ -29,6 +29,7 @@ apps/desktop/gen/
 graphify-out/
 .claude/
 .cursor/
+.codemap/
 .omx/
 
 # claude-mem 自动生成的记忆缓存
