@@ -1,9 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  FilePlus2,
+  Folder,
+  FolderOpen,
   GripHorizontal,
   Loader2,
-  Paperclip,
+  Plus,
+  X,
 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import {
@@ -13,11 +18,13 @@ import {
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
 import { ContextRing } from "@/desktop/ui/components/ContextRing";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
+import { ModelPickerButton } from "@/desktop/ui/components/ModelPickerButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { api } from "@/desktop/bridge/tauri";
 import type { MessageAttachment } from "@/desktop/ui/types";
 
 interface Props {
@@ -70,6 +77,82 @@ export function ChatInput({
     (s) => s.currentSession?.token_stats ?? null
   );
   const contextUsage = useStore((s) => s.contextUsage);
+  const pendingWorkdir = useStore((s) => s.pendingWorkdir);
+  const pendingAllowedDirs = useStore((s) => s.pendingAllowedDirs);
+  const setPendingWorkdir = useStore((s) => s.setPendingWorkdir);
+  const setPendingAllowedDirs = useStore((s) => s.setPendingAllowedDirs);
+  const currentSession = useStore((s) => s.currentSession);
+
+  // chip 数据源直接用 pending：openSession 会把 pending 同步成目标对话的实际值，
+  // setPending* 也会同步更新当前 session，二者保持一致——所以这里只看一边即可。
+  const activeWorkdir = pendingWorkdir;
+  const activeAllowedDirs = pendingAllowedDirs;
+
+  // 输入框文本 (value) 与附件 (attachments) 故意不绑定 currentSession：
+  // 这是用户当前的"草稿"，跨对话保留，切到老对话也不会被清空（老对话已发送的消息
+  // 仍在历史里，与草稿互不干扰）。发送时由 submit() 自行清空。
+
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    function onClick(event: MouseEvent) {
+      if (
+        addMenuRef.current &&
+        !addMenuRef.current.contains(event.target as Node)
+      ) {
+        setAddMenuOpen(false);
+      }
+    }
+    window.addEventListener("click", onClick);
+    return () => window.removeEventListener("click", onClick);
+  }, [addMenuOpen]);
+
+  async function pickProject() {
+    setAddMenuOpen(false);
+    try {
+      const dir = await openDialog({ directory: true, multiple: false });
+      if (typeof dir === "string") {
+        await setPendingWorkdir(dir);
+        toast.success(`已设为项目：${dir}`);
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function pickAllowedDir() {
+    setAddMenuOpen(false);
+    try {
+      const dir = await openDialog({ directory: true, multiple: true });
+      if (!dir) return;
+      const arr = Array.isArray(dir) ? dir : [dir];
+      const merged = [...activeAllowedDirs];
+      for (const d of arr) {
+        if (typeof d === "string" && !merged.includes(d)) merged.push(d);
+      }
+      await setPendingAllowedDirs(merged);
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function clearWorkdir() {
+    try {
+      await setPendingWorkdir(null);
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function removeAllowedDir(path: string) {
+    try {
+      await setPendingAllowedDirs(activeAllowedDirs.filter((d) => d !== path));
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
 
   async function runCompact(customInstructions: string) {
     if (compacting) return;
@@ -176,13 +259,68 @@ export function ChatInput({
     }
   }
 
+  /**
+   * 粘贴时按 [文件 → 路径文本] 顺序处理：
+   * 1. 剪切板里有 File（截图、Finder 复制图片）→ 直接走 addFiles，原样支持图片预览
+   * 2. 文本是文件路径列表（按行拆，支持 file:// URI）→ 调 attach_path 让后端
+   *    判断是文件还是目录，文件追加到 attachments，目录追加到 pendingAllowedDirs
+   * 3. 普通文本 → 不拦截，让浏览器按默认行为插入到 textarea
+   */
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(e.clipboardData.files).filter((file) =>
-      file.type.startsWith("image/")
-    );
-    if (!files.length) return;
+    const files = Array.from(e.clipboardData.files);
+    if (files.length > 0) {
+      e.preventDefault();
+      await addFiles(files);
+      return;
+    }
+    const text = e.clipboardData.getData("text/plain");
+    const candidates = parsePathCandidates(text);
+    if (candidates.length === 0) return;
     e.preventDefault();
-    await addFiles(files);
+    await attachPathCandidates(candidates);
+  }
+
+  /** 把每行（或 file:// 列表）当作潜在路径，全部丢给后端探测；UI 同步刷新 chip / attachments。 */
+  async function attachPathCandidates(paths: string[]) {
+    const newAttachments: MessageAttachment[] = [];
+    const newDirs: string[] = [];
+    for (const p of paths) {
+      try {
+        const res = await api.attachPath(p);
+        switch (res.kind) {
+          case "file":
+            newAttachments.push(res.attachment);
+            break;
+          case "dir":
+            if (
+              !activeAllowedDirs.includes(res.path) &&
+              !newDirs.includes(res.path)
+            ) {
+              newDirs.push(res.path);
+            }
+            break;
+          case "missing":
+            toast.error(`找不到路径：${res.path}`);
+            break;
+          case "unsupported":
+            toast.error(res.reason);
+            break;
+        }
+      } catch (e: any) {
+        toast.error(e?.message ?? String(e));
+      }
+    }
+    if (newAttachments.length > 0) {
+      setAttachments((current) => [...current, ...newAttachments]);
+    }
+    if (newDirs.length > 0) {
+      try {
+        await setPendingAllowedDirs([...activeAllowedDirs, ...newDirs]);
+        toast.success(`已添加 ${newDirs.length} 个目录`);
+      } catch (e: any) {
+        toast.error(e?.message ?? String(e));
+      }
+    }
   }
 
   function onDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -325,18 +463,58 @@ export function ChatInput({
               className="px-3 pt-2"
             />
           )}
-          <div className="flex items-end gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              accept="text/*,application/json,application/xml,application/javascript,application/typescript,.txt,.md,.markdown,.json,.jsonl,.csv,.ts,.tsx,.js,.jsx,.rs,.py,.go,.java,.c,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.toml,.sql,image/*"
-              onChange={(e) => {
-                if (e.currentTarget.files) addFiles(e.currentTarget.files);
-                e.currentTarget.value = "";
-              }}
-            />
+          {(activeWorkdir || activeAllowedDirs.length > 0) && (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+              {activeWorkdir && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group"
+                  title={`项目：${activeWorkdir}`}
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  <span className="truncate max-w-[200px]">
+                    {basename(activeWorkdir)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearWorkdir}
+                    className="opacity-50 hover:opacity-100"
+                    aria-label="移除项目"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {activeAllowedDirs.map((d) => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group"
+                  title={d}
+                >
+                  <Folder className="w-3 h-3" />
+                  <span className="truncate max-w-[200px]">{basename(d)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAllowedDir(d)}
+                    className="opacity-50 hover:opacity-100"
+                    aria-label="移除目录"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            accept="text/*,application/json,application/xml,application/javascript,application/typescript,.txt,.md,.markdown,.json,.jsonl,.csv,.ts,.tsx,.js,.jsx,.rs,.py,.go,.java,.c,.cpp,.h,.hpp,.css,.html,.xml,.yaml,.yml,.toml,.sql,image/*"
+            onChange={(e) => {
+              if (e.currentTarget.files) addFiles(e.currentTarget.files);
+              e.currentTarget.value = "";
+            }}
+          />
           <textarea
             ref={textareaRef}
             value={value}
@@ -353,48 +531,91 @@ export function ChatInput({
             placeholder="输入消息，Enter 发送，Shift+Enter 换行…"
             rows={1}
             style={manual ? { height } : undefined}
-            className="flex-1 resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
+            className="w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
           />
 
-          <div className="flex items-center gap-1 pr-2 pb-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={inputDisabled}
-              className="h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
-              title="添加附件"
-            >
-              <Paperclip className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={isStreaming ? cancel : submit}
-              disabled={
-                isStreaming ? canceling : !canSubmit
-              }
-              className={cn(
-                "h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-primary hover:bg-muted disabled:opacity-40 disabled:pointer-events-none",
-                isStreaming && "bg-background text-primary hover:bg-background"
+          {/* 底部工具条：左 = + 菜单（文件 / 项目 / 目录），右 = 模型选择 + 发送 */}
+          <div className="flex items-center justify-between px-2 pb-2">
+            <div className="relative" ref={addMenuRef}>
+              <button
+                type="button"
+                onClick={() => setAddMenuOpen((v) => !v)}
+                disabled={inputDisabled}
+                className="h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
+                title="添加文件 / 项目 / 目录"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+              {addMenuOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute bottom-full left-0 mb-1 w-44 rounded-lg border border-border bg-card shadow-lg z-[90] overflow-hidden animate-slide-up"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddMenuOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                  >
+                    <FilePlus2 className="w-4 h-4 text-muted-foreground" />
+                    添加文件
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pickProject}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                    title={
+                      activeWorkdir
+                        ? "项目（workdir）只能有一个，选择新目录会替换当前项目"
+                        : undefined
+                    }
+                  >
+                    <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                    {activeWorkdir ? "更换项目" : "添加项目"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pickAllowedDir}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                  >
+                    <Folder className="w-4 h-4 text-muted-foreground" />
+                    添加目录
+                  </button>
+                </div>
               )}
-              title={isStreaming ? "中断生成" : "发送 (Enter)"}
-            >
-              {isStreaming ? (
-                <LoopingWebm
-                  src={animations.sendInterrupt}
-                  className="h-7 w-7 rounded"
-                />
-              ) : sending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <img
-                  src={animations.assistantThinkingStatic}
-                  alt=""
-                  className="h-7 w-7 object-contain"
-                  draggable={false}
-                />
-              )}
-            </button>
-          </div>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <ModelPickerButton />
+              <button
+                type="button"
+                onClick={isStreaming ? cancel : submit}
+                disabled={isStreaming ? canceling : !canSubmit}
+                className={cn(
+                  "h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-primary hover:bg-muted disabled:opacity-40 disabled:pointer-events-none",
+                  isStreaming && "bg-background text-primary hover:bg-background"
+                )}
+                title={isStreaming ? "中断生成" : "发送 (Enter)"}
+              >
+                {isStreaming ? (
+                  <LoopingWebm
+                    src={animations.sendInterrupt}
+                    className="h-7 w-7 rounded"
+                  />
+                ) : sending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <img
+                    src={animations.assistantThinkingStatic}
+                    alt=""
+                    className="h-7 w-7 object-contain"
+                    draggable={false}
+                  />
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -426,6 +647,47 @@ export function ChatInput({
       </div>
     </div>
   );
+}
+
+/**
+ * 把粘贴的文本拆解为"看起来像路径"的候选列表。
+ *
+ * 启发式：先按换行拆，再 trim；每行剥掉 macOS / GNOME 拖拽常见的引号，
+ * 然后只保留以 `/`、`~/`、`file://` 或 Windows 盘符（`C:\` / `C:/`）开头的项。
+ * 普通文本（哪怕里面带几个空格）一概不当路径，避免误吃用户消息。
+ */
+function parsePathCandidates(raw: string): string[] {
+  if (!raw || raw.length > 4096) return [];
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+  for (const line of lines) {
+    let s = line.trim();
+    if (!s) continue;
+    // 去掉 Finder / 终端拖拽常见的两端引号
+    if (
+      (s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'"))
+    ) {
+      s = s.slice(1, -1);
+    }
+    if (
+      s.startsWith("/") ||
+      s.startsWith("~/") ||
+      s.startsWith("file://") ||
+      /^[A-Za-z]:[\\/]/.test(s)
+    ) {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+/** 路径 basename：剥掉尾部 `/` 后取最后一段；空串回退为整段。 */
+function basename(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  const name = idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+  return name || trimmed || p;
 }
 
 function isTextFile(file: File) {

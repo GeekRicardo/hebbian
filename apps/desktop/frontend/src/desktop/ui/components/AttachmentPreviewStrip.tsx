@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
 import type { MessageAttachment } from "@/desktop/ui/types";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -25,49 +26,22 @@ export function AttachmentPreviewStrip({
   className,
 }: Props) {
   const [preview, setPreview] = useState<PreviewImage | null>(null);
-  const hasGalleryImages =
-    variant === "gallery" &&
-    attachments.some((attachment) => attachment.kind === "image");
 
   const content = useMemo(
     () =>
       attachments.map((attachment, index) => {
         if (attachment.kind === "image") {
           const src = imageAttachmentSrc(attachment);
-          if (variant === "gallery") {
-            return (
-              <button
-                key={`${attachment.kind}-${attachment.name}-${index}`}
-                type="button"
-                onClick={() => setPreview({ src, name: attachment.name })}
-                className="group/image min-w-0 overflow-hidden rounded-md border border-border bg-background text-left transition hover:border-primary/60"
-                title="预览图片"
-              >
-                <img
-                  src={src}
-                  alt={attachment.name}
-                  className="h-44 w-full bg-muted object-contain"
-                  draggable={false}
-                />
-                <div className="truncate border-t border-border px-2 py-1.5 text-xs text-muted-foreground group-hover/image:text-foreground">
-                  {attachment.name}
-                </div>
-              </button>
-            );
-          }
-
           return (
-            <AttachmentPill
+            <ImageThumb
               key={`${attachment.kind}-${attachment.name}-${index}`}
+              src={src}
               name={attachment.name}
-              onRemove={onRemove ? () => onRemove(index) : undefined}
-              imageSrc={src}
               onPreview={() => setPreview({ src, name: attachment.name })}
-              variant={variant}
+              onRemove={onRemove ? () => onRemove(index) : undefined}
             />
           );
         }
-
         return (
           <AttachmentPill
             key={`${attachment.kind}-${attachment.name}-${index}`}
@@ -84,40 +58,70 @@ export function AttachmentPreviewStrip({
 
   return (
     <>
-      <div
-        className={cn(
-          hasGalleryImages
-            ? "grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-2"
-            : "flex flex-wrap gap-1.5",
-          className
+      <div className={cn("flex flex-wrap gap-1.5", className)}>{content}</div>
+      {preview &&
+        createPortal(
+          <ImagePreviewOverlay
+            image={preview}
+            onClose={() => setPreview(null)}
+          />,
+          document.body
         )}
-      >
-        {content}
-      </div>
-      {preview && (
-        <ImagePreviewOverlay image={preview} onClose={() => setPreview(null)} />
-      )}
     </>
+  );
+}
+
+/**
+ * 方形图片缩略图：所有场景下统一外观（输入框 / user / assistant 消息）。
+ * 文件名不直接显示，鼠标 hover 通过 title 提示；右上角的 X 按钮在 hover 时浮现。
+ */
+function ImageThumb({
+  src,
+  name,
+  onPreview,
+  onRemove,
+}: {
+  src: string;
+  name: string;
+  onPreview?: () => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div className="relative shrink-0 group/thumb" title={name}>
+      <button
+        type="button"
+        onClick={onPreview}
+        className="block h-14 w-14 overflow-hidden rounded-md border border-border bg-muted transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring"
+        aria-label={`预览图片 ${name}`}
+      >
+        <img
+          src={src}
+          alt={name}
+          className="h-full w-full object-cover"
+          draggable={false}
+        />
+      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute -right-1 -top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 group-hover/thumb:opacity-100 transition hover:text-destructive shadow"
+          aria-label="移除附件"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
 interface AttachmentPillProps {
   name: string;
-  imageSrc?: string;
-  onPreview?: () => void;
   onRemove?: () => void;
   variant: Variant;
 }
 
-function AttachmentPill({
-  name,
-  imageSrc,
-  onPreview,
-  onRemove,
-  variant,
-}: AttachmentPillProps) {
-  const imageSize = variant === "composer" ? "h-5 w-5" : "h-8 w-8";
-
+function AttachmentPill({ name, onRemove, variant }: AttachmentPillProps) {
   return (
     <div
       className={cn(
@@ -125,23 +129,7 @@ function AttachmentPill({
         variant === "composer" ? "max-w-[220px]" : "max-w-[240px]"
       )}
     >
-      {imageSrc ? (
-        <button
-          type="button"
-          onClick={onPreview}
-          className="shrink-0 rounded focus:outline-none focus:ring-2 focus:ring-ring"
-          title="预览图片"
-        >
-          <img
-            src={imageSrc}
-            alt={name}
-            className={cn(imageSize, "rounded object-cover")}
-            draggable={false}
-          />
-        </button>
-      ) : (
-        <FileText className="h-3.5 w-3.5 shrink-0" />
-      )}
+      <FileText className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 truncate">{name}</span>
       {onRemove && (
         <button

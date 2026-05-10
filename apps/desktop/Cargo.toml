@@ -26,6 +26,7 @@ chrono = "0.4"
 async-trait = "0.1"
 global-hotkey = "0.7"
 anyhow = "1"
+base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

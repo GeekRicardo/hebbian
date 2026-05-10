@@ -26,9 +26,45 @@ const LAST_PROMPT_ID_KEY = "lastPromptId";
 const LAST_PROVIDER_ID_KEY = "lastProviderId";
 const LAST_MODEL_KEY = "lastModel";
 const USER_AVATAR_KEY = "userAvatar";
+// 工作区"待继承"项：用户上次在输入框 + 菜单里选过的 workdir / allowed_dirs，
+// 新建对话会自动应用，避免每次都重选。null / [] 表示用户清空了，新对话也保持空。
+const PENDING_WORKDIR_KEY = "pendingWorkdir";
+const PENDING_ALLOWED_DIRS_KEY = "pendingAllowedDirs";
 
 function readStoredValue(key: string) {
   return localStorage.getItem(key) ?? "";
+}
+
+function readStoredWorkdir(): string | null {
+  const raw = localStorage.getItem(PENDING_WORKDIR_KEY);
+  return raw ? raw : null;
+}
+
+function readStoredAllowedDirs(): string[] {
+  try {
+    const raw = localStorage.getItem(PENDING_ALLOWED_DIRS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistPendingWorkdir(workdir: string | null) {
+  if (workdir) {
+    localStorage.setItem(PENDING_WORKDIR_KEY, workdir);
+  } else {
+    localStorage.removeItem(PENDING_WORKDIR_KEY);
+  }
+}
+
+function persistPendingAllowedDirs(dirs: string[]) {
+  if (dirs.length > 0) {
+    localStorage.setItem(PENDING_ALLOWED_DIRS_KEY, JSON.stringify(dirs));
+  } else {
+    localStorage.removeItem(PENDING_ALLOWED_DIRS_KEY);
+  }
 }
 
 function persistLastSessionConfig(config: {
@@ -454,6 +490,15 @@ interface AppState {
     enabled_tools?: string[] | null;
     skill_dirs?: string[] | null;
   }) => Promise<void>;
+  /**
+   * "待继承"的工作区配置：输入框左下 + 菜单选择的项目 / 目录会落到这里，
+   * 新建对话时自动写入新 session。当前 session 已经存在时，setter 会同时
+   * 写到本地（持久化）和 session（updateSessionSettings），让用户的修改即时生效。
+   */
+  pendingWorkdir: string | null;
+  pendingAllowedDirs: string[];
+  setPendingWorkdir: (workdir: string | null) => Promise<void>;
+  setPendingAllowedDirs: (dirs: string[]) => Promise<void>;
   /** PathAccess 审批专用 */
   resolvePathAccess: (scope: "once" | "this_project" | "all_project") => Promise<void>;
   setPendingPromptId: (v: string) => void;
@@ -507,6 +552,51 @@ export const useStore = create<AppState>((set, get) => ({
   enabledTools: new Set<string>(
     JSON.parse(localStorage.getItem("enabledTools") ?? '["web_search","web_fetch"]')
   ),
+
+  pendingWorkdir: readStoredWorkdir(),
+  pendingAllowedDirs: readStoredAllowedDirs(),
+  async setPendingWorkdir(workdir) {
+    persistPendingWorkdir(workdir);
+    set({ pendingWorkdir: workdir });
+    const cur = get().currentSession;
+    if (cur) {
+      // 立刻把变更写到当前 session，让本对话发的消息也用新 workdir。
+      // 写完后强制 getSession，避免内存对象与磁盘不同步（清空时 Tauri
+      // `Option<Option<T>>` 反序列化对 null 不友好，靠 getSession 验证最终状态）。
+      try {
+        await api.updateSessionSettings(cur.id, { workdir });
+      } catch {
+        // 写入失败仍然保留 pending，让用户可以重试；session 端就保留旧值
+      }
+      try {
+        const fresh = await api.getSession(cur.id);
+        set({ currentSession: fresh });
+      } catch {
+        /* ignore */
+      }
+    }
+  },
+  async setPendingAllowedDirs(dirs) {
+    const next = Array.from(new Set(dirs));
+    persistPendingAllowedDirs(next);
+    set({ pendingAllowedDirs: next });
+    const cur = get().currentSession;
+    if (cur) {
+      try {
+        await api.updateSessionSettings(cur.id, {
+          allowed_dirs: next.length === 0 ? null : next,
+        });
+      } catch {
+        /* ignore */
+      }
+      try {
+        const fresh = await api.getSession(cur.id);
+        set({ currentSession: fresh });
+      } catch {
+        /* ignore */
+      }
+    }
+  },
 
   contextUsage: null,
   compacting: false,
@@ -706,9 +796,19 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
+    // 切到这个对话时，让输入框 chip 显示的 pending 跟随该对话的实际 workdir / allowed_dirs。
+    // 这样：
+    // 1. 切对话 → chip 立即更新成目标对话的设置
+    // 2. 用户在某对话里改完 pending，新建对话会继承（newSession 用 pending 注入）
+    const sessionWorkdir = s.workdir ?? null;
+    const sessionAllowedDirs = s.allowed_dirs ?? [];
+    persistPendingWorkdir(sessionWorkdir);
+    persistPendingAllowedDirs(sessionAllowedDirs);
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
+      pendingWorkdir: sessionWorkdir,
+      pendingAllowedDirs: sessionAllowedDirs,
       unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
       ...mirrorFromSlot(state.sessionStreams[id]),
     }));
@@ -730,7 +830,17 @@ export const useStore = create<AppState>((set, get) => ({
       : undefined;
     const promptId = matchedPrompt?.id ?? null;
     const prompt = matchedPrompt?.content;
-    const s = await api.createSession(p.id, m, prompt ?? null, promptId);
+    let s = await api.createSession(p.id, m, prompt ?? null, promptId);
+    // 把"待继承"的 workdir / allowed_dirs 立即注入新 session：
+    // 输入框 + 菜单的选择是跨对话黏的，新建对话时无需用户重新选。
+    const inheritWorkdir = get().pendingWorkdir;
+    const inheritAllowed = get().pendingAllowedDirs;
+    if (inheritWorkdir || inheritAllowed.length > 0) {
+      s = await api.updateSessionSettings(s.id, {
+        ...(inheritWorkdir ? { workdir: inheritWorkdir } : {}),
+        ...(inheritAllowed.length > 0 ? { allowed_dirs: inheritAllowed } : {}),
+      });
+    }
     persistLastSessionConfig({
       providerId: s.provider_id,
       model: s.model,
