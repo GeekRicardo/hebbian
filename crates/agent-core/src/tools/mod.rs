@@ -154,9 +154,10 @@ pub fn ask_only_definitions() -> Vec<ToolDefinition> {
 pub fn ask_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: ASK_TOOL_NAME.to_string(),
-        description: "向用户提问以澄清需求或获取决策。务必同时给出 2-5 个候选选项 \
-                      （label 控制在 12 字以内）；用户除了选项之外总能自由输入其他意见，\
-                      所以选项不必穷尽所有可能。需要让用户多选时把 `multi` 设为 true。"
+        description: "向用户提问以澄清需求或获取决策。务必同时给出 2-5 个**实质性**候选选项 \
+                      （label 控制在 12 字以内）：每个选项都必须是用户可能直接选中的具体答案。\
+                      **禁止**出现「其他」「让我重新描述」「以上都不是」「自由回答」「再想想」 \
+                      之类的兜底/元选项。需要让用户多选时把 `multi` 设为 true。"
             .into(),
         parameters: serde_json::json!({
             "type": "object",

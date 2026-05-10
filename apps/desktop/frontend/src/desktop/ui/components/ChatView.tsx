@@ -477,14 +477,18 @@ export function ChatView() {
       </div>
 
       <PermissionApprovalPopup />
-      <UserQuestionPopup />
 
-      <ChatInput
-        onSend={handleSend}
-        onCancel={handleCancel}
-        isStreaming={isStreaming}
-        userMessageHistory={userMessageHistory}
-      />
+      <div className="relative">
+        <div className="absolute inset-x-0 bottom-full pointer-events-none z-10">
+          <UserQuestionPopup />
+        </div>
+        <ChatInput
+          onSend={handleSend}
+          onCancel={handleCancel}
+          isStreaming={isStreaming}
+          userMessageHistory={userMessageHistory}
+        />
+      </div>
     </div>
   );
 }

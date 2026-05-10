@@ -109,7 +109,7 @@ export function UserQuestionPopup() {
       <div className="max-w-3xl mx-auto pr-[50px]">
         <div
           className={cn(
-            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden",
+            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden pointer-events-auto",
             "animate-in fade-in slide-in-from-bottom-2 duration-150"
           )}
         >
