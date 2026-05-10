@@ -10,116 +10,11 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
-import {
-  DEFAULT_REASONING,
-  REASONING_EFFORT_LABEL,
-  REASONING_EFFORT_ORDER,
-  effortDisplay,
-  modelExposesLongContextToggle,
-  modelSupportsReasoning,
-} from "@/desktop/ui/lib/reasoning";
-import type {
-  MessageAttachment,
-  Provider,
-  ReasoningConfig,
-  ReasoningEffort,
-} from "@/desktop/ui/types";
-
-function ReasoningControls({
-  providerKind,
-  model,
-  reasoning,
-  onChange,
-}: {
-  providerKind: string;
-  model: string;
-  reasoning: ReasoningConfig;
-  onChange: (next: ReasoningConfig) => void;
-}) {
-  const enabled = reasoning.enabled ?? true;
-  const effort: ReasoningEffort = reasoning.effort ?? "extra";
-  const longContext = reasoning.long_context ?? false;
-  const showLongContext = modelExposesLongContextToggle(providerKind, model);
-  const showReasoning = modelSupportsReasoning(providerKind, model);
-  return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      className="px-3 py-2 border-t border-border bg-muted/40 space-y-2"
-    >
-      {showReasoning && (
-        <>
-          <label className="flex items-center justify-between text-[11px]">
-            <span className="text-muted-foreground">启用 thinking</span>
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) =>
-                onChange({ ...reasoning, enabled: e.target.checked })
-              }
-              className="h-3.5 w-3.5 cursor-pointer accent-primary"
-            />
-          </label>
-          <div className="flex items-center justify-between gap-2 text-[11px]">
-            <span
-              className="text-muted-foreground shrink-0"
-              title={`实际发送：${effortDisplay(providerKind, model, effort)}`}
-            >
-              思考强度
-            </span>
-            <div className="inline-flex rounded-md border border-border overflow-hidden">
-              {REASONING_EFFORT_ORDER.map((level) => {
-                const active = effort === level;
-                return (
-                  <button
-                    key={level}
-                    type="button"
-                    disabled={!enabled}
-                    onClick={() => onChange({ ...reasoning, effort: level })}
-                    title={`实际发送：${effortDisplay(providerKind, model, level)}`}
-                    className={cn(
-                      "px-2 py-0.5 text-[10px] transition-colors",
-                      active
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-background hover:bg-accent",
-                      !enabled && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    {REASONING_EFFORT_LABEL[level]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </>
-      )}
-      {showLongContext && (
-        <label
-          className="flex items-center justify-between text-[11px]"
-          title="开启后请求会带 anthropic-beta: context-1m-2025-08-07，把 Sonnet/Opus 旧版本上下文从 200k 抬到 1M"
-        >
-          <span className="text-muted-foreground">1M 上下文</span>
-          <input
-            type="checkbox"
-            checked={longContext}
-            onChange={(e) =>
-              onChange({ ...reasoning, long_context: e.target.checked })
-            }
-            className="h-3.5 w-3.5 cursor-pointer accent-primary"
-          />
-        </label>
-      )}
-    </div>
-  );
-}
-
-function isProviderEnabled(provider: Provider) {
-  return provider.enabled !== false;
-}
+import type { MessageAttachment } from "@/desktop/ui/types";
 
 export function ChatView() {
   const {
     currentSession,
-    providersFile,
     promptsFile,
     prompts,
     userAvatar,
@@ -135,8 +30,6 @@ export function ChatView() {
     regenerateTitle,
     setProviderDialogOpen,
     setSettingsOpen,
-    setReasoning,
-    switchProviderModel,
     newSession,
     pendingPromptId,
     setPendingPromptId,
@@ -145,10 +38,6 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [titleLoading, setTitleLoading] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(
-    () => new Set()
-  );
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -217,13 +106,6 @@ export function ChatView() {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
-
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const onClick = () => setPickerOpen(false);
-    window.addEventListener("click", onClick);
-    return () => window.removeEventListener("click", onClick);
-  }, [pickerOpen]);
 
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
@@ -295,11 +177,6 @@ export function ChatView() {
       : "";
   const promptSummary = activePrompt?.name ?? "无 Agent";
   const isStreaming = !!streamingMessageId;
-  const providers = providersFile.providers;
-  const enabledProviders = providers.filter(isProviderEnabled);
-  const currentProvider = providers.find(
-    (p) => p.id === currentSession.provider_id
-  );
   const userMessageHistory = currentSession.messages
     .filter((m) => m.role === "user")
     .map((m) => m.content);
@@ -412,16 +289,6 @@ export function ChatView() {
       setTitleLoading(false);
     }
   }
-  async function handleSwitch(providerId: string, model: string) {
-    // 不在这里关闭 picker：切完模型用户通常还要继续配 thinking / effort。
-    // 关闭由「点 picker 外部」的全局监听器负责（见 setPickerOpen 的 useEffect）。
-    try {
-      await switchProviderModel(providerId, model);
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-    }
-  }
-
   async function handlePromptChange(nextPromptId: string) {
     setPendingPromptId(nextPromptId);
     if (sessionStarted) return;
@@ -503,129 +370,6 @@ export function ChatView() {
           </div>
         </div>
         <div className="flex items-center gap-2 no-drag relative">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setPickerOpen((open) => {
-                const nextOpen = !open;
-                if (nextOpen) {
-                  const firstProviderId = enabledProviders[0]?.id;
-                  setExpandedProviderIds((ids) => {
-                    if (!firstProviderId || ids.has(firstProviderId)) return ids;
-                    return new Set([...ids, firstProviderId]);
-                  });
-                }
-                return nextOpen;
-              });
-            }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background hover:bg-accent px-2.5 py-1 text-xs no-drag"
-          >
-            <span className="text-muted-foreground">
-              {currentProvider?.name ?? "未知"} ·
-            </span>
-            <span className="font-medium">{currentSession.model}</span>
-            <ChevronDown className="w-3 h-3 opacity-60" />
-          </button>
-          {pickerOpen && (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="absolute top-full right-0 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-card shadow-lg z-[90] animate-slide-up"
-            >
-              {enabledProviders.length === 0 && (
-                <div className="p-4 text-xs text-muted-foreground text-center">
-                  没有已启用的供应商
-                </div>
-              )}
-              {enabledProviders.map((p) => {
-                const isActiveProvider = p.id === currentSession.provider_id;
-                const expanded = expandedProviderIds.has(p.id);
-                const models =
-                  p.models.length > 0
-                    ? p.models
-                    : p.default_model
-                    ? [p.default_model]
-                    : [];
-                return (
-                  <div
-                    key={p.id}
-                    className="border-b border-border last:border-b-0"
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedProviderIds((ids) => {
-                          const next = new Set(ids);
-                          if (next.has(p.id)) next.delete(p.id);
-                          else next.add(p.id);
-                          return next;
-                        })
-                      }
-                      className="w-full px-3 py-1.5 text-[11px] font-semibold text-foreground bg-muted hover:bg-accent flex items-center justify-between transition-colors"
-                    >
-                      <span>{p.name}</span>
-                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground uppercase">
-                        {p.kind}
-                        <ChevronDown
-                          className={cn(
-                            "h-3 w-3 transition-transform",
-                            !expanded && "-rotate-90"
-                          )}
-                        />
-                      </span>
-                    </button>
-                    {expanded && models.length === 0 && (
-                      <div className="px-3 py-2 text-xs text-muted-foreground italic">
-                        （无模型）
-                      </div>
-                    )}
-                    {expanded && models.length > 0 && (
-                      <div>
-                        {models.map((m) => {
-                          const act =
-                            isActiveProvider && m === currentSession.model;
-                          // 选中的模型才显示控件；reasoning 或 1M context 任一支持就展示。
-                          const showControls =
-                            act &&
-                            (modelSupportsReasoning(p.kind, m) ||
-                              modelExposesLongContextToggle(p.kind, m));
-                          return (
-                            <div key={`${p.id}-${m}`}>
-                              <button
-                                onClick={() => handleSwitch(p.id, m)}
-                                className={cn(
-                                  "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between",
-                                  act && "bg-primary/10 text-primary"
-                                )}
-                              >
-                                <span className="truncate">{m}</span>
-                                {act && <span className="text-xs">✓</span>}
-                              </button>
-                              {showControls && (
-                                <ReasoningControls
-                                  providerKind={p.kind}
-                                  model={m}
-                                  reasoning={
-                                    currentSession.reasoning ?? DEFAULT_REASONING
-                                  }
-                                  onChange={(next) => {
-                                    void setReasoning(next).catch((e: unknown) => {
-                                      const msg =
-                                        e instanceof Error ? e.message : String(e);
-                                      toast.error(msg);
-                                    });
-                                  }}
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
           <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
             对话设置
           </Button>
@@ -681,6 +425,7 @@ export function ChatView() {
             <MessageBubble
               key={m.id}
               message={m}
+              session={currentSession}
               prompt={activePrompt}
               userAvatar={userAvatar}
               onFork={handleFork}
@@ -716,6 +461,7 @@ export function ChatView() {
           {isStreaming && (
             <MessageBubble
               streaming
+              session={currentSession}
               prompt={activePrompt}
               userAvatar={userAvatar}
               streamingParts={streamingParts}

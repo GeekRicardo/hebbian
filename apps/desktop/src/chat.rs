@@ -871,6 +871,235 @@ pub async fn send_once(
     }
 }
 
+/// 构造一份「真实发给模型的 payload」预览,用于桌面 UI 的「显示原始 JSON」。
+///
+/// 复刻 [`agent_loop`] 进入模型调用之前的所有拼装动作:workspace XML、内置工具、
+/// 用户启用的工具、session 历史 transcript,但**不真正发起请求、不修改 session**。
+/// 输出统一为 OpenAI 风格的 `{model, messages, tools, ...}`,前端用 JsonView 渲染。
+pub async fn build_preview_payload(
+    data_dir: &Path,
+    session_id: &str,
+    upto_message_id: Option<&str>,
+) -> AppResult<serde_json::Value> {
+    use agent_core::tools::{
+        BUILTIN_TOOL_NAMES, ask_only_definitions, hosted_tool_definitions, registry::ToolRegistry,
+    };
+
+    let session = sessions::load(data_dir, session_id)?;
+    let settings = global_settings::load(data_dir);
+
+    let workdir = session
+        .workdir
+        .clone()
+        .or_else(|| settings.conversation.workdir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let initial_allowed_dirs = session
+        .allowed_dirs
+        .clone()
+        .unwrap_or_else(|| settings.conversation.allowed_dirs.clone());
+    let workspace = Workspace::with_runtime_state(
+        workdir.clone(),
+        initial_allowed_dirs.clone(),
+        session.runtime_allowed_dirs.clone(),
+        session.pending_runtime_allowed_dirs.clone(),
+    );
+
+    let configured_skill_dirs = session
+        .skill_dirs
+        .clone()
+        .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
+    let skill_dirs = if configured_skill_dirs.is_empty() {
+        default_skill_dirs(&workdir)
+    } else {
+        configured_skill_dirs
+    };
+
+    let session_enabled_tools = session
+        .enabled_tools
+        .clone()
+        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
+
+    // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具
+    let registry = ToolRegistry::new(agent_core::tools::default_tools(
+        workspace.clone(),
+        &skill_dirs,
+    ));
+    let mut tool_defs = ask_only_definitions();
+    let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
+    all_filter.extend(session_enabled_tools.iter().cloned());
+    tool_defs.extend(registry.definitions(&all_filter));
+    if !session_enabled_tools.is_empty() {
+        tool_defs.extend(hosted_tool_definitions(&session_enabled_tools));
+    }
+
+    // system = 用户 prompt + workspace XML(同 build_system_prompt)
+    let mut combined_system = String::new();
+    if let Some(user_sys) = session.system_prompt.as_deref() {
+        if !user_sys.is_empty() {
+            combined_system.push_str(user_sys);
+            combined_system.push_str("\n\n");
+        }
+    }
+    combined_system.push_str(&workspace.to_system_xml());
+
+    let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
+        "role": "system",
+        "content": combined_system,
+    })];
+    for m in &session.messages {
+        match m.role {
+            Role::Marker | Role::System => {}
+            Role::User => messages.push(serde_json::json!({
+                "role": "user",
+                "content": preview_user_content(m),
+            })),
+            Role::Assistant => preview_push_assistant(&mut messages, m),
+        }
+        if upto_message_id.is_some_and(|id| m.id == id) {
+            break;
+        }
+    }
+
+    let tools: Vec<serde_json::Value> = tool_defs
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                }
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "model": session.model,
+        "messages": messages,
+        "tools": tools,
+        "_workspace": {
+            "workdir": workdir.display().to_string(),
+            "initial_allowed_dirs": initial_allowed_dirs,
+            "runtime_allowed_dirs": session.runtime_allowed_dirs,
+            "pending_runtime_allowed_dirs": session.pending_runtime_allowed_dirs,
+            "skill_dirs": skill_dirs,
+        }
+    }))
+}
+
+fn preview_user_content(m: &Message) -> serde_json::Value {
+    if m.attachments.is_empty() {
+        return serde_json::Value::String(m.content.clone());
+    }
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    if !m.content.is_empty() {
+        blocks.push(serde_json::json!({"type": "text", "text": m.content}));
+    }
+    for a in &m.attachments {
+        match a {
+            MessageAttachment::Image {
+                media_type, data, ..
+            } => blocks.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:{};base64,{}", media_type, data) },
+            })),
+            MessageAttachment::TextFile {
+                name,
+                media_type,
+                content,
+            } => blocks.push(serde_json::json!({
+                "type": "text",
+                "text": format!(
+                    "<file name=\"{name}\" media_type=\"{media_type}\">\n{content}\n</file>"
+                ),
+            })),
+        }
+    }
+    serde_json::Value::Array(blocks)
+}
+
+fn preview_push_assistant(out: &mut Vec<serde_json::Value>, m: &Message) {
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut reasoning_parts: Vec<String> = Vec::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut tool_results: Vec<serde_json::Value> = Vec::new();
+
+    let push_call = |list: &mut Vec<serde_json::Value>,
+                     id: &str,
+                     name: &str,
+                     args: String| {
+        list.push(serde_json::json!({
+            "id": id,
+            "type": "function",
+            "function": { "name": name, "arguments": args },
+        }));
+    };
+
+    if !m.parts.is_empty() {
+        for p in &m.parts {
+            match p {
+                MessagePart::Text { text } => text_parts.push(text.clone()),
+                MessagePart::Reasoning { text } => reasoning_parts.push(text.clone()),
+                MessagePart::ToolCall {
+                    id,
+                    name,
+                    input,
+                    arguments,
+                    result,
+                    ..
+                } => {
+                    let args = if !arguments.is_empty() {
+                        arguments.clone()
+                    } else {
+                        serde_json::to_string(input).unwrap_or_else(|_| "{}".into())
+                    };
+                    push_call(&mut tool_calls, id, name, args);
+                    if let Some(res) = result {
+                        tool_results.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": res,
+                        }));
+                    }
+                }
+            }
+        }
+    } else if !m.tool_calls.is_empty() {
+        if !m.content.is_empty() {
+            text_parts.push(m.content.clone());
+        }
+        for tc in &m.tool_calls {
+            let args = serde_json::to_string(&tc.input).unwrap_or_else(|_| "{}".into());
+            push_call(&mut tool_calls, &tc.id, &tc.name, args);
+            if let Some(res) = &tc.result {
+                tool_results.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": res,
+                }));
+            }
+        }
+    } else if !m.content.is_empty() {
+        text_parts.push(m.content.clone());
+    }
+
+    let mut assistant = serde_json::json!({
+        "role": "assistant",
+        "content": text_parts.join(""),
+    });
+    let map = assistant.as_object_mut().expect("json object");
+    if !reasoning_parts.is_empty() {
+        map.insert("reasoning".into(), serde_json::Value::String(reasoning_parts.join("")));
+    }
+    if !tool_calls.is_empty() {
+        map.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
+    }
+    out.push(assistant);
+    out.extend(tool_results);
+}
+
 fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
     use agent_core::types::AgentEventPayload::*;
     match &event.payload {

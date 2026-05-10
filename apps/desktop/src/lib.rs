@@ -304,6 +304,16 @@ fn switch_provider_model(
 }
 
 #[tauri::command]
+async fn preview_session_payload(
+    app: AppHandle,
+    session_id: String,
+    upto_message_id: Option<String>,
+) -> AppResult<serde_json::Value> {
+    let dd = data_dir(&app)?;
+    chat::build_preview_payload(&dd, &session_id, upto_message_id.as_deref()).await
+}
+
+#[tauri::command]
 async fn send_message(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
@@ -479,35 +489,53 @@ fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
 }
 
 /// 更新对话级设置（workdir / allowed_dirs / enabled_tools / skill_dirs）。
-/// 任一字段传 `null` = 清空（回退到全局默认）。
+///
+/// 三态语义靠两组字段表达，避开 `Option<Option<T>>` 在 IPC 反序列化时
+/// 把 `null` 直接折叠成外层 `None` 的歧义：
+/// - 设值：传 `xxx` 字段，例如 `workdir = "/foo"` / `allowed_dirs = ["/bar"]`
+/// - 清空：传 `clearXxx = true`（前端 invoke 用 camelCase）
+/// - 不动：两边都不传
 ///
 /// `allowed_dirs` 的特殊语义：
 /// - 对话还没发出过 user message → 直接覆盖 `s.allowed_dirs`（initial 集合可任意改）
-/// - 对话已开始 → `s.allowed_dirs` 锁定，**禁止删除任何已存在的目录**（initial / 已宣告 / 待宣告）；
-///   新增的目录追加到 `pending_runtime_allowed_dirs`，下次 send_message 时通过
+/// - 对话已开始 → `s.allowed_dirs` 锁定，**禁止删除任何已存在的目录**；新增的目录
+///   追加到 `pending_runtime_allowed_dirs`，下次 send_message 时通过
 ///   `<workspace-update>` 段告诉模型，**不会改 system prompt**，因此 prompt cache 不破。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn update_session_settings(
     app: AppHandle,
     id: String,
-    workdir: Option<Option<PathBuf>>,
-    allowed_dirs: Option<Option<Vec<PathBuf>>>,
-    enabled_tools: Option<Option<Vec<String>>>,
-    skill_dirs: Option<Option<Vec<PathBuf>>>,
+    workdir: Option<PathBuf>,
+    clear_workdir: Option<bool>,
+    allowed_dirs: Option<Vec<PathBuf>>,
+    clear_allowed_dirs: Option<bool>,
+    enabled_tools: Option<Vec<String>>,
+    clear_enabled_tools: Option<bool>,
+    skill_dirs: Option<Vec<PathBuf>>,
+    clear_skill_dirs: Option<bool>,
 ) -> AppResult<Session> {
     let dd = data_dir(&app)?;
     let mut s = sessions::load(&dd, &id)?;
-    if let Some(v) = workdir {
-        s.workdir = v;
+    if clear_workdir.unwrap_or(false) {
+        s.workdir = None;
+    } else if let Some(v) = workdir {
+        s.workdir = Some(v);
     }
-    if let Some(v) = allowed_dirs {
-        apply_allowed_dirs_update(&mut s, v)?;
+    if clear_allowed_dirs.unwrap_or(false) {
+        apply_allowed_dirs_update(&mut s, None)?;
+    } else if let Some(v) = allowed_dirs {
+        apply_allowed_dirs_update(&mut s, Some(v))?;
     }
-    if let Some(v) = enabled_tools {
-        s.enabled_tools = v;
+    if clear_enabled_tools.unwrap_or(false) {
+        s.enabled_tools = None;
+    } else if let Some(v) = enabled_tools {
+        s.enabled_tools = Some(v);
     }
-    if let Some(v) = skill_dirs {
-        s.skill_dirs = v;
+    if clear_skill_dirs.unwrap_or(false) {
+        s.skill_dirs = None;
+    } else if let Some(v) = skill_dirs {
+        s.skill_dirs = Some(v);
     }
     sessions::save(&dd, s)
 }
@@ -616,6 +644,177 @@ fn approve_path_access(
     };
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
+}
+
+// ========== Path attach (粘贴/拖拽路径) ==========
+
+/// 前端粘贴/拖拽路径时的探测结果。前端只调一次 RPC 就能拿到全部信息：
+/// 是文件就直接返回 `MessageAttachment`，是目录就告诉前端把它加到 allowed_dirs。
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AttachPathResult {
+    Dir { path: String, name: String },
+    File { attachment: platform::attachments::MessageAttachment },
+    Missing { path: String },
+    Unsupported { path: String, reason: String },
+}
+
+/// 路径附件的兜底大小限制，与前端 ChatInput 中的 MAX_* 常量保持一致。
+const MAX_TEXT_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
+
+#[tauri::command]
+fn attach_path(path: String) -> AppResult<AttachPathResult> {
+    use base64::Engine as _;
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Ok(AttachPathResult::Missing { path });
+    }
+    // 接受 file:// URI（macOS Finder / GTK 拖拽常见格式）
+    let cleaned = raw
+        .strip_prefix("file://")
+        .map(|s| {
+            // 把 %20 等百分号编码还原成原样路径
+            percent_decode(s)
+        })
+        .unwrap_or_else(|| raw.to_string());
+    let p = std::path::Path::new(&cleaned);
+    let meta = match std::fs::metadata(p) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(AttachPathResult::Missing { path });
+        }
+    };
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cleaned.clone());
+
+    if meta.is_dir() {
+        return Ok(AttachPathResult::Dir {
+            path: p.to_string_lossy().into_owned(),
+            name,
+        });
+    }
+
+    let size = meta.len();
+    let media_type = guess_media_type(p);
+    let is_image = media_type.starts_with("image/");
+
+    if is_image {
+        if size > MAX_IMAGE_BYTES {
+            return Ok(AttachPathResult::Unsupported {
+                path,
+                reason: format!("{name} 超过 12MB"),
+            });
+        }
+        let bytes = std::fs::read(p)?;
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        return Ok(AttachPathResult::File {
+            attachment: platform::attachments::MessageAttachment::Image {
+                name,
+                media_type,
+                data,
+            },
+        });
+    }
+
+    if !looks_like_text(&media_type, p) {
+        return Ok(AttachPathResult::Unsupported {
+            path,
+            reason: format!("{name} 不是支持的文本或图片文件"),
+        });
+    }
+    if size > MAX_TEXT_FILE_BYTES {
+        return Ok(AttachPathResult::Unsupported {
+            path,
+            reason: format!("{name} 超过 1MB"),
+        });
+    }
+    let content = std::fs::read_to_string(p)
+        .map_err(|e| AppError::msg(format!("{name} 读取失败：{e}")))?;
+    Ok(AttachPathResult::File {
+        attachment: platform::attachments::MessageAttachment::TextFile {
+            name,
+            media_type,
+            content,
+        },
+    })
+}
+
+fn percent_decode(s: &str) -> String {
+    // 简易 percent decode：只处理常见 %XX 的两位 hex；其余保持原样。
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (
+                hex_val(bytes[i + 1]),
+                hex_val(bytes[i + 2]),
+            ) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn guess_media_type(p: &std::path::Path) -> String {
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("png") => "image/png".into(),
+        Some("jpg") | Some("jpeg") => "image/jpeg".into(),
+        Some("gif") => "image/gif".into(),
+        Some("webp") => "image/webp".into(),
+        Some("bmp") => "image/bmp".into(),
+        Some("svg") => "image/svg+xml".into(),
+        Some("json") => "application/json".into(),
+        Some("xml") => "application/xml".into(),
+        Some("html") | Some("htm") => "text/html".into(),
+        Some("css") => "text/css".into(),
+        Some("csv") => "text/csv".into(),
+        Some("md") | Some("markdown") => "text/markdown".into(),
+        Some(_) => "text/plain".into(),
+        None => "text/plain".into(),
+    }
+}
+
+fn looks_like_text(media_type: &str, p: &std::path::Path) -> bool {
+    if media_type.starts_with("text/") {
+        return true;
+    }
+    if matches!(media_type, "application/json" | "application/xml") {
+        return true;
+    }
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some(
+            "txt" | "md" | "markdown" | "json" | "jsonl" | "csv" | "ts" | "tsx" | "js"
+            | "jsx" | "rs" | "py" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "css"
+            | "html" | "htm" | "xml" | "yaml" | "yml" | "toml" | "sql"
+        )
+    )
 }
 
 // ========== OAuth ==========
@@ -751,6 +950,7 @@ pub fn run() {
             update_session_config,
             switch_provider_model,
             send_message,
+            preview_session_payload,
             cancel_message,
             get_context_usage,
             compact_session,
@@ -761,6 +961,7 @@ pub fn run() {
             get_settings,
             save_settings,
             update_session_settings,
+            attach_path,
             approve_path_access,
             oauth_codex_start,
             oauth_codex_poll,

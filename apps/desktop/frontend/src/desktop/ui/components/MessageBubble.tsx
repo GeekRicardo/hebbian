@@ -28,6 +28,7 @@ import type {
   Message,
   MessagePart,
   Prompt,
+  Session,
   StreamingAssistantPart,
   ToolCallStatus,
 } from "@/desktop/ui/types";
@@ -42,12 +43,16 @@ import {
   canShowRawMessage,
   getMessageRawText,
 } from "@/desktop/ui/lib/messageRawText";
+import { buildModelMessages } from "@/desktop/ui/lib/buildModelMessages";
+import { api } from "@/desktop/bridge/tauri";
 
 interface Props {
   message: Message;
   streaming?: boolean;
   prompt?: Prompt;
   userAvatar?: string;
+  /** 当前会话:用于在「显示原始 JSON」时拼出截至该消息的 messages 载荷。 */
+  session?: Session;
   onFork?: (id: string) => void;
   /**
    * 重新生成。对 assistant 消息：以前一条 user 消息为锚重跑。
@@ -363,6 +368,47 @@ function buildArgsPreview(
   return [{ key: "", value: trimmed.replace(/\s+/g, " ") }];
 }
 
+/** 仅匹配 data:...;base64,... 形式的内嵌资源(主要是图片) */
+const DATA_URI_BASE64_RE = /^data:[\w./+-]+;base64,/i;
+
+function Base64DataUriValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy(e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("复制失败");
+    }
+  }
+  // 占位用合法 JSON 字符串字面量形式:保留 mime 头,base64 主体折成 …,
+  // 全选拷贝拿到的仍是合法 JSON;想取原值用旁边的复制按钮。
+  const head = value.slice(0, value.indexOf(",") + 1);
+  const placeholder = `"${head}…(${value.length} chars)"`;
+  return (
+    <span className="inline-flex items-baseline gap-1 break-words">
+      <span className="text-emerald-700/80 dark:text-emerald-400/80 italic">
+        {placeholder}
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        title="复制完整 base64"
+        aria-label="复制完整 base64"
+        className="select-none inline-flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {copied ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Copy className="h-3 w-3" />
+        )}
+      </button>
+    </span>
+  );
+}
+
 function JsonPrimitive({ value }: { value: unknown }) {
   if (value === null)
     return <span className="text-muted-foreground">null</span>;
@@ -372,23 +418,28 @@ function JsonPrimitive({ value }: { value: unknown }) {
     return <span className="text-foreground/90">{String(value)}</span>;
   if (typeof value === "number")
     return <span className="text-foreground/90">{value}</span>;
-  if (typeof value === "string")
+  if (typeof value === "string") {
+    if (DATA_URI_BASE64_RE.test(value)) {
+      return <Base64DataUriValue value={value} />;
+    }
     return (
       <span className="break-words text-emerald-700 dark:text-emerald-400">
         {JSON.stringify(value)}
       </span>
     );
+  }
   return <span>{String(value)}</span>;
 }
 
 function JsonKeyLabel({ keyLabel }: { keyLabel: string | number | null }) {
   if (keyLabel === null) return null;
+  // 数组索引只是视觉辅助,不属于 JSON 内容,选区里跳过它
   if (typeof keyLabel === "number") {
     return (
-      <>
-        <span className="text-muted-foreground/70">{keyLabel}</span>
-        <span className="mr-1 text-muted-foreground/70">:</span>
-      </>
+      <span className="select-none text-muted-foreground/70">
+        <span>{keyLabel}</span>
+        <span className="mr-1">:</span>
+      </span>
     );
   }
   return (
@@ -416,7 +467,7 @@ function JsonNode({
   if (!composite) {
     return (
       <div style={indent} className="flex items-baseline">
-        <span className="inline-block w-3.5 shrink-0" />
+        <span className="inline-block w-3.5 shrink-0 select-none" />
         <JsonKeyLabel keyLabel={keyLabel} />
         <JsonPrimitive value={value} />
       </div>
@@ -436,7 +487,7 @@ function JsonNode({
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-label={open ? "折叠" : "展开"}
-          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded hover:bg-accent"
+          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded hover:bg-accent select-none"
         >
           {open ? (
             <ChevronDown className="h-3 w-3" />
@@ -449,7 +500,7 @@ function JsonNode({
         {!open && (
           <>
             {entries.length > 0 && (
-              <span className="mx-1 italic text-muted-foreground">
+              <span className="mx-1 italic text-muted-foreground select-none">
                 {entries.length} {isArray ? "项" : "键"}
               </span>
             )}
@@ -468,7 +519,7 @@ function JsonNode({
             />
           ))}
           <div style={indent} className="flex items-baseline">
-            <span className="inline-block w-3.5 shrink-0" />
+            <span className="inline-block w-3.5 shrink-0 select-none" />
             <span>{closeBracket}</span>
           </div>
         </>
@@ -478,9 +529,63 @@ function JsonNode({
 }
 
 function JsonView({ value }: { value: unknown }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
+      const node = ref.current;
+      if (!node) return;
+      e.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+  }
+
   return (
-    <div className="max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 px-2 py-2 font-mono text-[12px] leading-relaxed text-foreground">
+    <div
+      ref={ref}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 px-2 py-2 font-mono text-[12px] leading-relaxed text-foreground outline-none focus:ring-1 focus:ring-primary/40"
+    >
       <JsonNode value={value} level={0} keyLabel={null} />
+    </div>
+  );
+}
+
+function RawJsonPanel({
+  loading,
+  error,
+  payload,
+  fallback,
+}: {
+  loading: boolean;
+  error: string | null;
+  payload: unknown;
+  fallback: unknown;
+}) {
+  if (loading && payload == null) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        载入发送给模型的 payload…
+      </div>
+    );
+  }
+  if (payload != null) {
+    return <JsonView value={payload} />;
+  }
+  return (
+    <div className="space-y-2">
+      {error && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+          {error}（已回退到本地推断的 messages,不含 workspace XML / tools 定义）
+        </div>
+      )}
+      <JsonView value={fallback} />
     </div>
   );
 }
@@ -806,6 +911,7 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   prompt,
   userAvatar,
+  session,
   onFork,
   onRegenerate,
   onEdit,
@@ -824,6 +930,11 @@ export const MessageBubble = memo(function MessageBubble({
   );
   const [showRawText, setShowRawText] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
+  // 后端 preview payload(含 workspace XML / tools / skills)。
+  // 打开 JSON 视图时按需拉取,失败时回退到前端 buildModelMessages。
+  const [rawJsonPayload, setRawJsonPayload] = useState<unknown>(null);
+  const [rawJsonLoading, setRawJsonLoading] = useState(false);
+  const [rawJsonError, setRawJsonError] = useState<string | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -840,6 +951,33 @@ export const MessageBubble = memo(function MessageBubble({
     const len = ta.value.length;
     ta.setSelectionRange(len, len);
   }, [editing]);
+
+  // 打开 JSON 视图时按需拉取后端 preview。
+  // streaming 消息或没有 session(理论上不会发生)走前端 fallback。
+  useEffect(() => {
+    if (!showRawJson) return;
+    const sessionId = session?.id;
+    if (!sessionId || streaming) return;
+    let cancelled = false;
+    setRawJsonLoading(true);
+    setRawJsonError(null);
+    api
+      .previewSessionPayload(sessionId, message.id)
+      .then((value) => {
+        if (cancelled) return;
+        setRawJsonPayload(value);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setRawJsonError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setRawJsonLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showRawJson, session?.id, message.id, streaming]);
 
   function startEdit() {
     setEditDraft(message.content);
@@ -908,7 +1046,7 @@ export const MessageBubble = memo(function MessageBubble({
         <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
           <Ban className="w-3 h-3 text-destructive" />
           <span className="font-medium text-foreground/70">
-            当前对话已打断
+            用户中断对话
           </span>
         </div>
         <div className="flex-1 h-px bg-border" />
@@ -1026,7 +1164,15 @@ export const MessageBubble = memo(function MessageBubble({
       </div>
     );
   } else if (showRawJson) {
-    body = <JsonView value={message} />;
+    const fallback = session ? buildModelMessages(session, message.id) : message;
+    body = (
+      <RawJsonPanel
+        loading={rawJsonLoading}
+        error={rawJsonError}
+        payload={rawJsonPayload}
+        fallback={fallback}
+      />
+    );
   } else if (showRawText && canToggleRawText) {
     body = (
       <div className="whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-foreground">

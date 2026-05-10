@@ -132,6 +132,16 @@ export const api = {
   cancelMessage: (requestId: string) =>
     invoke<boolean>("cancel_message", { requestId }),
 
+  /**
+   * 预览「真实发给模型的 payload」(OpenAI 风格 messages + tools + workspace XML)。
+   * `uptoMessageId` 截断到指定消息(含),用于在每条 bubble 上显示「这条出现时模型看到的载荷」。
+   */
+  previewSessionPayload: (sessionId: string, uptoMessageId?: string | null) =>
+    invoke<unknown>("preview_session_payload", {
+      sessionId,
+      uptoMessageId: uptoMessageId ?? null,
+    }),
+
   /** 当前 session 的上下文用量（用于输入框旁的环形进度条） */
   getContextUsage: (sessionId: string) =>
     invoke<ContextUsage>("get_context_usage", { sessionId }),
@@ -178,7 +188,13 @@ export const api = {
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
 
-  /** 更新对话级设置；任一字段不传 = 保持原值，传 null = 清空（回退全局默认） */
+  /**
+   * 更新对话级设置；任一字段不传 = 保持原值，传 `null` = 显式清空（回退全局默认）。
+   *
+   * 实现把每个字段拆成两个 IPC 参数（设值 vs 清空），绕过 Tauri/serde 对
+   * `Option<Option<T>>` 中 `null` 直接折叠成外层 None 的歧义——清空请求若被
+   * 折叠就再也无法表达，会造成 chip 看似清掉但 session.workdir 还在的 bug。
+   */
   updateSessionSettings: (
     id: string,
     patch: {
@@ -187,14 +203,38 @@ export const api = {
       enabled_tools?: string[] | null;
       skill_dirs?: string[] | null;
     }
-  ) =>
-    invoke<Session>("update_session_settings", {
-      id,
-      ...("workdir" in patch ? { workdir: patch.workdir } : {}),
-      ...("allowed_dirs" in patch ? { allowedDirs: patch.allowed_dirs } : {}),
-      ...("enabled_tools" in patch ? { enabledTools: patch.enabled_tools } : {}),
-      ...("skill_dirs" in patch ? { skillDirs: patch.skill_dirs } : {}),
-    }),
+  ) => {
+    const args: Record<string, unknown> = { id };
+    if ("workdir" in patch) {
+      if (patch.workdir == null) args.clearWorkdir = true;
+      else args.workdir = patch.workdir;
+    }
+    if ("allowed_dirs" in patch) {
+      if (patch.allowed_dirs == null) args.clearAllowedDirs = true;
+      else args.allowedDirs = patch.allowed_dirs;
+    }
+    if ("enabled_tools" in patch) {
+      if (patch.enabled_tools == null) args.clearEnabledTools = true;
+      else args.enabledTools = patch.enabled_tools;
+    }
+    if ("skill_dirs" in patch) {
+      if (patch.skill_dirs == null) args.clearSkillDirs = true;
+      else args.skillDirs = patch.skill_dirs;
+    }
+    return invoke<Session>("update_session_settings", args);
+  },
+
+  /**
+   * 探测剪切板/拖拽过来的路径：是文件就读出来当 attachment，是目录就提示前端
+   * 加到 allowed_dirs。前端只发一次 RPC，避免来回 stat 磁盘。
+   */
+  attachPath: (path: string) =>
+    invoke<
+      | { kind: "dir"; path: string; name: string }
+      | { kind: "file"; attachment: MessageAttachment }
+      | { kind: "missing"; path: string }
+      | { kind: "unsupported"; path: string; reason: string }
+    >("attach_path", { path }),
 
   /** PathAccess 审批专用：scope 决定持久化到哪。"this_project" = session，"all_project" = 全局，"once" = 只放行本次 */
   approvePathAccess: (
