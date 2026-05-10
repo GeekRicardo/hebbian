@@ -4,6 +4,7 @@ import type {
   ApprovalDecisionPayload,
   ContextUsage,
   EngineEvent,
+  Message,
   MessageAttachment,
   PendingApproval,
   PendingQuestion,
@@ -11,6 +12,7 @@ import type {
   PromptsFile,
   Provider,
   ProvidersFile,
+  QueuedInput,
   QuestionAnswerPayload,
   ReasoningConfig,
   SearchHit,
@@ -217,6 +219,12 @@ type SessionStream = {
   streamingMessageId: string | null;
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
+  /**
+   * 「立即发送」期间临时显示的 user message：渲染时排在 streaming bubble **之后**，
+   * 视觉上紧跟当前正在跑的 assistant，下一轮 assistant 输出再接着它。
+   * run 结束时 reload session 拿到完整 messages，slot 整个被清掉，由 messages 接管。
+   */
+  injectedSinceStream: Message[];
   pendingApproval: PendingApproval | null;
   pendingApprovalQueue: PendingApproval[];
   pendingQuestion: PendingQuestion | null;
@@ -227,6 +235,7 @@ const EMPTY_MIRROR = {
   streamingMessageId: null as string | null,
   streamingText: "",
   streamingParts: [] as StreamingAssistantPart[],
+  injectedSinceStream: [] as Message[],
   activeRequestId: null as string | null,
   pendingApproval: null as PendingApproval | null,
   pendingApprovalQueue: [] as PendingApproval[],
@@ -240,6 +249,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     streamingMessageId: slot.streamingMessageId,
     streamingText: slot.streamingText,
     streamingParts: slot.streamingParts,
+    injectedSinceStream: slot.injectedSinceStream,
     activeRequestId: slot.requestId,
     pendingApproval: slot.pendingApproval,
     pendingApprovalQueue: slot.pendingApprovalQueue,
@@ -384,6 +394,8 @@ interface AppState {
   streamingMessageId: string | null;
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
+  /** 「立即发送」期间临时显示的 user message：渲染在 streaming bubble 之后。 */
+  injectedSinceStream: Message[];
   activeRequestId: string | null;
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
@@ -427,6 +439,30 @@ interface AppState {
   pendingQuestion: PendingQuestion | null;
   pendingQuestionQueue: PendingQuestion[];
   resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
+
+  // 运行时输入队列：每个 session 一条 FIFO 队列，streaming 期间用户排进的
+  // 后续 user message 暂存于此，当前 turn 跑完后自动按顺序消费。
+  inputQueues: Record<string, QueuedInput[]>;
+  /** 当前 session 队列的镜像（按 currentSession.id 跟随）。 */
+  currentInputQueue: QueuedInput[];
+  /**
+   * 入队一条新输入。
+   * - position='tail'（默认）：append 队尾，常规排队。
+   * - position='head'：prepend 队首，对应 Shift+Enter「立即」语义——
+   *   让它最先被消费。
+   */
+  enqueueInput: (
+    content: string,
+    attachments: MessageAttachment[],
+    position?: "tail" | "head"
+  ) => void;
+  removeQueuedInput: (id: string) => void;
+  /**
+   * 「立即发送」队首：把它真正注入到当前 run 的 pending 队列（agent_loop 下一次
+   * model.request 之前 drain 出来加入 transcript），并立即把该 user message 落到
+   * 当前 chat 区域显示。仅在当前 session 还在 streaming 时有意义。
+   */
+  flushQueuedHead: () => Promise<void>;
 
   // actions
   init: () => Promise<void>;
@@ -535,6 +571,7 @@ export const useStore = create<AppState>((set, get) => ({
   streamingMessageId: null,
   streamingText: "",
   streamingParts: [],
+  injectedSinceStream: [],
   activeRequestId: null,
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
@@ -668,6 +705,103 @@ export const useStore = create<AppState>((set, get) => ({
           ...state,
           sessionStreams: { ...state.sessionStreams, [sessionId]: restored },
           ...(isForeground ? mirrorFromSlot(restored) : {}),
+        };
+      });
+      throw e;
+    }
+  },
+
+  inputQueues: {},
+  currentInputQueue: [],
+  enqueueInput(content, attachments, position = "tail") {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const trimmed = content.trim();
+    if (!trimmed && attachments.length === 0) return;
+    const sessionId = cur.id;
+    const item: QueuedInput = {
+      id:
+        crypto.randomUUID?.() ??
+        `q-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      content,
+      attachments,
+      enqueued_at: Date.now(),
+    };
+    set((state) => {
+      const list = state.inputQueues[sessionId] ?? [];
+      const next = position === "head" ? [item, ...list] : [...list, item];
+      const isForeground = state.currentSession?.id === sessionId;
+      return {
+        inputQueues: { ...state.inputQueues, [sessionId]: next },
+        ...(isForeground ? { currentInputQueue: next } : {}),
+      };
+    });
+  },
+  removeQueuedInput(id) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    set((state) => {
+      const list = state.inputQueues[sessionId] ?? [];
+      const next = list.filter((it) => it.id !== id);
+      if (next.length === list.length) return state;
+      const isForeground = state.currentSession?.id === sessionId;
+      const queues = { ...state.inputQueues };
+      if (next.length === 0) delete queues[sessionId];
+      else queues[sessionId] = next;
+      return {
+        ...state,
+        inputQueues: queues,
+        ...(isForeground ? { currentInputQueue: next } : {}),
+      };
+    });
+  },
+  async flushQueuedHead() {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    const head = get().inputQueues[sessionId]?.[0];
+    if (!head) return;
+    const slot = get().sessionStreams[sessionId];
+    const requestId = slot?.requestId;
+    if (!requestId) return; // 不在 streaming：交给 ChatInput 走普通 send 路径
+    // 先把队列项移除，避免 agent_loop drain 完后又被 drainNext 重复发送。
+    get().removeQueuedInput(head.id);
+    try {
+      const persisted = await api.injectUserMessage(
+        sessionId,
+        requestId,
+        head.content,
+        head.attachments
+      );
+      // 把 user message 排在 streaming bubble **之后**临时显示——不动 messages 列表，
+      // 避免它跑到当前正在跑的 assistant 之前。run 结束时 slot 整个被清掉，由 reload
+      // 后的 session.messages 接管最终顺序。
+      set((state) => {
+        const slot = state.sessionStreams[sessionId];
+        if (!slot) return state;
+        const updated: SessionStream = {
+          ...slot,
+          injectedSinceStream: [...slot.injectedSinceStream, persisted],
+        };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
+          ...(isForeground ? mirrorFromSlot(updated) : {}),
+        };
+      });
+    } catch (e) {
+      // 失败时把队列项还原回队首，让用户重试或撤回。
+      const restored: QueuedInput = head;
+      set((state) => {
+        const list = state.inputQueues[sessionId] ?? [];
+        const next = [restored, ...list];
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          inputQueues: { ...state.inputQueues, [sessionId]: next },
+          ...(isForeground ? { currentInputQueue: next } : {}),
         };
       });
       throw e;
@@ -810,6 +944,7 @@ export const useStore = create<AppState>((set, get) => ({
       pendingWorkdir: sessionWorkdir,
       pendingAllowedDirs: sessionAllowedDirs,
       unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
+      currentInputQueue: state.inputQueues[id] ?? [],
       ...mirrorFromSlot(state.sessionStreams[id]),
     }));
     get().refreshContextUsage();
@@ -851,6 +986,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
+      currentInputQueue: state.inputQueues[s.id] ?? [],
       ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
     await get().refreshSessions();
@@ -869,13 +1005,16 @@ export const useStore = create<AppState>((set, get) => ({
     const wasCurrent = get().currentSession?.id === id;
     set((state) => {
       const { [id]: _drop, ...restStreams } = state.sessionStreams;
+      const { [id]: _dropQueue, ...restQueues } = state.inputQueues;
       const next: Partial<AppState> = {
         sessionStreams: restStreams,
+        inputQueues: restQueues,
         runningSessions: removeFromSet(state.runningSessions, id),
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
       };
       if (wasCurrent) {
         Object.assign(next, mirrorFromSlot(undefined));
+        next.currentInputQueue = [];
       }
       return next as AppState;
     });
@@ -900,6 +1039,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
+      currentInputQueue: state.inputQueues[s.id] ?? [],
       ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
   },
@@ -916,6 +1056,20 @@ export const useStore = create<AppState>((set, get) => ({
     const cur = get().currentSession;
     if (!cur) return;
     const sessionId = cur.id;
+    // 当前 turn 跑完后（无论成功 / 失败 / 取消），把队首项作为下一轮自动 send。
+    // 用微任务异步触发，避免在 finally 里递归调用栈过深。
+    const drainNext = () => {
+      queueMicrotask(() => {
+        const state = get();
+        if (state.currentSession?.id !== sessionId) return;
+        const queue = state.inputQueues[sessionId];
+        if (!queue || queue.length === 0) return;
+        if (state.sessionStreams[sessionId]) return; // 还有 run 在跑（异常路径）
+        const head = queue[0];
+        state.removeQueuedInput(head.id);
+        void state.sendUserMessage(head.content, head.attachments);
+      });
+    };
     const tempId = "streaming";
     const requestId =
       crypto.randomUUID?.() ??
@@ -925,6 +1079,7 @@ export const useStore = create<AppState>((set, get) => ({
       streamingMessageId: tempId,
       streamingText: "",
       streamingParts: [],
+      injectedSinceStream: [],
       pendingApproval: null,
       pendingApprovalQueue: [],
       pendingQuestion: null,
@@ -1050,6 +1205,8 @@ export const useStore = create<AppState>((set, get) => ({
       }
       // 后台失败不向 UI 抛错（用户视野不在这里，吐 toast 也无意义）
       if (stillForeground) throw err;
+    } finally {
+      drainNext();
     }
   },
 

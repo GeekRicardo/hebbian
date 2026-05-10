@@ -180,6 +180,17 @@ impl Session {
 
     /// 用调用方提供的 cancel 启动 run（接入外部取消机制）。
     pub fn run_with(&self, cancel: CancelFlag) -> RunHandle {
+        self.run_with_pending(cancel, None)
+    }
+
+    /// 与 [`Self::run_with`] 一致，但额外接入 surface 的运行时输入队列。
+    /// surface 在 streaming 中往 `pending_inputs` 推 user message，agent_loop 在下一次
+    /// model.request 之前 drain 出来加入 transcript（实现「立即发送」语义）。
+    pub fn run_with_pending(
+        &self,
+        cancel: CancelFlag,
+        pending_inputs: Option<platform::runtime::PendingInputs>,
+    ) -> RunHandle {
         let hitl = Arc::new(HitlGate::new(self.definition.permission_policy.clone()));
         self.harness.spawn_run(
             self.client.clone(),
@@ -195,6 +206,7 @@ impl Session {
                 parent: None,
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
+                pending_inputs,
             },
         )
     }

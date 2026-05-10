@@ -408,10 +408,9 @@ impl ToolDispatcher {
                     answer: answer.clone(),
                 }));
 
-                if cancellation::is_cancelled(&cancel) {
-                    return Err(ModelError::Cancelled);
-                }
-
+                // 即使 run 已被外部 cancel（例如 desktop 关窗），仍然把「取消」当作正常的
+                // ask 答案落到事件流里：emit ToolCallFinished + 推 ToolResult，让 surface
+                // 看到 ask 已经收到「用户取消」答案；下一步 cancel 检查再让 agent_loop bail。
                 let content = answer.to_agent_text();
                 let outcome = if matches!(answer, UserAnswer::Cancelled) {
                     attr::outcome::DENIED
@@ -426,6 +425,10 @@ impl ToolDispatcher {
                     duration_ms: 0,
                     truncated: false,
                 }));
+
+                if cancellation::is_cancelled(&cancel) {
+                    return Err(ModelError::Cancelled);
+                }
 
                 Ok((
                     call_index,

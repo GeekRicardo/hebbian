@@ -73,6 +73,7 @@ export function ChatInput({
 
   const compacting = useStore((s) => s.compacting);
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
+  const enqueueInput = useStore((s) => s.enqueueInput);
   const tokenStats = useStore(
     (s) => s.currentSession?.token_stats ?? null
   );
@@ -193,7 +194,12 @@ export function ChatInput({
 
   async function submit() {
     const v = value.trim();
-    if ((!v && attachments.length === 0) || sending || isStreaming) return;
+    if ((!v && attachments.length === 0) || sending) return;
+    // streaming 时回车不再直接发送，而是入队（FIFO 自动消费）。
+    if (isStreaming) {
+      enqueueAndClear("tail");
+      return;
+    }
     if (v.startsWith("/compact")) {
       const args = v.slice("/compact".length).trim();
       await runCompact(args);
@@ -209,6 +215,16 @@ export function ChatInput({
     } finally {
       setSending(false);
     }
+  }
+
+  /** 把当前输入加入队列；position='head' 用于 Shift+Enter / 立即发送。 */
+  function enqueueAndClear(position: "tail" | "head") {
+    const v = value.trim();
+    if (!v && attachments.length === 0) return;
+    enqueueInput(v, attachments, position);
+    setValue("");
+    setAttachments([]);
+    setHistoryState({ index: null });
   }
 
   async function cancel() {
@@ -366,6 +382,21 @@ export function ChatInput({
       }
     }
 
+    // streaming 中 Shift+Enter = 立即入队（队首），让它最先被消费；
+    // 非 streaming 时保持浏览器默认换行行为。
+    if (
+      isStreaming &&
+      e.key === "Enter" &&
+      e.shiftKey &&
+      !compositionRef.current.isComposing &&
+      !e.nativeEvent.isComposing &&
+      e.nativeEvent.keyCode !== 229
+    ) {
+      e.preventDefault();
+      enqueueAndClear("head");
+      return;
+    }
+
     if (
       shouldSubmitChatInput(
         {
@@ -423,7 +454,9 @@ export function ChatInput({
     }
   }, [height, manual]);
 
-  const inputDisabled = disabled || isStreaming;
+  // streaming 时仍允许输入（Enter 入队 / Shift+Enter 立即入队队首），
+  // 只有外部显式 disabled（如未配置 provider）时才禁用。
+  const inputDisabled = !!disabled;
   const canSubmit =
     isStreaming ||
     (!disabled && !sending && (!!value.trim() || attachments.length > 0));
@@ -528,7 +561,11 @@ export function ChatInput({
             autoCorrect="off"
             autoCapitalize="off"
             autoComplete="off"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行…"
+            placeholder={
+              isStreaming
+                ? "正在生成…Enter 排队，Shift+Enter 立即排到队首"
+                : "输入消息，Enter 发送，Shift+Enter 换行…"
+            }
             rows={1}
             style={manual ? { height } : undefined}
             className="w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
@@ -589,32 +626,58 @@ export function ChatInput({
 
             <div className="flex items-center gap-1">
               <ModelPickerButton />
-              <button
-                type="button"
-                onClick={isStreaming ? cancel : submit}
-                disabled={isStreaming ? canceling : !canSubmit}
-                className={cn(
-                  "h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-primary hover:bg-muted disabled:opacity-40 disabled:pointer-events-none",
-                  isStreaming && "bg-background text-primary hover:bg-background"
-                )}
-                title={isStreaming ? "中断生成" : "发送 (Enter)"}
-              >
-                {isStreaming ? (
-                  <LoopingWebm
-                    src={animations.sendInterrupt}
-                    className="h-7 w-7 rounded"
-                  />
-                ) : sending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <img
-                    src={animations.assistantThinkingStatic}
-                    alt=""
-                    className="h-7 w-7 object-contain"
-                    draggable={false}
-                  />
-                )}
-              </button>
+              {(() => {
+                // streaming 时：输入框有内容 → 按钮做入队（同 Enter）；否则做中断生成。
+                const hasDraft = !!value.trim() || attachments.length > 0;
+                const enqueueMode = isStreaming && hasDraft;
+                const onClick = enqueueMode
+                  ? () => enqueueAndClear("tail")
+                  : isStreaming
+                    ? cancel
+                    : submit;
+                const buttonDisabled = enqueueMode
+                  ? false
+                  : isStreaming
+                    ? canceling
+                    : !canSubmit;
+                const title = enqueueMode
+                  ? "排队（Enter）"
+                  : isStreaming
+                    ? "中断生成"
+                    : "发送 (Enter)";
+                return (
+                  <button
+                    type="button"
+                    onClick={onClick}
+                    disabled={buttonDisabled}
+                    className={cn(
+                      "h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-primary hover:bg-muted disabled:opacity-40 disabled:pointer-events-none",
+                      isStreaming &&
+                        !enqueueMode &&
+                        "bg-background text-primary hover:bg-background"
+                    )}
+                    title={title}
+                  >
+                    {enqueueMode ? (
+                      <Plus className="w-4 h-4" />
+                    ) : isStreaming ? (
+                      <LoopingWebm
+                        src={animations.sendInterrupt}
+                        className="h-7 w-7 rounded"
+                      />
+                    ) : sending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <img
+                        src={animations.assistantThinkingStatic}
+                        alt=""
+                        className="h-7 w-7 object-contain"
+                        draggable={false}
+                      />
+                    )}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>

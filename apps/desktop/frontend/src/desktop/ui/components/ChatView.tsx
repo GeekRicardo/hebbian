@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { Sparkles, ChevronDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
@@ -21,6 +22,7 @@ export function ChatView() {
     streamingMessageId,
     streamingText,
     streamingParts,
+    injectedSinceStream,
     sendUserMessage,
     cancelStreaming,
     forkSession,
@@ -473,6 +475,18 @@ export function ChatView() {
               }}
             />
           )}
+          {/* 「立即发送」插入的 user message：紧跟当前 streaming bubble 之后展示，
+              下一轮 assistant 输出会接在它后面。run 结束 reload session 时此列表被清空。 */}
+          {isStreaming &&
+            injectedSinceStream.map((m) => (
+              <MessageBubble
+                key={m.id}
+                message={m}
+                session={currentSession}
+                prompt={activePrompt}
+                userAvatar={userAvatar}
+              />
+            ))}
         </div>
       </div>
 
@@ -482,6 +496,7 @@ export function ChatView() {
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-10">
           <UserQuestionPopup />
         </div>
+        <InputQueuePanel />
         <ChatInput
           onSend={handleSend}
           onCancel={handleCancel}

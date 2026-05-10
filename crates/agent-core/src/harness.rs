@@ -21,7 +21,7 @@ use crate::{
     workspace::Workspace,
 };
 use model_gateway::client::ModelClient;
-use platform::CancelFlag;
+use platform::{runtime::PendingInputs, CancelFlag};
 
 /// 注册表里登记一次 run 的运行时控制点（供跨进程 `Op::Approve` / `Op::Interrupt` 反查）。
 struct RunRegistration {
@@ -47,6 +47,9 @@ pub struct RunParams {
     /// 可选的模型 IO dump：每次 model 调用前后写一条 `{request, response}` 到 jsonl。
     /// 由环境变量 `HEBBIAN_DUMP_MODEL_IO` 触发，surface 决定路径。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时把 user message 推进来，
+    /// agent_loop 每次 model.request 之前 drain 出来加入 transcript。`None` 表示禁用。
+    pub pending_inputs: Option<PendingInputs>,
 }
 
 /// Core 对外门面。
@@ -122,6 +125,7 @@ impl Harness {
             parent,
             recorder: _,
             model_io_dump,
+            pending_inputs,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -143,6 +147,7 @@ impl Harness {
                 agent,
                 parent,
                 model_io_dump,
+                pending_inputs,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

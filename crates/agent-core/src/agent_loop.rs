@@ -27,7 +27,10 @@ use model_gateway::{
     client::ModelClient,
     types::{AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
-use platform::{runtime as cancellation, CancelFlag};
+use platform::{
+    runtime::{self as cancellation, PendingInputs},
+    CancelFlag,
+};
 
 const MAX_TOOL_ITERATIONS: u32 = 100;
 
@@ -48,6 +51,9 @@ pub struct LoopParams<'a> {
     pub parent: Option<RunId>,
     /// 可选的模型 IO dump：每轮 `client.complete/stream` 前后写一条 jsonl。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时推一条进来，
+    /// 每次 model.request 之前 drain 出来作为新的 user message 加入 transcript。
+    pub pending_inputs: Option<PendingInputs>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -87,6 +93,7 @@ pub async fn run_loop(
         agent,
         parent,
         model_io_dump,
+        pending_inputs,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -112,6 +119,16 @@ pub async fn run_loop(
             debug!("run cancelled");
             hitl.cancel_all_pending();
             break Err(ModelError::Cancelled);
+        }
+
+        // 「立即发送」语义：surface 在 streaming 中往 pending_inputs 推过的 user message，
+        // 在下一次 model.request 之前 drain 出来加入 transcript——让模型在当前 agent loop
+        // 的下一个 iteration 立刻看到这些消息，而不是等整个 turn 跑完再开新 turn。
+        if let Some(slot) = pending_inputs.as_ref() {
+            let drained: Vec<_> = std::mem::take(&mut *slot.lock().unwrap());
+            for input in drained {
+                transcript.push_user(input.content, input.attachments);
+            }
         }
 
         // Microcompact：每轮模型请求前先把超阈值的老 tool_result 影子化为占位符。
@@ -521,6 +538,7 @@ mod tests {
                 agent: AgentRef::new("test"),
                 parent: None,
                 model_io_dump: None,
+                pending_inputs: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);

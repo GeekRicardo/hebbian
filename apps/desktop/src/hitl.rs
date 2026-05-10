@@ -65,4 +65,31 @@ impl HitlState {
             .unwrap()
             .retain(|_id, g| !Arc::ptr_eq(g, gate));
     }
+
+    /// 把所有 pending 的审批 / 提问按"取消"resolve；用于 desktop 关窗等场景，
+    /// 让正在 await 的 spawn_ask / spawn_tool 即刻醒来收尾。
+    /// 返回被取消的 gate 唯一数量（去重后）。
+    pub fn cancel_all_pending(&self) -> usize {
+        let gates: Vec<Arc<HitlGate>> = {
+            let mut pending = self.pending.lock().unwrap();
+            let mut seen: Vec<Arc<HitlGate>> = Vec::new();
+            for gate in pending.values() {
+                if !seen.iter().any(|g| Arc::ptr_eq(g, gate)) {
+                    seen.push(gate.clone());
+                }
+            }
+            pending.clear();
+            seen
+        };
+        let count = gates.len();
+        for gate in gates {
+            gate.cancel_all_pending();
+        }
+        count
+    }
+
+    /// 当前是否有未 resolve 的 HITL 请求。
+    pub fn has_pending(&self) -> bool {
+        !self.pending.lock().unwrap().is_empty()
+    }
 }

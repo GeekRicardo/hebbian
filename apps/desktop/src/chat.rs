@@ -16,6 +16,7 @@ use platform::{
     CancelFlag,
     attachments::MessageAttachment,
     config::settings as global_settings,
+    runtime::PendingInputs,
     storage::sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
     },
@@ -38,6 +39,10 @@ pub struct SendArgs {
     pub stream: bool,
     pub enabled_tools: Vec<String>,
     pub cancel_flag: CancelFlag,
+    /// 运行时输入注入队列：前端「立即发送」会把 user message 推进来，
+    /// agent_loop 在每次 model.request 之前 drain 出来加入 transcript。
+    /// 测试场景传 `None`，相当于一个空队列。
+    pub pending_inputs: Option<PendingInputs>,
     /// app 级 HITL 桥接。用 Tauri 的 `app.state::<Arc<HitlState>>()`
     /// 取出来塞进来。测试场景传 `None`。
     pub hitl: Option<Arc<HitlState>>,
@@ -186,7 +191,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
 
-    let mut handle = core_session.run_with(args.cancel_flag.clone());
+    let mut handle =
+        core_session.run_with_pending(args.cancel_flag.clone(), args.pending_inputs.clone());
     let hitl = handle.hitl().clone();
 
     let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event);
@@ -1719,6 +1725,7 @@ mod tests {
                     stream: true,
                     enabled_tools: vec!["missing_a".to_string(), "missing_b".to_string()],
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: None,
                     hitl: None,
                 },
                 |_| {},
@@ -1777,6 +1784,7 @@ mod tests {
                     stream: true,
                     enabled_tools: vec!["missing_first".to_string(), "missing_second".to_string()],
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: None,
                     hitl: None,
                 },
                 |_| {},

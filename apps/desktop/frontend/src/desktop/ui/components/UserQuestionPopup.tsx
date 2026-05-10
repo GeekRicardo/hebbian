@@ -114,17 +114,17 @@ export function UserQuestionPopup() {
           )}
         >
           {/* 头部 */}
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/40">
-            <CircleHelp className="w-3.5 h-3.5 text-primary shrink-0" />
-            <span className="text-sm font-medium flex-1 truncate">
+          <div className="flex items-start gap-2 px-3 py-1.5 border-b border-border bg-muted/40">
+            <CircleHelp className="w-3.5 h-3.5 text-primary shrink-0 mt-1" />
+            <span className="text-sm font-medium flex-1 whitespace-pre-wrap break-words leading-5">
               {pending.question}
             </span>
             {isMulti && (
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium">
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium shrink-0 mt-0.5">
                 多选
               </span>
             )}
-            <span className="text-[11px] text-muted-foreground/80">
+            <span className="text-[11px] text-muted-foreground/80 shrink-0 mt-1">
               ESC 取消
             </span>
           </div>

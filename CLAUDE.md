@@ -5,6 +5,29 @@
 
 ---
 
+## ⚠️ 动手前必做（违反此节 = 任务未完成）
+
+仓库主人是「想到什么就让 AI 改」的工作模式，最容易被 AI 写出**违背初衷 / 与既有设计冲突 / 给未来埋坑 / 局部最优但拆全局**的代码。所以每次接到新需求，**先停一下，按这个顺序走**：
+
+1. **读 docs/，确认背景**
+   - 必读：[docs/architecture.md](docs/architecture.md)（目标态 + 路线图）、[docs/todos.md](docs/todos.md)（已知漂移点）、[docs/changelog.md](docs/changelog.md)（**历次修改时间线，只增不减**）
+   - 涉及上下文压缩 → 加读 [docs/compaction.md](docs/compaction.md)；涉及 harness 内部 → 加读 [docs/hebbian-harness-detailed-design.md](docs/hebbian-harness-detailed-design.md)
+   - 看 changelog 是为了不重蹈覆辙：之前是不是已经讨论过、改过、又退回来过
+
+2. **动手前先做「全局影响评估」**，至少在心里（或简短回复里）回答这四问：
+   - **会不会和已有设计冲突？** 比如违反 [#层次边界](#层次边界最重要) 或 [#必须遵守的设计规则](#必须遵守的设计规则) 里的红线
+   - **会不会给未来埋坑？** 比如加了一个特判、一个全局静态、一个绕过 `HitlGate` / `RunHandle` / `TurnObserver` 的捷径
+   - **是不是过度设计？** 用户给的是一个具体痛点，不是让你重构一整层。能在原结构内 5 行解决就别新造抽象/trait/枚举
+   - **有没有顾及其他模块/surface？** 改 protocol → 三处映射（CLI render、desktop chat.rs、types.ts）；改 EventPayload → 同上；改 Tool → CLI 和 desktop 两套观察者都要过；改 system prompt → 想想 prompt-cache 还在不在
+   - 任何一条答案让你犹豫，**先回复用户讲清 trade-off 再动手**，不要直接写
+
+3. **改完后追加一条到 [docs/changelog.md](docs/changelog.md)**（**只增不减**，这是项目的修改时间线）
+   - 格式见 changelog.md 顶部说明，最少要有：日期 / 一句话改了什么 / 为什么 / 影响哪些模块 / 有没有留尾巴
+   - 不要回头改旧条目；旧条目错了就在新条目里更正
+   - 这条不是可选项 —— 没写 changelog 的 PR 视为未完成
+
+---
+
 ## 一句话定位
 
 **Hebbian = Model + Harness**。本仓库是一个 Rust + Tauri + React 的 AI agent 框架，已分两个 surface（Desktop、CLI）+ 协议 crate + harness 核心 + 观测层，HITL 闭环已通，事件流可 jsonl 落盘可重放。
@@ -272,6 +295,7 @@ pub enum EventPayload {
 8. **Hook 只在能改 state 的点位触发**（4 个：`BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction`）；纯观察走 Event 流
 9. **System prompt 要保 prompt-cache**：system 段 = [`BASE_SYSTEM_PROMPT`](crates/agent-core/src/system_prompt.rs) 常量 + 用户 persona，跨会话字节恒定；workspace / cwd / allowed_dirs 等环境信息**不进 system 段**——首条 user message 头部注入 `<environment>` 块，运行时新增允许目录通过下条 user message 的 `<workspace-update>` 块宣告。改 prompt 文案先动 `BASE_SYSTEM_PROMPT`，环境字段动 [`EnvironmentSnapshot`](crates/agent-core/src/system_prompt.rs)
 10. **ModelClient 装饰器顺序**：`provider impl → InstrumentedClient → ModelWithName/NamedModelClient`。surface 不要绕过 InstrumentedClient（否则丢 metrics / span）
+11. **改完必写 [docs/changelog.md](docs/changelog.md)**：项目修改时间线，**只增不减**。无 changelog = 任务未完成。详见顶部「⚠️ 动手前必做」
 
 ---
 
@@ -295,6 +319,9 @@ pub enum EventPayload {
 
 ## 给后续 agent 的提醒
 
+- **第一件事**：读 [docs/architecture.md](docs/architecture.md) + [docs/todos.md](docs/todos.md) + [docs/changelog.md](docs/changelog.md)（尤其 changelog 末尾几条），别重做或推翻已有决定
+- **最后一件事**：在 [docs/changelog.md](docs/changelog.md) **追加**一条修改记录（不要改旧条目），否则任务视为未完成
+- **设计前先自问四问**（详见顶部「⚠️ 动手前必做 §2」）：会不会冲突 / 会不会埋坑 / 是不是过度设计 / 有没有顾及其他模块。任何一条犹豫 → 先和用户对齐再写代码
 - **改协议前先跑一遍三种 CLI 模式**：`hebbian-cli "..." --mock` / `hebbian-cli --json '...' --mock` / `hebbian-cli --mock`（loop），看事件流是否完整
 - **agent-core 改完先 `cargo check -p agent-core --tests`**：测试已存在并会被 cargo 检查
 - **desktop 改完跑 `cargo check -p hebbian` 和 `pnpm exec tsc --noEmit`**

@@ -170,6 +170,18 @@ export type StreamingAssistantPart =
       status: ToolCallStatus;
     };
 
+/**
+ * 运行时输入队列项：streaming 期间用户排进来的下一条 / 下几条 user message。
+ * 当前 turn 跑完后按 FIFO 自动消费——每条都作为独立的 user message 起一个新 turn。
+ */
+export interface QueuedInput {
+  id: string;
+  content: string;
+  attachments: MessageAttachment[];
+  /** 入队时间戳，仅用于显示。 */
+  enqueued_at: number;
+}
+
 export type MessageAttachment =
   | {
       kind: "text_file";

@@ -133,6 +133,24 @@ export const api = {
     invoke<boolean>("cancel_message", { requestId }),
 
   /**
+   * 「立即发送」入口：streaming 中往当前 run 的 pending 队列推一条 user message，
+   * 后端持久化到 session.json 后返回 Message——前端拿到后立刻渲染到 chat 区域，
+   * agent_loop 在下一次 model.request 之前会 drain 出来加入 transcript。
+   */
+  injectUserMessage: (
+    sessionId: string,
+    requestId: string,
+    content: string,
+    attachments: MessageAttachment[]
+  ) =>
+    invoke<Message>("inject_user_message", {
+      sessionId,
+      requestId,
+      content,
+      attachments,
+    }),
+
+  /**
    * 预览「真实发给模型的 payload」(OpenAI 风格 messages + tools + workspace XML)。
    * `uptoMessageId` 截断到指定消息(含),用于在每条 bubble 上显示「这条出现时模型看到的载荷」。
    */

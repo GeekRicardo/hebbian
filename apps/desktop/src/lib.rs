@@ -29,7 +29,7 @@ use platform::{
     },
 };
 use std::path::PathBuf;
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{ipc::Channel, AppHandle, Manager, State, WindowEvent};
 
 fn data_dir(app: &AppHandle) -> AppResult<std::path::PathBuf> {
     let dir = app
@@ -325,7 +325,7 @@ async fn send_message(
     request_id: String,
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
-    let cancel_flag = cancellation::register(request_id.clone());
+    let runtime = cancellation::register(request_id.clone());
     let result = chat::send_and_save(
         &app,
         chat::SendArgs {
@@ -334,7 +334,8 @@ async fn send_message(
             attachments,
             stream,
             enabled_tools,
-            cancel_flag,
+            cancel_flag: runtime.cancel.clone(),
+            pending_inputs: Some(runtime.pending_inputs.clone()),
             hitl: Some(hitl.inner().clone()),
         },
         on_event,
@@ -347,6 +348,51 @@ async fn send_message(
 #[tauri::command]
 fn cancel_message(request_id: String) -> bool {
     cancellation::cancel(&request_id)
+}
+
+/// 「立即发送」入口：在 streaming 中把 user message 注入到当前 run 的 pending 队列，
+/// 并把它持久化到 session.json + 返回给前端立刻渲染到 chat 区域。
+///
+/// agent_loop 在下一次 model.request 之前会把 pending 列表 drain 出来作为新的 user
+/// message 加入 transcript（不打断当前 agent loop，下一个 iteration 立刻可见）。
+#[tauri::command]
+fn inject_user_message(
+    app: AppHandle,
+    session_id: String,
+    request_id: String,
+    content: String,
+    attachments: Vec<platform::attachments::MessageAttachment>,
+) -> AppResult<platform::storage::sessions::Message> {
+    use platform::storage::sessions::{self, Message, Role};
+    let dd = data_dir(&app)?;
+    let user_msg = Message {
+        id: sessions::new_id(),
+        role: Role::User,
+        content: content.clone(),
+        attachments: attachments.clone(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: None,
+    };
+    sessions::append_message(&dd, &session_id, user_msg.clone())?;
+
+    let injected = cancellation::inject_pending_input(
+        &request_id,
+        platform::runtime::PendingUserInput {
+            content,
+            attachments,
+        },
+    );
+    if !injected {
+        // run 已经结束（或还没注册）——session.json 里这条 user message 已经落盘，
+        // 前端拿到它后会把它作为接下来一条 user 显示，等用户决定下一步。
+        tracing::debug!(
+            request_id,
+            "inject_user_message: run not registered, message persisted only"
+        );
+    }
+    Ok(user_msg)
 }
 
 #[tauri::command]
@@ -907,6 +953,36 @@ async fn deepseek_login(
 
 // ========== App startup ==========
 
+/// 关窗时若仍有 pending HITL 或正在跑的 run：
+/// - 把所有 pending 提问 / 审批按"取消"resolve（让 spawn_ask 醒来正常 emit
+///   ToolCallFinished + UserQuestionAnswered，UI 持久化时能看到「取消」答案）
+/// - 设置全部 run 的 cancel flag（阻止 agent_loop 进入下一轮 model.complete）
+/// - 短暂等待（最多 2s）让 send_and_save 走完 persist_interrupted 把状态写盘
+///
+/// 用户硬关 / 强制退出还是会丢，这只是合作式的「正常关窗」路径。
+fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    let app = window.app_handle().clone();
+    let hitl_state: Arc<HitlState> = match app.try_state::<Arc<HitlState>>() {
+        Some(s) => s.inner().clone(),
+        None => return,
+    };
+    let needs_wait = hitl_state.has_pending() || cancellation::has_active_runs();
+    if !needs_wait {
+        return;
+    }
+    api.prevent_close();
+    hitl_state.cancel_all_pending();
+    cancellation::cancel_all();
+    let window = window.clone();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while cancellation::has_active_runs() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = window.close();
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 同步入口：observability::init 内部用独占 tokio runtime 跑 OTel 导出 task，
@@ -926,6 +1002,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             window_control::handle_window_event(window, event);
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                handle_close_with_pending_hitl(window, api);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_providers,
@@ -952,6 +1031,7 @@ pub fn run() {
             send_message,
             preview_session_payload,
             cancel_message,
+            inject_user_message,
             get_context_usage,
             compact_session,
             approve_permission,
