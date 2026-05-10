@@ -2,15 +2,15 @@
 //!
 //! 每个对话有独立的 workspace（默认 `~/`）。允许目录分三层：
 //!
-//! - **initial**：对话起始时锁定的快照。**只有这一层会进 system prompt 的
-//!   `<workspace>` XML**——保持每轮 system 段字节恒定，避免破坏 prompt cache。
+//! - **initial**：对话起始时锁定的快照。**只有这一层会进首条 user message 的
+//!   `<environment>` 块**（由 [`crate::system_prompt::EnvironmentSnapshot`] 渲染）。
 //! - **runtime_announced**：对话开始之后追加的目录，且已经通过上一条 user message
 //!   的 `<workspace-update>` 通知过模型。仅用于 `allows()` 判定。
 //! - **runtime_pending**：刚追加、还没通知模型的目录。下一次 [`take_pending_announcement`]
 //!   会把它们 drain 出来供上层注入到下条 user message，然后移入 announced。
 //!
-//! 任何运行时新增（用户在对话设置里追加 / `AllowAndRemember` 审批通过）都先进
-//! pending，**不会**改 system prompt，从而保持 prompt prefix 缓存命中。
+//! workspace 数据**完全不进 system 段**。system 段由 [`crate::system_prompt`] 单独管理，
+//! 跨会话保持字节稳定，方便 prompt cache 命中。
 //!
 //! [`take_pending_announcement`]: Workspace::take_pending_announcement
 
@@ -168,27 +168,6 @@ impl Workspace {
         }
     }
 
-    /// 注入到 system prompt 的 XML 片段。
-    /// **只渲染 initial**——保证 system 段在对话内字节恒定，prompt cache 不被运行时变更击穿。
-    pub fn to_system_xml(&self) -> String {
-        let mut s = String::from("<workspace>\n");
-        s.push_str(&format!(
-            "  <workdir>{}</workdir>\n",
-            self.workdir.display()
-        ));
-        for d in &self.initial_allowed_dirs {
-            s.push_str(&format!("  <allowed_dir>{}</allowed_dir>\n", d.display()));
-        }
-        s.push_str(
-            "  <note>读写、Bash 工具默认只能在以上目录中操作。\
-             越界访问会触发用户审批；如需长期允许，请在对话设置里追加 allowed_dirs。\
-             对话开始后追加的允许目录会通过下一条用户消息中的 \
-             &lt;workspace-update&gt; 单独通知。</note>\n",
-        );
-        s.push_str("</workspace>");
-        s
-    }
-
     /// UI/错误提示用的人类可读描述。
     pub fn describe(&self) -> String {
         let mut s = format!("workdir: {}", self.workdir.display());
@@ -308,17 +287,4 @@ mod tests {
         assert!(ws.runtime_pending_snapshot().is_empty());
     }
 
-    #[test]
-    fn system_xml_only_includes_initial_dirs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let initial = tempfile::tempdir().unwrap();
-        let runtime = tempfile::tempdir().unwrap();
-        let ws = Workspace::new(tmp.path(), vec![initial.path().to_path_buf()]);
-        ws.add_allowed_dir(runtime.path());
-
-        let xml = ws.to_system_xml();
-        assert!(xml.contains(&initial.path().to_string_lossy().to_string()));
-        // runtime pending 不进 system XML，缓存才不会破
-        assert!(!xml.contains(&runtime.path().to_string_lossy().to_string()));
-    }
 }

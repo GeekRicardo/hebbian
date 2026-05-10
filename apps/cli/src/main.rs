@@ -233,6 +233,14 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| session_record.as_ref().and_then(|s| s.system_prompt.clone()));
 
+    // HEBBIAN_DUMP_MODEL_IO=1 时把每次模型请求的 request/response 落到
+    // <data_dir>/sessions/<session_id>.model_io.jsonl 方便调试。需要 session_id，
+    // 因此 --no-record / --json 这类无 session_record 的路径不开启。
+    let model_io_dump = match session_record.as_ref() {
+        Some(s) => agent_core::model_io_dump::open_for_session_if_enabled(&data_dir, &s.id).await,
+        None => None,
+    };
+
     let mut session = CliSession::new(
         built.harness,
         built.client,
@@ -246,6 +254,7 @@ async fn main() -> Result<()> {
             session_id: s.id,
             seed_messages: s.messages,
         }),
+        model_io_dump,
     );
 
     match (cli.prompt, cli.json) {

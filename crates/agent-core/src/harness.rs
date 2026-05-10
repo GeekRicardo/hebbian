@@ -14,6 +14,7 @@ use crate::{
     context::transcript::Transcript,
     definition::CompactionPolicy,
     hooks::HookManager,
+    model_io_dump::ModelIoDump,
     recorder::Recorder,
     run_state::RunState,
     tools::{hitl::HitlGate, registry::ToolRegistry, Tool},
@@ -43,6 +44,9 @@ pub struct RunParams {
     pub parent: Option<RunId>,
     /// 可选的事件持久化。给定后所有事件 fire-and-forget 追加进 jsonl。
     pub recorder: Option<Recorder>,
+    /// 可选的模型 IO dump：每次 model 调用前后写一条 `{request, response}` 到 jsonl。
+    /// 由环境变量 `HEBBIAN_DUMP_MODEL_IO` 触发，surface 决定路径。
+    pub model_io_dump: Option<ModelIoDump>,
 }
 
 /// Core 对外门面。
@@ -117,6 +121,7 @@ impl Harness {
             cancel,
             parent,
             recorder: _,
+            model_io_dump,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -137,6 +142,7 @@ impl Harness {
                 state,
                 agent,
                 parent,
+                model_io_dump,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

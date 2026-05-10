@@ -634,21 +634,26 @@ impl ContextEngine {
 
 #### Prompt cache 边界
 
-`prepare_for_model()` 输出的 `ContextSnapshot` 把内容分成三段，让 provider 层精确告诉模型 API "缓存到这里"：
+实际 layout 把可变部分推出 system 段，让 STABLE 段在所有会话间字节恒定：
 
 ```text
-[ STABLE   ]   AgentDefinition.system_prompt + 内置工具 spec
+[ STABLE   ]   BASE_SYSTEM_PROMPT 常量 + 用户 persona
+                （[`crates/agent-core/src/system_prompt.rs`]）
 ———— cache breakpoint A ————
-[ SEMI     ]   workspace XML（allowed_dirs / cwd）
+[ SEMI     ]   首条 user message 头部的 <environment> 块
+                （cwd / allowed_dirs / platform / shell / date）
+                + 后续 user message 的 <workspace-update>
 ———— cache breakpoint B ————
 [ MUTABLE  ]   transcript history + 当前 turn input
 ```
 
-- STABLE 段在 Session 生命周期内不变，命中长效缓存
-- SEMI 段在用户授权新路径时变动，单次 turn 内稳定
-- MUTABLE 段每轮变化
+- **STABLE = system 段**：[`BASE_SYSTEM_PROMPT`](../crates/agent-core/src/system_prompt.rs) 是仓库唯一的常量提示词；用户 persona（来自 `prompts.json`）拼在末尾。**不再混 workspace XML**——以前老 layout 里 SEMI 段塞在 system 末尾，会随 cwd 变动击穿 prefix cache，现在彻底分离。
+- **SEMI = 首条 / 部分 user message 头部**：[`EnvironmentSnapshot`](../crates/agent-core/src/system_prompt.rs) 在第一次 `Session::append_user` 时注入 `<environment>` 块；运行时新增允许目录通过 `<workspace-update>` 块在下一条 user message 头部宣告。
+- **MUTABLE = transcript** + 当前 turn input。
 
 `ModelRequest` 携带 `cache_breakpoints: Vec<usize>`，Anthropic / OpenAI 协议层翻译成各自的 `cache_control` 标记。token 成本相比每轮整段重拼可降低 30-90%。
+
+**调试模型 IO**：设 `HEBBIAN_DUMP_MODEL_IO=1` 时，`agent_loop` 在每次 `client.complete/stream` 前后把完整的 `{ts, run_id, turn, model, request, response, duration_ms}` 落到 `<data_dir>/sessions/<session_id>.model_io.jsonl`，对应 [`ModelIoDump`](../crates/agent-core/src/model_io_dump.rs)。attachments 只存元数据（kind / size_bytes），不写 base64 正文。
 
 #### `ContextPolicy` 枚举
 

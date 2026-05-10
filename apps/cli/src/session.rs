@@ -54,6 +54,7 @@ impl CliSession {
         workspace: Arc<Workspace>,
         provider_display: String,
         persist: Option<SessionPersist>,
+        model_io_dump: Option<agent_core::ModelIoDump>,
     ) -> Self {
         let definition = AgentDefinition::default();
         let (initial_transcript, persist_ref) = match persist {
@@ -75,6 +76,7 @@ impl CliSession {
                 enabled_tools,
                 initial_transcript,
                 recorder: None,
+                model_io_dump,
             },
         );
         Self {

@@ -164,6 +164,11 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         args.enabled_tools.clone()
     };
 
+    // HEBBIAN_DUMP_MODEL_IO=1 时把每次模型 request/response 落到
+    // <data_dir>/sessions/<session_id>.model_io.jsonl，方便桌面调试 prompt / token / tool schema。
+    let model_io_dump =
+        agent_core::model_io_dump::open_for_session_if_enabled(data_dir, &args.session_id).await;
+
     let mut core_session = CoreSession::new(
         harness,
         SessionConfig {
@@ -176,6 +181,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 &prior_session.messages,
             ),
             recorder: None,
+            model_io_dump,
         },
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
@@ -881,6 +887,7 @@ pub async fn build_preview_payload(
     session_id: &str,
     upto_message_id: Option<&str>,
 ) -> AppResult<serde_json::Value> {
+    use agent_core::system_prompt::{compose_system_prompt, EnvironmentSnapshot};
     use agent_core::tools::{
         BUILTIN_TOOL_NAMES, ask_only_definitions, hosted_tool_definitions, registry::ToolRegistry,
     };
@@ -933,15 +940,14 @@ pub async fn build_preview_payload(
         tool_defs.extend(hosted_tool_definitions(&session_enabled_tools));
     }
 
-    // system = 用户 prompt + workspace XML(同 build_system_prompt)
-    let mut combined_system = String::new();
-    if let Some(user_sys) = session.system_prompt.as_deref() {
-        if !user_sys.is_empty() {
-            combined_system.push_str(user_sys);
-            combined_system.push_str("\n\n");
-        }
-    }
-    combined_system.push_str(&workspace.to_system_xml());
+    // system = BASE prompt + 用户 persona（与 agent_loop::compose_system_prompt 一致）
+    let combined_system = compose_system_prompt(session.system_prompt.as_deref());
+
+    // 首条 user message 头部要追加 <environment> 块（与 Session::append_user 一致），
+    // preview 时按同一逻辑还原，确保「显示 JSON」与实际发给模型的 payload 一致。
+    let env_snapshot = EnvironmentSnapshot::from_workspace(&workspace);
+    let env_block = env_snapshot.render();
+    let mut first_user_pending = true;
 
     let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
         "role": "system",
@@ -950,10 +956,17 @@ pub async fn build_preview_payload(
     for m in &session.messages {
         match m.role {
             Role::Marker | Role::System => {}
-            Role::User => messages.push(serde_json::json!({
-                "role": "user",
-                "content": preview_user_content(m),
-            })),
+            Role::User => {
+                let mut value = preview_user_content(m);
+                if first_user_pending {
+                    prepend_environment_to_preview(&mut value, &env_block);
+                    first_user_pending = false;
+                }
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": value,
+                }))
+            }
             Role::Assistant => preview_push_assistant(&mut messages, m),
         }
         if upto_message_id.is_some_and(|id| m.id == id) {
@@ -987,6 +1000,37 @@ pub async fn build_preview_payload(
             "skill_dirs": skill_dirs,
         }
     }))
+}
+
+/// 把 `<environment>` 块前置到 preview 的 user content 上。
+/// content 是 string 时直接拼前缀；是 array（含 attachments）时拼到首个 text block 前，
+/// 没有 text block 就插一个新的 text block 在最前。
+fn prepend_environment_to_preview(value: &mut serde_json::Value, env_block: &str) {
+    if env_block.is_empty() {
+        return;
+    }
+    match value {
+        serde_json::Value::String(s) => {
+            *s = format!("{env_block}{s}");
+        }
+        serde_json::Value::Array(blocks) => {
+            if let Some(first_text) = blocks
+                .iter_mut()
+                .find(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
+            {
+                if let Some(text) = first_text.get_mut("text").and_then(|v| v.as_str()) {
+                    let merged = format!("{env_block}{text}");
+                    first_text["text"] = serde_json::Value::String(merged);
+                }
+            } else {
+                blocks.insert(
+                    0,
+                    serde_json::json!({"type": "text", "text": env_block}),
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 fn preview_user_content(m: &Message) -> serde_json::Value {

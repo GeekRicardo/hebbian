@@ -4,9 +4,11 @@ pub mod definition;
 pub mod dispatch;
 pub mod harness;
 pub mod hooks;
+pub mod model_io_dump;
 pub mod recorder;
 pub mod run_state;
 pub mod session;
+pub mod system_prompt;
 pub mod tools;
 pub mod turn_context;
 pub mod types;
@@ -15,8 +17,12 @@ pub mod workspace;
 pub use harness::{
     Harness, HarnessError, RunHandle, TurnObserver, TurnOutcome, TurnSummary, UsageTotals,
 };
+pub use model_io_dump::ModelIoDump;
 pub use recorder::Recorder;
 pub use run_state::RunState;
 pub use session::{ContextUsage, Session, SessionConfig};
+pub use system_prompt::{
+    compose_system_prompt, prepend_environment, EnvironmentSnapshot, BASE_SYSTEM_PROMPT,
+};
 pub use turn_context::TurnContext;
 pub use workspace::Workspace;

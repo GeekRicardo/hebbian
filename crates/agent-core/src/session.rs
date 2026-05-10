@@ -20,12 +20,14 @@ use crate::{
     },
     definition::AgentDefinition,
     harness::{Harness, RunHandle, RunParams},
+    model_io_dump::ModelIoDump,
     recorder::Recorder,
+    system_prompt::{prepend_environment, EnvironmentSnapshot},
     tools::hitl::HitlGate,
     workspace::Workspace,
 };
 use model_gateway::client::ModelClient;
-use model_gateway::types::{ModelError, ToolCall};
+use model_gateway::types::{ModelError, ToolCall, TranscriptEntry};
 
 /// 当前会话的上下文用量快照。surface 端用来渲染输入框旁的环形进度条。
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +58,9 @@ pub struct SessionConfig {
     pub initial_transcript: Transcript,
     /// 可选事件落盘。给定后每次 run 的事件流自动追加进 jsonl。
     pub recorder: Option<Recorder>,
+    /// 可选模型 IO dump：每次 model 请求完整 request / response 写入 jsonl。
+    /// 由环境变量 [`crate::model_io_dump::ENV_VAR`] 触发，由 surface 决定路径。
+    pub model_io_dump: Option<ModelIoDump>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -67,6 +72,7 @@ pub struct Session {
     definition: AgentDefinition,
     enabled_tools: Vec<String>,
     recorder: Option<Recorder>,
+    model_io_dump: Option<ModelIoDump>,
 }
 
 impl Session {
@@ -79,6 +85,7 @@ impl Session {
             definition: config.definition,
             enabled_tools: config.enabled_tools,
             recorder: config.recorder,
+            model_io_dump: config.model_io_dump,
         }
     }
 
@@ -88,12 +95,23 @@ impl Session {
 
     /// 追加一条 user 消息到 transcript。
     ///
-    /// 如果 workspace 有"运行时新增、还没通知模型"的允许目录（`runtime_pending`），
-    /// 这里会把它们 drain 出来，包成 `<workspace-update>` 段拼到 user content 头部，
-    /// 让模型知道访问范围扩大了——同时保持 system prompt 字节恒定，prompt cache 不破。
+    /// 头部按需注入两类块（不影响 system 段，prompt cache 不破）：
+    /// - **首条 user message**：`<environment>` 快照（cwd / allowed_dirs / platform / date）。
+    ///   transcript 里若已经有 user 消息（含恢复出来的历史）则跳过——只在真正全新的对话开头注入。
+    /// - **任何 user message**：若 workspace 有 runtime_pending 的允许目录，drain 后包成
+    ///   `<workspace-update>` 紧接 environment 之后注入。
     pub fn append_user(&mut self, text: String, attachments: Vec<MessageAttachment>) {
+        let needs_environment = !self
+            .transcript
+            .entries
+            .iter()
+            .any(|e| matches!(e, TranscriptEntry::User(_)));
         let pending = self.workspace.take_pending_announcement();
-        let final_text = prepend_workspace_update(text, &pending);
+        let mut final_text = prepend_workspace_update(text, &pending);
+        if needs_environment {
+            let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace);
+            final_text = prepend_environment(final_text, &snapshot);
+        }
         self.transcript.push_user(final_text, attachments);
     }
 
@@ -176,6 +194,7 @@ impl Session {
                 cancel,
                 parent: None,
                 recorder: self.recorder.clone(),
+                model_io_dump: self.model_io_dump.clone(),
             },
         )
     }

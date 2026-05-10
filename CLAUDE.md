@@ -22,8 +22,9 @@ hebbian/
 ├── crates/
 │   ├── protocol/            协议唯一锚点：Submission/Op/Event/EventPayload/PermissionKind/...
 │   ├── agent-core/          产品核心：Harness / Session / RunHandle / TurnObserver / agent_loop /
-│   │                        dispatch / recorder / workspace / context（含 microcompact + compact_with_llm）/
-│   │                        hooks / tools（含 ask + Bash/Read/Write/Grep/Skill + web_search/web_fetch）
+│   │                        dispatch / recorder / model_io_dump / system_prompt / workspace /
+│   │                        context（含 microcompact + compact_with_llm）/ hooks /
+│   │                        tools（含 ask + Bash/Read/Write/Grep/Skill + web_search/web_fetch）
 │   ├── model-gateway/       ModelClient trait + 4 provider（openai/anthropic/gemini/deepseek）+
 │   │                        InstrumentedClient（自动 span/metrics）+ context_window + OAuth
 │   ├── observability/       tracing init + OTLP exporter + GenAI 语义属性 + 业务 metrics 工厂
@@ -269,7 +270,7 @@ pub enum EventPayload {
 6. **per-run seq**：永远从 `RunState::next_seq()` 取，绝不重新引入全局 `static AtomicU64`
 7. **子 agent 上下文继承默认 `Isolated`**，显式 `InheritRecent` / `InheritSummary` 才能继承
 8. **Hook 只在能改 state 的点位触发**（4 个：`BeforeModelCall / OnPermissionCheck / OnToolResult / OnCompaction`）；纯观察走 Event 流
-9. **System prompt 要保 prompt-cache**：workspace 的 `<workspace>` XML 只反映 `initial_allowed_dirs`，运行时新增进 pending → 下条 user message 头部注入 `<workspace-update>`，**不**改 system 段
+9. **System prompt 要保 prompt-cache**：system 段 = [`BASE_SYSTEM_PROMPT`](crates/agent-core/src/system_prompt.rs) 常量 + 用户 persona，跨会话字节恒定；workspace / cwd / allowed_dirs 等环境信息**不进 system 段**——首条 user message 头部注入 `<environment>` 块，运行时新增允许目录通过下条 user message 的 `<workspace-update>` 块宣告。改 prompt 文案先动 `BASE_SYSTEM_PROMPT`，环境字段动 [`EnvironmentSnapshot`](crates/agent-core/src/system_prompt.rs)
 10. **ModelClient 装饰器顺序**：`provider impl → InstrumentedClient → ModelWithName/NamedModelClient`。surface 不要绕过 InstrumentedClient（否则丢 metrics / span）
 
 ---
@@ -303,6 +304,7 @@ pub enum EventPayload {
 - **HITL 协议入口**：审批 / 提问 / 路径越界都走同一个 [HitlGate](crates/agent-core/src/tools/hitl.rs)。审批用 `open_approval` + `resolve`，提问用 `open_question` + `answer`，surface 端两条 Tauri 命令分别叫 `approve_permission` / `answer_question`（路径走 `approve_path_access`，逻辑同 approve）。新增需要 HITL 的协议时按这两条路径中哪条更贴合选。
 - **TurnObserver 是 surface 的标准接入点**：实现三个回调（`on_event` / `on_permission_request` / `on_question`），在 [harness.rs](crates/agent-core/src/harness.rs) 找 `TurnObserver` trait。本地 surface 在 `on_*` 里返回 `Some(decision)` 让 driver 自动 resolve，远端 / 异步链路返回 `None` 自己处理。
 - **推理 / thinking 配置入口**：[`platform::reasoning`](crates/platform/src/reasoning.rs) 统一抽象 Anthropic / OpenAI 两家的 schema 差异；想加新模型先看 `anthropic_thinking_mode` / `openai_supports_xhigh` 等 helper 而不是直接改 protocol。
+- **调试模型 IO**：`HEBBIAN_DUMP_MODEL_IO=1 ./target/debug/hebbian-cli "..."` 把每次 model 请求的完整 `{request, response}` 落到 `<data_dir>/sessions/<session_id>.model_io.jsonl`，每行一对。具体实现在 [`ModelIoDump`](crates/agent-core/src/model_io_dump.rs)，attachments 只存 metadata 不写 base64。CLI 与桌面都已接入，无 session_id 的临时模式（`--no-record` / `--json`）不开启。
 - **跑 OTLP 调试**：`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 ./target/debug/hebbian-cli ...`，再开个 Jaeger / Tempo / Langfuse 看 span tree（run → turn → model.request / tool.call → permission.check）。
 
 ## graphify

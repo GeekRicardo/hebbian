@@ -14,7 +14,9 @@ use crate::{
     definition::CompactionPolicy,
     dispatch::ToolDispatcher,
     hooks::{HookManager, HookPoint},
+    model_io_dump::{self, DumpEntry, ModelIoDump},
     run_state::RunState,
+    system_prompt::compose_system_prompt,
     tools::{
         ask_only_definitions, hitl::HitlGate, hosted_tool_definitions, registry::ToolRegistry,
         BUILTIN_TOOL_NAMES,
@@ -44,21 +46,13 @@ pub struct LoopParams<'a> {
     pub state: Arc<RunState>,
     pub agent: AgentRef,
     pub parent: Option<RunId>,
+    /// 可选的模型 IO dump：每轮 `client.complete/stream` 前后写一条 jsonl。
+    pub model_io_dump: Option<ModelIoDump>,
 }
 
-/// 把 user system prompt + workspace XML 拼成最终 system 字段。
-/// 每轮重拼，所以运行时 `add_allowed_dir` 后下一轮立刻反映。
-fn build_system_prompt(user_system: Option<&str>, workspace: &Workspace) -> String {
-    let mut s = String::new();
-    if let Some(u) = user_system {
-        if !u.is_empty() {
-            s.push_str(u);
-            s.push_str("\n\n");
-        }
-    }
-    s.push_str(&workspace.to_system_xml());
-    s
-}
+/// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
+/// 内部已经不再混入 workspace XML——环境信息走第一条 user message 的 `<environment>` 块。
+pub use crate::system_prompt::compose_system_prompt as build_system_prompt;
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
@@ -92,6 +86,7 @@ pub async fn run_loop(
         state,
         agent,
         parent,
+        model_io_dump,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -205,8 +200,9 @@ pub async fn run_loop(
         }
         let has_tools = !tool_defs.is_empty();
 
-        // system prompt：用户提供的 + workspace XML，每轮重拼以反映运行时新增的 allowed_dirs
-        let combined_system = build_system_prompt(transcript.system.as_deref(), &workspace);
+        // system prompt = BASE 常量 + 用户 persona。环境信息（cwd / allowed_dirs / runtime
+        // 追加）走 user message 的 `<environment>` / `<workspace-update>` 块——保 prompt cache。
+        let combined_system = compose_system_prompt(transcript.system.as_deref());
 
         let req = ModelRequest {
             model: String::new(),
@@ -222,6 +218,10 @@ pub async fn run_loop(
             .trigger(&HookPoint::BeforeModelCall { turn: turn_index })
             .await;
         let call_start = Instant::now();
+
+        // 启用 dump 时先 clone 一份 ModelRequest（含完整 transcript），
+        // 调用结束后落盘。未启用时 zero-cost。
+        let dump_request = model_io_dump.as_ref().map(|_| req.clone());
 
         let stream_tool_call_offset = tool_call_dispatch_offset;
         let on_event_for_stream = on_event.clone();
@@ -262,6 +262,18 @@ pub async fn run_loop(
         };
 
         let call_duration_ms = call_start.elapsed().as_millis() as u64;
+
+        if let (Some(dump), Some(req)) = (model_io_dump.as_ref(), dump_request) {
+            dump.record(DumpEntry {
+                ts: model_io_dump::iso_now(),
+                run_id: state.run_id.to_string(),
+                turn: turn_index,
+                model: client.provider_id().to_string(),
+                request: model_io_dump::request_to_json(&req, client.provider_id()),
+                response: model_io_dump::response_to_json(&response_result),
+                duration_ms: call_duration_ms,
+            });
+        }
 
         let response = match response_result {
             Ok(response) => response,
@@ -508,6 +520,7 @@ mod tests {
                 state,
                 agent: AgentRef::new("test"),
                 parent: None,
+                model_io_dump: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
