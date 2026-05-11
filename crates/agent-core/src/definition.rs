@@ -46,8 +46,8 @@ impl Default for PermissionPolicy {
     fn default() -> Self {
         Self {
             auto_approve: vec![
-                "web_search".into(),
-                "web_fetch".into(),
+                "WebSearch".into(),
+                "Fetch".into(),
                 "Read".into(),
                 "Grep".into(),
                 "Skill".into(),

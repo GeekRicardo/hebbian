@@ -29,7 +29,7 @@ enum RecorderCmd {
 /// JSONL 事件持久化的句柄。Clone 是廉价的（只复制 `Sender`）。
 #[derive(Clone)]
 pub struct Recorder {
-    tx: mpsc::UnboundedSender<RecorderCmd>,
+    tx: mpsc::Sender<RecorderCmd>,
     path: PathBuf,
 }
 
@@ -46,7 +46,7 @@ impl Recorder {
             .open(&path)
             .await?;
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<RecorderCmd>();
+        let (tx, mut rx) = mpsc::channel::<RecorderCmd>(1024);
         let writer_path = path.clone();
         tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
@@ -77,8 +77,11 @@ impl Recorder {
 
     /// 异步追加一个事件。失败被记入 trace，不向调用方传播——run loop 不应该
     /// 因为磁盘 IO 失败而崩。
+    /// 通道满时丢弃并打 warn——落盘是 best-effort，不应阻塞 run loop。
     pub fn write(&self, event: &Event) {
-        let _ = self.tx.send(RecorderCmd::Write(event.clone()));
+        if let Err(e) = self.tx.try_send(RecorderCmd::Write(event.clone())) {
+            warn!(error = %e, "recorder queue full, dropping event");
+        }
     }
 
     /// 等待写队列排空到磁盘。run 结束时可选调用。
@@ -86,6 +89,7 @@ impl Recorder {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(RecorderCmd::Flush(tx))
+            .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "recorder closed"))?;
         rx.await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "recorder dropped"))?

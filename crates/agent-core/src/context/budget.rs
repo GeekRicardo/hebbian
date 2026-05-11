@@ -35,10 +35,10 @@ fn entry_tokens(entry: &TranscriptEntry) -> usize {
                 .attachments
                 .iter()
                 .map(|a| match a {
-                    platform::attachments::MessageAttachment::TextFile { content, .. } => {
+                    common::attachments::MessageAttachment::TextFile { content, .. } => {
                         estimate_tokens(content) + 16
                     }
-                    platform::attachments::MessageAttachment::Image { data, .. } => {
+                    common::attachments::MessageAttachment::Image { data, .. } => {
                         (data.len() / 1024) * 85 + 128
                     }
                 })

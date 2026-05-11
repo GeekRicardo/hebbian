@@ -8,12 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
-use protocol::RiskLevel;
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::fs;
 
-use super::{Tool, ToolClass};
+use super::Tool;
 use crate::workspace::Workspace;
 
 const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
@@ -93,19 +92,6 @@ impl Tool for WriteTool {
         ))
     }
 
-    fn affected_paths(&self, input: &Value) -> Vec<PathBuf> {
-        input["file_path"]
-            .as_str()
-            .map(PathBuf::from)
-            .into_iter()
-            .collect()
-    }
-
-    fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Mutating {
-            risk: RiskLevel::Medium,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -151,11 +137,4 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
 
-    #[tokio::test]
-    async fn affected_paths_extracts_file_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let tool = WriteTool::new(workspace_at(tmp.path()));
-        let paths = tool.affected_paths(&json!({"file_path": "/x/y.txt", "content": "z"}));
-        assert_eq!(paths, vec![PathBuf::from("/x/y.txt")]);
-    }
 }

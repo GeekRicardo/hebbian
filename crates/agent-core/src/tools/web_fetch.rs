@@ -5,9 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Tool, ToolClass};
+use super::Tool;
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use reqwest::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
     StatusCode, Url,
@@ -61,7 +61,7 @@ pub struct WebFetchTool;
 #[async_trait]
 impl Tool for WebFetchTool {
     fn name(&self) -> &str {
-        "web_fetch"
+        "Fetch"
     }
 
     fn description(&self) -> &str {
@@ -103,9 +103,6 @@ impl Tool for WebFetchTool {
         fetch_page(url, prompt).await
     }
 
-    fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Network
-    }
 }
 
 async fn fetch_page(url: &str, prompt: &str) -> AppResult<String> {

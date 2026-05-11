@@ -1,7 +1,9 @@
+pub mod external;
 pub mod types;
 
 use async_trait::async_trait;
-pub use types::{HookOutcome, HookPoint};
+pub use external::{load_hooks_config, ExternalHook, HookConfig, HookMatcher, HookRule};
+pub use types::{HookOutcome, HookPatch, HookPoint};
 
 /// Hook trait：生命周期扩展点
 ///

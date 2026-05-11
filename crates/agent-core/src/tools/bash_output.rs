@@ -1,12 +1,12 @@
 //! BashOutput 工具：按 task_id 增量取后台 shell 的输出。
 //!
-//! - 只读，不需要审批（[`ToolClass::ReadOnly`]）。
+//! - 只读，不需要审批（`EffectClass::ReadOnly`）。
 //! - 每次返回 *自上次以来* 未读的输出（按字节游标推进）。已结束的进程会附带
 //!   退出码 / 状态。
 //! - 可传 `wait_ms` 让工具阻塞最多 N 毫秒等新输出，避免空轮询。
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 
 use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};

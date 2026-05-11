@@ -1,6 +1,6 @@
 //! Bash 工具：在用户机器上跑 shell 命令。
 //!
-//! - 分类按命令本身决定（[`Self::classify`]）：
+//! - 分类逻辑挪到 [`crate::effects::analyze_effects`]（架构 §4.4.2 effects 解耦）：
 //!   - 解析 shell line，全部子命令命中 [`safe_commands`] 白名单且无危险结构 → `ReadOnly`，自动放行
 //!   - 否则 → `Destructive`，走 HITL 审批
 //! - cwd 必须在 workspace 范围内，越界直接拒绝
@@ -11,19 +11,17 @@
 //!
 //! [`safe_commands`]: super::safe_commands
 
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
-use protocol::RiskLevel;
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::background::{BackgroundShells, ReadOutput, ShellState, READ_CHUNK_BYTES};
-use super::{safe_commands, shell_parse, Tool, ToolClass};
+use super::Tool;
 use crate::workspace::Workspace;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -159,47 +157,6 @@ impl Tool for BashTool {
         ))
     }
 
-    fn affected_paths(&self, input: &Value) -> Vec<PathBuf> {
-        vec![self.workspace.resolve_cwd(input["cwd"].as_str())]
-    }
-
-    /// 用于命令级记忆的指纹：把第一段命令规范化成 `"root sub ..."` 形式（剥引号、
-    /// 单空格连接），让 `git status -uno` 和 `git status README` 共用 `"git status"`
-    /// 前缀。复合命令（含 `&&` `|` 等）取首段；解析失败 → 退回原始 command。
-    fn permission_fingerprint(&self, input: &Value) -> Option<String> {
-        let raw = input["command"].as_str()?.trim();
-        if raw.is_empty() {
-            return None;
-        }
-        match shell_parse::parse(raw) {
-            Ok(parsed) if !parsed.commands.is_empty() => {
-                Some(parsed.commands[0].argv.join(" "))
-            }
-            _ => Some(raw.to_string()),
-        }
-    }
-
-    /// 解析命令文本，全部子命令安全且无危险结构 → ReadOnly（直接放行），
-    /// 否则 Destructive（走审批）。解析失败一律按不安全处理。
-    fn classify(&self, input: &Value) -> ToolClass {
-        let destructive = ToolClass::Destructive {
-            risk: RiskLevel::High,
-        };
-        let Some(line) = input["command"].as_str() else {
-            return destructive;
-        };
-        let Ok(parsed) = shell_parse::parse(line) else {
-            return destructive;
-        };
-        if parsed.dangerous || parsed.commands.is_empty() {
-            return destructive;
-        }
-        if parsed.commands.iter().all(safe_commands::is_safe) {
-            ToolClass::ReadOnly
-        } else {
-            destructive
-        }
-    }
 }
 
 fn format_finished(snapshot: &ReadOutput, task_id: &str) -> String {
@@ -284,18 +241,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn affected_paths_returns_cwd() {
-        let tmp = tempfile::tempdir().unwrap();
-        let t = tool(tmp.path());
-        let paths = t.affected_paths(&json!({"command": "ls"}));
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], tmp.path());
-
-        let paths = t.affected_paths(&json!({"command": "ls", "cwd": "/etc"}));
-        assert_eq!(paths[0], std::path::Path::new("/etc"));
-    }
-
-    #[tokio::test]
     async fn timeout_transitions_to_background() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
@@ -369,63 +314,6 @@ mod tests {
         shells.kill(&id).await;
     }
 
-    fn class_of(line: &str) -> ToolClass {
-        let tmp = tempfile::tempdir().unwrap();
-        tool(tmp.path()).classify(&json!({"command": line}))
-    }
-
-    #[test]
-    fn classify_ls_is_readonly() {
-        assert!(matches!(class_of("ls -la"), ToolClass::ReadOnly));
-    }
-
-    #[test]
-    fn classify_git_status_is_readonly() {
-        assert!(matches!(class_of("git status -uno"), ToolClass::ReadOnly));
-    }
-
-    #[test]
-    fn classify_pipe_of_safe_commands_is_readonly() {
-        assert!(matches!(
-            class_of("git log --oneline | head -5"),
-            ToolClass::ReadOnly
-        ));
-    }
-
-    #[test]
-    fn classify_compound_with_unsafe_step_is_destructive() {
-        assert!(matches!(
-            class_of("cd foo && rm -rf bar"),
-            ToolClass::Destructive { .. }
-        ));
-    }
-
-    #[test]
-    fn classify_redirection_is_destructive() {
-        assert!(matches!(
-            class_of("echo hi > /tmp/x"),
-            ToolClass::Destructive { .. }
-        ));
-    }
-
-    #[test]
-    fn classify_command_substitution_is_destructive() {
-        assert!(matches!(
-            class_of("echo $(whoami)"),
-            ToolClass::Destructive { .. }
-        ));
-    }
-
-    #[test]
-    fn classify_unknown_root_is_destructive() {
-        assert!(matches!(
-            class_of("./scripts/foo.sh"),
-            ToolClass::Destructive { .. }
-        ));
-    }
-
-    #[test]
-    fn classify_malformed_input_is_destructive() {
-        assert!(matches!(class_of("echo 'hi"), ToolClass::Destructive { .. }));
-    }
+    // 经过简化后 classify / affected_paths / permission_fingerprint 都搬到了
+    // `crate::effects` 模块；具体单测见 `crate::effects::tests`。
 }

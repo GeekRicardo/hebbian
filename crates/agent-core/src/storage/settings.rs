@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::AppResult;
+use common::AppResult;
 
 const FILE_NAME: &str = "settings.json";
 

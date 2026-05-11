@@ -1,10 +1,10 @@
 //! KillShell 工具：主动终止后台 shell 进程。
 //!
-//! 标记为 [`ToolClass::ReadOnly`]——只对自己 spawn 的后台进程发 SIGKILL，
+//! 标记为 `EffectClass::ReadOnly`——只对自己 spawn 的后台进程发 SIGKILL，
 //! 不在 workspace 内做任何文件改动。审批价值不大，反而会打断 agent 自愈。
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 
 use super::background::BackgroundShells;

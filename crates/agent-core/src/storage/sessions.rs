@@ -27,8 +27,8 @@
 //! 找不到时回落到 `.json`。任何写操作（save / append / rename）会触发
 //! 「读老 json → 写新 jsonl → 老 json 改名 .json.bak」的一次性迁移。
 
-use crate::attachments::MessageAttachment;
-use crate::{AppError, AppResult};
+use common::attachments::MessageAttachment;
+use common::{AppError, AppResult};
 use chrono::{TimeZone, Utc};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
@@ -66,9 +66,9 @@ pub enum MessageMeta {
     /// `None` 表示之前没有 reasoning 配置（沿用模型默认）。
     ReasoningSwitch {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<crate::reasoning::ReasoningConfig>,
+        from: Option<common::reasoning::ReasoningConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        to: Option<crate::reasoning::ReasoningConfig>,
+        to: Option<common::reasoning::ReasoningConfig>,
     },
 }
 
@@ -165,7 +165,7 @@ pub struct Session {
     /// 在 desktop 选模型时，对支持 thinking 的模型（claude-opus-4 / gpt-5 等）
     /// 默认填 `Some({enabled: true, effort: Extra})`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
+    pub reasoning: Option<common::reasoning::ReasoningConfig>,
     /// 整个对话累计的 token 用量。每次 run 结束由 surface 累加进 session.json，
     /// 用来在输入框旁的 TokenStatsPanel 直接展示，无需重跑。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -292,7 +292,7 @@ pub struct RolloutMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_dirs: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
+    pub reasoning: Option<common::reasoning::ReasoningConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_stats: Option<TokenStats>,
 }
@@ -328,7 +328,7 @@ pub struct MetaUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_dirs: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<crate::reasoning::ReasoningConfig>,
+    pub reasoning: Option<common::reasoning::ReasoningConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_stats: Option<TokenStats>,
 }
@@ -341,8 +341,9 @@ fn now() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+/// 架构 §4.9.3：session_id 形如 `{yyyymmddHHmm}-{shortUuid}`。
 pub fn new_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+    super::sessions_dir::new_session_id()
 }
 
 fn date_string(ts_ms: i64) -> String {
@@ -357,7 +358,19 @@ fn date_string(ts_ms: i64) -> String {
 }
 
 fn root_dir(data_dir: &Path) -> PathBuf {
-    super::sessions_dir(data_dir)
+    let dir = data_dir.join("sessions");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// 新布局：`~/.hebbian/sessions/<id>/session.jsonl`。
+fn new_layout_path(data_dir: &Path, id: &str) -> PathBuf {
+    super::sessions_dir::session_jsonl_path(data_dir, id)
+}
+
+/// 判断该 id 在新布局是否存在。
+fn new_layout_exists(data_dir: &Path, id: &str) -> bool {
+    new_layout_path(data_dir, id).exists()
 }
 
 /// 当前进程的 source 标识。Surface 显式调 [`set_default_source`] 覆盖；
@@ -377,52 +390,75 @@ pub fn set_default_source(source: &str) {
     let _ = DEFAULT_SOURCE.set(source.to_string());
 }
 
-/// 罗列所有 session 文件（含旧的 `.json` 和新的 `.jsonl`）。
-/// 同 id 同时存在两种扩展名时，`.jsonl` 优先返回。
+/// 罗列所有 session 文件。架构 §4.9.1 目录化布局：
+/// `~/.hebbian/sessions/<id>/session.jsonl`。
+///
+/// 兼容老布局：`~/.hebbian/sessions/<YYYY-MM-DD>/<id>.jsonl` 与
+/// 平铺 `~/.hebbian/sessions/<id>.jsonl` / `<id>.json` 也会被收录。
+/// 同 id 时优先返回新布局（目录化）文件。
 fn all_session_files(data_dir: &Path) -> AppResult<Vec<PathBuf>> {
     let root = root_dir(data_dir);
     if !root.exists() {
         return Ok(Vec::new());
     }
-    let mut all: Vec<PathBuf> = Vec::new();
+    let mut new_layout: std::collections::HashMap<String, PathBuf> =
+        std::collections::HashMap::new();
+    let mut legacy: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
+            // 跳过「目录名带 `.`」的伪 session 目录——session_id 规范不含 `.`（§4.9.3）。
+            // 历史脏数据 `<sid>.model_io/session.jsonl`（被老版本误迁移）也在此过滤掉。
+            let dir_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if dir_name.contains('.') {
+                continue;
+            }
+            // 跳过 `rollout-*/` 目录：早期 migrate_legacy_to_new 把孤儿
+            // `rollout-<ts>-<uuid>.jsonl`（裸 Event 流、不带 schema header）当成
+            // 平铺 legacy session 误迁成 `rollout-*/session.jsonl`，内容仍是裸 Event
+            // 解析必失败。这类目录跟 `is_session_file` 的「rollout-」黑名单同义。
+            if dir_name.starts_with("rollout-") {
+                continue;
+            }
+            // 新布局：目录名 = session_id，里面有 session.jsonl
+            let jsonl = path.join("session.jsonl");
+            if jsonl.exists() {
+                new_layout.insert(dir_name.to_string(), jsonl);
+                continue;
+            }
+            // 老布局：按日期目录归档的 <id>.jsonl / <id>.json
             for sub in std::fs::read_dir(&path)? {
                 let sub = sub?;
                 if is_session_file(&sub.path()) {
-                    all.push(sub.path());
+                    legacy.push(sub.path());
                 }
             }
         } else if is_session_file(&path) {
-            all.push(path);
+            legacy.push(path);
         }
     }
-    // 同 id 去重：jsonl 优先
-    all.sort();
-    all.dedup_by(|a, b| {
+    let mut all: Vec<PathBuf> = new_layout.into_values().collect();
+    // 老布局：同 id 去重（jsonl 优先于 json）
+    legacy.sort();
+    legacy.dedup_by(|a, b| {
         let a_id = a.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let b_id = b.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if a_id != b_id {
             return false;
         }
-        // 同 id 时保留 jsonl，丢 json
         let a_jsonl = a.extension().and_then(|s| s.to_str()) == Some("jsonl");
         let b_jsonl = b.extension().and_then(|s| s.to_str()) == Some("jsonl");
         match (a_jsonl, b_jsonl) {
             (true, false) => {
-                // a 是 jsonl，b 是 json — dedup_by 会保留前一个，所以让 a 留下
                 *b = a.clone();
                 true
             }
-            (false, true) => {
-                // a 是 json，b 是 jsonl — 保留 b
-                true
-            }
+            (false, true) => true,
             _ => true,
         }
     });
+    all.extend(legacy);
     Ok(all)
 }
 
@@ -433,24 +469,50 @@ fn is_session_file(p: &Path) -> bool {
     ) {
         return false;
     }
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     // 排除老 CLI 用 `agent_core::Recorder` 直接写的孤儿事件流文件，
     // 文件名形如 `rollout-<ts>-<uuid>.jsonl`，里面是裸 `Event`、不带 schema header。
-    // 这些文件没人消费，扫到反而会让 read_jsonl 报 "missing field type"。
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    !stem.starts_with("rollout-")
+    if stem.starts_with("rollout-") {
+        return false;
+    }
+    // 排除带「副扩展名」的辅助文件（如 `<sid>.model_io.jsonl`）。session_id 规范
+    // 是 `{yyyymmddHHmm}-{shortUuid}` 或 uuid v4，本身不含 `.`，stem 出现 `.`
+    // 必然是某种 sidecar，扫进来会导致 legacy migrate 误识别 + read_jsonl 解析失败。
+    if stem.contains('.') {
+        return false;
+    }
+    true
 }
 
-/// 找一个 id 的 jsonl 文件路径（按日期目录 + 根目录平铺都扫一遍）。
+/// 找一个 id 的 jsonl 文件路径。优先新布局，否则回落到老布局并按需迁移。
+///
+/// 新布局：`sessions/<id>/session.jsonl`
+/// 老布局：`sessions/<YYYY-MM-DD>/<id>.jsonl` 或 平铺 `sessions/<id>.jsonl`
 fn find_jsonl(data_dir: &Path, id: &str) -> AppResult<Option<PathBuf>> {
-    find_session_file_with_ext(data_dir, id, "jsonl")
+    // 新布局优先
+    let new_p = new_layout_path(data_dir, id);
+    if new_p.exists() {
+        return Ok(Some(new_p));
+    }
+    // 老布局兼容
+    if let Some(old) = find_legacy_jsonl(data_dir, id)? {
+        // 一次性迁移到新布局
+        let migrated = migrate_legacy_to_new(data_dir, id, &old)?;
+        return Ok(Some(migrated));
+    }
+    Ok(None)
 }
 
-/// 找一个 id 的旧 json 文件路径。
+/// 老布局 `<YYYY-MM-DD>/<id>.jsonl` 或平铺 `<id>.jsonl`。
+fn find_legacy_jsonl(data_dir: &Path, id: &str) -> AppResult<Option<PathBuf>> {
+    find_legacy_session_file_with_ext(data_dir, id, "jsonl")
+}
+
 fn find_legacy_json(data_dir: &Path, id: &str) -> AppResult<Option<PathBuf>> {
-    find_session_file_with_ext(data_dir, id, "json")
+    find_legacy_session_file_with_ext(data_dir, id, "json")
 }
 
-fn find_session_file_with_ext(
+fn find_legacy_session_file_with_ext(
     data_dir: &Path,
     id: &str,
     ext: &str,
@@ -468,6 +530,10 @@ fn find_session_file_with_ext(
         if !entry.path().is_dir() {
             continue;
         }
+        // 跳过新布局的 <id>/ 目录（new layout 已被 find_jsonl 优先匹配）
+        if entry.path().join("session.jsonl").exists() {
+            continue;
+        }
         let candidate = entry.path().join(format!("{id}.{ext}"));
         if candidate.exists() {
             return Ok(Some(candidate));
@@ -476,10 +542,34 @@ fn find_session_file_with_ext(
     Ok(None)
 }
 
-fn jsonl_path_for(data_dir: &Path, id: &str, created_at: i64) -> AppResult<PathBuf> {
-    let dir = root_dir(data_dir).join(date_string(created_at));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir.join(format!("{id}.jsonl")))
+/// 把老布局 jsonl 一次性迁移到新布局 `sessions/<id>/session.jsonl`，
+/// 完成后老文件改名为 `.bak` 留底（不删，避免误操作）。
+fn migrate_legacy_to_new(data_dir: &Path, id: &str, legacy: &Path) -> AppResult<PathBuf> {
+    let target = new_layout_path(data_dir, id);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // 用 rename 优先（同卷直接 mv）；跨卷退回 copy
+    if std::fs::rename(legacy, &target).is_err() {
+        std::fs::copy(legacy, &target)?;
+        let bak = legacy.with_extension("jsonl.bak");
+        let _ = std::fs::rename(legacy, &bak);
+    }
+    tracing::info!(
+        from = %legacy.display(),
+        to = %target.display(),
+        "session 老布局已迁移到新目录"
+    );
+    Ok(target)
+}
+
+/// 新布局路径：始终 `sessions/<id>/session.jsonl`，不再按日期分目录。
+fn jsonl_path_for(data_dir: &Path, id: &str, _created_at: i64) -> AppResult<PathBuf> {
+    let target = new_layout_path(data_dir, id);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(target)
 }
 
 fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -> RolloutMeta {
@@ -575,6 +665,32 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
 /// 把 jsonl 文件折叠回一个完整 [`Session`]。
 fn read_jsonl(path: &Path) -> AppResult<Session> {
     let content = std::fs::read_to_string(path)?;
+
+    // 兼容历史脏数据：早期版本把老 `<id>.json`（pretty-printed JSON 整对象）
+    // 直接 rename 成 `<id>/session.jsonl`，没做格式转换，结果每次 list 扫描时
+    // `serde_json::from_str::<RolloutLine>` 在每一行上都报 "missing field type"
+    // 一堆 warn 刷屏。这里检测「内容首字符是 `{` 且紧跟换行」（pretty JSON 起手式）
+    // → 尝试当整文件 JSON 解析，成功后回写为合法 jsonl 自愈，避免下次再警。
+    let head = content.trim_start();
+    if head.starts_with("{\n") || head.starts_with("{\r\n") {
+        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+            let source = session.source.clone().unwrap_or_else(default_source);
+            if let Err(e) = write_jsonl_full(path, &session, source) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "检测到 pretty-JSON session，但重写为 jsonl 失败"
+                );
+            } else {
+                tracing::info!(
+                    path = %path.display(),
+                    "把老 .json 格式的 session 文件重写为合法 jsonl"
+                );
+            }
+            return Ok(session);
+        }
+    }
+
     let mut session = Session {
         id: String::new(),
         title: "新对话".to_string(),
@@ -752,15 +868,65 @@ pub fn load(data_dir: &Path, id: &str) -> AppResult<Session> {
         return read_jsonl(&p);
     }
     if let Some(p) = find_legacy_json(data_dir, id)? {
-        return super::read_json_required(&p);
+        return common::storage::read_json_required(&p);
     }
     Err(AppError::msg(format!("session {id} not found")))
+}
+
+/// 把 old `<date>/<id>.jsonl` 或平铺 `<id>.jsonl` 迁移到新布局 `<id>/session.jsonl`。
+/// 仅迁移老 jsonl；老 `.json` 在第一次写入时由 `ensure_jsonl` 兜底迁移到 jsonl。
+pub fn migrate_legacy_layout_if_needed(data_dir: &Path) -> AppResult<usize> {
+    let root = root_dir(data_dir);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut moved = 0usize;
+    let entries: Vec<_> = std::fs::read_dir(&root)?.flatten().collect();
+    for entry in entries {
+        let path = entry.path();
+        if !path.is_dir() {
+            // 平铺 <id>.jsonl。用 is_session_file 过滤，排除 rollout-*.jsonl 与
+            // 带副扩展名的 sidecar（如 `<sid>.model_io.jsonl`）——否则 file_stem
+            // 会取到 `<sid>.model_io` 当成 session_id 错迁移。
+            if is_session_file(&path) {
+                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                    if !new_layout_exists(data_dir, id) {
+                        let _ = migrate_legacy_to_new(data_dir, id, &path);
+                        moved += 1;
+                    }
+                }
+            }
+            continue;
+        }
+        // 跳过新布局目录
+        if path.join("session.jsonl").exists() {
+            continue;
+        }
+        // 老的 <date>/<id>.jsonl
+        let subs: Vec<_> = match std::fs::read_dir(&path) {
+            Ok(rd) => rd.flatten().collect(),
+            Err(_) => continue,
+        };
+        for sub in subs {
+            let sub_p = sub.path();
+            if !is_session_file(&sub_p) {
+                continue;
+            }
+            if let Some(id) = sub_p.file_stem().and_then(|s| s.to_str()) {
+                if !new_layout_exists(data_dir, id) {
+                    let _ = migrate_legacy_to_new(data_dir, id, &sub_p);
+                    moved += 1;
+                }
+            }
+        }
+    }
+    Ok(moved)
 }
 
 fn load_from_path(path: &Path) -> AppResult<Session> {
     match path.extension().and_then(|s| s.to_str()) {
         Some("jsonl") => read_jsonl(path),
-        Some("json") => super::read_json_required(path),
+        Some("json") => common::storage::read_json_required(path),
         _ => Err(AppError::msg(format!("无法识别的 session 文件: {}", path.display()))),
     }
 }
@@ -776,13 +942,18 @@ pub fn save(data_dir: &Path, mut s: Session) -> AppResult<Session> {
 }
 
 pub fn delete(data_dir: &Path, id: &str) -> AppResult<()> {
-    if let Some(path) = find_jsonl(data_dir, id)? {
+    // 新布局：整目录删除（含 partial / tool_results / compactions / plans / meta.json）
+    let new_dir = super::sessions_dir::session_dir(data_dir, id);
+    if new_dir.exists() {
+        std::fs::remove_dir_all(&new_dir)?;
+    }
+    if let Some(path) = find_legacy_jsonl(data_dir, id)? {
         std::fs::remove_file(path)?;
     }
     if let Some(path) = find_legacy_json(data_dir, id)? {
         std::fs::remove_file(path)?;
     }
-    // .json.bak 也一起清掉
+    // .json.bak 也一起清掉（老布局残留）
     let root = root_dir(data_dir);
     let bak_flat = root.join(format!("{id}.json.bak"));
     if bak_flat.exists() {
@@ -843,7 +1014,21 @@ pub fn create_with_source(
         updated_at: now_ts,
     };
     let target = jsonl_path_for(data_dir, &session.id, session.created_at)?;
-    write_jsonl_full(&target, &session, source)?;
+    write_jsonl_full(&target, &session, source.clone())?;
+    // 初始化目录骨架 + meta.json（架构 §4.9.1）。
+    super::sessions_dir::ensure_session_dirs(data_dir, &session.id)?;
+    let _ = super::sessions_dir::save_meta(
+        data_dir,
+        &super::sessions_dir::SessionDirMeta {
+            session_id: session.id.clone(),
+            created_at: session.created_at,
+            agent: source.clone(),
+            workdir: session.workdir.clone(),
+            provider: session.provider_id.clone(),
+            model: session.model.clone(),
+            last_interrupted_at: None,
+        },
+    );
     session.updated_at = now_ts;
     Ok(session)
 }
@@ -876,8 +1061,8 @@ pub fn insert_switch_marker(data_dir: &Path, id: &str, meta: MessageMeta) -> App
 pub fn insert_reasoning_switch_marker(
     data_dir: &Path,
     id: &str,
-    from: Option<crate::reasoning::ReasoningConfig>,
-    to: Option<crate::reasoning::ReasoningConfig>,
+    from: Option<common::reasoning::ReasoningConfig>,
+    to: Option<common::reasoning::ReasoningConfig>,
 ) -> AppResult<Session> {
     insert_switch_marker(data_dir, id, MessageMeta::ReasoningSwitch { from, to })
 }
@@ -1315,6 +1500,64 @@ mod tests {
         assert_eq!(forked.messages.len(), 2);
         assert_eq!(forked.messages.last().unwrap().id, m2.id);
         assert!(forked.title.contains("分支"));
+    }
+
+    #[test]
+    fn list_self_heals_pretty_json_session_files() {
+        // 早期 desktop 把老 `<id>.json`（pretty-printed JSON）裸 rename 成
+        // `<id>/session.jsonl`。本应是 jsonl 但实际是格式化 JSON：list 时每行
+        // 都 "missing field type" 刷 warn。检测 + 自愈：用 JSON 解析 + 重写为
+        // 合法 jsonl，下次 list 就静默。
+        let dir = temp_data_dir("pretty-json-heal");
+        let sid = "aee7f54d-b873-4d23-b794-6288e0a83d6f";
+        let session_dir = root_dir(&dir).join(sid);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("session.jsonl");
+        // 整文件是 pretty-printed Session JSON（模仿磁盘脏数据）
+        let pretty = serde_json::to_string_pretty(&serde_json::json!({
+            "id": sid,
+            "title": "老格式 session",
+            "provider_id": "anthropic",
+            "model": "claude-opus-4-7",
+            "stream": true,
+            "messages": [],
+            "created_at": 1777272707015_i64,
+            "updated_at": 1777274494974_i64,
+        })).unwrap();
+        std::fs::write(&path, pretty).unwrap();
+
+        // 第一次 list：检测到 pretty-JSON 并自愈写回 jsonl
+        let metas = list(&dir).unwrap();
+        assert!(metas.iter().any(|m| m.id == sid), "list 应能返回该 session");
+
+        // 自愈后磁盘上的第一行必须是合法 Meta jsonl
+        let healed = std::fs::read_to_string(&path).unwrap();
+        let first = healed.lines().next().expect("至少一行");
+        let parsed: RolloutLine = serde_json::from_str(first).expect("第一行应是合法 jsonl");
+        assert!(matches!(parsed, RolloutLine::Meta(_)));
+    }
+
+    #[test]
+    fn list_and_migrate_ignore_sidecar_jsonl_with_dot_in_stem() {
+        // 形如 `<sid>.model_io.jsonl` 的 dump sidecar（HEBBIAN_DUMP_MODEL_IO 触发，
+        // 旧版本一度把它平铺写在 sessions/ 根目录）：list 不能把它当 session；
+        // 老布局迁移也不能把 `<sid>.model_io` 错当 session_id 迁成新目录。
+        let dir = temp_data_dir("model-io-sidecar");
+        let real = save_session(&dir, "real", "hi");
+        let sidecar = root_dir(&dir).join(format!("{}.model_io.jsonl", real.id));
+        std::fs::write(&sidecar, r#"{"ts":"2026","run_id":"r","turn":1}"#).unwrap();
+        // 同名「脏目录」：旧 bug 留下的副产物 `<sid>.model_io/session.jsonl`
+        let dirty = root_dir(&dir).join(format!("{}.model_io", real.id));
+        std::fs::create_dir_all(&dirty).unwrap();
+        std::fs::write(dirty.join("session.jsonl"), "{}\n").unwrap();
+
+        let metas = list(&dir).unwrap();
+        let ids: Vec<&str> = metas.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec![real.id.as_str()]);
+
+        let moved = migrate_legacy_layout_if_needed(&dir).unwrap();
+        assert_eq!(moved, 0, "sidecar 不能被 legacy migrate 迁走");
+        assert!(sidecar.exists(), "sidecar 文件保持原位");
     }
 
     #[test]

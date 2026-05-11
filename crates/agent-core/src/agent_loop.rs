@@ -27,7 +27,7 @@ use model_gateway::{
     client::ModelClient,
     types::{AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
-use platform::{
+use common::{
     runtime::{self as cancellation, PendingInputs},
     CancelFlag,
 };
@@ -54,6 +54,18 @@ pub struct LoopParams<'a> {
     /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时推一条进来，
     /// 每次 model.request 之前 drain 出来作为新的 user message 加入 transcript。
     pub pending_inputs: Option<PendingInputs>,
+    /// 运行模式（架构 §4.4.3）。默认 `AskBeforeEdits`。
+    pub run_mode: crate::run_mode::RunMode,
+    /// 当前模型 id（AutoMode judge 用作模型限定）。
+    pub model_id: Option<String>,
+    /// AutoMode judge 用的 client。通常 = 主 client，便于复用 OAuth/重试链。
+    /// `None` 时 AutoMode 直接降级为 Ask。
+    pub judge_client: Option<Arc<dyn ModelClient>>,
+    /// 数据目录路径，用于把 microcompact 压缩的原文落 txt（架构 §4.7 / Step 9）。
+    pub data_dir: Option<std::path::PathBuf>,
+    /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。与 `data_dir` 拼成
+    /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`。
+    pub session_id: Option<String>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -94,6 +106,11 @@ pub async fn run_loop(
         parent,
         model_io_dump,
         pending_inputs,
+        run_mode,
+        model_id,
+        judge_client,
+        data_dir,
+        session_id,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -108,6 +125,9 @@ pub async fn run_loop(
     let run_start = Instant::now();
     let mut iteration: u32 = 0;
     let mut tool_call_dispatch_offset = 0usize;
+    // 架构 §4.2 / §13：Step 粒度——ModelStep + ToolStep 分别计数。
+    let mut model_step_index: u32 = 0;
+    let mut tool_step_index: u32 = 0;
     let mut output_attachments = Vec::new();
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
@@ -118,6 +138,19 @@ pub async fn run_loop(
         if cancellation::is_cancelled(&cancel) {
             debug!("run cancelled");
             hitl.cancel_all_pending();
+            // Stop hook（架构 §4.8.1）：fire-and-forget，把用户取消事件转给外部 hook。
+            if !hooks.is_empty() {
+                let sid = session_id.clone().unwrap_or_default();
+                let hooks_for_stop = hooks.clone();
+                tokio::spawn(async move {
+                    let _ = hooks_for_stop
+                        .trigger(&HookPoint::Stop {
+                            session_id: sid,
+                            reason: "user_cancelled".to_string(),
+                        })
+                        .await;
+                });
+            }
             break Err(ModelError::Cancelled);
         }
 
@@ -131,9 +164,23 @@ pub async fn run_loop(
             }
         }
 
-        // Microcompact：每轮模型请求前先把超阈值的老 tool_result 影子化为占位符。
+        // Microcompact：每轮模型请求前先把超阈值的老 tool_result 压缩为占位符。
         // 不消耗模型调用，只改 transcript entries，幂等。
         let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
+        // 把被压缩的原文落 txt（架构 §4.7 / Step 9）：data_dir + session_id 都给定时
+        // 才落，否则只是 in-memory 占位符。占位符里写了 call_id，LLM 可用 Read
+        // `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt` 按需检索原始内容。
+        if !mc_report.shadowed_artifacts.is_empty() {
+            if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+                for (call_id, content) in &mc_report.shadowed_artifacts {
+                    if let Err(e) = crate::storage::tool_results::save_tool_result(
+                        dd, sid, call_id, content,
+                    ) {
+                        tracing::warn!(error = %e, call_id, "compaction artifact save failed");
+                    }
+                }
+            }
+        }
         if mc_report.shadowed_count > 0 {
             tracing::info_span!(
                 "microcompact",
@@ -215,6 +262,17 @@ pub async fn run_loop(
         if !enabled_tools.is_empty() {
             tool_defs.extend(hosted_tool_definitions(enabled_tools));
         }
+        // PlanMode 工具过滤（架构 §4.4.3 / §4.4.5）：删除会改外界的工具，强制 agent 走
+        // 只读探索路径；同时注入 ExitPlanMode 工具让 agent 主动结束规划。
+        if run_mode == crate::run_mode::RunMode::PlanMode {
+            let mutating = ["Bash", "PowerShell", "Edit", "Write"];
+            tool_defs.retain(|t| !mutating.contains(&t.name.as_str()));
+            let extra = registry.definitions(&["ExitPlanMode".to_string()]);
+            tool_defs.extend(extra);
+        } else {
+            // 其他模式不暴露 ExitPlanMode，避免误调用
+            tool_defs.retain(|t| t.name != "ExitPlanMode");
+        }
         let has_tools = !tool_defs.is_empty();
 
         // system prompt = BASE 常量 + 用户 persona。环境信息（cwd / allowed_dirs / runtime
@@ -246,6 +304,11 @@ pub async fn run_loop(
         // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
         // anthropic / gemini 默认不支持流式工具调用，含工具时只能用 complete 路径。
         let used_stream_path = stream && (!has_tools || client.supports_streaming_tools());
+        model_step_index += 1;
+        emit(EventPayload::StepStarted {
+            step_kind: protocol::StepKind::Model,
+            step_index: model_step_index,
+        });
         let response_result = if used_stream_path {
             client
                 .stream(
@@ -279,6 +342,10 @@ pub async fn run_loop(
         };
 
         let call_duration_ms = call_start.elapsed().as_millis() as u64;
+        emit(EventPayload::StepFinished {
+            step_kind: protocol::StepKind::Model,
+            step_index: model_step_index,
+        });
 
         if let (Some(dump), Some(req)) = (model_io_dump.as_ref(), dump_request) {
             dump.record(DumpEntry {
@@ -404,8 +471,18 @@ pub async fn run_loop(
                     state: state.clone(),
                     sink: on_event.clone(),
                     cancel: cancel.clone(),
+                    run_mode,
+                    model_id: model_id.clone(),
+                    judge_client: judge_client.clone(),
+                    hooks: hooks.clone(),
+                    session_id_for_hooks: session_id.clone(),
                 };
 
+                tool_step_index += 1;
+                emit(EventPayload::StepStarted {
+                    step_kind: protocol::StepKind::Tool,
+                    step_index: tool_step_index,
+                });
                 let results = match dispatcher
                     .run_calls(&calls, tool_call_dispatch_offset)
                     .instrument(turn_span.clone())
@@ -430,6 +507,10 @@ pub async fn run_loop(
 
                 transcript.push_tool_results(results);
                 tool_call_dispatch_offset += calls.len();
+                emit(EventPayload::StepFinished {
+                    step_kind: protocol::StepKind::Tool,
+                    step_index: tool_step_index,
+                });
 
                 turn_span.record(attr::STOP_REASON, "end_turn");
                 metrics::record_turn_duration(
@@ -539,6 +620,11 @@ mod tests {
                 parent: None,
                 model_io_dump: None,
                 pending_inputs: None,
+                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                model_id: None,
+                judge_client: None,
+                data_dir: None,
+                session_id: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);

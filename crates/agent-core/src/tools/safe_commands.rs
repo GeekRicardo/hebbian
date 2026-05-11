@@ -1,5 +1,5 @@
-//! 内置只读命令白名单。出现在这里的命令会被 [`BashTool::classify`] 判定为
-//! [`ToolClass::ReadOnly`]，**直接放行不审批**。
+//! 内置只读命令白名单。出现在这里的命令会被 [`crate::effects::analyze_effects`]
+//! 判定为 `EffectClass::ReadOnly`，**直接放行不审批**。
 //!
 //! 收录原则（保守）：
 //! - 命令本身**只读**：不会改文件系统、不发出网络请求、不修改进程状态
@@ -11,9 +11,6 @@
 //!
 //! 红线：**宁可漏报（多审批）也不要误放（少审批）**。新增条目前先想清楚是否有任何 flag
 //! 组合能让它变写操作或网络操作。
-//!
-//! [`BashTool::classify`]: super::bash::BashTool::classify
-//! [`ToolClass::ReadOnly`]: super::ToolClass::ReadOnly
 
 use super::shell_parse::ParsedCommand;
 

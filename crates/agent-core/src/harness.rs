@@ -21,12 +21,20 @@ use crate::{
     workspace::Workspace,
 };
 use model_gateway::client::ModelClient;
-use platform::{runtime::PendingInputs, CancelFlag};
+use common::{runtime::PendingInputs, CancelFlag};
 
-/// 注册表里登记一次 run 的运行时控制点（供跨进程 `Op::Approve` / `Op::Interrupt` 反查）。
+/// 注册表里登记一次 run 的运行时控制点（供跨进程 `Op::Approve` / `Op::Interrupt` /
+/// `Op::SwitchRunMode` 反查）。
 struct RunRegistration {
     hitl: Arc<HitlGate>,
     cancel: CancelFlag,
+    /// run 的事件 sink（克隆 from spawn_run），actor 处理 `Op::SwitchRunMode` 时
+    /// 用来 emit `RunModeChanged`。
+    sink: EventSink,
+    state: Arc<RunState>,
+    /// 当前 run mode 的共享视图。`Op::SwitchRunMode` 写入这里供 dispatcher
+    /// 下次循环读取（本期 actor 仅 emit 事件，不真切运行时 mode——架构 §13 留尾巴）。
+    run_mode: Arc<Mutex<crate::run_mode::RunMode>>,
 }
 
 /// 启动一次 run 所需的全部上下文。
@@ -50,6 +58,15 @@ pub struct RunParams {
     /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时把 user message 推进来，
     /// agent_loop 每次 model.request 之前 drain 出来加入 transcript。`None` 表示禁用。
     pub pending_inputs: Option<PendingInputs>,
+    /// 运行模式（架构 §4.4.3）。默认 [`RunMode::AskBeforeEdits`]。
+    pub run_mode: crate::run_mode::RunMode,
+    /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用作模型限定。
+    pub model_id: Option<String>,
+    /// 数据目录路径。microcompact 把被压缩的 tool result 落到
+    /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`。
+    pub data_dir: Option<std::path::PathBuf>,
+    /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。配合 `data_dir` 用于工件落盘路径。
+    pub session_id: Option<String>,
 }
 
 /// Core 对外门面。
@@ -63,12 +80,18 @@ pub struct Harness {
     registry: Arc<ToolRegistry>,
     hooks: Arc<HookManager>,
     runs: Arc<Mutex<HashMap<RunId, Arc<RunRegistration>>>>,
-    submit_tx: mpsc::UnboundedSender<Submission>,
+    submit_tx: mpsc::Sender<Submission>,
 }
 
 impl Harness {
+    /// 暴露 HookManager 引用给 Session 等下游，让它们在自己的生命周期点 trigger
+    /// SessionStart / UserPromptSubmit / SessionEnd 等外部 hook 点位。
+    pub fn hooks(&self) -> Arc<HookManager> {
+        self.hooks.clone()
+    }
+
     pub fn new(tools: Vec<Box<dyn Tool>>, hooks: HookManager) -> Self {
-        let (submit_tx, submit_rx) = mpsc::unbounded_channel::<Submission>();
+        let (submit_tx, submit_rx) = mpsc::channel::<Submission>(1024);
 
         let harness = Self {
             registry: Arc::new(ToolRegistry::new(tools)),
@@ -89,25 +112,45 @@ impl Harness {
     pub fn spawn_run(&self, client: Arc<dyn ModelClient>, params: RunParams) -> RunHandle {
         let run_id = RunId::new();
         let state = Arc::new(RunState::new(run_id.clone()));
-
-        // 注册到全局 runs 表，让 actor 能反查（处理 Op::Approve / Op::Interrupt）。
-        self.runs.lock().unwrap().insert(
-            run_id.clone(),
-            Arc::new(RunRegistration {
-                hitl: params.hitl.clone(),
-                cancel: params.cancel.clone(),
-            }),
-        );
+        let run_mode_shared = Arc::new(Mutex::new(params.run_mode));
 
         // 双路 sink：本 run 独享 mpsc + 可选 jsonl 持久化。
-        let (run_tx, run_rx) = mpsc::unbounded_channel::<Event>();
+        //
+        // 通道改为 bounded(1024)。sink 是同步闭包（type EventSink），不能 await，
+        // 因此按事件类型分流：
+        // - 关键事件（生命周期 / HITL）通过 `blocking_send` 等价路径：spawn 一个
+        //   极短的 task 用 `.send().await`，保证送达；
+        // - 非关键事件（流式增量 / 工具增量 / Reasoning）用 `try_send`，满时打 warn 丢弃。
+        let (run_tx, run_rx) = mpsc::channel::<Event>(1024);
         let recorder = params.recorder.clone();
         let sink: EventSink = Arc::new(move |event: Event| {
             if let Some(rec) = &recorder {
                 rec.write(&event);
             }
-            let _ = run_tx.send(event);
+            if is_critical_event(&event.payload) {
+                // 关键事件必须送达——spawn 一个 task 等通道空位
+                let tx = run_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(event).await {
+                        tracing::warn!(error = %e, "run event channel closed while sending critical event");
+                    }
+                });
+            } else if let Err(e) = run_tx.try_send(event) {
+                tracing::warn!(error = %e, "run event channel full, dropping non-critical event");
+            }
         });
+
+        // 注册到全局 runs 表，让 actor 能反查（处理 Op::Approve / Op::Interrupt / Op::SwitchRunMode）。
+        self.runs.lock().unwrap().insert(
+            run_id.clone(),
+            Arc::new(RunRegistration {
+                hitl: params.hitl.clone(),
+                cancel: params.cancel.clone(),
+                sink: sink.clone(),
+                state: state.clone(),
+                run_mode: run_mode_shared.clone(),
+            }),
+        );
 
         let registry = self.registry.clone();
         let hooks = self.hooks.clone();
@@ -126,10 +169,15 @@ impl Harness {
             recorder: _,
             model_io_dump,
             pending_inputs,
+            run_mode,
+            model_id,
+            data_dir,
+            session_id: loop_session_id,
         } = params;
 
         let hitl_for_handle = hitl.clone();
         let cancel_for_handle = cancel.clone();
+        let judge_client = client.clone();
 
         tokio::spawn(async move {
             let params = LoopParams {
@@ -148,6 +196,11 @@ impl Harness {
                 parent,
                 model_io_dump,
                 pending_inputs,
+                run_mode,
+                model_id,
+                judge_client: Some(judge_client),
+                data_dir,
+                session_id: loop_session_id,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");
@@ -165,10 +218,13 @@ impl Harness {
 
     /// 投递一个协议指令。当前 actor 处理 `Approve` / `AnswerQuestion` / `Interrupt`。
     /// `StartRun` 等需要 surface 自行解析后调 `spawn_run`。
+    ///
+    /// 满载时返回 `Closed`——submit 通道承载控制信号（审批/取消/回答），
+    /// 满载意味着 actor 严重落后，调用方应自行回退或重试。
     pub fn submit(&self, submission: Submission) -> Result<SubmissionId, HarnessError> {
         let id = submission.id.clone();
         self.submit_tx
-            .send(submission)
+            .try_send(submission)
             .map_err(|_| HarnessError::Closed)?;
         Ok(id)
     }
@@ -180,7 +236,7 @@ impl Harness {
 /// `RunFailed` / `RunCancelled`。
 pub struct RunHandle {
     run_id: RunId,
-    events: mpsc::UnboundedReceiver<Event>,
+    events: mpsc::Receiver<Event>,
     hitl: Arc<HitlGate>,
     cancel: CancelFlag,
 }
@@ -338,7 +394,7 @@ impl TurnSummary {
 }
 
 async fn run_actor_loop(
-    mut submit_rx: mpsc::UnboundedReceiver<Submission>,
+    mut submit_rx: mpsc::Receiver<Submission>,
     runs: Arc<Mutex<HashMap<RunId, Arc<RunRegistration>>>>,
 ) {
     while let Some(submission) = submit_rx.recv().await {
@@ -367,6 +423,30 @@ async fn run_actor_loop(
                     entry.hitl.cancel_all_pending();
                 }
             }
+            Op::SwitchRunMode { run_id, new_mode } => {
+                let entry = runs.lock().unwrap().get(&run_id).cloned();
+                let Some(entry) = entry else {
+                    tracing::debug!(%run_id, "actor: SwitchRunMode 未找到 run");
+                    continue;
+                };
+                let Some(next) = crate::run_mode::RunMode::parse(&new_mode) else {
+                    tracing::warn!(%new_mode, "actor: SwitchRunMode 无法解析 RunMode 字符串");
+                    continue;
+                };
+                // 本期：actor 仅更新共享 mode + emit 事件，不强行替换 dispatcher
+                // 已捕获的 run_mode 值（架构 §13 留尾巴：运行时真切要把 ToolDispatcher.run_mode
+                // 改为 Arc<Mutex<RunMode>> 才能下一轮 dispatch 立刻拿到新值）。
+                let prev = {
+                    let mut guard = entry.run_mode.lock().unwrap();
+                    let prev = *guard;
+                    *guard = next;
+                    prev
+                };
+                (entry.sink)(entry.state.event(protocol::EventPayload::RunModeChanged {
+                    from: prev.as_str().to_string(),
+                    to: next.as_str().to_string(),
+                }));
+            }
             other => {
                 tracing::debug!(?other, "actor: op 由 surface 自行处理");
             }
@@ -380,4 +460,26 @@ pub enum HarnessError {
     RunNotFound,
     #[error("Harness 已关闭")]
     Closed,
+}
+
+/// 区分事件是否必须送达。生命周期 / HITL / Turn 边界 / 上下文压缩通知是关键事件，
+/// surface 漏掉会卡死或状态不一致；流式增量类的事件丢弃后影响仅限于渲染。
+fn is_critical_event(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::RunStarted { .. }
+            | EventPayload::RunFinished { .. }
+            | EventPayload::RunFailed { .. }
+            | EventPayload::RunCancelled
+            | EventPayload::TurnStarted { .. }
+            | EventPayload::TurnFinished { .. }
+            | EventPayload::PermissionRequested { .. }
+            | EventPayload::PermissionResolved { .. }
+            | EventPayload::UserQuestionRequested { .. }
+            | EventPayload::UserQuestionAnswered { .. }
+            | EventPayload::ToolCallStarted { .. }
+            | EventPayload::ToolCallFinished { .. }
+            | EventPayload::ContextCompacted { .. }
+            | EventPayload::TextDone { .. }
+    )
 }

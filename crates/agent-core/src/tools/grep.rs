@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::time;
@@ -175,13 +175,6 @@ impl Tool for GrepTool {
         Ok(truncate_bytes(&result, MAX_OUTPUT_BYTES))
     }
 
-    fn affected_paths(&self, input: &Value) -> Vec<PathBuf> {
-        let path = match input["path"].as_str().filter(|s| !s.is_empty()) {
-            Some(p) => PathBuf::from(p),
-            None => self.workspace.workdir().to_path_buf(),
-        };
-        vec![path]
-    }
 }
 
 fn truncate_bytes(s: &str, limit: usize) -> String {
@@ -233,20 +226,6 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("2:needle here"));
-    }
-
-    #[tokio::test]
-    async fn affected_paths_uses_workdir_or_input() {
-        let tmp = tempfile::tempdir().unwrap();
-        let tool = GrepTool::new(workspace_at(tmp.path()));
-        assert_eq!(
-            tool.affected_paths(&json!({"pattern": "x"})),
-            vec![tmp.path().to_path_buf()]
-        );
-        assert_eq!(
-            tool.affected_paths(&json!({"pattern": "x", "path": "/etc"})),
-            vec![PathBuf::from("/etc")]
-        );
     }
 
     #[tokio::test]

@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use model_gateway::types::{AssistantEntry, ToolCall, ToolResult, TranscriptEntry, UserEntry};
-use platform::attachments::MessageAttachment;
-use platform::storage::sessions::{Message, MessageMeta, MessagePart, Role};
+use common::attachments::MessageAttachment;
+use crate::storage::sessions::{Message, MessageMeta, MessagePart, Role};
 
 #[derive(Debug, Clone)]
 pub struct PendingToolCall {

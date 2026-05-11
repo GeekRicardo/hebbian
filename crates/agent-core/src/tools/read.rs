@@ -7,9 +7,10 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+// PathBuf 仍由 ReadTool::execute 内部使用，保留导入。
 
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::fs;
 
@@ -121,13 +122,6 @@ impl Tool for ReadTool {
         Ok(out)
     }
 
-    fn affected_paths(&self, input: &Value) -> Vec<PathBuf> {
-        input["file_path"]
-            .as_str()
-            .map(PathBuf::from)
-            .into_iter()
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -178,11 +172,4 @@ mod tests {
         assert!(!out.contains("line7"));
     }
 
-    #[tokio::test]
-    async fn affected_paths_extracts_file_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let tool = ReadTool::new(workspace_at(tmp.path()));
-        let paths = tool.affected_paths(&json!({"file_path": "/etc/hosts"}));
-        assert_eq!(paths, vec![PathBuf::from("/etc/hosts")]);
-    }
 }

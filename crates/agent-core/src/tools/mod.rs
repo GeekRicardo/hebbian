@@ -1,6 +1,7 @@
 pub mod background;
 pub mod bash;
 pub mod bash_output;
+pub mod exit_plan_mode;
 pub mod grep;
 pub mod hitl;
 pub mod kill_shell;
@@ -18,70 +19,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
-use protocol::RiskLevel;
 use serde_json::Value;
 
-use platform::AppResult;
+use common::AppResult;
 
 use crate::workspace::Workspace;
 
 /// 内置 ask 工具的名称。
-pub const ASK_TOOL_NAME: &str = "ask";
+pub const ASK_TOOL_NAME: &str = "Ask";
 
-/// 工具自报的语义分类。Dispatcher 据此决定并发策略与 HITL 路径。
-#[derive(Debug, Clone)]
-pub enum ToolClass {
-    /// 只读：可与同 turn 内其他 ReadOnly 工具并发执行，免审批。
-    ReadOnly,
-    /// 网络访问：远端 channel 强制 ask，本地按 policy 决定。
-    Network,
-    /// 在 workspace 内修改文件：串行执行，按 policy 询问。
-    Mutating { risk: RiskLevel },
-    /// 破坏性操作（执行命令、删除等）：串行执行，默认询问。
-    Destructive { risk: RiskLevel },
-    /// 走 HitlGate.ask 路径，向用户求助。
-    NeedsHumanInput { kind: HumanInputKind },
-}
-
-#[derive(Debug, Clone)]
-pub enum HumanInputKind {
-    /// 选项 + 自由输入（ask 工具）
-    Question,
-}
-
-impl ToolClass {
-    /// 是否允许与同 turn 内其他工具并发执行。
-    pub fn is_concurrent_safe(&self) -> bool {
-        matches!(self, ToolClass::ReadOnly)
-    }
-}
-
+/// 极简 Tool 接口（架构 §4.4.1）：只描述「我是什么 + 我怎么干」。
+///
+/// 权限分类、路径解析、命令指纹等上下文相关信息由 dispatcher 旁的
+/// [`crate::effects::analyze_effects`] 集中处理；Tool trait 不再持有这些
+/// 默认实现。
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
     async fn execute(&self, input: Value) -> AppResult<String>;
-
-    /// 工具的语义分类。默认 ReadOnly；有副作用的工具必须覆盖。
-    fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::ReadOnly
-    }
-
-    /// 该工具调用涉及的文件系统路径（用于 workspace 越界审批）。
-    /// 默认空 = 与文件系统无关的工具（如 web_search）。
-    fn affected_paths(&self, _input: &Value) -> Vec<PathBuf> {
-        Vec::new()
-    }
-
-    /// 用于「命令级记忆」的指纹。返回 `Some(s)` 时 HitlGate 会用 `s` 做前缀匹配，
-    /// 让用户可以记住 `git status` 这类粒度而非仅记住 "Bash" 工具名。
-    ///
-    /// 实现要点：返回应已剥离引号、规范化空白；token 间用单空格分隔即可（HitlGate
-    /// 按空白 token 边界匹配）。返回 `None` 表示不支持命令级记忆——记忆仍按工具名落库。
-    fn permission_fingerprint(&self, _input: &Value) -> Option<String> {
-        None
-    }
 }
 
 /// 构造内置 + 用户可选工具：
@@ -103,6 +60,7 @@ pub fn default_tools(workspace: Arc<Workspace>, skill_dirs: &[PathBuf]) -> Vec<B
         Box::new(skill::SkillTool::new(skills)),
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
+        Box::new(exit_plan_mode::ExitPlanModeTool),
     ]
 }
 
@@ -208,12 +166,12 @@ pub struct ToolInfo {
 pub fn tool_manifest() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
-            name: "web_search".into(),
+            name: "WebSearch".into(),
             description: "DuckDuckGo 网络搜索".into(),
             icon: "search".into(),
         },
         ToolInfo {
-            name: "web_fetch".into(),
+            name: "Fetch".into(),
             description: "抓取网页内容".into(),
             icon: "globe".into(),
         },

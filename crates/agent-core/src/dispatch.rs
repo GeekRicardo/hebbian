@@ -27,22 +27,23 @@ use tracing::{field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
+    effects::{analyze_effects, EffectClass},
     run_state::RunState,
     tools::{
         hitl::{HitlGate, PermissionDecision},
         registry::ToolRegistry,
-        ToolClass, ASK_TOOL_NAME,
+        ASK_TOOL_NAME,
     },
     workspace::Workspace,
 };
 
-fn tool_class_label(class: &ToolClass) -> &'static str {
+fn effect_class_label(class: EffectClass) -> &'static str {
     match class {
-        ToolClass::ReadOnly => "read_only",
-        ToolClass::Network => "network",
-        ToolClass::Mutating { .. } => "mutating",
-        ToolClass::Destructive { .. } => "destructive",
-        ToolClass::NeedsHumanInput { .. } => "needs_human_input",
+        EffectClass::ReadOnly => "read_only",
+        EffectClass::Network => "network",
+        EffectClass::Mutating => "mutating",
+        EffectClass::Destructive => "destructive",
+        EffectClass::NeedsHumanInput => "needs_human_input",
     }
 }
 
@@ -56,7 +57,7 @@ fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
 }
 
 use model_gateway::types::{ModelError, ToolCall, ToolResult};
-use platform::{runtime as cancellation, CancelFlag};
+use common::{runtime as cancellation, CancelFlag};
 
 const MAX_TOOL_RESULT_INLINE: usize = 6_000;
 
@@ -85,6 +86,17 @@ pub struct ToolDispatcher {
     pub state: Arc<RunState>,
     pub sink: EventSink,
     pub cancel: CancelFlag,
+    /// 运行模式（架构 §4.4.3）。AutoMode 时在 NeedsApproval 路径上调一次 judge。
+    pub run_mode: crate::run_mode::RunMode,
+    /// 当前会话使用的模型 id（AutoMode judge 限定模型用）。
+    pub model_id: Option<String>,
+    /// AutoMode judge 复用的 ModelClient（通常 = 主 client）。`None` 时降级 Ask。
+    pub judge_client: Option<std::sync::Arc<dyn model_gateway::client::ModelClient>>,
+    /// Hook 管理器（架构 §4.8）。dispatch_one 内在工具调用前后 trigger PreToolUse /
+    /// PostToolUse / PostToolUseFailure 让外部 hook 介入。
+    pub hooks: std::sync::Arc<crate::hooks::HookManager>,
+    /// 当前会话 id，PreToolUse / PostToolUse hook payload 用。
+    pub session_id_for_hooks: Option<String>,
 }
 
 impl ToolDispatcher {
@@ -127,17 +139,25 @@ impl ToolDispatcher {
         dispatch_index: usize,
     ) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
         let tool = self.registry.find(&call.name);
+        let tool_found = tool.is_some();
+
+        // effects 分析（架构 §4.4.2）：路径、命令指纹、风险类别都从这里来。
+        // 对 Bash/PowerShell 这类 cwd 不一定显式给的工具，按 workspace.workdir 兜底，
+        // 让越界检查命中正确的工作目录。
+        let mut effects = analyze_effects(&call.name, &call.input);
+        if matches!(call.name.as_str(), "Bash" | "PowerShell") && effects.paths.is_empty() {
+            effects.paths.push(self.workspace.workdir().to_path_buf());
+        }
+        let class_label = effect_class_label(effects.class);
+        let fingerprint = effects.command_fingerprint.clone();
 
         // 路径越界检查（同步）
-        let out_of_scope: Vec<PathBuf> = tool
-            .as_ref()
-            .map(|t| {
-                t.affected_paths(&call.input)
-                    .into_iter()
-                    .filter(|p| !self.workspace.allows(p))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let out_of_scope: Vec<PathBuf> = effects
+            .paths
+            .iter()
+            .filter(|p| !self.workspace.allows(p))
+            .cloned()
+            .collect();
 
         let path_pending = if out_of_scope.is_empty() {
             None
@@ -146,18 +166,7 @@ impl ToolDispatcher {
         };
 
         // 工具审批
-        let class = tool
-            .as_ref()
-            .map(|t| t.classify(&call.input))
-            .unwrap_or(crate::tools::ToolClass::ReadOnly);
-        let class_label = tool_class_label(&class);
-        let tool_found = tool.is_some();
-        let fingerprint = tool
-            .as_ref()
-            .and_then(|t| t.permission_fingerprint(&call.input));
-        let permission = self
-            .hitl
-            .check(&call.name, &class, fingerprint.as_deref());
+        let permission = self.hitl.check(&call.name, &effects);
         match &permission {
             PermissionDecision::Approved => {
                 info!(
@@ -203,6 +212,14 @@ impl ToolDispatcher {
         let sink = self.sink.clone();
         let cancel = self.cancel.clone();
         let workspace = self.workspace.clone();
+        let run_mode = self.run_mode;
+        let judge_client = self.judge_client.clone();
+        let model_id_for_judge = self.model_id.clone();
+        let hitl_for_future = self.hitl.clone();
+        let call_name_for_judge = call.name.clone();
+        let call_input_for_judge = call.input.clone();
+        let hooks_for_future = self.hooks.clone();
+        let session_id_for_hooks = self.session_id_for_hooks.clone();
 
         let tool_span = tracing::info_span!(
             "tool.call",
@@ -234,6 +251,74 @@ impl ToolDispatcher {
                     }
                 }
 
+                // EditAutomatically 短路（架构 §4.4.3）：文件编辑类（Edit/Write）NeedsApproval
+                // 直接 AllowOnce 短路；命令类（Bash/PowerShell）仍走原审批路径。
+                if run_mode == crate::run_mode::RunMode::EditAutomatically {
+                    if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
+                        let is_edit = matches!(
+                            call_name_for_judge.as_str(),
+                            "Edit" | "Write" | "edit" | "write"
+                        );
+                        if is_edit {
+                            sink(state.event(
+                                protocol::EventPayload::PermissionAutoJudged {
+                                    tool_name: call_name_for_judge.clone(),
+                                    decision: "allow".to_string(),
+                                    reason: Some(
+                                        "EditAutomatically: 文件编辑自动放行".to_string(),
+                                    ),
+                                },
+                            ));
+                            hitl_for_future.resolve(request_id, ApprovalDecision::AllowOnce);
+                        }
+                    }
+                }
+
+                // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
+                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask。Allow/Deny 主动
+                // resolve waiter，让 await_permission_decision 立即按 judge 结果返回；
+                // Ask 则保持原流程让用户决策（PermissionRequested 已 emit）。
+                if run_mode == crate::run_mode::RunMode::AutoMode {
+                    if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
+                        if let Some(judge) = judge_client.as_ref() {
+                            let model_id_str =
+                                model_id_for_judge.as_deref().unwrap_or("");
+                            let decision = crate::automode::judge_auto_mode(
+                                judge,
+                                model_id_str,
+                                &call_name_for_judge,
+                                &call_input_for_judge,
+                                &[],
+                            )
+                            .await;
+                            sink(state.event(
+                                protocol::EventPayload::PermissionAutoJudged {
+                                    tool_name: call_name_for_judge.clone(),
+                                    decision: decision.as_label().to_string(),
+                                    reason: decision.reason().map(str::to_string),
+                                },
+                            ));
+                            match decision {
+                                crate::automode::AutoModeDecision::Allow => {
+                                    hitl_for_future
+                                        .resolve(request_id, ApprovalDecision::AllowOnce);
+                                }
+                                crate::automode::AutoModeDecision::Deny(reason) => {
+                                    hitl_for_future.resolve(
+                                        request_id,
+                                        ApprovalDecision::DenyWithFeedback {
+                                            feedback: reason,
+                                        },
+                                    );
+                                }
+                                crate::automode::AutoModeDecision::Ask(_) => {
+                                    // 保留人工决策
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 工具审批
                 match await_permission_decision(&sink, &state, permission).await {
                     Ok(()) => {}
@@ -254,23 +339,56 @@ impl ToolDispatcher {
                     return Err(ModelError::Cancelled);
                 }
 
+                // 工具入参可被 PreToolUse hook 改写（架构 §4.8.2 / §4.8.4）。
+                let mut effective_input = call.input.clone();
+
+                // PreToolUse hook（架构 §4.8.1 / §4.8.2）：允许外部 hook
+                // (1) 阻断工具调用；(2) Modify { input } 改写工具入参。
+                if !hooks_for_future.is_empty() {
+                    let sid = session_id_for_hooks.clone().unwrap_or_default();
+                    let hook_point = crate::hooks::HookPoint::PreToolUse {
+                        session_id: sid,
+                        tool_name: call.name.clone(),
+                        input: effective_input.clone(),
+                    };
+                    match hooks_for_future.trigger(&hook_point).await {
+                        crate::hooks::HookOutcome::Block(reason) => {
+                            record_tool_outcome(attr::outcome::DENIED, &call.name, 0.0, false, 0);
+                            return Ok(deny_tool(
+                                call,
+                                call_index,
+                                dispatch_index,
+                                &state,
+                                &sink,
+                                format!("PreToolUse hook blocked: {reason}"),
+                            ));
+                        }
+                        crate::hooks::HookOutcome::Modify(patch) => {
+                            if let Some(new_input) = patch.input {
+                                effective_input = new_input;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 // 执行
                 info!(
                     tool = %call.name,
                     call_id = %call.id,
-                    input = %call.input,
+                    input = %effective_input,
                     "tool_call executing"
                 );
                 sink(state.event(EventPayload::ToolCallStarted {
                     index: dispatch_index,
                     call_id: call.id.clone(),
                     name: call.name.clone(),
-                    input: call.input.clone(),
+                    input: effective_input.clone(),
                 }));
 
                 let started = Instant::now();
                 let (raw, exec_failed) = match tool {
-                    Some(t) => match t.execute(call.input.clone()).await {
+                    Some(t) => match t.execute(effective_input.clone()).await {
                         Ok(s) => (s, false),
                         Err(e) => {
                             warn!(tool = %call.name, error = %e, "tool exec error");
@@ -284,7 +402,7 @@ impl ToolDispatcher {
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
 
-                let (content, truncated) = truncate_tool_result(raw);
+                let (mut content, truncated) = truncate_tool_result(raw);
                 let outcome = if !tool_found {
                     attr::outcome::NOT_FOUND
                 } else if exec_failed {
@@ -309,6 +427,35 @@ impl ToolDispatcher {
                     bytes = content.len(),
                     "tool_call finished"
                 );
+
+                // PostToolUse / PostToolUseFailure hook（架构 §4.8.1 / §4.8.2）：
+                // 成功路径下接受 Modify { result } 改写最终工具结果文本；失败路径仅观察。
+                if !hooks_for_future.is_empty() {
+                    let sid = session_id_for_hooks.clone().unwrap_or_default();
+                    let hook_point = if exec_failed {
+                        crate::hooks::HookPoint::PostToolUseFailure {
+                            session_id: sid,
+                            tool_name: call.name.clone(),
+                            error: content.clone(),
+                        }
+                    } else {
+                        crate::hooks::HookPoint::PostToolUse {
+                            session_id: sid,
+                            tool_name: call.name.clone(),
+                            result: content.clone(),
+                        }
+                    };
+                    if let crate::hooks::HookOutcome::Modify(patch) =
+                        hooks_for_future.trigger(&hook_point).await
+                    {
+                        if !exec_failed {
+                            if let Some(new_result) = patch.result {
+                                content = new_result;
+                            }
+                        }
+                    }
+                }
+
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -692,9 +839,9 @@ mod tests {
             as Box<dyn crate::tools::Tool>]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
         let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
-            let _ = tx.send(event);
+            let _ = tx.try_send(event);
         });
         let dispatcher = ToolDispatcher {
             registry,
@@ -703,6 +850,11 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            model_id: None,
+            judge_client: None,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
         };
 
         let call = ToolCall {

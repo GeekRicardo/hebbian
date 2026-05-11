@@ -1,8 +1,8 @@
 use std::time::Instant;
 
-use super::{Tool, ToolClass};
+use super::Tool;
 use async_trait::async_trait;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use reqwest::Url;
 use serde_json::{json, Value};
 
@@ -26,7 +26,7 @@ pub struct WebSearchTool;
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str {
-        "web_search"
+        "WebSearch"
     }
 
     fn description(&self) -> &str {
@@ -64,9 +64,6 @@ impl Tool for WebSearchTool {
         search_duckduckgo(&input).await
     }
 
-    fn classify(&self, _input: &Value) -> ToolClass {
-        ToolClass::Network
-    }
 }
 
 fn parse_search_input(input: &Value) -> AppResult<SearchInput> {

@@ -19,13 +19,16 @@
 //! 避免 `"git statusbad"` 误中 `"git status"`。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use protocol::{ApprovalDecision, PermissionRequestId, PermissionScope, UserAnswer};
 use tokio::sync::oneshot;
 
 use crate::definition::{DefaultPermission, PermissionPolicy};
-use crate::tools::ToolClass;
+use crate::effects::{EffectClass, Effects};
+use crate::permissions::{
+    new_rule_id, PermissionDecisionKind, PermissionMatcher, PermissionRule, PermissionStore,
+};
 
 /// 单次工具调用的权限决策结果。
 #[derive(Debug)]
@@ -72,10 +75,16 @@ struct LearnedRules {
 const NO_TOOL_LEVEL_MEMORY: &[&str] = &["Bash"];
 
 /// HITL 统一闸门。
+///
+/// `permission_store` + `session_id` 可选：当 surface 启动 PermissionStore 时挂上来，
+/// resolve 时把 AllowAndRemember(Session/Global) 翻成 [`PermissionRule`] 落盘。
+/// 不挂时仅在 in-memory `learned` 表里记忆（保留旧行为）。
 pub struct HitlGate {
     policy: PermissionPolicy,
     pending: Mutex<HashMap<PermissionRequestId, Pending>>,
     learned: Mutex<LearnedRules>,
+    permission_store: Option<Arc<PermissionStore>>,
+    session_id: Option<String>,
 }
 
 impl HitlGate {
@@ -84,27 +93,37 @@ impl HitlGate {
             policy,
             pending: Mutex::new(HashMap::new()),
             learned: Mutex::new(LearnedRules::default()),
+            permission_store: None,
+            session_id: None,
         }
     }
 
-    /// 评估一次工具调用：依 `ToolClass` 默认行为 + 用户累计规则 + 策略规则三层判断。
+    /// 挂上 PermissionStore + 当前 session_id，让 AllowAndRemember 真正落盘。
+    pub fn with_store(
+        mut self,
+        store: Arc<PermissionStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.permission_store = Some(store);
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// 评估一次工具调用：依 effects 默认行为 + 用户累计规则 + 策略规则三层判断。
     ///
-    /// `fingerprint` 是工具自报的命令级指纹（[`super::Tool::permission_fingerprint`]）。
-    /// 当工具支持命令级记忆时传入，HitlGate 优先按 patterns 前缀匹配；缺省 `None` 退回
-    /// 工具名级判断。
+    /// `effects` 由 [`crate::effects::analyze_effects`] 解析得到（架构 §4.4.2）。
+    /// 其中 `command_fingerprint` 用于命令级记忆——支持的工具（Bash/PowerShell）
+    /// 优先按前缀匹配；其它工具退回工具名级判断。
     ///
     /// 返回 `NeedsApproval` 时，调用方应：
     /// 1. emit `PermissionRequested` 事件（用 request_id）
     /// 2. await waiter
     /// 3. 收到 `ApprovalDecision` 后决定是否执行
-    pub fn check(
-        &self,
-        tool_name: &str,
-        class: &ToolClass,
-        fingerprint: Option<&str>,
-    ) -> PermissionDecision {
+    pub fn check(&self, tool_name: &str, effects: &Effects) -> PermissionDecision {
+        let fingerprint = effects.command_fingerprint.as_deref();
+
         // 1) NeedsHumanInput 不走审批（dispatcher 走 ask 路径）
-        if matches!(class, ToolClass::NeedsHumanInput { .. }) {
+        if matches!(effects.class, EffectClass::NeedsHumanInput) {
             return PermissionDecision::Approved;
         }
 
@@ -118,9 +137,9 @@ impl HitlGate {
             }
         }
 
-        // 3) ReadOnly 永远放行：工具自报无副作用，always_ask 不该再拦。
-        //    例如 BashTool 把 `ls` 解析成 ReadOnly 后即便 always_ask 含 "Bash" 也直接通过。
-        if matches!(class, ToolClass::ReadOnly) {
+        // 3) ReadOnly 永远放行：effects 自报无副作用，always_ask 不该再拦。
+        //    例如 Bash 解析 `ls` 为 ReadOnly 后即便 always_ask 含 "Bash" 也直接通过。
+        if matches!(effects.class, EffectClass::ReadOnly) {
             return PermissionDecision::Approved;
         }
 
@@ -141,6 +160,19 @@ impl HitlGate {
             }
         }
 
+        // 4b) PermissionStore（Session → Global）—— 长期规则
+        if let Some(store) = &self.permission_store {
+            let sid = self.session_id.as_deref();
+            if let Some(dec) = store.find(sid, tool_name, fingerprint, None) {
+                return match dec {
+                    PermissionDecisionKind::Allow => PermissionDecision::Approved,
+                    PermissionDecisionKind::Deny => PermissionDecision::Denied {
+                        reason: "PermissionStore 规则拒绝".into(),
+                    },
+                };
+            }
+        }
+
         // 5) 静态策略按名命中
         if self.policy.auto_approve.iter().any(|n| n == tool_name) {
             return PermissionDecision::Approved;
@@ -149,9 +181,9 @@ impl HitlGate {
             return self.needs_approval(tool_name, fingerprint);
         }
 
-        // 6) 按 ToolClass 默认行为
-        match class {
-            ToolClass::Network | ToolClass::Mutating { .. } | ToolClass::Destructive { .. } => {
+        // 6) 按 effects 默认行为
+        match effects.class {
+            EffectClass::Network | EffectClass::Mutating | EffectClass::Destructive => {
                 match self.policy.default_action {
                     DefaultPermission::Auto => PermissionDecision::Approved,
                     DefaultPermission::Ask => self.needs_approval(tool_name, fingerprint),
@@ -160,7 +192,7 @@ impl HitlGate {
                     },
                 }
             }
-            ToolClass::ReadOnly | ToolClass::NeedsHumanInput { .. } => {
+            EffectClass::ReadOnly | EffectClass::NeedsHumanInput => {
                 unreachable!("已在前面分支短路")
             }
         }
@@ -215,37 +247,8 @@ impl HitlGate {
         };
 
         if let ApprovalDecision::AllowAndRemember { scope, pattern } = &decision {
-            if matches!(scope, PermissionScope::Session | PermissionScope::Run) {
-                if let Some(name) = &tool_name {
-                    let mut learned = self.learned.lock().unwrap();
-                    match (pattern.as_deref(), NO_TOOL_LEVEL_MEMORY.contains(&name.as_str())) {
-                        (Some(prefix), _) => {
-                            // 显式给了命令前缀 → 命令级记忆，工具名是否在黑名单都接受
-                            let prefix = prefix.trim();
-                            if !prefix.is_empty() {
-                                let entry = (name.clone(), prefix.to_string());
-                                if !learned.auto_approved_patterns.contains(&entry) {
-                                    learned.auto_approved_patterns.push(entry);
-                                }
-                            }
-                        }
-                        (None, false) => {
-                            // 没给前缀 + 工具允许工具名记忆 → 工具名级
-                            if !learned.auto_approved_tools.contains(name) {
-                                learned.auto_approved_tools.push(name.clone());
-                            }
-                        }
-                        (None, true) => {
-                            // 黑名单工具但没给前缀：保守起见这次不记忆，等价 AllowOnce
-                            tracing::debug!(
-                                tool = %name,
-                                "AllowAndRemember 没有 pattern，工具在 NO_TOOL_LEVEL_MEMORY 黑名单，本次不记忆"
-                            );
-                        }
-                    }
-                    // fingerprint 仅做 debug 提示
-                    let _ = fingerprint;
-                }
+            if let Some(name) = &tool_name {
+                self.remember(*scope, name, pattern.as_deref(), fingerprint.as_deref());
             }
         }
 
@@ -283,6 +286,115 @@ impl HitlGate {
         let (request_id, waiter) = self.open_approval(Some(tool_name), fingerprint);
         PermissionDecision::NeedsApproval { request_id, waiter }
     }
+
+    /// 把 AllowAndRemember 翻成对应 scope 的记忆。
+    ///
+    /// 行为分级：
+    /// - `Once`：不写任何地方
+    /// - `Session`：
+    ///   - 优先写 in-memory learned 表（兼容旧 dispatch 命中路径）
+    ///   - 若挂了 PermissionStore，再写一条 [`PermissionRule`] 进 session 内存视图（落
+    ///     jsonl 由 Recorder 在 `PermissionRequestResolved` 事件回调里执行）
+    /// - `Global`：
+    ///   - 若挂了 PermissionStore，写一条 PermissionRule 进 ~/.hebbian/permissions.json
+    ///   - 未挂时打 warn，"按钮"等同 AllowOnce
+    fn remember(
+        &self,
+        scope: PermissionScope,
+        tool_name: &str,
+        pattern: Option<&str>,
+        fingerprint: Option<&str>,
+    ) {
+        let _ = fingerprint; // 仅 debug 备用
+        let _no_tool_level = NO_TOOL_LEVEL_MEMORY.contains(&tool_name);
+        match scope {
+            PermissionScope::Once => {}
+            PermissionScope::Session => {
+                // (1) in-memory learned（旧路径，立即对本 run 后续工具调用生效）
+                let mut learned = self.learned.lock().unwrap();
+                match (pattern, _no_tool_level) {
+                    (Some(prefix), _) => {
+                        let prefix = prefix.trim();
+                        if !prefix.is_empty() {
+                            let entry = (tool_name.to_string(), prefix.to_string());
+                            if !learned.auto_approved_patterns.contains(&entry) {
+                                learned.auto_approved_patterns.push(entry);
+                            }
+                        }
+                    }
+                    (None, false) => {
+                        let name = tool_name.to_string();
+                        if !learned.auto_approved_tools.contains(&name) {
+                            learned.auto_approved_tools.push(name);
+                        }
+                    }
+                    (None, true) => {
+                        tracing::debug!(
+                            tool = tool_name,
+                            "AllowAndRemember(Session) 没有 pattern，工具在 NO_TOOL_LEVEL_MEMORY 黑名单，本次不记忆"
+                        );
+                    }
+                }
+                drop(learned);
+                // (2) PermissionStore：让 session.jsonl 也能回放出同样的规则
+                if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
+                    let rule = build_rule(tool_name, pattern, PermissionScope::Session);
+                    if let Some(rule) = rule {
+                        if let Err(e) = store.add(Some(sid.as_str()), rule) {
+                            tracing::warn!(error = %e, "PermissionStore.add(Session) 失败");
+                        }
+                    }
+                }
+            }
+            PermissionScope::Global => {
+                let Some(store) = self.permission_store.as_ref() else {
+                    tracing::warn!(
+                        tool = tool_name,
+                        "AllowAndRemember(Global) 但未挂 PermissionStore，等同 AllowOnce"
+                    );
+                    return;
+                };
+                let rule = build_rule(tool_name, pattern, PermissionScope::Global);
+                if let Some(rule) = rule {
+                    if let Err(e) = store.add(None, rule) {
+                        tracing::warn!(error = %e, "PermissionStore.add(Global) 失败");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn build_rule(
+    tool_name: &str,
+    pattern: Option<&str>,
+    scope: PermissionScope,
+) -> Option<PermissionRule> {
+    let matcher = match (tool_name, pattern) {
+        ("Bash", Some(prefix)) | ("PowerShell", Some(prefix)) => {
+            let prefix = prefix.trim();
+            if prefix.is_empty() {
+                return None;
+            }
+            PermissionMatcher::Bash {
+                command_prefix: prefix.to_string(),
+            }
+        }
+        (_, None) => PermissionMatcher::Any,
+        // 其它工具暂时把 pattern 当 path_prefix
+        (_, Some(prefix)) => PermissionMatcher::FilePath {
+            path_prefix: prefix.to_string(),
+        },
+    };
+    Some(PermissionRule {
+        id: new_rule_id(),
+        scope,
+        tool_name: tool_name.to_string(),
+        matcher,
+        decision: PermissionDecisionKind::Allow,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        created_by: "user".to_string(),
+    })
 }
 
 impl Default for HitlGate {
@@ -308,9 +420,27 @@ mod tests {
     use super::*;
     use protocol::RiskLevel;
 
-    fn destructive() -> ToolClass {
-        ToolClass::Destructive {
+    fn destructive_effects(fingerprint: Option<&str>) -> Effects {
+        Effects {
+            paths: Vec::new(),
+            command_fingerprint: fingerprint.map(str::to_owned),
+            network: false,
+            domain: None,
             risk: RiskLevel::High,
+            class: EffectClass::Destructive,
+            is_concurrent_safe: false,
+        }
+    }
+
+    fn readonly_effects(fingerprint: Option<&str>) -> Effects {
+        Effects {
+            paths: Vec::new(),
+            command_fingerprint: fingerprint.map(str::to_owned),
+            network: false,
+            domain: None,
+            risk: RiskLevel::Low,
+            class: EffectClass::ReadOnly,
+            is_concurrent_safe: true,
         }
     }
 
@@ -325,7 +455,7 @@ mod tests {
                 pattern: None,
             },
         );
-        match gate.check("Write", &destructive(), None) {
+        match gate.check("Write", &destructive_effects(None)) {
             PermissionDecision::Approved => {}
             other => panic!("expected Approved, got {other:?}"),
         }
@@ -343,7 +473,7 @@ mod tests {
             },
         );
         // 黑名单工具 + 无 pattern → 不写记忆，下次仍审批
-        match gate.check("Bash", &destructive(), Some("git status")) {
+        match gate.check("Bash", &destructive_effects(Some("git status"))) {
             PermissionDecision::NeedsApproval { .. } => {}
             other => panic!("expected NeedsApproval, got {other:?}"),
         }
@@ -362,12 +492,12 @@ mod tests {
         );
         // 完全相同
         assert!(matches!(
-            gate.check("Bash", &destructive(), Some("git status")),
+            gate.check("Bash", &destructive_effects(Some("git status"))),
             PermissionDecision::Approved
         ));
         // 前缀 + 空格 + 后续 args
         assert!(matches!(
-            gate.check("Bash", &destructive(), Some("git status -uno README.md")),
+            gate.check("Bash", &destructive_effects(Some("git status -uno README.md"))),
             PermissionDecision::Approved
         ));
     }
@@ -385,12 +515,12 @@ mod tests {
         );
         // 不该匹配 "git statusbad"（token 边界）
         assert!(matches!(
-            gate.check("Bash", &destructive(), Some("git statusbad")),
+            gate.check("Bash", &destructive_effects(Some("git statusbad"))),
             PermissionDecision::NeedsApproval { .. }
         ));
         // 不该匹配 "git push"
         assert!(matches!(
-            gate.check("Bash", &destructive(), Some("git push")),
+            gate.check("Bash", &destructive_effects(Some("git push"))),
             PermissionDecision::NeedsApproval { .. }
         ));
     }
@@ -410,7 +540,7 @@ mod tests {
         for cmd in ["git status", "git push origin", "git log --oneline"] {
             assert!(
                 matches!(
-                    gate.check("Bash", &destructive(), Some(cmd)),
+                    gate.check("Bash", &destructive_effects(Some(cmd))),
                     PermissionDecision::Approved
                 ),
                 "expected Approved for {cmd}"
@@ -421,7 +551,7 @@ mod tests {
     #[test]
     fn readonly_class_is_always_approved() {
         let gate = HitlGate::default();
-        match gate.check("Bash", &ToolClass::ReadOnly, Some("ls -la")) {
+        match gate.check("Bash", &readonly_effects(Some("ls -la"))) {
             PermissionDecision::Approved => {}
             other => panic!("expected Approved, got {other:?}"),
         }

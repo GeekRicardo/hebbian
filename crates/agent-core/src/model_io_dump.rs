@@ -1,7 +1,9 @@
 //! 模型 IO 调试 dump：把每次模型请求的完整入参 + 响应按 jsonl 写到磁盘。
 //!
 //! 仅在环境变量 `HEBBIAN_DUMP_MODEL_IO` 被设置时启用——保持默认无开销。
-//! 文件位置由 surface 决定（CLI 与桌面都用 `<data_dir>/sessions/<session_id>.model_io.jsonl`）。
+//! 文件位置由 surface 决定（CLI 与桌面都用 `<data_dir>/sessions/<session_id>/model_io.jsonl`，
+//! 与 session 的其它工件 `tool_results/` `compactions/` `plans/` `partial/` 同级，
+//! 遵循架构 §4.9.1：一段对话所有文件落在 `<sid>/` 目录内）。
 //!
 //! 设计与 [`Recorder`] 同构：actor 模式，clone 廉价（只复 `Sender`），
 //! 后台 writer task 异步落盘，主 loop 不被 IO 阻塞。
@@ -22,7 +24,7 @@ use model_gateway::types::{
     AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolResult, TranscriptEntry,
     UserEntry,
 };
-use platform::attachments::MessageAttachment;
+use common::attachments::MessageAttachment;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::fs::OpenOptions;
@@ -33,7 +35,7 @@ use tracing::warn;
 /// 触发本功能的环境变量。
 ///
 /// - 未设置 / 空值：禁用，runtime 不付任何代价。
-/// - 任意非空值：启用，dump 写到 `<data_dir>/sessions/<session_id>.model_io.jsonl`。
+/// - 任意非空值：启用，dump 写到 `<data_dir>/sessions/<session_id>/model_io.jsonl`。
 pub const ENV_VAR: &str = "HEBBIAN_DUMP_MODEL_IO";
 
 /// 是否启用 dump。surface 用它决定要不要构造 [`ModelIoDump`]。
@@ -41,11 +43,15 @@ pub fn is_enabled() -> bool {
     std::env::var(ENV_VAR).map(|v| !v.is_empty()).unwrap_or(false)
 }
 
-/// 默认路径：`<data_dir>/sessions/<session_id>.model_io.jsonl`。
+/// 默认路径：`<data_dir>/sessions/<session_id>/model_io.jsonl`。
+///
+/// 落在 session 目录内（与 `tool_results/` 等同级），避免污染 `sessions/` 根目录、
+/// 也避开 legacy migration 把平铺 `.jsonl` 误当作老 session 迁移的坑。
 pub fn default_path(data_dir: &Path, session_id: &str) -> PathBuf {
     data_dir
         .join("sessions")
-        .join(format!("{session_id}.model_io.jsonl"))
+        .join(session_id)
+        .join("model_io.jsonl")
 }
 
 /// 检查 [`ENV_VAR`]：开启则按 [`default_path`] 打开一份 dump，失败仅记 trace 不传播。
@@ -93,7 +99,7 @@ enum DumpCmd {
 /// jsonl 模型 IO 持久化的句柄。Clone 是廉价的（只复制 `Sender`）。
 #[derive(Clone)]
 pub struct ModelIoDump {
-    tx: mpsc::UnboundedSender<DumpCmd>,
+    tx: mpsc::Sender<DumpCmd>,
     path: PathBuf,
 }
 
@@ -110,7 +116,7 @@ impl ModelIoDump {
             .open(&path)
             .await?;
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<DumpCmd>();
+        let (tx, mut rx) = mpsc::channel::<DumpCmd>(1024);
         let writer_path = path.clone();
         tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
@@ -140,8 +146,11 @@ impl ModelIoDump {
     }
 
     /// fire-and-forget 写一条记录。失败仅记 trace，不向调用方传播。
+    /// 通道满时丢弃并打 warn——dump 是调试用，best-effort。
     pub fn record(&self, entry: DumpEntry) {
-        let _ = self.tx.send(DumpCmd::Write(entry));
+        if let Err(e) = self.tx.try_send(DumpCmd::Write(entry)) {
+            warn!(error = %e, "model_io_dump queue full, dropping entry");
+        }
     }
 
     /// 等待写队列排空到磁盘。run 结束时可选调用。
@@ -149,6 +158,7 @@ impl ModelIoDump {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(DumpCmd::Flush(tx))
+            .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "dump closed"))?;
         rx.await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "dump dropped"))?

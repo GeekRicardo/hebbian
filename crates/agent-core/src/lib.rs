@@ -1,13 +1,19 @@
 pub mod agent_loop;
+pub mod automode;
 pub mod context;
+pub mod core_client;
 pub mod definition;
 pub mod dispatch;
+pub mod effects;
 pub mod harness;
 pub mod hooks;
 pub mod model_io_dump;
+pub mod permissions;
 pub mod recorder;
+pub mod run_mode;
 pub mod run_state;
 pub mod session;
+pub mod storage;
 pub mod system_prompt;
 pub mod tools;
 pub mod turn_context;
@@ -19,6 +25,7 @@ pub use harness::{
 };
 pub use model_io_dump::ModelIoDump;
 pub use recorder::Recorder;
+pub use run_mode::RunMode;
 pub use run_state::RunState;
 pub use session::{ContextUsage, Session, SessionConfig};
 pub use system_prompt::{

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use platform::{attachments::MessageAttachment, CancelFlag};
+use common::{attachments::MessageAttachment, CancelFlag};
 use protocol::AgentRef;
 
 use crate::{
@@ -20,8 +20,11 @@ use crate::{
     },
     definition::AgentDefinition,
     harness::{Harness, RunHandle, RunParams},
+    hooks::{HookManager, HookPoint},
     model_io_dump::ModelIoDump,
+    permissions::PermissionStore,
     recorder::Recorder,
+    run_mode::RunMode,
     system_prompt::{prepend_environment, EnvironmentSnapshot},
     tools::hitl::HitlGate,
     workspace::Workspace,
@@ -61,6 +64,23 @@ pub struct SessionConfig {
     /// 可选模型 IO dump：每次 model 请求完整 request / response 写入 jsonl。
     /// 由环境变量 [`crate::model_io_dump::ENV_VAR`] 触发，由 surface 决定路径。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 持久化权限规则的共享 store。挂上后 HitlGate 在 AllowAndRemember 时直接写盘
+    /// （架构 §4.6）。surface 可在启动时 [`PermissionStore::open`] 一次共享给所有
+    /// session。
+    pub permission_store: Option<Arc<PermissionStore>>,
+    /// session_id（架构 §4.9.3 格式：`{yyyymmddHHmm}-{shortUuid}`）。用于
+    /// PermissionStore 按 session 索引内存规则，以及未来 Recorder 定位
+    /// `~/.hebbian/sessions/<id>/session.jsonl`。
+    pub session_id: Option<String>,
+    /// 运行模式（架构 §4.4.3）：默认 `AskBeforeEdits`。
+    /// `AutoMode` 时派发器在 destructive 工具调用前调一次 LLM judge（限定 claude-opus-4-7）。
+    pub run_mode: RunMode,
+    /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用它做模型限定。
+    /// `None` 时 AutoMode 自动降级为 Ask。
+    pub model_id: Option<String>,
+    /// 数据目录路径。给定后 microcompact 把被压缩的原始 tool result 落盘到
+    /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`（架构 §4.7 / Step 9）。
+    pub data_dir: Option<PathBuf>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -73,11 +93,20 @@ pub struct Session {
     enabled_tools: Vec<String>,
     recorder: Option<Recorder>,
     model_io_dump: Option<ModelIoDump>,
+    permission_store: Option<Arc<PermissionStore>>,
+    session_id: Option<String>,
+    run_mode: RunMode,
+    model_id: Option<String>,
+    data_dir: Option<PathBuf>,
+    /// 来自 Harness 的共享 HookManager；Session 在 new / append_user / close
+    /// 三个生命周期点 spawn 异步触发对应的外部 hook（架构 §4.8.1）。
+    hooks: Arc<HookManager>,
 }
 
 impl Session {
     pub fn new(harness: Arc<Harness>, config: SessionConfig) -> Self {
-        Self {
+        let hooks = harness.hooks();
+        let session = Self {
             harness,
             client: config.client,
             transcript: config.initial_transcript,
@@ -86,7 +115,64 @@ impl Session {
             enabled_tools: config.enabled_tools,
             recorder: config.recorder,
             model_io_dump: config.model_io_dump,
+            permission_store: config.permission_store,
+            session_id: config.session_id,
+            run_mode: config.run_mode,
+            model_id: config.model_id,
+            data_dir: config.data_dir,
+            hooks,
+        };
+        // SessionStart hook（架构 §4.8.1）：fire-and-forget，hook 失败不影响主流程。
+        if !session.hooks.is_empty() {
+            if let Some(sid) = session.session_id.clone() {
+                let workdir = session.workspace.workdir().display().to_string();
+                let hooks = session.hooks.clone();
+                tokio::spawn(async move {
+                    let _ = hooks
+                        .trigger(&HookPoint::SessionStart {
+                            session_id: sid,
+                            workdir,
+                        })
+                        .await;
+                });
+            }
         }
+        session
+    }
+
+    /// 关闭会话：fire-and-forget 触发 `SessionEnd` 外部 hook（架构 §4.8.1）。
+    /// surface 在退出 / 切换 session 前调一次；当前实现仅 emit hook，
+    /// 不做其它清理（recorder / model_io_dump 由各自 Drop / flush 收尾）。
+    pub async fn close(&self) {
+        if self.hooks.is_empty() {
+            return;
+        }
+        let Some(sid) = self.session_id.clone() else {
+            return;
+        };
+        let _ = self
+            .hooks
+            .trigger(&HookPoint::SessionEnd { session_id: sid })
+            .await;
+    }
+
+    /// 当前运行模式。
+    pub fn run_mode(&self) -> RunMode {
+        self.run_mode
+    }
+
+    /// 切换运行模式（架构 §10.2）。本期暂不 emit RunModeChanged 事件，留 Step 8 后续扩展。
+    pub fn set_run_mode(&mut self, mode: RunMode) {
+        self.run_mode = mode;
+    }
+
+    /// 当前会话使用的模型 id，AutoMode 判官限定模型时需要。
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
+
+    pub fn client_arc(&self) -> Arc<dyn ModelClient> {
+        self.client.clone()
     }
 
     pub fn recorder(&self) -> Option<&Recorder> {
@@ -109,8 +195,25 @@ impl Session {
         let pending = self.workspace.take_pending_announcement();
         let mut final_text = prepend_workspace_update(text, &pending);
         if needs_environment {
-            let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace);
+            let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace)
+                .with_run_mode(self.run_mode);
             final_text = prepend_environment(final_text, &snapshot);
+        }
+        // UserPromptSubmit hook（架构 §4.8.1）：fire-and-forget，把最终 user text 发给外部 hook。
+        // 当前实现不消费 hook 返回，完整 Modify patch 协议留增量。
+        if !self.hooks.is_empty() {
+            if let Some(sid) = self.session_id.clone() {
+                let hooks = self.hooks.clone();
+                let text_for_hook = final_text.clone();
+                tokio::spawn(async move {
+                    let _ = hooks
+                        .trigger(&HookPoint::UserPromptSubmit {
+                            session_id: sid,
+                            text: text_for_hook,
+                        })
+                        .await;
+                });
+            }
         }
         self.transcript.push_user(final_text, attachments);
     }
@@ -189,9 +292,13 @@ impl Session {
     pub fn run_with_pending(
         &self,
         cancel: CancelFlag,
-        pending_inputs: Option<platform::runtime::PendingInputs>,
+        pending_inputs: Option<common::runtime::PendingInputs>,
     ) -> RunHandle {
-        let hitl = Arc::new(HitlGate::new(self.definition.permission_policy.clone()));
+        let mut gate = HitlGate::new(self.definition.permission_policy.clone());
+        if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
+            gate = gate.with_store(store.clone(), sid.clone());
+        }
+        let hitl = Arc::new(gate);
         self.harness.spawn_run(
             self.client.clone(),
             RunParams {
@@ -207,6 +314,10 @@ impl Session {
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
                 pending_inputs,
+                run_mode: self.run_mode,
+                model_id: self.model_id.clone(),
+                data_dir: self.data_dir.clone(),
+                session_id: self.session_id.clone(),
             },
         )
     }

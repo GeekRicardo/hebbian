@@ -1,4 +1,4 @@
-//! Microcompact：工具结果影子化（学 Claude Code 的 microcompact 思路）。
+//! Microcompact：工具结果压缩（学 Claude Code 的 microcompact 思路）。
 //!
 //! 长 tool_result（`Bash` / `Read` / `Grep` / `Glob` / `web_fetch` / `web_search` / `Write` / `Edit`）
 //! 一旦超过指定轮数仍留在 transcript 里，会浪费大量 token：
@@ -21,8 +21,8 @@ const COMPACTABLE_TOOLS: &[&str] = &[
     "Glob",
     "Write",
     "Edit",
-    "web_fetch",
-    "web_search",
+    "Fetch",
+    "WebSearch",
 ];
 
 /// 占位符内容。够短，模型也能从字面意思理解"这条结果已被压缩"。
@@ -31,7 +31,7 @@ pub const SHADOWED_PLACEHOLDER: &str = "[结果已被压缩]";
 /// Microcompact 配置。
 #[derive(Debug, Clone, Copy)]
 pub struct MicrocompactPolicy {
-    /// 累积可压缩工具结果数到达这个值后开始影子化。
+    /// 累积可压缩工具结果数到达这个值后开始压缩。
     pub trigger_threshold: usize,
     /// 保留最近 K 个工具结果不动。
     pub keep_recent: usize,
@@ -48,11 +48,15 @@ impl Default for MicrocompactPolicy {
 }
 
 /// 一次 microcompact 的统计。
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MicrocompactReport {
     pub shadowed_count: usize,
     pub kept_count: usize,
     pub total_compactable: usize,
+    /// 被压缩的工具结果原文备份：`(call_id, original_content)`。
+    /// agent_loop 拿到后用 [`crate::storage::tool_results::save_tool_result`] 落盘
+    /// `~/.hebbian/sessions/<sid>/tool_results/<call_id>.txt`（架构 §4.7 / Step 9）。
+    pub shadowed_artifacts: Vec<(String, String)>,
 }
 
 fn is_compactable(name: &str) -> bool {
@@ -87,23 +91,31 @@ pub fn microcompact(
             shadowed_count: 0,
             kept_count: total,
             total_compactable: total,
+            shadowed_artifacts: Vec::new(),
         };
     }
 
     let keep = policy.keep_recent.min(total);
     let cutoff = total - keep;
     let mut shadowed = 0;
+    let mut artifacts: Vec<(String, String)> = Vec::new();
     for (idx_in_list, (entry_idx, result_idx)) in positions.iter().enumerate() {
         if idx_in_list >= cutoff {
             break;
         }
         if let Some(TranscriptEntry::ToolResults(results)) = entries.get_mut(*entry_idx) {
             if let Some(r) = results.get_mut(*result_idx) {
-                if r.content != SHADOWED_PLACEHOLDER {
+                if r.content != SHADOWED_PLACEHOLDER && !r.content.starts_with("[结果已被压缩") {
+                    // 保留原文给 caller 落盘成 txt（架构 §4.7 / Step 9）。
+                    artifacts.push((r.call_id.clone(), r.content.clone()));
+                    let placeholder = format!(
+                        "[结果已被压缩。原始内容可通过 Read 工具按 call_id 检索：tool_results/{}.txt]",
+                        r.call_id
+                    );
                     *r = ToolResult {
                         call_id: r.call_id.clone(),
                         name: r.name.clone(),
-                        content: SHADOWED_PLACEHOLDER.to_string(),
+                        content: placeholder,
                     };
                     shadowed += 1;
                 }
@@ -115,6 +127,7 @@ pub fn microcompact(
         shadowed_count: shadowed,
         kept_count: keep,
         total_compactable: total,
+        shadowed_artifacts: artifacts,
     }
 }
 
@@ -159,9 +172,12 @@ mod tests {
         assert_eq!(report.shadowed_count, 3);
         assert_eq!(report.kept_count, 2);
         if let TranscriptEntry::ToolResults(results) = &entries[0] {
-            assert_eq!(results[0].content, SHADOWED_PLACEHOLDER);
-            assert_eq!(results[1].content, SHADOWED_PLACEHOLDER);
-            assert_eq!(results[2].content, SHADOWED_PLACEHOLDER);
+            for i in 0..3 {
+                assert!(
+                    results[i].content.starts_with("[结果已被压缩"),
+                    "result {i} should be shadowed"
+                );
+            }
             assert_eq!(results[3].content, "4");
             assert_eq!(results[4].content, "5");
         } else {
