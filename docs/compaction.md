@@ -28,7 +28,7 @@ claude-code-haha 是参考实现中最完整的方案。其压缩策略由轻到
    shadow 工具结果      裁剪长结果中间        达阈值整段摘要        用户主动整段摘要
 ```
 
-### 2.1 microcompact（轮次 / 时间触发的工具结果影子化）
+### 2.1 microcompact（轮次 / 时间触发的工具结果压缩）
 
 来源：[`src/services/compact/microCompact.ts`](https://github.com/.../microCompact.ts)
 
