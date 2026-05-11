@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use model_gateway::config::Provider;
-use platform::storage::sessions::{Message, Role};
+use agent_core::storage::sessions::{Message, Role};
 
 const SYSTEM: &str = "你是一个严格的标题生成器。阅读给定对话，用不超过 16 个汉字（或 8 个英文单词）总结出一个简短、具体、没有标点和引号的标题，直接输出标题本身，不要任何前后缀。";
 

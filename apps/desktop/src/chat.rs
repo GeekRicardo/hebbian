@@ -6,20 +6,19 @@ use agent_core::{
     context::transcript::Transcript,
     definition::AgentDefinition,
     hooks::HookManager,
+    permissions::PermissionStore,
     tools::{hitl::HitlGate, skill::default_skill_dirs},
     types::{AgentEvent, AgentEventPayload},
     workspace::Workspace,
 };
 use async_trait::async_trait;
 use model_gateway::{self, config::Provider};
-use platform::{
-    CancelFlag,
-    attachments::MessageAttachment,
-    config::settings as global_settings,
-    runtime::PendingInputs,
-    storage::sessions::{
+use common::{attachments::MessageAttachment, runtime::PendingInputs, CancelFlag};
+use agent_core::storage::{
+    sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
     },
+    settings as global_settings,
 };
 use protocol::{
     ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
@@ -30,7 +29,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{AppHandle, Manager, ipc::Channel};
+use tauri::{AppHandle, ipc::Channel};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -46,12 +45,17 @@ pub struct SendArgs {
     /// app 级 HITL 桥接。用 Tauri 的 `app.state::<Arc<HitlState>>()`
     /// 取出来塞进来。测试场景传 `None`。
     pub hitl: Option<Arc<HitlState>>,
+    /// 全局共享的 PermissionStore（架构 §4.6）。`None` = 不启用持久化权限规则
+    /// （AllowAndRemember(Global) 退化为 AllowOnce）。
+    pub permission_store: Option<Arc<PermissionStore>>,
 }
 
-fn data_dir(app: &AppHandle) -> AppResult<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
-        .map_err(|e| AppError::msg(e.to_string()))
+fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
+    // 架构 §6.1 / 决策 D10：CLI 与 Desktop 共享 ~/.hebbian/。
+    // 不要走 Tauri 的 `app_data_dir`（macOS 下指向 ~/Library/Application Support/...），
+    // 否则 send_message 会与 lib.rs::data_dir 写盘路径错位，create_session 写到
+    // ~/.hebbian/sessions/<sid>/ 但 send_message 去 Tauri bundle 目录读，立刻 not found。
+    Ok(agent_core::storage::default_data_dir())
 }
 
 pub async fn send_and_save(
@@ -94,7 +98,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     build_client: impl Fn(
             Provider,
             String,
-            Option<platform::ReasoningConfig>,
+            Option<common::ReasoningConfig>,
         ) -> AppResult<Arc<dyn ModelClient>>
         + Send
         + Sync,
@@ -153,9 +157,11 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         configured_skill_dirs
     };
 
+    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
+    let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
     let harness = Arc::new(Harness::new(
         agent_core::tools::default_tools(workspace.clone(), &skill_dirs),
-        HookManager::empty(),
+        HookManager::new(external_hooks),
     ));
     let definition = AgentDefinition::default();
 
@@ -174,6 +180,25 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let model_io_dump =
         agent_core::model_io_dump::open_for_session_if_enabled(data_dir, &args.session_id).await;
 
+    // PermissionStore 加载本 session 已有的 Session 级规则到内存视图（架构 §4.6.2）。
+    // 当前 Session 级规则的 jsonl 落盘暂未实现（Recorder 还没写 PermissionRule entry），
+    // 这里仍调用 load_session_rules，让 store 在该 session 下有空 vec，准备好后续 add。
+    if let Some(store) = &args.permission_store {
+        store.load_session_rules(&args.session_id, Vec::new());
+    }
+
+    // ExitPlanMode 工具靠 env var 拿 data_dir + session_id（架构 §4.4.5 hack 路径）。
+    // 进程级共享 env 在多窗口并发时会被覆盖，本期接受这个限制——Step 4 CoreClient
+    // 重构时改为构造时注入。
+    std::env::set_var(
+        agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
+        data_dir.to_string_lossy().to_string(),
+    );
+    std::env::set_var(
+        agent_core::tools::exit_plan_mode::ENV_SESSION_ID,
+        &args.session_id,
+    );
+
     let mut core_session = CoreSession::new(
         harness,
         SessionConfig {
@@ -187,6 +212,11 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             ),
             recorder: None,
             model_io_dump,
+            permission_store: args.permission_store.clone(),
+            session_id: Some(args.session_id.clone()),
+            run_mode: agent_core::run_mode::RunMode::default(),
+            model_id: None,
+            data_dir: Some(data_dir.to_path_buf()),
         },
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
@@ -1262,6 +1292,33 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 }
             },
         }),
+        PermissionAutoJudged {
+            tool_name,
+            decision,
+            reason,
+        } => Some(EngineEvent::PermissionAutoJudged {
+            tool_name: tool_name.clone(),
+            decision: decision.clone(),
+            reason: reason.clone(),
+        }),
+        StepStarted { step_kind, step_index } => Some(EngineEvent::StepStarted {
+            step_kind: match step_kind {
+                protocol::StepKind::Model => "model".to_string(),
+                protocol::StepKind::Tool => "tool".to_string(),
+            },
+            step_index: *step_index,
+        }),
+        StepFinished { step_kind, step_index } => Some(EngineEvent::StepFinished {
+            step_kind: match step_kind {
+                protocol::StepKind::Model => "model".to_string(),
+                protocol::StepKind::Tool => "tool".to_string(),
+            },
+            step_index: *step_index,
+        }),
+        RunModeChanged { from, to } => Some(EngineEvent::RunModeChanged {
+            from: from.clone(),
+            to: to.clone(),
+        }),
         UserQuestionRequested {
             request_id,
             question,
@@ -1374,7 +1431,7 @@ mod tests {
         config::{AuthMode, ProviderKind, ProvidersFile},
         types::{ToolCall, ToolCallStreamDelta, Usage},
     };
-    use platform::storage::sessions::MessageMeta;
+    use agent_core::storage::sessions::MessageMeta;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1727,6 +1784,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
                     hitl: None,
+                    permission_store: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -1742,19 +1800,19 @@ mod tests {
             assert_eq!(assistant.parts.len(), 4);
             assert!(matches!(
                 &assistant.parts[0],
-                platform::storage::sessions::MessagePart::Text { text } if text == "先说"
+                agent_core::storage::sessions::MessagePart::Text { text } if text == "先说"
             ));
             assert!(matches!(
                 &assistant.parts[1],
-                platform::storage::sessions::MessagePart::ToolCall { name, .. } if name == "missing_a"
+                agent_core::storage::sessions::MessagePart::ToolCall { name, .. } if name == "missing_a"
             ));
             assert!(matches!(
                 &assistant.parts[2],
-                platform::storage::sessions::MessagePart::ToolCall { name, .. } if name == "missing_b"
+                agent_core::storage::sessions::MessagePart::ToolCall { name, .. } if name == "missing_b"
             ));
             assert!(matches!(
                 &assistant.parts[3],
-                platform::storage::sessions::MessagePart::Text { text } if text == "后说"
+                agent_core::storage::sessions::MessagePart::Text { text } if text == "后说"
             ));
 
             std::fs::remove_dir_all(data_dir).unwrap();
@@ -1786,6 +1844,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
                     hitl: None,
+                    permission_store: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -1802,7 +1861,7 @@ mod tests {
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    platform::storage::sessions::MessagePart::ToolCall { name, .. } => {
+                    agent_core::storage::sessions::MessagePart::ToolCall { name, .. } => {
                         Some(name.as_str())
                     }
                     _ => None,

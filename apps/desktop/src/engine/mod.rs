@@ -56,6 +56,30 @@ pub enum EngineEvent {
         request_id: String,
         decision: String, // "allow_once" / "allow_and_remember" / "deny" / "deny_with_feedback"
     },
+    /// AutoMode judge 自动给出决策（架构 §4.4.4）。前端可在消息流里渲染
+    /// 「AutoMode 自动放行 / 拒绝 / 转人工」，作为审计证据。
+    PermissionAutoJudged {
+        tool_name: String,
+        /// "allow" / "deny" / "ask"
+        decision: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reason: Option<String>,
+    },
+    /// Step 粒度起始（架构 §4.2）。step_kind = `"model"` 表示一次模型调用，
+    /// `"tool"` 表示一批 tool_call。前端可用 metrics / 进度条。
+    StepStarted {
+        step_kind: String,
+        step_index: u32,
+    },
+    StepFinished {
+        step_kind: String,
+        step_index: u32,
+    },
+    /// 运行模式切换（架构 §10.2）。前端用来刷新状态栏 mode 标签。
+    RunModeChanged {
+        from: String,
+        to: String,
+    },
     /// agent 主动向用户提问（ask 工具）。前端弹出选项 + 自由输入框，用户回应通过
     /// `answer_question` Tauri 命令回到 core。
     UserQuestionRequested {

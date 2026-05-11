@@ -11,104 +11,122 @@ pub use hitl::HitlState;
 
 use std::sync::Arc;
 
-use agent_core::tools::{self as tools, ToolInfo};
+use agent_core::core_client::{CoreClient, LocalCoreClient};
+use agent_core::permissions::PermissionStore;
+use agent_core::tools::ToolInfo;
 use model_gateway::{
     auth as oauth,
     config::{self as providers, Provider, ProviderPreset, ProvidersFile},
-    discovery::{self as model_fetch, FetchedModel},
-    health::{self as provider_health, ProviderModelTestResult},
+    discovery::FetchedModel,
+    health::ProviderModelTestResult,
 };
-use platform::{
-    config::{
-        prompts::{self as prompts, Prompt, PromptsFile},
-        settings::{self as settings_store, Settings},
-    },
-    runtime as cancellation,
-    storage::sessions::{
-        self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta,
-    },
+use common::runtime as cancellation;
+use agent_core::storage::{
+    prompts::{Prompt, PromptsFile},
+    sessions::{self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta},
+    settings::{self as settings_store, Settings},
 };
 use std::path::PathBuf;
 use tauri::{ipc::Channel, AppHandle, Manager, State, WindowEvent};
 
-fn data_dir(app: &AppHandle) -> AppResult<std::path::PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::msg(e.to_string()))?;
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
+    // 架构 §6.1 / 决策 D10：CLI 与 Desktop 共享 ~/.hebbian/。
+    // `default_data_dir` 在第一次调用时会检测 Tauri bundle 老路径并自动迁移
+    // （Library/Application Support/dev.ricardo.hebbian → ~/.hebbian），打 info log。
+    Ok(agent_core::storage::default_data_dir())
 }
 
 // ========== Providers ==========
+//
+// 架构 §7.1：surface 调 CoreClient 转发到 storage / model_gateway。
+// Tauri command 仅做参数透传 + AppError 兜底。
+
+fn core(app: &AppHandle) -> AppResult<Arc<LocalCoreClient>> {
+    let st: tauri::State<'_, Arc<LocalCoreClient>> = app
+        .try_state::<Arc<LocalCoreClient>>()
+        .ok_or_else(|| AppError::msg("LocalCoreClient 未注册"))?;
+    Ok(st.inner().clone())
+}
+
+fn map_core_err(e: agent_core::core_client::CoreError) -> AppError {
+    match e {
+        agent_core::core_client::CoreError::Storage(err) => err,
+        other => AppError::msg(other.to_string()),
+    }
+}
 
 #[tauri::command]
 fn get_providers(app: AppHandle) -> AppResult<ProvidersFile> {
-    providers::load(&data_dir(&app)?)
+    core(&app)?.list_providers().map_err(map_core_err)
 }
 
 #[tauri::command]
 fn save_providers(app: AppHandle, file: ProvidersFile) -> AppResult<()> {
-    providers::save(&data_dir(&app)?, &file)
+    core(&app)?.save_providers(file).map_err(map_core_err)
 }
 
 #[tauri::command]
 fn upsert_provider(app: AppHandle, provider: Provider) -> AppResult<Provider> {
-    providers::upsert(&data_dir(&app)?, provider)
+    core(&app)?.save_provider(provider).map_err(map_core_err)
 }
 
 #[tauri::command]
-fn list_provider_presets() -> Vec<ProviderPreset> {
-    providers::list_presets()
+fn list_provider_presets(app: AppHandle) -> AppResult<Vec<ProviderPreset>> {
+    Ok(core(&app)?.list_provider_presets())
 }
 
 #[tauri::command]
-async fn fetch_provider_models(provider: Provider) -> AppResult<Vec<FetchedModel>> {
-    model_fetch::fetch(&provider).await
+async fn fetch_provider_models(app: AppHandle, provider: Provider) -> AppResult<Vec<FetchedModel>> {
+    core(&app)?
+        .fetch_provider_models(provider)
+        .await
+        .map_err(map_core_err)
 }
 
 #[tauri::command]
 async fn test_provider_model(
+    app: AppHandle,
     provider: Provider,
     model: String,
 ) -> AppResult<ProviderModelTestResult> {
-    provider_health::test_provider_model(provider, model)
+    core(&app)?
+        .test_provider(provider, model)
         .await
-        .map_err(|e| AppError::msg(e.to_string()))
+        .map_err(map_core_err)
 }
 
 // ========== Prompts ==========
 
 #[tauri::command]
 fn list_prompts(app: AppHandle) -> AppResult<PromptsFile> {
-    prompts::load(&data_dir(&app)?)
+    core(&app)?.list_prompts().map_err(map_core_err)
 }
 
 #[tauri::command]
 fn upsert_prompt(app: AppHandle, prompt: Prompt) -> AppResult<Prompt> {
-    prompts::upsert(&data_dir(&app)?, prompt)
+    core(&app)?.upsert_prompt(prompt).map_err(map_core_err)
 }
 
 #[tauri::command]
 fn delete_prompt(app: AppHandle, id: String) -> AppResult<()> {
-    prompts::delete(&data_dir(&app)?, &id)
+    core(&app)?.delete_prompt(&id).map_err(map_core_err)
 }
 
 #[tauri::command]
 fn set_default_prompt(app: AppHandle, id: Option<String>) -> AppResult<PromptsFile> {
-    prompts::set_default(&data_dir(&app)?, id)
+    core(&app)?.set_default_prompt(id).map_err(map_core_err)
 }
 
 // ========== Sessions ==========
 
 #[tauri::command]
 fn list_sessions(app: AppHandle) -> AppResult<Vec<SessionMeta>> {
-    sessions::list(&data_dir(&app)?)
+    core(&app)?.list_sessions().map_err(map_core_err)
 }
 
 #[tauri::command]
 fn get_session(app: AppHandle, id: String) -> AppResult<Session> {
-    sessions::load(&data_dir(&app)?, &id)
+    core(&app)?.load_session(&id).map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -119,23 +137,45 @@ fn create_session(
     system_prompt: Option<String>,
     prompt_id: Option<String>,
 ) -> AppResult<Session> {
-    sessions::create(
-        &data_dir(&app)?,
-        provider_id,
-        model,
-        system_prompt,
-        prompt_id,
-    )
+    let dd = data_dir(&app)?;
+    let session = sessions::create(&dd, provider_id, model, system_prompt, prompt_id)?;
+    // 架构 §4.9.1 / §10.8：新 session 同步生成目录结构 + meta.json，
+    // 为流式 partial sidecar 与中断恢复预留落点（即使主体 jsonl 仍走老路径）。
+    if let Err(e) = ensure_session_layout(&dd, &session) {
+        tracing::warn!(error = %e, session_id = %session.id, "初始化 session 目录失败");
+    }
+    Ok(session)
+}
+
+fn ensure_session_layout(
+    data_dir: &std::path::Path,
+    session: &Session,
+) -> AppResult<()> {
+    use agent_core::storage::sessions_dir;
+    sessions_dir::ensure_session_dirs(data_dir, &session.id)?;
+    sessions_dir::save_meta(
+        data_dir,
+        &sessions_dir::SessionDirMeta {
+            session_id: session.id.clone(),
+            created_at: session.created_at,
+            agent: session.prompt_id.clone().unwrap_or_default(),
+            workdir: session.workdir.clone(),
+            provider: session.provider_id.clone(),
+            model: session.model.clone(),
+            last_interrupted_at: None,
+        },
+    )?;
+    Ok(())
 }
 
 #[tauri::command]
 fn rename_session(app: AppHandle, id: String, title: String) -> AppResult<Session> {
-    sessions::rename(&data_dir(&app)?, &id, title)
+    core(&app)?.rename_session(&id, title).map_err(map_core_err)
 }
 
 #[tauri::command]
 fn delete_session(app: AppHandle, id: String) -> AppResult<()> {
-    sessions::delete(&data_dir(&app)?, &id)
+    core(&app)?.delete_session(&id).map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -164,12 +204,13 @@ fn search_sessions(
     case_sensitive: Option<bool>,
     regex: Option<bool>,
 ) -> AppResult<Vec<SearchHit>> {
-    sessions::search(
-        &data_dir(&app)?,
-        &query,
-        case_sensitive.unwrap_or(false),
-        regex.unwrap_or(false),
-    )
+    core(&app)?
+        .search_sessions(
+            &query,
+            case_sensitive.unwrap_or(false),
+            regex.unwrap_or(false),
+        )
+        .map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -181,7 +222,7 @@ fn update_session_config(
     system_prompt: Option<String>,
     prompt_id: Option<String>,
     stream: Option<bool>,
-    reasoning: Option<platform::ReasoningConfig>,
+    reasoning: Option<common::ReasoningConfig>,
     // clear_reasoning：显式重置推理配置；当 reasoning=None 且这里传 Some(true) 时清空。
     clear_reasoning: Option<bool>,
 ) -> AppResult<Session> {
@@ -285,14 +326,14 @@ fn switch_provider_model(
     let mut updated = sessions::load(&dd, &id)?;
     updated.provider_id = new_provider_id;
     updated.model = new_model;
-    let supports = platform::reasoning::anthropic_supports_thinking(&updated.model)
-        || platform::reasoning::openai_supports_reasoning(&updated.model);
+    let supports = common::reasoning::anthropic_supports_thinking(&updated.model)
+        || common::reasoning::openai_supports_reasoning(&updated.model);
     if supports {
         // 首次切到支持推理的模型：默认 thinking on + extra effort（用户可在 UI 改）
         if updated.reasoning.is_none() {
-            updated.reasoning = Some(platform::ReasoningConfig {
+            updated.reasoning = Some(common::ReasoningConfig {
                 enabled: Some(true),
-                effort: Some(platform::ReasoningEffort::Extra),
+                effort: Some(common::ReasoningEffort::Extra),
                 long_context: None,
             });
         }
@@ -317,9 +358,10 @@ async fn preview_session_payload(
 async fn send_message(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
+    permission_store: State<'_, Option<Arc<PermissionStore>>>,
     session_id: String,
     content: String,
-    attachments: Vec<platform::attachments::MessageAttachment>,
+    attachments: Vec<common::attachments::MessageAttachment>,
     stream: bool,
     enabled_tools: Vec<String>,
     request_id: String,
@@ -337,6 +379,7 @@ async fn send_message(
             cancel_flag: runtime.cancel.clone(),
             pending_inputs: Some(runtime.pending_inputs.clone()),
             hitl: Some(hitl.inner().clone()),
+            permission_store: permission_store.inner().clone(),
         },
         on_event,
     )
@@ -361,9 +404,9 @@ fn inject_user_message(
     session_id: String,
     request_id: String,
     content: String,
-    attachments: Vec<platform::attachments::MessageAttachment>,
-) -> AppResult<platform::storage::sessions::Message> {
-    use platform::storage::sessions::{self, Message, Role};
+    attachments: Vec<common::attachments::MessageAttachment>,
+) -> AppResult<agent_core::storage::sessions::Message> {
+    use agent_core::storage::sessions::{self, Message, Role};
     let dd = data_dir(&app)?;
     let user_msg = Message {
         id: sessions::new_id(),
@@ -379,7 +422,7 @@ fn inject_user_message(
 
     let injected = cancellation::inject_pending_input(
         &request_id,
-        platform::runtime::PendingUserInput {
+        common::runtime::PendingUserInput {
             content,
             attachments,
         },
@@ -423,11 +466,18 @@ fn approve_permission(
     decision: String,
     feedback: Option<String>,
     pattern: Option<String>,
+    scope: Option<String>,
 ) -> AppResult<()> {
+    let allow_scope = match scope.as_deref().unwrap_or("session") {
+        "session" => protocol::PermissionScope::Session,
+        "global" => protocol::PermissionScope::Global,
+        "once" => protocol::PermissionScope::Once,
+        other => return Err(AppError::msg(format!("未知 scope: {other}"))),
+    };
     let decision = match decision.as_str() {
         "allow_once" => protocol::ApprovalDecision::AllowOnce,
         "allow_and_remember" => protocol::ApprovalDecision::AllowAndRemember {
-            scope: protocol::PermissionScope::Session,
+            scope: allow_scope,
             pattern,
         },
         "deny" => protocol::ApprovalDecision::Deny,
@@ -509,7 +559,7 @@ async fn try_generate_title(
     dd: &std::path::Path,
     provider: model_gateway::config::Provider,
     model: &str,
-    messages: &[platform::storage::sessions::Message],
+    messages: &[agent_core::storage::sessions::Message],
 ) -> Option<String> {
     let provider = oauth::refresh::ensure_fresh_provider_token(dd, provider)
         .await
@@ -518,20 +568,20 @@ async fn try_generate_title(
 }
 
 #[tauri::command]
-fn list_tools() -> Vec<ToolInfo> {
-    tools::tool_manifest()
+fn list_tools(app: AppHandle) -> AppResult<Vec<ToolInfo>> {
+    Ok(core(&app)?.list_tools())
 }
 
 // ========== Settings ==========
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> AppResult<Settings> {
-    Ok(settings_store::load(&data_dir(&app)?))
+    Ok(core(&app)?.get_settings())
 }
 
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
-    settings_store::save(&data_dir(&app)?, &settings)
+    core(&app)?.save_settings(settings).map_err(map_core_err)
 }
 
 /// 更新对话级设置（workdir / allowed_dirs / enabled_tools / skill_dirs）。
@@ -674,19 +724,17 @@ fn approve_path_access(
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     }
     // resolve gate；workspace.add_allowed_dir 已经由 agent_loop 在 AllowAndRemember 时执行
-    let scope_enum = match scope.as_str() {
-        "all_project" => protocol::PermissionScope::Global,
-        "this_project" => protocol::PermissionScope::Session,
-        _ => protocol::PermissionScope::Run,
-    };
-    let decision = if scope == "once" {
-        protocol::ApprovalDecision::AllowOnce
-    } else {
-        // 路径越界审批不在工具/命令维度，pattern 永远 None
-        protocol::ApprovalDecision::AllowAndRemember {
-            scope: scope_enum,
+    let decision = match scope.as_str() {
+        "once" => protocol::ApprovalDecision::AllowOnce,
+        "this_project" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Session,
             pattern: None,
-        }
+        },
+        "all_project" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Global,
+            pattern: None,
+        },
+        other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     };
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
@@ -700,7 +748,7 @@ fn approve_path_access(
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AttachPathResult {
     Dir { path: String, name: String },
-    File { attachment: platform::attachments::MessageAttachment },
+    File { attachment: common::attachments::MessageAttachment },
     Missing { path: String },
     Unsupported { path: String, reason: String },
 }
@@ -757,7 +805,7 @@ fn attach_path(path: String) -> AppResult<AttachPathResult> {
         let bytes = std::fs::read(p)?;
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         return Ok(AttachPathResult::File {
-            attachment: platform::attachments::MessageAttachment::Image {
+            attachment: common::attachments::MessageAttachment::Image {
                 name,
                 media_type,
                 data,
@@ -780,7 +828,7 @@ fn attach_path(path: String) -> AppResult<AttachPathResult> {
     let content = std::fs::read_to_string(p)
         .map_err(|e| AppError::msg(format!("{name} 读取失败：{e}")))?;
     Ok(AttachPathResult::File {
-        attachment: platform::attachments::MessageAttachment::TextFile {
+        attachment: common::attachments::MessageAttachment::TextFile {
             name,
             media_type,
             content,
@@ -989,11 +1037,33 @@ pub fn run() {
     // 与 Tauri 的 runtime 完全隔离。OTEL_EXPORTER_OTLP_ENDPOINT 未设时只装日志。
     let otel_guard = observability::init("hebbian-desktop", "agent_core=debug,warn");
 
+    // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
+    // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
+    // AllowAndRemember(Global) 会兜底为 AllowOnce。
+    let data_dir_for_core = agent_core::storage::default_data_dir();
+    let permission_store = match PermissionStore::open(&data_dir_for_core) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            tracing::warn!(error = %e, "PermissionStore 打开失败，全局权限规则将不可用");
+            None
+        }
+    };
+    // 架构 §7：LocalCoreClient 在 AppState 中作为同步 API 入口；Desktop 的
+    // chat / send_message 仍走 chat 模块按需构造 Harness，因此 CoreClient
+    // 不持 Harness。
+    let core_client = Arc::new(LocalCoreClient::new(
+        None,
+        data_dir_for_core.clone(),
+        permission_store.clone(),
+    ));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(HitlState::default()))
         .manage(otel_guard)
+        .manage(permission_store)
+        .manage(core_client)
         .setup(|app| {
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))

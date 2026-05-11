@@ -1,1 +1,1 @@
-pub use platform::{AppError, AppResult};
+pub use common::{AppError, AppResult};
