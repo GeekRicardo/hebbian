@@ -5,7 +5,7 @@ members = [
     "crates/agent-core",
     "crates/model-gateway",
     "crates/observability",
-    "crates/platform",
+    "crates/common",
     "crates/protocol",
 ]
 resolver = "2"
