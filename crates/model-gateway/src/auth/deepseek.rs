@@ -12,7 +12,7 @@
 //!
 //! 错误返回的 `code != 0` 时按 `biz_msg` / `msg` 提示用户。
 
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

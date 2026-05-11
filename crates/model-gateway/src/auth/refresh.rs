@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use parking_lot::Mutex as SyncMutex;
-use platform::AppResult;
+use common::AppResult;
 
 use super::{claude_code_import, claude_oauth_refresh};
 use crate::config::{self, AuthMode, Provider, ProviderKind};

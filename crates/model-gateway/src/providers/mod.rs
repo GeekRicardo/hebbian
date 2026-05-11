@@ -7,7 +7,7 @@ use crate::config::{AuthMode, Provider, ProviderKind};
 use crate::types::ModelError;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
-use platform::{runtime as cancellation, CancelFlag};
+use common::{runtime as cancellation, CancelFlag};
 #[cfg(not(test))]
 use rand::Rng;
 use reqwest::RequestBuilder;

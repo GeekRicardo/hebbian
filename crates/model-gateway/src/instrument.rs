@@ -18,7 +18,7 @@ use crate::{
     client::ModelClient,
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage},
 };
-use platform::CancelFlag;
+use common::CancelFlag;
 
 /// `ModelClient` 装饰器：在每次 complete/stream 周围创建 span 与 metrics。
 pub struct InstrumentedClient {

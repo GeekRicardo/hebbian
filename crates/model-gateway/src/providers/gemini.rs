@@ -10,7 +10,7 @@ use crate::{
         has_image_generation_tool, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage,
     },
 };
-use platform::CancelFlag;
+use common::CancelFlag;
 
 pub struct GeminiClient {
     provider: Provider,

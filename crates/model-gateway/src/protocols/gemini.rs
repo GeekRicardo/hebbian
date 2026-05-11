@@ -78,12 +78,12 @@ fn user_parts(user: &UserEntry) -> Vec<Value> {
     }
     for attachment in &user.attachments {
         match attachment {
-            platform::attachments::MessageAttachment::TextFile { .. } => {
+            common::attachments::MessageAttachment::TextFile { .. } => {
                 if let Some(text) = attachment.as_text_block() {
                     parts.push(json!({"text": text}));
                 }
             }
-            platform::attachments::MessageAttachment::Image {
+            common::attachments::MessageAttachment::Image {
                 media_type, data, ..
             } => {
                 parts.push(json!({
@@ -206,7 +206,7 @@ fn parse_usage(v: &Value) -> Usage {
 mod tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
-    use platform::attachments::MessageAttachment;
+    use common::attachments::MessageAttachment;
 
     #[test]
     fn user_attachments_become_gemini_parts() {

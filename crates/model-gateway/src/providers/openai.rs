@@ -13,7 +13,7 @@ use crate::{
         ToolCall, ToolCallStreamDelta, Usage,
     },
 };
-use platform::CancelFlag;
+use common::CancelFlag;
 
 pub struct OpenAiClient {
     provider: Provider,

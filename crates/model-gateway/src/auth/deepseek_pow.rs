@@ -10,7 +10,7 @@
 //! ```
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

@@ -23,7 +23,7 @@ use crate::types::{
     ToolCallStreamDelta, Usage,
 };
 use crate::{client::ModelClient, providers::apply_auth};
-use platform::CancelFlag;
+use common::CancelFlag;
 
 const SESSION_CREATE_URL: &str = "https://chat.deepseek.com/api/v0/chat_session/create";
 const POW_URL: &str = "https://chat.deepseek.com/api/v0/chat/create_pow_challenge";

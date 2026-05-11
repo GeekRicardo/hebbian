@@ -14,8 +14,8 @@ use crate::{
         ToolCall, ToolCallStreamDelta, Usage,
     },
 };
-use platform::reasoning::{anthropic_long_context_uses_beta, ANTHROPIC_LONG_CONTEXT_BETA};
-use platform::CancelFlag;
+use common::reasoning::{anthropic_long_context_uses_beta, ANTHROPIC_LONG_CONTEXT_BETA};
+use common::CancelFlag;
 
 /// 给 Anthropic 请求按需附加 beta 特性头。当前只处理 1M context（其余 beta
 /// 由 [`apply_auth`] 在 OAuth 分支里固定带上）。
@@ -170,8 +170,8 @@ impl ModelClient for AnthropicClient {
         // 这里检查到「4.7 + thinking 启用」就回退到 complete，保证 thinking 能落地；
         // 拿到完整 reasoning 后一次性 emit ReasoningDelta，再分别 emit text 和 tool_use。
         if matches!(
-            platform::reasoning::anthropic_thinking_mode(&req.model),
-            Some(platform::reasoning::AnthropicThinkingMode::Opus47Adaptive)
+            common::reasoning::anthropic_thinking_mode(&req.model),
+            Some(common::reasoning::AnthropicThinkingMode::Opus47Adaptive)
         ) && req
             .reasoning
             .as_ref()

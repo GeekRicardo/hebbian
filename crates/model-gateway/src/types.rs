@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use platform::attachments::MessageAttachment;
-pub use platform::{ReasoningConfig, ReasoningEffort};
+use common::attachments::MessageAttachment;
+pub use common::{ReasoningConfig, ReasoningEffort};
 
 pub const IMAGE_GENERATION_TOOL_NAME: &str = "image_generation";
 

@@ -5,7 +5,7 @@ pub mod refresh;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use parking_lot::Mutex;
-use platform::{AppError, AppResult};
+use common::{AppError, AppResult};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

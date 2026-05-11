@@ -1,5 +1,5 @@
 use crate::config::{AuthMode, Provider, ProviderKind};
-use platform::AppError;
+use common::AppError;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -56,7 +56,7 @@ fn fetch_gemini_models(
     request.send()
 }
 
-pub async fn fetch(provider: &Provider) -> platform::AppResult<Vec<FetchedModel>> {
+pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> {
     let client = reqwest::Client::builder()
         .user_agent("hebbian/0.1")
         .build()?;

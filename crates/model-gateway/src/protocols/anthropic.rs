@@ -5,7 +5,7 @@ use crate::types::{
     AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
-use platform::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
+use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ pub fn build_body(req: &ModelRequest, stream: bool, claude_code_oauth: bool) -> 
     let messages: Vec<Value> = req.entries.iter().filter_map(entry_to_message).collect();
 
     // 三种 thinking schema 互不兼容，按模型家族走不同分支。
-    // 见 platform::reasoning::AnthropicThinkingMode。
+    // 见 common::reasoning::AnthropicThinkingMode。
     let mut max_tokens = req.max_tokens;
     let mut thinking_block: Option<Value> = None;
     let mut output_config: Option<Value> = None;
@@ -264,12 +264,12 @@ fn user_content(user: &UserEntry) -> Value {
     }
     for attachment in &user.attachments {
         match attachment {
-            platform::attachments::MessageAttachment::TextFile { .. } => {
+            common::attachments::MessageAttachment::TextFile { .. } => {
                 if let Some(text) = attachment.as_text_block() {
                     content.push(json!({"type": "text", "text": text}));
                 }
             }
-            platform::attachments::MessageAttachment::Image {
+            common::attachments::MessageAttachment::Image {
                 media_type, data, ..
             } => {
                 content.push(json!({
@@ -467,7 +467,7 @@ fn parse_usage(v: &Value) -> Usage {
 mod tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
-    use platform::attachments::MessageAttachment;
+    use common::attachments::MessageAttachment;
 
     #[test]
     fn user_attachments_become_claude_content_blocks() {

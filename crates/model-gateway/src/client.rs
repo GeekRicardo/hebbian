@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use super::types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent};
-use platform::CancelFlag;
+use common::CancelFlag;
 
 #[async_trait]
 pub trait ModelClient: Send + Sync {

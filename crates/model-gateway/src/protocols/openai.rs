@@ -7,8 +7,8 @@ use crate::types::{
     AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
-use platform::attachments::MessageAttachment;
-use platform::reasoning::openai_supports_reasoning;
+use common::attachments::MessageAttachment;
+use common::reasoning::openai_supports_reasoning;
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -864,7 +864,7 @@ fn parse_responses_usage(v: &Value) -> Usage {
 mod responses_tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
-    use platform::attachments::MessageAttachment;
+    use common::attachments::MessageAttachment;
 
     #[test]
     fn codex_oauth_responses_body_matches_chatgpt_backend_contract() {
@@ -1268,7 +1268,7 @@ mod responses_tests {
 mod deepseek_compat_tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
-    use platform::reasoning::{ReasoningConfig, ReasoningEffort};
+    use common::reasoning::{ReasoningConfig, ReasoningEffort};
 
     fn req_for(model: &str, reasoning: Option<ReasoningConfig>, max_tokens: u32) -> ModelRequest {
         ModelRequest {
