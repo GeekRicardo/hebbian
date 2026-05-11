@@ -329,6 +329,30 @@ export type EngineEvent =
       decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback";
     }
   | {
+      // AutoMode judge 决策（架构 §4.4.4）。UI 可在消息流里渲染审计气泡。
+      type: "permission_auto_judged";
+      tool_name: string;
+      decision: "allow" | "deny" | "ask";
+      reason?: string;
+    }
+  | {
+      // Step 边界（架构 §4.2）。step_kind = model 是模型调用；tool 是工具批次。
+      type: "step_started";
+      step_kind: "model" | "tool";
+      step_index: number;
+    }
+  | {
+      type: "step_finished";
+      step_kind: "model" | "tool";
+      step_index: number;
+    }
+  | {
+      // 运行模式切换（架构 §10.2）。
+      type: "run_mode_changed";
+      from: string;
+      to: string;
+    }
+  | {
       type: "user_question_requested";
       request_id: string;
       question: string;
@@ -368,6 +392,12 @@ export type ApprovalDecisionPayload =
        * 后端兜回 AllowOnce）。
        */
       pattern?: string | null;
+      /**
+       * 记忆生效范围：
+       * - `"session"`（默认）：仅本对话内不再询问，写到 session.jsonl
+       * - `"global"`：写到 ~/.hebbian/permissions.json，所有对话生效
+       */
+      scope?: "session" | "global";
     }
   | { kind: "deny" }
   | { kind: "deny_with_feedback"; feedback: string };

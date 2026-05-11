@@ -171,18 +171,26 @@ export const api = {
       customInstructions: customInstructions ?? null,
     }),
 
-  /** 用户回应一次工具审批请求（HITL） */
+  /**
+   * 用户回应一次工具审批请求（HITL）。
+   *
+   * `scope` 仅对 `allow_and_remember` 有意义：
+   * - `"session"`（默认）：仅当前对话不再询问
+   * - `"global"`：写到 ~/.hebbian/permissions.json，所有对话生效
+   */
   approvePermission: (
     requestId: string,
     decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback",
     feedback?: string,
-    pattern?: string | null
+    pattern?: string | null,
+    scope?: "session" | "global"
   ) =>
     invoke<void>("approve_permission", {
       requestId,
       decision,
       feedback: feedback ?? null,
       pattern: pattern ?? null,
+      scope: scope ?? "session",
     }),
 
   /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */

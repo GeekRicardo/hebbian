@@ -23,6 +23,8 @@ export function ChatView() {
     streamingText,
     streamingParts,
     injectedSinceStream,
+    autoJudgedNotes,
+    currentRunMode,
     sendUserMessage,
     cancelStreaming,
     forkSession,
@@ -475,6 +477,31 @@ export function ChatView() {
               }}
             />
           )}
+          {/* RunMode 状态标签（架构 §10.2）：仅在 run_mode_changed 事件来过后显示，
+              ChatView 内悬浮一行——目前 UI 没有正式状态栏，先以轻量提示出现。 */}
+          {isStreaming && currentRunMode ? (
+            <div className="mx-auto my-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+              RunMode: {currentRunMode}
+            </div>
+          ) : null}
+          {/* AutoMode 判官标记气泡（架构 §4.4.4）：每一个 PermissionAutoJudged 事件渲染一行。
+              当前实现按时间顺序整体追加到流式 bubble 之后；run 结束 reload 时随 slot 一起清掉。 */}
+          {isStreaming &&
+            autoJudgedNotes.map((n, idx) => (
+              <div
+                key={`auto-judge-${idx}`}
+                className="mx-auto my-1 text-xs text-muted-foreground"
+              >
+                {n.decision === "allow" ? "✓" : n.decision === "deny" ? "✗" : "?"}{" "}
+                AutoMode {n.decision === "allow"
+                  ? "自动放行"
+                  : n.decision === "deny"
+                  ? "拒绝"
+                  : "转人工"}{" "}
+                [{n.toolName}]
+                {n.reason ? <span className="opacity-70">：{n.reason}</span> : null}
+              </div>
+            ))}
           {/* 「立即发送」插入的 user message：紧跟当前 streaming bubble 之后展示，
               下一轮 assistant 输出会接在它后面。run 结束 reload session 时此列表被清空。 */}
           {isStreaming &&

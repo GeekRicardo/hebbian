@@ -229,6 +229,16 @@ type SessionStream = {
   pendingApprovalQueue: PendingApproval[];
   pendingQuestion: PendingQuestion | null;
   pendingQuestionQueue: PendingQuestion[];
+  /** AutoMode judge 在 streaming 中产生的判官标记。ChatView 渲染气泡用。 */
+  autoJudgedNotes: AutoJudgedNote[];
+  /** 当前对话的 RunMode 字符串（由 run_mode_changed event 维护）。 */
+  currentRunMode: string | null;
+};
+
+export type AutoJudgedNote = {
+  toolName: string;
+  decision: string;
+  reason?: string | null;
 };
 
 const EMPTY_MIRROR = {
@@ -241,6 +251,8 @@ const EMPTY_MIRROR = {
   pendingApprovalQueue: [] as PendingApproval[],
   pendingQuestion: null as PendingQuestion | null,
   pendingQuestionQueue: [] as PendingQuestion[],
+  autoJudgedNotes: [] as AutoJudgedNote[],
+  currentRunMode: null as string | null,
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -255,6 +267,8 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     pendingApprovalQueue: slot.pendingApprovalQueue,
     pendingQuestion: slot.pendingQuestion,
     pendingQuestionQueue: slot.pendingQuestionQueue,
+    autoJudgedNotes: slot.autoJudgedNotes,
+    currentRunMode: slot.currentRunMode,
   };
 }
 
@@ -323,6 +337,28 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
         (it) => it.requestId !== e.request_id
       ),
     };
+  }
+  if (e.type === "permission_auto_judged") {
+    // AutoMode 判官标记（架构 §4.4.4）：累积到 slot.autoJudgedNotes，ChatView 渲染气泡。
+    return {
+      ...slot,
+      autoJudgedNotes: [
+        ...slot.autoJudgedNotes,
+        {
+          toolName: e.tool_name,
+          decision: e.decision,
+          reason: e.reason ?? null,
+        },
+      ],
+    };
+  }
+  if (e.type === "step_started" || e.type === "step_finished") {
+    // Step 边界事件（架构 §4.2）：当前用于 metrics / 调试，UI 暂不渲染。
+    return slot;
+  }
+  if (e.type === "run_mode_changed") {
+    // 运行模式切换通知（架构 §10.2）：更新当前 RunMode 标签，状态栏 / 顶栏可消费。
+    return { ...slot, currentRunMode: e.to };
   }
   if (e.type === "user_question_requested") {
     const q: PendingQuestion = {
@@ -397,6 +433,10 @@ interface AppState {
   /** 「立即发送」期间临时显示的 user message：渲染在 streaming bubble 之后。 */
   injectedSinceStream: Message[];
   activeRequestId: string | null;
+  /** 当前对话 AutoMode 判官累计标记（镜像自 currentSession 的 slot）。 */
+  autoJudgedNotes: AutoJudgedNote[];
+  /** 当前对话 RunMode 字符串。`null` 表示未收到过 RunModeChanged 事件。 */
+  currentRunMode: string | null;
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
@@ -573,6 +613,8 @@ export const useStore = create<AppState>((set, get) => ({
   streamingParts: [],
   injectedSinceStream: [],
   activeRequestId: null,
+  autoJudgedNotes: [],
+  currentRunMode: null,
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
   providerDialogOpen: false,
@@ -587,7 +629,7 @@ export const useStore = create<AppState>((set, get) => ({
   availableTools: [],
   // 默认只开启搜索/抓取；生图等额外工具需要用户手动开启
   enabledTools: new Set<string>(
-    JSON.parse(localStorage.getItem("enabledTools") ?? '["web_search","web_fetch"]')
+    JSON.parse(localStorage.getItem("enabledTools") ?? '["WebSearch","Fetch"]')
   ),
 
   pendingWorkdir: readStoredWorkdir(),
@@ -686,7 +728,10 @@ export const useStore = create<AppState>((set, get) => ({
         pending.requestId,
         decision.kind,
         decision.kind === "deny_with_feedback" ? decision.feedback : undefined,
-        decision.kind === "allow_and_remember" ? decision.pattern ?? null : null
+        decision.kind === "allow_and_remember" ? decision.pattern ?? null : null,
+        decision.kind === "allow_and_remember"
+          ? decision.scope ?? "session"
+          : undefined
       );
     } catch (e) {
       // 失败时恢复 slot 上的弹窗，让用户重试
@@ -1084,6 +1129,8 @@ export const useStore = create<AppState>((set, get) => ({
       pendingApprovalQueue: [],
       pendingQuestion: null,
       pendingQuestionQueue: [],
+      autoJudgedNotes: [],
+      currentRunMode: null,
     };
     set((state) => ({
       currentSession: appendOptimisticUserMessage(cur, content, attachments, {

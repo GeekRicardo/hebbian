@@ -269,6 +269,7 @@ export function PermissionApprovalPopup() {
                         send({
                           kind: "allow_and_remember",
                           pattern: bashPrefixes.sub,
+                          scope: "session",
                         })
                       }
                       disabled={submitting}
@@ -278,7 +279,7 @@ export function PermissionApprovalPopup() {
                       )}
                       title={`本会话内 ${bashPrefixes.sub}* 都不再询问`}
                     >
-                      始终允许{" "}
+                      当前对话{" "}
                       <code className="font-mono text-[12px]">
                         {bashPrefixes.sub} *
                       </code>
@@ -290,6 +291,7 @@ export function PermissionApprovalPopup() {
                       send({
                         kind: "allow_and_remember",
                         pattern: bashPrefixes.root,
+                        scope: "session",
                       })
                     }
                     disabled={submitting}
@@ -299,6 +301,28 @@ export function PermissionApprovalPopup() {
                     )}
                     title={`本会话内所有 ${bashPrefixes.root}* 都不再询问（含子命令）`}
                   >
+                    当前对话{" "}
+                    <code className="font-mono text-[12px]">
+                      {bashPrefixes.root} *
+                    </code>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        kind: "allow_and_remember",
+                        pattern: bashPrefixes.root,
+                        scope: "global",
+                      })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title={`写入 ~/.hebbian/permissions.json，全局放行 ${bashPrefixes.root}*`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
                     始终允许{" "}
                     <code className="font-mono text-[12px]">
                       {bashPrefixes.root} *
@@ -306,18 +330,37 @@ export function PermissionApprovalPopup() {
                   </button>
                 </>
               ) : pending.toolName !== "Bash" ? (
-                <button
-                  type="button"
-                  onClick={() => send({ kind: "allow_and_remember" })}
-                  disabled={submitting}
-                  className={cn(
-                    "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                    "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                  )}
-                  title="本会话内不再询问此工具"
-                >
-                  总是允许
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({ kind: "allow_and_remember", scope: "session" })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title="本会话内不再询问此工具"
+                  >
+                    当前对话不再询问
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({ kind: "allow_and_remember", scope: "global" })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title="写入 ~/.hebbian/permissions.json，所有对话生效"
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    始终允许
+                  </button>
+                </>
               ) : null}
               <div className="flex-1" />
               <button
