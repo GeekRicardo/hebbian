@@ -12,7 +12,7 @@ pub mod submission;
 
 pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
-pub use event::{Event, EventPayload, RiskLevel, StopReason};
+pub use event::{Event, EventPayload, RiskLevel, StepKind, StopReason};
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
 pub use permission::{
     ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,

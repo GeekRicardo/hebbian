@@ -25,17 +25,19 @@ pub enum ApprovalDecision {
     DenyWithFeedback { feedback: String },
 }
 
-/// 审批记忆生效的范围
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// 审批记忆生效的范围（架构 §4.5.3）。
+///
+/// 三选一：
+/// - [`Once`](Self::Once)：本次放行，不持久化（同协议旧 `Run`）。
+///   注意：本枚举主要用于 [`ApprovalDecision::AllowAndRemember`] 的 `scope` 字段；
+///   单次放行通常应直接发 [`ApprovalDecision::AllowOnce`]，无需带 scope。
+/// - [`Session`](Self::Session)：写到该 session 的 `session.jsonl`，重开仍生效。
+///   合并了旧的 `Project` 语义——本 scope 实质是「对话级 + 持久化」。
+/// - [`Global`](Self::Global)：写到 `~/.hebbian/permissions.json`，任意对话生效。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionScope {
-    /// 仅本次 run
-    Run,
-    /// 整个会话
+    Once,
     Session,
-    /// 当前项目
-    Project,
-    /// 全局（所有项目）
     Global,
 }
 

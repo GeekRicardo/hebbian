@@ -52,6 +52,23 @@ pub enum EventPayload {
         stop_reason: StopReason,
     },
 
+    // —— Step 粒度（架构 §4.2）：ModelStep = 一次 model.stream 调用；
+    //    ToolStep = 一批 tool_call 并发执行 ——
+    StepStarted {
+        step_kind: StepKind,
+        step_index: u32,
+    },
+    StepFinished {
+        step_kind: StepKind,
+        step_index: u32,
+    },
+
+    /// 运行模式切换（架构 §10.2）。actor 收到 [`Op::SwitchRunMode`] 后 emit。
+    RunModeChanged {
+        from: String,
+        to: String,
+    },
+
     // —— 模型流 ——
     TextDelta {
         text: String,
@@ -96,6 +113,16 @@ pub enum EventPayload {
         request_id: PermissionRequestId,
         decision: ApprovalDecision,
     },
+    /// AutoMode 判官自动给出决策（架构 §4.4.4）。surface 端用来在 UI 上提示
+    /// 「agent 替我决定了 X」，并落进 jsonl 作为审计证据。
+    PermissionAutoJudged {
+        tool_name: String,
+        /// `allow` / `deny` / `ask`
+        decision: String,
+        /// 模型给的简短理由。`Allow` 时通常为空。
+        #[serde(default)]
+        reason: Option<String>,
+    },
 
     // —— 人机协作：agent 主动提问 ——
     UserQuestionRequested {
@@ -122,6 +149,16 @@ pub enum EventPayload {
         level: LogLevel,
         message: String,
     },
+}
+
+/// Step 粒度（架构 §4.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepKind {
+    /// 一次 model.stream / model.complete 调用。
+    Model,
+    /// 一批 tool_call 的并发执行。
+    Tool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

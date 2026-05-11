@@ -93,4 +93,9 @@ pub enum Op {
         #[serde(default)]
         agent: Option<AgentRef>,
     },
+
+    /// 运行时切换 RunMode（架构 §10.2）。surface 监听 `RunModeChanged` 事件刷新 UI。
+    /// `new_mode` 用字符串载入，actor 端解析为 [`crate::run_mode_str_*`]——避免协议层
+    /// 反向依赖 agent-core 的 RunMode enum。
+    SwitchRunMode { run_id: RunId, new_mode: String },
 }
