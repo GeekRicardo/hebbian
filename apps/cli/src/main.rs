@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_core::{
+    core_client::{CoreClient, LocalCoreClient},
     hooks::HookManager,
     tools::{default_tools, skill::default_skill_dirs, Tool},
     workspace::Workspace,
@@ -31,13 +32,14 @@ use model_gateway::{
     client::{DynModelClient, ModelClient},
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
 };
-use platform::reasoning::{ReasoningConfig, ReasoningEffort};
-use platform::storage::sessions::{self, Session};
-use platform::CancelFlag;
+use common::reasoning::{ReasoningConfig, ReasoningEffort};
+use agent_core::storage::sessions::{self, Session};
+use common::CancelFlag;
 
 mod mock_provider;
 mod render;
 mod session;
+mod tui;
 
 use session::{CliSession, ConvoInput, SessionPersist};
 
@@ -115,6 +117,33 @@ struct Cli {
     /// Anthropic 1M 上下文 beta header
     #[arg(long = "long-context")]
     long_context: bool,
+
+    /// 运行模式（架构 §4.4.3）。
+    /// 取值：`ask-before-edits` | `edit-automatically` | `plan-mode` | `auto-mode`
+    #[arg(long = "run-mode", value_parser = parse_run_mode, default_value = "ask-before-edits")]
+    run_mode: agent_core::run_mode::RunMode,
+
+    /// 显式启用 ratatui 全屏 TUI（架构 §8）。默认在 isatty 时也自动启 TUI。
+    #[arg(long, conflicts_with_all = &["repl", "prompt", "json"])]
+    tui: bool,
+
+    /// 显式启用 rustyline REPL 简易模式。非 TUI 路径的回退。
+    #[arg(long, conflicts_with_all = &["tui", "prompt", "json"])]
+    repl: bool,
+}
+
+/// 终端是否 isatty——TUI 路径自动判断。stdout / stderr / stdin 都是 tty 才进 TUI，
+/// 否则降级 REPL（兼容管道 / CI / log capture）。
+fn is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::io::stderr().is_terminal()
+}
+
+fn parse_run_mode(s: &str) -> Result<agent_core::run_mode::RunMode, String> {
+    agent_core::run_mode::RunMode::parse(s)
+        .ok_or_else(|| format!("无效 run-mode：{s}（ask-before-edits|edit-automatically|plan-mode|auto-mode）"))
 }
 
 fn parse_effort(s: &str) -> Result<ReasoningEffort, String> {
@@ -141,14 +170,27 @@ async fn main() -> Result<()> {
     // allowed_dirs：CLI 参数优先，否则用全局 settings 默认
     let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
 
+    // 架构 §7：CLI 通过 CoreClient 调同步 API。Harness 仍在 build_harness_and_client
+    // 里按需构造（CLI 长生命周期，但跑 run 时才需要 Harness），故 CoreClient 不挂 harness。
+    let permission_store_for_core = match agent_core::permissions::PermissionStore::open(&data_dir)
+    {
+        Ok(s) => Some(Arc::new(s)),
+        Err(_) => None,
+    };
+    let core_client: Arc<dyn CoreClient> = Arc::new(LocalCoreClient::new(
+        None,
+        data_dir.clone(),
+        permission_store_for_core.clone(),
+    ));
+
     if cli.list_history {
-        return print_history_list(&data_dir);
+        return print_history_list(core_client.as_ref());
     }
     if let Some(command) = &cli.providers {
-        return handle_providers_command(command, &data_dir);
+        return handle_providers_command(command, core_client.as_ref());
     }
     if let Some(target) = &cli.provider_set {
-        return set_default_provider_model(&data_dir, target);
+        return set_default_provider_model(core_client.as_ref(), target);
     }
 
     // 如果 --history，先把已有 session 加载出来。后续 provider/model/system 都可由它兜底。
@@ -160,7 +202,7 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let settings = platform::config::settings::load(&data_dir);
+    let settings = agent_core::storage::settings::load(&data_dir);
     let allowed_dirs = if !cli.allowed_dirs.is_empty() {
         cli.allowed_dirs.clone()
     } else {
@@ -208,21 +250,28 @@ async fn main() -> Result<()> {
     let session_record = if persist {
         Some(match existing {
             Some(s) => s,
-            None => sessions::create_with_source(
-                &data_dir,
-                built
-                    .provider_id
-                    .clone()
-                    .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
-                built
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
-                cli.system.clone(),
-                None,
-                "cli".to_string(),
-            )
-            .map_err(|e| anyhow!("创建 session 失败：{e}"))?,
+            None => {
+                let s = sessions::create_with_source(
+                    &data_dir,
+                    built
+                        .provider_id
+                        .clone()
+                        .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
+                    built
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| if cli.mock { "mock".into() } else { "unknown".into() }),
+                    cli.system.clone(),
+                    None,
+                    "cli".to_string(),
+                )
+                .map_err(|e| anyhow!("创建 session 失败：{e}"))?;
+                // 架构 §4.9.1：同步建立 session 目录布局 + meta.json
+                if let Err(e) = ensure_session_layout(&data_dir, &s) {
+                    tracing::warn!(error = %e, session_id = %s.id, "初始化 session 目录失败");
+                }
+                s
+            }
         })
     } else {
         None
@@ -240,13 +289,27 @@ async fn main() -> Result<()> {
         Some(s) => agent_core::model_io_dump::open_for_session_if_enabled(&data_dir, &s.id).await,
         None => None,
     };
+    // 退出前 flush dump 的句柄。Drop 时直接结束 tokio runtime 会让 spawned
+    // writer task 来不及落盘（jsonl 文件 0 字节）。在 main 末尾显式 flush。
+    let dump_for_flush = model_io_dump.clone();
+
+    // 架构 §4.6.2：CLI 启动时打开 PermissionStore，注入到 Session。
+    // 已在前面 core_client 构造时共用同一份。
+    let permission_store = permission_store_for_core.clone();
+
+    // 非默认模式（AutoMode / EditAutomatically / PlanMode）有专门的派发器决策路径；
+    // CLI observer 的 auto_approve 在这些模式下应让位，否则会抢先短路 dispatch
+    // 的 judge / 工具过滤 / 编辑放行逻辑。
+    let effective_auto_approve = matches!(cli.run_mode, agent_core::run_mode::RunMode::AskBeforeEdits)
+        .then_some(cli.auto_approve)
+        .unwrap_or(false);
 
     let mut session = CliSession::new(
         built.harness,
         built.client,
         system,
         enabled_tools,
-        cli.auto_approve,
+        effective_auto_approve,
         workspace,
         built.provider_display,
         session_record.map(|s| SessionPersist {
@@ -255,9 +318,26 @@ async fn main() -> Result<()> {
             seed_messages: s.messages,
         }),
         model_io_dump,
+        permission_store,
+        cli.run_mode,
+        built.model.clone().unwrap_or_default(),
     );
 
-    match (cli.prompt, cli.json) {
+    // 路由（架构 §8.3）：
+    // - 显式 --tui / --repl：按用户选择
+    // - 默认：终端 isatty 且 stdout/stderr 都是 tty → TUI；否则 REPL（兼容管道）
+    let use_tui = if cli.tui {
+        true
+    } else if cli.repl {
+        false
+    } else {
+        cli.prompt.is_none() && cli.json.is_none() && is_tty()
+    };
+    let outcome = match (cli.prompt, cli.json) {
+        (None, None) if use_tui => {
+            let (inner_session, provider_display, run_mode, persist) = session.into_tui_parts();
+            tui::run_tui(inner_session, provider_display, run_mode, persist).await
+        }
         (None, None) => session.run_loop().await,
         (Some(prompt), None) => session.run_single(prompt).await,
         (None, Some(json_arg)) => {
@@ -267,11 +347,22 @@ async fn main() -> Result<()> {
             session.run_with_history(convo.messages).await
         }
         (Some(_), Some(_)) => unreachable!("clap 通过 conflicts_with 已阻止"),
+    };
+
+    // 退出前等 dump writer task 把缓冲落盘，否则 jsonl 0 字节。
+    if let Some(dump) = dump_for_flush {
+        if let Err(e) = dump.flush().await {
+            tracing::warn!(error = %e, "model_io_dump flush on exit failed");
+        }
     }
+
+    outcome
 }
 
-fn print_history_list(data_dir: &std::path::Path) -> Result<()> {
-    let metas = sessions::list(data_dir).map_err(|e| anyhow!("读 sessions：{e}"))?;
+fn print_history_list(core: &dyn CoreClient) -> Result<()> {
+    let metas = core
+        .list_sessions()
+        .map_err(|e| anyhow!("读 sessions：{e}"))?;
     if metas.is_empty() {
         println!("（无 session）");
         return Ok(());
@@ -349,7 +440,11 @@ async fn build_harness_and_client(
 ) -> Result<BuiltClient> {
     let skill_dirs = default_skill_dirs(workspace.workdir());
     let tools: Vec<Box<dyn Tool>> = default_tools(workspace, &skill_dirs);
-    let harness = Harness::new(tools, HookManager::empty());
+    // 加载 ~/.hebbian/hooks.json 把外部 hook 接进 HookManager（架构 §4.8 / Step 11）。
+    let hook_data_dir = opts.data_dir.clone().unwrap_or_else(default_data_dir);
+    let hook_cfg = agent_core::hooks::load_hooks_config(&hook_data_dir);
+    let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
+    let harness = Harness::new(tools, HookManager::new(external_hooks));
 
     if opts.mock {
         return Ok(BuiltClient {
@@ -438,15 +533,15 @@ fn find_provider<'a>(file: &'a ProvidersFile, key: &str) -> Result<&'a Provider>
         .ok_or_else(|| anyhow!("provider 不存在：{key}"))
 }
 
-fn handle_providers_command(command: &str, data_dir: &std::path::Path) -> Result<()> {
+fn handle_providers_command(command: &str, core: &dyn CoreClient) -> Result<()> {
     match command {
-        "list" => list_providers(data_dir),
+        "list" => list_providers(core),
         other => Err(anyhow!("未知 --providers 命令：{other}（目前支持 list）")),
     }
 }
 
-fn list_providers(data_dir: &std::path::Path) -> Result<()> {
-    let file = model_gateway::config::load(data_dir).map_err(|e| anyhow!("加载 providers：{e}"))?;
+fn list_providers(core: &dyn CoreClient) -> Result<()> {
+    let file = core.list_providers().map_err(|e| anyhow!("加载 providers：{e}"))?;
     if file.providers.is_empty() {
         println!("No providers configured.");
         return Ok(());
@@ -475,11 +570,10 @@ fn list_providers(data_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn set_default_provider_model(data_dir: &std::path::Path, target: &str) -> Result<()> {
+fn set_default_provider_model(core: &dyn CoreClient, target: &str) -> Result<()> {
     let (provider_key, model) = parse_provider_model_target(target);
     let model = model.ok_or_else(|| anyhow!("--provider set 需要格式：name/model_id"))?;
-    let mut file =
-        model_gateway::config::load(data_dir).map_err(|e| anyhow!("加载 providers：{e}"))?;
+    let mut file = core.list_providers().map_err(|e| anyhow!("加载 providers：{e}"))?;
     let provider = file
         .providers
         .iter_mut()
@@ -489,16 +583,41 @@ fn set_default_provider_model(data_dir: &std::path::Path, target: &str) -> Resul
     let provider_id = provider.id.clone();
     let provider_name = provider.name.clone();
     file.default_provider_id = Some(provider_id);
-    model_gateway::config::save(data_dir, &file).map_err(|e| anyhow!("保存 providers：{e}"))?;
+    core.save_providers(file)
+        .map_err(|e| anyhow!("保存 providers：{e}"))?;
     println!("Default provider set to {provider_name}·{model}");
     Ok(())
 }
 
-/// 与 desktop 共享同一 data_dir（Tauri bundle id：dev.ricardo.hebbian）
+/// 共享数据目录（架构 §6.1 / 决策 D10）：`~/.hebbian/`。
+///
+/// 启动时检测 Tauri bundle 老路径（dirs::data_dir()/dev.ricardo.hebbian）若存在，
+/// 自动迁移到新路径并打 info log。完整逻辑见
+/// [`agent_core::storage::default_data_dir`]。
 fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .map(|d| d.join("dev.ricardo.hebbian"))
-        .unwrap_or_else(|| PathBuf::from(".hebbian"))
+    agent_core::storage::default_data_dir()
+}
+
+/// 给 sessions::create_with_source 之后初始化 session 目录布局。
+fn ensure_session_layout(
+    data_dir: &std::path::Path,
+    session: &agent_core::storage::sessions::Session,
+) -> common::AppResult<()> {
+    use agent_core::storage::sessions_dir;
+    sessions_dir::ensure_session_dirs(data_dir, &session.id)?;
+    sessions_dir::save_meta(
+        data_dir,
+        &sessions_dir::SessionDirMeta {
+            session_id: session.id.clone(),
+            created_at: session.created_at,
+            agent: session.prompt_id.clone().unwrap_or_default(),
+            workdir: session.workdir.clone(),
+            provider: session.provider_id.clone(),
+            model: session.model.clone(),
+            last_interrupted_at: None,
+        },
+    )?;
+    Ok(())
 }
 
 /// 把 model id + reasoning 配置注入每次请求（与 desktop 的 ModelWithName 同思路）

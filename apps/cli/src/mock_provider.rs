@@ -7,7 +7,7 @@ use model_gateway::{
     client::ModelClient,
     types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage},
 };
-use platform::CancelFlag;
+use common::CancelFlag;
 
 pub struct MockClient;
 

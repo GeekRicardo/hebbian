@@ -165,6 +165,28 @@ impl TurnRenderer {
                 drop(_guard);
                 self.start_run_spinner();
             }
+            EventPayload::PermissionAutoJudged {
+                tool_name,
+                decision,
+                reason,
+            } => {
+                self.stop_run_spinner();
+                self.flush_streaming_line();
+                let _guard = self.output_lock.lock().ok();
+                let dec_label = match decision.as_str() {
+                    "allow" => "✓ AutoMode 自动放行".green().to_string(),
+                    "deny" => "✗ AutoMode 拒绝".red().to_string(),
+                    "ask" => "? AutoMode 转人工".yellow().to_string(),
+                    other => format!("? AutoMode {other}").yellow().to_string(),
+                };
+                if let Some(r) = reason {
+                    println!("  {dec_label}  [{tool_name}] {r}");
+                } else {
+                    println!("  {dec_label}  [{tool_name}]");
+                }
+                drop(_guard);
+                self.start_run_spinner();
+            }
             EventPayload::UserQuestionRequested { .. } => {
                 self.flush_streaming_line();
             }

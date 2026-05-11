@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_core::{
-    context::transcript::Transcript, definition::AgentDefinition, workspace::Workspace, Harness,
-    Session, SessionConfig, TurnObserver, TurnOutcome,
+    context::transcript::Transcript, definition::AgentDefinition, permissions::PermissionStore,
+    workspace::Workspace, Harness, Session, SessionConfig, TurnObserver, TurnOutcome,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use colored::Colorize;
 use model_gateway::client::ModelClient;
-use platform::storage::sessions::{self, Message as StoredMessage, Role as StoredRole};
+use agent_core::storage::sessions::{self, Message as StoredMessage, Role as StoredRole};
 use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, PermissionScope,
     QuestionOption, UserAnswer,
@@ -34,14 +34,15 @@ pub struct SessionPersist {
 pub struct CliSession {
     inner: Session,
     auto_approve: bool,
+    run_mode: agent_core::run_mode::RunMode,
     provider_display: String,
     persist: Option<PersistRef>,
 }
 
 /// `SessionPersist` 在构造完 transcript 后剩下的部分（不再持有 seed_messages）。
-struct PersistRef {
-    data_dir: PathBuf,
-    session_id: String,
+pub struct PersistRef {
+    pub data_dir: PathBuf,
+    pub session_id: String,
 }
 
 impl CliSession {
@@ -55,6 +56,9 @@ impl CliSession {
         provider_display: String,
         persist: Option<SessionPersist>,
         model_io_dump: Option<agent_core::ModelIoDump>,
+        permission_store: Option<Arc<PermissionStore>>,
+        run_mode: agent_core::run_mode::RunMode,
+        model_name: String,
     ) -> Self {
         let definition = AgentDefinition::default();
         let (initial_transcript, persist_ref) = match persist {
@@ -67,6 +71,22 @@ impl CliSession {
             ),
             None => (Transcript::new(system), None),
         };
+        // 给 PermissionStore 在该 session 下预热一个空规则视图（架构 §4.6.2）。
+        // jsonl 回放 PermissionRule entry 当前未实现，所以传空 Vec。
+        if let (Some(store), Some(p)) = (&permission_store, persist_ref.as_ref()) {
+            store.load_session_rules(&p.session_id, Vec::new());
+        }
+        // ExitPlanMode 工具靠 env var 拿 data_dir + session_id（架构 §4.4.5 hack 路径）。
+        if let Some(p) = persist_ref.as_ref() {
+            std::env::set_var(
+                agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
+                p.data_dir.to_string_lossy().to_string(),
+            );
+            std::env::set_var(
+                agent_core::tools::exit_plan_mode::ENV_SESSION_ID,
+                &p.session_id,
+            );
+        }
         let inner = Session::new(
             Arc::new(harness),
             SessionConfig {
@@ -77,11 +97,17 @@ impl CliSession {
                 initial_transcript,
                 recorder: None,
                 model_io_dump,
+                permission_store,
+                session_id: persist_ref.as_ref().map(|p| p.session_id.clone()),
+                run_mode,
+                model_id: Some(model_name.clone()),
+                data_dir: persist_ref.as_ref().map(|p| p.data_dir.clone()),
             },
         );
         Self {
             inner,
             auto_approve,
+            run_mode,
             provider_display,
             persist: persist_ref,
         }
@@ -160,6 +186,19 @@ impl CliSession {
             }
         }
         self.run_one_turn(last.content).await
+    }
+
+    /// 把 inner Session / provider / run_mode / persist 拆出来，交给 TUI 主循环。
+    /// 调用后本对象不再可用。
+    pub fn into_tui_parts(
+        self,
+    ) -> (
+        agent_core::Session,
+        String,
+        agent_core::run_mode::RunMode,
+        Option<PersistRef>,
+    ) {
+        (self.inner, self.provider_display, self.run_mode, self.persist)
     }
 
     /// loop 交互：rustyline 读输入，每行一个 turn，直到 Ctrl+D。
@@ -266,6 +305,7 @@ impl CliSession {
         let mut observer = CliObserver {
             renderer: TurnRenderer::new(),
             auto_approve: self.auto_approve,
+            run_mode: self.run_mode,
         };
         let summary = handle.drive(&mut observer).await;
 
@@ -287,6 +327,7 @@ impl CliSession {
 struct CliObserver {
     renderer: TurnRenderer,
     auto_approve: bool,
+    run_mode: agent_core::run_mode::RunMode,
 }
 
 #[async_trait]
@@ -311,6 +352,10 @@ impl TurnObserver for CliObserver {
         kind: &PermissionKind,
         summary: &str,
     ) -> Option<ApprovalDecision> {
+        // AutoMode 下 LLM judge 是唯一决策者；observer 不参与（否则会和 judge race）。
+        if matches!(self.run_mode, agent_core::run_mode::RunMode::AutoMode) {
+            return None;
+        }
         if self.auto_approve {
             return Some(ApprovalDecision::AllowOnce);
         }
@@ -516,7 +561,7 @@ async fn prompt_approval_in_terminal(
         match choice {
             Choice::Once => ApprovalDecision::AllowOnce,
             Choice::RememberPattern(pattern) => ApprovalDecision::AllowAndRemember {
-                scope: PermissionScope::Project,
+                scope: PermissionScope::Session,
                 pattern: Some(pattern),
             },
             Choice::RememberTool => ApprovalDecision::AllowAndRemember {
