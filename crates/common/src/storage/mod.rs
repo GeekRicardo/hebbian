@@ -1,17 +1,17 @@
-pub mod sessions;
+//! 通用 JSON 读写 helper + 仅供 model-gateway 使用的 `providers.json` 路径。
+//!
+//! 业务持久化（sessions / prompts / settings / permissions / oauth / 文件锁 /
+//! sessions 目录化 / surface settings 等）按架构 §6.2 全部归属
+//! [`agent_core::storage`]，本模块只保留最小公共原语，避免 `model-gateway`
+//! 反向依赖 `agent-core`。
 
 use crate::AppResult;
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::{Path, PathBuf};
 
+/// `~/.hebbian/providers.json` 路径。`model-gateway` 读写供应商列表用。
 pub fn providers_path(data_dir: &Path) -> PathBuf {
     data_dir.join("providers.json")
-}
-
-pub fn sessions_dir(data_dir: &Path) -> PathBuf {
-    let dir = data_dir.join("sessions");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
 }
 
 pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> AppResult<T> {
