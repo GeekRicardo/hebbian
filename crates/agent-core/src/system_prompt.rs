@@ -20,8 +20,8 @@ use crate::workspace::Workspace;
 
 /// Hebbian 的基础系统提示词。
 ///
-/// 集合 codex / claude-code / opencode 三家精华：identity → 沟通 → 客观性 → 工具策略
-/// → 行动可逆性 → 工程任务 → 验收 → Git → 安全 → 输出 → 环境。
+/// 章节顺序：identity → 沟通 → 客观性 → 工具策略 → 行动可逆性 → 工程任务 → 验收
+/// → Git → 安全 → 输出 → 环境。
 /// 不区分纯聊天 / 写代码模式：模型自己能根据对话内容判断当前任务，不会硬套不相干的章节。
 pub const BASE_SYSTEM_PROMPT: &str = include_str!("../prompts/base_system.md");
 

@@ -2,7 +2,7 @@
 use serde_json::{json, Value};
 
 use crate::types::{
-    AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
+    AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
 use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
@@ -12,17 +12,78 @@ use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 /// Claude Code OAuth token 必须看到这一行 system 才会被服务端识别为合法 CLI 流量。
 const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-pub fn build_body(req: &ModelRequest, stream: bool, claude_code_oauth: bool) -> Value {
-    let messages: Vec<Value> = req.entries.iter().filter_map(entry_to_message).collect();
+// DeepSeek v4 走 Anthropic Messages 端点时的 thinking 预算下限（与 protocols/openai.rs
+// 同源；server 拒掉「thinking 启用 & max_tokens 不足」的请求）。
+const DEEPSEEK_HIGH_THINKING_BUDGET: u32 = 32_768;
+const DEEPSEEK_HIGH_SAFE_MAX_TOKENS: u32 = 65_536;
+const DEEPSEEK_MAX_SAFE_MAX_TOKENS: u32 = 131_072;
+
+const DEEPSEEK_ANTHROPIC_TOOL_THINKING_MISSING: &str =
+    "DeepSeek thinking (Anthropic 端点) 模式下，历史里带 tool_use 的 assistant 消息缺失 \
+     非空 thinking block。请压缩当前会话或开新会话后再继续使用 DeepSeek thinking。";
+
+/// 是否为「走 Anthropic Messages 端点的 DeepSeek v4」模型。
+///
+/// 触发条件：模型名以 `deepseek-v4` 开头且不含 `nothinking`。具体走哪个 base_url
+/// 由 provider 配置决定——只要 provider 是 anthropic-kind 而 model 命中此名段，
+/// 就按 DeepSeek 方言重写 thinking/output_config 字段。
+fn is_deepseek_v4_anthropic_dialect(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    if m.contains("nothinking") {
+        return false;
+    }
+    m.starts_with("deepseek-v4")
+}
+
+pub fn build_body(
+    req: &ModelRequest,
+    stream: bool,
+    claude_code_oauth: bool,
+) -> Result<Value, ModelError> {
+    let dialect_deepseek = is_deepseek_v4_anthropic_dialect(&req.model);
+    let messages: Vec<Value> = req
+        .entries
+        .iter()
+        .filter_map(|e| entry_to_message(e, dialect_deepseek))
+        .collect();
 
     // 三种 thinking schema 互不兼容，按模型家族走不同分支。
     // 见 common::reasoning::AnthropicThinkingMode。
     let mut max_tokens = req.max_tokens;
     let mut thinking_block: Option<Value> = None;
     let mut output_config: Option<Value> = None;
-    let mut suppress_sampling = false;
+    let suppress_sampling = false;
 
-    if let (Some(cfg), Some(mode)) = (
+    if dialect_deepseek {
+        // DeepSeek v4 在 Anthropic 端点上的方言：
+        //   - enabled: `thinking: { type: "enabled" }` + `output_config: { effort: high|max }`
+        //   - disabled: `thinking: { type: "disabled" }`，剥掉 output_config
+        //   - max_tokens 与 OpenAI 兼容路径同步抬升到 65536 / 131072
+        //   - tool_use 多轮 fail-closed：历史里带 tool_use 的 assistant 消息必须有非空 thinking
+        let enabled = req.reasoning.as_ref().is_some_and(|c| c.is_enabled());
+        if enabled {
+            for msg in &messages {
+                ensure_deepseek_anthropic_tool_thinking(msg)?;
+            }
+            let effort = req
+                .reasoning
+                .as_ref()
+                .map(|c| c.effective_effort().deepseek_effort())
+                .unwrap_or("high");
+            thinking_block = Some(json!({ "type": "enabled" }));
+            output_config = Some(json!({ "effort": effort }));
+            let desired = if effort == "max" {
+                DEEPSEEK_MAX_SAFE_MAX_TOKENS
+            } else {
+                DEEPSEEK_HIGH_SAFE_MAX_TOKENS
+            };
+            if max_tokens <= DEEPSEEK_HIGH_THINKING_BUDGET {
+                max_tokens = desired;
+            }
+        } else {
+            thinking_block = Some(json!({ "type": "disabled" }));
+        }
+    } else if let (Some(cfg), Some(mode)) = (
         req.reasoning.as_ref(),
         anthropic_thinking_mode(&req.model),
     ) {
@@ -117,7 +178,7 @@ pub fn build_body(req: &ModelRequest, stream: bool, claude_code_oauth: bool) -> 
     //      整段标缓存，让本轮第一次发就把它写进缓存，下一轮 0 成本读出来
     apply_cache_control(&mut body);
 
-    body
+    Ok(body)
 }
 
 /// 把 `cache_control: ephemeral` 打到 system 末尾 + 倒数第二条 message 的尾 block。
@@ -203,18 +264,27 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
     }
 }
 
-fn entry_to_message(entry: &TranscriptEntry) -> Option<Value> {
+fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> Option<Value> {
     match entry {
         TranscriptEntry::User(user) => Some(json!({"role": "user", "content": user_content(user)})),
         TranscriptEntry::Assistant(AssistantEntry {
             text,
+            reasoning,
             tool_calls,
-            ..
         }) => {
             if tool_calls.is_empty() {
                 Some(json!({"role": "assistant", "content": text}))
             } else {
                 let mut content: Vec<Value> = Vec::new();
+                // DeepSeek v4 Anthropic 端点要求 tool_use 多轮里带回上一轮 thinking。
+                // 仅 dialect_deepseek 时注入，避免影响 Anthropic 原生路径
+                //（Anthropic 自家 thinking 回填另有 signature 字段要求，单独处理）。
+                if inject_deepseek_thinking && !reasoning.trim().is_empty() {
+                    content.push(json!({
+                        "type": "thinking",
+                        "thinking": reasoning,
+                    }));
+                }
                 if !text.is_empty() {
                     content.push(json!({"type": "text", "text": text}));
                 }
@@ -284,6 +354,34 @@ fn user_content(user: &UserEntry) -> Value {
         }
     }
     Value::Array(content)
+}
+
+/// DeepSeek v4 Anthropic 端点的 fail-closed 守卫：tool_use 多轮必须带非空 thinking。
+fn ensure_deepseek_anthropic_tool_thinking(msg: &Value) -> Result<(), ModelError> {
+    if msg.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Ok(());
+    }
+    let Some(content) = msg.get("content").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let has_tool_use = content
+        .iter()
+        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"));
+    if !has_tool_use {
+        return Ok(());
+    }
+    let has_nonempty_thinking = content.iter().any(|b| {
+        b.get("type").and_then(Value::as_str) == Some("thinking")
+            && b.get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty())
+    });
+    if !has_nonempty_thinking {
+        return Err(ModelError::Other(
+            DEEPSEEK_ANTHROPIC_TOOL_THINKING_MISSING.into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn tool_defs(tools: &[ToolDefinition]) -> Vec<Value> {
@@ -494,7 +592,7 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, false);
+        let body = build_body(&req, false, false).unwrap();
         let content = body["messages"][0]["content"].as_array().unwrap();
 
         assert_eq!(content[0], json!({"type": "text", "text": "what changed?"}));
@@ -526,7 +624,7 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, true);
+        let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
         assert_eq!(system.len(), 2);
@@ -548,7 +646,7 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, true);
+        let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
         assert_eq!(system.len(), 1);
@@ -566,7 +664,154 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, false);
-        assert_eq!(body["system"], json!("Be terse."));
+        let body = build_body(&req, false, false).unwrap();
+        // apply_cache_control 会把字符串 system 升格为带 cache_control 的 block 数组。
+        let arr = body["system"].as_array().expect("system 已升格为 block 数组");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["text"], "Be terse.");
+        assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────
+    use crate::types::ToolCall;
+    use common::ReasoningEffort;
+
+    fn req_for_deepseek_anthropic(
+        reasoning: Option<common::ReasoningConfig>,
+        assistant_reasoning: &str,
+        with_tool_call: bool,
+        max_tokens: u32,
+    ) -> ModelRequest {
+        let mut entries: Vec<TranscriptEntry> = vec![TranscriptEntry::User(UserEntry::text("查一下"))];
+        if with_tool_call {
+            entries.push(TranscriptEntry::Assistant(AssistantEntry {
+                text: String::new(),
+                reasoning: assistant_reasoning.into(),
+                tool_calls: vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "Bash".into(),
+                    input: json!({ "command": "ls" }),
+                }],
+            }));
+            entries.push(TranscriptEntry::ToolResults(vec![ToolResult {
+                call_id: "call_1".into(),
+                name: "Bash".into(),
+                content: "a.txt".into(),
+            }]));
+        }
+        ModelRequest {
+            model: "deepseek-v4-pro".into(),
+            system: None,
+            entries,
+            tools: vec![],
+            max_tokens,
+            reasoning,
+        }
+    }
+
+    #[test]
+    fn deepseek_v4_anthropic_enabled_emits_output_config_and_lifts_max_tokens() {
+        let cfg = common::ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let body = build_body(&req_for_deepseek_anthropic(Some(cfg), "", false, 8192), false, false)
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["output_config"]["effort"], "max");
+        assert_eq!(body["max_tokens"], 131_072);
+    }
+
+    #[test]
+    fn deepseek_v4_anthropic_disabled_emits_explicit_off() {
+        let cfg = common::ReasoningConfig {
+            enabled: Some(false),
+            effort: None,
+            long_context: None,
+        };
+        let body = build_body(&req_for_deepseek_anthropic(Some(cfg), "", false, 8192), false, false)
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn deepseek_v4_anthropic_tool_use_history_missing_thinking_fails_closed() {
+        let cfg = common::ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req = req_for_deepseek_anthropic(Some(cfg), "", true, 8192);
+        let err = build_body(&req, false, false).unwrap_err();
+        let crate::types::ModelError::Other(msg) = err else {
+            panic!("expected ModelError::Other");
+        };
+        assert!(msg.contains("thinking"), "msg = {msg}");
+    }
+
+    #[test]
+    fn deepseek_v4_anthropic_tool_use_history_with_reasoning_injects_thinking_block() {
+        let cfg = common::ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req = req_for_deepseek_anthropic(Some(cfg), "之前的思考", true, 8192);
+        let body = build_body(&req, false, false).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        let assistant = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
+        let content = assistant["content"].as_array().unwrap();
+        // 第一块必须是 thinking block，且非空
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "之前的思考");
+        // 后面跟着 tool_use
+        assert!(content.iter().any(|b| b["type"] == "tool_use"));
+    }
+
+    #[test]
+    fn deepseek_nothinking_variant_does_not_trigger_dialect() {
+        // -nothinking 后缀的模型不参与 thinking 方言；body 里不应有 thinking 字段
+        let cfg = common::ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req = ModelRequest {
+            model: "deepseek-v4-pro-nothinking".into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: Some(cfg),
+        };
+        let body = build_body(&req, false, false).unwrap();
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn anthropic_native_model_unaffected_by_deepseek_dialect() {
+        // claude 系列依然走原有的三态 thinking schema，不该走 DeepSeek 分支
+        let cfg = common::ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::High),
+            long_context: None,
+        };
+        let req = ModelRequest {
+            model: "claude-sonnet-4-5".into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: Some(cfg),
+        };
+        let body = build_body(&req, false, false).unwrap();
+        // claude-sonnet-4-5 走 LegacyEnabled：thinking.type=enabled + budget_tokens
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body["thinking"]["budget_tokens"].is_number());
+        // 不应注入 DeepSeek 的 output_config
+        assert!(body.get("output_config").is_none());
     }
 }

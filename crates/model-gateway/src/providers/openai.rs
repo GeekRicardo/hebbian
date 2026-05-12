@@ -79,7 +79,7 @@ impl ModelClient for OpenAiClient {
                 .await;
         }
 
-        let body = proto::build_body(&req, false);
+        let body = proto::build_body(&req, false)?;
 
         super::retry_request(cancel, || {
             let body = body.clone();
@@ -113,7 +113,7 @@ impl ModelClient for OpenAiClient {
                 .await;
         }
 
-        let body = proto::build_body(&req, true);
+        let body = proto::build_body(&req, true)?;
 
         let resp = super::retry_request(cancel.clone(), || {
             let body = body.clone();

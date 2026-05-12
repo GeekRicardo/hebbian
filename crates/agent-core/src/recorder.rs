@@ -1,7 +1,7 @@
 //! 事件持久化：把 run 产生的 [`Event`] 流以 JSONL 格式异步追加写盘。
 //!
-//! 设计参考 codex 的 `RolloutRecorder`：actor 模式，clone 成本只有一个 `Sender`，
-//! 后台 writer task 异步落盘，主 loop 不被 IO 阻塞。
+//! Actor 模式：clone 成本只有一个 `Sender`，后台 writer task 异步落盘，
+//! 主 loop 不被 IO 阻塞。
 //!
 //! 用法：
 //! ```ignore

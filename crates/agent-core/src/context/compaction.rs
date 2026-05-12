@@ -8,8 +8,8 @@ use model_gateway::types::{
     AssistantEntry, ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry,
 };
 
-/// 默认的中文压缩 prompt：参考 codex / claude-code 的 summarization 模板，
-/// 但调成项目内统一的中文风格。
+/// 默认的中文压缩 prompt。让模型把历史浓缩成接力摘要，下一个 LLM
+/// 不读原对话也能继续工作。
 pub const COMPACT_PROMPT: &str = "你正在执行【上下文压缩】。请把当前对话历史浓缩成一份简明、结构化的接力摘要，让另一个 LLM 能在不读原对话的情况下无缝继续工作。\n\n请覆盖：\n- 用户的核心目标 / 约束 / 偏好\n- 已完成的关键工作和重要决策（含影响后续判断的细节）\n- 仍未完成的事项 / 下一步\n- 关键数据：文件路径、命令、代码片段、错误信息、外部链接\n- 任何模型不读上下文就会丢的隐含上下文\n\n输出要求：\n- 直接给摘要正文，不要寒暄、不要 “以下是摘要” 之类的引导语\n- 紧凑但不丢关键信息；优先 bullet list\n- 保持中文";
 
 /// 压缩结果：用于 surface 端展示前后对比。

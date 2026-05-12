@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use crate::types::{
-    AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
+    AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
     TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
 use common::attachments::MessageAttachment;
@@ -12,7 +12,7 @@ use common::reasoning::openai_supports_reasoning;
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
-pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
+pub fn build_body(req: &ModelRequest, stream: bool) -> Result<Value, ModelError> {
     let mut messages: Vec<Value> = Vec::new();
 
     if let Some(sys) = &req.system {
@@ -102,15 +102,14 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Value {
         }
     }
 
-    apply_deepseek_compat(&mut body, req);
+    apply_deepseek_compat(&mut body, req)?;
 
-    body
+    Ok(body)
 }
 
 // ── DeepSeek (api.deepseek.com/beta) OpenAI-compat patch ──────────────────────
 //
-// DeepSeek 的 thinking-aware 模型在 chat completions 里有自己的协议方言（与
-// openhanako provider-compat/deepseek.js 一致）：
+// DeepSeek 的 thinking-aware 模型在 chat completions 里有自己的协议方言：
 //   - `thinking: { type: "enabled" | "disabled" }` 显式开关
 //   - `reasoning_effort` 命名空间只有 `high` / `max`（其它档位钳到 high）
 //   - 思考模式下 `max_tokens` 至少 32768，否则 server 直接拒；effort=max 抬到
@@ -129,18 +128,64 @@ fn is_deepseek_thinking_model(model: &str) -> bool {
     m.starts_with("deepseek-v4") || m == "deepseek-reasoner"
 }
 
-fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) {
+/// DeepSeek thinking 模式下，带 tool_calls 的 assistant 历史消息必须携带 reasoning_content。
+/// 缺失时抛错，让 surface 提示用户压缩当前会话或开新会话——
+/// 比悄悄丢推理链导致后续 server 400 更可控。
+const DEEPSEEK_TOOL_REASONING_MISSING: &str =
+    "DeepSeek thinking 模式下，历史里带 tool_calls 的 assistant 消息缺失 reasoning_content。\
+     请压缩当前会话或开新会话后再继续使用 DeepSeek thinking。";
+
+fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), ModelError> {
     if !is_deepseek_thinking_model(&req.model) {
-        return;
+        return Ok(());
     }
     let Some(map) = body.as_object_mut() else {
-        return;
+        return Ok(());
     };
     let enabled = req.reasoning.as_ref().is_some_and(|c| c.is_enabled());
     if !enabled {
         map.insert("thinking".into(), json!({ "type": "disabled" }));
         map.remove("reasoning_effort");
-        return;
+        // disabled 模式下剥掉历史 messages 里的 reasoning_content，
+        // 避免 server 在「thinking=disabled 却带 reasoning_content」时报 400。
+        if let Some(msgs) = map.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            for msg in msgs {
+                if let Some(obj) = msg.as_object_mut() {
+                    obj.remove("reasoning_content");
+                }
+            }
+        }
+        return Ok(());
+    }
+    // enabled 路径：
+    //   - fail-closed 校验所有「带 tool_calls 的 assistant 消息」必须有 reasoning_content 字段
+    //   - 同时把这些 assistant 消息的 content:null 收紧成空字符串
+    //     （v4 thinking + tool_replay 契约要求 content 非 null）
+    if let Some(msgs) = map.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        for msg in msgs.iter_mut() {
+            let Some(obj) = msg.as_object_mut() else {
+                continue;
+            };
+            if obj.get("role").and_then(Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let has_tool_calls = obj
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|a| !a.is_empty());
+            if !has_tool_calls {
+                continue;
+            }
+            let has_reasoning = obj
+                .get("reasoning_content")
+                .is_some_and(Value::is_string);
+            if !has_reasoning {
+                return Err(ModelError::Other(DEEPSEEK_TOOL_REASONING_MISSING.into()));
+            }
+            if matches!(obj.get("content"), Some(Value::Null) | None) {
+                obj.insert("content".into(), Value::String(String::new()));
+            }
+        }
     }
     let effort = req
         .reasoning
@@ -162,6 +207,7 @@ fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) {
         desired
     };
     map.insert("max_tokens".into(), json!(target));
+    Ok(())
 }
 
 pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool) -> Value {
@@ -1288,7 +1334,7 @@ mod deepseek_compat_tests {
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
-        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false).unwrap();
         assert_eq!(body["reasoning_effort"], "max");
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["max_tokens"], 131_072);
@@ -1301,7 +1347,7 @@ mod deepseek_compat_tests {
             effort: Some(ReasoningEffort::High),
             long_context: None,
         };
-        let body = build_body(&req_for("deepseek-v4-flash", Some(cfg), 8192), false);
+        let body = build_body(&req_for("deepseek-v4-flash", Some(cfg), 8192), false).unwrap();
         assert_eq!(body["reasoning_effort"], "high");
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["max_tokens"], 65_536);
@@ -1315,7 +1361,7 @@ mod deepseek_compat_tests {
                 effort: Some(level),
                 long_context: None,
             };
-            let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+            let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false).unwrap();
             assert_eq!(body["reasoning_effort"], "high", "effort={level:?}");
         }
     }
@@ -1328,7 +1374,7 @@ mod deepseek_compat_tests {
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
-        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 100_000), false);
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 100_000), false).unwrap();
         assert_eq!(body["max_tokens"], 100_000);
     }
 
@@ -1343,21 +1389,22 @@ mod deepseek_compat_tests {
         let body = build_body(
             &req_for("deepseek-v4-pro-nothinking", Some(cfg), 8192),
             false,
-        );
+        )
+        .unwrap();
         assert!(body.get("thinking").is_none());
         assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]
     fn deepseek_thinking_disabled_emits_explicit_off() {
-        // 用户显式关思考时，要发 thinking.disabled 而不是省略字段
-        // （openhanako 行为：让 server 知道是显式关，避免被默认拉起 thinking）。
+        // 用户显式关思考时，要发 thinking.disabled 而不是省略字段——
+        // 让 server 明确知道是显式关，避免被默认拉起 thinking。
         let cfg = ReasoningConfig {
             enabled: Some(false),
             effort: None,
             long_context: None,
         };
-        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false);
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false).unwrap();
         assert_eq!(body["thinking"]["type"], "disabled");
         assert!(body.get("reasoning_effort").is_none());
     }
@@ -1369,12 +1416,118 @@ mod deepseek_compat_tests {
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
-        let body = build_body(&req_for("gpt-5.4", Some(cfg.clone()), 8192), false);
+        let body = build_body(&req_for("gpt-5.4", Some(cfg.clone()), 8192), false).unwrap();
         assert!(body.get("thinking").is_none());
         // gpt-5.4 走的是 openai 自己的 reasoning_effort 注入路径
         assert_eq!(body["reasoning_effort"], "xhigh");
 
-        let body = build_body(&req_for("claude-4.7-opus", Some(cfg), 8192), false);
+        let body = build_body(&req_for("claude-4.7-opus", Some(cfg), 8192), false).unwrap();
         assert!(body.get("thinking").is_none());
+    }
+
+    fn req_with_tool_call_history(
+        model: &str,
+        reasoning: Option<ReasoningConfig>,
+        assistant_reasoning: &str,
+    ) -> ModelRequest {
+        use crate::types::{AssistantEntry, ToolCall, ToolResult};
+        use serde_json::json as j;
+        ModelRequest {
+            model: model.into(),
+            system: None,
+            entries: vec![
+                TranscriptEntry::User(UserEntry::text("查一下")),
+                TranscriptEntry::Assistant(AssistantEntry {
+                    text: String::new(),
+                    reasoning: assistant_reasoning.into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "Bash".into(),
+                        input: j!({ "command": "ls" }),
+                    }],
+                }),
+                TranscriptEntry::ToolResults(vec![ToolResult {
+                    call_id: "call_1".into(),
+                    name: "Bash".into(),
+                    content: "a.txt".into(),
+                }]),
+            ],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning,
+        }
+    }
+
+    #[test]
+    fn deepseek_thinking_tool_call_history_missing_reasoning_fails_closed() {
+        // 历史 assistant 带 tool_calls 但 reasoning 是空——thinking enabled 下 fail-closed
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req = req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "");
+        let err = build_body(&req, false).unwrap_err();
+        assert!(
+            matches!(err, ModelError::Other(ref s) if s.contains("reasoning_content")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn deepseek_thinking_tool_call_history_with_reasoning_passes_and_content_is_empty_string() {
+        // 有 reasoning：通过，且 assistant content 从 null 收紧为空字符串
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req =
+            req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "之前的思考过程");
+        let body = build_body(&req, false).unwrap();
+        let msgs = body["messages"].as_array().expect("messages array");
+        let assistant = msgs
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant msg");
+        assert_eq!(assistant["reasoning_content"], "之前的思考过程");
+        // content 必须是空字符串而非 null（v4 thinking + tool_replay 契约）
+        assert_eq!(assistant["content"], "");
+        assert!(
+            !assistant["content"].is_null(),
+            "content 不允许为 null：{:?}",
+            assistant["content"]
+        );
+    }
+
+    #[test]
+    fn deepseek_thinking_disabled_strips_reasoning_content_from_history() {
+        // thinking disabled 时，messages 历史里的 reasoning_content 必须被剥掉
+        let cfg = ReasoningConfig {
+            enabled: Some(false),
+            effort: None,
+            long_context: None,
+        };
+        let req = req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "历史思考");
+        let body = build_body(&req, false).unwrap();
+        for msg in body["messages"].as_array().unwrap() {
+            assert!(
+                msg.get("reasoning_content").is_none(),
+                "disabled 模式下 reasoning_content 不该出现：{msg:?}"
+            );
+        }
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn non_deepseek_model_tool_call_history_no_reasoning_does_not_fail() {
+        // 非 DeepSeek thinking 模型不受 fail-closed 影响
+        let cfg = ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        };
+        let req = req_with_tool_call_history("gpt-5.4", Some(cfg), "");
+        let _ = build_body(&req, false).expect("non-deepseek 不应 fail-closed");
     }
 }

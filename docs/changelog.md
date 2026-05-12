@@ -781,3 +781,48 @@
   - pretty-JSON 自愈是一次性的：第一次 list 会写一次盘；如果该 session 同时被其它进程读，第一次读可能看到旧 pretty JSON（自愈是 atomic rename，但只在第一次 read 时触发）
 - **关联**: 架构.md §4.9.1 / §4.9.6
 
+
+
+### 2026-05-12 — DeepSeek thinking 路径借鉴 openhanako 四项守卫 + utility 短调用
+
+- **Why**: 用户对照 openhanako [`core/provider-compat/deepseek.js`](../../openhanako/core/provider-compat/deepseek.js) 后指出 hebbian 的 DeepSeek v4 thinking 适配缺四道保险，希望借鉴过来。openhanako 落这四道保险的原因记录在它的注释里（issue #468 等历史踩坑）：tool_calls 多轮缺 reasoning_content 时 server 会 400、v4 thinking + tool_replay 要求 content 非 null、anthropic 端点要求 thinking block 续传、生成标题这种短输出场景不该耗 thinking 预算
+- **改动**:
+  - [crates/model-gateway/src/protocols/openai.rs](../crates/model-gateway/src/protocols/openai.rs) `apply_deepseek_compat`：
+    - 改返回 `Result<(), ModelError>`；带传 `build_body -> Result<Value, ModelError>` 透传到 `providers::openai`
+    - thinking 启用时遍历 messages，对「assistant + tool_calls」做 fail-closed：缺 `reasoning_content` 字段 → 抛 `ModelError::Other`（消息引导用户压缩或开新会话）
+    - 同一遍历里把这些 assistant 的 `content:null` 收紧成 `""`（v4 thinking + tool_replay 契约）
+    - thinking 关闭时主动剥掉历史 `reasoning_content`，避免 server 在「disabled 却带字段」时拒绝
+  - [crates/model-gateway/src/protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs) `build_body`：
+    - 同样改 Result 形态
+    - 新增 `is_deepseek_v4_anthropic_dialect` 分支：`deepseek-v4*`（非 nothinking）走 DeepSeek 方言——`thinking:{type:"enabled"|"disabled"}` + `output_config:{effort:"high"|"max"}` + `max_tokens` 抬升到 65536/131072
+    - `entry_to_message` 增加 `inject_deepseek_thinking` 参数：在该方言下把 `AssistantEntry.reasoning` 注入为 `{type:"thinking",thinking}` content block，供 v4 续推理链
+    - tool_use 多轮 fail-closed：缺非空 thinking block → 抛 `ModelError::Other`
+    - 顺手修正预存 fail 的 `non_oauth_keeps_plain_string_system` 测试断言（apply_cache_control 早就会把 system 字符串升格为 block 数组）
+  - [crates/agent-core/src/session_titler.rs](../crates/agent-core/src/session_titler.rs)（新增）：utility 短调用 helper `generate_title(client, model, user_msg)`——`ReasoningConfig.enabled=Some(false)` + 无工具 + `max_tokens=128` + sanitize 截断 32 字。**不挂自动钩子**，由 surface 按需触发；这次只把工具放到那。命名是 utility 短调用而非新 RunMode，避免污染 §4.4.3 的 4 种 mode
+  - [docs/架构.md](架构.md) §5.2：表格里 DeepSeek 行的「协议」补 `/ Anthropic Messages`；新增 §5.2.1 写清 DeepSeek 方言双协议路径的字段差异、公共规则、与 openhanako 对齐的来源、Step 12 迁移轨迹
+- **影响范围**:
+  - 协议层：`build_body` 返回类型从 `Value` 变 `Result`，**调用方需 `?` 透传**；目前只有 `providers/openai.rs` / `providers/anthropic.rs` 两处用，已同步。
+  - 用户感知：开 DeepSeek thinking + 工具循环时，若历史缺 reasoning（多见于跨版本/旧 session 续接），不再悄悄丢推理链，而是显式抛错，让用户压缩或开新会话——是行为变更，需在 surface 文案上注意
+  - 测试：model-gateway 新增 9 个 unit test（5 个 OpenAI 路径 + 4 个 Anthropic 路径），agent-core 新增 3 个 session_titler test
+- **留尾巴**:
+  - 改动 5 仅落「短调用 helper」，**没有挂自动触发**。下一步选项：①在 Session 第一条 user 落盘后异步触发 ②在压缩工件生成后触发摘要标题。需要 surface / Session lifecycle 再讨论
+  - DeepSeek v4 on Anthropic 端点路径目前**没有实测真实流量**——逻辑按 openhanako 形态实现 + 单测覆盖，但首次有用户真用这条端点时可能仍需调字段
+  - 架构.md §5.2.1 提及「这两段属于业务感知协议适配，按 §4.11 应迁到 model_adapters/」——Step 12 仍未启动；本次保持既有 hack 形态在 gateway 内，避免双线改动
+  - openhanako 还有跨模型 thinking-block → reasoning_content 恢复（`extractReasoningFromContent`），hebbian 暂未实现——hebbian 内部 `AssistantEntry.reasoning` 是单一来源，不存在跨协议形态转换的场景，先不抄
+- **关联**: openhanako `core/provider-compat/deepseek.js`；DeepSeek 官方文档 https://api-docs.deepseek.com/zh-cn/guides/thinking_mode（注意：官方文档明确「多轮不要回传 reasoning_content」，但 v4 thinking + tool_calls 实测必须回传，这是 openhanako/hebbian 共同选择的方言侧实现）
+
+### 2026-05-12 — 注释规则：禁止在代码里引用外部项目名 + 清扫存量引用
+
+- **Why**: 在上一条「借鉴 openhanako 四项守卫」改动里，我在代码注释里写了 8 处「与 openhanako xxx 一致 / 等价 / 同形」之类的引用。用户指出这种引用对未来读代码的人没用——外部项目函数会重命名 / 文件会移动，注释会 rot 成考古碎片；他真要对比时会去看那个项目的 HEAD，而不是 hebbian 注释里某个时间点的引用。借鉴的事实、原因、好处坏处归 changelog，代码注释只写「这是什么 + 为什么必须这样」的当下事实
+- **改动**:
+  - [CLAUDE.md](../CLAUDE.md) §「步骤 3：实施」末尾新增一条强约束：**代码注释里禁止出现外部项目名 / 内部函数名 / 内部文件路径**，附正反例
+  - 清掉本次新加的 8 处 + 顺手清掉 4 处存量引用：
+    - [crates/model-gateway/src/protocols/openai.rs](../crates/model-gateway/src/protocols/openai.rs)：3 处（包括 1 处存量）
+    - [crates/model-gateway/src/protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs)：5 处
+    - [crates/agent-core/src/session_titler.rs](../crates/agent-core/src/session_titler.rs)：1 处
+    - [crates/common/src/reasoning.rs](../crates/common/src/reasoning.rs)：1 处存量
+    - [crates/agent-core/src/recorder.rs](../crates/agent-core/src/recorder.rs)：1 处存量「参考 codex 的 RolloutRecorder」
+    - [crates/agent-core/src/system_prompt.rs](../crates/agent-core/src/system_prompt.rs)：1 处存量「集合 codex / claude-code / opencode 三家精华」
+    - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs)：1 处存量「参考 codex / claude-code 的 summarization 模板」
+- **影响范围**: 纯注释清理，不动代码行为；workspace 编译通过，cargo test --workspace --lib 135 + 18 + 7 + 83 全过
+- **留尾巴**: 无。新增规则后，未来 PR 里若再出现这类引用应被驳回

@@ -13,6 +13,7 @@ pub mod recorder;
 pub mod run_mode;
 pub mod run_state;
 pub mod session;
+pub mod session_titler;
 pub mod storage;
 pub mod system_prompt;
 pub mod tools;

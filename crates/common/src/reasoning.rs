@@ -66,7 +66,7 @@ impl ReasoningEffort {
 
     /// 用于 DeepSeek `reasoning_effort`（OpenAI compat 路径，api.deepseek.com）。
     /// DeepSeek 的 effort 命名空间只有 `high` / `max` 两档，所以我们把 Low/Medium/High
-    /// 全钳到 `high`，Extra 升到 `max`（与 openhanako provider-compat/deepseek.js 对齐）。
+    /// 全钳到 `high`，Extra 升到 `max`。
     pub fn deepseek_effort(self) -> &'static str {
         match self {
             Self::Low | Self::Medium | Self::High => "high",

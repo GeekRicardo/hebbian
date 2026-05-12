@@ -74,6 +74,21 @@
 - 命名严格遵循 §4.4.7
 - 持久化必经 storage 模块（§4.9 / §6.2）
 - 不允许 agent-core 直接 `fs::write` / 直接 `use tauri` / 直接 `use reqwest`（reqwest 仅 model-gateway 与 web 工具可用）
+- **代码注释里禁止出现外部项目名 / 它内部函数名 / 内部文件路径**（如 `openhanako 的 xxx`、`参考 codex/foo.rs`、`与 claude-code-haha applyX 一致`）。原因：外部项目的函数会重命名 / 文件会移动，注释会 rot 成考古碎片；且这类信息对未来读代码的人没用——他真要对比时会去看那个项目的 HEAD，而不是 hebbian 注释里某个时间点的引用。**用法**：借鉴的事实、原项目踩过的坑、为什么这么做的理由、与之前实现的对比，全部写到 changelog 那一条里（changelog 是历史档案，rot 不影响阅读）；代码注释只写「这是什么 + 为什么必须这样」的当下事实
+
+  反例（✗ 不允许）：
+  ```rust
+  // 与 openhanako provider-compat/deepseek.js 的 ensureReasoningContentForToolCalls 一致
+  // 参考 codex/src/foo.rs:42 的写法
+  ```
+
+  正例（✓ 允许）：
+  ```rust
+  // tool_calls 多轮里 reasoning_content 缺失会让 server 直接 400，
+  // 比悄悄丢推理链更可控——抛错让 surface 提示用户压缩或开新会话。
+  ```
+
+  changelog 那一条里写「借鉴了 openhanako 的 XXX 函数 / 这是 issue #468 的根因 / 之前我们是怎样 / 现在改成怎样 / 好处坏处」
 
 ### 步骤 4：验证
 
