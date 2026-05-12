@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown } from "lucide-react";
-import { MessageBubble } from "./MessageBubble";
+import {
+  MessageBubble,
+  FloatingTaskPanel,
+  extractLatestTodoSnapshot,
+} from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -184,6 +188,8 @@ export function ChatView() {
   const userMessageHistory = currentSession.messages
     .filter((m) => m.role === "user")
     .map((m) => m.content);
+
+  const latestTodos = extractLatestTodoSnapshot(currentSession, streamingParts);
 
   // 每条 compact_boundary 之前的消息默认折叠：模型已不再读，需要点击分隔条展开。
   // 多次压缩时每条 boundary 独立展开/折叠。
@@ -399,6 +405,14 @@ export function ChatView() {
         onPrev={prev}
         onNext={next}
       />
+
+      {latestTodos && latestTodos.length > 0 && (
+        <FloatingTaskPanel
+          key={currentSession.id}
+          todos={latestTodos}
+          streaming={isStreaming}
+        />
+      )}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {currentSession.messages.length === 0 && !isStreaming && (

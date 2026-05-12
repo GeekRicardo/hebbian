@@ -826,3 +826,96 @@
     - [crates/agent-core/src/context/compaction.rs](../crates/agent-core/src/context/compaction.rs)：1 处存量「参考 codex / claude-code 的 summarization 模板」
 - **影响范围**: 纯注释清理，不动代码行为；workspace 编译通过，cargo test --workspace --lib 135 + 18 + 7 + 83 全过
 - **留尾巴**: 无。新增规则后，未来 PR 里若再出现这类引用应被驳回
+
+### 2026-05-12 — desktop tool_call 改 Timeline + TodoWrite 浮动右上角 TaskPanel
+
+- **Why**: 用户在 [docs/tool-call-ui-prototypes.html](./tool-call-ui-prototypes.html) 里定下标准——相邻 tool_call 渲染成一条左侧带节点的时间线，遇到 content 就断成新的时间线；TaskList/TodoWrite 不再混在时间线里，而是浮在右上角的独立卡片，全部完成自动收起为小 pill，点击 timeline 里的历史 TaskList 仍可回放当时快照
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：
+    - 新增 `TodoItem` 类型 + `parseTodos(argumentsText)`：兼容 `{todos: [...]}` / 顶层数组 / 字符串元素，宽容解析 `content`/`text`/`title`、`status` 三态、`activeForm`
+    - 新增 `TodoChecklist`：grid checklist UI，区分 pending / in_progress（active 行高亮，显示 `activeForm`）/ completed（删除线）
+    - 新增并导出 `extractLatestTodoSnapshot(session, streamingParts)`：从流式末端 / 历史消息倒序找最近一次 TaskList 调用，返回当时 todos 快照
+    - 新增并导出 `FloatingTaskPanel`：absolute 在 ChatView 右上角（top-[64px] 避开 h-14 header），mount 时按 allDone 决定初始 collapsed；运行时仅 false→true transition 自动收起，尊重用户主动展开/关闭（用 useRef 跟踪 prevAllDone）
+    - timeline 里 TaskList 不再 static——chevron 可旋转、可点击展开；展开后 detail 走 `TodoChecklist`（即"那次快照"）；`callSummary` 对 TaskList 输出 `N 项 · K 完成 · M 进行中`
+    - 已有的「相邻 tool_call 聚成 timeline、遇到 content 断开」由 `buildAssistantRenderParts` 的 `pushToolGroup` 已经做了，本次未动逻辑
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx)：
+    - 引入 `FloatingTaskPanel` + `extractLatestTodoSnapshot`
+    - 在 header 之下、scroll 容器之外渲染浮动 panel，`key={currentSession.id}` 让切换会话时重置内部 collapsed 状态
+- **影响范围**:
+  - 仅 desktop 前端两个 .tsx 文件；不改协议 / Tool 列表 / prompt / storage / CLI
+  - 不破坏既有 saved/streaming/legacy 三种 tool_call 数据形态——`parseTodos` 走 `argumentsText`，与 saved `arguments` string / streaming `arguments|input` 完全兼容
+  - `pnpm exec tsc --noEmit` PASS；`cargo check --workspace` PASS（4 个 warning 与本次无关，cli 既有）
+- **留尾巴**:
+  - FloatingTaskPanel 全展开时 z-30，可能盖到第一条 MessageBubble hover 的 actionMenu（z-20）右上角；用户主动收起后变 pill 不挡。如果反馈不爽，再调整 z 或位置
+  - TodoWrite/TaskList 工具目前在 agent-core 里没有显式 schema 实现（仅 prompt 声明 + effects.rs 白名单），所以 todos 入参格式按 Claude Code 习惯 `{todos: [{content, status, activeForm}]}` 解析；若后续后端真定义了不同 schema，需要同步 `parseTodos`
+
+### 2026-05-12 — desktop tool_call detail 三处微调（Bash 命令头 / description 优先入参 / 放大窗解除内层限高）
+
+- **Why**: 紧接上一条 Timeline 改造，用户提了三点反馈：
+  1. Bash 详情黑框第一行没显示命令本体，看不出到底跑了什么——prototype 里是 `$ cargo check -p agent-core\n\n<output>`
+  2. tool_name 后那个 description 槽位应该展示**模型在入参里写的 description**（更具体的意图说明），fallback 才回到 "运行命令" 这种通用动词
+  3. 点放大图标弹出的窗口尺寸虽然小但**内部仍受 max-h-48 限制**导致需要二次滚动，要在合理大小内尽量一屏看完
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：
+    - Bash / PowerShell detail：从 `callArgs` 取 `command`，拼成 `$ ${command}\n\n${result}` 作为 ToolPre 内容（外层 + 放大窗共用同一份 body）。BashOutput / KillShell 不加，保持 result 原样
+    - 拆分 `callDescription`：抽出纯通用动词的 `defaultActionLabel(name)`，然后 `callDescription` 先读 `argString(args, "description")`（即模型入参里写的），有就用，没有 fallback `defaultActionLabel`。同时把 `callSummary` 里 Bash/PowerShell/自定义 fallback 中的 `argString(args, "description")` 删掉，避免和 description 槽重复
+    - 新增 `ToolDetailExpandedContext`（React Context，默认 false），在 `ExpandButton` 打开的 modal 内层包一个 `Provider value={true}`；`ToolPre` / `RenderedMarkdown` / `SearchResults` / `DefaultToolDetail` 都 `useContext` 这个值，expanded 时去掉自己 `max-h-48` 限制；`SearchResults` 行数截断从 20 提升到 500
+    - 放大窗外形：第一版改成了 `h/w = calc(100vh-2rem)` 占满视口（太大），按反馈改回 `max-w-5xl max-h-[85vh] w-full`，居中显示，刚好覆盖 chat 主体区域
+- **影响范围**:
+  - 仅 desktop 前端一个 .tsx 文件；不动协议 / 后端 / CLI
+  - `callDescription` 行为变更：先看 args.description，可能改变历史消息上 tool_name 旁边显示的文字（之前固定通用动词，现在显示模型写的具体意图）。对没填 description 的 tool 没有变化
+  - `pnpm exec tsc --noEmit` PASS
+- **留尾巴**:
+  - 模型有时把无意义的 description 也填进去（例如 "Run command"），UI 上会显示英文；这是模型行为问题，不在前端兜底
+  - 放大窗 max-w-5xl ≈ 1024px，在超宽屏（4K）上会显得偏小，但 chat 主区域本身一般在这个量级，所以视觉上对齐
+
+### 2026-05-12 — 内置 Maple Mono NF CN 字体（Bash 终端输出用）+ 微调
+
+- **Why**: 上一条把 Bash detail 字体设成 `'Maple Mono NF CN'` 后只能依赖用户系统是否预装；用户要求内置，且粗体 / 斜体都要（终端输出里 markdown 偶尔带粗体，IDE 风格还原需要 italic / bold-italic）。同步把 timeline 整体加淡灰底（`bg-muted/30`）、展开 detail 字号 +2px、Bash detail 第一行加 `$ command`、放大窗回到 chat 区域大小（`max-w-5xl max-h-[85vh]`）
+- **改动**:
+  - 新增 [apps/desktop/frontend/src/assets/fonts/](../apps/desktop/frontend/src/assets/fonts/)：从 `subframe7536/maple-font` v7.9 release 取 NF-CN ttf，本地用 `woff2_compress` 转成 4 份 woff2：
+    - `MapleMono-NF-CN-Regular.woff2`（6.0 M）
+    - `MapleMono-NF-CN-Italic.woff2`（6.5 M）
+    - `MapleMono-NF-CN-Bold.woff2`（6.1 M）
+    - `MapleMono-NF-CN-BoldItalic.woff2`（6.5 M）
+    - 总计 ~25 MB；NF（Nerd Font 图标）+ CN（含中文字符集）形态本身就大，没法再瘦
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css) 顶部：4 个 `@font-face`，按 weight 400/700 × style normal/italic 拆开，`font-display: swap` 避免首屏闪烁
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：
+    - `ToolPre` dark 分支字体改为 `font-['Maple_Mono_NF_CN',ui-monospace,SFMono-Regular,Menlo,monospace]`；浅色分支保持 `font-mono`
+    - timeline 容器：`bg-muted/30` 常态淡灰底 + `rounded-md` + 内 padding
+    - 展开 detail 内字号统一 +2：ToolPre 11→13、RenderedMarkdown 12→14、Ask/Image note 12→14、SearchResults 行/标签 11→13、各 file-bar 11→13、Default Input/Output 标签 10→12、args-table 11→13、TodoChecklist 11→13
+- **影响范围**:
+  - 仓库新增 ~25 MB 二进制资产；首次 `git clone` 会更慢；Tauri bundle 体积会增加同等量级（woff2 直接 bundle 在 dist/ 里）
+  - 仅前端 CSS + 字体文件 + MessageBubble.tsx 改动，不动协议 / 后端 / CLI
+  - `pnpm exec tsc --noEmit` PASS；字体许可 OFL 1.1 已附带在 LICENSE.txt（未单独抽出来 commit，子目录里没放许可证文本）
+- **留尾巴**:
+  - **字体许可文本未单独 commit**：OFL 1.1 要求保留许可证副本，应在 `assets/fonts/` 下放一个 `LICENSE.txt` 或在仓库根 NOTICE 文件提到。后续补
+  - 没装 git-lfs，4 个 6 M woff2 直接进对象库；如果以后字体经常更换、commit 历史膨胀，可以考虑 LFS
+  - 选用 hinted 版本（非 unhinted），macOS / Windows 屏渲染都能用，没有针对 Linux fontconfig 做单独优化
+
+### 2026-05-12 — Maple Mono NF CN 换成 JetBrains Mono（视觉更利落 + 体积 -98%）
+
+- **Why**: 上一条内置 Maple Mono NF CN 后实际跑起来字形效果不如预期（CN 字形偏中文宋体感、NF 图标占宽），用户要求换成 JetBrains 那套编程字体。JetBrains Mono 也是 OFL 1.1、字形对编程优化（连字、零点带斜杠、清晰区分 l1I0O）
+- **改动**:
+  - [apps/desktop/frontend/src/assets/fonts/](../apps/desktop/frontend/src/assets/fonts/)：
+    - 删除 4 个 Maple Mono NF CN woff2（~25 MB）
+    - 新增 4 个 JetBrains Mono woff2（Regular/Italic/Bold/BoldItalic，jsdelivr 拉 master `fonts/webfonts/`），总计 ~370 KB
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css)：4 个 `@font-face` 把 family 从 `"Maple Mono NF CN"` 换成 `"JetBrains Mono"`，URL 路径同步换
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：`ToolPre` dark 分支 className 从 `font-['Maple_Mono_NF_CN',...]` 改成 `font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]`
+- **影响范围**:
+  - 仓库总体积 -24.6 MB（终于不那么膨胀）；JetBrains Mono 只覆盖拉丁字符，中文会 fallback 到系统字体（macOS PingFang SC / Win 微软雅黑），对 terminal 输出无影响
+  - `pnpm exec tsc --noEmit` PASS
+- **留尾巴**:
+  - JetBrains Mono 不含 Nerd Font 图标；如果未来 terminal 输出里有 prompt 风格的 `` /`` 等图标需求，需要再加 Nerd Font 兜底
+  - 字体许可仍未单独放在 `assets/fonts/`；和上一条一起补 LICENSE 文本
+
+### 2026-05-12 — 修复 dev 模式重新编译后桌面窗口抢前台焦点
+
+- **Why**: 用户痛点：开着 `pnpm tauri dev` 在别的窗口工作，每次改 Rust 代码触发 cargo 重编 → 进程重启 → 主窗口跳到最前面抢走当前活动应用的焦点，打断工作流
+- **改动**:
+  - [apps/desktop/tauri.conf.json](apps/desktop/tauri.conf.json): 主窗口加 `"focus": false`，避免 Tauri 创建窗口时把它设为活动窗口
+  - [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs) `setup`: macOS + `debug_assertions` 下，进程进入 `setup` 立刻把 `ActivationPolicy` 降到 `Accessory`，绕过 macOS 在 `NSApplicationDidFinishLaunching` 自动把 Regular 应用 activate 到前台的默认行为；起一个 thread 600ms 后再切回 `Regular`，dock 图标恢复正常但此时不再触发 activate；同时在 release 构建里 `set_focus("main")` 保持双击启动应该抢前台的体验
+- **影响范围**: 仅 desktop crate；不动协议；不动其他 surface
+- **留尾巴**:
+  - 仅在 macOS 验证；Windows / Linux 上 dev 重启抢焦点是另一套机制（Windows 是 `SetForegroundWindow`），如有同样痛点需要单独处理
+  - 600ms 是经验值——如果 Tauri 窗口创建在某些机器上更慢，可能短暂看到 dock 图标空白；目前没出现就先这样

@@ -1,4 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { openUrl as openExternalUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -16,13 +18,23 @@ import {
   ChevronRight,
   CheckCircle2,
   Loader2,
-  Wrench,
   Brain,
-  Table as TableIcon,
-  Braces,
   FileJson,
   Pencil,
   X,
+  Terminal,
+  SquareTerminal,
+  CircleStop,
+  BookOpen,
+  Edit3,
+  Search,
+  Sparkles,
+  MessageSquare,
+  Globe2,
+  Image as ImageIcon,
+  Boxes,
+  Maximize2,
+  ClipboardCheck,
 } from "lucide-react";
 import type {
   Message,
@@ -254,6 +266,18 @@ function statusLabel(status: ToolCallItem["status"]) {
   return "生成参数";
 }
 
+async function openSystemBrowser(url: string) {
+  try {
+    await openExternalUrl(url);
+    return;
+  } catch (error) {
+    if (isTauri()) {
+      throw error;
+    }
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function formatReasoningLabel(
   cfg: import("@/desktop/ui/types").ReasoningConfig | null | undefined
 ): string {
@@ -263,16 +287,6 @@ function formatReasoningLabel(
   const long = cfg.long_context ? " · 1M" : "";
   if (!enabled) return `thinking off${long}`;
   return `thinking · ${effortText}${long}`;
-}
-
-function ToolStatusIcon({ status }: { status: ToolCallItem["status"] }) {
-  if (status === "done") {
-    return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
-  }
-  if (status === "running") {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />;
-  }
-  return <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />;
 }
 
 function previewArgValue(v: unknown): string {
@@ -590,104 +604,754 @@ function RawJsonPanel({
   );
 }
 
-function ArgsTable({
-  entries,
-}: {
-  entries: Array<{ key: string; value: string }>;
-}) {
+function parseArgsObject(argumentsText: string): Record<string, unknown> {
+  const trimmed = argumentsText.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fallthrough
+  }
+  const entries = buildArgsPreview(argumentsText);
+  return Object.fromEntries(entries.filter((e) => e.key).map((e) => [e.key, e.value]));
+}
+
+function argString(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (value === undefined || value === null) return "";
+  return previewArgValue(value);
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function callArgs(call: ToolCallItem): Record<string, unknown> {
+  return parseArgsObject(call.argumentsText);
+}
+
+function callSummary(call: ToolCallItem): string {
+  const args = callArgs(call);
+  const name = call.name || "工具调用";
+  if (name === "Bash") {
+    return argString(args, "command") || "运行命令";
+  }
+  if (name === "PowerShell") {
+    return argString(args, "command") || "运行命令";
+  }
+  if (name === "BashOutput") {
+    return argString(args, "task_id") || "读取后台命令输出";
+  }
+  if (name === "KillShell") {
+    return argString(args, "task_id") || "停止后台命令";
+  }
+  if (name === "Read") {
+    const file = argString(args, "file_path");
+    const offset = argString(args, "offset");
+    return file ? `${basename(file)}${offset ? `:${offset}` : ""}` : "读取文件";
+  }
+  if (name === "Write" || name === "Edit") {
+    const file = argString(args, "file_path");
+    return file ? basename(file) : name === "Edit" ? "编辑文件" : "写入文件";
+  }
+  if (name === "Grep") {
+    return argString(args, "pattern") || "搜索代码";
+  }
+  if (name === "Glob") {
+    return argString(args, "pattern") || "匹配文件";
+  }
+  if (name === "Skill") {
+    return argString(args, "name") || argString(args, "skill") || "读取技能";
+  }
+  if (name === "Ask") {
+    return argString(args, "question") || "用户提问记录";
+  }
+  if (name === "WebSearch") {
+    return argString(args, "query") || "网络搜索";
+  }
+  if (name === "Fetch") {
+    return argString(args, "url") || "抓取网页内容";
+  }
+  if (name === "image_generation") {
+    return argString(args, "prompt") || "生成图片";
+  }
+  if (isTaskListTool(name)) {
+    const todos = parseTodos(call.argumentsText);
+    if (todos.length === 0) return "任务列表";
+    const done = todos.filter((t) => t.status === "completed").length;
+    const active = todos.filter((t) => t.status === "in_progress").length;
+    const segs = [`${todos.length} 项`, `${done} 完成`];
+    if (active > 0) segs.push(`${active} 进行中`);
+    return segs.join(" · ");
+  }
+  if (name === "ExitPlanMode") {
+    return argString(args, "plan_markdown") || "提交计划";
+  }
   return (
-    <div className="max-h-56 overflow-auto rounded-md border border-border bg-muted/40">
-      <table className="w-full table-fixed text-[11px]">
-        <tbody>
-          {entries.map((row, i) => (
-            <tr
-              key={i}
-              className="border-b border-border/40 last:border-b-0 align-top"
+    argString(args, "prompt") ||
+    argString(args, "query") ||
+    argString(args, "file_path") ||
+    "自定义工具调用"
+  );
+}
+
+function defaultActionLabel(name: string): string {
+  if (name === "Bash") return "运行命令";
+  if (name === "PowerShell") return "运行命令";
+  if (name === "BashOutput") return "读取后台命令输出";
+  if (name === "KillShell") return "停止后台命令";
+  if (name === "Read") return "读取文件";
+  if (name === "Write") return "写入文件";
+  if (name === "Edit") return "编辑文件";
+  if (name === "Grep") return "搜索代码";
+  if (name === "Glob") return "匹配文件";
+  if (name === "Skill") return "读取技能说明";
+  if (name === "Ask") return "用户提问记录";
+  if (name === "WebSearch") return "网络搜索";
+  if (name === "Fetch") return "抓取网页内容";
+  if (name === "image_generation") return "生成图片";
+  if (isTaskListTool(name)) return "任务列表";
+  if (name === "ExitPlanMode") return "提交计划";
+  return "自定义工具 fallback";
+}
+
+function callDescription(call: ToolCallItem): string {
+  const name = call.name || "工具调用";
+  // 模型若在入参里写了 description（如 Bash 推荐的简短意图说明），优先展示，
+  // 它通常比通用动词更具体。fallback 才回到 "运行命令" 这一档。
+  const args = callArgs(call);
+  const userDesc = argString(args, "description");
+  if (userDesc) return userDesc;
+  return defaultActionLabel(name);
+}
+
+function ToolIcon({ name }: { name?: string | null }) {
+  const cls = "h-3.5 w-3.5";
+  if (name === "Bash" || name === "PowerShell") return <Terminal className={cls} />;
+  if (name === "BashOutput") return <SquareTerminal className={cls} />;
+  if (name === "KillShell") return <CircleStop className={cls} />;
+  if (name === "Read") return <BookOpen className={cls} />;
+  if (name === "Write" || name === "Edit") return <Edit3 className={cls} />;
+  if (name === "Grep" || name === "Glob") return <Search className={cls} />;
+  if (name === "Skill") return <Sparkles className={cls} />;
+  if (name === "Ask") return <MessageSquare className={cls} />;
+  if (name === "WebSearch" || name === "Fetch") return <Globe2 className={cls} />;
+  if (name === "image_generation") return <ImageIcon className={cls} />;
+  if (isTaskListTool(name)) {
+    return <span className="h-3 w-3 rounded-[2px] border border-current" />;
+  }
+  if (name === "ExitPlanMode") return <ClipboardCheck className={cls} />;
+  return <Boxes className={cls} />;
+}
+
+function isTaskListTool(name?: string | null): boolean {
+  return name === "TaskList" || name === "Task" || name === "TodoWrite";
+}
+
+type TodoStatus = "pending" | "in_progress" | "completed";
+interface TodoItem {
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+}
+
+function parseTodos(argumentsText: string): TodoItem[] {
+  const trimmed = (argumentsText || "").trim();
+  if (!trimmed) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  const arr = Array.isArray((parsed as { todos?: unknown })?.todos)
+    ? (parsed as { todos: unknown[] }).todos
+    : Array.isArray(parsed)
+      ? (parsed as unknown[])
+      : [];
+  return arr
+    .map((raw): TodoItem | null => {
+      if (typeof raw === "string") {
+        return { content: raw, status: "pending" };
+      }
+      if (raw && typeof raw === "object") {
+        const t = raw as Record<string, unknown>;
+        const content = String(t.content ?? t.text ?? t.title ?? "");
+        if (!content) return null;
+        const rawStatus = String(t.status ?? "pending");
+        const status: TodoStatus =
+          rawStatus === "completed" || rawStatus === "in_progress" || rawStatus === "pending"
+            ? rawStatus
+            : "pending";
+        const activeForm = typeof t.activeForm === "string" ? t.activeForm : undefined;
+        return { content, status, activeForm };
+      }
+      return null;
+    })
+    .filter((t): t is TodoItem => t !== null);
+}
+
+function TodoChecklist({ todos }: { todos: TodoItem[] }) {
+  if (todos.length === 0) {
+    return (
+      <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+        空任务列表
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-1 p-1.5">
+      {todos.map((todo, i) => {
+        const done = todo.status === "completed";
+        const active = todo.status === "in_progress";
+        return (
+          <div
+            key={i}
+            className={cn(
+              "grid grid-cols-[16px_minmax(0,1fr)] items-start gap-2 rounded-md px-1.5 py-1 text-[13px]",
+              active && "bg-muted/60"
+            )}
+          >
+            <span
+              className={cn(
+                "mt-[3px] grid h-3.5 w-3.5 place-items-center rounded-[3px] border",
+                done
+                  ? "border-muted-foreground/70 bg-muted-foreground/70 text-background"
+                  : active
+                    ? "border-foreground/60"
+                    : "border-border bg-background"
+              )}
             >
-              <td className="w-1/4 min-w-[64px] break-all px-2 py-1 font-medium text-foreground/85">
-                {row.key || "—"}
-              </td>
-              <td className="px-2 py-1 text-muted-foreground whitespace-pre-wrap break-words">
-                {row.value}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              {done ? (
+                <Check className="h-2.5 w-2.5" strokeWidth={3} />
+              ) : active ? (
+                <span className="h-1.5 w-1.5 rounded-[1px] bg-foreground/60" />
+              ) : null}
+            </span>
+            <span className="min-w-0">
+              <span
+                className={cn(
+                  "block break-words text-foreground",
+                  done && "line-through text-muted-foreground"
+                )}
+              >
+                {active && todo.activeForm ? todo.activeForm : todo.content}
+              </span>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function extractLatestTodoSnapshot(
+  session: Session | undefined,
+  streamingParts?: StreamingAssistantPart[] | null
+): TodoItem[] | null {
+  if (streamingParts && streamingParts.length) {
+    for (let i = streamingParts.length - 1; i >= 0; i--) {
+      const p = streamingParts[i];
+      if (p.type !== "tool_call" || !isTaskListTool(p.name)) continue;
+      const text = p.input === undefined ? formatJsonLike(p.arguments) : formatJsonLike(p.input);
+      const todos = parseTodos(text);
+      if (todos.length) return todos;
+    }
+  }
+  const messages = session?.messages;
+  if (!messages?.length) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    const parts = msg.parts ?? [];
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const p = parts[j];
+      if (p.type === "tool_call" && isTaskListTool(p.name)) {
+        const text = p.arguments || formatJsonLike(p.input);
+        const todos = parseTodos(text);
+        if (todos.length) return todos;
+      }
+    }
+    const legacy = msg.tool_calls ?? [];
+    for (let j = legacy.length - 1; j >= 0; j--) {
+      const c = legacy[j];
+      if (isTaskListTool(c.name)) {
+        const todos = parseTodos(formatJsonLike(c.input));
+        if (todos.length) return todos;
+      }
+    }
+  }
+  return null;
+}
+
+export function FloatingTaskPanel({
+  todos,
+  streaming,
+}: {
+  todos: TodoItem[];
+  streaming?: boolean;
+}) {
+  const total = todos.length;
+  const doneCount = todos.filter((t) => t.status === "completed").length;
+  const activeCount = todos.filter((t) => t.status === "in_progress").length;
+  const allDone = total > 0 && doneCount === total;
+  // mount 时若 session 已是全部完成态，默认收起；否则展开
+  const [collapsed, setCollapsed] = useState(allDone);
+  const prevAllDoneRef = useRef(allDone);
+
+  // 仅在 "未完成 -> 全部完成" 的瞬间自动收起一次，
+  // 用户主动展开 / 关闭后的选择保留，新增 todo 不会强行弹出
+  useEffect(() => {
+    if (!prevAllDoneRef.current && allDone && !streaming) {
+      setCollapsed(true);
+    }
+    prevAllDoneRef.current = allDone;
+  }, [allDone, streaming]);
+
+  if (total === 0) return null;
+  const progress = Math.round((doneCount / total) * 100);
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        className="pointer-events-auto absolute right-4 top-[64px] z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-background hover:text-foreground"
+        title="展开任务列表"
+      >
+        <ClipboardCheck className="h-3 w-3" />
+        <span>
+          任务 {doneCount}/{total}
+        </span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="pointer-events-auto absolute right-4 top-[64px] z-30 w-[280px] overflow-hidden rounded-lg border border-border bg-background/95 shadow-md backdrop-blur">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-2.5 py-1.5">
+        <div className="min-w-0">
+          <div className="text-[11px] font-medium leading-tight">任务列表</div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            {doneCount}/{total} 完成{activeCount > 0 ? ` · 进行中 ${activeCount}` : ""}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-muted-foreground/60 transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="收起"
+            aria-label="收起任务列表"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+      <div className="max-h-[60vh] overflow-auto">
+        <TodoChecklist todos={todos} />
+      </div>
+    </div>
+  );
+}
+
+function ReadHeader({ call }: { call: ToolCallItem }) {
+  const args = callArgs(call);
+  const path = argString(args, "file_path") || "file";
+  const offset = argString(args, "offset");
+  const limit = argString(args, "limit");
+  const range = offset ? `#${offset}${limit ? `+${limit}` : ""}` : "#";
+  return (
+    <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
+      <BookOpen className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 truncate font-mono">
+        {path}:{range}
+      </span>
+    </div>
+  );
+}
+
+function WriteHeader({ call, label = "write" }: { call: ToolCallItem; label?: string }) {
+  const args = callArgs(call);
+  const path = argString(args, "file_path") || "file";
+  const content = argString(args, "content");
+  const lineCount = content ? content.split(/\r?\n/).length : 0;
+  return (
+    <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
+      <Edit3 className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 truncate font-mono">
+        {path}:#{lineCount ? `${lineCount} lines` : label}
+      </span>
+    </div>
+  );
+}
+
+function SkillHeader({ call }: { call: ToolCallItem }) {
+  const args = callArgs(call);
+  const name = argString(args, "skill") || argString(args, "name") || "skill";
+  return (
+    <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
+      <Sparkles className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 truncate font-mono">{name}</span>
+    </div>
+  );
+}
+
+function FetchHeader({ call }: { call: ToolCallItem }) {
+  const args = callArgs(call);
+  const url = argString(args, "url") || "url";
+  const prompt = argString(args, "prompt");
+  const open = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openSystemBrowser(url).catch(() => toast.error("打开链接失败"));
+  };
+  return (
+    <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
+      <Globe2 className="h-3.5 w-3.5 shrink-0" />
+      <a
+        className="min-w-0 truncate text-primary hover:underline"
+        href={url}
+        onClick={open}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {url}
+      </a>
+      {prompt && <span className="shrink-0 truncate">prompt: {prompt}</span>}
+    </div>
+  );
+}
+
+/** 嵌套在 ExpandButton modal 内的渲染组件用它判断是否解除自身高度限制。 */
+const ToolDetailExpandedContext = createContext(false);
+
+function ExpandButton({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        title="放大查看完整内容"
+        aria-label="放大查看完整内容"
+        className="absolute right-2 top-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm hover:bg-background hover:text-foreground"
+      >
+        <Maximize2 className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="grid max-h-[85vh] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-muted/30 px-3">
+              <strong className="min-w-0 truncate text-[13px]">{title}</strong>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:text-foreground"
+                aria-label="关闭"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="min-h-0 overflow-auto p-4">
+              <ToolDetailExpandedContext.Provider value={true}>
+                {children}
+              </ToolDetailExpandedContext.Provider>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ToolPre({ children, dark = false }: { children: string; dark?: boolean }) {
+  const expanded = useContext(ToolDetailExpandedContext);
+  return (
+    <pre
+      className={cn(
+        "overflow-auto rounded-md border p-2 pr-10 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
+        !expanded && "max-h-48",
+        dark
+          ? "border-slate-800 bg-slate-950 text-slate-100 font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]"
+          : "border-border bg-muted/50 text-foreground font-mono"
+      )}
+    >
+      {children}
+    </pre>
+  );
+}
+
+function RenderedMarkdown({ text }: { text: string }) {
+  const expanded = useContext(ToolDetailExpandedContext);
+  return (
+    <div
+      className={cn(
+        "overflow-auto rounded-md border border-border bg-background px-3 py-2 text-[14px] leading-relaxed",
+        !expanded && "max-h-48"
+      )}
+    >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function SearchResults({ call, web }: { call: ToolCallItem; web?: boolean }) {
+  const expanded = useContext(ToolDetailExpandedContext);
+  const rows = (call.result || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, expanded ? 500 : 20);
+  const args = callArgs(call);
+  const query = argString(args, "query") || argString(args, "pattern");
+  const fallback = rows.length ? rows : ["等待返回…"];
+  return (
+    <div className={cn("space-y-1.5 overflow-auto", !expanded && "max-h-48")}>
+      {query && (
+        <div className="mb-1 text-[13px] text-muted-foreground">
+          query: <span className="font-medium text-foreground">{query}</span>
+        </div>
+      )}
+      {fallback.map((line, i) => {
+        const maybeUrl = line.match(/https?:\/\/\S+/)?.[0];
+        const open = (event: React.MouseEvent<HTMLAnchorElement>) => {
+          if (!maybeUrl) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void openSystemBrowser(maybeUrl).catch(() =>
+            toast.error("打开链接失败")
+          );
+        };
+        return (
+          <div key={i} className="rounded-md border border-border bg-background px-2 py-1.5 text-[13px]">
+            {web && maybeUrl ? (
+              <a
+                href={maybeUrl}
+                onClick={open}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                {line}
+              </a>
+            ) : (
+              <span className="whitespace-pre-wrap break-words">{line}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DefaultToolDetail({ call }: { call: ToolCallItem }) {
+  const expanded = useContext(ToolDetailExpandedContext);
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      <div className="min-w-0">
+        <div className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Input
+        </div>
+        <div
+          className={cn(
+            "overflow-auto rounded-md border border-border bg-muted/40",
+            !expanded && "max-h-48"
+          )}
+        >
+          <table className="w-full table-fixed text-[13px]">
+            <tbody>
+              {buildArgsPreview(call.argumentsText).map((row, i) => (
+                <tr key={i} className="border-b border-border/40 last:border-b-0 align-top">
+                  <td className="w-1/3 break-all px-2 py-1 font-medium text-foreground/85">
+                    {row.key || "—"}
+                  </td>
+                  <td className="px-2 py-1 text-muted-foreground whitespace-pre-wrap break-words">
+                    {row.value}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Output
+        </div>
+        <ToolPre>{call.result || "等待返回…"}</ToolPre>
+      </div>
     </div>
   );
 }
 
 function ToolCallDetail({ call }: { call: ToolCallItem }) {
-  const entries = buildArgsPreview(call.argumentsText);
-  const tableable = entries.length > 0 && entries.some((e) => e.key !== "");
-  const [argsRaw, setArgsRaw] = useState(false);
-  const showRaw = argsRaw || !tableable;
-
-  return (
-    <div className="rounded-md border border-border bg-background/70 p-3 text-xs shadow-sm">
-      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Wrench className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <span className="truncate font-medium">
-            {call.name || "工具调用"}
-          </span>
-          {call.id && (
-            <span className="truncate text-[10px] text-muted-foreground">
-              {call.id}
-            </span>
-          )}
-        </div>
-        {call.durationMs !== undefined && call.durationMs !== null && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
-            {(call.durationMs / 1000).toFixed(1)}s
-          </span>
-        )}
+  const name = call.name || "工具调用";
+  const result = call.result || "等待返回…";
+  const title = `${name} · ${callSummary(call)}`;
+  if (
+    name === "Bash" ||
+    name === "PowerShell" ||
+    name === "BashOutput" ||
+    name === "KillShell"
+  ) {
+    const cmd =
+      name === "Bash" || name === "PowerShell"
+        ? argString(callArgs(call), "command")
+        : "";
+    const body = cmd ? `$ ${cmd}\n\n${result}` : result;
+    return (
+      <div className="relative">
+        <ExpandButton title={title}>
+          <ToolPre dark>{body}</ToolPre>
+        </ExpandButton>
+        <ToolPre dark>{body}</ToolPre>
       </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <div className="min-w-0">
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              入参
-            </div>
-            {tableable && (
-              <button
-                type="button"
-                onClick={() => setArgsRaw((v) => !v)}
-                title={showRaw ? "切换为表格" : "切换为原文"}
-                aria-label={showRaw ? "切换为表格" : "切换为原文"}
-                className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                {showRaw ? (
-                  <TableIcon className="h-3 w-3" />
-                ) : (
-                  <Braces className="h-3 w-3" />
-                )}
-              </button>
-            )}
+    );
+  }
+  if (name === "Read") {
+    return (
+      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+        <ExpandButton title={title}>
+          <ToolPre>{result}</ToolPre>
+        </ExpandButton>
+        <ReadHeader call={call} />
+        <ToolPre>{result}</ToolPre>
+      </div>
+    );
+  }
+  if (name === "Skill") {
+    return (
+      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+        <ExpandButton title={title}>
+          <ToolPre>{result}</ToolPre>
+        </ExpandButton>
+        <SkillHeader call={call} />
+        <ToolPre>{result}</ToolPre>
+      </div>
+    );
+  }
+  if (name === "Write" || name === "Edit") {
+    return (
+      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+        <ExpandButton title={title}>
+          <ToolPre>{result}</ToolPre>
+        </ExpandButton>
+        <WriteHeader call={call} label={name === "Edit" ? "edit" : "write"} />
+        <ToolPre>{result}</ToolPre>
+      </div>
+    );
+  }
+  if (name === "Grep" || name === "Glob") {
+    return (
+      <div className="relative">
+        <ExpandButton title={title}>
+          <SearchResults call={call} />
+        </ExpandButton>
+        <SearchResults call={call} />
+      </div>
+    );
+  }
+  if (name === "WebSearch") {
+    return (
+      <div className="relative">
+        <ExpandButton title={title}>
+          <SearchResults call={call} web />
+        </ExpandButton>
+        <SearchResults call={call} web />
+      </div>
+    );
+  }
+  if (name === "Fetch") {
+    return (
+      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+        <ExpandButton title={title}>
+          <div className="space-y-2">
+            <RenderedMarkdown text={result} />
+            <ToolPre>{result}</ToolPre>
           </div>
-          {showRaw ? (
-            <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-              {call.argumentsText || "等待入参…"}
-            </pre>
-          ) : (
-            <ArgsTable entries={entries} />
-          )}
-        </div>
-        <div className="min-w-0">
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            返回值
-          </div>
-          <pre className="max-h-56 overflow-auto rounded-md bg-muted/70 p-2 text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
-            {call.result || "等待返回…"}
-          </pre>
+        </ExpandButton>
+        <FetchHeader call={call} />
+        <div className="space-y-2 p-2">
+          <RenderedMarkdown text={result} />
+          <ToolPre>{result}</ToolPre>
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+  if (name === "Ask") {
+    const args = callArgs(call);
+    return (
+      <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2 text-[14px] text-muted-foreground">
+        <div>只读记录：Ask 的真实选择控件在输入框上方，这里仅回放问题和返回。</div>
+        <div className="font-medium text-foreground">
+          {argString(args, "question") || "用户提问"}
+        </div>
+        <ToolPre>{result}</ToolPre>
+      </div>
+    );
+  }
+  if (name === "ExitPlanMode") {
+    return (
+      <div className="relative">
+        <ExpandButton title={title}>
+          <RenderedMarkdown text={result} />
+        </ExpandButton>
+        <RenderedMarkdown text={result} />
+      </div>
+    );
+  }
+  if (name === "image_generation") {
+    return (
+      <div className="grid overflow-hidden rounded-md border border-border bg-background md:grid-cols-[160px_minmax(0,1fr)]">
+        <div className="min-h-32 bg-[radial-gradient(circle_at_35%_35%,rgba(22,119,255,0.28),transparent_28%),radial-gradient(circle_at_70%_65%,rgba(18,166,111,0.24),transparent_30%),linear-gradient(135deg,#f8fafc,#edf1f7)]" />
+        <div className="space-y-2 p-2 text-[14px]">
+          <div className="rounded-md border border-border bg-muted/40 px-2 py-1 text-muted-foreground">
+            Hosted image_generation 由 provider 端执行。
+          </div>
+          <ToolPre>{result}</ToolPre>
+        </div>
+      </div>
+    );
+  }
+  if (isTaskListTool(name)) {
+    // 浮动 TaskPanel 显示最新状态，这里只回放本次调用提交的快照
+    return (
+      <div className="overflow-hidden rounded-md border border-border bg-background">
+        <TodoChecklist todos={parseTodos(call.argumentsText)} />
+      </div>
+    );
+  }
+  return <DefaultToolDetail call={call} />;
 }
 
-function ToolCallStrip({
+function ToolCallTimeline({
   calls,
   expandedKeys,
   onToggle,
@@ -697,53 +1361,69 @@ function ToolCallStrip({
   onToggle: (key: string) => void;
 }) {
   if (calls.length === 0) return null;
-
   return (
-    <div className="mt-3 space-y-2">
-      {calls.map((call) => {
+    <div className="relative mt-3 space-y-1 rounded-md bg-muted/30 py-1.5 pl-6 pr-2">
+      {calls.map((call, index) => {
         const active = expandedKeys.has(call.key);
-        const label = call.name || "工具调用";
-        // 按钮右侧只展示 prompt 字段（约定：tool_call 普遍带 `prompt`），
-        // 其它参数留给用户点开后自己查看。
-        const promptEntry = buildArgsPreview(call.argumentsText).find(
-          (e) => e.key === "prompt"
-        );
         return (
-          <div key={call.key} className="space-y-1.5">
-            <div className="flex w-full items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onToggle(call.key)}
+          <div
+            key={call.key}
+            className={cn("relative", index === calls.length - 1 && "pb-0")}
+          >
+            {index !== calls.length - 1 && (
+              <div className="absolute -left-[15px] top-6 bottom-[-8px] w-px bg-border" />
+            )}
+            <button
+              type="button"
+              onClick={() => onToggle(call.key)}
+              aria-label={active ? "折叠工具调用" : "展开工具调用"}
+              className="absolute -left-[22px] top-[5px] inline-flex h-[18px] w-[15px] cursor-pointer items-center justify-center text-muted-foreground"
+            >
+              <ChevronRight
                 className={cn(
-                  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] transition-colors",
-                  active
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border bg-background/80 text-muted-foreground hover:bg-accent"
+                  "h-[15px] w-[15px] transition-transform",
+                  active && "rotate-90"
                 )}
-                title={label}
-              >
-                <Wrench className="h-3.5 w-3.5 shrink-0" />
-                <span className="max-w-[180px] truncate font-medium">
-                  {label}
-                </span>
-                <ToolStatusIcon status={call.status} />
-                <span className="shrink-0 text-[10px]">
-                  {statusLabel(call.status)}
-                </span>
-                {active ? (
-                  <ChevronDown className="h-3 w-3 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-3 w-3 shrink-0" />
-                )}
-              </button>
-              {promptEntry && (
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
-                  {promptEntry.value}
-                </span>
-              )}
-            </div>
-
-            {active && <ToolCallDetail call={call} />}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggle(call.key)}
+              className="grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left"
+            >
+              <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+                <ToolIcon name={call.name} />
+              </span>
+              <span className="whitespace-nowrap text-[12px] font-semibold">
+                {call.name || "工具调用"}
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+                <span className="truncate">{callDescription(call)}</span>
+                <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
+                  {callSummary(call)}
+                </code>
+              </span>
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    call.status === "done"
+                      ? "bg-muted-foreground/45"
+                      : call.status === "running"
+                      ? "animate-pulse bg-muted-foreground/60"
+                      : "animate-pulse bg-muted-foreground/40"
+                  )}
+                />
+                {statusLabel(call.status)}
+              </span>
+            </button>
+            {active && (
+              <div className="mt-1 rounded-md border border-border bg-background">
+                <div className="p-2">
+                  <ToolCallDetail call={call} />
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -894,7 +1574,7 @@ function AssistantParts({
           );
         }
         return (
-          <ToolCallStrip
+          <ToolCallTimeline
             key={part.key}
             calls={part.calls}
             expandedKeys={expandedKeys}
