@@ -1065,6 +1065,21 @@ pub fn run() {
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
+            // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
+            // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
+            // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，
+            // 系统的「自动激活」就失效；过几百毫秒再切回 Regular，
+            // 此时不再触发 activate，但 dock 图标恢复正常。
+            // 仅 debug 构建启用——release 启动是用户主动双击触发的，期望抢前台。
+            #[cfg(all(target_os = "macos", debug_assertions))]
+            {
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+                });
+            }
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))
             })?;
