@@ -36,7 +36,20 @@ pub enum EngineEvent {
         id: String,
         result: String,
         duration_ms: u64,
+        /// 工具输出超阈值时落盘的工件路径（架构 §4.4.9）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact_path: Option<String>,
     },
+    /// Run 进入挂起态（架构 §4.12）。
+    RunSuspended {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resumes_at_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        waiting_for_task_ids: Vec<String>,
+    },
+    /// Run 从挂起态恢复。
+    RunResumed { cause: String },
     /// 出错
     Error { message: String },
 }

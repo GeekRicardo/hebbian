@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "apps/cli",
     "apps/desktop",
     "crates/agent-core",
     "crates/model-gateway",
@@ -8,4 +7,6 @@ members = [
     "crates/common",
     "crates/protocol",
 ]
+# apps/cli 目录保留作历史档案，已停止开发；不参与 workspace build。
+exclude = ["apps/cli"]
 resolver = "2"

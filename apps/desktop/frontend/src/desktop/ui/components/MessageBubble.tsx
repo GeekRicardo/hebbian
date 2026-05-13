@@ -35,6 +35,9 @@ import {
   Boxes,
   Maximize2,
   ClipboardCheck,
+  Paperclip,
+  BellRing,
+  AlarmClock,
 } from "lucide-react";
 import type {
   Message,
@@ -108,6 +111,8 @@ interface ToolCallItem {
   result?: string | null;
   durationMs?: number | null;
   status: ToolCallStatus;
+  /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9） */
+  artifactPath?: string | null;
 }
 
 type AssistantRenderPart =
@@ -149,6 +154,7 @@ function normalizeStreamingToolPart(
     result: part.result,
     durationMs: part.duration_ms,
     status: part.status,
+    artifactPath: part.artifact_path,
   };
 }
 
@@ -165,6 +171,7 @@ function normalizeSavedToolPart(
     result: part.result,
     durationMs: part.duration_ms,
     status: part.result ? "done" : "running",
+    artifactPath: part.artifact_path,
   };
 }
 
@@ -964,6 +971,133 @@ export function FloatingTaskPanel({
   );
 }
 
+/**
+ * 工件徽标（架构 §4.4.9）：工具输出超阈值时落盘后，让用户一眼看到
+ * 「完整输出在 path」并提供原生「复制路径」操作。模型已经从 result 文本
+ * 拿到指针；这里只是给人看的。
+ */
+function ArtifactBadge({ path }: { path: string }) {
+  return (
+    <div className="mt-1 flex items-center gap-1.5 rounded-md border border-dashed border-border bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
+      <Paperclip className="h-3 w-3 shrink-0" />
+      <span className="shrink-0">完整输出落盘到</span>
+      <code
+        className="min-w-0 flex-1 truncate font-mono text-foreground/80"
+        title={path}
+      >
+        {path}
+      </code>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(path);
+        }}
+        className="shrink-0 rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+        title="复制路径"
+      >
+        复制
+      </button>
+    </div>
+  );
+}
+
+/** 架构 §4.12.5：wakeup XML 解析结果。`kind` 决定渲染哪个变体。 */
+interface WakeupInfo {
+  kind: "bg_task_finished" | "cron_fired" | "manual" | string;
+  attrs: Record<string, string>;
+  body: string;
+}
+
+/**
+ * 识别由 surface 自动注入的 wakeup user message。要求：
+ * - trim 后以 `<wakeup ` 开头
+ * - 包含 `</wakeup>` 结尾
+ *
+ * 解析 `<wakeup key="val" ...>BODY</wakeup>` 形态——`wakeup_xml()` 在 Rust 端
+ * 不会写嵌套 XML，所以一次正则解析即可。失败时返回 null（按普通 user 消息渲染）。
+ */
+function parseWakeupMessage(content: string): WakeupInfo | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("<wakeup")) return null;
+  const endIdx = trimmed.lastIndexOf("</wakeup>");
+  if (endIdx < 0) return null;
+  const openEnd = trimmed.indexOf(">");
+  if (openEnd < 0 || openEnd > endIdx) return null;
+  const headStr = trimmed.slice("<wakeup".length, openEnd).trim();
+  const body = trimmed.slice(openEnd + 1, endIdx).trim();
+  const attrs: Record<string, string> = {};
+  const attrRe = /(\w+)="([^"]*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = attrRe.exec(headStr)) !== null) {
+    attrs[m[1]] = m[2];
+  }
+  const kind = attrs.kind ?? "manual";
+  return { kind, attrs, body };
+}
+
+function WakeupNotice({ content, info }: { content: string; info: WakeupInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const { kind, attrs, body } = info;
+  const Icon = kind === "cron_fired" ? AlarmClock : BellRing;
+  const headline = (() => {
+    if (kind === "bg_task_finished") {
+      const exit = attrs.exit_code != null ? `exit ${attrs.exit_code}` : "结束";
+      const ms = attrs.duration_ms ? `（${Math.round(Number(attrs.duration_ms) / 1000)}s）` : "";
+      return `后台任务 ${attrs.task_id ?? "?"} 完成 · ${exit}${ms}`;
+    }
+    if (kind === "cron_fired") {
+      return `定时唤醒：${attrs.original_reason ?? "(无说明)"}`;
+    }
+    return "Run 已唤醒";
+  })();
+  const truncatedBody = body.length > 240 && !expanded ? body.slice(0, 240) + "…" : body;
+  async function copyAll() {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success("已复制 wakeup 原文");
+    } catch {
+      toast.error("复制失败");
+    }
+  }
+  return (
+    <div className="flex justify-center px-6 py-2">
+      <div className="w-full max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px]">
+        <div className="flex items-start gap-2">
+          <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-amber-700 dark:text-amber-300">{headline}</div>
+            {body && (
+              <div className="mt-1 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/80">
+                {truncatedBody}
+              </div>
+            )}
+          </div>
+          <div className="shrink-0 flex items-center gap-1">
+            {body.length > 240 && (
+              <button
+                type="button"
+                onClick={() => setExpanded((e) => !e)}
+                className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
+                title={expanded ? "收起" : "展开"}
+              >
+                {expanded ? "收起" : "展开"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={copyAll}
+              className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
+              title="复制 wakeup 原文"
+            >
+              复制
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReadHeader({ call }: { call: ToolCallItem }) {
   const args = callArgs(call);
   const path = argString(args, "file_path") || "file";
@@ -1421,6 +1555,7 @@ function ToolCallTimeline({
               <div className="mt-1 rounded-md border border-border bg-background">
                 <div className="p-2">
                   <ToolCallDetail call={call} />
+                  {call.artifactPath && <ArtifactBadge path={call.artifactPath} />}
                 </div>
               </div>
             )}
@@ -1810,6 +1945,14 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   const isUser = message.role === "user";
+
+  // 架构 §4.12.5：wakeup XML 是 surface 自动注入的 user message，UI 要把它
+  // 单独渲染为系统通知样式，避免和用户真实发言混淆。
+  const wakeup = isUser ? parseWakeupMessage(message.content) : null;
+  if (wakeup) {
+    return <WakeupNotice content={message.content} info={wakeup} />;
+  }
+
   const assistantParts = buildAssistantRenderParts(
     message,
     streamingParts,

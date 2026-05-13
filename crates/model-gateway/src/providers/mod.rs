@@ -152,7 +152,10 @@ fn is_retryable_model_error(err: &ModelError) -> bool {
                 || body.contains("overloaded_error")
         }
         ModelError::Request(err) => err.is_connect() || err.is_timeout(),
-        ModelError::Json(_) | ModelError::Cancelled | ModelError::Other(_) => false,
+        ModelError::Json(_)
+        | ModelError::Cancelled
+        | ModelError::Suspended
+        | ModelError::Other(_) => false,
     }
 }
 

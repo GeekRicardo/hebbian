@@ -1,32 +1,33 @@
-import { CornerDownLeft, X } from "lucide-react";
+import { CornerDownLeft, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 
 /**
- * 运行时输入队列面板：streaming 期间用户排进的下一条 / 下几条 user message。
+ * 运行时输入队列面板：streaming 期间用户排队的下一条 / 下几条 user message。
  *
- * - 列表从上到下展示，最早入队的在最上面。
- * - 当前 turn 跑完后会按 FIFO 自动消费第一条。
- * - 每条右侧的「立即发送」图标只对队首启用——「立即发送只允许从上到下」：
- *   点击后立刻把该条注入当前 run 的 pending 队列（agent_loop 在下一次
- *   model.request 之前 drain 出来加入 transcript），同时立即把它显示到 chat
- *   区域作为 user message——不打断当前 agent loop，下个 iteration 立刻可见。
- * - X 按钮可移除任意排队项（撤回）。
+ * 队列语义（架构.md §4.2.3）：
+ * - 默认 Enter 入队 → 等本 Run 跑完后 drainNext 顺次作为新 Run 发出。
+ * - Shift+Enter / 行内 ↩「引导」按钮 → 走 PendingInputs，agent_loop
+ *   在下一次 ModelStep 之前 drain，等价于"当前 model_call+tool_call
+ *   完成后立即插队"，不开新 Run。
  *
- * 布局参考 UserQuestionPopup：外层 `px-4 pb-2`、内层 `max-w-3xl mx-auto pr-[50px]`，
- * 跟 ChatInput 内的 textarea 完全对齐。
+ * 行内三按钮：
+ * - ↩ 引导：把这条注入 PendingInputs（任意位置可点）
+ * - 🗑 删除：从队列移除
+ * - ✕ 放回输入框：移除并把内容追加回 ChatInput 草稿
  */
 export function InputQueuePanel() {
   const queue = useStore((s) => s.currentInputQueue);
   const removeQueuedInput = useStore((s) => s.removeQueuedInput);
-  const flushQueuedHead = useStore((s) => s.flushQueuedHead);
+  const flushQueuedItem = useStore((s) => s.flushQueuedItem);
+  const returnQueuedToComposer = useStore((s) => s.returnQueuedToComposer);
 
   if (queue.length === 0) return null;
 
-  async function flushHead() {
+  async function flush(id: string) {
     try {
-      await flushQueuedHead();
+      await flushQueuedItem(id);
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
@@ -77,27 +78,28 @@ export function InputQueuePanel() {
                 )}
                 <button
                   type="button"
-                  disabled={!isHead}
-                  onClick={isHead ? flushHead : undefined}
-                  className={cn(
-                    "shrink-0 h-6 w-6 rounded inline-flex items-center justify-center transition",
-                    isHead
-                      ? "text-primary hover:bg-primary/15"
-                      : "text-muted-foreground/40 cursor-not-allowed"
-                  )}
-                  title={
-                    isHead
-                      ? "立即发送：下一个 model 请求前注入到对话"
-                      : "仅允许从上到下立即发送"
-                  }
+                  onClick={() => flush(item.id)}
+                  className="shrink-0 h-6 w-6 rounded inline-flex items-center justify-center text-primary hover:bg-primary/15 transition"
+                  title="引导：当前模型调用完成后立即插队"
+                  aria-label="引导"
                 >
                   <CornerDownLeft className="w-3.5 h-3.5" />
                 </button>
                 <button
                   type="button"
                   onClick={() => removeQueuedInput(item.id)}
+                  className="shrink-0 h-6 w-6 rounded inline-flex items-center justify-center text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  title="删除"
+                  aria-label="删除"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => returnQueuedToComposer(item.id)}
                   className="shrink-0 h-6 w-6 rounded inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
-                  title="移除"
+                  title="放回输入框"
+                  aria-label="放回输入框"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>

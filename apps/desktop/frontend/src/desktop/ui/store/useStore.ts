@@ -233,6 +233,19 @@ type SessionStream = {
   autoJudgedNotes: AutoJudgedNote[];
   /** 当前对话的 RunMode 字符串（由 run_mode_changed event 维护）。 */
   currentRunMode: string | null;
+  /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
+  suspended: SuspendedInfo | null;
+};
+
+export type SuspendedInfo = {
+  /** "background_task" / "cron" / "manual" */
+  reason: string;
+  /** cron 路径：自动唤醒时间（Unix ms）。 */
+  resumesAtMs?: number | null;
+  /** bg-task 路径：等的 task_id 列表。 */
+  waitingForTaskIds: string[];
+  /** 挂起时间，用于 UI 显示「已挂起 N s」。 */
+  suspendedAtMs: number;
 };
 
 export type AutoJudgedNote = {
@@ -253,6 +266,7 @@ const EMPTY_MIRROR = {
   pendingQuestionQueue: [] as PendingQuestion[],
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
+  suspended: null as SuspendedInfo | null,
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -269,6 +283,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     pendingQuestionQueue: slot.pendingQuestionQueue,
     autoJudgedNotes: slot.autoJudgedNotes,
     currentRunMode: slot.currentRunMode,
+    suspended: slot.suspended,
   };
 }
 
@@ -305,6 +320,20 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   }
   if (e.type === "tool_done") {
     return { ...slot, streamingParts: applyToolDone(slot.streamingParts, e) };
+  }
+  if (e.type === "run_suspended") {
+    return {
+      ...slot,
+      suspended: {
+        reason: e.reason,
+        resumesAtMs: e.resumes_at_ms ?? null,
+        waitingForTaskIds: e.waiting_for_task_ids ?? [],
+        suspendedAtMs: Date.now(),
+      },
+    };
+  }
+  if (e.type === "run_resumed") {
+    return { ...slot, suspended: null };
   }
   if (e.type === "permission_requested") {
     const approval: PendingApproval = {
@@ -404,6 +433,7 @@ function applyToolDone(
     result: event.result,
     duration_ms: event.duration_ms,
     status: "done",
+    artifact_path: event.artifact_path ?? null,
   };
   return next;
 }
@@ -437,6 +467,8 @@ interface AppState {
   autoJudgedNotes: AutoJudgedNote[];
   /** 当前对话 RunMode 字符串。`null` 表示未收到过 RunModeChanged 事件。 */
   currentRunMode: string | null;
+  /** 架构 §4.12：当前对话 Run 是否被挂起。 */
+  suspended: SuspendedInfo | null;
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
@@ -480,6 +512,15 @@ interface AppState {
   pendingQuestionQueue: PendingQuestion[];
   resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
 
+  // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup XML，按 sessionId 暂存。
+  // - 若 wakeup 到达时该 session 是 currentSession，立刻自动发出
+  // - 否则暂存到这里，下次 openSession 时消费
+  pendingWakeups: Record<string, string>;
+  /** 自动唤醒：把 wakeup XML 作 user message 发给该 session（不论前后台）。 */
+  triggerWakeupResume: (sessionId: string, wakeupXml: string) => Promise<void>;
+  /** 给指定 session 排队一条 wakeup XML，等 openSession 时消费。 */
+  queueWakeupForSession: (sessionId: string, wakeupXml: string) => void;
+
   // 运行时输入队列：每个 session 一条 FIFO 队列，streaming 期间用户排进的
   // 后续 user message 暂存于此，当前 turn 跑完后自动按顺序消费。
   inputQueues: Record<string, QueuedInput[]>;
@@ -498,11 +539,25 @@ interface AppState {
   ) => void;
   removeQueuedInput: (id: string) => void;
   /**
-   * 「立即发送」队首：把它真正注入到当前 run 的 pending 队列（agent_loop 下一次
-   * model.request 之前 drain 出来加入 transcript），并立即把该 user message 落到
-   * 当前 chat 区域显示。仅在当前 session 还在 streaming 时有意义。
+   * 「引导」语义（架构.md §4.2.3）：把指定的 queued 项注入到当前 run 的
+   * PendingInputs 队列——agent_loop 在下一次 ModelStep 之前 drain，等价于
+   * "当前 model_call + tool_call 完成后立即插队"。
+   * 不限队首；任意位置可点。仅在当前 session 还在 streaming 时有意义。
+   * 不传 id 默认取队首（保持 Shift+Enter 行为）。
    */
-  flushQueuedHead: () => Promise<void>;
+  flushQueuedItem: (id?: string) => Promise<void>;
+  /**
+   * 「放回输入框」：把指定 queued 项从 next_run_queue 移除，并把它的
+   * content / attachments 追加到 ChatInput 草稿（composerDraft）。
+   * ChatInput 的 useEffect 会消费 composerDraft 并 clear。
+   */
+  returnQueuedToComposer: (id: string) => void;
+  /**
+   * ChatInput 待回填的草稿：被 returnQueuedToComposer 写入，
+   * ChatInput 消费后调 clearComposerDraft 清掉。
+   */
+  composerDraft: { content: string; attachments: MessageAttachment[] } | null;
+  clearComposerDraft: () => void;
 
   // actions
   init: () => Promise<void>;
@@ -615,6 +670,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeRequestId: null,
   autoJudgedNotes: [],
   currentRunMode: null,
+  suspended: null,
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
   providerDialogOpen: false,
@@ -756,6 +812,23 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  pendingWakeups: {},
+  queueWakeupForSession(sessionId, wakeupXml) {
+    set((state) => ({
+      pendingWakeups: { ...state.pendingWakeups, [sessionId]: wakeupXml },
+    }));
+  },
+  async triggerWakeupResume(sessionId, wakeupXml) {
+    const cur = get().currentSession;
+    if (cur?.id === sessionId) {
+      // 前台 session：复用 sendUserMessage 路径，backend 检测 checkpoint 走 resume
+      await get().sendUserMessage(wakeupXml, []);
+      return;
+    }
+    // 非前台：暂存到 pendingWakeups，等用户切到这个 session 时自动消费
+    get().queueWakeupForSession(sessionId, wakeupXml);
+  },
+
   inputQueues: {},
   currentInputQueue: [],
   enqueueInput(content, attachments, position = "tail") {
@@ -801,23 +874,26 @@ export const useStore = create<AppState>((set, get) => ({
       };
     });
   },
-  async flushQueuedHead() {
+  async flushQueuedItem(id) {
     const cur = get().currentSession;
     if (!cur) return;
     const sessionId = cur.id;
-    const head = get().inputQueues[sessionId]?.[0];
-    if (!head) return;
+    const list = get().inputQueues[sessionId] ?? [];
+    if (list.length === 0) return;
+    const target = id == null ? list[0] : list.find((it) => it.id === id);
+    if (!target) return;
+    const originalIndex = list.indexOf(target);
     const slot = get().sessionStreams[sessionId];
     const requestId = slot?.requestId;
     if (!requestId) return; // 不在 streaming：交给 ChatInput 走普通 send 路径
     // 先把队列项移除，避免 agent_loop drain 完后又被 drainNext 重复发送。
-    get().removeQueuedInput(head.id);
+    get().removeQueuedInput(target.id);
     try {
       const persisted = await api.injectUserMessage(
         sessionId,
         requestId,
-        head.content,
-        head.attachments
+        target.content,
+        target.attachments
       );
       // 把 user message 排在 streaming bubble **之后**临时显示——不动 messages 列表，
       // 避免它跑到当前正在跑的 assistant 之前。run 结束时 slot 整个被清掉，由 reload
@@ -837,11 +913,11 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
     } catch (e) {
-      // 失败时把队列项还原回队首，让用户重试或撤回。
-      const restored: QueuedInput = head;
+      // 失败时把队列项还原回原位置，让用户重试或撤回。
       set((state) => {
-        const list = state.inputQueues[sessionId] ?? [];
-        const next = [restored, ...list];
+        const cur = state.inputQueues[sessionId] ?? [];
+        const insertAt = Math.min(originalIndex, cur.length);
+        const next = [...cur.slice(0, insertAt), target, ...cur.slice(insertAt)];
         const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
@@ -851,6 +927,29 @@ export const useStore = create<AppState>((set, get) => ({
       });
       throw e;
     }
+  },
+
+  returnQueuedToComposer(id) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const sessionId = cur.id;
+    const list = get().inputQueues[sessionId] ?? [];
+    const target = list.find((it) => it.id === id);
+    if (!target) return;
+    get().removeQueuedInput(id);
+    // 同一时刻最多一条 draft 在等回填；后到的覆盖未消费的（ChatInput 应在
+    // useEffect 里立即消费）。
+    set({
+      composerDraft: {
+        content: target.content,
+        attachments: target.attachments,
+      },
+    });
+  },
+
+  composerDraft: null,
+  clearComposerDraft() {
+    set({ composerDraft: null });
   },
 
   pendingQuestion: null,
@@ -983,15 +1082,27 @@ export const useStore = create<AppState>((set, get) => ({
     const sessionAllowedDirs = s.allowed_dirs ?? [];
     persistPendingWorkdir(sessionWorkdir);
     persistPendingAllowedDirs(sessionAllowedDirs);
-    set((state) => ({
-      currentSession: s,
-      pendingPromptId: s.prompt_id ?? "",
-      pendingWorkdir: sessionWorkdir,
-      pendingAllowedDirs: sessionAllowedDirs,
-      unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
-      currentInputQueue: state.inputQueues[id] ?? [],
-      ...mirrorFromSlot(state.sessionStreams[id]),
-    }));
+    // 消费 pendingWakeup：切到该 session 时若有积压的 wakeup XML，立刻发出
+    const pendingWakeup = get().pendingWakeups[id];
+    set((state) => {
+      const { [id]: _drop, ...rest } = state.pendingWakeups;
+      return {
+        currentSession: s,
+        pendingPromptId: s.prompt_id ?? "",
+        pendingWorkdir: sessionWorkdir,
+        pendingAllowedDirs: sessionAllowedDirs,
+        unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
+        currentInputQueue: state.inputQueues[id] ?? [],
+        pendingWakeups: rest,
+        ...mirrorFromSlot(state.sessionStreams[id]),
+      };
+    });
+    if (pendingWakeup) {
+      // 用 microtask 异步触发，避免在 openSession 内嵌套 sendUserMessage 的 set 调用
+      queueMicrotask(() => {
+        void get().sendUserMessage(pendingWakeup, []);
+      });
+    }
     get().refreshContextUsage();
   },
 
@@ -1131,6 +1242,7 @@ export const useStore = create<AppState>((set, get) => ({
       pendingQuestionQueue: [],
       autoJudgedNotes: [],
       currentRunMode: null,
+      suspended: null,
     };
     set((state) => ({
       currentSession: appendOptimisticUserMessage(cur, content, attachments, {

@@ -8,8 +8,10 @@ pub mod kill_shell;
 pub mod read;
 pub mod registry;
 pub mod safe_commands;
+pub mod schedule_wakeup;
 pub mod shell_parse;
 pub mod skill;
+pub mod wait_for_task;
 pub mod web_fetch;
 pub mod web_search;
 pub mod write;
@@ -47,13 +49,31 @@ pub trait Tool: Send + Sync {
 ///
 /// `BashTool` / `BashOutputTool` / `KillShellTool` 共享同一个 [`background::BackgroundShells`]
 /// 注册表：超时或 `run_in_background=true` 时进程转后台，其余两个工具按 task_id 增量查询 / 终止。
-pub fn default_tools(workspace: Arc<Workspace>, skill_dirs: &[PathBuf]) -> Vec<Box<dyn Tool>> {
+///
+/// `bg_log_dir` 为本 session 的后台输出落盘目录（架构 §4.12.3）。生产路径通常是
+/// `~/.hebbian/sessions/<sid>/bg/`；CLI 单跑 / 单测可传 `None`，BackgroundShells
+/// 会回落到 tail-only。
+pub fn default_tools(
+    workspace: Arc<Workspace>,
+    skill_dirs: &[PathBuf],
+    bg_log_dir: Option<PathBuf>,
+    phase: crate::wakeup::PhaseChannel,
+    shells: background::BackgroundShells,
+) -> Vec<Box<dyn Tool>> {
     let skills = skill::load_skills(skill_dirs);
-    let shells = background::BackgroundShells::new();
     vec![
-        Box::new(bash::BashTool::new(workspace.clone(), shells.clone())),
+        Box::new(bash::BashTool::new(
+            workspace.clone(),
+            shells.clone(),
+            bg_log_dir,
+        )),
         Box::new(bash_output::BashOutputTool::new(shells.clone())),
-        Box::new(kill_shell::KillShellTool::new(shells)),
+        Box::new(kill_shell::KillShellTool::new(shells.clone())),
+        Box::new(wait_for_task::WaitForTaskTool::new(
+            shells.clone(),
+            phase.clone(),
+        )),
+        Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
         Box::new(read::ReadTool::new(workspace.clone())),
         Box::new(write::WriteTool::new(workspace.clone())),
         Box::new(grep::GrepTool::new(workspace)),
@@ -70,6 +90,8 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Bash",
     "BashOutput",
     "KillShell",
+    "WaitForTask",
+    "ScheduleWakeup",
     "Read",
     "Write",
     "Grep",

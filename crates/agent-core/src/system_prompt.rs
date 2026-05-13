@@ -46,6 +46,19 @@ pub struct EnvironmentSnapshot {
     pub date: String,
     /// 当前运行模式（架构 §4.4.3）。`None` = 不渲染，模型按默认行为推理。
     pub run_mode: Option<&'static str>,
+    /// 当前后台 shell 列表（架构 §4.12.7）。非空时在 `<environment>` 旁
+    /// 渲染一个 `<background_tasks>` 子块，让模型立刻看到。
+    /// 元组：(task_id, state_label, command, elapsed_secs)
+    pub background_tasks: Vec<BackgroundTaskSummary>,
+}
+
+/// `<background_tasks>` 渲染所需的最小信息。
+#[derive(Debug, Clone)]
+pub struct BackgroundTaskSummary {
+    pub task_id: String,
+    pub state: String,
+    pub command: String,
+    pub elapsed_secs: u64,
 }
 
 impl EnvironmentSnapshot {
@@ -59,6 +72,7 @@ impl EnvironmentSnapshot {
             shell: detect_shell(),
             date: today_iso(),
             run_mode: None,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -68,22 +82,58 @@ impl EnvironmentSnapshot {
         self
     }
 
+    /// builder-style：把当前后台 shell 列表塞进来（架构 §4.12.7）。
+    pub fn with_background_tasks(mut self, tasks: Vec<BackgroundTaskSummary>) -> Self {
+        self.background_tasks = tasks;
+        self
+    }
+
     /// 渲染成 `<environment>` XML 块，末尾保留空行便于和正文分隔。
     pub fn render(&self) -> String {
-        render_environment_xml(
+        let mut s = render_environment_xml(
             &self.workdir,
             &self.allowed_dirs,
             self.platform,
             self.shell.as_deref(),
             &self.date,
             self.run_mode,
-        )
+        );
+        if !self.background_tasks.is_empty() {
+            s.push_str("<background_tasks>\n");
+            for t in &self.background_tasks {
+                s.push_str(&format!(
+                    "  - {} [{}] {}s `{}`\n",
+                    t.task_id, t.state, t.elapsed_secs, t.command,
+                ));
+            }
+            s.push_str("</background_tasks>\n\n");
+        }
+        s
     }
 }
 
 /// 把环境块前置到 user content。用于第一条 user message。
 pub fn prepend_environment(text: String, snapshot: &EnvironmentSnapshot) -> String {
     let mut s = snapshot.render();
+    s.push_str(&text);
+    s
+}
+
+/// 把 `<background_tasks>` 块单独前置到 user content（架构 §4.12.7）。
+/// 用于非首条 user message——首条由 `prepend_environment` 内嵌在
+/// `<environment>` 旁，这里覆盖后续每一条。tasks 为空时调用方应跳过本函数。
+pub fn prepend_background_tasks(text: String, tasks: &[BackgroundTaskSummary]) -> String {
+    if tasks.is_empty() {
+        return text;
+    }
+    let mut s = String::from("<background_tasks>\n");
+    for t in tasks {
+        s.push_str(&format!(
+            "  - {} [{}] {}s `{}`\n",
+            t.task_id, t.state, t.elapsed_secs, t.command,
+        ));
+    }
+    s.push_str("</background_tasks>\n\n");
     s.push_str(&text);
     s
 }
@@ -195,6 +245,7 @@ mod tests {
             shell: None,
             date: "2026-05-10".into(),
             run_mode: None,
+            background_tasks: Vec::new(),
         };
         let out = prepend_environment("hello".into(), &snap);
         assert!(out.starts_with("<environment>"));

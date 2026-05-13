@@ -59,7 +59,21 @@ pub struct ToolCall {
 pub struct ToolResult {
     pub call_id: String,
     pub name: String,
+    /// 给模型看的 inline 内容。超阈值时由 dispatcher 改为「头部预览 + 工件指针」
+    /// 文本，原始全量落到 `artifact.path`（架构 §4.4.9 / §4.12.11 Phase 2）。
     pub content: String,
+    /// 超阈值时的 artifact 元数据；未触发落盘时为 `None`。
+    pub artifact: Option<ToolArtifact>,
+}
+
+/// 工具输出落盘后的元数据。dispatcher 在 `materialize_tool_output` 里产出，
+/// surface 端用 `path` 渲染「📎 完整输出 N KB」链接，Read 工具直接按
+/// offset/limit 翻页（架构 §4.4.9）。
+#[derive(Debug, Clone)]
+pub struct ToolArtifact {
+    pub path: std::path::PathBuf,
+    pub bytes: u64,
+    pub line_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +198,11 @@ pub enum ModelError {
 
     #[error("已取消")]
     Cancelled,
+
+    /// Run 进入挂起态——不是真错误，是 agent_loop 通过 Err 路径 break 出去
+    /// 让 harness 走"任务退出但 Run 未结束"分支（架构 §4.12）。
+    #[error("已挂起，等待 wakeup")]
+    Suspended,
 
     #[error("{0}")]
     Other(String),

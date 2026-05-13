@@ -7,7 +7,6 @@
 //! - [`sessions_dir`]：每段对话目录骨架 + partial sidecar + meta.json
 //! - [`prompts`]：用户 persona 列表（prompts.json）
 //! - [`settings`]：全局通用 settings.json
-//! - [`surface_settings`]：CLI / Desktop 各一份设置（架构 §7.3）
 //! - [`permissions`]：Global 级审批规则（架构 §4.6 / §4.5.4）
 //! - [`tool_results`]：工具结果 txt（含大输出落盘 + 压缩占位符）
 //! - [`compactions`]：/compact 时压缩前 markdown
@@ -22,17 +21,17 @@ pub mod oauth;
 pub mod permissions;
 pub mod plans;
 pub mod prompts;
+pub mod run_checkpoint;
 pub mod sessions;
 pub mod sessions_dir;
 pub mod settings;
-pub mod surface_settings;
 pub mod tool_results;
 
 use std::path::{Path, PathBuf};
 
 /// 默认数据目录：`~/.hebbian/`。
 ///
-/// 架构 §6.1：CLI / Desktop 共享同一根目录，跨平台保持一致（决策 D10）。
+/// 架构 §6.1：Desktop 多窗口/多进程共享同一根目录，跨平台保持一致（决策 D10）。
 /// 早期使用了 `~/Library/Application Support/dev.ricardo.hebbian/`（macOS）等
 /// 平台原生路径，本函数若发现旧路径存在但新路径为空，会迁移到 `~/.hebbian/`。
 ///

@@ -11,16 +11,22 @@
 //!   返回，模型一次拿不超过 [`READ_CHUNK_BYTES`] 字节。
 //! - 进程 stdout/stderr 由后台 task 持续抽到 buffer；waiter task 用 select! 同时
 //!   等 child 退出和 kill 信号——SIGKILL 与正常 wait 不会争 child 的可变借用。
+//! - 双轨写入（架构 §4.12.3）：若 register 时给了 log_dir，stdout/stderr 在灌
+//!   tail buffer 的同时 append 到 `<log_dir>/<task_id>.log`——内存 tail 给
+//!   BashOutput 增量查询，磁盘 log 给完整 Read。两条互不依赖：日志文件打开失败
+//!   不影响命令运行，仅 fallback 到 tail-only。
 
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify};
 
 /// tail buffer 上限（256 KiB）。超过后丢弃最早字节。
 pub const MAX_TAIL_BYTES: usize = 256 * 1024;
@@ -60,6 +66,8 @@ pub struct BackgroundShell {
     inner: Mutex<ShellInner>,
     /// 输出/状态变化时唤醒等待方（BashOutput 的 wait_ms 阻塞、KillShell 等终态）。
     notify: Notify,
+    /// 磁盘日志路径——`None` 表示未启用落盘（CLI / 单测）。
+    log_path: Option<PathBuf>,
 }
 
 struct ShellInner {
@@ -80,6 +88,7 @@ impl BackgroundShell {
         command: String,
         cwd: String,
         kill_tx: oneshot::Sender<()>,
+        log_path: Option<PathBuf>,
     ) -> Self {
         Self {
             task_id,
@@ -95,7 +104,14 @@ impl BackgroundShell {
                 kill_tx: Some(kill_tx),
             }),
             notify: Notify::new(),
+            log_path,
         }
+    }
+
+    /// 磁盘日志文件路径——`None` 表示未启用落盘。BashOutput / 转后台返回值
+    /// 用它告诉模型「完整输出在哪」（架构 §4.12.3）。
+    pub fn log_path(&self) -> Option<&Path> {
+        self.log_path.as_deref()
     }
 
     pub fn state(&self) -> ShellState {
@@ -200,11 +216,48 @@ pub struct ReadOutput {
     pub total_bytes: u64,
 }
 
-/// 进程级注册表。Clone 等价于持 Arc。
+/// session-scoped 注册表（架构 §4.12.2 修订）。每个 session 持有自己一份，
+/// 跨会话不可见。Clone 等价于持 Arc——同一 session 内的 BashTool /
+/// BashOutputTool / KillShellTool / WaitForTaskTool 共享同一份；跨 chat() 调用
+/// 通过 [`registry_for_session`] 拿同一把（按 session_id 路由）。
 #[derive(Clone, Default)]
 pub struct BackgroundShells {
     inner: Arc<Mutex<Inner>>,
     counter: Arc<AtomicU64>,
+}
+
+/// 进程内的 `session_id → BackgroundShells` 路由表（**不是**进程级单一注册表）。
+/// 同一 session 多次 chat() 调用拿到同一份 BackgroundShells；不同 session 完全隔离。
+/// CLI 等无 session 的路径直接用 `BackgroundShells::new()`，不入路由表。
+static SESSION_REGISTRY: std::sync::OnceLock<Mutex<std::collections::HashMap<String, BackgroundShells>>> =
+    std::sync::OnceLock::new();
+
+fn session_registry() -> &'static Mutex<std::collections::HashMap<String, BackgroundShells>> {
+    SESSION_REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 按 session_id 取（或首次创建）该 session 的 BackgroundShells。
+/// 同一 session 多次调用返回同一份；不同 session 互不可见。
+pub fn registry_for_session(session_id: &str) -> BackgroundShells {
+    let mut map = session_registry().lock().expect("session registry mutex");
+    map.entry(session_id.to_string())
+        .or_insert_with(BackgroundShells::default)
+        .clone()
+}
+
+/// session 关闭 / 删除时从路由表里摘除。已注册的 bg task 会随 Arc drop 一同清掉。
+pub fn discard_session_registry(session_id: &str) {
+    if let Ok(mut map) = session_registry().lock() {
+        map.remove(session_id);
+    }
+}
+
+/// 列出当前路由表中所有 session_id（diagnostic / WakeupScheduler 扫所有 shells 用）。
+pub fn registered_session_ids() -> Vec<String> {
+    session_registry()
+        .lock()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -224,12 +277,51 @@ impl BackgroundShells {
 
     /// 注册一条后台 shell：拿走 child 的 stdout/stderr 流式读，
     /// 用 waiter task 等退出 / kill 信号。
-    pub fn register(&self, command: String, cwd: String, mut child: Child) -> Arc<BackgroundShell> {
+    ///
+    /// `log_dir` 给定时（生产环境）会在 `<log_dir>/<task_id>.log` 同步追加 stdout/stderr——
+    /// 打开失败仅 warn 不阻塞命令执行，回落到内存 tail-only 路径（架构 §4.12.3）。
+    pub fn register(
+        &self,
+        command: String,
+        cwd: String,
+        log_dir: Option<&Path>,
+        mut child: Child,
+    ) -> Arc<BackgroundShell> {
         let task_id = self.next_id();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let (kill_tx, kill_rx) = oneshot::channel();
-        let shell = Arc::new(BackgroundShell::new(task_id, command, cwd, kill_tx));
+
+        // 打开日志文件：失败回落 tail-only，不破坏 BashTool 主路径。
+        let (log_path, log_writer) = match log_dir {
+            Some(dir) => {
+                let path = dir.join(format!("{task_id}.log"));
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    tracing::warn!(?dir, error = %e, "bg shell: mkdir log dir failed; tail-only");
+                    (None, None)
+                } else {
+                    match std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                    {
+                        Ok(file) => {
+                            let writer = Arc::new(AsyncMutex::new(File::from_std(file)));
+                            (Some(path), Some(writer))
+                        }
+                        Err(e) => {
+                            tracing::warn!(?path, error = %e, "bg shell: open log file failed; tail-only");
+                            (None, None)
+                        }
+                    }
+                }
+            }
+            None => (None, None),
+        };
+
+        let shell = Arc::new(BackgroundShell::new(
+            task_id, command, cwd, kill_tx, log_path,
+        ));
 
         {
             let mut inner = self.inner.lock().expect("background shells mutex");
@@ -246,10 +338,10 @@ impl BackgroundShells {
         }
 
         if let Some(stdout) = stdout {
-            spawn_reader(shell.clone(), stdout, None);
+            spawn_reader(shell.clone(), stdout, None, log_writer.clone());
         }
         if let Some(stderr) = stderr {
-            spawn_reader(shell.clone(), stderr, Some("[stderr] "));
+            spawn_reader(shell.clone(), stderr, Some("[stderr] "), log_writer.clone());
         }
         spawn_waiter(shell.clone(), child, kill_rx);
 
@@ -296,8 +388,12 @@ impl BackgroundShells {
     }
 }
 
-fn spawn_reader<R>(shell: Arc<BackgroundShell>, reader: R, prefix: Option<&'static str>)
-where
+fn spawn_reader<R>(
+    shell: Arc<BackgroundShell>,
+    reader: R,
+    prefix: Option<&'static str>,
+    log_writer: Option<Arc<AsyncMutex<File>>>,
+) where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
 {
     tokio::spawn(async move {
@@ -310,9 +406,24 @@ where
                 Ok(_) => {
                     let trimmed = line.strip_suffix(b"\n").unwrap_or(&line[..]);
                     shell.append(prefix, trimmed);
+                    // 双轨：同步追加到磁盘日志（架构 §4.12.3）。
+                    // 单条 write_all 失败不阻断后续，进程级 fd 罕见 break。
+                    if let Some(writer) = log_writer.as_ref() {
+                        let mut f = writer.lock().await;
+                        if let Some(p) = prefix {
+                            let _ = f.write_all(p.as_bytes()).await;
+                        }
+                        let _ = f.write_all(trimmed).await;
+                        let _ = f.write_all(b"\n").await;
+                    }
                 }
                 Err(_) => break,
             }
+        }
+        // 流结束时 flush，确保最后几行落盘
+        if let Some(writer) = log_writer {
+            let mut f = writer.lock().await;
+            let _ = f.flush().await;
         }
     });
 }
@@ -364,7 +475,7 @@ mod tests {
     async fn captures_output_and_exits() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("echo hello && echo world");
-        let shell = shells.register("echo hello && echo world".into(), "/".into(), child);
+        let shell = shells.register("echo hello && echo world".into(), "/".into(), None, child);
         shell.wait_terminal().await;
         let out = shell.read_incremental(READ_CHUNK_BYTES);
         assert!(out.content.contains("hello"));
@@ -376,7 +487,7 @@ mod tests {
     async fn read_is_incremental() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("echo a; sleep 0.1; echo b");
-        let shell = shells.register("...".into(), "/".into(), child);
+        let shell = shells.register("...".into(), "/".into(), None, child);
 
         // 先等到至少有 a 出现
         for _ in 0..50 {
@@ -397,7 +508,7 @@ mod tests {
     async fn kill_marks_killed() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("sleep 30");
-        let shell = shells.register("sleep 30".into(), "/".into(), child);
+        let shell = shells.register("sleep 30".into(), "/".into(), None, child);
         let id = shell.task_id.clone();
         let state = shells.kill(&id).await.unwrap();
         assert!(matches!(state, ShellState::Killed));
@@ -408,9 +519,38 @@ mod tests {
         let shells = BackgroundShells::new();
         for _ in 0..(MAX_BACKGROUND_SHELLS + 4) {
             let child = spawn_bash("true");
-            let s = shells.register("true".into(), "/".into(), child);
+            let s = shells.register("true".into(), "/".into(), None, child);
             s.wait_terminal().await;
         }
         assert!(shells.list().len() <= MAX_BACKGROUND_SHELLS);
+    }
+
+    /// 双轨：log_dir 给定时输出落到 `<log_dir>/<task_id>.log`，内容包含 stdout + stderr 行。
+    #[tokio::test]
+    async fn writes_log_file_when_log_dir_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BackgroundShells::new();
+        let child = spawn_bash("echo hi; echo oops >&2");
+        let shell = shells.register(
+            "echo hi; echo oops >&2".into(),
+            "/".into(),
+            Some(tmp.path()),
+            child,
+        );
+        shell.wait_terminal().await;
+        // 等 spawn_reader 把缓冲 flush
+        for _ in 0..50 {
+            if shell.log_path().and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|s| s.contains("hi") && s.contains("oops"))
+                .unwrap_or(false)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let path = shell.log_path().expect("log_path set");
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("hi"));
+        assert!(content.contains("[stderr] oops"));
     }
 }

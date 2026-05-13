@@ -19,6 +19,7 @@ pub mod system_prompt;
 pub mod tools;
 pub mod turn_context;
 pub mod types;
+pub mod wakeup;
 pub mod workspace;
 
 pub use harness::{

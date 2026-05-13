@@ -147,6 +147,8 @@ export type MessagePart =
       arguments?: string;
       result?: string | null;
       duration_ms?: number | null;
+      /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
+      artifact_path?: string | null;
     };
 
 export type StreamingAssistantPart =
@@ -168,6 +170,8 @@ export type StreamingAssistantPart =
       result?: string | null;
       duration_ms?: number | null;
       status: ToolCallStatus;
+      /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
+      artifact_path?: string | null;
     };
 
 /**
@@ -305,6 +309,20 @@ export type EngineEvent =
       id: string;
       result: string;
       duration_ms: number;
+      /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
+      artifact_path?: string | null;
+    }
+  | {
+      /** 架构 §4.12：Run 进入挂起态。 */
+      type: "run_suspended";
+      reason: string;
+      resumes_at_ms?: number | null;
+      waiting_for_task_ids?: string[];
+    }
+  | {
+      /** 架构 §4.12：Run 从挂起态恢复。 */
+      type: "run_resumed";
+      cause: string;
     }
   | {
       type: "permission_requested";
@@ -424,6 +442,29 @@ export interface ToolInfo {
   description: string;
   /** 对应 lucide-react 图标名称（kebab-case） */
   icon: string;
+}
+
+/** 架构 §4.12.9：BackgroundTaskPanel 轮询拉到的后台任务条目。 */
+export interface BackgroundTaskInfo {
+  task_id: string;
+  state: string; // "running" | "exited" | "killed" | "failed"
+  command: string;
+  cwd: string;
+  elapsed_secs: number;
+  log_path: string | null;
+}
+
+export interface PendingCron {
+  run_id: string;
+  fire_at_ms: number;
+  seconds_remaining: number;
+  reason: string;
+}
+
+export interface SessionBackgroundReport {
+  shells: BackgroundTaskInfo[];
+  pending_crons: PendingCron[];
+  has_suspended_checkpoint: boolean;
 }
 
 export interface DeviceCodeInfo {

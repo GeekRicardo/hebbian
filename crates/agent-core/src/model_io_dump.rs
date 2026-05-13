@@ -315,6 +315,7 @@ mod tests {
                     call_id: "t1".into(),
                     name: "Read".into(),
                     content: "file body".into(),
+                    artifact: None,
                 }]),
             ],
             tools: vec![ToolDefinition {

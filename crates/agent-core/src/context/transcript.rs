@@ -139,6 +139,7 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
                 call_id: call.id.clone(),
                 name: call.name.clone(),
                 content: content.clone(),
+                artifact: None,
             })
         })
         .collect();
@@ -199,6 +200,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                         call_id: id.clone(),
                         name: name.clone(),
                         content: content.clone(),
+                        artifact: None,
                     });
                 }
             }

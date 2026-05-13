@@ -250,6 +250,7 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
                     call_id,
                     name,
                     content,
+                    ..
                 } in results
                 {
                     let mut item = json!({
@@ -1095,6 +1096,7 @@ mod responses_tests {
                     call_id: "call_1".into(),
                     name: "web_search".into(),
                     content: "Sources:\n- [Rust](https://www.rust-lang.org/)".into(),
+                    artifact: None,
                 }]),
             ],
             tools: vec![],
@@ -1137,11 +1139,13 @@ mod responses_tests {
                         call_id: "call_1".into(),
                         name: "web_search".into(),
                         content: "one".into(),
+                        artifact: None,
                     },
                     ToolResult {
                         call_id: "call_2".into(),
                         name: "web_fetch".into(),
                         content: "two".into(),
+                        artifact: None,
                     },
                 ]),
                 TranscriptEntry::Assistant(AssistantEntry {
@@ -1157,6 +1161,7 @@ mod responses_tests {
                     call_id: "call_3".into(),
                     name: "web_search".into(),
                     content: "three".into(),
+                    artifact: None,
                 }]),
             ],
             tools: vec![],
@@ -1200,6 +1205,7 @@ mod responses_tests {
                     call_id: "call_1".into(),
                     name: String::new(),
                     content: "one".into(),
+                    artifact: None,
                 }]),
             ],
             tools: vec![],
@@ -1450,6 +1456,7 @@ mod deepseek_compat_tests {
                     call_id: "call_1".into(),
                     name: "Bash".into(),
                     content: "a.txt".into(),
+                    artifact: None,
                 }]),
             ],
             tools: vec![],

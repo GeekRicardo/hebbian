@@ -81,6 +81,11 @@ pub struct SessionConfig {
     /// 数据目录路径。给定后 microcompact 把被压缩的原始 tool result 落盘到
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`（架构 §4.7 / Step 9）。
     pub data_dir: Option<PathBuf>,
+    /// 挂起请求通道（架构 §4.12.4）。`WaitForTask` / `ScheduleWakeup` 写它，
+    /// agent_loop 在 ToolStep 后读它决定是否进入 Suspended。必须与本 session 的
+    /// `default_tools` 拿到的 phase channel 是同一份（否则模型挂起请求永远到不了
+    /// agent_loop）。
+    pub phase: Option<crate::wakeup::PhaseChannel>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -98,6 +103,8 @@ pub struct Session {
     run_mode: RunMode,
     model_id: Option<String>,
     data_dir: Option<PathBuf>,
+    /// 挂起请求通道（架构 §4.12.4）。
+    phase: Option<crate::wakeup::PhaseChannel>,
     /// 来自 Harness 的共享 HookManager；Session 在 new / append_user / close
     /// 三个生命周期点 spawn 异步触发对应的外部 hook（架构 §4.8.1）。
     hooks: Arc<HookManager>,
@@ -120,6 +127,7 @@ impl Session {
             run_mode: config.run_mode,
             model_id: config.model_id,
             data_dir: config.data_dir,
+            phase: config.phase,
             hooks,
         };
         // SessionStart hook（架构 §4.8.1）：fire-and-forget，hook 失败不影响主流程。
@@ -194,10 +202,37 @@ impl Session {
             .any(|e| matches!(e, TranscriptEntry::User(_)));
         let pending = self.workspace.take_pending_announcement();
         let mut final_text = prepend_workspace_update(text, &pending);
+
+        // 架构 §4.12.7：本 session 当前 Running 状态的后台任务列表注入
+        // `<background_tasks>` 块——每条 user message 都附带（不只是首条），
+        // 因为 bg 任务列表随时间变化。
+        let bg_summaries: Vec<crate::system_prompt::BackgroundTaskSummary> = self
+            .session_id
+            .as_deref()
+            .map(|sid| {
+                let shells = crate::tools::background::registry_for_session(sid);
+                shells
+                    .list()
+                    .into_iter()
+                    .filter(|s| matches!(s.state(), crate::tools::background::ShellState::Running))
+                    .map(|s| crate::system_prompt::BackgroundTaskSummary {
+                        task_id: s.task_id.clone(),
+                        state: s.state().label().to_string(),
+                        command: s.command.clone(),
+                        elapsed_secs: s.started_at.elapsed().as_secs(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         if needs_environment {
             let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace)
-                .with_run_mode(self.run_mode);
+                .with_run_mode(self.run_mode)
+                .with_background_tasks(bg_summaries.clone());
             final_text = prepend_environment(final_text, &snapshot);
+        } else if !bg_summaries.is_empty() {
+            // 非首条 user message：单独前置 `<background_tasks>` 块
+            final_text = crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
         }
         // UserPromptSubmit hook（架构 §4.8.1）：fire-and-forget，把最终 user text 发给外部 hook。
         // 当前实现不消费 hook 返回，完整 Modify patch 协议留增量。
@@ -318,6 +353,49 @@ impl Session {
                 model_id: self.model_id.clone(),
                 data_dir: self.data_dir.clone(),
                 session_id: self.session_id.clone(),
+                phase: self.phase.clone(),
+                resume_from: None,
+            },
+        )
+    }
+
+    /// 从挂起态恢复 Run（架构 §4.12.6）：调用方先把 `<wakeup>` user message
+    /// 追加到 transcript，再调本函数；agent_loop 入口会 emit `RunResumed { cause }`
+    /// 并从 checkpoint 计数器起步。`phase` 参数 = 同一份挂起通道，让 resume 后
+    /// 模型可以再次调 WaitForTask / ScheduleWakeup 形成多次挂起。
+    pub fn resume_with(
+        &self,
+        cancel: CancelFlag,
+        pending_inputs: Option<common::runtime::PendingInputs>,
+        phase: Option<crate::wakeup::PhaseChannel>,
+        resume_from: crate::agent_loop::RunResumeState,
+    ) -> RunHandle {
+        let mut gate = HitlGate::new(self.definition.permission_policy.clone());
+        if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
+            gate = gate.with_store(store.clone(), sid.clone());
+        }
+        let hitl = Arc::new(gate);
+        self.harness.spawn_run(
+            self.client.clone(),
+            RunParams {
+                agent: AgentRef::new(&self.definition.id),
+                hitl,
+                transcript: self.transcript.clone(),
+                enabled_tools: self.enabled_tools.clone(),
+                compaction_policy: self.definition.compaction_policy.clone(),
+                workspace: self.workspace.clone(),
+                stream: true,
+                cancel,
+                parent: None,
+                recorder: self.recorder.clone(),
+                model_io_dump: self.model_io_dump.clone(),
+                pending_inputs,
+                run_mode: self.run_mode,
+                model_id: self.model_id.clone(),
+                data_dir: self.data_dir.clone(),
+                session_id: self.session_id.clone(),
+                phase,
+                resume_from: Some(resume_from),
             },
         )
     }

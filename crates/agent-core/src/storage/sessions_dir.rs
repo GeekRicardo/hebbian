@@ -47,6 +47,12 @@ pub fn partial_path(data_dir: &Path, session_id: &str, msg_id: &str) -> PathBuf 
     partial_dir(data_dir, session_id).join(format!("{msg_id}.partial.jsonl"))
 }
 
+/// 架构 §4.12.3：后台 Bash 进程的输出日志目录。
+/// 每个 BackgroundShell 在这里落一份 `<task_id>.log`，与内存 tail buffer 双轨。
+pub fn bg_dir(data_dir: &Path, session_id: &str) -> PathBuf {
+    session_dir(data_dir, session_id).join("bg")
+}
+
 /// 确保 session 主体目录与所有子目录都存在。
 pub fn ensure_session_dirs(data_dir: &Path, session_id: &str) -> AppResult<()> {
     let root = session_dir(data_dir, session_id);
@@ -56,6 +62,7 @@ pub fn ensure_session_dirs(data_dir: &Path, session_id: &str) -> AppResult<()> {
         root.join("compactions"),
         root.join("plans"),
         root.join("partial"),
+        root.join("bg"),
     ] {
         std::fs::create_dir_all(&sub)?;
     }

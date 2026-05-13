@@ -129,6 +129,7 @@ pub fn build_prompt(req: &ModelRequest, tools: &[ToolDefinition]) -> String {
                     call_id,
                     name,
                     content,
+                    ..
                 } in results
                 {
                     out.push_str(&format!(
@@ -1485,6 +1486,7 @@ mod tests {
                     call_id: "call_1".into(),
                     name: "Bash".into(),
                     content: "a.txt\nb.txt".into(),
+                    artifact: None,
                 }]),
             ],
             tools: Vec::new(),

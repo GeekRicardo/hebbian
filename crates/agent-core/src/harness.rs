@@ -67,6 +67,13 @@ pub struct RunParams {
     pub data_dir: Option<std::path::PathBuf>,
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。配合 `data_dir` 用于工件落盘路径。
     pub session_id: Option<String>,
+    /// 挂起请求通道（架构 §4.12.4）。Surface 与本 Run 关联的工具
+    /// （WaitForTask / ScheduleWakeup）共享同一个 channel，由 `default_tools`
+    /// 构造时塞进 BashTool 旁边的两个挂起工具。`None` 表示当前会话禁用挂起。
+    pub phase: Option<crate::wakeup::PhaseChannel>,
+    /// 从挂起态恢复时携带：agent_loop 用它初始化计数器 + emit `RunResumed`
+    /// 而不是 `RunStarted`（架构 §4.12.6）。
+    pub resume_from: Option<crate::agent_loop::RunResumeState>,
 }
 
 /// Core 对外门面。
@@ -173,6 +180,8 @@ impl Harness {
             model_id,
             data_dir,
             session_id: loop_session_id,
+            phase,
+            resume_from,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -201,6 +210,8 @@ impl Harness {
                 judge_client: Some(judge_client),
                 data_dir,
                 session_id: loop_session_id,
+                phase,
+                resume_from,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

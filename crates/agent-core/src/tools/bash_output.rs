@@ -79,6 +79,9 @@ impl Tool for BashOutputTool {
             shell.task_id,
             snapshot.state.label()
         ));
+        if let Some(p) = shell.log_path() {
+            text.push_str(&format!("[完整日志：{}]\n", p.display()));
+        }
         if snapshot.bytes_dropped > 0 {
             text.push_str(&format!(
                 "[警告] 因 buffer 上限丢失了 {} 字节较早输出\n",
@@ -118,12 +121,16 @@ fn render_listing(shells: &[std::sync::Arc<super::background::BackgroundShell>])
     for s in shells {
         let elapsed = s.started_at.elapsed().as_secs();
         text.push_str(&format!(
-            "- {} [{}] {}s `{}`\n",
+            "- {} [{}] {}s `{}`",
             s.task_id,
             s.state().label(),
             elapsed,
             s.command,
         ));
+        if let Some(p) = s.log_path() {
+            text.push_str(&format!(" log={}", p.display()));
+        }
+        text.push('\n');
     }
     text
 }
@@ -148,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn lists_when_no_task_id() {
         let shells = BackgroundShells::new();
-        shells.register("true".into(), "/".into(), spawn("true"));
+        shells.register("true".into(), "/".into(), None, spawn("true"));
         let tool = BashOutputTool::new(shells);
         let out = tool.execute(json!({})).await.unwrap();
         assert!(out.contains("bash_"));
@@ -160,6 +167,7 @@ mod tests {
         let s = shells.register(
             "echo a; sleep 0.05; echo b".into(),
             "/".into(),
+            None,
             spawn("echo a; sleep 0.05; echo b"),
         );
         let tool = BashOutputTool::new(shells);

@@ -41,6 +41,22 @@ pub enum EventPayload {
     },
     RunCancelled,
 
+    /// Run 进入挂起态（架构 §4.12）。模型调 `WaitForTask` / `ScheduleWakeup` 后
+    /// 当前 ToolStep 完成、agent_loop 落 RunCheckpoint 并退出 task 时 emit。
+    /// surface 看到这条不要清 slot——稍后会有 `RunResumed`。
+    RunSuspended {
+        reason: SuspendReason,
+        /// cron 路径：什么时刻自动唤醒（Unix epoch ms）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resumes_at_ms: Option<i64>,
+        /// bg-task 路径：等哪些后台 task_id。v1 数组里至多一项。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        waiting_for_task_ids: Vec<String>,
+    },
+    /// Run 从挂起态恢复。surface 用 `cause` 在 UI 标明唤醒原因（bg 完成 / cron 触发 /
+    /// 用户消息 / 手动 resume）。
+    RunResumed { cause: ResumeCause },
+
     // —— 单个 turn ——
     TurnStarted {
         turn_id: TurnId,
@@ -100,6 +116,11 @@ pub enum EventPayload {
         duration_ms: u64,
         #[serde(default)]
         truncated: bool,
+        /// 工具输出超阈值时落到磁盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2）。
+        /// surface 端用它渲染「📎 完整输出」可点链接；模型从 `result` 文本里的
+        /// 指针拿到等价信息。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact_path: Option<String>,
     },
 
     // —— 人机协作：审批 ——
@@ -188,6 +209,39 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+}
+
+/// Run 挂起的原因（架构 §4.12）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuspendReason {
+    /// 等 BackgroundShell task 完成（`WaitForTask` 工具触发）。
+    BackgroundTask,
+    /// 等定时唤醒（`ScheduleWakeup` 工具触发）。
+    Cron,
+    /// 模型其他显式挂起（保留）。
+    Manual,
+}
+
+/// Run 被唤醒的原因（架构 §4.12）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResumeCause {
+    /// 关联 task 完成。
+    BgTaskFinished {
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
+    /// cron 到点。
+    CronFired {
+        /// 原 `ScheduleWakeup` 的 reason 字符串。
+        original_reason: String,
+    },
+    /// 用户在 session 发了新消息，触发了 resume。
+    UserMessageArrived,
+    /// surface 手动点 resume。
+    ManualResume,
 }
 
 impl Event {

@@ -19,6 +19,7 @@ import type {
   ReasoningConfig,
   SearchHit,
   Session,
+  SessionBackgroundReport,
   SessionMeta,
   ToolInfo,
 } from "@/desktop/ui/types";
@@ -208,6 +209,14 @@ export const api = {
 
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),
+
+  /** 架构 §4.12.9：拉取当前 session 的后台任务报告（含 shells / cron / 挂起态）。 */
+  listBackgroundTasks: (sessionId: string) =>
+    invoke<SessionBackgroundReport>("list_background_tasks", { sessionId }),
+
+  /** 强杀指定 session 的 bg shell。返回最终状态（exited/killed/failed）。 */
+  killBackgroundTask: (sessionId: string, taskId: string) =>
+    invoke<string>("kill_background_task", { sessionId, taskId }),
 
   // ── settings ──
   getSettings: () => invoke<AppSettings>("get_settings"),

@@ -6,6 +6,7 @@ import {
   FloatingTaskPanel,
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
+import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -413,6 +414,9 @@ export function ChatView() {
           streaming={isStreaming}
         />
       )}
+
+      <BackgroundTaskPanel />
+
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {currentSession.messages.length === 0 && !isStreaming && (

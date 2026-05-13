@@ -159,8 +159,25 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
 
     let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
+    // 架构 §4.12.3：BashTool 转后台时把 stdout/stderr 落到 `<sid>/bg/<task_id>.log`。
+    let bg_log_dir =
+        Some(agent_core::storage::sessions_dir::bg_dir(data_dir, &args.session_id));
+    // 架构 §4.12.4：phase channel 让 WaitForTask/ScheduleWakeup 把"挂起请求"递给 agent_loop。
+    let phase = agent_core::wakeup::new_phase_channel();
+    // 架构 §4.12.2 修订：BackgroundShells 是 session-scoped，跨 chat() 调用通过
+    // `registry_for_session` 拿同一份；不同 session 完全隔离。
+    let shells = agent_core::tools::background::registry_for_session(&args.session_id);
+    // 把本 session 的 shells 注册到 WakeupScheduler，BgFinishHook 才能扫到。
+    agent_core::wakeup::WakeupScheduler::global()
+        .register_session_shells(args.session_id.clone(), shells.clone());
     let harness = Arc::new(Harness::new(
-        agent_core::tools::default_tools(workspace.clone(), &skill_dirs),
+        agent_core::tools::default_tools(
+            workspace.clone(),
+            &skill_dirs,
+            bg_log_dir,
+            phase.clone(),
+            shells,
+        ),
         HookManager::new(external_hooks),
     ));
     let definition = AgentDefinition::default();
@@ -217,12 +234,38 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             run_mode: agent_core::run_mode::RunMode::default(),
             model_id: None,
             data_dir: Some(data_dir.to_path_buf()),
+            phase: Some(phase.clone()),
         },
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
 
-    let mut handle =
-        core_session.run_with_pending(args.cancel_flag.clone(), args.pending_inputs.clone());
+    // 架构 §4.12.6：用户发新消息时若本 session 有挂起态 checkpoint，走 resume
+    // 路径（载入 RunResumeState、清调度器登记、emit RunResumed{UserMessageArrived}）。
+    // 否则起新 Run。
+    let resume_state = agent_core::storage::run_checkpoint::load(data_dir, &args.session_id)
+        .ok()
+        .flatten()
+        .map(|ckpt| {
+            // checkpoint 已经被新消息接管，清掉文件 + 摘除调度器对该 run 的登记，
+            // 防止 cron/bg-task 之后又触发一次重复 resume。
+            let _ = agent_core::storage::run_checkpoint::delete(data_dir, &args.session_id);
+            agent_core::wakeup::WakeupScheduler::global()
+                .discard_run(&args.session_id, &ckpt.run_id);
+            agent_core::agent_loop::RunResumeState::from_checkpoint(
+                ckpt,
+                protocol::ResumeCause::UserMessageArrived,
+            )
+        });
+
+    let mut handle = match resume_state {
+        Some(rs) => core_session.resume_with(
+            args.cancel_flag.clone(),
+            args.pending_inputs.clone(),
+            Some(phase.clone()),
+            rs,
+        ),
+        None => core_session.run_with_pending(args.cancel_flag.clone(), args.pending_inputs.clone()),
+    };
     let hitl = handle.hitl().clone();
 
     let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event);
@@ -963,10 +1006,15 @@ pub async fn build_preview_payload(
         .clone()
         .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
 
-    // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具
+    // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具。
+    // 预览路径不会真发命令,bg_log_dir + phase 都用占位 None / 空 channel。
+    // BackgroundShells 用临时本地实例（预览只生成 tool schema，不真跑命令）。
     let registry = ToolRegistry::new(agent_core::tools::default_tools(
         workspace.clone(),
         &skill_dirs,
+        None,
+        agent_core::wakeup::new_phase_channel(),
+        agent_core::tools::background::BackgroundShells::new(),
     ));
     let mut tool_defs = ask_only_definitions();
     let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
@@ -1215,15 +1263,42 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             call_id,
             result,
             duration_ms,
+            artifact_path,
             ..
         } => Some(EngineEvent::ToolDone {
             index: *index,
             id: call_id.clone(),
             result: result.clone(),
             duration_ms: *duration_ms,
+            artifact_path: artifact_path.clone(),
         }),
         RunFailed { error } => Some(EngineEvent::Error {
             message: error.message.clone(),
+        }),
+        RunSuspended {
+            reason,
+            resumes_at_ms,
+            waiting_for_task_ids,
+        } => Some(EngineEvent::RunSuspended {
+            reason: match reason {
+                protocol::SuspendReason::BackgroundTask => "background_task".into(),
+                protocol::SuspendReason::Cron => "cron".into(),
+                protocol::SuspendReason::Manual => "manual".into(),
+            },
+            resumes_at_ms: *resumes_at_ms,
+            waiting_for_task_ids: waiting_for_task_ids.clone(),
+        }),
+        RunResumed { cause } => Some(EngineEvent::RunResumed {
+            cause: match cause {
+                protocol::ResumeCause::BgTaskFinished { task_id, .. } => {
+                    format!("bg_task_finished:{task_id}")
+                }
+                protocol::ResumeCause::CronFired { original_reason } => {
+                    format!("cron_fired:{original_reason}")
+                }
+                protocol::ResumeCause::UserMessageArrived => "user_message_arrived".into(),
+                protocol::ResumeCause::ManualResume => "manual_resume".into(),
+            },
         }),
         PermissionRequested {
             request_id,

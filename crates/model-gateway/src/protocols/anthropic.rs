@@ -697,6 +697,7 @@ mod tests {
                 call_id: "call_1".into(),
                 name: "Bash".into(),
                 content: "a.txt".into(),
+                artifact: None,
             }]));
         }
         ModelRequest {

@@ -11,7 +11,7 @@
 //!
 //! [`agent_loop`]: super::agent_loop
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -56,10 +56,12 @@ fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
     }
 }
 
-use model_gateway::types::{ModelError, ToolCall, ToolResult};
+use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult};
 use common::{runtime as cancellation, CancelFlag};
 
 const MAX_TOOL_RESULT_INLINE: usize = 6_000;
+/// 落 artifact 路径时给模型看的头部预览字节上限。
+const ARTIFACT_HEAD_PREVIEW_BYTES: usize = 2_000;
 
 /// `ask` 工具的输入。
 #[derive(Debug, Deserialize)]
@@ -97,6 +99,10 @@ pub struct ToolDispatcher {
     pub hooks: std::sync::Arc<crate::hooks::HookManager>,
     /// 当前会话 id，PreToolUse / PostToolUse hook payload 用。
     pub session_id_for_hooks: Option<String>,
+    /// hebbian 数据目录根（`~/.hebbian`）。dispatcher 用它把超阈值的工具结果落到
+    /// `tool_results/<call_id>.txt`（架构 §4.4.9 / §4.12.11 Phase 2）。`None`
+    /// 表示当前进程未挂数据目录（单测路径），跳过 materialize 走截断。
+    pub data_dir_for_artifacts: Option<PathBuf>,
 }
 
 impl ToolDispatcher {
@@ -220,6 +226,7 @@ impl ToolDispatcher {
         let call_input_for_judge = call.input.clone();
         let hooks_for_future = self.hooks.clone();
         let session_id_for_hooks = self.session_id_for_hooks.clone();
+        let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
 
         let tool_span = tracing::info_span!(
             "tool.call",
@@ -402,7 +409,20 @@ impl ToolDispatcher {
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
 
-                let (mut content, truncated) = truncate_tool_result(raw);
+                // 大输出统一落 artifact（架构 §4.4.9）：超 6 KB 写盘 + 给模型「头部预览 +
+                // 工件指针」。失败路径（exec_failed）不走 materialize——错误文本通常很短，
+                // 即便不短也不该把错误升格成需要 Read 的工件。
+                let (materialized, artifact) = if exec_failed {
+                    (raw, None)
+                } else {
+                    materialize_tool_output(
+                        raw,
+                        &call.id,
+                        session_id_for_hooks.as_deref(),
+                        data_dir_for_artifacts.as_deref(),
+                    )
+                };
+                let (mut content, truncated) = truncate_tool_result(materialized);
                 let outcome = if !tool_found {
                     attr::outcome::NOT_FOUND
                 } else if exec_failed {
@@ -456,12 +476,16 @@ impl ToolDispatcher {
                     }
                 }
 
+                let artifact_path_str = artifact
+                    .as_ref()
+                    .map(|a| a.path.display().to_string());
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
                     result: content.clone(),
                     duration_ms,
                     truncated,
+                    artifact_path: artifact_path_str,
                 }));
 
                 Ok((
@@ -470,6 +494,7 @@ impl ToolDispatcher {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         content,
+                        artifact,
                     },
                 ))
             }
@@ -571,6 +596,7 @@ impl ToolDispatcher {
                     result: content.clone(),
                     duration_ms: 0,
                     truncated: false,
+                    artifact_path: None,
                 }));
 
                 if cancellation::is_cancelled(&cancel) {
@@ -583,6 +609,7 @@ impl ToolDispatcher {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         content,
+                        artifact: None,
                     },
                 ))
             }
@@ -741,6 +768,7 @@ fn deny_tool(
         result: denied.clone(),
         duration_ms: 0,
         truncated: false,
+        artifact_path: None,
     }));
     (
         call_index,
@@ -748,6 +776,7 @@ fn deny_tool(
             call_id: call.id.clone(),
             name: call.name.clone(),
             content: denied,
+            artifact: None,
         },
     )
 }
@@ -772,6 +801,7 @@ fn finish_ask_with_error(
         result: error.clone(),
         duration_ms: 0,
         truncated: false,
+        artifact_path: None,
     }));
     (
         call_index,
@@ -779,8 +809,65 @@ fn finish_ask_with_error(
             call_id: call.id.clone(),
             name: call.name.clone(),
             content: error,
+            artifact: None,
         },
     )
+}
+
+/// 工具输出超阈值时落 artifact（架构 §4.4.9 / §4.12.11 Phase 2）：
+/// - 小于 `MAX_TOOL_RESULT_INLINE` → 原样返回，`artifact` = None
+/// - 大于阈值且 `data_dir + session_id` 可用 → 全量写到
+///   `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`，inline 改为
+///   「头部 ~2 KB 预览 + 工件路径指针」。模型看到指针后可以用 Read 翻页
+///   （Read 默认 limit=2000 行，自带分块）
+/// - 大于阈值但没 data_dir（CLI 单跑 / 单测）→ 回落到旧的截断路径
+fn materialize_tool_output(
+    raw: String,
+    call_id: &str,
+    session_id: Option<&str>,
+    data_dir: Option<&Path>,
+) -> (String, Option<ToolArtifact>) {
+    if raw.len() <= MAX_TOOL_RESULT_INLINE {
+        return (raw, None);
+    }
+    let (Some(sid), Some(dd)) = (session_id, data_dir) else {
+        return (raw, None); // 调用方继续走 truncate_tool_result
+    };
+
+    let path = match crate::storage::tool_results::save_tool_result(dd, sid, call_id, &raw) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(call_id, error = %e, "materialize: save_tool_result failed; fallback truncate");
+            return (raw, None);
+        }
+    };
+
+    let total_bytes = raw.len() as u64;
+    let line_count = raw.lines().count() as u32;
+    let head = head_preview_bytes(&raw, ARTIFACT_HEAD_PREVIEW_BYTES);
+    let inline = format!(
+        "{head}\n…\n[输出 {total_bytes} 字节 / {line_count} 行，完整内容已落盘到：{path}\n用 Read 按 offset/limit 翻页读取。]",
+        path = path.display(),
+    );
+    (
+        inline,
+        Some(ToolArtifact {
+            path,
+            bytes: total_bytes,
+            line_count: Some(line_count),
+        }),
+    )
+}
+
+fn head_preview_bytes(s: &str, limit: usize) -> String {
+    if s.len() <= limit {
+        return s.to_string();
+    }
+    let mut end = limit;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
 }
 
 fn truncate_tool_result(raw: String) -> (String, bool) {
@@ -835,6 +922,7 @@ mod tests {
         let registry = Arc::new(ToolRegistry::new(vec![Box::new(BashTool::new(
             workspace.clone(),
             crate::tools::background::BackgroundShells::new(),
+            None,
         ))
             as Box<dyn crate::tools::Tool>]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
@@ -855,6 +943,7 @@ mod tests {
             judge_client: None,
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
         };
 
         let call = ToolCall {
@@ -901,5 +990,46 @@ mod tests {
             content,
             format!("{}…[已截断]", "a".repeat(MAX_TOOL_RESULT_INLINE - 1))
         );
+    }
+
+    /// 架构 §4.4.9：超阈值输出落 artifact + inline 换成「头部预览 + 工件指针」。
+    #[test]
+    fn materialize_above_threshold_writes_artifact_and_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        let sid = "20260512-test1";
+        std::fs::create_dir_all(data_dir.join("sessions").join(sid)).unwrap();
+        // 7 KB > MAX_TOOL_RESULT_INLINE(6 KB)
+        let raw = "x".repeat(7_000);
+        let (inline, artifact) =
+            materialize_tool_output(raw.clone(), "call_abc", Some(sid), Some(data_dir));
+        let a = artifact.expect("artifact should be produced");
+        assert!(a.path.ends_with("call_abc.txt"));
+        assert_eq!(a.bytes, 7_000);
+        let on_disk = std::fs::read_to_string(&a.path).unwrap();
+        assert_eq!(on_disk, raw);
+        assert!(inline.starts_with("xxxxxxx"), "head preview at start");
+        assert!(inline.contains("已落盘到"));
+        assert!(inline.contains("call_abc.txt"));
+        assert!(inline.len() < raw.len(), "inline shrunk");
+    }
+
+    #[test]
+    fn materialize_under_threshold_passes_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let raw = "small".to_string();
+        let (inline, artifact) =
+            materialize_tool_output(raw.clone(), "c1", Some("sid"), Some(tmp.path()));
+        assert!(artifact.is_none());
+        assert_eq!(inline, raw);
+    }
+
+    #[test]
+    fn materialize_without_data_dir_passes_through() {
+        let raw = "y".repeat(7_000);
+        let (inline, artifact) = materialize_tool_output(raw.clone(), "c1", None, None);
+        // 没 data_dir → 不落盘，inline 保持原样（交给后续 truncate 收尾）
+        assert!(artifact.is_none());
+        assert_eq!(inline, raw);
     }
 }

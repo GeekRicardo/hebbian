@@ -1184,3 +1184,42 @@
 - **留尾巴**:
   - 🟡 Sidebar 上没有"上次中断"小徽标——多 session 场景下，用户切到该 session 才会看到 BackgroundTaskPanel 里的提示。后续可以在 list_sessions 返回里包一个 `has_suspended_checkpoint` 标志，Sidebar 渲染小角标
   - 🟡 wakeup XML 渲染目前是只读视图——「展开」也只能看截断到 240 字符之后的内容。完整内容需点「复制」拿到剪贴板。可以考虑做成 ExpandButton 弹大窗口预览，与 ToolPre 一致风格
+
+### 2026-05-13 — 从设计中摘除 CLI / TUI，收敛为 Desktop-only
+
+- **Why**: 项目实际只在维护 apps/desktop 这一个 surface；CLI/TUI 自始至终是"为远期保留 / 给 LLM 自调试"的设计，但 desktop 把所有日常用例都覆盖了，未来不再投入。继续保留两 surface 抽象会让心智模型背负"为不存在的用户写代码"的成本——架构 §0 的"Surface 是壳"原则被 CLI/TUI / Desktop 并列拖累，§7 的"设置分离两份"是纯粹为多 surface 共存设计的接口外壳，§8 的整章 TUI 设计永远不会被实施。摘干净后，crates 内代码与架构.md 都收敛为"只有 Desktop"的清晰心智
+- **改动**:
+  - [Cargo.toml](../Cargo.toml): `members` 摘掉 `apps/cli`，加 `exclude = ["apps/cli"]`；apps/cli 目录保留作历史档案但不参与 workspace build
+  - [crates/agent-core/src/storage/surface_settings.rs](../crates/agent-core/src/storage/surface_settings.rs): 整文件删除（无调用方；`Surface::Cli` / `cli-settings.json` 不复存在）
+  - [crates/agent-core/src/storage/mod.rs](../crates/agent-core/src/storage/mod.rs): 移除 `pub mod surface_settings;` + 头注释相应条目；§6.1 "CLI / Desktop 共享" → "Desktop 多窗口/多进程共享"
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs): trait + impl 删除 `get_surface_settings` / `save_surface_settings` 两方法，删 `use surface_settings`；模块头注释、`subscribe`/`submit` 报错文案里 "CLI / surface" 措辞按需替换为 "Desktop"；`LocalCoreClient.harness` 字段注释里"CLI 等长生命周期 surface"措辞改为中性版本
+  - [crates/agent-core/src/run_mode.rs](../crates/agent-core/src/run_mode.rs): `RunMode::parse` 注释由"从 CLI 字符串解析"改为"从协议字符串解析"——它真正的调用者是 `Op::SwitchRunMode { new_mode: String }` 在 harness actor 路径上的反序列化，与 CLI 命令行无关
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `data_dir_for_artifacts: None` 注释里"少数 CLI / 单测路径"→"单测路径"
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `data_dir` 注释里"CLI 与 Desktop 共享 ~/.hebbian/"→"Desktop 多窗口/多进程共享"
+  - [docs/架构.md](架构.md): §0 12 条原则中 #1/#4/#6 收敛措辞；§2.1/§2.2 顶层架构图删 `apps/cli`；§4.9.4 "CLI / Desktop 怎么读" → "Desktop 怎么读"；§6.3.3 文件锁动机改为 "Desktop 多窗口/多进程"；§7.2 "Desktop / CLI 用这个" → "Desktop 用这个"；§7.3 "设置分离（拍板版）" 整节删除，替换为简短"Desktop 设置"段（desktop-settings.json 由 Desktop 自行管，不经 CoreClient）；§7.4 对比表删 surface_settings 那一行；§8 整章 TUI 设计删除（约 210 行）；§10.6 "CLI 单次调试模式" + §10.7 "CLI Resume + Auto-Approve" 删除；§11 文件结构图删 apps/cli + surface_settings.rs 文件名；§12 关键原则汇总 由 14 条缩为 13 条（删 CLI 退出码 + 调整 #8/#9/#13 措辞）；§16.11 TUI 对比表删除，原 §16.12 综合评估合并升格为新的 §16.11
+- **影响范围**:
+  - agent-core public API：`CoreClient` trait 删 2 个方法（`get/save_surface_settings`）；删 `storage::surface_settings` 模块。**破坏 API**，但实际没有任何 surface 调用过这两个方法，desktop 在 chat.rs / lib.rs 里都不调（grep 已确认），所以是死代码外科切除
+  - 协议 / 持久化文件格式：**完全不动**。`session.jsonl` / `settings.json` / `providers.json` 等格式与读写路径都没改；用户磁盘上若已有 `cli-settings.json` 也不会被读，原地保留
+  - apps/cli：**不再编译**（被 workspace 排除）。`cargo check --workspace` / `cargo check -p agent-core --tests` / `pnpm exec tsc --noEmit` 三件验证全绿
+  - 远期 HttpCoreClient 仍可基于现有 CoreClient trait 实现，不受影响
+- **留尾巴**:
+  - 🟡 apps/cli 目录里的源码原样保留，但 surface_settings 模块没了之后它自身已经无法 build；保留只为 git 历史回看，**不要试图 `cargo build` 它**。后续彻底确定不再回看时可整目录 `git rm -r apps/cli`
+  - 🟡 上一条 changelog（挂起唤醒）里写"CLI/TUI 的 phase: None 占位代码是技术债——后续删 CLI 时一并清理"，本次摘除让那条尾巴部分清掉（CLI 不参与 build 后 phase 全链路始终是 Some）；agent-core 内部 `phase: Option<PhaseChannel>` 字段类型本身仍是 Option，因为单元测试路径仍可以传 None
+  - 🟡 RunParams / SessionConfig 中 `data_dir / session_id / recorder / pending_inputs / model_io_dump / phase` 等若干字段仍是 `Option<T>`。讨论中考虑过把 `data_dir / session_id` 收紧为必有，但会牵动单元测试路径的样板代码，且与本次"摘 CLI"主线无关，按 CLAUDE.md "避免顺手 refactor" 暂不动
+  - 🟡 架构 §12 原则编号从 14 缩为 13，**没有保留旧编号**；旧 changelog / commit message 里若引用 §12 #13/#14 的位置会失效，但 changelog 是只增不减不回头改
+
+### 2026-05-13 — desktop 输入框上方 hover 提示改为即时显示
+
+- **Why**: 输入框上方的"项目目录 / 目录 / 文件附件 / 模型选择"几个 chip 与按钮，原来用浏览器原生 `title=` 做 hover 提示。原生 title 有 1~2 秒延迟且**无法用 CSS/JS 配置**（不同 OS / 浏览器实现不一），用户反馈"等好几秒才出来"。需要换成可控的自定义 hover 气泡，鼠标移入即出现
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx](../apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx): 新增轻量组件，基于 React state + mouseenter/leave + `absolute` 定位 + `pointer-events:none` 实现 0 延迟提示；支持 `side=top|bottom` 与 `align=start|center|end` 控制气泡位置，长文本 `whitespace-pre-wrap break-words max-w-[320px]` 自动换行，颜色与项目其他浮层（菜单、附件 pill）一致使用 `bg-card / border-border / shadow-md`
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): workdir chip（"项目：xxx"全路径）与 allowed dir chip（目录全路径）的 `title=` 改为外包 `<HoverHint>`，`align="start"` 让气泡贴左对齐避免遮住右侧 X 按钮
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx): 当前模型按钮的 `title=` 改为 `<HoverHint align="end">`，气泡贴按钮右边缘对齐（按钮自身在输入框右下角，右对齐更顺眼）
+  - [apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx](../apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx): 图片缩略图 `ImageThumb` 的 `title={name}` 改为外包 `<HoverHint>`；原 `<div className="relative group/thumb">` 改为 `<span>`（HoverHint 外壳已是 `inline-flex`，避免双层 block）
+- **影响范围**:
+  - 仅 apps/desktop 前端 UI，不动协议 / agent-core / storage / 类型
+  - 不破坏兼容；其余地方的 `title=`（拖拽手柄、菜单项的"更换项目"提示、附件 pill "移除附件"、关闭按钮等）按用户原话不在本次范围内，保持原生 title 不动，需要时再迁移
+  - `pnpm exec tsc --noEmit` 通过
+- **留尾巴**:
+  - 🟡 HoverHint 当前用 `position: absolute` 渲染，处于 `overflow:hidden` 父容器内**会被裁剪**。当前 4 处的父容器都没设 overflow:hidden，实测无问题；若以后要用到下拉菜单内部 / sidebar 等 overflow 容器，可以再改造成 portal + fixed 定位
+  - 🟡 未给 `AttachmentPill`（文件类附件 pill）与"+"按钮、"添加项目/目录"菜单项、拖拽手柄等其他位置加 HoverHint。这些原本就有 `title=` 或暂无 hover 信息；本次严格按用户原话只动他提到的 4 处，避免顺手 refactor

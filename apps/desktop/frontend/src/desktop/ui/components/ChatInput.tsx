@@ -17,6 +17,7 @@ import {
 } from "@/desktop/ui/components/chatInputHistory";
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
 import { ContextRing } from "@/desktop/ui/components/ContextRing";
+import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { ModelPickerButton } from "@/desktop/ui/components/ModelPickerButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
@@ -74,6 +75,9 @@ export function ChatInput({
   const compacting = useStore((s) => s.compacting);
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
   const enqueueInput = useStore((s) => s.enqueueInput);
+  const flushQueuedItem = useStore((s) => s.flushQueuedItem);
+  const composerDraft = useStore((s) => s.composerDraft);
+  const clearComposerDraft = useStore((s) => s.clearComposerDraft);
   const tokenStats = useStore(
     (s) => s.currentSession?.token_stats ?? null
   );
@@ -226,6 +230,37 @@ export function ChatInput({
     setAttachments([]);
     setHistoryState({ index: null });
   }
+
+  /** Shift+Enter：入队首 + 立即引导（走 PendingInputs，当前 model 调用完成后插队）。 */
+  async function enqueueHeadAndFlush() {
+    const v = value.trim();
+    if (!v && attachments.length === 0) return;
+    enqueueInput(v, attachments, "head");
+    setValue("");
+    setAttachments([]);
+    setHistoryState({ index: null });
+    try {
+      await flushQueuedItem();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  // composerDraft：「放回输入框」按钮把队列项内容写到 store，这里消费并清掉。
+  // 文本以换行追加（避免覆盖正在打的内容），附件直接合并。
+  useEffect(() => {
+    if (!composerDraft) return;
+    const { content, attachments: incoming } = composerDraft;
+    if (content) {
+      setValue((prev) => (prev ? `${prev}\n${content}` : content));
+      setHistoryState({ index: null });
+    }
+    if (incoming.length > 0) {
+      setAttachments((prev) => [...prev, ...incoming]);
+    }
+    clearComposerDraft();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [composerDraft, clearComposerDraft]);
 
   async function cancel() {
     if (!isStreaming || canceling) return;
@@ -382,8 +417,9 @@ export function ChatInput({
       }
     }
 
-    // streaming 中 Shift+Enter = 立即入队（队首），让它最先被消费；
-    // 非 streaming 时保持浏览器默认换行行为。
+    // streaming 中 Shift+Enter = 入队首 + 立即引导（走 PendingInputs，
+    // 当前 model_call+tool_call 完成后插队）；非 streaming 时保持浏览器
+    // 默认换行行为。
     if (
       isStreaming &&
       e.key === "Enter" &&
@@ -393,7 +429,7 @@ export function ChatInput({
       e.nativeEvent.keyCode !== 229
     ) {
       e.preventDefault();
-      enqueueAndClear("head");
+      void enqueueHeadAndFlush();
       return;
     }
 
@@ -499,41 +535,38 @@ export function ChatInput({
           {(activeWorkdir || activeAllowedDirs.length > 0) && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
               {activeWorkdir && (
-                <span
-                  className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group"
-                  title={`项目：${activeWorkdir}`}
-                >
-                  <FolderOpen className="w-3 h-3" />
-                  <span className="truncate max-w-[200px]">
-                    {basename(activeWorkdir)}
+                <HoverHint hint={`项目：${activeWorkdir}`} align="start">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group">
+                    <FolderOpen className="w-3 h-3" />
+                    <span className="truncate max-w-[200px]">
+                      {basename(activeWorkdir)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearWorkdir}
+                      className="opacity-50 hover:opacity-100"
+                      aria-label="移除项目"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
                   </span>
-                  <button
-                    type="button"
-                    onClick={clearWorkdir}
-                    className="opacity-50 hover:opacity-100"
-                    aria-label="移除项目"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
+                </HoverHint>
               )}
               {activeAllowedDirs.map((d) => (
-                <span
-                  key={d}
-                  className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group"
-                  title={d}
-                >
-                  <Folder className="w-3 h-3" />
-                  <span className="truncate max-w-[200px]">{basename(d)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeAllowedDir(d)}
-                    className="opacity-50 hover:opacity-100"
-                    aria-label="移除目录"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
+                <HoverHint key={d} hint={d} align="start">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group">
+                    <Folder className="w-3 h-3" />
+                    <span className="truncate max-w-[200px]">{basename(d)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAllowedDir(d)}
+                      className="opacity-50 hover:opacity-100"
+                      aria-label="移除目录"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                </HoverHint>
               ))}
             </div>
           )}
@@ -563,7 +596,7 @@ export function ChatInput({
             autoComplete="off"
             placeholder={
               isStreaming
-                ? "正在生成…Enter 排队，Shift+Enter 立即排到队首"
+                ? "正在生成…Enter 排队，Shift+Enter 立即引导"
                 : "输入消息，Enter 发送，Shift+Enter 换行…"
             }
             rows={1}

@@ -32,6 +32,26 @@ pub enum EngineEvent {
         id: String,
         result: String,
         duration_ms: u64,
+        /// 工具输出超阈值时落盘的工件路径（架构 §4.4.9）。surface 用它在
+        /// MessageBubble 渲染「📎 完整输出」可点链接。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact_path: Option<String>,
+    },
+    /// Run 进入挂起态（架构 §4.12）。surface 据此渲染 BackgroundTaskPanel 占位。
+    RunSuspended {
+        /// "background_task" / "cron" / "manual"
+        reason: String,
+        /// cron 路径：自动唤醒时间（Unix ms）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resumes_at_ms: Option<i64>,
+        /// bg-task 路径：等的 task_id 列表。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        waiting_for_task_ids: Vec<String>,
+    },
+    /// Run 从挂起态恢复。
+    RunResumed {
+        /// 简短描述：bg_task_finished / cron_fired / user_message_arrived / manual_resume
+        cause: String,
     },
     /// 工具需要用户审批（HITL）。前端弹出审批 UI 后通过
     /// `approve_permission` / `approve_path_access` 命令回应。

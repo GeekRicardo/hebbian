@@ -11,6 +11,7 @@
 //!
 //! [`safe_commands`]: super::safe_commands
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,11 +32,23 @@ const MAX_OUTPUT_BYTES: usize = 30_000;
 pub struct BashTool {
     workspace: Arc<Workspace>,
     shells: BackgroundShells,
+    /// 当前 session 的 bg 日志目录（架构 §4.12.3）。`None` 时 BackgroundShells
+    /// 回落到 tail-only。CLI 单跑 / 单测一般传 None；desktop chat.rs 传
+    /// `~/.hebbian/sessions/<sid>/bg`。
+    bg_log_dir: Option<PathBuf>,
 }
 
 impl BashTool {
-    pub fn new(workspace: Arc<Workspace>, shells: BackgroundShells) -> Self {
-        Self { workspace, shells }
+    pub fn new(
+        workspace: Arc<Workspace>,
+        shells: BackgroundShells,
+        bg_log_dir: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            workspace,
+            shells,
+            bg_log_dir,
+        }
     }
 }
 
@@ -114,15 +127,26 @@ impl Tool for BashTool {
             .map_err(|e| AppError::msg(format!("Bash: 启动失败 {e}")))?;
 
         let cwd_str = cwd.display().to_string();
-        let shell = self
-            .shells
-            .register(command.to_string(), cwd_str, child);
+        let shell = self.shells.register(
+            command.to_string(),
+            cwd_str,
+            self.bg_log_dir.as_deref(),
+            child,
+        );
 
         if background {
-            return Ok(format!(
-                "[bash] 已在后台启动：task_id={} cmd=`{}`\n用 BashOutput {{\"task_id\": \"{}\"}} 查询进度。",
-                shell.task_id, command, shell.task_id
+            let mut text = format!(
+                "[bash] 已在后台启动：task_id={} cmd=`{}`\n",
+                shell.task_id, command
+            );
+            if let Some(p) = shell.log_path() {
+                text.push_str(&format!("完整输出落盘到：{}\n", p.display()));
+            }
+            text.push_str(&format!(
+                "用 BashOutput {{\"task_id\": \"{}\"}} 查询进度。",
+                shell.task_id
             ));
+            return Ok(text);
         }
 
         // 前台等待：要么进程退出，要么超时。等待期间不抽 buffer——
@@ -138,6 +162,9 @@ impl Tool for BashTool {
                 "[bash] 命令在 {timeout}s 内未结束，已转后台：task_id={}\n",
                 shell.task_id
             );
+            if let Some(p) = shell.log_path() {
+                text.push_str(&format!("完整输出落盘到：{}\n", p.display()));
+            }
             text.push_str(&format!(
                 "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止。\n",
                 shell.task_id
@@ -217,7 +244,7 @@ mod tests {
     }
 
     fn tool(path: &std::path::Path) -> BashTool {
-        BashTool::new(workspace_at(path), BackgroundShells::new())
+        BashTool::new(workspace_at(path), BackgroundShells::new(), None)
     }
 
     #[tokio::test]
@@ -244,7 +271,7 @@ mod tests {
     async fn timeout_transitions_to_background() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone());
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
         let out = t
             .execute(json!({"command": "sleep 5", "timeout_secs": 1}))
             .await
@@ -267,7 +294,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone());
+        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
         let bash_out = BashOutputTool::new(shells.clone());
         let kill = KillShellTool::new(shells.clone());
 
@@ -302,7 +329,7 @@ mod tests {
     async fn run_in_background_returns_immediately() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone());
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
         let started = std::time::Instant::now();
         let out = t
             .execute(json!({"command": "sleep 30", "run_in_background": true}))

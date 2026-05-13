@@ -159,6 +159,7 @@ fn record_usage_metrics(system: &str, model: &str, usage: &Usage) {
 fn error_finish_reason(err: &ModelError) -> &'static str {
     match err {
         ModelError::Cancelled => "cancelled",
+        ModelError::Suspended => "suspended",
         ModelError::Http { .. } => "http_error",
         ModelError::Request(_) => "network_error",
         ModelError::Json(_) => "parse_error",

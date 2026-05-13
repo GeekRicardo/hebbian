@@ -31,8 +31,47 @@ use common::{
     runtime::{self as cancellation, PendingInputs},
     CancelFlag,
 };
+use protocol::ResumeCause;
 
 const MAX_TOOL_ITERATIONS: u32 = 100;
+
+/// Run 从挂起态恢复时携带的初始状态（架构 §4.12.6）。Harness 在 spawn_run 时
+/// 把它放进 [`LoopParams`]——agent_loop 入口据此恢复计数器，并 emit
+/// `RunResumed { cause }` 而不是 `RunStarted`。
+#[derive(Debug, Clone)]
+pub struct RunResumeState {
+    pub cause: ResumeCause,
+    pub iteration: u32,
+    pub model_step_index: u32,
+    pub tool_step_index: u32,
+    pub tool_call_dispatch_offset: usize,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_creation_tokens: u64,
+}
+
+impl RunResumeState {
+    /// 把磁盘上的 [`crate::storage::run_checkpoint::RunCheckpoint`] 还原成
+    /// agent_loop 启动时初始化用的状态（架构 §4.12.6）。`cause` 决定 surface
+    /// 看到的 `RunResumed { cause }` 标签。
+    pub fn from_checkpoint(
+        ckpt: crate::storage::run_checkpoint::RunCheckpoint,
+        cause: ResumeCause,
+    ) -> Self {
+        Self {
+            cause,
+            iteration: ckpt.iteration,
+            model_step_index: ckpt.model_step_index,
+            tool_step_index: ckpt.tool_step_index,
+            tool_call_dispatch_offset: ckpt.tool_call_dispatch_offset,
+            total_input_tokens: ckpt.total_input_tokens,
+            total_output_tokens: ckpt.total_output_tokens,
+            total_cache_read_tokens: ckpt.total_cache_read_tokens,
+            total_cache_creation_tokens: ckpt.total_cache_creation_tokens,
+        }
+    }
+}
 
 /// 运行 agent loop 的入参集合
 pub struct LoopParams<'a> {
@@ -66,6 +105,14 @@ pub struct LoopParams<'a> {
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。与 `data_dir` 拼成
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`。
     pub session_id: Option<String>,
+    /// 工具与 agent_loop 之间共享的"挂起请求"槽（架构 §4.12.4）。WaitForTask /
+    /// ScheduleWakeup 调用时把 `RunPhase` 写进来；agent_loop 在每次 ToolStep 完成后
+    /// 取出处理：emit RunSuspended → 落 RunCheckpoint → 注册到 WakeupScheduler → return。
+    pub phase: Option<crate::wakeup::PhaseChannel>,
+    /// 从挂起态恢复时由 Harness 注入：agent_loop 据此恢复计数器并 emit
+    /// `RunResumed { cause }` 而不是 `RunStarted`（架构 §4.12.6）。`None` 表示
+    /// 普通新起 Run。
+    pub resume_from: Option<RunResumeState>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -111,28 +158,58 @@ pub async fn run_loop(
         judge_client,
         data_dir,
         session_id,
+        phase,
+        resume_from,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
 
-    info!("run started");
+    // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
+    // 计数器从 checkpoint 起步，保证 MAX_TOOL_ITERATIONS 累积、Step index 单调。
+    let (
+        mut iteration,
+        mut tool_call_dispatch_offset,
+        mut model_step_index,
+        mut tool_step_index,
+        mut total_input_tokens,
+        mut total_output_tokens,
+        mut total_cache_read_tokens,
+        mut total_cache_creation_tokens,
+    ) = if let Some(ref rs) = resume_from {
+        info!(?rs.cause, "run resumed");
+        emit(EventPayload::RunResumed {
+            cause: rs.cause.clone(),
+        });
+        (
+            rs.iteration,
+            rs.tool_call_dispatch_offset,
+            rs.model_step_index,
+            rs.tool_step_index,
+            rs.total_input_tokens,
+            rs.total_output_tokens,
+            rs.total_cache_read_tokens,
+            rs.total_cache_creation_tokens,
+        )
+    } else {
+        info!("run started");
+        emit(EventPayload::RunStarted {
+            agent: agent.clone(),
+            parent,
+        });
+        (0u32, 0usize, 0u32, 0u32, 0u64, 0u64, 0u64, 0u64)
+    };
 
-    emit(EventPayload::RunStarted {
-        agent: agent.clone(),
-        parent,
-    });
+    // resume 成功进入 loop 之前清除 checkpoint，避免重复 resume 同一份。
+    if resume_from.is_some() {
+        if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+            if let Err(e) = crate::storage::run_checkpoint::delete(dd, sid) {
+                tracing::warn!(error = %e, "resume: delete checkpoint failed");
+            }
+        }
+    }
 
     let run_start = Instant::now();
-    let mut iteration: u32 = 0;
-    let mut tool_call_dispatch_offset = 0usize;
-    // 架构 §4.2 / §13：Step 粒度——ModelStep + ToolStep 分别计数。
-    let mut model_step_index: u32 = 0;
-    let mut tool_step_index: u32 = 0;
     let mut output_attachments = Vec::new();
-    let mut total_input_tokens: u64 = 0;
-    let mut total_output_tokens: u64 = 0;
-    let mut total_cache_read_tokens: u64 = 0;
-    let mut total_cache_creation_tokens: u64 = 0;
 
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
@@ -476,6 +553,7 @@ pub async fn run_loop(
                     judge_client: judge_client.clone(),
                     hooks: hooks.clone(),
                     session_id_for_hooks: session_id.clone(),
+                    data_dir_for_artifacts: data_dir.clone(),
                 };
 
                 tool_step_index += 1;
@@ -512,6 +590,93 @@ pub async fn run_loop(
                     step_index: tool_step_index,
                 });
 
+                // 架构 §4.12.5：ToolStep 跑完后检查 phase channel。模型本 ToolStep
+                // 调过 WaitForTask / ScheduleWakeup 时，phase 已被工具写入；这里：
+                // 1. emit RunSuspended（surface 据此渲染 BackgroundTaskPanel 占位）
+                // 2. 落 RunCheckpoint
+                // 3. 在 WakeupScheduler 上 arm 对应 wakeup（bg-task / cron）
+                // 4. emit TurnFinished(EndTurn) 收尾本 turn
+                // 5. break loop —— agent_loop task 结束，等 scheduler 喊醒后由
+                //    Harness::resume_run 重新 spawn
+                if let Some(p) = phase.as_ref() {
+                    let phase_pending = p.lock().unwrap().take();
+                    if let Some(ph) = phase_pending {
+                        use crate::storage::run_checkpoint::{self as ck, RunPhase};
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let (reason_evt, resumes_at_ms, waiting_for_task_ids) = match &ph {
+                            RunPhase::AwaitingBackgroundTask { task_id, .. } => (
+                                protocol::SuspendReason::BackgroundTask,
+                                None,
+                                vec![task_id.clone()],
+                            ),
+                            RunPhase::AwaitingCron { fire_at_ms, .. } => (
+                                protocol::SuspendReason::Cron,
+                                Some(*fire_at_ms),
+                                Vec::new(),
+                            ),
+                        };
+                        emit(EventPayload::RunSuspended {
+                            reason: reason_evt,
+                            resumes_at_ms,
+                            waiting_for_task_ids: waiting_for_task_ids.clone(),
+                        });
+                        if let (Some(dd), Some(sid)) =
+                            (data_dir.as_ref(), session_id.as_deref())
+                        {
+                            let checkpoint = ck::RunCheckpoint {
+                                run_id: state.run_id.to_string(),
+                                session_id: sid.to_string(),
+                                agent: agent.0.to_string(),
+                                run_mode: format!("{:?}", run_mode),
+                                model_id: model_id.clone(),
+                                iteration,
+                                model_step_index,
+                                tool_step_index,
+                                tool_call_dispatch_offset,
+                                total_input_tokens,
+                                total_output_tokens,
+                                total_cache_read_tokens,
+                                total_cache_creation_tokens,
+                                phase: ph.clone(),
+                                suspended_at_ms: now_ms,
+                            };
+                            if let Err(e) = ck::save(dd, &checkpoint) {
+                                tracing::warn!(error = %e, "RunCheckpoint save failed");
+                            }
+                        }
+                        // 注册唤醒条件到进程内 scheduler（架构 §4.12.2）。
+                        let scheduler = crate::wakeup::WakeupScheduler::global();
+                        let sid_for_arm = session_id.clone().unwrap_or_default();
+                        let run_id_for_arm = state.run_id.to_string();
+                        match ph {
+                            RunPhase::AwaitingBackgroundTask { task_id, .. } => {
+                                scheduler.arm_bg_task(sid_for_arm, run_id_for_arm, task_id);
+                            }
+                            RunPhase::AwaitingCron {
+                                fire_at_ms, reason, ..
+                            } => {
+                                scheduler.arm_cron(
+                                    sid_for_arm,
+                                    run_id_for_arm,
+                                    fire_at_ms,
+                                    reason,
+                                );
+                            }
+                        }
+                        // 用 EndTurn 收 turn，但**不**走下文的 RunFinished 路径——
+                        // 直接走 break 让 result = Err(Cancelled-like) 不合适。
+                        // 取巧：emit TurnFinished 后 break 出循环，result 保持
+                        // 上一个 step 的状态；外层把 Suspended 视为 Run 没结束。
+                        turn_span.record(attr::STOP_REASON, "suspended");
+                        emit(EventPayload::TurnFinished {
+                            turn_id: turn_id.clone(),
+                            turn: turn_index,
+                            stop_reason: StopReason::EndTurn,
+                        });
+                        break Err(model_gateway::types::ModelError::Suspended);
+                    }
+                }
+
                 turn_span.record(attr::STOP_REASON, "end_turn");
                 metrics::record_turn_duration(
                     turn_index,
@@ -547,6 +712,11 @@ pub async fn run_loop(
             run_span.record("hebbian.run.outcome", attr::run_outcome::CANCELLED);
             metrics::record_run_outcome(attr::run_outcome::CANCELLED, agent_id, duration_ms as f64);
             emit(EventPayload::RunCancelled);
+        }
+        Err(ModelError::Suspended) => {
+            // 挂起态：本 task 退出，但 Run 仍 Active。不发 RunFinished / RunCancelled——
+            // RunSuspended 已在 break 前 emit；resume_run 时由 Harness 复活同一个 Run。
+            run_span.record("hebbian.run.outcome", "suspended");
         }
         Err(e) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::FAILED);
@@ -625,6 +795,8 @@ mod tests {
                 judge_client: None,
                 data_dir: None,
                 session_id: None,
+                phase: None,
+                resume_from: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);

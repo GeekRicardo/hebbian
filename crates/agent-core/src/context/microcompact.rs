@@ -116,6 +116,7 @@ pub fn microcompact(
                         call_id: r.call_id.clone(),
                         name: r.name.clone(),
                         content: placeholder,
+                        artifact: None,
                     };
                     shadowed += 1;
                 }
@@ -141,6 +142,7 @@ mod tests {
             call_id: format!("c-{name}-{}", content.len()),
             name: name.to_string(),
             content: content.to_string(),
+            artifact: None,
         }
     }
 

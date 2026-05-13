@@ -2,14 +2,14 @@
 //!
 //! 两种实现：
 //! - [`LocalCoreClient`]：in-process 转发到 storage / model_gateway / permissions 模块。
-//!   Desktop / CLI 都用它，零序列化。
+//!   Desktop 用它，零序列化。
 //! - [`HttpCoreClient`]：远端版（占位，未实施）。
 //!
 //! 双通路（架构 §3）：
 //! - 对话流：`submit(Op)` / `subscribe(RunId)` 走 [`Harness`](crate::Harness) 的 actor。
-//!   本期 `subscribe` 仅占位返回 `Unsupported`——每个 surface 自己拿 `RunHandle` 消费事件。
+//!   本期 `subscribe` 仅占位返回 `Unsupported`——Desktop 自己拿 `RunHandle` 消费事件。
 //! - 同步 API：providers / sessions / project settings / permissions / prompts / skills /
-//!   surface settings。每个方法对应一个 storage / model_gateway 函数，CoreClient 仅做转发。
+//!   tool manifest。每个方法对应一个 storage / model_gateway 函数，CoreClient 仅做转发。
 //!
 //! 不重复定义类型：直接借用 `agent_core::storage::*` / `agent_core::permissions::*` /
 //! `model_gateway::config::*` / `protocol::*`。
@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use crate::permissions::{PermissionRule, PermissionStore};
 use crate::storage::{
     permissions as permissions_store, prompts as prompts_store, sessions as sessions_store,
-    settings as settings_store, surface_settings,
+    settings as settings_store,
 };
 use crate::tools::{self as tools, ToolInfo};
 use crate::Harness;
@@ -135,34 +135,21 @@ pub trait CoreClient: Send + Sync {
 
     fn list_tools(&self) -> Vec<ToolInfo>;
 
-    // === 同步 API：Surface 设置（架构 §7.3）===
-
-    fn get_surface_settings(
-        &self,
-        surface: surface_settings::Surface,
-    ) -> Result<serde_json::Value, CoreError>;
-    fn save_surface_settings(
-        &self,
-        surface: surface_settings::Surface,
-        value: serde_json::Value,
-    ) -> Result<(), CoreError>;
-
     // === 数据目录访问 ===
 
-    /// 暴露 `~/.hebbian/` 路径——CLI / Desktop 仍需要它构造 Workspace / model_io_dump 等。
+    /// 暴露 `~/.hebbian/` 路径——Desktop 仍需要它构造 Workspace / model_io_dump 等。
     fn data_dir(&self) -> &Path;
 }
 
 /// In-process 实现：所有同步 API 转发到 storage / model_gateway 函数；
 /// `submit` 转发到 `Harness::submit`。
 ///
-/// 持有 [`Harness`] 和 [`PermissionStore`] 是为了让 CLI / Desktop 在一份对象上能拿到
-/// 「跑 run」和「列规则 / 清规则」两类能力。
+/// 持有 [`Harness`] 和 [`PermissionStore`] 让上层在一份对象上能同时拿到
+/// 「跑 run」和「列规则 / 清规则」两类能力。Desktop 当前在 `send_message` 时单独
+/// 构造 Harness 走 chat 模块，CoreClient 仅承担同步 API 转发——这种场景下
+/// 构造时传 `None`。远期若 Desktop 改为复用全局 Harness，则传 `Some`。
 pub struct LocalCoreClient {
     data_dir: PathBuf,
-    /// 可选：CLI 等长生命周期 surface 持有全局 Harness；Desktop 在每次
-    /// `send_message` 时单独构造 Harness 走 chat 模块，CoreClient 仅做同步 API
-    /// 转发——这种场景下传 `None`。
     harness: Option<Arc<Harness>>,
     permission_store: Option<Arc<PermissionStore>>,
 }
@@ -195,7 +182,7 @@ impl CoreClient for LocalCoreClient {
         let harness = self
             .harness
             .as_ref()
-            .ok_or(CoreError::Unsupported("submit: 该 surface 未挂 Harness"))?;
+            .ok_or(CoreError::Unsupported("submit: 未挂 Harness"))?;
         let submission = Submission::new(op);
         let id = submission.id.clone();
         harness
@@ -205,9 +192,9 @@ impl CoreClient for LocalCoreClient {
     }
 
     fn subscribe(&self, _run_id: &protocol::RunId) -> Result<(), CoreError> {
-        // 本期不做 broadcast：surface 直接消费 `RunHandle`。架构 §13 留尾巴。
+        // 本期不做 broadcast：Desktop 直接消费 `RunHandle`。架构 §13 留尾巴。
         Err(CoreError::Unsupported(
-            "subscribe: surface 直接消费 RunHandle，跨进程 broadcast 待实施",
+            "subscribe: Desktop 直接消费 RunHandle，跨进程 broadcast 待实施",
         ))
     }
 
@@ -353,22 +340,6 @@ impl CoreClient for LocalCoreClient {
 
     fn list_tools(&self) -> Vec<ToolInfo> {
         tools::tool_manifest()
-    }
-
-    fn get_surface_settings(
-        &self,
-        surface: surface_settings::Surface,
-    ) -> Result<serde_json::Value, CoreError> {
-        surface_settings::get_surface_settings(&self.data_dir, surface).map_err(CoreError::from)
-    }
-
-    fn save_surface_settings(
-        &self,
-        surface: surface_settings::Surface,
-        value: serde_json::Value,
-    ) -> Result<(), CoreError> {
-        surface_settings::save_surface_settings(&self.data_dir, surface, &value)
-            .map_err(CoreError::from)
     }
 
     fn data_dir(&self) -> &Path {

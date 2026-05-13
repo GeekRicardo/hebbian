@@ -31,7 +31,8 @@ impl RunMode {
         }
     }
 
-    /// 从 CLI 字符串解析（接受 kebab-case 与 PascalCase）。
+    /// 从协议字符串解析（接受 kebab-case 与 PascalCase）。
+    /// `Op::SwitchRunMode { new_mode: String }` 在 actor 路径上调用本函数。
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "ask-before-edits" | "askbeforeedits" | "ask" => Some(RunMode::AskBeforeEdits),

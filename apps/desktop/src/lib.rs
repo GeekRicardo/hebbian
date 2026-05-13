@@ -27,10 +27,10 @@ use agent_core::storage::{
     settings::{self as settings_store, Settings},
 };
 use std::path::PathBuf;
-use tauri::{ipc::Channel, AppHandle, Manager, State, WindowEvent};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State, WindowEvent};
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
-    // 架构 §6.1 / 决策 D10：CLI 与 Desktop 共享 ~/.hebbian/。
+    // 架构 §6.1 / 决策 D10：Desktop 多窗口/多进程共享 ~/.hebbian/。
     // `default_data_dir` 在第一次调用时会检测 Tauri bundle 老路径并自动迁移
     // （Library/Application Support/dev.ricardo.hebbian → ~/.hebbian），打 info log。
     Ok(agent_core::storage::default_data_dir())
@@ -572,6 +572,71 @@ fn list_tools(app: AppHandle) -> AppResult<Vec<ToolInfo>> {
     Ok(core(&app)?.list_tools())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct BackgroundTaskInfo {
+    task_id: String,
+    state: String,
+    command: String,
+    cwd: String,
+    elapsed_secs: u64,
+    log_path: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SessionBackgroundReport {
+    /// 当前 session 注册的所有后台 shell（含 running / exited / killed）。
+    shells: Vec<BackgroundTaskInfo>,
+    /// 当前 session 还在等的 cron 唤醒。
+    pending_crons: Vec<agent_core::wakeup::PendingCron>,
+    /// 当前 session 是否有挂起态 checkpoint（架构 §4.12.6）。surface 用来决定
+    /// 是否在 BackgroundTaskPanel 渲染「挂起中」徽标。
+    has_suspended_checkpoint: bool,
+}
+
+/// 强杀本 session 注册表中的某个 bg shell（包装 BackgroundShells.kill）。
+/// surface 用：BackgroundTaskPanel 上的「停止」按钮。
+#[tauri::command]
+async fn kill_background_task(session_id: String, task_id: String) -> AppResult<String> {
+    let shells = agent_core::tools::background::registry_for_session(&session_id);
+    match shells.kill(&task_id).await {
+        Some(state) => Ok(state.label().to_string()),
+        None => Err(AppError::msg(format!(
+            "未找到 task_id={task_id}（可能已被清理）"
+        ))),
+    }
+}
+
+/// 架构 §4.12.9：BackgroundTaskPanel 调它轮询当前 session 的后台情况。
+/// session-scoped——跨 session 的 bg shell 互不可见。
+#[tauri::command]
+fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<SessionBackgroundReport> {
+    let dd = data_dir(&app)?;
+    let shells_registry = agent_core::tools::background::registry_for_session(&session_id);
+    let shells: Vec<BackgroundTaskInfo> = shells_registry
+        .list()
+        .into_iter()
+        .map(|s| BackgroundTaskInfo {
+            task_id: s.task_id.clone(),
+            state: s.state().label().to_string(),
+            command: s.command.clone(),
+            cwd: s.cwd.clone(),
+            elapsed_secs: s.started_at.elapsed().as_secs(),
+            log_path: s.log_path().map(|p| p.display().to_string()),
+        })
+        .collect();
+    let pending_crons = agent_core::wakeup::WakeupScheduler::global()
+        .list_pending_crons(&session_id);
+    let has_suspended_checkpoint = agent_core::storage::run_checkpoint::load(&dd, &session_id)
+        .ok()
+        .flatten()
+        .is_some();
+    Ok(SessionBackgroundReport {
+        shells,
+        pending_crons,
+        has_suspended_checkpoint,
+    })
+}
+
 // ========== Settings ==========
 
 #[tauri::command]
@@ -1083,6 +1148,25 @@ pub fn run() {
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))
             })?;
+
+            // 架构 §4.12.6：注册 WakeupScheduler 的 resume 回调。BgFinishHook /
+            // CronTimer 触发时把 `<wakeup>` XML + session_id 通过 Tauri 事件
+            // `wakeup-fired` 推给前端，前端 listener 自动把它当 user message 发出
+            // → 后端 chat 命令检测到 checkpoint 走 resume_with 路径。
+            let resume_handle = app.handle().clone();
+            agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(
+                move |event| {
+                    let payload = serde_json::json!({
+                        "session_id": event.session_id(),
+                        "run_id": event.run_id(),
+                        "wakeup_xml": agent_core::wakeup::wakeup_xml(&event),
+                    });
+                    if let Err(e) = resume_handle.emit("wakeup-fired", payload) {
+                        tracing::warn!(error = %e, "failed to emit wakeup-fired tauri event");
+                    }
+                },
+            ));
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1123,6 +1207,8 @@ pub fn run() {
             answer_question,
             generate_session_title,
             list_tools,
+            list_background_tasks,
+            kill_background_task,
             get_settings,
             save_settings,
             update_session_settings,
