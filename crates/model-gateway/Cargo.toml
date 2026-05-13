@@ -23,3 +23,6 @@ sha2 = "0.10"
 rand = "0.8"
 urlencoding = "2"
 tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
