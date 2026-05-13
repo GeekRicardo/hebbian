@@ -920,13 +920,267 @@
   - 仅在 macOS 验证；Windows / Linux 上 dev 重启抢焦点是另一套机制（Windows 是 `SetForegroundWindow`），如有同样痛点需要单独处理
   - 600ms 是经验值——如果 Tauri 窗口创建在某些机器上更慢，可能短暂看到 dock 图标空白；目前没出现就先这样
 
-### 2026-05-12 — 修复 dev 模式重新编译后桌面窗口抢前台焦点
+### 2026-05-12 — 队列重排：默认「等本轮跑完再发」，引导走显式按钮
 
-- **Why**: 用户痛点：开着 `pnpm tauri dev` 在别的窗口工作，每次改 Rust 代码触发 cargo 重编 → 进程重启 → 主窗口跳到最前面抢走当前活动应用的焦点，打断工作流
+- **Why**: 用户痛点：streaming 中按 Enter 期望「等本轮跑完再发」（直觉），但旧实现把 Shift+Enter 等同于「仅放队首」，普通 Enter 是 `tail`、Shift+Enter 是 `head`——两种都只是排队，并没有"立即"语义；而队列条只有一个 ↩ 按钮且只对队首启用、文案叫「立即发送」。整体心智混乱：用户分不清"等本轮跑完"还是"立刻插入到当前 model 调用之间"
 - **改动**:
-  - [apps/desktop/tauri.conf.json](apps/desktop/tauri.conf.json): 主窗口加 `"focus": false`，避免 Tauri 创建窗口时把它设为活动窗口
-  - [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs) `setup`: macOS + `debug_assertions` 下，进程进入 `setup` 立刻把 `ActivationPolicy` 降到 `Accessory`，绕过 macOS 在 `NSApplicationDidFinishLaunching` 自动把 Regular 应用 activate 到前台的默认行为；起一个 thread 600ms 后再切回 `Regular`，dock 图标恢复正常但此时不再触发 activate；同时在 release 构建里 `set_focus("main")` 保持双击启动应该抢前台的体验
-- **影响范围**: 仅 desktop crate；不动协议；不动其他 surface
+  - [docs/架构.md](架构.md) §4.2.3: 新增「两条队列：排队 vs 引导」小节，明确 next_run_queue（surface 端）与 PendingInputs（agent-core 端）的语义边界；记录三按钮 UX；原 §4.2.3 MAX_STEPS 顺移为 §4.2.4
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](apps/desktop/frontend/src/desktop/ui/store/useStore.ts):
+    - `flushQueuedHead()` → `flushQueuedItem(id?)`：任意位置可触发引导，不再限队首；失败时还原回原位置（不是固定塞队首）
+    - 新增 `returnQueuedToComposer(id)`：移除该项 + 把 content/attachments 写到共享的 `composerDraft`
+    - 新增 `composerDraft` + `clearComposerDraft`：ChatInput 消费回填
+  - [apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx](apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx):
+    - 每条三按钮：↩「引导」（任意位置可点，tooltip 改为「引导：当前模型调用完成后立即插队」）、✕「放回输入框」、🗑「删除」
+    - 头部标识 `bg-primary/5` 仍保留——它只是"下一个被 drainNext 消费"的视觉提示
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx):
+    - Shift+Enter：`enqueue('head')` 之后立即 `flushQueuedItem()`，达成"入队首 + 当前 model_call+tool_call 完成后插队"
+    - 订阅 `composerDraft`：用 useEffect 把内容追加（不覆盖）到 textarea + 合并附件，然后 `clearComposerDraft` 并 focus
+    - placeholder 文案改为「Enter 排队，Shift+Enter 立即引导」
+- **影响范围**: 仅 desktop 前端；agent-core / protocol / CLI 不动；后端 `PendingInputs` 行为完全保持，只是 surface 收窄了写入它的入口
 - **留尾巴**:
-  - 仅在 macOS 验证；Windows / Linux 上 dev 重启抢焦点是另一套机制（Windows 是 `SetForegroundWindow`），如有同样痛点需要单独处理
-  - 600ms 是经验值——如果 Tauri 窗口创建在某些机器上更慢，可能短暂看到 dock 图标空白；目前没出现就先这样
+  - 「放回输入框」是追加模式（避免覆盖用户正在打的字）。极端场景下用户输入框已有大段内容，再放回会拼接出长草稿——这是已知的折中，不是 bug
+  - 没有把 ↩ 按钮限制成"仅 streaming 时启用"；非 streaming 时 `flushQueuedItem` 会因 `requestId` 缺失静默 return。考虑后续 disabled 掉
+
+### 2026-05-12 — 设计落地：长任务挂起 + Wakeup（架构.md §4.12，代码分 3 个 Phase）
+
+- **Why**: Bash 长跑命令、定时回看进度、等异步事件等场景，旧路径让模型轮询 `BashOutput` 既费 token 又卡 turn。讨论里用户明确：(1) Bash 超时不 kill、立即返回已有输出；(2) 所有 tool 输出超阈值统一落 artifact 让 agent 分块读；(3) agent_loop 要支持"运行时停止 + checkpointer 唤醒"；(4) cron / bg-finish 用进程内后台线程做，hebbian 退出即丢，重启不自动 resume；(5) wakeup 到 Suspended Run 直接 resume，到 Active Run 走 PendingInputs 插队，消息体用 XML 包裹；(6) UI 不弹挂起提示，右侧浮动栏新加 BackgroundTask 框与 TaskPanel 并列
+- **改动**（仅设计，未实现）：
+  - [docs/架构.md](架构.md): 新增整节 §4.12「长任务挂起 + Wakeup」，覆盖：
+    - 4.12.1 Run 三态（Active / Suspended / Finished）
+    - 4.12.2 整体数据流（三后台线程 + mpsc<WakeupEvent>）
+    - 4.12.3 RunCheckpoint 落盘（`session_id/run_checkpoint.json`，transcript 不入 checkpoint，靠 jsonl 重建）
+    - 4.12.4 两个新工具 WaitForTask / ScheduleWakeup（PascalCase / ReadOnly / 不审批）
+    - 4.12.5 Wakeup XML 消息格式（`<wakeup kind="...">…</wakeup>`，作为 user message）
+    - 4.12.6 Wakeup 路由（Suspended → resume / Active → PendingInputs 插队 / Finished → 丢）
+    - 4.12.7 SEMI 段注入 `<background_tasks>` 块
+    - 4.12.8 协议新增事件 RunSuspended / RunResumed
+    - 4.12.9 Surface UX（不弹挂起文案；FloatingTaskPanel 旁并列 BackgroundTask 框）
+    - 4.12.10 与参考项目对比
+    - 4.12.11 Phase 1/2/3 落地顺序
+  - 交叉引用：§3.1 加 RunSuspended/RunResumed 事件名；§4.2.1 Run 三态短句；§4.4.6 工具列表加 BashOutput/KillShell/WaitForTask/ScheduleWakeup（17 个）；§9.3 加 `<background_tasks>` / `<wakeup>` 块说明；§13 决策表加 8 行新决策
+- **影响范围**: 仅文档；代码未动；不破坏既有 protocol / jsonl
+- **留尾巴**:
+  - Phase 1（不动 agent_loop）：BackgroundShells 输出双轨落盘 + BashTool 返回 log 路径
+  - Phase 2：dispatcher 统一 `materialize_tool_output`，超阈值落 `tool_results/<call_id>.txt`，ToolResult 协议加 `artifact: Option<ToolArtifact>` 字段（向前兼容）
+  - Phase 3：agent_loop 状态机化（提取 RunRuntime + RunPhase）+ RunCheckpoint + WakeupScheduler（CronTimer/BgFinishHook/Dispatcher 三后台线程 + mpsc）+ 两个新工具 + 协议新事件 + BackgroundTask 浮动栏 UI + 右侧浮动栏重构（FloatingTaskPanel + BackgroundTaskPanel 竖向并列收进同一容器）
+
+### 2026-05-12 — Phase 1 落地：Bash 后台输出双轨写入（tail buffer + 磁盘 log）
+
+- **Why**: 旧实现 BackgroundShells 只有 256 KiB 内存 tail buffer，长跑命令早期输出会被 evict；BashOutput 也只能拿到 tail 这一份。需要把 stdout/stderr 同时落到磁盘 `~/.hebbian/sessions/<sid>/bg/<task_id>.log`，给 Read 工具按 offset/limit 翻页用——内存 tail 给 BashOutput 增量、磁盘 log 给 Read 完整。架构 §4.12.3 的「双轨」第一步
+- **改动**:
+  - [crates/agent-core/src/tools/background.rs](crates/agent-core/src/tools/background.rs):
+    - `BackgroundShell` 新增 `log_path: Option<PathBuf>` 字段 + 公开 `log_path()` 方法
+    - `BackgroundShells::register` 签名加 `log_dir: Option<&Path>` 入参；内部根据 `task_id` join 出 `<log_dir>/<task_id>.log` 用 `OpenOptions::create+append` 打开；打开失败仅 warn 不阻塞命令执行（回落 tail-only）
+    - `spawn_reader` 接收 `Option<Arc<AsyncMutex<File>>>`，每行同步写 tail buffer + append 到日志文件，流结束时 flush；stdout/stderr 共享同一 writer Mutex（确保 stderr 前缀和 stdout 行不交错）
+    - 新增单测 `writes_log_file_when_log_dir_given`：验证 `<task_id>.log` 含 stdout + `[stderr]` 行
+  - [crates/agent-core/src/tools/bash.rs](crates/agent-core/src/tools/bash.rs):
+    - `BashTool` 新增 `bg_log_dir: Option<PathBuf>` 字段，`new` 签名增加该参数
+    - `execute` 把 `bg_log_dir.as_deref()` 透传给 `shells.register`
+    - 转后台 / `run_in_background=true` 的返回文本里追加「完整输出落盘到：<path>」一行（仅当 log 启用时）
+  - [crates/agent-core/src/tools/bash_output.rs](crates/agent-core/src/tools/bash_output.rs):
+    - 单 task 查询的返回头部加 `[完整日志：<path>]`
+    - listing 路径每条尾部追加 ` log=<path>`
+  - [crates/agent-core/src/tools/mod.rs](crates/agent-core/src/tools/mod.rs) `default_tools`：签名加 `bg_log_dir: Option<PathBuf>`，只透传给 `BashTool`（BashOutputTool/KillShellTool 不需要，它们从 `BackgroundShell.log_path()` 读）
+  - [crates/agent-core/src/storage/sessions_dir.rs](crates/agent-core/src/storage/sessions_dir.rs):
+    - 新增 `pub fn bg_dir(data_dir, session_id) -> PathBuf`（与 `tool_results/` / `compactions/` 等并列）
+    - `ensure_session_dirs` 把 `bg/` 加进预创建子目录列表
+  - [apps/desktop/src/chat.rs](apps/desktop/src/chat.rs) chat 命令构造 harness 时：`bg_log_dir = Some(sessions_dir::bg_dir(data_dir, &args.session_id))`；preview 路径 `build_preview_payload` 传 `None`（预览不发命令）
+  - [apps/cli/src/main.rs](apps/cli/src/main.rs) `build_harness_and_client`：先暂传 `None`（CLI 在 harness 构造时还没决定 session_id；Phase 3 把 session_id 提前到 harness 构造之前再补串）
+  - [crates/agent-core/src/dispatch.rs](crates/agent-core/src/dispatch.rs) destructive_bash 测试同步补 `None`
+- **影响范围**: agent-core/tools（背景 shell 行为加强）+ storage（多一个子目录）+ 两个 surface 的 default_tools 调用点；protocol 不动；jsonl 不动；既有 Bash/BashOutput/KillShell 工具 schema 不动；旧 session 加载时 `bg/` 目录会被 `ensure_session_dirs` 创建出来（空目录无副作用）
+- **留尾巴**:
+  - CLI 仍是 tail-only（没串 session_id 到 harness 构造）。改起来需要把 `session_id` 提前到 `build_harness_and_client` 之前生成，且 CLI single 模式 / TUI 模式 / json 模式都走同一条；本轮先按 §4.12 设计的"CLI 简化优先"接受，Phase 3 整合时一起串
+  - `bg/<task_id>.log` 文件没有自动清理策略；MAX_BACKGROUND_SHELLS = 16 在内存里有上限，但磁盘 log 会随时间累积。Phase 2 加 artifact retention 时再考虑统一清理
+  - 单测 `writes_log_file_when_log_dir_given` 在没有 `/dev/stderr` 的极简容器里可能 flaky；目前 macOS / Linux 直跑都过
+  - tokio `AsyncMutex` 在 reader spawn task 里锁着串行写——单 reader 单 file 没问题，但 stderr/stdout 两个 reader 抢同一把锁，长跑高吞吐命令理论上会有锁竞争；目前 tail buffer 也是同 Mutex，量级一致，先观察
+
+### 2026-05-12 — Phase 2 落地：大输出统一落 artifact + 头部预览 + 指针
+
+- **Why**: §4.4.9 设计要求所有 tool（不只 Bash）输出超阈值就落 `tool_results/<call_id>.txt` + 给模型「头 2 KB 预览 + 工件路径」，让模型用 Read 自带的 offset/limit 分块读，不重复造工具。旧路径只有 microcompact 对**老**结果做这件事，新结果直接被 `truncate_tool_result` 拦腰截断丢信息
+- **改动**:
+  - 协议层（`crates/model-gateway/src/types.rs`）：
+    - 新增 `pub struct ToolArtifact { path: PathBuf, bytes: u64, line_count: Option<u32> }`
+    - `ToolResult` 加 `artifact: Option<ToolArtifact>` 字段——内部结构（不参与 serialize），向前兼容
+  - 协议层（`crates/protocol/src/event.rs`）：
+    - `EventPayload::ToolCallFinished` 加 `artifact_path: Option<String>`，`#[serde(default, skip_serializing_if = "Option::is_none")]` 老 jsonl 反序列化自动得 None
+  - dispatcher（`crates/agent-core/src/dispatch.rs`）：
+    - `ToolDispatcher` 新增 `data_dir_for_artifacts: Option<PathBuf>` 字段，`agent_loop` 注入 `data_dir`
+    - 新函数 `materialize_tool_output(raw, call_id, sid, data_dir)`：超 `MAX_TOOL_RESULT_INLINE=6 KB` 时调 `storage::tool_results::save_tool_result` 写盘，inline 替换为「头 2 KB 预览 + `[输出 N 字节 / M 行，完整内容已落盘到 path]`」；没 data_dir / 没 sid 时回落原样（再由 `truncate_tool_result` 兜底）；失败路径不触发 materialize（错误文本通常很短，不该升格为工件）
+    - `spawn_tool` 把 raw → materialize → truncate；ToolCallFinished 事件携带 `artifact_path`；ToolResult 携带 `artifact` 元数据
+    - 单测 3 个：`materialize_above_threshold_writes_artifact_and_pointer` / `materialize_under_threshold_passes_through` / `materialize_without_data_dir_passes_through`
+  - 前端（`apps/desktop/src/engine/`）：`EngineEvent::ToolDone` 加 `artifact_path: Option<String>`（mod.rs + types.rs 两处保持同步），chat.rs 翻译时透传
+  - 前端（`apps/desktop/frontend/src/desktop/ui/types.ts`）：`EngineEvent.tool_done` 加 `artifact_path?: string | null`；`MessagePart`/`StreamingAssistantPart` 的 `tool_call` 也加（持久层无值，仅 streaming 时有）
+  - 前端（`apps/desktop/frontend/src/desktop/ui/store/useStore.ts`）：`applyToolDone` 把 event.artifact_path 写到 streamingPart
+  - 前端（`apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`）：新增 `ArtifactBadge` 组件——dashed 边框 + 📎 paperclip 图标 + 单行路径 + 「复制」按钮；在每个 tool 详情下方按 `call.artifactPath` 渲染
+  - `normalizeStreamingToolPart` / `normalizeSavedToolPart` 把 `artifact_path` 接到 `ToolCallItem.artifactPath`
+- **影响范围**: protocol（新可选字段，向前兼容）/ agent-core（dispatcher 统一闸门）/ model-gateway（types + 各 protocol 模板的 pattern match 加 `..`）/ desktop（engine + frontend 渲染）；jsonl 老对话加载时新字段缺省 None，正常显示，只是没有 ArtifactBadge——这是预期
+- **验证**:
+  - `cargo test --workspace`：248 passed / 0 failed（含新增 3 个 materialize 单测）
+  - `pnpm exec tsc --noEmit`：通过
+- **留尾巴**:
+  - artifact_path **不持久化**进 jsonl 的 tool_call MessagePart——reload 后徽标不再渲染，但 result 文本里的路径文字仍在，用户能手动复制。如果后续要做"工件历史浏览"，需要 Recorder 落 artifact 元数据
+  - 没做 artifact 文件 GC——长跑 session 的 `tool_results/` 会随时间累积。后续可加 retention（按文件 mtime 或 session 关闭时清空非 microcompact 引用的）
+  - dispatcher 没做 ArtifactBadge 点击打开本地编辑器——用户需要"复制路径 → 终端打开"。后续可以加 `revealItemInDir(path)` 之类的 Tauri 命令
+
+### 2026-05-13 — Phase 3 落地：agent_loop 挂起 + RunCheckpoint + WakeupScheduler 骨架
+
+- **Why**: 架构 §4.12 设计的最后一步。让模型可以主动"挂起本 Run + 等任务完成 / 定时唤醒"，告别"模型轮询 BashOutput 占 turn"的旧路径。本轮交付**挂起半边**的完整闭环 + **唤醒半边**的进程内调度器骨架；真正"checkpoint → Harness.resume_run → 复活同一个 Run"还差最后一根线，留尾巴
+- **改动**:
+  - 协议层（`crates/protocol/src/event.rs` / `lib.rs`）：
+    - 新增 `EventPayload::RunSuspended { reason, resumes_at_ms?, waiting_for_task_ids }`
+    - 新增 `EventPayload::RunResumed { cause }`
+    - 新增 `enum SuspendReason { BackgroundTask, Cron, Manual }`
+    - 新增 `enum ResumeCause { BgTaskFinished { task_id, exit_code? }, CronFired { original_reason }, UserMessageArrived, ManualResume }`
+    - 重新导出 `SuspendReason` / `ResumeCause`
+  - 模型层（`crates/model-gateway/src/types.rs` + `instrument.rs` + `providers/mod.rs`）：
+    - `ModelError` 加 `Suspended` 变体——agent_loop 用它走 Err 路径 break loop 表示"task 退出但 Run 仍 Active"
+    - instrument 与 retry 分支处理 `Suspended`（不算可重试错误、finish_reason = "suspended"）
+  - 持久层（`crates/agent-core/src/storage/run_checkpoint.rs`，新文件）：
+    - `enum RunPhase { AwaitingBackgroundTask { task_id, max_wait_until_ms? }, AwaitingCron { fire_at_ms, reason } }`
+    - `struct RunCheckpoint { run_id, session_id, agent, run_mode, model_id, iteration, model_step_index, tool_step_index, tool_call_dispatch_offset, totals(4), phase, suspended_at_ms }`
+    - `save / load / delete` 三个 API；落到 `~/.hebbian/sessions/<sid>/run_checkpoint.json` 原子写
+    - transcript **不**入 checkpoint——resume 时从 session.jsonl 重建（§4.12.3）
+    - 单测 `save_load_delete_roundtrip` / `cron_phase_roundtrip`
+  - 进程级调度器（`crates/agent-core/src/wakeup.rs`，新文件）：
+    - `type PhaseChannel = Arc<Mutex<Option<RunPhase>>>`：dispatcher 与 agent_loop 间挂起槽
+    - `WakeupScheduler::global()`：OnceLock 单例。三个后台 task：
+      - `CronTimer`：每秒扫 cron 表，到点投递 `WakeupEvent::CronFired`
+      - `BgFinishHook`：每 500 ms 扫 `BackgroundShells.list()`，发现注册的 task 进入终态时投递 `WakeupEvent::BgTaskFinished`
+      - `WakeupDispatcher`：消费 mpsc 事件，调用 `ResumeHandler`（App 注册的回调，目前为空——见留尾巴）
+    - `arm_cron / arm_bg_task / set_shells / set_resume_handler / discard_run`
+    - `wakeup_xml(event)`：把事件渲染成 `<wakeup kind="..." ...>...</wakeup>` user message 主体
+  - 两个新工具（`crates/agent-core/src/tools/wait_for_task.rs` / `schedule_wakeup.rs`，新文件）：
+    - `WaitForTask { task_id, max_wait_secs? }`：校验 task_id 存在 → 写 phase channel `AwaitingBackgroundTask` → 返回"已挂起"。`EffectClass::ReadOnly` 不审批
+    - `ScheduleWakeup { delay_secs, reason }`：上限 3600s，写 phase channel `AwaitingCron(now+delay)`。同样 ReadOnly
+    - `BUILTIN_TOOL_NAMES` + `default_tools` 签名加 `phase: PhaseChannel`；两工具注册进 registry
+  - agent_loop 接入挂起（`crates/agent-core/src/agent_loop.rs`）：
+    - `LoopParams` / `RunParams` 加 `phase: Option<PhaseChannel>` 字段
+    - 每个 ToolStep 完成后，从 phase channel `take()`；非空时：
+      1. emit `EventPayload::RunSuspended { reason, resumes_at_ms, waiting_for_task_ids }`
+      2. 落 `RunCheckpoint`（data_dir + session_id 齐备时）
+      3. 调 `WakeupScheduler::global().arm_cron / arm_bg_task` 注册唤醒
+      4. emit `TurnFinished(EndTurn)` 收 turn
+      5. `break Err(ModelError::Suspended)` —— agent_loop task 退出但不发 RunFinished
+    - 尾段 `match &result` 加 `Err(Suspended)` 分支：仅 record outcome=suspended，不发任何 RunFinished / RunCancelled / RunFailed
+  - 桌面 surface 翻译（`apps/desktop/src/engine/mod.rs` + `types.rs`）：
+    - `EngineEvent` 加 `RunSuspended { reason, resumes_at_ms?, waiting_for_task_ids }` + `RunResumed { cause }`
+    - `agent_event_to_engine_event` 增 protocol → engine 翻译两条
+  - 前端（`apps/desktop/frontend/src/desktop/ui/`）：
+    - `types.ts` `EngineEvent` 加 `run_suspended` / `run_resumed`
+    - `store/useStore.ts` `SessionStream` 加 `suspended: SuspendedInfo | null`；`AppState` 镜像同名字段；`EMPTY_MIRROR` 与 initialSlot 默认 null；`applyEventToSlot` 处理两个事件
+    - 新 `components/BackgroundTaskPanel.tsx`：右侧浮动栏，与 `FloatingTaskPanel` 竖向并列（`top-[110px]`）。挂起时显示「等待 bash_001 完成 / 定时 60s 后唤醒」+ 已挂起秒数（每秒滴答），收起为药丸；非挂起态整个不渲染
+    - `ChatView.tsx` 引入 `BackgroundTaskPanel` 渲染
+  - 调用点更新：CLI / Desktop 的 `default_tools` 都串了 `phase` channel；Session::run_with_pending 暂传 `None`（Session 单独路径目前不接挂起）
+  - 各 ToolResult / ToolCallFinished 构造点补 `artifact: None` / `artifact_path: None`（Phase 2 协议扩展的兼容修复，没有功能差异）
+  - 架构 §9.3 SEMI 段（`crates/agent-core/src/system_prompt.rs`）：
+    - `EnvironmentSnapshot` 加 `background_tasks: Vec<BackgroundTaskSummary>` 字段
+    - `BackgroundTaskSummary { task_id, state, command, elapsed_secs }`
+    - `with_background_tasks(...)` builder + `render()` 在 `<environment>` 后追加 `<background_tasks>` 块
+- **影响范围**: protocol（新事件，向前兼容）/ model-gateway（ModelError 新变体）/ agent-core（新模块 wakeup + run_checkpoint + 两工具 + agent_loop 状态机化）/ desktop（engine + frontend 全量接入）/ CLI（仅串 phase channel，不接 WakeupScheduler）
+- **验证**:
+  - `cargo test --workspace`：141 + 18 + 7 + 83 + 1 = **250 tests passed / 0 failed**
+  - `cargo check --workspace`：通过
+  - `pnpm exec tsc --noEmit`：通过
+- **留尾巴（重要）**:
+  - 🔴 **真正的 resume 还差最后一根线**：WakeupScheduler 已经能 emit `WakeupEvent`、调用 `ResumeHandler`——但默认 handler 没注册，App 层也没注册。要让 Run 真复活，desktop chat.rs 需要：
+    - 在 `Harness` 构造后调 `WakeupScheduler::global().set_shells(shells)` 让 BgFinishHook 拿到注册表
+    - 注册 `set_resume_handler(Arc::new(|event| { 加载 RunCheckpoint → 加载 session.jsonl 重建 Transcript → push wakeup_xml 作 user message → Harness.spawn_run }))`
+    - Harness 需要新方法 `resume_run(session_id, wakeup_user_message, checkpoint) -> RunHandle`，或者 App 持有 spawn_run 所需全部参数的缓存（model client / workspace / agent_def 等），按 session_id 查询后 spawn
+  - 目前现象：模型调 WaitForTask / ScheduleWakeup → agent_loop 落 checkpoint + emit RunSuspended + 退出 → 前端 BackgroundTaskPanel 正确显示「挂起态」→ 后台 task 完成 / cron 到点 → WakeupScheduler 触发事件 → handler 未注册，事件 drop → Run 不会复活
+  - 现状下用户的兜底：用户主动发新消息 → 后端 chat command 检测到 Suspended（基于 RunCheckpoint 存在）→ 走 resume 路径 inject wakeup user message。这一段也未实现，下一步整一起做
+  - 🟡 SEMI `<background_tasks>` 块的结构已就位，但 `Session::append_user` / agent_loop user-message 构建时还没把 `BackgroundShells.list()` 喂给 `EnvironmentSnapshot.with_background_tasks`。补一行调用即可
+  - 🟡 BackgroundTaskPanel 没列出**所有**后台 task（只显示当前正在等的 task_id）。要做"列出所有 running bash + pending cron"，需要前端轮询一个新 Tauri 命令 `list_background_tasks(session_id)`——backend 已有 `BackgroundShells.list()`，差一层暴露
+  - 🟡 进程重启的体验：retain 在盘上的 `run_checkpoint.json` 不会自动 resume（§13 决策一致）；UI 也没读出它来提示「上次中断」。要做单独加一个 Tauri 命令 + Sidebar 角标
+  - WaitForTask v1 只允许一个 task_id；v2 扩成数组——架构 §4.12.4 已约定，留给后续
+- **后续 Phase 3.5 路线图（要复活 resume，按此顺序）**:
+  1. `Harness::resume_run` 接口（接受 checkpoint + 注入消息 + 复用原 RunParams 模板）
+  2. App 层把 session-id → run-params 配置存到一个 `HashMap<sid, ResumableSessionConfig>`
+  3. desktop chat.rs 在 chat 命令入口注册 resume handler
+  4. session.jsonl 重建 transcript 走 `Session::load_transcript`（已有）
+  5. 把 `<wakeup>` user message push 到 transcript 后调 spawn_run
+  6. emit `RunResumed { cause }` 让前端 BackgroundTaskPanel 清挂起态
+- **关联**: 架构.md §4.12.1～§4.12.11 全部章节
+
+### 2026-05-13 — Phase 3.5 闭环：resume_with + 用户/自动唤醒双路径 + session-scoped 后台栈 + UI 列出全部 bg/cron
+
+- **Why**: Phase 3 落地后还差最后一根线——「真正 resume 复活」。本轮把 6 段缺口全补齐：(1) Session::resume_with 接 agent_loop 的 RunResumeState；(2) RunResumeState::from_checkpoint helper；(3) BackgroundShells 改 session-scoped（修订上一版"进程级单例"的错误决定）；(4) 用户在挂起 session 发新消息自动走 resume 路径；(5) WakeupScheduler.set_resume_handler emit Tauri 事件 → 前端 listener 自动发 wakeup XML；(6) BackgroundTaskPanel 从仅显示挂起态升级为完整列出所有后台 bash + pending cron + 挂起徽标 + 已结束历史
+- **改动**:
+  - 架构 §4.12.2 修订（`docs/架构.md`）：明确 **BackgroundShells 是 session-scoped**（之前错说"进程级单例"）。调度器仍是进程级单例，但内部 `HashMap<session_id, BackgroundShells>` 路由；不同会话互不可见。§13 决策表新增一行记录这次修订
+  - `crates/agent-core/src/tools/background.rs`:
+    - 删除上轮加的 `BackgroundShells::global()` 单例（错误方向）
+    - 新增进程级 `SESSION_REGISTRY: OnceLock<Mutex<HashMap<String, BackgroundShells>>>` 路由表
+    - 公开 `registry_for_session(session_id) -> BackgroundShells`：同 session 多次取同一份；不同 session 隔离
+    - `discard_session_registry(session_id)` + `registered_session_ids()` 给 surface 用
+  - `crates/agent-core/src/tools/mod.rs`：`default_tools` 加 `shells: BackgroundShells` 参数（由 caller 决定从哪来），不再内部 `BackgroundShells::new()`
+  - `crates/agent-core/src/wakeup.rs`：
+    - `SchedulerInner.shells_ref` 改成 `session_shells: HashMap<String, BackgroundShells>`
+    - `set_shells` → `register_session_shells(session_id, shells)` + `unregister_session_shells(session_id)`
+    - `BgFinishHook.scan_bg` 按 `BgWatch.session_id` 反查对应 shells；找不到 shells（session 已销毁）当 done 兜底
+    - 新增 `list_pending_crons(session_id)` + `PendingCron` 结构供 UI 展示
+    - 新增 `WakeupEvent::session_id()` / `WakeupEvent::run_id()` 访问器
+  - `crates/agent-core/src/agent_loop.rs`：`RunResumeState::from_checkpoint(ckpt, cause)` 静态方法，把磁盘 checkpoint 直接转成 resume state（拷 9 个计数字段 + ResumeCause 标签）
+  - `crates/agent-core/src/session.rs`：
+    - `SessionConfig` + `Session` 加 `phase: Option<PhaseChannel>` 字段；`run_with_pending` 透传 self.phase（之前硬编码 None 是 bug——WaitForTask/ScheduleWakeup 写的 phase channel 与 agent_loop 读的不是同一份）
+    - `append_user` 接入 SEMI `<background_tasks>` 注入（架构 §4.12.7）：每条 user message 都查 session 自己的 BackgroundShells，把 Running 状态的 task 渲染为 XML 块；首条用 `<environment>` 内嵌，后续单独前置
+  - `crates/agent-core/src/system_prompt.rs`：`prepend_background_tasks(text, &summaries)` 新 helper——非首条 user message 单独前置 `<background_tasks>` 块
+  - `apps/desktop/src/chat.rs`：
+    - 每次 chat 调用 entry：`registry_for_session(session_id)` 取该 session 的 BackgroundShells（跨调用复用）；同步登记到 WakeupScheduler 让 BgFinishHook 能扫到
+    - SessionConfig 加 `phase: Some(phase.clone())`，让 WaitForTask 真能挂起 Run
+    - **检测 RunCheckpoint 走 resume 路径**：在 append_user 之后判断 `storage::run_checkpoint::load(...)`，有就 delete + `WakeupScheduler.discard_run` + 用 `core_session.resume_with(...)` 起 Run；否则常规 `run_with_pending`
+    - 预览路径继续传本地临时 BackgroundShells（不污染 session_registry）
+  - `apps/desktop/src/lib.rs`：
+    - Setup 中注册 `WakeupScheduler::global().set_resume_handler(...)`：把 `WakeupEvent` 渲染成 wakeup XML + Tauri-emit 全局 `wakeup-fired` 事件，payload `{ session_id, run_id, wakeup_xml }`
+    - 引入 `Emitter` trait
+    - 新增 Tauri 命令 `list_background_tasks(session_id) -> SessionBackgroundReport`，返回 `{ shells, pending_crons, has_suspended_checkpoint }`
+  - `apps/cli/src/main.rs` + `apps/cli/src/session.rs`：CLI 单跑路径用 `BackgroundShells::new()`（不入 session_registry），`SessionConfig.phase: None`（CLI 不接挂起恢复）。仅为编译通过保留——CLI/TUI 后续会从设计中摘除
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`：`BackgroundTaskInfo` / `PendingCron` / `SessionBackgroundReport` 三个类型
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`：`api.listBackgroundTasks(sessionId)`
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`：
+    - 顶层 `pendingWakeups: Record<sessionId, xml>` 暂存非前台 session 的 wakeup
+    - `triggerWakeupResume(sessionId, xml)`：前台 session 直接 sendUserMessage；非前台暂存到 pendingWakeups
+    - `queueWakeupForSession(sessionId, xml)` setter
+    - `openSession(id)` 顺手消费 `pendingWakeups[id]` —— 切到挂起 session 时自动发出 wakeup XML
+  - `apps/desktop/frontend/src/App.tsx`：监听 Tauri `wakeup-fired` 事件 → 调 `triggerWakeupResume`；非前台 toast 提示
+  - `apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx`：从「只在挂起态显示」升级为：3 秒轮询 `listBackgroundTasks`；上方显示挂起徽标（如有）；下方分三段列「运行中」/「定时唤醒」/「已结束」。session-scoped，切 session 自动清状态
+- **影响范围**: protocol 无新增 / agent-core wakeup + tools/background + session + system_prompt + agent_loop / desktop chat + lib + 前端全套 / CLI 走 phase=None 通路（不接挂起）
+- **验证**:
+  - `cargo test --workspace`：**250 tests passed / 0 failed**
+  - `cargo check --workspace`：通过
+  - `pnpm exec tsc --noEmit`：通过
+- **端到端能跑通的场景**:
+  1. **挂起 → 自动唤醒**：模型在前台 session A 调 `Bash {timeout_secs: 60}` 启动长跑命令 → 转后台返回 task_id → 模型调 `WaitForTask {task_id}` → agent_loop emit RunSuspended + 落 checkpoint + 退 task → BackgroundTaskPanel 显示「挂起 N 秒 / 1 运行中」徽标 → bash 命令实际结束 → BgFinishHook 检测到终态 → 投递 WakeupEvent → ResumeHandler Tauri-emit `wakeup-fired` → 前端 listener 调 sendUserMessage(wakeup_xml) → 后端 chat 命令检测 checkpoint 走 resume_with → agent_loop emit RunResumed{cause:BgTaskFinished} → 模型继续工作
+  2. **挂起 → cron 自动唤醒**：模型调 `ScheduleWakeup {delay_secs: 60, reason: "..."}` → 同样挂起 → 60 秒后 CronTimer 触发 → 后续路径同 (1)
+  3. **挂起 → 用户主动发消息**：模型挂起后用户在同 session 发新消息 → chat 命令检测到 checkpoint → resume_with({cause:UserMessageArrived}) → 用户消息正常进入 transcript，新 Run 从 checkpoint 计数器起步
+  4. **非前台 session 挂起**：A 挂起后用户切到 B；A 完成时 toast「后台任务已完成：A」+ pendingWakeups[A] 缓存；用户点 A 切回 → openSession 消费 pendingWakeups → 自动 resume
+- **留尾巴**:
+  - 🟡 wakeup XML 作为 user message 进入 transcript 后会被 jsonl 保存——用户在历史里能看到 `<wakeup kind="..." ...>...</wakeup>` 形式的"用户消息"。可读性其实可以接受（XML 一眼能看出非人为输入），但前端 MessageBubble 可以做一层特殊渲染，把它显示成系统提示样式而非用户气泡。后续优化
+  - 🟡 BackgroundTaskPanel 没暴露「kill 指定 task」/「立即触发 cron」按钮——目前 KillShell 工具只有模型调用入口。surface 端可以加 admin 按钮，调一个新 Tauri 命令 `kill_background_task(session_id, task_id)` 包装 BackgroundShells.kill 即可
+  - 🟡 进程重启遗留 checkpoint 仍不自动 resume（§13 决策）；UI 没专门提示「上次中断」。`list_background_tasks` 已返回 `has_suspended_checkpoint`，前端可以渲染一个小徽标但暂未做
+  - 🟡 CLI/TUI 的 phase: None 占位代码是技术债——后续删 CLI 时一并清理
+
+### 2026-05-13 — Phase 3.5 收尾打磨：wakeup 系统通知样式 + 「上次中断」提示 + 后台任务停止按钮
+
+- **Why**: 闭环跑起来后体验上还有三处突兀点：(1) wakeup XML 作为 user message 进 transcript，UI 把它渲染成普通用户气泡，看起来像"用户发了一坨 XML"；(2) 进程重启遗留 checkpoint 时 UI 没任何提示，用户不知道要发新消息触发恢复；(3) 模型挂起后想要"用户手动停止那个 bash"还得专门跟模型说"调 KillShell"，麻烦
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`:
+    - 新增 `parseWakeupMessage(content)` + `WakeupNotice` 组件
+    - 在 MessageBubble 渲染早期检测 `content.trim().startsWith("<wakeup")`——命中则跳过普通用户气泡，渲染为居中的 amber 系统通知卡片：
+      - bg_task_finished：`BellRing` 图标 + 「后台任务 bash_001 完成 · exit 0（12s）」+ 折叠的输出预览
+      - cron_fired：`AlarmClock` 图标 + 「定时唤醒：<reason>」+ 折叠的说明
+      - 长度 > 240 字符时显示「展开 / 收起」按钮；右上角「复制」按钮可拿到原始 XML 给模型反查
+  - 新 Tauri 命令 `kill_background_task(session_id, task_id)`（`apps/desktop/src/lib.rs`）：包装 `BackgroundShells.kill`，返回最终状态字符串；注册进 invoke_handler
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`：`api.killBackgroundTask(sessionId, taskId)` 包装
+  - `apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx`:
+    - 检测 `orphanedCheckpoint`：`has_suspended_checkpoint && !suspended && !runningShells.length && !pendingCrons.length`——进程重启后 checkpoint 还在但调度器没在等任何事件的典型场景
+    - 命中时在面板顶部渲染 orange 警示条「上次会话中断 · checkpoint 已落盘但调度器不在等。发新消息会从中断点继续。」
+    - 折叠态药丸的 summary 也加 "上次中断" 后缀
+    - `ShellSection` 加 `onKill?: (taskId) => void` prop；运行中的 shell 行右侧加 `Square` 图标按钮，点击触发 toast 反馈
+    - 关闭按钮、kill 按钮、AlertCircle 等图标通过 lucide-react 统一引入
+- **影响范围**: 仅 surface（前端 + Tauri 命令）；agent-core / protocol 不动；不破坏 jsonl 兼容（wakeup XML 仍是 user message 文本，只是 UI 渲染分支不同）
+- **验证**:
+  - `cargo test --workspace`：通过
+  - `cargo check --workspace`：通过
+  - `pnpm exec tsc --noEmit`：通过
+- **留尾巴**:
+  - 🟡 Sidebar 上没有"上次中断"小徽标——多 session 场景下，用户切到该 session 才会看到 BackgroundTaskPanel 里的提示。后续可以在 list_sessions 返回里包一个 `has_suspended_checkpoint` 标志，Sidebar 渲染小角标
+  - 🟡 wakeup XML 渲染目前是只读视图——「展开」也只能看截断到 240 字符之后的内容。完整内容需点「复制」拿到剪贴板。可以考虑做成 ExpandButton 弹大窗口预览，与 ToolPre 一致风格
