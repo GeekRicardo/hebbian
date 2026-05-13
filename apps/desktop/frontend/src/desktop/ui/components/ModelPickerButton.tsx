@@ -6,6 +6,7 @@ import {
   contextWindowFor,
   formatContextWindow,
 } from "@/desktop/ui/lib/contextWindow";
+import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { useStore } from "@/desktop/ui/store/useStore";
 import {
   DEFAULT_REASONING,
@@ -168,27 +169,28 @@ export function ModelPickerButton() {
 
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => {
-            const next = !v;
-            if (next) {
-              setExpandedProviderIds((ids) => {
-                if (ids.has(currentSession.provider_id)) return ids;
-                return new Set([...ids, currentSession.provider_id]);
-              });
-            }
-            return next;
-          });
-        }}
-        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        title={currentTooltip}
-      >
-        <span className="truncate max-w-[160px]">{currentSession.model}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
-      </button>
+      <HoverHint hint={currentTooltip} align="end">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => {
+              const next = !v;
+              if (next) {
+                setExpandedProviderIds((ids) => {
+                  if (ids.has(currentSession.provider_id)) return ids;
+                  return new Set([...ids, currentSession.provider_id]);
+                });
+              }
+              return next;
+            });
+          }}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <span className="truncate max-w-[160px]">{currentSession.model}</span>
+          <ChevronDown className="w-3 h-3 opacity-60" />
+        </button>
+      </HoverHint>
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}

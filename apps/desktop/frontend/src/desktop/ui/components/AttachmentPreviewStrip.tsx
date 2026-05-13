@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
 import type { MessageAttachment } from "@/desktop/ui/types";
 import { cn } from "@/desktop/ui/lib/utils";
+import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { nextPreviewZoom } from "@/desktop/ui/lib/imagePreviewZoom";
 
 type Variant = "composer" | "compact" | "gallery";
@@ -87,31 +88,33 @@ function ImageThumb({
   onRemove?: () => void;
 }) {
   return (
-    <div className="relative shrink-0 group/thumb" title={name}>
-      <button
-        type="button"
-        onClick={onPreview}
-        className="block h-14 w-14 overflow-hidden rounded-md border border-border bg-muted transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring"
-        aria-label={`预览图片 ${name}`}
-      >
-        <img
-          src={src}
-          alt={name}
-          className="h-full w-full object-cover"
-          draggable={false}
-        />
-      </button>
-      {onRemove && (
+    <HoverHint hint={name}>
+      <span className="relative shrink-0 group/thumb">
         <button
           type="button"
-          onClick={onRemove}
-          className="absolute -right-1 -top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 group-hover/thumb:opacity-100 transition hover:text-destructive shadow"
-          aria-label="移除附件"
+          onClick={onPreview}
+          className="block h-14 w-14 overflow-hidden rounded-md border border-border bg-muted transition hover:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring"
+          aria-label={`预览图片 ${name}`}
         >
-          <X className="h-2.5 w-2.5" />
+          <img
+            src={src}
+            alt={name}
+            className="h-full w-full object-cover"
+            draggable={false}
+          />
         </button>
-      )}
-    </div>
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="absolute -right-1 -top-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 group-hover/thumb:opacity-100 transition hover:text-destructive shadow"
+            aria-label="移除附件"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        )}
+      </span>
+    </HoverHint>
   );
 }
 
