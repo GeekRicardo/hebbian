@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  BriefcaseBusiness,
   FilePlus2,
-  Folder,
   FolderOpen,
   GripHorizontal,
   Loader2,
@@ -20,10 +20,15 @@ import { ContextRing } from "@/desktop/ui/components/ContextRing";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { ModelPickerButton } from "@/desktop/ui/components/ModelPickerButton";
+import { PathHint } from "@/desktop/ui/components/PathHint";
+import { RunModeChip } from "@/desktop/ui/components/RunModeChip";
+import { SlashCommandButton } from "@/desktop/ui/components/SlashCommandButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
+import { PathTypeIcon } from "@/desktop/ui/components/workspaceFields";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
-import { cn } from "@/desktop/ui/lib/utils";
+import { dispatchSlashCommand } from "@/desktop/ui/lib/slashCommands";
+import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import type { MessageAttachment } from "@/desktop/ui/types";
@@ -83,15 +88,19 @@ export function ChatInput({
   );
   const contextUsage = useStore((s) => s.contextUsage);
   const pendingWorkdir = useStore((s) => s.pendingWorkdir);
-  const pendingAllowedDirs = useStore((s) => s.pendingAllowedDirs);
+  const pendingAllowedPaths = useStore((s) => s.pendingAllowedPaths);
   const setPendingWorkdir = useStore((s) => s.setPendingWorkdir);
-  const setPendingAllowedDirs = useStore((s) => s.setPendingAllowedDirs);
+  const setPendingAllowedPaths = useStore((s) => s.setPendingAllowedPaths);
   const currentSession = useStore((s) => s.currentSession);
+  const projects = useStore((s) => s.projects);
 
   // chip 数据源直接用 pending：openSession 会把 pending 同步成目标对话的实际值，
   // setPending* 也会同步更新当前 session，二者保持一致——所以这里只看一边即可。
   const activeWorkdir = pendingWorkdir;
-  const activeAllowedDirs = pendingAllowedDirs;
+  const activeAllowedPaths = pendingAllowedPaths;
+  const activeProject = currentSession?.project_id
+    ? projects.find((project) => project.id === currentSession.project_id) ?? null
+    : null;
 
   // 输入框文本 (value) 与附件 (attachments) 故意不绑定 currentSession：
   // 这是用户当前的"草稿"，跨对话保留，切到老对话也不会被清空（老对话已发送的消息
@@ -127,17 +136,33 @@ export function ChatInput({
     }
   }
 
-  async function pickAllowedDir() {
+  async function pickAllowedFolder() {
     setAddMenuOpen(false);
     try {
       const dir = await openDialog({ directory: true, multiple: true });
       if (!dir) return;
       const arr = Array.isArray(dir) ? dir : [dir];
-      const merged = [...activeAllowedDirs];
+      const merged = [...activeAllowedPaths];
       for (const d of arr) {
         if (typeof d === "string" && !merged.includes(d)) merged.push(d);
       }
-      await setPendingAllowedDirs(merged);
+      await setPendingAllowedPaths(merged);
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function pickAllowedFiles() {
+    setAddMenuOpen(false);
+    try {
+      const file = await openDialog({ directory: false, multiple: true });
+      if (!file) return;
+      const arr = Array.isArray(file) ? file : [file];
+      const merged = [...activeAllowedPaths];
+      for (const path of arr) {
+        if (typeof path === "string" && !merged.includes(path)) merged.push(path);
+      }
+      await setPendingAllowedPaths(merged);
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
@@ -151,9 +176,18 @@ export function ChatInput({
     }
   }
 
-  async function removeAllowedDir(path: string) {
+  async function removeAllowedPath(path: string) {
     try {
-      await setPendingAllowedDirs(activeAllowedDirs.filter((d) => d !== path));
+      await setPendingAllowedPaths(activeAllowedPaths.filter((d) => d !== path));
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function clearWorkspaceSelections() {
+    try {
+      await setPendingWorkdir(null);
+      await setPendingAllowedPaths([]);
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
@@ -209,13 +243,32 @@ export function ChatInput({
       await runCompact(args);
       return;
     }
+    // `//` 命令系统（架构 §8）：以 `//` 开头的输入一律本地派发，绝不发给模型——
+    // 即便命令名陌生也走 error 分支并提示用户，避免伪命令污染对话。
+    if (v.startsWith("//")) {
+      const result = await dispatchSlashCommand(v, {
+        sessionId: currentSession?.id ?? null,
+        toast,
+      });
+      if (result.handled) {
+        if (result.error) {
+          toast.error(result.error);
+        } else {
+          setValue("");
+          setHistoryState({ index: null });
+        }
+        return;
+      }
+    }
     setSending(true);
     setValue("");
     const queuedAttachments = attachments;
     setAttachments([]);
     setHistoryState({ index: null });
     try {
-      await onSend(v, queuedAttachments);
+      void onSend(v, queuedAttachments).catch((e: any) => {
+        toast.error(e?.message || String(e));
+      });
     } finally {
       setSending(false);
     }
@@ -314,7 +367,7 @@ export function ChatInput({
    * 粘贴时按 [文件 → 路径文本] 顺序处理：
    * 1. 剪切板里有 File（截图、Finder 复制图片）→ 直接走 addFiles，原样支持图片预览
    * 2. 文本是文件路径列表（按行拆，支持 file:// URI）→ 调 attach_path 让后端
-   *    判断是文件还是目录，文件追加到 attachments，目录追加到 pendingAllowedDirs
+   *    判断是文件还是目录，文件追加到 attachments，目录追加到 pendingAllowedPaths
    * 3. 普通文本 → 不拦截，让浏览器按默认行为插入到 textarea
    */
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -344,7 +397,7 @@ export function ChatInput({
             break;
           case "dir":
             if (
-              !activeAllowedDirs.includes(res.path) &&
+              !activeAllowedPaths.includes(res.path) &&
               !newDirs.includes(res.path)
             ) {
               newDirs.push(res.path);
@@ -366,7 +419,7 @@ export function ChatInput({
     }
     if (newDirs.length > 0) {
       try {
-        await setPendingAllowedDirs([...activeAllowedDirs, ...newDirs]);
+        await setPendingAllowedPaths([...activeAllowedPaths, ...newDirs]);
         toast.success(`已添加 ${newDirs.length} 个目录`);
       } catch (e: any) {
         toast.error(e?.message ?? String(e));
@@ -532,42 +585,87 @@ export function ChatInput({
               className="px-3 pt-2"
             />
           )}
-          {(activeWorkdir || activeAllowedDirs.length > 0) && (
+          {(activeProject || activeWorkdir || activeAllowedPaths.length > 0) && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
-              {activeWorkdir && (
-                <HoverHint hint={`项目：${activeWorkdir}`} align="start">
-                  <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group">
-                    <FolderOpen className="w-3 h-3" />
-                    <span className="truncate max-w-[200px]">
-                      {basename(activeWorkdir)}
+              {activeProject ? (
+                <HoverHint
+                  hint={
+                    <span className="flex max-w-[320px] flex-col gap-1 font-mono">
+                      {activeWorkdir && (
+                        <span className="break-words">{activeWorkdir}</span>
+                      )}
+                      {activeWorkdir && activeAllowedPaths.length > 0 && (
+                        <span className="flex flex-col gap-0.5 py-0.5" aria-hidden="true">
+                          <span className="h-px bg-border" />
+                          <span className="h-px bg-border" />
+                        </span>
+                      )}
+                      {activeAllowedPaths.map((dir) => (
+                        <span key={dir} className="break-words">
+                          {dir}
+                        </span>
+                      ))}
                     </span>
+                  }
+                  align="start"
+                >
+                  <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-medium">
+                    <BriefcaseBusiness className="w-3 h-3" />
+                    <span className="truncate max-w-[220px]">
+                      {activeProject.name}
+                    </span>
+                  </span>
+                </HoverHint>
+              ) : (
+                <>
+                    <HoverHint hint="清空所有路径选择" align="start">
                     <button
                       type="button"
-                      onClick={clearWorkdir}
-                      className="opacity-50 hover:opacity-100"
-                      aria-label="移除项目"
+                      onClick={clearWorkspaceSelections}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      aria-label="清空所有路径选择"
                     >
                       <X className="w-3 h-3" />
                     </button>
-                  </span>
-                </HoverHint>
+                  </HoverHint>
+                  {activeWorkdir && (
+                    <PathHint path={activeWorkdir}>
+                      <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group">
+                        <FolderOpen className="w-3 h-3" />
+                        <span className="truncate max-w-[200px]">
+                          {pathLeaf(activeWorkdir)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={clearWorkdir}
+                          className="opacity-50 hover:opacity-100"
+                          aria-label="移除项目"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    </PathHint>
+                  )}
+                  {activeAllowedPaths.map((d) => (
+                    <PathHint key={d} path={d}>
+                      <span className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group">
+                        <PathTypeIcon path={d} className="w-3 h-3" />
+                        <span className="truncate max-w-[200px]">
+                          {pathLeaf(d)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeAllowedPath(d)}
+                          className="opacity-50 hover:opacity-100"
+                          aria-label="移除路径"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    </PathHint>
+                  ))}
+                </>
               )}
-              {activeAllowedDirs.map((d) => (
-                <HoverHint key={d} hint={d} align="start">
-                  <span className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group">
-                    <Folder className="w-3 h-3" />
-                    <span className="truncate max-w-[200px]">{basename(d)}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeAllowedDir(d)}
-                      className="opacity-50 hover:opacity-100"
-                      aria-label="移除目录"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                </HoverHint>
-              ))}
             </div>
           )}
           <input
@@ -604,15 +702,16 @@ export function ChatInput({
             className="w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
           />
 
-          {/* 底部工具条：左 = + 菜单（文件 / 项目 / 目录），右 = 模型选择 + 发送 */}
+          {/* 底部工具条：左 = + 菜单 / `//` 命令 / RunMode chip，右 = 模型选择 + 发送 */}
           <div className="flex items-center justify-between px-2 pb-2">
+            <div className="flex items-center gap-1">
             <div className="relative" ref={addMenuRef}>
               <button
                 type="button"
                 onClick={() => setAddMenuOpen((v) => !v)}
                 disabled={inputDisabled}
                 className="h-8 w-8 rounded-md inline-flex items-center justify-center bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
-                title="添加文件 / 项目 / 目录"
+                title="添加文件 / 项目 / 路径"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -647,14 +746,46 @@ export function ChatInput({
                   </button>
                   <button
                     type="button"
-                    onClick={pickAllowedDir}
+                    onClick={pickAllowedFiles}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
                   >
-                    <Folder className="w-4 h-4 text-muted-foreground" />
-                    添加目录
+                    <FilePlus2 className="w-4 h-4 text-muted-foreground" />
+                    允许访问文件
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pickAllowedFolder}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                  >
+                    <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                    允许访问文件夹
                   </button>
                 </div>
               )}
+            </div>
+            <SlashCommandButton
+              disabled={inputDisabled}
+              onPick={(cmd) => {
+                const trailingSpace = cmd.args.length > 0 ? " " : "";
+                const insertion = `//${cmd.name}${trailingSpace}`;
+                setValue((prev) => {
+                  if (!prev || prev.endsWith("\n")) return prev + insertion;
+                  return prev + "\n" + insertion;
+                });
+                setHistoryState({ index: null });
+                requestAnimationFrame(() => {
+                  const el = textareaRef.current;
+                  if (!el) return;
+                  el.focus();
+                  const end = el.value.length;
+                  el.setSelectionRange(end, end);
+                });
+              }}
+            />
+            <RunModeChip
+              sessionId={currentSession?.id ?? null}
+              disabled={inputDisabled}
+            />
             </div>
 
             <div className="flex items-center gap-1">
@@ -776,14 +907,6 @@ function parsePathCandidates(raw: string): string[] {
     }
   }
   return out;
-}
-
-/** 路径 basename：剥掉尾部 `/` 后取最后一段；空串回退为整段。 */
-function basename(p: string): string {
-  const trimmed = p.replace(/[\\/]+$/, "");
-  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  const name = idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
-  return name || trimmed || p;
 }
 
 function isTextFile(file: File) {

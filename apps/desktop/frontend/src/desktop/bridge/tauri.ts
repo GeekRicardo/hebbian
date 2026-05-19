@@ -22,6 +22,8 @@ import type {
   SessionBackgroundReport,
   SessionMeta,
   ToolInfo,
+  WorkspaceProject,
+  WorkspaceProjectInput,
 } from "@/desktop/ui/types";
 
 export const api = {
@@ -52,13 +54,21 @@ export const api = {
     providerId: string,
     model: string,
     systemPrompt?: string | null,
-    promptId?: string | null
+    promptId?: string | null,
+    workspace?: {
+      project_id?: string | null;
+      workdir?: string | null;
+      allowed_paths?: string[];
+    }
   ) =>
     invoke<Session>("create_session", {
       providerId,
       model,
       systemPrompt: systemPrompt ?? null,
       promptId: promptId ?? null,
+      projectId: workspace?.project_id ?? null,
+      workdir: workspace?.workdir ?? null,
+      allowedPaths: workspace?.allowed_paths ?? null,
     }),
   renameSession: (id: string, title: string) =>
     invoke<Session>("rename_session", { id, title }),
@@ -74,6 +84,19 @@ export const api = {
     invoke<Session>("truncate_inclusive", { id, messageId }),
   searchSessions: (query: string, caseSensitive: boolean, regex: boolean) =>
     invoke<SearchHit[]>("search_sessions", { query, caseSensitive, regex }),
+
+  // workspace projects
+  listProjects: () => invoke<WorkspaceProject[]>("list_projects"),
+  saveProject: (input: WorkspaceProjectInput) =>
+    invoke<WorkspaceProject>("save_project", { input }),
+  deleteProject: (id: string) => invoke<void>("delete_project", { id }),
+  importVscodeProject: (path: string, name?: string | null) =>
+    invoke<WorkspaceProject>("import_vscode_project", {
+      path,
+      name: name ?? null,
+    }),
+  importProjectFile: (path: string) =>
+    invoke<WorkspaceProject>("import_project_file", { path }),
   updateSessionConfig: (
     id: string,
     patch: {
@@ -207,6 +230,32 @@ export const api = {
       labels: payload?.labels ?? null,
     }),
 
+  /**
+   * 架构 §4.4.4 / §8：读取当前 session 的 `force_automode` 子开关。
+   * desktop 进程级状态，重启回归 false。
+   */
+  getForceAutomode: (sessionId: string) =>
+    invoke<boolean>("get_force_automode", { sessionId }),
+
+  /**
+   * 切换 `force_automode` 子开关；返回设置后的最新值。
+   * 由 `//force-automode [on|off|toggle]` 命令解析器调用。
+   */
+  setForceAutomode: (sessionId: string, enabled: boolean) =>
+    invoke<boolean>("set_force_automode", { sessionId, enabled }),
+
+  /**
+   * 架构 §4.4.3 / §8：读取当前 session 的 [`RunMode`]。
+   * desktop 进程级状态，重启回归 `AskBeforeEdits`。
+   * 返回 PascalCase 字符串：`AskBeforeEdits` / `EditAutomatically` / `PlanMode` / `AutoMode`
+   */
+  getRunMode: (sessionId: string) =>
+    invoke<string>("get_run_mode", { sessionId }),
+
+  /** 设置当前 session 的 [`RunMode`]；mode 接受 PascalCase 或 kebab-case。 */
+  setRunMode: (sessionId: string, mode: string) =>
+    invoke<string>("set_run_mode", { sessionId, mode }),
+
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),
 
@@ -234,7 +283,7 @@ export const api = {
     id: string,
     patch: {
       workdir?: string | null;
-      allowed_dirs?: string[] | null;
+      allowed_paths?: string[] | null;
       enabled_tools?: string[] | null;
       skill_dirs?: string[] | null;
     }
@@ -244,9 +293,9 @@ export const api = {
       if (patch.workdir == null) args.clearWorkdir = true;
       else args.workdir = patch.workdir;
     }
-    if ("allowed_dirs" in patch) {
-      if (patch.allowed_dirs == null) args.clearAllowedDirs = true;
-      else args.allowedDirs = patch.allowed_dirs;
+    if ("allowed_paths" in patch) {
+      if (patch.allowed_paths == null) args.clearAllowedPaths = true;
+      else args.allowedPaths = patch.allowed_paths;
     }
     if ("enabled_tools" in patch) {
       if (patch.enabled_tools == null) args.clearEnabledTools = true;
@@ -261,7 +310,7 @@ export const api = {
 
   /**
    * 探测剪切板/拖拽过来的路径：是文件就读出来当 attachment，是目录就提示前端
-   * 加到 allowed_dirs。前端只发一次 RPC，避免来回 stat 磁盘。
+   * 加到 allowed_paths。前端只发一次 RPC，避免来回 stat 磁盘。
    */
   attachPath: (path: string) =>
     invoke<

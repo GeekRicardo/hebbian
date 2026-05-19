@@ -27,14 +27,16 @@
 //! 找不到时回落到 `.json`。任何写操作（save / append / rename）会触发
 //! 「读老 json → 写新 jsonl → 老 json 改名 .json.bak」的一次性迁移。
 
+use chrono::{TimeZone, Utc};
 use common::attachments::MessageAttachment;
 use common::{AppError, AppResult};
-use chrono::{TimeZone, Utc};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use crate::run_mode::RunMode;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -140,21 +142,21 @@ pub struct Session {
     /// 对话工作目录。`None` = 用全局默认（通常 `~/`）。
     #[serde(default)]
     pub workdir: Option<PathBuf>,
-    /// 对话开始时锁定的允许目录覆盖。`None` = 用全局默认。
+    /// 对话开始时锁定的允许路径覆盖。`None` = 用全局默认。
     /// 一旦本对话发出过 user message，UI 不再允许从这里删除条目（否则会破坏
-    /// 已基于这组目录建立的 prompt cache + 已生效的工具行为）。
-    /// 运行时新增的允许目录请使用 `runtime_allowed_dirs` / `pending_runtime_allowed_dirs`。
+    /// 已基于这组路径建立的 prompt cache + 已生效的工具行为）。
+    /// 运行时新增的允许路径请使用 `runtime_allowed_paths` / `pending_runtime_allowed_paths`。
     #[serde(default)]
-    pub allowed_dirs: Option<Vec<PathBuf>>,
-    /// 对话开始之后追加的允许目录，且已经通过上一条 user message 中的
+    pub allowed_paths: Option<Vec<PathBuf>>,
+    /// 对话开始之后追加的允许路径，且已经通过上一条 user message 中的
     /// `<workspace-update>` 段通知过模型。仅作 `allows()` 判定用，不进 system prompt。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_allowed_dirs: Vec<PathBuf>,
-    /// 对话开始之后追加、还没通知模型的允许目录。下次 send_message 时
+    pub runtime_allowed_paths: Vec<PathBuf>,
+    /// 对话开始之后追加、还没通知模型的允许路径。下次 send_message 时
     /// `Workspace::take_pending_announcement` 会 drain 它们注入到 user message 头部，
-    /// 然后 surface 端把它们移到 `runtime_allowed_dirs`。
+    /// 然后 surface 端把它们移到 `runtime_allowed_paths`。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_runtime_allowed_dirs: Vec<PathBuf>,
+    pub pending_runtime_allowed_paths: Vec<PathBuf>,
     /// 对话启用的非内置工具（来自 `tool_manifest`）。`None` = 用全局默认。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
@@ -174,6 +176,14 @@ pub struct Session {
     /// 老 `.json` 没这个字段，反序列化时为 `None`。读 jsonl 时从 Meta 行的 `source` 字段填入。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// 创建该 session 时绑定的 workspace/project。老对话为 None；UI 可以用 workdir 兜底归类。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// 本对话的 [`RunMode`]（架构 §4.4.3 / §8）。Desktop mode chip 切换时持久化到这里，
+    /// chat 路径每次 send_message 从这里取真值传给 SessionConfig。
+    /// 老 jsonl 无此字段反序列化默认 [`RunMode::AskBeforeEdits`]。
+    #[serde(default)]
+    pub run_mode: RunMode,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -223,6 +233,12 @@ pub struct SessionMeta {
     /// 创建该 session 的 surface（前端 Sidebar 用于显示徽章）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// 创建该 session 时绑定的 workspace/project。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// 对话工作目录，用于项目列表兜底匹配老会话。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,11 +298,11 @@ pub struct RolloutMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_dirs: Option<Vec<PathBuf>>,
+    pub allowed_paths: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_allowed_dirs: Vec<PathBuf>,
+    pub runtime_allowed_paths: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_runtime_allowed_dirs: Vec<PathBuf>,
+    pub pending_runtime_allowed_paths: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,6 +311,11 @@ pub struct RolloutMeta {
     pub reasoning: Option<common::reasoning::ReasoningConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_stats: Option<TokenStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// [`RunMode`] 起始快照。老 RolloutMeta 无此字段反序列化为 `AskBeforeEdits`。
+    #[serde(default)]
+    pub run_mode: RunMode,
 }
 
 /// 可变字段补丁。每个 `Some(_)` 字段都会按 last-wins 覆盖到最终 [`Session`]。
@@ -318,11 +339,11 @@ pub struct MetaUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_dirs: Option<Vec<PathBuf>>,
+    pub allowed_paths: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime_allowed_dirs: Option<Vec<PathBuf>>,
+    pub runtime_allowed_paths: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_runtime_allowed_dirs: Option<Vec<PathBuf>>,
+    pub pending_runtime_allowed_paths: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -331,6 +352,11 @@ pub struct MetaUpdate {
     pub reasoning: Option<common::reasoning::ReasoningConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_stats: Option<TokenStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// 切换 [`RunMode`] 时下发的补丁。`None` 表示本次更新不动 RunMode。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_mode: Option<RunMode>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -587,13 +613,15 @@ fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -
         prompt_id: s.prompt_id.clone(),
         stream: s.stream,
         workdir: s.workdir.clone(),
-        allowed_dirs: s.allowed_dirs.clone(),
-        runtime_allowed_dirs: s.runtime_allowed_dirs.clone(),
-        pending_runtime_allowed_dirs: s.pending_runtime_allowed_dirs.clone(),
+        allowed_paths: s.allowed_paths.clone(),
+        runtime_allowed_paths: s.runtime_allowed_paths.clone(),
+        pending_runtime_allowed_paths: s.pending_runtime_allowed_paths.clone(),
         enabled_tools: s.enabled_tools.clone(),
         skill_dirs: s.skill_dirs.clone(),
         reasoning: s.reasoning.clone(),
         token_stats: s.token_stats,
+        project_id: s.project_id.clone(),
+        run_mode: s.run_mode,
     }
 }
 
@@ -607,13 +635,15 @@ fn apply_meta(s: &mut Session, m: RolloutMeta) {
     s.prompt_id = m.prompt_id;
     s.stream = m.stream;
     s.workdir = m.workdir;
-    s.allowed_dirs = m.allowed_dirs;
-    s.runtime_allowed_dirs = m.runtime_allowed_dirs;
-    s.pending_runtime_allowed_dirs = m.pending_runtime_allowed_dirs;
+    s.allowed_paths = m.allowed_paths;
+    s.runtime_allowed_paths = m.runtime_allowed_paths;
+    s.pending_runtime_allowed_paths = m.pending_runtime_allowed_paths;
     s.enabled_tools = m.enabled_tools;
     s.skill_dirs = m.skill_dirs;
     s.reasoning = m.reasoning;
     s.token_stats = m.token_stats;
+    s.project_id = m.project_id;
+    s.run_mode = m.run_mode;
     s.created_at = m.created_at;
 }
 
@@ -639,14 +669,14 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     if let Some(v) = u.workdir {
         s.workdir = Some(v);
     }
-    if let Some(v) = u.allowed_dirs {
-        s.allowed_dirs = Some(v);
+    if let Some(v) = u.allowed_paths {
+        s.allowed_paths = Some(v);
     }
-    if let Some(v) = u.runtime_allowed_dirs {
-        s.runtime_allowed_dirs = v;
+    if let Some(v) = u.runtime_allowed_paths {
+        s.runtime_allowed_paths = v;
     }
-    if let Some(v) = u.pending_runtime_allowed_dirs {
-        s.pending_runtime_allowed_dirs = v;
+    if let Some(v) = u.pending_runtime_allowed_paths {
+        s.pending_runtime_allowed_paths = v;
     }
     if let Some(v) = u.enabled_tools {
         s.enabled_tools = Some(v);
@@ -659,6 +689,12 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     }
     if let Some(v) = u.token_stats {
         s.token_stats = Some(v);
+    }
+    if let Some(v) = u.project_id {
+        s.project_id = Some(v);
+    }
+    if let Some(v) = u.run_mode {
+        s.run_mode = v;
     }
 }
 
@@ -701,14 +737,16 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
         stream: true,
         messages: Vec::new(),
         workdir: None,
-        allowed_dirs: None,
-        runtime_allowed_dirs: Vec::new(),
-        pending_runtime_allowed_dirs: Vec::new(),
+        allowed_paths: None,
+        runtime_allowed_paths: Vec::new(),
+        pending_runtime_allowed_paths: Vec::new(),
         enabled_tools: None,
         skill_dirs: None,
         reasoning: None,
         token_stats: None,
         source: None,
+        project_id: None,
+        run_mode: RunMode::default(),
         created_at: 0,
         updated_at: 0,
     };
@@ -771,8 +809,7 @@ fn write_jsonl_full(path: &Path, s: &Session, source: String) -> AppResult<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut buf = String::new();
-    let meta_line =
-        serde_json::to_string(&RolloutLine::Meta(meta_from_session(s, source, None)))?;
+    let meta_line = serde_json::to_string(&RolloutLine::Meta(meta_from_session(s, source, None)))?;
     buf.push_str(&meta_line);
     buf.push('\n');
     for m in &s.messages {
@@ -857,6 +894,8 @@ pub fn list(data_dir: &Path) -> AppResult<Vec<SessionMeta>> {
             message_count: count,
             date: date_string(session.created_at),
             source: session.source,
+            project_id: session.project_id,
+            workdir: session.workdir,
         });
     }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -927,7 +966,10 @@ fn load_from_path(path: &Path) -> AppResult<Session> {
     match path.extension().and_then(|s| s.to_str()) {
         Some("jsonl") => read_jsonl(path),
         Some("json") => common::storage::read_json_required(path),
-        _ => Err(AppError::msg(format!("无法识别的 session 文件: {}", path.display()))),
+        _ => Err(AppError::msg(format!(
+            "无法识别的 session 文件: {}",
+            path.display()
+        ))),
     }
 }
 
@@ -979,7 +1021,14 @@ pub fn create(
     system_prompt: Option<String>,
     prompt_id: Option<String>,
 ) -> AppResult<Session> {
-    create_with_source(data_dir, provider_id, model, system_prompt, prompt_id, default_source())
+    create_with_source(
+        data_dir,
+        provider_id,
+        model,
+        system_prompt,
+        prompt_id,
+        default_source(),
+    )
 }
 
 /// 显式指定 surface 来源的 create。CLI 应传 `"cli"`，desktop / 测试用默认值即可。
@@ -1002,14 +1051,16 @@ pub fn create_with_source(
         stream: true,
         messages: Vec::new(),
         workdir: None,
-        allowed_dirs: None,
-        runtime_allowed_dirs: Vec::new(),
-        pending_runtime_allowed_dirs: Vec::new(),
+        allowed_paths: None,
+        runtime_allowed_paths: Vec::new(),
+        pending_runtime_allowed_paths: Vec::new(),
         enabled_tools: None,
         skill_dirs: None,
         reasoning: None,
         token_stats: None,
         source: Some(source.clone()),
+        project_id: None,
+        run_mode: RunMode::default(),
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1031,6 +1082,33 @@ pub fn create_with_source(
     );
     session.updated_at = now_ts;
     Ok(session)
+}
+
+pub fn create_with_workspace(
+    data_dir: &Path,
+    provider_id: String,
+    model: String,
+    system_prompt: Option<String>,
+    prompt_id: Option<String>,
+    source: String,
+    project_id: Option<String>,
+    workdir: Option<PathBuf>,
+    allowed_paths: Vec<PathBuf>,
+) -> AppResult<Session> {
+    let mut session = create_with_source(
+        data_dir,
+        provider_id,
+        model,
+        system_prompt,
+        prompt_id,
+        source,
+    )?;
+    session.project_id = project_id;
+    session.workdir = workdir;
+    if !allowed_paths.is_empty() {
+        session.allowed_paths = Some(allowed_paths);
+    }
+    save(data_dir, session)
 }
 
 pub fn append_message(data_dir: &Path, id: &str, msg: Message) -> AppResult<Session> {
@@ -1087,15 +1165,17 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         stream: src.stream,
         messages: msgs,
         workdir: src.workdir,
-        allowed_dirs: src.allowed_dirs,
-        runtime_allowed_dirs: src.runtime_allowed_dirs,
-        pending_runtime_allowed_dirs: src.pending_runtime_allowed_dirs,
+        allowed_paths: src.allowed_paths,
+        runtime_allowed_paths: src.runtime_allowed_paths,
+        pending_runtime_allowed_paths: src.pending_runtime_allowed_paths,
         enabled_tools: src.enabled_tools,
         skill_dirs: src.skill_dirs,
         reasoning: src.reasoning,
         token_stats: src.token_stats,
+        project_id: src.project_id,
         // 分支沿用父对话的 surface 来源
         source: src.source,
+        run_mode: src.run_mode,
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1129,6 +1209,21 @@ pub fn rename(data_dir: &Path, id: &str, title: String) -> AppResult<Session> {
         &RolloutLine::MetaUpdate(MetaUpdate {
             at: now(),
             title: Some(title),
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// 切换会话 [`RunMode`]，追加一行 [`MetaUpdate`] 即可（不重写 messages）。
+/// 与 [`rename`] 同 pattern，IO 成本与切换频次匹配。
+pub fn set_run_mode(data_dir: &Path, id: &str, mode: RunMode) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            run_mode: Some(mode),
             ..Default::default()
         }),
     )?;
@@ -1262,6 +1357,8 @@ pub fn search(
                 message_count: count,
                 date: date_string(s.created_at),
                 source: s.source,
+                project_id: s.project_id,
+                workdir: s.workdir,
             },
             snippet,
             matched_in: if title_hit { "title" } else { "content" },
@@ -1357,6 +1454,28 @@ mod tests {
     }
 
     #[test]
+    fn create_with_workspace_persists_project_defaults() {
+        let dir = temp_data_dir("workspace-create");
+        let session = create_with_workspace(
+            &dir,
+            "openai".into(),
+            "gpt-x".into(),
+            None,
+            None,
+            "desktop".into(),
+            Some("proj-1".into()),
+            Some(PathBuf::from("/tmp/project")),
+            vec![PathBuf::from("/tmp/extra")],
+        )
+        .unwrap();
+
+        let loaded = load(&dir, &session.id).unwrap();
+        assert_eq!(loaded.project_id.as_deref(), Some("proj-1"));
+        assert_eq!(loaded.workdir, Some(PathBuf::from("/tmp/project")));
+        assert_eq!(loaded.allowed_paths, Some(vec![PathBuf::from("/tmp/extra")]));
+    }
+
+    #[test]
     fn append_message_persists_and_reloads() {
         let dir = temp_data_dir("append");
         let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
@@ -1432,14 +1551,16 @@ mod tests {
                 meta: None,
             }],
             workdir: None,
-            allowed_dirs: None,
-            runtime_allowed_dirs: Vec::new(),
-            pending_runtime_allowed_dirs: Vec::new(),
+            allowed_paths: None,
+            runtime_allowed_paths: Vec::new(),
+            pending_runtime_allowed_paths: Vec::new(),
             enabled_tools: None,
             skill_dirs: None,
             reasoning: None,
             token_stats: None,
             source: None,
+            project_id: None,
+            run_mode: RunMode::default(),
             created_at: now_ts,
             updated_at: now_ts,
         };
@@ -1523,7 +1644,8 @@ mod tests {
             "messages": [],
             "created_at": 1777272707015_i64,
             "updated_at": 1777274494974_i64,
-        })).unwrap();
+        }))
+        .unwrap();
         std::fs::write(&path, pretty).unwrap();
 
         // 第一次 list：检测到 pretty-JSON 并自愈写回 jsonl

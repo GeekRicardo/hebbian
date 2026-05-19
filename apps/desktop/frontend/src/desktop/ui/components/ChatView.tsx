@@ -10,6 +10,7 @@ import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
+import { runModeLabel } from "./RunModeChip";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -498,12 +499,11 @@ export function ChatView() {
           {/* RunMode 状态标签（架构 §10.2）：仅在 run_mode_changed 事件来过后显示，
               ChatView 内悬浮一行——目前 UI 没有正式状态栏，先以轻量提示出现。 */}
           {isStreaming && currentRunMode ? (
-            <div className="mx-auto my-1 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-              RunMode: {currentRunMode}
+            <div className="mx-auto my-1 text-[11px] tracking-wide text-muted-foreground/80">
+              当前模式：{runModeLabel(currentRunMode)}
             </div>
           ) : null}
-          {/* AutoMode 判官标记气泡（架构 §4.4.4）：每一个 PermissionAutoJudged 事件渲染一行。
-              当前实现按时间顺序整体追加到流式 bubble 之后；run 结束 reload 时随 slot 一起清掉。 */}
+          {/* 自动模式下，每个被判定的工具调用对应一条提示。事件流：PermissionAutoJudged。 */}
           {isStreaming &&
             autoJudgedNotes.map((n, idx) => (
               <div
@@ -511,11 +511,11 @@ export function ChatView() {
                 className="mx-auto my-1 text-xs text-muted-foreground"
               >
                 {n.decision === "allow" ? "✓" : n.decision === "deny" ? "✗" : "?"}{" "}
-                AutoMode {n.decision === "allow"
+                {n.decision === "allow"
                   ? "自动放行"
                   : n.decision === "deny"
-                  ? "拒绝"
-                  : "转人工"}{" "}
+                  ? "自动拒绝"
+                  : "需要询问"}{" "}
                 [{n.toolName}]
                 {n.reason ? <span className="opacity-70">：{n.reason}</span> : null}
               </div>

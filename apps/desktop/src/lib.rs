@@ -1,30 +1,33 @@
 pub mod chat;
 mod engine;
 mod error;
+mod force_automode;
 mod hitl;
 mod title_gen;
 mod window_control;
 
 pub use engine::EngineEvent;
 pub use error::{AppError, AppResult};
+pub use force_automode::ForceAutomodeState;
 pub use hitl::HitlState;
 
 use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
 use agent_core::permissions::PermissionStore;
+use agent_core::storage::{
+    projects::{WorkspaceProject, WorkspaceProjectInput},
+    prompts::{Prompt, PromptsFile},
+    sessions::{self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta},
+    settings::{self as settings_store, Settings},
+};
 use agent_core::tools::ToolInfo;
+use common::runtime as cancellation;
 use model_gateway::{
     auth as oauth,
     config::{self as providers, Provider, ProviderPreset, ProvidersFile},
     discovery::FetchedModel,
     health::ProviderModelTestResult,
-};
-use common::runtime as cancellation;
-use agent_core::storage::{
-    prompts::{Prompt, PromptsFile},
-    sessions::{self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta},
-    settings::{self as settings_store, Settings},
 };
 use std::path::PathBuf;
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State, WindowEvent};
@@ -136,9 +139,29 @@ fn create_session(
     model: String,
     system_prompt: Option<String>,
     prompt_id: Option<String>,
+    project_id: Option<String>,
+    workdir: Option<PathBuf>,
+    allowed_paths: Option<Vec<PathBuf>>,
 ) -> AppResult<Session> {
     let dd = data_dir(&app)?;
-    let session = sessions::create(&dd, provider_id, model, system_prompt, prompt_id)?;
+    let session = if project_id.is_some()
+        || workdir.is_some()
+        || allowed_paths.as_ref().is_some_and(|paths| !paths.is_empty())
+    {
+        sessions::create_with_workspace(
+            &dd,
+            provider_id,
+            model,
+            system_prompt,
+            prompt_id,
+            "desktop".to_string(),
+            project_id,
+            workdir,
+            allowed_paths.unwrap_or_default(),
+        )?
+    } else {
+        sessions::create(&dd, provider_id, model, system_prompt, prompt_id)?
+    };
     // 架构 §4.9.1 / §10.8：新 session 同步生成目录结构 + meta.json，
     // 为流式 partial sidecar 与中断恢复预留落点（即使主体 jsonl 仍走老路径）。
     if let Err(e) = ensure_session_layout(&dd, &session) {
@@ -147,10 +170,59 @@ fn create_session(
     Ok(session)
 }
 
-fn ensure_session_layout(
-    data_dir: &std::path::Path,
-    session: &Session,
-) -> AppResult<()> {
+// ========== Workspace Projects ==========
+
+#[tauri::command]
+fn list_projects(app: AppHandle) -> AppResult<Vec<WorkspaceProject>> {
+    core(&app)?.list_projects().map_err(map_core_err)
+}
+
+#[tauri::command]
+fn save_project(app: AppHandle, input: WorkspaceProjectInput) -> AppResult<WorkspaceProject> {
+    core(&app)?.save_project(input).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn delete_project(app: AppHandle, id: String) -> AppResult<()> {
+    core(&app)?.delete_project(&id).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn import_vscode_project(
+    app: AppHandle,
+    path: PathBuf,
+    name: Option<String>,
+) -> AppResult<WorkspaceProject> {
+    let content = std::fs::read_to_string(&path)?;
+    agent_core::storage::projects::import_vscode_workspace(
+        &data_dir(&app)?,
+        &content,
+        name,
+        Some(&path),
+    )
+}
+
+#[tauri::command]
+fn import_project_file(app: AppHandle, path: PathBuf) -> AppResult<WorkspaceProject> {
+    let content = std::fs::read_to_string(&path)?;
+    let project: WorkspaceProject = serde_json::from_str(&content)?;
+    let workdir = project.workdir().cloned().unwrap_or_default();
+    let allowed_paths = project.allowed_paths();
+    let project_id = project.id.clone();
+    let name = project.name.clone();
+    let source = project.source.clone();
+    core(&app)?
+        .save_project(WorkspaceProjectInput {
+            id: Some(project_id),
+            name,
+            workdir,
+            allowed_paths,
+            source,
+        })
+        .map_err(map_core_err)
+}
+
+fn ensure_session_layout(data_dir: &std::path::Path, session: &Session) -> AppResult<()> {
     use agent_core::storage::sessions_dir;
     sessions_dir::ensure_session_dirs(data_dir, &session.id)?;
     sessions_dir::save_meta(
@@ -252,12 +324,7 @@ fn update_session_config(
     if prev_reasoning != s.reasoning {
         // 把 reasoning 切换当作模型切换的轻量版本——往对话流里插一条 marker，
         // 让 UI 渲染分割线，从这条之后的回复里都是新参数下产生的。
-        sessions::insert_reasoning_switch_marker(
-            &dd,
-            &id,
-            prev_reasoning,
-            s.reasoning.clone(),
-        )?;
+        sessions::insert_reasoning_switch_marker(&dd, &id, prev_reasoning, s.reasoning.clone())?;
         // 上面 marker 写入后再 reload 一次，避免覆盖 marker。
         let mut latest = sessions::load(&dd, &id)?;
         latest.system_prompt = s.system_prompt.clone();
@@ -359,6 +426,7 @@ async fn send_message(
     app: AppHandle,
     hitl: State<'_, Arc<HitlState>>,
     permission_store: State<'_, Option<Arc<PermissionStore>>>,
+    force_automode: State<'_, Arc<ForceAutomodeState>>,
     session_id: String,
     content: String,
     attachments: Vec<common::attachments::MessageAttachment>,
@@ -368,6 +436,7 @@ async fn send_message(
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let runtime = cancellation::register(request_id.clone());
+    let force_automode_enabled = force_automode.is_enabled(&session_id);
     let result = chat::send_and_save(
         &app,
         chat::SendArgs {
@@ -378,8 +447,10 @@ async fn send_message(
             enabled_tools,
             cancel_flag: runtime.cancel.clone(),
             pending_inputs: Some(runtime.pending_inputs.clone()),
+            consumed_pending_inputs: Some(runtime.consumed_pending_inputs.clone()),
             hitl: Some(hitl.inner().clone()),
             permission_store: permission_store.inner().clone(),
+            force_automode: force_automode_enabled,
         },
         on_event,
     )
@@ -408,6 +479,17 @@ fn inject_user_message(
 ) -> AppResult<agent_core::storage::sessions::Message> {
     use agent_core::storage::sessions::{self, Message, Role};
     let dd = data_dir(&app)?;
+    let injected = cancellation::inject_pending_input(
+        &request_id,
+        common::runtime::PendingUserInput {
+            content: content.clone(),
+            attachments: attachments.clone(),
+        },
+    );
+    if !injected {
+        return Err(AppError::msg("当前 run 已结束，无法引导插队"));
+    }
+
     let user_msg = Message {
         id: sessions::new_id(),
         role: Role::User,
@@ -418,29 +500,13 @@ fn inject_user_message(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
     };
-    sessions::append_message(&dd, &session_id, user_msg.clone())?;
-
-    let injected = cancellation::inject_pending_input(
-        &request_id,
-        common::runtime::PendingUserInput {
-            content,
-            attachments,
-        },
-    );
-    if !injected {
-        // run 已经结束（或还没注册）——session.json 里这条 user message 已经落盘，
-        // 前端拿到它后会把它作为接下来一条 user 显示，等用户决定下一步。
-        tracing::debug!(
-            request_id,
-            "inject_user_message: run not registered, message persisted only"
-        );
-    }
+    let _ = sessions::load(&dd, &session_id)?;
     Ok(user_msg)
 }
 
 #[tauri::command]
-fn get_context_usage(app: AppHandle, session_id: String) -> AppResult<chat::ContextUsageDto> {
-    chat::context_usage(&data_dir(&app)?, &session_id)
+async fn get_context_usage(app: AppHandle, session_id: String) -> AppResult<chat::ContextUsageDto> {
+    chat::context_usage(&data_dir(&app)?, &session_id).await
 }
 
 #[tauri::command]
@@ -520,6 +586,42 @@ fn answer_question(
     };
     hitl.answer_question(&request_id, answer)
         .map_err(AppError::msg)
+}
+
+// ========== `//` 命令系统：force-automode ==========
+//
+// 架构 §4.4.4 / §8：force_automode 是 RunMode=AutoMode 下的子开关。
+// 用户在 ChatInput 输入 `//force-automode [on|off|toggle]`，前端解析后调下面两个 command。
+// 状态仅存内存（架构 §8.2 决策：危险开关重启回归 false）。
+
+#[tauri::command]
+fn get_force_automode(state: State<'_, Arc<ForceAutomodeState>>, session_id: String) -> bool {
+    state.is_enabled(&session_id)
+}
+
+#[tauri::command]
+fn set_force_automode(
+    state: State<'_, Arc<ForceAutomodeState>>,
+    session_id: String,
+    enabled: bool,
+) -> bool {
+    state.set(session_id, enabled);
+    enabled
+}
+
+#[tauri::command]
+fn get_run_mode(app: AppHandle, session_id: String) -> AppResult<String> {
+    let dd = data_dir(&app)?;
+    Ok(sessions::load(&dd, &session_id)?.run_mode.as_str().to_string())
+}
+
+#[tauri::command]
+fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<String> {
+    let parsed = agent_core::run_mode::RunMode::parse(&mode)
+        .ok_or_else(|| AppError::msg(format!("未知的 RunMode：{mode}")))?;
+    let dd = data_dir(&app)?;
+    sessions::set_run_mode(&dd, &session_id, parsed)?;
+    Ok(parsed.as_str().to_string())
 }
 
 #[tauri::command]
@@ -624,8 +726,8 @@ fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<Sessio
             log_path: s.log_path().map(|p| p.display().to_string()),
         })
         .collect();
-    let pending_crons = agent_core::wakeup::WakeupScheduler::global()
-        .list_pending_crons(&session_id);
+    let pending_crons =
+        agent_core::wakeup::WakeupScheduler::global().list_pending_crons(&session_id);
     let has_suspended_checkpoint = agent_core::storage::run_checkpoint::load(&dd, &session_id)
         .ok()
         .flatten()
@@ -649,18 +751,18 @@ fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
     core(&app)?.save_settings(settings).map_err(map_core_err)
 }
 
-/// 更新对话级设置（workdir / allowed_dirs / enabled_tools / skill_dirs）。
+/// 更新对话级设置（workdir / allowed_paths / enabled_tools / skill_dirs）。
 ///
 /// 三态语义靠两组字段表达，避开 `Option<Option<T>>` 在 IPC 反序列化时
 /// 把 `null` 直接折叠成外层 `None` 的歧义：
-/// - 设值：传 `xxx` 字段，例如 `workdir = "/foo"` / `allowed_dirs = ["/bar"]`
+/// - 设值：传 `xxx` 字段，例如 `workdir = "/foo"` / `allowed_paths = ["/bar"]`
 /// - 清空：传 `clearXxx = true`（前端 invoke 用 camelCase）
 /// - 不动：两边都不传
 ///
-/// `allowed_dirs` 的特殊语义：
-/// - 对话还没发出过 user message → 直接覆盖 `s.allowed_dirs`（initial 集合可任意改）
-/// - 对话已开始 → `s.allowed_dirs` 锁定，**禁止删除任何已存在的目录**；新增的目录
-///   追加到 `pending_runtime_allowed_dirs`，下次 send_message 时通过
+/// `allowed_paths` 的特殊语义：
+/// - 对话还没发出过 user message → 直接覆盖 `s.allowed_paths`（initial 集合可任意改）
+/// - 对话已开始 → `s.allowed_paths` 锁定，**禁止删除任何已存在的路径**；新增的路径
+///   追加到 `pending_runtime_allowed_paths`，下次 send_message 时通过
 ///   `<workspace-update>` 段告诉模型，**不会改 system prompt**，因此 prompt cache 不破。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -669,8 +771,8 @@ fn update_session_settings(
     id: String,
     workdir: Option<PathBuf>,
     clear_workdir: Option<bool>,
-    allowed_dirs: Option<Vec<PathBuf>>,
-    clear_allowed_dirs: Option<bool>,
+    allowed_paths: Option<Vec<PathBuf>>,
+    clear_allowed_paths: Option<bool>,
     enabled_tools: Option<Vec<String>>,
     clear_enabled_tools: Option<bool>,
     skill_dirs: Option<Vec<PathBuf>>,
@@ -683,10 +785,10 @@ fn update_session_settings(
     } else if let Some(v) = workdir {
         s.workdir = Some(v);
     }
-    if clear_allowed_dirs.unwrap_or(false) {
-        apply_allowed_dirs_update(&mut s, None)?;
-    } else if let Some(v) = allowed_dirs {
-        apply_allowed_dirs_update(&mut s, Some(v))?;
+    if clear_allowed_paths.unwrap_or(false) {
+        apply_allowed_paths_update(&mut s, None)?;
+    } else if let Some(v) = allowed_paths {
+        apply_allowed_paths_update(&mut s, Some(v))?;
     }
     if clear_enabled_tools.unwrap_or(false) {
         s.enabled_tools = None;
@@ -701,8 +803,8 @@ fn update_session_settings(
     sessions::save(&dd, s)
 }
 
-/// `update_session_settings` 中 `allowed_dirs` 字段的处理逻辑，单独拆出来便于测试。
-fn apply_allowed_dirs_update(
+/// `update_session_settings` 中 `allowed_paths` 字段的处理逻辑，单独拆出来便于测试。
+fn apply_allowed_paths_update(
     session: &mut Session,
     new_value: Option<Vec<PathBuf>>,
 ) -> AppResult<()> {
@@ -714,22 +816,22 @@ fn apply_allowed_dirs_update(
     if !conversation_started {
         // 还没发过消息：自由覆盖 initial。新值同时也代表"用户期望本对话起始集"，
         // runtime / pending 应该是空（无消息时不可能产生）但稳妥起见也清一遍。
-        session.allowed_dirs = new_value;
-        session.runtime_allowed_dirs.clear();
-        session.pending_runtime_allowed_dirs.clear();
+        session.allowed_paths = new_value;
+        session.runtime_allowed_paths.clear();
+        session.pending_runtime_allowed_paths.clear();
         return Ok(());
     }
 
-    // 对话已开始：锁定 initial。新值必须是当前所有已知目录的超集，新增项进 pending。
+    // 对话已开始：锁定 initial。新值必须是当前所有已知路径的超集，新增项进 pending。
     let target: Vec<PathBuf> = new_value.unwrap_or_default();
-    let initial: Vec<PathBuf> = session.allowed_dirs.clone().unwrap_or_default();
-    let announced: Vec<PathBuf> = session.runtime_allowed_dirs.clone();
-    let pending: Vec<PathBuf> = session.pending_runtime_allowed_dirs.clone();
+    let initial: Vec<PathBuf> = session.allowed_paths.clone().unwrap_or_default();
+    let announced: Vec<PathBuf> = session.runtime_allowed_paths.clone();
+    let pending: Vec<PathBuf> = session.pending_runtime_allowed_paths.clone();
 
     for known in initial.iter().chain(announced.iter()).chain(pending.iter()) {
         if !target.iter().any(|p| p == known) {
             return Err(AppError::msg(format!(
-                "对话开始后不能移除已允许的目录：{}",
+                "对话开始后不能移除已允许的路径：{}",
                 known.display()
             )));
         }
@@ -740,7 +842,7 @@ fn apply_allowed_dirs_update(
             || announced.iter().any(|p| p == &d)
             || pending.iter().any(|p| p == &d);
         if !existed {
-            session.pending_runtime_allowed_dirs.push(d);
+            session.pending_runtime_allowed_paths.push(d);
         }
     }
     Ok(())
@@ -748,7 +850,7 @@ fn apply_allowed_dirs_update(
 
 /// 审批越界路径并落盘到 session（this-project）或全局 settings（all-project）。
 /// 在 UI 用户点击 "this-project" / "all-project" 按钮时调用，
-/// 内部会先把目录加进对应存储，再 resolve `request_id`（AllowOnce 语义即可生效本轮）。
+/// 内部会先把路径加进对应存储，再 resolve `request_id`（AllowOnce 语义即可生效本轮）。
 #[tauri::command]
 fn approve_path_access(
     app: AppHandle,
@@ -765,20 +867,20 @@ fn approve_path_access(
                 AppError::msg("approve_path_access: this_project 需要 session_id")
             })?;
             let mut s = sessions::load(&dd, &session_id)?;
-            let mut existing = s.allowed_dirs.unwrap_or_default();
+            let mut existing = s.allowed_paths.unwrap_or_default();
             for p in &paths {
-                if !existing.iter().any(|d| d == p) {
+                if !existing.iter().any(|path| path == p) {
                     existing.push(p.clone());
                 }
             }
-            s.allowed_dirs = Some(existing);
+            s.allowed_paths = Some(existing);
             sessions::save(&dd, s)?;
         }
         "all_project" => {
             let mut settings = settings_store::load(&dd);
             for p in &paths {
-                if !settings.conversation.allowed_dirs.iter().any(|d| d == p) {
-                    settings.conversation.allowed_dirs.push(p.clone());
+                if !settings.conversation.allowed_paths.iter().any(|path| path == p) {
+                    settings.conversation.allowed_paths.push(p.clone());
                 }
             }
             settings_store::save(&dd, &settings)?;
@@ -788,7 +890,7 @@ fn approve_path_access(
         }
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     }
-    // resolve gate；workspace.add_allowed_dir 已经由 agent_loop 在 AllowAndRemember 时执行
+    // resolve gate；workspace.add_allowed_path 已经由 agent_loop 在 AllowAndRemember 时执行
     let decision = match scope.as_str() {
         "once" => protocol::ApprovalDecision::AllowOnce,
         "this_project" => protocol::ApprovalDecision::AllowAndRemember {
@@ -808,14 +910,24 @@ fn approve_path_access(
 // ========== Path attach (粘贴/拖拽路径) ==========
 
 /// 前端粘贴/拖拽路径时的探测结果。前端只调一次 RPC 就能拿到全部信息：
-/// 是文件就直接返回 `MessageAttachment`，是目录就告诉前端把它加到 allowed_dirs。
+/// 是文件就直接返回 `MessageAttachment`，是目录就告诉前端把它加到 allowed_paths。
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AttachPathResult {
-    Dir { path: String, name: String },
-    File { attachment: common::attachments::MessageAttachment },
-    Missing { path: String },
-    Unsupported { path: String, reason: String },
+    Dir {
+        path: String,
+        name: String,
+    },
+    File {
+        attachment: common::attachments::MessageAttachment,
+    },
+    Missing {
+        path: String,
+    },
+    Unsupported {
+        path: String,
+        reason: String,
+    },
 }
 
 /// 路径附件的兜底大小限制，与前端 ChatInput 中的 MAX_* 常量保持一致。
@@ -890,8 +1002,8 @@ fn attach_path(path: String) -> AppResult<AttachPathResult> {
             reason: format!("{name} 超过 1MB"),
         });
     }
-    let content = std::fs::read_to_string(p)
-        .map_err(|e| AppError::msg(format!("{name} 读取失败：{e}")))?;
+    let content =
+        std::fs::read_to_string(p).map_err(|e| AppError::msg(format!("{name} 读取失败：{e}")))?;
     Ok(AttachPathResult::File {
         attachment: common::attachments::MessageAttachment::TextFile {
             name,
@@ -908,10 +1020,7 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (
-                hex_val(bytes[i + 1]),
-                hex_val(bytes[i + 2]),
-            ) {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                 out.push(h * 16 + l);
                 i += 3;
                 continue;
@@ -969,9 +1078,32 @@ fn looks_like_text(media_type: &str, p: &std::path::Path) -> bool {
     matches!(
         ext.as_deref(),
         Some(
-            "txt" | "md" | "markdown" | "json" | "jsonl" | "csv" | "ts" | "tsx" | "js"
-            | "jsx" | "rs" | "py" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "css"
-            | "html" | "htm" | "xml" | "yaml" | "yml" | "toml" | "sql"
+            "txt"
+                | "md"
+                | "markdown"
+                | "json"
+                | "jsonl"
+                | "csv"
+                | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "rs"
+                | "py"
+                | "go"
+                | "java"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "css"
+                | "html"
+                | "htm"
+                | "xml"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "sql"
         )
     )
 }
@@ -1126,6 +1258,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(HitlState::default()))
+        .manage(Arc::new(ForceAutomodeState::default()))
         .manage(otel_guard)
         .manage(permission_store)
         .manage(core_client)
@@ -1189,6 +1322,11 @@ pub fn run() {
             list_sessions,
             get_session,
             create_session,
+            list_projects,
+            save_project,
+            delete_project,
+            import_vscode_project,
+            import_project_file,
             rename_session,
             delete_session,
             fork_session,
@@ -1205,6 +1343,10 @@ pub fn run() {
             compact_session,
             approve_permission,
             answer_question,
+            get_force_automode,
+            set_force_automode,
+            get_run_mode,
+            set_run_mode,
             generate_session_title,
             list_tools,
             list_background_tasks,
