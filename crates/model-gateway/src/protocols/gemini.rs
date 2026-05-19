@@ -34,9 +34,7 @@ fn entry_to_content(entry: &TranscriptEntry) -> Option<Value> {
             "parts": user_parts(user)
         })),
         TranscriptEntry::Assistant(AssistantEntry {
-            text,
-            tool_calls,
-            ..
+            text, tool_calls, ..
         }) => {
             if tool_calls.is_empty() {
                 Some(json!({

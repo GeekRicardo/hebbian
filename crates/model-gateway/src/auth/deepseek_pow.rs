@@ -202,7 +202,11 @@ pub fn solve_pow(
     let mut off = 0usize;
     while off + RATE <= prefix_bytes.len() {
         for i in 0..RATE / 8 {
-            let chunk = u64::from_le_bytes(prefix_bytes[off + i * 8..off + i * 8 + 8].try_into().unwrap());
+            let chunk = u64::from_le_bytes(
+                prefix_bytes[off + i * 8..off + i * 8 + 8]
+                    .try_into()
+                    .unwrap(),
+            );
             base_state[i] ^= chunk;
         }
         keccak_f23(&mut base_state);
@@ -342,12 +346,13 @@ pub fn deepseek_hash_v1(data: &[u8]) -> [u8; 32] {
 /// `Challenge` → `x-ds-pow-response` 头值（base64(JSON)）。
 pub fn solve_and_build_header(c: &DeepseekChallenge) -> AppResult<String> {
     if c.algorithm != "DeepSeekHashV1" {
-        return Err(AppError::msg(format!(
-            "pow: 不支持的算法 {}",
-            c.algorithm
-        )));
+        return Err(AppError::msg(format!("pow: 不支持的算法 {}", c.algorithm)));
     }
-    let difficulty = if c.difficulty == 0 { 144_000 } else { c.difficulty };
+    let difficulty = if c.difficulty == 0 {
+        144_000
+    } else {
+        c.difficulty
+    };
     let answer = solve_pow(&c.challenge, &c.salt, c.expire_at, difficulty)?;
     let body = json!({
         "algorithm": c.algorithm,

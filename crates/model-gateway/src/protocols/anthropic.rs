@@ -83,10 +83,9 @@ pub fn build_body(
         } else {
             thinking_block = Some(json!({ "type": "disabled" }));
         }
-    } else if let (Some(cfg), Some(mode)) = (
-        req.reasoning.as_ref(),
-        anthropic_thinking_mode(&req.model),
-    ) {
+    } else if let (Some(cfg), Some(mode)) =
+        (req.reasoning.as_ref(), anthropic_thinking_mode(&req.model))
+    {
         if cfg.is_enabled() {
             let effort = cfg.effective_effort();
             match mode {
@@ -199,10 +198,7 @@ fn apply_cache_control(body: &mut Value) {
             Value::Array(arr) if !arr.is_empty() => {
                 if let Some(last) = arr.last_mut() {
                     if let Some(obj) = last.as_object_mut() {
-                        obj.insert(
-                            "cache_control".to_string(),
-                            json!({ "type": "ephemeral" }),
-                        );
+                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                     }
                 }
             }
@@ -520,12 +516,12 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
                         index,
                         delta: s.to_string(),
                     }),
-                Some("input_json_delta") => v["delta"]["partial_json"]
-                    .as_str()
-                    .map(|s| AnthropicStreamEvent::ToolInputJsonDelta {
+                Some("input_json_delta") => v["delta"]["partial_json"].as_str().map(|s| {
+                    AnthropicStreamEvent::ToolInputJsonDelta {
                         index,
                         partial_json: s.to_string(),
-                    }),
+                    }
+                }),
                 // signature_delta 等暂时不上抛
                 _ => None,
             }
@@ -550,7 +546,9 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
 fn parse_usage(v: &Value) -> Usage {
     let raw_input = v["usage"]["input_tokens"].as_u64().unwrap_or(0);
     let cache_read = v["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0);
-    let cache_creation = v["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+    let cache_creation = v["usage"]["cache_creation_input_tokens"]
+        .as_u64()
+        .unwrap_or(0);
     // Anthropic 把 cache_read / cache_creation 单列、不计入 input_tokens；
     // 我们对齐 OpenAI / DeepSeek 的口径，把三者相加暴露成 input_tokens 总数。
     Usage {
@@ -666,7 +664,9 @@ mod tests {
 
         let body = build_body(&req, false, false).unwrap();
         // apply_cache_control 会把字符串 system 升格为带 cache_control 的 block 数组。
-        let arr = body["system"].as_array().expect("system 已升格为 block 数组");
+        let arr = body["system"]
+            .as_array()
+            .expect("system 已升格为 block 数组");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["text"], "Be terse.");
         assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
@@ -682,7 +682,8 @@ mod tests {
         with_tool_call: bool,
         max_tokens: u32,
     ) -> ModelRequest {
-        let mut entries: Vec<TranscriptEntry> = vec![TranscriptEntry::User(UserEntry::text("查一下"))];
+        let mut entries: Vec<TranscriptEntry> =
+            vec![TranscriptEntry::User(UserEntry::text("查一下"))];
         if with_tool_call {
             entries.push(TranscriptEntry::Assistant(AssistantEntry {
                 text: String::new(),
@@ -717,8 +718,12 @@ mod tests {
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
-        let body = build_body(&req_for_deepseek_anthropic(Some(cfg), "", false, 8192), false, false)
-            .unwrap();
+        let body = build_body(
+            &req_for_deepseek_anthropic(Some(cfg), "", false, 8192),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["output_config"]["effort"], "max");
         assert_eq!(body["max_tokens"], 131_072);
@@ -731,8 +736,12 @@ mod tests {
             effort: None,
             long_context: None,
         };
-        let body = build_body(&req_for_deepseek_anthropic(Some(cfg), "", false, 8192), false, false)
-            .unwrap();
+        let body = build_body(
+            &req_for_deepseek_anthropic(Some(cfg), "", false, 8192),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(body["thinking"]["type"], "disabled");
         assert!(body.get("output_config").is_none());
     }

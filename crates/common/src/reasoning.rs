@@ -207,9 +207,7 @@ pub fn openai_skips_reasoning(model: &str) -> bool {
 /// 当前已知支持 xhigh 的：gpt-5.4 系列、gpt-5.5 系列、gpt-5.1-codex-max。
 pub fn openai_supports_xhigh(model: &str) -> bool {
     let m = model.to_ascii_lowercase();
-    m.starts_with("gpt-5.4")
-        || m.starts_with("gpt-5.5")
-        || m.contains("gpt-5.1-codex-max")
+    m.starts_with("gpt-5.4") || m.starts_with("gpt-5.5") || m.contains("gpt-5.1-codex-max")
 }
 
 /// 该 OpenAI 模型是否支持 reasoning_effort 控制（即配 reasoning UI 是否可见）。
@@ -237,10 +235,7 @@ mod tests {
             anthropic_thinking_mode("claude-opus-4-7-20260101"),
             Some(Opus47Adaptive)
         );
-        assert_eq!(
-            anthropic_thinking_mode("claude-opus-4-6"),
-            Some(Adaptive46)
-        );
+        assert_eq!(anthropic_thinking_mode("claude-opus-4-6"), Some(Adaptive46));
         assert_eq!(
             anthropic_thinking_mode("claude-sonnet-4-6"),
             Some(Adaptive46)
@@ -299,11 +294,23 @@ mod tests {
 
     #[test]
     fn extra_maps_to_xhigh_only_when_supported() {
-        assert_eq!(ReasoningEffort::Extra.openai_effort_for_model("gpt-5.4"), "xhigh");
-        assert_eq!(ReasoningEffort::Extra.openai_effort_for_model("gpt-5.5"), "xhigh");
-        assert_eq!(ReasoningEffort::Extra.openai_effort_for_model("gpt-5"), "high");
+        assert_eq!(
+            ReasoningEffort::Extra.openai_effort_for_model("gpt-5.4"),
+            "xhigh"
+        );
+        assert_eq!(
+            ReasoningEffort::Extra.openai_effort_for_model("gpt-5.5"),
+            "xhigh"
+        );
+        assert_eq!(
+            ReasoningEffort::Extra.openai_effort_for_model("gpt-5"),
+            "high"
+        );
         assert_eq!(ReasoningEffort::Extra.openai_effort_for_model("o3"), "high");
-        assert_eq!(ReasoningEffort::Medium.openai_effort_for_model("gpt-5.4"), "medium");
+        assert_eq!(
+            ReasoningEffort::Medium.openai_effort_for_model("gpt-5.4"),
+            "medium"
+        );
     }
 
     #[test]

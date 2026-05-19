@@ -4,8 +4,8 @@ pub mod refresh;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use parking_lot::Mutex;
 use common::{AppError, AppResult};
+use parking_lot::Mutex;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -894,7 +894,9 @@ pub fn claude_code_import() -> AppResult<ImportedToken> {
     let home = dirs::home_dir().ok_or_else(|| AppError::msg("无法确定 HOME 目录"))?;
     for candidate in [
         home.join(".claude").join(".credentials.json"),
-        home.join(".config").join("claude").join(".credentials.json"),
+        home.join(".config")
+            .join("claude")
+            .join(".credentials.json"),
     ] {
         if candidate.exists() {
             let text = std::fs::read_to_string(&candidate)?;

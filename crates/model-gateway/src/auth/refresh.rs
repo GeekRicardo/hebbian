@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use parking_lot::Mutex as SyncMutex;
 use common::AppResult;
+use parking_lot::Mutex as SyncMutex;
 
 use super::{claude_code_import, claude_oauth_refresh};
 use crate::config::{self, AuthMode, Provider, ProviderKind};

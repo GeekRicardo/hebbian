@@ -67,8 +67,14 @@ impl AnthropicClient {
         tracing::info!(model = %req.model, "anthropic: 4.7 thinking → complete_then_emit");
         let resp = self.complete(req, cancel).await?;
         match &resp {
-            ModelResponse::Done { text, reasoning, .. } => {
-                tracing::info!(reasoning_len = reasoning.len(), text_len = text.len(), "anthropic complete_then_emit: Done");
+            ModelResponse::Done {
+                text, reasoning, ..
+            } => {
+                tracing::info!(
+                    reasoning_len = reasoning.len(),
+                    text_len = text.len(),
+                    "anthropic complete_then_emit: Done"
+                );
                 if !reasoning.is_empty() {
                     on_event(ModelStreamEvent::ReasoningDelta {
                         text: reasoning.clone(),

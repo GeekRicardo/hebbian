@@ -96,9 +96,8 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Result<Value, ModelError>
     // 5.4 / 5.5 / codex-max 走 xhigh，其它（含 o-series）钳到 high。o1-mini 直接跳过整个字段。
     if let Some(cfg) = req.reasoning.as_ref() {
         if cfg.is_enabled() && openai_supports_reasoning(&req.model) {
-            body["reasoning_effort"] = json!(cfg
-                .effective_effort()
-                .openai_effort_for_model(&req.model));
+            body["reasoning_effort"] =
+                json!(cfg.effective_effort().openai_effort_for_model(&req.model));
         }
     }
 
@@ -176,9 +175,7 @@ fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), Mod
             if !has_tool_calls {
                 continue;
             }
-            let has_reasoning = obj
-                .get("reasoning_content")
-                .is_some_and(Value::is_string);
+            let has_reasoning = obj.get("reasoning_content").is_some_and(Value::is_string);
             if !has_reasoning {
                 return Err(ModelError::Other(DEEPSEEK_TOOL_REASONING_MISSING.into()));
             }
@@ -710,10 +707,7 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
         (None, None, Vec::new())
     };
 
-    if text_delta.is_none()
-        && reasoning_delta.is_none()
-        && tool_calls.is_empty()
-        && usage.is_none()
+    if text_delta.is_none() && reasoning_delta.is_none() && tool_calls.is_empty() && usage.is_none()
     {
         None
     } else {
@@ -1489,8 +1483,7 @@ mod deepseek_compat_tests {
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
-        let req =
-            req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "之前的思考过程");
+        let req = req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "之前的思考过程");
         let body = build_body(&req, false).unwrap();
         let msgs = body["messages"].as_array().expect("messages array");
         let assistant = msgs

@@ -86,10 +86,14 @@ pub struct ToolCallStreamDelta {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelStreamEvent {
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// 思维链 / 推理过程增量。Anthropic 的 `thinking_delta`、
     /// OpenAI / DeepSeek / Qwen 等的 `reasoning_content` 都映射到这一路。
-    ReasoningDelta { text: String },
+    ReasoningDelta {
+        text: String,
+    },
     ToolCallDelta(ToolCallStreamDelta),
 }
 

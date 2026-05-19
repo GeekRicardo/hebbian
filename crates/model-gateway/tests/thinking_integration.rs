@@ -10,10 +10,10 @@
 //! 3. Effort parameter correctness
 //! 4. /v1/models endpoint
 
-use model_gateway::config::{self, Provider, ProviderKind, ProvidersFile};
-use model_gateway::types::*;
 use common::reasoning::{ReasoningConfig, ReasoningEffort};
 use common::CancelFlag;
+use model_gateway::config::{self, Provider, ProviderKind, ProvidersFile};
+use model_gateway::types::*;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -35,7 +35,11 @@ fn model_supports_thinking(model: &str, kind: ProviderKind) -> bool {
             if m.starts_with("deepseek-v4") && !m.contains("nothinking") {
                 return true;
             }
-            if m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
+            if m.starts_with("gpt-5")
+                || m.starts_with("o1")
+                || m.starts_with("o3")
+                || m.starts_with("o4")
+            {
                 return true;
             }
             false
@@ -76,8 +80,12 @@ fn effort_for_model(model: &str) -> ReasoningEffort {
 
 fn should_skip_model(model: &str) -> bool {
     let m = model.to_lowercase();
-    m.contains("gpt-image") || m.contains("dall-e") || m.contains("tts")
-        || m.contains("whisper") || m.contains("embedding") || m == "o1-mini"
+    m.contains("gpt-image")
+        || m.contains("dall-e")
+        || m.contains("tts")
+        || m.contains("whisper")
+        || m.contains("embedding")
+        || m == "o1-mini"
 }
 
 struct StreamCollector {
@@ -114,7 +122,12 @@ impl StreamCollector {
     }
 
     fn reasoning_len(&self) -> usize {
-        self.reasoning_deltas.lock().unwrap().iter().map(|s| s.len()).sum()
+        self.reasoning_deltas
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.len())
+            .sum()
     }
 
     fn full_text(&self) -> String {
@@ -185,7 +198,9 @@ async fn all_providers_thinking_stream() {
             let req = ModelRequest {
                 model: model.clone(),
                 system: Some("You are helpful. Be concise.".into()),
-                entries: vec![TranscriptEntry::User(UserEntry::text("What is 2+2? Think step by step."))],
+                entries: vec![TranscriptEntry::User(UserEntry::text(
+                    "What is 2+2? Think step by step.",
+                ))],
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning,
@@ -263,16 +278,18 @@ async fn tool_call_with_thinking() {
     let mut failed = 0;
 
     for (target, kind) in targets {
-        let provider = providers.iter().find(|p| {
-            p.kind == *kind && p.models.iter().any(|m| m.contains(target))
-        });
+        let provider = providers
+            .iter()
+            .find(|p| p.kind == *kind && p.models.iter().any(|m| m.contains(target)));
 
         let Some(provider) = provider else {
             eprintln!("   SKIP {target} ({kind:?}) - no matching provider");
             continue;
         };
 
-        let model = provider.models.iter()
+        let model = provider
+            .models
+            .iter()
             .find(|m| m.contains(target))
             .unwrap()
             .clone();
@@ -290,7 +307,9 @@ async fn tool_call_with_thinking() {
         let req = ModelRequest {
             model: model.clone(),
             system: Some("Always use the get_weather tool when asked about weather.".into()),
-            entries: vec![TranscriptEntry::User(UserEntry::text("What is the weather in Beijing?"))],
+            entries: vec![TranscriptEntry::User(UserEntry::text(
+                "What is the weather in Beijing?",
+            ))],
             tools: vec![ToolDefinition {
                 name: "get_weather".into(),
                 description: "Get weather for a city".into(),
@@ -329,7 +348,10 @@ async fn tool_call_with_thinking() {
                 let has_tools = matches!(&response, ModelResponse::ToolCalls { calls, .. } if !calls.is_empty());
 
                 if has_tools && !reasoning_text.is_empty() {
-                    eprintln!("   OK   {model} tool_call+thinking reasoning={}c ({elapsed:.1?})", reasoning_text.len());
+                    eprintln!(
+                        "   OK   {model} tool_call+thinking reasoning={}c ({elapsed:.1?})",
+                        reasoning_text.len()
+                    );
                     passed += 1;
                 } else if !has_tools && !reasoning_text.is_empty() {
                     eprintln!("   WARN {model} has thinking but no tool_call (model chose not to) ({elapsed:.1?})");
@@ -381,7 +403,11 @@ fn effort_parameter_correctness() {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 8192,
-            reasoning: Some(ReasoningConfig { enabled: Some(true), effort: Some(*effort), long_context: None }),
+            reasoning: Some(ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(*effort),
+                long_context: None,
+            }),
         };
         let body = op::build_body(&req, false).unwrap();
         let val = body["reasoning_effort"].as_str().unwrap_or("(none)");
@@ -399,7 +425,11 @@ fn effort_parameter_correctness() {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 8192,
-            reasoning: Some(ReasoningConfig { enabled: Some(true), effort: Some(*effort), long_context: None }),
+            reasoning: Some(ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(*effort),
+                long_context: None,
+            }),
         };
         let body = op::build_body(&req, false).unwrap();
         let val = body["reasoning_effort"].as_str().unwrap_or("(none)");
@@ -418,7 +448,11 @@ fn effort_parameter_correctness() {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 8192,
-            reasoning: Some(ReasoningConfig { enabled: Some(true), effort: Some(*effort), long_context: None }),
+            reasoning: Some(ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(*effort),
+                long_context: None,
+            }),
         };
         let body = ap::build_body(&req, false, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -438,7 +472,11 @@ fn effort_parameter_correctness() {
                 entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
                 tools: vec![],
                 max_tokens: 8192,
-                reasoning: Some(ReasoningConfig { enabled: Some(true), effort: Some(*effort), long_context: None }),
+                reasoning: Some(ReasoningConfig {
+                    enabled: Some(true),
+                    effort: Some(*effort),
+                    long_context: None,
+                }),
             };
             let body = ap::build_body(&req, false, false).unwrap();
             assert_eq!(body["thinking"]["type"], "enabled");
@@ -458,7 +496,11 @@ fn effort_parameter_correctness() {
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![],
             max_tokens: 8192,
-            reasoning: Some(ReasoningConfig { enabled: Some(true), effort: Some(*effort), long_context: None }),
+            reasoning: Some(ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(*effort),
+                long_context: None,
+            }),
         };
         let body = ap::build_body(&req, false, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -491,11 +533,19 @@ async fn models_endpoint() {
         match result {
             Ok(models) => {
                 let with_ctx = models.iter().filter(|m| m.context_length.is_some()).count();
-                eprintln!("   OK   {} ({:?}) {} models, {} with context_length ({elapsed:.1?})",
-                    provider.name, provider.kind, models.len(), with_ctx);
+                eprintln!(
+                    "   OK   {} ({:?}) {} models, {} with context_length ({elapsed:.1?})",
+                    provider.name,
+                    provider.kind,
+                    models.len(),
+                    with_ctx
+                );
             }
             Err(e) => {
-                eprintln!("   FAIL {} ({:?}) {e} ({elapsed:.1?})", provider.name, provider.kind);
+                eprintln!(
+                    "   FAIL {} ({:?}) {e} ({elapsed:.1?})",
+                    provider.name, provider.kind
+                );
             }
         }
     }
@@ -512,22 +562,32 @@ async fn focused_deepseek_thinking() {
     eprintln!("{SEP}\n");
 
     let cases: Vec<(&str, ProviderKind, &str)> = vec![
-        ("DeepSeek-API(OpenAI)", ProviderKind::Openai, "deepseek-v4-flash"),
+        (
+            "DeepSeek-API(OpenAI)",
+            ProviderKind::Openai,
+            "deepseek-v4-flash",
+        ),
         ("DeepSeek-Web", ProviderKind::Deepseek, "deepseek-v4-flash"),
-        ("DeepSeek-Anthropic", ProviderKind::Anthropic, "deepseek-v4-pro"),
+        (
+            "DeepSeek-Anthropic",
+            ProviderKind::Anthropic,
+            "deepseek-v4-pro",
+        ),
     ];
 
     for (label, kind, model_prefix) in &cases {
-        let provider = providers.iter().find(|p| {
-            p.kind == *kind && p.models.iter().any(|m| m.contains(model_prefix))
-        });
+        let provider = providers
+            .iter()
+            .find(|p| p.kind == *kind && p.models.iter().any(|m| m.contains(model_prefix)));
 
         let Some(provider) = provider else {
             eprintln!("   SKIP {label} - not configured");
             continue;
         };
 
-        let model = provider.models.iter()
+        let model = provider
+            .models
+            .iter()
             .find(|m| m.contains(model_prefix))
             .cloned()
             .unwrap_or_else(|| model_prefix.to_string());
@@ -544,7 +604,7 @@ async fn focused_deepseek_thinking() {
             model: model.clone(),
             system: Some("Be concise.".into()),
             entries: vec![TranscriptEntry::User(UserEntry::text(
-                "If a train goes 120km in 2 hours, what is its speed? Think carefully."
+                "If a train goes 120km in 2 hours, what is its speed? Think carefully.",
             ))],
             tools: vec![],
             max_tokens: 8192,
@@ -575,11 +635,20 @@ async fn focused_deepseek_thinking() {
 
                 if reasoning.is_empty() {
                     eprintln!("   FAIL {label} ({model}) NO THINKING ({elapsed:.1?})");
-                    eprintln!("        text: {}...", &collector.full_text()[..collector.full_text().len().min(200)]);
+                    eprintln!(
+                        "        text: {}...",
+                        &collector.full_text()[..collector.full_text().len().min(200)]
+                    );
                     panic!("{label} ({model}) thinking missing!");
                 }
-                eprintln!("   OK   {label} ({model}) thinking={}c ({elapsed:.1?})", reasoning.len());
-                eprintln!("        preview: {}...", &reasoning[..reasoning.len().min(120)]);
+                eprintln!(
+                    "   OK   {label} ({model}) thinking={}c ({elapsed:.1?})",
+                    reasoning.len()
+                );
+                eprintln!(
+                    "        preview: {}...",
+                    &reasoning[..reasoning.len().min(120)]
+                );
             }
             Err(e) => {
                 eprintln!("   FAIL {label} ({model}) error: {e:?} ({elapsed:.1?})");
@@ -599,8 +668,11 @@ async fn focused_claude_thinking() {
     eprintln!("  Focused Claude Thinking");
     eprintln!("{SEP}\n");
 
-    let anthropic_providers: Vec<&Provider> = providers.iter()
-        .filter(|p| p.kind == ProviderKind::Anthropic && p.models.iter().any(|m| m.contains("claude")))
+    let anthropic_providers: Vec<&Provider> = providers
+        .iter()
+        .filter(|p| {
+            p.kind == ProviderKind::Anthropic && p.models.iter().any(|m| m.contains("claude"))
+        })
         .collect();
 
     if anthropic_providers.is_empty() {
@@ -631,7 +703,9 @@ async fn focused_claude_thinking() {
             let req = ModelRequest {
                 model: model.clone(),
                 system: Some("Be concise.".into()),
-                entries: vec![TranscriptEntry::User(UserEntry::text("What is 15 * 17? Show reasoning."))],
+                entries: vec![TranscriptEntry::User(UserEntry::text(
+                    "What is 15 * 17? Show reasoning.",
+                ))],
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning: Some(ReasoningConfig {
@@ -660,22 +734,42 @@ async fn focused_claude_thinking() {
                     };
 
                     if reasoning.is_empty() {
-                        eprintln!("   FAIL {model} ({}) NO THINKING ({elapsed:.1?})", provider.name);
-                        eprintln!("        text: {}...", &collector.full_text()[..collector.full_text().len().min(200)]);
+                        eprintln!(
+                            "   FAIL {model} ({}) NO THINKING ({elapsed:.1?})",
+                            provider.name
+                        );
+                        eprintln!(
+                            "        text: {}...",
+                            &collector.full_text()[..collector.full_text().len().min(200)]
+                        );
                         // Don't panic - try next provider
                         continue;
                     }
-                    eprintln!("   OK   {model} ({}) thinking={}c ({elapsed:.1?})", provider.name, reasoning.len());
-                    eprintln!("        preview: {}...", &reasoning[..reasoning.len().min(120)]);
+                    eprintln!(
+                        "   OK   {model} ({}) thinking={}c ({elapsed:.1?})",
+                        provider.name,
+                        reasoning.len()
+                    );
+                    eprintln!(
+                        "        preview: {}...",
+                        &reasoning[..reasoning.len().min(120)]
+                    );
                     succeeded = true;
                     break;
                 }
-                Err(ModelError::Http { status: 401, .. }) | Err(ModelError::Http { status: 403, .. }) => {
-                    eprintln!("   WARN {model} ({}) auth failed, trying next provider", provider.name);
+                Err(ModelError::Http { status: 401, .. })
+                | Err(ModelError::Http { status: 403, .. }) => {
+                    eprintln!(
+                        "   WARN {model} ({}) auth failed, trying next provider",
+                        provider.name
+                    );
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   WARN {model} ({}) error: {e:?}, trying next provider", provider.name);
+                    eprintln!(
+                        "   WARN {model} ({}) error: {e:?}, trying next provider",
+                        provider.name
+                    );
                     continue;
                 }
             }
@@ -686,7 +780,6 @@ async fn focused_claude_thinking() {
         }
     }
 }
-
 
 // === Test 7: Debug request body for Claude thinking ===
 // Prints the exact request body that would be sent, to verify thinking params are correct
@@ -718,15 +811,31 @@ fn debug_claude_request_bodies() {
         let body = ap::build_body(&req, true, false).unwrap();
 
         eprintln!("-- {model} --");
-        eprintln!("   thinking: {}", body.get("thinking").map(|v| v.to_string()).unwrap_or("(none)".into()));
-        eprintln!("   output_config: {}", body.get("output_config").map(|v| v.to_string()).unwrap_or("(none)".into()));
+        eprintln!(
+            "   thinking: {}",
+            body.get("thinking")
+                .map(|v| v.to_string())
+                .unwrap_or("(none)".into())
+        );
+        eprintln!(
+            "   output_config: {}",
+            body.get("output_config")
+                .map(|v| v.to_string())
+                .unwrap_or("(none)".into())
+        );
         eprintln!("   max_tokens: {}", body["max_tokens"]);
         eprintln!("   stream: {}", body["stream"]);
         eprintln!();
 
         // Verify thinking is present
-        assert!(body.get("thinking").is_some(), "{model} must have thinking field");
-        assert_eq!(body["thinking"]["type"], "enabled", "{model} thinking.type must be enabled");
+        assert!(
+            body.get("thinking").is_some(),
+            "{model} must have thinking field"
+        );
+        assert_eq!(
+            body["thinking"]["type"], "enabled",
+            "{model} thinking.type must be enabled"
+        );
     }
 
     eprintln!("  All request bodies have correct thinking params.");

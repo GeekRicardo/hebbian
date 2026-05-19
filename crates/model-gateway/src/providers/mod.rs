@@ -6,8 +6,8 @@ pub mod openai;
 use crate::config::{AuthMode, Provider, ProviderKind};
 use crate::types::ModelError;
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
 use common::{runtime as cancellation, CancelFlag};
+use futures_util::{Stream, StreamExt};
 #[cfg(not(test))]
 use rand::Rng;
 use reqwest::RequestBuilder;

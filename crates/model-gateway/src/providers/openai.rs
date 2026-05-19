@@ -163,9 +163,7 @@ impl ModelClient for OpenAiClient {
                         if let Some(parsed) = proto::parse_chat_stream_frame(data) {
                             if let Some(delta) = parsed.reasoning_delta {
                                 full_reasoning.push_str(&delta);
-                                on_event(ModelStreamEvent::ReasoningDelta {
-                                    text: delta,
-                                });
+                                on_event(ModelStreamEvent::ReasoningDelta { text: delta });
                             }
                             if let Some(delta) = parsed.text_delta {
                                 on_event(ModelStreamEvent::TextDelta {

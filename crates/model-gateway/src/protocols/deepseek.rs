@@ -413,9 +413,7 @@ fn parse_chunk(
             if s.is_empty() || s == "FINISHED" {
                 return finalize(out, state, thinking_enabled);
             }
-            let kind = path_kind
-                .or(state.current_kind)
-                .unwrap_or(Kind::Text);
+            let kind = path_kind.or(state.current_kind).unwrap_or(Kind::Text);
             // 显式路径会更新 state.current_kind
             if path_kind.is_some() {
                 state.current_kind = path_kind;
@@ -560,7 +558,8 @@ fn finalize(
     thinking_enabled: bool,
 ) -> DeepseekChunkResult {
     if !thinking_enabled {
-        out.parts.retain(|p| !matches!(p, DeepseekChunkPart::Thinking(_)));
+        out.parts
+            .retain(|p| !matches!(p, DeepseekChunkPart::Thinking(_)));
     }
     out
 }
@@ -746,7 +745,6 @@ fn strip_think_tags(s: &str) -> String {
     out
 }
 
-
 // ── 流式 tool_call sieve ──────────────────────────────────────────────────
 
 /// 边流边筛掉 `<tool_calls>` / `<|DSML|tool_calls>` 块，只把剩余正文吐给上层。
@@ -778,10 +776,7 @@ const FAKE_ROLE_HEADERS: &[&str] = &[
 /// 在 `text` 里找最早的伪角色头位置，返回应该保留的字节数。
 /// 没找到时返回 `None`。
 pub(crate) fn find_fake_role_header_cut(text: &str) -> Option<usize> {
-    FAKE_ROLE_HEADERS
-        .iter()
-        .filter_map(|m| text.find(m))
-        .min()
+    FAKE_ROLE_HEADERS.iter().filter_map(|m| text.find(m)).min()
 }
 
 impl ToolCallSieve {
@@ -812,7 +807,8 @@ impl ToolCallSieve {
         let mut out = String::new();
         loop {
             if self.swallowing {
-                if let Some((close_pos, close_len)) = find_first_marker(&self.pending, CLOSE_MARKERS)
+                if let Some((close_pos, close_len)) =
+                    find_first_marker(&self.pending, CLOSE_MARKERS)
                 {
                     // 把 tool_calls 块整段（含闭合标签）丢掉，保留 close 之后的部分
                     let tail = self.pending[close_pos + close_len..].to_string();
@@ -959,12 +955,7 @@ fn find_after(s: &str, needle: &str, from: usize) -> Option<usize> {
 
 /// 在 `body[start..]` 内按深度找与已打开标签匹配的闭合位置（绝对 index）。
 /// 调用方已经消费了一个 open，所以初始 depth = 1；CDATA 内文本会被跳过，避免误匹配。
-fn find_matching_close(
-    body: &str,
-    start: usize,
-    open_tag: &str,
-    close_tag: &str,
-) -> Option<usize> {
+fn find_matching_close(body: &str, start: usize, open_tag: &str, close_tag: &str) -> Option<usize> {
     let mut depth = 1usize;
     let mut i = start;
     while i < body.len() {
@@ -1013,16 +1004,11 @@ fn parse_invoke_params(body: &str) -> Value {
         let Some(open_close) = after_name_close.find('>') else {
             break;
         };
-        let abs_value_start = p_start
-            + name_pos
-            + "name=".len()
-            + 1
-            + quote_end
-            + 1
-            + open_close
-            + 1;
+        let abs_value_start =
+            p_start + name_pos + "name=".len() + 1 + quote_end + 1 + open_close + 1;
         // 关键：模型在 array<object> 时常会嵌套 <parameter name="...">，必须按深度找匹配 </parameter>
-        let Some(close_abs) = find_matching_close(body, abs_value_start, "<parameter", "</parameter>")
+        let Some(close_abs) =
+            find_matching_close(body, abs_value_start, "<parameter", "</parameter>")
         else {
             break;
         };
@@ -1050,8 +1036,7 @@ fn parse_param_value(raw: &str) -> Value {
                 break;
             };
             let body_start = start + open_end_rel + 1;
-            let Some(close_abs) =
-                find_matching_close(trimmed, body_start, "<item", "</item>")
+            let Some(close_abs) = find_matching_close(trimmed, body_start, "<item", "</item>")
             else {
                 break;
             };
@@ -1150,7 +1135,10 @@ mod tests {
     #[test]
     fn parse_sse_thinking_path() {
         let mut state = DeepseekStreamState::default();
-        let r = parse(r#"{"p":"response/thinking_content","v":"思考"}"#, &mut state);
+        let r = parse(
+            r#"{"p":"response/thinking_content","v":"思考"}"#,
+            &mut state,
+        );
         assert!(matches!(&r.parts[0], DeepseekChunkPart::Thinking(s) if s == "思考"));
     }
 
@@ -1251,7 +1239,9 @@ mod tests {
         assert!(r0.parts.is_empty());
 
         let r1 = parse(r#"{"v":" about today's weather"}"#, &mut state);
-        assert!(matches!(&r1.parts[0], DeepseekChunkPart::Thinking(s) if s == " about today's weather"));
+        assert!(
+            matches!(&r1.parts[0], DeepseekChunkPart::Thinking(s) if s == " about today's weather")
+        );
 
         // 切到 RESPONSE 后才回 text
         let _ = parse(

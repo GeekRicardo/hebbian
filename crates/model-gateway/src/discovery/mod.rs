@@ -8,9 +8,27 @@ pub struct FetchedModel {
     pub id: String,
     #[serde(default)]
     pub owned_by: Option<String>,
+    /// 模型上下文窗口大小（从 /v1/models 响应中提取，不一定所有 provider 都返回）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<usize>,
 }
 
 const CODEX_OAUTH_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4-mini"];
+
+/// 从模型 JSON 对象中提取 context_length。
+/// 各家 provider 返回的字段名不统一，按优先级尝试多个候选字段。
+fn extract_context_length(model_obj: &Value) -> Option<usize> {
+    // DeepSeek API / 硅基流动 / 火山方舟等用 context_length
+    // OpenAI 官方不在 /v1/models 里返回这个字段，但第三方兼容层常加
+    for key in &["context_length", "context_window", "max_context_length"] {
+        if let Some(n) = model_obj[key].as_u64() {
+            if n > 0 {
+                return Some(n as usize);
+            }
+        }
+    }
+    None
+}
 
 fn fetch_openai_models(
     client: &reqwest::Client,
@@ -68,6 +86,7 @@ pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> 
                     .map(|id| FetchedModel {
                         id: (*id).to_string(),
                         owned_by: Some("ChatGPT / Codex OAuth".to_string()),
+                        context_length: None,
                     })
                     .collect());
             }
@@ -85,6 +104,7 @@ pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> 
                         out.push(FetchedModel {
                             id: id.to_string(),
                             owned_by: m["owned_by"].as_str().map(String::from),
+                            context_length: extract_context_length(m),
                         });
                     }
                 }
@@ -106,6 +126,7 @@ pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> 
                         out.push(FetchedModel {
                             id: id.to_string(),
                             owned_by: m["display_name"].as_str().map(String::from),
+                            context_length: extract_context_length(m),
                         });
                     }
                 }
@@ -132,9 +153,15 @@ pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> 
                 for m in arr {
                     if let Some(name) = m["name"].as_str() {
                         let id = name.strip_prefix("models/").unwrap_or(name).to_string();
+                        // Gemini 用 inputTokenLimit 表示上下文窗口
+                        let ctx = m["inputTokenLimit"]
+                            .as_u64()
+                            .map(|n| n as usize)
+                            .or_else(|| extract_context_length(m));
                         out.push(FetchedModel {
                             id,
                             owned_by: m["displayName"].as_str().map(String::from),
+                            context_length: ctx,
                         });
                     }
                 }
@@ -143,21 +170,33 @@ pub async fn fetch(provider: &Provider) -> common::AppResult<Vec<FetchedModel>> 
         }
         ProviderKind::Deepseek => {
             // chat.deepseek.com web 协议没有「列模型」端点，给出固定清单。
+            // context_length 参考 openhanako known-models.json 中 deepseek 分区。
             Ok([
-                "deepseek-v4-pro",
-                "deepseek-v4-flash",
-                "deepseek-v4-pro-search",
-                "deepseek-v4-flash-search",
-                "deepseek-v4-vision",
-                "deepseek-v4-pro-nothinking",
-                "deepseek-v4-flash-nothinking",
+                ("deepseek-v4-pro", 1_000_000),
+                ("deepseek-v4-flash", 1_000_000),
+                ("deepseek-v4-pro-search", 1_000_000),
+                ("deepseek-v4-flash-search", 1_000_000),
+                ("deepseek-v4-vision", 1_000_000),
+                ("deepseek-v4-pro-nothinking", 1_000_000),
+                ("deepseek-v4-flash-nothinking", 1_000_000),
             ]
             .iter()
-            .map(|id| FetchedModel {
+            .map(|(id, ctx)| FetchedModel {
                 id: (*id).to_string(),
                 owned_by: Some("DeepSeek Web".to_string()),
+                context_length: Some(*ctx),
             })
             .collect())
         }
     }
+}
+
+/// 从 /v1/models 获取指定模型的 context_length。
+/// 成功拿到则返回 `Some(tokens)`，API 不返回该字段或请求失败则返回 `None`。
+pub async fn fetch_context_length(provider: &Provider, model: &str) -> Option<usize> {
+    let models = fetch(provider).await.ok()?;
+    models
+        .into_iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.context_length)
 }

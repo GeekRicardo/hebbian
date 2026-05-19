@@ -148,12 +148,7 @@ fn record_usage_metrics(system: &str, model: &str, usage: &Usage) {
     metrics::record_token_usage(system, model, "input", usage.input_tokens);
     metrics::record_token_usage(system, model, "output", usage.output_tokens);
     metrics::record_token_usage(system, model, "cache_read", usage.cache_read_tokens);
-    metrics::record_token_usage(
-        system,
-        model,
-        "cache_creation",
-        usage.cache_creation_tokens,
-    );
+    metrics::record_token_usage(system, model, "cache_creation", usage.cache_creation_tokens);
 }
 
 fn error_finish_reason(err: &ModelError) -> &'static str {

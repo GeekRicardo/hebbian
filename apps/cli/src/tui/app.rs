@@ -37,6 +37,7 @@ pub async fn run(
     provider_display: String,
     run_mode: RunMode,
     persist: Option<crate::session::PersistRef>,
+    context_window: usize,
 ) -> Result<()> {
     // 进入 alternate screen + raw mode。
     enable_raw_mode()?;
@@ -45,7 +46,7 @@ pub async fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app_result = App::new(provider_display, run_mode, persist).run_loop(&mut terminal, &mut session).await;
+    let app_result = App::new(provider_display, run_mode, persist, context_window).run_loop(&mut terminal, &mut session).await;
 
     // 离开 alternate screen + 恢复 raw mode。
     let mut stdout = std::io::stdout();
@@ -76,6 +77,8 @@ struct App {
     should_quit: bool,
     // 模式快速切换：F2 在四种 RunMode 之间循环（仅本地状态，不重新构造 Session）。
     run_mode: RunMode,
+    /// 模型上下文窗口大小（从 /v1/models 获取或预设回退）。
+    context_window: usize,
 }
 
 impl App {
@@ -83,6 +86,7 @@ impl App {
         provider_display: String,
         run_mode: RunMode,
         persist: Option<crate::session::PersistRef>,
+        context_window: usize,
     ) -> Self {
         Self {
             chat: ChatView::default(),
@@ -90,7 +94,7 @@ impl App {
             status: StatusBarState {
                 provider_display,
                 used_tokens: 0,
-                budget_tokens: 200_000,
+                budget_tokens: context_window as u64,
                 run_mode: run_mode.as_str().to_string(),
                 model_step: 0,
                 tool_step: 0,
@@ -101,6 +105,7 @@ impl App {
             persist,
             should_quit: false,
             run_mode,
+            context_window,
         }
     }
 
@@ -155,7 +160,7 @@ impl App {
                     // 周期性刷一下 status_bar（token usage 等）。
                     let usage = session.context_usage();
                     self.status.used_tokens = usage.used_tokens as u64;
-                    self.status.budget_tokens = usage.budget_tokens as u64;
+                    self.status.budget_tokens = self.context_window as u64;
                 }
             }
 

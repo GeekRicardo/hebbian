@@ -64,7 +64,10 @@ impl DeepseekClient {
         let id = v
             .pointer("/data/biz_data/id")
             .and_then(Value::as_str)
-            .or_else(|| v.pointer("/data/biz_data/chat_session/id").and_then(Value::as_str))
+            .or_else(|| {
+                v.pointer("/data/biz_data/chat_session/id")
+                    .and_then(Value::as_str)
+            })
             .ok_or_else(|| ModelError::Other("DeepSeek create_session 响应缺少 id".into()))?
             .to_string();
         *self.session_id.lock() = Some(id.clone());
