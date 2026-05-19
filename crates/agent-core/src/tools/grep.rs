@@ -42,7 +42,7 @@ impl Tool for GrepTool {
          output_mode 默认 \"files_with_matches\"，可选 \"content\" 显示匹配行（带行号）\
          或 \"count\" 显示每个文件的命中次数。\
          glob 用于按文件名过滤；type 用于按语言过滤（如 rust/py/ts）。\
-         path 必须在对话允许的目录范围内。"
+         path 必须在对话允许的路径范围内。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -174,7 +174,6 @@ impl Tool for GrepTool {
         }
         Ok(truncate_bytes(&result, MAX_OUTPUT_BYTES))
     }
-
 }
 
 fn truncate_bytes(s: &str, limit: usize) -> String {

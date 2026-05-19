@@ -78,7 +78,7 @@ impl Tool for BashTool {
                 "cwd": {
                     "type": "string",
                     "description": "工作目录（绝对路径）。不传则用对话的 workdir。\
-                                    必须在对话允许的目录范围内。"
+                                    必须在对话允许的路径范围内。"
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -183,7 +183,6 @@ impl Tool for BashTool {
             MAX_OUTPUT_BYTES,
         ))
     }
-
 }
 
 fn format_finished(snapshot: &ReadOutput, task_id: &str) -> String {
@@ -207,9 +206,7 @@ fn format_finished(snapshot: &ReadOutput, task_id: &str) -> String {
             Some(format!("[terminated by signal] task_id={task_id}"))
         }
         ShellState::Killed => Some(format!("[killed] task_id={task_id}")),
-        ShellState::Failed { error } => {
-            Some(format!("[failed: {error}] task_id={task_id}"))
-        }
+        ShellState::Failed { error } => Some(format!("[failed: {error}] task_id={task_id}")),
         ShellState::Running => None,
     };
     if let Some(s) = suffix {
@@ -318,10 +315,7 @@ mod tests {
         assert!(read.contains("running") || read.contains("exited"));
 
         // KillShell
-        let killed = kill
-            .execute(json!({"task_id": task_id}))
-            .await
-            .unwrap();
+        let killed = kill.execute(json!({"task_id": task_id})).await.unwrap();
         assert!(killed.contains("killed"));
     }
 

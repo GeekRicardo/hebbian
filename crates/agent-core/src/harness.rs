@@ -20,8 +20,11 @@ use crate::{
     tools::{hitl::HitlGate, registry::ToolRegistry, Tool},
     workspace::Workspace,
 };
+use common::{
+    runtime::{ConsumedPendingInputs, PendingInputs},
+    CancelFlag,
+};
 use model_gateway::client::ModelClient;
-use common::{runtime::PendingInputs, CancelFlag};
 
 /// 注册表里登记一次 run 的运行时控制点（供跨进程 `Op::Approve` / `Op::Interrupt` /
 /// `Op::SwitchRunMode` 反查）。
@@ -45,7 +48,7 @@ pub struct RunParams {
     pub transcript: Transcript,
     pub enabled_tools: Vec<String>,
     pub compaction_policy: CompactionPolicy,
-    /// 本对话的 workspace（workdir + allowed_dirs）。每个对话独立。
+    /// 本对话的 workspace（workdir + allowed_paths）。每个对话独立。
     pub workspace: Arc<Workspace>,
     pub stream: bool,
     pub cancel: CancelFlag,
@@ -58,10 +61,14 @@ pub struct RunParams {
     /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时把 user message 推进来，
     /// agent_loop 每次 model.request 之前 drain 出来加入 transcript。`None` 表示禁用。
     pub pending_inputs: Option<PendingInputs>,
-    /// 运行模式（架构 §4.4.3）。默认 [`RunMode::AskBeforeEdits`]。
+    /// 已被 agent_loop drain 的 pending input 副本。surface 可在 run 结束后按顺序落盘。
+    pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
+    /// 运行模式（架构 §4.4.3）。默认 [`crate::run_mode::RunMode::AskBeforeEdits`]。
     pub run_mode: crate::run_mode::RunMode,
     /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用作模型限定。
     pub model_id: Option<String>,
+    /// `force_automode` 子开关（架构 §4.4.4）。仅 AutoMode 下生效：判官 Ask 折叠为 Deny。
+    pub force_automode: bool,
     /// 数据目录路径。microcompact 把被压缩的 tool result 落到
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`。
     pub data_dir: Option<std::path::PathBuf>,
@@ -124,26 +131,27 @@ impl Harness {
         // 双路 sink：本 run 独享 mpsc + 可选 jsonl 持久化。
         //
         // 通道改为 bounded(1024)。sink 是同步闭包（type EventSink），不能 await，
-        // 因此按事件类型分流：
-        // - 关键事件（生命周期 / HITL）通过 `blocking_send` 等价路径：spawn 一个
-        //   极短的 task 用 `.send().await`，保证送达；
-        // - 非关键事件（流式增量 / 工具增量 / Reasoning）用 `try_send`，满时打 warn 丢弃。
+        // 因此先用 `try_send` 保持事件顺序；只有关键事件遇到满队列时才 spawn 一个
+        // 极短 task 等空位，避免生命周期 / HITL 事件丢失。
         let (run_tx, run_rx) = mpsc::channel::<Event>(1024);
         let recorder = params.recorder.clone();
         let sink: EventSink = Arc::new(move |event: Event| {
             if let Some(rec) = &recorder {
                 rec.write(&event);
             }
-            if is_critical_event(&event.payload) {
-                // 关键事件必须送达——spawn 一个 task 等通道空位
-                let tx = run_tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = tx.send(event).await {
-                        tracing::warn!(error = %e, "run event channel closed while sending critical event");
-                    }
-                });
-            } else if let Err(e) = run_tx.try_send(event) {
-                tracing::warn!(error = %e, "run event channel full, dropping non-critical event");
+            if let Err(e) = run_tx.try_send(event) {
+                let error_label = e.to_string();
+                let event = e.into_inner();
+                if is_critical_event(&event.payload) {
+                    let tx = run_tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = tx.send(event).await {
+                            tracing::warn!(error = %e, "run event channel closed while sending critical event");
+                        }
+                    });
+                } else {
+                    tracing::warn!(error = %error_label, "run event channel full, dropping non-critical event");
+                }
             }
         });
 
@@ -176,8 +184,10 @@ impl Harness {
             recorder: _,
             model_io_dump,
             pending_inputs,
+            consumed_pending_inputs,
             run_mode,
             model_id,
+            force_automode,
             data_dir,
             session_id: loop_session_id,
             phase,
@@ -205,9 +215,11 @@ impl Harness {
                 parent,
                 model_io_dump,
                 pending_inputs,
+                consumed_pending_inputs,
                 run_mode,
                 model_id,
                 judge_client: Some(judge_client),
+                force_automode,
                 data_dir,
                 session_id: loop_session_id,
                 phase,

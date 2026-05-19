@@ -19,11 +19,18 @@ pub struct PendingUserInput {
 
 pub type PendingInputs = Arc<Mutex<Vec<PendingUserInput>>>;
 
+/// 已被 agent_loop 从 [`PendingInputs`] 消费的插队输入。
+///
+/// Desktop 需要等 Run 结束后再把这些 user message 落盘，保证历史顺序是：
+/// 正在输出的 assistant → 插队 user → 后续 assistant。
+pub type ConsumedPendingInputs = Arc<Mutex<Vec<PendingUserInput>>>;
+
 /// 一次 run 的运行时控制点：取消标志 + pending 输入队列。
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     pub cancel: CancelFlag,
     pub pending_inputs: PendingInputs,
+    pub consumed_pending_inputs: ConsumedPendingInputs,
 }
 
 static REGISTRY: std::sync::OnceLock<Mutex<HashMap<String, RuntimeHandle>>> =
@@ -37,6 +44,7 @@ pub fn register(request_id: String) -> RuntimeHandle {
     let handle = RuntimeHandle {
         cancel: Arc::new(AtomicBool::new(false)),
         pending_inputs: Arc::new(Mutex::new(Vec::new())),
+        consumed_pending_inputs: Arc::new(Mutex::new(Vec::new())),
     };
     registry()
         .lock()

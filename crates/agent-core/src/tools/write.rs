@@ -34,7 +34,7 @@ impl Tool for WriteTool {
     fn description(&self) -> &str {
         "创建或覆盖一个文件。如果父目录不存在会自动创建。\
          需要审批（覆盖会丢失原文件内容）。\
-         路径必须在对话允许的目录范围内。"
+         路径必须在对话允许的路径范围内。"
     }
 
     fn parameters_schema(&self) -> Value {
@@ -91,7 +91,6 @@ impl Tool for WriteTool {
             content.len()
         ))
     }
-
 }
 
 #[cfg(test)]
@@ -136,5 +135,4 @@ mod tests {
         assert!(result.contains("覆盖"));
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
-
 }

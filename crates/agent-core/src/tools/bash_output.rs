@@ -64,10 +64,7 @@ impl Tool for BashOutputTool {
             .get(task_id)
             .ok_or_else(|| AppError::msg(format!("BashOutput: 未找到 task_id={task_id}")))?;
 
-        let wait_ms = input["wait_ms"]
-            .as_u64()
-            .unwrap_or(0)
-            .min(MAX_WAIT_MS);
+        let wait_ms = input["wait_ms"].as_u64().unwrap_or(0).min(MAX_WAIT_MS);
         if wait_ms > 0 && !shell.state().is_terminal() {
             shell.wait_for_change(wait_ms).await;
         }

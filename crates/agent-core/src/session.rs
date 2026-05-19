@@ -78,6 +78,10 @@ pub struct SessionConfig {
     /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用它做模型限定。
     /// `None` 时 AutoMode 自动降级为 Ask。
     pub model_id: Option<String>,
+    /// `force_automode` 子开关（架构 §4.4.4）。仅 [`RunMode::AutoMode`] 下生效：
+    /// 判官返回 `Ask` 时折叠成 `Deny`，让"放手跑"模式不被打断。CLI 用
+    /// `--force-automode` flag 启动 / REPL `/force-automode` 切换。
+    pub force_automode: bool,
     /// 数据目录路径。给定后 microcompact 把被压缩的原始 tool result 落盘到
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`（架构 §4.7 / Step 9）。
     pub data_dir: Option<PathBuf>,
@@ -86,6 +90,10 @@ pub struct SessionConfig {
     /// `default_tools` 拿到的 phase channel 是同一份（否则模型挂起请求永远到不了
     /// agent_loop）。
     pub phase: Option<crate::wakeup::PhaseChannel>,
+    /// 启用的全局规则文件路径列表。
+    pub global_rules: Vec<PathBuf>,
+    /// 项目规则文件开关状态。None = 自动发现（workdir 下的默认 on）。
+    pub rules_files: Option<Vec<crate::rules::RuleFileState>>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -102,12 +110,15 @@ pub struct Session {
     session_id: Option<String>,
     run_mode: RunMode,
     model_id: Option<String>,
+    force_automode: bool,
     data_dir: Option<PathBuf>,
     /// 挂起请求通道（架构 §4.12.4）。
     phase: Option<crate::wakeup::PhaseChannel>,
     /// 来自 Harness 的共享 HookManager；Session 在 new / append_user / close
     /// 三个生命周期点 spawn 异步触发对应的外部 hook（架构 §4.8.1）。
     hooks: Arc<HookManager>,
+    global_rules: Vec<PathBuf>,
+    rules_files: Option<Vec<crate::rules::RuleFileState>>,
 }
 
 impl Session {
@@ -126,9 +137,12 @@ impl Session {
             session_id: config.session_id,
             run_mode: config.run_mode,
             model_id: config.model_id,
+            force_automode: config.force_automode,
             data_dir: config.data_dir,
             phase: config.phase,
             hooks,
+            global_rules: config.global_rules,
+            rules_files: config.rules_files,
         };
         // SessionStart hook（架构 §4.8.1）：fire-and-forget，hook 失败不影响主流程。
         if !session.hooks.is_empty() {
@@ -179,6 +193,17 @@ impl Session {
         self.model_id.as_deref()
     }
 
+    /// `force_automode` 子开关当前值（架构 §4.4.4）。
+    pub fn force_automode(&self) -> bool {
+        self.force_automode
+    }
+
+    /// 切换 `force_automode` 子开关。REPL `/force-automode` 命令通过 surface 调本方法。
+    /// 与 RunMode 正交：仅 AutoMode 下生效，其它 mode 时被派发器忽略。
+    pub fn set_force_automode(&mut self, on: bool) {
+        self.force_automode = on;
+    }
+
     pub fn client_arc(&self) -> Arc<dyn ModelClient> {
         self.client.clone()
     }
@@ -190,9 +215,9 @@ impl Session {
     /// 追加一条 user 消息到 transcript。
     ///
     /// 头部按需注入两类块（不影响 system 段，prompt cache 不破）：
-    /// - **首条 user message**：`<environment>` 快照（cwd / allowed_dirs / platform / date）。
+    /// - **首条 user message**：`<environment>` 快照（cwd / allowed_paths / platform / date）。
     ///   transcript 里若已经有 user 消息（含恢复出来的历史）则跳过——只在真正全新的对话开头注入。
-    /// - **任何 user message**：若 workspace 有 runtime_pending 的允许目录，drain 后包成
+    /// - **任何 user message**：若 workspace 有 runtime_pending 的允许路径，drain 后包成
     ///   `<workspace-update>` 紧接 environment 之后注入。
     pub fn append_user(&mut self, text: String, attachments: Vec<MessageAttachment>) {
         let needs_environment = !self
@@ -230,6 +255,20 @@ impl Session {
                 .with_run_mode(self.run_mode)
                 .with_background_tasks(bg_summaries.clone());
             final_text = prepend_environment(final_text, &snapshot);
+
+            // 规则文件注入：全局 + 项目规则文件，包装成 <system-reminder>
+            // 紧跟 <environment> 之后、user text 之前
+            let allowed_paths = self.workspace.initial_allowed_paths();
+            let rules_content = crate::rules::resolve_injection_files(
+                &self.global_rules,
+                self.rules_files.as_deref(),
+                self.workspace.workdir(),
+                allowed_paths,
+            );
+            let rules_block = crate::rules::format_injection(&rules_content);
+            if !rules_block.is_empty() {
+                final_text = format!("{rules_block}\n{final_text}");
+            }
         } else if !bg_summaries.is_empty() {
             // 非首条 user message：单独前置 `<background_tasks>` 块
             final_text = crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
@@ -309,9 +348,13 @@ impl Session {
     ) -> Result<CompactionResult, ModelError> {
         let system = self.transcript.system.clone();
         let entries = self.transcript.entries.clone();
-        let result =
-            compact_with_llm(self.client.as_ref(), system.as_deref(), entries, custom_instructions)
-                .await?;
+        let result = compact_with_llm(
+            self.client.as_ref(),
+            system.as_deref(),
+            entries,
+            custom_instructions,
+        )
+        .await?;
         self.transcript.entries = result.entries.clone();
         Ok(result)
     }
@@ -328,6 +371,16 @@ impl Session {
         &self,
         cancel: CancelFlag,
         pending_inputs: Option<common::runtime::PendingInputs>,
+    ) -> RunHandle {
+        self.run_with_runtime_inputs(cancel, pending_inputs, None)
+    }
+
+    /// Desktop surface 需要在 run 结束后把已消费的 PendingInputs 按正确顺序落盘。
+    pub fn run_with_runtime_inputs(
+        &self,
+        cancel: CancelFlag,
+        pending_inputs: Option<common::runtime::PendingInputs>,
+        consumed_pending_inputs: Option<common::runtime::ConsumedPendingInputs>,
     ) -> RunHandle {
         let mut gate = HitlGate::new(self.definition.permission_policy.clone());
         if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
@@ -349,8 +402,10 @@ impl Session {
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
                 pending_inputs,
+                consumed_pending_inputs,
                 run_mode: self.run_mode,
                 model_id: self.model_id.clone(),
+                force_automode: self.force_automode,
                 data_dir: self.data_dir.clone(),
                 session_id: self.session_id.clone(),
                 phase: self.phase.clone(),
@@ -367,6 +422,17 @@ impl Session {
         &self,
         cancel: CancelFlag,
         pending_inputs: Option<common::runtime::PendingInputs>,
+        phase: Option<crate::wakeup::PhaseChannel>,
+        resume_from: crate::agent_loop::RunResumeState,
+    ) -> RunHandle {
+        self.resume_with_runtime_inputs(cancel, pending_inputs, None, phase, resume_from)
+    }
+
+    pub fn resume_with_runtime_inputs(
+        &self,
+        cancel: CancelFlag,
+        pending_inputs: Option<common::runtime::PendingInputs>,
+        consumed_pending_inputs: Option<common::runtime::ConsumedPendingInputs>,
         phase: Option<crate::wakeup::PhaseChannel>,
         resume_from: crate::agent_loop::RunResumeState,
     ) -> RunHandle {
@@ -390,8 +456,10 @@ impl Session {
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
                 pending_inputs,
+                consumed_pending_inputs,
                 run_mode: self.run_mode,
                 model_id: self.model_id.clone(),
+                force_automode: self.force_automode,
                 data_dir: self.data_dir.clone(),
                 session_id: self.session_id.clone(),
                 phase,
@@ -401,14 +469,14 @@ impl Session {
     }
 }
 
-/// 把"对话开始后追加的允许目录"包成 `<workspace-update>` 前置到 user content。
+/// 把"对话开始后追加的允许路径"包成 `<workspace-update>` 前置到 user content。
 /// `pending` 为空时原样返回 `text`，避免无谓改写消息内容。
 fn prepend_workspace_update(text: String, pending: &[PathBuf]) -> String {
     if pending.is_empty() {
         return text;
     }
     let mut s = String::from("<workspace-update>\n");
-    s.push_str("以下目录已被加入本次对话的允许访问范围（运行时追加）：\n");
+    s.push_str("以下路径已被加入本次对话的允许访问范围（运行时追加）：\n");
     for p in pending {
         s.push_str(&format!("  - {}\n", p.display()));
     }

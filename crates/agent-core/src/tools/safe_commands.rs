@@ -17,28 +17,85 @@ use super::shell_parse::ParsedCommand;
 /// 顶级只读命令：argv[0] 在这里、且没有危险结构 → 直接安全。
 const SAFE_ROOTS: &[&str] = &[
     // 文件系统只读
-    "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "tree", "du", "df",
+    "ls",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "file",
+    "stat",
+    "tree",
+    "du",
+    "df",
     // 文本处理（纯过滤，无副作用）
-    "echo", "printf", "true", "false", "yes", "seq", "sort", "uniq", "cut", "tr",
+    "echo",
+    "printf",
+    "true",
+    "false",
+    "yes",
+    "seq",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
     "tee", // tee 严格说会写文件，但它没参数时只 stdout——简单起见排除
     // grep 系列
-    "grep", "egrep", "fgrep", "rg", "ack", "ag",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ack",
+    "ag",
     // 查找（`find` 加 -delete / -exec 会变危险，单独处理）
     // find 不在这里——交给子命令检查
     // 信息查询
-    "which", "whereis", "type", "command", "alias", "whoami", "id", "uname", "hostname",
-    "uptime", "date", "env", "printenv", "groups", "users",
+    "which",
+    "whereis",
+    "type",
+    "command",
+    "alias",
+    "whoami",
+    "id",
+    "uname",
+    "hostname",
+    "uptime",
+    "date",
+    "env",
+    "printenv",
+    "groups",
+    "users",
     // 进程查询
-    "ps", "pgrep", "jobs",
+    "ps",
+    "pgrep",
+    "jobs",
     // 帮助 / 文档
-    "man", "help", "info", "tldr",
+    "man",
+    "help",
+    "info",
+    "tldr",
     // 编程语言版本查询
-    "node", "python", "python3", "ruby", "perl", "go", "rustc", "java", "javac",
+    "node",
+    "python",
+    "python3",
+    "ruby",
+    "perl",
+    "go",
+    "rustc",
+    "java",
+    "javac",
     // ↑ 注意：这些只在带 `--version` / `-V` 时安全，单独命令也无害（启动 REPL 会卡住等审批超时即可）
     // hash / 校验
-    "md5", "md5sum", "shasum", "sha256sum", "sha1sum", "cksum",
+    "md5",
+    "md5sum",
+    "shasum",
+    "sha256sum",
+    "sha1sum",
+    "cksum",
     // 编码
-    "base64", "xxd", "od",
+    "base64",
+    "xxd",
+    "od",
 ];
 
 /// `(root, sub_arg0)` 形式的安全子命令，例如 `("git", "status")`。
@@ -121,6 +178,12 @@ const SAFE_SUBCOMMANDS: &[(&str, &str)] = &[
 pub fn is_safe(cmd: &ParsedCommand) -> bool {
     let root = cmd.root.as_str();
 
+    // 0) 段内有任何写文件目标（重定向 / tee / sed -i / python -c "open(...,'w')" / ...）
+    //    → 一律不安全。哪怕 root 是 echo / cat 也不行。
+    if !cmd.write_targets.is_empty() {
+        return false;
+    }
+
     // 1) 顶级只读命令
     if SAFE_ROOTS.contains(&root) {
         return true;
@@ -142,14 +205,7 @@ pub fn is_safe(cmd: &ParsedCommand) -> bool {
         // find 默认行为是只读列出。若 argv 中含 -delete / -exec / -execdir / -ok / -okdir / -fprint
         // / -fprintf / -fls 等就拒绝。
         let dangerous_find_flags: &[&str] = &[
-            "-delete",
-            "-exec",
-            "-execdir",
-            "-ok",
-            "-okdir",
-            "-fprint",
-            "-fprintf",
-            "-fls",
+            "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls",
         ];
         if cmd
             .argv

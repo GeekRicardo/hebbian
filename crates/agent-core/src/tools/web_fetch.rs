@@ -102,7 +102,6 @@ impl Tool for WebFetchTool {
 
         fetch_page(url, prompt).await
     }
-
 }
 
 async fn fetch_page(url: &str, prompt: &str) -> AppResult<String> {

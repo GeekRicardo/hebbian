@@ -37,11 +37,29 @@ pub enum EffectClass {
     NeedsHumanInput,
 }
 
+/// 一个 Bash 段的 effects（架构 §4.4.2 段级判定）。
+///
+/// 一整条 Bash 命令按 `&&` `||` `;` `|` 拆段后，每段产出一个 SegmentEffect。
+/// PermissionStore 按段独立匹配，**全段 allow 才整体 allow，任一 deny 即整体 deny**。
+#[derive(Debug, Clone)]
+pub struct SegmentEffect {
+    /// 段级 fingerprint：剥掉 timeout/nice/nohup/env 修饰符后的 `"base [sub]"`。
+    /// **env-var 不在 fingerprint 内**——分离到 [`env_prefix`](Self::env_prefix)；命中敏感
+    /// env-var 时 [`Effects::dangerous_kinds`] 会包含 `"sensitive-env-prefix"`（架构 §4.4.2.1）。
+    pub fingerprint: String,
+    /// 段内识别到的行内 env-var 赋值（`FOO=bar` / `RUST_LOG=info` 等）。
+    pub env_prefix: Vec<String>,
+    /// 段内识别到的写文件目标（重定向 / tee / sed -i / python open(...,'w')）。
+    pub write_targets: Vec<String>,
+}
+
 /// 单次工具调用解析出来的 effects。
 ///
-/// `paths` 用于路径越界检查（filter workspace.allowed_dirs）。
-/// `command_fingerprint` 用于命令级记忆（Bash 的 `git status` 前缀）。
-/// `domain` 用于按域名匹配 PermissionRule。
+/// `paths` 用于路径越界检查（filter workspace.allowed_paths）；Bash/PowerShell 时
+/// 包含 cwd + 所有段的写目标。
+/// `command_fingerprint` = `segments[0].fingerprint`，保留旧字段做规则向后兼容；
+/// PermissionStore 实际按 `segments` 段级匹配。
+/// `dangerous_kinds` 命中任一种 → 强制 NeedsApproval 且 HitlGate 拒绝 AllowAndRemember。
 #[derive(Debug, Clone)]
 pub struct Effects {
     pub paths: Vec<PathBuf>,
@@ -51,6 +69,10 @@ pub struct Effects {
     pub risk: RiskLevel,
     pub class: EffectClass,
     pub is_concurrent_safe: bool,
+    /// Bash/PowerShell 的段级 effects。其它工具为空 vec。
+    pub segments: Vec<SegmentEffect>,
+    /// 命中的危险复合模式 label（cd-git-compound / multi-cd / write-git-meta / ...）。
+    pub dangerous_kinds: Vec<String>,
 }
 
 impl Effects {
@@ -63,6 +85,8 @@ impl Effects {
             risk: RiskLevel::Low,
             class: EffectClass::ReadOnly,
             is_concurrent_safe: true,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         }
     }
 
@@ -75,6 +99,8 @@ impl Effects {
             risk: RiskLevel::Low,
             class: EffectClass::NeedsHumanInput,
             is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         }
     }
 
@@ -87,6 +113,8 @@ impl Effects {
             risk: RiskLevel::Medium,
             class: EffectClass::Network,
             is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         }
     }
 
@@ -99,7 +127,14 @@ impl Effects {
             risk: RiskLevel::Medium,
             class: EffectClass::Mutating,
             is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         }
+    }
+
+    /// 是否命中任一危险复合模式（HitlGate 据此强制审批 + 拒绝 AllowAndRemember）。
+    pub fn has_dangerous_pattern(&self) -> bool {
+        !self.dangerous_kinds.is_empty()
     }
 }
 
@@ -142,9 +177,7 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
             Effects::network(domain)
         }
 
-        "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => {
-            Effects::read_only()
-        }
+        "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
 
         _ => Effects::mutating(Vec::new()),
     }
@@ -161,12 +194,15 @@ fn file_path_paths(input: &Value, field: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Bash / PowerShell 分析：
-/// - paths = `cwd`（缺省时 dispatcher 在调用方按 workspace.workdir 补齐）
-/// - command_fingerprint = 首个子命令的 `"root sub ..."`，便于命令级记忆
-/// - class = 解析失败 / 不安全 → Destructive，全部子命令在白名单且无危险结构 → ReadOnly
+/// Bash / PowerShell 分析（架构 §4.4.2 段级判定）：
+/// - segments：按 `&&` `||` `;` `|` 拆段，每段独立产 `fingerprint` + `write_targets`
+/// - paths = cwd ∪ ⋃ segments[i].write_targets（write_targets 也走越界检查 +
+///   Edit FilePath deny 规则，防 Bash 重定向绕过 Edit 规则）
+/// - command_fingerprint = segments[0].fingerprint（向后兼容旧规则匹配点）
+/// - dangerous_kinds 命中 → Destructive 且 HITL 不可记忆
+/// - 全部子命令在白名单 + 无 dangerous → ReadOnly
 fn analyze_shell(input: &Value) -> Effects {
-    let paths: Vec<PathBuf> = input
+    let mut paths: Vec<PathBuf> = input
         .get("cwd")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
@@ -189,38 +225,77 @@ fn analyze_shell(input: &Value) -> Effects {
             risk: RiskLevel::High,
             class: EffectClass::Destructive,
             is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         };
     };
 
     let parsed = shell_parse::parse(raw);
-    let (fingerprint, classify_readonly) = match &parsed {
-        Ok(p) if !p.commands.is_empty() => {
-            let fp = Some(p.commands[0].argv.join(" "));
-            let ro = !p.dangerous && p.commands.iter().all(safe_commands::is_safe);
-            (fp, ro)
+    let mut segments: Vec<SegmentEffect> = Vec::new();
+    let mut dangerous_kinds: Vec<String> = Vec::new();
+    let mut classify_readonly = false;
+    let mut first_fingerprint: Option<String> = None;
+
+    match &parsed {
+        Ok(p) => {
+            for cmd in &p.commands {
+                let fingerprint = cmd.fingerprint();
+                if first_fingerprint.is_none() {
+                    first_fingerprint = Some(fingerprint.clone());
+                }
+                // 写目标合并到 effects.paths，让 workspace 越界检查 +
+                // Edit FilePath deny 规则一起兜底
+                for t in &cmd.write_targets {
+                    paths.push(PathBuf::from(t));
+                }
+                segments.push(SegmentEffect {
+                    fingerprint,
+                    env_prefix: cmd.env_prefix.clone(),
+                    write_targets: cmd.write_targets.clone(),
+                });
+            }
+            for k in &p.dangerous_kinds {
+                dangerous_kinds.push(k.label().to_string());
+            }
+            classify_readonly = !p.dangerous
+                && p.dangerous_kinds.is_empty()
+                && !p.commands.is_empty()
+                && p.commands.iter().all(safe_commands::is_safe);
         }
-        _ => (Some(raw.to_string()), false),
-    };
+        Err(_) => {
+            // tokenize / unbalanced 失败：保守地把原文当 fingerprint，且强制 destructive
+            first_fingerprint = Some(raw.to_string());
+            dangerous_kinds.push("ast-too-complex".to_string());
+        }
+    }
+
+    if first_fingerprint.is_none() {
+        first_fingerprint = Some(raw.to_string());
+    }
 
     if classify_readonly {
         Effects {
             paths,
-            command_fingerprint: fingerprint,
+            command_fingerprint: first_fingerprint,
             network: false,
             domain: None,
             risk: RiskLevel::Low,
             class: EffectClass::ReadOnly,
             is_concurrent_safe: true,
+            segments,
+            dangerous_kinds,
         }
     } else {
         Effects {
             paths,
-            command_fingerprint: fingerprint,
+            command_fingerprint: first_fingerprint,
             network: false,
             domain: None,
             risk: RiskLevel::High,
             class: EffectClass::Destructive,
             is_concurrent_safe: false,
+            segments,
+            dangerous_kinds,
         }
     }
 }
@@ -241,7 +316,10 @@ mod tests {
     fn bash_ls_is_readonly() {
         let e = analyze_effects("Bash", &json!({"command": "ls -la"}));
         assert!(matches!(e.class, EffectClass::ReadOnly));
-        assert_eq!(e.command_fingerprint.as_deref(), Some("ls -la"));
+        // 新 fingerprint 语义：剥掉 flag，留 base + 第一个非 flag 位置参数
+        assert_eq!(e.command_fingerprint.as_deref(), Some("ls"));
+        assert_eq!(e.segments.len(), 1);
+        assert_eq!(e.segments[0].fingerprint, "ls");
     }
 
     #[test]
@@ -249,7 +327,8 @@ mod tests {
         let e = analyze_effects("Bash", &json!({"command": "rm -rf /tmp/x"}));
         assert!(matches!(e.class, EffectClass::Destructive));
         assert!(matches!(e.risk, RiskLevel::High));
-        assert_eq!(e.command_fingerprint.as_deref(), Some("rm -rf /tmp/x"));
+        // 新 fingerprint 语义：base + 首个非 flag 位置参数
+        assert_eq!(e.command_fingerprint.as_deref(), Some("rm /tmp/x"));
     }
 
     #[test]
@@ -289,7 +368,13 @@ mod tests {
 
     #[test]
     fn skill_todo_exit_plan_are_readonly() {
-        for t in ["Skill", "TodoWrite", "ExitPlanMode", "BashOutput", "KillShell"] {
+        for t in [
+            "Skill",
+            "TodoWrite",
+            "ExitPlanMode",
+            "BashOutput",
+            "KillShell",
+        ] {
             assert!(matches!(
                 analyze_effects(t, &json!({})).class,
                 EffectClass::ReadOnly
@@ -307,5 +392,76 @@ mod tests {
     fn bash_redirection_is_destructive() {
         let e = analyze_effects("Bash", &json!({"command": "echo hi > /tmp/x"}));
         assert!(matches!(e.class, EffectClass::Destructive));
+        // 重定向目标进 paths（让 Edit FilePath deny 规则统一兜底）
+        assert!(e.paths.iter().any(|p| p == &PathBuf::from("/tmp/x")));
+        // segments 第一段含写目标
+        assert_eq!(e.segments.len(), 1);
+        assert_eq!(e.segments[0].write_targets, vec!["/tmp/x".to_string()]);
+    }
+
+    #[test]
+    fn bash_compound_cd_rm_carries_two_segments() {
+        let e = analyze_effects("Bash", &json!({"command": "cd /tmp/safe && rm -rf foo"}));
+        assert!(matches!(e.class, EffectClass::Destructive));
+        assert_eq!(e.segments.len(), 2);
+        assert_eq!(e.segments[0].fingerprint, "cd /tmp/safe");
+        assert_eq!(e.segments[1].fingerprint, "rm foo");
+    }
+
+    #[test]
+    fn bash_cd_git_compound_flagged() {
+        let e = analyze_effects("Bash", &json!({"command": "cd /tmp/evil && git status"}));
+        assert!(e.has_dangerous_pattern());
+        assert!(e.dangerous_kinds.iter().any(|k| k == "cd-git-compound"));
+    }
+
+    #[test]
+    fn bash_write_to_git_meta_flagged() {
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "echo evil > /repo/.git/hooks/post-merge"}),
+        );
+        assert!(e.has_dangerous_pattern());
+        assert!(e.dangerous_kinds.iter().any(|k| k == "write-git-meta"));
+        assert!(e
+            .paths
+            .iter()
+            .any(|p| p == &PathBuf::from("/repo/.git/hooks/post-merge")));
+    }
+
+    #[test]
+    fn bash_timeout_prefix_stripped_in_fingerprint() {
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "timeout 30 git push origin main"}),
+        );
+        assert_eq!(e.command_fingerprint.as_deref(), Some("git push"));
+        assert_eq!(e.segments[0].fingerprint, "git push");
+    }
+
+    #[test]
+    fn bash_sensitive_env_prefix_flagged() {
+        // PYTHONPATH / LD_PRELOAD 等敏感 env-var 不再保留到 fingerprint，
+        // 而是触发 dangerous_kinds=["sensitive-env-prefix"] 强制审批
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "PYTHONPATH=/tmp python3 script.py"}),
+        );
+        assert_eq!(e.command_fingerprint.as_deref(), Some("python3 script.py"));
+        assert!(e
+            .dangerous_kinds
+            .iter()
+            .any(|k| k == "sensitive-env-prefix"));
+    }
+
+    #[test]
+    fn bash_inline_env_does_not_pollute_fingerprint() {
+        // 普通 env-var：不触发 dangerous，fingerprint 也不被污染
+        let e = analyze_effects("Bash", &json!({"command": "FOO=bar make all"}));
+        assert_eq!(e.command_fingerprint.as_deref(), Some("make all"));
+        assert!(!e
+            .dangerous_kinds
+            .iter()
+            .any(|k| k == "sensitive-env-prefix"));
     }
 }

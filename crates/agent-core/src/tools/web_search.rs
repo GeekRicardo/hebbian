@@ -63,7 +63,6 @@ impl Tool for WebSearchTool {
         let input = parse_search_input(&input)?;
         search_duckduckgo(&input).await
     }
-
 }
 
 fn parse_search_input(input: &Value) -> AppResult<SearchInput> {

@@ -76,10 +76,7 @@ mod tests {
             .unwrap();
         let s = shells.register("sleep 30".into(), "/".into(), None, child);
         let tool = KillShellTool::new(shells);
-        let out = tool
-            .execute(json!({"task_id": s.task_id}))
-            .await
-            .unwrap();
+        let out = tool.execute(json!({"task_id": s.task_id})).await.unwrap();
         assert!(out.contains("killed"));
     }
 

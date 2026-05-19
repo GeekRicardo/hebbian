@@ -55,8 +55,9 @@ impl Tool for ExitPlanModeTool {
     }
 
     async fn execute(&self, input: Value) -> AppResult<String> {
-        let parsed: ExitPlanInput = serde_json::from_value(input)
-            .map_err(|e| common::error::AppError::msg(format!("invalid ExitPlanMode input: {e}")))?;
+        let parsed: ExitPlanInput = serde_json::from_value(input).map_err(|e| {
+            common::error::AppError::msg(format!("invalid ExitPlanMode input: {e}"))
+        })?;
 
         // 落盘 plan markdown：data_dir + session_id 都给定时写入；否则保持
         // 旧行为只返回提示。env var 由 CLI / Desktop 在创建 Session 时设置。

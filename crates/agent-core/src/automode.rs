@@ -1,15 +1,21 @@
 //! AutoMode：在 destructive 工具调用前调一次轻量 LLM 决定是否放行。
 //!
 //! 架构 §4.4.4。流程：
-//! 1. 仅当 `current_model_id == "claude-opus-4-7"` 时启用（其他模型直接降级 Ask）
-//! 2. 构造 judge prompt（[`AUTOMODE_JUDGE_SYSTEM`] + 调用上下文）
+//! 1. 仅当 `current_model_id` 命中 [`AUTOMODE_ALLOWED_MODELS`] 时启用（其他模型直接降级 Ask）
+//! 2. 构造 judge prompt：[`AUTOMODE_JUDGE_SYSTEM`] + 调用上下文 + hebbian 已识别的
+//!    `effects.segments` / `write_targets` / `paths` / `dangerous_kinds`。判官**不重复**
+//!    解析 shell，只在静态分析结果上做语境判定。
 //! 3. 一次 [`ModelClient::complete`] 拿首行决策
-//! 4. 解析 `ALLOW` / `DENY: <reason>` / `ASK: <reason>`
+//! 4. 解析 `ALLOW` / `DENY: <reason>` / `ASK: <reason>`；判官 reason 按段拆解风险，由
+//!    HITL 弹窗原样展示给用户
 //!
 //! emit `PermissionAutoJudged { decision, reason }` 由调用方负责（dispatcher）。
+//!
+//! `force_automode` 子开关由调用方在拿到 `Ask` 后自行折叠成 `Deny`，本模块不处理——
+//! 让 dispatcher 控制策略，automode 只负责 LLM 判定。
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use serde_json::Value;
 use tracing::warn;
@@ -17,11 +23,26 @@ use tracing::warn;
 use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
+use crate::effects::Effects;
+
 /// AutoMode 的判官 system prompt（编译进二进制，跨会话稳定）。
 pub const AUTOMODE_JUDGE_SYSTEM: &str = include_str!("../prompts/automode_judge.md");
 
-/// 当前 AutoMode 唯一支持的模型 id。
-pub const AUTOMODE_REQUIRED_MODEL: &str = "claude-opus-4-7";
+/// AutoMode 允许启用判官的模型 id 白名单（架构 §4.4.4 / §13）。
+///
+/// 选型依据：列出的模型都能稳定 follow 严格输出格式 + 段级 reason 推理。
+/// 扩白名单前需评估：模型是否能稳定首行返回 `ALLOW` / `DENY:` / `ASK:`、
+/// 能否按 `effects.segments` 逐段拆 reason；二者缺一即 fail-closed 兜底为 Ask。
+pub const AUTOMODE_ALLOWED_MODELS: &[&str] = &["opus-4-7", "opus4.7", "gpt-5.5"];
+
+/// 判定一个 model id 是否允许启用 AutoMode 判官。
+///
+/// 匹配规则：**精确相等**。`claude-opus-4-7-20260416` / `gpt-5.5-preview` 这类带前缀
+/// 或日期/版本后缀的变体**一律不允许**——AutoMode 在它们上面降级为 Ask，等待 model id
+/// 上游规范化（或上层显式把 selection 翻成白名单里的简洁字符串）后才生效。
+pub fn is_allowed_model(model_id: &str) -> bool {
+    AUTOMODE_ALLOWED_MODELS.contains(&model_id)
+}
 
 /// AutoMode 的判官决策。
 #[derive(Debug, Clone)]
@@ -46,34 +67,51 @@ impl AutoModeDecision {
             Self::Deny(r) | Self::Ask(r) => Some(r.as_str()),
         }
     }
+
+    /// 把 `Ask(reason)` 折叠成 `Deny`，并在 reason 头部加 `force-automode:` 前缀；
+    /// `Allow` / `Deny` 不变。
+    ///
+    /// 调用方在 `force_automode = true` 且 RunMode = AutoMode 时使用——含义：用户开了
+    /// "放手跑、不打断我"开关，判官拿不准的动作直接拒，agent 自己换路子。
+    pub fn collapse_ask_to_deny(self) -> Self {
+        match self {
+            Self::Ask(reason) => Self::Deny(format!("force-automode: {reason}")),
+            other => other,
+        }
+    }
 }
 
 /// 调一次模型作为 AutoMode 判官。
 ///
-/// `judge_client` 通常等于会话的主 client（同 model id 才符合限定）。本函数会先校验
-/// `current_model_id`，不匹配直接返回 `Ask`，不发请求。
+/// `judge_client` 通常等于会话的主 client（同 model id 才符合白名单）。本函数会先校验
+/// `current_model_id`，不在 [`AUTOMODE_ALLOWED_MODELS`] 命中时直接返回 `Ask`，不发请求。
+///
+/// `effects` 必须传 hebbian 已分析好的结果——判官 prompt 依赖 `segments` / `paths` /
+/// `dangerous_kinds` 做段级拆解，**不能**让判官自己重新解析 shell。
 pub async fn judge_auto_mode(
     judge_client: &Arc<dyn ModelClient>,
     current_model_id: &str,
     tool_name: &str,
     tool_input: &Value,
+    effects: &Effects,
     recent_transcript: &[TranscriptEntry],
 ) -> AutoModeDecision {
-    if current_model_id != AUTOMODE_REQUIRED_MODEL {
+    if !is_allowed_model(current_model_id) {
         return AutoModeDecision::Ask(format!(
-            "AutoMode 仅在 {AUTOMODE_REQUIRED_MODEL} 启用；当前模型 {current_model_id} 不支持自动判断"
+            "AutoMode 仅在 {:?} 启用；当前模型 {current_model_id} 不支持自动判断",
+            AUTOMODE_ALLOWED_MODELS
         ));
     }
 
-    // 拼装 user prompt：把上下文渲染成一段 JSON 描述
-    let prompt = format_judge_prompt(tool_name, tool_input, recent_transcript);
+    let prompt = format_judge_prompt(tool_name, tool_input, effects, recent_transcript);
 
     let request = ModelRequest {
         model: current_model_id.to_string(),
         system: Some(AUTOMODE_JUDGE_SYSTEM.to_string()),
         entries: vec![TranscriptEntry::User(UserEntry::text(prompt))],
         tools: Vec::new(),
-        max_tokens: 200,
+        // ASK reason 要按段拆解，原 200 不够；保守留 300 token 上限。
+        max_tokens: 300,
         reasoning: None,
     };
 
@@ -99,6 +137,7 @@ fn extract_text(resp: &ModelResponse) -> String {
 fn format_judge_prompt(
     tool_name: &str,
     tool_input: &Value,
+    effects: &Effects,
     recent_transcript: &[TranscriptEntry],
 ) -> String {
     let recent: Vec<String> = recent_transcript
@@ -109,12 +148,81 @@ fn format_judge_prompt(
         .map(summarize_entry)
         .collect();
 
-    let input_pretty = serde_json::to_string(tool_input)
-        .unwrap_or_else(|_| tool_input.to_string());
+    let input_pretty = serde_json::to_string(tool_input).unwrap_or_else(|_| tool_input.to_string());
+
+    let segments_block = if effects.segments.is_empty() {
+        "  (single-segment tool, no Bash split applies)".to_string()
+    } else {
+        effects
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(i, seg)| {
+                let env = if seg.env_prefix.is_empty() {
+                    String::new()
+                } else {
+                    format!(" env={:?}", seg.env_prefix)
+                };
+                let targets = if seg.write_targets.is_empty() {
+                    String::new()
+                } else {
+                    format!(" write_targets={:?}", seg.write_targets)
+                };
+                format!(
+                    "  [{}] fingerprint={:?}{}{}",
+                    i + 1,
+                    seg.fingerprint,
+                    env,
+                    targets
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let paths_block = if effects.paths.is_empty() {
+        "(none)".to_string()
+    } else {
+        effects
+            .paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let dangerous_block = if effects.dangerous_kinds.is_empty() {
+        "(none)".to_string()
+    } else {
+        effects.dangerous_kinds.join(", ")
+    };
+
+    let network_block = if effects.network {
+        format!("yes (domain={})", effects.domain.as_deref().unwrap_or("?"))
+    } else {
+        "no".to_string()
+    };
 
     format!(
-        "tool: {tool_name}\ninput: {input_pretty}\nrecent_transcript:\n{}\n\n按 system prompt 的格式输出一行决策。",
-        recent.join("\n")
+        "tool: {tool_name}\n\
+         input: {input_pretty}\n\
+         \n\
+         effects:\n\
+           class: {class:?}\n\
+           command_fingerprint: {fingerprint}\n\
+           paths: {paths_block}\n\
+           network: {network_block}\n\
+           dangerous_kinds: {dangerous_block}\n\
+         segments:\n\
+         {segments_block}\n\
+         \n\
+         recent_transcript (oldest first):\n\
+         {recent}\n\
+         \n\
+         Output one line per the system prompt's format.",
+        class = effects.class,
+        fingerprint = effects.command_fingerprint.as_deref().unwrap_or("(n/a)"),
+        recent = recent.join("\n"),
     )
 }
 
@@ -157,8 +265,12 @@ fn parse_decision(raw: &str) -> AutoModeDecision {
     } else if first.is_empty() {
         AutoModeDecision::Ask("AutoMode judge 返回空响应".to_string())
     } else {
-        // 无法识别的输出：保守降级
-        AutoModeDecision::Ask(format!("AutoMode judge 返回未识别格式：{}", trim(first, 120)))
+        // 任何非 ALLOW/DENY/ASK 开头的响应 → fail-closed 兜底为 Ask，
+        // 由用户最终拍板。绝不静默 Allow。
+        AutoModeDecision::Ask(format!(
+            "AutoMode judge 返回未识别格式：{}",
+            trim(first, 120)
+        ))
     }
 }
 
@@ -169,7 +281,10 @@ mod tests {
     #[test]
     fn parse_allow() {
         assert!(matches!(parse_decision("ALLOW"), AutoModeDecision::Allow));
-        assert!(matches!(parse_decision("allow\nmore text"), AutoModeDecision::Allow));
+        assert!(matches!(
+            parse_decision("allow\nmore text"),
+            AutoModeDecision::Allow
+        ));
     }
 
     #[test]
@@ -191,5 +306,39 @@ mod tests {
     fn parse_unknown_falls_back_to_ask() {
         assert!(matches!(parse_decision("MAYBE"), AutoModeDecision::Ask(_)));
         assert!(matches!(parse_decision(""), AutoModeDecision::Ask(_)));
+    }
+
+    #[test]
+    fn allowed_model_is_exact_match_only() {
+        // 白名单内三个 id 精确命中
+        assert!(is_allowed_model("opus-4-7"));
+        assert!(is_allowed_model("opus4.7"));
+        assert!(is_allowed_model("gpt-5.5"));
+        // 带前缀 / 后缀变体都拒绝（架构 §4.4.4：不允许后缀变体）
+        assert!(!is_allowed_model("claude-opus-4-7"));
+        assert!(!is_allowed_model("claude-opus-4-7-20260416"));
+        assert!(!is_allowed_model("gpt-5.5-preview"));
+        // 其它模型也拒绝
+        assert!(!is_allowed_model("claude-sonnet-4-6"));
+        assert!(!is_allowed_model("gpt-5.4"));
+        assert!(!is_allowed_model("gpt-4o"));
+    }
+
+    #[test]
+    fn collapse_ask_to_deny_prefixes_reason() {
+        let collapsed = AutoModeDecision::Ask("reads SSH key".into()).collapse_ask_to_deny();
+        match collapsed {
+            AutoModeDecision::Deny(r) => assert!(r.starts_with("force-automode: "), "{r}"),
+            _ => panic!("expected Deny"),
+        }
+        // Allow / Deny 不变
+        assert!(matches!(
+            AutoModeDecision::Allow.collapse_ask_to_deny(),
+            AutoModeDecision::Allow
+        ));
+        assert!(matches!(
+            AutoModeDecision::Deny("x".into()).collapse_ask_to_deny(),
+            AutoModeDecision::Deny(_)
+        ));
     }
 }
