@@ -1,6 +1,6 @@
 //! Microcompact：工具结果压缩（学 Claude Code 的 microcompact 思路）。
 //!
-//! 长 tool_result（`Bash` / `Read` / `Grep` / `Glob` / `web_fetch` / `web_search` / `Write` / `Edit`）
+//! 长 tool_result（`Bash` / `Read` / `Grep` / `Glob` / `web_fetch` / `web_search` / `Edit`）
 //! 一旦超过指定轮数仍留在 transcript 里，会浪费大量 token：
 //! - 它们多半是中间步骤的环境读入（已经反映在 assistant 的后续动作里）
 //! - 模型回看价值不大，回看也读不动整段 5k+ 输出
@@ -19,7 +19,6 @@ const COMPACTABLE_TOOLS: &[&str] = &[
     "Read",
     "Grep",
     "Glob",
-    "Write",
     "Edit",
     "Fetch",
     "WebSearch",

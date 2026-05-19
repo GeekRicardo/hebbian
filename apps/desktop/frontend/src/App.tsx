@@ -15,6 +15,12 @@ interface WakeupFiredPayload {
   wakeup_xml: string;
 }
 
+interface EditRevertedPayload {
+  session_id: string;
+  snapshot_id: string;
+  file_path: string;
+}
+
 export default function App() {
   const { init, theme } = useStore();
 
@@ -46,6 +52,27 @@ export default function App() {
         else unlisten = fn;
       })
       .catch((err) => console.warn("wakeup-fired listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // edits-worktree 全局事件：其他窗口回退 edit 后同步刷新当前窗口的 editSnapshots。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<EditRevertedPayload>("edit-reverted", (e) => {
+      const store = useStore.getState();
+      if (store.currentSession?.id === e.payload.session_id) {
+        store.refreshEdits();
+      }
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("edit-reverted listener failed:", err));
     return () => {
       cancelled = true;
       unlisten?.();

@@ -52,7 +52,7 @@ impl Default for PermissionPolicy {
                 "Grep".into(),
                 "Skill".into(),
             ],
-            always_ask: vec!["Bash".into(), "Write".into()],
+            always_ask: vec!["Bash".into(), "Edit".into()],
             default_action: DefaultPermission::Auto,
         }
     }

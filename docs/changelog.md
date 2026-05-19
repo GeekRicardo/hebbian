@@ -1552,3 +1552,163 @@
   - [.gitignore](../.gitignore): 增加 `.understand-anything/`，避免 `knowledge-graph.json`、`fingerprints.json` 等大文件进入版本库。
 - **影响范围**: 仅 Git 忽略规则；不影响代码、协议或运行时。
 - **留尾巴**: 无。
+
+### 2026-05-19 — 架构.md 新增 §4.13 Edit Tracker & Edits Worktree（设计 A 段）
+
+- **Why**: 用户要求 Write/Edit 工具支持：(1) 模型 streaming 期间 arguments 实时显示，避免大文件写入卡 UI；(2) Write/Edit 专属 diff 面板（流式期 / 审批期 / 完成期三态一致渲染）；(3) 审批通过/拒绝后 diff 从审批卡流转到 tool_call 详情；(4) 放大模态 + inline/split 切换；(5) git worktree 式回退树——能精确回退某一次历史修改而不影响前后；(6) 跨会话改同一文件要并发安全；(7) 用户机器无 git 时降级提示而不是闷蹦。本条只动文档不动代码，让方案先定稿
+- **改动**:
+  - [docs/架构.md §3.1](架构.md): 事件流追加 `EditSnapshotCreated / EditReverted / EditRevertFailed` 三个新事件，归类为"编辑快照"
+  - [docs/架构.md §3.2](架构.md): 同步 API 追加「编辑历史」组——`listEdits / diffEdit / revertEdit / editsWorktreeStatus`
+  - [docs/架构.md §4.13](架构.md): 新增整节"Edit Tracker & Shadow Repo（设计）"，14 个子节描述数据流 / 影子仓粒度 / 锁 / metadata / 协议 / 流式 diff / 三态 UI / 修改树 / 降级 / TTL / 冲突 / Phase 落地
+  - [docs/架构.md §6.1](架构.md): 目录布局 `~/.hebbian/sessions/<sid>/` 下补 `edits-worktree/`（含 `.git/` + 镜像树 + `.hebbian-edits.json`），并标注"可选，无 git CLI 时不创建"
+  - [docs/架构.md §13](架构.md): 决策表追加 6 行——回退机制 = shadow git 仓（C 方案）、无 git 降级、流式 diff 不扩协议、回退冲突保守、锁粒度按真实路径、TTL 30 天
+- **影响范围**: 仅文档；不动协议字节、不动 crate；后续 Phase B/C/D/E 将按本节实现。注意 §4.4.6 列出的 Edit 工具至今未实现（tools/ 下只有 write.rs），Phase B 将补齐——并在那次 changelog 里注明这是文档先行的尾巴清理
+- **留尾巴**:
+  - 协议事件 `EditAction` enum 的 wire format（snake_case 还是 camelCase）尚未在 §3.1 里固定，Phase C 实现 EventPayload 时按 §4.4.7 命名规范定（snake_case in protocol）
+  - edits_worktree_ttl_days 配置项落 settings.json 的位置（global vs per-session）Phase C 一并定
+  - `DiffPayload.hunks` 用 similar 还是 imara-diff 选型留待 Phase D（前端不重算，服务端给）
+  - Workspace 根之外的允许路径如何映射到 edits-worktree 子目录的命名规则（sha1 哈希？或直接 `absolute/<full_path>/`）Phase C 定
+
+### 2026-05-19 — 对齐 Claude Code 2.1.144 Edit 语义 + 取消 Write 工具 + ReadState Tracker（A 段补丁）
+
+- **Why**: 用户对照 `~/.vscode/extensions/anthropic.claude-code-2.1.144-darwin-arm64/` 内 native binary 提出三件事：(1) Edit/Write 直接对齐 Claude Code 实现，避免出现"功能像但细节差一截"的伪对齐；(2) 不要叫 shadow-repo，命名要跟 git worktree 概念挂钩；(3) 不要 Write 工具，所有写操作走 Edit（创建走 old_string="" 分支）。从 binary strings 抽出 Edit 完整 validation 流程（11 步 errorCode 0-12）/ Write 描述 / readFileState 机制 / `zLH` 容错匹配 / `vOH` 文件锁包装 / `.ipynb` 拒绝等细节，回写到架构.md
+- **改动**:
+  - [docs/架构.md §4.4.6](架构.md): 工具列表去掉 Write，核心 13→12（衍生 4 不变，总 16）；Edit 描述改为"创建 / 全覆盖 / 局部修改三合一"，old_string="" 时承担创建语义；"已删除"清单加 Write 并注明合并理由
+  - [docs/架构.md §4.4.10](架构.md): 新增整节"ReadState Tracker（Edit 前置 + stale check，对齐 Claude Code 2.1.144）"，含 ReadState 数据结构 / 11 步 validation 表（errorCode 与 Claude Code 同号 0-12）/ Unicode escape 二态容错 / CRLF 归一化 / `old_string==""` 创建分支 / execute 阶段流程（含 FileLock + edits-worktree 快照）/ 与 Claude Code 的差异说明（无 LSP / 无 memoryWriteQueue / 不做 GrowthBook A/B）
+  - [docs/架构.md §4.13](架构.md): 节标题改为"Edit Tracker & Edits Worktree"；新增"为什么叫 edits-worktree 而不是 shadow-repo"说明（独立 .git，不挂用户项目 worktrees）；目录结构里 workspace 外路径改用 `_external/<sha1(real_path)>/<basename>`
+  - 全局命名：所有 shadow-repo / shadow_repo / shadowRepoStatus / ShadowRepoStatus 替换为 edits-worktree / edits_worktree / editsWorktreeStatus / EditsWorktreeStatus（架构.md + 本 changelog）
+  - 全局工具引用：§4.4.2 effects / §4.4.3 RunMode / §4.4.5 PlanMode / §10 数据流 / §11 文件结构 / §16 综合对比 / §13 决策表里所有 `Write/Edit` `Edit/Write` `Edit/Write/Bash/PowerShell` 等组合统一为只列 Edit
+  - [docs/架构.md §13](架构.md): 决策表追加 3 行——取消 Write 工具 / ReadState Tracker 强约束 / edits-worktree 命名取舍；原"Edit 回退机制"一行表述微调（独立 .git 而非 linked worktree）
+- **影响范围**: 仅文档；不动代码、不动协议字节。Phase B 范围从"补 Edit 工具"扩为"补 Edit 工具 + 删除 Write 工具 + 新增 ReadStateTracker 模块 + agent_loop 强约束接入 + system prompt 更新（移除 Write 引用、加 Edit old_string="" 创建语义）"
+- **留尾巴**:
+  - hebbian 当前 `crates/agent-core/src/tools/write.rs` 还在，Phase B 删；同时 agent_loop.rs / effects.rs / dispatch.rs / context/microcompact.rs / permissions/mod.rs 里所有 `"Write"` 字面量分支同步清掉
+  - `tengu_edit_minimalanchor_jrn` 在 Claude Code 是 GrowthBook A/B 开关；本设计直接走"more context" prompt 那套（更稳）。如未来希望 token-saving 模式可再追决策
+  - errorCode 与 Claude Code 编号 0-12 对齐是为了未来用户搬迁 / 跨工具调试方便；如未来觉得"复用外部编号"有耦合风险可在 Phase B 实现时重新评估
+  - Workspace 外路径用 `_external/<sha1(real_path)>/<basename>` 镜像；同名文件在不同目录哈希后落不同子目录，不会撞车；UI 显示一律走 metadata.real_path
+
+### 2026-05-19 — Phase B：实现 Edit 工具 + ReadStateTracker + 删除 Write 工具 + 全量清理
+
+- **Why**: 执行 A 段补丁的代码落地。三条线并行：(1) 补齐 Edit 工具（对齐 Claude Code 2.1.144 11 步 validation）；(2) 新增 ReadStateTracker 模块做 Read→Edit 前置约束；(3) 删除 Write 工具，所有 "Write" 字面量从代码库清掉。
+- **改动**:
+  - [crates/agent-core/src/tools/edit.rs](../crates/agent-core/src/tools/edit.rs): 新建 ~600 行。Edit 工具支持创建/全覆盖/局部修改三合一；11-step validation（errorCode 0-12）：old==new(1)/.ipynb(5)/1GB limit(10)/is_dir(11)/NotRead(6)/Stale(7)/string not found(8)/non-unique(9)，含 CRLF 归一化、Unicode escape 二态容错、写后更新 tracker。12 个单元测试全覆盖。
+  - [crates/agent-core/src/tools/write.rs](../crates/agent-core/src/tools/write.rs): 删除。所有写入语义由 Edit 承担。
+  - [crates/agent-core/src/read_state.rs](../crates/agent-core/src/read_state.rs): 新建。ReadStateTracker（session 级 HashMap，Arc 共享），ReadTool 写后 record，EditTool 执行前 precheck（NotRead/Stale/Fresh）。
+  - [crates/agent-core/src/tools/read.rs](../crates/agent-core/src/tools/read.rs): 构造函数加 `tracker: Option<Arc<ReadStateTracker>>`；execute 内读完后调用 `record_read`。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): `pub mod write` → `pub mod edit`；`default_tools` 签名加第 9 参数 `read_state_tracker`；WriteTool 替换为 EditTool；BUILTIN_TOOL_NAMES "Write" → "Edit"。
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 加 `pub mod read_state;`。
+  - **"Write" 字面量清理（7 个文件）**: effects.rs 工具分支 "Write"|"Edit" → "Edit"；agent_loop.rs 可中断工具列表去 "Write"；dispatch.rs 破坏性匹配去 "write"；microcompact.rs COMPACTABLE_TOOLS 去 "Write"；permissions/mod.rs 注释；definition.rs always_ask 列表 "Write" → "Edit"；tools/hitl.rs 测试。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 两处 `default_tools` 调用加 `read_state_tracker` 参数；生产路径创建 `Arc<ReadStateTracker>` 实例（per-session），预览路径传 `None`。
+- **影响范围**: agent-core（tools/edit + read_state + lib + tools/mod + tools/read + 6 文件字符串清理）、desktop chat.rs 构建参数；不改协议字段、不改前端。Write 工具删除是破坏性变更——任何硬编码 "Write" 的外部调用方（如果有）会编译失败。
+- **留尾巴**:
+  - Edit 工具执行路径尚未包 edits-worktree 快照（架构 §4.13），由 dispatcher 在后续 Phase C/D 包夹完成
+  - system prompt（架构 §9）仍可能引用 Write 工具名，需要在 Phase C 检查并更新 `BASE_SYSTEM_PROMPT`
+  - Edit 的 streaming arguments 显示（前端 ToolCallDelta）留待 Phase C/D
+  - edit.rs 内部 FileLock 暂未接入（架构 §4.4.10 提到但当前 session 单进程无并发风险——Phase C 补）
+
+### 2026-05-20 — Phase C：edits-worktree 模块 + 协议事件 + dispatcher 快照集成
+
+- **Why**: 执行架构 §4.13 的 Phase C 落地——Edit 工具执行前后拍 git 快照，支撑后续单次回退、diff 面板、修改树。三条线并行：(1) 协议层 3 新事件 + EditAction 枚举；(2) edits-worktree 模块（独立 git 仓库 + metadata 持久化）；(3) dispatcher 包夹集成 + 全链路 plumbing（SessionConfig → Session → RunParams → LoopParams → ToolDispatcher）
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): EventPayload 新增 `EditSnapshotCreated / EditReverted / EditRevertFailed` 三个变体；新增 `EditAction { Create, Overwrite, Modify }` 枚举
+  - [crates/protocol/src/lib.rs](../crates/protocol/src/lib.rs): 导出 `EditAction`
+  - [crates/agent-core/src/types.rs](../crates/agent-core/src/types.rs): re-export `EditAction`
+  - [crates/agent-core/src/edits/metadata.rs](../crates/agent-core/src/edits/metadata.rs): 新建。`EditEntry` 结构体 + `EditsMetadata` 文件格式（`.hebbian-edits.json`）；`load_metadata / save_metadata / find_entry / worktree_dir`；含单元测试
+  - [crates/agent-core/src/edits/mod.rs](../crates/agent-core/src/edits/mod.rs): 新建。`EditsWorktree` 结构体：`enabled()` 懒检测 git、`snapshot_before/after()` 镜像+git commit、`revert()` 反向 patch + git apply、`append_entry/mark_reverted/list_entries`；路径映射（workspace 内保持相对路径 / 外走 `_external/<sha1>/<basename>`）；git 命令全部通过 `spawn_blocking` 跑以免阻塞 runtime；含单元测试
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 加 `pub mod edits;`
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): ToolDispatcher 加 `edits_worktree: Option<Arc<EditsWorktree>>`；spawn_tool 内 Edit 工具执行前拍 `snapshot_before`、执行后拍 `snapshot_after` + 写 metadata 条目 + emit `EditSnapshotCreated`；测试调用点补字段
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): LoopParams 加 `edits_worktree` 字段；run_loop 析构 + ToolDispatcher 构造链补该字段；3 个测试 LoopParams 构造点补 `None`
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): RunParams 加 `edits_worktree` 字段；spawn_run 析构 + LoopParams 构造链补该字段
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): SessionConfig + Session struct 加 `edits_worktree` 字段；Session::new() / run() / resume_with_runtime_inputs() 全链路传递
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): import EditsWorktree；创建 `Arc<EditsWorktree>` per-session（data_dir + session_id + workspace）；SessionConfig 加 `edits_worktree: Some(...)` 传入
+- **影响范围**: protocol（3 新事件 + 1 枚举）、agent-core（edits 模块 + dispatch 包夹集成）、desktop chat.rs（构建参数 + SessionConfig）；不改前端、不改 Tauri command。新事件自动进入 recorder jsonl（sink 已全局挂钩）
+- **留尾巴**:
+  - revert 路径仅在 EditsWorktree 模块内有接口，尚未接 Tauri command（Phase D：`list_edits / diff_edit / revert_edit / edits_worktree_status` 四个同步 API）
+  - edits-worktree 的 FileLock 尚未接入（架构 §4.13.4 要求按真实文件路径加排他锁）；当前单 session 单 run 无并发风险
+  - 前端 EditSnapshotCreated 事件订阅 + 修改树卡片渲染（Phase E）
+  - Edit 工具的 `action` 判定较简略（现仅按 old_string 是否为空判断 Create vs Modify）；未区分 Overwrite；Phase D 可完善
+  - `edits_worktree_ttl_days` 配置项 + 后台清理任务未实现（架构 §4.13.12）
+  - 无 git 时 `editsWorktreeStatus.enabled=false` 通知前端的通道尚未建立（Phase D Tauri command + Phase E toast UI）
+
+### 2026-05-20 — Phase D：edits-worktree Tauri 命令 + EngineEvent 翻译 + TypeScript 类型
+
+- **Why**: 把 edits-worktree 模块的能力暴露给前端——4 个 Tauri 命令让 UI 能查询、对比、回退 Edit 快照；3 个 EngineEvent 变体让实时快照创建/回退结果推送到前端。
+- **改动**:
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): EngineEvent 新增 `EditSnapshotCreated / EditReverted / EditRevertFailed` 三个变体
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `agent_event_to_engine_event` 新增 3 个 match 分支翻译 edit 事件
+  - [crates/agent-core/src/edits/mod.rs](../crates/agent-core/src/edits/mod.rs): 新增 `get_file_at_sha()` 和 `diff_text()` 两个公开方法，供 Tauri 命令使用
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs):
+    - 新增 `list_edits / diff_edit / revert_edit / edits_worktree_status` 4 个 Tauri 命令
+    - 新增 `DiffPayload / RevertResult / EditsWorktreeStatus` 3 个 DTO
+    - 新增 `build_edits_worktree()` 辅助函数，从 session + settings 构造 EditsWorktree
+    - `generate_handler![]` 注册 4 新命令
+    - 导入 `agent_core::edits` / `agent_core::edits::metadata::EditEntry` / `agent_core::workspace::Workspace`
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts):
+    - EngineEvent 联合类型新增 3 个变体（`edit_snapshot_created / edit_reverted / edit_revert_failed`）
+    - 新增 `EditAction / EditEntry / DiffPayload / RevertResult / EditsWorktreeStatus` 接口
+- **影响范围**: desktop crate（lib.rs + engine/mod.rs + chat.rs + types.ts）、agent-core（edits/mod.rs 2 新公开方法）；不改协议字段、不改 storage 格式
+- **留尾巴**:
+  - 前端 EditSnapshotCreated 事件订阅 + EditTree 浮动卡片渲染（Phase E）
+  - 前端 diff 面板（DiffPanel 三态 inline/split/fullscreen）+ revert 按钮 UI（Phase E）
+  - revert_edit 命令目前仅操作 edits-worktree 层面，未通过 Tauri 事件广播 `edit_reverted` 给前端（revert 成功时 lib.rs 未持有 event sink——Phase E 需解决：revert 完从 ToolDispatcher 再包一次？或在 Tauri command 里主动 emit 到 window）
+  - EditsWorktree 跨 session 并发 FileLock 未接入（架构 §4.13.4）
+
+### 2026-05-20 — Phase E：前端 EditTreePanel + DiffPanel + 事件订阅 + revert 交互
+
+- **Why**: 把 edits-worktree 的后端能力完整暴露为前端 UI——Edit 修改树浮动卡片、差异对比面板、回退按钮、实时事件订阅。用户可在对话中看到每次 Edit 操作的记录，对比修改前后内容，并一键回退。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `listEdits / diffEdit / revertEdit / editsWorktreeStatus` 4 个 IPC 调用
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts):
+    - `SessionStream` 类型新增 `editSnapshots: EditEntry[]` 字段
+    - `applyEventToSlot()` 新增 3 个分支处理 `edit_snapshot_created / edit_reverted / edit_revert_failed`
+    - 新增 `revertEdit()` 和 `refreshEdits()` 两个 action
+    - `openSession()` 末尾调用 `refreshEdits()` 加载已有快照
+    - 镜像字段 + EMPTY_MIRROR + 初始状态同步新增 `editSnapshots`
+  - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 新建。浮动卡片（`absolute right-4 top-[150px] z-30`），支持折叠药丸 / 展开面板；按文件路径分组展示 EditEntry 列表，每项显示 action 图标、文件路径片段、字节变化、时间戳；提供回退按钮和「对比」按钮
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): 新建。差异对比面板，支持 inline / split / fullscreen 三种模式切换；split 模式左右分栏对比，inline 模式上下排列；删除行红色背景、新增行绿色背景、修改行琥珀色背景；集成 `api.diffEdit()` 获取 before/after 文本
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 在 `BackgroundTaskPanel` 之后、消息列表之前插入 `<EditTreePanel />`
+- **影响范围**: 仅前端（tauri.ts + useStore.ts + ChatView.tsx + 2 新组件）；Rust 后端无变化
+- **留尾巴**:
+  - 简单逐行比较不考虑行移位（真正的 Myers diff 算法），对于大段代码重排/缩进变更不够准确
+  - EditTree panel 目前只展示 streaming 中累积的快照；session reload 后会从后端全量 refresh，但 streaming 期间的 `editSnapshots` 事件携带的 `before_sha`/`after_sha` 为空字符串（`edit_snapshot_created` EngineEvent 字段限制），点「对比」前需要 refreshEdits 拿完整 entry
+  - 无 git 时的 toast 警告未实现——需在 `edits_worktree_status` 返回 `enabled=false` 时弹出（当前仅在 `edit_revert_failed` 事件 + revert Tauri command 失败时能看到错误提示）
+  - DiffPanel fullscreen 模式下按 Escape 关闭未实现
+
+### 2026-05-20 — Phase F：完善 edits-worktree 全链路（sha 字段 / 文件锁 / 全局事件 / LCS diff / 非阻塞面板 / 提示清理）
+
+- **Why**: Phase E 留下了 11 个待修复项——sha 字段不流通导致「对比」需先 refresh、diff 算法简陋、DiffPanel 阻塞聊天交互、无 Escape 键、无 git 不可用提示、revert 不广播全局事件、EditsWorktree 无文件锁、系统提示残留 Write 引用、TTL 未配置、类型重复无维护说明。
+- **改动**:
+  - sha 字段补全（pipeline 端到端通过）：
+    - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): `EventPayload::EditSnapshotCreated` 已有 `before_sha`/`after_sha`（Phase D 已加）
+    - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `after.sha` clone 修复，避免 move 后重复使用
+    - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): `EngineEvent::EditSnapshotCreated` 已有 `before_sha`/`after_sha`（Phase D 已加）
+    - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `edit_snapshot_created` 变体新增 `before_sha`/`after_sha` 字段
+    - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `applyEventToSlot` 改用 `e.before_sha`/`e.after_sha` 替代硬编码空字符串
+  - DiffPanel 三项改进：
+    - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): 
+      - 实现 LCS-based diff 算法（`computeDiff`），正确处理行移位/插入/删除，替代原先逐行对齐的比较
+      - inline 模式下 before/after 区域各只显示相关行（remove 行只出现在 before，add 行只出现在 after）
+      - split 模式下左右两侧行号独立计数，空行用占位保持对齐
+      - 非全屏模式改为非阻塞浮动面板（`pointer-events-none` 外层 + `pointer-events-auto` 卡片），聊天可后台交互
+      - 全局 Escape 键：全屏模式退回分栏，非全屏直接关闭
+  - Git 不可用提示：
+    - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 初始化时调 `editsWorktreeStatus`，git 不可用且无已有快照时弹出 toast 警告
+  - revert 全局事件广播（跨窗口同步）：
+    - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `revert_edit` 成功时 `app.emit("edit-reverted", payload)`
+    - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): 新增 `edit-reverted` 全局事件监听，前台窗口自动调 `refreshEdits()`
+  - EditAction 检测改进（Overwrite 判定）：
+    - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `old_string.len() >= before_bytes - 10` 时判定为 Overwrite（Phase F 修复前仅区分 Create/Modify）
+  - FileLock 集成（架构 §4.13.4）：
+    - [crates/agent-core/src/edits/mod.rs](../crates/agent-core/src/edits/mod.rs): 新增 `FileLockGuard` 结构（Drop 时自动 `fs2::unlock`）+ `lock_file()` 公开方法，lock 文件路径 `<worktree>/.locks/<hash(real_path)>.lock`
+    - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): Edit 工具派发前获取 `_edit_lock`，贯穿 snapshot_before + execute + snapshot_after 全程，确保同文件不被并发 Edit 打断
+  - 系统提示清理：
+    - [crates/agent-core/prompts/base_system.md](../crates/agent-core/prompts/base_system.md): 3 处 `Write` → `Edit`（工具选择指南 + 写前先读规则 + AskBeforeEdits 模式说明）
+  - 类型同步维护说明：
+    - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): 新增 doc comment 说明与 types.ts EngineEvent 的双向同步关系
+    - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 新增 JSDoc 列出 4 处需同步更新的位置
+  - TTL 配置字段（架构 §4.13.12）：
+    - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs): `ConversationDefaults` 新增 `edits_worktree_ttl_days: u32`（默认 30 天），后台清理任务待后续实现
+- **影响范围**: protocol（无字段变更，仅修复 clone 语义）、agent-core（edits + dispatch + settings）、desktop（lib.rs + engine/mod.rs + chat.rs）、前端（types.ts + useStore.ts + App.tsx + DiffPanel + EditTreePanel + types.ts 维护注释）；不破坏兼容
+- **留尾巴**:
+  - 后台 TTL 清理任务未实现（`edits_worktree_ttl_days` 字段已就位，清理逻辑待加：扫描过期 session → 删 worktree → 标灰 metadata）
+  - `revert_edit` 自己未对真实文件加 FileLock（当前锁只保护 snapshot 流程；revert 的 git apply → copy 回真实文件的原子性由 git apply --check 保证冲突检测）
+  - 大文件 diff（>10K 行）的 LCS DP 表 O(n*m) 可能有性能压力——可后续加阈值切换到启发式算法

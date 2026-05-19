@@ -119,6 +119,8 @@ pub struct LoopParams<'a> {
     /// `RunResumed { cause }` 而不是 `RunStarted`（架构 §4.12.6）。`None` 表示
     /// 普通新起 Run。
     pub resume_from: Option<RunResumeState>,
+    /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照。
+    pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -190,6 +192,7 @@ pub async fn run_loop(
         session_id,
         phase,
         resume_from,
+        edits_worktree,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -367,7 +370,7 @@ pub async fn run_loop(
         // PlanMode 工具过滤（架构 §4.4.3 / §4.4.5）：删除会改外界的工具，强制 agent 走
         // 只读探索路径；同时注入 ExitPlanMode 工具让 agent 主动结束规划。
         if run_mode == crate::run_mode::RunMode::PlanMode {
-            let mutating = ["Bash", "PowerShell", "Edit", "Write"];
+            let mutating = ["Bash", "PowerShell", "Edit"];
             tool_defs.retain(|t| !mutating.contains(&t.name.as_str()));
             let extra = registry.definitions(&["ExitPlanMode".to_string()]);
             tool_defs.extend(extra);
@@ -590,6 +593,7 @@ pub async fn run_loop(
                     session_id_for_hooks: session_id.clone(),
                     data_dir_for_artifacts: data_dir.clone(),
                     permission_store: hitl.permission_store().cloned(),
+                    edits_worktree: edits_worktree.clone(),
                 };
 
                 tool_step_index += 1;
@@ -981,6 +985,7 @@ mod tests {
                 session_id: None,
                 phase: None,
                 resume_from: None,
+                edits_worktree: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1036,6 +1041,7 @@ mod tests {
                 session_id: None,
                 phase: None,
                 resume_from: None,
+                edits_worktree: None,
             },
             Arc::new(|_| {}),
         )
@@ -1103,6 +1109,7 @@ mod tests {
                 session_id: None,
                 phase: None,
                 resume_from: None,
+                edits_worktree: None,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })

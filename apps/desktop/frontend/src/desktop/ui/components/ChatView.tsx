@@ -7,6 +7,7 @@ import {
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
+import { EditTreePanel } from "./EditTreePanel";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -422,6 +423,7 @@ export function ChatView() {
 
       <BackgroundTaskPanel />
 
+      <EditTreePanel />
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {currentSession.messages.length === 0 && !isStreaming && (

@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn allow_and_remember_writes_tool_level_for_normal_tool() {
         let gate = HitlGate::default();
-        let (id, _waiter) = gate.open_approval(Some("Write"), None);
+        let (id, _waiter) = gate.open_approval(Some("Edit"), None);
         gate.resolve(
             &id,
             ApprovalDecision::AllowAndRemember {
@@ -545,7 +545,7 @@ mod tests {
                 pattern: None,
             },
         );
-        match gate.check("Write", &destructive_effects(None)) {
+        match gate.check("Edit", &destructive_effects(None)) {
             PermissionDecision::Approved => {}
             other => panic!("expected Approved, got {other:?}"),
         }

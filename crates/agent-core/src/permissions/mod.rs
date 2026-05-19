@@ -209,7 +209,7 @@ impl PermissionStore {
     /// - `None`  其余（调用方按 RunMode 默认决策）
     ///
     /// `tool_name` 通常是 `"Bash"` 或 `"PowerShell"`；写目标维度会跨工具查
-    /// `"Edit"` / `"Write"` / `"Bash"` 等 tool 下的 FilePath/BashWithPath 规则。
+    /// `"Edit"` / `"Bash"` 等 tool 下的 FilePath/BashWithPath 规则。
     /// `tool_name = "*"` 的规则作为兜底通配：匹配任意工具名。
     pub fn find_for_segments(
         &self,

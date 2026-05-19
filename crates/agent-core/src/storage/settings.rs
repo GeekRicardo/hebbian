@@ -47,10 +47,18 @@ pub struct ConversationDefaults {
     /// 默认启用的全局规则文件路径列表。默认仅 `~/.claude/CLAUDE.md`。
     #[serde(default = "default_global_rules")]
     pub global_rules: Vec<PathBuf>,
+    /// edits-worktree 保留天数（架构 §4.13.12）。session 关闭后超过此天数的
+    /// worktree 会被后台任务清理（metadata 保留但标灰）。默认 30 天。
+    #[serde(default = "default_edits_worktree_ttl_days")]
+    pub edits_worktree_ttl_days: u32,
 }
 
 fn default_global_rules() -> Vec<PathBuf> {
     crate::rules::default_global_rules()
+}
+
+fn default_edits_worktree_ttl_days() -> u32 {
+    30
 }
 
 impl Default for ConversationDefaults {
@@ -61,6 +69,7 @@ impl Default for ConversationDefaults {
             enabled_tools: Vec::new(),
             skill_dirs: Vec::new(),
             global_rules: crate::rules::default_global_rules(),
+            edits_worktree_ttl_days: default_edits_worktree_ttl_days(),
         }
     }
 }

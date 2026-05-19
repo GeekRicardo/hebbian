@@ -1,6 +1,7 @@
 pub mod background;
 pub mod bash;
 pub mod bash_output;
+pub mod edit;
 pub mod exit_plan_mode;
 pub mod grep;
 pub mod hitl;
@@ -14,7 +15,6 @@ pub mod skill;
 pub mod wait_for_task;
 pub mod web_fetch;
 pub mod web_search;
-pub mod write;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use serde_json::Value;
 
 use common::AppResult;
 
+use crate::read_state::ReadStateTracker;
 use crate::workspace::Workspace;
 
 /// 内置 ask 工具的名称。
@@ -44,7 +45,7 @@ pub trait Tool: Send + Sync {
 }
 
 /// 构造内置 + 用户可选工具：
-/// - 内置：Bash / BashOutput / KillShell / Read / Write / Grep / Skill（与 ask 一起每次自动注入）
+/// - 内置：Bash / BashOutput / KillShell / Read / Edit / Grep / Skill（与 ask 一起每次自动注入）
 /// - 用户可选：web_search / web_fetch（按 enabled_tools 过滤）
 ///
 /// `BashTool` / `BashOutputTool` / `KillShellTool` 共享同一个 [`background::BackgroundShells`]
@@ -53,6 +54,10 @@ pub trait Tool: Send + Sync {
 /// `bg_log_dir` 为本 session 的后台输出落盘目录（架构 §4.12.3）。生产路径通常是
 /// `~/.hebbian/sessions/<sid>/bg/`；CLI 单跑 / 单测可传 `None`，BackgroundShells
 /// 会回落到 tail-only。
+///
+/// `read_state_tracker` 是 session 级 Read 状态追踪表（架构 §4.4.10）：
+/// Read 工具读完写入、Edit 工具读取做前置校验。CLI 单跑 / 单测可传 `None`，
+/// 此时 Edit 工具的"必须先 Read"约束会被跳过（行为与历史 Write 工具兼容）。
 pub fn default_tools(
     workspace: Arc<Workspace>,
     skill_dirs: &[PathBuf],
@@ -61,6 +66,7 @@ pub fn default_tools(
     shells: background::BackgroundShells,
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
+    read_state_tracker: Option<Arc<ReadStateTracker>>,
 ) -> Vec<Box<dyn Tool>> {
     let skills = skill::load_skills(skill_dirs);
     vec![
@@ -76,8 +82,12 @@ pub fn default_tools(
             phase.clone(),
         )),
         Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
-        Box::new(read::ReadTool::new(data_dir, session_id)),
-        Box::new(write::WriteTool::new(workspace.clone())),
+        Box::new(read::ReadTool::new(
+            data_dir,
+            session_id,
+            read_state_tracker.clone(),
+        )),
+        Box::new(edit::EditTool::new(workspace.clone(), read_state_tracker)),
         Box::new(grep::GrepTool::new(workspace)),
         Box::new(skill::SkillTool::new(skills)),
         Box::new(web_search::WebSearchTool),
@@ -95,7 +105,7 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "WaitForTask",
     "ScheduleWakeup",
     "Read",
-    "Write",
+    "Edit",
     "Grep",
     "Skill",
 ];
@@ -124,9 +134,9 @@ pub fn hosted_tool_definitions(filter: &[String]) -> Vec<ToolDefinition> {
 ///
 /// 内置工具特征：
 /// - 是「agent 能力」的一部分，不该让用户误以为关掉会有性能收益
-/// - 与 HITL 紧密耦合（统一走 `HitlGate`：ask 走提问通路，Bash/Write 等走审批通路）
+/// - 与 HITL 紧密耦合（统一走 `HitlGate`：ask 走提问通路，Bash/Edit 等走审批通路）
 ///
-/// `ask` 的定义在这里硬编码；其他内置工具（Bash/Read/Write/Grep/Skill）
+/// `ask` 的定义在这里硬编码；其他内置工具（Bash/Read/Edit/Grep/Skill）
 /// 由 `ToolRegistry` 持有实现，`registry.builtin_definitions()` 读取它们的 schema。
 pub fn ask_only_definitions() -> Vec<ToolDefinition> {
     vec![ask_tool_definition()]
@@ -185,7 +195,7 @@ pub struct ToolInfo {
     pub icon: String,
 }
 
-/// 暴露给 UI 的工具菜单。**内置工具**（ask / Bash / Read / Write / Grep / Skill）
+/// 暴露给 UI 的工具菜单。**内置工具**（ask / Bash / Read / Edit / Grep / Skill）
 /// 默认开启且不可见，**不出现**在这个列表中。
 pub fn tool_manifest() -> Vec<ToolInfo> {
     vec![

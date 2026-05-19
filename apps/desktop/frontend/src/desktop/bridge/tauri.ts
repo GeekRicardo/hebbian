@@ -5,6 +5,9 @@ import type {
   CodexTokenInfo,
   ContextUsage,
   DeviceCodeInfo,
+  DiffPayload,
+  EditEntry,
+  EditsWorktreeStatus,
   EngineEvent,
   FetchedModel,
   ImportedToken,
@@ -17,6 +20,7 @@ import type {
   ProviderPreset,
   ProvidersFile,
   ReasoningConfig,
+  RevertResult,
   RuleFileInfo,
   RuleFileState,
   SearchHit,
@@ -397,6 +401,23 @@ export const api = {
   // provider.api_key 作为 Bearer。
   deepseekLogin: (input: DeepseekLoginInput) =>
     invoke<DeepseekLoginToken>("deepseek_login", { input }),
+
+  // ── edits worktree（架构 §4.13）──
+  /** 列出某 session 所有 Edit 快照条目。 */
+  listEdits: (sessionId: string) =>
+    invoke<EditEntry[]>("list_edits", { sessionId }),
+
+  /** 获取某次 Edit 的 before/after 文本内容。 */
+  diffEdit: (sessionId: string, snapshotId: string) =>
+    invoke<DiffPayload>("diff_edit", { sessionId, snapshotId }),
+
+  /** 回退单次 Edit。返回 `{ success, error? }`。 */
+  revertEdit: (sessionId: string, snapshotId: string) =>
+    invoke<RevertResult>("revert_edit", { sessionId, snapshotId }),
+
+  /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
+  editsWorktreeStatus: (sessionId: string) =>
+    invoke<EditsWorktreeStatus>("edits_worktree_status", { sessionId }),
 };
 
 export interface DeepseekLoginInput {

@@ -14,6 +14,8 @@ pub use hitl::HitlState;
 use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
+use agent_core::edits;
+use agent_core::edits::metadata::EditEntry;
 use agent_core::permissions::PermissionStore;
 use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
@@ -23,6 +25,7 @@ use agent_core::storage::{
     settings::{self as settings_store, Settings},
 };
 use agent_core::tools::ToolInfo;
+use agent_core::workspace::Workspace;
 use common::runtime as cancellation;
 use model_gateway::{
     auth as oauth,
@@ -284,6 +287,154 @@ fn search_sessions(
             regex.unwrap_or(false),
         )
         .map_err(map_core_err)
+}
+
+// ========== Edits Worktree（架构 §4.13）==========
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DiffPayload {
+    before_text: String,
+    after_text: String,
+    before_sha: String,
+    after_sha: String,
+    file_path: String,
+    action: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RevertResult {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct EditsWorktreeStatus {
+    enabled: bool,
+    entry_count: usize,
+}
+
+fn build_edits_worktree(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> AppResult<edits::EditsWorktree> {
+    let session = sessions::load(data_dir, session_id)?;
+    let settings = settings_store::load(data_dir);
+    let workdir = session
+        .workdir
+        .clone()
+        .or_else(|| settings.conversation.workdir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let initial_allowed_paths = session
+        .allowed_paths
+        .clone()
+        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
+    let workspace = Workspace::with_runtime_state(
+        workdir,
+        initial_allowed_paths,
+        session.runtime_allowed_paths,
+        session.pending_runtime_allowed_paths,
+    );
+    Ok(edits::EditsWorktree::new(
+        data_dir,
+        session_id,
+        &workspace,
+    ))
+}
+
+#[tauri::command]
+fn list_edits(app: AppHandle, session_id: String) -> AppResult<Vec<EditEntry>> {
+    let dd = data_dir(&app)?;
+    let wd = edits::metadata::worktree_dir(&dd, &session_id);
+    let meta = edits::metadata::load_metadata(&wd)?;
+    Ok(meta.entries)
+}
+
+#[tauri::command]
+async fn diff_edit(
+    app: AppHandle,
+    session_id: String,
+    snapshot_id: String,
+) -> AppResult<DiffPayload> {
+    let dd = data_dir(&app)?;
+    let worktree = build_edits_worktree(&dd, &session_id)?;
+    if !worktree.enabled().await {
+        return Err(AppError::msg("git 不可用，无法生成 diff"));
+    }
+    let entries = worktree.list_entries()?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.snapshot_id == snapshot_id)
+        .ok_or_else(|| AppError::msg("找不到该快照"))?;
+    let (before_text, after_text) = worktree.diff_text(&entry).await?;
+    Ok(DiffPayload {
+        before_text,
+        after_text,
+        before_sha: entry.before_sha,
+        after_sha: entry.after_sha,
+        file_path: entry.real_path,
+        action: format!("{:?}", entry.action).to_lowercase(),
+    })
+}
+
+#[tauri::command]
+async fn revert_edit(
+    app: AppHandle,
+    session_id: String,
+    snapshot_id: String,
+) -> AppResult<RevertResult> {
+    let dd = data_dir(&app)?;
+    let worktree = build_edits_worktree(&dd, &session_id)?;
+    if !worktree.enabled().await {
+        return Err(AppError::msg("git 不可用，回退功能已禁用"));
+    }
+    let entries = worktree.list_entries()?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.snapshot_id == snapshot_id)
+        .ok_or_else(|| AppError::msg("找不到该快照"))?;
+    if entry.reverted {
+        return Err(AppError::msg("该快照已回退过"));
+    }
+    match worktree.revert(&entry).await {
+        Ok(()) => {
+            worktree.mark_reverted(&snapshot_id)?;
+            let payload = serde_json::json!({
+                "session_id": session_id,
+                "snapshot_id": snapshot_id,
+                "file_path": entry.real_path,
+            });
+            app.emit("edit-reverted", payload).ok();
+            Ok(RevertResult {
+                success: true,
+                error: None,
+            })
+        }
+        Err(e) => Ok(RevertResult {
+            success: false,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+async fn edits_worktree_status(
+    app: AppHandle,
+    session_id: String,
+) -> AppResult<EditsWorktreeStatus> {
+    let dd = data_dir(&app)?;
+    let worktree = build_edits_worktree(&dd, &session_id)?;
+    let enabled = worktree.enabled().await;
+    let entry_count = if enabled {
+        worktree.list_entries().map(|e| e.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(EditsWorktreeStatus {
+        enabled,
+        entry_count,
+    })
 }
 
 #[tauri::command]
@@ -1389,6 +1540,10 @@ pub fn run() {
             discover_rules_files,
             attach_path,
             approve_path_access,
+            list_edits,
+            diff_edit,
+            revert_edit,
+            edits_worktree_status,
             oauth_codex_start,
             oauth_codex_poll,
             oauth_codex_refresh,

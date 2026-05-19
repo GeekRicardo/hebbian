@@ -154,7 +154,7 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
                 ..Effects::read_only()
             }
         }
-        "Write" | "Edit" => {
+        "Edit" => {
             let paths = file_path_paths(input, "file_path");
             Effects::mutating(paths)
         }
@@ -338,8 +338,8 @@ mod tests {
     }
 
     #[test]
-    fn write_is_mutating_with_file_path() {
-        let e = analyze_effects("Write", &json!({"file_path": "/x/y.txt"}));
+    fn edit_is_mutating_with_file_path() {
+        let e = analyze_effects("Edit", &json!({"file_path": "/x/y.txt"}));
         assert!(matches!(e.class, EffectClass::Mutating));
         assert_eq!(e.paths, vec![PathBuf::from("/x/y.txt")]);
     }

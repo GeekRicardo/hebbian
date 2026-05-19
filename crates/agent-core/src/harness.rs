@@ -81,6 +81,8 @@ pub struct RunParams {
     /// 从挂起态恢复时携带：agent_loop 用它初始化计数器 + emit `RunResumed`
     /// 而不是 `RunStarted`（架构 §4.12.6）。
     pub resume_from: Option<crate::agent_loop::RunResumeState>,
+    /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照。
+    pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
 }
 
 /// Core 对外门面。
@@ -192,6 +194,7 @@ impl Harness {
             session_id: loop_session_id,
             phase,
             resume_from,
+            edits_worktree,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -224,6 +227,7 @@ impl Harness {
                 session_id: loop_session_id,
                 phase,
                 resume_from,
+                edits_worktree,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

@@ -94,6 +94,8 @@ pub struct SessionConfig {
     pub global_rules: Vec<PathBuf>,
     /// 项目规则文件开关状态。None = 自动发现（workdir 下的默认 on）。
     pub rules_files: Option<Vec<crate::rules::RuleFileState>>,
+    /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
+    pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -119,6 +121,7 @@ pub struct Session {
     hooks: Arc<HookManager>,
     global_rules: Vec<PathBuf>,
     rules_files: Option<Vec<crate::rules::RuleFileState>>,
+    edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
 }
 
 impl Session {
@@ -143,6 +146,7 @@ impl Session {
             hooks,
             global_rules: config.global_rules,
             rules_files: config.rules_files,
+            edits_worktree: config.edits_worktree,
         };
         // SessionStart hook（架构 §4.8.1）：fire-and-forget，hook 失败不影响主流程。
         if !session.hooks.is_empty() {
@@ -410,6 +414,7 @@ impl Session {
                 session_id: self.session_id.clone(),
                 phase: self.phase.clone(),
                 resume_from: None,
+                edits_worktree: self.edits_worktree.clone(),
             },
         )
     }
@@ -464,6 +469,7 @@ impl Session {
                 session_id: self.session_id.clone(),
                 phase,
                 resume_from: Some(resume_from),
+                edits_worktree: self.edits_worktree.clone(),
             },
         )
     }

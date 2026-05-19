@@ -10,8 +10,10 @@ use agent_core::storage::{
 use agent_core::{
     context::transcript::Transcript,
     definition::AgentDefinition,
+    edits::EditsWorktree,
     hooks::HookManager,
     permissions::PermissionStore,
+    read_state::ReadStateTracker,
     tools::{hitl::HitlGate, skill::default_skill_dirs},
     types::{AgentEvent, AgentEventPayload},
     workspace::Workspace,
@@ -177,6 +179,12 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     // 把本 session 的 shells 注册到 WakeupScheduler，BgFinishHook 才能扫到。
     agent_core::wakeup::WakeupScheduler::global()
         .register_session_shells(args.session_id.clone(), shells.clone());
+    let read_state_tracker = Arc::new(ReadStateTracker::new());
+    let edits_worktree = Arc::new(EditsWorktree::new(
+        data_dir,
+        &args.session_id,
+        &workspace,
+    ));
     let harness = Arc::new(Harness::new(
         agent_core::tools::default_tools(
             workspace.clone(),
@@ -186,6 +194,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             shells,
             Some(data_dir.to_path_buf()),
             Some(args.session_id.clone()),
+            Some(read_state_tracker),
         ),
         HookManager::new(external_hooks),
     ));
@@ -253,6 +262,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             phase: Some(phase.clone()),
             global_rules: used_global_rules,
             rules_files: used_rules_files,
+            edits_worktree: Some(edits_worktree),
         },
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
@@ -1198,6 +1208,7 @@ pub async fn build_preview_payload(
         agent_core::tools::background::BackgroundShells::new(),
         None,
         None,
+        None,
     ));
     let mut tool_defs = ask_only_definitions();
     let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
@@ -1629,6 +1640,46 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 text,
             })
         }
+        EditSnapshotCreated {
+            call_id,
+            snapshot_id,
+            file_path,
+            action,
+            before_sha,
+            after_sha,
+            before_bytes,
+            after_bytes,
+        } => Some(EngineEvent::EditSnapshotCreated {
+            call_id: call_id.clone(),
+            snapshot_id: snapshot_id.clone(),
+            file_path: file_path.clone(),
+            action: match action {
+                protocol::EditAction::Create => "create",
+                protocol::EditAction::Overwrite => "overwrite",
+                protocol::EditAction::Modify => "modify",
+            }
+            .to_string(),
+            before_sha: before_sha.clone(),
+            after_sha: after_sha.clone(),
+            before_bytes: *before_bytes,
+            after_bytes: *after_bytes,
+        }),
+        EditReverted {
+            snapshot_id,
+            file_path,
+        } => Some(EngineEvent::EditReverted {
+            snapshot_id: snapshot_id.clone(),
+            file_path: file_path.clone(),
+        }),
+        EditRevertFailed {
+            snapshot_id,
+            file_path,
+            error,
+        } => Some(EngineEvent::EditRevertFailed {
+            snapshot_id: snapshot_id.clone(),
+            file_path: file_path.clone(),
+            error: error.clone(),
+        }),
         _ => None,
     }
 }

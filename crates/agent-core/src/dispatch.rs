@@ -27,6 +27,7 @@ use tracing::{field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
+    edits::{metadata::EditEntry, EditsWorktree},
     effects::{analyze_effects, EffectClass},
     permissions::PermissionStore,
     run_state::RunState,
@@ -111,6 +112,8 @@ pub struct ToolDispatcher {
     pub data_dir_for_artifacts: Option<PathBuf>,
     /// 共享的 PermissionStore（用于路径越界检查纳入 Global 规则 + 路径审批后持久化）。
     pub permission_store: Option<Arc<PermissionStore>>,
+    /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
+    pub edits_worktree: Option<Arc<EditsWorktree>>,
 }
 
 impl ToolDispatcher {
@@ -260,6 +263,7 @@ impl ToolDispatcher {
         let session_id_for_hooks = self.session_id_for_hooks.clone();
         let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
         let permission_store = self.permission_store.clone();
+        let edits_worktree_for_snapshot = self.edits_worktree.clone();
 
         let tool_span = tracing::info_span!(
             "tool.call",
@@ -305,7 +309,7 @@ impl ToolDispatcher {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let is_edit = matches!(
                             call_name_for_judge.as_str(),
-                            "Edit" | "Write" | "edit" | "write"
+                            "Edit" | "edit"
                         );
                         if is_edit {
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
@@ -421,6 +425,36 @@ impl ToolDispatcher {
                     }
                 }
 
+                // —— Edit 工具快照：执行前拍 before（架构 §4.13.2）——
+                // 按真实文件路径加排他锁，确保 snapshot_before + execute + snapshot_after
+                // 不被其他 run 对同一文件的 Edit 打断（架构 §4.13.4）。
+                let _edit_lock = if call.name == "Edit" {
+                    edits_worktree_for_snapshot.as_ref().and_then(|wt| {
+                        effective_input["file_path"]
+                            .as_str()
+                            .map(Path::new)
+                            .and_then(|fp| wt.lock_file(fp).ok())
+                    })
+                } else {
+                    None
+                };
+                let edit_before = if call.name == "Edit" {
+                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
+                        let fp = effective_input["file_path"]
+                            .as_str()
+                            .map(Path::new);
+                        if let Some(fp) = fp {
+                            wt.snapshot_before(&call.id, fp).await.unwrap_or(None)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 // 执行
                 info!(
                     tool = %call.name,
@@ -450,6 +484,88 @@ impl ToolDispatcher {
                     }
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
+
+                // —— Edit 工具快照：执行后拍 after + 写 metadata + emit 事件 ——
+                if call.name == "Edit" && !exec_failed {
+                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
+                        let fp = effective_input["file_path"]
+                            .as_str()
+                            .map(Path::new);
+                        if let Some(fp) = fp {
+                            if let Ok(Some(after)) =
+                                wt.snapshot_after(&call.id, fp).await
+                            {
+                                let before_existed = edit_before
+                                    .as_ref()
+                                    .map_or(false, |b| b.file_bytes > 0);
+                                let action =
+                                    if effective_input["old_string"]
+                                        .as_str()
+                                        .map_or(false, |s| s.is_empty())
+                                    {
+                                        protocol::EditAction::Create
+                                    } else if !before_existed {
+                                        protocol::EditAction::Create
+                                    } else {
+                                        // overwrite = old_string 长度接近原文件大小
+                                        let old_len =
+                                            effective_input["old_string"]
+                                                .as_str()
+                                                .map_or(0, |s| s.len() as u64);
+                                        let before_len = edit_before
+                                            .as_ref()
+                                            .map_or(0, |b| b.file_bytes);
+                                        if old_len >= before_len.saturating_sub(10)
+                                        {
+                                            protocol::EditAction::Overwrite
+                                        } else {
+                                            protocol::EditAction::Modify
+                                        }
+                                    };
+                                let snapshot_id =
+                                    uuid::Uuid::new_v4().to_string();
+                                let entry = EditEntry {
+                                    snapshot_id: snapshot_id.clone(),
+                                    call_id: call.id.clone(),
+                                    tool: "Edit".into(),
+                                    real_path: fp.to_string_lossy().to_string(),
+                                    action,
+                                    before_sha: edit_before
+                                        .as_ref()
+                                        .map_or("".into(), |b| b.sha.clone()),
+                                    after_sha: after.sha.clone(),
+                                    before_bytes: edit_before
+                                        .as_ref()
+                                        .map_or(0, |b| b.file_bytes),
+                                    after_bytes: after.file_bytes,
+                                    ts_ms: chrono::Utc::now()
+                                        .timestamp_millis(),
+                                    reverted: false,
+                                    reverted_at_ms: None,
+                                };
+                                let _ = wt.append_entry(entry);
+                                sink(state.event(
+                                    EventPayload::EditSnapshotCreated {
+                                        call_id: call.id.clone(),
+                                        snapshot_id,
+                                        file_path: fp
+                                            .to_string_lossy()
+                                            .to_string(),
+                                        action,
+                                        before_sha: edit_before
+                                            .as_ref()
+                                            .map_or(String::new(), |b| b.sha.clone()),
+                                        after_sha: after.sha,
+                                        before_bytes: edit_before
+                                            .as_ref()
+                                            .map_or(0, |b| b.file_bytes),
+                                        after_bytes: after.file_bytes,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 // 大输出统一落 artifact（架构 §4.4.9）：超 6 KB 写盘 + 给模型「头部预览 +
                 // 工件指针」。失败路径（exec_failed）不走 materialize——错误文本通常很短，
@@ -1013,6 +1129,7 @@ mod tests {
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
             permission_store: None,
+            edits_worktree: None,
         };
 
         let call = ToolCall {

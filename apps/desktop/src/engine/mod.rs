@@ -1,6 +1,14 @@
 use serde::Serialize;
 use serde_json::Value;
 
+/// 桌面端引擎事件——通过 Tauri Channel 序列化推送给前端。
+///
+/// 维护注意：此枚举必须与前端 `types.ts` 的 `EngineEvent` 类型保持字段级同步。
+/// 新增/修改 EventPayload variant 时需同时更新：
+/// 1. protocol::event::EventPayload（crates/protocol/src/event.rs）
+/// 2. 本文件 EngineEvent
+/// 3. chat.rs agent_event_to_engine_event 翻译函数
+/// 4. frontend types.ts EngineEvent + useStore.ts applyEventToSlot
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
@@ -118,6 +126,29 @@ pub enum EngineEvent {
         /// selected 时是 label，selected_multi 时是 "、" 拼接的 labels，
         /// custom 时是 text，cancelled 时为空
         text: String,
+    },
+    /// Edit 工具快照已创建（架构 §4.13）。前端 EditTree 用它对文件操作排序展示。
+    EditSnapshotCreated {
+        call_id: String,
+        snapshot_id: String,
+        file_path: String,
+        /// "create" / "overwrite" / "modify"
+        action: String,
+        before_sha: String,
+        after_sha: String,
+        before_bytes: u64,
+        after_bytes: u64,
+    },
+    /// Edit 回退成功。
+    EditReverted {
+        snapshot_id: String,
+        file_path: String,
+    },
+    /// Edit 回退失败。
+    EditRevertFailed {
+        snapshot_id: String,
+        file_path: String,
+        error: String,
     },
     Error {
         message: String,

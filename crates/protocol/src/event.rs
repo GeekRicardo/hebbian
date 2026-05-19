@@ -167,11 +167,41 @@ pub enum EventPayload {
         after_tokens: usize,
     },
 
+    // —— 编辑快照（§4.13） ——
+    EditSnapshotCreated {
+        call_id: String,
+        snapshot_id: String,
+        file_path: String,
+        action: EditAction,
+        before_sha: String,
+        after_sha: String,
+        before_bytes: u64,
+        after_bytes: u64,
+    },
+    EditReverted {
+        snapshot_id: String,
+        file_path: String,
+    },
+    EditRevertFailed {
+        snapshot_id: String,
+        file_path: String,
+        error: String,
+    },
+
     // —— 调试 ——
     Log {
         level: LogLevel,
         message: String,
     },
+}
+
+/// Edit 工具的操作类型（§4.13.6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditAction {
+    Create,
+    Overwrite,
+    Modify,
 }
 
 /// Step 粒度（架构 §4.2）。

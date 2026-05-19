@@ -10,7 +10,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
 use common::{AppError, AppResult};
@@ -18,6 +20,7 @@ use serde_json::{json, Value};
 use tokio::fs;
 
 use super::Tool;
+use crate::read_state::ReadStateTracker;
 
 const DEFAULT_LIMIT: usize = 2_000;
 const MAX_LINE_LENGTH: usize = 2_000;
@@ -27,14 +30,31 @@ const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 pub struct ReadTool {
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
+    /// session 级 Read 状态追踪表；Edit 工具据此校验"已读 + 未 stale"。
+    /// CLI / 单测无 session 场景传 `None`，仅跳过追踪，工具行为不受影响。
+    tracker: Option<Arc<ReadStateTracker>>,
 }
 
 impl ReadTool {
-    pub fn new(data_dir: Option<PathBuf>, session_id: Option<String>) -> Self {
+    pub fn new(
+        data_dir: Option<PathBuf>,
+        session_id: Option<String>,
+        tracker: Option<Arc<ReadStateTracker>>,
+    ) -> Self {
         Self {
             data_dir,
             session_id,
+            tracker,
         }
+    }
+
+    fn record_read(&self, path: &Path, raw_bytes: &[u8], mtime_ms: i64) {
+        let Some(tracker) = self.tracker.as_ref() else {
+            return;
+        };
+        let mut hasher = DefaultHasher::new();
+        raw_bytes.hash(&mut hasher);
+        tracker.record(path, hasher.finish(), mtime_ms);
     }
 
     /// 把超长行剩余部分落盘到 `<data_dir>/sessions/<sid>/line_trunc/<hash>_L<line>.txt`
@@ -158,6 +178,16 @@ impl Tool for ReadTool {
         let content = fs::read(&file_path)
             .await
             .map_err(|e| AppError::msg(format!("Read: 读取失败 {file_path_str}: {e}")))?;
+        // 写 ReadStateTracker（架构 §4.4.10）：Edit 工具据此校验已读 + 未 stale。
+        // 取磁盘 mtime 而非 now()——避免与 Edit 的"current mtime > 已读时戳"比对错乱。
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.record_read(&file_path, &content, mtime_ms);
+
         let text = String::from_utf8_lossy(&content);
 
         let mut out = String::new();
@@ -226,7 +256,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("a.txt");
         std::fs::write(&file, "first\nsecond\n").unwrap();
-        let tool = ReadTool::new(None, None);
+        let tool = ReadTool::new(None, None, None);
 
         let out = tool
             .execute(json!({"file_path": file.to_string_lossy()}))
@@ -244,7 +274,7 @@ mod tests {
         for i in 1..=10 {
             writeln!(f, "line{i}").unwrap();
         }
-        let tool = ReadTool::new(None, None);
+        let tool = ReadTool::new(None, None, None);
 
         let out = tool
             .execute(json!({
@@ -269,7 +299,7 @@ mod tests {
         let long = "a".repeat(3_000);
         std::fs::write(&file, format!("short\n{long}\nlast\n")).unwrap();
 
-        let tool = ReadTool::new(Some(data_dir.clone()), Some(sid.into()));
+        let tool = ReadTool::new(Some(data_dir.clone()), Some(sid.into()), None);
 
         let out = tool
             .execute(json!({"file_path": file.to_string_lossy()}))
@@ -303,7 +333,7 @@ mod tests {
         for i in 1..=500 {
             writeln!(f, "line {i:04} {}", "x".repeat(40)).unwrap();
         }
-        let tool = ReadTool::new(None, None);
+        let tool = ReadTool::new(None, None, None);
 
         let out = tool
             .execute(json!({"file_path": file.to_string_lossy()}))

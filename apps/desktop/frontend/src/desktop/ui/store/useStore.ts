@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ApprovalDecisionPayload,
   ContextUsage,
+  EditEntry,
   EngineEvent,
   Message,
   MessageAttachment,
@@ -258,6 +259,8 @@ type SessionStream = {
   currentRunMode: string | null;
   /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
   suspended: SuspendedInfo | null;
+  /** 架构 §4.13：当前 stream 中 Edit 工具产生的快照条目（EditSnapshotCreated 事件累积）。 */
+  editSnapshots: EditEntry[];
 };
 
 export type SuspendedInfo = {
@@ -290,6 +293,7 @@ const EMPTY_MIRROR = {
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
   suspended: null as SuspendedInfo | null,
+  editSnapshots: [] as EditEntry[],
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -307,6 +311,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     autoJudgedNotes: slot.autoJudgedNotes,
     currentRunMode: slot.currentRunMode,
     suspended: slot.suspended,
+    editSnapshots: slot.editSnapshots,
   };
 }
 
@@ -440,6 +445,41 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       ),
     };
   }
+  if (e.type === "edit_snapshot_created") {
+    return {
+      ...slot,
+      editSnapshots: [
+        ...slot.editSnapshots,
+        {
+          snapshot_id: e.snapshot_id,
+          call_id: e.call_id,
+          tool: "Edit",
+          real_path: e.file_path,
+          action: e.action,
+          before_sha: e.before_sha,
+          after_sha: e.after_sha,
+          before_bytes: e.before_bytes,
+          after_bytes: e.after_bytes,
+          ts_ms: Date.now(),
+          reverted: false,
+        },
+      ],
+    };
+  }
+  if (e.type === "edit_reverted") {
+    return {
+      ...slot,
+      editSnapshots: slot.editSnapshots.map((entry) =>
+        entry.snapshot_id === e.snapshot_id
+          ? { ...entry, reverted: true, reverted_at_ms: Date.now() }
+          : entry
+      ),
+    };
+  }
+  if (e.type === "edit_revert_failed") {
+    // 状态不变——revert 失败由 Tauri command 的 reject 路径 toast 提示
+    return slot;
+  }
   return slot;
 }
 
@@ -492,6 +532,8 @@ interface AppState {
   currentRunMode: string | null;
   /** 架构 §4.12：当前对话 Run 是否被挂起。 */
   suspended: SuspendedInfo | null;
+  /** 架构 §4.13：当前 stream 中 Edit 工具产生的快照条目。 */
+  editSnapshots: EditEntry[];
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
@@ -525,6 +567,12 @@ interface AppState {
   compacting: boolean;
   refreshContextUsage: () => Promise<void>;
   compactCurrentSession: (customInstructions?: string) => Promise<void>;
+
+  // ── edits worktree（架构 §4.13）──
+  /** 回退单次 Edit（调 Tauri revert_edit 命令）。成功/失败直接在 UI 展示 toast。 */
+  revertEdit: (sessionId: string, snapshotId: string) => Promise<void>;
+  /** 从后端重新加载当前 session 的 edits 条目列表。 */
+  refreshEdits: () => Promise<void>;
 
   // HITL — 当前一轮 run 中悬挂的审批请求
   pendingApproval: PendingApproval | null;
@@ -775,6 +823,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   contextUsage: null,
   compacting: false,
+  editSnapshots: [],
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -798,6 +847,52 @@ export const useStore = create<AppState>((set, get) => ({
       set({ contextUsage: usage, currentSession: fresh });
     } finally {
       set({ compacting: false });
+    }
+  },
+
+  async revertEdit(sessionId: string, snapshotId: string) {
+    const result = await api.revertEdit(sessionId, snapshotId);
+    if (result.success) {
+      // 更新前端 editSnapshots 列表中的 reverted 标记
+      set((state) => {
+        const slot = state.sessionStreams[sessionId];
+        if (!slot) return state;
+        const updatedEntry = slot.editSnapshots.map((e) =>
+          e.snapshot_id === snapshotId ? { ...e, reverted: true, reverted_at_ms: Date.now() } : e
+        );
+        const nextSlot: SessionStream = { ...slot, editSnapshots: updatedEntry };
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
+          ...(isForeground ? mirrorFromSlot(nextSlot) : {}),
+        };
+      });
+      // 同步刷新后端数据
+      const cur = get().currentSession;
+      if (cur?.id === sessionId) {
+        get().refreshEdits();
+      }
+    } else {
+      throw new Error(result.error ?? "回退失败");
+    }
+  },
+
+  async refreshEdits() {
+    const cur = get().currentSession;
+    if (!cur) return;
+    try {
+      const entries = await api.listEdits(cur.id);
+      set((state) => {
+        const slot = state.sessionStreams[cur.id];
+        if (!slot) return state;
+        const nextSlot: SessionStream = { ...slot, editSnapshots: entries };
+        return {
+          sessionStreams: { ...state.sessionStreams, [cur.id]: nextSlot },
+          ...mirrorFromSlot(nextSlot),
+        };
+      });
+    } catch {
+      // 静默——edits-worktree 不可用时 entries 保持原样
     }
   },
 
@@ -1196,6 +1291,7 @@ export const useStore = create<AppState>((set, get) => ({
       });
     }
     get().refreshContextUsage();
+    get().refreshEdits();
   },
 
   async newSession(opts) {
@@ -1389,6 +1485,7 @@ export const useStore = create<AppState>((set, get) => ({
         autoJudgedNotes: [],
         currentRunMode: null,
         suspended: null,
+        editSnapshots: [],
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;

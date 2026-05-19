@@ -338,7 +338,16 @@ export interface SearchHit extends SessionMeta {
   matched_in: "" | "title" | "content";
 }
 
-/** 引擎事件——后端通过 Tauri Channel 流式推送给前端 */
+/**
+ * 引擎事件——后端通过 Tauri Channel 流式推送给前端。
+ *
+ * 维护注意：此类型必须与 `apps/desktop/src/engine/mod.rs` 的 `EngineEvent` 枚举
+ * 保持字段级同步。新增/修改 EventPayload variant 时需同时更新：
+ * 1. protocol::event::EventPayload（crates/protocol/src/event.rs）
+ * 2. engine/mod.rs EngineEvent
+ * 3. chat.rs agent_event_to_engine_event 翻译函数
+ * 4. 本文件 EngineEvent 类型 + useStore.ts applyEventToSlot 处理函数
+ */
 export type EngineEvent =
   | { type: "text_delta"; text: string }
   | { type: "text_done"; full_text: string }
@@ -431,7 +440,29 @@ export type EngineEvent =
       kind: "selected" | "selected_multi" | "custom" | "cancelled";
       text: string;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "edit_snapshot_created";
+      call_id: string;
+      snapshot_id: string;
+      file_path: string;
+      action: "create" | "overwrite" | "modify";
+      before_sha: string;
+      after_sha: string;
+      before_bytes: number;
+      after_bytes: number;
+    }
+  | {
+      type: "edit_reverted";
+      snapshot_id: string;
+      file_path: string;
+    }
+  | {
+      type: "edit_revert_failed";
+      snapshot_id: string;
+      file_path: string;
+      error: string;
+    };
 
 /** 一次待审批请求（HITL） */
 export interface PendingApproval {
@@ -546,4 +577,42 @@ export interface ImportedToken {
   expires_at?: number | null;
   client_id?: string | null;
   client_secret?: string | null;
+}
+
+// ========== Edits Worktree（架构 §4.13）==========
+
+export type EditAction = "create" | "overwrite" | "modify";
+
+export interface EditEntry {
+  snapshot_id: string;
+  call_id: string;
+  tool: string;
+  real_path: string;
+  action: EditAction;
+  before_sha: string;
+  after_sha: string;
+  before_bytes: number;
+  after_bytes: number;
+  ts_ms: number;
+  reverted: boolean;
+  reverted_at_ms?: number | null;
+}
+
+export interface DiffPayload {
+  before_text: string;
+  after_text: string;
+  before_sha: string;
+  after_sha: string;
+  file_path: string;
+  action: string;
+}
+
+export interface RevertResult {
+  success: boolean;
+  error?: string | null;
+}
+
+export interface EditsWorktreeStatus {
+  enabled: boolean;
+  entry_count: number;
 }
