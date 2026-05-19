@@ -1,13 +1,16 @@
 //! WakeupScheduler（架构 §4.12.2 / §4.12.4）：进程内的 cron + bg-task 唤醒中心。
 //!
-//! 三个后台 task + 一个 mpsc 通道：
+//! 独占一个后台线程 + current_thread runtime，跑三个 task + 一个 mpsc 通道：
 //! - `CronTimer`：每秒扫 cron 表，到点投递 [`WakeupEvent::CronFired`]
 //! - `BgFinishHook`：每秒扫 [`BackgroundShells`] 列表，发现已注册任务进入终态时投递
 //!   [`WakeupEvent::BgTaskFinished`]
 //! - `WakeupDispatcher`：消费 mpsc 事件，调用 surface 注册的 `ResumeHandler` 真正
 //!   resume Run。Run 在挂起期间 agent_loop task 已经退出——dispatcher 帮它"再生"
 //!
-//! 进程退出 = 整个 scheduler 一起死（§13 决策：不自动 resume 跨进程的 checkpoint）。
+//! 独立 runtime 让调度器既不依赖 surface 的 runtime 上下文（避免 Tauri 同步 setup
+//! 阶段调 `global()` 时 `tokio::spawn` 因无 reactor 而 panic），也不会随某个 surface
+//! runtime 一起死。进程退出 = 整个 scheduler 一起死（§13 决策：不自动 resume 跨进程
+//! 的 checkpoint）。
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -54,8 +57,9 @@ impl WakeupEvent {
 
     pub fn run_id(&self) -> &str {
         match self {
-            WakeupEvent::BgTaskFinished { run_id, .. }
-            | WakeupEvent::CronFired { run_id, .. } => run_id,
+            WakeupEvent::BgTaskFinished { run_id, .. } | WakeupEvent::CronFired { run_id, .. } => {
+                run_id
+            }
         }
     }
 }
@@ -112,37 +116,50 @@ impl WakeupScheduler {
             .clone()
     }
 
-    fn start_background_tasks(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<WakeupEvent>) {
-        // CronTimer
+    fn start_background_tasks(self: Arc<Self>, rx: mpsc::UnboundedReceiver<WakeupEvent>) {
+        // 调度器独占一个 current_thread runtime，和 surface（Tauri / CLI）的 runtime
+        // 完全隔离。否则若调用方在无 runtime 上下文里首次触发 `global()`（典型例子：
+        // Tauri 的同步 setup 闭包跑在 NSApplication did_finish_launching 主线程上），
+        // 内部 `tokio::spawn` 会立刻 panic；ObjC 回调禁止 unwind，会把 panic 升级为
+        // 进程 abort。独立 runtime 同时让 scheduler 的生命周期挂在进程而非任一 surface。
         let s_cron = self.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000));
-            loop {
-                tick.tick().await;
-                s_cron.scan_cron();
-            }
-        });
-        // BgFinishHook
         let s_bg = self.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
-            loop {
-                tick.tick().await;
-                s_bg.scan_bg();
-            }
-        });
-        // Dispatcher
         let s_disp = self.clone();
-        tokio::spawn(async move {
-            while let Some(ev) = rx.recv().await {
-                let handler = s_disp.inner.lock().unwrap().handler.clone();
-                if let Some(h) = handler {
-                    h(ev);
-                } else {
-                    tracing::warn!("wakeup event arrived but no resume_handler registered");
-                }
-            }
-        });
+        std::thread::Builder::new()
+            .name("wakeup-scheduler".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build wakeup scheduler runtime");
+                rt.block_on(async move {
+                    let mut rx = rx;
+                    tokio::spawn(async move {
+                        let mut tick =
+                            tokio::time::interval(std::time::Duration::from_millis(1000));
+                        loop {
+                            tick.tick().await;
+                            s_cron.scan_cron();
+                        }
+                    });
+                    tokio::spawn(async move {
+                        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+                        loop {
+                            tick.tick().await;
+                            s_bg.scan_bg();
+                        }
+                    });
+                    while let Some(ev) = rx.recv().await {
+                        let handler = s_disp.inner.lock().unwrap().handler.clone();
+                        if let Some(h) = handler {
+                            h(ev);
+                        } else {
+                            tracing::warn!("wakeup event arrived but no resume_handler registered");
+                        }
+                    }
+                });
+            })
+            .expect("spawn wakeup scheduler thread");
     }
 
     fn scan_cron(&self) {
