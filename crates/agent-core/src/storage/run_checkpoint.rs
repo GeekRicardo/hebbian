@@ -33,10 +33,7 @@ pub enum RunPhase {
         max_wait_until_ms: Option<i64>,
     },
     /// 等 cron 时间到点。
-    AwaitingCron {
-        fire_at_ms: i64,
-        reason: String,
-    },
+    AwaitingCron { fire_at_ms: i64, reason: String },
 }
 
 /// 落盘的 RunCheckpoint。重启后 WakeupScheduler 不会自动 resume（§13 决策），
@@ -166,6 +163,8 @@ mod tests {
         };
         save(tmp.path(), &ck).unwrap();
         let back = load(tmp.path(), sid).unwrap().unwrap();
-        assert!(matches!(back.phase, RunPhase::AwaitingCron { ref reason, .. } if reason == "check build progress"));
+        assert!(
+            matches!(back.phase, RunPhase::AwaitingCron { ref reason, .. } if reason == "check build progress")
+        );
     }
 }

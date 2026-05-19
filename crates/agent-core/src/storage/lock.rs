@@ -66,9 +66,7 @@ pub fn write_atomic(path: &Path, content: &[u8]) -> AppResult<()> {
         }
         let tmp = path.with_extension(format!(
             "{}.tmp.{}",
-            path.extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or(""),
+            path.extension().and_then(|s| s.to_str()).unwrap_or(""),
             uuid::Uuid::new_v4()
         ));
         let mut f = OpenOptions::new()
@@ -92,10 +90,7 @@ pub fn append_jsonl(path: &Path, line: &str) -> AppResult<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut f = OpenOptions::new().create(true).append(true).open(path)?;
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_data()?;
@@ -118,7 +113,8 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hebbian-lock-{name}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-lock-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("data.bin")
     }

@@ -17,9 +17,7 @@ use std::sync::Arc;
 
 use common::{CancelFlag, ReasoningConfig};
 use model_gateway::client::ModelClient;
-use model_gateway::types::{
-    ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry,
-};
+use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
 const TITLE_INSTRUCTION: &str =
     "为以下用户消息生成一个 4-12 字的中文对话主题作为标题，只输出标题本身，\

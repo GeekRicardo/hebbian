@@ -20,11 +20,11 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use common::attachments::MessageAttachment;
 use model_gateway::types::{
     AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolResult, TranscriptEntry,
     UserEntry,
 };
-use common::attachments::MessageAttachment;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::fs::OpenOptions;
@@ -40,7 +40,9 @@ pub const ENV_VAR: &str = "HEBBIAN_DUMP_MODEL_IO";
 
 /// 是否启用 dump。surface 用它决定要不要构造 [`ModelIoDump`]。
 pub fn is_enabled() -> bool {
-    std::env::var(ENV_VAR).map(|v| !v.is_empty()).unwrap_or(false)
+    std::env::var(ENV_VAR)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
 }
 
 /// 默认路径：`<data_dir>/sessions/<session_id>/model_io.jsonl`。
@@ -56,10 +58,7 @@ pub fn default_path(data_dir: &Path, session_id: &str) -> PathBuf {
 
 /// 检查 [`ENV_VAR`]：开启则按 [`default_path`] 打开一份 dump，失败仅记 trace 不传播。
 /// CLI / desktop 启动时调用。
-pub async fn open_for_session_if_enabled(
-    data_dir: &Path,
-    session_id: &str,
-) -> Option<ModelIoDump> {
+pub async fn open_for_session_if_enabled(data_dir: &Path, session_id: &str) -> Option<ModelIoDump> {
     if !is_enabled() {
         return None;
     }
@@ -385,8 +384,7 @@ mod tests {
 
     #[test]
     fn response_error_branch() {
-        let err: Result<ModelResponse, ModelError> =
-            Err(ModelError::Other("provider 502".into()));
+        let err: Result<ModelResponse, ModelError> = Err(ModelError::Other("provider 502".into()));
         let v = response_to_json(&err);
         assert_eq!(v["type"], "Error");
         assert_eq!(v["error"], "provider 502");

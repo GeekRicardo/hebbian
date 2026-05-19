@@ -95,10 +95,7 @@ impl ExternalHook {
     pub fn from_config(config: HookConfig) -> Vec<Box<dyn Hook>> {
         let mut hooks: Vec<Box<dyn Hook>> = Vec::new();
         for (event, rules) in config {
-            hooks.push(Box::new(ExternalHook {
-                name: event,
-                rules,
-            }));
+            hooks.push(Box::new(ExternalHook { name: event, rules }));
         }
         hooks
     }
@@ -166,7 +163,10 @@ impl ExternalHook {
                 return None;
             }
         };
-        let outcome = resp.get("outcome").and_then(|v| v.as_str()).unwrap_or("continue");
+        let outcome = resp
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("continue");
         match outcome {
             "block" => {
                 let reason = resp
@@ -179,12 +179,12 @@ impl ExternalHook {
             "modify" => {
                 // 完整 patch 协议（架构 §4.8.2 / §4.8.4）：从 resp.patch 解析 input /
                 // result / system_prefix 三个可选字段，dispatcher 按点位拿对应字段。
-                let patch_value = resp.get("patch").cloned().unwrap_or(serde_json::Value::Null);
+                let patch_value = resp
+                    .get("patch")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let patch = HookPatch {
-                    input: patch_value
-                        .get("input")
-                        .cloned()
-                        .filter(|v| !v.is_null()),
+                    input: patch_value.get("input").cloned().filter(|v| !v.is_null()),
                     result: patch_value
                         .get("result")
                         .and_then(|v| v.as_str())
@@ -194,7 +194,8 @@ impl ExternalHook {
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 };
-                if patch.input.is_none() && patch.result.is_none() && patch.system_prefix.is_none() {
+                if patch.input.is_none() && patch.result.is_none() && patch.system_prefix.is_none()
+                {
                     debug!(event = %point.event_name(), "hook modify with empty patch — treated as continue");
                     None
                 } else {
@@ -231,7 +232,10 @@ impl Hook for ExternalHook {
 fn describe_point(point: &HookPoint) -> serde_json::Value {
     use serde_json::json;
     match point {
-        HookPoint::SessionStart { session_id, workdir } => json!({
+        HookPoint::SessionStart {
+            session_id,
+            workdir,
+        } => json!({
             "session_id": session_id,
             "workdir": workdir,
         }),
@@ -240,36 +244,63 @@ fn describe_point(point: &HookPoint) -> serde_json::Value {
             "session_id": session_id,
             "text": text,
         }),
-        HookPoint::PreToolUse { session_id, tool_name, input } => json!({
+        HookPoint::PreToolUse {
+            session_id,
+            tool_name,
+            input,
+        } => json!({
             "session_id": session_id,
             "tool": tool_name,
             "input": input,
         }),
-        HookPoint::PostToolUse { session_id, tool_name, result } => json!({
+        HookPoint::PostToolUse {
+            session_id,
+            tool_name,
+            result,
+        } => json!({
             "session_id": session_id,
             "tool": tool_name,
             "result": result,
         }),
-        HookPoint::PostToolUseFailure { session_id, tool_name, error } => json!({
+        HookPoint::PostToolUseFailure {
+            session_id,
+            tool_name,
+            error,
+        } => json!({
             "session_id": session_id,
             "tool": tool_name,
             "error": error,
         }),
-        HookPoint::PermissionRequest { session_id, tool_name, input } => json!({
+        HookPoint::PermissionRequest {
+            session_id,
+            tool_name,
+            input,
+        } => json!({
             "session_id": session_id,
             "tool": tool_name,
             "input": input,
         }),
-        HookPoint::PreCompact { session_id, strategy } => json!({
+        HookPoint::PreCompact {
+            session_id,
+            strategy,
+        } => json!({
             "session_id": session_id,
             "strategy": strategy,
         }),
-        HookPoint::PostCompact { session_id, before_tokens, after_tokens } => json!({
+        HookPoint::PostCompact {
+            session_id,
+            before_tokens,
+            after_tokens,
+        } => json!({
             "session_id": session_id,
             "before_tokens": before_tokens,
             "after_tokens": after_tokens,
         }),
-        HookPoint::Notification { session_id, level, message } => json!({
+        HookPoint::Notification {
+            session_id,
+            level,
+            message,
+        } => json!({
             "session_id": session_id,
             "level": level,
             "message": message,
@@ -288,7 +319,10 @@ fn describe_point(point: &HookPoint) -> serde_json::Value {
             "tool": tool_name,
             "content_len": content.len(),
         }),
-        HookPoint::OnCompaction { before_tokens, after_tokens } => json!({
+        HookPoint::OnCompaction {
+            before_tokens,
+            after_tokens,
+        } => json!({
             "before_tokens": before_tokens,
             "after_tokens": after_tokens,
         }),

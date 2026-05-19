@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use crate::context::budget;
 use crate::definition::CompactionPolicy;
@@ -136,8 +136,8 @@ pub async fn compact_with_llm(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use model_gateway::types::{ModelStreamEvent, Usage};
     use common::CancelFlag;
+    use model_gateway::types::{ModelStreamEvent, Usage};
 
     /// 极简 mock：固定返回一段非空摘要，不关心入参。
     struct StubClient;
@@ -221,7 +221,9 @@ mod tests {
             TranscriptEntry::User(UserEntry::text("用户主动 /compact")),
         ];
 
-        let _ = compact_with_llm(&client, None, entries, None).await.unwrap();
+        let _ = compact_with_llm(&client, None, entries, None)
+            .await
+            .unwrap();
 
         let captured = client.captured.lock().unwrap().clone().unwrap();
         // 仍是 3 条（没有新增第 4 条 user），最后一条 user 的 text 同时包含原文与 prompt
@@ -256,7 +258,9 @@ mod tests {
             }),
         ];
 
-        let _ = compact_with_llm(&client, None, entries, None).await.unwrap();
+        let _ = compact_with_llm(&client, None, entries, None)
+            .await
+            .unwrap();
 
         let captured = client.captured.lock().unwrap().clone().unwrap();
         // 新增一条 user prompt，共 3 条

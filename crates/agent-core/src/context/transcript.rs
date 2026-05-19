@@ -1,8 +1,8 @@
 use serde_json::Value;
 
-use model_gateway::types::{AssistantEntry, ToolCall, ToolResult, TranscriptEntry, UserEntry};
-use common::attachments::MessageAttachment;
 use crate::storage::sessions::{Message, MessageMeta, MessagePart, Role};
+use common::attachments::MessageAttachment;
+use model_gateway::types::{AssistantEntry, ToolCall, ToolResult, TranscriptEntry, UserEntry};
 
 #[derive(Debug, Clone)]
 pub struct PendingToolCall {
@@ -34,12 +34,9 @@ impl Transcript {
 
     pub fn from_session(system: Option<String>, messages: &[Message]) -> Self {
         // 找到最近一次 CompactBoundary：之前的消息全部跳过，summary 作为前情提要注入。
-        let boundary = messages.iter().rposition(|m| {
-            matches!(
-                m.meta,
-                Some(MessageMeta::CompactBoundary { .. })
-            )
-        });
+        let boundary = messages
+            .iter()
+            .rposition(|m| matches!(m.meta, Some(MessageMeta::CompactBoundary { .. })));
 
         let mut t = Self::new(system);
         if let Some(idx) = boundary {
@@ -170,7 +167,9 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                 }
                 text.push_str(next_text);
             }
-            MessagePart::Reasoning { text: next_reasoning } => {
+            MessagePart::Reasoning {
+                text: next_reasoning,
+            } => {
                 if !tool_calls.is_empty() {
                     // reasoning 出现在工具调用之后罕见；如果发生，先把当前 turn 落桶。
                     flush_assistant_turn(

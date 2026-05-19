@@ -105,7 +105,8 @@ pub fn microcompact(
         }
         if let Some(TranscriptEntry::ToolResults(results)) = entries.get_mut(*entry_idx) {
             if let Some(r) = results.get_mut(*result_idx) {
-                if r.content != SHADOWED_PLACEHOLDER && !r.content.starts_with("[结果已被压缩") {
+                if r.content != SHADOWED_PLACEHOLDER && !r.content.starts_with("[结果已被压缩")
+                {
                     // 保留原文给 caller 落盘成 txt（架构 §4.7 / Step 9）。
                     artifacts.push((r.call_id.clone(), r.content.clone()));
                     let placeholder = format!(

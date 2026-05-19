@@ -74,8 +74,8 @@ impl Drop for OtelGuard {
 /// `OTEL_EXPORTER_OTLP_ENDPOINT` 缺失时只装 stderr 日志，返回空守卫。
 /// 重复调用安全（subscriber 已注册时静默跳过）。
 pub fn init(service_name: &str, default_filter: &str) -> OtelGuard {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_writer(std::io::stderr);
@@ -143,8 +143,8 @@ pub fn init(service_name: &str, default_filter: &str) -> OtelGuard {
 
 /// 仅装 stderr 日志，不接 OTLP。在不需要 OTel 时使用。
 pub fn init_logging_only(default_filter: &str) {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_target(true)

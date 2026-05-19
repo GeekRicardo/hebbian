@@ -96,7 +96,11 @@ pub struct SessionDirMeta {
     pub model: String,
     /// 流式中断时间戳；首次落 partial 时不写，恢复时由
     /// [`recover_interrupted_partials`] 填上。
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "lastInterruptedAt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "lastInterruptedAt"
+    )]
     pub last_interrupted_at: Option<i64>,
 }
 
@@ -124,8 +128,12 @@ pub fn load_meta(data_dir: &Path, session_id: &str) -> AppResult<Option<SessionD
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum PartialFragment {
-    Text { text: String },
-    Reasoning { text: String },
+    Text {
+        text: String,
+    },
+    Reasoning {
+        text: String,
+    },
     ToolCall {
         index: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,7 +221,10 @@ pub fn recover_interrupted_partials(
                     name,
                     arguments_chunk,
                 }) => {
-                    let entry = recovered.tool_calls.entry(index).or_insert((None, String::new()));
+                    let entry = recovered
+                        .tool_calls
+                        .entry(index)
+                        .or_insert((None, String::new()));
                     if entry.0.is_none() {
                         entry.0 = name;
                     }

@@ -55,7 +55,9 @@ pub enum EventPayload {
     },
     /// Run 从挂起态恢复。surface 用 `cause` 在 UI 标明唤醒原因（bg 完成 / cron 触发 /
     /// 用户消息 / 手动 resume）。
-    RunResumed { cause: ResumeCause },
+    RunResumed {
+        cause: ResumeCause,
+    },
 
     // —— 单个 turn ——
     TurnStarted {
