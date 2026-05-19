@@ -37,6 +37,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::run_mode::RunMode;
+use crate::rules::RuleFileState;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -184,6 +185,12 @@ pub struct Session {
     /// 老 jsonl 无此字段反序列化默认 [`RunMode::AskBeforeEdits`]。
     #[serde(default)]
     pub run_mode: RunMode,
+    /// 启用的全局规则文件路径列表。None = 继承全局默认。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_rules: Option<Vec<PathBuf>>,
+    /// 项目规则文件开关状态。None = 自动发现（workdir 下的默认 on）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_files: Option<Vec<RuleFileState>>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -316,6 +323,10 @@ pub struct RolloutMeta {
     /// [`RunMode`] 起始快照。老 RolloutMeta 无此字段反序列化为 `AskBeforeEdits`。
     #[serde(default)]
     pub run_mode: RunMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_rules: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_files: Option<Vec<RuleFileState>>,
 }
 
 /// 可变字段补丁。每个 `Some(_)` 字段都会按 last-wins 覆盖到最终 [`Session`]。
@@ -357,6 +368,10 @@ pub struct MetaUpdate {
     /// 切换 [`RunMode`] 时下发的补丁。`None` 表示本次更新不动 RunMode。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_mode: Option<RunMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_rules: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_files: Option<Vec<RuleFileState>>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -622,6 +637,8 @@ fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -
         token_stats: s.token_stats,
         project_id: s.project_id.clone(),
         run_mode: s.run_mode,
+        global_rules: s.global_rules.clone(),
+        rules_files: s.rules_files.clone(),
     }
 }
 
@@ -644,6 +661,8 @@ fn apply_meta(s: &mut Session, m: RolloutMeta) {
     s.token_stats = m.token_stats;
     s.project_id = m.project_id;
     s.run_mode = m.run_mode;
+    s.global_rules = m.global_rules.clone();
+    s.rules_files = m.rules_files;
     s.created_at = m.created_at;
 }
 
@@ -696,6 +715,12 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     if let Some(v) = u.run_mode {
         s.run_mode = v;
     }
+    if let Some(v) = u.global_rules {
+        s.global_rules = Some(v);
+    }
+    if let Some(v) = u.rules_files {
+        s.rules_files = Some(v);
+    }
 }
 
 /// 把 jsonl 文件折叠回一个完整 [`Session`]。
@@ -747,6 +772,8 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
         source: None,
         project_id: None,
         run_mode: RunMode::default(),
+        global_rules: None,
+        rules_files: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -1061,6 +1088,8 @@ pub fn create_with_source(
         source: Some(source.clone()),
         project_id: None,
         run_mode: RunMode::default(),
+        global_rules: None,
+        rules_files: None,
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1176,6 +1205,8 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         // 分支沿用父对话的 surface 来源
         source: src.source,
         run_mode: src.run_mode,
+        global_rules: src.global_rules.clone(),
+        rules_files: src.rules_files.clone(),
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1561,6 +1592,8 @@ mod tests {
             source: None,
             project_id: None,
             run_mode: RunMode::default(),
+            global_rules: None,
+            rules_files: None,
             created_at: now_ts,
             updated_at: now_ts,
         };

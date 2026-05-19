@@ -20,6 +20,7 @@ pub mod lock;
 pub mod oauth;
 pub mod permissions;
 pub mod plans;
+pub mod projects;
 pub mod prompts;
 pub mod run_checkpoint;
 pub mod sessions;

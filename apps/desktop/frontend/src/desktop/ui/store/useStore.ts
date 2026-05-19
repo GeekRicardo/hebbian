@@ -20,6 +20,8 @@ import type {
   SessionMeta,
   StreamingAssistantPart,
   ToolInfo,
+  WorkspaceProject,
+  WorkspaceProjectInput,
 } from "@/desktop/ui/types";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
@@ -28,10 +30,12 @@ const LAST_PROMPT_ID_KEY = "lastPromptId";
 const LAST_PROVIDER_ID_KEY = "lastProviderId";
 const LAST_MODEL_KEY = "lastModel";
 const USER_AVATAR_KEY = "userAvatar";
-// 工作区"待继承"项：用户上次在输入框 + 菜单里选过的 workdir / allowed_dirs，
+// 工作区"待继承"项：用户上次在输入框 + 菜单里选过的 workdir / allowed_paths，
 // 新建对话会自动应用，避免每次都重选。null / [] 表示用户清空了，新对话也保持空。
 const PENDING_WORKDIR_KEY = "pendingWorkdir";
-const PENDING_ALLOWED_DIRS_KEY = "pendingAllowedDirs";
+const PENDING_ALLOWED_PATHS_KEY = "pendingAllowedPaths";
+// 全局规则继承：新建对话时沿用上一个对话的 global_rules 设置。
+const GLOBAL_RULES_KEY = "globalRules";
 
 function readStoredValue(key: string) {
   return localStorage.getItem(key) ?? "";
@@ -42,9 +46,9 @@ function readStoredWorkdir(): string | null {
   return raw ? raw : null;
 }
 
-function readStoredAllowedDirs(): string[] {
+function readStoredAllowedPaths(): string[] {
   try {
-    const raw = localStorage.getItem(PENDING_ALLOWED_DIRS_KEY);
+    const raw = localStorage.getItem(PENDING_ALLOWED_PATHS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
@@ -61,11 +65,30 @@ function persistPendingWorkdir(workdir: string | null) {
   }
 }
 
-function persistPendingAllowedDirs(dirs: string[]) {
-  if (dirs.length > 0) {
-    localStorage.setItem(PENDING_ALLOWED_DIRS_KEY, JSON.stringify(dirs));
+function persistPendingAllowedPaths(paths: string[]) {
+  if (paths.length > 0) {
+    localStorage.setItem(PENDING_ALLOWED_PATHS_KEY, JSON.stringify(paths));
   } else {
-    localStorage.removeItem(PENDING_ALLOWED_DIRS_KEY);
+    localStorage.removeItem(PENDING_ALLOWED_PATHS_KEY);
+  }
+}
+
+function readStoredGlobalRules(): string[] | null {
+  try {
+    const raw = localStorage.getItem(GLOBAL_RULES_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistGlobalRules(rules: string[] | null) {
+  if (rules === null) {
+    localStorage.removeItem(GLOBAL_RULES_KEY);
+  } else {
+    localStorage.setItem(GLOBAL_RULES_KEY, JSON.stringify(rules));
   }
 }
 
@@ -571,10 +594,22 @@ interface AppState {
 
   refreshSessions: () => Promise<void>;
   openSession: (id: string) => Promise<void>;
+  projects: WorkspaceProject[];
+  projectSidebarMode: "projects" | "all";
+  selectedProjectId: string | null;
+  refreshProjects: () => Promise<void>;
+  saveProject: (input: WorkspaceProjectInput) => Promise<WorkspaceProject>;
+  deleteProject: (id: string) => Promise<void>;
+  importVscodeProject: (content: string, name?: string | null) => Promise<WorkspaceProject>;
+  importProjectFile: (path: string) => Promise<WorkspaceProject>;
+  setProjectSidebarMode: (mode: "projects" | "all") => void;
+  openProject: (id: string) => void;
+  closeProject: () => void;
   newSession: (opts?: {
     providerId?: string;
     model?: string;
     promptId?: string;
+    projectId?: string | null;
   }) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -614,12 +649,14 @@ interface AppState {
   appSettings: AppSettings | null;
   refreshAppSettings: () => Promise<void>;
   saveAppSettings: (settings: AppSettings) => Promise<void>;
-  /** 更新当前对话的设置（workdir / allowed_dirs / enabled_tools / skill_dirs） */
+  /** 更新当前对话的设置（workdir / allowed_paths / enabled_tools / skill_dirs / global_rules / rules_files） */
   updateCurrentSessionSettings: (patch: {
     workdir?: string | null;
-    allowed_dirs?: string[] | null;
+    allowed_paths?: string[] | null;
     enabled_tools?: string[] | null;
     skill_dirs?: string[] | null;
+    global_rules?: string[] | null;
+    rules_files?: import("@/desktop/ui/types").RuleFileState[] | null;
   }) => Promise<void>;
   /**
    * "待继承"的工作区配置：输入框左下 + 菜单选择的项目 / 目录会落到这里，
@@ -627,9 +664,9 @@ interface AppState {
    * 写到本地（持久化）和 session（updateSessionSettings），让用户的修改即时生效。
    */
   pendingWorkdir: string | null;
-  pendingAllowedDirs: string[];
+  pendingAllowedPaths: string[];
   setPendingWorkdir: (workdir: string | null) => Promise<void>;
-  setPendingAllowedDirs: (dirs: string[]) => Promise<void>;
+  setPendingAllowedPaths: (dirs: string[]) => Promise<void>;
   /** PathAccess 审批专用 */
   resolvePathAccess: (scope: "once" | "this_project" | "all_project") => Promise<void>;
   setPendingPromptId: (v: string) => void;
@@ -661,6 +698,9 @@ export const useStore = create<AppState>((set, get) => ({
   pendingPromptId: readStoredValue(LAST_PROMPT_ID_KEY),
   userAvatar: readStoredValue(USER_AVATAR_KEY),
   sessions: [],
+  projects: [],
+  projectSidebarMode: "all",
+  selectedProjectId: null,
   currentSession: null,
   sessionStreams: {},
   streamingMessageId: null,
@@ -689,7 +729,7 @@ export const useStore = create<AppState>((set, get) => ({
   ),
 
   pendingWorkdir: readStoredWorkdir(),
-  pendingAllowedDirs: readStoredAllowedDirs(),
+  pendingAllowedPaths: readStoredAllowedPaths(),
   async setPendingWorkdir(workdir) {
     persistPendingWorkdir(workdir);
     set({ pendingWorkdir: workdir });
@@ -711,15 +751,15 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
   },
-  async setPendingAllowedDirs(dirs) {
+  async setPendingAllowedPaths(dirs) {
     const next = Array.from(new Set(dirs));
-    persistPendingAllowedDirs(next);
-    set({ pendingAllowedDirs: next });
+    persistPendingAllowedPaths(next);
+    set({ pendingAllowedPaths: next });
     const cur = get().currentSession;
     if (cur) {
       try {
         await api.updateSessionSettings(cur.id, {
-          allowed_dirs: next.length === 0 ? null : next,
+          allowed_paths: next.length === 0 ? null : next,
         });
       } catch {
         /* ignore */
@@ -1008,6 +1048,7 @@ export const useStore = create<AppState>((set, get) => ({
       get().refreshProviders(),
       get().refreshPrompts(),
       get().refreshSessions(),
+      get().refreshProjects(),
       // 加载工具清单（失败不影响主流程）
       api.listTools().then((tools) => set({ availableTools: tools })).catch(() => {}),
     ]);
@@ -1067,6 +1108,56 @@ export const useStore = create<AppState>((set, get) => ({
     set({ sessions: list });
   },
 
+  async refreshProjects() {
+    const projects = await api.listProjects();
+    set((state) => ({
+      projects,
+      selectedProjectId:
+        state.selectedProjectId &&
+        projects.some((project) => project.id === state.selectedProjectId)
+          ? state.selectedProjectId
+          : null,
+    }));
+  },
+
+  async saveProject(input) {
+    const project = await api.saveProject(input);
+    await get().refreshProjects();
+    return project;
+  },
+
+  async deleteProject(id) {
+    await api.deleteProject(id);
+    set((state) => ({
+      selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
+    }));
+    await get().refreshProjects();
+  },
+
+  async importVscodeProject(path, name) {
+    const project = await api.importVscodeProject(path, name);
+    await get().refreshProjects();
+    return project;
+  },
+
+  async importProjectFile(path) {
+    const project = await api.importProjectFile(path);
+    await get().refreshProjects();
+    return project;
+  },
+
+  setProjectSidebarMode(mode) {
+    set({ projectSidebarMode: mode });
+  },
+
+  openProject(id) {
+    set({ projectSidebarMode: "projects", selectedProjectId: id });
+  },
+
+  closeProject() {
+    set({ selectedProjectId: null });
+  },
+
   async openSession(id) {
     const s = await api.getSession(id);
     persistLastSessionConfig({
@@ -1074,14 +1165,15 @@ export const useStore = create<AppState>((set, get) => ({
       model: s.model,
       promptId: s.prompt_id ?? "",
     });
-    // 切到这个对话时，让输入框 chip 显示的 pending 跟随该对话的实际 workdir / allowed_dirs。
+    // 切到这个对话时，让输入框 chip 显示的 pending 跟随该对话的实际 workdir / allowed_paths。
     // 这样：
     // 1. 切对话 → chip 立即更新成目标对话的设置
     // 2. 用户在某对话里改完 pending，新建对话会继承（newSession 用 pending 注入）
     const sessionWorkdir = s.workdir ?? null;
-    const sessionAllowedDirs = s.allowed_dirs ?? [];
+    const sessionAllowedPaths = s.allowed_paths ?? [];
     persistPendingWorkdir(sessionWorkdir);
-    persistPendingAllowedDirs(sessionAllowedDirs);
+    persistPendingAllowedPaths(sessionAllowedPaths);
+    persistGlobalRules(s.global_rules ?? null);
     // 消费 pendingWakeup：切到该 session 时若有积压的 wakeup XML，立刻发出
     const pendingWakeup = get().pendingWakeups[id];
     set((state) => {
@@ -1090,7 +1182,7 @@ export const useStore = create<AppState>((set, get) => ({
         currentSession: s,
         pendingPromptId: s.prompt_id ?? "",
         pendingWorkdir: sessionWorkdir,
-        pendingAllowedDirs: sessionAllowedDirs,
+        pendingAllowedPaths: sessionAllowedPaths,
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
         currentInputQueue: state.inputQueues[id] ?? [],
         pendingWakeups: rest,
@@ -1121,15 +1213,35 @@ export const useStore = create<AppState>((set, get) => ({
       : undefined;
     const promptId = matchedPrompt?.id ?? null;
     const prompt = matchedPrompt?.content;
-    let s = await api.createSession(p.id, m, prompt ?? null, promptId);
-    // 把"待继承"的 workdir / allowed_dirs 立即注入新 session：
+    const activeProjectId = opts?.projectId ?? (get().projectSidebarMode === "projects" ? get().selectedProjectId : null);
+    const selectedProject = activeProjectId
+      ? get().projects.find((project) => project.id === activeProjectId) ?? null
+      : null;
+    const projectFolders = selectedProject?.folders ?? [];
+    const projectWorkdir = projectFolders[0]?.path ?? null;
+    const projectAllowed = projectFolders.slice(1).map((folder) => folder.path);
+    let s = await api.createSession(p.id, m, prompt ?? null, promptId, selectedProject
+      ? {
+          project_id: selectedProject.id,
+          workdir: projectWorkdir,
+          allowed_paths: projectAllowed,
+        }
+      : undefined);
+    // 把"待继承"的 workdir / allowed_paths 立即注入新 session：
     // 输入框 + 菜单的选择是跨对话黏的，新建对话时无需用户重新选。
-    const inheritWorkdir = get().pendingWorkdir;
-    const inheritAllowed = get().pendingAllowedDirs;
-    if (inheritWorkdir || inheritAllowed.length > 0) {
+    const inheritWorkdir = selectedProject ? null : get().pendingWorkdir;
+    const inheritAllowed = selectedProject ? [] : get().pendingAllowedPaths;
+    if (!selectedProject && (inheritWorkdir || inheritAllowed.length > 0)) {
       s = await api.updateSessionSettings(s.id, {
         ...(inheritWorkdir ? { workdir: inheritWorkdir } : {}),
-        ...(inheritAllowed.length > 0 ? { allowed_dirs: inheritAllowed } : {}),
+        ...(inheritAllowed.length > 0 ? { allowed_paths: inheritAllowed } : {}),
+      });
+    }
+    // 继承上一个对话的全局规则设置
+    const inheritGlobalRules = readStoredGlobalRules();
+    if (inheritGlobalRules !== null) {
+      s = await api.updateSessionSettings(s.id, {
+        global_rules: inheritGlobalRules,
       });
     }
     persistLastSessionConfig({
@@ -1142,6 +1254,8 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       currentSession: s,
       pendingPromptId: s.prompt_id ?? "",
+      pendingWorkdir: s.workdir ?? null,
+      pendingAllowedPaths: s.allowed_paths ?? [],
       currentInputQueue: state.inputQueues[s.id] ?? [],
       ...mirrorFromSlot(state.sessionStreams[s.id]),
     }));
@@ -1211,162 +1325,210 @@ export const useStore = create<AppState>((set, get) => ({
   async sendUserMessage(content, attachments = []) {
     const cur = get().currentSession;
     if (!cur) return;
-    const sessionId = cur.id;
-    // 当前 turn 跑完后（无论成功 / 失败 / 取消），把队首项作为下一轮自动 send。
-    // 用微任务异步触发，避免在 finally 里递归调用栈过深。
-    const drainNext = () => {
-      queueMicrotask(() => {
-        const state = get();
-        if (state.currentSession?.id !== sessionId) return;
-        const queue = state.inputQueues[sessionId];
-        if (!queue || queue.length === 0) return;
-        if (state.sessionStreams[sessionId]) return; // 还有 run 在跑（异常路径）
-        const head = queue[0];
-        state.removeQueuedInput(head.id);
-        void state.sendUserMessage(head.content, head.attachments);
-      });
-    };
-    const tempId = "streaming";
-    const requestId =
-      crypto.randomUUID?.() ??
-      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const initialSlot: SessionStream = {
-      requestId,
-      streamingMessageId: tempId,
-      streamingText: "",
-      streamingParts: [],
-      injectedSinceStream: [],
-      pendingApproval: null,
-      pendingApprovalQueue: [],
-      pendingQuestion: null,
-      pendingQuestionQueue: [],
-      autoJudgedNotes: [],
-      currentRunMode: null,
-      suspended: null,
-    };
-    set((state) => ({
-      currentSession: appendOptimisticUserMessage(cur, content, attachments, {
-        id: `pending-user-${requestId}`,
-        now: Date.now(),
-      }),
-      sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
-      runningSessions: new Set(state.runningSessions).add(sessionId),
-      // sessionId === currentSession.id（这一刻一定是前台），同步镜像
-      ...mirrorFromSlot(initialSlot),
-    }));
-    try {
-      const isFirstRound = cur.messages.every((m) => m.role !== "user");
-      // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
-      // 工具的开关现在统一在「设置 → 对话设置」配置。
-      await api.sendMessage(
-        cur.id,
-        content,
-        attachments,
-        cur.stream,
-        [],
-        requestId,
-        (e: EngineEvent) => {
-          set((state) => {
-            const slot = state.sessionStreams[sessionId];
-            // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
-            if (!slot || slot.requestId !== requestId) return state;
-            const updated = applyEventToSlot(slot, e);
-            if (updated === slot) return state;
-            const isForeground = state.currentSession?.id === sessionId;
-            return {
-              ...state,
-              sessionStreams: {
-                ...state.sessionStreams,
-                [sessionId]: updated,
-              },
-              ...(isForeground ? mirrorFromSlot(updated) : {}),
-            };
-          });
-        },
-      );
-      const stillForeground = get().currentSession?.id === sessionId;
-      if (stillForeground) {
-        const fresh = await api.getSession(sessionId);
-        set((state) => {
-          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
-          return {
-            currentSession: fresh,
-            sessionStreams: rest,
-            runningSessions: removeFromSet(state.runningSessions, sessionId),
-            ...mirrorFromSlot(undefined),
-          };
-        });
-        get().refreshContextUsage();
-      } else {
-        set((state) => {
-          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
-          return {
-            sessionStreams: rest,
-            runningSessions: removeFromSet(state.runningSessions, sessionId),
-            unreadFinishedSessions: new Set(state.unreadFinishedSessions).add(
-              sessionId
-            ),
-          };
-        });
-      }
-      await get().refreshSessions();
 
-      // 首轮对话完成后自动生成标题（失败不影响主流程）
-      if (isFirstRound) {
-        api
-          .generateSessionTitle(sessionId)
-          .then((s) => {
-            if (get().currentSession?.id === s.id) {
-              set({ currentSession: s });
-            }
-            get().refreshSessions();
-          })
-          .catch(() => {
-            /* ignore */
-          });
-      }
-    } catch (err: any) {
-      const stillForeground = get().currentSession?.id === sessionId;
-      // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread
+    const removeQueuedForSession = (sessionId: string, id: string) => {
       set((state) => {
-        const { [sessionId]: _drop, ...rest } = state.sessionStreams;
-        const next: Partial<AppState> = {
-          sessionStreams: rest,
-          runningSessions: removeFromSet(state.runningSessions, sessionId),
+        const list = state.inputQueues[sessionId] ?? [];
+        const next = list.filter((it) => it.id !== id);
+        if (next.length === list.length) return state;
+        const queues = { ...state.inputQueues };
+        if (next.length === 0) delete queues[sessionId];
+        else queues[sessionId] = next;
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          inputQueues: queues,
+          ...(isForeground ? { currentInputQueue: next } : {}),
         };
-        if (stillForeground) {
-          Object.assign(next, mirrorFromSlot(undefined));
-        } else {
-          next.unreadFinishedSessions = new Set(state.unreadFinishedSessions).add(
-            sessionId
-          );
-        }
-        return next as AppState;
       });
-      if (String(err?.message ?? err).includes("请求已中断")) {
+    };
+
+    const sendForSession = async (
+      baseSession: Session,
+      runContent: string,
+      runAttachments: MessageAttachment[]
+    ) => {
+      const sessionId = baseSession.id;
+      // 当前 turn 跑完后（无论成功 / 失败 / 取消），把队首项作为下一轮自动 send。
+      // 队列属于 session，不属于当前打开的页面；切到别的对话后也要继续 drain。
+      const drainNext = () => {
+        queueMicrotask(() => {
+          const state = get();
+          const queue = state.inputQueues[sessionId];
+          if (!queue || queue.length === 0) return;
+          if (state.sessionStreams[sessionId]) return; // 还有 run 在跑（异常路径）
+          const head = queue[0];
+          removeQueuedForSession(sessionId, head.id);
+          void (async () => {
+            const latest =
+              get().currentSession?.id === sessionId
+                ? get().currentSession
+                : await api.getSession(sessionId);
+            if (!latest) return;
+            await sendForSession(latest, head.content, head.attachments);
+          })().catch(() => {
+            // 后台队列失败时由 running/unread 状态提示用户回到该会话查看。
+          });
+        });
+      };
+
+      const tempId = "streaming";
+      const requestId =
+        crypto.randomUUID?.() ??
+        `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const initialSlot: SessionStream = {
+        requestId,
+        streamingMessageId: tempId,
+        streamingText: "",
+        streamingParts: [],
+        injectedSinceStream: [],
+        pendingApproval: null,
+        pendingApprovalQueue: [],
+        pendingQuestion: null,
+        pendingQuestionQueue: [],
+        autoJudgedNotes: [],
+        currentRunMode: null,
+        suspended: null,
+      };
+      set((state) => {
+        const isForeground = state.currentSession?.id === sessionId;
+        return {
+          ...state,
+          ...(isForeground
+            ? {
+                currentSession: appendOptimisticUserMessage(
+                  baseSession,
+                  runContent,
+                  runAttachments,
+                  {
+                    id: `pending-user-${requestId}`,
+                    now: Date.now(),
+                  }
+                ),
+              }
+            : {}),
+          sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
+          runningSessions: new Set(state.runningSessions).add(sessionId),
+          ...(isForeground ? mirrorFromSlot(initialSlot) : {}),
+        };
+      });
+      try {
+        const isFirstRound = baseSession.messages.every((m) => m.role !== "user");
+        // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
+        // 工具的开关现在统一在「设置 → 对话设置」配置。
+        await api.sendMessage(
+          sessionId,
+          runContent,
+          runAttachments,
+          baseSession.stream,
+          [],
+          requestId,
+          (e: EngineEvent) => {
+            set((state) => {
+              const slot = state.sessionStreams[sessionId];
+              // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
+              if (!slot || slot.requestId !== requestId) return state;
+              const updated = applyEventToSlot(slot, e);
+              if (updated === slot) return state;
+              const isForeground = state.currentSession?.id === sessionId;
+              return {
+                ...state,
+                sessionStreams: {
+                  ...state.sessionStreams,
+                  [sessionId]: updated,
+                },
+                ...(isForeground ? mirrorFromSlot(updated) : {}),
+              };
+            });
+          },
+        );
+        const stillForeground = get().currentSession?.id === sessionId;
         if (stillForeground) {
           const fresh = await api.getSession(sessionId);
-          set({ currentSession: fresh });
+          set((state) => {
+            const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+            return {
+              currentSession: fresh,
+              sessionStreams: rest,
+              runningSessions: removeFromSet(state.runningSessions, sessionId),
+              ...mirrorFromSlot(undefined),
+            };
+          });
+          get().refreshContextUsage();
+        } else {
+          set((state) => {
+            const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+            return {
+              ...state,
+              sessionStreams: rest,
+              runningSessions: removeFromSet(state.runningSessions, sessionId),
+              unreadFinishedSessions: new Set(state.unreadFinishedSessions).add(
+                sessionId
+              ),
+            };
+          });
         }
         await get().refreshSessions();
-        return;
-      }
-      try {
-        const fresh = await api.getSession(sessionId);
-        if (get().currentSession?.id === sessionId) {
-          set({ currentSession: fresh });
+
+        // 首轮对话完成后自动生成标题（失败不影响主流程）
+        if (isFirstRound) {
+          api
+            .generateSessionTitle(sessionId)
+            .then((s) => {
+              if (get().currentSession?.id === s.id) {
+                set({ currentSession: s });
+              }
+              get().refreshSessions();
+            })
+            .catch(() => {
+              /* ignore */
+            });
         }
-        await get().refreshSessions();
-      } catch {
-        if (get().currentSession?.id === sessionId) {
-          set({ currentSession: cur });
+      } catch (err: any) {
+        const stillForeground = get().currentSession?.id === sessionId;
+        // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread
+        set((state) => {
+          const { [sessionId]: _drop, ...rest } = state.sessionStreams;
+          const next: Partial<AppState> = {
+            sessionStreams: rest,
+            runningSessions: removeFromSet(state.runningSessions, sessionId),
+          };
+          if (stillForeground) {
+            Object.assign(next, mirrorFromSlot(undefined));
+          } else {
+            next.unreadFinishedSessions = new Set(state.unreadFinishedSessions).add(
+              sessionId
+            );
+          }
+          return next as AppState;
+        });
+        if (String(err?.message ?? err).includes("请求已中断")) {
+          if (stillForeground) {
+            const fresh = await api.getSession(sessionId);
+            set({ currentSession: fresh });
+          }
+          await get().refreshSessions();
+          return;
         }
+        try {
+          const fresh = await api.getSession(sessionId);
+          if (get().currentSession?.id === sessionId) {
+            set({ currentSession: fresh });
+          }
+          await get().refreshSessions();
+        } catch {
+          if (get().currentSession?.id === sessionId) {
+            set({ currentSession: baseSession });
+          }
+        }
+        // 后台失败不向 UI 抛错（用户视野不在这里，吐 toast 也无意义）
+        if (stillForeground) throw err;
+      } finally {
+        drainNext();
       }
-      // 后台失败不向 UI 抛错（用户视野不在这里，吐 toast 也无意义）
-      if (stillForeground) throw err;
-    } finally {
-      drainNext();
-    }
+    };
+
+    await sendForSession(cur, content, attachments);
   },
 
   async cancelStreaming() {
@@ -1478,6 +1640,9 @@ export const useStore = create<AppState>((set, get) => ({
     const cur = get().currentSession;
     if (!cur) return;
     const updated = await api.updateSessionSettings(cur.id, patch);
+    if ("global_rules" in patch) {
+      persistGlobalRules(patch.global_rules ?? null);
+    }
     set({ currentSession: updated });
   },
   async resolvePathAccess(scope) {
@@ -1503,7 +1668,7 @@ export const useStore = create<AppState>((set, get) => ({
         scope,
         sessionId
       );
-      // 重新拉一下 session（this_project 时 allowed_dirs 已落盘）
+      // 重新拉一下 session（this_project 时 allowed_paths 已落盘）
       if (scope === "this_project") {
         const fresh = await api.getSession(sessionId);
         if (get().currentSession?.id === sessionId) {

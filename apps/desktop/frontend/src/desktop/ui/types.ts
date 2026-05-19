@@ -69,6 +69,28 @@ export interface PromptsFile {
   prompts: Prompt[];
 }
 
+export interface WorkspaceFolder {
+  path: string;
+  name?: string | null;
+}
+
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  folders: WorkspaceFolder[];
+  source?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceProjectInput {
+  id?: string | null;
+  name: string;
+  workdir: string;
+  allowed_paths?: string[];
+  source?: string | null;
+}
+
 export type Role = "system" | "user" | "assistant" | "marker";
 
 export type MessageMeta =
@@ -233,15 +255,15 @@ export interface Session {
   /** 对话工作目录。null = 用全局默认（通常 ~/）。 */
   workdir?: string | null;
   /**
-   * 对话起始时的允许目录覆盖。null = 用全局默认。
+   * 对话起始时的允许路径覆盖。null = 用全局默认。
    * 一旦本对话发出过 user message，UI 不再允许从这里删除条目（破坏 prompt cache + 已生效行为）。
-   * 运行时新增的允许目录请使用 `runtime_allowed_dirs` / `pending_runtime_allowed_dirs`。
+   * 运行时新增的允许路径请使用 `runtime_allowed_paths` / `pending_runtime_allowed_paths`。
    */
-  allowed_dirs?: string[] | null;
-  /** 对话开始之后追加、已通过 `<workspace-update>` 通知模型的允许目录。UI 只读。 */
-  runtime_allowed_dirs?: string[];
-  /** 对话开始之后追加、还没通知模型的允许目录。下次发消息时随 user message 注入。UI 只读。 */
-  pending_runtime_allowed_dirs?: string[];
+  allowed_paths?: string[] | null;
+  /** 对话开始之后追加、已通过 `<workspace-update>` 通知模型的允许路径。UI 只读。 */
+  runtime_allowed_paths?: string[];
+  /** 对话开始之后追加、还没通知模型的允许路径。下次发消息时随 user message 注入。UI 只读。 */
+  pending_runtime_allowed_paths?: string[];
   /** 对话启用的非内置工具。null = 用全局默认。 */
   enabled_tools?: string[] | null;
   /** 对话使用的 skill 目录列表。null = 用全局默认。 */
@@ -252,8 +274,29 @@ export interface Session {
   token_stats?: TokenStats | null;
   /** 创建该 session 的 surface："desktop" / "cli"。老对话可能为 null/undefined。 */
   source?: string | null;
+  /** 创建该 session 时绑定的 workspace/project。 */
+  project_id?: string | null;
   created_at: number;
   updated_at: number;
+  /** 启用的全局规则文件路径列表。null = 继承全局默认。 */
+  global_rules?: string[] | null;
+  /** 项目规则文件开关状态。null = 自动发现（workdir 下的默认 on）。 */
+  rules_files?: RuleFileState[] | null;
+}
+
+/** 规则文件来源（决定默认开关状态） */
+export type RuleSource = "global" | "workdir" | "allowed_path";
+
+/** 发现请求返回给前端的轻量信息 */
+export interface RuleFileInfo {
+  path: string;
+  source: RuleSource;
+}
+
+/** 前端保存的规则文件开关状态 */
+export interface RuleFileState {
+  path: string;
+  enabled: boolean;
 }
 
 export interface AppSettings {
@@ -262,9 +305,10 @@ export interface AppSettings {
   };
   conversation: {
     workdir?: string | null;
-    allowed_dirs: string[];
+    allowed_paths: string[];
     enabled_tools: string[];
     skill_dirs: string[];
+    global_rules: string[];
   };
   agents: {
     default_prompt_id?: string | null;
@@ -283,6 +327,10 @@ export interface SessionMeta {
   date: string;
   /** 创建该 session 的 surface："desktop" / "cli"。Sidebar 用于显示徽章。 */
   source?: string | null;
+  /** 创建该 session 时绑定的 workspace/project。 */
+  project_id?: string | null;
+  /** 对话工作目录，用于项目列表兜底匹配老会话。 */
+  workdir?: string | null;
 }
 
 export interface SearchHit extends SessionMeta {

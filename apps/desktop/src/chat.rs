@@ -1240,6 +1240,9 @@ pub async fn build_preview_payload(
             Role::User => {
                 let mut value = preview_user_content(m);
                 if first_user_pending {
+                    if !rules_block.is_empty() {
+                        prepend_environment_to_preview(&mut value, &rules_block);
+                    }
                     prepend_environment_to_preview(&mut value, &env_block);
                     first_user_pending = false;
                 }

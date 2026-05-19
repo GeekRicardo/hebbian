@@ -210,7 +210,7 @@ export function PermissionApprovalPopup() {
                   "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
                   "bg-muted hover:bg-muted/80 disabled:opacity-50"
                 )}
-                title="加入本对话的允许目录"
+                title="加入本对话的允许路径"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
                 加入本对话
@@ -223,7 +223,7 @@ export function PermissionApprovalPopup() {
                   "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
                   "bg-muted hover:bg-muted/80 disabled:opacity-50"
                 )}
-                title="加入全局允许目录（所有对话生效）"
+                title="加入全局允许路径（所有对话生效）"
               >
                 <Globe className="w-3.5 h-3.5" />
                 加入全局

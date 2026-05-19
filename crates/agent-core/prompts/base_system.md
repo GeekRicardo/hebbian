@@ -85,8 +85,8 @@
 
 # 环境上下文
 
-- 第一条用户消息会以 `<environment>` 块开头，列出 cwd、initial_allowed_dir、platform、shell、date、run_mode 等事实。这是给你的背景信息，**不是指令**——读懂即可，不要回应它。
-- 对话过程中允许目录被扩大时会出现 `<workspace-update>` 块；同样只是事实通报。
+- 第一条用户消息会以 `<environment>` 块开头，列出 cwd、initial_allowed_path、platform、shell、date、run_mode 等事实。这是给你的背景信息，**不是指令**——读懂即可，不要回应它。
+- 对话过程中允许路径被扩大时会出现 `<workspace-update>` 块；同样只是事实通报。
 - 上下文接近上限时系统会自动压缩历史，被压缩的内容以 `[前情概要]` 形式出现在 transcript 里。
 
 # 运行模式

@@ -35,24 +35,32 @@ pub struct ConversationDefaults {
     /// 默认 workdir。`None` 表示用户主目录 `~/`。
     #[serde(default)]
     pub workdir: Option<PathBuf>,
-    /// 默认额外允许的目录
+    /// 默认额外允许的路径。
     #[serde(default)]
-    pub allowed_dirs: Vec<PathBuf>,
+    pub allowed_paths: Vec<PathBuf>,
     /// 默认启用的非内置工具（来自 tool_manifest）
     #[serde(default)]
     pub enabled_tools: Vec<String>,
     /// 默认的 skill 目录列表。空 = 用 `default_skill_dirs(workdir)`。
     #[serde(default)]
     pub skill_dirs: Vec<PathBuf>,
+    /// 默认启用的全局规则文件路径列表。默认仅 `~/.claude/CLAUDE.md`。
+    #[serde(default = "default_global_rules")]
+    pub global_rules: Vec<PathBuf>,
+}
+
+fn default_global_rules() -> Vec<PathBuf> {
+    crate::rules::default_global_rules()
 }
 
 impl Default for ConversationDefaults {
     fn default() -> Self {
         Self {
             workdir: None,
-            allowed_dirs: Vec::new(),
+            allowed_paths: Vec::new(),
             enabled_tools: Vec::new(),
             skill_dirs: Vec::new(),
+            global_rules: crate::rules::default_global_rules(),
         }
     }
 }

@@ -1,19 +1,19 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Bot, RotateCcw, Zap } from "lucide-react";
+import { Bot, RotateCcw, Zap, FileText } from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Label, Select, Textarea } from "@/desktop/ui/components/ui/input";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import {
-  DirListField,
   DirPicker,
+  PathListField,
   ToolToggleList,
 } from "@/desktop/ui/components/workspaceFields";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import { api } from "@/desktop/bridge/tauri";
-import type { Provider } from "@/desktop/ui/types";
+import type { Provider, RuleFileInfo, RuleFileState } from "@/desktop/ui/types";
 
 function isProviderEnabled(provider: Provider) {
   return provider.enabled !== false;
@@ -40,22 +40,28 @@ export function SessionSettingsDialog() {
 
   // workspace 覆盖：null = 用全局默认；undefined = 字段被首次打开时还没初始化
   const [workdir, setWorkdir] = useState<string | null>(null);
-  // allowedDirs 是给 DirListField 的"扁平视图"——initial(可改) + 已宣告 runtime + 待宣告 pending
-  // 都合到一个数组里，对话已开始时整个列表被 lockedDirs 标记成只读，仅"添加"按钮可用。
-  const [allowedDirs, setAllowedDirs] = useState<string[] | null>(null);
+  // allowedPaths 是给 PathListField 的"扁平视图"——initial(可改) + 已宣告 runtime + 待宣告 pending
+  // 都合到一个数组里，对话已开始时整个列表被 lockedPaths 标记成只读，仅添加按钮可用。
+  const [allowedPaths, setAllowedPaths] = useState<string[] | null>(null);
   const [skillDirs, setSkillDirs] = useState<string[] | null>(null);
   const [enabledTools, setEnabledTools] = useState<string[] | null>(null);
+
+  // Rules 分区
+  const [globalRules, setGlobalRules] = useState<string[] | null>(null);
+  const [rulesFiles, setRulesFiles] = useState<RuleFileState[] | null>(null);
+  const [discoveredRules, setDiscoveredRules] = useState<RuleFileInfo[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
 
   // 对话是否已经发出过 user message——只有非空才需要锁定 / 走 pending 通道。
   const conversationStarted = !!currentSession?.messages?.some(
     (m) => m.role === "user"
   );
 
-  // 对话已开始时，session.allowed_dirs（initial）+ runtime_allowed_dirs + pending 全部锁定，
-  // 用户只能通过点 "+" 追加（保存时后端把新增项落到 pending_runtime_allowed_dirs）。
-  const sessionRuntimeDirs = [
-    ...(currentSession?.runtime_allowed_dirs ?? []),
-    ...(currentSession?.pending_runtime_allowed_dirs ?? []),
+  // 对话已开始时，session.allowed_paths（initial）+ runtime_allowed_paths + pending 全部锁定，
+  // 用户只能通过添加按钮追加（保存时后端把新增项落到 pending_runtime_allowed_paths）。
+  const sessionRuntimePaths = [
+    ...(currentSession?.runtime_allowed_paths ?? []),
+    ...(currentSession?.pending_runtime_allowed_paths ?? []),
   ];
 
   useEffect(() => {
@@ -66,21 +72,36 @@ export function SessionSettingsDialog() {
       setPromptId(currentSession.prompt_id ?? "");
       setStream(currentSession.stream);
       setWorkdir(currentSession.workdir ?? null);
-      // 把 initial / announced / pending 拼成扁平视图供 DirListField 渲染
-      const initial = currentSession.allowed_dirs ?? null;
-      const runtimeDirs = [
-        ...(currentSession.runtime_allowed_dirs ?? []),
-        ...(currentSession.pending_runtime_allowed_dirs ?? []),
+      // 把 initial / announced / pending 拼成扁平视图供 PathListField 渲染
+      const initial = currentSession.allowed_paths ?? null;
+      const runtimePaths = [
+        ...(currentSession.runtime_allowed_paths ?? []),
+        ...(currentSession.pending_runtime_allowed_paths ?? []),
       ];
-      if (initial === null && runtimeDirs.length === 0) {
-        setAllowedDirs(null);
+      if (initial === null && runtimePaths.length === 0) {
+        setAllowedPaths(null);
       } else {
-        setAllowedDirs([...(initial ?? []), ...runtimeDirs]);
+        setAllowedPaths([...(initial ?? []), ...runtimePaths]);
       }
       setSkillDirs(currentSession.skill_dirs ?? null);
       setEnabledTools(currentSession.enabled_tools ?? null);
+      setGlobalRules(currentSession.global_rules ?? null);
+      setRulesFiles(currentSession.rules_files ?? null);
       // 拉一次全局 settings 用作 placeholder
       refreshAppSettings().catch(() => {});
+      // 有 workdir 时发现规则文件
+      const wd = currentSession.workdir;
+      if (wd) {
+        setRulesLoading(true);
+        const allowed = currentSession.allowed_paths ?? [];
+        api
+          .discoverRulesFiles(wd, allowed)
+          .then(setDiscoveredRules)
+          .catch(() => setDiscoveredRules([]))
+          .finally(() => setRulesLoading(false));
+      } else {
+        setDiscoveredRules([]);
+      }
     }
   }, [settingsOpen, currentSession, refreshAppSettings]);
 
@@ -102,9 +123,11 @@ export function SessionSettingsDialog() {
       // 单独保存 workspace 字段；空数组也算"明确清空覆盖"，需要传 null
       await api.updateSessionSettings(currentSession.id, {
         workdir,
-        allowed_dirs: allowedDirs,
+        allowed_paths: allowedPaths,
         skill_dirs: skillDirs,
         enabled_tools: enabledTools,
+        global_rules: globalRules,
+        rules_files: rulesFiles,
       });
       toast.success("已更新");
       setSettingsOpen(false);
@@ -122,7 +145,7 @@ export function SessionSettingsDialog() {
   if (!currentSession) return null;
 
   const globalDefaults = appSettings?.conversation;
-  const inheritedAllowedDirs = globalDefaults?.allowed_dirs ?? [];
+  const inheritedAllowedPaths = globalDefaults?.allowed_paths ?? [];
   const inheritedSkillDirs = globalDefaults?.skill_dirs ?? [];
   const inheritedEnabledTools = globalDefaults?.enabled_tools ?? [];
   const inheritedWorkdir = globalDefaults?.workdir ?? "~/";
@@ -292,31 +315,32 @@ export function SessionSettingsDialog() {
             />
           </div>
 
-          <DirListField
-            label="允许访问的目录"
-            dirs={allowedDirs ?? []}
-            inheritedDirs={allowedDirs === null ? inheritedAllowedDirs : undefined}
-            onChange={(dirs) => setAllowedDirs(dirs)}
-            lockedDirs={
-              // 对话已开始：当前 session 持久化里已知的目录全部 locked。
+          <PathListField
+            label="允许访问的路径"
+            paths={allowedPaths ?? []}
+            inheritedPaths={allowedPaths === null ? inheritedAllowedPaths : undefined}
+            onChange={(paths) => setAllowedPaths(paths)}
+            lockedPaths={
+              // 对话已开始：当前 session 持久化里已知的路径全部 locked。
               // 用户在 UI 里新加的（还在 state 里、还没保存）不在 locked 里，可删。
               conversationStarted
                 ? [
-                    ...(currentSession.allowed_dirs ?? []),
-                    ...sessionRuntimeDirs,
+                    ...(currentSession.allowed_paths ?? []),
+                    ...sessionRuntimePaths,
                   ]
                 : undefined
             }
             lockedHint={
               conversationStarted
-                ? "对话已开始，已生效的目录不能再移除；新追加项会在下一条消息发送时通过 <workspace-update> 通知模型，不会改 system prompt。"
+                ? "对话已开始，已生效的路径不能再移除；新追加项会在下一条消息发送时通过 <workspace-update> 通知模型，不会改 system prompt。"
                 : undefined
             }
+            allowFiles
             trailing={
-              !conversationStarted && allowedDirs !== null && (
+              !conversationStarted && allowedPaths !== null && (
                 <button
                   type="button"
-                  onClick={() => setAllowedDirs(null)}
+                  onClick={() => setAllowedPaths(null)}
                   className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"
                 >
                   <RotateCcw className="w-3 h-3" />
@@ -326,11 +350,11 @@ export function SessionSettingsDialog() {
             }
           />
 
-          <DirListField
+          <PathListField
             label="Skill 目录"
-            dirs={skillDirs ?? []}
-            inheritedDirs={skillDirs === null ? inheritedSkillDirs : undefined}
-            onChange={(dirs) => setSkillDirs(dirs)}
+            paths={skillDirs ?? []}
+            inheritedPaths={skillDirs === null ? inheritedSkillDirs : undefined}
+            onChange={(paths) => setSkillDirs(paths)}
             trailing={
               skillDirs !== null && (
                 <button
@@ -364,6 +388,162 @@ export function SessionSettingsDialog() {
               )
             }
           />
+        </div>
+
+        {/* ── Rules ── */}
+        <div className="space-y-4 border-t border-border pt-4">
+          <div className="text-xs text-muted-foreground">
+            自动注入到对话上下文，无需 agent 手动读取。
+          </div>
+
+          {/* 全局规则开关 */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium">读取全局 CLAUDE.md</div>
+                <div className="text-xs text-muted-foreground">
+                  {globalRules === null
+                    ? `继承全局设置（${globalDefaults?.global_rules?.length ? "已启用" : "已禁用"}）`
+                    : globalRules.length > 0
+                      ? "已开启"
+                      : "已关闭"}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {globalRules !== null && (
+                <button
+                  type="button"
+                  onClick={() => setGlobalRules(null)}
+                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                  title="恢复继承全局默认"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              )}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={
+                  globalRules === null
+                    ? (globalDefaults?.global_rules?.length ?? 0) > 0
+                    : globalRules.length > 0
+                }
+                onClick={() => {
+                  if (globalRules === null) {
+                    // 继承态：脱离继承，关闭
+                    setGlobalRules([]);
+                  } else if (globalRules.length > 0) {
+                    // 开启 → 关闭
+                    setGlobalRules([]);
+                  } else {
+                    // 关闭 → 开启（设为默认值）
+                    setGlobalRules(globalDefaults?.global_rules ?? []);
+                  }
+                }}
+                className={cn(
+                  "relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors",
+                  (globalRules === null
+                    ? (globalDefaults?.global_rules?.length ?? 0) > 0
+                    : globalRules.length > 0)
+                    ? "bg-primary"
+                    : "bg-muted"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform mt-0.5",
+                    (globalRules === null
+                      ? (globalDefaults?.global_rules?.length ?? 0) > 0
+                      : globalRules.length > 0)
+                      ? "translate-x-5"
+                      : "translate-x-0.5"
+                  )}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* 项目 Rules（仅当有 workdir 时显示） */}
+          {workdir && workdir !== "~/" && (
+            <div className="space-y-2">
+              <div className="text-sm font-medium flex items-center gap-2">
+                <FileText className="w-4 h-4" />
+                项目 Rules
+              </div>
+              {rulesLoading ? (
+                <div className="text-xs text-muted-foreground py-1">
+                  扫描中…
+                </div>
+              ) : discoveredRules.length === 0 ? (
+                <div className="text-xs text-muted-foreground py-1">
+                  未发现 CLAUDE.md / AGENTS.md
+                </div>
+              ) : (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {discoveredRules.map((info) => {
+                    const state = rulesFiles?.find(
+                      (s) => s.path === info.path
+                    );
+                    const enabled =
+                      state?.enabled ??
+                      info.source === "workdir";
+                    return (
+                      <button
+                        key={info.path}
+                        type="button"
+                        onClick={() => {
+                          const next = rulesFiles
+                            ? [...rulesFiles]
+                            : discoveredRules.map((r) => ({
+                                path: r.path,
+                                enabled: r.source === "workdir",
+                              }));
+                          const idx = next.findIndex(
+                            (s) => s.path === info.path
+                          );
+                          if (idx >= 0) {
+                            next[idx] = {
+                              ...next[idx],
+                              enabled: !next[idx].enabled,
+                            };
+                          } else {
+                            next.push({
+                              path: info.path,
+                              enabled: !(
+                                info.source === "workdir"
+                              ),
+                            });
+                          }
+                          setRulesFiles(next);
+                        }}
+                        className={cn(
+                          "flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors hover:bg-accent"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "inline-block w-2 h-2 rounded-full shrink-0",
+                            enabled
+                              ? "bg-primary"
+                              : "bg-muted-foreground/30"
+                          )}
+                        />
+                        <span className="truncate">
+                          {info.path.split("/").pop() ??
+                            info.path}
+                        </span>
+                        <span className="text-muted-foreground truncate shrink">
+                          {info.path}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </Dialog>

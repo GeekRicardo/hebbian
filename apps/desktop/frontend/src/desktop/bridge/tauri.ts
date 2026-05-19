@@ -17,6 +17,8 @@ import type {
   ProviderPreset,
   ProvidersFile,
   ReasoningConfig,
+  RuleFileInfo,
+  RuleFileState,
   SearchHit,
   Session,
   SessionBackgroundReport,
@@ -267,6 +269,11 @@ export const api = {
   killBackgroundTask: (sessionId: string, taskId: string) =>
     invoke<string>("kill_background_task", { sessionId, taskId }),
 
+  // ── rules ──
+  /** 从 workdir + allowed_paths 发现所有规则文件（CLAUDE.md / AGENTS.md 等） */
+  discoverRulesFiles: (workdir: string, allowedPaths: string[]) =>
+    invoke<RuleFileInfo[]>("discover_rules_files", { workdir, allowedPaths }),
+
   // ── settings ──
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
@@ -286,6 +293,8 @@ export const api = {
       allowed_paths?: string[] | null;
       enabled_tools?: string[] | null;
       skill_dirs?: string[] | null;
+      global_rules?: string[] | null;
+      rules_files?: RuleFileState[] | null;
     }
   ) => {
     const args: Record<string, unknown> = { id };
@@ -304,6 +313,14 @@ export const api = {
     if ("skill_dirs" in patch) {
       if (patch.skill_dirs == null) args.clearSkillDirs = true;
       else args.skillDirs = patch.skill_dirs;
+    }
+    if ("global_rules" in patch) {
+      if (patch.global_rules == null) args.clearGlobalRules = true;
+      else args.globalRules = patch.global_rules;
+    }
+    if ("rules_files" in patch) {
+      if (patch.rules_files == null) args.clearRulesFiles = true;
+      else args.rulesFiles = patch.rules_files;
     }
     return invoke<Session>("update_session_settings", args);
   },

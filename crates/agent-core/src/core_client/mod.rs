@@ -21,8 +21,8 @@ use async_trait::async_trait;
 
 use crate::permissions::{PermissionRule, PermissionStore};
 use crate::storage::{
-    permissions as permissions_store, prompts as prompts_store, sessions as sessions_store,
-    settings as settings_store,
+    permissions as permissions_store, projects as projects_store, prompts as prompts_store,
+    sessions as sessions_store, settings as settings_store,
 };
 use crate::tools::{self as tools, ToolInfo};
 use crate::Harness;
@@ -97,6 +97,15 @@ pub trait CoreClient: Send + Sync {
         regex: bool,
     ) -> Result<Vec<sessions_store::SearchHit>, CoreError>;
 
+    // === 同步 API：Workspace / Projects ===
+
+    fn list_projects(&self) -> Result<Vec<projects_store::WorkspaceProject>, CoreError>;
+    fn save_project(
+        &self,
+        input: projects_store::WorkspaceProjectInput,
+    ) -> Result<projects_store::WorkspaceProject, CoreError>;
+    fn delete_project(&self, project_id: &str) -> Result<(), CoreError>;
+
     // === 同步 API：项目设置 ===
 
     fn get_settings(&self) -> settings_store::Settings;
@@ -123,9 +132,15 @@ pub trait CoreClient: Send + Sync {
     // === 同步 API：Prompt（用户 persona）===
 
     fn list_prompts(&self) -> Result<prompts_store::PromptsFile, CoreError>;
-    fn upsert_prompt(&self, prompt: prompts_store::Prompt) -> Result<prompts_store::Prompt, CoreError>;
+    fn upsert_prompt(
+        &self,
+        prompt: prompts_store::Prompt,
+    ) -> Result<prompts_store::Prompt, CoreError>;
     fn delete_prompt(&self, id: &str) -> Result<(), CoreError>;
-    fn set_default_prompt(&self, id: Option<String>) -> Result<prompts_store::PromptsFile, CoreError>;
+    fn set_default_prompt(
+        &self,
+        id: Option<String>,
+    ) -> Result<prompts_store::PromptsFile, CoreError>;
 
     // === 同步 API：Skills ===
 
@@ -263,7 +278,23 @@ impl CoreClient for LocalCoreClient {
         case_sensitive: bool,
         regex: bool,
     ) -> Result<Vec<sessions_store::SearchHit>, CoreError> {
-        sessions_store::search(&self.data_dir, query, case_sensitive, regex).map_err(CoreError::from)
+        sessions_store::search(&self.data_dir, query, case_sensitive, regex)
+            .map_err(CoreError::from)
+    }
+
+    fn list_projects(&self) -> Result<Vec<projects_store::WorkspaceProject>, CoreError> {
+        projects_store::list(&self.data_dir).map_err(CoreError::from)
+    }
+
+    fn save_project(
+        &self,
+        input: projects_store::WorkspaceProjectInput,
+    ) -> Result<projects_store::WorkspaceProject, CoreError> {
+        projects_store::save(&self.data_dir, input).map_err(CoreError::from)
+    }
+
+    fn delete_project(&self, project_id: &str) -> Result<(), CoreError> {
+        projects_store::delete(&self.data_dir, project_id).map_err(CoreError::from)
     }
 
     fn get_settings(&self) -> settings_store::Settings {

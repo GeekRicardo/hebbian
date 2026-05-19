@@ -6,8 +6,8 @@ import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Label, Select } from "@/desktop/ui/components/ui/input";
 import {
-  DirListField,
   DirPicker,
+  PathListField,
   ToolToggleList,
 } from "@/desktop/ui/components/workspaceFields";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -190,16 +190,17 @@ function ConversationPane({
         />
       </div>
 
-      <DirListField
-        label="额外允许访问的目录"
-        dirs={conv.allowed_dirs}
-        onChange={(dirs) => updateConv({ allowed_dirs: dirs })}
+      <PathListField
+        label="允许访问的路径"
+        paths={conv.allowed_paths}
+        onChange={(paths) => updateConv({ allowed_paths: paths })}
+        allowFiles
       />
 
-      <DirListField
+      <PathListField
         label="Skill 目录"
-        dirs={conv.skill_dirs}
-        onChange={(dirs) => updateConv({ skill_dirs: dirs })}
+        paths={conv.skill_dirs}
+        onChange={(paths) => updateConv({ skill_dirs: paths })}
       />
 
       <ToolToggleList

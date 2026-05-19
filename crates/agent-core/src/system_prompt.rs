@@ -40,7 +40,7 @@ pub fn compose_system_prompt(persona: Option<&str>) -> String {
 #[derive(Debug, Clone)]
 pub struct EnvironmentSnapshot {
     pub workdir: PathBuf,
-    pub allowed_dirs: Vec<PathBuf>,
+    pub allowed_paths: Vec<PathBuf>,
     pub platform: &'static str,
     pub shell: Option<String>,
     pub date: String,
@@ -63,11 +63,11 @@ pub struct BackgroundTaskSummary {
 
 impl EnvironmentSnapshot {
     /// 从 workspace + 当前进程环境拼出快照。
-    /// 只读 `initial_allowed_dirs`：runtime_pending 通过 `<workspace-update>` 单独通知。
+    /// 只读 `initial_allowed_paths`：runtime_pending 通过 `<workspace-update>` 单独通知。
     pub fn from_workspace(workspace: &Workspace) -> Self {
         Self {
             workdir: workspace.workdir().to_path_buf(),
-            allowed_dirs: workspace.initial_allowed_dirs().to_vec(),
+            allowed_paths: workspace.initial_allowed_paths().to_vec(),
             platform: std::env::consts::OS,
             shell: detect_shell(),
             date: today_iso(),
@@ -92,7 +92,7 @@ impl EnvironmentSnapshot {
     pub fn render(&self) -> String {
         let mut s = render_environment_xml(
             &self.workdir,
-            &self.allowed_dirs,
+            &self.allowed_paths,
             self.platform,
             self.shell.as_deref(),
             &self.date,
@@ -140,7 +140,7 @@ pub fn prepend_background_tasks(text: String, tasks: &[BackgroundTaskSummary]) -
 
 fn render_environment_xml(
     workdir: &Path,
-    allowed_dirs: &[PathBuf],
+    allowed_paths: &[PathBuf],
     platform: &str,
     shell: Option<&str>,
     date: &str,
@@ -148,8 +148,8 @@ fn render_environment_xml(
 ) -> String {
     let mut s = String::from("<environment>\n");
     s.push_str(&format!("  <cwd>{}</cwd>\n", workdir.display()));
-    for d in allowed_dirs {
-        s.push_str(&format!("  <allowed_dir>{}</allowed_dir>\n", d.display()));
+    for d in allowed_paths {
+        s.push_str(&format!("  <allowed_path>{}</allowed_path>\n", d.display()));
     }
     s.push_str(&format!("  <platform>{platform}</platform>\n"));
     if let Some(sh) = shell {
@@ -164,9 +164,11 @@ fn render_environment_xml(
 }
 
 fn detect_shell() -> Option<String> {
-    std::env::var("SHELL")
-        .ok()
-        .and_then(|p| Path::new(&p).file_name().map(|f| f.to_string_lossy().into_owned()))
+    std::env::var("SHELL").ok().and_then(|p| {
+        Path::new(&p)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+    })
 }
 
 fn today_iso() -> String {
@@ -229,7 +231,7 @@ mod tests {
         );
         assert!(xml.starts_with("<environment>"));
         assert!(xml.contains("<cwd>/tmp/work</cwd>"));
-        assert!(xml.contains("<allowed_dir>/tmp/extra</allowed_dir>"));
+        assert!(xml.contains("<allowed_path>/tmp/extra</allowed_path>"));
         assert!(xml.contains("<platform>darwin</platform>"));
         assert!(xml.contains("<shell>zsh</shell>"));
         assert!(xml.contains("<date>2026-05-10</date>"));
@@ -240,7 +242,7 @@ mod tests {
     fn prepend_environment_attaches_to_user_text() {
         let snap = EnvironmentSnapshot {
             workdir: PathBuf::from("/tmp"),
-            allowed_dirs: Vec::new(),
+            allowed_paths: Vec::new(),
             platform: "darwin",
             shell: None,
             date: "2026-05-10".into(),

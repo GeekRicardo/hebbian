@@ -18,6 +18,12 @@ export function formatTime(ts: number) {
   return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
+export function pathLeaf(path: string) {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed || "";
+}
+
 export function hasSessionStarted(
   session?: { messages?: Array<{ role: string }> } | null
 ) {

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
 use agent_core::permissions::PermissionStore;
+use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
     projects::{WorkspaceProject, WorkspaceProjectInput},
     prompts::{Prompt, PromptsFile},
@@ -777,6 +778,10 @@ fn update_session_settings(
     clear_enabled_tools: Option<bool>,
     skill_dirs: Option<Vec<PathBuf>>,
     clear_skill_dirs: Option<bool>,
+    global_rules: Option<Vec<PathBuf>>,
+    clear_global_rules: Option<bool>,
+    rules_files: Option<Vec<RuleFileState>>,
+    clear_rules_files: Option<bool>,
 ) -> AppResult<Session> {
     let dd = data_dir(&app)?;
     let mut s = sessions::load(&dd, &id)?;
@@ -799,6 +804,16 @@ fn update_session_settings(
         s.skill_dirs = None;
     } else if let Some(v) = skill_dirs {
         s.skill_dirs = Some(v);
+    }
+    if clear_global_rules.unwrap_or(false) {
+        s.global_rules = None;
+    } else if let Some(v) = global_rules {
+        s.global_rules = Some(v);
+    }
+    if clear_rules_files.unwrap_or(false) {
+        s.rules_files = None;
+    } else if let Some(v) = rules_files {
+        s.rules_files = Some(v);
     }
     sessions::save(&dd, s)
 }
@@ -905,6 +920,23 @@ fn approve_path_access(
     };
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
+}
+
+/// 从 workdir + allowed_paths 发现所有规则文件（CLAUDE.md / AGENTS.md 等），
+/// 返回轻量信息列表给前端渲染 Rules 开关列表。
+#[tauri::command]
+fn discover_rules_files(
+    workdir: PathBuf,
+    allowed_paths: Vec<PathBuf>,
+) -> AppResult<Vec<RuleFileInfo>> {
+    let files = agent_core::rules::discover(&workdir, &allowed_paths);
+    Ok(files
+        .into_iter()
+        .map(|f| RuleFileInfo {
+            path: f.path.display().to_string(),
+            source: f.source,
+        })
+        .collect())
 }
 
 // ========== Path attach (粘贴/拖拽路径) ==========
@@ -1354,6 +1386,7 @@ pub fn run() {
             get_settings,
             save_settings,
             update_session_settings,
+            discover_rules_files,
             attach_path,
             approve_path_access,
             oauth_codex_start,

@@ -10,6 +10,7 @@ pub mod hooks;
 pub mod model_io_dump;
 pub mod permissions;
 pub mod recorder;
+pub mod rules;
 pub mod run_mode;
 pub mod run_state;
 pub mod session;
