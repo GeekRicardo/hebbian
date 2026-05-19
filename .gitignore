@@ -27,6 +27,7 @@ apps/desktop/gen/
 .vscode/settings.json
 
 graphify-out/
+.understand-anything/
 .claude/
 .cursor/
 .codemap/
