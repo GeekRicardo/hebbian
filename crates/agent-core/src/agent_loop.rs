@@ -261,6 +261,15 @@ pub async fn run_loop(
             break Err(ModelError::Cancelled);
         }
 
+        // Turn 边界兜底：ToolStep 后已经 drain 过一次；如果 surface 在
+        // ToolStep drain 之后、下一轮 ModelStep 构造请求之前才注入引导消息，
+        // 这里保证它仍然进入本轮请求，而不是晚一轮或等当前 Run 结束。
+        drain_pending_inputs(
+            pending_inputs.as_ref(),
+            consumed_pending_inputs.as_ref(),
+            transcript,
+        );
+
         // Microcompact：每轮模型请求前先把超阈值的老 tool_result 压缩为占位符。
         // 不消耗模型调用，只改 transcript entries，幂等。
         let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
@@ -1065,6 +1074,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
         let pending_for_sink = pending_inputs.clone();
+        let injected_once = Arc::new(AtomicBool::new(false));
+        let injected_once_for_sink = injected_once.clone();
 
         let result = run_loop(
             LoopParams {
@@ -1094,7 +1105,9 @@ mod tests {
                 resume_from: None,
             },
             Arc::new(move |event| {
-                if matches!(event.payload, EventPayload::TurnFinished { .. }) {
+                if matches!(event.payload, EventPayload::TurnFinished { .. })
+                    && !injected_once_for_sink.swap(true, Ordering::SeqCst)
+                {
                     pending_for_sink
                         .lock()
                         .unwrap()

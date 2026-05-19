@@ -2351,7 +2351,7 @@ mod tests {
             .await
             .unwrap();
 
-            assert_eq!(assistant.content, "正在输出后续回答");
+            assert_eq!(assistant.content, "后续回答");
             let saved = sessions::load(&data_dir, &session.id).unwrap();
             let roles_and_content: Vec<(Role, String)> = saved
                 .messages
@@ -2362,8 +2362,9 @@ mod tests {
                 roles_and_content,
                 vec![
                     (Role::User, "第一条".to_string()),
-                    (Role::Assistant, "正在输出后续回答".to_string()),
+                    (Role::Assistant, "正在输出".to_string()),
                     (Role::User, "插队消息".to_string()),
+                    (Role::Assistant, "后续回答".to_string()),
                 ]
             );
 

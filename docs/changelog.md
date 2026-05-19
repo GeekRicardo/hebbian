@@ -1523,3 +1523,24 @@
   - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): run 正常完成后先落当前 assistant，再把已消费和未消费的 pending user message 排到 assistant 后面落盘；新增单测覆盖"模型看见插队输入 + jsonl 顺序为 user → assistant → 插队 user"
 - **影响范围**: desktop 前端 store/input、desktop Tauri chat 路径、agent-core run 参数、common runtime；协议 `EventPayload` 与 Tauri `send_message` IPC 入参不变，老 session 文件兼容
 - **留尾巴**: 中断 / 失败路径仍按现有 partial assistant + marker / failed assistant 逻辑收尾，未额外追加未消费 pending input；如果用户在失败前刚点引导，前端队列项会因 `inject_user_message` 失败还原，已成功注入但 run 随后失败的极端场景后续可再细化恢复策略
+
+### 2026-05-19 — 修复引导消息在最终 ModelStep 后不继续同一 Run
+
+- **Why**: 用户反馈"发送立即引导的消息"虽然发送出去了，但没有在当前 `agent_loop` 的下一轮立刻生效；根因是 `PendingInputs` 只在外层 loop 顶部 drain，模型若在当前 ModelStep 直接 `Done`，run 会立即结束，插队消息只会被保存而不会触发同一个 run 内的下一次模型请求；同时 Harness 的关键事件异步发送可能让 `TurnFinished` 被后续 `TextDelta` 超车，影响按 Turn 分段保存
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 抽出 `drain_pending_inputs`，按架构 §4.2/§4.3 在 ToolStep 完成后 drain；`Done` 分支在 Turn 边界 drain 到引导消息时继续同一个 run 的下一次 ModelStep，而不是直接 `RunFinished`
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): run 事件 sink 先用 `try_send` 保序，只有关键事件遇到满队列才异步兜底，避免 `TurnFinished` 被后续流式增量超车
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): DesktopObserver 增加 Turn 级 assistant 分段；存在已消费引导消息时，保存为 `assistant(当前段) → injected user → assistant(后续段)`，避免同一 run 多段 assistant 被合并后又把 injected user 落到最后
+  - 新增回归测试覆盖：最终 ModelStep 期间注入 PendingInputs 后，同一 run 继续第二次模型请求；Desktop 持久化顺序为 `user → assistant1 → injected user → assistant2`
+- **影响范围**: agent-core loop / harness event ordering、desktop chat 持久化；不改协议字段、不改 Tauri command 入参、不改前端 UI 临时展示逻辑；session 文件仍是普通 messages 顺序追加
+- **留尾巴**: 完整 cargo 验证当前被工作区已有的 `crates/agent-core/src/tools/background.rs` 截断/未闭合 delimiter 阻塞；修复该无关语法错误后需要重跑 `cargo test -p agent-core pending_input_during_final_model_step_continues_same_run`、`cargo test -p hebbian persists_injected_input_between_assistant_turns_in_same_run` 和 `cargo check -p hebbian`
+
+### 2026-05-19 — 修复 ToolStep 后窗口期引导消息晚一轮生效
+
+- **Why**: 继续排查发现，上一条修复覆盖了最终 `Done` 分支，但如果用户的引导消息到达在 ToolStep 后 drain 已经完成、下一次 ModelStep 构造请求之前，下一次请求仍可能看不到这条 `PendingInputs`，表现为"工具调用完成后没有立即插队，agent_loop 继续原来的下一轮"。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 在每轮 loop 入口、microcompact 和构造 `ModelRequest` 之前补一次 `drain_pending_inputs`，作为 Turn 边界兜底；保留 ToolStep 后 drain 和 `Done` 分支 drain。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 新增回归测试，模拟 `TurnFinished` 事件之后注入引导消息，断言下一次 ModelStep 的请求立刻包含该 user message。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 更新插队顺序测试期望，明确保存顺序为 `assistant(正在输出) → injected user → assistant(后续回答)`，不再把前后两段 assistant 合并成一条后再追加 user。
+- **影响范围**: agent-core loop 与 desktop chat 单测；不改协议、不改 Tauri command、不改 session 文件结构。
+- **留尾巴**: 无。
