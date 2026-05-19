@@ -59,6 +59,8 @@ pub fn default_tools(
     bg_log_dir: Option<PathBuf>,
     phase: crate::wakeup::PhaseChannel,
     shells: background::BackgroundShells,
+    data_dir: Option<PathBuf>,
+    session_id: Option<String>,
 ) -> Vec<Box<dyn Tool>> {
     let skills = skill::load_skills(skill_dirs);
     vec![
@@ -74,7 +76,7 @@ pub fn default_tools(
             phase.clone(),
         )),
         Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
-        Box::new(read::ReadTool::new(workspace.clone())),
+        Box::new(read::ReadTool::new(data_dir, session_id)),
         Box::new(write::WriteTool::new(workspace.clone())),
         Box::new(grep::GrepTool::new(workspace)),
         Box::new(skill::SkillTool::new(skills)),

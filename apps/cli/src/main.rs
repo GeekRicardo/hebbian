@@ -81,9 +81,9 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     tools: Vec<String>,
 
-    /// 额外允许访问的目录（可重复）。不传则用全局 settings.conversation.allowed_dirs。
-    #[arg(long = "allowed-dir", value_name = "DIR")]
-    allowed_dirs: Vec<PathBuf>,
+    /// 额外允许访问的路径（可重复）。不传则用全局 settings.conversation.allowed_paths。
+    #[arg(long = "allowed-path", value_name = "PATH")]
+    allowed_paths: Vec<PathBuf>,
 
     /// data dir（默认与 desktop 共享：~/Library/Application Support/dev.ricardo.hebbian/）
     #[arg(long)]
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
     // 不再用 --workdir：直接用 CLI 进程当前目录
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // allowed_dirs：CLI 参数优先，否则用全局 settings 默认
+    // allowed_paths：CLI 参数优先，否则用全局 settings 默认
     let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
 
     // 架构 §7：CLI 通过 CoreClient 调同步 API。Harness 仍在 build_harness_and_client
@@ -203,17 +203,17 @@ async fn main() -> Result<()> {
     };
 
     let settings = agent_core::storage::settings::load(&data_dir);
-    let allowed_dirs = if !cli.allowed_dirs.is_empty() {
-        cli.allowed_dirs.clone()
+    let allowed_paths = if !cli.allowed_paths.is_empty() {
+        cli.allowed_paths.clone()
     } else {
-        settings.conversation.allowed_dirs.clone()
+        settings.conversation.allowed_paths.clone()
     };
     let enabled_tools = if !cli.tools.is_empty() {
         cli.tools.clone()
     } else {
         settings.conversation.enabled_tools.clone()
     };
-    let workspace = Workspace::new(workdir.clone(), allowed_dirs);
+    let workspace = Workspace::new(workdir.clone(), allowed_paths);
 
     let reasoning = if cli.thinking || cli.long_context {
         Some(ReasoningConfig {
@@ -439,7 +439,15 @@ async fn build_harness_and_client(
     workspace: Arc<Workspace>,
 ) -> Result<BuiltClient> {
     let skill_dirs = default_skill_dirs(workspace.workdir());
-    let tools: Vec<Box<dyn Tool>> = default_tools(workspace, &skill_dirs);
+    let tools: Vec<Box<dyn Tool>> = default_tools(
+        workspace,
+        &skill_dirs,
+        None,
+        agent_core::wakeup::new_phase_channel(),
+        agent_core::tools::background::BackgroundShells::new(),
+        None,
+        None,
+    );
     // 加载 ~/.hebbian/hooks.json 把外部 hook 接进 HookManager（架构 §4.8 / Step 11）。
     let hook_data_dir = opts.data_dir.clone().unwrap_or_else(default_data_dir);
     let hook_cfg = agent_core::hooks::load_hooks_config(&hook_data_dir);

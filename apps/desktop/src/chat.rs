@@ -1,8 +1,13 @@
 use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hitl::HitlState;
+use agent_core::storage::{
+    sessions::{
+        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
+    },
+    settings as global_settings,
+};
 use agent_core::{
-    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
     context::transcript::Transcript,
     definition::AgentDefinition,
     hooks::HookManager,
@@ -10,26 +15,24 @@ use agent_core::{
     tools::{hitl::HitlGate, skill::default_skill_dirs},
     types::{AgentEvent, AgentEventPayload},
     workspace::Workspace,
+    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
 use async_trait::async_trait;
-use model_gateway::{self, config::Provider};
-use common::{attachments::MessageAttachment, runtime::PendingInputs, CancelFlag};
-use agent_core::storage::{
-    sessions::{
-        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
-    },
-    settings as global_settings,
+use common::{
+    attachments::MessageAttachment,
+    runtime::{ConsumedPendingInputs, PendingInputs},
+    CancelFlag,
 };
+use model_gateway::{self, config::Provider};
 use protocol::{
-    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
-    UserAnswer,
+    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, UserAnswer,
 };
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{AppHandle, ipc::Channel};
+use tauri::{ipc::Channel, AppHandle};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -42,12 +45,18 @@ pub struct SendArgs {
     /// agent_loop 在每次 model.request 之前 drain 出来加入 transcript。
     /// 测试场景传 `None`，相当于一个空队列。
     pub pending_inputs: Option<PendingInputs>,
+    /// agent_loop 已消费的 pending input。Desktop 用它在 run 结束后按正确顺序落盘。
+    pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
     /// app 级 HITL 桥接。用 Tauri 的 `app.state::<Arc<HitlState>>()`
     /// 取出来塞进来。测试场景传 `None`。
     pub hitl: Option<Arc<HitlState>>,
     /// 全局共享的 PermissionStore（架构 §4.6）。`None` = 不启用持久化权限规则
     /// （AllowAndRemember(Global) 退化为 AllowOnce）。
     pub permission_store: Option<Arc<PermissionStore>>,
+    /// `force_automode` 子开关当前值（架构 §4.4.4 / §8）。仅 RunMode=AutoMode
+    /// 下生效：判官 Ask 折叠为 Deny。Desktop 用 `//force-automode` 命令切换，
+    /// 状态由 `ForceAutomodeState` 进程级持有；测试场景传 `false`。
+    pub force_automode: bool,
 }
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -95,11 +104,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     data_dir: &Path,
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
-    build_client: impl Fn(
-            Provider,
-            String,
-            Option<common::ReasoningConfig>,
-        ) -> AppResult<Arc<dyn ModelClient>>
+    build_client: impl Fn(Provider, String, Option<common::ReasoningConfig>) -> AppResult<Arc<dyn ModelClient>>
         + Send
         + Sync,
 ) -> AppResult<Message> {
@@ -133,18 +138,18 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .or_else(|| settings.conversation.workdir.clone())
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    // initial = session 起始时锁定的允许目录（首条 user message 之前可改的部分），
+    // initial = session 起始时锁定的允许路径（首条 user message 之前可改的部分），
     // 缺省时回退到全局默认；runtime_announced 是已经通知模型的运行时追加；
     // runtime_pending 是这次 send_message 时要在 user message 头部补充宣告的部分。
-    let initial_allowed_dirs = session
-        .allowed_dirs
+    let initial_allowed_paths = session
+        .allowed_paths
         .clone()
-        .unwrap_or_else(|| settings.conversation.allowed_dirs.clone());
+        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
     let workspace = Workspace::with_runtime_state(
         workdir.clone(),
-        initial_allowed_dirs,
-        session.runtime_allowed_dirs.clone(),
-        session.pending_runtime_allowed_dirs.clone(),
+        initial_allowed_paths,
+        session.runtime_allowed_paths.clone(),
+        session.pending_runtime_allowed_paths.clone(),
     );
 
     let configured_skill_dirs = session
@@ -160,8 +165,10 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
     // 架构 §4.12.3：BashTool 转后台时把 stdout/stderr 落到 `<sid>/bg/<task_id>.log`。
-    let bg_log_dir =
-        Some(agent_core::storage::sessions_dir::bg_dir(data_dir, &args.session_id));
+    let bg_log_dir = Some(agent_core::storage::sessions_dir::bg_dir(
+        data_dir,
+        &args.session_id,
+    ));
     // 架构 §4.12.4：phase channel 让 WaitForTask/ScheduleWakeup 把"挂起请求"递给 agent_loop。
     let phase = agent_core::wakeup::new_phase_channel();
     // 架构 §4.12.2 修订：BackgroundShells 是 session-scoped，跨 chat() 调用通过
@@ -177,6 +184,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             bg_log_dir,
             phase.clone(),
             shells,
+            Some(data_dir.to_path_buf()),
+            Some(args.session_id.clone()),
         ),
         HookManager::new(external_hooks),
     ));
@@ -231,8 +240,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             model_io_dump,
             permission_store: args.permission_store.clone(),
             session_id: Some(args.session_id.clone()),
-            run_mode: agent_core::run_mode::RunMode::default(),
+            run_mode: prior_session.run_mode,
             model_id: None,
+            force_automode: args.force_automode,
             data_dir: Some(data_dir.to_path_buf()),
             phase: Some(phase.clone()),
         },
@@ -258,13 +268,18 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         });
 
     let mut handle = match resume_state {
-        Some(rs) => core_session.resume_with(
+        Some(rs) => core_session.resume_with_runtime_inputs(
             args.cancel_flag.clone(),
             args.pending_inputs.clone(),
+            args.consumed_pending_inputs.clone(),
             Some(phase.clone()),
             rs,
         ),
-        None => core_session.run_with_pending(args.cancel_flag.clone(), args.pending_inputs.clone()),
+        None => core_session.run_with_runtime_inputs(
+            args.cancel_flag.clone(),
+            args.pending_inputs.clone(),
+            args.consumed_pending_inputs.clone(),
+        ),
     };
     let hitl = handle.hitl().clone();
 
@@ -302,6 +317,14 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         output_attachments,
         ..
     } = observer;
+    let mut pending_inputs_to_persist = args
+        .consumed_pending_inputs
+        .as_ref()
+        .map(|slot| slot.lock().unwrap().clone())
+        .unwrap_or_default();
+    if let Some(pending) = args.pending_inputs.as_ref() {
+        pending_inputs_to_persist.extend(std::mem::take(&mut *pending.lock().unwrap()));
+    }
 
     match summary.outcome {
         TurnOutcome::Done => {}
@@ -346,6 +369,22 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         meta: None,
     };
     sessions::append_message(data_dir, &args.session_id, assistant_msg.clone())?;
+    for input in pending_inputs_to_persist {
+        sessions::append_message(
+            data_dir,
+            &args.session_id,
+            Message {
+                id: sessions::new_id(),
+                role: Role::User,
+                content: input.content,
+                attachments: input.attachments,
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: None,
+            },
+        )?;
+    }
 
     Ok(assistant_msg)
 }
@@ -389,7 +428,11 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         if let EventPayload::TextDone { full_text } = &event.payload {
             // complete 路径只发 TextDone 不发 TextDelta；补一次 append 避免落盘空文本。
             if !full_text.is_empty() {
-                if !self.parts.last_text_snapshot().ends_with(full_text.as_str()) {
+                if !self
+                    .parts
+                    .last_text_snapshot()
+                    .ends_with(full_text.as_str())
+                {
                     self.parts.append_text(full_text);
                 }
                 if self.partial_output.is_empty() {
@@ -823,8 +866,8 @@ fn persist_workspace_runtime_dirs(
     let Ok(mut session) = sessions::load(data_dir, session_id) else {
         return;
     };
-    session.runtime_allowed_dirs = workspace.runtime_announced_snapshot();
-    session.pending_runtime_allowed_dirs = workspace.runtime_pending_snapshot();
+    session.runtime_allowed_paths = workspace.runtime_announced_snapshot();
+    session.pending_runtime_allowed_paths = workspace.runtime_pending_snapshot();
     let _ = sessions::save(data_dir, session);
 }
 
@@ -840,19 +883,19 @@ fn accumulate_session_tokens(data_dir: &Path, session_id: &str, delta: TokenStat
     let _ = sessions::save(data_dir, session);
 }
 
-/// 计算指定 session 的上下文用量。直接复用 [`agent_core::context::budget`]
-/// 估算器，与发起 run 时看到的口径一致。分母按 session 当前 provider+model
-/// 的 context window 取，provider 已删等场景兜底 200k。
-pub fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
+/// 计算指定 session 的上下文用量。优先从 /v1/models 获取模型的 context_length，
+/// 拉不到时回退到预设查表。与发起 run 时看到的口径一致。
+pub async fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id)?;
     let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
     let used = agent_core::context::budget::estimate_transcript_tokens(
         transcript.system.as_deref(),
         &transcript.entries,
     );
-    let budget = model_gateway::config::get(data_dir, &session.provider_id)
-        .map(|p| model_gateway::context_window::context_window_for(p.kind, &session.model))
-        .unwrap_or(200_000);
+    let budget = match model_gateway::config::get(data_dir, &session.provider_id) {
+        Ok(p) => model_gateway::context_window::resolve_context_window(&p, &session.model).await,
+        Err(_) => 200_000,
+    };
     Ok(ContextUsageDto {
         used_tokens: used,
         budget_tokens: budget,
@@ -874,7 +917,7 @@ pub async fn compact_session(
         .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
     let model = session.model.clone();
     let budget_tokens =
-        model_gateway::context_window::context_window_for(provider.kind, &model);
+        model_gateway::context_window::resolve_context_window(&provider, &model).await;
     let inner = model_gateway::build_client(provider)
         .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
     let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(inner, model));
@@ -968,7 +1011,7 @@ pub async fn build_preview_payload(
 ) -> AppResult<serde_json::Value> {
     use agent_core::system_prompt::{compose_system_prompt, EnvironmentSnapshot};
     use agent_core::tools::{
-        BUILTIN_TOOL_NAMES, ask_only_definitions, hosted_tool_definitions, registry::ToolRegistry,
+        ask_only_definitions, hosted_tool_definitions, registry::ToolRegistry, BUILTIN_TOOL_NAMES,
     };
 
     let session = sessions::load(data_dir, session_id)?;
@@ -980,15 +1023,15 @@ pub async fn build_preview_payload(
         .or_else(|| settings.conversation.workdir.clone())
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    let initial_allowed_dirs = session
-        .allowed_dirs
+    let initial_allowed_paths = session
+        .allowed_paths
         .clone()
-        .unwrap_or_else(|| settings.conversation.allowed_dirs.clone());
+        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
     let workspace = Workspace::with_runtime_state(
         workdir.clone(),
-        initial_allowed_dirs.clone(),
-        session.runtime_allowed_dirs.clone(),
-        session.pending_runtime_allowed_dirs.clone(),
+        initial_allowed_paths.clone(),
+        session.runtime_allowed_paths.clone(),
+        session.pending_runtime_allowed_paths.clone(),
     );
 
     let configured_skill_dirs = session
@@ -1015,6 +1058,8 @@ pub async fn build_preview_payload(
         None,
         agent_core::wakeup::new_phase_channel(),
         agent_core::tools::background::BackgroundShells::new(),
+        None,
+        None,
     ));
     let mut tool_defs = ask_only_definitions();
     let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
@@ -1078,9 +1123,9 @@ pub async fn build_preview_payload(
         "tools": tools,
         "_workspace": {
             "workdir": workdir.display().to_string(),
-            "initial_allowed_dirs": initial_allowed_dirs,
-            "runtime_allowed_dirs": session.runtime_allowed_dirs,
-            "pending_runtime_allowed_dirs": session.pending_runtime_allowed_dirs,
+            "initial_allowed_paths": initial_allowed_paths,
+            "runtime_allowed_paths": session.runtime_allowed_paths,
+            "pending_runtime_allowed_paths": session.pending_runtime_allowed_paths,
             "skill_dirs": skill_dirs,
         }
     }))
@@ -1107,10 +1152,7 @@ fn prepend_environment_to_preview(value: &mut serde_json::Value, env_block: &str
                     first_text["text"] = serde_json::Value::String(merged);
                 }
             } else {
-                blocks.insert(
-                    0,
-                    serde_json::json!({"type": "text", "text": env_block}),
-                );
+                blocks.insert(0, serde_json::json!({"type": "text", "text": env_block}));
             }
         }
         _ => {}
@@ -1154,10 +1196,7 @@ fn preview_push_assistant(out: &mut Vec<serde_json::Value>, m: &Message) {
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
     let mut tool_results: Vec<serde_json::Value> = Vec::new();
 
-    let push_call = |list: &mut Vec<serde_json::Value>,
-                     id: &str,
-                     name: &str,
-                     args: String| {
+    let push_call = |list: &mut Vec<serde_json::Value>, id: &str, name: &str, args: String| {
         list.push(serde_json::json!({
             "id": id,
             "type": "function",
@@ -1219,7 +1258,10 @@ fn preview_push_assistant(out: &mut Vec<serde_json::Value>, m: &Message) {
     });
     let map = assistant.as_object_mut().expect("json object");
     if !reasoning_parts.is_empty() {
-        map.insert("reasoning".into(), serde_json::Value::String(reasoning_parts.join("")));
+        map.insert(
+            "reasoning".into(),
+            serde_json::Value::String(reasoning_parts.join("")),
+        );
     }
     if !tool_calls.is_empty() {
         map.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
@@ -1376,14 +1418,20 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             decision: decision.clone(),
             reason: reason.clone(),
         }),
-        StepStarted { step_kind, step_index } => Some(EngineEvent::StepStarted {
+        StepStarted {
+            step_kind,
+            step_index,
+        } => Some(EngineEvent::StepStarted {
             step_kind: match step_kind {
                 protocol::StepKind::Model => "model".to_string(),
                 protocol::StepKind::Tool => "tool".to_string(),
             },
             step_index: *step_index,
         }),
-        StepFinished { step_kind, step_index } => Some(EngineEvent::StepFinished {
+        StepFinished {
+            step_kind,
+            step_index,
+        } => Some(EngineEvent::StepFinished {
             step_kind: match step_kind {
                 protocol::StepKind::Model => "model".to_string(),
                 protocol::StepKind::Tool => "tool".to_string(),
@@ -1502,11 +1550,11 @@ impl ModelClient for ModelWithName {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_core::storage::sessions::MessageMeta;
     use model_gateway::{
         config::{AuthMode, ProviderKind, ProvidersFile},
         types::{ToolCall, ToolCallStreamDelta, Usage},
     };
-    use agent_core::storage::sessions::MessageMeta;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1715,6 +1763,86 @@ mod tests {
         }
     }
 
+    struct PendingInputOrderClient {
+        calls: AtomicUsize,
+        pending_inputs: PendingInputs,
+    }
+
+    #[async_trait]
+    impl ModelClient for PendingInputOrderClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "正在输出".to_string(),
+                    });
+                    self.pending_inputs
+                        .lock()
+                        .unwrap()
+                        .push(common::runtime::PendingUserInput {
+                            content: "插队消息".to_string(),
+                            attachments: Vec::new(),
+                        });
+                    Ok(ModelResponse::ToolCalls {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        calls: vec![ToolCall {
+                            id: "call_missing".to_string(),
+                            name: "missing_tool".to_string(),
+                            input: serde_json::json!({}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => {
+                    let saw_injected = req.entries.iter().any(|entry| {
+                        matches!(
+                            entry,
+                            model_gateway::types::TranscriptEntry::User(user)
+                                if user.text == "插队消息"
+                        )
+                    });
+                    assert!(
+                        saw_injected,
+                        "second model request should see injected user input"
+                    );
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "后续回答".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        text: "后续回答".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
     #[test]
     fn persist_interrupted_output_appends_partial_assistant_then_marker() {
         let data_dir = temp_data_dir();
@@ -1858,8 +1986,10 @@ mod tests {
                     enabled_tools: vec!["missing_a".to_string(), "missing_b".to_string()],
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
+                    consumed_pending_inputs: None,
                     hitl: None,
                     permission_store: None,
+                    force_automode: false,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -1918,8 +2048,10 @@ mod tests {
                     enabled_tools: vec!["missing_first".to_string(), "missing_second".to_string()],
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
+                    consumed_pending_inputs: None,
                     hitl: None,
                     permission_store: None,
+                    force_automode: false,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -1943,6 +2075,70 @@ mod tests {
                 })
                 .collect();
             assert_eq!(tool_names, vec!["missing_first", "missing_second"]);
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn persists_consumed_pending_inputs_after_current_assistant() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            let pending_inputs: PendingInputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let consumed_pending_inputs: ConsumedPendingInputs =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pending_for_client = pending_inputs.clone();
+
+            let assistant = send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    session_id: session.id.clone(),
+                    user_content: "第一条".to_string(),
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: vec!["missing_tool".to_string()],
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: Some(pending_inputs),
+                    consumed_pending_inputs: Some(consumed_pending_inputs),
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                },
+                |_| {},
+                move |_provider, _model, _reasoning| {
+                    Ok(Arc::new(PendingInputOrderClient {
+                        calls: AtomicUsize::new(0),
+                        pending_inputs: pending_for_client.clone(),
+                    }) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(assistant.content, "正在输出后续回答");
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            let roles_and_content: Vec<(Role, String)> = saved
+                .messages
+                .iter()
+                .map(|m| (m.role, m.content.clone()))
+                .collect();
+            assert_eq!(
+                roles_and_content,
+                vec![
+                    (Role::User, "第一条".to_string()),
+                    (Role::Assistant, "正在输出后续回答".to_string()),
+                    (Role::User, "插队消息".to_string()),
+                ]
+            );
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });

@@ -46,6 +46,31 @@
 
 <!-- 新条目追加在文件末尾 -->
 
+### 2026-05-19 — 新增 workspace/project 层并让新对话从项目继承 workdir 与 allowed_dirs
+
+- **Why**: 用户希望把会话设置外提成 workspace 概念，项目负责一组默认目录，新建对话从项目复制 workdir / allowed_dirs，但已有会话保持原样可独立修改
+- **改动**:
+  - [crates/agent-core/src/storage/projects.rs](../crates/agent-core/src/storage/projects.rs): 新增 `~/.hebbian/projects/` 持久化、VS Code workspace 导入、项目创建/保存/删除与单元测试
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): session 增加 `project_id`，新增按 workspace 创建 session 的入口，列表元数据携带 workdir/project
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs) / [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 暴露项目相关同步 API 与 Tauri 命令
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 左侧增加项目/全部筛选、项目列表、项目详情与项目内会话列表
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 目录 chips 前增加单独的清空所有目录按钮
+  - [docs/架构.md](../docs/架构.md): 补充 workspace/project 的持久化目录与同步 API 语义
+- **影响范围**: agent-core / desktop / docs；新增项目文件格式与 session 元数据字段，老 session 保持兼容
+- **留尾巴**: 前端项目导入/新建的交互还在收尾校验中，项目内会话列表目前按 `project_id` + `workdir` 兜底匹配老数据
+
+### 2026-05-19 — 调整 VS Code workspace 导入路径归一化与项目路径显示
+
+- **Why**: 用户希望导入 VS Code workspace 后，Hebbian 项目文件落在 `~/.hebbian/projects/`，所有 workdir / allowed_dirs 都变成可直接继承的全局路径；左侧和输入框只显示目录/文件名，hover 后能停留复制完整路径；项目内新建对话时输入框不再铺开所有目录
+- **改动**:
+  - [crates/agent-core/src/storage/projects.rs](../crates/agent-core/src/storage/projects.rs): VS Code workspace 导入时把首个相对路径按 workspace 文件所在目录解析为 workdir，后续相对路径按 workdir 解析为 allowed_dirs；同时写 `<project_id>.code-workspace` 副本
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 导入 VS Code 项目时把原 workspace 文件路径传给 storage 层用于相对路径解析
+  - [apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx](../apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx) / [PathHint.tsx](../apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx): tooltip 支持 hover 停留 0.5s、文本可选中复制，并新增统一路径显示组件
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx) / [ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx) / [workspaceFields.tsx](../apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx): 路径列表显示最后一段，完整路径放入可复制 hover；项目会话输入框只显示项目名称 chip
+  - [docs/架构.md](架构.md): 补充 VS Code workspace 导入路径归一化和 `.code-workspace` 副本语义
+- **影响范围**: agent-core storage / desktop Tauri command / desktop frontend；项目 JSON 仍兼容旧格式，新增 `.code-workspace` 副本不会参与项目列表扫描
+- **留尾巴**: `.code-workspace` 当前作为导入后的只读副本保存，不提供单独编辑入口
+
 ### 2026-05-10 — 新增「动手前必做」流程 + changelog 时间线
 
 - **Why**: 项目主人的工作模式是「想到什么就让 AI 改」，多次出现 AI 局部最优、违背初衷、与既有设计冲突、给未来埋坑。需要在 CLAUDE.md 里强制 agent 先读文档 + 做全局影响评估，并落一份只增不减的时间线作为回溯依据
@@ -1223,3 +1248,278 @@
 - **留尾巴**:
   - 🟡 HoverHint 当前用 `position: absolute` 渲染，处于 `overflow:hidden` 父容器内**会被裁剪**。当前 4 处的父容器都没设 overflow:hidden，实测无问题；若以后要用到下拉菜单内部 / sidebar 等 overflow 容器，可以再改造成 portal + fixed 定位
   - 🟡 未给 `AttachmentPill`（文件类附件 pill）与"+"按钮、"添加项目/目录"菜单项、拖拽手柄等其他位置加 HoverHint。这些原本就有 `title=` 或暂无 hover 信息；本次严格按用户原话只动他提到的 4 处，避免顺手 refactor
+
+### 2026-05-14 — 修复 WakeupScheduler 在 Tauri setup 阶段触发的进程级 abort
+
+- **Why**: Desktop 启动时直接 abort，控制台 panic 信息：
+  ```
+  thread 'main' panicked at crates/agent-core/src/wakeup.rs:118:
+  there is no reactor running, must be called from the context of a Tokio 1.x runtime
+  ...
+  thread caused non-unwinding panic. aborting.
+  ```
+  根因：`WakeupScheduler::global()` 内部用 `tokio::spawn` 启动三个后台 task，且这是进程级单例的 lazy-init。Desktop 的 Tauri `setup(...)` 闭包在 macOS NSApplication 的 `did_finish_launching` 回调里**同步**执行，此时主线程**没有 Tokio runtime 上下文**——首次调 `set_resume_handler` 触发 `global()` 初始化，三处 `tokio::spawn` 直接 panic；ObjC 回调禁止 unwind（C ABI），panic 被强制升级为 `abort()`。CLI 模式之所以没炸，是因为 `#[tokio::main]` 在调用前已经建好 runtime——纯属巧合，scheduler 不应该依赖调用方 runtime
+- **改动**:
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs)：`start_background_tasks` 改为 `std::thread::Builder` 起一个命名为 `wakeup-scheduler` 的 OS 线程，线程内 build 一个 `tokio::runtime::Builder::new_current_thread().enable_all().build()` 的独占 runtime，三个原本 `tokio::spawn` 的 task 与 dispatcher 的 `rx.recv()` 循环都跑在这个独占 runtime 上；模块头注释同步说明独立 runtime 的动机
+- **影响范围**:
+  - 仅 `agent-core::wakeup` 内部实现；对外 API（`global()` / `set_resume_handler` / `arm_cron` / `arm_bg_task` / `register_session_shells` / `discard_run` / `list_pending_crons`）零改动
+  - 不影响协议、storage、model-gateway、prompt cache；架构 §4.12 设计语义不变（仍是"进程级单例 + 三 task + 一 mpsc"），只是 task 的 runtime 归属改为 scheduler 自有
+  - 与 `observability::init` 的"独占 runtime 跑 OTel 导出 task"思路一致；多出一个 OS 线程 + 一个 current_thread runtime，资源开销可忽略
+  - `cargo check --workspace` 与 `cargo check -p agent-core --tests` 均通过
+- **留尾巴**:
+  - 🟡 这条 panic 之所以能溜进 main：scheduler 的 lazy-init 把"何时启动后台 task"完全交给"谁第一个调 `global()`"决定，调用方对 runtime 上下文这个隐式约束毫无感知。本次改完后 scheduler 自给自足，调用方真正不用关心；但同类隐式契约（"进程级单例 + 内部 spawn"）在其他模块若再出现，建议优先复制本文件的模式而非要求调用方"必须在 runtime 上下文里调"
+  - 🟡 独占线程在进程退出时随主进程销毁；scheduler 没有显式 shutdown 路径——和原实现保持一致，符合 §13 "不跨进程 resume" 决策
+
+### 2026-05-14 — 新增「权限/沙箱机制」横向调研文档
+
+- **Why**: 当前 [permissions](../crates/agent-core/src/permissions/mod.rs) + [effects](../crates/agent-core/src/effects.rs) + [hitl](../crates/agent-core/src/tools/hitl.rs) 三件套已能跑通基础审批流，但模型可以用 `cd /tmp && rm -rf foo` 这类**复合命令**绕过单纯的前缀匹配，存在已知风险（fingerprint 是 `cd` 不是 `rm`，规则 `Bash(cd *)` 误放整条）；同时 `timeout 30 git push` 之类的**修饰符前缀**会让规则匹配错位。需要先把外部参考（claude code 二进制 + codex 源码）拆开摆清楚，再决定怎么动 §4.4 / §4.6 / §4.8。本次只产出调研文档与改造方案（P0/P1/P2 分级），不动代码
+- **改动**:
+  - [docs/权限沙箱-调研.md](权限沙箱-调研.md)：新建文档（10 章）。逐项拆解 claude code 的 tree-sitter AST 拆段、前缀剥离正则栈、危险复合模式分类（cd-git-compound / multi-cd / shell-operators）、macOS SBPL profile 模板、Linux bwrap+seccomp+socat 网络桥、PreToolUse hook + 改写后规则重校验机制、`dangerouslyDisableSandbox` 设计；对比 codex 的 sandbox_policy / approval_policy 正交化；列出 hebbian 已落地组件与未实现项；给 P0（复合命令分段 + 前缀剥离 + 危险模式黑名单）、P1（acceptEdits / WebFetch default-deny / Hook / symlink 检测）、P2（macOS opt-in sandbox-exec）三级改造建议；明确不照搬 5 层 settings 来源 / `dangerouslyDisableSandbox` 入参 / TLS MITM
+  - 调研定位与 [compaction.md](compaction.md) 一致：横向背景资料，**不是设计准则**；任何把结论落地的改动仍需走 CLAUDE.md「动手前必做」三步流程，先在 [架构.md](架构.md) §4.4 / §4.5 / §4.6 / §4.8 落定
+- **影响范围**: 仅文档，零代码/协议变动；不影响构建、不影响 surface
+- **留尾巴**:
+  - 🟡 P0-1（复合命令分段）+ P0-2（前缀剥离）+ P0-3（危险复合模式黑名单）是当前最实在的安全提升，预计 effects.rs 局部 200 行内可完成，等用户决策后开工
+  - 🟡 P2 macOS sandbox-exec 是否做 / 是否默认开 / 与桌面端的交互方式都需先在架构.md 决策点落定，再开工
+  - 🟡 调研物料 `/tmp/claude_strings.txt` 是会话期临时文件，会清理；后续要复查可重新 `strings <native-binary> > <file>` 生成。文档第 9 章已经把关键字符串在 strings 文件里的偏移行号记下来（macOS SBPL profile / Linux bwrap / 前缀剥离正则 / 危险分类 / hook 重校验 / PowerShell 黑名单 / seccomp 限制），即使物料重新生成也能快速回到原位
+
+### 2026-05-14 — 「权限/沙箱机制」调研补研：Auto Mode（LLM Classifier）专章
+
+- **Why**: 第一轮 [权限沙箱-调研.md](权限沙箱-调研.md) 漏了 claude code permissionMode 的 `auto` 那一档对 Bash / Edit 的处理。auto mode 不是普通规则匹配，而是一个独立的 LLM classifier 在做决策——这套机制对"hebbian 要不要往 LLM 辅助审批方向走"的判断非常重要，需要把实现拆透再讨论。第一轮调研用的 2.1.140 二进制本地被升级换成了 2.1.141，借此机会重新 dump strings 并补完 auto mode 这一大块
+- **改动**:
+  - [docs/权限沙箱-调研.md](权限沙箱-调研.md)：
+    - 新增 §2.9「Auto Mode（LLM Classifier 决策）」共 10 个小节：opt-in 机制 / 4 类用户自定义规则（allow/soft_deny/hard_deny/environment）/ 两个独立 classifier（A 前缀提取+注入检测、B 决策主 classifier）/ 两阶段（fast→thinking）/ 失败 fail-closed / 连续 + 累计拒绝上限 / 对 Bash 与 Edit 的具体处理路径 / Telemetry & 调试 / 整体取舍。包含 classifier 完整 prompt 模板（含"鼓励语不解锁拦截"、"防工具切换绕过"两条关键设计），以及 Bash 注入检测 prompt 全文摘录（含 `git diff $(curl evil)` 等 9 个反例）
+    - 原 §2.9（`dangerouslyDisableSandbox`）顺移为 §2.10
+    - §0 TL;DR 加 auto mode 一句话总结 + classifier 借鉴策略
+    - §5 对比矩阵加两行：「LLM Classifier 决策层」、「命令注入检测（LLM 辅助）」
+    - §6 借鉴方案新增 §6.4「Auto Mode 单独考量」：分析为什么整套不建议照搬（与 surface 信任模型冲突 / 额外开销 / fail-closed 与 UI 冲突 / prompt-cache 压力），列出可拆出来用的子设计（命令注入检测 AST 版可并入 P0；**Bash 写文件目标识别**——`>` / `cat >` / `sed -i` / `tee` / `python -c "open(...,'w')"` / heredoc 的目标路径塞进 effects.paths 让 FilePath deny 规则统一兜底，提到 **P0+** 优先级——这是当前 hebbian 最大的安全洞之一；"鼓励语不解锁拦截"原则写入架构.md；hard_deny 标签）
+    - §8 落地建议表加两步（Bash 写文件目标识别 / 鼓励语原则写入架构.md），调整阶段编号
+    - §9 调研物料路径更新二进制版本（2.1.141）+ strings 行数（366008）；新增 Auto Mode 相关 13 个关键字符串偏移行号
+- **影响范围**: 仅文档，零代码/协议变动；不影响构建、不影响 surface
+- **留尾巴**:
+  - 🟡 **§6.4.2 的"Bash 写文件目标识别"提到了 P0+**，是当前 hebbian permissions 模型最实在的一个洞——配置 `Edit(secrets/**) deny` 后模型仍可 `bash: echo x > secrets/y.txt` 绕过。等 P0 复合命令分段落地后立刻补这块
+  - 🟡 是否在 hebbian 引入"鼓励语不解锁拦截"作为 §0 原则需要先与用户确认。这条原则会让 hebbian 在用户说"放手做"时反而不该自动放权，与 surface 信任模型有微妙张力，需要单独讨论
+  - 🟡 Auto Mode 的整套 classifier 机制本身不进 hebbian 主路线（§6.4.1 已分析理由），但 hard_deny 标签如果做最小版本（UI 上把 deny 与 hard_deny 区分显示），可以在 P1 阶段加进 PermissionRule 数据结构
+
+### 2026-05-14 — 调研补研：Classifier A（Bash 前缀提取）展开
+
+- **Why**: 用户提示之前只笼统说"Classifier A 提取 prefix"，没讲清楚为什么需要 LLM、什么时候第二个 token（subcommand verb）会进 prefix、什么时候不会。这一层是 claude code 整套机制里最巧妙也最容易低估的设计——它不做 allow/deny 决策，但决定了 allowlist 规则的合理粒度，hebbian 借鉴时必须吃透
+- **改动**:
+  - [docs/权限沙箱-调研.md](权限沙箱-调研.md) §2.9.4 Classifier A 子节大幅展开：
+    - 加「设计本质：粒度问题，不是语法问题」前置说明——dispatcher (git/npm) vs unitary (cat/find) 的 LLM 推断是无法用纯正则做的核心理由
+    - prompt 全文 28 个 example 重新按 5 类规律分组：单命令风格 / dispatcher 风格 / dispatcher 裸调用 → none / env var 整段保留 / 命令注入
+    - 加 6 条「关键判断」子节：(1) dispatcher vs unitary 二分；(2) 为什么 `git push` 返回 none 而 `git push origin master` 返回 `git push`（"prefix 必须 specific 才能形成 allowlist"反直觉设计）；(3) 参数不进 prefix（截止在 verb）；(4) 环境变量整段保留及理由（防 `PYTHONPATH=/tmp python3` / `NODE_TLS_REJECT_UNAUTHORIZED=0` 这类语义偷换）；(5) 路径/脚本参数即使在 dispatcher 之后也不进 prefix；(6) 命令注入 4 种形态（`$()` / 反引号 / 注释+反引号 / 换行裸命令 / 进程替换）与原文核心定义
+    - 加「这套设计避开的纯规则解法的坑」子节：5 个 corner case 解释为什么必须用 LLM 而不是硬编码 dispatcher 列表
+    - 加「在整体决策链里的位置」流程图，明确 Classifier A 在 auto mode 关闭时也跑（不限 auto mode）
+    - 加「与 hebbian 当前 shell_parse 的差距（具体到这一层）」分析：当前 fingerprint 取首个 token 导致 `BashCommandPrefix: "git commit"` 永远不命中、`PYTHONPATH=/tmp python3` 这类 fingerprint 错位等具体问题
+    - **给出 hebbian 第一阶段不上 LLM 的混合实现规范**：剥离修饰符 → 收集 env var → 取 base → 在硬编码 dispatcher 列表里查（git/npm/yarn/cargo/docker/kubectl/gh/aws 约 20 项）决定是否取 verb → 注入检测；覆盖 80% case，dispatcher 列表外按 unitary 处理，未来需要再升 LLM
+- **影响范围**: 仅文档；不动代码
+- **留尾巴**:
+  - 🟡 dispatcher 硬编码列表的具体清单（哪些工具进、哪些不进）需要在 P0-2 实施时与用户对齐。建议起步：`git npm yarn pnpm cargo rustc docker kubectl helm gh aws gcloud terraform go bun deno pip uvx make ninja`
+  - 🟡 这套混合实现"未知工具按 unitary 处理"是有意权衡（牺牲 dispatcher 推断换代价控制），实施前要在架构.md §4.6 落定这条约束，避免后续 agent 误以为是 bug
+  - 🟡 Bash 命令注入检测的 AST 实现细节（process_substitution 节点 / 反引号 token / 换行裸命令）建议在 P0-1（复合命令分段）的同一次 PR 里做，共用 tree-sitter-bash 解析结果
+
+
+### 2026-05-19 — AutoMode 判官升级：扩白名单 + effects 注入 prompt + ASK 段级拆解 + `--force-automode` 子开关
+
+- **Why**: 用户要求按 claude code Classifier B / codex 自动审查的设计哲学把 AutoMode 判官升级到真正能用。原 prompt 是 22 行简版、模型白名单只有 `claude-opus-4-7`、判官也看不到 hebbian 静态分析（segments / dangerous_kinds），导致：
+  1. 判官不知道用户已识别的危险信号（cd-git-compound / write-git-meta / rm-rf-root / sensitive-env-prefix），可能"凭直觉"重复判定
+  2. 用户口里的 gpt-5.5 没办法用 AutoMode
+  3. 危险命令默认 DENY 太武断——用户运维场景就是想跑 `rm -rf` 这类，应当 ASK + 让用户拍板
+  4. "放手跑、不打断我"的场景没法表达——CLI 起来后所有 ASK 都打断 agent，违背初衷
+- **改动**:
+  - [docs/架构.md](架构.md): §4.4.4 重写 AutoMode 实现细节（模型白名单、判官输入端扩 effects、判官设计原则 6 条、`force_automode` 子开关说明）；§13 决策表追加 4 行（模型白名单 / DENY 边界 / ASK reason 格式 / force_automode 子开关）
+  - [crates/agent-core/prompts/automode_judge.md](../crates/agent-core/prompts/automode_judge.md): 整段重写（英文，~120 行）。新结构：Inputs / Verdicts (ALLOW/DENY/ASK 各档触发条件)/ ASK 段级拆解示例 / Hard rules 5 条 / Output format strict。借鉴 CC Classifier B 的「鼓励语不解锁」「工具切换绕过」「fail-closed」原则，但 DENY 边界收紧到只覆盖 ast-too-complex + 无意图——其它危险动作一律 ASK
+  - [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs): `AUTOMODE_REQUIRED_MODEL` (单一字符串) → `AUTOMODE_ALLOWED_MODELS: &[&str]` (白名单 substring 匹配，容忍 `claude-opus-4-7-20260416` 这类日期变体)；`judge_auto_mode` 签名加 `effects: &Effects` 参数；`format_judge_prompt` 注入 `segments[*]` / `paths` / `dangerous_kinds` / `network` / `class`；`max_tokens` 200 → 300（ASK reason 要按段拆解）；新增 `AutoModeDecision::collapse_ask_to_deny()`，把 Ask 折叠为 Deny 时在 reason 头部加 `force-automode:` 前缀；单测覆盖白名单 + collapse
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `ToolDispatcher` 加 `force_automode: bool` 字段；AutoMode 分支调 `judge_auto_mode` 时多传 `&effects`，拿到 raw decision 后按 `force_automode` 调 `collapse_ask_to_deny`，再 emit / resolve
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): `SessionConfig` 与 `Session` 都加 `force_automode: bool` 字段 + getter `force_automode()` + setter `set_force_automode()`；`run_with_pending` / `resume_with` 透传给 `RunParams`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `LoopParams` 加 `force_automode` 字段；构造 `ToolDispatcher` 时传过去；测试 / harness 处补 default `false`
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): `RunParams` 加 `force_automode`，`spawn_run` 解构 + 传 `LoopParams`
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 加 `--force-automode` clap flag，传给 `CliSession::new`
+  - [apps/cli/src/session.rs](../apps/cli/src/session.rs): `CliSession::new` 加 `force_automode: bool` 参数 → 灌进 `SessionConfig`；REPL loop 加 `/force-automode [on|off|toggle|status]` 命令（toggle/无参 = 取反）；启动期顺手补上之前 c80c983 commit 漏写的 `SessionConfig.phase: None` 字段（CLI 不接入挂起通道，与架构 §4.12 一致）
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `SessionConfig` 字面量补 `force_automode: false`（Desktop UI 切换由后续单独 PR 跟）
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): 顺手修两个上次 c80c983 重写没收尾的 bug
+    1. `strip_prefix` 的内层 `if SCHED_MODIFIERS.contains(...) {` 缺右大括号 + `'outer: loop {` 缺退出条件和闭合 → 整个文件 unclosed delimiter，cargo check 失败
+    2. fd 复制 (`2>&1` / `1>&2`) 的 `&N` 在 op 之后被 `scan_token` 拒绝后**只跳过了 op 字符**，`&1` 残留进 cleaned 让 `sniff_complex_structure` 误判为后台 `&` → 加 `scan_fd_dup` helper 整段吞掉 `&[0-9]+` / `&-`
+- **影响范围**:
+  - 协议无变化（`PermissionAutoJudged` payload 字段不变，只是 reason 文本现在带段级拆解）
+  - `SessionConfig` / `RunParams` / `LoopParams` / `ToolDispatcher` 多了一个公开字段 → desktop / CLI / agent-core test 三处构造点必须补；其它 surface（远期 HttpCoreClient）按需透传
+  - prompt 文件二进制内嵌（`include_str!`），prompt cache 用户首次跑 AutoMode 会重建一次
+  - AutoMode 单次判官调用 token 略涨：原 prompt ~22 行 → 现 ~120 行，加上 effects 注入用户消息约多 200-400 token，但 ASK reason 按段拆解后用户体验质变（之前是"我不确定，让人决定" → 现在是"段 1 cd /etc 切到系统配置目录、段 2 cat ~/.ssh/id_rsa 读取 SSH 私钥..."）
+- **留尾巴**:
+  - 🟡 Desktop UI 没接 `force_automode` 切换按钮（后端字段已透传到 SessionConfig，前端单独 PR 跟）
+  - 🟡 TUI 状态栏没显示 `force_automode` 状态（CLI 启动 `--force-automode` 锁定 + REPL `/force-automode` 切换已足够；TUI 用户想运行时切要回 REPL）
+  - 🟡 模型白名单是 substring 匹配。`gpt-5.5-something-experimental` 这种带后缀的命名也会被命中——以后 OpenAI 推 `gpt-5.5-mini` 这种"基础名相同但能力差很多"的模型时需要把白名单收紧成 exact match 或 regex
+  - 🟡 判官输出现在严格要求英文格式头 (`ALLOW` / `DENY:` / `ASK:`)。如果未来 gpt-5.5 在某些 locale 下偶发首行翻译成 "允许" / "拒绝"，会被 `parse_decision` 兜底为 Ask（fail-closed 正确，但用户体验扣分）—— 观察期后如果发现可考虑给 prompt 加一条 negative example
+  - 🟡 shell_parse.rs 的 `strip_prefix` 闭合 + fd dup 两个修复属于"撞到了上次没做完的工作"，不是本次 AutoMode 任务范围。已通过 cargo test (31/31 shell_parse + 165/165 agent-core lib) 验证回归覆盖
+- **关联**: 架构 §4.4.4 / §13；调研 §2.9 (CC Classifier B) / §3 (codex approval_policy 三态) / §6.4 (借鉴方案矩阵)
+
+### 2026-05-19 — 调整项目入口与项目 chip 图标
+
+- **Why**: 用户希望左上角「项目 / 全部」筛选按钮的图标更贴合语义，同时输入框上方的项目标识要和目录 chip 区分开，避免项目看起来像普通文件夹目录
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 「项目」筛选改为公文包项目图标，「全部」筛选改为多对话图标，保留「新建对话」的加号对话图标
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 项目 chip 改用公文包项目图标，目录 chip 继续使用文件夹图标
+- **影响范围**: 仅 Desktop 前端展示；不改协议、不改持久化、不影响已有项目/会话数据
+- **留尾巴**: 无
+
+### 2026-05-19 — 调整输入框项目 chip 的路径 hover 展示
+
+- **Why**: 用户希望项目 chip 鼠标悬停时只显示完整路径，不要 `allowed` 等标签；同时 workdir 与 allowed paths 要有清晰视觉分隔
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 项目 chip 的 hover 内容改为 workdir 路径在上、双分割线、allowed paths 路径列表在下
+- **影响范围**: 仅 Desktop 前端展示；不改协议、不改持久化、不影响项目/会话数据
+- **留尾巴**: 无
+
+### 2026-05-19 — 修正 VS Code workspace 导入的相对路径转换规则
+
+- **Why**: 用户导入 `../../other/hebbian.code-workspace` 时发现，`../rust/hebbian` 被保存成带 `other/..` 的未归一化绝对路径，后续 `sub2api` 又被错误拼到 workdir 下；实际期望是第一个 folder 变成规范全局 workdir，其余相对 folder 按原 workspace 文件位置解析后，再保存成相对 workdir 父目录的相对路径
+- **改动**:
+  - [crates/agent-core/src/storage/projects.rs](../crates/agent-core/src/storage/projects.rs): VS Code workspace 导入新增 lexical path normalize；首个 folder 规范化为绝对 workdir；后续相对 folder 改写为相对 workdir 父目录的路径，绝对 folder 继续保存为规范绝对路径；新增覆盖 `../rust/hebbian` / `sub2api` / `../claude-code-haha` / `../rust/cc-switch` 的回归测试
+  - [docs/架构.md](架构.md): 同步更新 `importVscodeProject` 的路径归一化语义
+- **影响范围**: agent-core storage / Desktop 导入项目命令；不改项目 JSON 字段结构，不影响已有项目文件，后续重新导入 VS Code workspace 会按新规则落盘
+- **留尾巴**: 已导入过的旧项目不会自动迁移，需要用户重新导入或手动调整项目目录
+
+
+### 2026-05-19 — AutoMode 收尾：CLI 路径回退、白名单 exact match、Desktop `//` 命令系统落地
+
+- **Why**: 上一条 AutoMode 落地把 `--force-automode` flag / REPL 命令塞进了 `apps/cli`，但 changelog 早就写过"先不考虑 tui cli"且 `apps/cli` 已经从 Cargo workspace 排除，那条改动方向错了；同时白名单的 substring 匹配过宽，`gpt-5.5-mini` 这种"基础名同、能力差很多"的模型会误开 AutoMode；需要把唯一 surface（Desktop）补上等价的入口
+- **改动**:
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs) / [apps/cli/src/session.rs](../apps/cli/src/session.rs): 完全 revert 上一条加的 `--force-automode` flag + REPL `/force-automode` 命令——cli 已脱离 workspace，不再维护
+  - [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs): `AUTOMODE_ALLOWED_MODELS` 从 substring 匹配改为 exact match，白名单收紧到 `&["opus-4-7", "opus4.7", "gpt-5.5"]`；带前缀（`claude-opus-4-7`）/ 后缀（`gpt-5.5-preview` / `gpt-5.5-mini` / `opus-4-7-20260416`）一律降级 Ask；新增 `is_allowed_model` 单测覆盖三类拒绝场景；上一条遗留的 substring 留尾巴清掉
+  - [docs/架构.md](../docs/架构.md): §3.3 / §6.1 / §6.3.1 / §10.3 / §16 / §13 / §14 清扫 CLI / TUI / REPL / `--mock` 残留；§13 删 D7 + 8.3.x 系列 8 行；§14 步骤表把 CoreClient 转发收敛到 Desktop、删 Step 13 TUI；新增 §8 "Desktop 命令系统"章节定义 `//` 前缀的本地命令派发规范（前端拦截 / fail-closed / 三层后端落点）
+  - [CLAUDE.md](../CLAUDE.md): 清扫第 34 / 161 行的 CLI / TUI / REPL / hebbian-cli 残留
+  - [apps/desktop/src/force_automode.rs](../apps/desktop/src/force_automode.rs): 新增进程级 `ForceAutomodeState`（`Mutex<HashMap<session_id, bool>>`），重启回归 `false`；选 in-memory 而非写 session.json 的理由：危险开关重启回归默认更安全，且老 session 反序列化无需迁移
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 注册 `ForceAutomodeState`；新增 `get_force_automode` / `set_force_automode` Tauri command；`send_message` 拿 State 注入到 `SendArgs.force_automode`
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `SendArgs` 加 `force_automode: bool`，构造 `SessionConfig` 时透传（替换原硬编码 `false`）
+  - [apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts](../apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts): 新增 `dispatchSlashCommand`，注册表只挂 `force-automode` 一条，支持 `on/off/toggle/status`（无参 = toggle）；未知命令 / 参数非法走 toast error；输入框 onSubmit 命中 `//` 前缀时一律本地派发
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): submit 路径在 `/compact` 拦截之后、`onSend` 之前调 `dispatchSlashCommand`；命中即清输入框 / 重置历史光标，错误走 toast
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `api.getForceAutomode` / `api.setForceAutomode`
+- **影响范围**:
+  - `apps/cli` 回到上一条 AutoMode 改动**之前**的状态（除已经修的 shell_parse.rs，那部分保留）
+  - `SendArgs` 加 `force_automode: bool` 字段——chat.rs 内部测试两处构造点已同步补 `force_automode: false`
+  - 协议无变化（只是 Tauri command 新增 2 个，不影响 send_message 既有签名）
+  - 架构.md 减小覆盖面：CLI / TUI / REPL 全部移出唯一设计准则，新增 §8 章节正式收纳 `//` 命令规范
+- **留尾巴**:
+  - 🟡 §8 命令清单当前只有 `//force-automode` 一条，后续按需追加 `//run-mode <mode>` / `//clear` / `//compact <hint>`（把 ChatInput.tsx 里硬编码的 `/compact` 拦截搬过来统一）
+  - 🟡 前端没有可视化徽章显示 `force_automode` 当前状态——目前用 `//force-automode status` 查；后续如果要做 status pill，从 `api.getForceAutomode` 拉就行
+  - 🟡 `force_automode` 不持久化的取舍可能要复盘：用户重启 desktop 后会"以为还开着"。当前依赖 toast 反馈 + status 子命令兜底，等多用户后看是否需要落 session
+  - 🟡 上一条 changelog 提的"判官 prompt 英文严格格式"的兜底观察期继续——本次没动 prompt 文件
+- **关联**: 架构 §4.4.4 / §8 / §13；上一条 changelog（同日 AutoMode 落地）
+
+### 2026-05-19 — 将允许访问项统一迁移为 allowed_paths 并增强路径列表 UI
+
+- **Why**: 用户指出允许访问项已经同时包含目录和文件，继续使用 allowed_dirs / 允许目录会误导；左侧项目允许列表也需要限制行数、超出滚动，并区分目录与不同类型文件
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs) / [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs) / [crates/agent-core/src/storage/projects.rs](../crates/agent-core/src/storage/projects.rs): 持久化字段统一写出 `allowed_paths` / `runtime_allowed_paths` / `pending_runtime_allowed_paths`；读侧保留旧 `allowed_dirs` 系列 alias；新增兼容测试覆盖旧设置、旧 rollout meta、旧项目输入
+  - [crates/agent-core/src/workspace.rs](../crates/agent-core/src/workspace.rs) / [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs) / [crates/agent-core/src/tools](../crates/agent-core/src/tools): 内部注释、workspace-update 文案、工具描述从允许目录改为允许路径
+  - [apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx](../apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx): `DirListField` 改为 `PathListField`，支持分别添加文件/文件夹，文件按常见类型显示不同 lucide 图标，列表支持 `maxVisibleRows` 后滚动
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 项目详情里的允许路径列表最多显示 5 行，超出滚动；文案改为“允许访问的路径”
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx) / [apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx) / [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx) / [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): UI 文案统一为允许路径；输入框菜单增加“允许访问文件 / 允许访问文件夹”，chip 图标按路径类型区分
+  - [docs/架构.md](架构.md): 同步 `folders[1..]`、模板变量和 storage 布局中的 `allowed_paths` 语义
+- **影响范围**:
+  - agent-core storage / workspace / prompt 注入文案；Desktop frontend workspace/project/session settings；Tauri 参数保持 camelCase `allowedPaths`
+  - 向后兼容旧 `allowed_dirs` JSON / jsonl 字段，保存后会按新字段写出；CLI 参数名从 `--allowed-dir` 收敛为 `--allowed-path`
+- **留尾巴**: 无
+
+
+### 2026-05-19 — Desktop ChatInput 加号右侧增设 `//` 命令 popup 与 RunMode chip
+
+- **Why**: 用户希望在输入框工具栏看到一个一目了然的入口——`//` 按钮列出注册的所有命令、命中后填入输入框等敲参数；mode chip 实时显示当前 RunMode 并支持下拉切换。原 `//force-automode` 只能键盘敲，对鼠标党不友好；同时 RunMode 在后端长期被写死 `RunMode::default()`，前端从未接入切换路径
+- **改动**:
+  - [apps/desktop/src/run_mode_state.rs](../apps/desktop/src/run_mode_state.rs): 新增进程级 `RunModeState`（`Mutex<HashMap<session_id, RunMode>>`），复用 ForceAutomodeState 的 in-memory pattern；重启回归 `AskBeforeEdits`
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 注册 `RunModeState`；新增 `get_run_mode` / `set_run_mode` Tauri command（后者校验字符串可被 `RunMode::parse` 解析）；`send_message` 新增 `run_mode: State<...>` 注入并往 `SendArgs` 透传
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `SendArgs` 加 `run_mode: RunMode` 字段，构造 `SessionConfig` 时替换原硬编码 `RunMode::default()`；测试构造点同步补默认值
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `api.getRunMode` / `api.setRunMode`
+  - [apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts](../apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts): 暴露 `SlashCommandMeta` 与 `slashCommandCatalog`——是 popup 的数据源；同步 `parseBoolArg` 的大小写归一化，避免 `On/OFF/Toggle` 这种混合大小写命中默认分支
+  - [apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx): 新增；工具栏 `//` 图标按钮 + popup 渲染 `slashCommandCatalog`，点击回调把 `//${name} ` 写入输入框
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx): 新增；显示当前 RunMode 的人类可读 label（"Ask before edits" / "Edit automatically" / "Plan mode" / "Auto mode"），点击下拉切换，调 `api.setRunMode` 并本地 setState
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 把原加号 wrapper 改成水平 group 容纳 `SlashCommandButton` 与 `RunModeChip`；右侧 ModelPicker / 发送按钮不动；`//` popup 命中后 `setValue` 追加在末尾并 focus 输入框光标到末尾（保持已有草稿不被覆盖）
+  - [docs/架构.md](../docs/架构.md): §8.1 加原则 6（工具栏入口与 `//` 命令并存）；§8.2 表加 `//run-mode` 行与"工具栏入口"列
+- **设计取舍**:
+  - **RunMode in-memory 而非持久化**：先做到能切 + 立即生效。等多用户反馈"切完关掉再开希望保留"再统一搬到 session.json；现在持久化要先解决老 jsonl 兼容 / prompt cache 边界 / Switch marker 是否插入等问题，本期不掺这个雷
+  - **mode chip 不挂 `//` 命令文字**：避免与 `//force-automode` 这种"子开关"类命令在 popup 列表里互相干扰；命令清单（架构 §8.2）依然把 mode chip 当作 §8 命令系统的一员登记，理由是它们共享相同的 Tauri command pattern 与失败语义
+  - **popup 命中后填入输入框（而非直接执行）**：用户决策。`//force-automode` 在不带参数时是 toggle，带参数时是 set——填入输入框让用户决定要不要补参，比"无脑 toggle"对预期更友好
+- **影响范围**:
+  - 协议无变化（新增两个 Tauri command，不破坏既有 send_message 签名——`run_mode` 字段是 State 注入，IPC 入参不变）
+  - `SendArgs` 加 `run_mode` 字段；chat 内部两处测试构造点已同步
+  - 老 session 不影响：进程级 state 默认 `AskBeforeEdits`，与之前硬编码值一致
+- **留尾巴**:
+  - 🟡 RunMode 不持久化：用户重启 desktop 后会回到 `AskBeforeEdits`，可能与上次工作期望不一致；当 mode chip 也加可视化 badge 提示"刚刚重置过"时再复盘
+  - 🟡 切到 `AutoMode` 时若当前模型不在白名单（不是 opus-4-7 / gpt-5.5），目前 chip 静默切换、运行时 `judge_auto_mode` 才返回 Ask 降级；后续可以在 chip 切换时做一次 model 白名单 precheck，给出 toast 警告
+  - 🟡 `PlanMode` 在 dispatcher 里的工具过滤当前还是 TODO（架构 §4.4.5 占位），切到 PlanMode 暂时跟 AskBeforeEdits 行为一致——chip 本身已经能切，等 PlanMode 实装时无需再改前端
+- **关联**: 架构 §4.4.3 / §8.1 / §8.2；与上一条 changelog（AutoMode 收尾）同日续作
+
+
+### 2026-05-19 — RunMode 升级为 Session 持久化字段（替换上一条的 in-memory 方案）
+
+- **Why**: 上一条 changelog 把 RunMode 放在 desktop 进程级 `RunModeState` 里，用户重启或换窗口就丢失，与"已有对话的 mode 跟着对话走"的直觉不符；用户明确要求把 mode 持久化到 Session 配置里
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `Session` / `RolloutMeta` / `MetaUpdate` 三处都加 `run_mode` 字段，全部带 `#[serde(default)]`——老 jsonl / 老 `.json` 反序列化回退 `AskBeforeEdits`，与切换前硬编码行为一致；`meta_from_session` / `apply_meta` / `apply_update` 透传；`read_jsonl` 初始化 Session、`create_with_source` / `fork` 构造点补字段；新增 `sessions::set_run_mode(data_dir, id, mode)` helper，**追加一行 `RolloutLine::MetaUpdate { run_mode: Some(_) }`**（不重写 messages），与 `rename` 同 pattern
+  - [apps/desktop/src/run_mode_state.rs](../apps/desktop/src/run_mode_state.rs): **删除**——in-memory 中间层不再需要
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 删 `RunModeState` 模块 / pub use / `.manage()`；`get_run_mode` 改为 `sessions::load(...).run_mode`；`set_run_mode` 改为 `sessions::set_run_mode(...)`；`send_message` 不再注入 RunMode State——run_mode 由 chat.rs 内部从 `prior_session` 取
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `SendArgs` 去掉 `run_mode` 字段；构造 `SessionConfig` 时改为 `run_mode: prior_session.run_mode`；测试构造点对应回收
+  - [docs/架构.md](../docs/架构.md): §4.4.3 新增"持久化"小段，说明 `Session.run_mode` + `MetaUpdate` append-only 切换路径；§8.1.3 把命令后端落点分类改为"进程级 / 会话级持久 / agent-core API"三档；§8.2 表里 `//run-mode` 行的"后端 Tauri commands"列补注"落到 `Session.run_mode`，跨重启保留"
+- **设计取舍**:
+  - **MetaUpdate append 而非 save 全量重写**：rename 走的就是这套；RunMode 切换频率可能高（用户调几下试），全量重写大 session.jsonl 会是浪费
+  - **从 `RunModeState` in-memory 改为 Session 字段**：本来 force_automode 是"危险开关重启回归默认"的语义所以 in-memory 合理；RunMode 是会话级偏好，跟着 Session 走更符合用户预期；多窗口共享 desktop 进程时也保证一致（虽然 in-memory 在同进程也 OK，但 fail-safe 多一层）
+  - **prompt cache 不受影响**：架构 §4.4.3 早定下"mode 不进 system prompt"，新增字段也只影响 storage 层与 SEMI 段；prompt cache 命中边界不变
+- **影响范围**:
+  - `Session` / `RolloutMeta` / `MetaUpdate` schema 字段新增——老数据完全兼容（`#[serde(default)]` 兜底为 `AskBeforeEdits`），但已经写过新字段的 jsonl 不能被旧版本 hebbian 二进制读（因为旧版没有 RunMode 反序列化器）——本仓库单向演进，不构成问题
+  - `SendArgs.run_mode` 字段移除——之前唯一调用点是 desktop 的 `send_message`，已同步更新；CLI 路径不受影响（已脱离 workspace）
+  - 桌面 in-memory `RunModeState` 完全删除
+- **留尾巴**:
+  - 🟡 mode chip 切换到 `AutoMode` 时，如果当前 session.model 不在白名单（不是 opus-4-7 / gpt-5.5），目前 chip 静默落盘、运行时 `judge_auto_mode` 才降级为 Ask；后续给 chip 加一次 model 白名单 precheck + toast 警告
+  - 🟡 `PlanMode` 的工具过滤仍是 TODO（§4.4.5 占位）；切到 PlanMode 现在能落盘了，但运行时与 AskBeforeEdits 行为一致
+  - 🟡 `MetaUpdate` 行随时间累积——每切换一次 RunMode 多一行 jsonl；与 `rename` 同性质，目前不做 compaction
+- **关联**: 架构 §4.4.3 / §6.2 / §8；与上一条 changelog（mode chip 工具栏入口）同日续作
+
+### 2026-05-19 — Read 工具重构：单行截断 + 整体 6KB 截断 + 豁免 materialize 落盘
+
+- **Why**: 
+  - 死循环：Read 读一个 2000 行的常规源文件 → 输出 ~100KB → dispatch `materialize_tool_output` 把整份落盘到 `tool_results/<call_id>.txt`、inline 给"完整内容已落盘到 xxx → 请用 Read 翻页"指针 → agent 照做，Read 这个落盘文件 → 又 100KB → 又落盘 → 死循环
+  - 根因：Read 是**分页工具**，本身提供 offset/limit 翻页，再叠一层 materialize 语义重复且误导向落盘文件触发的二次 Read
+  - 与 Claude Code 对照分析（对 2.1.143 二进制 `strings` 转储反推）：CC Read 描述里写 "verbatim file content"（逐字原文），不做单行截断，不做整体落盘，没有 MAX_FILE_BYTES 硬拒绝——完全信任 agent 用 offset/limit 自控。但 hebbian 没有 CC 服务端的 context compaction 兜底，需要安全网
+- **改动**:
+  - [crates/agent-core/src/tools/read.rs](../crates/agent-core/src/tools/read.rs): 
+    - 新增 `data_dir` / `session_id` 字段（≥ `ReadTool::new` 接受），用于超长行剩余部分落盘
+    - **单行截断**：行 > 2000 字符时截断，inline 显示前 2000 字符 + `…[截断，剩余 N 字符已落盘 /path]`；剩余部分保存到 `<data_dir>/sessions/<sid>/line_trunc/<file_hash>_L<line>.txt`，按 ~2000 字符换行
+    - **整体 6KB 输出截断**：输出超 ~6KB 后停止追加新行，附加 `[输出截断：已显示 N 行。后续约 M 行未显示。请用 offset/limit 翻页读取（当前 offset=X limit=Y）。]` —— **不落盘**，不给出"请用 Read 读这个文件"的指针
+    - 无 `data_dir` / `session_id` 时，超长行截断仅标注剩余字符数，不落盘
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): `default_tools` 签名加 `data_dir: Option<PathBuf>` / `session_id: Option<String>`，透传给 `ReadTool::new`
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `materialize_tool_output` 豁免 Read（`call.name == "Read"` 时跳过落盘 + `truncate_tool_result`），Read 自身已做截断控制
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 两处 `default_tools` 调用传 `Some(data_dir)` / `Some(session_id)`（主路径）或 `None, None`（工具预览路径）
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 同步新签名（CLI 已从 workspace 排除，仅为避免复活时编译错误）
+- **设计取舍**:
+  - **不全文落盘**（与 old materialize 行为断舍离）：Read 是分页工具，落盘 + 指针诱导 agent 读落盘文件 → 文件又触发 materialize → 死循环。改为截断后仅给 offset/limit 提示，agent 天然知道怎么翻页
+  - **长行截断后落盘（而不是完全不截断）**：CC 的 "verbatim" 策略在 hebbian 没有 compaction 兜底时风险太高（单行 minified JS 50KB 直通模型可能撑爆上下文窗口）；截断 + 落盘剩余部分 = 安全网
+  - **保留 `MAX_FILE_BYTES = 5MB`**：与 CC 不同，但 hebbian 纯读文件不需要 agent 阅读 >5MB 的二进制；agent 真需要时可以用 `Bash + head -c` 或者 Grep 切片
+- **影响范围**:
+  - agent-core: Read 工具 / `default_tools` / dispatch materialize 路径
+  - desktop: `chat.rs` 两处调用点
+  - CLI: 签名同步（已脱离 workspace）
+  - 协议无变化（EventPayload / ToolResult 不变；Read 不再产生 artifact_path，前端 MessageBubble 已有 `artifact_path = None` 处理）
+  - 前端无变化
+- **留尾巴**:
+  - 🟡 超长行剩余文件（`line_trunc/` 目录）不随 session 删除自动清理——单行截断场景罕见（minified JS / 巨大 JSON single-line），累积量可忽略
+  - 🟡 `MAX_FILE_BYTES = 5MB` 硬拒绝可在用户反馈后再评估是否去除或提高
+- **关联**: Claude Code 2.1.143 binary 对照分析（`wpH=2000`、verbatim 语义、无 artifact 落盘）；架构 §4.4 / §4.4.9
+
+### 2026-05-19 — dispatch 路径越界检查：hebbian 数据目录自动放行
+
+- **Why**: Read 截断落盘的 `line_trunc/` 文件位于 `~/.hebbian/sessions/<sid>/` 下，agent 尝试读取这些文件时会触发 PathAccess 审批——但这些是 agent 自己的工具输出，不该走权限系统。同理 `tool_results/`、`bg/` 等 hebbian 内部文件都应在界内
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `out_of_scope` 过滤加第二道 `filter`：以 `<data_dir>/sessions/<session_id>/` 为前缀的路径视为在界内，不触发 PathAccess 审批。范围限定在当前 session 目录（`tool_results/`、`line_trunc/`、`bg/` 等），不包含 `~/.hebbian/settings.json`、`permissions.json` 等配置文件
+- **影响范围**: agent-core dispatch；不影响已有 HITL 审批逻辑（路径不在当前 session 目录下仍按原规则检查）
+- **留尾巴**: 无
+
+### 2026-05-19 — 修复 Desktop 多会话并行发送与流式插队顺序
+
+- **Why**: 用户反馈一个对话运行时，其他对话和新建对话的发送按钮一直转圈、不能发送；同一对话运行时引导插队也被挡住；并且插队 user message 会在持久化历史里跑到当前正在输出的 assistant 前面
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 发送按钮的 `sending` 只覆盖本次提交动作，不再等待整轮 `sendUserMessage` 完成；后台 run 的状态由 `sessionStreams` / `isStreaming` 驱动
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `sendUserMessage` 内部改为按 session 执行，队列 `drainNext` 不再依赖当前打开的 session；切到其他对话后，原对话的 queued input 仍能按 FIFO 继续发
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs) / [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs) / [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs) / [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): 在 `PendingInputs` 外增加已消费副本 `ConsumedPendingInputs`，agent_loop drain 插队输入时同步记录，供 surface 在 run 结束后落盘
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `inject_user_message` 只注入当前 run，不再立即 append 到 session.jsonl；run 已结束时返回错误，让前端保留队列项供重试
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): run 正常完成后先落当前 assistant，再把已消费和未消费的 pending user message 排到 assistant 后面落盘；新增单测覆盖"模型看见插队输入 + jsonl 顺序为 user → assistant → 插队 user"
+- **影响范围**: desktop 前端 store/input、desktop Tauri chat 路径、agent-core run 参数、common runtime；协议 `EventPayload` 与 Tauri `send_message` IPC 入参不变，老 session 文件兼容
+- **留尾巴**: 中断 / 失败路径仍按现有 partial assistant + marker / failed assistant 逻辑收尾，未额外追加未消费 pending input；如果用户在失败前刚点引导，前端队列项会因 `inject_user_message` 失败还原，已成功注入但 run 随后失败的极端场景后续可再细化恢复策略

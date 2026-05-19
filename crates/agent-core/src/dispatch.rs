@@ -56,8 +56,8 @@ fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
     }
 }
 
-use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult};
 use common::{runtime as cancellation, CancelFlag};
+use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult};
 
 const MAX_TOOL_RESULT_INLINE: usize = 6_000;
 /// 落 artifact 路径时给模型看的头部预览字节上限。
@@ -90,10 +90,15 @@ pub struct ToolDispatcher {
     pub cancel: CancelFlag,
     /// 运行模式（架构 §4.4.3）。AutoMode 时在 NeedsApproval 路径上调一次 judge。
     pub run_mode: crate::run_mode::RunMode,
-    /// 当前会话使用的模型 id（AutoMode judge 限定模型用）。
+    /// 当前会话使用的模型 id（AutoMode judge 限定模型用，命中
+    /// [`crate::automode::AUTOMODE_ALLOWED_MODELS`] 才发请求）。
     pub model_id: Option<String>,
     /// AutoMode judge 复用的 ModelClient（通常 = 主 client）。`None` 时降级 Ask。
     pub judge_client: Option<std::sync::Arc<dyn model_gateway::client::ModelClient>>,
+    /// `force_automode` 子开关（架构 §4.4.4）。仅 [`RunMode::AutoMode`] 下生效：
+    /// 判官返回 `Ask` 时直接折叠成 `Deny` 不打断用户；`Allow` / `Deny` 不变。
+    /// 由 CLI flag `--force-automode` 或 REPL `/force-automode` 切换。
+    pub force_automode: bool,
     /// Hook 管理器（架构 §4.8）。dispatch_one 内在工具调用前后 trigger PreToolUse /
     /// PostToolUse / PostToolUseFailure 让外部 hook 介入。
     pub hooks: std::sync::Arc<crate::hooks::HookManager>,
@@ -157,11 +162,21 @@ impl ToolDispatcher {
         let class_label = effect_class_label(effects.class);
         let fingerprint = effects.command_fingerprint.clone();
 
-        // 路径越界检查（同步）
+        // 路径越界检查（同步）。
+        // 当前 session 数据目录（`~/.hebbian/sessions/<sid>/`）下的文件是 agent
+        // 自己的工具输出（line_trunc/、tool_results/、bg/ 等），永远视为在界内，
+        // 不触发 PathAccess 审批。范围限定到 session 目录，避免配置文件被随便读。
         let out_of_scope: Vec<PathBuf> = effects
             .paths
             .iter()
             .filter(|p| !self.workspace.allows(p))
+            .filter(|p| {
+                !self
+                    .data_dir_for_artifacts
+                    .as_ref()
+                    .zip(self.session_id_for_hooks.as_deref())
+                    .map_or(false, |(dd, sid)| p.starts_with(&dd.join("sessions").join(sid)))
+            })
             .cloned()
             .collect();
 
@@ -221,6 +236,8 @@ impl ToolDispatcher {
         let run_mode = self.run_mode;
         let judge_client = self.judge_client.clone();
         let model_id_for_judge = self.model_id.clone();
+        let force_automode = self.force_automode;
+        let effects_for_judge = effects.clone();
         let hitl_for_future = self.hitl.clone();
         let call_name_for_judge = call.name.clone();
         let call_input_for_judge = call.input.clone();
@@ -267,15 +284,11 @@ impl ToolDispatcher {
                             "Edit" | "Write" | "edit" | "write"
                         );
                         if is_edit {
-                            sink(state.event(
-                                protocol::EventPayload::PermissionAutoJudged {
-                                    tool_name: call_name_for_judge.clone(),
-                                    decision: "allow".to_string(),
-                                    reason: Some(
-                                        "EditAutomatically: 文件编辑自动放行".to_string(),
-                                    ),
-                                },
-                            ));
+                            sink(state.event(protocol::EventPayload::PermissionAutoJudged {
+                                tool_name: call_name_for_judge.clone(),
+                                decision: "allow".to_string(),
+                                reason: Some("EditAutomatically: 文件编辑自动放行".to_string()),
+                            }));
                             hitl_for_future.resolve(request_id, ApprovalDecision::AllowOnce);
                         }
                     }
@@ -288,23 +301,30 @@ impl ToolDispatcher {
                 if run_mode == crate::run_mode::RunMode::AutoMode {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         if let Some(judge) = judge_client.as_ref() {
-                            let model_id_str =
-                                model_id_for_judge.as_deref().unwrap_or("");
-                            let decision = crate::automode::judge_auto_mode(
+                            let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
+                            // judge 必须看到 hebbian 静态分析的全量 effects（segments /
+                            // write_targets / dangerous_kinds），不重复解析 shell。
+                            let raw_decision = crate::automode::judge_auto_mode(
                                 judge,
                                 model_id_str,
                                 &call_name_for_judge,
                                 &call_input_for_judge,
+                                &effects_for_judge,
                                 &[],
                             )
                             .await;
-                            sink(state.event(
-                                protocol::EventPayload::PermissionAutoJudged {
-                                    tool_name: call_name_for_judge.clone(),
-                                    decision: decision.as_label().to_string(),
-                                    reason: decision.reason().map(str::to_string),
-                                },
-                            ));
+                            // force_automode 子开关：把 Ask 折叠成 Deny + reason 头部
+                            // 加 force-automode: 前缀。让"放手跑"模式不被 ASK 打断。
+                            let decision = if force_automode {
+                                raw_decision.collapse_ask_to_deny()
+                            } else {
+                                raw_decision
+                            };
+                            sink(state.event(protocol::EventPayload::PermissionAutoJudged {
+                                tool_name: call_name_for_judge.clone(),
+                                decision: decision.as_label().to_string(),
+                                reason: decision.reason().map(str::to_string),
+                            }));
                             match decision {
                                 crate::automode::AutoModeDecision::Allow => {
                                     hitl_for_future
@@ -313,9 +333,7 @@ impl ToolDispatcher {
                                 crate::automode::AutoModeDecision::Deny(reason) => {
                                     hitl_for_future.resolve(
                                         request_id,
-                                        ApprovalDecision::DenyWithFeedback {
-                                            feedback: reason,
-                                        },
+                                        ApprovalDecision::DenyWithFeedback { feedback: reason },
                                     );
                                 }
                                 crate::automode::AutoModeDecision::Ask(_) => {
@@ -412,7 +430,9 @@ impl ToolDispatcher {
                 // 大输出统一落 artifact（架构 §4.4.9）：超 6 KB 写盘 + 给模型「头部预览 +
                 // 工件指针」。失败路径（exec_failed）不走 materialize——错误文本通常很短，
                 // 即便不短也不该把错误升格成需要 Read 的工件。
-                let (materialized, artifact) = if exec_failed {
+                // Read 是分页工具，自身已做单行截断 + 整体 6KB 输出截断 + offset/limit 提示，
+                // 再走 materialize 会形成"Read → 落盘 → Read 落盘文件 → 再落盘"的死循环。
+                let (materialized, artifact) = if exec_failed || call.name == "Read" {
                     (raw, None)
                 } else {
                     materialize_tool_output(
@@ -422,7 +442,13 @@ impl ToolDispatcher {
                         data_dir_for_artifacts.as_deref(),
                     )
                 };
-                let (mut content, truncated) = truncate_tool_result(materialized);
+                // Read 自身的截断标志着"输出被裁减了，agent 应该改 offset/limit"，
+                // 所以 truncated 只用 dispatch 侧的截断标记，不混用 Read 自己生成的消息。
+                let (mut content, truncated) = if call.name == "Read" {
+                    (materialized, false)
+                } else {
+                    truncate_tool_result(materialized)
+                };
                 let outcome = if !tool_found {
                     attr::outcome::NOT_FOUND
                 } else if exec_failed {
@@ -476,9 +502,7 @@ impl ToolDispatcher {
                     }
                 }
 
-                let artifact_path_str = artifact
-                    .as_ref()
-                    .map(|a| a.path.display().to_string());
+                let artifact_path_str = artifact.as_ref().map(|a| a.path.display().to_string());
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -563,7 +587,9 @@ impl ToolDispatcher {
                     hebbian.permission.decision = Empty,
                 );
                 let wait_started = Instant::now();
-                let answer = waiter.instrument(permission_span.clone()).await
+                let answer = waiter
+                    .instrument(permission_span.clone())
+                    .await
                     .unwrap_or(UserAnswer::Cancelled);
                 let wait_ms = wait_started.elapsed().as_millis() as f64;
                 let answer_label = match &answer {
@@ -619,7 +645,7 @@ impl ToolDispatcher {
 
     /// 申请越界路径访问审批：开 pending + emit `PermissionRequested { kind: PathAccess }`。
     fn request_path_approval(&self, tool_name: &str, paths: Vec<PathBuf>) -> PathApproval {
-        // 路径越界不在工具维度，AllowAndRemember 在外层把路径加进 workspace.allowed_dirs，
+        // 路径越界不在工具维度，AllowAndRemember 在外层把路径加进 workspace.allowed_paths，
         // 不通过 hitl learned 表，所以传 None。
         let (request_id, waiter) = self.hitl.open_approval(None, None);
         let path_strings: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
@@ -649,7 +675,7 @@ impl ToolDispatcher {
     }
 }
 
-/// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_dirs。
+/// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths。
 async fn await_path_decision(
     sink: &EventSink,
     state: &Arc<RunState>,
@@ -684,7 +710,7 @@ async fn await_path_decision(
         ApprovalDecision::AllowOnce => Ok(()),
         ApprovalDecision::AllowAndRemember { .. } => {
             for p in &paths {
-                workspace.add_allowed_dir(p.clone());
+                workspace.add_allowed_path(p.clone());
             }
             Ok(())
         }
@@ -730,13 +756,7 @@ async fn await_permission_decision(
     }
 }
 
-fn record_tool_outcome(
-    outcome: &str,
-    tool: &str,
-    duration_ms: f64,
-    truncated: bool,
-    bytes: usize,
-) {
+fn record_tool_outcome(outcome: &str, tool: &str, duration_ms: f64, truncated: bool, bytes: usize) {
     let span = tracing::Span::current();
     span.record(attr::TOOL_OUTCOME, outcome);
     span.record(attr::TOOL_TRUNCATED, truncated);
@@ -941,6 +961,7 @@ mod tests {
             run_mode: crate::run_mode::RunMode::AskBeforeEdits,
             model_id: None,
             judge_client: None,
+            force_automode: false,
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
@@ -963,12 +984,9 @@ mod tests {
             }
         });
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            dispatcher.run_calls(&[call], 0),
-        )
-        .await
-        .expect("dispatch 在 5s 内应当完成（不应卡在审批）");
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("dispatch 在 5s 内应当完成（不应卡在审批）");
 
         let results = result.expect("dispatch 不应返回错误");
         assert_eq!(results.len(), 1);
