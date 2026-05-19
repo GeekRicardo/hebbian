@@ -52,6 +52,10 @@ enum Pending {
         /// 路径越界审批走 `open_approval(None, None)` 不写 learned 表。
         tool_name: Option<String>,
         fingerprint: Option<String>,
+        /// 危险复合模式（架构 §4.4.2.2）触发的审批：resolve 时即使收到
+        /// AllowAndRemember 也**不**落 learned 表 / PermissionStore——cd-git-compound
+        /// 这类不可信复合不该一键放行同类后续命令。
+        refuse_remember: bool,
     },
     Question(oneshot::Sender<UserAnswer>),
 }
@@ -109,6 +113,11 @@ impl HitlGate {
         self
     }
 
+    /// 共享的 PermissionStore（用于 dispatcher 级别的路径越界检查也纳入全局规则）。
+    pub fn permission_store(&self) -> Option<&Arc<PermissionStore>> {
+        self.permission_store.as_ref()
+    }
+
     /// 评估一次工具调用：依 effects 默认行为 + 用户累计规则 + 策略规则三层判断。
     ///
     /// `effects` 由 [`crate::effects::analyze_effects`] 解析得到（架构 §4.4.2）。
@@ -121,6 +130,7 @@ impl HitlGate {
     /// 3. 收到 `ApprovalDecision` 后决定是否执行
     pub fn check(&self, tool_name: &str, effects: &Effects) -> PermissionDecision {
         let fingerprint = effects.command_fingerprint.as_deref();
+        let has_segments = !effects.segments.is_empty();
 
         // 1) NeedsHumanInput 不走审批（dispatcher 走 ask 路径）
         if matches!(effects.class, EffectClass::NeedsHumanInput) {
@@ -137,16 +147,33 @@ impl HitlGate {
             }
         }
 
-        // 3) ReadOnly 永远放行：effects 自报无副作用，always_ask 不该再拦。
+        // 3) 危险复合模式（架构 §4.4.2.2）：cd-git-compound / multi-cd / write-git-meta /
+        //    rm-rf-root / ast-too-complex 等命中任一种 → 强制走人工审批，覆盖一切 allow
+        //    规则，且 resolve 时禁止 AllowAndRemember 落盘。
+        if effects.has_dangerous_pattern() {
+            return self.needs_approval_no_remember(tool_name, fingerprint);
+        }
+
+        // 4) ReadOnly 永远放行：effects 自报无副作用，always_ask 不该再拦。
         //    例如 Bash 解析 `ls` 为 ReadOnly 后即便 always_ask 含 "Bash" 也直接通过。
         if matches!(effects.class, EffectClass::ReadOnly) {
             return PermissionDecision::Approved;
         }
 
-        // 4) 用户累计的"允许并记住"——先看命令前缀，再看工具名
+        // 5) 用户累计的"允许并记住"——Bash/PowerShell 走段级匹配，其它工具退回工具名级。
+        //    Bash 段级语义：**全部段**都被某条 learned pattern 命中才算 Approved。
         {
             let learned = self.learned.lock().unwrap();
-            if let Some(fp) = fingerprint {
+            if has_segments {
+                let all_seg_allowed = effects.segments.iter().all(|seg| {
+                    learned.auto_approved_patterns.iter().any(|(t, prefix)| {
+                        t == tool_name && fingerprint_matches(&seg.fingerprint, prefix)
+                    })
+                });
+                if all_seg_allowed {
+                    return PermissionDecision::Approved;
+                }
+            } else if let Some(fp) = fingerprint {
                 if learned
                     .auto_approved_patterns
                     .iter()
@@ -160,10 +187,21 @@ impl HitlGate {
             }
         }
 
-        // 4b) PermissionStore（Session → Global）—— 长期规则
+        // 5b) PermissionStore（Session → Global）—— 长期规则
+        //     Bash/PowerShell 段级查询：全段 allow 才整体 allow，任一 deny 即整体 deny。
         if let Some(store) = &self.permission_store {
             let sid = self.session_id.as_deref();
-            if let Some(dec) = store.find(sid, tool_name, fingerprint, None) {
+            let store_decision = if has_segments {
+                let seg_pairs: Vec<(String, Vec<String>)> = effects
+                    .segments
+                    .iter()
+                    .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
+                    .collect();
+                store.find_for_segments(sid, tool_name, &seg_pairs)
+            } else {
+                store.find(sid, tool_name, fingerprint, None)
+            };
+            if let Some(dec) = store_decision {
                 return match dec {
                     PermissionDecisionKind::Allow => PermissionDecision::Approved,
                     PermissionDecisionKind::Deny => PermissionDecision::Denied {
@@ -173,7 +211,7 @@ impl HitlGate {
             }
         }
 
-        // 5) 静态策略按名命中
+        // 6) 静态策略按名命中
         if self.policy.auto_approve.iter().any(|n| n == tool_name) {
             return PermissionDecision::Approved;
         }
@@ -181,7 +219,7 @@ impl HitlGate {
             return self.needs_approval(tool_name, fingerprint);
         }
 
-        // 6) 按 effects 默认行为
+        // 7) 按 effects 默认行为
         match effects.class {
             EffectClass::Network | EffectClass::Mutating | EffectClass::Destructive => {
                 match self.policy.default_action {
@@ -208,6 +246,25 @@ impl HitlGate {
         tool_name: Option<&str>,
         fingerprint: Option<&str>,
     ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
+        self.open_approval_inner(tool_name, fingerprint, false)
+    }
+
+    /// 同 [`open_approval`](Self::open_approval)，但 resolve 时即使收到 `AllowAndRemember`
+    /// 也**不**写 learned 表 / PermissionStore（架构 §4.4.2.2 危险复合模式）。
+    pub fn open_approval_no_remember(
+        &self,
+        tool_name: Option<&str>,
+        fingerprint: Option<&str>,
+    ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
+        self.open_approval_inner(tool_name, fingerprint, true)
+    }
+
+    fn open_approval_inner(
+        &self,
+        tool_name: Option<&str>,
+        fingerprint: Option<&str>,
+        refuse_remember: bool,
+    ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
         let request_id = PermissionRequestId::new();
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(
@@ -216,6 +273,7 @@ impl HitlGate {
                 sender: tx,
                 tool_name: tool_name.map(str::to_owned),
                 fingerprint: fingerprint.map(str::to_owned),
+                refuse_remember,
             },
         );
         (request_id, rx)
@@ -241,13 +299,20 @@ impl HitlGate {
             sender,
             tool_name,
             fingerprint,
+            refuse_remember,
         }) = entry
         else {
             return;
         };
 
         if let ApprovalDecision::AllowAndRemember { scope, pattern } = &decision {
-            if let Some(name) = &tool_name {
+            if refuse_remember {
+                tracing::debug!(
+                    tool = tool_name.as_deref().unwrap_or(""),
+                    fingerprint = fingerprint.as_deref().unwrap_or(""),
+                    "AllowAndRemember 被拒绝落盘：审批是由危险复合模式触发的（架构 §4.4.2.2）"
+                );
+            } else if let Some(name) = &tool_name {
                 self.remember(*scope, name, pattern.as_deref(), fingerprint.as_deref());
             }
         }
@@ -278,12 +343,19 @@ impl HitlGate {
         }
     }
 
-    fn needs_approval(
+    fn needs_approval(&self, tool_name: &str, fingerprint: Option<&str>) -> PermissionDecision {
+        let (request_id, waiter) = self.open_approval(Some(tool_name), fingerprint);
+        PermissionDecision::NeedsApproval { request_id, waiter }
+    }
+
+    /// 同 [`needs_approval`](Self::needs_approval)，但 pending 带 `refuse_remember=true`。
+    /// 用于危险复合模式触发的强制审批（架构 §4.4.2.2）。
+    fn needs_approval_no_remember(
         &self,
         tool_name: &str,
         fingerprint: Option<&str>,
     ) -> PermissionDecision {
-        let (request_id, waiter) = self.open_approval(Some(tool_name), fingerprint);
+        let (request_id, waiter) = self.open_approval_no_remember(Some(tool_name), fingerprint);
         PermissionDecision::NeedsApproval { request_id, waiter }
     }
 
@@ -429,6 +501,8 @@ mod tests {
             risk: RiskLevel::High,
             class: EffectClass::Destructive,
             is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
         }
     }
 
@@ -441,6 +515,22 @@ mod tests {
             risk: RiskLevel::Low,
             class: EffectClass::ReadOnly,
             is_concurrent_safe: true,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
+        }
+    }
+
+    fn dangerous_effects(fingerprint: Option<&str>, kinds: Vec<&str>) -> Effects {
+        Effects {
+            paths: Vec::new(),
+            command_fingerprint: fingerprint.map(str::to_owned),
+            network: false,
+            domain: None,
+            risk: RiskLevel::High,
+            class: EffectClass::Destructive,
+            is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: kinds.into_iter().map(str::to_owned).collect(),
         }
     }
 
@@ -497,7 +587,10 @@ mod tests {
         ));
         // 前缀 + 空格 + 后续 args
         assert!(matches!(
-            gate.check("Bash", &destructive_effects(Some("git status -uno README.md"))),
+            gate.check(
+                "Bash",
+                &destructive_effects(Some("git status -uno README.md"))
+            ),
             PermissionDecision::Approved
         ));
     }
@@ -564,5 +657,51 @@ mod tests {
         assert!(fingerprint_matches("git status\t-uno", "git status"));
         assert!(!fingerprint_matches("git statusbad", "git status"));
         assert!(!fingerprint_matches("gits", "git"));
+    }
+
+    /// 危险复合模式：即使有 allow 规则也强制审批，且 resolve(AllowAndRemember)
+    /// 不被记忆——下次再来同样命令仍然要审批。
+    #[test]
+    fn dangerous_pattern_forces_approval_and_refuses_remember() {
+        let gate = HitlGate::default();
+        // 先给一条 `Bash(git)` allow & remember——会让普通 `git push` 自动放行
+        let (id_seed, _waiter_seed) = gate.open_approval(Some("Bash"), Some("git push"));
+        gate.resolve(
+            &id_seed,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("git".into()),
+            },
+        );
+        // 普通 git push fingerprint 段命中 allow（无危险模式）→ Approved
+        assert!(matches!(
+            gate.check("Bash", &destructive_effects(Some("git push"))),
+            PermissionDecision::Approved
+        ));
+        // 现在带 cd-git-compound 危险模式：即使 fingerprint 命中 git allow，也必须审批
+        let decision = gate.check(
+            "Bash",
+            &dangerous_effects(Some("git status"), vec!["cd-git-compound"]),
+        );
+        let req_id = match decision {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected NeedsApproval, got {other:?}"),
+        };
+        // 用户即便选 AllowAndRemember(pattern=git status)，也不该写入 learned
+        gate.resolve(
+            &req_id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("git status".into()),
+            },
+        );
+        // 验证：再次出现独立的 `git status` 危险模式仍然审批
+        assert!(matches!(
+            gate.check(
+                "Bash",
+                &dangerous_effects(Some("git status"), vec!["cd-git-compound"])
+            ),
+            PermissionDecision::NeedsApproval { .. }
+        ));
     }
 }

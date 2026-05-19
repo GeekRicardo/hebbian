@@ -23,13 +23,13 @@ use crate::{
     },
     workspace::Workspace,
 };
+use common::{
+    runtime::{self as cancellation, ConsumedPendingInputs, PendingInputs, PendingUserInput},
+    CancelFlag,
+};
 use model_gateway::{
     client::ModelClient,
     types::{AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
-};
-use common::{
-    runtime::{self as cancellation, PendingInputs},
-    CancelFlag,
 };
 use protocol::ResumeCause;
 
@@ -93,6 +93,8 @@ pub struct LoopParams<'a> {
     /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时推一条进来，
     /// 每次 model.request 之前 drain 出来作为新的 user message 加入 transcript。
     pub pending_inputs: Option<PendingInputs>,
+    /// 已被 drain 的 pending input 副本。surface 用它在 run 结束后按正确顺序落盘。
+    pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
     /// 运行模式（架构 §4.4.3）。默认 `AskBeforeEdits`。
     pub run_mode: crate::run_mode::RunMode,
     /// 当前模型 id（AutoMode judge 用作模型限定）。
@@ -100,6 +102,10 @@ pub struct LoopParams<'a> {
     /// AutoMode judge 用的 client。通常 = 主 client，便于复用 OAuth/重试链。
     /// `None` 时 AutoMode 直接降级为 Ask。
     pub judge_client: Option<Arc<dyn ModelClient>>,
+    /// `force_automode` 子开关（架构 §4.4.4）。仅 [`crate::run_mode::RunMode::AutoMode`]
+    /// 下生效：判官返回 `Ask` 时折叠成 `Deny`，让"放手跑"模式不被打断。
+    /// 由 CLI flag `--force-automode` 或 REPL `/force-automode` 切换。
+    pub force_automode: bool,
     /// 数据目录路径，用于把 microcompact 压缩的原文落 txt（架构 §4.7 / Step 9）。
     pub data_dir: Option<std::path::PathBuf>,
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。与 `data_dir` 拼成
@@ -120,6 +126,28 @@ pub struct LoopParams<'a> {
 pub use crate::system_prompt::compose_system_prompt as build_system_prompt;
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
+
+fn drain_pending_inputs(
+    pending_inputs: Option<&PendingInputs>,
+    consumed_pending_inputs: Option<&ConsumedPendingInputs>,
+    transcript: &mut Transcript,
+) -> usize {
+    let Some(slot) = pending_inputs else {
+        return 0;
+    };
+    let drained: Vec<PendingUserInput> = std::mem::take(&mut *slot.lock().unwrap());
+    let drained_len = drained.len();
+    if drained_len == 0 {
+        return 0;
+    }
+    for input in drained {
+        if let Some(consumed) = consumed_pending_inputs {
+            consumed.lock().unwrap().push(input.clone());
+        }
+        transcript.push_user(input.content, input.attachments);
+    }
+    drained_len
+}
 
 #[tracing::instrument(
     name = "run",
@@ -153,9 +181,11 @@ pub async fn run_loop(
         parent,
         model_io_dump,
         pending_inputs,
+        consumed_pending_inputs,
         run_mode,
         model_id,
         judge_client,
+        force_automode,
         data_dir,
         session_id,
         phase,
@@ -231,16 +261,6 @@ pub async fn run_loop(
             break Err(ModelError::Cancelled);
         }
 
-        // 「立即发送」语义：surface 在 streaming 中往 pending_inputs 推过的 user message，
-        // 在下一次 model.request 之前 drain 出来加入 transcript——让模型在当前 agent loop
-        // 的下一个 iteration 立刻看到这些消息，而不是等整个 turn 跑完再开新 turn。
-        if let Some(slot) = pending_inputs.as_ref() {
-            let drained: Vec<_> = std::mem::take(&mut *slot.lock().unwrap());
-            for input in drained {
-                transcript.push_user(input.content, input.attachments);
-            }
-        }
-
         // Microcompact：每轮模型请求前先把超阈值的老 tool_result 压缩为占位符。
         // 不消耗模型调用，只改 transcript entries，幂等。
         let mc_report = microcompact(&mut transcript.entries, &MicrocompactPolicy::default());
@@ -250,9 +270,9 @@ pub async fn run_loop(
         if !mc_report.shadowed_artifacts.is_empty() {
             if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
                 for (call_id, content) in &mc_report.shadowed_artifacts {
-                    if let Err(e) = crate::storage::tool_results::save_tool_result(
-                        dd, sid, call_id, content,
-                    ) {
+                    if let Err(e) =
+                        crate::storage::tool_results::save_tool_result(dd, sid, call_id, content)
+                    {
                         tracing::warn!(error = %e, call_id, "compaction artifact save failed");
                     }
                 }
@@ -295,11 +315,7 @@ pub async fn run_loop(
             let after_tokens = compaction_result.after_tokens;
             compaction_span.record(attr::COMPACTION_BEFORE_TOKENS, before_tokens);
             compaction_span.record(attr::COMPACTION_AFTER_TOKENS, after_tokens);
-            info!(
-                before_tokens,
-                after_tokens,
-                "context compacted"
-            );
+            info!(before_tokens, after_tokens, "context compacted");
             transcript.entries = compaction_result.entries;
             drop(_enter);
             emit(EventPayload::ContextCompacted {
@@ -352,7 +368,7 @@ pub async fn run_loop(
         }
         let has_tools = !tool_defs.is_empty();
 
-        // system prompt = BASE 常量 + 用户 persona。环境信息（cwd / allowed_dirs / runtime
+        // system prompt = BASE 常量 + 用户 persona。环境信息（cwd / allowed_paths / runtime
         // 追加）走 user message 的 `<environment>` / `<workspace-update>` 块——保 prompt cache。
         let combined_system = compose_system_prompt(transcript.system.as_deref());
 
@@ -486,6 +502,15 @@ pub async fn run_loop(
                 transcript.push_assistant_with_reasoning(text.clone(), reasoning, Vec::new());
                 let mut all_attachments = output_attachments;
                 all_attachments.extend(attachments);
+                if drain_pending_inputs(
+                    pending_inputs.as_ref(),
+                    consumed_pending_inputs.as_ref(),
+                    transcript,
+                ) > 0
+                {
+                    output_attachments = all_attachments;
+                    continue;
+                }
                 break Ok(AssistantOutput {
                     text,
                     attachments: all_attachments,
@@ -551,9 +576,11 @@ pub async fn run_loop(
                     run_mode,
                     model_id: model_id.clone(),
                     judge_client: judge_client.clone(),
+                    force_automode,
                     hooks: hooks.clone(),
                     session_id_for_hooks: session_id.clone(),
                     data_dir_for_artifacts: data_dir.clone(),
+                    permission_store: hitl.permission_store().cloned(),
                 };
 
                 tool_step_index += 1;
@@ -589,6 +616,11 @@ pub async fn run_loop(
                     step_kind: protocol::StepKind::Tool,
                     step_index: tool_step_index,
                 });
+                drain_pending_inputs(
+                    pending_inputs.as_ref(),
+                    consumed_pending_inputs.as_ref(),
+                    transcript,
+                );
 
                 // 架构 §4.12.5：ToolStep 跑完后检查 phase channel。模型本 ToolStep
                 // 调过 WaitForTask / ScheduleWakeup 时，phase 已被工具写入；这里：
@@ -609,20 +641,16 @@ pub async fn run_loop(
                                 None,
                                 vec![task_id.clone()],
                             ),
-                            RunPhase::AwaitingCron { fire_at_ms, .. } => (
-                                protocol::SuspendReason::Cron,
-                                Some(*fire_at_ms),
-                                Vec::new(),
-                            ),
+                            RunPhase::AwaitingCron { fire_at_ms, .. } => {
+                                (protocol::SuspendReason::Cron, Some(*fire_at_ms), Vec::new())
+                            }
                         };
                         emit(EventPayload::RunSuspended {
                             reason: reason_evt,
                             resumes_at_ms,
                             waiting_for_task_ids: waiting_for_task_ids.clone(),
                         });
-                        if let (Some(dd), Some(sid)) =
-                            (data_dir.as_ref(), session_id.as_deref())
-                        {
+                        if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
                             let checkpoint = ck::RunCheckpoint {
                                 run_id: state.run_id.to_string(),
                                 session_id: sid.to_string(),
@@ -655,12 +683,7 @@ pub async fn run_loop(
                             RunPhase::AwaitingCron {
                                 fire_at_ms, reason, ..
                             } => {
-                                scheduler.arm_cron(
-                                    sid_for_arm,
-                                    run_id_for_arm,
-                                    fire_at_ms,
-                                    reason,
-                                );
+                                scheduler.arm_cron(sid_for_arm, run_id_for_arm, fire_at_ms, reason);
                             }
                         }
                         // 用 EndTurn 收 turn，但**不**走下文的 RunFinished 路径——
@@ -733,8 +756,13 @@ pub async fn run_loop(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use model_gateway::types::{ModelRequest, ModelResponse, ModelStreamEvent};
-    use std::sync::{atomic::AtomicBool, Mutex};
+    use model_gateway::types::{
+        ModelRequest, ModelResponse, ModelStreamEvent, TranscriptEntry, Usage,
+    };
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    };
 
     struct FailingModelClient;
 
@@ -759,6 +787,151 @@ mod tests {
             _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
         ) -> Result<ModelResponse, ModelError> {
             Err(ModelError::Other("model rejected request".to_string()))
+        }
+    }
+
+    struct PendingInputDuringDoneClient {
+        calls: AtomicUsize,
+        pending_inputs: PendingInputs,
+    }
+
+    #[async_trait]
+    impl ModelClient for PendingInputDuringDoneClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第一段".to_string(),
+                    });
+                    self.pending_inputs
+                        .lock()
+                        .unwrap()
+                        .push(common::runtime::PendingUserInput {
+                            content: "插队消息".to_string(),
+                            attachments: Vec::new(),
+                        });
+                    Ok(ModelResponse::Done {
+                        text: "第一段".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => {
+                    let saw_injected = req.entries.iter().any(|entry| {
+                        matches!(
+                            entry,
+                            TranscriptEntry::User(user) if user.text == "插队消息"
+                        )
+                    });
+                    assert!(
+                        saw_injected,
+                        "second model request should see injected user input"
+                    );
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "引导后的回答".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        text: "引导后的回答".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
+    struct PendingInputAfterTurnFinishedClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for PendingInputAfterTurnFinishedClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "先查工具".to_string(),
+                    });
+                    Ok(ModelResponse::ToolCalls {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        calls: vec![model_gateway::types::ToolCall {
+                            id: "call_missing".to_string(),
+                            name: "missing_tool".to_string(),
+                            input: serde_json::json!({}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => {
+                    let saw_injected = req.entries.iter().any(|entry| {
+                        matches!(
+                            entry,
+                            TranscriptEntry::User(user) if user.text == "ToolStep 后的引导"
+                        )
+                    });
+                    assert!(
+                        saw_injected,
+                        "next model request after TurnFinished should drain pending user input"
+                    );
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "已按引导继续".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        text: "已按引导继续".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
         }
     }
 
@@ -790,9 +963,11 @@ mod tests {
                 parent: None,
                 model_io_dump: None,
                 pending_inputs: None,
+                consumed_pending_inputs: None,
                 run_mode: crate::run_mode::RunMode::AskBeforeEdits,
                 model_id: None,
                 judge_client: None,
+                force_automode: false,
                 data_dir: None,
                 session_id: None,
                 phase: None,
@@ -809,5 +984,145 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, EventPayload::RunFailed { .. })));
+    }
+
+    #[tokio::test]
+    async fn pending_input_during_final_model_step_continues_same_run() {
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("hi".to_string(), Vec::new());
+
+        let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+        let consumed_pending_inputs: ConsumedPendingInputs = Arc::new(Mutex::new(Vec::new()));
+        let client = PendingInputDuringDoneClient {
+            calls: AtomicUsize::new(0),
+            pending_inputs: pending_inputs.clone(),
+        };
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: Some(pending_inputs),
+                consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
+                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                model_id: None,
+                judge_client: None,
+                force_automode: false,
+                data_dir: None,
+                session_id: None,
+                phase: None,
+                resume_from: None,
+            },
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect("run should complete after following injected input");
+
+        assert_eq!(result.text, "引导后的回答");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        let consumed = consumed_pending_inputs.lock().unwrap();
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].content, "插队消息");
+        assert!(matches!(
+            transcript.entries.as_slice(),
+            [
+                TranscriptEntry::User(_),
+                TranscriptEntry::Assistant(first),
+                TranscriptEntry::User(user),
+                TranscriptEntry::Assistant(second)
+            ] if first.text == "第一段"
+                && user.text == "插队消息"
+                && second.text == "引导后的回答"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pending_input_after_tool_step_checkpoint_is_drained_before_next_model_request() {
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("hi".to_string(), Vec::new());
+
+        let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+        let consumed_pending_inputs: ConsumedPendingInputs = Arc::new(Mutex::new(Vec::new()));
+        let client = PendingInputAfterTurnFinishedClient {
+            calls: AtomicUsize::new(0),
+        };
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+        let pending_for_sink = pending_inputs.clone();
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: Some(pending_inputs),
+                consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
+                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                model_id: None,
+                judge_client: None,
+                force_automode: false,
+                data_dir: None,
+                session_id: None,
+                phase: None,
+                resume_from: None,
+            },
+            Arc::new(move |event| {
+                if matches!(event.payload, EventPayload::TurnFinished { .. }) {
+                    pending_for_sink
+                        .lock()
+                        .unwrap()
+                        .push(common::runtime::PendingUserInput {
+                            content: "ToolStep 后的引导".to_string(),
+                            attachments: Vec::new(),
+                        });
+                }
+            }),
+        )
+        .await
+        .expect("run should continue with pending input from the turn boundary");
+
+        assert_eq!(result.text, "已按引导继续");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        let consumed = consumed_pending_inputs.lock().unwrap();
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].content, "ToolStep 后的引导");
+        assert!(matches!(
+            transcript.entries.as_slice(),
+            [
+                TranscriptEntry::User(_),
+                TranscriptEntry::Assistant(_),
+                TranscriptEntry::ToolResults(_),
+                TranscriptEntry::User(user),
+                TranscriptEntry::Assistant(second)
+            ] if user.text == "ToolStep 后的引导"
+                && second.text == "已按引导继续"
+        ));
     }
 }

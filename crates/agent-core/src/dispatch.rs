@@ -28,6 +28,7 @@ use tracing::{field::Empty, info, warn, Instrument};
 use crate::{
     agent_loop::EventSink,
     effects::{analyze_effects, EffectClass},
+    permissions::PermissionStore,
     run_state::RunState,
     tools::{
         hitl::{HitlGate, PermissionDecision},
@@ -108,6 +109,8 @@ pub struct ToolDispatcher {
     /// `tool_results/<call_id>.txt`（架构 §4.4.9 / §4.12.11 Phase 2）。`None`
     /// 表示当前进程未挂数据目录（单测路径），跳过 materialize 走截断。
     pub data_dir_for_artifacts: Option<PathBuf>,
+    /// 共享的 PermissionStore（用于路径越界检查纳入 Global 规则 + 路径审批后持久化）。
+    pub permission_store: Option<Arc<PermissionStore>>,
 }
 
 impl ToolDispatcher {
@@ -177,6 +180,18 @@ impl ToolDispatcher {
                     .zip(self.session_id_for_hooks.as_deref())
                     .map_or(false, |(dd, sid)| p.starts_with(&dd.join("sessions").join(sid)))
             })
+            .filter(|p| {
+                // 也查 PermissionStore：Global/Session FilePath Allow 规则覆盖的路径免审批
+                !self
+                    .permission_store
+                    .as_ref()
+                    .map_or(false, |store| {
+                        store.allows_path(
+                            self.session_id_for_hooks.as_deref(),
+                            &p.to_string_lossy(),
+                        )
+                    })
+            })
             .cloned()
             .collect();
 
@@ -244,6 +259,7 @@ impl ToolDispatcher {
         let hooks_for_future = self.hooks.clone();
         let session_id_for_hooks = self.session_id_for_hooks.clone();
         let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
+        let permission_store = self.permission_store.clone();
 
         let tool_span = tracing::info_span!(
             "tool.call",
@@ -261,7 +277,15 @@ impl ToolDispatcher {
             async move {
                 // 路径审批（带 permission.check 子 span）
                 if let Some(p) = path_pending {
-                    let outcome = await_path_decision(&sink, &state, &workspace, p).await;
+                    let outcome = await_path_decision(
+                        &sink,
+                        &state,
+                        &workspace,
+                        &permission_store,
+                        session_id_for_hooks.as_deref(),
+                        p,
+                    )
+                    .await;
                     if let Err(reason) = outcome {
                         record_tool_outcome(attr::outcome::DENIED, &call.name, 0.0, false, 0);
                         return Ok(deny_tool(
@@ -675,11 +699,14 @@ impl ToolDispatcher {
     }
 }
 
-/// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths。
+/// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths +
+/// 持久化到 PermissionStore（让其他 session 也能共享）。
 async fn await_path_decision(
     sink: &EventSink,
     state: &Arc<RunState>,
     workspace: &Arc<Workspace>,
+    permission_store: &Option<Arc<PermissionStore>>,
+    session_id: Option<&str>,
     pending: PathApproval,
 ) -> Result<(), String> {
     let PathApproval {
@@ -708,9 +735,29 @@ async fn await_path_decision(
     }));
     match decision {
         ApprovalDecision::AllowOnce => Ok(()),
-        ApprovalDecision::AllowAndRemember { .. } => {
+        ApprovalDecision::AllowAndRemember { scope, .. } => {
             for p in &paths {
                 workspace.add_allowed_path(p.clone());
+                // 持久化到 PermissionStore：其他 session 通过 out-of-scope filter
+                // 里的 allows_path() 检查共享这些规则。
+                if let Some(store) = permission_store {
+                    if scope == protocol::PermissionScope::Session
+                        || scope == protocol::PermissionScope::Global
+                    {
+                        let sid = if scope == protocol::PermissionScope::Session {
+                            session_id
+                        } else {
+                            None
+                        };
+                        if let Err(e) = store.add_path_rule(
+                            sid,
+                            p.to_string_lossy().to_string(),
+                            scope,
+                        ) {
+                            tracing::warn!(error = %e, path = %p.display(), "路径规则持久化失败");
+                        }
+                    }
+                }
             }
             Ok(())
         }
@@ -965,6 +1012,7 @@ mod tests {
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
+            permission_store: None,
         };
 
         let call = ToolCall {

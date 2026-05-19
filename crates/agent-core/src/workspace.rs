@@ -1,12 +1,12 @@
 //! Workspace：单次对话的文件访问边界。
 //!
-//! 每个对话有独立的 workspace（默认 `~/`）。允许目录分三层：
+//! 每个对话有独立的 workspace（默认 `~/`）。允许路径分三层：
 //!
 //! - **initial**：对话起始时锁定的快照。**只有这一层会进首条 user message 的
 //!   `<environment>` 块**（由 [`crate::system_prompt::EnvironmentSnapshot`] 渲染）。
-//! - **runtime_announced**：对话开始之后追加的目录，且已经通过上一条 user message
+//! - **runtime_announced**：对话开始之后追加的路径，且已经通过上一条 user message
 //!   的 `<workspace-update>` 通知过模型。仅用于 `allows()` 判定。
-//! - **runtime_pending**：刚追加、还没通知模型的目录。下一次 [`take_pending_announcement`]
+//! - **runtime_pending**：刚追加、还没通知模型的路径。下一次 [`take_pending_announcement`]
 //!   会把它们 drain 出来供上层注入到下条 user message，然后移入 announced。
 //!
 //! workspace 数据**完全不进 system 段**。system 段由 [`crate::system_prompt`] 单独管理，
@@ -21,15 +21,15 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct Workspace {
     workdir: PathBuf,
     /// 对话起始时确定，整个生命周期不变。进 system XML。
-    initial_allowed_dirs: Vec<PathBuf>,
-    /// 已通知模型的运行时追加目录。仅 `allows()` 使用。
+    initial_allowed_paths: Vec<PathBuf>,
+    /// 已通知模型的运行时追加路径。仅 `allows()` 使用。
     runtime_announced: RwLock<Vec<PathBuf>>,
-    /// 还没通知模型的运行时追加目录。下次 user message 注入。
+    /// 还没通知模型的运行时追加路径。下次 user message 注入。
     runtime_pending: Mutex<Vec<PathBuf>>,
 }
 
 impl Workspace {
-    /// 默认 workspace：`~/`，无额外允许目录。
+    /// 默认 workspace：`~/`，无额外允许路径。
     pub fn home_default() -> Arc<Self> {
         Self::with_runtime_state(
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
@@ -40,8 +40,8 @@ impl Workspace {
     }
 
     /// 全新会话使用：只给 initial。
-    pub fn new(workdir: impl Into<PathBuf>, initial_allowed_dirs: Vec<PathBuf>) -> Arc<Self> {
-        Self::with_runtime_state(workdir, initial_allowed_dirs, Vec::new(), Vec::new())
+    pub fn new(workdir: impl Into<PathBuf>, initial_allowed_paths: Vec<PathBuf>) -> Arc<Self> {
+        Self::with_runtime_state(workdir, initial_allowed_paths, Vec::new(), Vec::new())
     }
 
     /// 从持久化恢复：把上次落盘的 announced + pending 一并塞回来。
@@ -49,11 +49,11 @@ impl Workspace {
     /// announced 中已存在于 initial 的项也会被剔除，避免重复通知 / 重复 allows() 检查。
     pub fn with_runtime_state(
         workdir: impl Into<PathBuf>,
-        initial_allowed_dirs: Vec<PathBuf>,
+        initial_allowed_paths: Vec<PathBuf>,
         runtime_announced: Vec<PathBuf>,
         runtime_pending: Vec<PathBuf>,
     ) -> Arc<Self> {
-        let initial = dedup(initial_allowed_dirs);
+        let initial = dedup(initial_allowed_paths);
         let announced: Vec<PathBuf> = dedup(runtime_announced)
             .into_iter()
             .filter(|p| !initial.contains(p))
@@ -64,7 +64,7 @@ impl Workspace {
             .collect();
         Arc::new(Self {
             workdir: workdir.into(),
-            initial_allowed_dirs: initial,
+            initial_allowed_paths: initial,
             runtime_announced: RwLock::new(announced),
             runtime_pending: Mutex::new(pending),
         })
@@ -74,8 +74,8 @@ impl Workspace {
         &self.workdir
     }
 
-    pub fn initial_allowed_dirs(&self) -> &[PathBuf] {
-        &self.initial_allowed_dirs
+    pub fn initial_allowed_paths(&self) -> &[PathBuf] {
+        &self.initial_allowed_paths
     }
 
     pub fn runtime_announced_snapshot(&self) -> Vec<PathBuf> {
@@ -87,8 +87,8 @@ impl Workspace {
     }
 
     /// initial + announced + pending 合并去重，UI / 描述用。
-    pub fn allowed_dirs_snapshot(&self) -> Vec<PathBuf> {
-        let mut out = self.initial_allowed_dirs.clone();
+    pub fn allowed_paths_snapshot(&self) -> Vec<PathBuf> {
+        let mut out = self.initial_allowed_paths.clone();
         for p in self.runtime_announced.read().unwrap().iter() {
             if !out.contains(p) {
                 out.push(p.clone());
@@ -102,13 +102,19 @@ impl Workspace {
         out
     }
 
-    /// 运行时扩展允许目录：已存在则跳过，否则进 pending（下次 user message 通知模型）。
-    pub fn add_allowed_dir(&self, path: impl Into<PathBuf>) {
+    /// 运行时扩展允许路径：已存在则跳过，否则进 pending（下次 user message 通知模型）。
+    pub fn add_allowed_path(&self, path: impl Into<PathBuf>) {
         let path = path.into();
-        if self.initial_allowed_dirs.iter().any(|d| d == &path) {
+        if self.initial_allowed_paths.iter().any(|d| d == &path) {
             return;
         }
-        if self.runtime_announced.read().unwrap().iter().any(|d| d == &path) {
+        if self
+            .runtime_announced
+            .read()
+            .unwrap()
+            .iter()
+            .any(|d| d == &path)
+        {
             return;
         }
         let mut pending = self.runtime_pending.lock().unwrap();
@@ -138,11 +144,14 @@ impl Workspace {
     /// 路径是否在允许范围内：先 canonicalize 再做前缀匹配，防止 `..` 绕过。
     /// canonicalize 失败时退回到 `canonicalize_lossy`（处理"打算写入但还未创建"的场景）。
     pub fn allows(&self, path: &Path) -> bool {
+        if is_unrestricted_device(path) {
+            return true;
+        }
         let canon = canonicalize_lossy(path);
         if canon.starts_with(canonicalize_lossy(&self.workdir)) {
             return true;
         }
-        for root in &self.initial_allowed_dirs {
+        for root in &self.initial_allowed_paths {
             if canon.starts_with(canonicalize_lossy(root)) {
                 return true;
             }
@@ -171,9 +180,9 @@ impl Workspace {
     /// UI/错误提示用的人类可读描述。
     pub fn describe(&self) -> String {
         let mut s = format!("workdir: {}", self.workdir.display());
-        let all = self.allowed_dirs_snapshot();
+        let all = self.allowed_paths_snapshot();
         if !all.is_empty() {
-            s.push_str("\nallowed_dirs:");
+            s.push_str("\nallowed_paths:");
             for d in &all {
                 s.push_str(&format!("\n  - {}", d.display()));
             }
@@ -193,6 +202,25 @@ fn dedup(mut v: Vec<PathBuf>) -> Vec<PathBuf> {
         }
     });
     v
+}
+
+/// 无危害的设备路径：读永远 EOF/zero/random，写要么丢弃要么只进流，不存在
+/// 文件系统副作用。对这些路径的访问不需要审批。
+fn is_unrestricted_device(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    // Unix device files — writing to null/zero is discarded, reading is EOF/zeros
+    if s == "/dev/null"
+        || s == "/dev/zero"
+        || s == "/dev/random"
+        || s == "/dev/urandom"
+    {
+        return true;
+    }
+    // Windows null device
+    if s.eq_ignore_ascii_case("nul") || s.eq_ignore_ascii_case("\\\\.\\nul") {
+        return true;
+    }
+    false
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -244,23 +272,23 @@ mod tests {
     }
 
     #[test]
-    fn add_allowed_dir_takes_effect_immediately() {
+    fn add_allowed_path_takes_effect_immediately() {
         let tmp = tempfile::tempdir().unwrap();
         let extra = tempfile::tempdir().unwrap();
         let ws = Workspace::new(tmp.path(), Vec::new());
 
         assert!(!ws.allows(&extra.path().join("x")));
-        ws.add_allowed_dir(extra.path());
+        ws.add_allowed_path(extra.path());
         assert!(ws.allows(&extra.path().join("x")));
     }
 
     #[test]
-    fn add_allowed_dir_lands_in_pending_until_announced() {
+    fn add_allowed_path_lands_in_pending_until_announced() {
         let tmp = tempfile::tempdir().unwrap();
         let extra = tempfile::tempdir().unwrap();
         let ws = Workspace::new(tmp.path(), Vec::new());
 
-        ws.add_allowed_dir(extra.path());
+        ws.add_allowed_path(extra.path());
         assert!(ws.runtime_announced_snapshot().is_empty());
         assert_eq!(ws.runtime_pending_snapshot().len(), 1);
 
@@ -274,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn add_allowed_dir_skips_existing_in_initial_or_announced() {
+    fn add_allowed_path_skips_existing_in_initial_or_announced() {
         let tmp = tempfile::tempdir().unwrap();
         let already = tempfile::tempdir().unwrap();
         let ws = Workspace::with_runtime_state(
@@ -283,8 +311,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        ws.add_allowed_dir(already.path());
+        ws.add_allowed_path(already.path());
         assert!(ws.runtime_pending_snapshot().is_empty());
     }
-
 }

@@ -91,7 +91,9 @@ impl PermissionMatcher {
                 let cmd_ok = fingerprint
                     .map(|fp| prefix_with_token_boundary(fp, command_prefix))
                     .unwrap_or(false);
-                let path_ok = path.map(|p| p.starts_with(path_prefix.as_str())).unwrap_or(false);
+                let path_ok = path
+                    .map(|p| p.starts_with(path_prefix.as_str()))
+                    .unwrap_or(false);
                 cmd_ok && path_ok
             }
             PermissionMatcher::FilePath { path_prefix } => path
@@ -113,6 +115,26 @@ fn prefix_with_token_boundary(haystack: &str, prefix: &str) -> bool {
     } else {
         false
     }
+}
+
+/// rule 的 `tool_name` 是否命中当前工具名：精确匹配，或 wildcard `"*"` 匹配任意工具。
+fn tool_matches(rule_tool: &str, current_tool: &str) -> bool {
+    rule_tool == "*" || rule_tool == current_tool
+}
+
+/// 判断 matcher 是否命中某段（fingerprint + write_targets 任一即算）。
+/// 由 [`PermissionStore::find_for_segments`] 内部使用。
+fn matcher_hits_segment(
+    matcher: &PermissionMatcher,
+    fingerprint: &str,
+    write_targets: &[String],
+) -> bool {
+    if matcher.matches(Some(fingerprint), None) {
+        return true;
+    }
+    write_targets
+        .iter()
+        .any(|t| matcher.matches(Some(fingerprint), Some(t.as_str())))
 }
 
 /// 持久化的权限规则集合（架构 §4.6.1 / §4.6.2）。
@@ -149,6 +171,9 @@ impl PermissionStore {
 
     /// 查找是否命中规则（[Session, Global] 顺序）。
     /// 命中返回 [`PermissionDecisionKind`]；未命中返回 `None`，调用方按 RunMode 默认。
+    ///
+    /// `tool_name = "*"` 的规则作为兜底通配：匹配任意工具名。用于路径审批
+    /// 产生的跨工具 FilePath 规则。
     pub fn find(
         &self,
         session_id: Option<&str>,
@@ -159,8 +184,9 @@ impl PermissionStore {
         if let Some(sid) = session_id {
             let session_rules = self.session_rules.lock().unwrap();
             if let Some(rules) = session_rules.get(sid) {
-                if let Some(rule) =
-                    rules.iter().find(|r| r.tool_name == tool_name && r.matcher.matches(fingerprint, path))
+                if let Some(rule) = rules
+                    .iter()
+                    .find(|r| tool_matches(&r.tool_name, tool_name) && r.matcher.matches(fingerprint, path))
                 {
                     return Some(rule.decision);
                 }
@@ -169,8 +195,125 @@ impl PermissionStore {
         let global = self.global_rules.lock().unwrap();
         global
             .iter()
-            .find(|r| r.tool_name == tool_name && r.matcher.matches(fingerprint, path))
+            .find(|r| tool_matches(&r.tool_name, tool_name) && r.matcher.matches(fingerprint, path))
             .map(|r| r.decision)
+    }
+
+    /// Bash / PowerShell 段级查询（架构 §4.4.2）：
+    ///
+    /// 输入是每段 `(fingerprint, write_targets)`，返回：
+    /// - `Deny`  当任一段命中任一 deny 规则（fingerprint 命中 `tool_name` 维度的
+    ///   Bash/BashWithPath 规则，或 write_target 命中任一 FilePath/BashWithPath
+    ///   规则——后者用来兜底 Bash 写文件绕过 Edit deny 的工具切换攻击）
+    /// - `Allow` 当**全部段**在 `tool_name` 维度命中至少一条 Bash/Any allow 规则
+    /// - `None`  其余（调用方按 RunMode 默认决策）
+    ///
+    /// `tool_name` 通常是 `"Bash"` 或 `"PowerShell"`；写目标维度会跨工具查
+    /// `"Edit"` / `"Write"` / `"Bash"` 等 tool 下的 FilePath/BashWithPath 规则。
+    /// `tool_name = "*"` 的规则作为兜底通配：匹配任意工具名。
+    pub fn find_for_segments(
+        &self,
+        session_id: Option<&str>,
+        tool_name: &str,
+        segments: &[(String, Vec<String>)],
+    ) -> Option<PermissionDecisionKind> {
+        if segments.is_empty() {
+            return None;
+        }
+        // 收集生效规则：Session → Global 拼接
+        let mut all_rules: Vec<PermissionRule> = Vec::new();
+        if let Some(sid) = session_id {
+            if let Some(rules) = self.session_rules.lock().unwrap().get(sid) {
+                all_rules.extend(rules.iter().cloned());
+            }
+        }
+        all_rules.extend(self.global_rules.lock().unwrap().iter().cloned());
+
+        // 阶段 1：deny 优先
+        for (fp, write_targets) in segments {
+            // (a) tool_name 维度按 fingerprint 命中（含 wildcard "*"）
+            for r in &all_rules {
+                if !tool_matches(&r.tool_name, tool_name) {
+                    continue;
+                }
+                if r.decision != PermissionDecisionKind::Deny {
+                    continue;
+                }
+                if matcher_hits_segment(&r.matcher, fp, write_targets) {
+                    return Some(PermissionDecisionKind::Deny);
+                }
+            }
+            // (b) 写目标跨工具维度：让 Edit/Write deny 规则兜底 Bash 写文件
+            for t in write_targets {
+                for r in &all_rules {
+                    if r.decision != PermissionDecisionKind::Deny {
+                        continue;
+                    }
+                    if matches!(
+                        r.matcher,
+                        PermissionMatcher::FilePath { .. } | PermissionMatcher::BashWithPath { .. }
+                    ) && r.matcher.matches(None, Some(t))
+                    {
+                        return Some(PermissionDecisionKind::Deny);
+                    }
+                }
+            }
+        }
+
+        // 阶段 2：全部段都至少命中一条 allow
+        let all_allow = segments.iter().all(|(fp, write_targets)| {
+            all_rules.iter().any(|r| {
+                tool_matches(&r.tool_name, tool_name)
+                    && r.decision == PermissionDecisionKind::Allow
+                    && matcher_hits_segment(&r.matcher, fp, write_targets)
+            })
+        });
+        if all_allow {
+            return Some(PermissionDecisionKind::Allow);
+        }
+        None
+    }
+
+    /// 检查是否有 Allow 规则匹配给定路径（不限 tool_name）。
+    /// 用于 dispatcher 路径越界检查，让跨 session 的全局路径规则生效。
+    pub fn allows_path(&self, session_id: Option<&str>, path: &str) -> bool {
+        if let Some(sid) = session_id {
+            let session_rules = self.session_rules.lock().unwrap();
+            if let Some(rules) = session_rules.get(sid) {
+                if rules
+                    .iter()
+                    .any(|r| r.decision == PermissionDecisionKind::Allow && r.matcher.matches(None, Some(path)))
+                {
+                    return true;
+                }
+            }
+        }
+        let global = self.global_rules.lock().unwrap();
+        global
+            .iter()
+            .any(|r| r.decision == PermissionDecisionKind::Allow && r.matcher.matches(None, Some(path)))
+    }
+
+    /// 给一条路径创建 wildcard (`"*"`) tool_name 的 FilePath Allow 规则。
+    /// 路径审批选了「加入全局」后调用，让其他 session 也能共享。
+    pub fn add_path_rule(
+        &self,
+        session_id: Option<&str>,
+        path: String,
+        scope: PermissionScope,
+    ) -> AppResult<()> {
+        let rule = PermissionRule {
+            id: new_rule_id(),
+            scope,
+            tool_name: "*".to_string(),
+            matcher: PermissionMatcher::FilePath {
+                path_prefix: path,
+            },
+            decision: PermissionDecisionKind::Allow,
+            created_at: chrono::Utc::now().timestamp_millis(),
+            created_by: "user".to_string(),
+        };
+        self.add(session_id, rule)
     }
 
     /// 增加规则：Session 仅写内存（落 jsonl 由 Recorder 负责）；Global 重写
@@ -192,9 +335,7 @@ impl PermissionStore {
             PermissionScope::Global => {
                 let mut g = self.global_rules.lock().unwrap();
                 g.push(rule);
-                let file = permissions_store::PermissionsFile {
-                    rules: g.clone(),
-                };
+                let file = permissions_store::PermissionsFile { rules: g.clone() };
                 permissions_store::save(&self.data_dir, &file)
             }
         }
@@ -225,11 +366,7 @@ impl PermissionStore {
     }
 
     /// 列规则：scope=Some(Session) 时需要 session_id；Global 不需要。
-    pub fn list(
-        &self,
-        scope: PermissionScope,
-        session_id: Option<&str>,
-    ) -> Vec<PermissionRule> {
+    pub fn list(&self, scope: PermissionScope, session_id: Option<&str>) -> Vec<PermissionRule> {
         match scope {
             PermissionScope::Once => Vec::new(),
             PermissionScope::Session => session_id

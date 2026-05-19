@@ -20,7 +20,7 @@ use agent_core::{
 use async_trait::async_trait;
 use common::{
     attachments::MessageAttachment,
-    runtime::{ConsumedPendingInputs, PendingInputs},
+    runtime::{ConsumedPendingInputs, PendingInputs, PendingUserInput},
     CancelFlag,
 };
 use model_gateway::{self, config::Provider};
@@ -225,6 +225,12 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         &args.session_id,
     );
 
+    let used_global_rules = session
+        .global_rules
+        .clone()
+        .unwrap_or_else(|| settings.conversation.global_rules.clone());
+    let used_rules_files = session.rules_files.clone();
+
     let mut core_session = CoreSession::new(
         harness,
         SessionConfig {
@@ -245,6 +251,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             force_automode: args.force_automode,
             data_dir: Some(data_dir.to_path_buf()),
             phase: Some(phase.clone()),
+            global_rules: used_global_rules,
+            rules_files: used_rules_files,
         },
     );
     core_session.append_user(args.user_content.clone(), args.attachments);
@@ -310,10 +318,12 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     // - 本轮 AllowAndRemember 审批新增的目录此时仍在 pending，下一条 user message 会通知模型
     persist_workspace_runtime_dirs(data_dir, &args.session_id, &workspace);
 
+    observer.finish_current_turn();
     let DesktopObserver {
-        mut parts,
+        parts,
         partial_output,
         tool_calls,
+        mut turn_messages,
         output_attachments,
         ..
     } = observer;
@@ -351,42 +361,127 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         }
     }
 
+    let assistant_msg = if pending_inputs_to_persist.is_empty() {
+        let assistant_msg = assistant_message_from_recorded_parts(
+            parts,
+            partial_output,
+            tool_calls,
+            output_attachments,
+        );
+        sessions::append_message(data_dir, &args.session_id, assistant_msg.clone())?;
+        assistant_msg
+    } else {
+        if turn_messages.is_empty() {
+            turn_messages.push(assistant_message_from_recorded_parts(
+                parts,
+                partial_output,
+                tool_calls,
+                Vec::new(),
+            ));
+        }
+        if let Some(last) = turn_messages.last_mut() {
+            last.attachments = output_attachments;
+        }
+        let assistant_msg = turn_messages
+            .last()
+            .cloned()
+            .unwrap_or_else(empty_assistant_message);
+        persist_interleaved_pending_inputs(
+            data_dir,
+            &args.session_id,
+            turn_messages,
+            pending_inputs_to_persist,
+        )?;
+        assistant_msg
+    };
+
+    Ok(assistant_msg)
+}
+
+fn persist_interleaved_pending_inputs(
+    data_dir: &Path,
+    session_id: &str,
+    assistant_messages: Vec<Message>,
+    pending_inputs: Vec<PendingUserInput>,
+) -> AppResult<()> {
+    if pending_inputs.len() == assistant_messages.len().saturating_sub(1) {
+        for (index, assistant) in assistant_messages.into_iter().enumerate() {
+            sessions::append_message(data_dir, session_id, assistant)?;
+            if let Some(input) = pending_inputs.get(index) {
+                sessions::append_message(
+                    data_dir,
+                    session_id,
+                    user_message_from_pending_input(input),
+                )?;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut assistants = assistant_messages.into_iter();
+    if let Some(first) = assistants.next() {
+        sessions::append_message(data_dir, session_id, first)?;
+    }
+    for input in &pending_inputs {
+        sessions::append_message(data_dir, session_id, user_message_from_pending_input(input))?;
+    }
+    for assistant in assistants {
+        sessions::append_message(data_dir, session_id, assistant)?;
+    }
+    Ok(())
+}
+
+fn assistant_message_from_recorded_parts(
+    mut parts: AssistantPartsRecorder,
+    partial_output: String,
+    tool_calls: Vec<MessageToolCall>,
+    attachments: Vec<MessageAttachment>,
+) -> Message {
     let final_text = parts.last_text_snapshot();
     parts.append_final_text_if_missing(&final_text);
     let assistant_parts = parts.parts.clone();
     let assistant_content = text_from_parts(&assistant_parts)
         .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| final_text.clone());
+        .unwrap_or_else(|| {
+            if final_text.is_empty() {
+                partial_output
+            } else {
+                final_text
+            }
+        });
 
-    let assistant_msg = Message {
+    Message {
         id: sessions::new_id(),
         role: Role::Assistant,
         content: assistant_content,
-        attachments: output_attachments,
+        attachments,
         tool_calls,
         parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
-    };
-    sessions::append_message(data_dir, &args.session_id, assistant_msg.clone())?;
-    for input in pending_inputs_to_persist {
-        sessions::append_message(
-            data_dir,
-            &args.session_id,
-            Message {
-                id: sessions::new_id(),
-                role: Role::User,
-                content: input.content,
-                attachments: input.attachments,
-                tool_calls: Vec::new(),
-                parts: Vec::new(),
-                created_at: chrono::Utc::now().timestamp_millis(),
-                meta: None,
-            },
-        )?;
     }
+}
 
-    Ok(assistant_msg)
+fn user_message_from_pending_input(input: &PendingUserInput) -> Message {
+    Message {
+        id: sessions::new_id(),
+        role: Role::User,
+        content: input.content.clone(),
+        attachments: input.attachments.clone(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: None,
+    }
+}
+
+fn empty_assistant_message() -> Message {
+    assistant_message_from_recorded_parts(
+        AssistantPartsRecorder::default(),
+        String::new(),
+        Vec::new(),
+        Vec::new(),
+    )
 }
 
 /// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
@@ -395,6 +490,10 @@ struct DesktopObserver<'a> {
     parts: AssistantPartsRecorder,
     partial_output: String,
     tool_calls: Vec<MessageToolCall>,
+    turn_parts: AssistantPartsRecorder,
+    turn_partial_output: String,
+    turn_tool_calls: Vec<MessageToolCall>,
+    turn_messages: Vec<Message>,
     output_attachments: Vec<MessageAttachment>,
     hitl_state: Option<Arc<HitlState>>,
     hitl: Arc<HitlGate>,
@@ -411,11 +510,34 @@ impl<'a> DesktopObserver<'a> {
             parts: AssistantPartsRecorder::default(),
             partial_output: String::new(),
             tool_calls: Vec::new(),
+            turn_parts: AssistantPartsRecorder::default(),
+            turn_partial_output: String::new(),
+            turn_tool_calls: Vec::new(),
+            turn_messages: Vec::new(),
             output_attachments: Vec::new(),
             hitl_state,
             hitl,
             emit,
         }
+    }
+
+    fn finish_current_turn(&mut self) {
+        if self.turn_parts.parts.is_empty()
+            && self.turn_partial_output.is_empty()
+            && self.turn_tool_calls.is_empty()
+        {
+            return;
+        }
+        let parts = std::mem::take(&mut self.turn_parts);
+        let partial_output = std::mem::take(&mut self.turn_partial_output);
+        let tool_calls = std::mem::take(&mut self.turn_tool_calls);
+        self.turn_messages
+            .push(assistant_message_from_recorded_parts(
+                parts,
+                partial_output,
+                tool_calls,
+                Vec::new(),
+            ));
     }
 }
 
@@ -424,6 +546,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
     fn on_event(&mut self, event: &AgentEvent) {
         if let EventPayload::TextDelta { text } = &event.payload {
             self.partial_output.push_str(text);
+            self.turn_partial_output.push_str(text);
         }
         if let EventPayload::TextDone { full_text } = &event.payload {
             // complete 路径只发 TextDone 不发 TextDelta；补一次 append 避免落盘空文本。
@@ -435,13 +558,28 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
                 {
                     self.parts.append_text(full_text);
                 }
+                if !self
+                    .turn_parts
+                    .last_text_snapshot()
+                    .ends_with(full_text.as_str())
+                {
+                    self.turn_parts.append_text(full_text);
+                }
                 if self.partial_output.is_empty() {
                     self.partial_output.push_str(full_text);
+                }
+                if self.turn_partial_output.is_empty() {
+                    self.turn_partial_output.push_str(full_text);
                 }
             }
         }
         record_assistant_part_event(&mut self.parts, event);
+        record_assistant_part_event(&mut self.turn_parts, event);
         record_tool_event(&mut self.tool_calls, event);
+        record_tool_event(&mut self.turn_tool_calls, event);
+        if let EventPayload::TurnFinished { .. } = &event.payload {
+            self.finish_current_turn();
+        }
         if let Some(ev) = agent_event_to_engine_event(event) {
             (self.emit)(ev);
         }
@@ -1076,6 +1214,20 @@ pub async fn build_preview_payload(
     // preview 时按同一逻辑还原，确保「显示 JSON」与实际发给模型的 payload 一致。
     let env_snapshot = EnvironmentSnapshot::from_workspace(&workspace);
     let env_block = env_snapshot.render();
+
+    // 规则文件注入：与 Session::append_user 一致
+    let used_global_rules = session
+        .global_rules
+        .clone()
+        .unwrap_or_else(|| settings.conversation.global_rules.clone());
+    let rules_content = agent_core::rules::resolve_injection_files(
+        &used_global_rules,
+        session.rules_files.as_deref(),
+        &workdir,
+        &initial_allowed_paths,
+    );
+    let rules_block = agent_core::rules::format_injection(&rules_content);
+
     let mut first_user_pending = true;
 
     let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -1843,6 +1995,81 @@ mod tests {
         }
     }
 
+    struct PendingInputDuringDoneClient {
+        calls: AtomicUsize,
+        pending_inputs: PendingInputs,
+    }
+
+    #[async_trait]
+    impl ModelClient for PendingInputDuringDoneClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第一段".to_string(),
+                    });
+                    self.pending_inputs
+                        .lock()
+                        .unwrap()
+                        .push(common::runtime::PendingUserInput {
+                            content: "插队消息".to_string(),
+                            attachments: Vec::new(),
+                        });
+                    Ok(ModelResponse::Done {
+                        text: "第一段".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => {
+                    let saw_injected = req.entries.iter().any(|entry| {
+                        matches!(
+                            entry,
+                            model_gateway::types::TranscriptEntry::User(user)
+                                if user.text == "插队消息"
+                        )
+                    });
+                    assert!(
+                        saw_injected,
+                        "second model request should see injected user input"
+                    );
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第二段".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        text: "第二段".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
     #[test]
     fn persist_interrupted_output_appends_partial_assistant_then_marker() {
         let data_dir = temp_data_dir();
@@ -2137,6 +2364,71 @@ mod tests {
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "正在输出后续回答".to_string()),
                     (Role::User, "插队消息".to_string()),
+                ]
+            );
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn persists_injected_input_between_assistant_turns_in_same_run() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            let pending_inputs: PendingInputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let consumed_pending_inputs: ConsumedPendingInputs =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pending_for_client = pending_inputs.clone();
+
+            let assistant = send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    session_id: session.id.clone(),
+                    user_content: "第一条".to_string(),
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: Vec::new(),
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: Some(pending_inputs),
+                    consumed_pending_inputs: Some(consumed_pending_inputs),
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                },
+                |_| {},
+                move |_provider, _model, _reasoning| {
+                    Ok(Arc::new(PendingInputDuringDoneClient {
+                        calls: AtomicUsize::new(0),
+                        pending_inputs: pending_for_client.clone(),
+                    }) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(assistant.content, "第二段");
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            let roles_and_content: Vec<(Role, String)> = saved
+                .messages
+                .iter()
+                .map(|m| (m.role, m.content.clone()))
+                .collect();
+            assert_eq!(
+                roles_and_content,
+                vec![
+                    (Role::User, "第一条".to_string()),
+                    (Role::Assistant, "第一段".to_string()),
+                    (Role::User, "插队消息".to_string()),
+                    (Role::Assistant, "第二段".to_string()),
                 ]
             );
 
