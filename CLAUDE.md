@@ -31,8 +31,8 @@
 - 改 model adapter → §4.11
 - 改 Model Gateway → §5
 - 改 Storage / 文件锁 → §6
-- 改 CoreClient / surface settings → §7
-- 改 TUI / CLI → §8
+- 改 CoreClient → §7
+- 改 Desktop 命令系统（`//xxx`）→ §8
 - 改 Prompt → §9
 
 ### 步骤 2：做设计影响评估
@@ -55,9 +55,9 @@
    - 新增决策点 → 在架构.md §13 表格追加一行
 
 4. **会影响哪些其他模块？**
-   - 改 protocol → 同步 CLI render、desktop chat.rs 翻译、前端 types.ts 三处映射
+   - 改 protocol → 同步 desktop chat.rs 翻译 + 前端 types.ts 两处映射
    - 改 EventPayload → 同上
-   - 改 Tool → CLI 与 desktop 两套观察者均需验证
+   - 改 Tool → desktop 观察者（chat.rs + 前端 MessageBubble）需验证
    - 改 system prompt → 检查 prompt-cache 是否仍命中（§9.3 约束）
    - 改 storage 文件格式 → 检查向前向后兼容性、加载老 jsonl 是否可用
    - 改 Mode → 检查工具列表过滤（§4.4.5）、SEMI 段注入（§9.3）
@@ -96,20 +96,16 @@
 # Rust 编译
 cargo check --workspace
 cargo check -p agent-core --tests
+cargo test -p agent-core --lib
 
 # TS 类型检查
 pnpm exec tsc --noEmit
 
-# CLI 端到端验证（比启动 Tauri 快）
-./target/debug/hebbian-cli "..." --mock
-./target/debug/hebbian-cli --json '{"messages":[...]}' --mock
-./target/debug/hebbian-cli --mock     # loop 模式
-
-# 桌面 dev 模式
+# 桌面 dev 模式（唯一 surface）
 pnpm tauri dev
 ```
 
-修改 EventPayload 后必须跑这三种 CLI 模式确认事件流完整。
+修改 EventPayload 后必须跑 desktop dev 模式手动验证事件流完整（chat.rs 翻译 + 前端渲染两端都看一眼）。
 
 ### 步骤 5：追加 changelog
 
@@ -148,26 +144,21 @@ pnpm tauri dev
 ## 开发命令
 
 ```bash
-# CLI 启动方式
-hebbian                # 默认 TUI（终端支持时）
-hebbian --repl         # REPL 简易模式
-hebbian "你好"          # 单次问答
-hebbian --json '...'   # JSON 多轮（脚本用）
-hebbian --tui          # 显式启 TUI
+# 启动 Desktop（唯一 surface）
+pnpm tauri dev
 
-# Provider 管理
-hebbian --providers list
-hebbian --provider set openai/gpt-5
+# Provider / Session / 设置由 Desktop UI 操作；
+# `apps/cli` 目录已从 workspace 排除（2026-05-13 changelog），不再构建
 
-# 调试模型 IO
-HEBBIAN_DUMP_MODEL_IO=1 hebbian "..."
+# 调试模型 IO（Desktop 启动前导出环境变量）
+HEBBIAN_DUMP_MODEL_IO=1 pnpm tauri dev
 # 输出位置：~/.hebbian/sessions/<session_id>/model_io.jsonl
 
 # OTLP 追踪
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 hebbian ...
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 pnpm tauri dev
 ```
 
-CLI 与 desktop 共享同一个数据目录 `~/.hebbian/`。
+Desktop 多窗口/多进程共享同一个数据目录 `~/.hebbian/`（文件锁保护并发写）。
 
 ---
 

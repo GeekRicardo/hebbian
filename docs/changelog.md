@@ -1544,3 +1544,11 @@
   - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 更新插队顺序测试期望，明确保存顺序为 `assistant(正在输出) → injected user → assistant(后续回答)`，不再把前后两段 assistant 合并成一条后再追加 user。
 - **影响范围**: agent-core loop 与 desktop chat 单测；不改协议、不改 Tauri command、不改 session 文件结构。
 - **留尾巴**: 无。
+
+### 2026-05-19 — 忽略 understand-anything 本地知识图谱产物
+
+- **Why**: 用户明确要求 `understand-anything` 生成目录不要进入提交，只作为本机分析缓存保留。
+- **改动**:
+  - [.gitignore](../.gitignore): 增加 `.understand-anything/`，避免 `knowledge-graph.json`、`fingerprints.json` 等大文件进入版本库。
+- **影响范围**: 仅 Git 忽略规则；不影响代码、协议或运行时。
+- **留尾巴**: 无。
