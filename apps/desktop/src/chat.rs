@@ -5,6 +5,7 @@ use agent_core::storage::{
     sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
     },
+    sessions_dir::{self as sessions_dir, PartialFragment},
     settings as global_settings,
 };
 use agent_core::{
@@ -111,6 +112,10 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         + Sync,
 ) -> AppResult<Message> {
     let prior_session = sessions::load(data_dir, &args.session_id)?;
+
+    // 恢复上次崩溃/强退中断的 partial assistant 输出，追加到 session.jsonl 后清理文件。
+    recover_and_save_interrupted_partials(data_dir, &args.session_id);
+
     let user_msg = Message {
         id: sessions::new_id(),
         role: Role::User,
@@ -180,11 +185,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     agent_core::wakeup::WakeupScheduler::global()
         .register_session_shells(args.session_id.clone(), shells.clone());
     let read_state_tracker = Arc::new(ReadStateTracker::new());
-    let edits_worktree = Arc::new(EditsWorktree::new(
-        data_dir,
-        &args.session_id,
-        &workspace,
-    ));
+    let edits_worktree = Arc::new(EditsWorktree::new(data_dir, &args.session_id, &workspace));
     let harness = Arc::new(Harness::new(
         agent_core::tools::default_tools(
             workspace.clone(),
@@ -303,7 +304,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     };
     let hitl = handle.hitl().clone();
 
-    let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event);
+    let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event, data_dir, &args.session_id);
     let summary = handle.drive(&mut observer).await;
     if let Some(state) = &args.hitl {
         state.forget(&hitl);
@@ -337,6 +338,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         tool_calls,
         mut turn_messages,
         output_attachments,
+        partial_writer,
         ..
     } = observer;
     let mut pending_inputs_to_persist = args
@@ -358,6 +360,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 &parts.parts,
                 &tool_calls,
             )?;
+            if let Some(pw) = partial_writer { pw.delete(); }
             return Err(AppError::msg("请求已中断"));
         }
         TurnOutcome::Failed(error) => {
@@ -369,6 +372,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 &tool_calls,
                 &error,
             )?;
+            if let Some(pw) = partial_writer { pw.delete(); }
             return Err(AppError::msg(error));
         }
     }
@@ -381,6 +385,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             output_attachments,
         );
         sessions::append_message(data_dir, &args.session_id, assistant_msg.clone())?;
+        if let Some(pw) = partial_writer { pw.delete(); }
         assistant_msg
     } else {
         if turn_messages.is_empty() {
@@ -404,10 +409,87 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             turn_messages,
             pending_inputs_to_persist,
         )?;
+        if let Some(pw) = partial_writer { pw.delete(); }
         assistant_msg
     };
 
     Ok(assistant_msg)
+}
+
+/// 扫描 partial 目录，把所有残留的中断输出追加到 session.jsonl，然后删除 partial 文件。
+/// 失败静默——恢复是 best-effort，不影响正常会话流程。
+fn recover_and_save_interrupted_partials(data_dir: &Path, session_id: &str) {
+    let partials = match sessions_dir::recover_interrupted_partials(data_dir, session_id) {
+        Ok(v) if !v.is_empty() => v,
+        _ => return,
+    };
+    for partial in partials {
+        if let Some(msg) = partial_to_interrupted_message(&partial) {
+            let _ = sessions::append_message(data_dir, session_id, msg);
+        }
+        let _ = sessions_dir::delete_partial(data_dir, session_id, &partial.msg_id);
+    }
+    // 插入中断标记，让前端显示"此处曾被中断"分隔线。
+    let marker = Message {
+        id: sessions::new_id(),
+        role: Role::Marker,
+        content: String::new(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: Some(MessageMeta::Interrupted),
+    };
+    let _ = sessions::append_message(data_dir, session_id, marker);
+}
+
+/// 把 [`sessions_dir::RecoveredPartial`] 转成可落盘的 [`Message`]。
+/// text / reasoning / tool_calls 全空时返回 `None`（无内容无需保存）。
+fn partial_to_interrupted_message(
+    partial: &sessions_dir::RecoveredPartial,
+) -> Option<Message> {
+    let mut parts: Vec<MessagePart> = Vec::new();
+    if !partial.reasoning.is_empty() {
+        parts.push(MessagePart::Reasoning { text: partial.reasoning.clone() });
+    }
+    if !partial.text.is_empty() {
+        parts.push(MessagePart::Text { text: partial.text.clone() });
+    }
+    for (idx, (name, args)) in &partial.tool_calls {
+        parts.push(MessagePart::ToolCall {
+            id: format!("recovered-{idx}"),
+            name: name.as_deref().unwrap_or("unknown").to_string(),
+            input: serde_json::from_str(args).unwrap_or(serde_json::Value::Null),
+            arguments: args.clone(),
+            result: None,
+            duration_ms: None,
+        });
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let tool_calls: Vec<MessageToolCall> = partial
+        .tool_calls
+        .values()
+        .enumerate()
+        .map(|(i, (name, args))| MessageToolCall {
+            id: format!("recovered-{i}"),
+            name: name.as_deref().unwrap_or("unknown").to_string(),
+            input: serde_json::from_str(args).unwrap_or(serde_json::Value::Null),
+            result: None,
+            duration_ms: None,
+        })
+        .collect();
+    Some(Message {
+        id: sessions::new_id(),
+        role: Role::Assistant,
+        content: partial.text.clone(),
+        attachments: Vec::new(),
+        tool_calls,
+        parts,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: None,
+    })
 }
 
 fn persist_interleaved_pending_inputs(
@@ -496,6 +578,51 @@ fn empty_assistant_message() -> Message {
     )
 }
 
+/// 流式增量写到 `partial/<msg_id>.partial.jsonl` 供崩溃/强退后恢复。
+/// 使用 BufWriter：每次写只是 memcpy 到内核缓冲区，不 fsync；
+/// Drop 时自动 flush 到 OS，正常退出/panic 都能保留大部分内容。
+struct PartialFileWriter {
+    writer: std::io::BufWriter<std::fs::File>,
+    path: std::path::PathBuf,
+    wrote_text: bool,
+}
+
+impl PartialFileWriter {
+    fn open(path: std::path::PathBuf) -> Option<Self> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok()?;
+        Some(Self {
+            writer: std::io::BufWriter::new(file),
+            path,
+            wrote_text: false,
+        })
+    }
+
+    fn append(&mut self, frag: &PartialFragment) {
+        use std::io::Write;
+        if let Ok(line) = serde_json::to_string(frag) {
+            let _ = self.writer.write_all(line.as_bytes());
+            let _ = self.writer.write_all(b"\n");
+        }
+        if matches!(frag, PartialFragment::Text { .. }) {
+            self.wrote_text = true;
+        }
+    }
+
+    fn delete(mut self) {
+        use std::io::Write;
+        let _ = self.writer.flush();
+        drop(self.writer);
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
 /// 把每个事件翻译成 `EngineEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
 struct DesktopObserver<'a> {
@@ -510,6 +637,7 @@ struct DesktopObserver<'a> {
     hitl_state: Option<Arc<HitlState>>,
     hitl: Arc<HitlGate>,
     emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+    partial_writer: Option<PartialFileWriter>,
 }
 
 impl<'a> DesktopObserver<'a> {
@@ -517,7 +645,12 @@ impl<'a> DesktopObserver<'a> {
         hitl_state: Option<Arc<HitlState>>,
         hitl: Arc<HitlGate>,
         emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+        data_dir: &Path,
+        session_id: &str,
     ) -> Self {
+        let msg_id = sessions::new_id();
+        let partial_path = sessions_dir::partial_path(data_dir, session_id, &msg_id);
+        let partial_writer = PartialFileWriter::open(partial_path);
         Self {
             parts: AssistantPartsRecorder::default(),
             partial_output: String::new(),
@@ -530,6 +663,7 @@ impl<'a> DesktopObserver<'a> {
             hitl_state,
             hitl,
             emit,
+            partial_writer,
         }
     }
 
@@ -594,6 +728,43 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         }
         if let Some(ev) = agent_event_to_engine_event(event) {
             (self.emit)(ev);
+        }
+
+        // 实时写 partial 文件，供进程崩溃/强退后的下次加载恢复。
+        if let Some(pw) = &mut self.partial_writer {
+            match &event.payload {
+                EventPayload::TextDelta { text } => {
+                    pw.append(&PartialFragment::Text { text: text.clone() });
+                }
+                // non-streaming 路径只发 TextDone，没有 TextDelta
+                EventPayload::TextDone { full_text } if !full_text.is_empty() && !pw.wrote_text => {
+                    pw.append(&PartialFragment::Text { text: full_text.clone() });
+                }
+                EventPayload::Reasoning { text } => {
+                    pw.append(&PartialFragment::Reasoning { text: text.clone() });
+                }
+                EventPayload::ToolCallStarted { index, name, input, .. } => {
+                    let args = serde_json::to_string(input)
+                        .ok()
+                        .filter(|s| s != "null")
+                        .unwrap_or_default();
+                    pw.append(&PartialFragment::ToolCall {
+                        index: *index as u32,
+                        name: Some(name.clone()),
+                        arguments_chunk: args,
+                    });
+                }
+                EventPayload::ToolCallDelta { index, name, arguments_delta, .. } => {
+                    if let Some(chunk) = arguments_delta {
+                        pw.append(&PartialFragment::ToolCall {
+                            index: *index as u32,
+                            name: name.clone(),
+                            arguments_chunk: chunk.clone(),
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
