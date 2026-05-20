@@ -78,6 +78,11 @@ pub enum EngineEvent {
         /// 仅 BashTool 当前会带，UI 据此渲染"记住 git status / 记住 git"两档按钮。
         #[serde(skip_serializing_if = "Option::is_none", default)]
         fingerprint: Option<String>,
+        /// Bash / PowerShell 的所有段 fingerprint（架构 §4.4.2）。
+        /// compound 命令 `cd /tmp && touch foo` → `["cd /tmp", "touch foo"]`。
+        /// UI 据此展示每段独立 allow 按钮 + 「整条都允许」按钮。
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        command_segments: Vec<String>,
     },
     /// 审批已被回应（无论 approve / deny）。前端关闭弹窗。
     PermissionResolved {

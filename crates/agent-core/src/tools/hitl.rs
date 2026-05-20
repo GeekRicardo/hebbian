@@ -313,7 +313,7 @@ impl HitlGate {
             return;
         };
 
-        if let ApprovalDecision::AllowAndRemember { scope, pattern } = &decision {
+        if let ApprovalDecision::AllowAndRemember { scope, pattern, extra_patterns } = &decision {
             if refuse_remember {
                 tracing::debug!(
                     tool = tool_name.as_deref().unwrap_or(""),
@@ -322,6 +322,11 @@ impl HitlGate {
                 );
             } else if let Some(name) = &tool_name {
                 self.remember(*scope, name, pattern.as_deref(), fingerprint.as_deref());
+                // compound 命令场景：额外段前缀逐一落盘，让 `cd /tmp && touch x` 类
+                // 命令一次审批就能让段级判定（架构 §4.4.2）的"全段 allow"条件满足。
+                for extra in extra_patterns {
+                    self.remember(*scope, name, Some(extra.as_str()), fingerprint.as_deref());
+                }
             }
         }
 
@@ -575,6 +580,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: None,
+                extra_patterns: Vec::new(),
             },
         );
         match gate.check("Edit", &destructive_effects(None)) {
@@ -592,6 +598,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: None, // 故意不给 pattern
+                extra_patterns: Vec::new(),
             },
         );
         // 黑名单工具 + 无 pattern → 不写记忆，下次仍审批
@@ -610,6 +617,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some("git status".into()),
+                extra_patterns: Vec::new(),
             },
         );
         // 完全相同
@@ -636,6 +644,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some("git status".into()),
+                extra_patterns: Vec::new(),
             },
         );
         // 不该匹配 "git statusbad"（token 边界）
@@ -659,6 +668,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some("git".into()),
+                extra_patterns: Vec::new(),
             },
         );
         // root pattern 命中所有 git 子命令
@@ -703,6 +713,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some("git".into()),
+                extra_patterns: Vec::new(),
             },
         );
         // 普通 git push fingerprint 段命中 allow（无危险模式）→ Approved
@@ -725,6 +736,7 @@ mod tests {
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some("git status".into()),
+                extra_patterns: Vec::new(),
             },
         );
         // 验证：再次出现独立的 `git status` 危险模式仍然审批

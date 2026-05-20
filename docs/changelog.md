@@ -2037,3 +2037,68 @@
 - **留尾巴**:
   - 规则要求新增命令时同步五处文件，后续若 IPC 协议演化（例如拆分 client / daemon 包），要更新这条 checklist 的文件路径
   - 「能/不能 heb 复现」对照表是当前两 surface 边界的快照，未来若 EditsWorktree 在 CLI 也暴露（目前 CLI 已经接入但没暴露查看 diff 的命令），该表「不能 heb 复现」一列需缩
+
+### 2026-05-21 — 引入第三个 surface：`hebweb` 浏览器/HTTP+WS server
+
+- **Why**: 用户希望 AI 也能"看到并操作前端"（不是纯 URL，而是带真实 Tauri 数据），用于自主定位 UI bug。macOS 的 Tauri WebView 没有官方 headless / WebDriver 支持，所以走另一条路：让浏览器加载同一份 React 代码，背后接 hebweb 进程提供 HTTP+WS 桥，agent_core / `~/.hebbian/` 全部共享。多个 AI 用 Playwright 各开各的 WS + 各自的 session_id 即可天然并发——前端各看各的，后端共享。
+- **设计**:
+  - 三 surface 拓扑：Desktop（Tauri）、heb（CLI/IPC）、hebweb（HTTP+WS）。三者都是 in-process 持有 agent_core，区别只是 surface ↔ 客户端 之间的传输。
+  - **多 AI 并发模型**：单 hebweb 进程 hold `Arc<RwLock<HashMap<SessionId, SessionRuntime>>>`，每个 SessionRuntime 各自独立持有 cancel_flag / pending_inputs / pending_approvals / pending_questions。多个浏览器 / Playwright 通过 WS subscribe 不同 session_id 即可看到各自的事件流，互不阻塞。备选模型：每 AI 起一个 `hebweb --port` 独立进程，跟 heb daemon 完全对称。
+  - **WS 协议**：`subscribe / invoke / unsubscribe` (client→server) + `hello / subscribed / invoke_response / event` (server→client)，全部 JSON 行。`engine-event` payload 与 desktop Tauri emit 一致，前端代码不需任何改动。
+  - **前端 transport 抽象**：新建 `apps/desktop/frontend/src/desktop/bridge/transport.ts`，runtime detect `window.__TAURI_INTERNALS__` —— 在 Tauri 里走 `@tauri-apps/api`，在浏览器里走 WS。导出 `invoke / listen / Channel / isTauri`，业务代码改 import 路径即可双 surface 共用。
+  - **v1 范围**：镜像 7 个核心 Tauri command（list_sessions / get_session / create_session / send_message / inject_user_message / approve_permission / answer_question / cancel_message），其余 60+ command 由 server 返回 "not implemented in hebweb v1"。v2 计划：抽 `crates/surface-commands` 共享模块给 desktop / hebweb 一起用，消除双倍维护。
+- **改动**:
+  - [Cargo.toml](../Cargo.toml): workspace 新增 `apps/web-server` 成员
+  - [apps/web-server/Cargo.toml](../apps/web-server/Cargo.toml): 新建，依赖 axum / tower-http / tokio-stream 等
+  - [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): clap + tokio runtime 入口，参数 `--addr / --port / --data-dir / --static-dir`
+  - [apps/web-server/src/protocol.rs](../apps/web-server/src/protocol.rs): WsClientMessage / WsServerMessage 类型
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs): EngineEvent 类型 + agent_event → engine_event 翻译。与 desktop `engine/mod.rs` 字段对齐。v1 重复一份，v2 抽共享 crate
+  - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs): SessionRuntime 结构 + WebObserver(TurnObserver impl) + run_turn（与 daemon.rs 等价）
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): axum router (healthz / ws / static dir) + WS 连接 handler + 7 个核心 invoke 命令实现 + 事件广播（broadcast::Sender → ws task）
+  - [apps/desktop/frontend/src/desktop/bridge/transport.ts](../apps/desktop/frontend/src/desktop/bridge/transport.ts): 新建抽象层，runtime detect + WsClient + 统一 `invoke / listen / Channel / isTauri`
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): import 从 `@tauri-apps/api/core` 改为 `./transport`，业务代码无感切换
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx) + [AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx) + [OAuthDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx) + [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): listen / isTauri import 路径改 transport
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs) + [client.rs](../apps/cli/src/client.rs): heb 新增 `heb list-sessions` 命令——扫 `~/.hebbian/cli-sockets/`，ping 每个 socket 测活，自动清理死 socket。让多 AI 并发调试时 AI 能发现其他 AI 起的 daemon
+  - [docs/架构.md](架构.md) §0/§2.1/§2.2/§7: surface 数量由 2 升到 3；§7.5/§7.6/§7.7 新增三 surface 拓扑、hebweb 设计、与远期 HttpCoreClient 关系，明确"多 AI 并发调试"作为硬约束
+  - [docs/heb-cli-debug.md](heb-cli-debug.md): 文档标题改为「heb CLI / hebweb」；§2 命令表加 `heb list-sessions`；末尾新增 §9 Web Surface（启动 / 多 AI 并发两种模型 / WS 协议 / 7 命令清单 / Playwright 模板 / 故障速查 / 已知限制）
+  - [CLAUDE.md](../CLAUDE.md)「开发命令」节加 hebweb 启动方式；「调试 bug 前必做」对照表改成"问题类型 → 首选 surface"三分类：行为问题用 heb、UI 问题用 hebweb+Playwright、Tauri native 才回 Desktop
+- **验证**:
+  - `cargo check --workspace` 通过（desktop / cli / web-server 三个 binary 都编译过）
+  - `pnpm exec tsc --noEmit` 前端类型检查通过
+  - 起 hebweb：`./target/debug/hebweb --port 38080 --data-dir /tmp/hebweb-smoke` → `/healthz` 返回正确 JSON；node WebSocket 客户端依次收到 `hello / invoke_response(list_sessions=[]) / invoke_response(error: not implemented)`
+- **影响范围**:
+  - 新增 `apps/web-server` crate；不动 agent-core / protocol / model-gateway
+  - desktop 前端 5 个文件改 import 路径，零运行时行为变化（IS_TAURI=true 时 transport 直接 forward 到 @tauri-apps/api）
+  - heb CLI 新增 1 个命令，纯 additive，不破坏现有协议
+  - 架构.md 新增章节，§0 第 1 条措辞从"Desktop 不实现业务"改为"三个 surface 都不实现业务"
+- **留尾巴**:
+  - **v2 抽共享 commands crate**：当前 hebweb 只镜像 7 个核心命令，其余 60+ Tauri command 走 desktop。v2 把 `apps/desktop/src/lib.rs` 的 command body 抽到 `crates/surface-commands`，desktop / hebweb 各自的 surface handler 调同一份业务逻辑，hebweb 自动获得全部命令
+  - **events.rs 重复**：hebweb 的 EngineEvent + 翻译函数与 desktop `engine/mod.rs` + `chat.rs:agent_event_to_engine_event` 几乎逐字相同。v2 抽到 `crates/surface-events`（或并入 protocol crate）后两边一起依赖
+  - **Tauri native 能力**：系统通知 / 文件对话框 / tray icon / 全局快捷键在浏览器没有等价物。浏览器 surface 调到这些命令时返回 not_implemented，前端可以根据 `isTauri()` 隐藏对应入口。当前 v1 不做降级 UI，仅靠 server 端 reject
+  - **认证**：hebweb 仅 `127.0.0.1` 监听、无 token。多用户机器上不要放共享 data-dir；公网部署需要在前面套 nginx + auth
+  - **Channel 适配**：`transport.ts` 的 `Channel<T>` 在 Web 模式下用 `listen('engine-event')` 桥接到 onmessage。如果未来某个 Tauri command 用 Channel 传非 engine-event（其他自定义事件名），这里的桥接会漏；当前所有 Channel 用法都是 EngineEvent，没问题
+
+### 2026-05-20 — compound 命令"一次审批多前缀"：扩展协议 + popup 看全段
+
+- **Why**: 上一个补丁修了"chat.rs 每 turn 清空 session_rules"那个 bug 后，用户报告 `cd /tmp && touch foo` 类 compound 命令在新 turn 仍然要审批。用 heb CLI 复现确认：架构 §4.4.2 段级判定要求"全部段都被 allow 规则命中才整体放行"——用户在前端 popup 点"始终允许 cd"只写了 `Bash{prefix:"cd"}` 一条规则，下次 `cd /tmp && touch bar` 的 touch 段没规则，整体回到 NeedsApproval。前端 popup 历来只看 `effects.command_fingerprint`（= segments[0].fingerprint），**完全没让用户看到第二段的存在**——用户主观感受是"我审批过的还在问"。
+- **根因不在 chat.rs 也不在 PermissionStore**：架构 §4.4.2 段级判定语义本身是对的（拒绝攻击者绕过：cd 改 cwd + 后续段做事）。bug 在协议层——`PermissionKind::ToolCall` 只暴露第一段 fingerprint，popup 没机会让用户一次性给所有段开 allow。
+- **改动**:
+  - [crates/protocol/src/permission.rs](../crates/protocol/src/permission.rs):
+    - `PermissionKind::ToolCall` 加 `command_segments: Vec<String>` —— 所有段的 fingerprint
+    - `ApprovalDecision::AllowAndRemember` 加 `extra_patterns: Vec<String>` —— compound 场景一次写多前缀
+    - 两者都加 `#[serde(default)]`，向前兼容
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): emit `PermissionRequested` 时把 `effects.segments` 的 fingerprint 列表填进 `command_segments`
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): `resolve` 解析 `extra_patterns`，循环调 `remember` 为每个 extra prefix 单独落一条规则
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs) + [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `EngineEvent::PermissionRequested` 加 `command_segments` 字段，把 agent_core 的段列表透传到前端
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `approve_permission` tauri command 加 `extra_patterns: Option<Vec<String>>` 入参
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) / [bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) / [store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 同步类型 + bridge 加 extraPatterns
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): compute `segmentRoots`（多段 unique root tokens），多段（≥2 段）时渲染高亮的"整条都允许（N 段）"按钮——点击发 `pattern = segmentRoots[0]` + `extraPatterns = segmentRoots[1..]`，一次审批让段级判定"全段 allow"立即满足
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs) + [apps/cli/src/main.rs](../apps/cli/src/main.rs) + [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `heb allow` 加 `--extra-pattern <prefix>`（可多次）+ `--pattern` 已有；调试/自动化脚本可一次给 compound 命令的所有段开 allow。这是关键调试基础设施——没有它前端的修复无法用 CLI 复现验证
+  - 其他 surface（旧 cli/session.rs / cli/tui/permission_popup.rs / web-server）的 `AllowAndRemember` 构造点全部补 `extra_patterns: Vec::new()`，行为不变
+  - [docs/架构.md](架构.md) §13 追加 1 行决策：compound "一次审批多前缀"机制
+- **影响范围**: protocol（向前兼容：缺省字段反序列化为空 vec / None）/ agent-core / desktop / heb CLI / web-server / docs。段级判定语义本身不变，危险复合模式 §4.4.2.2 仍强制审批 + 拒绝记忆。`PermissionKind::ToolCall::fingerprint` 字段保留只为向前兼容，等于 `command_segments[0]`
+- **验证**: heb 端到端复现修复——turn 1 `cd /tmp && touch a` 触发审批 → `heb allow SID RID session --pattern cd --extra-pattern touch` → turn 2 `cd /tmp && touch b` 直接执行（events 中无 `permission_requested`）。`permission_resolved` 事件 decision 字段正确显示 `extra_patterns: ["touch"]`
+- **留尾巴**:
+  - popup 当前只对 Bash 有"整条都允许"按钮；非 Bash 工具（Edit/Write）天生单段，不需要
+  - heb CLI 的 `--extra-pattern` 是为本次调试 + 未来自动化测试 compound 场景而加，长期价值在于让 heb 能精确复现前端任何审批组合
+  - 段级判定原则（架构 §4.4.2）依然严格——攻击者构造的"诱导 allow 第一段、第二段恶意"型攻击仍被段级判定拦截。本次修复只让"用户**自愿**一次允许整条"成为协议层支持的操作，没有放宽自动判定

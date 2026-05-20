@@ -1687,17 +1687,19 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             summary,
             risk,
         } => {
-            let (kind_str, tool_name, tool_input, paths, fingerprint) = match kind {
+            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments) = match kind {
                 agent_core::types::PermissionKind::ToolCall {
                     tool_name,
                     input,
                     fingerprint,
+                    command_segments,
                 } => (
                     "tool_call",
                     tool_name.clone(),
                     input.clone(),
                     Vec::<String>::new(),
                     fingerprint.clone(),
+                    command_segments.clone(),
                 ),
                 agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
                     "path_access",
@@ -1705,6 +1707,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                     serde_json::Value::Null,
                     paths.clone(),
                     None,
+                    Vec::new(),
                 ),
                 agent_core::types::PermissionKind::Plan { .. } => (
                     "plan",
@@ -1712,6 +1715,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                     serde_json::Value::Null,
                     Vec::new(),
                     None,
+                    Vec::new(),
                 ),
                 agent_core::types::PermissionKind::ContinueLongRun { .. } => (
                     "continue_long_run",
@@ -1719,6 +1723,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                     serde_json::Value::Null,
                     Vec::new(),
                     None,
+                    Vec::new(),
                 ),
             };
             Some(EngineEvent::PermissionRequested {
@@ -1730,6 +1735,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 risk: format!("{risk:?}").to_lowercase(),
                 paths,
                 fingerprint,
+                command_segments,
             })
         }
         PermissionResolved {

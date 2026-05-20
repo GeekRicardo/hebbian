@@ -18,6 +18,12 @@ pub enum ApprovalDecision {
         scope: PermissionScope,
         #[serde(default)]
         pattern: Option<String>,
+        /// 额外要一同记忆的命令前缀（compound 命令场景）。
+        /// 例：`cd /tmp && touch foo` 弹审批，用户选「整条都允许」 → `pattern = "cd"`,
+        /// `extra_patterns = ["touch"]`。后端循环写多条 PermissionRule。
+        /// 空数组（默认）= 仅按 `pattern` 写一条规则（旧行为）。
+        #[serde(default)]
+        extra_patterns: Vec<String>,
     },
     /// 拒绝
     Deny,
@@ -56,8 +62,16 @@ pub enum PermissionKind {
         /// 命令级记忆指纹（来自 [`crate::permission`] 文档：BashTool 给 `"git status -uno"`）。
         /// UI 据此渲染"记住 `git status` / 记住 `git`"两档按钮；
         /// `None` 时退回工具名级"总是允许 Bash"按钮。
+        /// **历史字段**：等于 `command_segments[0]`，保留只为向前兼容（架构 §4.4.2）。
         #[serde(default)]
         fingerprint: Option<String>,
+        /// Bash / PowerShell 的所有段 fingerprint。compound 命令
+        /// `cd /tmp && touch foo` → `["cd /tmp", "touch foo"]`。
+        /// UI 据此展示「每段独立 allow / 一次性 allow 整条」按钮，避免段级
+        /// 判定（架构 §4.4.2）需要"全段都允许"时用户却只允许了第一段的体感落差。
+        /// 非 Bash 工具为空 vec。
+        #[serde(default)]
+        command_segments: Vec<String>,
     },
     /// workspace 越界路径访问审批（Bash/Read/Write/Grep）
     PathAccess {

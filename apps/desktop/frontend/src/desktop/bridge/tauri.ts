@@ -1,4 +1,4 @@
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { invoke, Channel } from "./transport";
 import type {
   AppSettings,
   AuthUrlResult,
@@ -214,7 +214,8 @@ export const api = {
     decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback",
     feedback?: string,
     pattern?: string | null,
-    scope?: "session" | "project" | "global"
+    scope?: "session" | "project" | "global",
+    extraPatterns?: string[]
   ) =>
     invoke<void>("approve_permission", {
       requestId,
@@ -222,6 +223,7 @@ export const api = {
       feedback: feedback ?? null,
       pattern: pattern ?? null,
       scope: scope ?? "session",
+      extraPatterns: extraPatterns ?? [],
     }),
 
   /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */

@@ -75,10 +75,12 @@ pub fn decision_for_key(c: char) -> Option<ApprovalDecision> {
         'b' | 'B' => Some(ApprovalDecision::AllowAndRemember {
             scope: PermissionScope::Session,
             pattern: None,
+        extra_patterns: Vec::new(),
         }),
         'c' | 'C' => Some(ApprovalDecision::AllowAndRemember {
             scope: PermissionScope::Global,
             pattern: None,
+        extra_patterns: Vec::new(),
         }),
         'd' | 'D' => Some(ApprovalDecision::Deny),
         _ => None,

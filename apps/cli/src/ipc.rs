@@ -20,6 +20,14 @@ pub enum IpcCommand {
         /// "once" | "session" | "project" | "global"
         #[serde(default = "default_once")]
         scope: String,
+        /// 命令前缀（Bash 命令级记忆）；scope != "once" 时生效
+        #[serde(default)]
+        pattern: Option<String>,
+        /// compound 命令场景的额外段前缀（架构 §4.4.2）。
+        /// 例：`cd /tmp && touch foo` 用户想一次性允许两段 →
+        /// `pattern = "cd"`, `extra_patterns = ["touch"]`。
+        #[serde(default)]
+        extra_patterns: Vec<String>,
     },
     /// 拒绝审批
     Deny { request_id: String },

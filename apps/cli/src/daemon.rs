@@ -655,7 +655,7 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 IpcResponse::err("无活跃 run，无法注入")
             }
         }
-        IpcCommand::Allow { request_id, scope } => {
+        IpcCommand::Allow { request_id, scope, pattern, extra_patterns } => {
             let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
             match tx {
                 None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
@@ -663,15 +663,18 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                     let decision = match scope.as_str() {
                         "session" => ApprovalDecision::AllowAndRemember {
                             scope: PermissionScope::Session,
-                            pattern: None,
+                            pattern,
+                            extra_patterns,
                         },
                         "project" => ApprovalDecision::AllowAndRemember {
                             scope: PermissionScope::Project,
-                            pattern: None,
+                            pattern,
+                            extra_patterns,
                         },
                         "global" => ApprovalDecision::AllowAndRemember {
                             scope: PermissionScope::Global,
-                            pattern: None,
+                            pattern,
+                            extra_patterns,
                         },
                         _ => ApprovalDecision::AllowOnce,
                     };

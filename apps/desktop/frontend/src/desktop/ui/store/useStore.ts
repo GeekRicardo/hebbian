@@ -397,6 +397,7 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       paths: e.paths ?? [],
       kind: e.kind ?? "tool_call",
       fingerprint: e.fingerprint ?? null,
+      commandSegments: e.command_segments ?? [],
     };
     if (slot.pendingApproval) {
       return { ...slot, pendingApprovalQueue: [...slot.pendingApprovalQueue, approval] };
@@ -948,7 +949,10 @@ export const useStore = create<AppState>((set, get) => ({
         decision.kind === "allow_and_remember" ? decision.pattern ?? null : null,
         decision.kind === "allow_and_remember"
           ? decision.scope ?? "session"
-          : undefined
+          : undefined,
+        decision.kind === "allow_and_remember"
+          ? decision.extraPatterns ?? []
+          : []
       );
     } catch (e) {
       // 失败时恢复 slot 上的弹窗，让用户重试

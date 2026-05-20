@@ -683,6 +683,7 @@ fn approve_permission(
     feedback: Option<String>,
     pattern: Option<String>,
     scope: Option<String>,
+    extra_patterns: Option<Vec<String>>,
 ) -> AppResult<()> {
     let allow_scope = match scope.as_deref().unwrap_or("session") {
         "session" => protocol::PermissionScope::Session,
@@ -696,6 +697,7 @@ fn approve_permission(
         "allow_and_remember" => protocol::ApprovalDecision::AllowAndRemember {
             scope: allow_scope,
             pattern,
+            extra_patterns: extra_patterns.unwrap_or_default(),
         },
         "deny" => protocol::ApprovalDecision::Deny,
         "deny_with_feedback" => protocol::ApprovalDecision::DenyWithFeedback {
@@ -1075,14 +1077,17 @@ fn approve_path_access(
         "this_session" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Session,
             pattern: None,
+        extra_patterns: Vec::new(),
         },
         "this_project" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Project,
             pattern: None,
+        extra_patterns: Vec::new(),
         },
         "global" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Global,
             pattern: None,
+        extra_patterns: Vec::new(),
         },
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     };

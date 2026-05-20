@@ -234,12 +234,18 @@ impl ToolDispatcher {
                     fingerprint = fingerprint.as_deref().unwrap_or(""),
                     "tool_call needs human approval"
                 );
+                let command_segments: Vec<String> = effects
+                    .segments
+                    .iter()
+                    .map(|s| s.fingerprint.clone())
+                    .collect();
                 self.emit(EventPayload::PermissionRequested {
                     request_id: request_id.clone(),
                     kind: PermissionKind::ToolCall {
                         tool_name: call.name.clone(),
                         input: call.input.clone(),
                         fingerprint: fingerprint.clone(),
+                        command_segments,
                     },
                     summary: format!("工具 {} 请求执行", call.name),
                     risk: RiskLevel::Medium,

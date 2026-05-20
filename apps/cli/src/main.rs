@@ -17,6 +17,7 @@
 //! heb stop   20260520T1234-abc
 //! heb mode   20260520T1234-abc auto-mode
 //! heb ping   20260520T1234-abc
+//! heb list-sessions                                  # 列出本机所有存活 daemon
 //! ```
 
 use std::path::PathBuf;
@@ -83,6 +84,14 @@ enum Command {
         /// 记住范围：once（默认）| session | project | global
         #[arg(default_value = "once")]
         scope: String,
+        /// 命令前缀（Bash 命令级记忆），如 `--pattern "git status"` 或 `--pattern git`；
+        /// scope != "once" 时生效
+        #[arg(long)]
+        pattern: Option<String>,
+        /// compound 命令的额外段前缀，可多次给：
+        /// `--pattern cd --extra-pattern touch --extra-pattern ls` 一次允许 cd && touch && ls
+        #[arg(long = "extra-pattern")]
+        extra_patterns: Vec<String>,
     },
 
     /// 拒绝权限审批
@@ -124,6 +133,9 @@ enum Command {
 
     /// 检测 daemon 是否存活
     Ping { session_id: String },
+
+    /// 列出本机所有存活的 heb daemon（按 ~/.hebbian/cli-sockets/ 扫描 + ping 测活，自动清理死 socket）
+    ListSessions,
 }
 
 #[tokio::main]
@@ -148,8 +160,12 @@ async fn main() -> Result<()> {
             client::send_command(&session_id, IpcCommand::Send { text }).await
         }
 
-        Command::Allow { session_id, request_id, scope } => {
-            client::send_command(&session_id, IpcCommand::Allow { request_id, scope }).await
+        Command::Allow { session_id, request_id, scope, pattern, extra_patterns } => {
+            client::send_command(
+                &session_id,
+                IpcCommand::Allow { request_id, scope, pattern, extra_patterns },
+            )
+            .await
         }
 
         Command::Deny { session_id, request_id } => {
@@ -186,5 +202,7 @@ async fn main() -> Result<()> {
         Command::Ping { session_id } => {
             client::send_command(&session_id, IpcCommand::Ping).await
         }
+
+        Command::ListSessions => client::list_sessions().await,
     }
 }

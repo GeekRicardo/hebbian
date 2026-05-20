@@ -563,11 +563,13 @@ async fn prompt_approval_in_terminal(
             Choice::RememberPattern(pattern) => ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: Some(pattern),
-            },
+            extra_patterns: Vec::new(),
+        },
             Choice::RememberTool => ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
                 pattern: None,
-            },
+            extra_patterns: Vec::new(),
+        },
             Choice::Deny => ApprovalDecision::Deny,
         }
     })

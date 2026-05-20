@@ -97,6 +97,22 @@ export function PermissionApprovalPopup() {
         : null,
     [pending?.toolName, pending?.fingerprint]
   );
+  // Bash compound 命令的全部段 root 列表（架构 §4.4.2）。
+  // 例：`cd /tmp && touch foo` → ["cd", "touch"]，去重保序。
+  // segmentRoots.length >= 2 时弹窗展示"整条命令一次性允许"按钮，
+  // 一次写入多条规则避免段级判定"全段 allow"条件单点放行不够。
+  const segmentRoots = useMemo(() => {
+    if (!pending || pending.toolName !== "Bash") return [] as string[];
+    const segs = pending.commandSegments ?? [];
+    const roots: string[] = [];
+    for (const fp of segs) {
+      const parsed = parseBashPrefixes(fp);
+      if (parsed && !roots.includes(parsed.root)) {
+        roots.push(parsed.root);
+      }
+    }
+    return roots;
+  }, [pending?.toolName, pending?.commandSegments]);
 
   if (!pending) return null;
 
@@ -311,6 +327,28 @@ export function PermissionApprovalPopup() {
               */}
               {bashPrefixes ? (
                 <>
+                  {segmentRoots.length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        send({
+                          kind: "allow_and_remember",
+                          pattern: segmentRoots[0],
+                          extraPatterns: segmentRoots.slice(1),
+                          scope: "session",
+                        })
+                      }
+                      disabled={submitting}
+                      className={cn(
+                        "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                        "bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50"
+                      )}
+                      title={`本会话内放行 compound 命令的全部 ${segmentRoots.length} 段：${segmentRoots.join(", ")}`}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      整条都允许（{segmentRoots.length} 段）
+                    </button>
+                  )}
                   {bashPrefixes.sub && (
                     <button
                       type="button"

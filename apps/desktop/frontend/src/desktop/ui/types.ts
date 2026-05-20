@@ -394,9 +394,15 @@ export type EngineEvent =
       /**
        * 命令级记忆指纹（仅 BashTool 当前会带）：完整规范化命令字符串，
        * 例如 `"git status -uno README.md"`。UI 据此切 token 渲染
-       * "记住 git status / 记住 git" 两档按钮。
+       * "记住 git status / 记住 git" 两档按钮。等于 `commandSegments[0]`。
        */
       fingerprint?: string | null;
+      /**
+       * Bash / PowerShell 的所有段 fingerprint（架构 §4.4.2）。
+       * compound 命令 `cd /tmp && touch foo` → `["cd /tmp", "touch foo"]`。
+       * UI 据此展示每段独立 allow 按钮 + 「整条都允许」按钮。
+       */
+      command_segments?: string[];
     }
   | {
       type: "permission_resolved";
@@ -476,6 +482,8 @@ export interface PendingApproval {
   kind: "tool_call" | "path_access" | "plan" | "continue_long_run";
   /** 命令级记忆指纹（BashTool 会带），用于 UI 渲染前缀按钮 */
   fingerprint?: string | null;
+  /** Bash 多段命令的所有段 fingerprint，compound 时由 UI 展开每段独立按钮 */
+  commandSegments?: string[];
 }
 
 /** 用户对审批的回应 */
@@ -489,6 +497,13 @@ export type ApprovalDecisionPayload =
        * 后端兜回 AllowOnce）。
        */
       pattern?: string | null;
+      /**
+       * compound 命令场景的额外段前缀（架构 §4.4.2）。
+       * 例：`cd /tmp && touch foo` 弹审批，用户选「整条都允许」 →
+       * `pattern = "cd"`, `extraPatterns = ["touch"]`。后端循环写多条规则
+       * 让段级判定"全段 allow"一次满足。
+       */
+      extraPatterns?: string[];
       /**
        * 记忆生效范围（架构 §4.5.3）：
        * - `"session"`（默认）：仅本对话内不再询问，写到 session.jsonl
