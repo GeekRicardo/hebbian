@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "hebbian-cli"
+name = "heb"
 path = "src/main.rs"
 
 [dependencies]
@@ -22,12 +22,4 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 async-trait = "0.1"
 dirs = "5"
-rustyline = "14"
-colored = "2"
-inquire = "0.7"
-terminal-spinners = "0.3.2"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4"] }
-ratatui = "0.28"
-crossterm = { version = "0.28", features = ["event-stream"] }
-futures-util = "0.3"

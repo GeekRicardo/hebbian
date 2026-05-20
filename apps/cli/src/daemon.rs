@@ -1,0 +1,918 @@
+//! Daemon 主体：启动后持守一个 Unix socket，接受 IPC 命令，同时驱动 agent_core。
+//!
+//! 事件输出：全部以 NDJSON 行写到 stdout，AI 调试工具可直接 tail 读取。
+//! IPC 通信：每条连接读一行 JSON → 执行 → 回一行 JSON → 断开。
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+
+use agent_core::{
+    context::transcript::Transcript,
+    definition::AgentDefinition,
+    edits::EditsWorktree,
+    hooks::HookManager,
+    permissions::PermissionStore,
+    read_state::ReadStateTracker,
+    run_mode::RunMode,
+    storage::{
+        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role, TokenStats},
+        sessions_dir,
+        settings as settings_store,
+    },
+    tools::{background, skill::default_skill_dirs},
+    workspace::Workspace,
+    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
+};
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use chrono::Utc;
+use common::runtime::{PendingInputs, PendingUserInput};
+use model_gateway::{
+    client::{DynModelClient, ModelClient},
+    config as providers,
+    types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
+};
+use protocol::{
+    ApprovalDecision, Event as AgentEvent, EventPayload, PermissionKind, PermissionRequestId,
+    PermissionScope, QuestionOption, UserAnswer,
+};
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::client::socket_path;
+use crate::ipc::{DaemonEvent, IpcCommand, IpcResponse, QuestionOptionDto};
+
+// ─── 启动参数 ───────────────────────────────────────────────────────────────
+
+pub struct DaemonArgs {
+    pub session_id: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub workdir: Option<PathBuf>,
+    pub run_mode: String,
+    pub data_dir: Option<PathBuf>,
+}
+
+// ─── 共享状态 ───────────────────────────────────────────────────────────────
+
+struct DaemonState {
+    session_id: String,
+    data_dir: PathBuf,
+    provider_id: String,
+    model: String,
+    reasoning: Option<common::ReasoningConfig>,
+
+    // HITL 挂起审批：request_id → oneshot Sender
+    pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
+    // HITL 挂起提问：request_id → oneshot Sender
+    pending_questions: Mutex<HashMap<String, oneshot::Sender<UserAnswer>>>,
+
+    // 当前 run 的控制点
+    active_run: AtomicBool,
+    cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
+    pending_inputs: Mutex<Option<PendingInputs>>,
+
+    // 当前 run mode（每次 run_turn 读取，heb mode 命令更新）
+    run_mode: Mutex<RunMode>,
+
+    // 新 turn 输入通道
+    input_tx: mpsc::UnboundedSender<String>,
+
+    permission_store: Option<Arc<PermissionStore>>,
+}
+
+impl DaemonState {
+    fn emit(&self, event: &DaemonEvent) {
+        if let Ok(line) = serde_json::to_string(event) {
+            println!("{line}");
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.active_run.load(Ordering::SeqCst)
+    }
+
+    fn set_active(&self, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
+        *self.cancel_flag.lock().unwrap() = Some(cancel);
+        *self.pending_inputs.lock().unwrap() = Some(inputs);
+        self.active_run.store(true, Ordering::SeqCst);
+    }
+
+    fn clear_active(&self) {
+        *self.cancel_flag.lock().unwrap() = None;
+        *self.pending_inputs.lock().unwrap() = None;
+        self.active_run.store(false, Ordering::SeqCst);
+    }
+
+    fn inject(&self, text: String) -> bool {
+        if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
+            inputs
+                .lock()
+                .unwrap()
+                .push(PendingUserInput { content: text, attachments: Vec::new() });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn stop(&self) {
+        if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+// ─── Observer ──────────────────────────────────────────────────────────────
+
+/// turn 级数据（每次 run_turn 新建）——追踪 assistant 输出以便落盘
+struct TurnData {
+    full_text: String,
+    tool_calls: Vec<MessageToolCall>,
+    parts: Vec<MessagePart>,
+    // 当前正在收集的工具调用（call_id → (name, input)）
+    pending_tools: HashMap<String, (String, Value)>,
+}
+
+impl TurnData {
+    fn new() -> Self {
+        Self {
+            full_text: String::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            pending_tools: HashMap::new(),
+        }
+    }
+
+    fn handle_event(&mut self, payload: &EventPayload) {
+        match payload {
+            EventPayload::Reasoning { text } => {
+                self.parts.push(MessagePart::Reasoning { text: text.clone() });
+            }
+            EventPayload::TextDone { full_text } => {
+                self.full_text = full_text.clone();
+                // 把最终文字同步进 parts
+                self.parts.retain(|p| !matches!(p, MessagePart::Text { .. }));
+                self.parts.push(MessagePart::Text { text: full_text.clone() });
+            }
+            EventPayload::ToolCallStarted { call_id, name, input, .. } => {
+                self.pending_tools
+                    .insert(call_id.clone(), (name.clone(), input.clone()));
+            }
+            EventPayload::ToolCallFinished { call_id, result, duration_ms, .. } => {
+                if let Some((name, input)) = self.pending_tools.remove(call_id) {
+                    let tc = MessageToolCall {
+                        id: call_id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                        result: Some(result.clone()),
+                        duration_ms: Some(*duration_ms),
+                    };
+                    self.tool_calls.push(tc.clone());
+                    self.parts.push(MessagePart::ToolCall {
+                        id: call_id.clone(),
+                        name,
+                        input,
+                        arguments: String::new(),
+                        result: Some(result.clone()),
+                        duration_ms: Some(*duration_ms),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn build_message(self) -> Option<Message> {
+        if self.full_text.is_empty() && self.tool_calls.is_empty() {
+            return None;
+        }
+        Some(Message {
+            id: sessions::new_id(),
+            role: Role::Assistant,
+            content: self.full_text,
+            attachments: Vec::new(),
+            tool_calls: self.tool_calls,
+            parts: self.parts,
+            created_at: Utc::now().timestamp_millis(),
+            meta: None,
+        })
+    }
+}
+
+struct DaemonObserver {
+    state: Arc<DaemonState>,
+    turn: TurnData,
+}
+
+impl DaemonObserver {
+    fn new(state: Arc<DaemonState>) -> Self {
+        Self { state, turn: TurnData::new() }
+    }
+}
+
+#[async_trait]
+impl TurnObserver for DaemonObserver {
+    fn on_event(&mut self, event: &AgentEvent) {
+        self.turn.handle_event(&event.payload);
+        if let Some(ev) = translate_event(&event.payload) {
+            self.state.emit(&ev);
+        }
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        request_id: &PermissionRequestId,
+        _kind: &PermissionKind,
+        _summary: &str,
+    ) -> Option<ApprovalDecision> {
+        let (tx, rx) = oneshot::channel();
+        self.state
+            .pending_approvals
+            .lock()
+            .unwrap()
+            .insert(request_id.as_str().to_string(), tx);
+        // PermissionRequested event 已由 on_event 推到 stdout，这里只等待回应
+        rx.await.ok()
+    }
+
+    async fn on_question(
+        &mut self,
+        request_id: &PermissionRequestId,
+        _question: &str,
+        _options: &[QuestionOption],
+        _multi: bool,
+    ) -> Option<UserAnswer> {
+        let (tx, rx) = oneshot::channel();
+        self.state
+            .pending_questions
+            .lock()
+            .unwrap()
+            .insert(request_id.as_str().to_string(), tx);
+        rx.await.ok()
+    }
+}
+
+fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
+    match payload {
+        EventPayload::RunStarted { .. } => Some(DaemonEvent::RunStarted),
+        EventPayload::RunFinished {
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_tokens,
+            duration_ms,
+            ..
+        } => Some(DaemonEvent::RunFinished {
+            input_tokens: *total_input_tokens,
+            output_tokens: *total_output_tokens,
+            cache_read_tokens: *total_cache_read_tokens,
+            duration_ms: *duration_ms,
+        }),
+        EventPayload::RunFailed { error } => {
+            Some(DaemonEvent::RunFailed { error: error.message.clone() })
+        }
+        EventPayload::RunCancelled => Some(DaemonEvent::RunCancelled),
+        EventPayload::RunSuspended { reason, .. } => {
+            Some(DaemonEvent::RunSuspended { reason: format!("{reason:?}") })
+        }
+        EventPayload::RunResumed { cause } => {
+            Some(DaemonEvent::RunResumed { cause: format!("{cause:?}") })
+        }
+        EventPayload::TextDelta { text } => Some(DaemonEvent::TextDelta { text: text.clone() }),
+        EventPayload::TextDone { full_text } => {
+            Some(DaemonEvent::TextDone { full_text: full_text.clone() })
+        }
+        EventPayload::Reasoning { text } => Some(DaemonEvent::Reasoning { text: text.clone() }),
+        EventPayload::ToolCallStarted { call_id, name, input, .. } => {
+            Some(DaemonEvent::ToolStart {
+                id: call_id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            })
+        }
+        EventPayload::ToolCallFinished { call_id, result, duration_ms, .. } => {
+            Some(DaemonEvent::ToolDone {
+                id: call_id.clone(),
+                result: result.chars().take(500).collect(),
+                duration_ms: *duration_ms,
+            })
+        }
+        EventPayload::PermissionRequested { request_id, kind, summary, risk } => {
+            let (tool_name, kind_str) = match kind {
+                PermissionKind::ToolCall { tool_name, .. } => {
+                    (tool_name.clone(), "tool_call".to_string())
+                }
+                PermissionKind::PathAccess { tool_name, .. } => {
+                    (tool_name.clone(), "path_access".to_string())
+                }
+                PermissionKind::Plan { .. } => ("plan".to_string(), "plan".to_string()),
+                PermissionKind::ContinueLongRun { .. } => {
+                    ("continue_long_run".to_string(), "continue_long_run".to_string())
+                }
+            };
+            Some(DaemonEvent::PermissionRequested {
+                request_id: request_id.as_str().to_string(),
+                kind: kind_str,
+                tool_name,
+                summary: summary.clone(),
+                risk: format!("{risk:?}"),
+            })
+        }
+        EventPayload::PermissionResolved { request_id, decision } => {
+            Some(DaemonEvent::PermissionResolved {
+                request_id: request_id.as_str().to_string(),
+                decision: format!("{decision:?}"),
+            })
+        }
+        EventPayload::UserQuestionRequested { request_id, question, options, multi } => {
+            Some(DaemonEvent::QuestionRequested {
+                request_id: request_id.as_str().to_string(),
+                question: question.clone(),
+                options: options
+                    .iter()
+                    .map(|o| QuestionOptionDto {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                    })
+                    .collect(),
+                multi: *multi,
+            })
+        }
+        EventPayload::UserQuestionAnswered { request_id, .. } => {
+            Some(DaemonEvent::QuestionAnswered { request_id: request_id.as_str().to_string() })
+        }
+        EventPayload::RunModeChanged { from, to } => {
+            Some(DaemonEvent::RunModeChanged { from: from.clone(), to: to.clone() })
+        }
+        _ => None,
+    }
+}
+
+// ─── NamedModelClient ──────────────────────────────────────────────────────
+
+struct NamedModelClient {
+    inner: DynModelClient,
+    model: String,
+    reasoning: Option<common::ReasoningConfig>,
+}
+
+impl NamedModelClient {
+    fn new(
+        inner: DynModelClient,
+        model: String,
+        reasoning: Option<common::ReasoningConfig>,
+    ) -> Self {
+        Self { inner, model, reasoning }
+    }
+
+    fn patch(&self, mut req: ModelRequest) -> ModelRequest {
+        req.model = self.model.clone();
+        if req.reasoning.is_none() {
+            req.reasoning = self.reasoning.clone();
+        }
+        req
+    }
+}
+
+#[async_trait]
+impl ModelClient for NamedModelClient {
+    fn provider_id(&self) -> &str {
+        self.inner.provider_id()
+    }
+    fn supports_streaming_tools(&self) -> bool {
+        self.inner.supports_streaming_tools()
+    }
+    async fn complete(
+        &self,
+        req: ModelRequest,
+        cancel: common::CancelFlag,
+    ) -> Result<ModelResponse, ModelError> {
+        self.inner.complete(self.patch(req), cancel).await
+    }
+    async fn stream(
+        &self,
+        req: ModelRequest,
+        cancel: common::CancelFlag,
+        on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+    ) -> Result<ModelResponse, ModelError> {
+        self.inner.stream(self.patch(req), cancel, on_event).await
+    }
+}
+
+// ─── run_turn ──────────────────────────────────────────────────────────────
+
+/// 一次完整的用户输入 → agent run → assistant 持久化流程
+async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
+    let data_dir = &state.data_dir;
+    let session_id = &state.session_id;
+
+    // 加载 session（transcript 从 jsonl 重建）
+    let prior = sessions::load(data_dir, session_id)?;
+
+    // 持久化 user message
+    let user_msg = Message {
+        id: sessions::new_id(),
+        role: Role::User,
+        content: user_text.clone(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: Utc::now().timestamp_millis(),
+        meta: None,
+    };
+    sessions::append_message(data_dir, session_id, user_msg)?;
+
+    // 构建 model client
+    let providers_file = providers::load(data_dir)?;
+    let provider = providers_file
+        .providers
+        .iter()
+        .find(|p| p.id == state.provider_id)
+        .ok_or_else(|| anyhow!("provider {} 不存在，请先在 desktop 配置", state.provider_id))?
+        .clone();
+    let provider =
+        model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+            .await
+            .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
+    let inner = model_gateway::build_client(provider)
+        .map_err(|e| anyhow!("构建 model client 失败: {e}"))?;
+    let client: Arc<dyn ModelClient> =
+        Arc::new(NamedModelClient::new(inner, state.model.clone(), state.reasoning.clone()));
+
+    // Workspace
+    let settings = settings_store::load(data_dir);
+    let workdir = prior
+        .workdir
+        .clone()
+        .or_else(|| settings.conversation.workdir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let allowed_paths = prior
+        .allowed_paths
+        .clone()
+        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
+    let workspace = Workspace::with_runtime_state(
+        workdir.clone(),
+        allowed_paths,
+        prior.runtime_allowed_paths.clone(),
+        prior.pending_runtime_allowed_paths.clone(),
+    );
+
+    // Skill dirs
+    let skill_dirs = {
+        let configured = prior
+            .skill_dirs
+            .clone()
+            .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
+        if configured.is_empty() { default_skill_dirs(&workdir) } else { configured }
+    };
+
+    // Phase channel + background shells
+    let phase = agent_core::wakeup::new_phase_channel();
+    let shells = background::registry_for_session(session_id);
+    agent_core::wakeup::WakeupScheduler::global()
+        .register_session_shells(session_id.clone(), shells.clone());
+
+    // Hooks
+    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
+    let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
+
+    // bg log dir + ReadStateTracker + EditsWorktree
+    let bg_log_dir = Some(sessions_dir::bg_dir(data_dir, session_id));
+    let read_state_tracker = Arc::new(ReadStateTracker::new());
+    let edits_worktree = Arc::new(EditsWorktree::new(data_dir, session_id, &workspace));
+
+    // Harness
+    let harness = Arc::new(Harness::new(
+        agent_core::tools::default_tools(
+            workspace.clone(),
+            &skill_dirs,
+            bg_log_dir,
+            phase.clone(),
+            shells,
+            Some(data_dir.to_path_buf()),
+            Some(session_id.clone()),
+            Some(read_state_tracker),
+        ),
+        HookManager::new(external_hooks),
+    ));
+
+    // model IO dump
+    let model_io_dump =
+        agent_core::model_io_dump::open_for_session_if_enabled(data_dir, session_id).await;
+
+    // PermissionStore session view（幂等初始化，不覆盖已有规则）
+    if let Some(store) = &state.permission_store {
+        store.ensure_session_view(session_id);
+    }
+
+    // ExitPlanMode 通过 env var 拿 data_dir + session_id
+    std::env::set_var(
+        agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
+        data_dir.to_string_lossy().to_string(),
+    );
+    std::env::set_var(agent_core::tools::exit_plan_mode::ENV_SESSION_ID, session_id);
+
+    let run_mode = *state.run_mode.lock().unwrap();
+    let enabled_tools = prior
+        .enabled_tools
+        .clone()
+        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
+    let global_rules = prior
+        .global_rules
+        .clone()
+        .unwrap_or_else(|| settings.conversation.global_rules.clone());
+    let rules_files = prior.rules_files.clone();
+
+    let mut core_session = CoreSession::new(
+        harness,
+        SessionConfig {
+            definition: AgentDefinition::default(),
+            workspace: workspace.clone(),
+            client,
+            enabled_tools,
+            initial_transcript: Transcript::from_session(
+                prior.system_prompt.clone(),
+                &prior.messages,
+            ),
+            recorder: None,
+            model_io_dump,
+            permission_store: state.permission_store.clone(),
+            session_id: Some(session_id.clone()),
+            run_mode,
+            model_id: Some(state.model.clone()),
+            force_automode: false,
+            data_dir: Some(data_dir.to_path_buf()),
+            phase: Some(phase),
+            global_rules,
+            rules_files,
+            edits_worktree: Some(edits_worktree),
+        },
+    );
+    core_session.append_user(user_text, Vec::new());
+
+    // 运行时控制点
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+    let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
+    state.set_active(cancel_flag.clone(), pending_inputs.clone());
+
+    let mut handle = core_session.run_with_runtime_inputs(
+        cancel_flag,
+        Some(pending_inputs),
+        Some(consumed_inputs.clone()),
+    );
+
+    let mut observer = DaemonObserver::new(state.clone());
+    let summary = handle.drive(&mut observer).await;
+
+    state.clear_active();
+
+    // 把这轮 token 用量累加进 session.json（失败不传染）
+    if let Some(usage) = summary.usage {
+        if let Ok(mut sess) = sessions::load(data_dir, session_id) {
+            let mut stats = sess.token_stats.unwrap_or_default();
+            stats.accumulate(TokenStats {
+                input_tokens: usage.input,
+                output_tokens: usage.output,
+                cache_read_tokens: usage.cache_read,
+                cache_creation_tokens: usage.cache_creation,
+                run_count: 1,
+            });
+            sess.token_stats = Some(stats);
+            let _ = sessions::save(data_dir, sess);
+        }
+    }
+
+    // 持久化插队的 user 消息（consumed_pending_inputs）
+    let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
+
+    match summary.outcome {
+        TurnOutcome::Done => {
+            // 先持久化 assistant，再持久化注入的 user messages
+            if let Some(msg) = observer.turn.build_message() {
+                sessions::append_message(data_dir, session_id, msg)?;
+            }
+            for input in consumed {
+                sessions::append_message(
+                    data_dir,
+                    session_id,
+                    Message {
+                        id: sessions::new_id(),
+                        role: Role::User,
+                        content: input.content,
+                        attachments: input.attachments,
+                        tool_calls: Vec::new(),
+                        parts: Vec::new(),
+                        created_at: Utc::now().timestamp_millis(),
+                        meta: None,
+                    },
+                )?;
+            }
+        }
+        TurnOutcome::Cancelled => {
+            state.emit(&DaemonEvent::Error { message: "run 已取消".to_string() });
+        }
+        TurnOutcome::Failed(err) => {
+            state.emit(&DaemonEvent::Error { message: err });
+        }
+    }
+
+    Ok(())
+}
+
+// ─── IPC 命令处理 ──────────────────────────────────────────────────────────
+
+async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse {
+    match cmd {
+        IpcCommand::Send { text } => {
+            if state.is_active() {
+                // 注入当前 run
+                if state.inject(text) {
+                    IpcResponse::ok()
+                } else {
+                    IpcResponse::err("注入失败：无活跃 pending_inputs")
+                }
+            } else {
+                // 发给输入 channel，启动新 run
+                if state.input_tx.send(text).is_ok() {
+                    IpcResponse::ok()
+                } else {
+                    IpcResponse::err("daemon 输入通道已关闭")
+                }
+            }
+        }
+        IpcCommand::Inject { text } => {
+            if state.inject(text) {
+                IpcResponse::ok()
+            } else {
+                IpcResponse::err("无活跃 run，无法注入")
+            }
+        }
+        IpcCommand::Allow { request_id, scope } => {
+            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
+            match tx {
+                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
+                Some(tx) => {
+                    let decision = match scope.as_str() {
+                        "session" => ApprovalDecision::AllowAndRemember {
+                            scope: PermissionScope::Session,
+                            pattern: None,
+                        },
+                        "project" => ApprovalDecision::AllowAndRemember {
+                            scope: PermissionScope::Project,
+                            pattern: None,
+                        },
+                        "global" => ApprovalDecision::AllowAndRemember {
+                            scope: PermissionScope::Global,
+                            pattern: None,
+                        },
+                        _ => ApprovalDecision::AllowOnce,
+                    };
+                    let _ = tx.send(decision);
+                    IpcResponse::ok()
+                }
+            }
+        }
+        IpcCommand::Deny { request_id } => {
+            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
+            match tx {
+                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
+                Some(tx) => {
+                    let _ = tx.send(ApprovalDecision::Deny);
+                    IpcResponse::ok()
+                }
+            }
+        }
+        IpcCommand::DenyWithFeedback { request_id, feedback } => {
+            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
+            match tx {
+                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
+                Some(tx) => {
+                    let _ = tx.send(ApprovalDecision::DenyWithFeedback { feedback });
+                    IpcResponse::ok()
+                }
+            }
+        }
+        IpcCommand::Answer { request_id, kind, value } => {
+            let tx = state.pending_questions.lock().unwrap().remove(&request_id);
+            match tx {
+                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
+                Some(tx) => {
+                    let answer = match kind.as_str() {
+                        "cancelled" => UserAnswer::Cancelled,
+                        "custom" => UserAnswer::Custom { text: value },
+                        _ => UserAnswer::Selected { label: value },
+                    };
+                    let _ = tx.send(answer);
+                    IpcResponse::ok()
+                }
+            }
+        }
+        IpcCommand::Stop => {
+            state.stop();
+            IpcResponse::ok()
+        }
+        IpcCommand::Mode { mode } => {
+            match RunMode::parse(&mode) {
+                Some(m) => {
+                    *state.run_mode.lock().unwrap() = m;
+                    IpcResponse::ok()
+                }
+                None => IpcResponse::err(format!(
+                    "无效 mode：{mode}（ask-before-edits | edit-automatically | plan-mode | auto-mode）"
+                )),
+            }
+        }
+        IpcCommand::Ping => {
+            IpcResponse::with_data(serde_json::json!({ "session_id": state.session_id }))
+        }
+    }
+}
+
+// ─── socket 单连接处理 ─────────────────────────────────────────────────────
+
+async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
+    let (reader, mut writer) = stream.into_split();
+    let mut buf = BufReader::new(reader);
+    let mut line = String::new();
+
+    if buf.read_line(&mut line).await.is_err() {
+        return;
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let response = match serde_json::from_str::<IpcCommand>(trimmed) {
+        Ok(cmd) => handle_command(state, cmd).await,
+        Err(e) => IpcResponse::err(format!("命令解析失败：{e}")),
+    };
+
+    if let Ok(resp_line) = serde_json::to_string(&response) {
+        let _ = writer.write_all(resp_line.as_bytes()).await;
+        let _ = writer.write_all(b"\n").await;
+        let _ = writer.flush().await;
+    }
+}
+
+// ─── 入口 ──────────────────────────────────────────────────────────────────
+
+pub async fn run(args: DaemonArgs) -> Result<()> {
+    let data_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(agent_core::storage::default_data_dir);
+    std::fs::create_dir_all(&data_dir)?;
+
+    // ── 解析 provider / model ──
+    let providers_file = providers::load(&data_dir)?;
+    let (provider_id, model) = resolve_provider_model(&providers_file, args.provider.as_deref(), args.model.as_deref())?;
+
+    // ── session ──
+    let session_id = match args.session_id {
+        Some(id) => {
+            // 验证 session 存在
+            sessions::load(&data_dir, &id).map_err(|e| anyhow!("session {id} 不存在：{e}"))?;
+            id
+        }
+        None => {
+            // 创建新 session
+            let mut session = sessions::create_with_source(
+                &data_dir,
+                provider_id.clone(),
+                model.clone(),
+                None,
+                None,
+                "cli".to_string(),
+            )?;
+            // 把 --workdir 写进 session（session.workdir 是 Option<PathBuf>）
+            if let Some(wd) = args.workdir.clone() {
+                session.workdir = Some(wd);
+                session = sessions::save(&data_dir, session)?;
+            }
+            // 初始化 session 目录结构
+            sessions_dir::ensure_session_dirs(&data_dir, &session.id)?;
+            sessions_dir::save_meta(
+                &data_dir,
+                &sessions_dir::SessionDirMeta {
+                    session_id: session.id.clone(),
+                    created_at: session.created_at,
+                    agent: session.prompt_id.clone().unwrap_or_default(),
+                    workdir: session.workdir.clone(),
+                    provider: session.provider_id.clone(),
+                    model: session.model.clone(),
+                    last_interrupted_at: None,
+                },
+            )?;
+            session.id
+        }
+    };
+
+    // ── run mode ──
+    let run_mode = RunMode::parse(&args.run_mode).unwrap_or(RunMode::AskBeforeEdits);
+
+    // ── permission store ──
+    let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
+
+    // ── socket ──
+    let socket_dir = data_dir.join("cli-sockets");
+    std::fs::create_dir_all(&socket_dir)?;
+    let sock_path = socket_path(&session_id);
+    // 清理旧 socket 文件（进程退出残留）
+    let _ = std::fs::remove_file(&sock_path);
+    let listener = UnixListener::bind(&sock_path)?;
+
+    // ── 输入通道 ──
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<String>();
+
+    let state = Arc::new(DaemonState {
+        session_id: session_id.clone(),
+        data_dir: data_dir.clone(),
+        provider_id,
+        model,
+        reasoning: None,
+        pending_approvals: Mutex::new(HashMap::new()),
+        pending_questions: Mutex::new(HashMap::new()),
+        active_run: AtomicBool::new(false),
+        cancel_flag: Mutex::new(None),
+        pending_inputs: Mutex::new(None),
+        run_mode: Mutex::new(run_mode),
+        input_tx,
+        permission_store,
+    });
+
+    // ── 宣告启动 ──
+    state.emit(&DaemonEvent::Started { session_id: session_id.clone() });
+
+    // ── 接收 IPC 连接（独立 task）──
+    let state_for_ipc = state.clone();
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let s = state_for_ipc.clone();
+                    tokio::spawn(handle_connection(stream, s));
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Unix socket accept 失败");
+                    break;
+                }
+            }
+        }
+    });
+
+    // ── 主循环：依次处理每条输入 ──
+    while let Some(text) = input_rx.recv().await {
+        if let Err(e) = run_turn(state.clone(), text).await {
+            state.emit(&DaemonEvent::Error { message: e.to_string() });
+        }
+    }
+
+    // 清理 socket 文件
+    let _ = std::fs::remove_file(&sock_path);
+    Ok(())
+}
+
+// ─── 辅助：解析 provider/model ─────────────────────────────────────────────
+
+fn resolve_provider_model(
+    file: &model_gateway::config::ProvidersFile,
+    provider_arg: Option<&str>,
+    model_arg: Option<&str>,
+) -> Result<(String, String)> {
+    let provider_key = match provider_arg {
+        Some(arg) => arg.rsplit_once('/').map(|(p, _)| p).unwrap_or(arg),
+        None => file
+            .default_provider_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("未指定 --provider 且无默认 provider（先在 desktop 配置）"))?,
+    };
+    let model_from_arg = provider_arg.and_then(|a| a.rsplit_once('/').map(|(_, m)| m));
+
+    let provider = file
+        .providers
+        .iter()
+        .find(|p| p.id == provider_key || p.name == provider_key)
+        .ok_or_else(|| anyhow!("provider 不存在：{provider_key}"))?;
+
+    let model = model_arg
+        .map(str::to_string)
+        .or_else(|| model_from_arg.map(str::to_string))
+        .or_else(|| provider.default_model.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "未指定 model（用 --model 或 --provider {}/model_id）",
+                provider.name
+            )
+        })?;
+
+    Ok((provider.id.clone(), model))
+}

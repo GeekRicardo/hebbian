@@ -1988,4 +1988,39 @@
   - `cargo test -p agent-core --lib` 通过（209 项）
 - **影响范围**: agent-core 的 session → model transcript 转换；不改协议、不改 session/jsonl 落盘格式、不改 Desktop UI。历史里已有的半截 tool_call 仍可显示给用户，但不会再破坏下一次模型请求。
 - **留尾巴**:
-  - `partial_to_interrupted_message` / failed output 仍会把未完成 tool_call 存到 UI 历史里。当前修复选择在 transcript 边界过滤，避免迁移旧数据；后续如果要在 UI 上明确标出“未执行/中断”，可给 `MessagePart::ToolCall` 增加状态字段或用 meta 标记，但那会改持久化语义。
+  - `partial_to_interrupted_message` / failed output 仍会把未完成 tool_call 存到 UI 历史里。当前修复选择在 transcript 边界过滤，避免迁移旧数据；后续如果要在 UI 上明确标出”未执行/中断”，可给 `MessagePart::ToolCall` 增加状态字段或用 meta 标记，但那会改持久化语义。
+
+---
+
+## 2026-05-20 新增 `apps/cli` daemon CLI surface（`heb` 命令）
+
+- **Why**: 需要一个自动化调试工具，让 AI 可以用纯命令行方式驱动 agent_core，等价于手动操作 Desktop 的所有交互点（发消息、审批权限、回答提问、停止、注入、切 mode）。独立进程 + Unix socket IPC 使 AI 可以在一个终端 tail 事件流，在另一个终端发命令。
+- **设计**:
+  - `heb new` 启动 daemon：创建（或连接已有）session，绑定 Unix socket `~/.hebbian/cli-sockets/<session-id>.sock`，向 stdout 持续输出 NDJSON 事件流（`started → run_started → text_delta → … → run_finished`）
+  - 所有 agent_core 交互点均有对应子命令：`input / allow / deny / deny-feedback / answer / stop / mode / ping`
+  - `input` 智能路由：有活跃 run 时注入（等价于 Desktop 的「立即发送」），无活跃 run 时开新 run
+  - HITL 用 tokio oneshot channel：`on_permission_request` 阻塞等待 IPC `allow/deny` 命令；`on_question` 同理等待 `answer` 命令；harness 自动调 `resolve_permission`，不需要绕过 HitlGate
+  - 与 Desktop 同共享 `~/.hebbian/` 数据目录，session history / permissions / providers 全部互通
+- **改动**:
+  - [Cargo.toml](../Cargo.toml): 把 `apps/cli` 加回 workspace members（此前 2026-05-13 以”历史档案”排除）
+  - [apps/cli/Cargo.toml](../apps/cli/Cargo.toml): 精简依赖（移除 ratatui / rustyline / inquire 等 TUI 依赖，只保留 daemon 所需的 tokio / clap / serde_json / anyhow 等）
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 完全重写，纯 clap 子命令路由，无交互逻辑
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs): 新建，定义 IpcCommand / IpcResponse / DaemonEvent 三个协议类型
+  - [apps/cli/src/client.rs](../apps/cli/src/client.rs): 新建，向 daemon socket 发单条命令并等待响应
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): 新建，daemon 主体——DaemonState 共享状态、DaemonObserver（TurnObserver 实现）、run_turn 函数（与 desktop chat.rs send_and_save 等价逻辑）、Unix socket 监听循环
+- **影响范围**: 新增 `apps/cli` crate；不改 agent-core / protocol / desktop；与 Desktop 共享 `~/.hebbian/` 无冲突（文件锁保护）
+- **留尾巴**:
+  - 旧的 `apps/cli/src/{session.rs,render.rs,tui/,mock_provider.rs}` 文件保留在目录但不再被引用（dead code）——可在后续清理，或按需保留作参考
+  - `--workdir` 在 `heb new` 时写进 session.json，但当前 `run_turn` 优先读 session.workdir，所以生效；不过 AllowAndRemember(Project) 审批依赖 workdir 正确，若用户不传 `--workdir` 则回落到全局设置
+  - `mode` 命令只更新下一次 run 的 run_mode，不影响当前 run（当前 run 的 run_mode 在 run_turn 开始时已捕获）
+  - IPC 没有身份验证；socket 文件权限跟随 umask，本地单用户场景足够
+
+### 2026-05-21 — 新增 `docs/heb-cli-debug.md`：AI 自主调试操作手册
+
+- **Why**: 上一条新增的 `heb` daemon CLI 已经验证可用，但没有给 AI 看的"读完即用"文档。AI 想自主驱动 Hebbian 调试时，得在 changelog / 架构.md / 源码之间来回拼，门槛太高。需要一份独立、自包含、起手就能用的操作手册。
+- **改动**:
+  - 新建 [docs/heb-cli-debug.md](heb-cli-debug.md)：一分钟上手 / 完整命令表 / 完整事件表 / 自动审批 pattern / bug 复现 pattern / 数据持久化路径 / 故障速查；后半部分讲原理（IPC 协议、HITL oneshot 阻塞模型、流式中 user message 注入、多轮持久化、cancel 语义、RunMode、与 Desktop 的对称关系）
+- **影响范围**: 仅文档；不动代码、不动协议
+- **留尾巴**:
+  - 文档里 `~/.hebbian/sessions/<SID>/model_io.jsonl` 路径依赖 `HEBBIAN_DUMP_MODEL_IO=1`；若后续 Recorder 全量落盘上线（架构.md §4.9），可把"看模型 IO"小节切到 Recorder 输出
+  - 故障速查里"`run_failed: 400 No tool output found`"引用了同日另一条 changelog 的根因——若那条修复扩大覆盖（partial_to_interrupted_message 也跳过未完成 tool_call），可同步精简故障表
