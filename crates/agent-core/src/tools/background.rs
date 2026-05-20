@@ -115,7 +115,11 @@ impl BackgroundShell {
     }
 
     pub fn state(&self) -> ShellState {
-        self.inner.lock().expect("background shell mutex").state.clone()
+        self.inner
+            .lock()
+            .expect("background shell mutex")
+            .state
+            .clone()
     }
 
     fn append(&self, prefix: Option<&str>, bytes: &[u8]) {
@@ -229,8 +233,9 @@ pub struct BackgroundShells {
 /// 进程内的 `session_id → BackgroundShells` 路由表（**不是**进程级单一注册表）。
 /// 同一 session 多次 chat() 调用拿到同一份 BackgroundShells；不同 session 完全隔离。
 /// CLI 等无 session 的路径直接用 `BackgroundShells::new()`，不入路由表。
-static SESSION_REGISTRY: std::sync::OnceLock<Mutex<std::collections::HashMap<String, BackgroundShells>>> =
-    std::sync::OnceLock::new();
+static SESSION_REGISTRY: std::sync::OnceLock<
+    Mutex<std::collections::HashMap<String, BackgroundShells>>,
+> = std::sync::OnceLock::new();
 
 fn session_registry() -> &'static Mutex<std::collections::HashMap<String, BackgroundShells>> {
     SESSION_REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
@@ -326,11 +331,7 @@ impl BackgroundShells {
         {
             let mut inner = self.inner.lock().expect("background shells mutex");
             if inner.shells.len() >= MAX_BACKGROUND_SHELLS {
-                if let Some(idx) = inner
-                    .shells
-                    .iter()
-                    .position(|s| s.state().is_terminal())
-                {
+                if let Some(idx) = inner.shells.iter().position(|s| s.state().is_terminal()) {
                     inner.shells.remove(idx);
                 }
             }
@@ -540,7 +541,9 @@ mod tests {
         shell.wait_terminal().await;
         // 等 spawn_reader 把缓冲 flush
         for _ in 0..50 {
-            if shell.log_path().and_then(|p| std::fs::read_to_string(p).ok())
+            if shell
+                .log_path()
+                .and_then(|p| std::fs::read_to_string(p).ok())
                 .map(|s| s.contains("hi") && s.contains("oops"))
                 .unwrap_or(false)
             {

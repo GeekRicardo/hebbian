@@ -69,7 +69,8 @@ pub fn load_metadata(worktree_dir: &Path) -> AppResult<EditsMetadata> {
     if s.trim().is_empty() {
         return Ok(EditsMetadata::default());
     }
-    serde_json::from_str(&s).map_err(|e| AppError::msg(format!("解析 .hebbian-edits.json 失败: {e}")))
+    serde_json::from_str(&s)
+        .map_err(|e| AppError::msg(format!("解析 .hebbian-edits.json 失败: {e}")))
 }
 
 /// 保存 metadata（整文件原子写，加排他锁）。
@@ -78,16 +79,14 @@ pub fn save_metadata(worktree_dir: &Path, meta: &EditsMetadata) -> AppResult<()>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json =
-        serde_json::to_string_pretty(meta).map_err(|e| AppError::msg(format!("序列化 metadata: {e}")))?;
+    let json = serde_json::to_string_pretty(meta)
+        .map_err(|e| AppError::msg(format!("序列化 metadata: {e}")))?;
     storage::lock::write_atomic(&path, json.as_bytes())
 }
 
 /// 按 snapshot_id 查找条目。
 pub fn find_entry<'a>(meta: &'a EditsMetadata, snapshot_id: &str) -> Option<&'a EditEntry> {
-    meta.entries
-        .iter()
-        .find(|e| e.snapshot_id == snapshot_id)
+    meta.entries.iter().find(|e| e.snapshot_id == snapshot_id)
 }
 
 /// 按 snapshot_id 查找可变条目。

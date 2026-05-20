@@ -65,8 +65,7 @@ impl ReadTool {
         line_no: usize,
         remainder: &str,
     ) -> Option<String> {
-        let (data_dir, session_id) = match (self.data_dir.as_ref(), self.session_id.as_deref())
-        {
+        let (data_dir, session_id) = match (self.data_dir.as_ref(), self.session_id.as_deref()) {
             (Some(dd), Some(sid)) => (dd, sid),
             _ => return None,
         };
@@ -87,7 +86,8 @@ impl ReadTool {
         let path = dir.join(format!("{:016x}_L{}.txt", file_hash, line_no));
 
         // 按 MAX_LINE_LENGTH 换行
-        let mut wrapped = String::with_capacity(remainder.len() + remainder.len() / MAX_LINE_LENGTH);
+        let mut wrapped =
+            String::with_capacity(remainder.len() + remainder.len() / MAX_LINE_LENGTH);
         let mut chars = remainder.chars();
         loop {
             let chunk: String = chars.by_ref().take(MAX_LINE_LENGTH).collect();
@@ -150,9 +150,7 @@ impl Tool for ReadTool {
             .ok_or_else(|| AppError::msg("Read: 缺少 file_path"))?;
         let file_path = PathBuf::from(file_path_str);
         let offset = input["offset"].as_u64().unwrap_or(1).max(1) as usize;
-        let limit = input["limit"]
-            .as_u64()
-            .unwrap_or(DEFAULT_LIMIT as u64) as usize;
+        let limit = input["limit"].as_u64().unwrap_or(DEFAULT_LIMIT as u64) as usize;
 
         // 文件大小硬上限：避免 agent 误读巨型二进制
         let meta = fs::metadata(&file_path).await.map_err(|e| {
@@ -209,10 +207,7 @@ impl Tool for ReadTool {
                         "{}…[截断，剩余 {} 字符已落盘 {saved_path}]",
                         visible, remainder_len
                     ),
-                    None => format!(
-                        "{}…[截断，剩余 {} 字符]",
-                        visible, remainder_len
-                    ),
+                    None => format!("{}…[截断，剩余 {} 字符]", visible, remainder_len),
                 }
             } else {
                 line.to_string()

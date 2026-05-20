@@ -49,7 +49,12 @@ pub struct RuleFileInfo {
 }
 
 /// 每层目录检查的文件名列表。
-const RULE_FILE_NAMES: &[&str] = &["CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+const RULE_FILE_NAMES: &[&str] = &[
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".claude/CLAUDE.md",
+    "CLAUDE.local.md",
+];
 
 /// 全局规则文件的默认路径列表。
 pub fn default_global_rules() -> Vec<PathBuf> {
@@ -178,11 +183,7 @@ pub fn format_injection(files: &[RuleFile]) -> String {
             RuleSource::Workdir => "project instructions, checked into the codebase",
             RuleSource::AllowedPath => "project instructions from allowed path",
         };
-        s.push_str(&format!(
-            "Contents of {} ({}):\n",
-            f.path.display(),
-            label
-        ));
+        s.push_str(&format!("Contents of {} ({}):\n", f.path.display(), label));
         s.push_str(&f.content);
         s.push('\n');
     }
@@ -305,7 +306,9 @@ mod tests {
         std::fs::write(tmp.path().join("CLAUDE.md"), "").unwrap();
 
         let files = discover(tmp.path(), &[]);
-        assert!(files.iter().all(|f| f.path != canonicalize_lossy(&tmp.path().join("CLAUDE.md"))));
+        assert!(files
+            .iter()
+            .all(|f| f.path != canonicalize_lossy(&tmp.path().join("CLAUDE.md"))));
     }
 
     #[test]
@@ -369,8 +372,7 @@ mod tests {
             path: md.clone(),
             enabled: true,
         }];
-        let files =
-            resolve_injection_files(&[], Some(&states), tmp.path(), &[]);
+        let files = resolve_injection_files(&[], Some(&states), tmp.path(), &[]);
         assert!(files.iter().any(|f| f.content.contains("explicit")));
     }
 
@@ -384,8 +386,7 @@ mod tests {
             path: md.clone(),
             enabled: false,
         }];
-        let files =
-            resolve_injection_files(&[], Some(&states), tmp.path(), &[]);
+        let files = resolve_injection_files(&[], Some(&states), tmp.path(), &[]);
         assert!(!files.iter().any(|f| f.content.contains("disabled")));
     }
 }

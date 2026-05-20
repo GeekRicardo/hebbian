@@ -14,15 +14,7 @@
 use model_gateway::types::{ToolResult, TranscriptEntry};
 
 /// 进入压缩白名单的工具名称。这些工具的结果"看过就没用"，token 大头。
-const COMPACTABLE_TOOLS: &[&str] = &[
-    "Bash",
-    "Read",
-    "Grep",
-    "Glob",
-    "Edit",
-    "Fetch",
-    "WebSearch",
-];
+const COMPACTABLE_TOOLS: &[&str] = &["Bash", "Read", "Grep", "Glob", "Edit", "Fetch", "WebSearch"];
 
 /// 占位符内容。够短，模型也能从字面意思理解"这条结果已被压缩"。
 pub const SHADOWED_PLACEHOLDER: &str = "[结果已被压缩]";

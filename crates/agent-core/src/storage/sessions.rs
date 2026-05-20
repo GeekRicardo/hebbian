@@ -36,8 +36,8 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::run_mode::RunMode;
 use crate::rules::RuleFileState;
+use crate::run_mode::RunMode;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -1503,7 +1503,10 @@ mod tests {
         let loaded = load(&dir, &session.id).unwrap();
         assert_eq!(loaded.project_id.as_deref(), Some("proj-1"));
         assert_eq!(loaded.workdir, Some(PathBuf::from("/tmp/project")));
-        assert_eq!(loaded.allowed_paths, Some(vec![PathBuf::from("/tmp/extra")]));
+        assert_eq!(
+            loaded.allowed_paths,
+            Some(vec![PathBuf::from("/tmp/extra")])
+        );
     }
 
     #[test]

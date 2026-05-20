@@ -187,18 +187,11 @@ impl EditsWorktree {
     /// 取某个 commit 上的文件镜像内容（`git show <sha>:<path>`）。
     pub async fn get_file_at_sha(&self, sha: &str, real_path: &Path) -> AppResult<String> {
         let rel = self.mirrored_path_relative(real_path);
-        run_git(
-            &self.worktree_dir,
-            &["show", &format!("{sha}:{rel}")],
-        )
-        .await
+        run_git(&self.worktree_dir, &["show", &format!("{sha}:{rel}")]).await
     }
 
     /// 取 entry 对应的 before / after 文本内容。
-    pub async fn diff_text(
-        &self,
-        entry: &EditEntry,
-    ) -> AppResult<(String, String)> {
+    pub async fn diff_text(&self, entry: &EditEntry) -> AppResult<(String, String)> {
         let real_path = Path::new(&entry.real_path);
         let before = self.get_file_at_sha(&entry.before_sha, real_path).await?;
         let after = self.get_file_at_sha(&entry.after_sha, real_path).await?;
@@ -272,18 +265,9 @@ impl EditsWorktree {
         run_git(&self.worktree_dir, &["rev-parse", "HEAD"]).await
     }
 
-    async fn git_diff(
-        &self,
-        from_sha: &str,
-        to_sha: &str,
-        real_path: &Path,
-    ) -> AppResult<String> {
+    async fn git_diff(&self, from_sha: &str, to_sha: &str, real_path: &Path) -> AppResult<String> {
         let rel = self.mirrored_path_relative(real_path);
-        run_git(
-            &self.worktree_dir,
-            &["diff", from_sha, to_sha, "--", &rel],
-        )
-        .await
+        run_git(&self.worktree_dir, &["diff", from_sha, to_sha, "--", &rel]).await
     }
 
     async fn git_apply(&self, patch_file: &Path) -> AppResult<()> {

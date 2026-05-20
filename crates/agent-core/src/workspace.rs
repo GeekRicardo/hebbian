@@ -209,11 +209,7 @@ fn dedup(mut v: Vec<PathBuf>) -> Vec<PathBuf> {
 fn is_unrestricted_device(path: &Path) -> bool {
     let s = path.to_string_lossy();
     // Unix device files — writing to null/zero is discarded, reading is EOF/zeros
-    if s == "/dev/null"
-        || s == "/dev/zero"
-        || s == "/dev/random"
-        || s == "/dev/urandom"
-    {
+    if s == "/dev/null" || s == "/dev/zero" || s == "/dev/random" || s == "/dev/urandom" {
         return true;
     }
     // Windows null device

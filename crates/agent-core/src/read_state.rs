@@ -45,13 +45,13 @@ impl ReadStateTracker {
 
     /// 记录一次 Read 或 Edit 之后的最新状态。
     pub fn record(&self, path: &Path, content_hash: u64, mtime_ms: i64) {
-        self.states
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), ReadState {
+        self.states.lock().unwrap().insert(
+            path.to_path_buf(),
+            ReadState {
                 content_hash,
                 mtime_ms,
-            });
+            },
+        );
     }
 
     /// Edit 前置检查。`current_mtime_ms` 是磁盘上**当下**的 mtime（调用方负责取）。

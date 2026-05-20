@@ -378,10 +378,10 @@ impl PermissionStore {
         if let Some(sid) = session_id {
             let session_rules = self.session_rules.lock().unwrap();
             if let Some(rules) = session_rules.get(sid) {
-                if rules
-                    .iter()
-                    .any(|r| r.decision == PermissionDecisionKind::Allow && r.matcher.matches(None, Some(path)))
-                {
+                if rules.iter().any(|r| {
+                    r.decision == PermissionDecisionKind::Allow
+                        && r.matcher.matches(None, Some(path))
+                }) {
                     return true;
                 }
             }
@@ -447,8 +447,7 @@ impl PermissionStore {
                 let file = permissions_store::PermissionsFile { rules: g.clone() };
                 permissions_store::save(&self.data_dir, &file)?;
                 // 写完更新 mtime 缓存，避免触发自身的"已变更" reload。
-                *self.last_loaded_mtime.lock().unwrap() =
-                    permissions_store::mtime(&self.data_dir);
+                *self.last_loaded_mtime.lock().unwrap() = permissions_store::mtime(&self.data_dir);
                 Ok(())
             }
         }
@@ -633,10 +632,7 @@ mod tests {
         let dir = tmp("ensure");
         let store = PermissionStore::open(&dir).unwrap();
         let sid = "s1";
-        store.load_session_rules(
-            sid,
-            vec![bash_rule("cd", PermissionScope::Session)],
-        );
+        store.load_session_rules(sid, vec![bash_rule("cd", PermissionScope::Session)]);
         // ensure 在已存在视图时必须保留规则——这是 chat.rs bug 修复的核心保证
         store.ensure_session_view(sid);
         assert_eq!(
