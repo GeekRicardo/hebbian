@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
 import type { MessageAttachment } from "@/desktop/ui/types";
 import { cn } from "@/desktop/ui/lib/utils";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
+import { FullscreenPortal } from "@/desktop/ui/components/DiffPanel";
 import { nextPreviewZoom } from "@/desktop/ui/lib/imagePreviewZoom";
 
 type Variant = "composer" | "compact" | "gallery";
@@ -60,14 +60,14 @@ export function AttachmentPreviewStrip({
   return (
     <>
       <div className={cn("flex flex-wrap gap-1.5", className)}>{content}</div>
-      {preview &&
-        createPortal(
+      {preview && (
+        <FullscreenPortal>
           <ImagePreviewOverlay
             image={preview}
             onClose={() => setPreview(null)}
-          />,
-          document.body
-        )}
+          />
+        </FullscreenPortal>
+      )}
     </>
   );
 }
@@ -177,7 +177,7 @@ function ImagePreviewOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-black/80 p-4"
+      className="pointer-events-auto absolute inset-0 flex items-center justify-center overflow-hidden bg-foreground/40 p-4"
       role="dialog"
       aria-modal="true"
       aria-label={image.name}
@@ -200,7 +200,7 @@ function ImagePreviewOverlay({
         <img
           src={image.src}
           alt={image.name}
-          className="max-h-[calc(100vh-6rem)] max-w-[calc(100vw-2rem)] rounded-md object-contain shadow-2xl transition-transform duration-100"
+          className="max-h-full max-w-full rounded-md object-contain shadow-2xl transition-transform duration-100"
           draggable={false}
           style={{ transform: `scale(${zoom})` }}
         />

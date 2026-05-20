@@ -1897,3 +1897,14 @@
   - Session 规则的 jsonl 持久化（架构 §4.5.4 提到的 `{ "type": "PermissionRule", ... }` entry type）依旧未实现——重开 Desktop 后 session 规则会丢，依赖 Recorder 后续接入。本次只修了「同进程内 session 规则被清空」，重启级别的持久化是另一个独立 issue
   - 热加载策略每次 match 前 stat 一次文件——同进程内只有真正发现 mtime 变化才重读。批量审批场景下 syscall 开销可接受，未做缓存窗口（如"500ms 内不再 stat"）
   - 危险复合模式（cd-git-compound / multi-cd 等）依然是 `refuse_remember=true`——架构 §4.4.2.2 明确规定。这次没动这条原则；如果用户 `cd /xxx && git yyy` 类命令一直审批不烦，那是设计预期，不是 bug
+
+### 2026-05-20 — 修正 .env.example 与 .env 写法：含空格 value 必须单引号包裹
+
+- **Why**: 上一条加完 `.env` 支持后，Langfuse 一直 401。根因是 dotenvy 0.15 对 unquoted value 不允许含空格——`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic xxx` 这种 value 里有空格，dotenvy 抛 `LineParse(..., 20)`（20 正好是 `Basic ` 后的那个空格位置），整个 KV 没注入到环境，于是 OTLP 请求没 Authorization header → Langfuse 401。验证方式：单独跑 `dotenvy::from_filename_override` 直接复现 panic
+- **改动**:
+  - [.env.example](../.env.example): `OTEL_EXPORTER_OTLP_HEADERS` 示例从 `Authorization=Basic <b64>` 改成 `'Authorization=Basic <b64>'`（单引号 literal，里面 `=` 和空格不会被特殊处理），并加显式警告说明 dotenvy 不接受 unquoted spaces
+  - 本机 `.env` 同步改为单引号包裹的形态（验证 dotenvy 三个变量全部正确加载）
+- **影响范围**: 只动文档/模板，零代码改动。observability 端不需要 strip 引号——dotenvy 自己会处理引号、注入到 env 的就是 literal value
+- **留尾巴**:
+  - 如果未来想让 observability 容忍 raw shell-style 单/双引号（比如用户用 `export OTEL_EXPORTER_OTLP_HEADERS="..."` 时一些 shell 不剥引号），可以在 `parse_otlp_headers` 里加一次 `trim_matches(|c| c == '"' || c == '\'')`。但当前 dotenvy 已经处理，加这层兜底是多余防御，先不加
+  - 另一个边角：dotenvy 双引号 value 会处理 `\n` `\t` 等转义；base64 字符表里没这些，所以单引号 / 双引号在本场景等价，统一推荐单引号是为了让用户少踩一类坑（万一某天 value 里出现 `\xxx` 字面字符串）

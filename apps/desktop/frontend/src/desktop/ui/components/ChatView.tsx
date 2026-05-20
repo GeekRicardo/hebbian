@@ -425,7 +425,12 @@ export function ChatView() {
 
       <EditTreePanel />
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      {/* chat 区域：header 下方、ChatInput 上方的消息列表区。
+          所有"放大预览"（DiffViewer fullscreen / ExpandButton 放大）都 portal 到下面的
+          #chat-fullscreen-anchor，确保只覆盖此区域、不挡 sidebar / 标题栏 / 输入框。
+          详见架构.md §4.13.9 chat 区域定义。 */}
+      <div className="relative flex-1 min-h-0">
+      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto">
         {currentSession.messages.length === 0 && !isStreaming && (
           <div className="px-6 py-10 text-center text-sm text-muted-foreground">
             发送第一条消息开始对话
@@ -540,6 +545,13 @@ export function ChatView() {
             ))}
         </div>
       </div>
+        {/* 放大预览 portal 锚点：只覆盖 chat 区域（不含 header / input / sidebar）。
+            内层放大内容用 `absolute inset-3` 撑满锚点 + 12px padding。 */}
+        <div
+          id="chat-fullscreen-anchor"
+          className="pointer-events-none absolute inset-0 z-[60]"
+        />
+      </div>
 
       <PermissionApprovalPopup />
 
@@ -555,6 +567,7 @@ export function ChatView() {
           userMessageHistory={userMessageHistory}
         />
       </div>
+
     </div>
   );
 }

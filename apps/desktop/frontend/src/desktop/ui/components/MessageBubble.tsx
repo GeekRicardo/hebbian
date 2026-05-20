@@ -34,6 +34,7 @@ import {
   Image as ImageIcon,
   Boxes,
   Maximize2,
+  Minimize2,
   ClipboardCheck,
   Paperclip,
   BellRing,
@@ -53,12 +54,23 @@ import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
+import {
+  DiffViewer,
+  FullscreenPortal,
+  type DiffMode,
+} from "@/desktop/ui/components/DiffPanel";
+import {
+  diffSidesFromArgs,
+  inferDiffAction,
+  parsePartialEditArgs,
+} from "@/desktop/ui/lib/parsePartialEditArgs";
 import { findMatches, highlight } from "./FindBar";
 import {
   canShowRawMessage,
   getMessageRawText,
 } from "@/desktop/ui/lib/messageRawText";
 import { buildModelMessages } from "@/desktop/ui/lib/buildModelMessages";
+import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 
 interface Props {
@@ -233,6 +245,20 @@ function buildAssistantRenderParts(
       }
     });
     pushToolGroup(out, pendingTools);
+    const toolGroups = out.filter(r => r.type === "tool_group");
+    if (toolGroups.length > 0) {
+      console.debug("[buildAssistantRenderParts] tool groups", {
+        streamingPartsCount: streamingParts.length,
+        toolPartsCount: streamingParts.filter(p => p.type === "tool_call").length,
+        toolGroupsCount: toolGroups.length,
+        groups: toolGroups.map(g => ({
+          callsCount: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.length,
+          callKeys: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.key),
+          callIds: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.id),
+          callIndices: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.index),
+        })),
+      });
+    }
     return out;
   }
 
@@ -1177,6 +1203,19 @@ function ExpandButton({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   return (
     <>
       <button
@@ -1192,12 +1231,14 @@ function ExpandButton({
         <Maximize2 className="h-3.5 w-3.5" />
       </button>
       {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4"
-          onClick={() => setOpen(false)}
-        >
+        <FullscreenPortal>
+          {/* 半透明 backdrop：点击关闭、视觉提示 modal 性质 */}
           <div
-            className="grid max-h-[85vh] w-full max-w-5xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
+            className="pointer-events-auto absolute inset-0 bg-foreground/30"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="pointer-events-auto absolute inset-3 grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-muted/30 px-3">
@@ -1217,7 +1258,7 @@ function ExpandButton({
               </ToolDetailExpandedContext.Provider>
             </div>
           </div>
-        </div>
+        </FullscreenPortal>
       )}
     </>
   );
@@ -1345,6 +1386,148 @@ function DefaultToolDetail({ call }: { call: ToolCallItem }) {
   );
 }
 
+/**
+ * Edit / Write 工具卡片的差异视图（架构 §4.13.9）。
+ *
+ * 数据源策略：
+ * - **默认（非放大）**：永远只渲 args 的 old_string / new_string，不读 worktree——
+ *   零网络等待，每次 ToolCallDelta 立刻刷新画面。
+ * - **放大（GitHub review 风格）**：若 `editSnapshots` 里能按 `call.id` 找到 EditEntry，
+ *   异步拉 `api.diffEdit` 取完整 before/after（含未改动上下文行），否则仍渲局部 args。
+ *
+ * 布局（inline / split）和"是否放大"两个状态独立——切换 inline↔split 不会关掉放大框。
+ */
+function EditDiffDetail({ call }: { call: ToolCallItem }) {
+  const sessionId = useStore((s) => s.currentSession?.id ?? null);
+  const editSnapshots = useStore((s) => s.editSnapshots);
+  const [viewMode, setViewMode] = useState<DiffMode>("split");
+  const [expanded, setExpanded] = useState(false);
+  const [fullPayload, setFullPayload] = useState<{
+    before: string;
+    after: string;
+    action: string;
+    file_path: string;
+  } | null>(null);
+  const [fullError, setFullError] = useState<string | null>(null);
+
+  const snapshot = call.id
+    ? editSnapshots.find((e) => e.call_id === call.id)
+    : null;
+
+  // 仅在「放大且有 snapshot」时才拉服务端权威完整文件——非放大永不发请求。
+  useEffect(() => {
+    if (!expanded || !sessionId || !snapshot) {
+      return;
+    }
+    let cancelled = false;
+    setFullError(null);
+    api
+      .diffEdit(sessionId, snapshot.snapshot_id)
+      .then((p) => {
+        if (cancelled) return;
+        setFullPayload({
+          before: p.before_text,
+          after: p.after_text,
+          action: p.action,
+          file_path: p.file_path,
+        });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setFullError(e?.message ?? String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, sessionId, snapshot?.snapshot_id]);
+
+  const partial = parsePartialEditArgs(call.argumentsText);
+  const argSides = diffSidesFromArgs(call.name, partial);
+  const action = snapshot?.action ?? inferDiffAction(call.name, partial);
+  const actionLabel =
+    action === "create" ? "创建文件" : action === "overwrite" ? "覆盖文件" : "修改文件";
+
+  // 数据源选择：放大态优先用完整 payload；非放大态/未加载完成都用 args 局部
+  const useFull = expanded && !!fullPayload && !!snapshot;
+  const beforeText = useFull ? fullPayload!.before : argSides.beforeText;
+  const afterText = useFull ? fullPayload!.after : argSides.afterText;
+  const filePath = (useFull ? fullPayload!.file_path : partial.file_path) ?? "";
+
+  const streamingFlag = call.status === "streaming";
+  const badge = (() => {
+    if (call.status === "streaming") return "实时预览";
+    if (expanded && snapshot && !fullPayload && !fullError) return "加载完整文件…";
+    if (expanded && fullError) return "完整文件加载失败";
+    if (expanded && useFull) return "完整文件";
+    return undefined;
+  })();
+
+  const cycleMode = () => setViewMode((prev) => (prev === "split" ? "inline" : "split"));
+  const toggleExpanded = () => setExpanded((e) => !e);
+
+  // Esc 在放大态退出而不是关掉父展开
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
+  if (expanded) {
+    return (
+      <FullscreenPortal>
+        <div
+          className="pointer-events-auto absolute inset-0 bg-foreground/30"
+          onClick={() => setExpanded(false)}
+        />
+        <div
+          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <DiffViewer
+            beforeText={beforeText}
+            afterText={afterText}
+            filePath={filePath}
+            actionLabel={actionLabel}
+            badge={badge}
+            mode={viewMode}
+            onCycleMode={cycleMode}
+            expanded={expanded}
+            onToggleExpanded={toggleExpanded}
+            streaming={streamingFlag}
+            onClose={() => setExpanded(false)}
+            className="min-h-0 flex-1"
+            collapseContext={useFull ? 3 : undefined}
+          />
+        </div>
+      </FullscreenPortal>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-background">
+      <DiffViewer
+        beforeText={beforeText}
+        afterText={afterText}
+        filePath={filePath}
+        actionLabel={actionLabel}
+        badge={badge}
+        mode={viewMode}
+        onCycleMode={cycleMode}
+        expanded={expanded}
+        onToggleExpanded={toggleExpanded}
+        streaming={streamingFlag}
+        maxRows={20}
+      />
+    </div>
+  );
+}
+
 function ToolCallDetail({ call }: { call: ToolCallItem }) {
   const name = call.name || "工具调用";
   const result = call.result || "等待返回…";
@@ -1392,15 +1575,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
     );
   }
   if (name === "Write" || name === "Edit") {
-    return (
-      <div className="relative overflow-hidden rounded-md border border-border bg-background">
-        <ExpandButton title={title}>
-          <ToolPre>{result}</ToolPre>
-        </ExpandButton>
-        <WriteHeader call={call} label={name === "Edit" ? "edit" : "write"} />
-        <ToolPre>{result}</ToolPre>
-      </div>
-    );
+    return <EditDiffDetail call={call} />;
   }
   if (name === "Grep" || name === "Glob") {
     return (
@@ -1743,6 +1918,29 @@ export const MessageBubble = memo(function MessageBubble({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
     () => new Set()
   );
+  // 已经自动展开过的 streaming key，避免用户折叠后又被强行展开。
+  const autoExpandedRef = useRef<Set<string>>(new Set());
+
+  // 架构 §4.13.9：Edit/Write 流式时默认把卡片展开，用户能边写边看 diff 流动。
+  // 仅第一次出现时展开一次，后续跟随用户的折叠选择。
+  useEffect(() => {
+    if (!streamingParts?.length) return;
+    let changed = false;
+    const next = new Set(expandedToolCalls);
+    for (const p of streamingParts) {
+      if (p.type !== "tool_call") continue;
+      if (p.name !== "Edit" && p.name !== "Write") continue;
+      const key = `streaming-${p.index}`;
+      if (autoExpandedRef.current.has(key)) continue;
+      autoExpandedRef.current.add(key);
+      if (!next.has(key)) {
+        next.add(key);
+        changed = true;
+      }
+    }
+    if (changed) setExpandedToolCalls(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamingParts]);
   const [showRawText, setShowRawText] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
   // 后端 preview payload(含 workspace XML / tools / skills)。
