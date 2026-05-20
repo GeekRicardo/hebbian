@@ -24,6 +24,10 @@ dirs = "5"
 shlex = "1"
 fs2 = "0.4"
 regex = "1"
+ignore = "0.4"
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
