@@ -285,6 +285,12 @@ impl ModelClient for AnthropicClient {
                                 on_event(ModelStreamEvent::ReasoningDelta { text: delta });
                             }
                             proto::AnthropicStreamEvent::ToolUseStart { index, id, name } => {
+                                tracing::info!(
+                                    sse_index = index,
+                                    tool_id = %id,
+                                    tool_name = %name,
+                                    "anthropic stream: ToolUseStart"
+                                );
                                 tools.insert(
                                     index,
                                     ToolAccum {
@@ -293,8 +299,6 @@ impl ModelClient for AnthropicClient {
                                         args: String::new(),
                                     },
                                 );
-                                // 通知 surface 一次 ToolCallDelta（携带 id/name），让 UI 立刻
-                                // 起一条 tool 行；后续 input_json_delta 会持续灌 args。
                                 on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
                                     index,
                                     id: Some(id),

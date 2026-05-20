@@ -150,7 +150,9 @@ fn create_session(
     let dd = data_dir(&app)?;
     let session = if project_id.is_some()
         || workdir.is_some()
-        || allowed_paths.as_ref().is_some_and(|paths| !paths.is_empty())
+        || allowed_paths
+            .as_ref()
+            .is_some_and(|paths| !paths.is_empty())
     {
         sessions::create_with_workspace(
             &dd,
@@ -336,11 +338,7 @@ fn build_edits_worktree(
         session.runtime_allowed_paths,
         session.pending_runtime_allowed_paths,
     );
-    Ok(edits::EditsWorktree::new(
-        data_dir,
-        session_id,
-        &workspace,
-    ))
+    Ok(edits::EditsWorktree::new(data_dir, session_id, &workspace))
 }
 
 #[tauri::command]
@@ -765,7 +763,10 @@ fn set_force_automode(
 #[tauri::command]
 fn get_run_mode(app: AppHandle, session_id: String) -> AppResult<String> {
     let dd = data_dir(&app)?;
-    Ok(sessions::load(&dd, &session_id)?.run_mode.as_str().to_string())
+    Ok(sessions::load(&dd, &session_id)?
+        .run_mode
+        .as_str()
+        .to_string())
 }
 
 #[tauri::command]
@@ -1051,7 +1052,12 @@ fn approve_path_access(
         "global" => {
             let mut settings = settings_store::load(&dd);
             for p in &paths {
-                if !settings.conversation.allowed_paths.iter().any(|path| path == p) {
+                if !settings
+                    .conversation
+                    .allowed_paths
+                    .iter()
+                    .any(|path| path == p)
+                {
                     settings.conversation.allowed_paths.push(p.clone());
                 }
             }
@@ -1432,7 +1438,10 @@ pub fn run() {
 
     // 同步入口：observability::init 内部用独占 tokio runtime 跑 OTel 导出 task，
     // 与 Tauri 的 runtime 完全隔离。OTEL_EXPORTER_OTLP_ENDPOINT 未设时只装日志。
-    let otel_guard = observability::init("hebbian-desktop", "agent_core=debug,warn");
+    let otel_guard = observability::init(
+        "hebbian-desktop",
+        "agent_core=debug,model_gateway=info,warn",
+    );
 
     // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——

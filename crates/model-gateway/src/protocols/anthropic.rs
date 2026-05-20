@@ -418,11 +418,21 @@ pub fn parse_response(v: &Value) -> ModelResponse {
                         reasoning.push_str(s);
                     }
                 }
-                Some("tool_use") => calls.push(ToolCall {
-                    id: block["id"].as_str().unwrap_or("").to_string(),
-                    name: block["name"].as_str().unwrap_or("").to_string(),
-                    input: block["input"].clone(),
-                }),
+                Some("tool_use") => {
+                    let id = block["id"].as_str().unwrap_or("").to_string();
+                    let name = block["name"].as_str().unwrap_or("").to_string();
+                    tracing::info!(
+                        block_index = calls.len(),
+                        tool_id = %id,
+                        tool_name = %name,
+                        "parse_response: tool_use block"
+                    );
+                    calls.push(ToolCall {
+                        id,
+                        name,
+                        input: block["input"].clone(),
+                    });
+                }
                 _ => {}
             }
         }

@@ -7,6 +7,16 @@
 //!
 //! 没设 `OTEL_EXPORTER_OTLP_ENDPOINT` 时只装 stderr 日志，零网络副作用。
 //!
+//! ## 环境变量
+//!
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP HTTP base URL。例：
+//!   - 通用 collector：`http://localhost:4318`
+//!   - Langfuse Cloud（日本）：`https://jp.cloud.langfuse.com/api/public/otel`
+//! - `OTEL_EXPORTER_OTLP_HEADERS`：标准 OTel header 字符串，`k1=v1,k2=v2`。Langfuse 用 Basic Auth：
+//!   `Authorization=Basic <base64(public_key:secret_key)>`
+//! - `HEBBIAN_OTEL_METRICS`：`0/false/off` 时关闭 metric 导出。Langfuse 只收 trace，
+//!   开着会让 metric 路径打 404，关掉更干净。默认 on。
+//!
 //! ## 内置 OTel 后台 runtime
 //!
 //! [`init`] 是同步函数，可以在 `#[tokio::main]` 之外的入口（如 Tauri 的 sync `run()`）
@@ -30,9 +40,11 @@
 pub mod attr;
 pub mod metrics;
 
+use std::collections::HashMap;
+
 use once_cell::sync::Lazy;
 use opentelemetry::{global, KeyValue};
-use opentelemetry_otlp::{Protocol, WithExportConfig};
+use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
     metrics::{PeriodicReader, SdkMeterProvider},
     runtime,
@@ -101,12 +113,18 @@ pub fn init(service_name: &str, default_filter: &str) -> OtelGuard {
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
     ]);
 
-    let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+    let endpoint = endpoint.trim_end_matches('/').to_string();
+    let headers = parse_otlp_headers();
+    let metrics_enabled = metrics_export_enabled();
+
+    let mut span_builder = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
-        .with_endpoint(format!("{}/v1/traces", endpoint.trim_end_matches('/')))
-        .with_protocol(Protocol::HttpBinary)
-        .build()
-        .expect("build OTLP span exporter");
+        .with_endpoint(format!("{endpoint}/v1/traces"))
+        .with_protocol(Protocol::HttpBinary);
+    if !headers.is_empty() {
+        span_builder = span_builder.with_headers(headers.clone());
+    }
+    let span_exporter = span_builder.build().expect("build OTLP span exporter");
     let tracer_provider = TracerProvider::builder()
         .with_resource(resource.clone())
         .with_batch_exporter(span_exporter, runtime::Tokio)
@@ -114,31 +132,73 @@ pub fn init(service_name: &str, default_filter: &str) -> OtelGuard {
     let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "hebbian");
     global::set_tracer_provider(tracer_provider.clone());
 
-    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_http()
-        .with_endpoint(format!("{}/v1/metrics", endpoint.trim_end_matches('/')))
-        .with_protocol(Protocol::HttpBinary)
-        .build()
-        .expect("build OTLP metric exporter");
-    let reader = PeriodicReader::builder(metric_exporter, runtime::Tokio).build();
-    let meter_provider = SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_reader(reader)
-        .build();
-    global::set_meter_provider(meter_provider.clone());
+    let meter_provider = if metrics_enabled {
+        let mut metric_builder = opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_endpoint(format!("{endpoint}/v1/metrics"))
+            .with_protocol(Protocol::HttpBinary);
+        if !headers.is_empty() {
+            metric_builder = metric_builder.with_headers(headers);
+        }
+        let metric_exporter = metric_builder.build().expect("build OTLP metric exporter");
+        let reader = PeriodicReader::builder(metric_exporter, runtime::Tokio).build();
+        let provider = SdkMeterProvider::builder()
+            .with_resource(resource)
+            .with_reader(reader)
+            .build();
+        global::set_meter_provider(provider.clone());
+        Some(provider)
+    } else {
+        None
+    };
 
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    let _ = tracing_subscriber::registry()
+    if let Err(e) = tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
         .with(otel_layer)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("[observability] subscriber init failed (otel_layer not active): {e}");
+    }
 
     OtelGuard {
         tracer_provider: Some(tracer_provider),
-        meter_provider: Some(meter_provider),
+        meter_provider,
     }
+}
+
+/// 解析 `OTEL_EXPORTER_OTLP_HEADERS`（OTel 标准格式 `k1=v1,k2=v2`）。
+/// 空 / 缺失返回空 map。值里允许出现 `=`（按第一个 `=` 切）。
+fn parse_otlp_headers() -> HashMap<String, String> {
+    let Ok(raw) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") else {
+        return HashMap::new();
+    };
+    raw.split(',')
+        .filter_map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            let k = it.next()?.trim();
+            let v = it.next()?.trim();
+            if k.is_empty() {
+                None
+            } else {
+                Some((k.to_string(), v.to_string()))
+            }
+        })
+        .collect()
+}
+
+/// `HEBBIAN_OTEL_METRICS=0/false/off` 时关闭 metric 导出。默认 on。
+fn metrics_export_enabled() -> bool {
+    std::env::var("HEBBIAN_OTEL_METRICS")
+        .map(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off"
+            )
+        })
+        .unwrap_or(true)
 }
 
 /// 仅装 stderr 日志，不接 OTLP。在不需要 OTel 时使用。

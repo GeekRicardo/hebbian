@@ -161,6 +161,9 @@ fn drain_pending_inputs(
         hebbian.run.parent_id = ?params.parent,
         hebbian.run.outcome = Empty,
         hebbian.run.iterations = Empty,
+        langfuse.session.id = Empty,
+        langfuse.trace.input = Empty,
+        langfuse.trace.output = Empty,
     )
 )]
 pub async fn run_loop(
@@ -196,6 +199,14 @@ pub async fn run_loop(
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
+    let run_span = tracing::Span::current();
+    if let Some(session_id) = session_id.as_deref() {
+        run_span.record(attr::LANGFUSE_SESSION_ID, session_id);
+    }
+    run_span.record(
+        attr::LANGFUSE_TRACE_INPUT,
+        trace_input_from_entries(&transcript.entries).as_str(),
+    );
 
     // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
     // 计数器从 checkpoint 起步，保证 MAX_TOOL_ITERATIONS 累积、Step index 单调。
@@ -345,7 +356,7 @@ pub async fn run_loop(
         let turn_index = state.next_turn();
         let turn_id = protocol::TurnId::new();
         let turn_span = tracing::info_span!(
-            "turn",
+            "agent.iteration",
             hebbian.turn.index = turn_index,
             hebbian.turn.id = %turn_id,
             hebbian.turn.stop_reason = Empty,
@@ -409,6 +420,12 @@ pub async fn run_loop(
         // 走 stream 的条件：调用方要求流式 + (本轮无工具 || provider 支持流式工具调用)。
         // anthropic / gemini 默认不支持流式工具调用，含工具时只能用 complete 路径。
         let used_stream_path = stream && (!has_tools || client.supports_streaming_tools());
+        let model_span = tracing::info_span!(
+            parent: &turn_span,
+            "model",
+            hebbian.turn.index = turn_index,
+            hebbian.model.streaming = used_stream_path,
+        );
         model_step_index += 1;
         emit(EventPayload::StepStarted {
             step_kind: protocol::StepKind::Model,
@@ -427,22 +444,34 @@ pub async fn run_loop(
                             ModelStreamEvent::ReasoningDelta { text } => {
                                 EventPayload::Reasoning { text }
                             }
-                            ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
-                                index: stream_tool_call_offset + delta.index,
-                                id: delta.id,
-                                name: delta.name,
-                                arguments_delta: delta.arguments_delta,
-                            },
+                            ModelStreamEvent::ToolCallDelta(delta) => {
+                                let final_index = stream_tool_call_offset + delta.index;
+                                tracing::debug!(
+                                    stream_offset = stream_tool_call_offset,
+                                    delta_index = delta.index,
+                                    final_index,
+                                    delta_id = ?delta.id,
+                                    delta_name = ?delta.name,
+                                    args_delta_len = delta.arguments_delta.as_ref().map(|a| a.len()).unwrap_or(0),
+                                    "agent_loop: ToolCallDelta → EventPayload"
+                                );
+                                EventPayload::ToolCallDelta {
+                                    index: final_index,
+                                    id: delta.id,
+                                    name: delta.name,
+                                    arguments_delta: delta.arguments_delta,
+                                }
+                            }
                         };
                         on_event_for_stream(state_for_stream.event(payload));
                     },
                 )
-                .instrument(turn_span.clone())
+                .instrument(model_span.clone())
                 .await
         } else {
             client
                 .complete(req, cancel.clone())
-                .instrument(turn_span.clone())
+                .instrument(model_span.clone())
                 .await
         };
 
@@ -523,6 +552,10 @@ pub async fn run_loop(
                     output_attachments = all_attachments;
                     continue;
                 }
+                run_span.record(
+                    attr::LANGFUSE_TRACE_OUTPUT,
+                    truncate_for_langfuse(&text).as_str(),
+                );
                 break Ok(AssistantOutput {
                     text,
                     attachments: all_attachments,
@@ -596,6 +629,12 @@ pub async fn run_loop(
                     edits_worktree: edits_worktree.clone(),
                 };
 
+                let tools_span = tracing::info_span!(
+                    parent: &turn_span,
+                    "tools",
+                    hebbian.turn.index = turn_index,
+                    hebbian.turn.tool_calls = calls.len(),
+                );
                 tool_step_index += 1;
                 emit(EventPayload::StepStarted {
                     step_kind: protocol::StepKind::Tool,
@@ -603,7 +642,7 @@ pub async fn run_loop(
                 });
                 let results = match dispatcher
                     .run_calls(&calls, tool_call_dispatch_offset)
-                    .instrument(turn_span.clone())
+                    .instrument(tools_span.clone())
                     .await
                 {
                     Ok(results) => results,
@@ -729,7 +768,6 @@ pub async fn run_loop(
     };
 
     let duration_ms = run_start.elapsed().as_millis() as u64;
-    let run_span = tracing::Span::current();
     run_span.record("hebbian.run.iterations", iteration);
     let agent_id = agent.0.as_str();
     match &result {
@@ -763,6 +801,49 @@ pub async fn run_loop(
         }
     }
     result
+}
+
+fn trace_input_from_entries(entries: &[model_gateway::types::TranscriptEntry]) -> String {
+    let messages: Vec<_> = entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            model_gateway::types::TranscriptEntry::User(user) => Some(serde_json::json!({
+                "role": "user",
+                "content": user.text,
+                "attachments": user.attachments.iter().map(|attachment| match attachment {
+                    common::attachments::MessageAttachment::TextFile { name, media_type, content } => serde_json::json!({
+                        "kind": "text_file",
+                        "name": name,
+                        "media_type": media_type,
+                        "content": truncate_for_langfuse(content),
+                    }),
+                    common::attachments::MessageAttachment::Image { name, media_type, data } => serde_json::json!({
+                        "kind": "image",
+                        "name": name,
+                        "media_type": media_type,
+                        "bytes_base64": data.len(),
+                    }),
+                }).collect::<Vec<_>>(),
+            })),
+            _ => None,
+        })
+        .into_iter()
+        .collect();
+    truncate_for_langfuse(&serde_json::to_string(&messages).unwrap_or_default())
+}
+
+fn truncate_for_langfuse(value: &str) -> String {
+    const MAX_CHARS: usize = 32_000;
+    let mut iter = value.char_indices();
+    match iter.nth(MAX_CHARS) {
+        Some((idx, _)) => format!(
+            "{}\n…[truncated {} chars]",
+            &value[..idx],
+            value.chars().count() - MAX_CHARS
+        ),
+        None => value.to_string(),
+    }
 }
 
 #[cfg(test)]

@@ -181,20 +181,19 @@ impl ToolDispatcher {
                     .data_dir_for_artifacts
                     .as_ref()
                     .zip(self.session_id_for_hooks.as_deref())
-                    .map_or(false, |(dd, sid)| p.starts_with(&dd.join("sessions").join(sid)))
+                    .map_or(false, |(dd, sid)| {
+                        p.starts_with(&dd.join("sessions").join(sid))
+                    })
             })
             .filter(|p| {
                 // 也查 PermissionStore：Session/Project/Global FilePath Allow 规则覆盖的路径免审批
-                !self
-                    .permission_store
-                    .as_ref()
-                    .map_or(false, |store| {
-                        store.allows_path(
-                            self.session_id_for_hooks.as_deref(),
-                            Some(self.workspace.workdir()),
-                            &p.to_string_lossy(),
-                        )
-                    })
+                !self.permission_store.as_ref().map_or(false, |store| {
+                    store.allows_path(
+                        self.session_id_for_hooks.as_deref(),
+                        Some(self.workspace.workdir()),
+                        &p.to_string_lossy(),
+                    )
+                })
             })
             .cloned()
             .collect();
@@ -266,8 +265,10 @@ impl ToolDispatcher {
         let permission_store = self.permission_store.clone();
         let edits_worktree_for_snapshot = self.edits_worktree.clone();
 
+        let tool_span_name = format!("tool.{}", call.name);
         let tool_span = tracing::info_span!(
             "tool.call",
+            otel.name = %tool_span_name,
             otel.kind = "internal",
             hebbian.tool.name = %call.name,
             hebbian.tool.call_id = %call.id,
@@ -276,6 +277,8 @@ impl ToolDispatcher {
             hebbian.tool.truncated = Empty,
             hebbian.tool.result_bytes = Empty,
             hebbian.tool.duration_ms = Empty,
+            langfuse.observation.input = Empty,
+            langfuse.observation.output = Empty,
         );
 
         Box::pin(
@@ -308,10 +311,7 @@ impl ToolDispatcher {
                 // 直接 AllowOnce 短路；命令类（Bash/PowerShell）仍走原审批路径。
                 if run_mode == crate::run_mode::RunMode::EditAutomatically {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
-                        let is_edit = matches!(
-                            call_name_for_judge.as_str(),
-                            "Edit" | "edit"
-                        );
+                        let is_edit = matches!(call_name_for_judge.as_str(), "Edit" | "edit");
                         if is_edit {
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
                                 tool_name: call_name_for_judge.clone(),
@@ -441,9 +441,7 @@ impl ToolDispatcher {
                 };
                 let edit_before = if call.name == "Edit" {
                     if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
-                        let fp = effective_input["file_path"]
-                            .as_str()
-                            .map(Path::new);
+                        let fp = effective_input["file_path"].as_str().map(Path::new);
                         if let Some(fp) = fp {
                             wt.snapshot_before(&call.id, fp).await.unwrap_or(None)
                         } else {
@@ -455,6 +453,11 @@ impl ToolDispatcher {
                 } else {
                     None
                 };
+
+                tracing::Span::current().record(
+                    attr::LANGFUSE_OBSERVATION_INPUT,
+                    tool_input_for_langfuse(&call.name, &effective_input).as_str(),
+                );
 
                 // 执行
                 info!(
@@ -489,42 +492,32 @@ impl ToolDispatcher {
                 // —— Edit 工具快照：执行后拍 after + 写 metadata + emit 事件 ——
                 if call.name == "Edit" && !exec_failed {
                     if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
-                        let fp = effective_input["file_path"]
-                            .as_str()
-                            .map(Path::new);
+                        let fp = effective_input["file_path"].as_str().map(Path::new);
                         if let Some(fp) = fp {
-                            if let Ok(Some(after)) =
-                                wt.snapshot_after(&call.id, fp).await
-                            {
-                                let before_existed = edit_before
-                                    .as_ref()
-                                    .map_or(false, |b| b.file_bytes > 0);
-                                let action =
-                                    if effective_input["old_string"]
+                            if let Ok(Some(after)) = wt.snapshot_after(&call.id, fp).await {
+                                let before_existed =
+                                    edit_before.as_ref().map_or(false, |b| b.file_bytes > 0);
+                                let action = if effective_input["old_string"]
+                                    .as_str()
+                                    .map_or(false, |s| s.is_empty())
+                                {
+                                    protocol::EditAction::Create
+                                } else if !before_existed {
+                                    protocol::EditAction::Create
+                                } else {
+                                    // overwrite = old_string 长度接近原文件大小
+                                    let old_len = effective_input["old_string"]
                                         .as_str()
-                                        .map_or(false, |s| s.is_empty())
-                                    {
-                                        protocol::EditAction::Create
-                                    } else if !before_existed {
-                                        protocol::EditAction::Create
+                                        .map_or(0, |s| s.len() as u64);
+                                    let before_len =
+                                        edit_before.as_ref().map_or(0, |b| b.file_bytes);
+                                    if old_len >= before_len.saturating_sub(10) {
+                                        protocol::EditAction::Overwrite
                                     } else {
-                                        // overwrite = old_string 长度接近原文件大小
-                                        let old_len =
-                                            effective_input["old_string"]
-                                                .as_str()
-                                                .map_or(0, |s| s.len() as u64);
-                                        let before_len = edit_before
-                                            .as_ref()
-                                            .map_or(0, |b| b.file_bytes);
-                                        if old_len >= before_len.saturating_sub(10)
-                                        {
-                                            protocol::EditAction::Overwrite
-                                        } else {
-                                            protocol::EditAction::Modify
-                                        }
-                                    };
-                                let snapshot_id =
-                                    uuid::Uuid::new_v4().to_string();
+                                        protocol::EditAction::Modify
+                                    }
+                                };
+                                let snapshot_id = uuid::Uuid::new_v4().to_string();
                                 let entry = EditEntry {
                                     snapshot_id: snapshot_id.clone(),
                                     call_id: call.id.clone(),
@@ -535,23 +528,18 @@ impl ToolDispatcher {
                                         .as_ref()
                                         .map_or("".into(), |b| b.sha.clone()),
                                     after_sha: after.sha.clone(),
-                                    before_bytes: edit_before
-                                        .as_ref()
-                                        .map_or(0, |b| b.file_bytes),
+                                    before_bytes: edit_before.as_ref().map_or(0, |b| b.file_bytes),
                                     after_bytes: after.file_bytes,
-                                    ts_ms: chrono::Utc::now()
-                                        .timestamp_millis(),
+                                    ts_ms: chrono::Utc::now().timestamp_millis(),
                                     reverted: false,
                                     reverted_at_ms: None,
                                 };
                                 let _ = wt.append_entry(entry);
-                                sink(state.event(
-                                    EventPayload::EditSnapshotCreated {
+                                sink(
+                                    state.event(EventPayload::EditSnapshotCreated {
                                         call_id: call.id.clone(),
                                         snapshot_id,
-                                        file_path: fp
-                                            .to_string_lossy()
-                                            .to_string(),
+                                        file_path: fp.to_string_lossy().to_string(),
                                         action,
                                         before_sha: edit_before
                                             .as_ref()
@@ -561,8 +549,8 @@ impl ToolDispatcher {
                                             .as_ref()
                                             .map_or(0, |b| b.file_bytes),
                                         after_bytes: after.file_bytes,
-                                    },
-                                ));
+                                    }),
+                                );
                             }
                         }
                     }
@@ -597,24 +585,6 @@ impl ToolDispatcher {
                 } else {
                     attr::outcome::OK
                 };
-                record_tool_outcome(
-                    outcome,
-                    &call.name,
-                    duration_ms as f64,
-                    truncated,
-                    content.len(),
-                );
-
-                info!(
-                    tool = %call.name,
-                    call_id = %call.id,
-                    outcome,
-                    duration_ms,
-                    truncated,
-                    bytes = content.len(),
-                    "tool_call finished"
-                );
-
                 // PostToolUse / PostToolUseFailure hook（架构 §4.8.1 / §4.8.2）：
                 // 成功路径下接受 Modify { result } 改写最终工具结果文本；失败路径仅观察。
                 if !hooks_for_future.is_empty() {
@@ -642,6 +612,28 @@ impl ToolDispatcher {
                         }
                     }
                 }
+
+                tracing::Span::current().record(
+                    attr::LANGFUSE_OBSERVATION_OUTPUT,
+                    truncate_for_langfuse(&content).as_str(),
+                );
+                record_tool_outcome(
+                    outcome,
+                    &call.name,
+                    duration_ms as f64,
+                    truncated,
+                    content.len(),
+                );
+
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    outcome,
+                    duration_ms,
+                    truncated,
+                    bytes = content.len(),
+                    "tool_call finished"
+                );
 
                 let artifact_path_str = artifact.as_ref().map(|a| a.path.display().to_string());
                 sink(state.event(EventPayload::ToolCallFinished {
@@ -679,8 +671,10 @@ impl ToolDispatcher {
         let sink = self.sink.clone();
         let cancel = self.cancel.clone();
 
+        let tool_span_name = format!("tool.{}", call.name);
         let tool_span = tracing::info_span!(
             "tool.call",
+            otel.name = %tool_span_name,
             otel.kind = "internal",
             hebbian.tool.name = %call.name,
             hebbian.tool.call_id = %call.id,
@@ -927,6 +921,29 @@ fn record_tool_outcome(outcome: &str, tool: &str, duration_ms: f64, truncated: b
     span.record(attr::TOOL_RESULT_SIZE, bytes as i64);
     span.record(attr::TOOL_NAME, tool);
     metrics::record_tool_duration(tool, outcome, duration_ms);
+}
+
+fn tool_input_for_langfuse(tool: &str, input: &serde_json::Value) -> String {
+    truncate_for_langfuse(
+        &serde_json::to_string(&serde_json::json!({
+            "name": tool,
+            "input": input,
+        }))
+        .unwrap_or_default(),
+    )
+}
+
+fn truncate_for_langfuse(value: &str) -> String {
+    const MAX_CHARS: usize = 32_000;
+    let mut iter = value.char_indices();
+    match iter.nth(MAX_CHARS) {
+        Some((idx, _)) => format!(
+            "{}\n…[truncated {} chars]",
+            &value[..idx],
+            value.chars().count() - MAX_CHARS
+        ),
+        None => value.to_string(),
+    }
 }
 
 /// 把"被拒"渲染为 ToolStarted/Finished + ToolResult，让 transcript 一致。
