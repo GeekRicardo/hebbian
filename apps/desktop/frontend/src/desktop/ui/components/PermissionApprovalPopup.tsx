@@ -214,7 +214,7 @@ export function PermissionApprovalPopup() {
             <textarea
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              placeholder="告诉模型为什么拒绝（会作为 user message 注入下一轮）"
+              placeholder="告诉Hebbian如何改进"
               rows={2}
               className="w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
               autoFocus
