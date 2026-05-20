@@ -2024,3 +2024,16 @@
 - **留尾巴**:
   - 文档里 `~/.hebbian/sessions/<SID>/model_io.jsonl` 路径依赖 `HEBBIAN_DUMP_MODEL_IO=1`；若后续 Recorder 全量落盘上线（架构.md §4.9），可把"看模型 IO"小节切到 Recorder 输出
   - 故障速查里"`run_failed: 400 No tool output found`"引用了同日另一条 changelog 的根因——若那条修复扩大覆盖（partial_to_interrupted_message 也跳过未完成 tool_call），可同步精简故障表
+
+### 2026-05-21 — CLAUDE.md 新增「调试 bug 前必做：先用 heb CLI 自主复现」规则
+
+- **Why**: heb CLI + 自主调试手册都已就位，但缺少一条约束告诉 AI 「遇到 bug 优先自主复现，不要立刻把用户拉下水」。同时需要明确：现有 8 个命令不够用时怎么扩，避免要么束手束脚、要么自作主张乱加旁路绕过 agent_core 主路径。
+- **改动**:
+  - [CLAUDE.md](../CLAUDE.md):
+    - 「开发命令」节修正过时描述：`apps/cli` 不再标记为「已排除」，补上 heb daemon 启动命令；说明 Desktop / heb 两个 surface 共享 `~/.hebbian/`，行为对称
+    - 新增「调试 bug 前必做：先用 heb CLI 自主复现」一节，含能/不能 heb 复现的对照表、最小 loop 脚本、修完自验要求
+    - 新增「现有 heb 命令不够用时：允许新增」一节，规定四条准入：先证明现有命令不够 → 必须走 agent_core 主路径 → 不破坏 Desktop 兼容（只允许加 IpcCommand/DaemonEvent variant，不改现有字段语义）→ 走完动手前必做 5 步；并要求新增命令必须同步更新 ipc.rs / main.rs / daemon.rs / heb-cli-debug.md / changelog 五处
+- **影响范围**: 仅规则文档；不动代码、不动协议、不动架构.md（这是工作流规则，不是设计变更）
+- **留尾巴**:
+  - 规则要求新增命令时同步五处文件，后续若 IPC 协议演化（例如拆分 client / daemon 包），要更新这条 checklist 的文件路径
+  - 「能/不能 heb 复现」对照表是当前两 surface 边界的快照，未来若 EditsWorktree 在 CLI 也暴露（目前 CLI 已经接入但没暴露查看 diff 的命令），该表「不能 heb 复现」一列需缩

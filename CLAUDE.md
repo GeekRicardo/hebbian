@@ -144,13 +144,14 @@ pnpm tauri dev
 ## 开发命令
 
 ```bash
-# 启动 Desktop（唯一 surface）
+# 启动 Desktop（GUI surface）
 pnpm tauri dev
 
-# Provider / Session / 设置由 Desktop UI 操作；
-# `apps/cli` 目录已从 workspace 排除（2026-05-13 changelog），不再构建
+# 启动 heb CLI daemon（AI 自主调试 surface，2026-05-20 changelog）
+cargo build -p heb
+./target/debug/heb new --provider=<id> --workdir <dir>
 
-# 调试模型 IO（Desktop 启动前导出环境变量）
+# 调试模型 IO（Desktop / heb 启动前导出环境变量）
 HEBBIAN_DUMP_MODEL_IO=1 pnpm tauri dev
 # 输出位置：~/.hebbian/sessions/<session_id>/model_io.jsonl
 
@@ -158,7 +159,87 @@ HEBBIAN_DUMP_MODEL_IO=1 pnpm tauri dev
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 pnpm tauri dev
 ```
 
-Desktop 多窗口/多进程共享同一个数据目录 `~/.hebbian/`（文件锁保护并发写）。
+Desktop 与 heb daemon 共享同一个数据目录 `~/.hebbian/`（文件锁保护并发写）。任一 surface 能复现的 agent_core 问题，另一个也能。
+
+---
+
+## ⚠️ 调试 bug 前必做：先用 `heb` CLI 自主复现
+
+**适用范围**：用户报 bug / 自己发现 agent 行为异常 / 验证修复是否真的解决问题。
+
+### 步骤 1：判定是否能用 heb 复现
+
+`heb` daemon 与 Desktop 共享 `~/.hebbian/`，走相同的 agent_core 主路径。只要问题不在 GUI 层，就**优先用 heb 自主复现**，不要立刻让用户去 Desktop 重跑。
+
+| 能 heb 复现 | 不能 heb 复现（必须 Desktop） |
+|------------|----------------------------|
+| agent 行为问题（工具调用错、回答跑偏、死循环） | UI 渲染 / 样式问题 |
+| 工具执行问题（Read/Write/Edit/Bash/Grep） | Tauri 命令分发本身的 bug |
+| 权限审批流程问题 | 前端事件流翻译错位（chat.rs ↔ types.ts） |
+| 多轮上下文 / 缓存命中问题 | 输入框 / 侧边栏 / 设置弹窗交互 |
+| Provider / model 协议问题 | EditsWorktree 的可视化 diff |
+| Session 持久化 / 崩溃恢复问题 | 流式 bubble 折叠 / portal 渲染 |
+| HITL 阻塞 / cancel 行为 | 全局快捷键、菜单、托盘 |
+| Prompt / RunMode / Hooks 行为 | |
+
+### 步骤 2：读 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)
+
+它是给 AI 看的自包含手册：一分钟上手、完整命令/事件表、常用复现 pattern、故障速查、原理。读它而不是从源码拼。
+
+### 步骤 3：自主跑
+
+最小 loop：
+
+```bash
+heb new --provider=<id> --workdir /tmp/repro > /tmp/heb.log 2>&1 &
+sleep 1; SID=$(jq -r .session_id < <(head -n1 /tmp/heb.log))
+heb input $SID "<触发 bug 的输入>"
+# tail -f /tmp/heb.log 看事件流；按 permission_requested / question_requested 自动响应
+# 看实际模型 IO：~/.hebbian/sessions/$SID/model_io.jsonl
+# 看完整对话历史：~/.hebbian/sessions/$SID/session.jsonl
+```
+
+报告 bug 时附上：触发输入 + 关键事件行 + （如有）`model_io.jsonl` 中相关请求段。
+
+### 步骤 4：修完后自验
+
+修完 bug 必须**用同一个 heb 脚本重跑确认修复**，再交付给用户。"我改完了，请你试试"是低质量交付。
+
+---
+
+## 现有 `heb` 命令不够用时：允许新增
+
+如果某种调试场景 **能在 agent_core 层实现但现有 heb 命令做不到**（例：dump 某个 session 的 transcript 但不开新 run、注入一条历史 user message、查询当前 pending_approvals 状态、强制重置某项 ReadStateTracker），允许新增 IPC 命令或事件。
+
+新增前先评估：
+
+1. **现有命令真的不够吗？**
+   - 90% 的调试需求能用现有 8 个命令 + 文件系统直接看 jsonl/model_io 解决
+   - 先确认问题不能通过组合现有命令 + 读 `~/.hebbian/` 下文件解决，再考虑加命令
+
+2. **新命令是否走 agent_core 主路径？**
+   - **必须**：新命令的语义对应 agent_core / storage 已有的某个能力，CLI 只是 surface 化它
+   - **禁止**：新命令做 agent_core 之外的事（例如直接 fs::write session.jsonl 篡改历史、绕过 ApprovalDecision 直接修改 rules.json）—— 这会让 CLI / Desktop 行为脱钩，违反"两 surface 对称"原则
+
+3. **是否破坏 Desktop 兼容？**
+   - 加 `IpcCommand` variant：纯 additive，旧客户端无感
+   - 加 `DaemonEvent` variant：旧脚本会忽略未知 event，可接受
+   - 改 `IpcCommand` / `DaemonEvent` **现有字段语义** → 禁止，必须新加 variant
+
+4. **走完[动手前必做](#️-任何修改前必做)5 步**
+   - 大概率落在架构.md §7（CoreClient）或新设的 surface 节
+   - 如果新命令暴露的是 agent_core 已有但未导出的能力 → 不动架构.md，只走 changelog
+   - 如果新命令需要 agent_core 加新能力 → 先改架构.md 对应章节
+
+### 实现完后必须同步更新
+
+- [apps/cli/src/ipc.rs](apps/cli/src/ipc.rs)：协议类型
+- [apps/cli/src/main.rs](apps/cli/src/main.rs)：clap 子命令
+- [apps/cli/src/daemon.rs](apps/cli/src/daemon.rs)：`handle_command` 分支
+- [docs/heb-cli-debug.md](docs/heb-cli-debug.md)：命令表 §2 + 事件表 §3 + （如有）pattern §4
+- [docs/changelog.md](docs/changelog.md)：追加一条，注明为什么加、典型用例
+
+**新增命令的提交 = CLI 代码 + 文档 + changelog 三件套缺一不可**，仅改代码不更新文档视为未完成。
 
 ---
 
