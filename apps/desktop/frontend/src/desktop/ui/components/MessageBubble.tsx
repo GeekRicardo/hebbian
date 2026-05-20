@@ -1269,11 +1269,11 @@ function ToolPre({ children, dark = false }: { children: string; dark?: boolean 
   return (
     <pre
       className={cn(
-        "overflow-auto rounded-md border p-2 pr-10 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
+        "tool-pre m-0 overflow-auto rounded-none p-2 pr-10 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
         !expanded && "max-h-48",
         dark
-          ? "border-slate-800 bg-slate-950 text-slate-100 font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]"
-          : "border-border bg-muted/50 text-foreground font-mono"
+          ? "bg-slate-950 text-slate-100 font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]"
+          : "text-foreground font-mono"
       )}
     >
       {children}
@@ -1286,7 +1286,7 @@ function RenderedMarkdown({ text }: { text: string }) {
   return (
     <div
       className={cn(
-        "overflow-auto rounded-md border border-border bg-background px-3 py-2 text-[14px] leading-relaxed",
+        "overflow-auto px-3 py-2 text-[14px] leading-relaxed",
         !expanded && "max-h-48"
       )}
     >
@@ -1554,7 +1554,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
   }
   if (name === "Read") {
     return (
-      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+      <div className="relative">
         <ExpandButton title={title}>
           <ToolPre>{result}</ToolPre>
         </ExpandButton>
@@ -1565,7 +1565,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
   }
   if (name === "Skill") {
     return (
-      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+      <div className="relative">
         <ExpandButton title={title}>
           <ToolPre>{result}</ToolPre>
         </ExpandButton>
@@ -1599,7 +1599,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
   }
   if (name === "Fetch") {
     return (
-      <div className="relative overflow-hidden rounded-md border border-border bg-background">
+      <div className="relative">
         <ExpandButton title={title}>
           <div className="space-y-2">
             <RenderedMarkdown text={result} />
@@ -1695,45 +1695,56 @@ function ToolCallTimeline({
                 )}
               />
             </button>
-            <button
-              type="button"
-              onClick={() => onToggle(call.key)}
-              className="grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left"
+            <div
+              className={cn(
+                active && "overflow-hidden rounded-b-md border border-border bg-background"
+              )}
             >
-              <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
-                <ToolIcon name={call.name} />
-              </span>
-              <span className="whitespace-nowrap text-[12px] font-semibold">
-                {call.name || "工具调用"}
-              </span>
-              <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-                <span className="truncate">{callDescription(call)}</span>
-                <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
-                  {callSummary(call)}
-                </code>
-              </span>
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    call.status === "done"
-                      ? "bg-muted-foreground/45"
-                      : call.status === "running"
-                      ? "animate-pulse bg-muted-foreground/60"
-                      : "animate-pulse bg-muted-foreground/40"
-                  )}
-                />
-                {statusLabel(call.status)}
-              </span>
-            </button>
-            {active && (
-              <div className="mt-1 rounded-md border border-border bg-background">
-                <div className="p-2">
+              <button
+                type="button"
+                onClick={() => onToggle(call.key)}
+                className={cn(
+                  "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left",
+                  active && "border-b border-border bg-muted/30"
+                )}
+              >
+                <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+                  <ToolIcon name={call.name} />
+                </span>
+                <span className="whitespace-nowrap text-[12px] font-semibold">
+                  {call.name || "工具调用"}
+                </span>
+                <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+                  <span className="truncate">{callDescription(call)}</span>
+                  <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
+                    {callSummary(call)}
+                  </code>
+                </span>
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      call.status === "done"
+                        ? "bg-muted-foreground/45"
+                        : call.status === "running"
+                        ? "animate-pulse bg-muted-foreground/60"
+                        : "animate-pulse bg-muted-foreground/40"
+                    )}
+                  />
+                  {statusLabel(call.status)}
+                </span>
+              </button>
+              {active && (
+                <>
                   <ToolCallDetail call={call} />
-                  {call.artifactPath && <ArtifactBadge path={call.artifactPath} />}
-                </div>
-              </div>
-            )}
+                  {call.artifactPath && (
+                    <div className="border-t border-border p-2">
+                      <ArtifactBadge path={call.artifactPath} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         );
       })}

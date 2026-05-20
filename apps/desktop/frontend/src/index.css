@@ -133,6 +133,9 @@
   .markdown :where(pre) {
     @apply bg-muted rounded-lg p-3 overflow-x-auto mb-3;
   }
+  .markdown :where(.tool-pre) {
+    @apply m-0 rounded-none bg-transparent p-2 pr-10;
+  }
   .markdown :where(pre code) {
     @apply text-[0.875em] font-mono;
   }

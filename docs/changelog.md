@@ -1908,3 +1908,84 @@
 - **留尾巴**:
   - 如果未来想让 observability 容忍 raw shell-style 单/双引号（比如用户用 `export OTEL_EXPORTER_OTLP_HEADERS="..."` 时一些 shell 不剥引号），可以在 `parse_otlp_headers` 里加一次 `trim_matches(|c| c == '"' || c == '\'')`。但当前 dotenvy 已经处理，加这层兜底是多余防御，先不加
   - 另一个边角：dotenvy 双引号 value 会处理 `\n` `\t` 等转义；base64 字符表里没这些，所以单引号 / 双引号在本场景等价，统一推荐单引号是为了让用户少踩一类坑（万一某天 value 里出现 `\xxx` 字面字符串）
+
+### 2026-05-20 — 补全 Langfuse OTLP span 语义：一个 run 聚合成 trace，model/tool 有 input/output/usage
+
+- **Why**: Langfuse 认证打通后，Web 端虽然有数据，但体验不对：一次 user message 到 agent_loop 结束应该是一条 `run` trace；实际列表里夹杂启动探针 trace，trace 内 observations 也只有 metadata，`model.request` 缺失，`model_call` / `tool_call` 的 input、output、usage 全为空。根因：（1）临时 `startup-probe` 仍在 init 里每次启动都发一条 trace；（2）Desktop 默认 filter 只有 `agent_core=debug,warn`，`model_gateway` 的 info span 被过滤，导致 `model.request` 根本没上报；（3）只写了 `gen_ai.usage.*`，没有写 Langfuse OTLP ingest 显式识别的 `langfuse.trace.*` / `langfuse.observation.*` 字段。
+- **改动**:
+  - [crates/observability/src/lib.rs](../crates/observability/src/lib.rs): 删除临时 `startup-probe` native OTel span；保留 subscriber 初始化失败时的 stderr 提示（这类失败会让 otel_layer 不生效，必须显性暴露）
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 默认 filter 从 `agent_core=debug,warn` 改为 `agent_core=debug,model_gateway=info,warn`，让 `model.request` info span 进入 OTLP
+  - [crates/observability/src/attr.rs](../crates/observability/src/attr.rs): 新增 `gen_ai.prompt/completion` 与 Langfuse 显式映射常量：`langfuse.trace.input/output`、`langfuse.observation.input/output/usage_details`
+  - [crates/model-gateway/src/instrument.rs](../crates/model-gateway/src/instrument.rs): `model.request` 标记 `langfuse.observation.type="generation"`，记录模型名、参数、请求 messages JSON、完成文本 / tool calls JSON、usage_details JSON；继续保留 GenAI semconv 的 model/usage/finish_reason，并把 prompt/completion 同步写到 `gen_ai.prompt/completion`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): run span 记录最近一条 user message 作为 `langfuse.trace.input`，最终 assistant output 作为 `langfuse.trace.output`
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): tool.call span 记录有效工具入参（hook 改写后）作为 `langfuse.observation.input`，最终返回给模型的工具结果作为 `langfuse.observation.output`
+  - [docs/架构.md](架构.md) §4.10.1: 补充 GenAI prompt/completion 与 Langfuse 显式映射字段、32k chars 截断约束
+- **影响范围**: observability / model-gateway / agent-core / desktop；不改协议、不改 session/jsonl、不改 UI。Langfuse 会开始存明文 prompt、completion、tool input/output（含可能的文件片段 / 命令输出），这是用户明确要求“都加”的结果；所有写入 Langfuse 的长文本统一按 32k chars 截断，避免 OTLP payload 过大。
+- **留尾巴**:
+  - `model.request` 的 input 当前是完整请求 messages（system + transcript + tool results），能最大化还原模型上下文，但会把系统 prompt 和工具输出明文发到 Langfuse。若后续需要隐私模式，可加环境变量控制“只记录 summary / 最近 N 轮 / 不记录内容”。
+  - trace.input 取的是 run 开始时 transcript 中最近一条 user message；如果本 run 中途通过 pending input 注入额外 user message，trace.input 不会追加更新。本次先保持“一次用户触发 run = 最近 user message”的语义，避免 trace.input 过长。
+
+### 2026-05-20 — 调整 Langfuse trace 树为 agent 语义层级，补 session 聚合
+
+- **Why**: 用户指出目标不是“把所有信息塞进一条 observation”，而是像 deepagents 一样：一次用户消息只有一条 trace 记录，点开后是一棵清晰的 agent 树（before/model/tools/permission/after），而不是在列表里像散落的 `turn` / `model.request` / `tool.call`。之前虽然 trace_id 已经一致，但 `turn` 这个内部实现名直接暴露，model/tool 也没有挂在明确的 phase 容器下；同时 Langfuse Sessions 为空，因为 root span 没写 `langfuse.session.id`。
+- **改动**:
+  - [crates/observability/src/attr.rs](../crates/observability/src/attr.rs): 新增 `LANGFUSE_SESSION_ID = "langfuse.session.id"`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): run span 声明并记录 `langfuse.session.id`；原 `turn` span 更名为 `agent.iteration`；每轮模型调用前新增 `model` phase span，并把 `model.request` 挂到它下面；工具阶段新增 `tools` phase span，并把 dispatcher / tool.call 挂到它下面
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): tool span 增加 `otel.name = tool.<name>` 属性，给 OTLP/Langfuse 一条可读的工具名线索（若 Langfuse 不把它映射成 observation name，也仍保留 `hebbian.tool.name` 可筛选）
+  - [docs/架构.md](架构.md) §4.10.1: 明确 Langfuse 树结构为 `run → agent.iteration → model → model.request` 与 `run → agent.iteration → tools → tool.call`
+- **影响范围**: observability attr / agent-core trace span 树 / Langfuse UI 展示；不改协议、不改业务执行、不改 session/jsonl。下一条新 trace 才会带 sessionId，历史 trace 不会回填。
+- **留尾巴**:
+  - 当前 hook 只有 BeforeModelCall / PreToolUse / PostToolUse 等触发点，没有单独建 `hook.before_model` observation；如果要完全复刻用户截图里 middleware/hook 节点，需要在 HookManager::trigger 周围统一包一层 hook span。
+  - `tool.<name>` 是否成为 Langfuse UI 的 observation name 取决于 tracing-opentelemetry / Langfuse 对 `otel.name` 的映射；如果仍显示 `tool.call`，后续可把常用工具按 match 建固定 span name，或引入原生 OTel span builder 支持动态 name。
+
+### 2026-05-20 — 启用 partial 崩溃恢复：进程退出后输出不再丢失
+
+- **Why**: 用户反映程序退出（强退 / crash）后已经输出的 assistant 内容不在 session.jsonl 里——聊了一半的内容彻底消失。根因是 `chat.rs` 的 `recorder: None` 一直是空，且 `sessions::append_message` 只在 run 正常完成后才落盘。
+- **改动**:
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs):
+    - 新增 `PartialFileWriter` 结构体：持有 `BufWriter<File>`，在 `on_event` 中把 TextDelta / TextDone(non-streaming) / Reasoning / ToolCallStarted / ToolCallDelta 增量写到 `partial/<msg_id>.partial.jsonl`。使用 BufWriter 而非 fsync 每次，Drop 时自动 flush OS buffer——正常退出和 panic 都能保留内容，SIGKILL 有极小 OS buffer 窗口丢失（可接受）。
+    - `DesktopObserver` 增加 `partial_writer` 字段，`new()` 接受 `data_dir`/`session_id` 并自动创建 partial 文件。
+    - 所有出口路径（Done / Cancelled / Failed）均在输出已落盘后删除 partial 文件，避免下次误恢复。
+    - 新增 `recover_and_save_interrupted_partials`：每次用户发新消息时，先扫描 partial 目录，把残留内容追加为 AssistantMessage + Interrupted 标记到 session.jsonl，再删 partial 文件。
+    - 新增 `partial_to_interrupted_message`：把 `RecoveredPartial`（text / reasoning / tool_calls）组装成 `Message`。
+  - `recorder: None` 保持不变——Recorder 是全量 Event 落盘，当前问题由 partial 机制解决，两者互不干扰。
+- **影响范围**: `apps/desktop/src/chat.rs` 只改 desktop 一个文件；`sessions_dir` 的 partial 基础设施（`append_partial` / `delete_partial` / `recover_interrupted_partials`）已在前期建好，本次只是首次接入调用方。协议不变，session.jsonl 格式不变，前端无感。
+- **留尾巴**:
+  - SIGKILL（`kill -9`）仍有极小窗口（BufWriter 剩余内容，最多几 KB）可能丢失；完全消除需改为 per-write fsync 或引入 Recorder 的 async-channel 模式，但性能代价高，当前 trade-off 合理。
+  - `recorder: None` 仍未启用；架构 §4.9 的完整 Recorder 路线（全量 Event 落盘）可在后续迭代中独立开启，届时 partial 机制可以退役（二者功能重叠但不冲突）。
+  - 崩溃恢复后前端展示的 tool_calls 没有 result（崩溃时工具可能没跑完），不影响对话可读性，但后续可考虑在 MessagePart::ToolCall 上加 `truncated` 标记区分已完成和中断的工具调用。
+
+### 2026-05-20 — Grep 内置化：使用 ripgrep 同源 crates，不再依赖系统 rg 二进制
+
+- **Why**: 用户在 Desktop 里看到 `Grep: 未找到 ripgrep（rg）。请安装...`，但本机 shell 里 `rg` 实际存在于 `/opt/homebrew/bin/rg`。根因是 `GrepTool` 直接 `Command::new("rg")`，GUI app / Tauri 启动环境的 PATH 不等于交互 shell PATH。用户进一步明确要求的不是手写简化版 grep，而是命令行 ripgrep 的高效搜索核心；所以实现必须用 ripgrep 项目拆出的 Rust crates，而不是依赖系统二进制或维护自写 walkdir+regex 子集。
+- **改动**:
+  - [crates/agent-core/src/tools/grep.rs](../crates/agent-core/src/tools/grep.rs): 删除外部 `rg` 进程调用，改为 `tokio::task::spawn_blocking` 内部搜索；遍历 / `.gitignore` / override glob / type 过滤走 `ignore::WalkBuilder`；正则编译走 `grep_regex::RegexMatcherBuilder`；逐文件匹配、行号和二进制检测走 `grep_searcher::Searcher`。保留 `files_with_matches` / `content` / `count` 三种 output_mode，默认排除 `.git` / `.svn` / `.hg` / `node_modules` / `target`，并支持常见 `type` alias（rust/rs/py/ts/js/md/yml 等）。
+  - [crates/agent-core/Cargo.toml](../crates/agent-core/Cargo.toml): agent-core 增加 `ignore` / `grep-matcher` / `grep-regex` / `grep-searcher` 依赖。
+  - [docs/架构.md](架构.md) §4.4.6 / §13: 明确 `Grep` 是 Rust 内部实现，使用 ripgrep 同源 crates，不依赖系统 `rg` 或 GUI PATH；同时说明协议边界仍是 Hebbian 的工具 schema，不是完整 `rg` CLI flag 兼容层。
+  - 新增单测：PATH 指向空目录时 `Grep` 仍能成功；`.gitignore` 忽略的文件不会被搜出来；覆盖 brace glob + type 过滤、count 模式。
+- **验证**: `cargo test -p agent-core tools::grep::tests` 通过（7 项）。
+- **影响范围**: agent-core 内置 Grep 工具。协议不变、工具 schema 不变、权限/effects 不变。用户可见变化是 Desktop 内 `Grep` 不再因 PATH 找不到 `/opt/homebrew/bin/rg` 失败，同时搜索路径更接近命令行 `rg` 的核心行为（ignore/type/regex/searcher 同源）。
+- **留尾巴**:
+  - 这不是完整 `rg` CLI flag 兼容层：Hebbian `Grep` 的模型可见 schema 目前没有 `--type-not`、多 include/exclude glob、context lines、PCRE2 等参数。后续要扩能力应扩工具 schema 并继续复用 ripgrep crates，而不是退回系统二进制。
+
+### 2026-05-20 — 简化工具调用详情卡片的嵌套边框
+
+- **Why**: 用户指出 Desktop 里 `tool_` 调用详情不应再套一层 `div` 形成双重卡片；后续截图又暴露出内容区仍有圆角底色、底部没有贴到外框、外框顶部仍像有圆角。根因是 `ToolPre` 虽已去掉自身圆角/底色，但消息主体外层 `.markdown` 的全局 `pre` 样式仍会给工具输出重新加 `bg-muted`、`rounded-lg`、`p-3`、`mb-3`。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 工具详情展开区保留单一外框；去掉详情内容内层 `p-2` 容器、`Read`/`Skill`/`Fetch` 专用详情壳、`ToolPre` 默认 margin、以及 markdown 结果区自带边框/圆角/底色；展开外框顶部显式设为直角，artifact 区改用顶部分割线承接同一个外框。
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 给 `.tool-pre` 增加 markdown 全局 `pre` 样式的 opt-out，阻止工具输出再被套上代码块背景、圆角和底部 margin；暗色终端输出继续保留深色底。
+- **影响范围**: Desktop 前端消息渲染；不改 EngineEvent / EventPayload，不影响 agent-core、协议、持久化或工具执行。
+- **留尾巴**: 无
+
+### 2026-05-20 — 跳过未完成历史 tool_call，避免 Anthropic 400
+
+- **Why**: 用户贴出的失败日志显示 Anthropic 返回 `No tool output found for function call call_IYFbvGyBzNf1drdPkV5zq2K6`。检查对应 session 后确认：`session.jsonl` 第 5 行的 assistant 消息来自失败/中断后的半截输出，`parts[46]` 记录了一个 `Edit` tool_call，但没有 result；`Transcript::from_session` 重建历史时仍把这个未完成 tool_call 当成已完成模型输出发给 provider，导致 Anthropic 要求后续必须有同 id 的 `tool_result`。
+- **改动**:
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs): session 历史转 transcript 时，只回放已有 result 的 tool_call/tool_result 对；无 result 的半截 tool_call 保留在 UI 历史里，但不进入下一轮模型请求。
+  - 新增回归测试 `skips_unfinished_part_tool_calls_when_rebuilding_transcript`，覆盖 `MessagePart::ToolCall { result: None }` 不再出现在 `TranscriptEntry::Assistant.tool_calls` 或 `ToolResults` 中，同时确认已完成 tool_call 仍正常回放。
+- **验证**:
+  - `cargo test -p agent-core context::transcript::tests::skips_unfinished_part_tool_calls_when_rebuilding_transcript -- --nocapture` 先红后绿
+  - `cargo test -p agent-core --lib` 通过（209 项）
+- **影响范围**: agent-core 的 session → model transcript 转换；不改协议、不改 session/jsonl 落盘格式、不改 Desktop UI。历史里已有的半截 tool_call 仍可显示给用户，但不会再破坏下一次模型请求。
+- **留尾巴**:
+  - `partial_to_interrupted_message` / failed output 仍会把未完成 tool_call 存到 UI 历史里。当前修复选择在 transcript 边界过滤，避免迁移旧数据；后续如果要在 UI 上明确标出“未执行/中断”，可给 `MessagePart::ToolCall` 增加状态字段或用 meta 标记，但那会改持久化语义。
