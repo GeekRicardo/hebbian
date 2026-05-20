@@ -184,13 +184,14 @@ impl ToolDispatcher {
                     .map_or(false, |(dd, sid)| p.starts_with(&dd.join("sessions").join(sid)))
             })
             .filter(|p| {
-                // 也查 PermissionStore：Global/Session FilePath Allow 规则覆盖的路径免审批
+                // 也查 PermissionStore：Session/Project/Global FilePath Allow 规则覆盖的路径免审批
                 !self
                     .permission_store
                     .as_ref()
                     .map_or(false, |store| {
                         store.allows_path(
                             self.session_id_for_hooks.as_deref(),
+                            Some(self.workspace.workdir()),
                             &p.to_string_lossy(),
                         )
                     })
@@ -857,21 +858,21 @@ async fn await_path_decision(
                 // 持久化到 PermissionStore：其他 session 通过 out-of-scope filter
                 // 里的 allows_path() 检查共享这些规则。
                 if let Some(store) = permission_store {
-                    if scope == protocol::PermissionScope::Session
-                        || scope == protocol::PermissionScope::Global
-                    {
-                        let sid = if scope == protocol::PermissionScope::Session {
-                            session_id
-                        } else {
-                            None
-                        };
-                        if let Err(e) = store.add_path_rule(
-                            sid,
-                            p.to_string_lossy().to_string(),
-                            scope,
-                        ) {
-                            tracing::warn!(error = %e, path = %p.display(), "路径规则持久化失败");
+                    let (sid, workdir_for_rule) = match scope {
+                        protocol::PermissionScope::Once => continue,
+                        protocol::PermissionScope::Session => (session_id, None),
+                        protocol::PermissionScope::Project => {
+                            (None, Some(workspace.workdir().to_path_buf()))
                         }
+                        protocol::PermissionScope::Global => (None, None),
+                    };
+                    if let Err(e) = store.add_path_rule(
+                        sid,
+                        workdir_for_rule,
+                        p.to_string_lossy().to_string(),
+                        scope,
+                    ) {
+                        tracing::warn!(error = %e, path = %p.display(), "路径规则持久化失败");
                     }
                 }
             }

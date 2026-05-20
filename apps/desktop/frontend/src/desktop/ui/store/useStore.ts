@@ -158,11 +158,21 @@ function toolPartIndex(
     const byId = parts.findIndex(
       (part) => part.type === "tool_call" && part.id === id
     );
-    if (byId >= 0) return byId;
+    if (byId >= 0) {
+      console.debug("[toolPartIndex] matched by id", { id, index, byId, totalParts: parts.length });
+      return byId;
+    }
+    console.debug("[toolPartIndex] id not found, falling back to index", { id, index, totalParts: parts.length, toolParts: parts.filter(p => p.type === "tool_call").map(p => ({ idx: p.index, id: p.id })) });
   }
-  return parts.findIndex(
+  const byIndex = parts.findIndex(
     (part) => part.type === "tool_call" && part.index === index
   );
+  if (byIndex >= 0) {
+    console.debug("[toolPartIndex] matched by index", { id, index, byIndex, totalParts: parts.length });
+  } else {
+    console.debug("[toolPartIndex] NOT FOUND — will create new part", { id, index, totalParts: parts.length, toolParts: parts.filter(p => p.type === "tool_call").map(p => ({ idx: p.index, id: p.id })) });
+  }
+  return byIndex;
 }
 
 function ensureToolPart(
@@ -190,12 +200,19 @@ function applyToolCallDelta(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_call_delta" }>
 ): StreamingAssistantPart[] {
+  const prevToolCount = parts.filter(p => p.type === "tool_call").length;
   const [next, pos] = ensureToolPart(
     parts,
     event.index,
     event.id,
     event.name
   );
+  const newToolCount = next.filter(p => p.type === "tool_call").length;
+  if (newToolCount > prevToolCount) {
+    console.debug("[applyToolCallDelta] created NEW tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, argsDeltaLen: event.arguments_delta?.length ?? 0, prevToolCount, newToolCount, pos });
+  } else {
+    console.debug("[applyToolCallDelta] updated existing tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, argsDeltaLen: event.arguments_delta?.length ?? 0, pos });
+  }
   const call = next[pos];
   if (call.type !== "tool_call") return next;
   next[pos] = {
@@ -212,7 +229,14 @@ function applyToolStart(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_start" }>
 ): StreamingAssistantPart[] {
+  const prevToolCount = parts.filter(p => p.type === "tool_call").length;
   const [next, pos] = ensureToolPart(parts, event.index, event.id, event.name);
+  const newToolCount = next.filter(p => p.type === "tool_call").length;
+  if (newToolCount > prevToolCount) {
+    console.debug("[applyToolStart] created NEW tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, prevToolCount, newToolCount, pos });
+  } else {
+    console.debug("[applyToolStart] updated existing tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, pos });
+  }
   const call = next[pos];
   if (call.type !== "tool_call") return next;
   next[pos] = {
@@ -716,7 +740,9 @@ interface AppState {
   setPendingWorkdir: (workdir: string | null) => Promise<void>;
   setPendingAllowedPaths: (dirs: string[]) => Promise<void>;
   /** PathAccess 审批专用 */
-  resolvePathAccess: (scope: "once" | "this_project" | "all_project") => Promise<void>;
+  resolvePathAccess: (
+    scope: "once" | "this_session" | "this_project" | "global"
+  ) => Promise<void>;
   setPendingPromptId: (v: string) => void;
   setUserAvatar: (v: string) => void;
   toggleTheme: () => void;
@@ -1765,13 +1791,14 @@ export const useStore = create<AppState>((set, get) => ({
         scope,
         sessionId
       );
-      // 重新拉一下 session（this_project 时 allowed_paths 已落盘）
-      if (scope === "this_project") {
+      // 重新拉一下 session（this_session 时 allowed_paths 已落盘）；
+      // global 触发 settings 刷新；this_project / once 只动 PermissionStore，无需额外拉数据。
+      if (scope === "this_session") {
         const fresh = await api.getSession(sessionId);
         if (get().currentSession?.id === sessionId) {
           set({ currentSession: fresh });
         }
-      } else if (scope === "all_project") {
+      } else if (scope === "global") {
         await get().refreshAppSettings();
       }
     } catch (e) {

@@ -388,7 +388,11 @@ impl Session {
     ) -> RunHandle {
         let mut gate = HitlGate::new(self.definition.permission_policy.clone());
         if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
-            gate = gate.with_store(store.clone(), sid.clone());
+            gate = gate.with_store(
+                store.clone(),
+                sid.clone(),
+                Some(self.workspace.workdir().to_path_buf()),
+            );
         }
         let hitl = Arc::new(gate);
         self.harness.spawn_run(
@@ -443,7 +447,11 @@ impl Session {
     ) -> RunHandle {
         let mut gate = HitlGate::new(self.definition.permission_policy.clone());
         if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
-            gate = gate.with_store(store.clone(), sid.clone());
+            gate = gate.with_store(
+                store.clone(),
+                sid.clone(),
+                Some(self.workspace.workdir().to_path_buf()),
+            );
         }
         let hitl = Arc::new(gate);
         self.harness.spawn_run(

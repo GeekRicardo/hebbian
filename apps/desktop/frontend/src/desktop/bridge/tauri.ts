@@ -204,16 +204,17 @@ export const api = {
   /**
    * 用户回应一次工具审批请求（HITL）。
    *
-   * `scope` 仅对 `allow_and_remember` 有意义：
+   * `scope` 仅对 `allow_and_remember` 有意义（架构 §4.5.3）：
    * - `"session"`（默认）：仅当前对话不再询问
-   * - `"global"`：写到 ~/.hebbian/permissions.json，所有对话生效
+   * - `"project"`：当前 workdir 所有对话不再询问（其他项目不受影响）
+   * - `"global"`：写到 ~/.hebbian/permissions.json（workdir = null），所有对话生效
    */
   approvePermission: (
     requestId: string,
     decision: "allow_once" | "allow_and_remember" | "deny" | "deny_with_feedback",
     feedback?: string,
     pattern?: string | null,
-    scope?: "session" | "global"
+    scope?: "session" | "project" | "global"
   ) =>
     invoke<void>("approve_permission", {
       requestId,
@@ -341,11 +342,17 @@ export const api = {
       | { kind: "unsupported"; path: string; reason: string }
     >("attach_path", { path }),
 
-  /** PathAccess 审批专用：scope 决定持久化到哪。"this_project" = session，"all_project" = 全局，"once" = 只放行本次 */
+  /**
+   * PathAccess 审批专用：scope 决定持久化到哪（架构 §4.5.3）：
+   * - `"once"`：只放行本次
+   * - `"this_session"`：当前 session 的 allowed_paths
+   * - `"this_project"`：当前 workdir 的 PermissionStore Project FilePath 规则
+   * - `"global"`：settings.conversation.allowed_paths + Global FilePath 规则
+   */
   approvePathAccess: (
     requestId: string,
     paths: string[],
-    scope: "once" | "this_project" | "all_project",
+    scope: "once" | "this_session" | "this_project" | "global",
     sessionId: string | null
   ) =>
     invoke<void>("approve_path_access", {

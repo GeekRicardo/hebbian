@@ -17,6 +17,7 @@
 //! ```
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +34,15 @@ pub struct PermissionsFile {
     pub rules: Vec<PermissionRule>,
 }
 
-fn path(data_dir: &Path) -> PathBuf {
+pub fn path(data_dir: &Path) -> PathBuf {
     data_dir.join(FILE_NAME)
+}
+
+/// 文件最后修改时间；不存在或读不到 metadata 时返回 None。
+pub fn mtime(data_dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path(data_dir))
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 pub fn load(data_dir: &Path) -> AppResult<PermissionsFile> {

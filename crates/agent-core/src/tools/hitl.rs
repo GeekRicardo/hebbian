@@ -19,6 +19,7 @@
 //! 避免 `"git statusbad"` 误中 `"git status"`。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use protocol::{ApprovalDecision, PermissionRequestId, PermissionScope, UserAnswer};
@@ -80,8 +81,9 @@ const NO_TOOL_LEVEL_MEMORY: &[&str] = &["Bash"];
 
 /// HITL 统一闸门。
 ///
-/// `permission_store` + `session_id` 可选：当 surface 启动 PermissionStore 时挂上来，
-/// resolve 时把 AllowAndRemember(Session/Global) 翻成 [`PermissionRule`] 落盘。
+/// `permission_store` + `session_id` + `workdir` 可选：当 surface 启动 PermissionStore
+/// 时挂上来，resolve 时把 AllowAndRemember(Session/Project/Global) 翻成
+/// [`PermissionRule`] 落盘。`workdir` 仅 `Project` scope 必填（架构 §4.5.4）。
 /// 不挂时仅在 in-memory `learned` 表里记忆（保留旧行为）。
 pub struct HitlGate {
     policy: PermissionPolicy,
@@ -89,6 +91,7 @@ pub struct HitlGate {
     learned: Mutex<LearnedRules>,
     permission_store: Option<Arc<PermissionStore>>,
     session_id: Option<String>,
+    workdir: Option<PathBuf>,
 }
 
 impl HitlGate {
@@ -99,17 +102,21 @@ impl HitlGate {
             learned: Mutex::new(LearnedRules::default()),
             permission_store: None,
             session_id: None,
+            workdir: None,
         }
     }
 
-    /// 挂上 PermissionStore + 当前 session_id，让 AllowAndRemember 真正落盘。
+    /// 挂上 PermissionStore + 当前 session_id + workdir，让 AllowAndRemember 真正落盘。
+    /// `workdir` 用于 `PermissionScope::Project` 规则（架构 §4.5.4）。
     pub fn with_store(
         mut self,
         store: Arc<PermissionStore>,
         session_id: impl Into<String>,
+        workdir: Option<PathBuf>,
     ) -> Self {
         self.permission_store = Some(store);
         self.session_id = Some(session_id.into());
+        self.workdir = workdir;
         self
     }
 
@@ -187,19 +194,20 @@ impl HitlGate {
             }
         }
 
-        // 5b) PermissionStore（Session → Global）—— 长期规则
+        // 5b) PermissionStore（Session → Project → Global）—— 长期规则
         //     Bash/PowerShell 段级查询：全段 allow 才整体 allow，任一 deny 即整体 deny。
         if let Some(store) = &self.permission_store {
             let sid = self.session_id.as_deref();
+            let wd = self.workdir.as_deref();
             let store_decision = if has_segments {
                 let seg_pairs: Vec<(String, Vec<String>)> = effects
                     .segments
                     .iter()
                     .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
                     .collect();
-                store.find_for_segments(sid, tool_name, &seg_pairs)
+                store.find_for_segments(sid, wd, tool_name, &seg_pairs)
             } else {
-                store.find(sid, tool_name, fingerprint, None)
+                store.find(sid, wd, tool_name, fingerprint, None)
             };
             if let Some(dec) = store_decision {
                 return match dec {
@@ -365,11 +373,11 @@ impl HitlGate {
     /// - `Once`：不写任何地方
     /// - `Session`：
     ///   - 优先写 in-memory learned 表（兼容旧 dispatch 命中路径）
-    ///   - 若挂了 PermissionStore，再写一条 [`PermissionRule`] 进 session 内存视图（落
-    ///     jsonl 由 Recorder 在 `PermissionRequestResolved` 事件回调里执行）
-    /// - `Global`：
-    ///   - 若挂了 PermissionStore，写一条 PermissionRule 进 ~/.hebbian/permissions.json
-    ///   - 未挂时打 warn，"按钮"等同 AllowOnce
+    ///   - 若挂了 PermissionStore，再写一条 [`PermissionRule`] 进 session 内存视图
+    /// - `Project`：写一条 PermissionRule 进 ~/.hebbian/permissions.json，
+    ///   带 `workdir = self.workdir`。未挂 PermissionStore 或 workdir 缺失 → warn 退回 AllowOnce
+    /// - `Global`：写一条 PermissionRule 进 ~/.hebbian/permissions.json
+    ///   未挂时打 warn，"按钮"等同 AllowOnce
     fn remember(
         &self,
         scope: PermissionScope,
@@ -410,11 +418,33 @@ impl HitlGate {
                 drop(learned);
                 // (2) PermissionStore：让 session.jsonl 也能回放出同样的规则
                 if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
-                    let rule = build_rule(tool_name, pattern, PermissionScope::Session);
+                    let rule = build_rule(tool_name, pattern, PermissionScope::Session, None);
                     if let Some(rule) = rule {
                         if let Err(e) = store.add(Some(sid.as_str()), rule) {
                             tracing::warn!(error = %e, "PermissionStore.add(Session) 失败");
                         }
+                    }
+                }
+            }
+            PermissionScope::Project => {
+                let Some(store) = self.permission_store.as_ref() else {
+                    tracing::warn!(
+                        tool = tool_name,
+                        "AllowAndRemember(Project) 但未挂 PermissionStore，等同 AllowOnce"
+                    );
+                    return;
+                };
+                let Some(wd) = self.workdir.clone() else {
+                    tracing::warn!(
+                        tool = tool_name,
+                        "AllowAndRemember(Project) 但 HitlGate 未持 workdir，等同 AllowOnce"
+                    );
+                    return;
+                };
+                let rule = build_rule(tool_name, pattern, PermissionScope::Project, Some(wd));
+                if let Some(rule) = rule {
+                    if let Err(e) = store.add(None, rule) {
+                        tracing::warn!(error = %e, "PermissionStore.add(Project) 失败");
                     }
                 }
             }
@@ -426,7 +456,7 @@ impl HitlGate {
                     );
                     return;
                 };
-                let rule = build_rule(tool_name, pattern, PermissionScope::Global);
+                let rule = build_rule(tool_name, pattern, PermissionScope::Global, None);
                 if let Some(rule) = rule {
                     if let Err(e) = store.add(None, rule) {
                         tracing::warn!(error = %e, "PermissionStore.add(Global) 失败");
@@ -441,6 +471,7 @@ fn build_rule(
     tool_name: &str,
     pattern: Option<&str>,
     scope: PermissionScope,
+    workdir: Option<PathBuf>,
 ) -> Option<PermissionRule> {
     let matcher = match (tool_name, pattern) {
         ("Bash", Some(prefix)) | ("PowerShell", Some(prefix)) => {
@@ -466,6 +497,7 @@ fn build_rule(
         decision: PermissionDecisionKind::Allow,
         created_at: chrono::Utc::now().timestamp_millis(),
         created_by: "user".to_string(),
+        workdir,
     })
 }
 

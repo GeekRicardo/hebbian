@@ -688,6 +688,7 @@ fn approve_permission(
 ) -> AppResult<()> {
     let allow_scope = match scope.as_deref().unwrap_or("session") {
         "session" => protocol::PermissionScope::Session,
+        "project" => protocol::PermissionScope::Project,
         "global" => protocol::PermissionScope::Global,
         "once" => protocol::PermissionScope::Once,
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
@@ -1027,10 +1028,15 @@ fn approve_path_access(
     session_id: Option<String>,
 ) -> AppResult<()> {
     let dd = data_dir(&app)?;
+    // scope 命名（前端/后端同步）：
+    //   once          → 仅本次，不持久化
+    //   this_session  → 仅当前对话（写 session.allowed_paths）
+    //   this_project  → 当前 workdir 所有对话（PermissionStore Project scope FilePath 规则）
+    //   global        → 任意对话（PermissionStore Global scope FilePath 规则）
     match scope.as_str() {
-        "this_project" => {
-            let session_id = session_id.ok_or_else(|| {
-                AppError::msg("approve_path_access: this_project 需要 session_id")
+        "this_session" => {
+            let session_id = session_id.clone().ok_or_else(|| {
+                AppError::msg("approve_path_access: this_session 需要 session_id")
             })?;
             let mut s = sessions::load(&dd, &session_id)?;
             let mut existing = s.allowed_paths.unwrap_or_default();
@@ -1042,7 +1048,7 @@ fn approve_path_access(
             s.allowed_paths = Some(existing);
             sessions::save(&dd, s)?;
         }
-        "all_project" => {
+        "global" => {
             let mut settings = settings_store::load(&dd);
             for p in &paths {
                 if !settings.conversation.allowed_paths.iter().any(|path| path == p) {
@@ -1051,19 +1057,24 @@ fn approve_path_access(
             }
             settings_store::save(&dd, &settings)?;
         }
-        "once" => {
-            // 不持久化，仅放行本次
+        "this_project" | "once" => {
+            // this_project：仅落 PermissionStore Project FilePath 规则（在下面 hitl.resolve 后）
+            // once：不持久化
         }
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     }
     // resolve gate；workspace.add_allowed_path 已经由 agent_loop 在 AllowAndRemember 时执行
     let decision = match scope.as_str() {
         "once" => protocol::ApprovalDecision::AllowOnce,
-        "this_project" => protocol::ApprovalDecision::AllowAndRemember {
+        "this_session" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Session,
             pattern: None,
         },
-        "all_project" => protocol::ApprovalDecision::AllowAndRemember {
+        "this_project" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Project,
+            pattern: None,
+        },
+        "global" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Global,
             pattern: None,
         },
@@ -1413,6 +1424,12 @@ fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequ
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 从 CWD 向上递归找 `.env` 并加载到进程环境。已有的 shell env 不会被覆盖
+    // （shell > .env 优先级符合 12-factor 直觉）。必须早于 observability::init，
+    // 否则 OTEL_EXPORTER_OTLP_* 读不到。dev 模式 CWD 在 apps/desktop，向上找命中
+    // workspace 根的 .env；release 包从可执行文件所在目录向上找，需要时再加 from_path 兜底。
+    let _ = dotenvy::dotenv();
+
     // 同步入口：observability::init 内部用独占 tokio runtime 跑 OTel 导出 task，
     // 与 Tauri 的 runtime 完全隔离。OTEL_EXPORTER_OTLP_ENDPOINT 未设时只装日志。
     let otel_guard = observability::init("hebbian-desktop", "agent_core=debug,warn");

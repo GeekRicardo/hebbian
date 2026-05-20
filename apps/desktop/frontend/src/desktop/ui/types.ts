@@ -490,11 +490,13 @@ export type ApprovalDecisionPayload =
        */
       pattern?: string | null;
       /**
-       * 记忆生效范围：
+       * 记忆生效范围（架构 §4.5.3）：
        * - `"session"`（默认）：仅本对话内不再询问，写到 session.jsonl
-       * - `"global"`：写到 ~/.hebbian/permissions.json，所有对话生效
+       * - `"project"`：当前 workdir 所有对话生效，写到 ~/.hebbian/permissions.json
+       *   并带 workdir 字段；其他项目不受影响
+       * - `"global"`：写到 ~/.hebbian/permissions.json（workdir = null），所有对话生效
        */
-      scope?: "session" | "global";
+      scope?: "session" | "project" | "global";
     }
   | { kind: "deny" }
   | { kind: "deny_with_feedback"; feedback: string };

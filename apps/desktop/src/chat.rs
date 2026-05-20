@@ -215,11 +215,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let model_io_dump =
         agent_core::model_io_dump::open_for_session_if_enabled(data_dir, &args.session_id).await;
 
-    // PermissionStore 加载本 session 已有的 Session 级规则到内存视图（架构 §4.6.2）。
-    // 当前 Session 级规则的 jsonl 落盘暂未实现（Recorder 还没写 PermissionRule entry），
-    // 这里仍调用 load_session_rules，让 store 在该 session 下有空 vec，准备好后续 add。
+    // PermissionStore session 视图的「幂等初始化」（架构 §4.6.2）：
+    // 用 ensure_session_view 而非 load_session_rules——后者是 HashMap::insert，
+    // 会把前几轮累积的 AllowAndRemember(Session) 规则覆盖成空 vec，导致同对话内
+    // 同一审批反复弹（这是 2026-05 之前的真实 bug）。ensure_session_view 只在
+    // 该 session 还没有视图时才初始化空 vec，已存在则保留。
     if let Some(store) = &args.permission_store {
-        store.load_session_rules(&args.session_id, Vec::new());
+        store.ensure_session_view(&args.session_id);
     }
 
     // ExitPlanMode 工具靠 env var 拿 data_dir + session_id（架构 §4.4.5 hack 路径）。

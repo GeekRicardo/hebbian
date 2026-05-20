@@ -1,15 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   FolderOpen,
+  FolderTree,
   Globe,
+  Maximize2,
   MessageSquareWarning,
+  Minimize2,
   Shield,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+import {
+  DiffViewer,
+  FullscreenPortal,
+  type DiffMode,
+} from "@/desktop/ui/components/DiffPanel";
+import {
+  diffSidesFromArgs,
+  inferDiffAction,
+  parsePartialEditArgs,
+  type PartialEditArgs,
+} from "@/desktop/ui/lib/parsePartialEditArgs";
 
 /**
  * 把 BashTool 推送的命令指纹切成"前缀按钮"。
@@ -101,7 +115,9 @@ export function PermissionApprovalPopup() {
     }
   }
 
-  async function sendPath(scope: "once" | "this_project" | "all_project") {
+  async function sendPath(
+    scope: "once" | "this_session" | "this_project" | "global"
+  ) {
     setSubmitting(true);
     try {
       await resolvePathAccess(scope);
@@ -119,6 +135,20 @@ export function PermissionApprovalPopup() {
       : pending.input
         ? JSON.stringify(pending.input, null, 2)
         : "";
+
+  // 架构 §4.13.9 approval 态：Edit/Write 渲 DiffViewer，不再原始 JSON。
+  // 入参 input 此时已是完整 JSON（PermissionRequested 携带）；统一走容错解析
+  // 走流式同一个入口，避免两份代码。
+  const isEditLike = !isPathAccess && (pending.toolName === "Edit" || pending.toolName === "Write");
+  const editArgs: PartialEditArgs | null = isEditLike
+    ? parsePartialEditArgs(
+        typeof pending.input === "string"
+          ? pending.input
+          : pending.input
+            ? JSON.stringify(pending.input)
+            : "",
+      )
+    : null;
 
   return (
     <div className="px-4 pb-2">
@@ -165,11 +195,17 @@ export function PermissionApprovalPopup() {
         )}
 
         {/* 工具输入参数预览（tool_call） */}
-        {!isPathAccess && inputPreview && inputPreview !== "null" && (
-          <pre className="text-[11px] text-muted-foreground/90 px-3 py-2 max-h-32 overflow-auto bg-background/50 font-mono whitespace-pre-wrap break-all">
-            {inputPreview.slice(0, 800)}
-            {inputPreview.length > 800 ? "…" : ""}
-          </pre>
+        {isEditLike && editArgs ? (
+          <ApprovalEditDiff toolName={pending.toolName} args={editArgs} />
+        ) : (
+          !isPathAccess &&
+          inputPreview &&
+          inputPreview !== "null" && (
+            <pre className="text-[11px] text-muted-foreground/90 px-3 py-2 max-h-32 overflow-auto bg-background/50 font-mono whitespace-pre-wrap break-all">
+              {inputPreview.slice(0, 800)}
+              {inputPreview.length > 800 ? "…" : ""}
+            </pre>
+          )
         )}
 
         {/* 反馈输入框（按需展开，仅 tool_call 有） */}
@@ -204,7 +240,7 @@ export function PermissionApprovalPopup() {
               </button>
               <button
                 type="button"
-                onClick={() => sendPath("this_project")}
+                onClick={() => sendPath("this_session")}
                 disabled={submitting}
                 className={cn(
                   "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
@@ -217,7 +253,20 @@ export function PermissionApprovalPopup() {
               </button>
               <button
                 type="button"
-                onClick={() => sendPath("all_project")}
+                onClick={() => sendPath("this_project")}
+                disabled={submitting}
+                className={cn(
+                  "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                  "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                )}
+                title="加入本项目允许路径（当前 workdir 下任何对话生效）"
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+                加入本项目
+              </button>
+              <button
+                type="button"
+                onClick={() => sendPath("global")}
                 disabled={submitting}
                 className={cn(
                   "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
@@ -312,6 +361,28 @@ export function PermissionApprovalPopup() {
                       send({
                         kind: "allow_and_remember",
                         pattern: bashPrefixes.root,
+                        scope: "project",
+                      })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title={`当前项目（workdir）所有对话放行 ${bashPrefixes.root}*`}
+                  >
+                    <FolderTree className="w-3.5 h-3.5" />
+                    本项目{" "}
+                    <code className="font-mono text-[12px]">
+                      {bashPrefixes.root} *
+                    </code>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({
+                        kind: "allow_and_remember",
+                        pattern: bashPrefixes.root,
                         scope: "global",
                       })
                     }
@@ -344,6 +415,21 @@ export function PermissionApprovalPopup() {
                     title="本会话内不再询问此工具"
                   >
                     当前对话不再询问
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      send({ kind: "allow_and_remember", scope: "project" })
+                    }
+                    disabled={submitting}
+                    className={cn(
+                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
+                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
+                    )}
+                    title="当前项目（workdir）所有对话不再询问此工具"
+                  >
+                    <FolderTree className="w-3.5 h-3.5" />
+                    本项目不再询问
                   </button>
                   <button
                     type="button"
@@ -417,6 +503,93 @@ export function PermissionApprovalPopup() {
         </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 架构 §4.13.9 approval 态：Edit/Write 在审批弹窗里用 DiffViewer 替代原始 JSON。
+ *
+ * before/after 直接来自 args（与 streaming 态同源）：
+ * - Edit:  before = old_string,  after = new_string
+ * - Write: before = "",          after = content
+ *
+ * 顶栏右上 [放大 / inline↔split / 关闭] 与详情卡片保持一致。
+ */
+function ApprovalEditDiff({
+  toolName,
+  args,
+}: {
+  toolName: string;
+  args: PartialEditArgs;
+}) {
+  const [viewMode, setViewMode] = useState<DiffMode>("split");
+  const [expanded, setExpanded] = useState(false);
+  const { beforeText, afterText } = diffSidesFromArgs(toolName, args);
+  const action = inferDiffAction(toolName, args);
+  const actionLabel =
+    action === "create" ? "创建文件" : action === "overwrite" ? "覆盖文件" : "修改文件";
+
+  // 放大态接管 Esc，避免直接关掉审批弹窗
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [expanded]);
+
+  const cycleMode = () => setViewMode((m) => (m === "split" ? "inline" : "split"));
+  const toggleExpanded = () => setExpanded((e) => !e);
+
+  if (expanded) {
+    return (
+      <FullscreenPortal>
+        <div
+          className="pointer-events-auto absolute inset-0 bg-foreground/30"
+          onClick={() => setExpanded(false)}
+        />
+        <div
+          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <DiffViewer
+            beforeText={beforeText}
+            afterText={afterText}
+            filePath={args.file_path ?? ""}
+            actionLabel={actionLabel}
+            badge="待审批"
+            mode={viewMode}
+            onCycleMode={cycleMode}
+            expanded={expanded}
+            onToggleExpanded={toggleExpanded}
+            onClose={() => setExpanded(false)}
+            className="min-h-0 flex-1"
+          />
+        </div>
+      </FullscreenPortal>
+    );
+  }
+
+  return (
+    <div className="border-t border-border">
+      <DiffViewer
+        beforeText={beforeText}
+        afterText={afterText}
+        filePath={args.file_path ?? ""}
+        actionLabel={actionLabel}
+        badge="待审批"
+        mode={viewMode}
+        onCycleMode={cycleMode}
+        expanded={expanded}
+        onToggleExpanded={toggleExpanded}
+        maxRows={20}
+      />
     </div>
   );
 }

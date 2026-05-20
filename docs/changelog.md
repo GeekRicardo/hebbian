@@ -1712,3 +1712,188 @@
   - 后台 TTL 清理任务未实现（`edits_worktree_ttl_days` 字段已就位，清理逻辑待加：扫描过期 session → 删 worktree → 标灰 metadata）
   - `revert_edit` 自己未对真实文件加 FileLock（当前锁只保护 snapshot 流程；revert 的 git apply → copy 回真实文件的原子性由 git apply --check 保证冲突检测）
   - 大文件 diff（>10K 行）的 LCS DP 表 O(n*m) 可能有性能压力——可后续加阈值切换到启发式算法
+
+### 2026-05-20 — Edit/Write 工具流式 diff + 审批弹窗 diff 视图 + 三态共用 DiffViewer
+
+- **Why**: 用户痛点：（1）Edit 工具流式输出 args 时 desktop 端只显示空 result，看不到模型正在写什么；（2）Edit/Write 工具卡片展开后是原始 result 文本，缺少 diff 视图；（3）需要审批的 Edit/Write 在 PermissionApprovalPopup 里渲染的是 `JSON.stringify(input)`，不直观。架构.md §4.13.8 / §4.13.9 早就定义了三态共用 DiffViewer + inline/split 切换 + 放大模态，但只落到 detail 态。本次补齐 streaming + approval 两态。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): 拆分出纯渲染 `<DiffViewer>` 组件，参数 `beforeText / afterText / mode / streaming / filePath / actionLabel / badge / rightExtras / onCycleMode / onClose`；流式时 after 末尾渲一个脉动光标占位；inline / split / fullscreen 三模式共用，由父组件受控。`DiffPanel` 退化为 detail 态浮层包装（拉 `api.diffEdit` 后喂给 DiffViewer）。
+  - [apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts](../apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts): 新增容错 JSON 流式解析器。手写状态机扫顶层对象的 `file_path / old_string / new_string / content` 字符串字段；遇到未闭合的 `"..."` 也能把已收的部分（包含转义还原）吐出来给 UI 渲。同时导出 `diffSidesFromArgs(toolName, args) → { beforeText, afterText }`（Edit: old/new；Write: ""/content）和 `inferDiffAction(toolName, args)`。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Edit/Write 工具的卡片详情改用新增的 `<EditDiffDetail>` 组件——按 `editSnapshots.find(call_id)` 决定走 detail（`api.diffEdit` 拉权威 before/after）还是 streaming（直接渲 args）。状态徽标显示「实时预览 / 执行中 / 加载权威 diff… / 权威 diff 加载失败」。inline ↔ split 切换 + 放大 fullscreen 全在卡片内，Esc 退回 split。删除原本的 `WriteHeader` + 双 ToolPre 渲染。
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): 当 `kind == tool_call && toolName ∈ {Edit, Write}` 时，把原始 JSON 预览换成新增的 `<ApprovalEditDiff>` 子组件，走同一个 `parsePartialEditArgs` + `<DiffViewer>`；徽标显示「待审批」。其它工具保持原 JSON 预览。
+  - [docs/架构.md](架构.md): §4.13.7 移除 `hunks` 字段，改为只给 `before_text / after_text` + 加一段"hunks 在前端算"的说明；§4.13.8 重写流式策略——明确"diff 两端直接来自 args 本身，不读磁盘"（Edit: old_string / new_string；Write: "" / content），并加"为什么 streaming 态不读磁盘"的取舍解释；§4.13.9 三态表数据源改成 `parsePartialEditArgs(arguments)` / detail 用 `diffEdit`。§13 决策表追加两条："流式 diff 两端来源" + "DiffPayload hunks"。
+- **影响范围**: desktop 前端（DiffPanel / MessageBubble / PermissionApprovalPopup + 新 lib 文件）+ 架构文档；**协议零变更**（复用现有 `ToolCallDelta { arguments_delta }`）；Rust 端零改动。EditEntry / DiffPayload 后端类型不动。视觉变化：Edit/Write 工具卡片展开后改为 diff 视图（之前是 result 文本框），审批弹窗 Edit/Write 改为 diff 视图（之前是 JSON）。
+- **留尾巴**:
+  - streaming 态展示的是局部 diff（只看 old/new），切到 detail 时画面会变成完整文件 diff（包含未改动上下文）——这是有意的语义切换，但用户可能短暂感到画面"跳"。后续可考虑 detail 态默认折叠相同行（只显示带 ±N 行上下文的 hunks）来缩小这个跳变。
+  - DiffViewer 没把 LCS DP 表加大文件阈值；上一版 changelog 已留过同一个尾巴，未在本次解决。
+  - `inferDiffAction` 在 Edit 工具流式阶段把"old_string 还没收"和"old_string 真的是空串"都判成 `create`，等流式收完会自动校正；与后端 EditAction 落盘语义对齐，无副作用。
+
+### 2026-05-20 — DiffViewer 三处体验补丁：行折行对齐 / 流式默认展开 / 放大改为 chat 区域内
+
+- **Why**: 上一条落地后用户实际试用反馈：（1）流式过来时虽然 diff 已经能渲，但工具卡片默认折叠，用户得点开才看见，等点开模型已经写完了——看不到"流"的感觉；（2）长行 break-all 后第二行直接顶到行号位置，视觉上文本和行号混在一起；（3）"放大"是 `fixed inset-0` 占满整个 window，连 sidebar 都盖住了，用户希望只占 chat 区域并留一点 padding。
+- **改动**:
+  - 流式默认展开：[apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `MessageBubble` 新增 `autoExpandedRef`，监听 `streamingParts` 中首次出现的 Edit/Write tool_call → 自动加入 `expandedToolCalls`。用 ref 去重避免重复触发，因此用户主动折叠后不会被强行展回。
+  - 行折行对齐：[apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx) 抽 `<DiffLine>` 子组件，把"行号 + 文本"从 inline-block 改成 flex 布局：行号 `shrink-0 w-8`，文本 `min-w-0 flex-1 whitespace-pre-wrap break-all`——这样长行换行只在文本子元素内换，第二行自然缩进到第一行文本起点，不会回到行号位置。`InlineDiff` / `SplitDiff` 全部走 `<DiffLine>`，删除两份重复的行渲染代码。`tabular-nums` 让行号等宽对齐。
+  - Fullscreen 改为 chat 区域 portal：
+    - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 根 div 末尾加 `<div id="chat-fullscreen-anchor" className="pointer-events-none absolute inset-0 z-[60]" />` 作为 portal 锚点。ChatView 自身已是 `relative`，所以锚点正好覆盖 chat 区域不挡 sidebar。
+    - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): 导出 `<FullscreenPortal>` 包装组件——用 `React.createPortal` 渲到 `#chat-fullscreen-anchor`（找不到时回退到 `document.body`）；放大内容用 `absolute inset-3` 撑满锚点并留 12px padding，外加 `rounded-xl border shadow-2xl` 做卡片样式。`pointer-events-auto` 只开在内容卡片上。
+    - 三处 fullscreen 全部走同一个 portal：`DiffPanel`（修改树点开的浮层放大）、`EditDiffDetail`（消息卡片放大）、`ApprovalEditDiff`（审批弹窗放大）。
+- **影响范围**: desktop frontend（ChatView / DiffPanel / MessageBubble / PermissionApprovalPopup）；零协议变更、零 Rust 改动。视觉变化：（a）流式 Edit/Write 工具卡片首次出现立刻展开；（b）所有 diff 行长行换行第二行起从文本起点缩进；（c）放大模式占 chat 区域而非整个 window，sidebar 仍可见。
+- **留尾巴**:
+  - "首次自动展开"的 ref 是 MessageBubble 实例级——用户切换会话后重新创建 MessageBubble，新会话的流式 Edit 又会自动展开一次。这是有意的行为（每个会话独立"提示一次"），但如果将来想做"全局只提示一次"需要把 ref 提到上层。
+  - 修改树面板里的 `DiffPanel` 浮层（非全屏态）仍用 `fixed inset-0` 包裹，没有跟着改成 portal——它本来就是非阻塞浮层，背景透传，影响较小。后续如果要让浮层也只占 chat 区域，再做一次 portal 化迁移。
+
+### 2026-05-20 — observability 支持 OTLP 自定义 headers + 可关 metric，打通 Langfuse 接入
+
+- **Why**: 用户要把现有 OTLP 流量直接灌到 Langfuse Cloud（jp 区）。Langfuse 走 OTLP/HTTP，但用 Basic Auth（`Authorization=Basic base64(pk:sk)`），而原先 `observability::init` 只配了 endpoint + protocol，没给 SpanExporter 喂 headers，于是认证根本带不上。同时 Langfuse 不消费 metrics，metric exporter 默认开着会让 `/v1/metrics` 一路打 404 噪音。
+- **改动**:
+  - [crates/observability/src/lib.rs](../crates/observability/src/lib.rs): 新增 `parse_otlp_headers()` 读取 OTel 标准变量 `OTEL_EXPORTER_OTLP_HEADERS`（`k1=v1,k2=v2`），分别喂给 `SpanExporter::builder().with_headers()` 和 `MetricExporter::builder().with_headers()`；新增 `HEBBIAN_OTEL_METRICS=0/false/off` 开关让 metric 导出可单独关掉（关闭时 `OtelGuard.meter_provider = None`，全局 meter provider 不被覆盖，保持 no-op 默认实现）；模块顶 doc 补充环境变量小节
+  - [docs/架构.md](架构.md) §4.10.1: 补充 `OTEL_EXPORTER_OTLP_HEADERS` 用法、Langfuse Cloud endpoint 形态、`HEBBIAN_OTEL_METRICS` 开关
+- **影响范围**: 仅 `crates/observability`，对外行为只新增 2 个环境变量识别；attr.rs 的 GenAI semconv 命名本就和 Langfuse 对齐，无需联动；不破坏既有 collector（Tempo/Jaeger/Grafana）用法——不设 headers 即沿用旧行为
+- **接入操作（不入仓）**:
+  ```bash
+  export LANGFUSE_PK=pk-lf-...
+  export LANGFUSE_SK=sk-lf-...
+  export OTEL_EXPORTER_OTLP_ENDPOINT=https://jp.cloud.langfuse.com/api/public/otel
+  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic $(printf '%s:%s' "$LANGFUSE_PK" "$LANGFUSE_SK" | base64)"
+  export HEBBIAN_OTEL_METRICS=0
+  pnpm tauri dev
+  ```
+- **留尾巴**:
+  - Header 解析按 OTel spec 「逗号分隔 + 第一个 `=` 切 key/value」实现，未做 URL-decode；如果以后要塞含逗号 / 等号的复杂 value，再补一层 percent-decode 即可。Basic Auth base64 不含这两类字符，当前足够。
+  - Langfuse 只看 OTel resource 的 `service.name` 区分来源，目前 desktop 注入的是 `hebbian-desktop` / cli 是 `hebbian-cli`，需要进一步按环境（dev/staging/prod）区分时，可考虑加 `deployment.environment` resource 属性
+
+### 2026-05-20 — 修正 fullscreen 锚点位置 + ExpandButton 统一走 chat 区域 portal + 文档定义 chat 区域
+
+- **Why**: 上一条把 `#chat-fullscreen-anchor` 放在 ChatView 根（`absolute inset-0`），结果盖到了标题栏和输入框——"chat 区域"实际是消息列表那一块（header 下、input 上）。用户同时要求：其他放大预览（工具卡片 ExpandButton）也走同一区域；并在架构.md 写明 chat 区域定义，免得后续 agent 又把它理解错。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 给消息列表 scrollRef 包一层 `<div className="relative flex-1 min-h-0">`，scrollRef 从 `flex-1 overflow-y-auto` 改成 `absolute inset-0 overflow-y-auto`（依赖新父容器的 relative + min-h-0 撑满）；`#chat-fullscreen-anchor` 移到这个新父容器内做兄弟元素——这样锚点完全覆盖消息列表区域，不挡 header / input / sidebar。删除根 div 末尾原本错位的锚点。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `ExpandButton`: 工具卡片放大原本是 `fixed inset-0` 全屏 + `flex items-center justify-center` 居中 modal，改用 `<FullscreenPortal>` 渲到 chat 锚点；内层 `absolute inset-3` 撑满 + 12px padding + `rounded-xl shadow-2xl`。新增 `bg-foreground/30` 透明 backdrop 接收"点外面关闭"（之前依靠外层 div onClick，现在 portal 锚点 pointer-events-none 要单独加），同时挂 Escape 监听让 Esc 也能关。
+  - 三处 DiffViewer fullscreen（[DiffPanel](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx) / [MessageBubble EditDiffDetail](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) / [PermissionApprovalPopup ApprovalEditDiff](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx)）也同步加 backdrop，体验对齐 ExpandButton。
+  - [docs/架构.md](架构.md) §4.13.9 追加两段：（1）"chat 区域定义"——`header 下方、ChatInput 上方的消息列表区，Sidebar 不算`；（2）"放大预览 portal 锚点"——所有 modal 统一走 `#chat-fullscreen-anchor` + `inset-3` + transparent backdrop 的范式。
+- **影响范围**: desktop frontend（ChatView / MessageBubble / DiffPanel / PermissionApprovalPopup）+ 架构文档；scrollRef 从 flex-1 改 absolute inset-0 后布局等价（新父容器接管了 flex-1 撑满），其它消息列表行为不变。
+- **留尾巴**: 修改树面板（EditTreePanel）和 FloatingTaskPanel 是 ChatView 根级 `absolute right-4 top-...` 浮层，不在新 chat 区域 wrapper 内——它们的定位坐标系还是 ChatView 根（包含 header 高度），位置不变。如果以后要让浮层也只浮在 chat 区域内、随 header 高度变化自动调整，需要把它们也迁进新 wrapper。
+
+### 2026-05-20 — desktop 启动加载 .env，避免每次重开终端重 export OTLP / Langfuse 变量
+
+- **Why**: 上一条 Langfuse 接入打通后，所有秘钥靠 shell `export`，每次重开终端就丢；用户希望支持 `.env` 让本地凭据稳定下来，但不入仓。
+- **改动**:
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): 新增 `dotenvy = "0.15"` 依赖
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `run()` 第一行 `dotenvy::dotenv().ok();`——必须早于 `observability::init`，否则 OTLP 环境变量读不到。dev 模式 Tauri CWD 在 `apps/desktop`，dotenvy 会向上递归找到 workspace 根的 `.env`
+  - [.env.example](../.env.example): 新增模板，列出日志 / OTLP 通用变量 / Langfuse 区域 endpoint / `HEBBIAN_OTEL_METRICS` / `HEBBIAN_DUMP_MODEL_IO`，注明本机凭据走 `cp .env.example .env` 后填值
+  - [docs/架构.md](架构.md) §4.10.1: 补充 `.env` 加载位置、优先级（shell > `.env`）、`.env.example` 入仓约定
+- **影响范围**: 仅 desktop surface；`.gitignore` 早已忽略 `.env`，新增模板文件 `.env.example` 不被忽略（精确匹配规则）。优先级保留 shell > `.env` 默认行为，CI / 已有 `export` 用户零感知。
+- **留尾巴**:
+  - Release 包从可执行文件目录向上找 `.env`，如果用户把 release 装到 `/Applications/Hebbian.app` 这种位置，向上找不到 workspace `.env` 是预期——未来若要支持 prod `.env`，可加 `~/.hebbian/.env` 作为兜底加载点
+  - cli surface 没改（`apps/cli` 已从 workspace 排除），重新启用时再加同样的 `dotenvy::dotenv()` 一行
+
+### 2026-05-20 — 所有放大预览统一走 chat portal + DiffViewer 加 VSCode 风格 +/- 符号
+
+- **Why**: 用户两个补充：（1）"所有放大显示的都改为到这个区域"——前一条只迁了 DiffViewer fullscreen + ExpandButton，AttachmentPreviewStrip 的图片放大和 DiffPanel 的非全屏 detail 浮层还在 `fixed inset-0` 状态；（2）上下 diff（inline 模式）也要加行号 + VSCode 风格的 +/- 符号让用户一眼能区分增减行。
+- **改动**:
+  - 全面迁 portal：
+    - [apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx](../apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx): 图片放大预览原本 `createPortal(..., document.body) + fixed inset-0 bg-black/80`，改用 `<FullscreenPortal>` + `pointer-events-auto absolute inset-0 bg-foreground/40`；图片尺寸约束从 `max-h-[calc(100vh-6rem)]` 改成 `max-h-full max-w-full`（适配 chat 区域大小）
+    - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): `DiffPanel` 非全屏 detail 浮层从 `fixed inset-0 pointer-events-none` 改成 `<FullscreenPortal>` + `absolute right-4 top-4 max-h-[calc(100%-2rem)]`，浮层位置相对 chat 区域而非 viewport
+  - DiffViewer 行渲染重写（VSCode 风格 +/-）：
+    - `DiffLine` 重设计：受控显示 before/after 行号槽（独立控制是否渲）+ 行首 `+/-/空格` 符号槽，颜色按符号变化（+ 绿 / - 红 / 空格中性）；同时保留前一条的 flex 布局（长行换行从文本起点缩进）
+    - `InlineDiff` 重写：原本是"修改前 / 修改后"两个独立块的简化视图，改成 **VSCode unified view**——单列、按 diff 顺序混排所有行，每行同时显示 before/after 两个行号槽 + 行首 +/-/空格符号；删除行红底带左行号，新增行绿底带右行号，不变行两边都有行号。一眼能看出哪一行被删/加。
+    - `SplitDiff` 在原行号基础上加 +/- 符号槽：左侧 before 端 remove 行带 `-`、不变行带空格；右侧 after 端 add 行带 `+`、不变行带空格。
+  - 流式光标位置：unified inline 也加最后一个非 remove 行的光标占位，跟 split 一致
+- **影响范围**: desktop frontend（AttachmentPreviewStrip / DiffPanel / 复用 FullscreenPortal）；zero protocol change、zero Rust change。视觉变化：（a）图片放大现在只覆盖 chat 区域而非整个窗口；（b）DiffPanel 浮层从右上 viewport 角改成 chat 区域右上角；（c）inline diff 从"上下两块"变成"VSCode unified"，带行号和 +/-；（d）split diff 行首多了 +/- 符号槽。
+- **留尾巴**:
+  - `ui/dialog.tsx` 是通用 Dialog 组件（用于 AppSettings / SessionSettings / Providers / Prompts / DeepseekLogin / OAuth 等"配置类弹窗"），按设计应该全屏覆盖，没迁 portal——这与"放大查看"语义不同，本次保持。
+  - inline diff 切到 unified view 是行为变化：之前是"上下两块"，现在是"VSCode 单列混排"，用户习惯上要适应。如果有人怀念旧布局可以加 setting 切回，目前不做。
+
+### 2026-05-20 — DiffViewer 限 20 行滚动 + SplitDiff 行对齐 bug 修复
+
+- **Why**:
+  - 长 diff 把工具卡片撑得太长，用户希望默认只显示 20 行、超出滚动看完整。
+  - SplitDiff 左侧第一行渲到了最下面、右侧渲到了最上面——根因：之前左右两列是各自独立的纵向列表，add 行在左列用 `min-h-[1.4em]` 占位 div、remove 行在右列同样；但实际内容行 break-all 后高度变多行，左右两列同一逻辑行的高度不再一致，逐行错位累积出"反"的视觉。
+- **改动**:
+  - 限高（[DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx)）：
+    - `DiffViewer` 新增 `maxRows?: number` prop。内部按 `行高 18px × maxRows + padding 16px` 算 `maxHeight`，赋给 InlineDiff / SplitDiff 最外层 overflow 容器。`fullscreen` 模式自动忽略（父容器接管高度）。
+    - 同时清掉 inline 模式之前误嵌的双层 `flex-1 overflow-auto`（DiffViewer 外层 + InlineDiff 内层），现在只有 InlineDiff 自己一层。
+    - 三处调用（[EditDiffDetail](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) / [ApprovalEditDiff](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx) / [DiffPanel detail 浮层](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx)）非全屏时统一传 `maxRows={20}`；去掉旧的 `className="max-h-[60vh]"` / `className="max-h-[50vh]"`——`maxRows` 是单一真理来源。
+  - SplitDiff 重写为 row-first flex 布局：
+    - 之前每列是独立的 `<div>{...}.map</div>`，每行各自渲一个 DiffLine 或 placeholder div——两列同行高度不同就错位。
+    - 改成：sticky header 一行 flex divide-x；下面 `{diffRows.map(...)}` 每行渲一个 `<div className="flex divide-x">`，里面装左右两个 cell。flex 默认 `align-items: stretch`，长行 break-all 让一列变高时另一列自动跟上；占位 div `min-h-[1.4em] flex-1 min-w-0` 也 stretch 到同行实际行高。
+  - `DiffLine` 不变，仍按上一条的双行号槽 + +/-/空格符号槽渲。
+- **影响范围**: 仅 desktop frontend DiffPanel；行为变化：（a）所有 DiffViewer 默认 20 行可见、超出滚动；（b）SplitDiff 长行不再错位。zero protocol / Rust 变更。
+- **留尾巴**:
+  - **关于 inline diff 顺序**：用户提到"印象中 source 在上、change 在下"——这与当前实现一致。LCS 回溯优先 `j--`（add）再 `i--`（remove），rev.reverse() 后单个修改对的顺序就是 `remove 在上、add 在下`，等同 git / VSCode unified diff 标准。如果在某个具体例子里看到反了，可能是 LCS 把"修改"识别成"删除 + 新增"且两块不相邻，需要具体例子复现。
+  - 行高常量 `DIFF_LINE_PX = 18` 是按 text-[11px] leading-relaxed (1.625) 算的近似值；如果将来调字号或行距要同步更新。
+
+### 2026-05-20 — DiffViewer mode 拆分 + detail 默认仅渲 args + 放大态拉完整文件（GitHub review 风格）
+
+- **Why**:
+  - Bug A：审批弹窗放大后，点 inline/split 切换按钮就关掉放大框。根因：之前 `DiffMode = "inline" | "split" | "fullscreen"` 把"布局"和"是否放大"塞到同一个 state；fullscreen 模式下传给 DiffViewer 的 mode 写死 "split"，`onCycleMode` 实际是 `() => setMode("split")` 即退出全屏。
+  - Bug B：点接受编辑后几秒钟显示完整全文 diff。根因：detail 态切换时 `useEffect` 触发 `api.diffEdit` 拉服务端权威完整 before/after，覆盖 args 局部 → 画面"突然变全文"。用户指出 args 里已经有 old_string/new_string，根本不需要 fetch。
+  - 新需求：放大态希望能看未改动的上下文行，类似 GitHub review 的"Show more context"。这与 Bug B 的诉求并存——非放大保持局部、放大才看完整。
+- **改动**:
+  - 拆 mode（[DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx)）：
+    - `DiffMode` 改为 `"inline" | "split"`（移除 `"fullscreen"`）
+    - DiffViewer 新增 `expanded?: boolean` + `onToggleExpanded?: () => void` props；顶栏渲放大/缩小按钮的逻辑挪到 DiffHeader 内（之前靠父组件传 rightExtras，重复且容易错）
+    - `maxRowsToStyle` 不再判断 fullscreen，由调用方决定放大时传 `maxRows={undefined}`
+  - 三处调用同步拆 `mode` → `viewMode + expanded`：
+    - [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `EditDiffDetail`：
+      - 删除 `useEffect → api.diffEdit` 的无条件 fetch（这是 Bug B 根因）
+      - 改成"仅 expanded 且有 snapshot 时"才 fetch；fetch 完成后 expanded 态切到 `fullPayload`（完整 before/after），非 expanded 态永远是 args 局部
+      - 增加 badge "完整文件" / "加载完整文件…" / "完整文件加载失败"
+    - [PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx) `ApprovalEditDiff`：纯拆 mode，数据源永远是 args（审批时没有 worktree 可拉）；切换 inline/split 在放大态下也能用了
+    - [DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx) `DiffPanel` 修改树 detail 浮层：拆 mode；数据源仍是 `api.diffEdit`（这里入口本来就是修改树点对比按钮，期望全文）；放大态去掉 `maxRows=20` 让父容器接管高度
+  - 架构 §4.13.9 重写数据源表：
+    - 表格列改成 "默认数据源（非放大）" + "放大态数据源" 两列
+    - detail 态默认改成"仍用 args 局部 diff"，放大态才是 `diffEdit` 完整文件
+    - 加"关键设计"段说明非放大态永远不读 worktree 的取舍
+- **影响范围**: desktop frontend（DiffPanel / MessageBubble / PermissionApprovalPopup）+ 架构 §4.13.9；zero protocol / Rust 变更。视觉变化：
+  - 审批放大后切 inline/split 不再误关
+  - Edit 完成时不会"突然显示全文"——保持 args 局部 diff
+  - 用户主动点放大才看到完整文件（含未改动上下文，GitHub review 风格）
+- **留尾巴**:
+  - 放大态目前是"非放大局部 → 放大完整"二态切换，没有 GitHub 那样的"扩展 ±3 行 / ±10 行"精细控制。如果有人想要中间档（例如 hunk + 3 行上下文），后续可以加 toggle。
+  - `api.diffEdit` 在 expanded 切换时才发起，第一次放大有几百 ms 等待——加载期间徽标显示"加载完整文件…"，体验上可接受。如果觉得卡顿可以预取（卡片初次渲染时就请求并缓存）。
+
+### 2026-05-20 — Diff 放大态 GitHub 风格折叠：未改动行默认收起，点击「展开 N 行原文」按需展开
+
+- **Why**: 用户说"审批完了普通 tool 展开然后放大也要能看 github 的那种展开原文的效果"——之前放大态直接 dump 完整文件全部行，未改动的也一股脑铺出来；GitHub PR review 的标准做法是默认折叠未改动段、显示「↕ Show N more」按钮按需展开。诉求就是这个。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx):
+    - 新增 `DiffViewerProps.collapseContext?: number`——提供则按 GitHub 风格折叠
+    - 新增 `buildRenderRows(diffRows)`：预计算每行 before/after 行号，避免在 React map 内 mutable 累加导致折叠展开时闭包错乱
+    - 新增 `buildCollapsibleView(diffRows, contextLines)`：扫一遍 diffRows，标记每个 change 行的 ±N 邻居为"可见"，剩下连续不可见段切成 `{kind: "collapsed", start, end}` 折叠单元
+    - 折叠 state 提到 DiffViewer 顶层（`Set<string>`，groupKey = `${start}-${end}`），切换 inline↔split 保留展开偏好
+    - `InlineDiff` / `SplitDiff` 改为接收 `items: DiffViewItem[] | null` + `renderRows`：items 存在则按视图迭代渲行 / 折叠按钮；items=null 全展开（沿用旧路径）
+    - 新增 `<CollapsedToggle>` 组件：跨整行的虚线边框按钮，「↕ 展开 N 行原文（#start—#end）」，hover 高亮，点击调 `toggleGroup`
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `EditDiffDetail`: expanded 且 `useFull`（即拿到了完整 EditEntry payload）时传 `collapseContext={3}`；其它情况不传（args 局部 diff 没有未改动段可折叠）
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx) `DiffPanel` 修改树 detail 浮层：始终是完整文件 → 始终传 `collapseContext={3}`（含非放大态——这里点开本来就是想看权威 diff）
+  - `ApprovalEditDiff` 不传——审批时只有 args 局部，没有未改动段
+  - [docs/架构.md](架构.md) §4.13.9 加一段「GitHub 风格折叠」语义说明
+- **影响范围**: desktop frontend（DiffPanel / MessageBubble）+ 架构文档；零 protocol / Rust 变更。视觉变化：放大 Edit/Write 看到完整文件时默认按 hunk 折叠，未改动大段收起为单行按钮，点开扩展回原行。
+- **留尾巴**:
+  - 当前折叠粒度是"整段一次性展开"，没有 GitHub 那样的"展开 ±10 行"中间档。如果折叠段特别大，用户点一次就全开了——大文件场景或许不理想，后续可加上下/中间分档展开。
+  - `collapseContext = 3` 是硬编码，没做成可配。如果对上下文需求强烈可以让它成为 settings 项。
+
+### 2026-05-20 — 权限审批：新增 Project scope + 文件热加载 + 修复 session 规则被清空的 bug
+
+- **Why**: 用户报告三个相关问题：(1) 同一对话内已审批的命令（如 `cd *`）再次出现仍弹审批，本次 session 允许 / 全局允许都不奏效；(2) 缺少"本项目允许"档——当前用 Session 太窄（仅本对话），Global 太宽（其他项目也生效），同一项目里开多个对话 / 不同 worktree 用同一规则的场景没法表达；(3) 手动改 `~/.hebbian/permissions.json` 必须重启 Desktop 才生效。
+- **根因**:
+  - **真凶**：[apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) 每次发新消息无脑调 `store.load_session_rules(sid, Vec::new())`，而该函数是 `HashMap::insert`，**直接把前几轮累积的 Session 规则覆盖成空 vec**——用户选 AllowAndRemember(Session) 后下个 turn 一发消息规则就没了，PermissionStore 找不到匹配自然又弹审批。
+  - PermissionStore Global 规则只在 `open()` 时加载一次 in-memory cache，运行时不感知文件变更——手动改文件需重启才生效。
+  - 只有 Session / Global 两档持久化 scope，缺 workdir 维度。
+- **改动**:
+  - [docs/架构.md](架构.md) §4.5.3 / §4.5.4 / §4.6.1 / §4.6.2 / §13: AllowScope 由 3 种扩为 4 种（Once / Session / Project / Global），PermissionRule 新增可选 `workdir` 字段，匹配阶段加 mtime 热加载策略；§13 追加 3 行决策（Project scope / 文件热加载 / 严禁 turn 间无脑清 session_rules）
+  - [crates/protocol/src/permission.rs](../crates/protocol/src/permission.rs): `PermissionScope` 加 `Project` 变体
+  - [crates/agent-core/src/permissions/mod.rs](../crates/agent-core/src/permissions/mod.rs): 重构 `PermissionStore`：`global_rules` 改 `persisted_rules`（Project + Global 共存一个 vec，按 `scope` + `workdir` 区分）；新增 `reload_if_stale` 在每次 `find` / `find_for_segments` / `allows_path` 前按 mtime 判断是否需要重读文件；新增 `ensure_session_view`（幂等初始化，已存在则保留）；规则匹配按 [Session, Project, Global] 顺序；`workdir_matches` 按 `current_workdir.starts_with(rule.workdir)` 命中（含子目录）；写入 Project 规则强制要求带 workdir，否则报错。新增 6 个单元测试覆盖 project 维度匹配 / ensure_session_view / 外部文件改动热加载
+  - [crates/agent-core/src/storage/permissions.rs](../crates/agent-core/src/storage/permissions.rs): 暴露 `path()` / `mtime()` 帮助 `PermissionStore` 做热加载
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): `HitlGate` 持 `workdir`，`with_store(store, sid, workdir)` 多一个参数；`remember` 增加 `Project` 分支（写持久化文件 + workdir 字段）
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `allows_path` 调用传 workspace.workdir；`await_path_decision` 中 `AllowAndRemember` 分支按 scope 决定写入 sid / workdir：Project → workdir、Session → sid、Global → 都 None
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): 构造 `HitlGate` 时把 `workspace.workdir()` 透传给 `with_store`
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): **核心 bug 修复**——把 `store.load_session_rules(sid, Vec::new())` 改成 `store.ensure_session_view(sid)`，保留前轮累积规则
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `approve_permission` scope 支持 `"project"`；`approve_path_access` scope 词表更名（`this_project` 改为 workdir 级 Project；旧 session 级语义改名为 `this_session`；旧 `all_project` 改为 `global`，命名与 PermissionScope 对齐）
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) / [ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) / [ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 同步 scope 类型 + 命名
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): tool_call 类按钮（Bash 前缀路径和非 Bash 路径都加）+ path_access 类按钮都增加"本项目" / "加入本项目"档，icon 用 lucide `FolderTree`
+- **影响范围**: protocol（向前兼容：旧 PermissionRule 反序列化时 `workdir` 缺省 None，按 Global 处理）/ agent-core / desktop / frontend / docs。`permissions.json` 文件格式向前兼容：旧文件无 `workdir` 字段直接当 Global 加载；新写入的 Project 规则带 workdir，旧版本读到也只是当 Global，不会崩
+- **留尾巴**:
+  - Session 规则的 jsonl 持久化（架构 §4.5.4 提到的 `{ "type": "PermissionRule", ... }` entry type）依旧未实现——重开 Desktop 后 session 规则会丢，依赖 Recorder 后续接入。本次只修了「同进程内 session 规则被清空」，重启级别的持久化是另一个独立 issue
+  - 热加载策略每次 match 前 stat 一次文件——同进程内只有真正发现 mtime 变化才重读。批量审批场景下 syscall 开销可接受，未做缓存窗口（如"500ms 内不再 stat"）
+  - 危险复合模式（cd-git-compound / multi-cd 等）依然是 `refuse_remember=true`——架构 §4.4.2.2 明确规定。这次没动这条原则；如果用户 `cd /xxx && git yyy` 类命令一直审批不烦，那是设计预期，不是 bug
