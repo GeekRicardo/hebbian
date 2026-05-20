@@ -116,17 +116,13 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
     let tool_calls: Vec<ToolCall> = msg
         .tool_calls
         .iter()
+        .filter(|call| call.result.is_some())
         .map(|call| ToolCall {
             id: call.id.clone(),
             name: call.name.clone(),
             input: call.input.clone(),
         })
         .collect();
-    entries.push(TranscriptEntry::Assistant(AssistantEntry {
-        text: msg.content.clone(),
-        reasoning: String::new(),
-        tool_calls: tool_calls.clone(),
-    }));
 
     let tool_results: Vec<ToolResult> = msg
         .tool_calls
@@ -140,7 +136,14 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
             })
         })
         .collect();
-    if !tool_calls.is_empty() && !tool_results.is_empty() {
+    if !tool_calls.is_empty() || !msg.content.is_empty() {
+        entries.push(TranscriptEntry::Assistant(AssistantEntry {
+            text: msg.content.clone(),
+            reasoning: String::new(),
+            tool_calls: tool_calls.clone(),
+        }));
+    }
+    if !tool_results.is_empty() {
         entries.push(TranscriptEntry::ToolResults(tool_results));
     }
 }
@@ -186,7 +189,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                 id,
                 name,
                 input,
-                result,
+                result: Some(content),
                 ..
             } => {
                 tool_calls.push(ToolCall {
@@ -194,15 +197,14 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                     name: name.clone(),
                     input: input.clone(),
                 });
-                if let Some(content) = result {
-                    tool_results.push(ToolResult {
-                        call_id: id.clone(),
-                        name: name.clone(),
-                        content: content.clone(),
-                        artifact: None,
-                    });
-                }
+                tool_results.push(ToolResult {
+                    call_id: id.clone(),
+                    name: name.clone(),
+                    content: content.clone(),
+                    artifact: None,
+                });
             }
+            MessagePart::ToolCall { result: None, .. } => {}
         }
     }
 
@@ -237,5 +239,81 @@ fn flush_assistant_turn(
     }));
     if !tool_results.is_empty() {
         entries.push(TranscriptEntry::ToolResults(std::mem::take(tool_results)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sessions::{MessageToolCall, MessagePart};
+    use serde_json::json;
+
+    fn assistant(parts: Vec<MessagePart>, tool_calls: Vec<MessageToolCall>) -> Message {
+        Message {
+            id: "assistant-1".to_string(),
+            role: Role::Assistant,
+            content: String::new(),
+            attachments: Vec::new(),
+            tool_calls,
+            parts,
+            created_at: 0,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn skips_unfinished_part_tool_calls_when_rebuilding_transcript() {
+        let msg = assistant(
+            vec![
+                MessagePart::Text {
+                    text: "before".to_string(),
+                },
+                MessagePart::ToolCall {
+                    id: "call_done".to_string(),
+                    name: "Read".to_string(),
+                    input: json!({"file_path": "a.txt"}),
+                    arguments: "{\"file_path\":\"a.txt\"}".to_string(),
+                    result: Some("file contents".to_string()),
+                    duration_ms: None,
+                },
+                MessagePart::Text {
+                    text: "after".to_string(),
+                },
+                MessagePart::ToolCall {
+                    id: "call_orphan".to_string(),
+                    name: "Edit".to_string(),
+                    input: json!({"file_path": "a.txt"}),
+                    arguments: "{\"file_path\":\"a.txt\"}".to_string(),
+                    result: None,
+                    duration_ms: None,
+                },
+            ],
+            Vec::new(),
+        );
+
+        let transcript = Transcript::from_session(None, &[msg]);
+        let has_orphan = transcript.entries.iter().any(|entry| match entry {
+            TranscriptEntry::Assistant(a) => {
+                a.tool_calls.iter().any(|call| call.id == "call_orphan")
+            }
+            TranscriptEntry::ToolResults(results) => {
+                results.iter().any(|result| result.call_id == "call_orphan")
+            }
+            TranscriptEntry::User(_) => false,
+        });
+
+        assert!(!has_orphan);
+        assert!(transcript.entries.iter().any(|entry| match entry {
+            TranscriptEntry::Assistant(a) => {
+                a.tool_calls.iter().any(|call| call.id == "call_done")
+            }
+            _ => false,
+        }));
+        assert!(transcript.entries.iter().any(|entry| match entry {
+            TranscriptEntry::ToolResults(results) => {
+                results.iter().any(|result| result.call_id == "call_done")
+            }
+            _ => false,
+        }));
     }
 }
