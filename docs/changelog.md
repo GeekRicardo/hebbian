@@ -3031,26 +3031,19 @@
   - PrettyJson 没做大对象懒加载折叠 —— 一次 render 超大 JSON 仍可能慢；React virtualization 等性能问题真碰到再做
   - 放大 modal Esc 用 capture 阶段拦截抽屉 Esc 监听 —— 工作但耦合：如果未来抽屉 Esc 监听也改 capture 会冲突。等真出 bug 再换 stop propagation 或 ref forwarding 解
 
-### 2026-05-22 — 删除前端 ToolCallDelta hot path 上残留的 console.debug，修 desktop 卡死
+### 2026-05-22 — 补记：ToolCallDelta 刷屏 / desktop 卡死的根因排查（无代码改动）
 
-- **Why**: 用户报「终端疯狂输出 `agent_loop: ToolCallDelta → EventPayload ...`，desktop 前端卡死无法操作」。两个症状分别对应两处早期临时诊断代码
-  - 后端日志（终端刷屏）：commit `69c971fd`（Langfuse OTLP 那次）在 `agent_loop.rs` 的 `ModelStreamEvent::ToolCallDelta → EventPayload` 转换处加了 per-delta `tracing::debug!`。`43da96a`（Model I/O 调试器 + langfuse 残留清理）那次提交已经把它清掉，用户继续看到刷屏是因为没重启 dev 进程，跑的还是旧 build
-  - 前端卡死：commit `32d19def`（项目/权限/Skills 重构那次）在 [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) 的 `toolPartIndex` / `applyToolCallDelta` / `applyToolStart` 共 7 处加了 `console.debug`，参数对象里还有 `parts.filter(...).map(...)` 实时计算。WebView 的 `console.debug` 不是 no-op —— Tauri 会把每次调用通过 IPC 序列化送到 devtools 通道，一个 tool_call 的 args 被切成几十～几百段 delta 时几百次/秒，主线程直接堵死。这部分 `43da96a` 没动，本次清掉
-- **改动**:
-  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts):
-    - `toolPartIndex` 删 4 个 console.debug + 内联两个 `parts.filter(...).map(...)` 的诊断 payload
-    - `applyToolCallDelta` / `applyToolStart` 各删 2 个 console.debug 以及为它们准备的 `prevToolCount` / `newToolCount` 中间变量（这些变量纯为日志服务）
-- **影响范围**:
-  - 仅前端观测代码，不动 protocol / 状态机 / storage / 回归测试
-  - tool_call 拼回的正确性已有 [chat.rs:2035 `ToolCallDelta 必须完整拼回`](../apps/desktop/src/chat.rs#L2035) 回归测试覆盖
-  - 模型 IO 观测仍可通过 `HEBBIAN_DUMP_MODEL_IO=1 → ~/.hebbian/sessions/<sid>/model_io.jsonl`、Model I/O 调试器抽屉、OTLP span 等上层手段获取，不需要 per-delta console.debug
+- **Why**: 用户报「终端疯狂输出 `agent_loop: ToolCallDelta → EventPayload ...`，desktop 前端卡死」。排查后确认两处诊断代码 **`43da96a`（Model I/O 调试器那次 commit）已经一并清掉**，但 `43da96a` changelog 没把这一项单独列字面，未来 agent 遇到类似刷屏报告容易再次定位走弯路。这条专门补字
+- **被清掉的两处临时诊断代码**:
+  - 后端 `crates/agent-core/src/agent_loop.rs`（原 commit `69c971fd` Langfuse OTLP 时加的）：`ModelStreamEvent::ToolCallDelta → EventPayload` 转换处 per-delta `tracing::debug!("agent_loop: ToolCallDelta → EventPayload" ...)` —— 开 `RUST_LOG=debug` / langfuse exporter 时按 delta 数刷屏
+  - 前端 `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`（原 commit `32d19def` 项目/权限/Skills 重构时加的）：`toolPartIndex` / `applyToolCallDelta` / `applyToolStart` 共 7 处 `console.debug`，参数对象内联 `parts.filter(...).map(...)`。WebView 的 console.debug 不是 no-op，Tauri 通过 IPC 序列化送到 devtools 通道，每秒几百次主线程堵死
+- **用户继续看到症状的真实原因**: 没重启 desktop dev / heb daemon，跑的是 `43da96a` 之前 build 的二进制。重启即恢复
+- **本次会话的实际工作**:
+  - 完整定位 + 与 HEAD 对照，确认两处诊断代码当前都已不存在
+  - `cargo check -p agent-core` ✓ / `cargo test -p agent-core --lib` 235 passed ✓ / `pnpm exec tsc --noEmit` ✓
+  - **零代码改动** —— HEAD 已是想要的状态，所有 Edit 都被验证为"和 HEAD 字面相同"，最终未产生 diff
 - **取舍**:
-  - **删 vs 改成 if (DEBUG) 包起来**：选删。这些日志本来就是当时调 tool_call index/id 对齐 bug 用的临时诊断，bug 修完应该清掉。开关式是补丁 —— 既留考古碎片，又让"下一次出问题再加一遍"的负反馈出现
-  - **保留 per-tool 一行日志 vs 全删**：选全删。id / name 在上层 `tool_start` 事件已带，per-delta 诊断对前端没有观测价值
-- **验证**:
-  - `cargo check -p agent-core` 通过；`cargo test -p agent-core --lib` 235 passed
-  - `pnpm exec tsc --noEmit` 通过
-  - 复现路径：重启 desktop dev，触发任意 tool_call，应不再看到 devtools / 前端卡顿
+  - **删条目 vs 留字面记录**：选留。changelog 是「回溯线索」，把一次合并 commit 里隐含的清理逐项落字面，下一个 agent 才不会重复诊断同一件事 —— 把"43da96a 顺手清掉但没显式记录"明确写下来
 - **留尾巴**: 无
 
 ### 2026-05-22 — Bash 前台执行支持流式实时输出（新增 `ToolCallOutputDelta` 事件 + Tool trait 加 `execute_streaming` 默认方法）
