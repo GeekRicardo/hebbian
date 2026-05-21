@@ -3030,3 +3030,26 @@
   - Tauri `previewSessionPayload` 命令 + `buildModelMessages` 前端 lib 后端两端还在（前端入口已删）。如果未来证实没人需要"重建快照"功能，下版本一起清掉（agent-core 不依赖它，只是 desktop / hebweb 注册了 invoke）
   - PrettyJson 没做大对象懒加载折叠 —— 一次 render 超大 JSON 仍可能慢；React virtualization 等性能问题真碰到再做
   - 放大 modal Esc 用 capture 阶段拦截抽屉 Esc 监听 —— 工作但耦合：如果未来抽屉 Esc 监听也改 capture 会冲突。等真出 bug 再换 stop propagation 或 ref forwarding 解
+
+### 2026-05-22 — 删除 ToolCallDelta hot path 上残留的诊断日志，修 desktop 卡死
+
+- **Why**: 用户报「终端疯狂输出 `agent_loop: ToolCallDelta → EventPayload ...`，desktop 前端卡死无法操作」。根因是两处临时诊断代码没清掉
+  - 后端 [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs) commit `69c971fd`（Langfuse OTLP 那次）在 `ModelStreamEvent::ToolCallDelta → EventPayload` 转换处加了 `tracing::debug!`，每条 delta 一行。一个 tool_call 的 args 会被切成几十～几百段 delta，开 `RUST_LOG=debug` / Langfuse 时刷屏
+  - 前端 [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) commit `32d19def`（项目/权限/Skills 重构那次）在 `toolPartIndex` / `applyToolCallDelta` / `applyToolStart` 共 7 处加了 `console.debug`，每条 ToolCallDelta 至少 2 行，参数里还有 `parts.filter(...).map(...)` 实时计算。WebView 的 `console.debug` 不是 no-op —— Tauri 会把每次调用通过 IPC 序列化送到 devtools 通道，几百次/秒就把主线程堵死
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 删 `tracing::debug!("agent_loop: ToolCallDelta → EventPayload" ...)`，保留 `stream_tool_call_offset + delta.index` 索引转换的纯逻辑
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts):
+    - `toolPartIndex` 删 4 个 console.debug + 内联两个 filter/map 的诊断输出
+    - `applyToolCallDelta` / `applyToolStart` 各删 2 个 console.debug 以及为它们准备的 `prevToolCount` / `newToolCount` 中间变量（这些变量只用于 console.debug，本身就是诊断开销）
+- **影响范围**:
+  - 仅观测代码，不动 protocol / 状态机 / storage / 回归测试
+  - tool_call 拼回的正确性已有 [chat.rs:2035 `ToolCallDelta 必须完整拼回`](../apps/desktop/src/chat.rs#L2035) 回归测试覆盖
+  - 模型 IO 观测仍可通过 `HEBBIAN_DUMP_MODEL_IO=1 → ~/.hebbian/sessions/<sid>/model_io.jsonl`、OTLP span 等上层手段获取，不需要 per-delta 日志
+- **取舍**:
+  - **删 vs 改 trace 包 if 开关**：选删。这些日志本来就是当时调 tool_call index/id 对齐 bug 用的临时诊断，bug 修完应该清掉。改 trace 是补丁式 —— 既留考古碎片，又让"下一次出问题再加一遍"的负反馈出现
+  - **保留 per-tool 一行日志 vs 全删**：选全删。id / name 在上层 `tool_start` 事件已带，per-delta 日志没有任何观测价值。真要看 raw model stream 上 model_io.jsonl
+- **验证**:
+  - `cargo check -p agent-core` 通过
+  - `pnpm exec tsc --noEmit` 通过
+  - 复现路径：开 desktop dev，触发任意 tool_call，应不再看到终端刷屏 / 前端卡顿。回归测试 `cargo test -p agent-core --lib` + `cargo test -p hebbian-desktop --lib` 不受影响（这两处都不是日志相关）
+- **留尾巴**: 无

@@ -1674,6 +1674,15 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
         }),
+        ToolCallOutputDelta {
+            index,
+            call_id,
+            chunk,
+        } => Some(EngineEvent::ToolOutputDelta {
+            index: *index,
+            id: call_id.clone(),
+            chunk: chunk.clone(),
+        }),
         RunFailed { error } => Some(EngineEvent::Error {
             message: error.message.clone(),
         }),

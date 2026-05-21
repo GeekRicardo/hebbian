@@ -31,17 +31,63 @@ use crate::workspace::Workspace;
 /// 内置 ask 工具的名称。
 pub const ASK_TOOL_NAME: &str = "Ask";
 
+/// 工具进度回调：让长跑工具（前台 Bash 等待、流式 Fetch 等）在 ToolCallStarted
+/// 与 ToolCallFinished 之间向 surface 推增量输出。chunk 通常是 UTF-8 文本，
+/// 不需带换行；调用方按原样追加到对应 tool 卡片即可。
+///
+/// 实现方只负责往主事件流喂 `EventPayload::ToolCallOutputDelta`，dispatcher
+/// 已经知道 dispatch_index / call_id，所以这里只暴露 chunk 字符串接口。
+pub trait ToolProgress: Send + Sync {
+    fn emit(&self, chunk: String);
+}
+
+/// Tool::execute 的上下文（架构 §4.4.1）。除工具自身的 input 外，dispatcher
+/// 还需把 call 元信息 + 流式 progress 通道塞进来。**默认 noop**：单测、CLI
+/// 直接 invoke 工具时构造一个空 ctx 即可。
+pub struct ToolCtx {
+    pub call_id: String,
+    pub progress: Option<Arc<dyn ToolProgress>>,
+}
+
+impl ToolCtx {
+    /// 不带任何 progress 通道的空 ctx——给单测 / CLI / 不需要流式的工具用。
+    pub fn noop() -> Self {
+        Self {
+            call_id: String::new(),
+            progress: None,
+        }
+    }
+
+    pub fn emit_chunk(&self, chunk: impl Into<String>) {
+        if let Some(p) = self.progress.as_ref() {
+            let s = chunk.into();
+            if !s.is_empty() {
+                p.emit(s);
+            }
+        }
+    }
+}
+
 /// 极简 Tool 接口（架构 §4.4.1）：只描述「我是什么 + 我怎么干」。
 ///
 /// 权限分类、路径解析、命令指纹等上下文相关信息由 dispatcher 旁的
 /// [`crate::effects::analyze_effects`] 集中处理；Tool trait 不再持有这些
 /// 默认实现。
+///
+/// **流式工具**（如 Bash 前台等待）覆盖 [`execute_streaming`]：在 await 期间
+/// 通过 `ctx.emit_chunk(...)` 向 surface 推 `ToolCallOutputDelta`，返回值仍
+/// 是聚合后的完整文本（写入 ToolCallFinished.result + 推回模型）。
+/// 非流式工具不用覆盖——默认实现直接委托给 [`execute`]，忽略 ctx。
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Value;
     async fn execute(&self, input: Value) -> AppResult<String>;
+
+    async fn execute_streaming(&self, _ctx: ToolCtx, input: Value) -> AppResult<String> {
+        self.execute(input).await
+    }
 }
 
 /// 构造内置 + 用户可选工具：

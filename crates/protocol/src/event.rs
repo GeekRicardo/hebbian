@@ -111,6 +111,16 @@ pub enum EventPayload {
         name: String,
         input: Value,
     },
+    /// 工具执行中的流式输出片段（架构 §3.1 / §4.4.1）。
+    /// 紧跟 `ToolCallStarted` 之后、`ToolCallFinished` 之前出现。
+    /// 长跑工具（Bash 前台等待、未来的流式 Grep / Fetch 等）按 chunk 推送，
+    /// surface 端追加到对应 tool 卡片即可——`ToolCallFinished.result` 仍是
+    /// 聚合后的完整文本，二者语义不冲突：delta 流给观察，finished 给模型。
+    ToolCallOutputDelta {
+        index: usize,
+        call_id: String,
+        chunk: String,
+    },
     ToolCallFinished {
         index: usize,
         call_id: String,

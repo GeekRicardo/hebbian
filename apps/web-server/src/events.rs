@@ -37,6 +37,12 @@ pub enum EngineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
     },
+    /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台 stdout/stderr 按 chunk 推过来。
+    ToolOutputDelta {
+        index: usize,
+        id: String,
+        chunk: String,
+    },
     RunSuspended {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,6 +134,11 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 artifact_path: artifact_path.clone(),
             }
         }
+        ToolCallOutputDelta { index, call_id, chunk } => EngineEvent::ToolOutputDelta {
+            index: *index,
+            id: call_id.clone(),
+            chunk: chunk.clone(),
+        },
         RunFailed { error } => EngineEvent::Error { message: error.message.clone() },
         RunSuspended { reason, resumes_at_ms, waiting_for_task_ids } => {
             EngineEvent::RunSuspended {

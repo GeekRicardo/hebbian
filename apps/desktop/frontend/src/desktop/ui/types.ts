@@ -194,6 +194,13 @@ export type StreamingAssistantPart =
       status: ToolCallStatus;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+      /**
+       * 工具执行中的流式输出累积（架构 §4.4.1）。Bash 前台等待期间
+       * `tool_output_delta` 事件按 chunk 追加到这里，渲染层在 status="running"
+       * 时把它当作"实时控制台"显示。`tool_done.result` 到来后变成聚合最终结果，
+       * 这个字段可保留供折叠展示，亦可清空。
+       */
+      live_output?: string;
     };
 
 /**
@@ -368,6 +375,17 @@ export type EngineEvent =
       duration_ms: number;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+    }
+  | {
+      /**
+       * 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待期间
+       * stdout/stderr 增量按 chunk 推过来；append 到对应工具卡片的实时输出区。
+       * `tool_done.result` 是聚合后的最终文本，二者语义不冲突。
+       */
+      type: "tool_output_delta";
+      index: number;
+      id: string;
+      chunk: string;
     }
   | {
       /** 架构 §4.12：Run 进入挂起态。 */

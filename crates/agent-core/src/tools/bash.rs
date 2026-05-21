@@ -21,8 +21,8 @@ use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
-use super::background::{BackgroundShells, ReadOutput, ShellState, READ_CHUNK_BYTES};
-use super::Tool;
+use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};
+use super::{Tool, ToolCtx};
 use crate::workspace::Workspace;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -101,6 +101,10 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: Value) -> AppResult<String> {
+        self.execute_streaming(ToolCtx::noop(), input).await
+    }
+
+    async fn execute_streaming(&self, ctx: ToolCtx, input: Value) -> AppResult<String> {
         let command = input["command"]
             .as_str()
             .ok_or_else(|| AppError::msg("Bash: 缺少 command"))?;
@@ -155,16 +159,38 @@ impl Tool for BashTool {
             return Ok(text);
         }
 
-        // 前台等待：要么进程退出，要么超时。等待期间不抽 buffer——
-        // 后台 reader task 一直在抽，最后我们直接 read_incremental 取 buffer。
-        let exited = tokio::time::timeout(Duration::from_secs(timeout), shell.wait_terminal())
-            .await
-            .is_ok();
+        // 前台等待：要么进程退出，要么超时。等待期间持续抽 tail buffer 增量，
+        // 通过 ctx.progress emit `ToolCallOutputDelta`——surface 端能在
+        // ToolCallFinished 之前看到 stdout/stderr 实时刷出来。
+        //
+        // 关键约束：read_incremental 推进 cursor，再次调 read 不会拿到旧字节。
+        // 所以我们本地 buffer 累加 forward 出去的内容，最后聚合返回。
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
+        let mut buffer = String::new();
+        let exited = loop {
+            // 终态或 deadline 到点都退出循环；中间每 ~200ms 抽一次增量。
+            let tick = tokio::time::sleep_until(
+                tokio::time::Instant::now() + Duration::from_millis(200),
+            );
+            tokio::select! {
+                biased;
+                _ = shell.wait_terminal() => {
+                    drain_into(&shell, &ctx, &mut buffer, usize::MAX);
+                    break true;
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
+                    break false;
+                }
+                _ = tick => {
+                    drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
+                }
+            }
+        };
 
         if !exited {
             // 超时：进程仍在跑，转后台。
             shell.promote_to_background();
-            let snapshot = shell.read_incremental(READ_CHUNK_BYTES);
             let mut text = format!(
                 "[bash] 命令在 {timeout}s 内未结束，已转后台：task_id={}\n",
                 shell.task_id
@@ -173,38 +199,42 @@ impl Tool for BashTool {
                 "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止。\n",
                 shell.task_id
             ));
-            if !snapshot.content.is_empty() {
+            if !buffer.is_empty() {
                 text.push_str("--- 已产出 ---\n");
-                text.push_str(&snapshot.content);
+                text.push_str(&buffer);
             }
             return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
         }
 
-        // 已退出：抽全部 tail buffer 拼输出 + 退出码，然后从注册表里摘掉——
-        // 前台命令完整 output 已经返回给模型，task_id 失去意义，
-        // 留在注册表只会让 surface 把它当成"已结束的后台任务"展示。
-        let snapshot = shell.read_incremental(usize::MAX);
-        let text = format_finished(&snapshot);
+        // 已退出：聚合 buffer + 终态后缀；从注册表摘掉前台条目。
+        let final_state = shell.state();
+        let text = format_finished(&buffer, &final_state);
         self.shells.unregister(&shell.task_id);
         Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES))
     }
 }
 
-fn format_finished(snapshot: &ReadOutput) -> String {
+/// 把 shell 当前未读的 tail buffer 抽出来：emit 给 surface 一份、累加到本地 buffer 一份。
+/// 单次最多抽 `max_bytes`，超长在下一次循环再继续。
+fn drain_into(
+    shell: &super::background::BackgroundShell,
+    ctx: &ToolCtx,
+    buffer: &mut String,
+    max_bytes: usize,
+) {
+    let snap = shell.read_incremental(max_bytes);
+    if !snap.content.is_empty() {
+        ctx.emit_chunk(snap.content.clone());
+        buffer.push_str(&snap.content);
+    }
+}
+
+fn format_finished(buffer: &str, state: &ShellState) -> String {
     let mut text = String::new();
-    if !snapshot.content.is_empty() {
-        text.push_str(&snapshot.content);
+    if !buffer.is_empty() {
+        text.push_str(buffer);
     }
-    if snapshot.bytes_dropped > 0 {
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&format!(
-            "[警告] 因 buffer 上限丢失开头 {} 字节",
-            snapshot.bytes_dropped
-        ));
-    }
-    let suffix = match &snapshot.state {
+    let suffix = match state {
         ShellState::Exited { code: Some(0) } => None,
         ShellState::Exited { code: Some(c) } => Some(format!("[exit {c}]")),
         ShellState::Exited { code: None } => Some("[terminated by signal]".to_string()),
@@ -377,4 +407,83 @@ mod tests {
 
     // 经过简化后 classify / affected_paths / permission_fingerprint 都搬到了
     // `crate::effects` 模块；具体单测见 `crate::effects::tests`。
+
+    /// 流式输出（架构 §4.4.1）：长跑命令在 ToolCallFinished 到达之前，
+    /// progress 通道应该收到至少两段 chunk——而不是憋到结尾一次性吐出来。
+    #[tokio::test]
+    async fn streaming_emits_chunks_before_finish() {
+        use crate::tools::ToolProgress;
+        use std::sync::Mutex;
+
+        struct CaptureProgress {
+            chunks: Mutex<Vec<String>>,
+        }
+        impl ToolProgress for CaptureProgress {
+            fn emit(&self, chunk: String) {
+                self.chunks.lock().unwrap().push(chunk);
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BackgroundShells::new();
+        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let progress = Arc::new(CaptureProgress {
+            chunks: Mutex::new(Vec::new()),
+        });
+        let ctx = crate::tools::ToolCtx {
+            call_id: "test_call".into(),
+            progress: Some(progress.clone()),
+        };
+
+        // 三行隔 300ms 输出——足够 forwarder 抽到 ≥2 段 chunk。
+        let out = bash
+            .execute_streaming(
+                ctx,
+                json!({
+                    "command": "for i in 1 2 3; do echo line$i; sleep 0.3; done",
+                    "timeout_secs": 5,
+                }),
+            )
+            .await
+            .unwrap();
+
+        let chunks = progress.chunks.lock().unwrap();
+        assert!(
+            chunks.len() >= 2,
+            "至少应收到 2 段 chunk（实时输出），实际：{:?}",
+            *chunks
+        );
+        let joined: String = chunks.iter().cloned().collect();
+        assert!(joined.contains("line1") && joined.contains("line3"));
+        assert!(out.contains("line1") && out.contains("line3"));
+    }
+
+    /// 命令瞬时完成时也走 progress 路径（不应 panic / 丢内容）。chunk 数 0~1 皆可。
+    #[tokio::test]
+    async fn streaming_short_command_still_returns_result() {
+        use crate::tools::ToolProgress;
+        use std::sync::Mutex;
+
+        struct CaptureProgress(Mutex<Vec<String>>);
+        impl ToolProgress for CaptureProgress {
+            fn emit(&self, c: String) {
+                self.0.lock().unwrap().push(c);
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BackgroundShells::new();
+        let bash = BashTool::new(workspace_at(tmp.path()), shells, None);
+        let progress = Arc::new(CaptureProgress(Mutex::new(Vec::new())));
+        let ctx = crate::tools::ToolCtx {
+            call_id: "test_call".into(),
+            progress: Some(progress.clone()),
+        };
+
+        let out = bash
+            .execute_streaming(ctx, json!({"command": "echo quick"}))
+            .await
+            .unwrap();
+        assert!(out.contains("quick"));
+    }
 }

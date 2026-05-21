@@ -45,6 +45,14 @@ pub enum EngineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
     },
+    /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待期间的
+    /// stdout/stderr 增量按 chunk 推过来；前端把 chunk 追加到对应工具卡片的
+    /// 实时输出区，`ToolDone.result` 仍是聚合后的最终文本。
+    ToolOutputDelta {
+        index: usize,
+        id: String,
+        chunk: String,
+    },
     /// Run 进入挂起态（架构 §4.12）。surface 据此渲染 BackgroundTaskPanel 占位。
     RunSuspended {
         /// "background_task" / "cron" / "manual"

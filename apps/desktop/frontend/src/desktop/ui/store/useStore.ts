@@ -158,21 +158,11 @@ function toolPartIndex(
     const byId = parts.findIndex(
       (part) => part.type === "tool_call" && part.id === id
     );
-    if (byId >= 0) {
-      console.debug("[toolPartIndex] matched by id", { id, index, byId, totalParts: parts.length });
-      return byId;
-    }
-    console.debug("[toolPartIndex] id not found, falling back to index", { id, index, totalParts: parts.length, toolParts: parts.filter(p => p.type === "tool_call").map(p => ({ idx: p.index, id: p.id })) });
+    if (byId >= 0) return byId;
   }
-  const byIndex = parts.findIndex(
+  return parts.findIndex(
     (part) => part.type === "tool_call" && part.index === index
   );
-  if (byIndex >= 0) {
-    console.debug("[toolPartIndex] matched by index", { id, index, byIndex, totalParts: parts.length });
-  } else {
-    console.debug("[toolPartIndex] NOT FOUND — will create new part", { id, index, totalParts: parts.length, toolParts: parts.filter(p => p.type === "tool_call").map(p => ({ idx: p.index, id: p.id })) });
-  }
-  return byIndex;
 }
 
 function ensureToolPart(
@@ -200,19 +190,12 @@ function applyToolCallDelta(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_call_delta" }>
 ): StreamingAssistantPart[] {
-  const prevToolCount = parts.filter(p => p.type === "tool_call").length;
   const [next, pos] = ensureToolPart(
     parts,
     event.index,
     event.id,
     event.name
   );
-  const newToolCount = next.filter(p => p.type === "tool_call").length;
-  if (newToolCount > prevToolCount) {
-    console.debug("[applyToolCallDelta] created NEW tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, argsDeltaLen: event.arguments_delta?.length ?? 0, prevToolCount, newToolCount, pos });
-  } else {
-    console.debug("[applyToolCallDelta] updated existing tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, argsDeltaLen: event.arguments_delta?.length ?? 0, pos });
-  }
   const call = next[pos];
   if (call.type !== "tool_call") return next;
   next[pos] = {
@@ -229,14 +212,7 @@ function applyToolStart(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_start" }>
 ): StreamingAssistantPart[] {
-  const prevToolCount = parts.filter(p => p.type === "tool_call").length;
   const [next, pos] = ensureToolPart(parts, event.index, event.id, event.name);
-  const newToolCount = next.filter(p => p.type === "tool_call").length;
-  if (newToolCount > prevToolCount) {
-    console.debug("[applyToolStart] created NEW tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, prevToolCount, newToolCount, pos });
-  } else {
-    console.debug("[applyToolStart] updated existing tool part", { eventIndex: event.index, eventId: event.id, eventName: event.name, pos });
-  }
   const call = next[pos];
   if (call.type !== "tool_call") return next;
   next[pos] = {
@@ -372,6 +348,9 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   }
   if (e.type === "tool_done") {
     return { ...slot, streamingParts: applyToolDone(slot.streamingParts, e) };
+  }
+  if (e.type === "tool_output_delta") {
+    return { ...slot, streamingParts: applyToolOutputDelta(slot.streamingParts, e) };
   }
   if (e.type === "run_suspended") {
     return {
@@ -522,6 +501,25 @@ function applyToolDone(
     duration_ms: event.duration_ms,
     status: "done",
     artifact_path: event.artifact_path ?? null,
+  };
+  return next;
+}
+
+/**
+ * 工具执行期间的流式输出片段——把 chunk 累加到对应 tool_call part 的 live_output。
+ * 顺序保证：dispatcher 先 emit tool_start，本事件之后；finished 前都可能来多次。
+ */
+function applyToolOutputDelta(
+  parts: StreamingAssistantPart[],
+  event: Extract<EngineEvent, { type: "tool_output_delta" }>
+): StreamingAssistantPart[] {
+  if (!event.chunk) return parts;
+  const [next, pos] = ensureToolPart(parts, event.index, event.id);
+  const call = next[pos];
+  if (call.type !== "tool_call") return next;
+  next[pos] = {
+    ...call,
+    live_output: (call.live_output ?? "") + event.chunk,
   };
   return next;
 }
