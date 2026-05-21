@@ -3031,25 +3031,55 @@
   - PrettyJson 没做大对象懒加载折叠 —— 一次 render 超大 JSON 仍可能慢；React virtualization 等性能问题真碰到再做
   - 放大 modal Esc 用 capture 阶段拦截抽屉 Esc 监听 —— 工作但耦合：如果未来抽屉 Esc 监听也改 capture 会冲突。等真出 bug 再换 stop propagation 或 ref forwarding 解
 
-### 2026-05-22 — 删除 ToolCallDelta hot path 上残留的诊断日志，修 desktop 卡死
+### 2026-05-22 — 删除前端 ToolCallDelta hot path 上残留的 console.debug，修 desktop 卡死
 
-- **Why**: 用户报「终端疯狂输出 `agent_loop: ToolCallDelta → EventPayload ...`，desktop 前端卡死无法操作」。根因是两处临时诊断代码没清掉
-  - 后端 [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs) commit `69c971fd`（Langfuse OTLP 那次）在 `ModelStreamEvent::ToolCallDelta → EventPayload` 转换处加了 `tracing::debug!`，每条 delta 一行。一个 tool_call 的 args 会被切成几十～几百段 delta，开 `RUST_LOG=debug` / Langfuse 时刷屏
-  - 前端 [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) commit `32d19def`（项目/权限/Skills 重构那次）在 `toolPartIndex` / `applyToolCallDelta` / `applyToolStart` 共 7 处加了 `console.debug`，每条 ToolCallDelta 至少 2 行，参数里还有 `parts.filter(...).map(...)` 实时计算。WebView 的 `console.debug` 不是 no-op —— Tauri 会把每次调用通过 IPC 序列化送到 devtools 通道，几百次/秒就把主线程堵死
+- **Why**: 用户报「终端疯狂输出 `agent_loop: ToolCallDelta → EventPayload ...`，desktop 前端卡死无法操作」。两个症状分别对应两处早期临时诊断代码
+  - 后端日志（终端刷屏）：commit `69c971fd`（Langfuse OTLP 那次）在 `agent_loop.rs` 的 `ModelStreamEvent::ToolCallDelta → EventPayload` 转换处加了 per-delta `tracing::debug!`。`43da96a`（Model I/O 调试器 + langfuse 残留清理）那次提交已经把它清掉，用户继续看到刷屏是因为没重启 dev 进程，跑的还是旧 build
+  - 前端卡死：commit `32d19def`（项目/权限/Skills 重构那次）在 [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) 的 `toolPartIndex` / `applyToolCallDelta` / `applyToolStart` 共 7 处加了 `console.debug`，参数对象里还有 `parts.filter(...).map(...)` 实时计算。WebView 的 `console.debug` 不是 no-op —— Tauri 会把每次调用通过 IPC 序列化送到 devtools 通道，一个 tool_call 的 args 被切成几十～几百段 delta 时几百次/秒，主线程直接堵死。这部分 `43da96a` 没动，本次清掉
 - **改动**:
-  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 删 `tracing::debug!("agent_loop: ToolCallDelta → EventPayload" ...)`，保留 `stream_tool_call_offset + delta.index` 索引转换的纯逻辑
   - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts):
-    - `toolPartIndex` 删 4 个 console.debug + 内联两个 filter/map 的诊断输出
-    - `applyToolCallDelta` / `applyToolStart` 各删 2 个 console.debug 以及为它们准备的 `prevToolCount` / `newToolCount` 中间变量（这些变量只用于 console.debug，本身就是诊断开销）
+    - `toolPartIndex` 删 4 个 console.debug + 内联两个 `parts.filter(...).map(...)` 的诊断 payload
+    - `applyToolCallDelta` / `applyToolStart` 各删 2 个 console.debug 以及为它们准备的 `prevToolCount` / `newToolCount` 中间变量（这些变量纯为日志服务）
 - **影响范围**:
-  - 仅观测代码，不动 protocol / 状态机 / storage / 回归测试
+  - 仅前端观测代码，不动 protocol / 状态机 / storage / 回归测试
   - tool_call 拼回的正确性已有 [chat.rs:2035 `ToolCallDelta 必须完整拼回`](../apps/desktop/src/chat.rs#L2035) 回归测试覆盖
-  - 模型 IO 观测仍可通过 `HEBBIAN_DUMP_MODEL_IO=1 → ~/.hebbian/sessions/<sid>/model_io.jsonl`、OTLP span 等上层手段获取，不需要 per-delta 日志
+  - 模型 IO 观测仍可通过 `HEBBIAN_DUMP_MODEL_IO=1 → ~/.hebbian/sessions/<sid>/model_io.jsonl`、Model I/O 调试器抽屉、OTLP span 等上层手段获取，不需要 per-delta console.debug
 - **取舍**:
-  - **删 vs 改 trace 包 if 开关**：选删。这些日志本来就是当时调 tool_call index/id 对齐 bug 用的临时诊断，bug 修完应该清掉。改 trace 是补丁式 —— 既留考古碎片，又让"下一次出问题再加一遍"的负反馈出现
-  - **保留 per-tool 一行日志 vs 全删**：选全删。id / name 在上层 `tool_start` 事件已带，per-delta 日志没有任何观测价值。真要看 raw model stream 上 model_io.jsonl
+  - **删 vs 改成 if (DEBUG) 包起来**：选删。这些日志本来就是当时调 tool_call index/id 对齐 bug 用的临时诊断，bug 修完应该清掉。开关式是补丁 —— 既留考古碎片，又让"下一次出问题再加一遍"的负反馈出现
+  - **保留 per-tool 一行日志 vs 全删**：选全删。id / name 在上层 `tool_start` 事件已带，per-delta 诊断对前端没有观测价值
 - **验证**:
-  - `cargo check -p agent-core` 通过
+  - `cargo check -p agent-core` 通过；`cargo test -p agent-core --lib` 235 passed
   - `pnpm exec tsc --noEmit` 通过
-  - 复现路径：开 desktop dev，触发任意 tool_call，应不再看到终端刷屏 / 前端卡顿。回归测试 `cargo test -p agent-core --lib` + `cargo test -p hebbian-desktop --lib` 不受影响（这两处都不是日志相关）
+  - 复现路径：重启 desktop dev，触发任意 tool_call，应不再看到 devtools / 前端卡顿
 - **留尾巴**: 无
+
+### 2026-05-22 — Bash 前台执行支持流式实时输出（新增 `ToolCallOutputDelta` 事件 + Tool trait 加 `execute_streaming` 默认方法）
+
+- **Why**: 用户痛点——Bash 前台命令（最长 60s 默认 timeout）原本要等命令结束 / 超时才把 stdout/stderr 一次性塞进 `ToolCallFinished.result`。长跑命令（编译、测试、迁移脚本）期间 UI 一片"等待返回…"，模型也看不到中间产物。BackgroundShell 的 tail buffer 已经在被 reader task 实时灌入，缺的只是把"新增片段"沿事件流推给 surface
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): 新增 `EventPayload::ToolCallOutputDelta { index, call_id, chunk }`——`TextDelta`/`ToolCallDelta` 的兄弟，紧跟 `ToolCallStarted` 之后、`ToolCallFinished` 之前出现
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): Tool trait 加 `execute_streaming(ctx, input)` 默认方法，默认委托回 `execute(input)` 忽略 ctx；新增 `ToolCtx { call_id, progress: Option<Arc<dyn ToolProgress>> }` 与 `ToolProgress::emit(chunk)` trait。非流式工具零侵入
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 前台等待循环重写——原本 `timeout(wait_terminal())` 一次等死；现在 loop `select { wait_terminal | sleep_until(deadline) | tick(200ms) }`，每次变化抽 `read_incremental(READ_CHUNK_BYTES)`，`ctx.emit_chunk(s)` 推 surface + 本地 buffer 累加。退出循环后 buffer + 终态拼最终 text。run_in_background=true 路径不动
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs)（随 `43da96a` 一同入 HEAD）: `spawn_tool` 构造 `ToolProgressEmitter`（持 sink/state/dispatch_index/call_id），调用 `t.execute_streaming(ctx, input)` 代替 `t.execute(input)`
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs) / [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `EngineEvent::ToolOutputDelta { index, id, chunk }` + 翻译分支
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `EngineEvent` 加 `tool_output_delta`；`StreamingAssistantPart.tool_call` 加 `live_output?: string`
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 新增 `applyToolOutputDelta`，把 chunk append 到对应 `tool_call.live_output`
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)（随 `43da96a` 一同入 HEAD）: `ToolCallItem` 加 `liveOutput` 字段；Bash 渲染分支在 `status="running"` 时显示 `live_output` 并加 "▍" 光标，`status="done"` 后由 `result` 覆盖
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)（随 `43da96a` 一同入 HEAD）: `DaemonEvent::ToolOutputDelta { id, chunk }` + translate 分支。NDJSON 脚本可 tail 这条看 Bash 实时进度
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs): `EngineEvent::ToolOutputDelta` + translate 分支
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs) 新增两个回归单测：`streaming_emits_chunks_before_finish` 验证长跑命令在 finished 之前 progress 通道收到 ≥2 段 chunk；`streaming_short_command_still_returns_result` 验证瞬时命令也走 progress 路径不 panic
+  - [docs/架构.md](../docs/架构.md): §3.1 工具事件列表加 `ToolCallOutputDelta`；§4.4.1 Tool 接口加流式工具一节；§13 决策表加一行
+- **影响范围**: protocol / agent-core / desktop / cli / web-server / docs。**全部 additive**——新事件 variant 旧 surface 默认忽略；Tool trait 加默认方法，非流式工具不需动；BashTool 旧的 `execute(input)` 行为不变（委托回 `execute_streaming` 用 noop ctx），单测兼容
+- **取舍**:
+  - **trait 加签名 vs 加默认方法**：选了"加一个有默认实现的方法"——所有其它 12 个工具零改动；流式只是 BashTool 一个的局部能力，不必让 Read/Edit/Grep 也背一个 ctx 参数
+  - **chunk 进 transcript vs 仅走事件流**：选了仅走事件流。`ToolCallFinished.result` 仍是聚合后完整文本喂回模型，避免"模型在 transcript 里看到分段输出 + 最终完整输出"重复计费。delta 是给 surface 端观察用的旁路
+  - **forward 间隔**：200ms tick——比 chunk 来一条 emit 一条更省事件量（连续行会合并到下一次 tick），又比 500ms+ 体感"卡"。前端 React 每秒 5 次更新可承受
+  - **read_incremental cursor 推进后丢字节问题**：本来 finished 时 `read_incremental(usize::MAX)` 重抽全量，现在 forwarder 已推进 cursor 会拿不到旧字节。改成 bash.rs 内部维护本地 String buffer——每次 emit 同时累加，最终结果用 buffer 而不是再 read。语义清晰、不需扩 BackgroundShell API
+  - **超时转后台时的 partial 输出**：保留——`drain_into(deadline)` 在 select! 命中 deadline 分支时再抽一次残余 chunk，emit + buffer 都更新，"已转后台"提示文本拼上"--- 已产出 ---"区域内容
+- **验证**:
+  - 阶段 A（复现痛点）：mental model + 代码路径分析（原 `tokio::time::timeout(.., shell.wait_terminal()).await` 等到结束才 read_incremental(usize::MAX)，期间 surface 拿不到任何中间事件）
+  - 阶段 B（验证修复）：`cargo test -p agent-core --lib tools::bash` 9 个测试全过（含 2 个新加的流式测试）；`cargo test -p agent-core --lib` 235 全过；`cargo check --workspace` clean；`pnpm exec tsc --noEmit` clean
+- **留尾巴**:
+  - 大命令 buffer 累加可能产生 100KB+ 的本地 String——已有 `truncate_bytes(MAX_OUTPUT_BYTES=30_000)` 兜底，但 forward 过程中 emit 的 chunk 总量未限。短期可接受（前端按需折叠 + tail buffer 自带 256KB 上限）；长期想做"超过 N MB 不再 emit chunk，建议切后台"再说
+  - 未在 desktop dev 模式手工跑 chat 流；后续真实长跑命令（如 `cargo build --workspace`）首次跑时建议肉眼观察一次 UI 流畅度——理论上每 200ms 一次 React diff，无问题但视用户机器而定
+  - Bash 之外的工具暂无流式实现（Grep / WebFetch 的大响应也能用，留给后续按需求开）
