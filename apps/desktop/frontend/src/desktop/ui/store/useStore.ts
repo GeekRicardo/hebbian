@@ -1890,3 +1890,9 @@ export const useStore = create<AppState>((set, get) => ({
     return providers.find((p) => !!p.api_key) || providers[0];
   },
 }));
+
+// 把 store 暴露到 window，便于 Playwright / 浏览器控制台 inspect 与注入。
+// 零开销，hebweb / desktop 都保留——遇到事件流问题时不用重启就能直接 dump 状态。
+if (typeof window !== "undefined") {
+  (window as unknown as { __hebStore?: typeof useStore }).__hebStore = useStore;
+}

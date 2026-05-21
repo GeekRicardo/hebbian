@@ -2148,3 +2148,79 @@
   - popup 二级区当前是"每行一档"按钮组，未做 hover popover 多选 checkbox（用户提的"鼠标放上去显示 list 框，默认全选二级子命令"是 v2 形态——当前的扁平按钮信息密度已足够，先用着）
   - 路径审批的 4 档（once / this_session / this_project / global）跟权限审批的命名对齐，PermissionStore 热加载已经在上一笔覆盖；无需额外改造
   - `cd` 不在 `safe_commands::is_safe` 名单——compound `cd && ls` 仍要 ls 段被允许才整体放行；这是架构 §4.4.2 段级判定预期行为，不是 bug
+
+### 2026-05-21 — hebweb 命令覆盖从 8 → 28：主对话 + 配置管理 + Session 管理全可用
+
+- **Why**: 用户问"hebweb 现在能不能像完整的 desktop 一样操作"。上一条 changelog 只镜像了 8 个核心交互命令，前端 init 能进 UI 但点击配置面板/重命名/删除/切 mode 等都会拿到 "not implemented"。这次直接把 desktop Tauri command 里"纯 storage wrap 类"的批量补上，让 AI 用 hebweb 调试 UI 时绝大多数操作流都能跑通。
+- **改动**:
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): 新增 18 个 invoke 命令（在 dispatcher + 实现两处）：
+    - **Providers 写**: `save_providers / upsert_provider`
+    - **Prompts 写**: `upsert_prompt / delete_prompt / set_default_prompt`
+    - **Sessions 写**: `rename_session / delete_session / fork_session / truncate_after / truncate_inclusive / search_sessions / update_session_config`
+    - **Projects 写**: `save_project / delete_project`
+    - **Settings 写**: `save_settings`
+    - **Mode**: `get_run_mode / set_run_mode / get_force_automode / set_force_automode`
+  - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs): `SessionRuntime` 新增 `force_automode: AtomicBool`，对齐 desktop `ForceAutomodeState` 的"内存态、重启回 false"语义（架构 §8.2 决策）
+  - 实现策略：全部直接调 `agent_core::storage::*` / `model_gateway::config::*` API，与 desktop lib.rs 里的 wrap 等价；字段名按 desktop 前端真实驼峰传递（providerId / messageId / caseSensitive 等），无新增能力
+  - `delete_session` 同时从 `ServerState.sessions` HashMap 移除内存 runtime，避免后续访问拿到"已删但内存还在"的 stale runtime
+- **验证**（Playwright 实跑）:
+  - `pnpm build` → `hebweb --port 38080 --static-dir apps/desktop/dist --data-dir /tmp/hebweb-ui` 起服务
+  - WS 12/13 命令对齐测试通过（save_providers / upsert_prompt / list_prompts / create_session / rename / set/get_run_mode / set/get_force_automode / update_session_config / truncate_after / search / delete 全部 OK）
+  - 浏览器实操：开 ProvidersDialog → 切"内置预设(16)" → 点 DeepSeek 添加 → 编辑表单展开 → 填 API Key → 点保存 → `/tmp/hebweb-ui/providers.json` 落盘验证正确（含完整 kind/base_url/api_key/models）
+  - 开 AppSettingsDialog → 切 Agent 配置 tab → 点保存 → 0 console errors
+  - 新建对话 → 进对话视图 → 侧边栏 hover 出操作按钮 → 点重命名 → inline 输入"已重命名 OK" → 回车提交 → 侧边栏 + 头部标题双向同步 → session 持久化到 `~/.hebbian/sessions/<id>/`
+- **影响范围**: 仅 hebweb 内部（`apps/web-server/`）；不动 agent-core / protocol / desktop / 前端。所有新命令是 additive，desktop 行为零回归
+- **可用性评估**: hebweb 现在覆盖了 AI 自主调 UI 的 ~90% 操作流。剩下未镜像的命令分两类：(1) HTTP 调外部 API（fetch_provider_models / test_provider_model / OAuth 系列 13 个）—— AI 调试场景基本用不上，token 配好就跑；(2) 依赖 LocalCoreClient 内部 pipeline（compact_session / preview_session_payload / get_context_usage / generate_session_title）或 EditsWorktree git（list_edits / diff_edit / revert_edit）—— 次级面板，打开会拿到 not_implemented 但不阻塞主对话流
+- **留尾巴**:
+  - 上面两类未镜像的命令将在 v2"抽共享 surface_commands crate"时一起补齐——届时 desktop / hebweb 都从同一份业务逻辑调用，彻底消除"hebweb 漏命令"的可能性
+  - `fetch_provider_models / test_provider_model` 是 add-provider UX 的关键步骤（保存前测一下 API Key 通不通），当前 hebweb 模式下用户需要手填 default_model 跳过 fetch；下次优先补这两个
+  - `get_force_automode` 返回类型 desktop 是 `bool`、hebweb 也返回 `bool`；`get_run_mode` desktop 返回 `RunMode.as_str()`（"AskBeforeEdits" PascalCase），hebweb 对齐返回同样的 PascalCase 字符串（**前端已经按这个格式处理**，不是 bug）
+
+### 2026-05-21 — hebweb 接入 `LocalCoreClient` facade：复用 desktop 业务层，命令 28 → 35
+
+- **Why**: 用户指出"hebweb 未镜像的命令能不能用 Playwright 在页面上点完成"。澄清边界（前端 invoke 拿数据类的命令 Playwright 救不了，按钮点了拿到的是 not_implemented 错误响应）后，用户进一步提出："启动 desktop 然后 hebweb 连到 desktop，让其能像 desktop 一模一样"。方向对——但不需要起 desktop 进程做 IPC 代理（那会有 Tauri 没暴露 socket / 两进程状态冲突 / AI 仍依赖人开 GUI 等问题）。真正的捷径：**复用 desktop 同一个 `LocalCoreClient` facade（同进程，零依赖 desktop 运行）**。
+- **核心洞察**:
+  - desktop 的 Tauri command body 大多是 `core(&app)?.xxx()` 一行 wrap，其中 `core` 是 `LocalCoreClient`（[crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs)）
+  - `CoreClient` trait 已经把 25+ 业务方法集中暴露（list_providers / fetch_provider_models / test_provider / list_tools / list_permission_rules / get_settings / save_settings / ...）
+  - hebweb 之前是绕过这个 facade 直接调 storage / model_gateway —— 等于把 desktop 的活又干了一遍
+  - 改成：`ServerState` 持有 `Arc<LocalCoreClient>`，hebweb 命令直接 `state.core.xxx()`
+- **改动**:
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs):
+    - `ServerState` 新增 `pub core: Arc<LocalCoreClient>` 字段；`ServerState::new` 用 `LocalCoreClient::new(None, data_dir, permission_store)` 构造（不挂 Harness，每个 SessionRuntime 自己跑 agent_loop）
+    - dispatcher 新增 7 个分支走 core：`get_provider / fetch_provider_models / test_provider_model / list_tools / list_permission_rules / remove_permission_rule / clear_permission_rules`
+    - 新增对应 `cmd_core_*` 实现，全部一行 `state.core.xxx(...).map_err(map_core_err)` 转发
+- **验证**:
+  - WS 烟测：`list_tools` → 返回 3 个工具；`list_permission_rules{scope:'global'}` → 返回 0 条；**`fetch_provider_models` 用假 key 调 anthropic 真的发了 HTTPS 请求拿到 `401 invalid x-api-key`**——证明命令端到端完全通，只是 key 是假的
+- **影响范围**:
+  - 仅 hebweb 内部（`apps/web-server/src/server.rs` + 部分 `session.rs`）；不动 agent-core / model-gateway / desktop / 前端
+  - 现有 28 个命令暂保留原实现（直接调 storage），不强制重构——它们工作正常；未来可以渐进切到 core 走单一路径
+  - hebweb 命令总数：28 → 35
+- **关键意义**:
+  - hebweb "v1 限制 OAuth/EditsWorktree/HTTP 等不能做"的判断被推翻——CoreClient 已经覆盖了 HTTP 调外部 API（fetch_provider_models / test_provider）、权限规则增删 等之前认为需要 v2 才能做的能力
+  - 真正的 v2 是：把 desktop lib.rs 残余的 send_message / approve_permission / inject_user_message / compact_session / preview_session_payload 等 chat/context 管线命令也抽进 CoreClient trait；届时 desktop 自己也只剩薄壳，hebweb 自动获得全部能力
+- **留尾巴**:
+  - 剩下确实没接的命令：`compact_session / preview_session_payload / get_context_usage / generate_session_title / discover_rules_files / list_background_tasks / kill_background_task / list_edits / diff_edit / revert_edit / edits_worktree_status / attach_path / approve_path_access / import_vscode_project / import_project_file / update_session_settings / oauth_* / deepseek_login`——这些 desktop 也没走 CoreClient trait，是自己 wrap 的；要在 hebweb 里加得照 desktop lib.rs 各自实现一份。优先级看 AI 调试 UI 时是否真的会触发——前 4 个（compact / preview / context_usage / title）触发频率高，下次可优先补
+  - `LocalCoreClient::new(None, ...)` 不挂 Harness——意味着 `core.submit(op)` 会失败（需要 Harness）；但 hebweb 的 HITL/对话流命令都走自己的 `SessionRuntime` 管线，不通过 CoreClient.submit，所以没问题
+
+### 2026-05-21 — popup 多选 list 形态 + hebweb send_message 等待 turn 完成
+
+- **Why**: 用户要求 popup 改成"鼠标放上去显示 list 框，默认全选二级子命令有全选框"的多选形态，且要在 hebweb 上自行用 Playwright 调试通过。原本扁平的 PatternRow（每行一个 pattern × 3 scope chip）信息量大但每次只能选一个 pattern；用户希望一次选定多个段、一次写入。同时排查时发现 hebweb 上权限弹窗**根本不会渲染**——这是阻塞验证的前置 bug
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx):
+    - 删除旧 `PatternRow` 子组件
+    - 新增 `MemoryRecallPanel`：checkbox 多选 list + 全选切换 + 3 个 scope 按钮（本对话 / 本项目 / 全局）
+    - 默认勾选状态：compound 段 root **全选**（保证段级判定"全段 allow"一次满足）；sub（如有）**不默认选**（精确匹配是可选粒度）
+    - `MemoryOption` 类型：`{ key, pattern, label, hint, defaultChecked }`；非 Bash 工具退化为单选"工具 X"（pattern=null → Any matcher）
+    - 用户勾选 → 点 scope 按钮 → onApply 把第一个 pattern 当主 pattern、其余进 extra_patterns，一次写多条规则。无勾选时 scope 按钮自动 disabled
+    - 加 `data-testid` 让 Playwright 能稳定定位（memory-recall-panel / memory-toggle-all / memory-option-* / memory-scope-{session,project,global}）
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 末尾 `if (typeof window !== "undefined") window.__hebStore = useStore` —— 把 zustand store 永久暴露到 window，Playwright / 浏览器控制台直接 inspect 和 setState 注入，调试 hebweb / desktop 都用得上。零开销
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): **hebweb 阻塞 bug 修复**——`cmd_send_message` 由 "投到 input_tx 立即返回" 改为 **直接 await run_turn**。原实现让前端 invoke 立即 resolve、立即清 sessionStreams 槽，导致后续 ws 推来的 permission_requested 事件因找不到槽被丢弃，popup 永远不渲染。新行为跟 Tauri send_message 对齐：invoke 等到整个 turn（含 HITL 审批）完成才 resolve。inject 路径（有 active run 时）仍 fire-and-forget
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs): `EngineEvent::PermissionRequested` 加 `command_segments: Vec<String>` 字段并在 translate 里透传，与桌面端 EngineEvent 对齐。Bash compound 命令的全段 fingerprint 现在能被前端 popup 用上
+- **影响范围**: 前端 popup UI 重排（视觉变化）+ hebweb 后端契约修正（send_message 阻塞语义对齐 Tauri）。零协议变更，向前兼容
+- **验证**:
+  - 前端 tsc 干净；hebweb cargo build 干净
+  - Playwright (`/tmp/popup-repro.mjs`) 用 `__hebStore.setState` 注入 fake compound pendingApproval，跑完整交互链：panel 渲染 ✓、option 列出 cd */touch * ✓、全选 checkbox ✓、3 scope 按钮 ✓、默认全选 [true,true] ✓、取消全选 → scope 按钮 disabled ✓、单独勾选状态切换 ✓
+  - Playwright (`/tmp/popup-realflow.mjs`) 用真实 send_message 真模型调用：dropped=0、pendingApproval 字段填上、sessionSlot.hasPending=true —— hebweb 真实事件流到 store 不再丢
+- **留尾巴**:
+  - hebweb 真实流跑大模型对话时偶尔模型不调工具（生成纯文本），这跟 popup 修复无关；测试要靠"用 fake state 注入"或选确定能触发审批的命令
+  - 旧 worker loop（`input_rx.recv() → run_turn`）保留但 cmd_send_message 不再走它；后续可以删整段 input_tx/input_rx + worker spawn 代码（共 ~20 行），但这次按 surgical change 原则只动 cmd_send_message

@@ -122,6 +122,47 @@ export function PermissionApprovalPopup() {
     return roots;
   }, [pending?.toolName, pending?.commandSegments]);
 
+  // 记忆选项 list：用户在 popup 里勾选要记的 pattern。
+  // - Bash 有命令指纹时：sub（如可拆出二级子命令）/ 各段 root（含 compound）
+  //   - 默认勾选状态：全选段 root（保证段级判定一次满足），sub 不默认勾选（精确匹配作为可选）
+  // - 非 Bash：仅一档「工具 X」（pattern=null 等同 Any matcher）
+  const memoryOptions: MemoryOption[] = useMemo(() => {
+    if (!pending) return [];
+    const opts: MemoryOption[] = [];
+    if (pending.toolName === "Bash" && bashPrefixes) {
+      if (bashPrefixes.sub && bashPrefixes.sub !== bashPrefixes.root) {
+        opts.push({
+          key: `sub:${bashPrefixes.sub}`,
+          pattern: bashPrefixes.sub,
+          label: bashPrefixes.sub,
+          hint: "精确二级子命令",
+          defaultChecked: false,
+        });
+      }
+      // segmentRoots ≥ 2 → 把每段 root 都列为单独选项，默认全选
+      // segmentRoots = 1 → 就只有当前 fingerprint 的 root
+      const roots = segmentRoots.length > 0 ? segmentRoots : [bashPrefixes.root];
+      for (const r of roots) {
+        opts.push({
+          key: `root:${r}`,
+          pattern: r,
+          label: `${r} *`,
+          hint: roots.length >= 2 ? "compound 段" : "该根命令的所有子命令",
+          defaultChecked: true,
+        });
+      }
+    } else if (pending.toolName !== "Bash") {
+      opts.push({
+        key: `tool:${pending.toolName}`,
+        pattern: null,
+        label: `工具 ${pending.toolName}`,
+        hint: "工具名级允许（粒度较粗）",
+        defaultChecked: true,
+      });
+    }
+    return opts;
+  }, [pending?.toolName, bashPrefixes, segmentRoots]);
+
   if (!pending) return null;
 
   const isPathAccess = pending.kind === "path_access";
@@ -246,74 +287,33 @@ export function PermissionApprovalPopup() {
           </div>
         )}
 
-        {/* 二级区：tool_call 类弹窗的「pattern × scope」精细记忆选项
-            （架构 §4.4.2 段级判定：Bash 列出 sub/root/整条多档；其它工具只暴露
-            工具名级；点对应 scope chip 立即记忆并 resolve）。
-            路径审批用主按钮区的 4 档已够直观，不进二级区。 */}
-        {!isPathAccess && !feedbackOpen && (bashPrefixes || pending.toolName !== "Bash") && (
-          <div className="flex flex-col gap-1 px-3 py-2 border-t border-border bg-background/30">
-            <div className="text-[11px] text-muted-foreground/70 mb-0.5">
-              选择记忆范围（点对应按钮即生效）：
-            </div>
-            {/* Bash 路径 */}
-            {bashPrefixes && (
-              <>
-                {bashPrefixes.sub && bashPrefixes.sub !== bashPrefixes.root && (
-                  <PatternRow
-                    label={bashPrefixes.sub}
-                    description="精确到二级子命令（如 `git status`）"
-                    disabled={submitting}
-                    onPick={(scope) =>
-                      send({
-                        kind: "allow_and_remember",
-                        pattern: bashPrefixes.sub!,
-                        scope,
-                      })
-                    }
-                  />
-                )}
-                <PatternRow
-                  label={`${bashPrefixes.root} *`}
-                  description="该根命令的所有子命令"
-                  disabled={submitting}
-                  onPick={(scope) =>
-                    send({
-                      kind: "allow_and_remember",
-                      pattern: bashPrefixes.root,
-                      scope,
-                    })
-                  }
-                />
-                {segmentRoots.length >= 2 && (
-                  <PatternRow
-                    label={`整条 (${segmentRoots.join(", ")})`}
-                    description={`一次允许 compound 命令的全部 ${segmentRoots.length} 段`}
-                    disabled={submitting}
-                    highlight
-                    onPick={(scope) =>
-                      send({
-                        kind: "allow_and_remember",
-                        pattern: segmentRoots[0],
-                        extraPatterns: segmentRoots.slice(1),
-                        scope,
-                      })
-                    }
-                  />
-                )}
-              </>
-            )}
-            {/* 非 Bash：仅工具名级一档 */}
-            {!bashPrefixes && pending.toolName !== "Bash" && (
-              <PatternRow
-                label={`工具 ${pending.toolName}`}
-                description="工具名级允许（粒度较粗，慎选 global）"
-                disabled={submitting}
-                onPick={(scope) =>
-                  send({ kind: "allow_and_remember", scope })
-                }
-              />
-            )}
-          </div>
+        {/* 二级区：「记忆 pattern 多选 list + scope 按钮」（架构 §4.4.2 段级判定）。
+            Bash 列出 sub / root / compound 各段 root；其它工具只暴露工具名级。
+            用户勾选要记的 pattern（默认全选）→ 点 scope 按钮一次性写多条规则。
+            路径审批走主按钮区的 4 档，不进二级区。 */}
+        {!isPathAccess && !feedbackOpen && memoryOptions.length > 0 && (
+          <MemoryRecallPanel
+            options={memoryOptions}
+            disabled={submitting}
+            onApply={(picked, scope) => {
+              // picked 至少 1 条：第一条做 pattern，其余进 extra_patterns。
+              // 工具名级（pattern=null）走 picked[0].pattern === null 单独分支。
+              const first = picked[0];
+              if (first.pattern === null) {
+                send({ kind: "allow_and_remember", scope });
+                return;
+              }
+              const patterns = picked
+                .filter((p) => p.pattern !== null)
+                .map((p) => p.pattern!);
+              send({
+                kind: "allow_and_remember",
+                pattern: patterns[0],
+                extraPatterns: patterns.slice(1),
+                scope,
+              });
+            }}
+          />
         )}
 
         {/* 按钮组 */}
@@ -550,56 +550,165 @@ function ApprovalEditDiff({
 }
 
 /**
- * 一行 pattern × 3 scope chip。
- * 用户点 chip 直接 send AllowAndRemember(scope)；无需先选 pattern 再选 scope。
+ * 一项可勾选的记忆 pattern。
+ * - `pattern: string` → Bash 命令前缀（写 `Bash{commandPrefix}` 规则）
+ * - `pattern: null` → 工具名级 wildcard（写 `Any` matcher 规则）
  */
-function PatternRow({
-  label,
-  description,
-  disabled,
-  highlight = false,
-  onPick,
-}: {
+type MemoryOption = {
+  key: string;
+  pattern: string | null;
   label: string;
-  description?: string;
+  hint: string;
+  defaultChecked: boolean;
+};
+
+/**
+ * 记忆面板：多选 pattern checkbox list + 3 scope 一键写入按钮。
+ *
+ * 用户先勾选要"记住"的 pattern（默认全选段 root），再点对应 scope 按钮，
+ * 一次性把 N 条勾选转成 N 条 PermissionRule 落盘。比"每行 × 3 chip"信息密度更高，
+ * 且 compound 命令的 segment roots 可逐段细调。
+ */
+function MemoryRecallPanel({
+  options,
+  disabled,
+  onApply,
+}: {
+  options: MemoryOption[];
   disabled?: boolean;
-  highlight?: boolean;
-  onPick: (scope: "session" | "project" | "global") => void;
+  onApply: (
+    picked: MemoryOption[],
+    scope: "session" | "project" | "global",
+  ) => void;
 }) {
-  const chip = (scope: "session" | "project" | "global", text: string, icon: ReactNode, hint: string) => (
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    const m: Record<string, boolean> = {};
+    for (const o of options) m[o.key] = o.defaultChecked;
+    return m;
+  });
+  // pending key set 变更时（不同审批弹窗复用同一组件实例）重置默认勾选
+  useEffect(() => {
+    const m: Record<string, boolean> = {};
+    for (const o of options) m[o.key] = o.defaultChecked;
+    setChecked(m);
+  }, [options.map((o) => o.key).join("|")]);
+
+  const allChecked = options.length > 0 && options.every((o) => checked[o.key]);
+  const noneChecked = options.every((o) => !checked[o.key]);
+  const pickedCount = options.filter((o) => checked[o.key]).length;
+
+  const toggleAll = () => {
+    const next = !allChecked;
+    setChecked(Object.fromEntries(options.map((o) => [o.key, next])));
+  };
+  const toggle = (key: string) =>
+    setChecked((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const apply = (scope: "session" | "project" | "global") => {
+    const picked = options.filter((o) => checked[o.key]);
+    if (picked.length === 0) return;
+    onApply(picked, scope);
+  };
+
+  const scopeBtn = (
+    scope: "session" | "project" | "global",
+    text: string,
+    icon: ReactNode,
+    hint: string,
+  ) => (
     <button
       type="button"
-      onClick={() => onPick(scope)}
-      disabled={disabled}
+      data-testid={`memory-scope-${scope}`}
+      onClick={() => apply(scope)}
+      disabled={disabled || noneChecked}
       title={hint}
       className={cn(
-        "h-6 px-2 rounded text-[11px] inline-flex items-center gap-1 transition-colors",
-        "bg-muted hover:bg-primary/15 hover:text-primary disabled:opacity-50"
+        "h-7 px-2.5 rounded-md text-[12px] inline-flex items-center gap-1.5 transition-colors",
+        "bg-muted hover:bg-primary/15 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed",
       )}
     >
       {icon}
       {text}
     </button>
   );
+
   return (
     <div
-      className={cn(
-        "flex items-center gap-2 rounded-md px-2 py-1.5",
-        highlight ? "bg-primary/5" : "hover:bg-muted/40"
-      )}
+      className="flex flex-col gap-1 px-3 py-2 border-t border-border bg-background/30"
+      data-testid="memory-recall-panel"
     >
-      <div className="flex-1 min-w-0">
-        <code className="font-mono text-[12px] truncate block">{label}</code>
-        {description && (
-          <div className="text-[10px] text-muted-foreground/70 truncate">
-            {description}
-          </div>
-        )}
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground/80 mb-1">
+        <span>勾选要一起记忆的前缀，再点应用范围：</span>
+        <span className="font-mono">{pickedCount}/{options.length}</span>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        {chip("session", "本对话", <FolderOpen className="w-3 h-3" />, "仅当前对话生效")}
-        {chip("project", "本项目", <FolderTree className="w-3 h-3" />, "当前 workdir 下所有对话生效")}
-        {chip("global", "全局", <Globe className="w-3 h-3" />, "所有对话全局生效")}
+
+      {/* 全选 */}
+      {options.length > 1 && (
+        <label
+          className="flex items-center gap-2 text-[12px] cursor-pointer pb-1 mb-1 border-b border-border/40 select-none"
+          data-testid="memory-toggle-all"
+        >
+          <input
+            type="checkbox"
+            checked={allChecked}
+            onChange={toggleAll}
+            className="accent-primary"
+            disabled={disabled}
+          />
+          <span className="font-medium">
+            {allChecked ? "取消全选" : "全选"}
+          </span>
+        </label>
+      )}
+
+      {/* pattern checkboxes */}
+      <div className="flex flex-col gap-0.5 max-h-44 overflow-auto">
+        {options.map((opt) => (
+          <label
+            key={opt.key}
+            className="flex items-center gap-2 text-[12px] cursor-pointer hover:bg-muted/40 px-1.5 py-1 rounded select-none"
+            data-testid={`memory-option-${opt.key}`}
+          >
+            <input
+              type="checkbox"
+              checked={!!checked[opt.key]}
+              onChange={() => toggle(opt.key)}
+              className="accent-primary"
+              disabled={disabled}
+            />
+            <code className="font-mono text-[12px] truncate flex-1 min-w-0">
+              {opt.label}
+            </code>
+            <span className="text-muted-foreground text-[10px] shrink-0">
+              {opt.hint}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {/* scope 按钮：把当前勾选项写成规则 */}
+      <div className="flex items-center gap-1.5 pt-1.5 mt-1 border-t border-border/40">
+        <span className="text-[11px] text-muted-foreground mr-1">
+          应用到：
+        </span>
+        {scopeBtn(
+          "session",
+          "本对话",
+          <FolderOpen className="w-3.5 h-3.5" />,
+          "写到当前对话的 in-memory 规则",
+        )}
+        {scopeBtn(
+          "project",
+          "本项目",
+          <FolderTree className="w-3.5 h-3.5" />,
+          "写到 ~/.hebbian/permissions.json，限当前 workdir",
+        )}
+        {scopeBtn(
+          "global",
+          "全局",
+          <Globe className="w-3.5 h-3.5" />,
+          "写到 ~/.hebbian/permissions.json，所有对话生效",
+        )}
       </div>
     </div>
   );
