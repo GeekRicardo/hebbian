@@ -283,8 +283,9 @@ impl ToolDispatcher {
             hebbian.tool.truncated = Empty,
             hebbian.tool.result_bytes = Empty,
             hebbian.tool.duration_ms = Empty,
-            langfuse.observation.input = Empty,
-            langfuse.observation.output = Empty,
+            // langfuse.* 字段会污染 stderr，暂时关闭
+            // langfuse.observation.input = Empty,
+            // langfuse.observation.output = Empty,
         );
 
         Box::pin(
@@ -460,10 +461,11 @@ impl ToolDispatcher {
                     None
                 };
 
-                tracing::Span::current().record(
-                    attr::LANGFUSE_OBSERVATION_INPUT,
-                    tool_input_for_langfuse(&call.name, &effective_input).as_str(),
-                );
+                // langfuse 上报已关闭——observation.input 不再写入 tool.call span
+                // tracing::Span::current().record(
+                //     attr::LANGFUSE_OBSERVATION_INPUT,
+                //     tool_input_for_langfuse(&call.name, &effective_input).as_str(),
+                // );
 
                 // 执行
                 info!(
@@ -619,10 +621,11 @@ impl ToolDispatcher {
                     }
                 }
 
-                tracing::Span::current().record(
-                    attr::LANGFUSE_OBSERVATION_OUTPUT,
-                    truncate_for_langfuse(&content).as_str(),
-                );
+                // langfuse 上报已关闭——observation.output 不再写入 tool.call span
+                // tracing::Span::current().record(
+                //     attr::LANGFUSE_OBSERVATION_OUTPUT,
+                //     truncate_for_langfuse(&content).as_str(),
+                // );
                 record_tool_outcome(
                     outcome,
                     &call.name,
@@ -929,6 +932,7 @@ fn record_tool_outcome(outcome: &str, tool: &str, duration_ms: f64, truncated: b
     metrics::record_tool_duration(tool, outcome, duration_ms);
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn tool_input_for_langfuse(tool: &str, input: &serde_json::Value) -> String {
     truncate_for_langfuse(
         &serde_json::to_string(&serde_json::json!({
@@ -939,6 +943,7 @@ fn tool_input_for_langfuse(tool: &str, input: &serde_json::Value) -> String {
     )
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn truncate_for_langfuse(value: &str) -> String {
     const MAX_CHARS: usize = 32_000;
     let mut iter = value.char_indices();

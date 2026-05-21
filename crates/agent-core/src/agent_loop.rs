@@ -161,9 +161,10 @@ fn drain_pending_inputs(
         hebbian.run.parent_id = ?params.parent,
         hebbian.run.outcome = Empty,
         hebbian.run.iterations = Empty,
-        langfuse.session.id = Empty,
-        langfuse.trace.input = Empty,
-        langfuse.trace.output = Empty,
+        // langfuse.* 字段会污染 stderr，暂时关闭
+        // langfuse.session.id = Empty,
+        // langfuse.trace.input = Empty,
+        // langfuse.trace.output = Empty,
     )
 )]
 pub async fn run_loop(
@@ -200,13 +201,14 @@ pub async fn run_loop(
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
     let run_span = tracing::Span::current();
-    if let Some(session_id) = session_id.as_deref() {
-        run_span.record(attr::LANGFUSE_SESSION_ID, session_id);
-    }
-    run_span.record(
-        attr::LANGFUSE_TRACE_INPUT,
-        trace_input_from_entries(&transcript.entries).as_str(),
-    );
+    // langfuse 上报已关闭——session_id / trace.input 不再写入 run span
+    // if let Some(session_id) = session_id.as_deref() {
+    //     run_span.record(attr::LANGFUSE_SESSION_ID, session_id);
+    // }
+    // run_span.record(
+    //     attr::LANGFUSE_TRACE_INPUT,
+    //     trace_input_from_entries(&transcript.entries).as_str(),
+    // );
 
     // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
     // 计数器从 checkpoint 起步，保证 MAX_TOOL_ITERATIONS 累积、Step index 单调。
@@ -552,10 +554,11 @@ pub async fn run_loop(
                     output_attachments = all_attachments;
                     continue;
                 }
-                run_span.record(
-                    attr::LANGFUSE_TRACE_OUTPUT,
-                    truncate_for_langfuse(&text).as_str(),
-                );
+                // langfuse 上报已关闭——trace.output 不再写入 run span
+                // run_span.record(
+                //     attr::LANGFUSE_TRACE_OUTPUT,
+                //     truncate_for_langfuse(&text).as_str(),
+                // );
                 break Ok(AssistantOutput {
                     text,
                     attachments: all_attachments,
@@ -803,6 +806,7 @@ pub async fn run_loop(
     result
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn trace_input_from_entries(entries: &[model_gateway::types::TranscriptEntry]) -> String {
     let messages: Vec<_> = entries
         .iter()
@@ -833,6 +837,7 @@ fn trace_input_from_entries(entries: &[model_gateway::types::TranscriptEntry]) -
     truncate_for_langfuse(&serde_json::to_string(&messages).unwrap_or_default())
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn truncate_for_langfuse(value: &str) -> String {
     const MAX_CHARS: usize = 32_000;
     let mut iter = value.char_indices();

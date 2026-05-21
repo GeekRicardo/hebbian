@@ -37,7 +37,6 @@ impl InstrumentedClient {
 
     fn make_span(&self, req: &ModelRequest, streaming: bool) -> tracing::Span {
         let input = model_request_input(req);
-        let parameters = model_parameters(req, streaming);
         // 字段先声明为 Empty，拿到 response 后用 record() 填回。
         tracing::info_span!(
             "model.request",
@@ -47,12 +46,13 @@ impl InstrumentedClient {
             gen_ai.request.model = %req.model,
             gen_ai.request.max_tokens = req.max_tokens,
             hebbian.model.streaming = streaming,
-            langfuse.observation.type = "generation",
-            langfuse.observation.model.name = %req.model,
-            langfuse.observation.model.parameters = %parameters,
-            langfuse.observation.input = %input,
-            langfuse.observation.output = Empty,
-            langfuse.observation.usage_details = Empty,
+            // langfuse.* 字段会作为 span 上下文被 fmt layer 打到 stderr，污染日志，暂时关掉
+            // langfuse.observation.type = "generation",
+            // langfuse.observation.model.name = %req.model,
+            // langfuse.observation.model.parameters = %parameters,
+            // langfuse.observation.input = %input,
+            // langfuse.observation.output = Empty,
+            // langfuse.observation.usage_details = Empty,
             gen_ai.prompt = %input,
             gen_ai.completion = Empty,
             gen_ai.usage.input_tokens = Empty,
@@ -148,16 +148,16 @@ fn finish_span_and_metrics(
 
 fn record_output_on_span(span: &tracing::Span, output: &str) {
     let output = truncate_for_langfuse(output);
-    span.record(attr::LANGFUSE_OBSERVATION_OUTPUT, output.as_str());
+    // span.record(attr::LANGFUSE_OBSERVATION_OUTPUT, output.as_str());
     span.record(attr::GEN_AI_COMPLETION, output.as_str());
 }
 
 fn record_usage_on_span(span: &tracing::Span, usage: &Usage, finish: &str) {
-    let usage_details = usage_details_json(usage);
-    span.record(
-        attr::LANGFUSE_OBSERVATION_USAGE_DETAILS,
-        usage_details.as_str(),
-    );
+    // let usage_details = usage_details_json(usage);
+    // span.record(
+    //     attr::LANGFUSE_OBSERVATION_USAGE_DETAILS,
+    //     usage_details.as_str(),
+    // );
     span.record(attr::GEN_AI_USAGE_INPUT_TOKENS, usage.input_tokens);
     span.record(attr::GEN_AI_USAGE_OUTPUT_TOKENS, usage.output_tokens);
     span.record(
@@ -283,6 +283,7 @@ fn model_response_tool_output(text: &str, calls: &[crate::types::ToolCall]) -> S
     .unwrap_or_else(|_| text.to_string())
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn model_parameters(req: &ModelRequest, streaming: bool) -> String {
     serde_json::to_string(&serde_json::json!({
         "max_tokens": req.max_tokens,
@@ -293,6 +294,7 @@ fn model_parameters(req: &ModelRequest, streaming: bool) -> String {
     .unwrap_or_else(|_| "{}".to_string())
 }
 
+#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
 fn usage_details_json(usage: &Usage) -> String {
     serde_json::to_string(&serde_json::json!({
         "input": usage.input_tokens,

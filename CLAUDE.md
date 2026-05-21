@@ -197,11 +197,20 @@ Desktop / heb / hebweb 三个 surface 共享同一个数据目录 `~/.hebbian/`�
 
 ---
 
-## ⚠️ 调试 bug 前必做：先用 `heb` CLI 或 `hebweb` 自主复现
+## ⚠️ 修 bug 必经流程：先复现 → 修 → 再复现验证
 
-**适用范围**：用户报 bug / 自己发现 agent 行为异常 / 验证修复是否真的解决问题。
+**适用范围**：用户报 bug / 自己发现 agent 行为异常 / 验证修复。
 
-### 步骤 1：判定走哪个 surface 复现
+**总纲（不可绕过的两个步骤）**：
+
+1. **阶段 A：动手前先复现**——按 [docs/heb-cli-debug.md](docs/heb-cli-debug.md) 跑出 bug 现象。看不到现象就不要瞎改，先确认对触发条件的理解是对的
+2. **阶段 B：修完后再用同一脚本验证现象消失**——只跑 `cargo check` / 单测过了**不算修好**；必须复现路径上看不到原现象
+
+绕过任一步就是「我以为修好了」式低质量交付。**反例**：直接读代码改完，单测过了就报「修好了」——bug 是不是真没了完全没验证。本次 partial sidecar 那次就是被用户追问"测了没"才补做的 A/B 验证
+
+### 阶段 A：先复现
+
+#### A.1 选 surface
 
 三个 surface 走相同的 agent_core 主路径，行为对称。哪个最快能复现就用哪个，**不要立刻让用户去 Desktop 重跑**：
 
@@ -211,11 +220,11 @@ Desktop / heb / hebweb 三个 surface 共享同一个数据目录 `~/.hebbian/`�
 | UI 渲染 / 样式 / 工具卡片显示 / 流式 bubble 折叠 / 输入框 / 侧边栏 / 设置弹窗 / 审批/提问弹窗 UX / EditsWorktree 可视化 diff / 前端 store 状态机 | **hebweb + Playwright** | 同一份 React 代码 + 真实 agent_core 数据 + DOM/截图/点击可控（详见 [docs/heb-cli-debug.md §9](docs/heb-cli-debug.md)） |
 | Tauri 命令分发本身的 bug / 全局快捷键 / 菜单 / 托盘 / 系统通知 / 文件对话框 | **Desktop**（最后兜底） | hebweb 没有 Tauri native 能力对应 |
 
-### 步骤 2：读 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)
+#### A.2 读 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)
 
-它是给 AI 看的自包含手册：一分钟上手、完整命令/事件表、常用复现 pattern、故障速查、原理。读它而不是从源码拼。
+给 AI 看的自包含手册：一分钟上手、完整命令/事件表、常用复现 pattern、故障速查、原理。读它而不是从源码拼。
 
-### 步骤 3：自主跑
+#### A.3 跑复现脚本，确认看到 bug 现象
 
 最小 loop：
 
@@ -228,11 +237,33 @@ heb input $SID "<触发 bug 的输入>"
 # 看完整对话历史：~/.hebbian/sessions/$SID/session.jsonl
 ```
 
-报告 bug 时附上：触发输入 + 关键事件行 + （如有）`model_io.jsonl` 中相关请求段。
+**复现不出来怎么办**：先反思触发条件是不是理解错了，找用户对齐——而不是凭代码"应该有什么 bug"硬猜着改。复现不出来的"修复"99% 是改错地方。
 
-### 步骤 4：修完后自验
+复现成功的标志：能在事件流 / jsonl / UI / 截图里指出一段"这就是 bug"的具体输出。截图它、截事件行——给阶段 B 留对照基线。
 
-修完 bug 必须**用同一个 heb 脚本重跑确认修复**，再交付给用户。"我改完了，请你试试"是低质量交付。
+surface 端复现不了但单元层能复现（如纯函数行为）：写一个 fail 的单测当复现替代，跑出 FAIL 红字才算成立。
+
+### 阶段 B：修完后再验证
+
+#### B.1 用同一份复现脚本重跑
+
+**用阶段 A 那条触发输入再跑一次**——不是新写一条"我觉得这条也能验"的输入。事件流 / jsonl / UI 应看不到原现象。
+
+`cargo check`、单测、tsc 都通过**只代表代码能编**，不代表 bug 修了。必须现象级再现路径上看不到 bug，才算修完。
+
+#### B.2 能固化成回归测试就固化
+
+如果 bug 的本质是一个可单元化的属性（如「这个函数在这条路径上必须落盘」「这个状态机不能跳过这一步」），加一条 `cargo test` 单测把"修前复现 fail / 修后 pass"凝固下来。下一次手贱回退会被立刻拍醒。
+
+参考：[chat::tests::partial_writer_survives_process_kill_without_drop](apps/desktop/src/chat.rs) 就是这种回归——用 `std::mem::forget` 模拟"进程被 SIGKILL，Drop 不跑"，BufWriter 版本必 fail，sessions_dir delegate 版本必 pass。A/B 翻转能稳定复现。
+
+#### B.3 交付给用户时报告 = 修了什么 + 怎么验的
+
+- 阶段 A 的复现现象（"输入 X，事件流第 N 行是 Y"）
+- 阶段 B 的验证结果（"同一脚本重跑，事件流第 N 行变成 Z"）
+- 如有回归测试：测试名 + A/B 对比结果
+
+「我改完了，请你试试」是低质量交付。
 
 ---
 

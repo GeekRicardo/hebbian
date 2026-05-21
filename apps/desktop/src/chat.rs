@@ -594,47 +594,41 @@ fn empty_assistant_message() -> Message {
 }
 
 /// 流式增量写到 `partial/<msg_id>.partial.jsonl` 供崩溃/强退后恢复。
-/// 使用 BufWriter：每次写只是 memcpy 到内核缓冲区，不 fsync；
-/// Drop 时自动 flush 到 OS，正常退出/panic 都能保留大部分内容。
+///
+/// 每帧 delegate 到 [`sessions_dir::append_partial`]——后者经
+/// [`crate::storage::lock::append_jsonl`] 走「open → write → fsync」，每帧落实到
+/// 磁盘。不能用 `BufWriter` 包一层：进程被 SIGKILL / force-quit 时 Drop 根本不跑，
+/// 内存缓冲整段丢，partial 文件就成了空壳——这是中断恢复反复失效的真因。
 struct PartialFileWriter {
-    writer: std::io::BufWriter<std::fs::File>,
-    path: std::path::PathBuf,
+    data_dir: PathBuf,
+    session_id: String,
+    msg_id: String,
     wrote_text: bool,
 }
 
 impl PartialFileWriter {
-    fn open(path: std::path::PathBuf) -> Option<Self> {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()?;
-        Some(Self {
-            writer: std::io::BufWriter::new(file),
-            path,
+    fn new(data_dir: &Path, session_id: &str, msg_id: String) -> Self {
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            session_id: session_id.to_string(),
+            msg_id,
             wrote_text: false,
-        })
+        }
     }
 
     fn append(&mut self, frag: &PartialFragment) {
-        use std::io::Write;
-        if let Ok(line) = serde_json::to_string(frag) {
-            let _ = self.writer.write_all(line.as_bytes());
-            let _ = self.writer.write_all(b"\n");
-        }
         if matches!(frag, PartialFragment::Text { .. }) {
             self.wrote_text = true;
         }
+        if let Err(e) =
+            sessions_dir::append_partial(&self.data_dir, &self.session_id, &self.msg_id, frag)
+        {
+            tracing::warn!(error = %e, msg_id = %self.msg_id, "append_partial 失败");
+        }
     }
 
-    fn delete(mut self) {
-        use std::io::Write;
-        let _ = self.writer.flush();
-        drop(self.writer);
-        let _ = std::fs::remove_file(&self.path);
+    fn delete(self) {
+        let _ = sessions_dir::delete_partial(&self.data_dir, &self.session_id, &self.msg_id);
     }
 }
 
@@ -664,8 +658,7 @@ impl<'a> DesktopObserver<'a> {
         session_id: &str,
     ) -> Self {
         let msg_id = sessions::new_id();
-        let partial_path = sessions_dir::partial_path(data_dir, session_id, &msg_id);
-        let partial_writer = PartialFileWriter::open(partial_path);
+        let partial_writer = Some(PartialFileWriter::new(data_dir, session_id, msg_id));
         Self {
             parts: AssistantPartsRecorder::default(),
             partial_output: String::new(),
@@ -1978,6 +1971,55 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 回归测试：进程在流式写到一半被 SIGKILL / force-quit 时，PartialFileWriter
+    /// 的 Drop 不会跑。本测试用 `std::mem::forget` 跳过 Drop，模拟这一场景。
+    ///
+    /// 旧实现（BufWriter 包 File）：缓冲在进程内存里，Drop 不跑就丢，文件为空
+    /// → recover 不到内容。
+    /// 修复后：每帧 delegate 到 sessions_dir::append_partial（write + fsync），
+    /// Drop 不跑也不影响——内容已经在磁盘上 → recover 能拿回完整文本。
+    #[test]
+    fn partial_writer_survives_process_kill_without_drop() {
+        let dir = temp_data_dir();
+        let sid = "kill-test-session";
+        sessions_dir::ensure_session_dirs(&dir, sid).unwrap();
+
+        let mut pw = PartialFileWriter::new(&dir, sid, "msg-x".into());
+        pw.append(&PartialFragment::Text {
+            text: "hel".into(),
+        });
+        pw.append(&PartialFragment::Text {
+            text: "lo".into(),
+        });
+        pw.append(&PartialFragment::Reasoning {
+            text: "思考片段".into(),
+        });
+        pw.append(&PartialFragment::ToolCall {
+            index: 0,
+            name: Some("Bash".into()),
+            arguments_chunk: r#"{"cmd""#.into(),
+        });
+        pw.append(&PartialFragment::ToolCall {
+            index: 0,
+            name: None,
+            arguments_chunk: r#":"ls"}"#.into(),
+        });
+
+        // 模拟进程被 SIGKILL：Drop 不跑，writer 状态全部丢
+        std::mem::forget(pw);
+
+        // 此刻文件必须已经在磁盘上有完整内容——不依赖任何 flush
+        let recovered = sessions_dir::recover_interrupted_partials(&dir, sid).unwrap();
+        assert_eq!(recovered.len(), 1, "应恢复一个 partial 文件");
+        let r = &recovered[0];
+        assert_eq!(r.msg_id, "msg-x");
+        assert_eq!(r.text, "hello", "TextDelta 必须完整保留");
+        assert_eq!(r.reasoning, "思考片段");
+        let tc = r.tool_calls.get(&0).expect("tool_call 0 应在");
+        assert_eq!(tc.0.as_deref(), Some("Bash"));
+        assert_eq!(tc.1, r#"{"cmd":"ls"}"#, "ToolCallDelta 必须完整拼回");
     }
 
     fn save_test_provider(data_dir: &std::path::Path) {

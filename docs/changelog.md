@@ -2790,3 +2790,52 @@
 - **影响范围**: 仅 docs 静态 mock 与 changelog；不改 production React/Tauri/Rust，不动协议，不影响构建产物。
 - **验证**: HTML5 解析通过；抽出 `<script>` 后 `node --check` 通过；扫描确认 86 个 `data-action` 都有处理分支；用 jsdom 跑过供应商弹窗、对话设置、查找、发送消息、审批、上下文/修改 tab 与回退的 smoke test。
 - **留尾巴**: 这是评审用 mock，尚未迁移到 `apps/desktop/frontend` 的 React 组件；后续若确认方向，需要再拆成真实组件并接入 store/Tauri API。
+
+### 2026-05-21 — 修复 partial sidecar 被 BufWriter 截胡导致进程退出后流式输出丢失
+
+- **Why**: 用户反复反馈"进程一退出，正在跑的 agent_loop 已经输出的内容就丢了"。架构 §4.9.3 / §10.6 设计的 partial sidecar 本意是「流式期间每帧 TextDelta/ToolCallDelta 落 `partial/<msg_id>.partial.jsonl`，下次启动 `recover_interrupted_partials` 补成 truncated AssistantMessage 追加到 session.jsonl」。问题出在 [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) 的 `PartialFileWriter`：它在 `std::fs::File` 外又包了一层 `std::io::BufWriter`，每次 `append()` 只是 memcpy 到进程内存里的 8 KiB 缓冲，**没真正写到文件**。当进程被 SIGKILL / force-quit / Tauri 主进程崩溃时 Drop 根本不跑，缓冲区整段丢——partial 文件就是空壳，恢复机制扫到也无东西可恢复。注释里写「Drop 时自动 flush 到 OS，正常退出/panic 都能保留大部分内容」是错的：BufWriter::drop 既不传播 flush 错误，更扛不住非优雅退出。这一份"自留实现"还和 [crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs) 已经存在的 `append_partial`（走 `lock::append_jsonl` → write + fsync）重复，是脱钩的根因
+- **改动**:
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)：`PartialFileWriter` 字段从 `BufWriter<File>` + path 换成 `data_dir / session_id / msg_id`；`append` 每帧 delegate 到 `sessions_dir::append_partial`（背后 open + write + fsync），`delete` delegate 到 `sessions_dir::delete_partial`；构造函数从 `open(path) -> Option<Self>` 改成 `new(data_dir, session_id, msg_id) -> Self`（不再前置 open，单帧失败也不影响后续帧）。DesktopObserver 处的调用站点同步成 `Some(PartialFileWriter::new(...))`，其他四处 `pw.delete()` 调用点不变
+  - 注释把"BufWriter 自动 flush"那套错误描述改成"BufWriter 包一层就丢"的真相
+- **影响范围**: 仅 desktop surface（CLI / hebweb 本来就没接 partial sidecar——见下方留尾巴）；不动协议 / 不动 agent_core / 不动架构.md（修的是实现 bug，对外行为反而是「兑现 §4.9.3 既定设计」）。流式 callback 每帧多一次 open + lock + write + fsync，SSD 上几百 μs 量级，相对 token 帧间隔（几十 ms）可忽略
+- **验证**:
+  - `cargo check --workspace` 通过
+  - `cargo test -p agent-core --lib storage::sessions_dir::` 通过（`partial_roundtrip_and_recovery` 覆盖的就是新的写入路径）
+  - 新增针对性回归测试 [chat::tests::partial_writer_survives_process_kill_without_drop](../apps/desktop/src/chat.rs)：用 `std::mem::forget(pw)` 跳过 Drop 模拟 SIGKILL，验证写入的 TextDelta / Reasoning / ToolCallDelta 在不经任何 flush 的前提下能被 recover 完整拿回
+  - **A/B 复现验证**：临时把 PartialFileWriter 改回 BufWriter 版本跑同一测试 → fail（`r.text = ""`，"hello" 在缓冲里整段丢），证明 bug 真实复现；改回 sessions_dir::append_partial delegate 版本 → pass。整套 `cargo test -p hebbian --lib chat::` 8/8 通过
+- **取舍**:
+  - 方案 A（只去掉 BufWriter，保留 desktop 自留实现）：1 处改完但与 `sessions_dir::append_partial` 重复实现继续存在
+  - 方案 B（选定）：复用 `sessions_dir::append_partial`，把 desktop 自留实现彻底删掉。重复实现消除 + 顺带获得 fsync
+  - 方案 C（不选）：把整个 partial sidecar 写入下沉到 agent_loop 流式 callback 里，三个 surface 都受益。改动面大需要重跑全部 surface 验证——这次先解你眼前 desktop 的丢失问题，C 留作下一步迁移
+- **留尾巴**:
+  - **CLI / hebweb 仍无 partial sidecar**：`apps/cli/src/daemon.rs` 和 `apps/web-server/src/session.rs` 把 `SessionConfig::recorder` 都设为 `None`，TurnObserver 实现里没写 partial。任一在这两个 surface 上跑的 agent_loop 进程退出后，流式中间态依旧丢。按架构 §4.9.3 应把 partial 写入下沉到 agent_core（流式 callback 自己负责，所有 surface 受益），同时把 `recover_interrupted_partials` 在 daemon 启动和 hebweb 新建/加载 session 时各调一次。本次未做
+  - **架构.md §4.9 / recorder.rs 模块注释**写「★ 单 jsonl 唯一文件 + partial sidecar」暗示 recorder.rs 同时承担 partial 写入，但实际 `recorder.rs` 只异步落 Event 流，partial 在 `sessions_dir.rs`。注释没更新，不算 bug 但读起来误导，下次清理
+
+### 2026-05-21 — CLAUDE.md 强化「修 bug 必经流程」为「先复现 → 修 → 再复现验证」两阶段刚性约束
+
+- **Why**: 本次 partial sidecar 修复时直接读代码改完就报告"修好了"，跑了 `cargo check` + 一个不相关的单测就交付，被用户追问"测了没"才补做"BufWriter 版本 → fail / 修复版本 → pass" A/B 验证。原 CLAUDE.md「调试 bug 前必做」节只把"复现"写在前置流程里，"修后自验"只在步骤 4 一行带过，agent 容易跳过——尤其在自以为问题简单时。需要把"先复现"和"修后再用同一脚本验证"提到节标题级别的对等地位，让 agent 没法擦边球地交付未验证的修复
+- **改动**:
+  - [CLAUDE.md](../CLAUDE.md): 节标题从「⚠️ 调试 bug 前必做：先用 heb / hebweb 自主复现」改为「⚠️ 修 bug 必经流程：先复现 → 修 → 再复现验证」；节顶部加总纲「两个不可绕过的步骤」，明确「`cargo check` / 单测通过 ≠ 修好」
+  - 拆成两个对等阶段：
+    - **阶段 A（先复现）**：选 surface → 读 debug 手册 → 跑复现脚本，确认能看到 bug 现象；新增"复现不出来怎么办"——先对齐触发条件而不是凭"应该有 bug"硬猜
+    - **阶段 B（修后验证）**：用同一份复现脚本重跑（不是新写一条"我觉得这条也能验"）；能固化成回归测试就固化（以本次 [partial_writer_survives_process_kill_without_drop](../apps/desktop/src/chat.rs) 为参考样板）；交付报告必须包含"修前现象 + 修后再跑结果 + 回归测试名"三项
+  - 把本次踩坑直接写成"反例"挂在总纲下，避免 agent 把已发生过的低质量交付当合规
+- **影响范围**: 仅 CLAUDE.md，不动代码 / 协议 / 架构；下一个 agent 接 bug 任务前会读到强化版流程
+- **留尾巴**: 无
+
+### 2026-05-21 — 关闭 langfuse 上报相关 span 字段以净化 stderr 日志
+
+- **Why**: dev 模式下 `model.request` / `run` / `tool.call` span 上挂的 `langfuse.observation.input`、`langfuse.trace.input` 等字段会把整段对话 / 工具入参 JSON（最大 32K 字符）作为 span context 跟随 fmt layer 输出到 stderr，刷屏严重。用户要求"关闭日志中 langfuse 上报的 debug 日志"
+- **改动**:
+  - [crates/model-gateway/src/instrument.rs](../crates/model-gateway/src/instrument.rs): 注释 `make_span` 中 6 个 `langfuse.observation.*` 字段；注释 `record_output_on_span` / `record_usage_on_span` 中对 `LANGFUSE_OBSERVATION_OUTPUT` / `LANGFUSE_OBSERVATION_USAGE_DETAILS` 的 record 调用；`model_parameters` / `usage_details_json` 加 `#[allow(dead_code)]` 保留以便重启
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 注释 `run` span 的 `langfuse.session.id` / `langfuse.trace.input` / `langfuse.trace.output` 字段及对应 `record` 调用；`trace_input_from_entries` / `truncate_for_langfuse` 加 `#[allow(dead_code)]`
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 注释 `tool.call` span 的 `langfuse.observation.input` / `langfuse.observation.output` 字段及对应 `record` 调用；`tool_input_for_langfuse` / `truncate_for_langfuse` 加 `#[allow(dead_code)]`
+- **影响范围**:
+  - stderr / 终端：`model.request` / `run` / `tool.call` 事件不再带 langfuse.* 字段上下文，日志显著变短
+  - langfuse 后端：trace input/output、observation input/output、usage_details 收到的内容为空；usage 数字、model name、duration、tool name/outcome 等元数据仍通过 `gen_ai.*` 与 `hebbian.*` 字段正常上报
+  - 架构.md §4.10 Observability 关于"Span 层级与 Langfuse 对齐"的语义在结构上保留（span 树不变），仅 langfuse-specific 字段层暂时静默
+  - 协议 / 持久化 / 前端：零影响
+- **留尾巴**:
+  - 这是简单关停而不是根因方案。根因是 `tracing_subscriber::fmt` 默认会把当前 span 链上所有字段串到事件输出。彻底干净的做法是配置 fmt layer 不展开 span 字段（自定义 `FormatFields`），既保留 langfuse 上报又干净 stderr——后续要恢复 langfuse 完整上报时优先走这条路
+  - 6 个辅助函数当前是 `#[allow(dead_code)]` 状态，注释解除即可恢复
+
