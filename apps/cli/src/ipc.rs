@@ -104,6 +104,19 @@ pub enum DaemonEvent {
         tool_name: String,
         summary: String,
         risk: String,
+        /// ToolCall 命令级记忆指纹（架构 §4.4.2）；只 Bash 当前会带
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        fingerprint: Option<String>,
+        /// Bash compound 命令的所有段 fingerprint，让 CLI 看到全段后能用
+        /// `--pattern X --extra-pattern Y` 一次允许多前缀
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        command_segments: Vec<String>,
+        /// ToolCall 时的工具入参（命令本身、文件路径等），便于 AI 调试看清在审批啥
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        input: Option<serde_json::Value>,
+        /// PathAccess 越界路径列表
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        paths: Vec<String>,
     },
     PermissionResolved { request_id: String, decision: String },
     QuestionRequested {

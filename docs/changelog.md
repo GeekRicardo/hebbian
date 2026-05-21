@@ -2102,3 +2102,49 @@
   - popup 当前只对 Bash 有"整条都允许"按钮；非 Bash 工具（Edit/Write）天生单段，不需要
   - heb CLI 的 `--extra-pattern` 是为本次调试 + 未来自动化测试 compound 场景而加，长期价值在于让 heb 能精确复现前端任何审批组合
   - 段级判定原则（架构 §4.4.2）依然严格——攻击者构造的"诱导 allow 第一段、第二段恶意"型攻击仍被段级判定拦截。本次修复只让"用户**自愿**一次允许整条"成为协议层支持的操作，没有放宽自动判定
+
+### 2026-05-21 — hebweb 实战验证：补 5 个只读命令 + 修 2 个字段对齐 bug
+
+- **Why**: 用户敦促"赶紧验证好啊，出这个模式不就是为了给你能自己验证吗"。我（agent）用 Playwright 加载真实前端 `dist/index.html`，立刻发现前端 init 时调 `get_providers` 直接报 "command not implemented in hebweb v1"——hebweb v1 只镜像了 8 个交互命令，但前端启动阶段还会同步调一批"只读元数据"命令，前者不补，UI 根本进不去。同时端到端验证发现 2 个隐藏的字段对齐 bug——pnpm tsc 没暴露（args 是 Value），WS 烟测也没暴露（之前我只测了 cmd 派发，没用前端真实字段名）。
+- **改动**:
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs):
+    - 新增 5 个只读 invoke 命令：`get_providers` → `model_gateway::config::load`、`list_provider_presets` → `model_gateway::config::list_presets`、`list_prompts` → `prompts_store::load`、`list_projects` → `projects_store::list`、`get_settings` → `settings_store::load`。全部直接调 agent_core 现有 storage API，无新增能力。
+    - 修 `cmd_send_message` / `cmd_inject_user_message` 字段名：之前期望 `text`，但 desktop 前端传的是 `content`。引入 `pick_text(args)` 同时兼容 `content` / `text`，前端无感、heb CLI 自定义脚本也能用简短名。
+    - 修 `cmd_approve_permission` decision 字符串：之前只认 `allow / deny`（heb CLI 风格），但 desktop 前端传的是 `allow_once / allow_and_remember / deny / deny_with_feedback`。重写匹配支持 desktop 全 4 种 decision，保留 heb CLI 简短形态；同步补 `extra_patterns` 字段（之前 linter 给 ApprovalDecision::AllowAndRemember 新加的字段没接住）。
+    - 修 `cmd_answer_question` kind：补 `selected_multi` 分支取 `labels` 数组（之前 fall-through 当成单选）；`value` 字段同时兼容 `text`（desktop 传 text）。
+- **验证**（关键——这次不再纸面而是端到端跑通了）:
+  - `cd apps/desktop/frontend && pnpm build` → `apps/desktop/dist/` 产物 OK
+  - `./target/debug/hebweb --port 38080 --data-dir /tmp/hebweb-ui --static-dir apps/desktop/dist` 起服务
+  - `playwright-cli open http://127.0.0.1:38080` → 浏览器加载真实前端
+    - 第 1 次：console 报 `init failed: command 'get_providers' not implemented`
+    - 修后重试：console 0 errors / 0 warnings，侧边栏完整渲染（项目/全部 tab、新建对话按钮、全局搜索、设置按钮、主题切换）
+  - 用 WS 客户端调 `create_session` 注入 fake 会话 → `reload` → 侧边栏出现"新对话 / fake-m / 09:47"
+  - `click` 该会话 → 完整 ChatView 渲染（标题、Agent 选择器、模型选择、textarea、添加文件/插入命令/编辑前询问按钮、Token 用量），console 持续 0 errors
+  - `click` 对话设置按钮 → SessionSettingsDialog 弹窗正确打开（Agent / 系统指令 / 字段覆盖说明 / 取消/保存）
+  - 截图证据：浏览器里看到的 UI 与 Tauri desktop 像素级一致
+- **影响范围**: 仅 hebweb 内部（`apps/web-server/src/server.rs`），不动 agent-core / protocol / desktop / 前端。新增 5 个只读命令是 additive，不破坏任何已有协议。
+- **教训**:
+  - "cargo check + pnpm tsc 全绿" ≠ "前端 init 跑得通"。Tauri/WS args 都是 `Value` / `unknown`，类型系统帮不上字段名对齐。下次新 surface 一定要用真实 dist + 真实浏览器（Playwright）走完 init 流程才算交付。
+  - hebweb 的"v1 只镜像 8 个交互命令、其余 not implemented"理论上没错，但实际上前端 init 必经几个只读元数据 invoke，如果不补整个 UI 进不去——这个"必经子集"应该作为 v1 的硬下限，而不是"v2 再说"。
+- **留尾巴**:
+  - send_message / inject_user_message 在 desktop Tauri 模式下返回 `Message` 对象给前端立即渲染；hebweb 当前返回 `null` 让事件流走 WS 广播，前端 store 在 web 模式下可能 UX 略有延迟（消息要等 `engine-event` 回流才渲染）。不影响功能可用性，但视觉上不如 desktop 即时
+  - desktop Tauri 模式没在本次重新跑 `pnpm tauri dev` 实测；理论上 IS_TAURI=true 时 transport 直接 forward 到 `@tauri-apps/api` 零行为变化，但建议下次 desktop 改动时实跑一次确认 transport.ts 的 Channel 适配没破坏 Tauri 路径
+  - 还有一批中等优先级 desktop Tauri command 未镜像（discover_rules_files / list_tools / get_context_usage / preview_session_payload / edits_worktree_status / list_edits 等）。前端某些次级面板（context usage 环形进度条、edit history 面板、preview payload 弹窗）打开时会触发它们 → 在浏览器里会拿到"not implemented"错误，但不阻塞主对话流。v2 抽共享 commands crate 时一起补
+
+### 2026-05-21 — popup pattern × scope chip 重构 + daemon event 补全字段
+
+- **Why**: 上一笔修复后用户反馈：当前对话有「允许 git status」按钮，本项目 / 全局却只有「允许 git *」——sub 粒度没被三 scope 都接入。同时 heb daemon 输出的 `permission_requested` 事件缺 fingerprint / command_segments / input 字段，AI 自主调试时看不到"现在审批的命令到底是什么"，要去翻 session.jsonl
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx):
+    - 拆"主按钮区"和"二级 pattern × scope 区"，主区只留「允许此次 / 拒绝 / 反馈」
+    - 二级区每行展示一个 pattern（sub / root / 整条 compound），后接 3 个 scope chip（本对话 / 本项目 / 全局）——点哪个 chip 立即按对应 scope 写规则 + resolve。这样 sub / root / 整条三档**每档都暴露 3 scope**，不再有「sub 只能本对话、root 才能全局」的歧视
+    - `parseBashPrefixes` 增加路径参数过滤：第二个 token 以 `/` `~` `./` `../` 开头时 sub = null。否则 `touch /tmp/x.txt` 会把整个绝对路径当 sub，下次同前缀不同文件名 token-boundary 校验失败仍要审批，反而误导用户
+    - 新增 `PatternRow` 子组件统一渲染样式
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs) + [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `DaemonEvent::PermissionRequested` 加 `fingerprint` / `command_segments` / `input` / `paths` 四个字段——AI 调试时一行 `jq '.command_segments'` 就能看到 compound 命令的全部段，不用再翻 session.jsonl
+  - [docs/changelog.md](changelog.md): 本条
+- **影响范围**: 前端 popup 视觉重排，无协议变更；daemon event 加字段全部 `#[serde(skip_serializing_if = ...)]` 向前兼容（旧 heb 脚本 jq 不到的字段直接当 null 处理）
+- **验证**: heb 端到端 — `cd /tmp/repro-perm && touch a.txt` compound 审批 → `heb allow SID RID project --pattern cd --extra-pattern touch` → permissions.json 落 2 条 Project 规则（workdir=/tmp/repro-perm）→ 下个 turn `cd /tmp/repro-perm && touch b.txt` 直接通过，`cd /tmp/repro-perm && ls` 仍弹审批（ls 段无规则，设计正确）。daemon event 现在能在一行 JSON 里看到完整 segments + input
+- **留尾巴**:
+  - popup 二级区当前是"每行一档"按钮组，未做 hover popover 多选 checkbox（用户提的"鼠标放上去显示 list 框，默认全选二级子命令"是 v2 形态——当前的扁平按钮信息密度已足够，先用着）
+  - 路径审批的 4 档（once / this_session / this_project / global）跟权限审批的命名对齐，PermissionStore 热加载已经在上一笔覆盖；无需额外改造
+  - `cd` 不在 `safe_commands::is_safe` 名单——compound `cd && ls` 仍要 ls 段被允许才整体放行；这是架构 §4.4.2 段级判定预期行为，不是 bug

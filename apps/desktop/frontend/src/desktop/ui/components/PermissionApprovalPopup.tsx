@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   FolderOpen,
@@ -29,10 +29,15 @@ import {
  * 把 BashTool 推送的命令指纹切成"前缀按钮"。
  *
  * 例：`"git status -uno README"` → `{ sub: "git status", root: "git" }`
+ * 例：`"touch /tmp/x.txt"`        → `{ sub: null, root: "touch" }` (路径参数不算"子命令")
  * 例：`"ls -la"`                  → `{ sub: null, root: "ls" }`
  *
  * 切 token 后过滤掉 flag（`-` 开头），只保留位置参数；用户选 sub 前缀时记 `(root, sub)`，
  * 选 root 前缀时记单 token，两者都靠 HitlGate 的空白 token 边界匹配命中后续命令。
+ *
+ * 路径参数过滤：第二个 token 看起来是路径（`/` / `~` / `./` / `../` 开头）时 sub = null
+ * ——避免用户被误导："点 sub" 等同于写一条只匹配该确切文件的规则，下次同前缀
+ * 不同文件名不命中。路径参数命令应当用 root（含 `*`）或 PathAccess 审批走分级路径。
  */
 function parseBashPrefixes(
   fingerprint: string | null | undefined
@@ -43,10 +48,13 @@ function parseBashPrefixes(
     .split(/\s+/)
     .filter((t) => t && !t.startsWith("-"));
   if (tokens.length === 0) return null;
-  return {
-    sub: tokens.length >= 2 ? `${tokens[0]} ${tokens[1]}` : null,
-    root: tokens[0],
-  };
+  const isPathLike = (t: string) =>
+    t.startsWith("/") || t.startsWith("~") || t.startsWith("./") || t.startsWith("../");
+  const sub =
+    tokens.length >= 2 && !isPathLike(tokens[1])
+      ? `${tokens[0]} ${tokens[1]}`
+      : null;
+  return { sub, root: tokens[0] };
 }
 
 const RISK_STYLE: Record<
@@ -238,6 +246,76 @@ export function PermissionApprovalPopup() {
           </div>
         )}
 
+        {/* 二级区：tool_call 类弹窗的「pattern × scope」精细记忆选项
+            （架构 §4.4.2 段级判定：Bash 列出 sub/root/整条多档；其它工具只暴露
+            工具名级；点对应 scope chip 立即记忆并 resolve）。
+            路径审批用主按钮区的 4 档已够直观，不进二级区。 */}
+        {!isPathAccess && !feedbackOpen && (bashPrefixes || pending.toolName !== "Bash") && (
+          <div className="flex flex-col gap-1 px-3 py-2 border-t border-border bg-background/30">
+            <div className="text-[11px] text-muted-foreground/70 mb-0.5">
+              选择记忆范围（点对应按钮即生效）：
+            </div>
+            {/* Bash 路径 */}
+            {bashPrefixes && (
+              <>
+                {bashPrefixes.sub && bashPrefixes.sub !== bashPrefixes.root && (
+                  <PatternRow
+                    label={bashPrefixes.sub}
+                    description="精确到二级子命令（如 `git status`）"
+                    disabled={submitting}
+                    onPick={(scope) =>
+                      send({
+                        kind: "allow_and_remember",
+                        pattern: bashPrefixes.sub!,
+                        scope,
+                      })
+                    }
+                  />
+                )}
+                <PatternRow
+                  label={`${bashPrefixes.root} *`}
+                  description="该根命令的所有子命令"
+                  disabled={submitting}
+                  onPick={(scope) =>
+                    send({
+                      kind: "allow_and_remember",
+                      pattern: bashPrefixes.root,
+                      scope,
+                    })
+                  }
+                />
+                {segmentRoots.length >= 2 && (
+                  <PatternRow
+                    label={`整条 (${segmentRoots.join(", ")})`}
+                    description={`一次允许 compound 命令的全部 ${segmentRoots.length} 段`}
+                    disabled={submitting}
+                    highlight
+                    onPick={(scope) =>
+                      send({
+                        kind: "allow_and_remember",
+                        pattern: segmentRoots[0],
+                        extraPatterns: segmentRoots.slice(1),
+                        scope,
+                      })
+                    }
+                  />
+                )}
+              </>
+            )}
+            {/* 非 Bash：仅工具名级一档 */}
+            {!bashPrefixes && pending.toolName !== "Bash" && (
+              <PatternRow
+                label={`工具 ${pending.toolName}`}
+                description="工具名级允许（粒度较粗，慎选 global）"
+                disabled={submitting}
+                onPick={(scope) =>
+                  send({ kind: "allow_and_remember", scope })
+                }
+              />
+            )}
+          </div>
+        )}
+
         {/* 按钮组 */}
         <div className="flex flex-wrap items-center gap-1.5 px-2 py-2 border-t border-border bg-background/60">
           {isPathAccess ? (
@@ -325,167 +403,6 @@ export function PermissionApprovalPopup() {
                 Bash 工具有命令指纹时只展示前缀按钮，避免工具名级"总是允许"
                 让后续 `rm -rf /` 也免审批。其他工具退回工具名级"总是允许"。
               */}
-              {bashPrefixes ? (
-                <>
-                  {segmentRoots.length >= 2 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        send({
-                          kind: "allow_and_remember",
-                          pattern: segmentRoots[0],
-                          extraPatterns: segmentRoots.slice(1),
-                          scope: "session",
-                        })
-                      }
-                      disabled={submitting}
-                      className={cn(
-                        "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                        "bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50"
-                      )}
-                      title={`本会话内放行 compound 命令的全部 ${segmentRoots.length} 段：${segmentRoots.join(", ")}`}
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      整条都允许（{segmentRoots.length} 段）
-                    </button>
-                  )}
-                  {bashPrefixes.sub && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        send({
-                          kind: "allow_and_remember",
-                          pattern: bashPrefixes.sub,
-                          scope: "session",
-                        })
-                      }
-                      disabled={submitting}
-                      className={cn(
-                        "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                        "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                      )}
-                      title={`本会话内 ${bashPrefixes.sub}* 都不再询问`}
-                    >
-                      当前对话{" "}
-                      <code className="font-mono text-[12px]">
-                        {bashPrefixes.sub} *
-                      </code>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({
-                        kind: "allow_and_remember",
-                        pattern: bashPrefixes.root,
-                        scope: "session",
-                      })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title={`本会话内所有 ${bashPrefixes.root}* 都不再询问（含子命令）`}
-                  >
-                    当前对话{" "}
-                    <code className="font-mono text-[12px]">
-                      {bashPrefixes.root} *
-                    </code>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({
-                        kind: "allow_and_remember",
-                        pattern: bashPrefixes.root,
-                        scope: "project",
-                      })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title={`当前项目（workdir）所有对话放行 ${bashPrefixes.root}*`}
-                  >
-                    <FolderTree className="w-3.5 h-3.5" />
-                    本项目{" "}
-                    <code className="font-mono text-[12px]">
-                      {bashPrefixes.root} *
-                    </code>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({
-                        kind: "allow_and_remember",
-                        pattern: bashPrefixes.root,
-                        scope: "global",
-                      })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title={`写入 ~/.hebbian/permissions.json，全局放行 ${bashPrefixes.root}*`}
-                  >
-                    <Globe className="w-3.5 h-3.5" />
-                    始终允许{" "}
-                    <code className="font-mono text-[12px]">
-                      {bashPrefixes.root} *
-                    </code>
-                  </button>
-                </>
-              ) : pending.toolName !== "Bash" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({ kind: "allow_and_remember", scope: "session" })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title="本会话内不再询问此工具"
-                  >
-                    当前对话不再询问
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({ kind: "allow_and_remember", scope: "project" })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title="当前项目（workdir）所有对话不再询问此工具"
-                  >
-                    <FolderTree className="w-3.5 h-3.5" />
-                    本项目不再询问
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      send({ kind: "allow_and_remember", scope: "global" })
-                    }
-                    disabled={submitting}
-                    className={cn(
-                      "h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 transition-colors",
-                      "bg-muted hover:bg-muted/80 disabled:opacity-50"
-                    )}
-                    title="写入 ~/.hebbian/permissions.json，所有对话生效"
-                  >
-                    <Globe className="w-3.5 h-3.5" />
-                    始终允许
-                  </button>
-                </>
-              ) : null}
               <div className="flex-1" />
               <button
                 type="button"
@@ -628,6 +545,62 @@ function ApprovalEditDiff({
         onToggleExpanded={toggleExpanded}
         maxRows={20}
       />
+    </div>
+  );
+}
+
+/**
+ * 一行 pattern × 3 scope chip。
+ * 用户点 chip 直接 send AllowAndRemember(scope)；无需先选 pattern 再选 scope。
+ */
+function PatternRow({
+  label,
+  description,
+  disabled,
+  highlight = false,
+  onPick,
+}: {
+  label: string;
+  description?: string;
+  disabled?: boolean;
+  highlight?: boolean;
+  onPick: (scope: "session" | "project" | "global") => void;
+}) {
+  const chip = (scope: "session" | "project" | "global", text: string, icon: ReactNode, hint: string) => (
+    <button
+      type="button"
+      onClick={() => onPick(scope)}
+      disabled={disabled}
+      title={hint}
+      className={cn(
+        "h-6 px-2 rounded text-[11px] inline-flex items-center gap-1 transition-colors",
+        "bg-muted hover:bg-primary/15 hover:text-primary disabled:opacity-50"
+      )}
+    >
+      {icon}
+      {text}
+    </button>
+  );
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2 py-1.5",
+        highlight ? "bg-primary/5" : "hover:bg-muted/40"
+      )}
+    >
+      <div className="flex-1 min-w-0">
+        <code className="font-mono text-[12px] truncate block">{label}</code>
+        {description && (
+          <div className="text-[10px] text-muted-foreground/70 truncate">
+            {description}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {chip("session", "本对话", <FolderOpen className="w-3 h-3" />, "仅当前对话生效")}
+        {chip("project", "本项目", <FolderTree className="w-3 h-3" />, "当前 workdir 下所有对话生效")}
+        {chip("global", "全局", <Globe className="w-3 h-3" />, "所有对话全局生效")}
+      </div>
     </div>
   );
 }

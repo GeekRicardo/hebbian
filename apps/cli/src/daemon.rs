@@ -304,17 +304,44 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
             })
         }
         EventPayload::PermissionRequested { request_id, kind, summary, risk } => {
-            let (tool_name, kind_str) = match kind {
-                PermissionKind::ToolCall { tool_name, .. } => {
-                    (tool_name.clone(), "tool_call".to_string())
-                }
-                PermissionKind::PathAccess { tool_name, .. } => {
-                    (tool_name.clone(), "path_access".to_string())
-                }
-                PermissionKind::Plan { .. } => ("plan".to_string(), "plan".to_string()),
-                PermissionKind::ContinueLongRun { .. } => {
-                    ("continue_long_run".to_string(), "continue_long_run".to_string())
-                }
+            let (tool_name, kind_str, fingerprint, command_segments, input, paths) = match kind {
+                PermissionKind::ToolCall {
+                    tool_name,
+                    input,
+                    fingerprint,
+                    command_segments,
+                } => (
+                    tool_name.clone(),
+                    "tool_call".to_string(),
+                    fingerprint.clone(),
+                    command_segments.clone(),
+                    Some(input.clone()),
+                    Vec::new(),
+                ),
+                PermissionKind::PathAccess { tool_name, paths } => (
+                    tool_name.clone(),
+                    "path_access".to_string(),
+                    None,
+                    Vec::new(),
+                    None,
+                    paths.clone(),
+                ),
+                PermissionKind::Plan { .. } => (
+                    "plan".to_string(),
+                    "plan".to_string(),
+                    None,
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+                PermissionKind::ContinueLongRun { .. } => (
+                    "continue_long_run".to_string(),
+                    "continue_long_run".to_string(),
+                    None,
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
             };
             Some(DaemonEvent::PermissionRequested {
                 request_id: request_id.as_str().to_string(),
@@ -322,6 +349,10 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
                 tool_name,
                 summary: summary.clone(),
                 risk: format!("{risk:?}"),
+                fingerprint,
+                command_segments,
+                input,
+                paths,
             })
         }
         EventPayload::PermissionResolved { request_id, decision } => {
