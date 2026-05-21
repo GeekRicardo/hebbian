@@ -3076,3 +3076,29 @@
   - 大命令 buffer 累加可能产生 100KB+ 的本地 String——已有 `truncate_bytes(MAX_OUTPUT_BYTES=30_000)` 兜底，但 forward 过程中 emit 的 chunk 总量未限。短期可接受（前端按需折叠 + tail buffer 自带 256KB 上限）；长期想做"超过 N MB 不再 emit chunk，建议切后台"再说
   - 未在 desktop dev 模式手工跑 chat 流；后续真实长跑命令（如 `cargo build --workspace`）首次跑时建议肉眼观察一次 UI 流畅度——理论上每 200ms 一次 React diff，无问题但视用户机器而定
   - Bash 之外的工具暂无流式实现（Grep / WebFetch 的大响应也能用，留给后续按需求开）
+
+### 2026-05-22 — 删除 `gen_ai.prompt` / `gen_ai.completion` span 字段，彻底解决 stderr 刷屏
+
+- **Why**: 用户报告"重启后仍刷屏"，截图日志每行类似 `…[truncated 38645 chars]}: model_gateway::providers::anthropic: anthropic stream: dispatched`。根因是 [crates/model-gateway/src/instrument.rs](../crates/model-gateway/src/instrument.rs) `make_span` 在 `model.request` info span 上挂了 `gen_ai.prompt = %model_request_input(req)` —— 把整段对话 transcript 序列化成 JSON（截到 32k chars）塞进 INFO span field。`tracing_subscriber::fmt` 默认会把当前 span 链上所有字段串到事件输出前缀，于是 model_gateway 内部每条 INFO 日志（`anthropic stream: dispatched` / `ToolUseStart` 等）都被前置几十 KB 的 prompt JSON
+- **背景**:
+  - 2026-05-21「关闭 langfuse 上报相关 span 字段以净化 stderr 日志」已修过同类问题（清掉 `langfuse.*` 系列），其留尾巴明确写："这是简单关停而不是根因方案……彻底干净的做法是配置 fmt layer 不展开 span 字段（自定义 FormatFields）"
+  - 当时只关停了 `langfuse.*`，OTel 标准的 `gen_ai.prompt` / `gen_ai.completion` 这两个同样超大的字段忘了一并处理，所以一旦命中有这俩字段的 info span，刷屏照常出现
+- **改动**:
+  - [crates/model-gateway/src/instrument.rs](../crates/model-gateway/src/instrument.rs):
+    - `make_span` 删 `gen_ai.prompt = %input,` 与 `gen_ai.completion = Empty,` 两行字段声明
+    - 删 `record_output_on_span` 函数 + 调用
+    - 删 dead helper：`model_request_input` / `user_entry_json` / `assistant_entry_json` / `tool_result_json` / `model_response_tool_output` / `truncate_for_span`（合计约 115 行，全为给这两字段服务）
+    - imports 收窄（去掉 `AssistantEntry` / `ToolResult` / `TranscriptEntry` / `UserEntry`）
+  - [crates/observability/src/attr.rs](../crates/observability/src/attr.rs): 删 `GEN_AI_PROMPT` / `GEN_AI_COMPLETION` 常量（不再被引用）
+- **影响范围**:
+  - stderr：`model.request` span 上下文不再带 prompt/completion 大字段，model_gateway 内部每条 INFO 日志单行长度从 ~32k 降到 < 200 字符
+  - OTLP：仍保留 `gen_ai.system` / `gen_ai.request.model` / `gen_ai.request.max_tokens` / `gen_ai.usage.*` / `gen_ai.response.finish_reasons` / `hebbian.model.streaming` —— 核心 trace / metric 元数据未损
+  - 想看 prompt/completion 原文：`~/.hebbian/sessions/<sid>/model_io.jsonl`（`HEBBIAN_DUMP_MODEL_IO=1` 默认开），Model I/O 调试器抽屉，`heb model-io <sid>` 子命令 —— 3 个入口都比 OTLP span attr 易用
+- **取舍**:
+  - **删字段 vs 自定义 FormatFields（2026-05-21 留尾巴方案）**：选删。FormatFields 方案保留 OTLP 上报但引入 fmt 层定制；项目里 Langfuse 已关停、暂无 OTLP backend 在消费 prompt/completion，定制 fmt layer 复杂度大于收益。未来真接入 Langfuse / Tempo 想看 prompt 时再做 FormatFields，路径就是 2026-05-21 留尾巴里写的那个
+  - **保留 vs 删 dead helper（`model_request_input` 等 6 个函数）**：选删干净。它们存在的唯一目的就是给 `gen_ai.prompt` 准备字符串；删字段后留着就是死代码招摇，违反"不要过度封装 / 拒绝补丁式修改"
+- **验证**:
+  - `cargo check --workspace` clean（hebbian-web-server 既有 dead_code 警告与本次无关）
+  - `cargo test -p model-gateway --lib` 84 passed；`cargo test -p agent-core --lib` 235 passed
+  - 复现路径：重启 desktop dev / heb daemon，跑任意对话 + 工具调用，stderr 中 `model_gateway::providers::*` 行应短而清晰
+- **留尾巴**: 无

@@ -16,10 +16,7 @@ use tracing::{field::Empty, Instrument};
 
 use crate::{
     client::ModelClient,
-    types::{
-        AssistantEntry, ModelError, ModelRequest, ModelResponse, ModelStreamEvent, ToolResult,
-        TranscriptEntry, Usage, UserEntry,
-    },
+    types::{ModelError, ModelRequest, ModelResponse, ModelStreamEvent, Usage},
 };
 use common::CancelFlag;
 
@@ -36,8 +33,10 @@ impl InstrumentedClient {
     }
 
     fn make_span(&self, req: &ModelRequest, streaming: bool) -> tracing::Span {
-        let input = model_request_input(req);
         // 字段先声明为 Empty，拿到 response 后用 record() 填回。
+        // 不挂 prompt / completion：这两个大字段会被 fmt 当前 span 上下文带到每条
+        // 内层 INFO 日志上刷屏；真要看请求/响应原文走 `model_io.jsonl`（HEBBIAN_DUMP_MODEL_IO
+        // 默认开），或 Model I/O 调试器抽屉 / `heb model-io <sid>`。
         tracing::info_span!(
             "model.request",
             otel.kind = "client",
@@ -46,8 +45,6 @@ impl InstrumentedClient {
             gen_ai.request.model = %req.model,
             gen_ai.request.max_tokens = req.max_tokens,
             hebbian.model.streaming = streaming,
-            gen_ai.prompt = %input,
-            gen_ai.completion = Empty,
             gen_ai.usage.input_tokens = Empty,
             gen_ai.usage.output_tokens = Empty,
             gen_ai.usage.cache_read_tokens = Empty,
@@ -120,13 +117,10 @@ fn finish_span_and_metrics(
     let span = tracing::Span::current();
     match result {
         Ok(resp) => {
-            let (usage, finish, output) = match resp {
-                ModelResponse::Done { text, usage, .. } => (usage, "stop", text.clone()),
-                ModelResponse::ToolCalls {
-                    text, usage, calls, ..
-                } => (usage, "tool_calls", model_response_tool_output(text, calls)),
+            let (usage, finish) = match resp {
+                ModelResponse::Done { usage, .. } => (usage, "stop"),
+                ModelResponse::ToolCalls { usage, .. } => (usage, "tool_calls"),
             };
-            record_output_on_span(&span, &output);
             record_usage_on_span(&span, usage, finish);
             record_usage_metrics(system, model, usage);
         }
@@ -137,11 +131,6 @@ fn finish_span_and_metrics(
             );
         }
     }
-}
-
-fn record_output_on_span(span: &tracing::Span, output: &str) {
-    let output = truncate_for_span(output);
-    span.record(attr::GEN_AI_COMPLETION, output.as_str());
 }
 
 fn record_usage_on_span(span: &tracing::Span, usage: &Usage, finish: &str) {
@@ -163,126 +152,6 @@ fn record_usage_metrics(system: &str, model: &str, usage: &Usage) {
     metrics::record_token_usage(system, model, "output", usage.output_tokens);
     metrics::record_token_usage(system, model, "cache_read", usage.cache_read_tokens);
     metrics::record_token_usage(system, model, "cache_creation", usage.cache_creation_tokens);
-}
-
-fn model_request_input(req: &ModelRequest) -> String {
-    let mut messages = Vec::new();
-    if let Some(system) = req.system.as_ref().filter(|s| !s.is_empty()) {
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": system,
-        }));
-    }
-    for entry in &req.entries {
-        match entry {
-            TranscriptEntry::User(user) => messages.push(user_entry_json(user)),
-            TranscriptEntry::Assistant(assistant) => messages.push(assistant_entry_json(assistant)),
-            TranscriptEntry::ToolResults(results) => {
-                for result in results {
-                    messages.push(tool_result_json(result));
-                }
-            }
-        }
-    }
-    truncate_for_span(&serde_json::to_string(&messages).unwrap_or_default())
-}
-
-fn user_entry_json(entry: &UserEntry) -> serde_json::Value {
-    let attachments: Vec<_> = entry
-        .attachments
-        .iter()
-        .map(|attachment| match attachment {
-            common::attachments::MessageAttachment::TextFile {
-                name,
-                media_type,
-                content,
-            } => serde_json::json!({
-                "kind": "text_file",
-                "name": name,
-                "media_type": media_type,
-                "content": truncate_for_span(content),
-            }),
-            common::attachments::MessageAttachment::Image {
-                name,
-                media_type,
-                data,
-            } => serde_json::json!({
-                "kind": "image",
-                "name": name,
-                "media_type": media_type,
-                "bytes_base64": data.len(),
-            }),
-        })
-        .collect();
-    serde_json::json!({
-        "role": "user",
-        "content": entry.text,
-        "attachments": attachments,
-    })
-}
-
-fn assistant_entry_json(entry: &AssistantEntry) -> serde_json::Value {
-    let tool_calls: Vec<_> = entry
-        .tool_calls
-        .iter()
-        .map(|call| {
-            serde_json::json!({
-                "id": call.id,
-                "name": call.name,
-                "input": call.input,
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "role": "assistant",
-        "content": entry.text,
-        "reasoning": entry.reasoning,
-        "tool_calls": tool_calls,
-    })
-}
-
-fn tool_result_json(result: &ToolResult) -> serde_json::Value {
-    serde_json::json!({
-        "role": "tool",
-        "tool_call_id": result.call_id,
-        "name": result.name,
-        "content": result.content,
-        "artifact": result.artifact.as_ref().map(|artifact| serde_json::json!({
-            "path": artifact.path.display().to_string(),
-            "bytes": artifact.bytes,
-            "line_count": artifact.line_count,
-        })),
-    })
-}
-
-fn model_response_tool_output(text: &str, calls: &[crate::types::ToolCall]) -> String {
-    serde_json::to_string(&serde_json::json!({
-        "content": text,
-        "tool_calls": calls
-            .iter()
-            .map(|call| serde_json::json!({
-                "id": call.id,
-                "name": call.name,
-                "input": call.input,
-            }))
-            .collect::<Vec<_>>(),
-    }))
-    .unwrap_or_else(|_| text.to_string())
-}
-
-/// 把字符串限制在 32k 字符以内再丢给 OTel span —— 超长 attribute 在多数 collector
-/// 端会被丢弃或截到难看的位置，这里统一在源头截。
-fn truncate_for_span(value: &str) -> String {
-    const MAX_CHARS: usize = 32_000;
-    let mut iter = value.char_indices();
-    match iter.nth(MAX_CHARS) {
-        Some((idx, _)) => format!(
-            "{}\n…[truncated {} chars]",
-            &value[..idx],
-            value.chars().count() - MAX_CHARS
-        ),
-        None => value.to_string(),
-    }
 }
 
 fn error_finish_reason(err: &ModelError) -> &'static str {

@@ -13,8 +13,6 @@ pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
 pub const GEN_AI_USAGE_CACHE_READ_TOKENS: &str = "gen_ai.usage.cache_read_tokens";
 pub const GEN_AI_USAGE_CACHE_CREATION_TOKENS: &str = "gen_ai.usage.cache_creation_tokens";
-pub const GEN_AI_PROMPT: &str = "gen_ai.prompt";
-pub const GEN_AI_COMPLETION: &str = "gen_ai.completion";
 
 // ── Hebbian 业务属性 ─────────────────────────────────────────────────────────
 pub const RUN_ID: &str = "hebbian.run.id";
