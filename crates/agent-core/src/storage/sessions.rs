@@ -263,6 +263,10 @@ pub struct SearchHit {
 /// 当前 rollout schema 版本号。读侧遇到不认识的版本应该报错而不是静默降级。
 pub const ROLLOUT_SCHEMA: u32 = 1;
 
+/// 新会话的默认标题。session_titler 用它来判断是否需要自动生成标题——
+/// 当前 title 还等于这个值才触发，以避免覆盖用户的手动重命名。
+pub const DEFAULT_TITLE: &str = "新对话";
+
 /// jsonl 单行。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

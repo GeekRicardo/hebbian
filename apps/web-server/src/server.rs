@@ -1324,47 +1324,17 @@ async fn cmd_compact_session(state: &ServerState, args: Value) -> Result<Value> 
     Ok(serde_json::to_value(usage)?)
 }
 
+/// 「重新生成标题」命令（手动入口）：自动生成已下沉到 agent_core，由 Harness::spawn_run
+/// 在首轮 TurnFinished 后异步触发并通过 `EngineEvent::SessionTitleChanged` 推到前端。
+/// 本命令是手动重生成入口——无视当前 title，强制走一次。
 async fn cmd_generate_session_title(state: &ServerState, args: Value) -> Result<Value> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `id`"))?;
-    let mut session = sessions_store::load(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
-    let has_user = session
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, agent_core::storage::sessions::Role::User));
-    if !has_user {
-        return Ok(serde_json::to_value(session)?);
-    }
-
-    // 优先用 ProvidersFile 中标记为「标题生成 model」的 provider，否则回退到 session 自己的
-    let providers_file = model_gateway::config::load(&state.data_dir).map_err(|e| anyhow!("{e}"))?;
-    let title_provider = providers_file.providers.into_iter().find(|p| {
-        p.enabled
-            && p.title_gen_enabled
-            && p.title_gen_model.as_deref().is_some_and(|m| !m.is_empty())
-    });
-    let (provider, model) = match title_provider {
-        Some(p) => {
-            let m = p.title_gen_model.clone().unwrap_or_default();
-            (p, m)
-        }
-        None => (
-            model_gateway::config::get(&state.data_dir, &session.provider_id)
-                .map_err(|e| anyhow!("{e}"))?,
-            session.model.clone(),
-        ),
-    };
-    let title = crate::chat_helpers::try_generate_title(
-        &state.data_dir,
-        provider,
-        &model,
-        &session.messages,
-    )
-    .await
-    .unwrap_or_else(|| crate::chat_helpers::fallback_from_first_user(&session.messages));
-    session = sessions_store::rename(&state.data_dir, id, title).map_err(|e| anyhow!("{e}"))?;
+    let session = agent_core::session_titler::regenerate_session_title(&state.data_dir, id)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(session)?)
 }
 

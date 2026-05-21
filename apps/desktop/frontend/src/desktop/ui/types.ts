@@ -468,6 +468,12 @@ export type EngineEvent =
       snapshot_id: string;
       file_path: string;
       error: string;
+    }
+  | {
+      /** agent_core 后台 task 异步生成的标题已落盘 jsonl。前端用它更新 sidebar + chat header。 */
+      type: "session_title_changed";
+      session_id: string;
+      title: string;
     };
 
 /** 一次待审批请求（HITL） */

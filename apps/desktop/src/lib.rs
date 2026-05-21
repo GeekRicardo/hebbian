@@ -3,7 +3,6 @@ mod engine;
 mod error;
 mod force_automode;
 mod hitl;
-mod title_gen;
 mod window_control;
 
 pub use engine::EngineEvent;
@@ -780,49 +779,14 @@ fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<S
     Ok(parsed.as_str().to_string())
 }
 
+/// 「重新生成标题」入口（前端 sidebar 右键 / chat header 按钮触发）。
+/// 自动生成已下沉到 [`agent_core::session_titler`]，由 Harness::spawn_run 在首轮
+/// TurnFinished 后异步触发并通过 `EngineEvent::SessionTitleChanged` 推到前端。
+/// 本 invoke 命令只是手动重生成入口——无视当前 title，强制走一次。
 #[tauri::command]
 async fn generate_session_title(app: AppHandle, id: String) -> AppResult<Session> {
     let dd = data_dir(&app)?;
-    let s = sessions::load(&dd, &id)?;
-    let has_user = s.messages.iter().any(|m| matches!(m.role, Role::User));
-    if !has_user {
-        return Ok(s);
-    }
-
-    // 决定用谁来生成标题：优先用 ProvidersFile 中标记为「标题生成模型」的 provider，
-    // 否则回退到 session 自己的 provider/model。
-    let providers_file = providers::load(&dd)?;
-    let title_provider = providers_file.providers.into_iter().find(|p| {
-        p.enabled
-            && p.title_gen_enabled
-            && p.title_gen_model.as_deref().is_some_and(|m| !m.is_empty())
-    });
-
-    let (provider, model) = match title_provider {
-        Some(p) => {
-            let model = p.title_gen_model.clone().unwrap_or_default();
-            (p, model)
-        }
-        None => (providers::get(&dd, &s.provider_id)?, s.model.clone()),
-    };
-
-    let title = match try_generate_title(&dd, provider, &model, &s.messages).await {
-        Some(t) => t,
-        None => title_gen::fallback_from_first_user(&s.messages),
-    };
-    sessions::rename(&dd, &id, title)
-}
-
-async fn try_generate_title(
-    dd: &std::path::Path,
-    provider: model_gateway::config::Provider,
-    model: &str,
-    messages: &[agent_core::storage::sessions::Message],
-) -> Option<String> {
-    let provider = oauth::refresh::ensure_fresh_provider_token(dd, provider)
-        .await
-        .ok()?;
-    title_gen::generate(&provider, model, messages).await.ok()
+    agent_core::session_titler::regenerate_session_title(&dd, &id).await
 }
 
 #[tauri::command]

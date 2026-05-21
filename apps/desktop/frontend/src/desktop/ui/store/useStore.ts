@@ -1554,7 +1554,6 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       try {
-        const isFirstRound = baseSession.messages.every((m) => m.role !== "user");
         // 传空数组：后端会优先用 session.enabled_tools，再 fallback 到全局 settings。
         // 工具的开关现在统一在「设置 → 对话设置」配置。
         await api.sendMessage(
@@ -1565,6 +1564,18 @@ export const useStore = create<AppState>((set, get) => ({
           [],
           requestId,
           (e: EngineEvent) => {
+            // 标题是 session 级状态（不属于 slot）：agent_core 首轮跑完后异步落盘，
+            // 通过 EngineEvent 通知。这里独立处理：直接更新 currentSession.title +
+            // refreshSessions 让 sidebar 同步。
+            if (e.type === "session_title_changed") {
+              set((state) =>
+                state.currentSession?.id === e.session_id
+                  ? { currentSession: { ...state.currentSession, title: e.title } }
+                  : state
+              );
+              void get().refreshSessions();
+              return;
+            }
             set((state) => {
               const slot = state.sessionStreams[sessionId];
               // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
@@ -1610,21 +1621,9 @@ export const useStore = create<AppState>((set, get) => ({
           });
         }
         await get().refreshSessions();
-
-        // 首轮对话完成后自动生成标题（失败不影响主流程）
-        if (isFirstRound) {
-          api
-            .generateSessionTitle(sessionId)
-            .then((s) => {
-              if (get().currentSession?.id === s.id) {
-                set({ currentSession: s });
-              }
-              get().refreshSessions();
-            })
-            .catch(() => {
-              /* ignore */
-            });
-        }
+        // 标题自动生成已下沉到 agent_core：首轮 TurnFinished 后由 Harness::spawn_run
+        // 异步 spawn 一个短调用 task，落 jsonl 后通过 EngineEvent::SessionTitleChanged
+        // 推到前端（见上面 event handler）。前端不再主动 invoke。
       } catch (err: any) {
         const stillForeground = get().currentSession?.id === sessionId;
         // 不论前后台都先把 slot 清掉、running 摘除；后台失败再标 unread

@@ -9,15 +9,19 @@
 //!   分支，避免短输出耗在推理上 / 触发 thinking 最小 32K 预算的硬下限。
 //! - `max_tokens` 给到 128 就够。
 //!
-//! 触发时机由 surface / 上层 Session 决定（当前未自动挂钩，调用方按需触发）。
-//! 后续若有压缩摘要、关键词抽取等更多 utility 场景，再考虑是否升级成正式 mode 概念。
+//! **触发时机**：Harness::spawn_run 在每个 Run 的首个 `TurnFinished` 事件后异步
+//! spawn 一个独立 task 调 [`generate_for_session`]，与主 run 完全解耦——失败不
+//! 影响主流程，事件流通过 [`EventPayload::SessionTitleChanged`] 通知 surface。
 
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use common::{CancelFlag, ReasoningConfig};
+use common::{AppResult, CancelFlag, ReasoningConfig};
 use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
+
+use crate::storage::sessions::{self, Message, Role, Session};
 
 const TITLE_INSTRUCTION: &str =
     "为以下用户消息生成一个 4-12 字的中文对话主题作为标题，只输出标题本身，\
@@ -28,6 +32,11 @@ const TITLE_MAX_CHARS: usize = 32;
 const TITLE_TRIM_CHARS: &[char] = &[
     ' ', '\t', '\n', '"', '\'', '`', '「', '」', '“', '”', '【', '】', '(', ')', '（', '）',
 ];
+
+/// 模型短调用失败时的兜底：截 session 首条 user message 开头若干字符。
+/// CJK / 全角字符 10 个，纯英文 15 个；超出加 `…` 后缀；session 没有 user 消息时回到 `DEFAULT_TITLE`。
+const FALLBACK_LIMIT_CJK: usize = 10;
+const FALLBACK_LIMIT_LATIN: usize = 15;
 
 /// 用「关思考」的 utility 短调用让模型从用户首条消息提炼对话标题。
 /// 调用方负责把返回值写入 `Session.title`（建议先 trim 检查非空再写）。
@@ -58,6 +67,106 @@ pub async fn generate_title(
         ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => text,
     };
     Ok(sanitize_title(&raw_text))
+}
+
+/// 根据 session 选 provider + 调模型 → `Some(title)` 或 `None`。
+///
+/// 不读 `session.title`、不写 jsonl——纯计算。选 provider 的策略：
+/// `providers.json` 里 `title_gen_enabled=true` 的优先，否则回退到 session 自己的 provider/model。
+/// 任何环节失败（OAuth 刷新失败、模型调用失败、返回空标题）都返回 `None`。
+async fn try_generate_for_session(data_dir: &Path, session: &Session) -> Option<String> {
+    let first_user = session
+        .messages
+        .iter()
+        .find(|m| matches!(m.role, Role::User))
+        .map(|m| m.content.trim().to_string())
+        .unwrap_or_default();
+    if first_user.is_empty() {
+        return None;
+    }
+
+    let providers_file = model_gateway::config::load(data_dir).ok()?;
+    let (provider, model) = providers_file
+        .providers
+        .into_iter()
+        .find(|p| {
+            p.enabled
+                && p.title_gen_enabled
+                && p.title_gen_model.as_deref().is_some_and(|m| !m.is_empty())
+        })
+        .map(|p| {
+            let m = p.title_gen_model.clone().unwrap_or_default();
+            (p, m)
+        })
+        .or_else(|| {
+            let p = model_gateway::config::get(data_dir, &session.provider_id).ok()?;
+            Some((p, session.model.clone()))
+        })?;
+
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .ok()?;
+    let client = model_gateway::build_client(provider).ok()?;
+
+    let title = generate_title(client.as_ref(), &model, &first_user).await.ok()?;
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+/// 自动入口（Harness::spawn_run 首轮挂钩调用）：
+/// 仅当当前 `session.title == DEFAULT_TITLE` 时才执行模型短调用 + rename 落盘。
+/// 模型失败 / 用户已重命名 / 无 user message 等情况都返回 `None`，不动 jsonl。
+pub async fn generate_for_session(data_dir: &Path, session_id: &str) -> Option<String> {
+    let session = sessions::load(data_dir, session_id).ok()?;
+    if session.title != sessions::DEFAULT_TITLE {
+        return None;
+    }
+    let title = try_generate_for_session(data_dir, &session).await?;
+    sessions::rename(data_dir, session_id, title.clone()).ok()?;
+    Some(title)
+}
+
+/// 手动重生成（surface 「重新生成标题」入口）：
+/// 无视当前 title；模型失败时 fallback 截首条 user message；总是 rename 落盘 + 返回新 Session。
+/// 唯一可能的失败：session 文件本身 load/rename 失败。
+pub async fn regenerate_session_title(data_dir: &Path, session_id: &str) -> AppResult<Session> {
+    let session = sessions::load(data_dir, session_id)?;
+    let title = try_generate_for_session(data_dir, &session)
+        .await
+        .unwrap_or_else(|| fallback_from_messages(&session.messages));
+    sessions::rename(data_dir, session_id, title)
+}
+
+/// 模型调用失败时的兜底标题：截 session 首条 user message 开头若干字符。
+/// 永远返回非空字符串——session 没有 user 消息时回到 `DEFAULT_TITLE`。
+pub fn fallback_from_messages(messages: &[Message]) -> String {
+    let first_user = messages
+        .iter()
+        .find(|m| matches!(m.role, Role::User))
+        .map(|m| m.content.trim())
+        .unwrap_or("");
+    if first_user.is_empty() {
+        return sessions::DEFAULT_TITLE.to_string();
+    }
+    let limit = if first_user.chars().take(20).any(is_wide_char) {
+        FALLBACK_LIMIT_CJK
+    } else {
+        FALLBACK_LIMIT_LATIN
+    };
+    let mut chars = first_user.chars();
+    let head: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+fn is_wide_char(c: char) -> bool {
+    c.len_utf8() >= 3
 }
 
 fn sanitize_title(raw: &str) -> String {

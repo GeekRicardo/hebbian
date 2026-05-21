@@ -155,6 +155,12 @@ pub enum EngineEvent {
         file_path: String,
         error: String,
     },
+    /// 新会话首轮跑完后，agent_core 后台 task 异步生成的标题已落盘 jsonl。
+    /// 前端用它更新 sidebar / chat header；落盘已由 agent_core 完成，前端只需 setState。
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
     Error {
         message: String,
     },

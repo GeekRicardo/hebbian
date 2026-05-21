@@ -1880,6 +1880,10 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             file_path: file_path.clone(),
             error: error.clone(),
         }),
+        SessionTitleChanged { session_id, title } => Some(EngineEvent::SessionTitleChanged {
+            session_id: session_id.clone(),
+            title: title.clone(),
+        }),
         _ => None,
     }
 }

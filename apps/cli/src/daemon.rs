@@ -381,6 +381,12 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
         EventPayload::RunModeChanged { from, to } => {
             Some(DaemonEvent::RunModeChanged { from: from.clone(), to: to.clone() })
         }
+        EventPayload::SessionTitleChanged { session_id, title } => {
+            Some(DaemonEvent::SessionTitleChanged {
+                session_id: session_id.clone(),
+                title: title.clone(),
+            })
+        }
         _ => None,
     }
 }

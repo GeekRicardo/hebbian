@@ -83,6 +83,12 @@ pub enum EngineEvent {
         kind: String,
         text: String,
     },
+    /// 新会话首轮跑完后，agent_core 后台 task 异步生成的标题已落盘 jsonl。
+    /// 前端用它更新 sidebar / chat header；落盘已由 agent_core 完成。
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
     Error {
         message: String,
     },
@@ -215,6 +221,10 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
         RunModeChanged { from, to } => EngineEvent::RunModeChanged {
             from: from.clone(),
             to: to.clone(),
+        },
+        SessionTitleChanged { session_id, title } => EngineEvent::SessionTitleChanged {
+            session_id: session_id.clone(),
+            title: title.clone(),
         },
         _ => return None,
     })

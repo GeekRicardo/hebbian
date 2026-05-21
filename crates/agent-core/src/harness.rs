@@ -137,7 +137,7 @@ impl Harness {
         // 极短 task 等空位，避免生命周期 / HITL 事件丢失。
         let (run_tx, run_rx) = mpsc::channel::<Event>(1024);
         let recorder = params.recorder.clone();
-        let sink: EventSink = Arc::new(move |event: Event| {
+        let core_sink: EventSink = Arc::new(move |event: Event| {
             if let Some(rec) = &recorder {
                 rec.write(&event);
             }
@@ -154,6 +154,43 @@ impl Harness {
                 } else {
                     tracing::warn!(error = %error_label, "run event channel full, dropping non-critical event");
                 }
+            }
+        });
+
+        // 标题生成挂钩（架构 §4.9.x）：本 Run 内首次看到 TurnFinished 时异步 spawn 一个
+        // 短调用 task，调 session_titler::generate_for_session。task 内部判断 session
+        // 当前 title 是否仍是默认值（"新对话"）—— 是才生成 / 落盘 / emit 事件，从而保证
+        // 用户已重命名 / fork / resume 等场景下不会被自动覆盖。
+        //
+        // 事件 emit 走同一份 sink。task 持有 sink 的 Arc，确保通道 send 端在 task 完成前
+        // 不被 drop；接收端由 surface 通过 [`RunHandle::drive`] 的 trailing window 消费。
+        let title_triggered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let title_data_dir = params.data_dir.clone();
+        let title_session_id = params.session_id.clone();
+        let title_state = state.clone();
+        let title_sink = core_sink.clone();
+        let sink: EventSink = Arc::new(move |event: Event| {
+            let trigger_now = matches!(event.payload, EventPayload::TurnFinished { .. })
+                && title_data_dir.is_some()
+                && title_session_id.is_some()
+                && !title_triggered.swap(true, std::sync::atomic::Ordering::SeqCst);
+            core_sink(event);
+            if trigger_now {
+                let dd = title_data_dir.clone().unwrap();
+                let sid = title_session_id.clone().unwrap();
+                let task_state = title_state.clone();
+                let task_sink = title_sink.clone();
+                tokio::spawn(async move {
+                    if let Some(title) =
+                        crate::session_titler::generate_for_session(&dd, &sid).await
+                    {
+                        let ev = task_state.event(EventPayload::SessionTitleChanged {
+                            session_id: sid,
+                            title,
+                        });
+                        task_sink(ev);
+                    }
+                });
             }
         });
 
@@ -298,8 +335,13 @@ impl RunHandle {
 
     /// 把事件循环的全部样板（recv + filter + 终止判定 + HITL 路由）交给 driver，
     /// surface 只实现 [`TurnObserver`]：渲染事件 + 给 HITL 回应。
+    ///
+    /// **trailing 事件窗口**：收到 terminal 事件（RunFinished/Failed/Cancelled）后，
+    /// 本方法不会立即返回，而是继续 `recv` 直到事件通道关闭或最多 5 秒。这给
+    /// `SessionTitleChanged` 等「主流程结束后才完成的后台 task」一个送达窗口。
+    /// 正常情况下 channel 在 task 完成后立即关闭，不会真的等满 5 秒。
     pub async fn drive<O: TurnObserver>(&mut self, observer: &mut O) -> TurnSummary {
-        loop {
+        let summary = loop {
             let Some(event) = self.recv().await else {
                 return TurnSummary::failed("事件流意外关闭");
             };
@@ -339,7 +381,7 @@ impl RunHandle {
                     total_cache_creation_tokens,
                     ..
                 } => {
-                    return TurnSummary {
+                    break TurnSummary {
                         outcome: TurnOutcome::Done,
                         usage: Some(UsageTotals {
                             input: *total_input_tokens,
@@ -350,15 +392,41 @@ impl RunHandle {
                     };
                 }
                 EventPayload::RunFailed { error } => {
-                    return TurnSummary::failed(&error.message);
+                    break TurnSummary::failed(&error.message);
                 }
                 EventPayload::RunCancelled => {
-                    return TurnSummary {
+                    break TurnSummary {
                         outcome: TurnOutcome::Cancelled,
                         usage: None,
                     };
                 }
                 _ => {}
+            }
+        };
+
+        self.drain_trailing_events(observer, std::time::Duration::from_secs(5))
+            .await;
+        summary
+    }
+
+    /// terminal 事件之后继续 recv 直到通道关闭或超时——把可能晚到的 trailing 事件
+    /// （如 [`EventPayload::SessionTitleChanged`]）转给 observer。
+    async fn drain_trailing_events<O: TurnObserver>(
+        &mut self,
+        observer: &mut O,
+        timeout: std::time::Duration,
+    ) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline - now;
+            match tokio::time::timeout(remaining, self.events.recv()).await {
+                Ok(Some(event)) => observer.on_event(&event),
+                Ok(None) => break,
+                Err(_) => break,
             }
         }
     }
@@ -508,5 +576,6 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::ToolCallFinished { .. }
             | EventPayload::ContextCompacted { .. }
             | EventPayload::TextDone { .. }
+            | EventPayload::SessionTitleChanged { .. }
     )
 }

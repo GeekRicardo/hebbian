@@ -1,13 +1,10 @@
-//! 复刻 desktop `chat.rs` / `title_gen.rs` 中的几个非流式 helpers，让 hebweb
-//! 不依赖 desktop 在跑就能镜像 `compact_session / get_context_usage /
-//! generate_session_title` 等命令。
+//! 复刻 desktop `chat.rs` 中的几个非流式 helpers（context_usage / compact_session），
+//! 让 hebweb 不依赖 desktop 在跑就能镜像相应命令。
 //!
 //! 这是 hebweb standalone 路线的一部分：bridge 在场时 invoke 走 bridge（desktop 真后端）；
 //! 不在场时走这里的本地实现。两条路 v1 都保留。
 //!
-//! 复刻而非抽 agent-core 共享 crate，是按 surgical change 原则——desktop chat.rs 是
-//! 核心文件，refactor 会牵动太多。当函数体确实"同构"时（如 send_once、context_usage），
-//! 双份等价代码可接受。未来若引入 v2 surface_commands crate 再消除重复。
+//! 历史包袱：原来标题生成也复刻在这里，已下沉到 `agent_core::session_titler`。
 
 use std::path::Path;
 use std::sync::Arc;
@@ -132,126 +129,6 @@ pub async fn compact_session(
     })
 }
 
-// ─── 标题生成（复刻 desktop title_gen.rs）────────────────────────────────
-
-const TITLE_SYSTEM_PROMPT: &str =
-    "你是一个严格的标题生成器。阅读给定对话，用不超过 16 个汉字（或 8 个英文单词）总结出一个简短、具体、没有标点和引号的标题，直接输出标题本身，不要任何前后缀。";
-const FALLBACK_LIMIT_CJK: usize = 10;
-const FALLBACK_LIMIT_LATIN: usize = 15;
-
-/// 走非流式 complete 一次模型，把对话头部交给标题生成器。
-pub async fn try_generate_title(
-    data_dir: &Path,
-    provider: model_gateway::config::Provider,
-    model: &str,
-    messages: &[Message],
-) -> Option<String> {
-    let convo: Vec<&Message> = messages
-        .iter()
-        .filter(|m| matches!(m.role, Role::User | Role::Assistant))
-        .take(8)
-        .collect();
-    if convo.is_empty() {
-        return Some("新对话".to_string());
-    }
-
-    let mut bundle = String::from("请为以下对话生成标题：\n\n");
-    for m in &convo {
-        let role = match m.role {
-            Role::User => "用户",
-            Role::Assistant => "助手",
-            _ => continue,
-        };
-        bundle.push_str(&format!("[{role}] "));
-        let snippet: String = m.content.chars().take(200).collect();
-        bundle.push_str(&snippet);
-        if m.content.chars().count() > 200 {
-            bundle.push('…');
-        }
-        bundle.push('\n');
-    }
-
-    let provider =
-        model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-            .await
-            .ok()?;
-    let user_msg = Message {
-        id: String::new(),
-        role: Role::User,
-        content: bundle,
-        attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: 0,
-        meta: None,
-    };
-    send_once(provider, model, Some(TITLE_SYSTEM_PROMPT), &[user_msg]).await.ok()
-}
-
-pub fn fallback_from_first_user(messages: &[Message]) -> String {
-    let first_user = messages
-        .iter()
-        .find(|m| matches!(m.role, Role::User))
-        .map(|m| m.content.trim())
-        .unwrap_or("");
-    if first_user.is_empty() {
-        return "新对话".to_string();
-    }
-    let limit = if first_user.chars().take(20).any(is_wide_char) {
-        FALLBACK_LIMIT_CJK
-    } else {
-        FALLBACK_LIMIT_LATIN
-    };
-    let mut chars = first_user.chars();
-    let head: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() {
-        format!("{head}…")
-    } else {
-        head
-    }
-}
-
-fn is_wide_char(c: char) -> bool {
-    c.len_utf8() >= 3
-}
-
-/// 简单的非流式 LLM 调用（与 desktop `chat::send_once` 等价）。
-async fn send_once(
-    provider: model_gateway::config::Provider,
-    model: &str,
-    system: Option<&str>,
-    messages: &[Message],
-) -> Result<String> {
-    use model_gateway::types::{
-        AssistantEntry, ModelRequest, TranscriptEntry, UserEntry,
-    };
-
-    let client = model_gateway::build_client(provider).map_err(|e| anyhow!("{e}"))?;
-    let entries: Vec<TranscriptEntry> = messages
-        .iter()
-        .filter_map(|m| match m.role {
-            Role::User => Some(TranscriptEntry::User(UserEntry {
-                text: m.content.clone(),
-                attachments: m.attachments.clone(),
-            })),
-            Role::Assistant => Some(TranscriptEntry::Assistant(AssistantEntry {
-                text: m.content.clone(),
-                reasoning: String::new(),
-                tool_calls: Vec::new(),
-            })),
-            _ => None,
-        })
-        .collect();
-    let req = ModelRequest {
-        model: model.to_string(),
-        system: system.map(str::to_string),
-        entries,
-        tools: Vec::new(),
-        max_tokens: 4096,
-        reasoning: None,
-    };
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    match client.complete(req, cancel).await.map_err(|e| anyhow!("{e}"))? {
-        ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => Ok(text),
-    }
-}
+// 标题生成已下沉到 agent_core::session_titler——hebweb 的 cmd_generate_session_title
+// 直接调 regenerate_session_title。本文件不再保留 try_generate_title / fallback 等
+// 复刻代码。

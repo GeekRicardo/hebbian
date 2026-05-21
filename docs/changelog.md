@@ -2839,3 +2839,40 @@
   - 这是简单关停而不是根因方案。根因是 `tracing_subscriber::fmt` 默认会把当前 span 链上所有字段串到事件输出。彻底干净的做法是配置 fmt layer 不展开 span 字段（自定义 `FormatFields`），既保留 langfuse 上报又干净 stderr——后续要恢复 langfuse 完整上报时优先走这条路
   - 6 个辅助函数当前是 `#[allow(dead_code)]` 状态，注释解除即可恢复
 
+### 2026-05-21 — 标题自动生成下沉到 agent_core，三 surface 改为事件驱动
+
+- **Why**: 用户反馈"标题生成好像不 work 了，另外 CLI 也要能生成标题，因为本质上都是 agent_core 里的"。现状是：`agent_core::session_titler` 早就有 utility helper 但是 dead code（5 月 a34463c changelog 明说"不挂自动钩子，由 surface 触发"）；desktop 自己一份 `title_gen.rs`（多消息 bundle prompt + provider 选择 + fallback），hebweb `chat_helpers.rs` 复刻 desktop 一份（注释自承"复刻 desktop title_gen.rs"），CLI 完全没有。三处实现、两处重复、一处缺失，agent_core 那份还是 dead code——再修 desktop bug 也是补丁式
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): 新增 `EventPayload::SessionTitleChanged { session_id, title }` variant。`session_id` 是因为标题属于 session 级状态而非 run 级
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): 新增 `pub const DEFAULT_TITLE = "新对话"`，作为自动入口的「未被重命名」判断锚
+  - [crates/agent-core/src/session_titler.rs](../crates/agent-core/src/session_titler.rs):
+    - 新增 `try_generate_for_session(dd, &session) -> Option<String>`（中层 helper：选 title-gen provider → refresh OAuth token → build_client → 调底层 generate_title；不读 title，不写 jsonl）
+    - 新增 `generate_for_session(dd, sid) -> Option<String>`（自动入口：仅当 `title == DEFAULT_TITLE` 时执行 + rename 落盘）
+    - 新增 `regenerate_session_title(dd, sid) -> AppResult<Session>`（手动入口：无视当前 title + 模型失败 fallback 截首条 user message + 总是 rename）
+    - 新增 `fallback_from_messages(messages) -> String`（兜底：CJK 10 字 / 英文 15 字 + …）
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs):
+    - `Harness::spawn_run` 在 sink 包装层维护 `AtomicBool` 钩子：本 Run 首次看到 `TurnFinished` 时 `tokio::spawn` 一个独立 task 调 `session_titler::generate_for_session`，成功时通过 sink emit `SessionTitleChanged` 事件
+    - `RunHandle::drive` 在收到 terminal 事件（RunFinished/Failed/Cancelled）后不再立即 return，改为继续 recv 直到通道关闭或 5 秒超时，让 trailing 事件（SessionTitleChanged 等）能被 observer 消费。正常情况下没 spawn 标题任务时通道立即关闭，drive 不会真等满 5 秒
+    - `is_critical_event` 把 `SessionTitleChanged` 列为关键事件，通道满时走 spawn-send fallback
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs): `DaemonEvent` 新增 `SessionTitleChanged { session_id, title }` variant
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `translate_event` 新增 `EventPayload::SessionTitleChanged` → `DaemonEvent::SessionTitleChanged` 翻译
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): `EngineEvent` 新增 `SessionTitleChanged` variant
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `agent_event_to_engine_event` 加翻译分支
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 删除 `mod title_gen` 与 `try_generate_title` helper；`generate_session_title` invoke 命令简化为薄壳直调 `agent_core::session_titler::regenerate_session_title`
+  - [apps/desktop/src/title_gen.rs](../apps/desktop/src/title_gen.rs): **整个文件删除**
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `EngineEvent` 加 `session_title_changed` variant
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): event handler 加 `session_title_changed` 独立分支（不进 slot，直接更新 currentSession.title + refreshSessions）；删除 `isFirstRound + api.generateSessionTitle` 主动 invoke 块
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs): `EngineEvent` 加 `SessionTitleChanged` variant + translate 分支
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): `cmd_generate_session_title` 简化为薄壳直调 `agent_core::session_titler::regenerate_session_title`
+  - [apps/web-server/src/chat_helpers.rs](../apps/web-server/src/chat_helpers.rs): 删除 `try_generate_title` / `fallback_from_first_user` / `send_once` / `is_wide_char` / `TITLE_SYSTEM_PROMPT` 等所有 title 相关复刻；模块 doc 同步更新
+- **影响范围**:
+  - 协议：`EventPayload::SessionTitleChanged` 是 additive variant；旧 surface 看到会落到 `_ => None` 兜底，无破坏。同样 `DaemonEvent` / `EngineEvent` / 前端 `EngineEvent` 都是 additive
+  - 标题生成 prompt 从 desktop 的「多消息 bundle」prompt 切换到 agent_core 的「单条 user message」prompt（即原 `session_titler::generate_title` 那份带 thinking-disabled 守卫的）。这是有意取舍：首轮自动触发时通常只有 1 条 user message，bundle 跟 single-message 等价；而 thinking-disabled 守卫对 DeepSeek thinking 模型是必要的（避免短输出耗在推理 32K 预算上）
+  - 自动触发时机从「前端 useStore.ts 在首轮 RunFinished 后主动 invoke」改为「agent_core Harness 在首个 TurnFinished 后异步 spawn task」。RunFinished 后 drive 多等 ≤2 秒等 trailing 事件，主流程感觉不到延迟（surface 已经在 await drive）
+  - desktop 用户体验：之前是同步 invoke 等结果再 setState（首轮回复结束 → 等 ~1-2 秒 → title 出现），现在是异步事件推送（首轮回复结束 → title 自动出现，时序差不多）；前端 store 状态机更简单
+  - CLI 用户：之前完全没有标题生成，现在自动有；CLI 客户端可监听 `session_title_changed` event 做侧边栏更新（也可以不消费，title 已落 jsonl）
+  - jsonl 落盘：所有 surface 通过同一个 `agent_core::session_titler::generate_for_session → sessions::rename` 路径，写入格式不变
+- **留尾巴**:
+  - 没改架构.md：本期是把已有的 session_titler.rs（5 月已落地）从 dead code 升级为活跃路径 + 三 surface 接入，属于实现层下沉，未引入新协议字段以外的设计。下次架构.md 整理时把 §4.x 加一节"标题自动生成"指向 session_titler.rs 与本条 changelog
+  - 没把 `agent_core::session_titler::generate_for_session` 写成 `Result`——当前是 `Option<String>`，错误信息（OAuth 刷新失败 / 模型 400 / 网络）只走 `tracing::warn`。如果后续需要 surface 端感知具体失败原因（例如展示 toast），把返回类型升级成 `Result<Option<String>, TitleError>`
+  - 没加 `heb title <session_id>` 手动重生成 CLI 命令：当前自动触发已经覆盖 90% 场景；如果后续要给 CLI 加手动入口，加一条 `IpcCommand::RegenerateTitle` 调 `agent_core::session_titler::regenerate_session_title` 即可

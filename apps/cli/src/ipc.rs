@@ -127,6 +127,10 @@ pub enum DaemonEvent {
     },
     QuestionAnswered { request_id: String },
     RunModeChanged { from: String, to: String },
+    /// 新会话首轮跑完后，agent_core 后台 task 生成的标题已落盘 jsonl。
+    /// CLI 自动化脚本可监听这条做侧边栏 / 提示更新；落盘已由 agent_core 完成，
+    /// 客户端不需要再回写。
+    SessionTitleChanged { session_id: String, title: String },
     Error { message: String },
 }
 

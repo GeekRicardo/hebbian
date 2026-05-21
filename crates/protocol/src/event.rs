@@ -167,6 +167,15 @@ pub enum EventPayload {
         after_tokens: usize,
     },
 
+    /// 新会话首轮跑完后，agent_core 异步生成的标题已落盘。
+    /// surface 端拿这条更新侧边栏 / 头部标题——无需再主动 invoke 重生成。
+    /// 携带 `session_id` 是因为标题属于 session 级状态而非 run 级（一个 session
+    /// 的多个 run 共用 title），surface 端可能在切换会话时仍要消费这条。
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
+
     // —— 编辑快照（§4.13） ——
     EditSnapshotCreated {
         call_id: String,
