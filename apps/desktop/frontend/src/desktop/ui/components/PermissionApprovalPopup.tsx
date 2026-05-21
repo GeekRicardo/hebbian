@@ -123,9 +123,11 @@ export function PermissionApprovalPopup() {
   }, [pending?.toolName, pending?.commandSegments]);
 
   // 记忆选项 list：用户在 popup 里勾选要记的 pattern。
-  // - Bash 有命令指纹时：sub（如可拆出二级子命令）/ 各段 root（含 compound）
-  //   - 默认勾选状态：全选段 root（保证段级判定一次满足），sub 不默认勾选（精确匹配作为可选）
-  // - 非 Bash：仅一档「工具 X」（pattern=null 等同 Any matcher）
+  // - Bash：sub（如可拆二级子命令）/ 各段 root（含 compound）；默认全选段 root
+  // - Edit / Write：从 input.file_path 切出「精确文件 / 父目录」两档路径前缀
+  //   后端 build_rule 对非 Bash 工具把 pattern 当 path_prefix（FilePath matcher），
+  //   下次同前缀的路径自动放行；这是用户的"审批路径"心理模型
+  // - 其它工具：仅一档「工具 X」（pattern=null = Any matcher）兜底
   const memoryOptions: MemoryOption[] = useMemo(() => {
     if (!pending) return [];
     const opts: MemoryOption[] = [];
@@ -139,8 +141,6 @@ export function PermissionApprovalPopup() {
           defaultChecked: false,
         });
       }
-      // segmentRoots ≥ 2 → 把每段 root 都列为单独选项，默认全选
-      // segmentRoots = 1 → 就只有当前 fingerprint 的 root
       const roots = segmentRoots.length > 0 ? segmentRoots : [bashPrefixes.root];
       for (const r of roots) {
         opts.push({
@@ -148,6 +148,31 @@ export function PermissionApprovalPopup() {
           pattern: r,
           label: `${r} *`,
           hint: roots.length >= 2 ? "compound 段" : "该根命令的所有子命令",
+          defaultChecked: true,
+        });
+      }
+    } else if (
+      (pending.toolName === "Edit" || pending.toolName === "Write") &&
+      typeof (pending.input as { file_path?: unknown })?.file_path === "string"
+    ) {
+      const filePath = (pending.input as { file_path: string }).file_path;
+      // 精确文件路径：仅放行同一个文件
+      opts.push({
+        key: `path:${filePath}`,
+        pattern: filePath,
+        label: filePath,
+        hint: "精确文件",
+        defaultChecked: false,
+      });
+      // 父目录前缀：放行该目录下所有同工具操作
+      const slash = filePath.lastIndexOf("/");
+      if (slash > 0) {
+        const parentDir = filePath.slice(0, slash + 1);
+        opts.push({
+          key: `dir:${parentDir}`,
+          pattern: parentDir,
+          label: `${parentDir}*`,
+          hint: "整个目录",
           defaultChecked: true,
         });
       }
@@ -161,7 +186,7 @@ export function PermissionApprovalPopup() {
       });
     }
     return opts;
-  }, [pending?.toolName, bashPrefixes, segmentRoots]);
+  }, [pending?.toolName, pending?.input, bashPrefixes, segmentRoots]);
 
   if (!pending) return null;
 

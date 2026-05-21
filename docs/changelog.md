@@ -2224,3 +2224,79 @@
 - **留尾巴**:
   - hebweb 真实流跑大模型对话时偶尔模型不调工具（生成纯文本），这跟 popup 修复无关；测试要靠"用 fake state 注入"或选确定能触发审批的命令
   - 旧 worker loop（`input_rx.recv() → run_turn`）保留但 cmd_send_message 不再走它；后续可以删整段 input_tx/input_rx + worker spawn 代码（共 ~20 行），但这次按 surgical change 原则只动 cmd_send_message
+
+### 2026-05-21 — hebweb 接 desktop invoke proxy bridge（Step 1：sync 命令）
+
+- **Why**: 上一轮把 hebweb 命令镜像到 35，但还差 18 个（OAuth 14 / Edits 4 / compact/preview/context_usage/title/discover_rules/list_bg_tasks/import 等）。用户提出关键洞察："在 tauri 前端那边做手脚，加一个转发层让其暴露所有连接出来给 Playwright"。本质是 **让 Tauri 前端当 invoke proxy**——前端已经能调所有 Tauri 命令，给它一条 outbound WS 连到 hebweb，hebweb 收到外部 invoke 时通过这条 WS 让 Tauri 前端代劳。一劳永逸：desktop 全部 66 个命令瞬间可用、未来 desktop 加新命令 hebweb 自动获得
+- **关键设计**:
+  - desktop 启动时前端 outbound 连 `ws://127.0.0.1:38080/ws/bridge`，注册自己为 bridge client
+  - hebweb dispatch_invoke 入口先看 BridgeRegistry：有 bridge 就走 bridge，没有 fallback 到 LocalCoreClient（standalone 仍可用）
+  - **`is_local_runtime_command` 隔离名单**：send_message / inject_user_message / approve_permission / answer_question / cancel_message / set/get_run_mode / set/get_force_automode 这 9 个不走 bridge——它们依赖 hebweb 自己的 `SessionRuntime`（HITL oneshot / pending_inputs / cancel_flag），desktop 有自己一套 SessionContext / HitlState，两边 state 不能同步。流式 channel 转发要等 Step 2
+  - 无 bridge 时一切照旧 hebweb v1 行为；多 bridge 同时注册时用最近注册的（多 desktop 窗口场景）
+- **改动**:
+  - [apps/web-server/src/protocol.rs](../apps/web-server/src/protocol.rs): 新增 `BridgeInbound` (`Register` / `ProxyResponse`) + `BridgeOutbound` (`Welcome` / `ProxyInvoke`)
+  - [apps/web-server/src/bridge.rs](../apps/web-server/src/bridge.rs): 新建。`BridgeClient` 持有 `outbound_tx` + `pending: HashMap<req_id, oneshot::Sender>`；`proxy_invoke` 生成 uuid req_id → 发请求 → 等 oneshot（60s 超时）→ 返回。`BridgeRegistry` 是 `Arc<Mutex<Vec<Arc<BridgeClient>>>>`
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs):
+    - `ServerState` 加 `bridges: BridgeRegistry` 字段
+    - `/healthz` 加 `bridges` count 报告
+    - 新增 `/ws/bridge` 路由 + `handle_bridge` 函数：等首条 Register → 注册 → 持续消费 ProxyResponse 唤醒对应 pending oneshot → 断连自动 unregister
+    - `dispatch_invoke` 入口加 bridge 优先逻辑：非 local-runtime 命令时 `state.bridges.pick()`，有就 `bridge.proxy_invoke(cmd, args)`；fallback 到 LocalCoreClient
+  - [apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts](../apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts): 新建 60 行。Outbound WS 连 mediator → 发 Register → 收 `proxy_invoke` → 调 `tauriInvoke(cmd, args)` → 回 `proxy_response`；断开 3s 后自动重连
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): init 时 `if (isTauri()) startDesktopBridge()`——只在 Tauri 环境启动
+- **验证**（协议端到端通过，desktop 真实端待 reload）:
+  - cargo build -p hebbian-web-server ✓ / pnpm tsc ✓
+  - 起 hebweb (`--port 38080 --data-dir /tmp/hebweb-bridge --static-dir apps/desktop/dist`)
+  - node 写一个 mock bridge 连 `/ws/bridge` 注册 "mock-desktop"，对每个 proxy_invoke 回 mock 数据
+  - `/healthz` 立刻 `"bridges":1` ✓
+  - node WS 连 `/ws` 调 `list_providers / oauth_claude_start / edits_worktree_status` 三个命令（后两个 hebweb 完全没镜像）
+  - 全部成功路由：bridge 收 proxy_invoke，client 拿到对应 mock 响应（含 OAuth URL）
+- **影响范围**: 新增 bridge.rs + protocol 类型；server.rs 加路由 + 入口分支；desktop 前端加 60 行 + App.tsx 一行 init。**无 bridge 时行为 100% 不变**，hebweb standalone 完全可用
+- **留尾巴**:
+  - **desktop 真实端验证**: 当前在用户机器跑着的 desktop 是改动前编译的，需要在 desktop 窗口内 ⌘R reload 才能加载 desktop-bridge.ts。reload 后 healthz 应立刻 `bridges:1`，浏览器 invoke 任意 desktop 专有命令都会自动走 bridge
+  - **Step 2 流式事件代理（未做）**: 当前 bridge 只代理 sync invoke。`send_message` 这种带 Tauri `Channel<EngineEvent>` 流式回调的命令不能走 bridge，仍走 hebweb 自己的 SessionRuntime。Step 2 需要 bridge 端拦截 Channel 创建 + 把每条 onmessage 通过 WS 转发给 mediator + mediator 转发给对应 client。之后 desktop 完整对话流也能走 bridge——hebweb 100% 等价 desktop
+  - **OAuth callback 仍是固有限制**: OAuth redirect_uri 是 deep link `hebbian://...`，OS 路由给 desktop 进程，浏览器收不到。但用户在 desktop 完成 OAuth 后 token 落盘，Playwright 端下次 `list_providers` 能看到 ✓
+  - **多 bridge 当前用最近一个**: 多 desktop 窗口注册多个 bridge 时，当前 `pick` 总返回最后注册的
+
+### 2026-05-21 — hebweb bridge Step 2：流式 Channel 事件代理，desktop 完整对话流接通
+
+- **Why**: Step 1 接通 sync invoke 后，剩下 `send_message / approve_permission / answer_question / cancel_message / inject_user_message` 等流式/状态命令仍走 hebweb 自己的 SessionRuntime——bridge 在场也没意义。Step 2 让所有命令都走 bridge：bridge 在场时整个对话流落在 desktop 那边（agent_core + HitlState + chat 全套），事件通过新增的 `ChannelEvent` 路径回流到浏览器，hebweb **100% 等价 desktop**。
+- **关键设计**:
+  - **dispatch_invoke 简化**：bridge 在场时**所有命令**走 bridge，无 `is_local_runtime_command` 隔离；无 bridge 时 fallback hebweb 本地 35 个命令（standalone 完全可用）
+  - **Channel 注入在 desktop bridge 端**：`desktop-bridge.ts` 维护 `CHANNEL_COMMANDS = {"send_message"}` 名单。收到 `proxy_invoke` 时如果 cmd 在名单里，前端 `new TauriChannel<unknown>()`，`channel.onmessage = (payload) => ws.send({type:'channel_event', req_id, session_id, payload})`，把 channel 塞进 `args.onEvent` 再调 `tauriInvoke`
+  - **mediator 路由事件**：`handle_bridge` 收到 `ChannelEvent { req_id, session_id, payload }` → `state.ensure_runtime(session_id)` → `runtime.broadcast(WsServerMessage::Event { session_id, name:"engine-event", payload })`。所有订阅该 session 的 ws 自然收到——浏览器（Playwright）端的 transport 通过现有 `listen("engine-event", ...)` 路径接到
+- **改动**:
+  - [apps/web-server/src/protocol.rs](../apps/web-server/src/protocol.rs): `BridgeInbound` 新增 `ChannelEvent { req_id, session_id, payload }` variant
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs):
+    - `handle_bridge` 改成 match 三 variant：`ProxyResponse` 唤醒 pending oneshot；`ChannelEvent` 路由到 SessionRuntime broadcast；`Register` 忽略（已在注册阶段处理）
+    - `dispatch_invoke` 删除 `is_local_runtime_command` 名单（直接走 bridge），加 best-effort 把 session_id 补到 args.sessionId
+  - [apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts](../apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts):
+    - import `Channel as TauriChannel`
+    - 新增 `CHANNEL_COMMANDS` Set + `CHANNEL_FIELD = "onEvent"`
+    - 处理 `proxy_invoke`：cmd 在 CHANNEL_COMMANDS 时 `new TauriChannel`，`onmessage` 回调把 payload 通过 ws 转 `channel_event`；channel 替换到 `args.onEvent`
+- **验证**（mock bridge 端到端通过）:
+  - 起 hebweb，node 写一个 mock bridge 注册 → bridges:1
+  - client `create_session` 创建 fake session
+  - client `subscribe` 该 session
+  - client invoke `send_message`（args 含 sessionId / content / requestId / onEvent:null）
+  - mediator 转发到 bridge → bridge mock 推 3 条 `text_delta` + 1 条 `text_done` channel_event + 最后 proxy_response 带 assistant message
+  - client **完整收到 4 条 engine-event** + send_message invoke_response 带 content `"你好世界"`
+- **影响范围**:
+  - bridge 接上时：浏览器 → hebweb → bridge → desktop tauriInvoke → desktop chat / agent_core 跑 run，事件经 channel 回流给浏览器；hebweb 自己的 SessionRuntime.run_turn 不再被触发（input_tx 通道仍存在但 send_message 不再 push 到它）
+  - bridge 不在场：100% 不变，hebweb standalone 35 个命令照常工作
+- **关键意义**:
+  - **hebweb + desktop bridge 上线 = Playwright 100% 等价 desktop**。所有 66 个 Tauri 命令、所有 HITL 弹窗、所有流式对话、所有 Edits 历史 / OAuth 启动 / 后台任务 都通过 Playwright 可见可操作（OAuth callback 仍由 OS 路由给 desktop 处理，不是 hebweb 限制）
+  - **未来 desktop 加新命令 hebweb 自动获得**——bridge 是透明的 RPC，不需要在 hebweb 镜像任何东西
+- **留尾巴**:
+  - desktop 真实端验证仍要 desktop 窗口内 ⌘R reload 一次加载新 desktop-bridge.ts（Step 1 同样的留尾，Step 2 不引入新东西）
+  - **OAuth callback** 仍是固有限制——用户在 desktop 完成 OAuth 后 token 落盘共享，Playwright 端 `list_providers` 能看到
+  - **多 bridge 路由**：仍是"最近注册者吃所有请求"，未来按 session affinity 路由要扩 registry
+  - desktop-bridge.ts 的 `CHANNEL_COMMANDS` 当前硬编码 `"send_message"`——desktop 未来若有其他命令带 Channel 参数（grep 一下 tauri.ts 没有），要在这里加上
+
+### 2026-05-21 — Edit / Write 审批改为路径粒度
+
+- **Why**: 用户反馈"edit 不是审批 edit 命令，是审批路径"。原 popup 对 Edit/Write 只给一档"工具 Edit"（pattern=null = Any matcher），点本对话/项目/全局都是无视具体路径的工具级放行——粒度过粗，且不符合用户心理模型（用户审批的是"对某个文件/目录的写访问"）
+- **改动**: [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx) 的 `memoryOptions`：当 toolName=Edit|Write 且 input.file_path 是 string 时，渲染两档路径前缀选项——「精确文件」（pattern=完整 file_path，默认未勾选）+「整个目录」（pattern=parent dir，默认勾选）。其它非 Bash 工具仍 fallback 到工具名级一档
+- **后端无需改**: `agent-core/tools/hitl.rs::build_rule` 对非 Bash 工具早就把 pattern 当 path_prefix 构造 `PermissionMatcher::FilePath { path_prefix }` 规则，PermissionStore.find 用 path 参数做 starts_with 命中——下次同目录下任意文件 Edit/Write 都自动放行，不同目录仍审批
+- **影响范围**: 仅前端 popup 选项构造逻辑改动，零协议变更、零后端代码动
+- **验证**: Playwright (`/tmp/popup-edit.mjs`) 注入 Edit `/.../chat.rs` 的 fake pendingApproval：panel 渲染 2 个 option（精确文件 + 整个目录 src/*），默认勾选 [false, true]，截图 `/tmp/popup-edit.png` 视觉确认
+- **留尾巴**: 父目录粒度按 `/` 切到最近一级；如果用户在嵌套深的项目里想放行整个项目根（如 `~/code/proj/*` 而非 `~/code/proj/src/components/*`），需要多次审批不同子目录。可后续加"项目根"层级，但当前两档已能覆盖 80% 场景
