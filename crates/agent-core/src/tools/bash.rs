@@ -130,6 +130,7 @@ impl Tool for BashTool {
         let shell = self.shells.register(
             command.to_string(),
             cwd_str,
+            background,
             self.bg_log_dir.as_deref(),
             child,
         );

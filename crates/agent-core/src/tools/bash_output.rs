@@ -152,7 +152,7 @@ mod tests {
     #[tokio::test]
     async fn lists_when_no_task_id() {
         let shells = BackgroundShells::new();
-        shells.register("true".into(), "/".into(), None, spawn("true"));
+        shells.register("true".into(), "/".into(), false, None, spawn("true"));
         let tool = BashOutputTool::new(shells);
         let out = tool.execute(json!({})).await.unwrap();
         assert!(out.contains("bash_"));
@@ -164,6 +164,7 @@ mod tests {
         let s = shells.register(
             "echo a; sleep 0.05; echo b".into(),
             "/".into(),
+            false,
             None,
             spawn("echo a; sleep 0.05; echo b"),
         );

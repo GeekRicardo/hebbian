@@ -63,6 +63,9 @@ pub struct BackgroundShell {
     pub command: String,
     pub cwd: String,
     pub started_at: Instant,
+    /// 是否明确标记为后台任务（run_in_background=true 或超时转后台）。
+    /// 前端用它把"前台 bash 残留"和"真正后台任务"区分开。
+    pub is_background: bool,
     inner: Mutex<ShellInner>,
     /// 输出/状态变化时唤醒等待方（BashOutput 的 wait_ms 阻塞、KillShell 等终态）。
     notify: Notify,
@@ -87,6 +90,7 @@ impl BackgroundShell {
         task_id: String,
         command: String,
         cwd: String,
+        is_background: bool,
         kill_tx: oneshot::Sender<()>,
         log_path: Option<PathBuf>,
     ) -> Self {
@@ -94,6 +98,7 @@ impl BackgroundShell {
             task_id,
             command,
             cwd,
+            is_background,
             started_at: Instant::now(),
             inner: Mutex::new(ShellInner {
                 state: ShellState::Running,
@@ -289,6 +294,7 @@ impl BackgroundShells {
         &self,
         command: String,
         cwd: String,
+        is_background: bool,
         log_dir: Option<&Path>,
         mut child: Child,
     ) -> Arc<BackgroundShell> {
@@ -325,7 +331,7 @@ impl BackgroundShells {
         };
 
         let shell = Arc::new(BackgroundShell::new(
-            task_id, command, cwd, kill_tx, log_path,
+            task_id, command, cwd, is_background, kill_tx, log_path,
         ));
 
         {
@@ -476,7 +482,7 @@ mod tests {
     async fn captures_output_and_exits() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("echo hello && echo world");
-        let shell = shells.register("echo hello && echo world".into(), "/".into(), None, child);
+        let shell = shells.register("echo hello && echo world".into(), "/".into(), false, None, child);
         shell.wait_terminal().await;
         let out = shell.read_incremental(READ_CHUNK_BYTES);
         assert!(out.content.contains("hello"));
@@ -488,7 +494,7 @@ mod tests {
     async fn read_is_incremental() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("echo a; sleep 0.1; echo b");
-        let shell = shells.register("...".into(), "/".into(), None, child);
+        let shell = shells.register("...".into(), "/".into(), false, None, child);
 
         // 先等到至少有 a 出现
         for _ in 0..50 {
@@ -509,7 +515,7 @@ mod tests {
     async fn kill_marks_killed() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("sleep 30");
-        let shell = shells.register("sleep 30".into(), "/".into(), None, child);
+        let shell = shells.register("sleep 30".into(), "/".into(), false, None, child);
         let id = shell.task_id.clone();
         let state = shells.kill(&id).await.unwrap();
         assert!(matches!(state, ShellState::Killed));
@@ -520,7 +526,7 @@ mod tests {
         let shells = BackgroundShells::new();
         for _ in 0..(MAX_BACKGROUND_SHELLS + 4) {
             let child = spawn_bash("true");
-            let s = shells.register("true".into(), "/".into(), None, child);
+            let s = shells.register("true".into(), "/".into(), false, None, child);
             s.wait_terminal().await;
         }
         assert!(shells.list().len() <= MAX_BACKGROUND_SHELLS);
@@ -535,6 +541,7 @@ mod tests {
         let shell = shells.register(
             "echo hi; echo oops >&2".into(),
             "/".into(),
+            false,
             Some(tmp.path()),
             child,
         );
