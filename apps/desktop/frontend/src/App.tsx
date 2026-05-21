@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { Toaster, toast } from "sonner";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isTauri, listen } from "@/desktop/bridge/transport";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { startDesktopBridge } from "@/desktop/bridge/desktop-bridge";
 import { Sidebar } from "@/desktop/ui/components/Sidebar";
 import { ChatView } from "@/desktop/ui/components/ChatView";
 import { ProvidersDialog } from "@/desktop/ui/components/ProvidersDialog";
@@ -28,6 +30,12 @@ export default function App() {
     init().catch((e) => {
       console.error("init failed:", e);
     });
+    // 仅 Tauri 环境启动 hebweb invoke proxy bridge——desktop 当代理把所有 Tauri command
+    // 的能力暴露给同一台机器上 hebweb 端的浏览器（Playwright）使用。hebweb 没起就反复
+    // 重连，没副作用。
+    if (isTauri()) {
+      startDesktopBridge();
+    }
   }, [init]);
 
   // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup-fired 全局事件 →

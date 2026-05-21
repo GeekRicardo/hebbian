@@ -1,8 +1,11 @@
-# `heb` CLI — AI 自主调试操作手册
+# `heb` CLI / `hebweb` — AI 自主调试操作手册
 
-> **写给 AI**：你正在调试 Hebbian agent。本文档让你不依赖 Desktop GUI，纯命令行 + 文件流就能驱动 agent_core，并观察它的全部内部状态。读完即可上手。
+> **写给 AI**：你正在调试 Hebbian agent。本文档让你不依赖 Desktop GUI 也能驱动 agent_core 并观察它的全部内部状态。两套 surface 供选择：
 >
-> 适用场景：自动化回归、bug 复现、压测 prompt / 工具行为、CI 端到端验证、agent 自我调试 agent。
+> - **`heb` CLI**：纯命令行 + NDJSON 事件流。最快、最适合脚本化回归 / bug 复现。§1–§8。
+> - **`hebweb`**：HTTP + WebSocket server，跑真实前端代码（与 Desktop 同一份 React 代码）。配合 Playwright 可以让 AI 看到 DOM / 截图、点击界面、定位 UI bug。§9。
+>
+> 适用场景：自动化回归、bug 复现、压测 prompt / 工具行为、CI 端到端验证、agent 自我调试 agent、UI 视觉/交互回归测试。
 
 ---
 
@@ -58,6 +61,7 @@ heb deny-feedback $SID perm_xxx "改用 Edit 工具"   # 拒绝并把反馈塞�
 | `heb stop <SID>` | 设 cancel flag，立刻中断当前 run | 跑飞了 / 死循环 |
 | `heb mode <SID> <MODE>` | 切换 run mode：`ask-before-edits / edit-automatically / plan-mode / auto-mode` | 下一轮起生效 |
 | `heb ping <SID>` | 检测 daemon 存活，返回 `{"session_id":...}` | 写守护脚本 |
+| `heb list-sessions` | 扫 `~/.hebbian/cli-sockets/` 列出所有存活 daemon，自动清理死 socket | 多 AI 并发调试时发现其他 AI 起的 daemon |
 
 **`heb answer` 三种形态**：
 
@@ -370,4 +374,356 @@ CLI daemon 的 `run_turn` 是 Desktop `apps/desktop/src/chat.rs` 中 `send_and_s
 - **没有身份认证**：socket 走默认 umask，本地单用户场景安全；多用户机器上不要把数据目录放共享路径
 - **不支持远程 daemon**：socket 只能本地连接，要远程驱动请 ssh 进去再起 daemon
 - **`heb mode` 只影响下一轮**：当前进行中的 run mode 是冻结的；切到 `auto-mode` 不会让当前 run 突然不再问审批
+
+---
+
+## 9. `hebweb` —— 让 AI 看到并操作真实前端
+
+`hebweb` 是 Hebbian 的浏览器 surface：HTTP + WebSocket server，跑同一份 React 前端代码，数据走真实 agent_core，与 Desktop 共享 `~/.hebbian/`。AI 配合 Playwright 即可看到 DOM、截图、点击界面、定位 UI bug。
+
+### 9.1 何时用 hebweb 而不是 heb CLI
+
+`heb` 覆盖 agent_core 内部行为；UI 层的问题必须借 hebweb：
+
+| 适合 hebweb | 仍适合 heb CLI |
+|------------|---------------|
+| 前端组件渲染错乱 / 样式 bug | agent 行为问题（工具调用错、回答跑偏） |
+| 工具调用详情卡片显示问题 | 多轮上下文 / 缓存命中 |
+| 流式 bubble 折叠 / portal 渲染 | 权限审批流程本身 |
+| 侧边栏 / 输入框 / 设置弹窗 | provider 协议问题 |
+| 输入队列面板的状态机问题 | session 持久化 / 崩溃恢复 |
+| 审批弹窗 / 提问弹窗的 UX | HITL 阻塞 / cancel 语义 |
+
+### 9.2 启动
+
+```bash
+cargo build -p hebbian-web-server
+# 一次性构建前端（仅首次或前端代码变更后）
+cd apps/desktop/frontend && pnpm install && pnpm build && cd -
+
+# 起 server——必须 --addr [::]:38080 而不是默认 127.0.0.1:38080
+# （macOS WKWebView 解析 localhost 走 IPv6，IPv4-only 监听会让 desktop bridge 连不上，
+#  见 §9.9.1 IPv6 教训）
+./target/debug/hebweb --addr "[::]:38080" --static-dir apps/desktop/dist
+# → "hebweb listening on http://[::]:38080  (data_dir=/Users/.../.hebbian)"
+```
+
+参数：
+
+```
+hebweb [OPTIONS]
+
+--addr <ADDR>          监听地址（默认 127.0.0.1:3030；用 bridge 必须 [::]:<port>）
+-p, --port <PORT>      监听端口（覆盖 --addr 的端口）
+--data-dir <DIR>       数据目录（默认 ~/.hebbian）
+--static-dir <DIR>     前端静态文件目录（默认自动探测 apps/desktop/frontend/dist）
+```
+
+健康检查：
+
+```bash
+curl -s http://127.0.0.1:38080/healthz
+# {"active_sessions":[],"bridges":0,"data_dir":"...","ok":true,"version":"0.1.0"}
+#                              ^^^^^^^^^ bridge 接上时 = 1
+```
+
+### 9.3 多 AI 并发：两种隔离模型
+
+**模型 A（推荐）：一个 hebweb 进程 + 多 session**
+
+```
+hebweb --port 38080
+        │
+        ├─ AI 1 浏览器 → WS subscribe session_A
+        ├─ AI 2 浏览器 → WS subscribe session_B
+        └─ AI 3 浏览器 → WS subscribe session_C
+```
+
+每个 WS 连接通过首条 `subscribe` 消息绑定一个 `session_id`，server 按 session_id 路由 invoke 和 event。多个 AI 共享同一进程内的 agent_core，但 `SessionRuntime` 完全独立（各有自己的 cancel_flag / pending_inputs / pending_approvals），互不阻塞。
+
+**模型 B：每个 AI 一个独立 hebweb 进程**
+
+```
+hebweb --port 38080 --data-dir /tmp/hebweb-ai1
+hebweb --port 38081 --data-dir /tmp/hebweb-ai2
+hebweb --port 38082 --data-dir /tmp/hebweb-ai3
+```
+
+进程间通过 `~/.hebbian/` 文件锁保证写安全；用 `--data-dir` 可以做到完全隔离的数据目录（甚至不共享 session 列表）。
+
+### 9.4 WS 协议
+
+每条 WS 连接是 **JSON 行**：
+
+**client → server**：
+
+```json
+{"type":"subscribe","session_id":"<SID>"}
+{"type":"invoke","id":"<uuid>","cmd":"send_message","args":{"text":"..."},"session_id":"<SID>"}
+{"type":"unsubscribe"}
+```
+
+**server → client**：
+
+```json
+{"type":"hello","server_version":"0.1.0"}
+{"type":"subscribed","session_id":"<SID>"}
+{"type":"invoke_response","id":"<uuid>","ok":true,"data":{...}}
+{"type":"invoke_response","id":"<uuid>","ok":false,"error":"..."}
+{"type":"event","session_id":"<SID>","name":"engine-event","payload":{...}}
+```
+
+`engine-event` 的 payload 是与 desktop Tauri emit 完全一致的 `EngineEvent` JSON（`text_delta` / `tool_start` / `permission_requested` / `user_question_requested` / ...）。前端代码不需要任何改动。
+
+### 9.5 v1 支持的 invoke 命令
+
+> **设计原则**：hebweb 内部持有一个 `Arc<LocalCoreClient>`（与 desktop 同一个 facade，定义在 [crates/agent-core/src/core_client/](../crates/agent-core/src/core_client/)）。CoreClient trait 已经把 25+ 业务方法集中在一个对象上，desktop 的 Tauri command body 大多是一行 `core(&app)?.xxx()` wrap——hebweb 同样直接调 `state.core.xxx()`，避免重复 wrap storage / model_gateway。**未来 agent_core 给 CoreClient 加新方法时 hebweb 自动获得**。
+
+**已镜像（35 个）—— 主对话 + 配置管理 + 业务面板全套**：
+
+| 分类 | 命令 | 用途 |
+|------|------|------|
+| 主对话 | `list_sessions / get_session / create_session` | session 列表/详情/新建 |
+| 主对话 | `send_message / inject_user_message` | 发用户消息（active 注入 / idle 开新 run）/ 强制注入 |
+| 主对话 | `approve_permission / answer_question / cancel_message` | HITL 审批 / 回答提问 / 中断 |
+| Session 管理 | `rename_session / delete_session / fork_session` | 重命名 / 删除 / 分叉 |
+| Session 管理 | `truncate_after / truncate_inclusive / search_sessions` | 截断 / 全局搜索 |
+| Session 管理 | `update_session_config` | 切 provider/model/stream/reasoning |
+| RunMode | `get_run_mode / set_run_mode` | 模式切换 |
+| RunMode | `get_force_automode / set_force_automode` | 强制 auto 开关（内存态） |
+| Providers | `get_providers / save_providers / upsert_provider / get_provider / list_provider_presets` | provider CRUD + 16 个预设 |
+| Providers | `fetch_provider_models / test_provider_model` | 真正调外部 API 拉模型列表 / 测试 API Key 通不通（走 LocalCoreClient） |
+| 工具 / 规则 | `list_tools` | UI 工具菜单（走 LocalCoreClient） |
+| 权限规则 | `list_permission_rules / remove_permission_rule / clear_permission_rules` | 列/删/清 PermissionStore（走 LocalCoreClient） |
+| Prompts | `list_prompts / upsert_prompt / delete_prompt / set_default_prompt` | Agent prompt CRUD |
+| Projects | `list_projects / save_project / delete_project` | 项目（workspace）CRUD |
+| Settings | `get_settings / save_settings` | 应用级偏好 |
+
+**已验证的 UI 流**（Playwright 实跑通过）：
+
+- ✅ 起 hebweb → 浏览器加载 → 侧边栏完整渲染
+- ✅ 打开供应商配置弹窗 → 添加 DeepSeek 预设 → 填 API Key → 保存 → `providers.json` 落盘
+- ✅ 打开设置弹窗 → 切 Agent 配置 tab → 保存 → `settings.json` 落盘
+- ✅ 新建对话 → 进对话视图（标题、Agent 选择、模型选择、textarea、Token 用量全渲染）
+- ✅ 侧边栏 hover → 重命名/删除按钮可点 → rename inline 输入 → 持久化 + UI 同步
+- ✅ 点对话设置 → SessionSettingsDialog 弹出（Agent / 系统指令 / 字段覆盖）
+- ✅ session 落盘到 `~/.hebbian/sessions/<id>/meta.json` + `session.jsonl`，与 desktop 完全同构
+
+**未镜像（暂走 desktop）**：
+
+| 命令 | 原因 |
+|------|------|
+| `compact_session` / `preview_session_payload` / `get_context_usage` / `generate_session_title` | 走 chat / context 管线，不在 CoreClient trait 里。下次可单独 wrap |
+| `discover_rules_files` | 需要 workspace 上下文构建 |
+| `list_background_tasks` / `kill_background_task` | 需要 background registry |
+| `list_edits` / `diff_edit` / `revert_edit` / `edits_worktree_status` | 需要 EditsWorktree git 集成 |
+| `attach_path` / `approve_path_access` | 与 PathAccess HITL 弹窗联动 |
+| `import_vscode_project` / `import_project_file` | 需要 file dialog 选文件（Tauri native） |
+| `update_session_settings` | 与 `update_session_config` 部分重复 |
+| `oauth_*`（13 个） / `deepseek_login` | OAuth 浏览器跳转 + token 交换，AI 调试场景基本用不上 |
+
+**前端碰到 not_implemented 的行为**：next-level 面板（Edits 历史、Token 用量进度环、Preview Payload、OAuth 登录）打开时会拿到错误，但 **不阻塞主对话流**——sidebar / 对话视图 / 配置弹窗 / Agent 切换 / RunMode 切换 / 审批 / 提问 / 删除/重命名 全部能用。
+
+### 9.6 AI 自主驱动 hebweb（Playwright 模板）
+
+```bash
+# 一次性安装
+pnpm dlx playwright install chromium
+
+# 写一个 Playwright 脚本，让 AI 完整复现 UI bug
+cat > /tmp/repro.mjs <<'EOF'
+import { chromium } from "playwright";
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+page.on("console", (msg) => console.log("[browser]", msg.text()));
+await page.goto("http://127.0.0.1:38080/");
+// 等到前端加载完
+await page.waitForSelector('[data-testid="chat-input"], textarea', { timeout: 10000 });
+
+// 1. 截图当前 UI
+await page.screenshot({ path: "/tmp/before.png", fullPage: true });
+// 2. 模拟用户输入
+await page.fill("textarea", "请用 Write 工具写 /tmp/work/hello.txt");
+await page.keyboard.press("Enter");
+// 3. 等审批弹窗出现
+await page.waitForSelector('[role="dialog"]', { timeout: 30000 });
+await page.screenshot({ path: "/tmp/permission-dialog.png" });
+// 4. dump DOM 给 AI 分析
+const html = await page.content();
+console.log("DOM length:", html.length);
+// ...
+await browser.close();
+EOF
+node /tmp/repro.mjs
+```
+
+AI 拿到 `before.png` / `permission-dialog.png` 截图 + DOM HTML 即可定位 UI bug。
+
+#### 9.6.1 推荐：用 `playwright-cli`（一行一动，AI 直接可控）
+
+```bash
+# 起 chromium 加载 hebweb
+playwright-cli open http://127.0.0.1:38080
+
+# 看当前页面 ARIA snapshot（自动包含 ref=e3, e4... 给后续 click/hover 用）
+playwright-cli --raw snapshot
+
+# 控制台 + 网络
+playwright-cli console
+playwright-cli network
+
+# 操作元素（用 snapshot 给的 ref）
+playwright-cli click e17                      # 点 "新建对话" 按钮
+playwright-cli fill "textarea" "你好"          # 用 CSS 选择器
+playwright-cli press Enter
+playwright-cli hover e3224                    # hover 某个 button（如 OAuth 启动）
+playwright-cli mousemove 1140 680             # 像素级 hover（hover 圆环 tooltip）
+playwright-cli screenshot --filename=ui.png   # 截图（路径必须在仓库根目录或允许目录）
+
+# 取 DOM 内任意状态（eval 直接跑 JS）
+playwright-cli eval "() => window.__hebStore.getState().sessions ? Object.keys(window.__hebStore.getState().sessions).length : 0"
+
+# 关浏览器
+playwright-cli close
+```
+
+#### 9.6.2 实战示例：hover 右下角 Token 用量小圆环显示 tooltip
+
+bridge 接上时这能拿到 desktop 真实的上下文用量。`tooltip` 是 native 的，必须 **像素级 mousemove** 触发：
+
+```bash
+# 1. 起 hebweb + 接 desktop bridge（详见 §9.9）
+./target/debug/hebweb --addr "[::]:38080" --static-dir apps/desktop/dist &
+sleep 5
+curl -s http://127.0.0.1:38080/healthz | jq .bridges   # 期望 1
+
+# 2. 打开浏览器 + 点进一个已有 session
+playwright-cli open http://127.0.0.1:38080
+sleep 2
+playwright-cli eval "() => {
+  const li = [...document.querySelectorAll('aside ul li')].find(l => l.textContent?.includes('Bash'));
+  li?.querySelector('[class*=cursor-pointer]')?.click();
+  return 'clicked';
+}"
+
+# 3. 找右下角 Token 用量按钮的位置
+playwright-cli --raw eval "() => {
+  const btn = [...document.querySelectorAll('button')].find(b => /上下文.*200/.test(b.getAttribute('aria-label') ?? ''));
+  return btn ? JSON.stringify(btn.getBoundingClientRect()) : '{}';
+}"
+# {"x":1130,"y":670,"width":22,"height":22,...}
+
+# 4. 像素级 hover 触发 native tooltip
+playwright-cli mousemove 1140 680
+sleep 1
+playwright-cli screenshot --filename=context-usage-tip.png
+# 截图右下能看到 "上下文 25% · 50.3k / 200.0k" tooltip
+# —— 这是 get_context_usage 通过 desktop bridge 实时返回的真实数据
+```
+
+#### 9.6.3 注意
+
+- `playwright-cli` 每条命令完成后自动回个 snapshot；不想要 raw text 就加 `--raw` 只输出结果
+- `playwright-cli screenshot --filename=` 路径必须在仓库根目录或 `.playwright-cli/` 下（cli 有沙箱）；写 `.mjs` 用 `page.screenshot` library 路径不限
+- JS `mouseover` 事件触发不了 OS native tooltip，**必须** `mousemove` 到像素位置
+- 涉及用户真实 `~/.hebbian/` 的 session 时遵守 §9.10 五条安全规则
+
+### 9.7 hebweb 调试自身 / 故障速查
+
+| 现象 | 排查 |
+|------|------|
+| `curl /healthz` 502 / 拒绝连接 | hebweb 没起 / 端口被占；`lsof -i :38080` 查冲突 |
+| 前端访问 404 | 没建 `dist/`；先 `pnpm build` 或加 `--static-dir <path>` |
+| 前端连不上 WS | 端口跨域？hebweb 监听 `127.0.0.1` 不接受其他 host；本地访问没问题 |
+| invoke 返回 `not implemented` | v1 范围外的命令；要么用 Desktop，要么等 v2 抽共享 commands |
+| 多 AI 切换 session 后事件错乱 | 检查 WS subscribe 是否换了 session_id；server 是按连接 + session_id 路由 |
+| WS 连接断开 | 看 hebweb stdout 日志（默认 INFO 级），多半是 client 侧关闭 |
+
+### 9.8 hebweb 已知限制
+
+- 35 个命令已镜像（覆盖主对话 + 配置管理 + 部分业务），另一批中级面板（Edits / Token 用量 / preview / OAuth / generate_title / compact / list_background_tasks 等）需走 §9.9 desktop bridge 才能用
+- 仅本地监听（`127.0.0.1` 或 `[::]:`），不要在公网开放
+- 单 WS 连接同时只订阅一个 session（切 session 自动取消旧订阅）
+- Tauri native 能力（系统通知 / 文件对话框 / tray / 全局快捷键）浏览器没有等价物——v1 不模拟
+
+---
+
+## 9.9 接入 desktop bridge：100% 等价 desktop
+
+hebweb 自己只镜像了 35 个命令，剩 18+ 个 desktop 专有命令（OAuth / EditsWorktree / context_usage / preview_payload / generate_title / compact_session / list_background_tasks ...）需要 **desktop 当 invoke proxy**——desktop 已经实现了所有 66 个 Tauri 命令，让它通过 outbound WebSocket 把"调命令的能力"暴露给 hebweb，所有命令瞬间可用。
+
+### 9.9.1 启动两端 + 验证 bridges=1
+
+**关键**：hebweb 必须监听 IPv6 双栈，否则 desktop WKWebView 解析 `localhost` 走 IPv6 时会失败（错误 `Socket is not connected`）：
+
+```bash
+# 1. 起 hebweb（双栈必须，否则 bridge 连不上）
+./target/debug/hebweb --addr "[::]:38080" --static-dir apps/desktop/dist &
+
+# 2. 起 desktop（或者已经开着的话 ⌘R reload 一次让前端加载 desktop-bridge.ts）
+pnpm tauri dev &
+
+# 3. 等几秒，确认 bridge 接上
+curl -s http://127.0.0.1:38080/healthz | jq .bridges
+# 1   ← desktop bridge 已注册
+```
+
+hebweb log 应该看到：
+
+```
+INFO hebweb::server: bridge registered label=desktop-xxxxx
+```
+
+### 9.9.2 接上后的行为变化
+
+| | bridge=0（standalone） | bridge=1（接上 desktop） |
+|--|---------------------|----------------------|
+| 35 个 hebweb 自镜像命令 | hebweb LocalCoreClient 跑 | **走 bridge → desktop tauriInvoke** |
+| 剩余 desktop 专有命令 | `not implemented in hebweb v1` | **走 bridge → desktop tauriInvoke** |
+| `send_message` 流式对话 | hebweb 自己 SessionRuntime 跑 agent_loop | **走 bridge → desktop chat 模块跑**（事件通过 ChannelEvent 流回浏览器） |
+| `approve_permission / answer_question / cancel_message` | hebweb HITL oneshot | **走 bridge → desktop HitlState** |
+
+**bridge 在场时 hebweb 完全是个透明代理**——所有 66 个 Tauri 命令以及所有 HITL 流、流式事件，都由 desktop 真后端处理，浏览器看到的就是 desktop 真实状态。
+
+### 9.9.3 hebweb 启动顺序无关
+
+desktop bridge 启动失败时 3s 自动重连。所以两种顺序都行：
+
+- 先起 desktop → 后起 hebweb：desktop bridge 反复重连 → hebweb 起来后立刻接上
+- 先起 hebweb → 后起 desktop：desktop 一启动就 connect 成功
+
+`pnpm tauri dev` 期间改 frontend/src/ 代码时 vite HMR 通常自动 reload；但如果是**新增 import / 新增 useEffect** 这种破性变化，**必须在 desktop 窗口手动 ⌘R 一次**让 WebView reload 整个 page（HMR 只 patch 单 module，不会重新跑 App effect）。
+
+### 9.9.4 bridge 不能解决的两个固有限制
+
+1. **OAuth callback**：OAuth redirect_uri 是 deep link `hebbian://...`，OS 路由给 desktop 进程，**浏览器收不到回调**。补救：用户在 desktop 完成 OAuth 后 token 落盘共享，Playwright 端下次 `list_providers` 能看到结果 ✓
+2. **File dialog**：`dialog.open()` 弹的是 Tauri 原生 OS 窗口，不在 Playwright 浏览器里。补救：要选文件时切到 desktop 窗口操作
+
+---
+
+## 9.10 AI 自主调试时的安全实践
+
+bridge 在场时 hebweb 的任何操作都会**落到用户真实 `~/.hebbian/`**——hebweb 直接读写真实 session.jsonl / providers.json / settings.json。**AI 必须遵守**：
+
+1. **绝不在用户真实 session 上 send_message** —— 任何测试消息都会真的发给 LLM + 落盘 + 占 token + 污染历史。先 `create_session` 起一个 throw-away session 再操作
+2. **删除测试 session 不要手动 `rm`** —— 走 desktop 自己的 `delete_session` 命令（通过 bridge 调用），让 desktop 处理好 partial / lock / bg-task 等关联状态
+3. **不要擅自 truncate jsonl** —— 用 desktop 自带的 `truncate_inclusive(id, messageId)` 命令，desktop 会把 partial 也清掉
+4. **隔离 data_dir**：调试环境用 `hebweb --data-dir /tmp/<专用>` + `--static-dir` 指向 desktop dist，与用户真实 `~/.hebbian/` 完全分开；这样不接 desktop bridge（因 desktop 的 ~/.hebbian 不一致），但 hebweb 自镜像的 35 命令仍可用
+5. **session_id 路由要明确**：subscribe / invoke 都带 `session_id`；不要在调用前没确认就发命令——可能误打到用户当前在用的 session
+
+### 9.10.1 安全测试模板
+
+```bash
+# 起一个完全隔离的 hebweb
+mkdir -p /tmp/hebweb-test
+echo '{"providers":[<复制需要的 provider>],"default_provider_id":"..."}' > /tmp/hebweb-test/providers.json
+hebweb --addr "[::]:38080" --data-dir /tmp/hebweb-test --static-dir apps/desktop/dist &
+
+# Playwright 操作时所有数据都在 /tmp/hebweb-test，不污染真实环境
+# 不接 desktop bridge（data_dir 不同），AI 只能用 hebweb 35 个命令
+```
+
+要测 desktop 专有命令（OAuth / EditsWorktree 等）必须共用真实 ~/.hebbian/——这时必须严格遵守上面 1-5 条。
+
+
 

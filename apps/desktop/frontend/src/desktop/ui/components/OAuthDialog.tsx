@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@/desktop/bridge/transport";
 import { openUrl as openExternalUrl } from "@tauri-apps/plugin-opener";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";

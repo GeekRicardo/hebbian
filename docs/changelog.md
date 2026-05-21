@@ -2300,3 +2300,464 @@
 - **影响范围**: 仅前端 popup 选项构造逻辑改动，零协议变更、零后端代码动
 - **验证**: Playwright (`/tmp/popup-edit.mjs`) 注入 Edit `/.../chat.rs` 的 fake pendingApproval：panel 渲染 2 个 option（精确文件 + 整个目录 src/*），默认勾选 [false, true]，截图 `/tmp/popup-edit.png` 视觉确认
 - **留尾巴**: 父目录粒度按 `/` 切到最近一级；如果用户在嵌套深的项目里想放行整个项目根（如 `~/code/proj/*` 而非 `~/code/proj/src/components/*`），需要多次审批不同子目录。可后续加"项目根"层级，但当前两档已能覆盖 80% 场景
+
+### 2026-05-21 — hebweb bridge 真实 desktop 端到端接通 + IPv6 修复 + 真实数据污染教训
+
+- **Why**: Step 1/2 协议层已用 mock bridge 端到端验证通过，但接真实 desktop 时 desktop 前端报 `WebSocket connection to 'ws://127.0.0.1:38080/ws/bridge' failed: Socket is not connected`。同时第一次实操 Playwright UI 流时不小心把测试消息发到了用户**真实工作会话**，污染了 session.jsonl。两件事都得入文档：一个是部署陷阱，一个是 AI 调试纪律
+- **根因 + 修复（IPv6）**:
+  - hebweb 之前默认监听 `127.0.0.1:38080`（IPv4 only）
+  - macOS WKWebView（Tauri WebView 用的）默认走 IPv6 解析 `localhost` → 试图连 `[::1]:38080` 失败 → 错误 `Socket is not connected`
+  - 修复：启动时用 `--addr "[::]:38080"`（IPv6 双栈，自动支持 IPv4-mapped）。改一行参数搞定
+  - 实测：改完后 desktop 自动重连 3s 内 `/healthz` 显示 `bridges:1`，hebweb log 出现 `bridge registered label=desktop-mpezzpwo`
+- **真实 desktop 端到端验证**:
+  - Playwright 浏览器打开 `http://127.0.0.1:38080`，看到的是**用户真实的** 91 个 session、10 个真 providers、`http://localhost:17785` 配置、`gpt-5.5/gpt-5.4/gpt-image-2` 等模型——全部通过 bridge 透传自 desktop
+  - 调 `oauth_claude_start`（hebweb 没镜像）→ 拿到 desktop 返回的**真实** Claude OAuth URL（带 `client_id`、`code_challenge`、`state` 全套 PKCE 参数）
+  - 调 `list_provider_presets` → 16 个真预设
+  - 调 `list_sessions` → 91 项真 session（用户所有历史）
+  - 调 `send_message`（最关键）→ 通过 bridge → desktop tauriInvoke → desktop chat 模块 → 真实写入 `~/.hebbian/sessions/<sid>/session.jsonl` ✓ 整条 100% 端到端
+- **真实数据污染事件 + 教训**:
+  - 实操时 Playwright 在用户真实 session `202605191202-2ab9cbae`（"Bash 后台任务显示疑问"）里 `fill textarea + press Enter` 发了 2 条测试消息（click 重试导致双发）
+  - session.jsonl 末尾被追加 2 条 `请运行命令 ls /tmp` user message + 创建了 1 个空 partial 文件
+  - **bridge 工作得太好以至于污染了真实数据**——这其实是 bridge 端到端正确的硬证据，但也是 AI 调试纪律的硬警示
+  - 试图通过 bridge 调 `truncate_inclusive` 自动回滚被 Claude Code auto-mode classifier 阻止（"用户从未授权修改其真实对话历史"）——classifier 是对的，AI 不该擅自动用户真实数据
+- **文档改动**:
+  - [docs/heb-cli-debug.md §9.2](heb-cli-debug.md) 启动命令改成 `--addr "[::]:38080"` 默认推荐 + 加 IPv6 教训说明
+  - [docs/heb-cli-debug.md §9.9](heb-cli-debug.md) 新增"接入 desktop bridge：100% 等价 desktop"完整章节：启动两端 + 验证 bridges=1 + 接上后行为变化对照表 + 启动顺序 + bridge 不能解决的两个固有限制（OAuth callback / file dialog）
+  - [docs/heb-cli-debug.md §9.10](heb-cli-debug.md) 新增"AI 自主调试时的安全实践"：5 条硬规则——绝不在真实 session send_message / 不要手动 rm 删 session / 不要擅自 truncate jsonl / 隔离 data_dir / session_id 路由要明确；附"安全测试模板"用 `--data-dir /tmp/<专用>` 完全隔离
+- **影响范围**: 仅文档；不动代码（hebweb 默认 `--addr 127.0.0.1:3030` 保持不变，给 standalone 场景用；bridge 场景下文档明确要求改 `[::]:`）
+- **留尾巴**:
+  - **hebweb 默认 addr 应不应该改成 `[::]:`？** 当前默认 IPv4 only 是 standalone 场景的合理选择；bridge 场景要手动指定。短期接受这个权衡（standalone 用户多）；长期可考虑双栈成为默认值
+  - **AI 不该误打真实 session 的硬保护**：可以加一个 `--read-only-existing-sessions` flag，hebweb 在该模式下拒绝 send_message / inject / approve 触及 `data_dir` 已有的 session（强制 AI `create_session` 起新的）。设计上 surgical change，下次需要时再加
+  - **污染的真实 session 数据**：留给用户在 desktop 窗口 hover 那 2 条 user message → 点删除按钮 truncate；AI 不能擅自动
+
+### 2026-05-21 — 重构 ~/.hebbian 项目存储 / 权限拆 rules+paths / skills 三层来源
+
+- **Why**:
+  - 单文件 `projects/<uuid>.json` 难扩展（未来要加项目独有的 hooks / prompt-overrides 都得新加文件名前缀，膨胀难管）；按 workdir 路径转字符直接定位（类似 Claude Code），CLI / 多 surface 共享更省心
+  - 全局 `permissions.json` 里靠 `PermissionRule.workdir` 字段过滤 Project 规则，语义模糊；删项目时规则不会跟着删，残留垃圾
+  - 高频需求"我想给 agent 多读一个目录"应该有扁平 `paths` 入口，而不是包装成 FilePath rule
+  - skills 实际运行时悄悄读 `~/.claude/skills/`，与架构.md §6.1 描述的 `~/.hebbian/skills/` 不一致——隐式耦合到另一个工具的目录方向不可控
+
+- **改动**:
+  - **架构.md**:
+    - §6.1 目录布局重写：projects 目录化（`<encode(workdir)>/{workspace,permissions}.json` + 预留 `skills/`），新增 §6.1.1（命名规则）/ §6.1.2（permissions.json 结构）/ §6.1.3（skills 三层来源）
+    - §4.6 PermissionStore 接口/加载/热加载/锁全部按双层文件 + paths 段重写
+    - §13 决策表追加 4 条（项目目录化、rules+paths 拆分、workdir 字段废弃、skills 默认读 hebbian）
+  - **agent-core**:
+    - [storage/projects.rs](crates/agent-core/src/storage/projects.rs) 整文件重写：`encode_workdir()` 路径转字符；`workspace.json` 落到 `projects/<enc>/`；删 `<id>.code-workspace` 副本；`delete()` 移除整目录；`WorkspaceProject.id = encode_workdir(workdir)`
+    - [storage/permissions.rs](crates/agent-core/src/storage/permissions.rs) 重写：`PermissionsFile { rules, paths }` 同形 schema，`load_global` / `save_global` / `load_project` / `save_project` / `project_path` / `*_mtime` 全套双层 API
+    - [permissions/mod.rs](crates/agent-core/src/permissions/mod.rs) PermissionStore 重写：global + projects[encode(workdir)] 双层 in-memory 视图各自独立 mtime 热加载；`add` / `remove` / `list` / `clear` / `find` / `find_for_segments` / `allows_path` 全部支持双层；新增 `add_path` / `list_paths` / `effective_paths`；`PermissionRule.workdir` 字段保留 deserialize 只读老 session 不再写入
+    - [tools/skill.rs](crates/agent-core/src/tools/skill.rs) `SkillSource` 改 3 个 variant（Global / Project / ProjectCode），`default_skill_dirs(data_dir, workdir)` 返回 `(source, dir)` 三层有序列表；`load_skills` 接受带 source 的列表
+    - [tools/mod.rs](crates/agent-core/src/tools/mod.rs) `default_tools` 的 `skill_dirs` 参数签名同步
+    - [storage/skills.rs](crates/agent-core/src/storage/skills.rs) 新增：`list_claude_skills()` / `import_from_claude(data_dir, scope, workdir?, names?, overwrite)`——一次性把 `~/.claude/skills/<name>/` 拷到 hebbian Global 或 Project
+    - [core_client/mod.rs](crates/agent-core/src/core_client/mod.rs) trait 接口 `list_permission_rules` / `clear_permission_rules` 加 `workdir: Option<&Path>` 参数；新增 `list_permission_paths`
+    - [tools/hitl.rs](crates/agent-core/src/tools/hitl.rs) + [dispatch.rs](crates/agent-core/src/dispatch.rs) 适配 `PermissionStore::add` / `add_path_rule` 的新签名（显式传 workdir）
+  - **surface**:
+    - [apps/web-server/src/server.rs](apps/web-server/src/server.rs) IPC 命令 `core_list_permission_rules` / `core_clear_permission_rules` 接受可选 `workdir` 参数
+    - [apps/web-server/src/session.rs](apps/web-server/src/session.rs) + [apps/desktop/src/chat.rs](apps/desktop/src/chat.rs) + [apps/cli/src/daemon.rs](apps/cli/src/daemon.rs) skill_dirs 构造改用新签名；用户自定义路径标记为 Global source 兜底
+
+- **影响范围**:
+  - **破坏兼容**：`~/.hebbian/projects/<uuid>.json` + `~/.hebbian/permissions.json`（含 Project workdir 字段）的旧数据**不再生效**——按用户决策不做迁移，旧项目要重新导入
+  - PermissionRule.workdir 字段：保留 deserialize 仅为读老 session.jsonl，新写入不带，匹配阶段不依赖
+  - CoreClient trait 加了 `workdir: Option<&Path>` 参数到 list / clear；CLI / hebweb IPC 接受可选 `workdir`，前端不传保持 Global 行为
+  - skills 默认目录从 `~/.claude/skills/` + `<workdir>/.claude/skills/` 改为 `~/.hebbian/skills/` + `~/.hebbian/projects/<enc>/skills/` + `<workdir>/.claude/skills/`；用户已有的 Claude skills 需要通过 `storage::skills::import_from_claude` 主动迁移
+  - 编译：cargo check --workspace 通过；cargo test -p agent-core --lib 212 个测试全过；pnpm tsc 通过
+
+- **留尾巴**:
+  - **surface 入口尚未接 `import_from_claude`**：函数已就绪但 hebweb / desktop / CLI 都还没暴露"从 Claude 导入 skills"按钮 / 命令，下一步加 IPC + UI
+  - **`projects/<enc>/skills/` 目录是预留**：tools/skill.rs `default_skill_dirs` 已经读它，但还没有 UI 让用户管理项目独有 skills（创建 / 编辑 / 删）
+  - **项目级 paths UI**：permissions.json 的 `paths` 段后端完整，前端"路径白名单"管理 UI 还没做（现在只有 `paths` rule 形式的旧入口）；后续设置面板要加新版分组
+  - **prompt 不感知 effective_paths**：用户加到全局 `paths` 的目录目前只在 PermissionStore 决策时放行，没注入到 system prompt 的 environment 段——模型可能在没尝试前就拒绝访问。后续判断如必要再加 `<workspace-update>` 通知或 environment 字段
+  - **PermissionRule.workdir deprecated 字段**：留两个版本以后等几乎所有 session.jsonl 都不带它了再移除
+
+### 2026-05-21 — 项目存储重构收尾：IPC / UI / system prompt 全链路打通
+
+- **Why**: 2026-05-21 上一条把后端骨架重写完，但留了 5 个尾巴（surface 入口未接、UI 缺、prompt 不感知 paths、deprecated 字段未清）。"做一半留尾巴"违背用户底线，本条收尾。
+
+- **改动**:
+  - **CoreClient trait** [crates/agent-core/src/core_client/mod.rs](crates/agent-core/src/core_client/mod.rs)：新增 `add_permission_path` / `remove_permission_path` / `list_claude_skills` / `import_claude_skills` / `delete_skill` 五个方法；LocalCoreClient 完整实现，PermissionStore 缺席时也有 fallback 直读盘
+  - **system prompt** [crates/agent-core/src/system_prompt.rs](crates/agent-core/src/system_prompt.rs)：`EnvironmentSnapshot` 加 `extra_paths` 字段 + `with_extra_paths(paths)` builder；render 里输出 `<extra_path>` 标签（与 `<allowed_path>` 同形），自带与 allowed_paths 去重
+  - **Session 注入** [crates/agent-core/src/session.rs](crates/agent-core/src/session.rs)：首条 user message 加 `<environment>` 时从 PermissionStore 拿 `effective_paths(workdir)`（global + project paths 合并）塞进 snapshot；模型能立刻看到允许访问的所有路径
+  - **Desktop preview 同步** [apps/desktop/src/chat.rs](apps/desktop/src/chat.rs)：`preview_session_payload` 路径也注入 extra_paths，保证"显示 JSON"和实际发送的 payload 一致
+  - **Desktop Tauri commands** [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs)：新增 `list_permission_rules` / `remove_permission_rule` / `clear_permission_rules` / `list_permission_paths` / `add_permission_path` / `remove_permission_path` / `list_skills` / `list_claude_skills` / `import_claude_skills` / `delete_skill` 共 10 个命令并挂入 `invoke_handler!`
+  - **Web-server IPC** [apps/web-server/src/server.rs](apps/web-server/src/server.rs)：对应 7 个新命令的 dispatch + handler，前端通过 hebweb 也可调用
+  - **`Skill` / `SkillSource` 可序列化** [crates/agent-core/src/tools/skill.rs](crates/agent-core/src/tools/skill.rs)：`#[derive(Serialize)]` + `#[serde(rename_all = "snake_case")]`，Tauri / IPC 返回前端直接用
+  - **前端 UI** [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)：设置 dialog 加两个 tab：
+    - 「权限」：列全局 paths（加 / 删）+ 列全局 PermissionRule（删）
+    - 「Skills」：按当前 workdir 加载三层 skills 列表（标签区分 global / project / project_code），从 `~/.claude/skills` 多选导入到 global 或 project（project 需要 workdir），删除 hebbian 内的 skill（project_code 直接拒绝，提示去改源文件）
+  - **彻底删 `PermissionRule.workdir` 字段** [crates/agent-core/src/permissions/mod.rs](crates/agent-core/src/permissions/mod.rs)：旧 session.jsonl 中残留的 `workdir` 由 serde 默认忽略 unknown fields 兜底，向下兼容；`build_rule` 调用方同步去掉 workdir 参数
+
+- **影响范围**:
+  - agent-core / apps/desktop / apps/web-server 全部参与；apps/cli 编译通过（CLI 走 LocalCoreClient 自然继承新能力）
+  - 前端只动 `AppSettingsDialog.tsx` 一文件，加 ~280 行；其他 UI 不动
+  - 编译：`cargo check --workspace` 通过；`cargo test -p agent-core --lib` 213 通过（新加 1 个 `with_extra_paths_dedup_against_allowed_paths`）；`pnpm tsc --noEmit` 通过
+  - **破坏兼容**：`PermissionRule` JSON schema 删了 `workdir` 字段——新写入不带，老数据被 serde 静默丢弃；不影响匹配语义
+
+- **留尾巴**: 无
+
+### 2026-05-21 — Skills 加本地目录 / Git 仓库导入；enabled_tools 兜底读全局
+
+- **Why**:
+  - 上一轮 SkillsPane 只有"从 ~/.claude/skills 导入"一种来源，用户希望"从任意已有目录复制一份到 hebbian"以及"从 GitHub 仓库下载"
+  - 用户反馈"启用的 tool 没有读取全局的配置"：当 `session.enabled_tools = Some([])`（历史残留或某些代码路径写入的空 vec）时，旧 fallback 逻辑只检 None 不检空，导致"全局勾了工具但当前对话用不上"
+
+- **改动**:
+  - **storage::skills** [crates/agent-core/src/storage/skills.rs](crates/agent-core/src/storage/skills.rs)：新增
+    - `list_skills_in_dir(src_dir)`：探测目录是单个 skill 还是 skill 集合
+    - `import_from_dir(data_dir, scope, workdir?, src_dir, overwrite)`：从本地目录拷（自动识别单 skill / 集合根）
+    - `import_from_github(data_dir, scope, workdir?, repo_url, subpath?, overwrite)`：浅 `git clone --depth=1` 到临时目录后调 `import_from_dir`，结束 cleanup；subpath 为 None 时按常见 layout（root / `skills/` / `.claude/skills/`）自动探测
+    - 把 `import_from_claude` 重构成调用共享的 `import_named_from_root` helper，三种导入路径都走同一段落盘逻辑
+    - 新增 5 个单元测试覆盖 single skill / collection root / workdir 强校验 / project scope 落盘位置 / list_skills_in_dir 自识别
+  - **CoreClient trait + LocalCoreClient** [crates/agent-core/src/core_client/mod.rs](crates/agent-core/src/core_client/mod.rs)：新增 `import_skills_from_dir` / `import_skills_from_github` 两个方法
+  - **Tauri commands** [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs)：新增 `import_skills_from_dir` / `import_skills_from_github` 并挂入 `invoke_handler!`
+  - **Web-server IPC** [apps/web-server/src/server.rs](apps/web-server/src/server.rs)：对应两个 dispatch 入口与 handler；接受 camelCase（`srcDir` / `repoUrl`）与 snake_case 两种 args 形式
+  - **前端 SkillsPane** [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)：重排 Skills tab
+    - 把"导入范围"（global / project）提到三种导入方式的上面统一选一次，避免重复选择器
+    - 新增「从本地目录导入」section：调 `@tauri-apps/plugin-dialog` 打开目录选择对话框 → invoke `import_skills_from_dir`
+    - 新增「从 Git 仓库导入」section：URL + 可选 subpath 文本框 → invoke `import_skills_from_github`，错误回显 git 没装 / clone 失败
+    - 「从 ~/.claude/skills 导入」section 保留，去掉自身的 scope 选择器（统一到顶部）
+  - **enabled_tools 兜底（全局生效更稳）**：
+    - [apps/desktop/src/chat.rs](apps/desktop/src/chat.rs) send_message 与 preview_session_payload 两处的 fallback 链改为「args > session 非空 > 全局 settings」——session.enabled_tools = `Some([])` 也下沉到全局，去掉"明确为本对话清空"的语义边角（实际无人用，且与"读全局"直觉冲突）
+    - 同改 [apps/web-server/src/session.rs](apps/web-server/src/session.rs) / [apps/cli/src/daemon.rs](apps/cli/src/daemon.rs)
+    - chat.rs 加 `tracing::debug!` 打印实际生效的 enabled_tools 与各层来源，方便用户后续排查
+    - SessionSettingsDialog 的「恢复继承」按钮（setEnabledTools(null)）仍是清空 session 自定义、回到全局的正确入口
+
+- **影响范围**:
+  - agent-core / apps/desktop / apps/web-server / apps/cli 全参与；编译 `cargo check --workspace` 通过
+  - `cargo test -p agent-core --lib` 218 通过（新增 5 个 skills 导入测试 = 213 → 218）
+  - `pnpm tsc --noEmit` 通过
+  - **行为变更**：session.enabled_tools = `Some([])` 不再代表"明确不启用任何工具"，会下沉到全局。用户如果真的想"什么工具都不要"只能把全局也清空（产品决策：默认推断"用户没想覆盖"比"用户想清空"更常见）
+
+- **留尾巴**: 无
+
+### 2026-05-21 — 权限规则数据模型彻底简化为 Claude Code 风格字符串 pattern
+
+- **Why**: 用户原话"一个权限就这样了 太复杂了吧"，看到的是
+  ```json
+  { "id": "...", "scope": "Global", "toolName": "Bash",
+    "matcher": { "type": "Bash", "commandPrefix": "xargs" },
+    "decision": "Allow", "createdAt": ..., "createdBy": "user" }
+  ```
+  6 个字段 + 嵌套 matcher = 一个 8 字符串规则的展开形式。Claude Code 用 `Bash(xargs)` 一行字符串表达同样语义，配合"三文件天然分 scope"（global / project / session），干净得多。
+
+- **改动**:
+  - **schema 重写** [crates/agent-core/src/storage/permissions.rs](crates/agent-core/src/storage/permissions.rs)：`PermissionsFile { allow: Vec<String>, deny: Vec<String>, paths: Vec<PathBuf> }`，三段平铺
+  - **删 `PermissionRule` / `PermissionMatcher` / `PermissionDecisionKind` / `new_rule_id`** [crates/agent-core/src/permissions/mod.rs](crates/agent-core/src/permissions/mod.rs)
+  - **新加 `Permission` + `RuleEffect`**：
+    - `Permission::parse(raw)` 解析 `<Tool>(<arg>)` 或 `<Tool>` → 内部 Arg 枚举（Any / Bash{cmd,path?} / Path{prefix} / Domain{suffix}）
+    - 工具名 `Bash` / `PowerShell` 的 arg 支持 `cmd:path` 冒号分隔表达"命令前缀 + 路径前缀"
+    - `WebFetch` / `WebSearch` / `Fetch` arg 解析为域名后缀
+    - 其他工具 arg 解析为路径前缀
+    - 通配工具名 `*` 仍内部支持（不强制 UI 暴露）
+  - **PermissionStore API 全部重写**：`add` / `remove` / `list` / `clear` / `find` / `find_for_segments` / `allows_path` / `effective_paths` / `add_path` / `remove_path` / `list_paths`；签名统一以 `(scope, session_id?, workdir?, effect, pattern)` 为基线
+  - **scope 由文件位置隐含**：rule 字符串里**不再带 scope 字段**——global → `~/.hebbian/permissions.json`；project → `~/.hebbian/projects/<enc>/permissions.json`；session → 仅 PermissionStore 内存（不持久化）
+  - **hitl.rs**：`build_rule` → `build_pattern(tool, opt_arg)`，输出 `Tool(arg)` 字符串；调用 `store.add(scope, session_id?, workdir?, effect=Allow, pattern)`
+  - **dispatch.rs**：路径批准走 `store.add_path(scope, workdir?, path)`，写入 paths 段（不再通过 wildcard "*" 工具 + FilePath rule 表达）
+  - **CoreClient trait** [crates/agent-core/src/core_client/mod.rs](crates/agent-core/src/core_client/mod.rs)：
+    - 删 `list_permission_rules` / `remove_permission_rule` / `clear_permission_rules`
+    - 新增 `list_permissions(scope, sid?, wd?, effect)` / `add_permission(... pattern)` / `remove_permission(... pattern)` / `clear_permissions(...)`
+    - `list_permission_paths` / `add_permission_path` / `remove_permission_path` 不变
+  - **Desktop Tauri commands**：4 个新命令 `list_permissions` / `add_permission` / `remove_permission` / `clear_permissions` 并挂入 `invoke_handler!`
+  - **Web-server IPC**：4 个对应 dispatch + handler；接收 `scope` / `effect` / `pattern` / `sessionId` / `workdir`
+  - **前端 PermissionsPane** [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)：
+    - 删除原"全局权限规则"的 matcher 展开渲染（`describeMatcher` 函数 + PermissionRule 类型）
+    - 新增 `PatternList` 共用组件：标题 + emptyHint + 输入框 + 列表，颜色（emerald / red）区分 allow / deny
+    - Permissions tab 现在显示：「规则语法说明」+「允许 allow」+「拒绝 deny」+「paths 白名单」四段；每段 Enter 即可添加
+  - 测试：permissions/mod.rs 新加 10 个测试覆盖 parse / find / deny-overrides-allow / session-precedence / project-isolation / paths-whitelist / list-and-remove；总计 218 → 223 通过
+
+- **影响范围**:
+  - **破坏兼容**：旧版本的 `~/.hebbian/permissions.json` 与 `~/.hebbian/projects/<enc>/permissions.json` 文件中 `rules: [...]` 数组**不再被读取**——schema 改 `allow / deny / paths`。按既定原则不做迁移，老规则需重新加（用户原话"不做迁移"）
+  - **API 破坏**：CoreClient trait 与 Tauri commands 删除/重命名了 3 个旧命令，新增 4 个。所有 surface 已同步
+  - `cargo check --workspace` 通过；`cargo test -p agent-core --lib` 223 通过；`pnpm tsc --noEmit` 通过
+
+- **留尾巴**: 无
+
+### 2026-05-21 — SkillsPane 抽成共享组件；右上角对话设置也能导入 skills
+
+- **Why**: 用户原话"右上角 项目设置/对话设置也要能导入"——SkillsPane 之前只在 AppSettingsDialog（应用全局设置）里出现，新建对话后想给当前项目装个 skill 还得绕一圈到全局。SessionSettingsDialog 就在右上角，理应能直接管理本项目 skills
+
+- **改动**:
+  - **抽出共享组件** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：把 AppSettingsDialog 里的 SkillsPane 内联实现整段迁出
+  - 新增 `defaultScope?: "global" | "project"` prop，决定打开时默认选哪个 scope：
+    - 应用全局设置：`defaultScope="global"`
+    - 对话设置：`defaultScope="project"`（有 workdir 时；否则自动回退 global）
+  - SkillsPane 内部仍允许用户切换 scope，无 workdir 时"当前项目"选项禁用
+  - **AppSettingsDialog** 把内联 SkillsPane 整段删除，改为 `import { SkillsPane } from "./SkillsPane"` 并在 Skills tab 渲染 `<SkillsPane workdir={...} defaultScope="global" />`
+  - **SessionSettingsDialog** 新增「Skills」区段，紧跟"启用的工具"，渲染 `<SkillsPane workdir={workdir} defaultScope="project" />`；标题旁配 Sparkles 图标 + 一句话说明
+  - 三种导入入口（本地目录 / Git 仓库 / `~/.claude/skills`）在两个 dialog 里行为完全一致
+
+- **影响范围**:
+  - 仅前端：抽组件 + 在 SessionSettingsDialog 加一节；后端 IPC 不变
+  - `pnpm tsc --noEmit` 通过
+  - 行为：原"全局设置 → Skills tab"功能保留；新增"右上角对话设置 → Skills 区段"，默认 scope=project，方便给当前项目添加 skill
+
+- **留尾巴**: 无
+
+### 2026-05-21 — SessionSettingsDialog 的「目录 / Skills / 规则」改为默认折叠
+
+- **Why**: 用户原话"把项目设置里 目录部分 skills 部分 规则部分改成可以折叠的 默认折叠 点击展开"——这三段都是二级配置，常用编辑场景是改 provider / model / agent / stream（首屏），三段长内容默认展开造成视觉过载与滚动负担
+
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx)：
+    - 新增内联 `<CollapsibleSection title icon defaultOpen description>{children}</CollapsibleSection>` 组件：头部按钮 + chevron 图标（ChevronRight 折叠 / ChevronDown 展开）+ 标题 + 描述，子内容仅在 open=true 时渲染
+    - 「目录与工具」段（workdir / allowed_paths / skill_dirs / 启用工具）包成 `<CollapsibleSection title="目录与工具" icon={FolderOpen} ...>`
+    - 「Skills」段包成 `<CollapsibleSection title="Skills" icon={Sparkles} ...>`
+    - 「规则」段包成 `<CollapsibleSection title="规则" icon={FileText} ...>`
+    - 三段全部 `defaultOpen=false`（默认折叠），点击头部展开
+    - 顶部 provider / model / agent / system_prompt / stream 五项保持原样（首屏直接可见）
+
+- **影响范围**:
+  - 仅前端，单文件修改；`pnpm tsc --noEmit` 通过
+  - 行为：原先打开"对话设置"会一次性看到所有 5 块（基本信息 + 目录与工具 + Skills + 规则），现在只看基本信息，剩三块各自一个可点击头部
+  - state 是 component 内部，关闭 dialog 再开会回到默认折叠状态——若哪段经常要展开，后续可以加 localStorage 记忆
+
+- **留尾巴**: 无
+
+### 2026-05-21 — 移除「Skill 目录」UI 字段，全程靠 project>global 默认链
+
+- **Why**: 用户原话"项目与工具了这个 skills 目录的设置不要了，就按我们默认项目>全局 这样就行，普通的没有项目的对话 就默认读取全局的就行"——`skill_dirs` 配置项当初是想让用户指定额外 skill 来源路径，但现在三层加载链（`~/.hebbian/skills` / `~/.hebbian/projects/<enc>/skills` / `<workdir>/.claude/skills`）已经覆盖所有合理场景，再保留配置项只会让用户疑惑「我要不要改这个？」
+
+- **改动**:
+  - **AppSettingsDialog** [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)：「对话设置」tab 删除 `<PathListField label="Skill 目录" ...>`
+  - **SessionSettingsDialog** [apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx)：「目录与工具」section 删除 `<PathListField label="Skill 目录" ...>`；连带删 `skillDirs` state、`setSkillDirs` setter、`inheritedSkillDirs` 变量、useEffect 中 `setSkillDirs(...)`、`updateSessionSettings` payload 中的 `skill_dirs` 字段
+  - 后端字段 `settings.conversation.skill_dirs` 与 `session.skill_dirs` **保留**（serde `#[serde(default)]`，向后兼容老 settings.json）。当为空（默认）时 surface 已经调 `default_skill_dirs(data_dir, workdir)` 拿三层来源，行为符合用户预期
+  - 用户若手动编辑 settings.json 加 skill_dirs，后端仍读，但不再提供 UI
+
+- **影响范围**:
+  - 仅前端 2 个文件；后端不动
+  - `pnpm tsc --noEmit` 通过
+  - 行为：无 workdir 的"空对话"读 `~/.hebbian/skills/`；有 project 的对话读 `~/.hebbian/skills/ + ~/.hebbian/projects/<enc>/skills/ + <workdir>/.claude/skills/` 三层，后者覆盖前者同名 skill
+
+- **留尾巴**: 无
+
+### 2026-05-21 — desktop-bridge.ts 加心跳 + 主动 reconnect，hebweb 重启不再死
+
+- **Why**: 真实使用 bridge 时发现：hebweb 被 `kill -9` / 重启后，desktop 前端的 WebSocket 不触发 `onclose`（macOS WKWebSocket 在对端硬关时偶发漏事件），导致 desktop bridge 一直处于"假活"状态——不重连。表现：hebweb 重启 → `bridges:0` 持续 → 浏览器调任何走 bridge 的命令 hang 到 60s 超时
+- **修复**:
+  - [apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts](../apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts):
+    - 加 10s 心跳：`setInterval` 每隔 10s `ws.send({type:'ping'})`；对端死了 send 抛错或 readyState != OPEN 立刻触发 reconnect
+    - 加 `reconnecting` 标志位 + `cleanupAndReconnect(reason)` 统一函数，防止 onerror + onclose 双触发 schedule 出两个重连
+    - `onerror` 也触发 reconnect（不只是 onclose）——双保险
+  - 后端无需改：hebweb `handle_bridge` 收到未知 `BridgeInbound` variant（`ping` 不在枚举里）会 serde_json::from_str Err，走 `warn!(...); continue;` 路径，安全忽略
+- **验证**:
+  - kill -9 hebweb → 重启 → 10s 内 desktop bridge 心跳 send 失败触发 reconnect → 新 hebweb `bridges:1` ✓
+  - reload 后 Playwright 真实操作用户 session "Bash后台任务显示疑问"：
+    - `list_sessions` 走 bridge → 浏览器侧边栏渲染真实 37 个 session
+    - hover 右下角 Token 用量小圆环 → 弹出 native tooltip `上下文 25% · 50.3k / 200.0k`（**`get_context_usage` 通过 bridge 实时拿到的真实数据**）
+    - 误触压缩按钮 → desktop 真的调 `compact_session` → 模型 API 返回 HTTP 503 → 错误 toast 完整冒到浏览器：`压缩失败: HTTP 503: ... No available accounts`
+- **影响范围**: 仅 desktop 前端 60 行修改；不动协议、不动 hebweb 后端；ws 消息 additive（`{type:'ping'}` server 自动忽略）
+- **留尾巴**:
+  - `ping` 当前是 fire-and-forget，server 不回 pong。若未来要做"server 死活探测"还需要加 `pong` 响应 + client 端 readtimeout（当前依赖 send 失败被动探测，10s 延迟可接受）
+  - 心跳间隔 10s 是经验值；过短增加 ws 流量、过长延长断连感知。如果未来场景需要可拉成配置
+
+### 2026-05-21 — Skills UI 收敛 scope，加 markdown 预览；Rules 改为全局/项目分栏列表；dialog 加宽 20%
+
+- **Why**: 用户原话一组改动：
+  1. "skills 栏 导入范围就去了，因为在项目设置里就已经是项目范围了 在总设置里范围就是全局了"——scope 由打开的 dialog 决定，UI 不该让用户再选
+  2. "导入全局的已经导入的就自动勾上并灰色"——避免重复导入
+  3. "整个项目设置/全局设置 左右两边宽度再宽 20%"——Dialog lg size 太窄
+  4. "导入的 skill 可以点击某条展开预览（markdown 渲染）"——加预览
+  5. "规则分栏 不要那个'读取全局CLAUDE.md'的开关了 就把所有的能读的 rules 文件列出来 从上面是全局的一条线 线上写小字'全局' 下面项目范围 以一个目录分割"——全局开关换成完整列表 + 视觉分组
+
+- **改动**:
+  - **Dialog 宽度 +20%** [apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx](apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx)：`lg: max-w-2xl` (672px) → `lg: max-w-[820px]`；`xl: max-w-4xl` (896px) → `xl: max-w-[1120px]`
+  - **SkillsPane 重写** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - props: `defaultScope?` → 必填 `scope: "global" | "project"`，删除内部 scope 切换 Select
+    - AppSettingsDialog 传 `scope="global"`；SessionSettingsDialog 传 `scope="project"`
+    - 新增 `installedNames` 计算：从已加载 skills 中按当前 scope 取 source==global/project 同名集合
+    - 「从 ~/.claude/skills 导入」列表里同名 skill 自动 `checked + disabled`，右侧显示「已导入」标签
+    - 已加载 skills 列表每项前面加 ChevronRight/Down 按钮，点击展开 SKILL.md 预览（懒加载 + 缓存）
+    - 预览用 `ReactMarkdown` + `remark-gfm`（与 MessageBubble 一致），容器最大高 420px + 内部滚动
+    - scope=project 且 workdir=null 时顶部显示橙色提示，三个导入按钮全部禁用
+  - **后端 read_skill_md command** [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs)：按 (source, name, workdir?) 三参定位 SKILL.md 文件并返回内容；source 校验 global/project/project_code 三选一
+  - **discover_all_rules command** [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs)：合并 `global_candidates` + `default_global_rules()` 过滤出存在的全局规则文件，workdir 给定时叠加 `rules::discover` 项目祖先链结果；统一返回带 source 的 RuleFileInfo 列表
+  - **SessionSettingsDialog 规则段重写** [apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx](apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx)：
+    - 删除「读取全局 CLAUDE.md」switch 开关 + 整段相关代码
+    - useEffect 改调 `discover_all_rules`，传 `globalCandidates: session.global_rules ?? null`
+    - 新加 `RulesList` 组件：按 source 分两段渲染——「全局」section 顶部小字 label + 列表；中间 `border-t` 分隔；「项目」section 同形态，每项前 wd/allowed 来源徽章
+    - 复选框（圆点）样式：启用 = primary 色实心；禁用 = muted-foreground/30 实心
+    - 全局复选框 toggle 改 session.global_rules（含/不含）；项目复选框 toggle 改 session.rules_files
+
+- **影响范围**:
+  - 前端 3 文件 + Dialog 全局 size 调整；后端 desktop lib.rs 加两个 Tauri command
+  - `cargo check --workspace` 通过；`pnpm tsc --noEmit` 通过
+  - 行为：所有用 `size="lg"` 的 Dialog（AppSettings / SessionSettings 等）变宽，视觉空间多 ~20%；Skills 预览首次点击拉一次后缓存到 component state（关 dialog 重开会重新拉）；规则文件 UI 不再有"全局开关"，每个文件独立勾选
+
+- **留尾巴**: 无
+
+### 2026-05-21 — 启动定位最新对话所属项目；右上角按钮按 project_id 判定 label
+
+- **Why**: 用户原话"程序启动时，最新一个对话如果属于一个项目，则左侧默认显示其项目列，右上角也是项目设置，如果是普通对话，则右上角是对话设置"——以前启动总是「全部」模式，用户得手动点「项目 → 选某项目」找到自己的会话；右上角按钮 label 之前看 workdir，普通对话只要有 workdir 也会误显示「项目设置」
+
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](apps/desktop/frontend/src/desktop/ui/store/useStore.ts) `init()`：
+    - 拿 `sessions[0]`（按 updated_at 排序的最新对话）后，判断它的 `project_id` 是否还在已加载的 projects 列表里
+    - 若是，启动时 `set({ projectSidebarMode: "projects", selectedProjectId: first.project_id })`——侧栏直接进项目模式 + 锁定到该项目
+    - 普通对话（`project_id == null` 或 project 已被删）保持「全部」模式默认
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx) 右上角按钮：从 `currentSession?.workdir && workdir !== "~/" && workdir !== "~"` 改为 `currentSession?.project_id`——`workdir` 普通对话也可能有，`project_id` 才是"属于一个项目"的权威信号
+
+- **影响范围**:
+  - 仅前端 2 文件；后端不动
+  - `pnpm tsc --noEmit` 通过
+  - 行为：启动后若最新对话属于项目 → 侧栏自动 = 项目模式 + 选中该项目，右上角显示「项目设置」；否则默认「全部」模式 + 右上角「对话设置」
+  - 不破坏已有 selectedProjectId：用户手动切回「全部」、关闭再开后下次启动仍按 sessions[0] 的归属重新定位
+
+- **留尾巴**: 无
+
+### 2026-05-21 — 修复全局 enabled_tools 老 snake_case 命名无法继承的 bug
+
+- **Why**: 用户原话"现在全局是启用的，然后新建对话启用的工具都没有选中"。诊断：用户的 `~/.hebbian/settings.json` 里 `conversation.enabled_tools` 写的是 `["web_search","web_fetch"]`（老 snake_case），但当前 [tool_manifest()](crates/agent-core/src/tools/mod.rs) 暴露给 UI 的工具名是 PascalCase（`"WebSearch"` / `"Fetch"`）。两边对不上 → ToolToggleList 渲染时 `enabledSet.has(t.name)` 永远 false → UI 全不勾选；运行时 agent_loop 过滤工具时也命中不上 → web 工具实际从未启用。
+  这是命名规范早期摇摆遗留的脏数据。
+
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](crates/agent-core/src/storage/settings.rs) `load()`：
+    - 反序列化后 normalize `conversation.enabled_tools`：`web_search` → `WebSearch`、`web_fetch` / `WebFetch` → `Fetch`、`image_generation` → `IMAGE_GENERATION_TOOL_NAME`，其他名字透传
+    - normalize 后若与原值不同**透明回写盘**（一次性迁移），下次启动直接是新名字
+  - 新增两个单元测试：
+    - `normalize_maps_legacy_snake_case_to_pascal`：纯函数映射验证
+    - `load_rewrites_legacy_tool_names_to_disk`：写入老 settings.json、load 后值正确 + 盘文件已被改写
+
+- **影响范围**:
+  - 仅 storage::settings；其他模块不变
+  - `cargo check --workspace` 通过；agent-core 225 测试全过（新增 2 个）
+  - 行为：所有现存用户的 `~/.hebbian/settings.json` 下次启动会一次性迁移，UI 立刻显示正确勾选，agent 运行时真启用对应工具
+  - 没动 session.jsonl Meta / meta.json 中的 `enabled_tools`——新建对话默认继承全局（已修），老 session 自己的覆盖值若也是老名字会留下小缺陷；用户可在「对话设置」点「恢复继承」（设 enabled_tools = null）让它重新读全局
+
+- **留尾巴**: 无
+
+### 2026-05-21 — Skill 预览改全屏 modal + 修 read_skill_md 路径拼接 bug
+
+- **Why**:
+  1. 用户报：点 SKILL 预览失败 `读取 /Users/ricardo/.hebbian/skills/karpathy-guidelines/SKILL.md 失败：No such file`。诊断：用户的 skill 目录是 `karpathy/`，frontmatter 写 `name: karpathy-guidelines`。旧版本 `Skill.name` 用 frontmatter name → `read_skill_md(source, name, workdir)` 后端按 `<root>/skills/<name>/SKILL.md` 拼路径找不到文件
+  2. 用户原话要求预览改成"放大框、跟 tool_call 详情放大框一样大小"，并"md 的 metadata 部分不渲染往下正文部分 markdown 渲染"
+
+- **claude code 行为对齐**（[loadSkillsDir.ts:423-431](/Users/ricardo/code/ricardo/claude-code-haha/src/skills/loadSkillsDir.ts#L423-L431)）：
+  - claude code 只查一层 `<skills_dir>/<dir-name>/SKILL.md`，**不递归**
+  - `name` 用**目录名**（`entry.name`），frontmatter 的 `name` 仅当 `displayName`
+  - hebbian 之前用 frontmatter name 是错误（与 claude code 不符且导致定位失败）
+
+- **改动**:
+  - **后端**：
+    - [crates/agent-core/src/tools/skill.rs](crates/agent-core/src/tools/skill.rs) `load_dir_into`：保持一层扫不变（与 claude code 一致），但 `Skill.name` 改用**目录名**而不是 frontmatter name；frontmatter 的 name 字段先不使用（如需 displayName 后续再加 `display_name` 字段）。撤回上一轮误改的递归扫描方案
+    - [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs) `read_skill_md`：签名从 `(source, name, workdir?)` 改为 `(path: PathBuf)`，直接读 `list_skills` 返回的 `path`；校验 `path.file_name() == "SKILL.md"` 防任意路径读
+  - **前端 SkillsPane** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - 删除内嵌展开 + chevron 按钮 + `contentCache` / `expanded` / `loadingContent` 旧 state
+    - 新增 `previewSkill` / `previewContent` / `previewLoading` state
+    - 点击 skill 行直接打开**全屏 modal**：`fixed inset-0 z-[110]` + 半透明 backdrop + `inset-3` 内框，与 MessageBubble 工具放大形态一致（z-[110] 高于 Dialog z-[100] 保证盖住父 SessionSettingsDialog）
+    - modal header 显示 skill name + path；body 用 `ReactMarkdown` + `remark-gfm` 渲染
+    - 新增 `stripFrontmatter()` 工具：跳过 `---\n...\n---\n` YAML 头，只渲染正文
+    - `read_skill_md` 调用从 `(source, name, workdir)` 改为传 `path: s.path`
+
+- **影响范围**:
+  - 后端 2 文件 + 前端 1 文件；`cargo check --workspace` 通过；`pnpm tsc --noEmit` 通过
+  - 行为：所有 skill 的 `Skill.name` 现在 = 目录名（与 claude code 行为对齐 + 用户的 karpathy-guidelines 这类目录名↔frontmatter name 不一致的场景现在工作正常）；点击预览打开全屏放大框，关闭点 backdrop / × 都行；frontmatter 头部不显示
+
+- **留尾巴**: 无
+
+### 2026-05-21 — hebweb standalone Round 1：复刻 7 个 desktop 命令，不依赖 bridge
+
+- **Why**: 用户洞察："tauri rust 与前端之间数据传输是 ipc 调用——为什么不能单独起前端 + 单独起 heb cli 那种后端，前端连后端不就行了？" 完全对。bridge 路线（让 desktop 当 invoke proxy）依赖 desktop 在跑；真正想 unattended 跑就要 hebweb 自己镜像 desktop 命令。这一笔是 standalone 路线 Round 1
+- **关键设计**:
+  - **bridge / standalone 双轨共存**：dispatch_invoke 优先 bridge（desktop 在跑时零工作量复用 desktop 完整命令集），不在场时 fallback 到 hebweb 自己镜像的命令
+  - **复刻而非抽 agent-core 共享 crate**：按 surgical change 原则——desktop chat.rs 是核心文件，refactor 牵动太多。当函数体确实"同构"时（context_usage / send_once）双份等价代码可接受。v2 真要消除重复再做 surface_commands crate
+  - **本轮 7 个命令选型**：跳过 build_preview_payload（150+ 行，依赖多个 desktop 内部 preview helper）；选了所有"简单 wrap + 高频"的：context_usage / compact_session / generate_session_title / discover_rules_files / list_background_tasks / kill_background_task / update_session_settings
+- **改动**:
+  - [apps/web-server/src/chat_helpers.rs](../apps/web-server/src/chat_helpers.rs): 新建，复刻 desktop chat.rs 的 `ContextUsageDto / context_usage / compact_session / send_once` 以及 title_gen.rs 的 `try_generate_title / fallback_from_first_user`。共 ~200 SLOC
+  - [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): mod 引入 chat_helpers
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs):
+    - dispatcher 加 7 个新分支
+    - 末尾新增 7 个 `cmd_*` handler：`cmd_get_context_usage / cmd_compact_session / cmd_generate_session_title / cmd_discover_rules_files / cmd_list_background_tasks_local / cmd_kill_background_task_local / cmd_update_session_settings`
+    - 内置 `ForcedModelClient` adapter（per-call 覆盖 ModelRequest.model 字段，让 compact_session 用 session.model 而不是 provider.default_model）
+- **验证**（hebweb standalone，bridges=0）:
+  - 起 hebweb `--port 38080 --data-dir /tmp/hebweb-r1`（无 bridge）
+  - WS 烟测 7 命令全通：
+    - `get_context_usage` → `{used_tokens:0, budget_tokens:200000}` 真实计算
+    - `discover_rules_files {workdir:'/tmp', allowedPaths:['/tmp']}` → 真扫返回 0 项
+    - `list_background_tasks` → 真扫 background registry
+    - `kill_background_task {taskId:'nope'}` → 合理报错 "未找到 task_id"
+    - `update_session_settings {enabledTools:['Read','Grep']}` → 真改并落盘
+    - `generate_session_title` 无 user msg → 直接返回原 session
+    - `compact_session` provider 不存在 → 合理报错
+- **影响范围**:
+  - 仅 hebweb 内部（+ chat_helpers.rs / + 7 个 handler）；不动 desktop / agent-core / protocol
+  - hebweb 命令总数 35 → 42
+  - bridge 接上时仍然优先走 bridge（这些 standalone handler 走 fallback）；bridge 没有时直接 standalone 跑
+- **留尾巴**:
+  - **build_preview_payload 未做**——hover 消息气泡看"模型 payload" 需要拷贝 desktop chat.rs 整段 preview pipeline（~200 行 + 多个 helper），单独 PR 做
+  - **Edits 历史 4 个**（list_edits / diff_edit / revert_edit / edits_worktree_status）—— 依赖 EditsWorktree git，独立工程，下一 Round
+  - **OAuth 14 个 + 2 个 file import**——固有限制（OAuth callback deep link / file dialog Tauri native），需要前端 transport 层改造，浏览器走替代方案。这两类长期可能始终需要 bridge
+  - **chat_helpers.rs 与 desktop chat.rs 是双份代码**——v2 抽 surface_commands crate 时合并；当前 ~200 SLOC 重复可控
+  - hebweb 默认 addr 仍是 `127.0.0.1:3030`；如果要接 bridge 还得记得加 `--addr [::]:38080`（详见前一笔 IPv6 修复 changelog）
+
+### 2026-05-21 — Skills 导入加扫描+分组选择 UX；启用/禁用 toggle；递归发现
+
+- **Why**:
+  1. 用户原话"很多 github 仓库 不是只有一个 skills 一般是有一个目录 或者多个目录 每个目录里面有一个 skills，扫描应该能把目录当做一个小子集来展示"——常见仓库布局是 `repo/category/skill-name/SKILL.md` 多层嵌套，旧 import_from_dir 只能扫一层
+  2. 用户原话"导入一个仓库后，也可以选择哪些启用那些不启用"——已导入的 skill 想在不删除的前提下临时关掉
+  3. claude code 自己只扫一层是因为 `~/.claude/skills/` 用户自己管理；**从外部仓库导入**时递归是合理的（已确认 claude code 不递归，但我们的"导入"场景与 claude code 的"加载"场景不一样）
+
+- **改动**:
+  - **storage::skills 扩展**：
+    - 新增 `ScannedSkill { name, relative_path, description, dir_path }`：`dir_path` 是 SKILL.md 所在目录的**绝对路径**，做为唯一 key + import 时直接拷贝源；`relative_path` 给前端按第一段分组用
+    - 新增 `scan_skill_dir(src_dir)`：递归（深度上限 8、跳过 `.xxx` / node_modules / target）找所有 SKILL.md 目录，"找到一个不再深入"（避免一个 skill 内嵌套被重复采集）
+    - 新增 `scan_skill_github(repo_url, subpath?)`：浅 clone 到临时目录 → 扫描 → 清理
+    - `import_from_dir` / `import_from_github` 加 `selected_paths: Option<&[String]>` 参数（用 dir_path 字符串匹配）
+    - 新增 `DisabledSkillsFile` + `disabled_path` + `load_disabled` / `save_disabled` / `set_skill_enabled` / `apply_disabled` 全套 disabled 持久化
+  - **Skill 结构** [crates/agent-core/src/tools/skill.rs](crates/agent-core/src/tools/skill.rs)：加 `enabled: bool` 字段
+  - **default_tools** [crates/agent-core/src/tools/mod.rs](crates/agent-core/src/tools/mod.rs)：加载 skills 后调 `apply_disabled` + 过滤 `enabled == false` 的，**不暴露给模型**
+  - **CoreClient trait** [crates/agent-core/src/core_client/mod.rs](crates/agent-core/src/core_client/mod.rs)：
+    - 新增 `scan_skill_dir` / `scan_skill_github` 两个接口
+    - `import_skills_from_dir` / `import_skills_from_github` 加 `selected_paths` 参数
+    - 新增 `set_skill_enabled(name, enabled)` 接口
+    - `list_skills` 调用方拿到的 Skill 已带 `enabled` 字段（由 `apply_disabled` 填充）
+  - **Tauri commands** [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs)：`scan_skill_dir` / `scan_skill_github` / `set_skill_enabled` 三个新命令并挂入 `invoke_handler!`
+  - **Web-server IPC** [apps/web-server/src/server.rs](apps/web-server/src/server.rs)：对应 3 个 dispatch + handler
+  - **前端 SkillsPane** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - 「从本地目录」按钮 → 选目录 → 调 `scan_skill_dir` → 打开扫描选择 modal（顶部带源信息 + 中间按 relative_path 第一段分组 + 每组「全选/取消」按钮 + 复选框 + 底部确认）
+    - 「从 Git 仓库」类似流程，按钮文案改为「扫描仓库」
+    - 选中→点确认→调 `import_skills_from_dir` / `import_skills_from_github` 带 `selectedPaths` 真正拷贝
+    - 已加载 skills 列表每行最前面加复选框，勾上 = 启用、取消 = 禁用（写入 `~/.hebbian/disabled_skills.json`，立即生效——agent 下次启动不再看到禁用的 skill）；禁用的条目整体 `opacity-50` 灰显
+    - SkillItem 类型加 `enabled` 字段
+
+- **影响范围**:
+  - agent-core + apps/desktop + apps/web-server + 前端 SkillsPane；`cargo check --workspace` 通过
+  - `cargo test -p agent-core --lib` 225 通过（skills 测试更新签名）
+  - `pnpm tsc --noEmit` 通过
+  - 新数据文件：`~/.hebbian/disabled_skills.json`（不存在时空对象，无需初始化）
+  - 行为：导入 UX 由"一键全导"改成"扫描 → 看分组 → 选哪些 → 导入"；启用/禁用立即作用于 agent
+
+- **留尾巴**: 无
+
+### 2026-05-21 — UI 文案纪律入项目 CLAUDE.md；SkillsPane 清掉内部行话；扫描分组可折叠；预览 markdown 自渲染
+
+- **Why**: 用户原话
+  1. "在项目的 claude.md 里写，不要在 desktop 写这么多多余的注释比如「按 workdir /Users/ricardo/code/ricardo/rust/hebbian 加载三层来源：global / project / project_code（代码内嵌）」这种，desktop 是给用户看的"——内部架构术语 / 绝对路径 / source 枚举名漏到用户 UI 上很难看也没用
+  2. "没有在导入的 skills 下点击展开有哪些 skills，只有一个 SKILLS.md 的就展示一个，有子路径的就要展示子列表，点击展开这种，每个都需要有一个选中框"——扫描结果直接铺开太长，需要单 skill 直接显示、多 skill 分组默认折叠可展开
+  3. "然后点击预览也没有渲染成 markdown"——预览框依赖 `prose` 但项目没装 `@tailwindcss/typography`，所有元素退化无样式
+
+- **改动**:
+  - **CLAUDE.md 加纪律** [CLAUDE.md](CLAUDE.md)：新增「步骤 3.1：UI 文案纪律」一节，明确禁止在用户能看到的 label/description/toast 里写架构 / 路径 / source 枚举值 / 字段名 / Rust 类型名；给出反例 + 正例 + 自检清单（"我妈看得懂吗"）
+  - **SkillsPane 文案重写** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - 删除「按 workdir ... 加载三层来源：global / project / project_code（代码内嵌）。点击条目预览 SKILL.md。」→ 改为「点击任一条预览内容；勾选框控制是否启用，禁用后模型不会看到这个 skill。」
+    - 「当前对话无 workdir，无法做项目级导入」→「当前对话没绑定项目，先去「目录与工具」选一个项目再来」
+    - 「当前对话未设置 workdir，项目级 skill 不可导入。先在「目录与工具」里指定 workdir，或在应用全局设置里管理 skills。」→「当前对话没绑定项目；要装到「当前项目」需要先去「目录与工具」选一个项目，或换到应用全局设置里管理 Skills」
+    - 「项目代码内嵌的 skill 请直接修改源文件」→「这条 skill 在你的项目代码里，去源文件改」
+    - 「选一个目录：若它自己含 SKILL.md，导入为单个 skill；若它下面有多个含 SKILL.md 的子目录，全部导入。」→「选一个目录，自动扫描里面所有 skill，让你挑哪些导入。」
+    - 「浅 clone 到临时目录后拷贝，结束清理。需要本机已装 git。」→「需要本机装了 git。下载下来扫描完，未导入的部分会自动清理。」
+    - Tauri dialog title 简化为「选一个目录开始扫描」
+  - **扫描结果分组改可折叠** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - 新增 `expandedGroups` state（Set<string>），默认空集合（全部折叠）
+    - 单 skill 的分组（`items.length === 1`）**直接展示一行**，不需要分组头——符合用户原话"只有一个 SKILL.md 的就展示一个"
+    - 多 skill 的分组渲染分组头 = chevron + 三态 checkbox（全选 / 部分选 indeterminate / 全空）+ 「组名 N 个」；点击 chevron 或组名展开子列表，子项缩进 + 各自的勾选框
+    - 移除原来的"全选"文字按钮，改用 indeterminate checkbox 更直观
+  - **预览 markdown 自渲染** [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx)：
+    - 删掉对 `prose prose-sm` 的依赖（项目没装 `@tailwindcss/typography` 所以一直没生效，h1/p/ul 跟纯文本一样）
+    - 用 ReactMarkdown 的 `components` prop 给 h1-h4 / p / ul / ol / li / code / pre / blockquote / a / hr / table / th / td 全套自定义 className，跟 MessageBubble 同款"普通文本"风格但带间距 + 字号 + 列表缩进
+    - 容器加 `max-w-3xl mx-auto` 居中，避免在 1120px 大屏 modal 里满屏拉伸
+
+- **影响范围**:
+  - CLAUDE.md（agent 流程纪律）+ SkillsPane.tsx（前端单文件）
+  - `pnpm tsc --noEmit` 通过；不动后端
+  - 行为：UI 文案换人话；扫描结果只有 1 个 skill 时一行展示，多 skill 用分组折叠减少视觉噪音；点 skill 行打开的预览框正确渲染 markdown（标题 / 列表 / 代码块 / 表格都有样式）
+
+- **留尾巴**: 无
