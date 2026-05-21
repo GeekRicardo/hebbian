@@ -17,6 +17,7 @@
 
 pub mod compactions;
 pub mod lock;
+pub mod model_io;
 pub mod oauth;
 pub mod permissions;
 pub mod plans;

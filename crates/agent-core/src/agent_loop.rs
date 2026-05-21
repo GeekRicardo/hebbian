@@ -161,10 +161,6 @@ fn drain_pending_inputs(
         hebbian.run.parent_id = ?params.parent,
         hebbian.run.outcome = Empty,
         hebbian.run.iterations = Empty,
-        // langfuse.* 字段会污染 stderr，暂时关闭
-        // langfuse.session.id = Empty,
-        // langfuse.trace.input = Empty,
-        // langfuse.trace.output = Empty,
     )
 )]
 pub async fn run_loop(
@@ -201,14 +197,6 @@ pub async fn run_loop(
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
     let run_span = tracing::Span::current();
-    // langfuse 上报已关闭——session_id / trace.input 不再写入 run span
-    // if let Some(session_id) = session_id.as_deref() {
-    //     run_span.record(attr::LANGFUSE_SESSION_ID, session_id);
-    // }
-    // run_span.record(
-    //     attr::LANGFUSE_TRACE_INPUT,
-    //     trace_input_from_entries(&transcript.entries).as_str(),
-    // );
 
     // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
     // 计数器从 checkpoint 起步，保证 MAX_TOOL_ITERATIONS 累积、Step index 单调。
@@ -447,18 +435,8 @@ pub async fn run_loop(
                                 EventPayload::Reasoning { text }
                             }
                             ModelStreamEvent::ToolCallDelta(delta) => {
-                                let final_index = stream_tool_call_offset + delta.index;
-                                tracing::debug!(
-                                    stream_offset = stream_tool_call_offset,
-                                    delta_index = delta.index,
-                                    final_index,
-                                    delta_id = ?delta.id,
-                                    delta_name = ?delta.name,
-                                    args_delta_len = delta.arguments_delta.as_ref().map(|a| a.len()).unwrap_or(0),
-                                    "agent_loop: ToolCallDelta → EventPayload"
-                                );
                                 EventPayload::ToolCallDelta {
-                                    index: final_index,
+                                    index: stream_tool_call_offset + delta.index,
                                     id: delta.id,
                                     name: delta.name,
                                     arguments_delta: delta.arguments_delta,
@@ -554,11 +532,6 @@ pub async fn run_loop(
                     output_attachments = all_attachments;
                     continue;
                 }
-                // langfuse 上报已关闭——trace.output 不再写入 run span
-                // run_span.record(
-                //     attr::LANGFUSE_TRACE_OUTPUT,
-                //     truncate_for_langfuse(&text).as_str(),
-                // );
                 break Ok(AssistantOutput {
                     text,
                     attachments: all_attachments,
@@ -804,51 +777,6 @@ pub async fn run_loop(
         }
     }
     result
-}
-
-#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
-fn trace_input_from_entries(entries: &[model_gateway::types::TranscriptEntry]) -> String {
-    let messages: Vec<_> = entries
-        .iter()
-        .rev()
-        .find_map(|entry| match entry {
-            model_gateway::types::TranscriptEntry::User(user) => Some(serde_json::json!({
-                "role": "user",
-                "content": user.text,
-                "attachments": user.attachments.iter().map(|attachment| match attachment {
-                    common::attachments::MessageAttachment::TextFile { name, media_type, content } => serde_json::json!({
-                        "kind": "text_file",
-                        "name": name,
-                        "media_type": media_type,
-                        "content": truncate_for_langfuse(content),
-                    }),
-                    common::attachments::MessageAttachment::Image { name, media_type, data } => serde_json::json!({
-                        "kind": "image",
-                        "name": name,
-                        "media_type": media_type,
-                        "bytes_base64": data.len(),
-                    }),
-                }).collect::<Vec<_>>(),
-            })),
-            _ => None,
-        })
-        .into_iter()
-        .collect();
-    truncate_for_langfuse(&serde_json::to_string(&messages).unwrap_or_default())
-}
-
-#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
-fn truncate_for_langfuse(value: &str) -> String {
-    const MAX_CHARS: usize = 32_000;
-    let mut iter = value.char_indices();
-    match iter.nth(MAX_CHARS) {
-        Some((idx, _)) => format!(
-            "{}\n…[truncated {} chars]",
-            &value[..idx],
-            value.chars().count() - MAX_CHARS
-        ),
-        None => value.to_string(),
-    }
 }
 
 #[cfg(test)]

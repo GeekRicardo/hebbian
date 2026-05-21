@@ -48,6 +48,9 @@ pub enum IpcCommand {
     Mode { mode: String },
     /// 检测 daemon 存活
     Ping,
+    /// 读当前 session 的 model_io.jsonl：返回 `data: [DumpEntry, ...]`
+    /// 给 AI 脚本调试 / hebweb 后端做数据源，避免每个 surface 自己解析 jsonl
+    ListModelIo,
 }
 
 fn default_once() -> String {
@@ -97,6 +100,9 @@ pub enum DaemonEvent {
     TextDone { full_text: String },
     Reasoning { text: String },
     ToolStart { id: String, name: String, input: Value },
+    /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待时按 chunk 推过来；
+    /// 自动化脚本可以 tail 这个看命令实时进度，不必等 ToolDone。
+    ToolOutputDelta { id: String, chunk: String },
     ToolDone { id: String, result: String, duration_ms: u64 },
     PermissionRequested {
         request_id: String,

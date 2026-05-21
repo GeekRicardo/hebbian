@@ -460,6 +460,7 @@ async fn dispatch_invoke(
         "update_session_settings" => {
             cmd_update_session_settings(state, args).await.map(Some)
         }
+        "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
         // 其余 desktop Tauri command 在 v1 浏览器 surface 暂不实现
         // OAuth 系列、edits diff/revert、preview_payload 等需要 desktop bridge
         other => Err(anyhow!(
@@ -1408,6 +1409,18 @@ async fn cmd_kill_background_task_local(args: Value) -> Result<Value> {
         Some(state) => Ok(Value::String(state.label().to_string())),
         None => Err(anyhow!("未找到 task_id={task_id}（可能已被清理）")),
     }
+}
+
+/// 读 session 的 `model_io.jsonl`，返回 `Vec<DumpEntry-as-Value>`。
+/// 与 desktop `list_session_model_io` 同语义；bridge 不在场时直接读 hebweb 自己的 data_dir。
+async fn cmd_list_session_model_io(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let entries = agent_core::storage::model_io::read_session(&state.data_dir, sid)
+        .map_err(|e| anyhow!("读 model_io.jsonl 失败：{e}"))?;
+    Ok(Value::Array(entries))
 }
 
 async fn cmd_update_session_settings(state: &ServerState, args: Value) -> Result<Value> {

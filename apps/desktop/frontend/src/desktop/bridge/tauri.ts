@@ -190,6 +190,15 @@ export const api = {
       uptoMessageId: uptoMessageId ?? null,
     }),
 
+  /**
+   * 拉 session 的 model_io.jsonl —— 每条对应一次「真实发出去的」模型请求 + 响应。
+   * 与 `previewSessionPayload` 互补：preview 是按当前 session 状态实时重建的"理论 payload"；
+   * 这边是后端真发出去过的"历史 payload"，用来排查"模型到底收到了什么、返了什么"。
+   * 每条 entry shape：`{ ts, run_id, turn, model, request, response, duration_ms }`。
+   */
+  listSessionModelIo: (sessionId: string) =>
+    invoke<unknown[]>("list_session_model_io", { sessionId }),
+
   /** 当前 session 的上下文用量（用于输入框旁的环形进度条） */
   getContextUsage: (sessionId: string) =>
     invoke<ContextUsage>("get_context_usage", { sessionId }),

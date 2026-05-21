@@ -9,13 +9,9 @@
 //!
 //! ## 环境变量
 //!
-//! - `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP HTTP base URL。例：
-//!   - 通用 collector：`http://localhost:4318`
-//!   - Langfuse Cloud（日本）：`https://jp.cloud.langfuse.com/api/public/otel`
-//! - `OTEL_EXPORTER_OTLP_HEADERS`：标准 OTel header 字符串，`k1=v1,k2=v2`。Langfuse 用 Basic Auth：
-//!   `Authorization=Basic <base64(public_key:secret_key)>`
-//! - `HEBBIAN_OTEL_METRICS`：`0/false/off` 时关闭 metric 导出。Langfuse 只收 trace，
-//!   开着会让 metric 路径打 404，关掉更干净。默认 on。
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP HTTP base URL（如 `http://localhost:4318`）。
+//! - `OTEL_EXPORTER_OTLP_HEADERS`：标准 OTel header 字符串，`k1=v1,k2=v2`，用于鉴权。
+//! - `HEBBIAN_OTEL_METRICS`：`0/false/off` 时关闭 metric 导出。默认 on。
 //!
 //! ## 内置 OTel 后台 runtime
 //!
@@ -23,7 +19,7 @@
 //! 直接调用。批处理导出 task 跑在 observability 内部独占的 multi-thread runtime
 //! 上（1 worker），不依赖 surface 是否提供 tokio 上下文。
 //!
-//! ## Span 层级（与 Langfuse 对齐）
+//! ## Span 层级
 //!
 //! ```text
 //! run                                ← agent-core::harness::spawn_run

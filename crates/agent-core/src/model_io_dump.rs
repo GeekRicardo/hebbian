@@ -1,9 +1,12 @@
 //! 模型 IO 调试 dump：把每次模型请求的完整入参 + 响应按 jsonl 写到磁盘。
 //!
-//! 仅在环境变量 `HEBBIAN_DUMP_MODEL_IO` 被设置时启用——保持默认无开销。
-//! 文件位置由 surface 决定（CLI 与桌面都用 `<data_dir>/sessions/<session_id>/model_io.jsonl`，
-//! 与 session 的其它工件 `tool_results/` `compactions/` `plans/` `partial/` 同级，
-//! 遵循架构 §4.9.1：一段对话所有文件落在 `<sid>/` 目录内）。
+//! **默认开启**：每个 session 都会落盘 model_io.jsonl，为前端"Model I/O 调试器"
+//! 提供数据源。开销极小（每个 turn 一行 jsonl，attachments 不写正文）。
+//! 用 `HEBBIAN_DUMP_MODEL_IO=0` / `=false` 显式禁用。
+//!
+//! 文件位置：`<data_dir>/sessions/<session_id>/model_io.jsonl`，与 session 的其它工件
+//! `tool_results/` `compactions/` `plans/` `partial/` 同级，遵循架构 §4.9.1：
+//! 一段对话所有文件落在 `<sid>/` 目录内。
 //!
 //! 设计与 [`Recorder`] 同构：actor 模式，clone 廉价（只复 `Sender`），
 //! 后台 writer task 异步落盘，主 loop 不被 IO 阻塞。
@@ -32,17 +35,25 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
-/// 触发本功能的环境变量。
+/// 控制本功能的环境变量。
 ///
-/// - 未设置 / 空值：禁用，runtime 不付任何代价。
-/// - 任意非空值：启用，dump 写到 `<data_dir>/sessions/<session_id>/model_io.jsonl`。
+/// - 未设置：**默认启用**，dump 写到 `<data_dir>/sessions/<session_id>/model_io.jsonl`。
+/// - `0` / `false` / `off` / `no`（大小写无关）：显式禁用。
+/// - 其它非空值：启用。
 pub const ENV_VAR: &str = "HEBBIAN_DUMP_MODEL_IO";
 
 /// 是否启用 dump。surface 用它决定要不要构造 [`ModelIoDump`]。
+///
+/// 调试器的可用性比微小开销更重要——bug 出现时再去开环境变量已经晚了，
+/// 所以默认开。
 pub fn is_enabled() -> bool {
-    std::env::var(ENV_VAR)
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
+    match std::env::var(ENV_VAR) {
+        Ok(v) => {
+            let trimmed = v.trim().to_ascii_lowercase();
+            !matches!(trimmed.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => true,
+    }
 }
 
 /// 默认路径：`<data_dir>/sessions/<session_id>/model_io.jsonl`。
@@ -403,6 +414,35 @@ mod tests {
         assert_eq!(v["size_bytes"], 8000);
         // 没有 data 字段
         assert!(v.get("data").is_none());
+    }
+
+    #[test]
+    fn is_enabled_defaults_on_when_env_unset() {
+        // 直接断言 default 行为：环境变量未设置时启用。
+        // 用一个绝对不可能被别处占用的临时 var 名做隔离没有意义，因为 is_enabled
+        // 用的是常量；这里只断当前进程未配置该 var 时的行为。
+        let saved = std::env::var(ENV_VAR).ok();
+        // 删除一下以模拟 missing
+        std::env::remove_var(ENV_VAR);
+        assert!(is_enabled());
+        // 恢复
+        match saved {
+            Some(v) => std::env::set_var(ENV_VAR, v),
+            None => std::env::remove_var(ENV_VAR),
+        }
+    }
+
+    #[test]
+    fn is_enabled_disabled_by_explicit_false_values() {
+        let saved = std::env::var(ENV_VAR).ok();
+        for v in ["0", "false", "FALSE", "off", "No"] {
+            std::env::set_var(ENV_VAR, v);
+            assert!(!is_enabled(), "expected disabled for {v:?}");
+        }
+        match saved {
+            Some(v) => std::env::set_var(ENV_VAR, v),
+            None => std::env::remove_var(ENV_VAR),
+        }
     }
 
     #[tokio::test]

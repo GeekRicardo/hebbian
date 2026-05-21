@@ -34,10 +34,33 @@ use crate::{
     tools::{
         hitl::{HitlGate, PermissionDecision},
         registry::ToolRegistry,
-        ASK_TOOL_NAME,
+        ToolCtx, ToolProgress, ASK_TOOL_NAME,
     },
     workspace::Workspace,
 };
+
+/// 把 dispatch 主事件 sink 包成 `ToolProgress`：拿到 chunk 后转成
+/// `ToolCallOutputDelta` 事件喂回去。`dispatch_index` / `call_id` 在闭包构造时
+/// 就锁死，工具内部不需要知道这些元信息。
+struct ToolProgressEmitter {
+    sink: EventSink,
+    state: Arc<RunState>,
+    dispatch_index: usize,
+    call_id: String,
+}
+
+impl ToolProgress for ToolProgressEmitter {
+    fn emit(&self, chunk: String) {
+        if chunk.is_empty() {
+            return;
+        }
+        (self.sink)(self.state.event(EventPayload::ToolCallOutputDelta {
+            index: self.dispatch_index,
+            call_id: self.call_id.clone(),
+            chunk,
+        }));
+    }
+}
 
 fn effect_class_label(class: EffectClass) -> &'static str {
     match class {
@@ -283,9 +306,6 @@ impl ToolDispatcher {
             hebbian.tool.truncated = Empty,
             hebbian.tool.result_bytes = Empty,
             hebbian.tool.duration_ms = Empty,
-            // langfuse.* 字段会污染 stderr，暂时关闭
-            // langfuse.observation.input = Empty,
-            // langfuse.observation.output = Empty,
         );
 
         Box::pin(
@@ -461,12 +481,6 @@ impl ToolDispatcher {
                     None
                 };
 
-                // langfuse 上报已关闭——observation.input 不再写入 tool.call span
-                // tracing::Span::current().record(
-                //     attr::LANGFUSE_OBSERVATION_INPUT,
-                //     tool_input_for_langfuse(&call.name, &effective_input).as_str(),
-                // );
-
                 // 执行
                 info!(
                     tool = %call.name,
@@ -482,8 +496,18 @@ impl ToolDispatcher {
                 }));
 
                 let started = Instant::now();
+                let progress: Arc<dyn ToolProgress> = Arc::new(ToolProgressEmitter {
+                    sink: sink.clone(),
+                    state: state.clone(),
+                    dispatch_index,
+                    call_id: call.id.clone(),
+                });
+                let tool_ctx = ToolCtx {
+                    call_id: call.id.clone(),
+                    progress: Some(progress),
+                };
                 let (raw, exec_failed) = match tool {
-                    Some(t) => match t.execute(effective_input.clone()).await {
+                    Some(t) => match t.execute_streaming(tool_ctx, effective_input.clone()).await {
                         Ok(s) => (s, false),
                         Err(e) => {
                             warn!(tool = %call.name, error = %e, "tool exec error");
@@ -621,11 +645,6 @@ impl ToolDispatcher {
                     }
                 }
 
-                // langfuse 上报已关闭——observation.output 不再写入 tool.call span
-                // tracing::Span::current().record(
-                //     attr::LANGFUSE_OBSERVATION_OUTPUT,
-                //     truncate_for_langfuse(&content).as_str(),
-                // );
                 record_tool_outcome(
                     outcome,
                     &call.name,
@@ -930,31 +949,6 @@ fn record_tool_outcome(outcome: &str, tool: &str, duration_ms: f64, truncated: b
     span.record(attr::TOOL_RESULT_SIZE, bytes as i64);
     span.record(attr::TOOL_NAME, tool);
     metrics::record_tool_duration(tool, outcome, duration_ms);
-}
-
-#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
-fn tool_input_for_langfuse(tool: &str, input: &serde_json::Value) -> String {
-    truncate_for_langfuse(
-        &serde_json::to_string(&serde_json::json!({
-            "name": tool,
-            "input": input,
-        }))
-        .unwrap_or_default(),
-    )
-}
-
-#[allow(dead_code)] // langfuse 上报关闭后保留，便于将来重启
-fn truncate_for_langfuse(value: &str) -> String {
-    const MAX_CHARS: usize = 32_000;
-    let mut iter = value.char_indices();
-    match iter.nth(MAX_CHARS) {
-        Some((idx, _)) => format!(
-            "{}\n…[truncated {} chars]",
-            &value[..idx],
-            value.chars().count() - MAX_CHARS
-        ),
-        None => value.to_string(),
-    }
 }
 
 /// 把"被拒"渲染为 ToolStarted/Finished + ToolResult，让 transcript 一致。

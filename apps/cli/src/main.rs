@@ -136,6 +136,10 @@ enum Command {
 
     /// 列出本机所有存活的 heb daemon（按 ~/.hebbian/cli-sockets/ 扫描 + ping 测活，自动清理死 socket）
     ListSessions,
+
+    /// 拉当前 session 已记录的所有 model 请求/响应（每个 turn 一条）
+    /// → 输出 `{ entries: [DumpEntry, ...] }`，给 AI 脚本排查"模型到底收到了什么"
+    ModelIo { session_id: String },
 }
 
 #[tokio::main]
@@ -204,5 +208,9 @@ async fn main() -> Result<()> {
         }
 
         Command::ListSessions => client::list_sessions().await,
+
+        Command::ModelIo { session_id } => {
+            client::send_command(&session_id, IpcCommand::ListModelIo).await
+        }
     }
 }

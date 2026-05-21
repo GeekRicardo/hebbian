@@ -19,7 +19,6 @@ import {
   CheckCircle2,
   Loader2,
   Brain,
-  FileJson,
   Pencil,
   X,
   Terminal,
@@ -69,7 +68,6 @@ import {
   canShowRawMessage,
   getMessageRawText,
 } from "@/desktop/ui/lib/messageRawText";
-import { buildModelMessages } from "@/desktop/ui/lib/buildModelMessages";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 
@@ -125,6 +123,12 @@ interface ToolCallItem {
   status: ToolCallStatus;
   /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9） */
   artifactPath?: string | null;
+  /**
+   * 工具执行中的流式输出累积（架构 §4.4.1）。Bash 前台等待期间的
+   * stdout/stderr 增量；status=running 时渲染为实时 console，status=done
+   * 后由 result 取代显示。
+   */
+  liveOutput?: string | null;
 }
 
 type AssistantRenderPart =
@@ -167,6 +171,7 @@ function normalizeStreamingToolPart(
     durationMs: part.duration_ms,
     status: part.status,
     artifactPath: part.artifact_path,
+    liveOutput: part.live_output,
   };
 }
 
@@ -456,186 +461,6 @@ function Base64DataUriValue({ value }: { value: string }) {
   );
 }
 
-function JsonPrimitive({ value }: { value: unknown }) {
-  if (value === null)
-    return <span className="text-muted-foreground">null</span>;
-  if (value === undefined)
-    return <span className="text-muted-foreground">undefined</span>;
-  if (typeof value === "boolean")
-    return <span className="text-foreground/90">{String(value)}</span>;
-  if (typeof value === "number")
-    return <span className="text-foreground/90">{value}</span>;
-  if (typeof value === "string") {
-    if (DATA_URI_BASE64_RE.test(value)) {
-      return <Base64DataUriValue value={value} />;
-    }
-    return (
-      <span className="break-words text-emerald-700 dark:text-emerald-400">
-        {JSON.stringify(value)}
-      </span>
-    );
-  }
-  return <span>{String(value)}</span>;
-}
-
-function JsonKeyLabel({ keyLabel }: { keyLabel: string | number | null }) {
-  if (keyLabel === null) return null;
-  // 数组索引只是视觉辅助,不属于 JSON 内容,选区里跳过它
-  if (typeof keyLabel === "number") {
-    return (
-      <span className="select-none text-muted-foreground/70">
-        <span>{keyLabel}</span>
-        <span className="mr-1">:</span>
-      </span>
-    );
-  }
-  return (
-    <>
-      <span className="text-foreground/85">&quot;{keyLabel}&quot;</span>
-      <span className="mr-1 text-muted-foreground/70">:</span>
-    </>
-  );
-}
-
-function JsonNode({
-  value,
-  level,
-  keyLabel,
-}: {
-  value: unknown;
-  level: number;
-  keyLabel: string | number | null;
-}) {
-  const [open, setOpen] = useState(true);
-  const indent = { paddingLeft: level * 14 } as const;
-  const composite =
-    value !== null && typeof value === "object" && !(value instanceof Date);
-
-  if (!composite) {
-    return (
-      <div style={indent} className="flex items-baseline">
-        <span className="inline-block w-3.5 shrink-0 select-none" />
-        <JsonKeyLabel keyLabel={keyLabel} />
-        <JsonPrimitive value={value} />
-      </div>
-    );
-  }
-
-  const isArray = Array.isArray(value);
-  const entries: Array<[string | number, unknown]> = isArray
-    ? (value as unknown[]).map((v, i) => [i, v])
-    : Object.entries(value as Record<string, unknown>);
-  const [openBracket, closeBracket] = isArray ? ["[", "]"] : ["{", "}"];
-
-  return (
-    <div>
-      <div style={indent} className="flex items-baseline">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-label={open ? "折叠" : "展开"}
-          className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded hover:bg-accent select-none"
-        >
-          {open ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </button>
-        <JsonKeyLabel keyLabel={keyLabel} />
-        <span>{openBracket}</span>
-        {!open && (
-          <>
-            {entries.length > 0 && (
-              <span className="mx-1 italic text-muted-foreground select-none">
-                {entries.length} {isArray ? "项" : "键"}
-              </span>
-            )}
-            <span>{closeBracket}</span>
-          </>
-        )}
-      </div>
-      {open && (
-        <>
-          {entries.map(([k, v]) => (
-            <JsonNode
-              key={String(k)}
-              value={v}
-              level={level + 1}
-              keyLabel={k}
-            />
-          ))}
-          <div style={indent} className="flex items-baseline">
-            <span className="inline-block w-3.5 shrink-0 select-none" />
-            <span>{closeBracket}</span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function JsonView({ value }: { value: unknown }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
-      const node = ref.current;
-      if (!node) return;
-      e.preventDefault();
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    }
-  }
-
-  return (
-    <div
-      ref={ref}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      className="max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 px-2 py-2 font-mono text-[12px] leading-relaxed text-foreground outline-none focus:ring-1 focus:ring-primary/40"
-    >
-      <JsonNode value={value} level={0} keyLabel={null} />
-    </div>
-  );
-}
-
-function RawJsonPanel({
-  loading,
-  error,
-  payload,
-  fallback,
-}: {
-  loading: boolean;
-  error: string | null;
-  payload: unknown;
-  fallback: unknown;
-}) {
-  if (loading && payload == null) {
-    return (
-      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        载入发送给模型的 payload…
-      </div>
-    );
-  }
-  if (payload != null) {
-    return <JsonView value={payload} />;
-  }
-  return (
-    <div className="space-y-2">
-      {error && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
-          {error}（已回退到本地推断的 messages,不含 workspace XML / tools 定义）
-        </div>
-      )}
-      <JsonView value={fallback} />
-    </div>
-  );
-}
 
 function parseArgsObject(argumentsText: string): Record<string, unknown> {
   const trimmed = argumentsText.trim();
@@ -1542,7 +1367,14 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
       name === "Bash" || name === "PowerShell"
         ? argString(callArgs(call), "command")
         : "";
-    const body = cmd ? `$ ${cmd}\n\n${result}` : result;
+    // status=running 且收到过 ToolOutputDelta：实时控制台展示，命令仍在跑。
+    // status=done 后 result 已是聚合后的完整文本，覆盖掉 liveOutput。
+    const running = call.status === "running";
+    const live = call.liveOutput ?? "";
+    const stream = running ? (live || "等待输出…") : result;
+    const body = cmd
+      ? `$ ${cmd}\n\n${stream}${running && live ? "\n▍" : ""}`
+      : stream;
     return (
       <div className="relative">
         <ExpandButton title={title}>
@@ -1953,12 +1785,6 @@ export const MessageBubble = memo(function MessageBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamingParts]);
   const [showRawText, setShowRawText] = useState(false);
-  const [showRawJson, setShowRawJson] = useState(false);
-  // 后端 preview payload(含 workspace XML / tools / skills)。
-  // 打开 JSON 视图时按需拉取,失败时回退到前端 buildModelMessages。
-  const [rawJsonPayload, setRawJsonPayload] = useState<unknown>(null);
-  const [rawJsonLoading, setRawJsonLoading] = useState(false);
-  const [rawJsonError, setRawJsonError] = useState<string | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -1975,33 +1801,6 @@ export const MessageBubble = memo(function MessageBubble({
     const len = ta.value.length;
     ta.setSelectionRange(len, len);
   }, [editing]);
-
-  // 打开 JSON 视图时按需拉取后端 preview。
-  // streaming 消息或没有 session(理论上不会发生)走前端 fallback。
-  useEffect(() => {
-    if (!showRawJson) return;
-    const sessionId = session?.id;
-    if (!sessionId || streaming) return;
-    let cancelled = false;
-    setRawJsonLoading(true);
-    setRawJsonError(null);
-    api
-      .previewSessionPayload(sessionId, message.id)
-      .then((value) => {
-        if (cancelled) return;
-        setRawJsonPayload(value);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setRawJsonError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setRawJsonLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showRawJson, session?.id, message.id, streaming]);
 
   function startEdit() {
     setEditDraft(message.content);
@@ -2195,16 +1994,6 @@ export const MessageBubble = memo(function MessageBubble({
         {highlight(message.content, matches, find!.activeLocalIdx, message.id)}
       </div>
     );
-  } else if (showRawJson) {
-    const fallback = session ? buildModelMessages(session, message.id) : message;
-    body = (
-      <RawJsonPanel
-        loading={rawJsonLoading}
-        error={rawJsonError}
-        payload={rawJsonPayload}
-        fallback={fallback}
-      />
-    );
   } else if (showRawText && canToggleRawText) {
     body = (
       <div className="whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-[13px] leading-relaxed text-foreground">
@@ -2340,7 +2129,6 @@ export const MessageBubble = memo(function MessageBubble({
                 type="button"
                 onClick={() => {
                   setShowRawText((show) => !show);
-                  setShowRawJson(false);
                   setActionMenuOpen(false);
                 }}
                 className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -2349,18 +2137,6 @@ export const MessageBubble = memo(function MessageBubble({
                 <span>{showRawText ? "显示渲染" : "显示原文"}</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => {
-                setShowRawJson((show) => !show);
-                setShowRawText(false);
-                setActionMenuOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <FileJson className="h-3.5 w-3.5" />
-              <span>{showRawJson ? "显示渲染" : "显示原始 JSON"}</span>
-            </button>
           </div>
         )}
       </div>

@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown } from "lucide-react";
+import { Sparkles, ChevronDown, FileJson } from "lucide-react";
 import {
   MessageBubble,
   FloatingTaskPanel,
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
+import { ModelIoInspector } from "./ModelIoInspector";
 import { EditTreePanel } from "./EditTreePanel";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
@@ -49,6 +50,7 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [titleLoading, setTitleLoading] = useState(false);
+  const [modelIoOpen, setModelIoOpen] = useState(false);
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -383,11 +385,29 @@ export function ChatView() {
           </div>
         </div>
         <div className="flex items-center gap-2 no-drag relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setModelIoOpen(true)}
+            title="查看本会话所有发给模型的请求 / 响应"
+            data-testid="open-model-io"
+          >
+            <FileJson className="w-3.5 h-3.5 mr-1" />
+            Model I/O
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
             {currentSession?.project_id ? "项目设置" : "对话设置"}
           </Button>
         </div>
       </header>
+
+      {currentSession?.id ? (
+        <ModelIoInspector
+          sessionId={currentSession.id}
+          open={modelIoOpen}
+          onClose={() => setModelIoOpen(false)}
+        />
+      ) : null}
 
       <FindBar
         open={findOpen}

@@ -175,6 +175,17 @@ fn create_session(
     Ok(session)
 }
 
+/// 读 session 的 `model_io.jsonl`：返回 `Vec<DumpEntry-as-Value>`，每条对应一次模型调用。
+/// 给前端 Model I/O 调试器排查"每次给模型发了什么、模型返了什么"——比 bubble
+/// 上的 `preview_session_payload` 多一份"历史真实出参"维度，因为 preview 是
+/// 基于当前 session 状态实时重建，而这里是后端真发出去过的。
+#[tauri::command]
+fn list_session_model_io(app: AppHandle, session_id: String) -> AppResult<Vec<serde_json::Value>> {
+    let dd = data_dir(&app)?;
+    agent_core::storage::model_io::read_session(&dd, &session_id)
+        .map_err(|e| AppError::msg(format!("读 model_io.jsonl 失败：{e}")))
+}
+
 // ========== Workspace Projects ==========
 
 #[tauri::command]
@@ -1827,6 +1838,7 @@ pub fn run() {
             switch_provider_model,
             send_message,
             preview_session_payload,
+            list_session_model_io,
             cancel_message,
             inject_user_message,
             get_context_usage,

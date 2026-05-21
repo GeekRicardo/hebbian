@@ -296,6 +296,12 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
                 input: input.clone(),
             })
         }
+        EventPayload::ToolCallOutputDelta { call_id, chunk, .. } => {
+            Some(DaemonEvent::ToolOutputDelta {
+                id: call_id.clone(),
+                chunk: chunk.clone(),
+            })
+        }
         EventPayload::ToolCallFinished { call_id, result, duration_ms, .. } => {
             Some(DaemonEvent::ToolDone {
                 id: call_id.clone(),
@@ -783,6 +789,15 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
         }
         IpcCommand::Ping => {
             IpcResponse::with_data(serde_json::json!({ "session_id": state.session_id }))
+        }
+        IpcCommand::ListModelIo => {
+            match agent_core::storage::model_io::read_session(
+                &state.data_dir,
+                &state.session_id,
+            ) {
+                Ok(entries) => IpcResponse::with_data(serde_json::json!({ "entries": entries })),
+                Err(e) => IpcResponse::err(format!("读 model_io.jsonl 失败：{e}")),
+            }
         }
     }
 }

@@ -2876,3 +2876,157 @@
   - 没改架构.md：本期是把已有的 session_titler.rs（5 月已落地）从 dead code 升级为活跃路径 + 三 surface 接入，属于实现层下沉，未引入新协议字段以外的设计。下次架构.md 整理时把 §4.x 加一节"标题自动生成"指向 session_titler.rs 与本条 changelog
   - 没把 `agent_core::session_titler::generate_for_session` 写成 `Result`——当前是 `Option<String>`，错误信息（OAuth 刷新失败 / 模型 400 / 网络）只走 `tracing::warn`。如果后续需要 surface 端感知具体失败原因（例如展示 toast），把返回类型升级成 `Result<Option<String>, TitleError>`
   - 没加 `heb title <session_id>` 手动重生成 CLI 命令：当前自动触发已经覆盖 90% 场景；如果后续要给 CLI 加手动入口，加一条 `IpcCommand::RegenerateTitle` 调 `agent_core::session_titler::regenerate_session_title` 即可
+
+### 2026-05-21 — 新增 session 级 Model I/O 调试器：抽屉式查看真实模型 IO + jsonl 默认开启
+
+- **Why**: 用户排查"模型到底收到了什么、返了什么"时，MessageBubble 三点菜单里"查看原始 JSON"是 per-bubble 形态——每个 bubble 都从 systemprompt 起头展开整段 payload，跨请求要在多个弹窗间切换；重复信息又多；assistant bubble 实际上对应**多次**模型请求（中间 tool_call 多轮），点开一次只看到最后一次。用户原话："任何一次请求都可能有问题，我要的就是一个能查看所有请求的发送给模型的 messages，但不是像现在每个点开都从 systemprompt 看"。
+- **改动**:
+  - `crates/agent-core/src/model_io_dump.rs`: `is_enabled()` 默认开启（环境变量 `HEBBIAN_DUMP_MODEL_IO=0|false|off|no` 才禁用）。**此前**默认禁用、需要用户启动前 export 才有数据——bug 出现时再去开就晚了。落盘开销很小（每个 turn 一行 jsonl、attachments 只写元数据）。新增 2 个单测覆盖新语义
+  - `crates/agent-core/src/storage/model_io.rs`（新）: `read_session(data_dir, session_id)` 读 `<sid>/model_io.jsonl`，坏行跳过+warn、文件缺失返回空 vec
+  - `apps/cli/src/ipc.rs`: 新增 `IpcCommand::ListModelIo` variant（additive，旧客户端无感）
+  - `apps/cli/src/daemon.rs`: `handle_command` 分发新命令，返回 `{ entries: [...] }`
+  - `apps/cli/src/main.rs`: 新增 `heb model-io <session_id>` clap 子命令 → IpcCommand::ListModelIo
+  - `apps/desktop/src/lib.rs`: 新增 Tauri 命令 `list_session_model_io(session_id)` → `Vec<Value>`，注册到 `invoke_handler`
+  - `apps/web-server/src/server.rs`: dispatch_invoke 加 `list_session_model_io` 分支（bridge 不在场时 fallback 用），直接读 hebweb 自己的 data_dir
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`: api 加 `listSessionModelIo(sessionId)`
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`（新）: 右侧抽屉式调试器。左侧请求时间线（时间 / duration / msg 数 / token 用量 / status 标签）、右侧详情（system prompt 默认折叠、carried-over 折叠条、本次新增 messages 标 NEW 徽章 + 绿色 ring、response 块带 type/text/calls/usage）
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`: header 加 "Model I/O" 入口按钮（FileJson 图标），点击开抽屉，Esc 关
+- **影响范围**:
+  - agent_core: 新增 `storage::model_io` 模块（additive）+ `model_io_dump::is_enabled` 默认翻转
+  - 协议: IpcCommand 加 variant、Tauri command 加一条、hebweb dispatch 加一条 —— 全部 additive，对旧客户端无影响
+  - 三个 surface 都能用：heb CLI `heb model-io <sid>`、Desktop / hebweb 都在 ChatView header 显示"Model I/O"按钮
+  - **没动** MessageBubble 的"查看原始 JSON"按钮（避免顺手 refactor）—— 同时保留两个入口，用户慢慢习惯抽屉后下版本再清理
+- **取舍**:
+  - **默认开启 vs 默认关闭**：每个 session 多一个 `model_io.jsonl` 文件（KB~MB 量级，attachments 不写正文所以不会暴涨）。换来"任何 session 出问题都能立即开抽屉看现场"——bug 出现时才意识到要开环境变量已经晚了。决策：开
+  - **抽屉 vs 独立 tab vs modal**：modal 排查时反复切窗很烦；独立 tab 偏离当前对话上下文；抽屉能与 chat 区域并存，关闭即回到对话，最贴合"排查中"的使用模式
+  - **diff 模式 vs 全展开**：抽屉默认 diff 模式——上一条请求的 messages 折成"上次已发送 N 条"，本次新增的标 NEW 自动展开。理由：翻 30 次请求时只看你要看的；想看全的可以点折叠条展开
+  - **diff 比较算法**：first iteration 用严格 JSON 字符串比较——实测发现碎了：agent_core 在首条 user message 里注入 `<environment>` / `<system-reminder>` 包装段，且这些段每个 turn 内容微调（时间、workspace 状态），导致字面比较永远判"全新"，carried-over 折叠条永远不出现。修复：`fingerprintMessage` 比较前剥离 `<environment>` / `<system-reminder>` / `<workspace-update>` 三种包装段。这本身也暴露一个事实——**这些段每次都不同 → 它们破坏 prompt cache 命中**，未来如果要追求"几乎全局 cache 命中"需要把动态环境信息搬出 first user message（架构 §9.3 已经约束 system prompt 稳定，但 first user 没人管）
+- **验证**:
+  - 阶段 A（复现痛点）：MessageBubble 三点菜单里"查看原始 JSON"现况确实是 per-bubble 弹窗——多请求难对比的现象 1:1 重现
+  - 阶段 B（验证修复）：Playwright 走 hebweb （`/tmp/hebweb-modelio-test/` 独立 data_dir 隔离 bridge 干扰），新建 session → 发"回复你好世界四个字" → 1 次请求落盘 `<sid>/model_io.jsonl` (22KB) → 点 Model I/O 按钮 → 抽屉打开显示 1 次请求 → 详情侧看到 system prompt 4838 字符 / 1 条 user message / response Done text "你好世界"。再发第二条 → 2 次请求；切到 #2 看到 "上次已发送 (1 条) —— 点击展开" 折叠条 + 新增的 assistant + user 标 NEW 徽章。空状态 / 单条 / 多条 / diff 模式四种状态都能拍出截图，符合"任何一次请求都可能有问题"的排查需求
+  - `cargo check --workspace` clean；`cargo test -p agent-core --lib model_io` 10 个测试全过；`pnpm exec tsc --noEmit` clean
+- **留尾巴**:
+  - 没改架构.md：本期是 §4.10 Observability 现有能力的 surface 化（model_io_dump.jsonl 已经存在；只是默认开启 + 加读 API + UI）。下次架构.md 整理时在 §4.10 加一节"Model I/O 调试器"指向本 changelog 与 `ModelIoInspector.tsx`
+  - MessageBubble 三点菜单的"查看原始 JSON"按钮保留——下版本验证用户都迁移到抽屉后再清理（避免本期顺手 refactor）
+  - bubble 上的按钮还没"跳到 Request #N"功能——当前还是独立的内嵌 JSON 视图。等抽屉用户习惯后，把 bubble 按钮改成"在 Model I/O 调试器里看这条"，按 bubble 的位置在抽屉里高亮对应请求
+  - first user message 里 `<environment>` / `<system-reminder>` 段每次都变会破 prompt cache（diff 修复时发现的副产物）—— 未来想稳定 cache 命中需要把动态环境信息搬到独立位置。本期不动这个，留给 §9.3 cache 优化时一起处理
+  - 抽屉不支持"对比两次请求的 messages diff"（除了 carried-over 折叠）—— 如果之后用户说"我想看 #5 和 #12 之间到底差了什么"，加一个"Diff vs #N"按钮即可
+
+### 2026-05-22 — Bash 前台执行支持流式实时输出（新增 `ToolCallOutputDelta` 事件 + Tool trait 加 `execute_streaming` 默认方法）
+
+- **Why**: 用户痛点——Bash 前台命令（最长 60s 默认 timeout）原本要等命令结束 / 超时才把 stdout/stderr 一次性塞进 `ToolCallFinished.result`。长跑命令（编译、测试、迁移脚本）期间 UI 一片"等待返回…"，模型也看不到中间产物。BackgroundShell 的 tail buffer 已经在被 reader task 实时灌入，缺的只是把"新增片段"沿事件流推给 surface
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): 新增 `EventPayload::ToolCallOutputDelta { index, call_id, chunk }`——`TextDelta`/`ToolCallDelta` 的兄弟，紧跟 `ToolCallStarted` 之后、`ToolCallFinished` 之前出现
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): Tool trait 加 `execute_streaming(ctx, input)` 默认方法，默认委托回 `execute(input)` 忽略 ctx；新增 `ToolCtx { call_id, progress: Option<Arc<dyn ToolProgress>> }` 和 `ToolProgress::emit(chunk)` trait。非流式工具零侵入
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 前台等待循环重写——原本 `timeout(wait_terminal())` 一次等死；现在 loop `select { wait_terminal | sleep_until(deadline) | tick(200ms) }`，每次有变化 `read_incremental(READ_CHUNK_BYTES)` 抽增量，`ctx.emit_chunk(s)` 推 surface + 本地 buffer 累加。退出循环后 buffer + 终态拼最终 text（不再依赖 read_incremental 的 cursor 重抽）。run_in_background=true 路径不动
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `spawn_tool` 构造 `ToolProgressEmitter`（持 sink/state/dispatch_index/call_id），调用 `t.execute_streaming(ctx, input)` 代替 `t.execute(input)`；emitter 把 chunk 包成 `ToolCallOutputDelta` 喂回主 sink
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): `EngineEvent::ToolOutputDelta { index, id, chunk }`；[apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) `agent_event_to_engine_event` 加翻译分支
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `EngineEvent` 加 `tool_output_delta`；`StreamingAssistantPart.tool_call` 加 `live_output?: string`
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 新增 `applyToolOutputDelta`，把 chunk append 到对应 `tool_call.live_output`
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `ToolCallItem` 加 `liveOutput` 字段；Bash 渲染分支在 `status="running"` 时显示 `live_output` 并加"▍"光标，`status="done"` 后由 `result` 覆盖
+  - [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `DaemonEvent::ToolOutputDelta { id, chunk }` + translate 分支。NDJSON 脚本可 tail 这条看 Bash 实时进度
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs): `EngineEvent::ToolOutputDelta` + translate 分支
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs) 新增两个回归单测：`streaming_emits_chunks_before_finish` 验证长跑命令在 finished 之前 progress 通道收到 ≥2 段 chunk；`streaming_short_command_still_returns_result` 验证瞬时命令也走 progress 路径不 panic
+  - [docs/架构.md](../docs/架构.md): §3.1 工具事件列表加 `ToolCallOutputDelta`；§4.4.1 Tool 接口加流式工具一节；§13 决策表加一行
+- **影响范围**: protocol / agent-core / desktop / cli / web-server / docs。**全部 additive**——新事件 variant 旧 surface 默认忽略；Tool trait 加默认方法，非流式工具不需动；BashTool 旧的 `execute(input)` 行为不变（委托回 `execute_streaming` 用 noop ctx），单测兼容
+- **取舍**:
+  - **trait 加签名 vs 双轨方法**：选了"加一个默认方法"——所有其它 12 个工具零改动；流式只是 BashTool 一个的局部能力，不必让 Read/Edit/Grep 也背一个 ctx 参数
+  - **chunk 走 transcript vs 仅走事件流**：选了仅走事件流。`ToolCallFinished.result` 仍是聚合后的完整文本喂回模型，避免"模型在 transcript 里看到分段输出 + 最终完整输出"重复计费。delta 是给 surface 端观察用的旁路
+  - **forward 间隔**：200ms tick——比 chunk 来一条 emit 一条更省事件量（连续行会合并到下一次 tick），又比 500ms+ 体感"卡"。前端 React diff 一秒 5 次更新可承受
+  - **read_incremental cursor 推进后丢字节问题**：本来 finished 时 `read_incremental(usize::MAX)` 重抽，现在 forwarder 已推进 cursor 会拿不到旧字节。改成 bash.rs 内部维护本地 String buffer——每次 emit 同时累加，最终结果用 buffer 而不是再 read。语义清晰、不需扩 BackgroundShell API
+  - **超时转后台时的 partial 输出**：保留——`drain_into(deadline)` 在 select! 命中 deadline 分支时再抽一次残余 chunk，emit + buffer 都更新，"已转后台"提示文本拼上"--- 已产出 ---"区域内容
+- **验证**:
+  - 阶段 A（复现痛点）：mental model + 代码路径分析（原 `tokio::time::timeout(.., shell.wait_terminal()).await` 等到结束才 read_incremental(usize::MAX)，期间 surface 拿不到任何中间事件）
+  - 阶段 B（验证修复）：`cargo test -p agent-core --lib tools::bash` 9 个测试全过（含 2 个新加的流式测试）；`cargo test -p agent-core --lib` 235 全过；`cargo check --workspace` clean；`pnpm exec tsc --noEmit` clean
+- **留尾巴**:
+  - 大命令 buffer 累加可能产生 100KB+ 的本地 String——已有 `truncate_bytes(MAX_OUTPUT_BYTES=30_000)` 兜底，但 forward 过程中 emit 的 chunk 总量未限。短期可接受（前端按需折叠 + tail buffer 自带 256KB 上限）；长期想做"超过 N MB 不再 emit chunk，建议用户切后台"再说
+  - 未在 desktop dev 模式手工跑 chat 流；后续真实长跑命令（如 `cargo build --workspace`）首次跑时建议肉眼观察一次 UI 流畅度——理论上每 200ms 一次 React diff，无问题但视用户机器而定
+  - Bash 之外的工具暂无流式实现（Grep / WebFetch 的大响应也能用，留给后续按需求开）
+
+### 2026-05-22 — Model I/O 调试器：字符串字段控制字符可视化 + 移除 langfuse 上报残留
+
+- **Why**:
+  - **渲染**：调试器里看长字符串（典型如 `Read` 工具返回的带 `\t` 行号 + `\n` 分隔的代码、`ls /tmp` 的目录列表）时，旧实现走 `JSON.stringify(_, null, 2)` 全栈 dump —— `\n` `\t` 都被转义成字面 `\\n` `\\t`，一坨连成一行根本读不了。用户原话："对于很长的 json 看的比较吃力，是否能将 content 和 reasoning 里 \"\" 包裹的部分稍微渲染一下，\\t \\n 这些渲染，但是要标识有一个这个"
+  - **langfuse**：上报代码早已被注释（参见以前 commit 里所有 `langfuse 上报已关闭——便于将来重启` 注释），但 dead-code 函数 / 常量 / span 注释都还散落在 5 个文件里。这次彻底清掉，让 observability 回归"通用 OTLP（OTel semantic conventions）"原状
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`:
+    - 新增 `PrettyJson` 递归渲染器（取代 `JSON.stringify(_, null, 2)`）：标量按类型上色（string 绿 / number boolean 琥珀 / null 灰 / key 天蓝），对象/数组按虚拟 `indent` 递归
+    - 新增 `PrettyStringInner`：把字符串里的控制字符**展开为真字符 + 行尾可视 marker**：
+      - `\n` → 真换行 + 行尾浅蓝 `↵`
+      - `\t` → 真 tab + 绿色 `→`
+      - `\r` → 浅青 `⏎`（不输出真 `\r`，HTML pre 行为受 user-agent 影响）
+      - 其他 `< 0x20` 或 `= 0x7f` 控制字符 → 琥珀色 `\xNN` 徽章
+    - markers 全部 `select-none` —— 选中复制时不会带 marker，粘贴出去仍是原始字符串
+    - 新增 `PayloadField` 公共壳消除 9 处重复 pre + label 样式
+    - 修一个不显眼的隐藏 bug：旧 early-return 用的字符范围正则被工具序列化时插入了真换行（`[\x00-\x1f\x7f]` 变成了 `[\\n]`），导致仅含 `\t` 的字符串不会触发渲染。改用显式 `charCodeAt` 比较 (`hasControlChar`)
+  - `crates/observability/src/lib.rs`: 文档里删掉 Langfuse Cloud endpoint 示例 / Basic Auth header 提示 / "Langfuse 只收 trace" 段，保留通用 OTLP 配置说明
+  - `crates/observability/src/attr.rs`: 删 `LANGFUSE_SESSION_ID` / `LANGFUSE_TRACE_INPUT` / `LANGFUSE_TRACE_OUTPUT` / `LANGFUSE_OBSERVATION_INPUT` / `LANGFUSE_OBSERVATION_OUTPUT` / `LANGFUSE_OBSERVATION_USAGE_DETAILS` 6 个常量；GenAI 注释行去掉 "/ Langfuse 通用键"
+  - `crates/agent-core/src/agent_loop.rs`: 删 run span 里 3 行 `langfuse.*` 注释字段；删 `run_span.record(LANGFUSE_*)` 注释块；删 dead-code 函数 `trace_input_from_entries` + `truncate_for_langfuse`
+  - `crates/agent-core/src/dispatch.rs`: 删 tool span 里 2 行 `langfuse.*` 注释字段；删两处 `LANGFUSE_OBSERVATION_*` record 注释块；删 dead-code 函数 `tool_input_for_langfuse` + `truncate_for_langfuse`
+  - `crates/model-gateway/src/instrument.rs`: 删 model.request span 里 6 行 `langfuse.observation.*` 注释字段；删 dead-code 函数 `model_parameters` + `usage_details_json`；把 `truncate_for_langfuse` 改名为 `truncate_for_span`（同名调用一并更新 4 处）并补一句注释说明用途（32k 截断给 OTel attribute）
+- **影响范围**:
+  - 前端：调试器 UI 单组件改动，无 API 变更。tool result / Read / Bash 等多行字符串可读性大幅提升
+  - observability: 业务行为零变化 —— langfuse 上报本来就是 dead code。这一次仅清掉残留符号 / 文档措辞，让阅读 observability 这块代码的人不会再被"为什么这一坨注释了又留着"困扰
+  - 三 surface 均能直接吃到前端改动；后端只是清理，与 surface 无关
+- **取舍**:
+  - **markers 占字宽 vs 零宽**：占字宽视觉信号最清晰（不会被误以为 typo），代价是行末多一个字符；零宽 marker 通过 absolute position 或 `font-size: 0` 复杂度高且复制时易漏。决策：占字宽 + `select-none` 解决复制问题
+  - **完整 PrettyJson vs 局部 markers**：仅替换字符串字段就够展示 `\n` `\t`，但 tool_calls / results 嵌套对象里的字符串字段（如 Bash command 的 description / Edit 工具的 new_string）也常含控制字符。决策：写完整递归 PrettyJson，所有层级一致处理
+  - **`truncate_for_langfuse` 函数保留 vs 改名 vs 删**：删的话 OTel attribute 没有大字符串截断保护（多数 collector 会丢超长 attribute 或截到难看位置）；保留原名不准确（不是给 langfuse 用了）；改名 `truncate_for_span` 表达准确意图。决策：改名
+- **验证**:
+  - `cargo check --workspace` clean（仅两个本来就有的 web-server dead_code 警告，与本次改动无关）
+  - `pnpm exec tsc --noEmit` clean；前端重 build 成功
+  - Playwright 走 hebweb（独立 data_dir + 38081）：
+    1. 新建 session → 发"请用 ls /tmp 看一下目录" → 落盘 2 行 model_io.jsonl（turn 0 ToolCalls + turn 1 Done）
+    2. 打开 Model I/O 抽屉，切到 #2 → tool results 展开看到：每个文件名一行 + 行尾浅蓝 `↵` marker + 真换行；目录列表清晰可读、再也不是一坨字面 `\n`
+    3. 截图证实排版正确：JSON 结构着色 / NEW 徽章 / carried-over 折叠 / 控制字符 marker 全部共存不冲突
+  - 全文 grep `langfuse|Langfuse|LANGFUSE` 在 `crates/` 与 `apps/` 下零命中
+- **留尾巴**:
+  - PrettyJson 还没做"大对象（>500 key 等）懒加载折叠" —— 当前所有字段一次性渲染，超大 attachments / 极长 tool result 可能卡顿。等真碰到性能问题再加 React virtualization
+  - dispatch.rs / agent_loop.rs / instrument.rs 几个 span 上下文区段被压缩了不少（删了 6 行 `langfuse.*` Empty 字段声明），未来如果再接 Langfuse 或类似"按 `langfuse.*` attribute 自动归集 trace"的后端，需要重新加回这些 attribute 声明 + record。当前 OTel + `gen_ai.*` semantic conventions 通用 collector 已经够用
+
+### 2026-05-22 — Model I/O 调试器：JSON 渲染重写 + 整 message 放大 + 左侧抽屉折叠 + 删 bubble 旧入口
+
+- **Why**: 一轮真实使用反馈暴露了多个体验问题：
+  - 长 value 字符串（如 `"file_path"` 完整路径、`Edit` 工具的 `new_string` HTML 代码）wrap 时跑到屏幕最左端，丢层级；JSON 嵌套缩进只靠空格看不出层次结构
+  - 用户排查时想看的是"这条 assistant message 整体发了什么"，不是单个字段；之前在 PayloadField 上加放大按钮位置错
+  - 左侧请求列表 280px 太宽，挤掉 detail 视图；调试时大部分时间盯一条请求，列表用不上但占着位置
+  - bubble 三点菜单还留着"显示原始 JSON"——它和 Model I/O 调试器功能重叠（preview 是重建快照、调试器是真实发出去的），让用户分不清该用哪个
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`:
+    - **PrettyJson 完全重写为 div-per-row 模式**：每个 key-value 一个 `<div>`，缩进靠 `paddingLeft + border-left`（不再走 `whitespace-pre-wrap` 文本流）。长字符串 wrap 时由当前 div 内部换行，下一行仍在缩进位置 —— 彻底解决"长 path wrap 到屏幕最左"
+    - **每层 indent guide 竖线**：children 容器加 `border-l border-muted-foreground/40 hover:border-muted-foreground/70`（1px 灰色细线，hover 加深），IDE 风格，沿线一路能跟到底
+    - **多行字符串单独占块**：value 含 `\n` 或长度 > 80 字符时，key 占一行、value 块在下面缩进一格（比 key 多 14px）独立显示。避免 flex 容器 wrap 时 value 引号回到 key 列造成视觉混淆
+    - **对象/数组可折叠**：每个嵌套容器左边 chevron，**展开态默认隐藏**（hover 父行才显示，避免视觉杂乱）/ **折叠态一直显示**（提示"能展开"）。折叠后单行显示 `{N 键}` / `[N 项]` 预览
+    - **左侧请求列表**：宽度 280 → 200px，加 header 折叠按钮（PanelLeftClose/Open 图标），点击 width 0 + `transition-[width] duration-200 ease-out` 平滑过渡，让 detail 视图自然变大
+    - **整 message / response 框放大查看**：每个 MessageRow / ResponseBlock 的 header hover 时显示 Maximize2 按钮，点击 portal 一个 `absolute inset-0` modal 到抽屉容器（`#model-io-drawer-root`）—— **只覆盖抽屉范围**，hebweb sidebar / chat header 保持可见。`ZoomContext` 让 PayloadField 在 modal 内自动去掉 `max-h-[400px]` 限制，内容自然撑满整个 modal 高度（之前 portal 到 body 全屏 + 内容只占顶部 1/3）
+    - Esc 关 modal 用 capture 阶段拦截，避免被抽屉自己的 Esc 监听吃掉去关抽屉
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`:
+    - 删三点菜单里的"显示原始 JSON"按钮（FileJson）—— 用户排查"真发了什么"应去 Model I/O 调试器；这个入口和调试器功能重叠且语义不准（preview 是重建快照不是真实出参）
+    - 删 dead code：`showRawJson` / `rawJsonPayload` / `rawJsonLoading` / `rawJsonError` 4 个 state、`useEffect` 拉 `previewSessionPayload`、`} else if (showRawJson)` 渲染分支
+    - 删 5 个相关函数 `JsonPrimitive` / `JsonKeyLabel` / `JsonNode` / `JsonView` / `RawJsonPanel`（共 180 行）
+    - 删两个 import：`FileJson` from lucide-react、`buildModelMessages` from lib
+    - bubble Tauri `previewSessionPayload` 命令后端保留（postcondition：本期没动 Tauri 命令注册）；如果之后确认彻底不用，可以分独立 PR 清理
+- **影响范围**:
+  - 前端单组件改动（Inspector + MessageBubble）+ 1 个新依赖（`react-dom/createPortal` 已经在用，无新依赖）
+  - 无后端 / IPC 协议变化
+  - 用户视角：bubble 三点菜单从 2 项变成 1 项（"显示原文"），Model I/O 入口仍在 chat header；调试器抽屉打开后视觉显著改观
+- **取舍**:
+  - **完全重写 PrettyJson vs 在原版上 patch**：原版用 `whitespace-pre-wrap` + 文本节点拼接，从根上不支持 hanging indent / wrap 对齐。在此基础上补丁会越来越乱。决策：重写为 div-per-row，每行独立 div + paddingLeft 缩进，结构清晰
+  - **indent guide 颜色**：第一版用 `border-sky-500/30`，太花哨且与 string token 绿色冲突。改 `border-muted-foreground/40` 灰色细 1px 线，hover 加深到 /70。视觉中性
+  - **放大覆盖整个浏览器窗口 vs 只覆盖抽屉**：第一版 portal 到 body fixed inset-0 z-[200]，挡掉 sidebar / chrome。用户原话"要是 chat 区域"。改 portal 到抽屉 root `#model-io-drawer-root` + absolute inset-0，只覆盖抽屉。代价是 ZoomedModal 必须能拿到该 DOM 节点 —— 用 `getElementById` lookup，找不到时 fallback 到 body（SSR 安全）
+  - **放大粒度：field vs message**：第一版每个 PayloadField 加放大按钮，用户反馈"放大不是放大一个 json 是一个 message"。改成 MessageRow / ResponseBlock 整体放大，符合"看一条 message 整体发了/收了什么"的真实用例
+  - **删 dead `previewSessionPayload` Tauri 命令 vs 保留**：保留 —— 本期改 UI 没破任何后端契约，删 Tauri 命令是另一个 scope；前端不调即可，未来需要"基于当前 session 状态重建 payload"的功能时这条命令依然有价值
+- **验证**:
+  - `pnpm exec tsc --noEmit` clean
+  - `pnpm build` clean（仅 dynamic import chunk 警告，跟本次无关）
+  - Playwright 完整走 hebweb（独立 data_dir 38081，无 bridge）：
+    1. 新建 session → `请用 ls /tmp 看一下目录` → Bash 工具回 80+ 文件名（一行一个 \n 分隔）
+    2. 打开抽屉 → tool_calls JSON 渲染清晰，indent guide 灰色细线明确显示嵌套层级
+    3. `"file_path"` 的长 path value：之前会跑到屏幕最左，**现在保持在缩进位置内 wrap**
+    4. `"new_string"` 多行 HTML 字符串：key 一行、value 块在下面**比 key 多缩进一格**，行尾 `↵` marker
+    5. 折叠按钮：hover message 头部出现 Maximize2 → 点击 → modal 在抽屉范围内 absolute 覆盖 → 内容自然撑满高度 → Esc 关
+    6. 折叠按钮：点 header 上的 PanelLeftClose → 左侧列表 width 200 → 0 平滑过渡 → detail 区域占满抽屉
+- **留尾巴**:
+  - Tauri `previewSessionPayload` 命令 + `buildModelMessages` 前端 lib 后端两端还在（前端入口已删）。如果未来证实没人需要"重建快照"功能，下版本一起清掉（agent-core 不依赖它，只是 desktop / hebweb 注册了 invoke）
+  - PrettyJson 没做大对象懒加载折叠 —— 一次 render 超大 JSON 仍可能慢；React virtualization 等性能问题真碰到再做
+  - 放大 modal Esc 用 capture 阶段拦截抽屉 Esc 监听 —— 工作但耦合：如果未来抽屉 Esc 监听也改 capture 会冲突。等真出 bug 再换 stop propagation 或 ref forwarding 解
