@@ -1128,9 +1128,13 @@ async fn kill_background_task(session_id: String, task_id: String) -> AppResult<
 fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<SessionBackgroundReport> {
     let dd = data_dir(&app)?;
     let shells_registry = agent_core::tools::background::registry_for_session(&session_id);
+    // 只暴露真后台任务（is_background=true）：用户显式 run_in_background=true
+    // 或前台超时转后台的。前台正常 exit 的命令已经被 BashTool 直接 unregister，
+    // 这里就算注册表里万一还残留 is_background=false 的条目（罕见 race），surface 也不要展示。
     let shells: Vec<BackgroundTaskInfo> = shells_registry
         .list()
         .into_iter()
+        .filter(|s| s.is_background())
         .map(|s| BackgroundTaskInfo {
             task_id: s.task_id.clone(),
             state: s.state().label().to_string(),

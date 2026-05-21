@@ -19,7 +19,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -64,8 +64,10 @@ pub struct BackgroundShell {
     pub cwd: String,
     pub started_at: Instant,
     /// 是否明确标记为后台任务（run_in_background=true 或超时转后台）。
-    /// 前端用它把"前台 bash 残留"和"真正后台任务"区分开。
-    pub is_background: bool,
+    /// surface 用它把"前台 bash 中间状态"和"真正后台任务"区分开。
+    /// 前台正常 exit 的命令会被 BashTool 直接 unregister，不会停留在注册表里；
+    /// 这个字段在「前台超时转后台」时由 `promote_to_background` 翻成 true。
+    is_background: AtomicBool,
     inner: Mutex<ShellInner>,
     /// 输出/状态变化时唤醒等待方（BashOutput 的 wait_ms 阻塞、KillShell 等终态）。
     notify: Notify,
@@ -98,7 +100,7 @@ impl BackgroundShell {
             task_id,
             command,
             cwd,
-            is_background,
+            is_background: AtomicBool::new(is_background),
             started_at: Instant::now(),
             inner: Mutex::new(ShellInner {
                 state: ShellState::Running,
@@ -117,6 +119,19 @@ impl BackgroundShell {
     /// 用它告诉模型「完整输出在哪」（架构 §4.12.3）。
     pub fn log_path(&self) -> Option<&Path> {
         self.log_path.as_deref()
+    }
+
+    pub fn is_background(&self) -> bool {
+        self.is_background.load(Ordering::Relaxed)
+    }
+
+    /// 前台命令超时后被 BashTool 转后台时调一次：把 is_background 翻成 true，
+    /// 这样下游过滤（list_background_tasks / bg_summaries）就能正确收录它。
+    /// 日志文件不在这里补开——register 时没开就一直没开，转后台后模型用
+    /// BashOutput 走 tail buffer 取增量足够；如要完整日志，应该一开始就传
+    /// run_in_background=true。
+    pub fn promote_to_background(&self) {
+        self.is_background.store(true, Ordering::Relaxed);
     }
 
     pub fn state(&self) -> ShellState {
@@ -355,6 +370,23 @@ impl BackgroundShells {
         shell
     }
 
+    /// 前台命令正常退出后，BashTool 把自己从注册表摘掉，避免 surface 把
+    /// "刚跑完的 ls" 当成"已结束的后台任务"展示。仅当目标条目已进入终态时
+    /// 才移除——还在 running 的拒绝删，避免误删活进程。
+    pub fn unregister(&self, task_id: &str) -> bool {
+        let mut inner = self.inner.lock().expect("background shells mutex");
+        if let Some(idx) = inner
+            .shells
+            .iter()
+            .position(|s| s.task_id == task_id && s.state().is_terminal())
+        {
+            inner.shells.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get(&self, task_id: &str) -> Option<Arc<BackgroundShell>> {
         self.inner
             .lock()
@@ -519,6 +551,59 @@ mod tests {
         let id = shell.task_id.clone();
         let state = shells.kill(&id).await.unwrap();
         assert!(matches!(state, ShellState::Killed));
+    }
+
+    /// unregister 只摘已 terminal 的条目，running 的拒绝删——
+    /// 保护 BashTool 误调（虽然代码路径上不会，但防御性边界要有）。
+    #[tokio::test]
+    async fn unregister_only_removes_terminal() {
+        let shells = BackgroundShells::new();
+        // running 条目：unregister 返回 false，列表仍含该条目
+        let still_running = shells.register(
+            "sleep 30".into(),
+            "/".into(),
+            true,
+            None,
+            spawn_bash("sleep 30"),
+        );
+        assert!(!shells.unregister(&still_running.task_id));
+        assert_eq!(shells.list().len(), 1);
+
+        // terminal 条目：unregister 返回 true，列表为空
+        let done = shells.register(
+            "true".into(),
+            "/".into(),
+            false,
+            None,
+            spawn_bash("true"),
+        );
+        done.wait_terminal().await;
+        assert!(shells.unregister(&done.task_id));
+        assert_eq!(shells.list().len(), 1); // 只剩仍 running 的那个
+
+        // 不存在的 task_id 返回 false
+        assert!(!shells.unregister("bash_999"));
+
+        // 收尾
+        shells.kill(&still_running.task_id).await;
+    }
+
+    /// promote_to_background 把 is_background 由 false 翻成 true——
+    /// BashTool 前台超时转后台路径用它。
+    #[tokio::test]
+    async fn promote_flips_is_background() {
+        let shells = BackgroundShells::new();
+        let s = shells.register(
+            "sleep 1".into(),
+            "/".into(),
+            false,
+            None,
+            spawn_bash("sleep 1"),
+        );
+        assert!(!s.is_background());
+        s.promote_to_background();
+        assert!(s.is_background());
+        shells.kill(&s.task_id).await;
     }
 
     #[tokio::test]

@@ -2761,3 +2761,32 @@
   - 行为：UI 文案换人话；扫描结果只有 1 个 skill 时一行展示，多 skill 用分组折叠减少视觉噪音；点 skill 行打开的预览框正确渲染 markdown（标题 / 列表 / 代码块 / 表格都有样式）
 
 - **留尾巴**: 无
+
+### 2026-05-21 — 修复 BackgroundShells 注册表把所有 bash 调用都当后台任务展示
+
+- **Why**: 用户反馈"右上角显示所有 bash 命令"。复查发现 [bash.rs](../crates/agent-core/src/tools/bash.rs) 在 execute 时无条件 register 进 BackgroundShells——前台短命命令（`ls` / `echo`）跑完也以 `exited` 状态永久留在注册表，被 `list_background_tasks` 当成"已结束的后台任务"渲染。`BackgroundShell::is_background` 字段本来就是为分辨"前台残留 vs 真后台"加的，但下游全没用上；更糟的是超时转后台路径根本没把这个标记翻成 true，导致即便加 filter 也不显示真正的转后台命令。本质是注册表语义没贯彻——`is_background` 字段半套实现
+- **改动**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `is_background` 由 `pub bool` 改为 `AtomicBool`，加 `is_background()` getter + `promote_to_background()` setter；新增 `BackgroundShells::unregister(task_id)`，只摘已 terminal 的条目
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 前台 register 时**不传** `log_dir`（不落盘日志），节省磁盘 IO；前台正常 exit 路径 return 前调 `shells.unregister(task_id)`；前台超时转后台路径调 `shell.promote_to_background()` 把 `is_background` 翻成 true；`format_finished` 去掉退出码后的 `task_id=...` 字段（前台命令完整输出已返回给模型，task_id 失去意义且 unregister 后再查会 fail，留着是误导）
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `list_background_tasks` 加 `.filter(|s| s.is_background())`
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): hebweb 的 `cmd_list_background_tasks_local` 同步加 filter，保持 desktop / hebweb surface 行为对称
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): `bg_summaries` 由"仅 Running"改为"is_background && Running"双过滤，避免前台命令瞬时残留误注入 `<background_tasks>` 提示段
+  - 单测：`unregister_only_removes_terminal`、`promote_flips_is_background`、`foreground_exit_unregisters_from_registry`、`explicit_background_keeps_in_registry`，以及 `timeout_transitions_to_background` 补断言 `is_background()==true`
+- **影响范围**: agent-core / desktop / hebweb；不动协议（IpcCommand / DaemonEvent / SessionBackgroundReport 字段不变），UI 行为可见改进（右上角面板只在用户显式 `run_in_background=true` 或前台超时转后台时才出现）；不动架构.md（§4.12.7 原文就只筛 `Running` 条目，本次改动是兑现"注册表只装真后台"的既定语义）
+- **取舍记录**:
+  - 备选方案 A（只在 surface 层 filter）：1 行改完，但前台命令仍占注册表 16 槽位 + 256 KiB tail buffer，且 `is_background` 字段半套实现没修正
+  - 备选方案 C（前台路径完全不走注册表）：物理隔离最干净，但要重写 stdout/stderr 流式抽取 + tail buffer + 超时转后台时再补登记，代码翻倍且易和后台路径行为漂移
+  - 选定方案 B：复用 BackgroundShells 这套已经经过测试的进程管理基础设施，前台命令"借道用一下"再 unregister，注册表对外语义干净
+  - **简化**：超时转后台的命令日志只覆盖"转后台之后"的输出（之前的丢失），不补建之前的日志——前台路径没开日志文件，spawn_reader 不会回头补写。若模型需要完整日志，应该一开始就传 `run_in_background=true`。架构.md §4.12.3 "BashTool 转后台时把 stdout/stderr 落到 `<sid>/bg/<task_id>.log`" 仍然成立（针对显式后台路径），但超时转后台分支没磁盘日志属于已知简化
+- **留尾巴**: 无
+
+### 2026-05-21 — 新增 Kumo 风格的 Hebbian 前端 HTML mock
+
+- **Why**: 用户希望参考 `https://kumo-ui.com/` 重新设计整个前端页面，先用 HTML mock 评审整体方向；要求界面优雅简洁、有重点、不累赘，并且所有能交互的地方都要能点、能产生状态变化。
+- **改动**:
+  - [docs/frontend-kumo-mock.html](frontend-kumo-mock.html): 新增单文件前端 mock。覆盖左侧项目/会话/搜索，中间对话/查找/上下文/修改视图，底部输入框/队列/附件/模型与模式菜单，右侧任务/后台任务/审批，以及供应商、对话设置、应用设置、Agent 管理、项目导入、审批、Agent 提问等弹窗。
+  - 视觉方向：借鉴 Kumo UI 的紧凑 page header、tabs、dialog、sidebar、语义色与表面层级；用中性灰白/深色双主题做底，品牌橙只作为重点状态，不做营销页和装饰性大卡片。
+  - 交互：用原生 JS 模拟切主题、切项目/全部、搜索高亮、当前对话查找、发送/流式/排队、工具卡片展开、审批处理、任务勾选、路径和工具切换、provider/prompt 增删改、设置 tab 切换、编辑回退等状态。
+- **影响范围**: 仅 docs 静态 mock 与 changelog；不改 production React/Tauri/Rust，不动协议，不影响构建产物。
+- **验证**: HTML5 解析通过；抽出 `<script>` 后 `node --check` 通过；扫描确认 86 个 `data-action` 都有处理分支；用 jsdom 跑过供应商弹窗、对话设置、查找、发送消息、审批、上下文/修改 tab 与回退的 smoke test。
+- **留尾巴**: 这是评审用 mock，尚未迁移到 `apps/desktop/frontend` 的 React 组件；后续若确认方向，需要再拆成真实组件并接入 store/Tauri API。

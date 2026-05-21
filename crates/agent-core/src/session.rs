@@ -243,7 +243,15 @@ impl Session {
                 shells
                     .list()
                     .into_iter()
-                    .filter(|s| matches!(s.state(), crate::tools::background::ShellState::Running))
+                    .filter(|s| {
+                        // 双重过滤：is_background=true 排除前台命令的瞬时残留；
+                        // ShellState::Running 排除已结束条目。两个一起才是"模型当下需要感知的活后台任务"。
+                        s.is_background()
+                            && matches!(
+                                s.state(),
+                                crate::tools::background::ShellState::Running
+                            )
+                    })
                     .map(|s| crate::system_prompt::BackgroundTaskSummary {
                         task_id: s.task_id.clone(),
                         state: s.state().label().to_string(),

@@ -127,13 +127,18 @@ impl Tool for BashTool {
             .map_err(|e| AppError::msg(format!("Bash: 启动失败 {e}")))?;
 
         let cwd_str = cwd.display().to_string();
-        let shell = self.shells.register(
-            command.to_string(),
-            cwd_str,
-            background,
-            self.bg_log_dir.as_deref(),
-            child,
-        );
+        // 前台命令此刻 register 时 is_background=false 且不传 log_dir——
+        // 跑完会被 unregister，避免短命前台命令在 surface 残留为"已结束的后台任务"；
+        // 超时转后台时再 promote_to_background()。只有用户显式 run_in_background=true
+        // 才一开始就 is_background=true + 开日志。
+        let log_dir = if background {
+            self.bg_log_dir.as_deref()
+        } else {
+            None
+        };
+        let shell = self
+            .shells
+            .register(command.to_string(), cwd_str, background, log_dir, child);
 
         if background {
             let mut text = format!(
@@ -158,14 +163,12 @@ impl Tool for BashTool {
 
         if !exited {
             // 超时：进程仍在跑，转后台。
+            shell.promote_to_background();
             let snapshot = shell.read_incremental(READ_CHUNK_BYTES);
             let mut text = format!(
                 "[bash] 命令在 {timeout}s 内未结束，已转后台：task_id={}\n",
                 shell.task_id
             );
-            if let Some(p) = shell.log_path() {
-                text.push_str(&format!("完整输出落盘到：{}\n", p.display()));
-            }
             text.push_str(&format!(
                 "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止。\n",
                 shell.task_id
@@ -177,16 +180,17 @@ impl Tool for BashTool {
             return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
         }
 
-        // 已退出：抽全部 tail buffer 拼输出 + 退出码。
+        // 已退出：抽全部 tail buffer 拼输出 + 退出码，然后从注册表里摘掉——
+        // 前台命令完整 output 已经返回给模型，task_id 失去意义，
+        // 留在注册表只会让 surface 把它当成"已结束的后台任务"展示。
         let snapshot = shell.read_incremental(usize::MAX);
-        Ok(truncate_bytes(
-            &format_finished(&snapshot, shell.task_id.as_str()),
-            MAX_OUTPUT_BYTES,
-        ))
+        let text = format_finished(&snapshot);
+        self.shells.unregister(&shell.task_id);
+        Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES))
     }
 }
 
-fn format_finished(snapshot: &ReadOutput, task_id: &str) -> String {
+fn format_finished(snapshot: &ReadOutput) -> String {
     let mut text = String::new();
     if !snapshot.content.is_empty() {
         text.push_str(&snapshot.content);
@@ -202,12 +206,10 @@ fn format_finished(snapshot: &ReadOutput, task_id: &str) -> String {
     }
     let suffix = match &snapshot.state {
         ShellState::Exited { code: Some(0) } => None,
-        ShellState::Exited { code: Some(c) } => Some(format!("[exit {c}] task_id={task_id}")),
-        ShellState::Exited { code: None } => {
-            Some(format!("[terminated by signal] task_id={task_id}"))
-        }
-        ShellState::Killed => Some(format!("[killed] task_id={task_id}")),
-        ShellState::Failed { error } => Some(format!("[failed: {error}] task_id={task_id}")),
+        ShellState::Exited { code: Some(c) } => Some(format!("[exit {c}]")),
+        ShellState::Exited { code: None } => Some("[terminated by signal]".to_string()),
+        ShellState::Killed => Some("[killed]".to_string()),
+        ShellState::Failed { error } => Some(format!("[failed: {error}]")),
         ShellState::Running => None,
     };
     if let Some(s) = suffix {
@@ -276,12 +278,49 @@ mod tests {
             .unwrap();
         assert!(out.contains("已转后台"));
         assert!(out.contains("task_id=bash_"));
-        // 注册表里应该能找到这个 task
+        // 注册表里应该能找到这个 task，且 is_background 已被 promote 翻为 true
         let tasks = shells.list();
         assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].is_background(), "超时转后台后必须 is_background=true");
         // kill 它，避免测试结束后还有 sleep 进程
         let id = tasks[0].task_id.clone();
         shells.kill(&id).await;
+    }
+
+    /// 前台命令正常退出后，BashTool 应该把自己从 BackgroundShells 摘掉——
+    /// 否则 surface 会把 "ls" 也展示为 "已结束的后台任务"。
+    #[tokio::test]
+    async fn foreground_exit_unregisters_from_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BackgroundShells::new();
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let out = t
+            .execute(json!({"command": "echo hello"}))
+            .await
+            .unwrap();
+        assert!(out.contains("hello"));
+        // 注册表必须为空：前台 ls 不该残留为"已结束的后台任务"
+        assert!(
+            shells.list().is_empty(),
+            "前台命令跑完后 BackgroundShells 应清空，实际：{:?}",
+            shells.list().iter().map(|s| &s.task_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// 显式 run_in_background=true 时一开始就 is_background=true 且留在注册表里。
+    #[tokio::test]
+    async fn explicit_background_keeps_in_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shells = BackgroundShells::new();
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let _ = t
+            .execute(json!({"command": "sleep 30", "run_in_background": true}))
+            .await
+            .unwrap();
+        let tasks = shells.list();
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].is_background());
+        shells.kill(&tasks[0].task_id).await;
     }
 
     /// 端到端：Bash 超时 → 转后台 → BashOutput 增量查询 → KillShell 终止。

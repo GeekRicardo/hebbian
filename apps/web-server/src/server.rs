@@ -1399,9 +1399,12 @@ async fn cmd_list_background_tasks_local(args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let shells_registry = agent_core::tools::background::registry_for_session(sid);
+    // 只暴露真后台任务（语义同 desktop 端 list_background_tasks）：
+    // 前台命令跑完会被 BashTool 直接 unregister，is_background=false 的瞬时残留 surface 不展示。
     let shells: Vec<Value> = shells_registry
         .list()
         .into_iter()
+        .filter(|s| s.is_background())
         .map(|s| {
             json!({
                 "task_id": s.task_id,
