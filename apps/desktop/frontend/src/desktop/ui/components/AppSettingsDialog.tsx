@@ -1,25 +1,35 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { listen } from "@tauri-apps/api/event";
-import { Bot, FolderOpen, Settings as SettingsIcon } from "lucide-react";
+import { invoke, listen } from "@/desktop/bridge/transport";
+import {
+  Bot,
+  FolderOpen,
+  Settings as SettingsIcon,
+  Shield,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
-import { Label, Select } from "@/desktop/ui/components/ui/input";
+import { Input, Label, Select } from "@/desktop/ui/components/ui/input";
 import {
   DirPicker,
   PathListField,
   ToolToggleList,
 } from "@/desktop/ui/components/workspaceFields";
+import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import type { AppSettings } from "@/desktop/ui/types";
 
-type TabKey = "general" | "conversation" | "agents";
+type TabKey = "general" | "conversation" | "agents" | "permissions" | "skills";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "general", label: "通用", icon: SettingsIcon },
   { key: "conversation", label: "对话设置", icon: FolderOpen },
   { key: "agents", label: "Agent 配置", icon: Bot },
+  { key: "permissions", label: "权限", icon: Shield },
+  { key: "skills", label: "Skills", icon: Sparkles },
 ];
 
 /**
@@ -138,6 +148,10 @@ export function AppSettingsDialog() {
               prompts={promptsFile.prompts}
             />
           )}
+          {tab === "permissions" && <PermissionsPane />}
+          {tab === "skills" && (
+            <SkillsPane workdir={draft.conversation.workdir ?? null} scope="global" />
+          )}
         </div>
       </div>
     </Dialog>
@@ -197,12 +211,6 @@ function ConversationPane({
         allowFiles
       />
 
-      <PathListField
-        label="Skill 目录"
-        paths={conv.skill_dirs}
-        onChange={(paths) => updateConv({ skill_dirs: paths })}
-      />
-
       <ToolToggleList
         label="默认启用的工具"
         availableTools={availableTools}
@@ -212,6 +220,230 @@ function ConversationPane({
     </div>
   );
 }
+
+// ─── 权限管理（全局 allow / deny + 路径白名单）─────────────────────────
+function PermissionsPane() {
+  const [allow, setAllow] = useState<string[]>([]);
+  const [deny, setDeny] = useState<string[]>([]);
+  const [paths, setPaths] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [newAllow, setNewAllow] = useState("");
+  const [newDeny, setNewDeny] = useState("");
+  const [newPath, setNewPath] = useState("");
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [a, d, ps] = await Promise.all([
+        invoke<string[]>("list_permissions", { scope: "global", effect: "allow" }),
+        invoke<string[]>("list_permissions", { scope: "global", effect: "deny" }),
+        invoke<string[]>("list_permission_paths", { scope: "global" }),
+      ]);
+      setAllow(a);
+      setDeny(d);
+      setPaths(ps);
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  async function addPattern(effect: "allow" | "deny", pattern: string) {
+    const p = pattern.trim();
+    if (!p) return;
+    try {
+      await invoke("add_permission", { scope: "global", effect, pattern: p });
+      if (effect === "allow") setNewAllow("");
+      else setNewDeny("");
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function removePattern(effect: "allow" | "deny", pattern: string) {
+    try {
+      await invoke("remove_permission", { scope: "global", effect, pattern });
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function addPath() {
+    const p = newPath.trim();
+    if (!p) return;
+    try {
+      await invoke("add_permission_path", { scope: "global", path: p });
+      setNewPath("");
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function removePath(p: string) {
+    try {
+      await invoke("remove_permission_path", { scope: "global", path: p });
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-1">
+        <Label>规则语法</Label>
+        <p className="text-xs text-muted-foreground">
+          每条 pattern 形如 <span className="font-mono">Tool(arg)</span> 或 <span className="font-mono">Tool</span>（任意调用）。例：<br />
+          <span className="font-mono">Bash(git status)</span> · <span className="font-mono">Bash(rm:/tmp/)</span> · <span className="font-mono">Edit(/Users/x/proj)</span> · <span className="font-mono">WebFetch(github.com)</span>
+        </p>
+      </section>
+
+      <PatternList
+        title="允许 (allow)"
+        emptyHint="允许 agent 自动执行命中此 pattern 的工具调用"
+        items={allow}
+        value={newAllow}
+        setValue={setNewAllow}
+        onAdd={() => addPattern("allow", newAllow)}
+        onRemove={(p) => removePattern("allow", p)}
+        accent="allow"
+        loading={loading}
+      />
+
+      <PatternList
+        title="拒绝 (deny)"
+        emptyHint="命中此 pattern 的调用直接拒绝（优先级高于 allow）"
+        items={deny}
+        value={newDeny}
+        setValue={setNewDeny}
+        onAdd={() => addPattern("deny", newDeny)}
+        onRemove={(p) => removePattern("deny", p)}
+        accent="deny"
+        loading={loading}
+      />
+
+      <section className="space-y-2">
+        <Label>全局允许的路径（paths 白名单）</Label>
+        <p className="text-xs text-muted-foreground">
+          扩展 agent 可访问的目录或文件。effects 中的路径前缀命中此列表 → 不触发 PathAccess 审批。
+        </p>
+        <div className="flex gap-2">
+          <Input
+            value={newPath}
+            onChange={(e) => setNewPath(e.target.value)}
+            placeholder="/abs/path/to/dir 或 文件"
+          />
+          <Button onClick={addPath} disabled={!newPath.trim()}>
+            添加
+          </Button>
+        </div>
+        {paths.length === 0 ? (
+          <p className="text-xs text-muted-foreground">暂无</p>
+        ) : (
+          <ul className="space-y-1">
+            {paths.map((p) => (
+              <li
+                key={p}
+                className="flex items-center justify-between px-2 py-1 rounded border text-sm"
+              >
+                <span className="font-mono break-all">{p}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removePath(p)}
+                  aria-label={`删除 ${p}`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function PatternList({
+  title,
+  emptyHint,
+  items,
+  value,
+  setValue,
+  onAdd,
+  onRemove,
+  accent,
+  loading,
+}: {
+  title: string;
+  emptyHint: string;
+  items: string[];
+  value: string;
+  setValue: (v: string) => void;
+  onAdd: () => void;
+  onRemove: (p: string) => void;
+  accent: "allow" | "deny";
+  loading: boolean;
+}) {
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label>{title}</Label>
+        {loading && <span className="text-xs text-muted-foreground">加载中…</span>}
+      </div>
+      <p className="text-xs text-muted-foreground">{emptyHint}</p>
+      <div className="flex gap-2">
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="例：Bash(git status)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onAdd();
+          }}
+        />
+        <Button onClick={onAdd} disabled={!value.trim()}>
+          添加
+        </Button>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">暂无</p>
+      ) : (
+        <ul className="space-y-1">
+          {items.map((p) => (
+            <li
+              key={p}
+              className={cn(
+                "flex items-center justify-between px-2 py-1 rounded border text-sm",
+                accent === "allow"
+                  ? "border-emerald-500/30 bg-emerald-500/5"
+                  : "border-red-500/30 bg-red-500/5"
+              )}
+            >
+              <span className="font-mono break-all">{p}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onRemove(p)}
+                aria-label={`删除 ${p}`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 
 function AgentsPane({
   draft,

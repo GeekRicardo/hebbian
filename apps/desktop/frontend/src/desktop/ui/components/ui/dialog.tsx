@@ -15,8 +15,8 @@ interface DialogProps {
 const sizeCls = {
   sm: "max-w-sm",
   md: "max-w-md",
-  lg: "max-w-2xl",
-  xl: "max-w-4xl",
+  lg: "max-w-[820px]",
+  xl: "max-w-[1120px]",
 };
 
 export function Dialog({

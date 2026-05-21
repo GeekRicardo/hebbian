@@ -830,6 +830,264 @@ fn list_tools(app: AppHandle) -> AppResult<Vec<ToolInfo>> {
     Ok(core(&app)?.list_tools())
 }
 
+// ========== 权限规则与路径白名单（架构 §4.6 / §6.1.2）==========
+
+fn parse_perm_scope(s: &str) -> AppResult<protocol::PermissionScope> {
+    Ok(match s {
+        "session" => protocol::PermissionScope::Session,
+        "project" => protocol::PermissionScope::Project,
+        "global" => protocol::PermissionScope::Global,
+        "once" => protocol::PermissionScope::Once,
+        other => return Err(AppError::msg(format!("未知 scope: {other}"))),
+    })
+}
+
+fn parse_rule_effect(s: &str) -> AppResult<agent_core::permissions::RuleEffect> {
+    Ok(match s {
+        "deny" => agent_core::permissions::RuleEffect::Deny,
+        _ => agent_core::permissions::RuleEffect::Allow,
+    })
+}
+
+#[tauri::command]
+fn list_permissions(
+    app: AppHandle,
+    scope: String,
+    effect: String,
+    session_id: Option<String>,
+    workdir: Option<PathBuf>,
+) -> AppResult<Vec<String>> {
+    let scope = parse_perm_scope(&scope)?;
+    let effect = parse_rule_effect(&effect)?;
+    Ok(core(&app)?.list_permissions(scope, session_id.as_deref(), workdir.as_deref(), effect))
+}
+
+#[tauri::command]
+fn add_permission(
+    app: AppHandle,
+    scope: String,
+    effect: String,
+    pattern: String,
+    session_id: Option<String>,
+    workdir: Option<PathBuf>,
+) -> AppResult<()> {
+    let scope = parse_perm_scope(&scope)?;
+    let effect = parse_rule_effect(&effect)?;
+    core(&app)?
+        .add_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, pattern)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn remove_permission(
+    app: AppHandle,
+    scope: String,
+    effect: String,
+    pattern: String,
+    session_id: Option<String>,
+    workdir: Option<PathBuf>,
+) -> AppResult<bool> {
+    let scope = parse_perm_scope(&scope)?;
+    let effect = parse_rule_effect(&effect)?;
+    core(&app)?
+        .remove_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, &pattern)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn clear_permissions(
+    app: AppHandle,
+    scope: String,
+    session_id: Option<String>,
+    workdir: Option<PathBuf>,
+) -> AppResult<()> {
+    let scope = parse_perm_scope(&scope)?;
+    core(&app)?
+        .clear_permissions(scope, session_id.as_deref(), workdir.as_deref())
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn list_permission_paths(
+    app: AppHandle,
+    scope: String,
+    workdir: Option<PathBuf>,
+) -> AppResult<Vec<PathBuf>> {
+    let scope = parse_perm_scope(&scope)?;
+    Ok(core(&app)?.list_permission_paths(scope, workdir.as_deref()))
+}
+
+#[tauri::command]
+fn add_permission_path(
+    app: AppHandle,
+    scope: String,
+    path: PathBuf,
+    workdir: Option<PathBuf>,
+) -> AppResult<()> {
+    let scope = parse_perm_scope(&scope)?;
+    core(&app)?
+        .add_permission_path(scope, workdir.as_deref(), path)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn remove_permission_path(
+    app: AppHandle,
+    scope: String,
+    path: PathBuf,
+    workdir: Option<PathBuf>,
+) -> AppResult<bool> {
+    let scope = parse_perm_scope(&scope)?;
+    core(&app)?
+        .remove_permission_path(scope, workdir.as_deref(), &path)
+        .map_err(map_core_err)
+}
+
+// ========== Skills（架构 §6.1.3）==========
+
+#[tauri::command]
+fn list_skills(
+    app: AppHandle,
+    workdir: PathBuf,
+) -> AppResult<Vec<agent_core::tools::skill::Skill>> {
+    Ok(core(&app)?.list_skills(&workdir))
+}
+
+#[tauri::command]
+fn list_claude_skills(app: AppHandle) -> AppResult<Vec<String>> {
+    Ok(core(&app)?.list_claude_skills())
+}
+
+#[tauri::command]
+fn import_claude_skills(
+    app: AppHandle,
+    scope: String,
+    workdir: Option<PathBuf>,
+    names: Option<Vec<String>>,
+    overwrite: Option<bool>,
+) -> AppResult<Vec<agent_core::storage::skills::ImportedSkill>> {
+    let scope = match scope.as_str() {
+        "project" => agent_core::storage::skills::ImportScope::Project,
+        _ => agent_core::storage::skills::ImportScope::Global,
+    };
+    core(&app)?
+        .import_claude_skills(
+            scope,
+            workdir.as_deref(),
+            names.as_deref(),
+            overwrite.unwrap_or(false),
+        )
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn import_skills_from_dir(
+    app: AppHandle,
+    scope: String,
+    src_dir: PathBuf,
+    workdir: Option<PathBuf>,
+    selected_paths: Option<Vec<String>>,
+    overwrite: Option<bool>,
+) -> AppResult<Vec<agent_core::storage::skills::ImportedSkill>> {
+    let scope = match scope.as_str() {
+        "project" => agent_core::storage::skills::ImportScope::Project,
+        _ => agent_core::storage::skills::ImportScope::Global,
+    };
+    core(&app)?
+        .import_skills_from_dir(
+            scope,
+            workdir.as_deref(),
+            &src_dir,
+            selected_paths.as_deref(),
+            overwrite.unwrap_or(true),
+        )
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn import_skills_from_github(
+    app: AppHandle,
+    scope: String,
+    repo_url: String,
+    subpath: Option<String>,
+    workdir: Option<PathBuf>,
+    selected_paths: Option<Vec<String>>,
+    overwrite: Option<bool>,
+) -> AppResult<Vec<agent_core::storage::skills::ImportedSkill>> {
+    let scope = match scope.as_str() {
+        "project" => agent_core::storage::skills::ImportScope::Project,
+        _ => agent_core::storage::skills::ImportScope::Global,
+    };
+    core(&app)?
+        .import_skills_from_github(
+            scope,
+            workdir.as_deref(),
+            &repo_url,
+            subpath.as_deref(),
+            selected_paths.as_deref(),
+            overwrite.unwrap_or(true),
+        )
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn scan_skill_dir(
+    app: AppHandle,
+    src_dir: PathBuf,
+) -> AppResult<Vec<agent_core::storage::skills::ScannedSkill>> {
+    core(&app)?.scan_skill_dir(&src_dir).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn scan_skill_github(
+    app: AppHandle,
+    repo_url: String,
+    subpath: Option<String>,
+) -> AppResult<Vec<agent_core::storage::skills::ScannedSkill>> {
+    core(&app)?
+        .scan_skill_github(&repo_url, subpath.as_deref())
+        .map_err(map_core_err)
+}
+
+/// 读取一个 SKILL.md 的原始内容。`path` 必须直接指向 SKILL.md 文件
+/// （前端调用方应传 `list_skills` 返回的 `path` 字段）。
+///
+/// 限制：仅允许读 `SKILL.md` 命名的文件，避免被当成任意路径读取工具。
+#[tauri::command]
+fn read_skill_md(path: PathBuf) -> AppResult<String> {
+    let is_skill = path
+        .file_name()
+        .map(|n| n == std::ffi::OsStr::new("SKILL.md"))
+        .unwrap_or(false);
+    if !is_skill {
+        return Err(AppError::msg("仅允许读取 SKILL.md 文件"));
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|e| AppError::msg(format!("读取 {} 失败：{e}", path.display())))
+}
+
+#[tauri::command]
+fn set_skill_enabled(app: AppHandle, name: String, enabled: bool) -> AppResult<()> {
+    core(&app)?.set_skill_enabled(&name, enabled).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn delete_skill(
+    app: AppHandle,
+    source: String,
+    name: String,
+    workdir: Option<PathBuf>,
+) -> AppResult<bool> {
+    let source = match source.as_str() {
+        "project" => agent_core::tools::skill::SkillSource::Project,
+        "project_code" => agent_core::tools::skill::SkillSource::ProjectCode,
+        _ => agent_core::tools::skill::SkillSource::Global,
+    };
+    core(&app)?
+        .delete_skill(source, workdir.as_deref(), &name)
+        .map_err(map_core_err)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct BackgroundTaskInfo {
     task_id: String,
@@ -1110,6 +1368,56 @@ fn discover_rules_files(
             source: f.source,
         })
         .collect())
+}
+
+/// 发现"全部"规则文件：
+/// - 全局：合并 `global_candidates`（来自 settings/session 配置）与 `default_global_rules()`，
+///   过滤出真实存在的文件
+/// - 项目：当 workdir 给定时调 `rules::discover` 扫祖先链 + allowed_paths
+///
+/// 用于 SessionSettingsDialog 的「全局/项目」两段统一列表。
+#[tauri::command]
+fn discover_all_rules(
+    workdir: Option<PathBuf>,
+    allowed_paths: Option<Vec<PathBuf>>,
+    global_candidates: Option<Vec<PathBuf>>,
+) -> AppResult<Vec<RuleFileInfo>> {
+    use agent_core::rules::RuleSource;
+    let mut out: Vec<RuleFileInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let mut globals: Vec<PathBuf> = global_candidates.unwrap_or_default();
+    for d in agent_core::rules::default_global_rules() {
+        if !globals.contains(&d) {
+            globals.push(d);
+        }
+    }
+    for g in globals {
+        if !g.exists() {
+            continue;
+        }
+        let key = g.display().to_string();
+        if seen.insert(key.clone()) {
+            out.push(RuleFileInfo {
+                path: key,
+                source: RuleSource::Global,
+            });
+        }
+    }
+
+    if let Some(wd) = workdir {
+        let ap = allowed_paths.unwrap_or_default();
+        for f in agent_core::rules::discover(&wd, &ap) {
+            let key = f.path.display().to_string();
+            if seen.insert(key.clone()) {
+                out.push(RuleFileInfo {
+                    path: key,
+                    source: f.source,
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ========== Path attach (粘贴/拖拽路径) ==========
@@ -1563,12 +1871,30 @@ pub fn run() {
             set_run_mode,
             generate_session_title,
             list_tools,
+            list_permissions,
+            add_permission,
+            remove_permission,
+            clear_permissions,
+            list_permission_paths,
+            add_permission_path,
+            remove_permission_path,
+            list_skills,
+            list_claude_skills,
+            import_claude_skills,
+            import_skills_from_dir,
+            import_skills_from_github,
+            scan_skill_dir,
+            scan_skill_github,
+            read_skill_md,
+            set_skill_enabled,
+            delete_skill,
             list_background_tasks,
             kill_background_task,
             get_settings,
             save_settings,
             update_session_settings,
             discover_rules_files,
+            discover_all_rules,
             attach_path,
             approve_path_access,
             list_edits,

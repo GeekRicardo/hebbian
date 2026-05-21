@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Bot, RotateCcw, Zap, FileText } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, RotateCcw, Zap, FileText, FolderOpen, Sparkles } from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Label, Select, Textarea } from "@/desktop/ui/components/ui/input";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
+import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
+import { invoke } from "@/desktop/bridge/transport";
 import {
   DirPicker,
   PathListField,
@@ -43,7 +45,6 @@ export function SessionSettingsDialog() {
   // allowedPaths 是给 PathListField 的"扁平视图"——initial(可改) + 已宣告 runtime + 待宣告 pending
   // 都合到一个数组里，对话已开始时整个列表被 lockedPaths 标记成只读，仅添加按钮可用。
   const [allowedPaths, setAllowedPaths] = useState<string[] | null>(null);
-  const [skillDirs, setSkillDirs] = useState<string[] | null>(null);
   const [enabledTools, setEnabledTools] = useState<string[] | null>(null);
 
   // Rules 分区
@@ -83,25 +84,24 @@ export function SessionSettingsDialog() {
       } else {
         setAllowedPaths([...(initial ?? []), ...runtimePaths]);
       }
-      setSkillDirs(currentSession.skill_dirs ?? null);
       setEnabledTools(currentSession.enabled_tools ?? null);
       setGlobalRules(currentSession.global_rules ?? null);
       setRulesFiles(currentSession.rules_files ?? null);
       // 拉一次全局 settings 用作 placeholder
       refreshAppSettings().catch(() => {});
-      // 有 workdir 时发现规则文件
-      const wd = currentSession.workdir;
-      if (wd) {
-        setRulesLoading(true);
-        const allowed = currentSession.allowed_paths ?? [];
-        api
-          .discoverRulesFiles(wd, allowed)
-          .then(setDiscoveredRules)
-          .catch(() => setDiscoveredRules([]))
-          .finally(() => setRulesLoading(false));
-      } else {
-        setDiscoveredRules([]);
-      }
+      // 扫所有规则文件（全局 default + 项目祖先链）
+      setRulesLoading(true);
+      const wd = currentSession.workdir ?? null;
+      const allowed = currentSession.allowed_paths ?? [];
+      invoke<RuleFileInfo[]>("discover_all_rules", {
+        workdir: wd,
+        allowedPaths: allowed,
+        globalCandidates:
+          currentSession.global_rules ?? null,
+      })
+        .then(setDiscoveredRules)
+        .catch(() => setDiscoveredRules([]))
+        .finally(() => setRulesLoading(false));
     }
   }, [settingsOpen, currentSession, refreshAppSettings]);
 
@@ -124,7 +124,6 @@ export function SessionSettingsDialog() {
       await api.updateSessionSettings(currentSession.id, {
         workdir,
         allowed_paths: allowedPaths,
-        skill_dirs: skillDirs,
         enabled_tools: enabledTools,
         global_rules: globalRules,
         rules_files: rulesFiles,
@@ -146,7 +145,6 @@ export function SessionSettingsDialog() {
 
   const globalDefaults = appSettings?.conversation;
   const inheritedAllowedPaths = globalDefaults?.allowed_paths ?? [];
-  const inheritedSkillDirs = globalDefaults?.skill_dirs ?? [];
   const inheritedEnabledTools = globalDefaults?.enabled_tools ?? [];
   const inheritedWorkdir = globalDefaults?.workdir ?? "~/";
 
@@ -288,11 +286,11 @@ export function SessionSettingsDialog() {
         </div>
 
         {/* ── Workspace 覆盖 ── */}
-        <div className="space-y-4 border-t border-border pt-4">
-          <div className="text-xs text-muted-foreground">
-            以下字段留空 = 继承全局设置；任意改动都会成为本对话的覆盖。
-          </div>
-
+        <CollapsibleSection
+          title="目录与工具"
+          icon={<FolderOpen className="w-4 h-4 text-muted-foreground" />}
+          description="以下字段留空 = 继承全局设置；任意改动都会成为本对话的覆盖。"
+        >
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label>工作目录（workdir）</Label>
@@ -350,25 +348,6 @@ export function SessionSettingsDialog() {
             }
           />
 
-          <PathListField
-            label="Skill 目录"
-            paths={skillDirs ?? []}
-            inheritedPaths={skillDirs === null ? inheritedSkillDirs : undefined}
-            onChange={(paths) => setSkillDirs(paths)}
-            trailing={
-              skillDirs !== null && (
-                <button
-                  type="button"
-                  onClick={() => setSkillDirs(null)}
-                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  恢复默认
-                </button>
-              )
-            }
-          />
-
           <ToolToggleList
             label="启用的工具"
             availableTools={availableTools}
@@ -388,164 +367,222 @@ export function SessionSettingsDialog() {
               )
             }
           />
-        </div>
+        </CollapsibleSection>
+
+        {/* ── Skills（项目级管理与导入）── */}
+        <CollapsibleSection
+          title="Skills"
+          icon={<Sparkles className="w-4 h-4 text-muted-foreground" />}
+          description="管理本对话 workdir 加载的 skills，可从本地目录 / Git 仓库 / ~/.claude/skills 导入到当前项目或全局。"
+        >
+          <SkillsPane workdir={workdir} scope="project" />
+        </CollapsibleSection>
 
         {/* ── Rules ── */}
-        <div className="space-y-4 border-t border-border pt-4">
-          <div className="text-xs text-muted-foreground">
-            自动注入到对话上下文，无需 agent 手动读取。
-          </div>
-
-          {/* 全局规则开关 */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium">读取全局 CLAUDE.md</div>
-                <div className="text-xs text-muted-foreground">
-                  {globalRules === null
-                    ? `继承全局设置（${globalDefaults?.global_rules?.length ? "已启用" : "已禁用"}）`
-                    : globalRules.length > 0
-                      ? "已开启"
-                      : "已关闭"}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {globalRules !== null && (
-                <button
-                  type="button"
-                  onClick={() => setGlobalRules(null)}
-                  className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-                  title="恢复继承全局默认"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              )}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={
-                  globalRules === null
-                    ? (globalDefaults?.global_rules?.length ?? 0) > 0
-                    : globalRules.length > 0
-                }
-                onClick={() => {
-                  if (globalRules === null) {
-                    // 继承态：脱离继承，关闭
-                    setGlobalRules([]);
-                  } else if (globalRules.length > 0) {
-                    // 开启 → 关闭
-                    setGlobalRules([]);
-                  } else {
-                    // 关闭 → 开启（设为默认值）
-                    setGlobalRules(globalDefaults?.global_rules ?? []);
-                  }
-                }}
-                className={cn(
-                  "relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors",
-                  (globalRules === null
-                    ? (globalDefaults?.global_rules?.length ?? 0) > 0
-                    : globalRules.length > 0)
-                    ? "bg-primary"
-                    : "bg-muted"
-                )}
-              >
-                <span
-                  className={cn(
-                    "inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform mt-0.5",
-                    (globalRules === null
-                      ? (globalDefaults?.global_rules?.length ?? 0) > 0
-                      : globalRules.length > 0)
-                      ? "translate-x-5"
-                      : "translate-x-0.5"
-                  )}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* 项目 Rules（仅当有 workdir 时显示） */}
-          {workdir && workdir !== "~/" && (
-            <div className="space-y-2">
-              <div className="text-sm font-medium flex items-center gap-2">
-                <FileText className="w-4 h-4" />
-                项目 Rules
-              </div>
-              {rulesLoading ? (
-                <div className="text-xs text-muted-foreground py-1">
-                  扫描中…
-                </div>
-              ) : discoveredRules.length === 0 ? (
-                <div className="text-xs text-muted-foreground py-1">
-                  未发现 CLAUDE.md / AGENTS.md
-                </div>
-              ) : (
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {discoveredRules.map((info) => {
-                    const state = rulesFiles?.find(
-                      (s) => s.path === info.path
-                    );
-                    const enabled =
-                      state?.enabled ??
-                      info.source === "workdir";
-                    return (
-                      <button
-                        key={info.path}
-                        type="button"
-                        onClick={() => {
-                          const next = rulesFiles
-                            ? [...rulesFiles]
-                            : discoveredRules.map((r) => ({
-                                path: r.path,
-                                enabled: r.source === "workdir",
-                              }));
-                          const idx = next.findIndex(
-                            (s) => s.path === info.path
-                          );
-                          if (idx >= 0) {
-                            next[idx] = {
-                              ...next[idx],
-                              enabled: !next[idx].enabled,
-                            };
-                          } else {
-                            next.push({
-                              path: info.path,
-                              enabled: !(
-                                info.source === "workdir"
-                              ),
-                            });
-                          }
-                          setRulesFiles(next);
-                        }}
-                        className={cn(
-                          "flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors hover:bg-accent"
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "inline-block w-2 h-2 rounded-full shrink-0",
-                            enabled
-                              ? "bg-primary"
-                              : "bg-muted-foreground/30"
-                          )}
-                        />
-                        <span className="truncate">
-                          {info.path.split("/").pop() ??
-                            info.path}
-                        </span>
-                        <span className="text-muted-foreground truncate shrink">
-                          {info.path}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <CollapsibleSection
+          title="规则"
+          icon={<FileText className="w-4 h-4 text-muted-foreground" />}
+          description="自动注入到对话上下文，无需 agent 手动读取。复选框控制本对话是否启用该文件。"
+        >
+          <RulesList
+            discovered={discoveredRules}
+            loading={rulesLoading}
+            globalEnabled={
+              globalRules ?? globalDefaults?.global_rules ?? []
+            }
+            onToggleGlobal={(path) => {
+              const cur = new Set(
+                globalRules ?? globalDefaults?.global_rules ?? []
+              );
+              if (cur.has(path)) cur.delete(path);
+              else cur.add(path);
+              setGlobalRules(Array.from(cur));
+            }}
+            rulesFiles={rulesFiles ?? []}
+            onToggleProject={(info) => {
+              const next = rulesFiles
+                ? [...rulesFiles]
+                : discoveredRules
+                    .filter((r) => r.source !== "global")
+                    .map((r) => ({
+                      path: r.path,
+                      enabled: r.source === "workdir",
+                    }));
+              const idx = next.findIndex((s) => s.path === info.path);
+              if (idx >= 0) {
+                next[idx] = { ...next[idx], enabled: !next[idx].enabled };
+              } else {
+                next.push({
+                  path: info.path,
+                  enabled: !(info.source === "workdir"),
+                });
+              }
+              setRulesFiles(next);
+            }}
+          />
+        </CollapsibleSection>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * 规则文件列表：按 source 分两段。
+ * - 上段「全局」：列 source==="global" 的文件，复选框对应 session.global_rules
+ * - 下段「项目」：列 source==="workdir"/"allowed_path"，复选框对应 session.rules_files
+ *
+ * 中间一条分隔线 + 小字 label 视觉分割。
+ */
+function RulesList({
+  discovered,
+  loading,
+  globalEnabled,
+  onToggleGlobal,
+  rulesFiles,
+  onToggleProject,
+}: {
+  discovered: RuleFileInfo[];
+  loading: boolean;
+  globalEnabled: string[];
+  onToggleGlobal: (path: string) => void;
+  rulesFiles: RuleFileState[];
+  onToggleProject: (info: RuleFileInfo) => void;
+}) {
+  const globalRules = discovered.filter((r) => r.source === "global");
+  const projectRules = discovered.filter((r) => r.source !== "global");
+  const globalSet = new Set(globalEnabled);
+
+  if (loading) {
+    return <div className="text-xs text-muted-foreground py-1">扫描中…</div>;
+  }
+  if (discovered.length === 0) {
+    return (
+      <div className="text-xs text-muted-foreground py-1">
+        未发现 CLAUDE.md / AGENTS.md
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-[11px] text-muted-foreground mb-1 uppercase tracking-wide">
+          全局
+        </div>
+        {globalRules.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-1">
+            未配置全局规则文件
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {globalRules.map((info) => {
+              const enabled = globalSet.has(info.path);
+              return (
+                <li key={info.path}>
+                  <button
+                    type="button"
+                    onClick={() => onToggleGlobal(info.path)}
+                    className="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors hover:bg-accent"
+                  >
+                    <span
+                      className={cn(
+                        "inline-block w-2 h-2 rounded-full shrink-0",
+                        enabled ? "bg-primary" : "bg-muted-foreground/30"
+                      )}
+                    />
+                    <span className="truncate font-mono">{info.path}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="border-t border-border" />
+
+      <div>
+        <div className="text-[11px] text-muted-foreground mb-1 uppercase tracking-wide">
+          项目
+        </div>
+        {projectRules.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-1">
+            当前 workdir 与 allowed_paths 下没发现规则文件
+          </div>
+        ) : (
+          <ul className="space-y-1 max-h-60 overflow-y-auto">
+            {projectRules.map((info) => {
+              const state = rulesFiles.find((s) => s.path === info.path);
+              const enabled = state?.enabled ?? info.source === "workdir";
+              return (
+                <li key={info.path}>
+                  <button
+                    type="button"
+                    onClick={() => onToggleProject(info)}
+                    className="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors hover:bg-accent"
+                  >
+                    <span
+                      className={cn(
+                        "inline-block w-2 h-2 rounded-full shrink-0",
+                        enabled ? "bg-primary" : "bg-muted-foreground/30"
+                      )}
+                    />
+                    <span className="shrink-0 px-1 rounded text-[9px] uppercase bg-muted">
+                      {info.source === "workdir" ? "wd" : "allowed"}
+                    </span>
+                    <span className="truncate font-mono">{info.path}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 可折叠区段：头部点击切换展开/收起，默认折叠。
+ * 用于「目录」「Skills」「规则」三段二级配置——首屏只露常用项（provider/model/agent/stream），
+ * 高级配置默认收起避免视觉过载。
+ */
+function CollapsibleSection({
+  title,
+  icon,
+  defaultOpen = false,
+  description,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  defaultOpen?: boolean;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="space-y-3 border-t border-border pt-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 text-left -mx-1 px-1 py-1 rounded hover:bg-accent/40 transition-colors"
+      >
+        {open ? (
+          <ChevronDown className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        )}
+        {icon}
+        <span className="text-sm font-medium">{title}</span>
+      </button>
+      {open && (
+        <div className="space-y-4">
+          {description && (
+            <div className="text-xs text-muted-foreground">{description}</div>
+          )}
+          {children}
+        </div>
+      )}
+    </div>
   );
 }

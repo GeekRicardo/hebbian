@@ -90,10 +90,35 @@ pub fn load(data_dir: &Path) -> Settings {
     if !p.exists() {
         return Settings::default();
     }
-    match std::fs::read_to_string(&p) {
+    let mut settings: Settings = match std::fs::read_to_string(&p) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => Settings::default(),
+        Err(_) => return Settings::default(),
+    };
+    // 老命名向新命名迁移（架构 §4.4.7：工具名 PascalCase）。
+    // 一次性 normalize + 透明回写，避免老 settings.json 里的 snake_case 工具名
+    // 在 UI 与运行时全部"看着是空"的 bug。
+    let normalized = normalize_legacy_tool_names(&settings.conversation.enabled_tools);
+    if normalized != settings.conversation.enabled_tools {
+        settings.conversation.enabled_tools = normalized;
+        if let Err(e) = save(data_dir, &settings) {
+            tracing::warn!(error = %e, "normalize enabled_tools 回写失败，仅内存生效");
+        }
     }
+    settings
+}
+
+/// 已知的工具名迁移映射（老 → 新）。新工具加入时这里无需改——只迁移已废弃的别名。
+fn normalize_legacy_tool_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .map(|n| match n.as_str() {
+            "web_search" => "WebSearch".to_string(),
+            // 老版本的 web_fetch 与 WebFetch 现已统一为 "Fetch"
+            "web_fetch" | "WebFetch" => "Fetch".to_string(),
+            "image_generation" => model_gateway::types::IMAGE_GENERATION_TOOL_NAME.to_string(),
+            _ => n.clone(),
+        })
+        .collect()
 }
 
 pub fn save(data_dir: &Path, settings: &Settings) -> AppResult<()> {
@@ -101,4 +126,54 @@ pub fn save(data_dir: &Path, settings: &Settings) -> AppResult<()> {
     let text = serde_json::to_string_pretty(settings)?;
     std::fs::write(path(data_dir), text)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("hebbian-settings-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn normalize_maps_legacy_snake_case_to_pascal() {
+        let names = vec![
+            "web_search".to_string(),
+            "web_fetch".to_string(),
+            "image_generation".to_string(),
+            "Custom".to_string(),
+        ];
+        let out = normalize_legacy_tool_names(&names);
+        assert_eq!(out[0], "WebSearch");
+        assert_eq!(out[1], "Fetch");
+        assert_eq!(
+            out[2],
+            model_gateway::types::IMAGE_GENERATION_TOOL_NAME.to_string()
+        );
+        assert_eq!(out[3], "Custom"); // 未知 → 透传
+    }
+
+    #[test]
+    fn load_rewrites_legacy_tool_names_to_disk() {
+        let dir = tmp("legacy-rewrite");
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"conversation":{"enabled_tools":["web_search","web_fetch"]}}"#,
+        )
+        .unwrap();
+        let s = load(&dir);
+        assert_eq!(
+            s.conversation.enabled_tools,
+            vec!["WebSearch".to_string(), "Fetch".to_string()]
+        );
+        // 已透明回写
+        let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(text.contains("WebSearch"));
+        assert!(text.contains("Fetch"));
+        assert!(!text.contains("web_search"));
+    }
 }

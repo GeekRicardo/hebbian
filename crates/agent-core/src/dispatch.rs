@@ -855,24 +855,24 @@ async fn await_path_decision(
         ApprovalDecision::AllowAndRemember { scope, .. } => {
             for p in &paths {
                 workspace.add_allowed_path(p.clone());
-                // 持久化到 PermissionStore：其他 session 通过 out-of-scope filter
-                // 里的 allows_path() 检查共享这些规则。
+                // 持久化到 PermissionStore.paths 段（架构 §6.1.2）：Project / Global 落盘，
+                // Session / Once 仅 workspace 内存生效。
                 if let Some(store) = permission_store {
-                    let (sid, workdir_for_rule) = match scope {
-                        protocol::PermissionScope::Once => continue,
-                        protocol::PermissionScope::Session => (session_id, None),
+                    let _ = session_id; // session paths 不持久化（workspace 内存即可）
+                    let workdir_buf;
+                    let (scope_for_path, workdir_for_path) = match scope {
+                        protocol::PermissionScope::Once
+                        | protocol::PermissionScope::Session => continue,
                         protocol::PermissionScope::Project => {
-                            (None, Some(workspace.workdir().to_path_buf()))
+                            workdir_buf = workspace.workdir().to_path_buf();
+                            (scope, Some(workdir_buf.as_path()))
                         }
-                        protocol::PermissionScope::Global => (None, None),
+                        protocol::PermissionScope::Global => (scope, None),
                     };
-                    if let Err(e) = store.add_path_rule(
-                        sid,
-                        workdir_for_rule,
-                        p.to_string_lossy().to_string(),
-                        scope,
-                    ) {
-                        tracing::warn!(error = %e, path = %p.display(), "路径规则持久化失败");
+                    if let Err(e) =
+                        store.add_path(scope_for_path, workdir_for_path, p.clone())
+                    {
+                        tracing::warn!(error = %e, path = %p.display(), "paths 持久化失败");
                     }
                 }
             }

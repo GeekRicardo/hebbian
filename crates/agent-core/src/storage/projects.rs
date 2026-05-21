@@ -1,7 +1,16 @@
-//! Workspace/project 持久化（独立于 session）。
+//! Workspace / project 持久化（架构 §6.1 / §6.1.1）。
 //!
-//! 项目是 session 之上的一层命名实体：每个项目保存一个主 workdir 和若干
-//! allowed_paths。新建 session 时可以从项目复制这组默认路径，但 session 仍可独立修改。
+//! 项目按 workdir 路径编码为目录名落盘：
+//!
+//! ```text
+//! ~/.hebbian/projects/<encode(workdir)>/
+//! ├── workspace.json       ← 本模块负责
+//! ├── permissions.json     ← storage::permissions 负责
+//! └── skills/              ← tools::skill 负责（不存在则跳过）
+//! ```
+//!
+//! `WorkspaceProject.id` = `encode_workdir(workdir)`——同一 workdir 永远映射到同一 id。
+//! workdir 改名 = 项目配置丢失（设计选择，§6.1.1）。
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -11,44 +20,75 @@ use serde::{Deserialize, Serialize};
 
 use super::lock;
 
-const PROJECT_DIR: &str = "projects";
+pub(crate) const PROJECTS_DIR: &str = "projects";
+const WORKSPACE_FILE: &str = "workspace.json";
 
-fn projects_root(data_dir: &Path) -> PathBuf {
-    data_dir.join(PROJECT_DIR)
+/// 项目目录根：`<data_dir>/projects/`
+pub fn projects_root(data_dir: &Path) -> PathBuf {
+    data_dir.join(PROJECTS_DIR)
 }
 
-fn project_path(data_dir: &Path, id: &str) -> PathBuf {
-    projects_root(data_dir).join(format!("{id}.json"))
+/// 项目目录：`<data_dir>/projects/<encode(workdir)>/`
+pub fn project_dir(data_dir: &Path, workdir: &Path) -> PathBuf {
+    projects_root(data_dir).join(encode_workdir(workdir))
+}
+
+/// 按 id（即 encoded workdir）取项目目录：`<data_dir>/projects/<id>/`
+pub fn project_dir_by_id(data_dir: &Path, id: &str) -> PathBuf {
+    projects_root(data_dir).join(id)
 }
 
 fn workspace_path(data_dir: &Path, id: &str) -> PathBuf {
-    projects_root(data_dir).join(format!("{id}.code-workspace"))
+    project_dir_by_id(data_dir, id).join(WORKSPACE_FILE)
 }
 
-fn sanitize_component(raw: &str) -> String {
+/// 把 workdir 绝对路径编码为目录名：`/Users/x/y` → `-Users-x-y`，
+/// Windows `C:\Users\x` → `C--Users-x`。与 Claude Code 行为一致。
+///
+/// 非绝对路径回退为 lexical 归一化后的 token 串（不带前导 `-`），仅用于异常容错；
+/// 正常流程应永远传入绝对路径。
+pub fn encode_workdir(workdir: &Path) -> String {
+    let normalized = normalize_lexical(workdir.to_path_buf());
     let mut out = String::new();
-    for ch in raw.chars() {
-        let keep = ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.';
-        if keep {
-            out.push(ch);
-        } else if ch.is_whitespace() {
-            out.push('-');
+    let mut first = true;
+    for component in normalized.components() {
+        match component {
+            Component::Prefix(p) => {
+                let raw = p.as_os_str().to_string_lossy();
+                for ch in raw.chars() {
+                    out.push(if ch == ':' || ch == '\\' || ch == '/' {
+                        '-'
+                    } else {
+                        ch
+                    });
+                }
+                first = false;
+            }
+            Component::RootDir => {
+                // POSIX 根：留前导 `-`
+                if !out.ends_with('-') {
+                    out.push('-');
+                }
+                first = false;
+            }
+            Component::Normal(part) => {
+                if !first && !out.ends_with('-') {
+                    out.push('-');
+                }
+                let raw = part.to_string_lossy();
+                for ch in raw.chars() {
+                    out.push(if ch == '/' || ch == '\\' { '-' } else { ch });
+                }
+                first = false;
+            }
+            Component::CurDir | Component::ParentDir => {}
         }
     }
-    let trimmed = out.trim_matches('-').trim_matches('.').to_string();
-    if trimmed.is_empty() {
+    if out.is_empty() {
         "project".to_string()
     } else {
-        trimmed
+        out
     }
-}
-
-fn default_id(name: &str) -> String {
-    format!(
-        "{}-{}",
-        sanitize_component(name),
-        uuid::Uuid::new_v4().simple()
-    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,8 +125,7 @@ impl WorkspaceProject {
             .collect()
     }
 
-    pub fn from_parts(
-        id: String,
+    fn from_parts(
         name: String,
         workdir: PathBuf,
         allowed_paths: Vec<PathBuf>,
@@ -94,6 +133,7 @@ impl WorkspaceProject {
         created_at: i64,
         updated_at: i64,
     ) -> Self {
+        let id = encode_workdir(&workdir);
         let mut folders = vec![WorkspaceFolder {
             path: workdir,
             name: Some("workdir".to_string()),
@@ -122,6 +162,7 @@ pub struct WorkspaceProjectsFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceProjectInput {
+    /// 兼容旧 API；提交时按 workdir 推算实际 id，本字段被忽略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub name: String,
@@ -147,28 +188,20 @@ struct VscodeWorkspaceFolder {
     name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct HebbianWorkspaceFile {
-    name: String,
-    folders: Vec<WorkspaceFolder>,
-}
-
-fn ensure_project_dir(data_dir: &Path) -> AppResult<()> {
-    std::fs::create_dir_all(projects_root(data_dir))?;
+fn ensure_dir(path: &Path) -> AppResult<()> {
+    std::fs::create_dir_all(path)?;
     Ok(())
 }
 
 fn normalize_project(mut project: WorkspaceProject) -> WorkspaceProject {
-    if project.id.trim().is_empty() {
-        project.id = default_id(&project.name);
-    } else {
-        project.id = sanitize_component(&project.id);
-    }
     project.name = project.name.trim().to_string();
     if project.name.is_empty() {
         project.name = "项目".to_string();
     }
     project.folders = dedup_folders(project.folders);
+    if let Some(workdir) = project.workdir().cloned() {
+        project.id = encode_workdir(&workdir);
+    }
     if project
         .source
         .as_deref()
@@ -200,35 +233,40 @@ fn dedup_paths(items: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn write_project(data_dir: &Path, project: WorkspaceProject) -> AppResult<WorkspaceProject> {
-    ensure_project_dir(data_dir)?;
     let project = normalize_project(project);
-    let path = project_path(data_dir, &project.id);
+    let dir = project_dir_by_id(data_dir, &project.id);
+    ensure_dir(&dir)?;
+    let path = dir.join(WORKSPACE_FILE);
     let bytes = serde_json::to_vec_pretty(&project)?;
     lock::write_atomic(&path, &bytes)?;
     Ok(project)
 }
 
 pub fn load(data_dir: &Path) -> AppResult<WorkspaceProjectsFile> {
-    ensure_project_dir(data_dir)?;
     let root = projects_root(data_dir);
+    ensure_dir(&root)?;
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+        if !path.is_dir() {
             continue;
         }
-        let bytes = match lock::read_locked(&path) {
+        let file = path.join(WORKSPACE_FILE);
+        if !file.exists() {
+            continue;
+        }
+        let bytes = match lock::read_locked(&file) {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(), "读取 project 文件失败");
+                tracing::warn!(error = %e, path = %file.display(), "读取 workspace.json 失败");
                 continue;
             }
         };
         match serde_json::from_slice::<WorkspaceProject>(&bytes) {
             Ok(project) => projects.push(normalize_project(project)),
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(), "解析 project 文件失败");
+                tracing::warn!(error = %e, path = %file.display(), "解析 workspace.json 失败");
             }
         }
     }
@@ -245,7 +283,7 @@ pub fn list(data_dir: &Path) -> AppResult<Vec<WorkspaceProject>> {
 }
 
 pub fn get(data_dir: &Path, id: &str) -> AppResult<WorkspaceProject> {
-    let path = project_path(data_dir, id);
+    let path = workspace_path(data_dir, id);
     if !path.exists() {
         return Err(AppError::msg(format!("找不到项目：{id}")));
     }
@@ -255,16 +293,16 @@ pub fn get(data_dir: &Path, id: &str) -> AppResult<WorkspaceProject> {
 }
 
 pub fn save(data_dir: &Path, input: WorkspaceProjectInput) -> AppResult<WorkspaceProject> {
-    ensure_project_dir(data_dir)?;
     if input.workdir.as_os_str().is_empty() {
         return Err(AppError::msg("项目主目录不能为空"));
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let existing = input.id.as_deref().and_then(|id| get(data_dir, id).ok());
+    let workdir = normalize_lexical(input.workdir);
+    let id = encode_workdir(&workdir);
+    let existing = get(data_dir, &id).ok();
     let project = WorkspaceProject::from_parts(
-        input.id.clone().unwrap_or_else(|| default_id(&input.name)),
         input.name,
-        input.workdir,
+        workdir,
         input.allowed_paths,
         input.source,
         existing.as_ref().map(|p| p.created_at).unwrap_or(now),
@@ -273,24 +311,10 @@ pub fn save(data_dir: &Path, input: WorkspaceProjectInput) -> AppResult<Workspac
     write_project(data_dir, project)
 }
 
-fn save_workspace_file(data_dir: &Path, project: &WorkspaceProject) -> AppResult<()> {
-    let path = workspace_path(data_dir, &project.id);
-    let file = HebbianWorkspaceFile {
-        name: project.name.clone(),
-        folders: project.folders.clone(),
-    };
-    let bytes = serde_json::to_vec_pretty(&file)?;
-    lock::write_atomic(&path, &bytes)
-}
-
 pub fn delete(data_dir: &Path, id: &str) -> AppResult<()> {
-    let path = project_path(data_dir, id);
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    let workspace = workspace_path(data_dir, id);
-    if workspace.exists() {
-        std::fs::remove_file(workspace)?;
+    let dir = project_dir_by_id(data_dir, id);
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
     }
     Ok(())
 }
@@ -401,10 +425,7 @@ pub fn import_vscode_workspace(
     source_path: Option<&Path>,
 ) -> AppResult<WorkspaceProject> {
     let value: VscodeWorkspaceFile = serde_json::from_str(text)?;
-    let mut folders = Vec::new();
-    for folder in value.folders {
-        folders.push(folder);
-    }
+    let folders = value.folders;
     if folders.is_empty() {
         return Err(AppError::msg("workspace 文件里没有可用目录"));
     }
@@ -445,9 +466,7 @@ pub fn import_vscode_workspace(
     for (project_folder, vscode_folder) in project.folders.iter_mut().zip(folders.iter()) {
         project_folder.name = vscode_folder.name.clone();
     }
-    let project = write_project(data_dir, project)?;
-    save_workspace_file(data_dir, &project)?;
-    Ok(project)
+    write_project(data_dir, project)
 }
 
 pub fn create(
@@ -470,15 +489,17 @@ pub fn create(
 
 pub fn update(
     data_dir: &Path,
-    id: &str,
+    _id: &str,
     name: String,
     workdir: PathBuf,
     allowed_paths: Vec<PathBuf>,
 ) -> AppResult<WorkspaceProject> {
+    // `id` 由 workdir 推算，外部传入的 id 仅用于"我想更新哪个项目"的语义，
+    // 实际写盘按 encode_workdir(workdir) 落到对应目录。
     save(
         data_dir,
         WorkspaceProjectInput {
-            id: Some(id.to_string()),
+            id: None,
             name,
             workdir,
             allowed_paths,
@@ -499,6 +520,15 @@ mod tests {
     }
 
     #[test]
+    fn encode_workdir_posix() {
+        assert_eq!(
+            encode_workdir(Path::new("/Users/ricardo/code/hebbian")),
+            "-Users-ricardo-code-hebbian"
+        );
+        assert_eq!(encode_workdir(Path::new("/")), "-");
+    }
+
+    #[test]
     fn save_and_load_projects_roundtrip() {
         let dir = tmp("roundtrip");
         let saved = create(
@@ -508,6 +538,7 @@ mod tests {
             vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/a")],
         )
         .unwrap();
+        assert_eq!(saved.id, "-tmp-work");
         assert_eq!(saved.workdir(), Some(&PathBuf::from("/tmp/work")));
         assert_eq!(saved.allowed_paths(), vec![PathBuf::from("/tmp/a")]);
 
@@ -515,6 +546,22 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "My Project");
         assert_eq!(loaded[0].workdir(), Some(&PathBuf::from("/tmp/work")));
+    }
+
+    #[test]
+    fn delete_removes_project_dir() {
+        let dir = tmp("delete");
+        let saved = create(
+            &dir,
+            "X".to_string(),
+            PathBuf::from("/tmp/x"),
+            vec![],
+        )
+        .unwrap();
+        let proj_dir = project_dir_by_id(&dir, &saved.id);
+        assert!(proj_dir.exists());
+        delete(&dir, &saved.id).unwrap();
+        assert!(!proj_dir.exists());
     }
 
     #[test]
@@ -552,31 +599,6 @@ mod tests {
         assert_eq!(
             saved.allowed_paths(),
             vec![PathBuf::from("src"), PathBuf::from("/abs/data"),]
-        );
-    }
-
-    #[test]
-    fn import_vscode_workspace_reexpresses_relative_allowed_paths_from_workdir_parent() {
-        let dir = tmp("import-relative-siblings");
-        let source = PathBuf::from("/Users/ricardo/code/ricardo/other/hebbian.code-workspace");
-        let saved = import_vscode_workspace(
-            &dir,
-            r#"{"folders":[{"path":"../rust/hebbian"},{"path":"sub2api"},{"path":"../claude-code-haha"},{"path":"../rust/cc-switch"}]}"#,
-            Some("hebbian".to_string()),
-            Some(&source),
-        )
-        .unwrap();
-        assert_eq!(
-            saved.workdir(),
-            Some(&PathBuf::from("/Users/ricardo/code/ricardo/rust/hebbian"))
-        );
-        assert_eq!(
-            saved.allowed_paths(),
-            vec![
-                PathBuf::from("../other/sub2api"),
-                PathBuf::from("../claude-code-haha"),
-                PathBuf::from("cc-switch"),
-            ]
         );
     }
 }

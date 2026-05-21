@@ -1,116 +1,163 @@
-//! PermissionStore + PermissionRule（架构 §4.5.4 / §4.6）。
+//! PermissionStore + Permission pattern（架构 §4.6 / §6.1.2）。
 //!
-//! 数据模型遵从架构 §4.5.4：
+//! 设计走 Claude Code 风格：
+//! - 落盘只有 `allow` / `deny` / `paths` 三个数组（详见 [`crate::storage::permissions`]）
+//! - 每条 allow/deny 是字符串 pattern：`<Tool>(<arg>)` 或 `<Tool>`（任意调用）
+//! - Scope 由文件位置区分：global / project / session 三个文件天然分层
+//! - PermissionRule struct 已删除——pattern 字符串本身是唯一的标识/数据
 //!
-//! - [`PermissionRule`]：一条规则，含 scope / tool_name / matcher / decision / 时间戳 /
-//!   可选的 `workdir`（Project scope 必填）。
-//! - [`PermissionMatcher`]：按工具语义分类的匹配器（Bash / BashWithPath / FilePath /
-//!   Network / Any）。
-//! - [`PermissionStore`]：内存索引 + 落盘。Project + Global 规则共用
-//!   `~/.hebbian/permissions.json`，匹配前按 mtime 做热加载（架构 §4.6.2）；
-//!   Session 规则由调用方在加载 session 时遍历 jsonl entry 灌进来。
-//!
-//! `match(session_id, workdir, tool_name, effects)`：按 `[Session, Project, Global]`
-//! 顺序查表，命中即返回（架构 §4.6.1）。
+//! Pattern 语法：
+//! - `Bash(xargs)` / `Bash(git status)` — 命令前缀（按 token 边界匹配）
+//! - `Bash(rm:/tmp)` — 命令前缀 + 路径前缀（冒号分隔）
+//! - `Edit(/Users/x/file)` / `Read(/etc)` / `Write(/tmp)` — 路径前缀
+//! - `WebFetch(github.com)` / `WebSearch(example.com)` — 域名后缀
+//! - `Bash` — 任意 Bash 调用
+//! - `*(...)` — 任意工具（仅在程序层使用，UI 一般不暴露）
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
-
-use common::AppResult;
+use common::{AppError, AppResult};
 use protocol::PermissionScope;
 
 use crate::storage::permissions as permissions_store;
+use crate::storage::projects;
 
-/// 单条权限规则。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionRule {
-    pub id: String,
-    pub scope: PermissionScope,
-    #[serde(rename = "toolName")]
-    pub tool_name: String,
-    pub matcher: PermissionMatcher,
-    pub decision: PermissionDecisionKind,
-    #[serde(default, rename = "createdAt")]
-    pub created_at: i64,
-    #[serde(default, rename = "createdBy")]
-    pub created_by: String,
-    /// Project scope 规则必填：用户写规则时的 workdir。
-    /// 匹配阶段按 `current_workdir.starts_with(rule.workdir)` 命中（含子目录）。
-    /// 旧 Global 规则未带此字段时 deserialize 为 `None`，向前兼容。
-    #[serde(default)]
-    pub workdir: Option<PathBuf>,
-}
-
-/// 写盘时的决定类型（仅 Allow / Deny，无 "Once"——Once 本就不持久化）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PermissionDecisionKind {
+/// Allow / Deny —— 对应文件中的 `allow` / `deny` 数组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleEffect {
     Allow,
     Deny,
 }
 
-/// 按工具语义分类的匹配器（架构 §4.5.4）。
-///
-/// JSON 形态：`{ "type": "Bash", "commandPrefix": "git" }` —— 与文档示例一致。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum PermissionMatcher {
-    /// 工具级全放行（适用于 Read / Glob 等 ReadOnly 工具）。
-    Any,
-    /// Bash 命令前缀（按空白 token 边界匹配）。
-    Bash {
-        #[serde(rename = "commandPrefix")]
-        command_prefix: String,
-    },
-    /// Bash + 命令前缀 + 路径前缀（如 `rm` 限制只能在 `~/tmp`）。
-    BashWithPath {
-        #[serde(rename = "commandPrefix")]
-        command_prefix: String,
-        #[serde(rename = "pathPrefix")]
-        path_prefix: String,
-    },
-    /// 文件路径前缀（Read / Write / Edit 等）。
-    FilePath {
-        #[serde(rename = "pathPrefix")]
-        path_prefix: String,
-    },
-    /// 网络访问域名后缀（Fetch / WebSearch）。
-    Network {
-        #[serde(rename = "domainSuffix")]
-        domain_suffix: String,
-    },
+/// 解析后的 pattern。`raw` 保留原字符串，用于 list / remove / 落盘。
+#[derive(Debug, Clone)]
+pub struct Permission {
+    pub raw: String,
+    tool: String,
+    arg: Arg,
 }
 
-impl PermissionMatcher {
-    /// 是否匹配一次工具调用。`fingerprint` 是工具自报的命令级指纹
-    /// （Bash 给 `"git status -uno"`），`path` 是工具操作的路径（如 Write 的目标文件）。
-    pub fn matches(&self, fingerprint: Option<&str>, path: Option<&str>) -> bool {
-        match self {
-            PermissionMatcher::Any => true,
-            PermissionMatcher::Bash { command_prefix } => fingerprint
-                .map(|fp| prefix_with_token_boundary(fp, command_prefix))
-                .unwrap_or(false),
-            PermissionMatcher::BashWithPath {
-                command_prefix,
-                path_prefix,
-            } => {
+#[derive(Debug, Clone)]
+enum Arg {
+    /// `<Tool>` 或 `<Tool>()` — 任意调用该工具
+    Any,
+    /// `Bash(cmd)` 或 `Bash(cmd:path)` — 命令前缀 + 可选路径前缀
+    Bash {
+        cmd: String,
+        path: Option<String>,
+    },
+    /// `<FileTool>(/path)` — 路径前缀
+    Path { prefix: String },
+    /// `<WebTool>(domain.com)` — 域名后缀
+    Domain { suffix: String },
+}
+
+impl Permission {
+    /// 解析一条字符串 pattern。
+    pub fn parse(raw: &str) -> AppResult<Self> {
+        let s = raw.trim();
+        if s.is_empty() {
+            return Err(AppError::msg("权限 pattern 不能为空"));
+        }
+        if let Some(open) = s.find('(') {
+            if !s.ends_with(')') {
+                return Err(AppError::msg(format!("权限 pattern 缺少右括号：{raw}")));
+            }
+            let tool = s[..open].trim().to_string();
+            if tool.is_empty() {
+                return Err(AppError::msg(format!("权限 pattern 缺少工具名：{raw}")));
+            }
+            let inner = &s[open + 1..s.len() - 1];
+            let arg = parse_arg(&tool, inner);
+            Ok(Permission {
+                raw: raw.to_string(),
+                tool,
+                arg,
+            })
+        } else {
+            Ok(Permission {
+                raw: raw.to_string(),
+                tool: s.to_string(),
+                arg: Arg::Any,
+            })
+        }
+    }
+
+    /// 是否命中一次工具调用。
+    /// - `tool_name`：当前工具（如 `"Bash"`）
+    /// - `fingerprint`：Bash 类工具的命令级指纹（如 `"git status -uno"`）
+    /// - `path`：工具操作的路径或域名
+    pub fn matches(
+        &self,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        path: Option<&str>,
+    ) -> bool {
+        if self.tool != "*" && self.tool != tool_name {
+            return false;
+        }
+        match &self.arg {
+            Arg::Any => true,
+            Arg::Bash { cmd, path: pp } => {
                 let cmd_ok = fingerprint
-                    .map(|fp| prefix_with_token_boundary(fp, command_prefix))
+                    .map(|fp| prefix_with_token_boundary(fp, cmd))
                     .unwrap_or(false);
-                let path_ok = path
-                    .map(|p| p.starts_with(path_prefix.as_str()))
-                    .unwrap_or(false);
+                let path_ok = match pp {
+                    None => true,
+                    Some(prefix) => path.map(|p| p.starts_with(prefix.as_str())).unwrap_or(false),
+                };
                 cmd_ok && path_ok
             }
-            PermissionMatcher::FilePath { path_prefix } => path
-                .map(|p| p.starts_with(path_prefix.as_str()))
+            Arg::Path { prefix } => path
+                .map(|p| p.starts_with(prefix.as_str()))
                 .unwrap_or(false),
-            PermissionMatcher::Network { domain_suffix } => path
-                .map(|d| d.ends_with(domain_suffix.as_str()))
+            Arg::Domain { suffix } => path
+                .map(|d| d.ends_with(suffix.as_str()))
                 .unwrap_or(false),
         }
+    }
+
+    /// 仅检查"该 pattern 是否能命中给定路径"，与 tool_name 无关。
+    /// 用于跨工具的路径检查（dispatch 路径越界兜底）。
+    pub fn matches_path(&self, path: &str) -> bool {
+        match &self.arg {
+            Arg::Path { prefix } => path.starts_with(prefix.as_str()),
+            _ => false,
+        }
+    }
+}
+
+fn parse_arg(tool: &str, inner: &str) -> Arg {
+    let arg = inner.trim();
+    if arg.is_empty() {
+        return Arg::Any;
+    }
+    match tool {
+        "Bash" | "PowerShell" => {
+            if let Some(colon) = arg.find(':') {
+                let cmd = arg[..colon].trim().to_string();
+                let path = arg[colon + 1..].trim().to_string();
+                Arg::Bash {
+                    cmd,
+                    path: if path.is_empty() { None } else { Some(path) },
+                }
+            } else {
+                Arg::Bash {
+                    cmd: arg.to_string(),
+                    path: None,
+                }
+            }
+        }
+        "WebFetch" | "WebSearch" | "Fetch" => Arg::Domain {
+            suffix: arg.to_string(),
+        },
+        _ => Arg::Path {
+            prefix: arg.to_string(),
+        },
     }
 }
 
@@ -125,85 +172,76 @@ fn prefix_with_token_boundary(haystack: &str, prefix: &str) -> bool {
     }
 }
 
-/// rule 的 `tool_name` 是否命中当前工具名：精确匹配，或 wildcard `"*"` 匹配任意工具。
-fn tool_matches(rule_tool: &str, current_tool: &str) -> bool {
-    rule_tool == "*" || rule_tool == current_tool
+/// 单个文件（global 或某 project）的内存视图。
+#[derive(Default)]
+struct PermissionsView {
+    allow: Vec<Permission>,
+    deny: Vec<Permission>,
+    paths: Vec<PathBuf>,
+    mtime: Option<SystemTime>,
 }
 
-/// 当前 workdir 是否被 rule 的 scope/workdir 覆盖。
-///
-/// - `Session` 不在持久化文件里，本函数不应被调用；防御性返回 false。
-/// - `Project` 仅当 rule.workdir 是当前 workdir 的前缀（含相等）时命中。
-/// - `Global` workdir = None，对任意 workdir 都命中。
-/// - `Once` 不持久化，同 Session 防御性 false。
-fn workdir_matches(rule: &PermissionRule, current_workdir: Option<&Path>) -> bool {
-    match rule.scope {
-        PermissionScope::Once | PermissionScope::Session => false,
-        PermissionScope::Project => match (&rule.workdir, current_workdir) {
-            (Some(rule_dir), Some(cwd)) => cwd.starts_with(rule_dir),
-            _ => false,
-        },
-        PermissionScope::Global => true,
+impl PermissionsView {
+    fn from_file(file: permissions_store::PermissionsFile, mtime: Option<SystemTime>) -> Self {
+        Self {
+            allow: parse_list(&file.allow),
+            deny: parse_list(&file.deny),
+            paths: file.paths,
+            mtime,
+        }
+    }
+
+    fn to_file(&self) -> permissions_store::PermissionsFile {
+        permissions_store::PermissionsFile {
+            allow: self.allow.iter().map(|p| p.raw.clone()).collect(),
+            deny: self.deny.iter().map(|p| p.raw.clone()).collect(),
+            paths: self.paths.clone(),
+        }
     }
 }
 
-/// 判断 matcher 是否命中某段（fingerprint + write_targets 任一即算）。
-/// 由 [`PermissionStore::find_for_segments`] 内部使用。
-fn matcher_hits_segment(
-    matcher: &PermissionMatcher,
-    fingerprint: &str,
-    write_targets: &[String],
-) -> bool {
-    if matcher.matches(Some(fingerprint), None) {
-        return true;
+fn parse_list(raws: &[String]) -> Vec<Permission> {
+    let mut out = Vec::new();
+    for raw in raws {
+        match Permission::parse(raw) {
+            Ok(p) => out.push(p),
+            Err(e) => tracing::warn!(error = %e, pattern = raw, "跳过非法 permission pattern"),
+        }
     }
-    write_targets
-        .iter()
-        .any(|t| matcher.matches(Some(fingerprint), Some(t.as_str())))
+    out
 }
 
 /// 持久化的权限规则集合（架构 §4.6.1 / §4.6.2）。
-///
-/// `persisted_rules` 启动时一次性从 `~/.hebbian/permissions.json` 加载（Project + Global
-/// 共用此文件，按 scope + rule.workdir 字段区分）。匹配前 [`Self::reload_if_stale`] 检查
-/// 文件 mtime 做热加载——用户手动改文件下一次审批立即生效。
-///
-/// `session_rules_for` 提供按 session 索引的 in-memory 视图——调用方在
-/// load_session 时遍历 jsonl 中的 `PermissionRule` entry 灌进来。
 pub struct PermissionStore {
     data_dir: PathBuf,
-    persisted_rules: Mutex<Vec<PermissionRule>>,
-    /// 上次加载时文件的 mtime；用于检测外部修改触发 reload。
-    last_loaded_mtime: Mutex<Option<SystemTime>>,
-    session_rules: Mutex<std::collections::HashMap<String, Vec<PermissionRule>>>,
+    global: Mutex<PermissionsView>,
+    /// key = `projects::encode_workdir(workdir)`
+    projects: Mutex<HashMap<String, PermissionsView>>,
+    /// session 内规则：(allow, deny)。不持久化，进程内有效。
+    session_views: Mutex<HashMap<String, (Vec<Permission>, Vec<Permission>)>>,
 }
 
 impl PermissionStore {
-    /// 创建并加载持久化规则。
     pub fn open(data_dir: impl Into<PathBuf>) -> AppResult<Self> {
         let data_dir = data_dir.into();
-        let file = permissions_store::load(&data_dir)?;
-        let mtime = permissions_store::mtime(&data_dir);
+        let file = permissions_store::load_global(&data_dir)?;
+        let mtime = permissions_store::global_mtime(&data_dir);
         Ok(Self {
             data_dir,
-            persisted_rules: Mutex::new(file.rules),
-            last_loaded_mtime: Mutex::new(mtime),
-            session_rules: Mutex::new(std::collections::HashMap::new()),
+            global: Mutex::new(PermissionsView::from_file(file, mtime)),
+            projects: Mutex::new(HashMap::new()),
+            session_views: Mutex::new(HashMap::new()),
         })
     }
 
-    /// 检查 `permissions.json` 的 mtime；若文件比上次加载新，重新读盘 + 替换 cache。
-    /// 失败时打 warn 不阻塞决策路径（仍用旧 cache）。
-    fn reload_if_stale(&self) {
-        let current = permissions_store::mtime(&self.data_dir);
-        let mut last = self.last_loaded_mtime.lock().unwrap();
-        let stale = match (current, *last) {
+    fn refresh_global(&self) {
+        let current = permissions_store::global_mtime(&self.data_dir);
+        let mut g = self.global.lock().unwrap();
+        let stale = match (current, g.mtime) {
             (Some(cur), Some(prev)) => cur > prev,
             (Some(_), None) => true,
-            // 文件被删了：清空 cache 让规则失效
             (None, Some(_)) => {
-                *self.persisted_rules.lock().unwrap() = Vec::new();
-                *last = None;
+                *g = PermissionsView::default();
                 return;
             }
             (None, None) => false,
@@ -211,46 +249,79 @@ impl PermissionStore {
         if !stale {
             return;
         }
-        match permissions_store::load(&self.data_dir) {
-            Ok(file) => {
-                *self.persisted_rules.lock().unwrap() = file.rules;
-                *last = current;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "permissions.json reload 失败，沿用旧 cache");
-            }
+        match permissions_store::load_global(&self.data_dir) {
+            Ok(file) => *g = PermissionsView::from_file(file, current),
+            Err(e) => tracing::warn!(error = %e, "global permissions.json reload 失败，沿用旧 cache"),
         }
     }
 
-    /// 在 session 内存视图里追加一条规则（不落盘——session 规则随 session.jsonl
-    /// 持久化，由 Recorder 写入）。
-    ///
-    /// **严禁**在用户发新消息 / turn 切换时无脑调用 `load_session_rules(sid, vec![])`
-    /// 重置规则——会把累积的 AllowAndRemember(Session) 清空，导致审批反复弹（架构 §4.6.2）。
-    /// 本函数只用于 surface 启动加载 session 时一次性灌入历史 PermissionRule。
-    pub fn load_session_rules(&self, session_id: &str, rules: Vec<PermissionRule>) {
-        self.session_rules
-            .lock()
-            .unwrap()
-            .insert(session_id.to_string(), rules);
+    fn refresh_project(&self, workdir: &Path) {
+        let enc = projects::encode_workdir(workdir);
+        let current = permissions_store::project_mtime(&self.data_dir, Some(workdir));
+        let mut p = self.projects.lock().unwrap();
+        let view = p.entry(enc.clone()).or_default();
+        let stale = match (current, view.mtime) {
+            (Some(cur), Some(prev)) => cur > prev,
+            (Some(_), None) => true,
+            (None, Some(_)) => {
+                *view = PermissionsView::default();
+                return;
+            }
+            (None, None) => view.mtime.is_none()
+                && view.allow.is_empty()
+                && view.deny.is_empty()
+                && view.paths.is_empty(),
+        };
+        if !stale {
+            return;
+        }
+        match permissions_store::load_project(&self.data_dir, workdir) {
+            Ok(file) => *view = PermissionsView::from_file(file, current),
+            Err(e) => tracing::warn!(error = %e, enc, "project permissions.json reload 失败，沿用旧 cache"),
+        }
     }
 
-    /// 仅当该 session_id 还没有任何视图时，初始化一个空 vec；已有则保留现有规则。
-    /// 用于 surface 在 session 启动 / 新 turn 入口的"幂等初始化"，避免 [`Self::load_session_rules`]
-    /// 误清空累积规则的 bug。
+    /// 给 session 视图灌入历史 pattern（surface 启动加载 session 时用）。
+    pub fn load_session_view(
+        &self,
+        session_id: &str,
+        allow: Vec<String>,
+        deny: Vec<String>,
+    ) {
+        self.session_views.lock().unwrap().insert(
+            session_id.to_string(),
+            (parse_list(&allow), parse_list(&deny)),
+        );
+    }
+
+    /// 兼容旧接口名：仅当 session_id 还没视图时插入空视图，保留已有规则。
     pub fn ensure_session_view(&self, session_id: &str) {
-        self.session_rules
+        self.session_views
             .lock()
             .unwrap()
             .entry(session_id.to_string())
-            .or_default();
+            .or_insert_with(|| (Vec::new(), Vec::new()));
     }
 
-    /// 查找是否命中规则（[Session, Project, Global] 顺序）。
-    /// 命中返回 [`PermissionDecisionKind`]；未命中返回 `None`，调用方按 RunMode 默认。
-    ///
-    /// `tool_name = "*"` 的规则作为兜底通配：匹配任意工具名。用于路径审批
-    /// 产生的跨工具 FilePath 规则。
+    /// 取当前 workdir 对应的 effective paths（global ∪ project）。
+    pub fn effective_paths(&self, workdir: Option<&Path>) -> Vec<PathBuf> {
+        self.refresh_global();
+        let mut out: Vec<PathBuf> = self.global.lock().unwrap().paths.clone();
+        if let Some(wd) = workdir {
+            self.refresh_project(wd);
+            let enc = projects::encode_workdir(wd);
+            if let Some(view) = self.projects.lock().unwrap().get(&enc) {
+                for p in &view.paths {
+                    if !out.contains(p) {
+                        out.push(p.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 查找匹配的决定。优先级：deny 命中 > allow 命中；分层 Session → Project → Global。
     pub fn find(
         &self,
         session_id: Option<&str>,
@@ -258,310 +329,605 @@ impl PermissionStore {
         tool_name: &str,
         fingerprint: Option<&str>,
         path: Option<&str>,
-    ) -> Option<PermissionDecisionKind> {
-        self.reload_if_stale();
-        if let Some(sid) = session_id {
-            let session_rules = self.session_rules.lock().unwrap();
-            if let Some(rules) = session_rules.get(sid) {
-                if let Some(rule) = rules.iter().find(|r| {
-                    tool_matches(&r.tool_name, tool_name) && r.matcher.matches(fingerprint, path)
-                }) {
-                    return Some(rule.decision);
+    ) -> Option<RuleEffect> {
+        // 收集每层视图的引用（避免锁嵌套）。
+        if let Some(d) = self.find_in_session(session_id, tool_name, fingerprint, path) {
+            return Some(d);
+        }
+        if let Some(wd) = workdir {
+            self.refresh_project(wd);
+            let enc = projects::encode_workdir(wd);
+            let projects = self.projects.lock().unwrap();
+            if let Some(view) = projects.get(&enc) {
+                if let Some(d) = match_view(view, tool_name, fingerprint, path) {
+                    return Some(d);
                 }
             }
         }
-        let persisted = self.persisted_rules.lock().unwrap();
-        // Project 优先于 Global：用户对项目级的精细化覆盖更具体
-        for scope in [PermissionScope::Project, PermissionScope::Global] {
-            if let Some(rule) = persisted.iter().find(|r| {
-                r.scope == scope
-                    && workdir_matches(r, workdir)
-                    && tool_matches(&r.tool_name, tool_name)
-                    && r.matcher.matches(fingerprint, path)
-            }) {
-                return Some(rule.decision);
-            }
+        self.refresh_global();
+        let g = self.global.lock().unwrap();
+        match_view(&g, tool_name, fingerprint, path)
+    }
+
+    fn find_in_session(
+        &self,
+        session_id: Option<&str>,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        path: Option<&str>,
+    ) -> Option<RuleEffect> {
+        let sid = session_id?;
+        let views = self.session_views.lock().unwrap();
+        let (allow, deny) = views.get(sid)?;
+        if deny.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+            return Some(RuleEffect::Deny);
+        }
+        if allow.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+            return Some(RuleEffect::Allow);
         }
         None
     }
 
     /// Bash / PowerShell 段级查询（架构 §4.4.2）：
-    ///
-    /// 输入是每段 `(fingerprint, write_targets)`，返回：
-    /// - `Deny`  当任一段命中任一 deny 规则
-    /// - `Allow` 当**全部段**命中至少一条 Bash/Any allow 规则
-    /// - `None`  其余（调用方按 RunMode 默认决策）
-    ///
-    /// `tool_name = "*"` 的规则作为兜底通配：匹配任意工具名。
+    /// 每段 `(fingerprint, write_targets)`：任一段命中 deny → Deny；全部段命中 allow → Allow。
     pub fn find_for_segments(
         &self,
         session_id: Option<&str>,
         workdir: Option<&Path>,
         tool_name: &str,
         segments: &[(String, Vec<String>)],
-    ) -> Option<PermissionDecisionKind> {
+    ) -> Option<RuleEffect> {
         if segments.is_empty() {
             return None;
         }
-        self.reload_if_stale();
-        // 收集生效规则：Session → 持久化文件（已 workdir 过滤）
-        let mut all_rules: Vec<PermissionRule> = Vec::new();
+        // 收集所有层 allow + deny 引用
+        let mut allow: Vec<Permission> = Vec::new();
+        let mut deny: Vec<Permission> = Vec::new();
         if let Some(sid) = session_id {
-            if let Some(rules) = self.session_rules.lock().unwrap().get(sid) {
-                all_rules.extend(rules.iter().cloned());
+            if let Some((a, d)) = self.session_views.lock().unwrap().get(sid) {
+                allow.extend(a.iter().cloned());
+                deny.extend(d.iter().cloned());
             }
         }
+        if let Some(wd) = workdir {
+            self.refresh_project(wd);
+            let enc = projects::encode_workdir(wd);
+            if let Some(view) = self.projects.lock().unwrap().get(&enc) {
+                allow.extend(view.allow.iter().cloned());
+                deny.extend(view.deny.iter().cloned());
+            }
+        }
+        self.refresh_global();
         {
-            let persisted = self.persisted_rules.lock().unwrap();
-            for r in persisted.iter() {
-                if matches!(r.scope, PermissionScope::Project | PermissionScope::Global)
-                    && workdir_matches(r, workdir)
-                {
-                    all_rules.push(r.clone());
-                }
-            }
+            let g = self.global.lock().unwrap();
+            allow.extend(g.allow.iter().cloned());
+            deny.extend(g.deny.iter().cloned());
         }
 
-        // 阶段 1：deny 优先
+        // 阶段 1：任一段命中 deny → Deny
         for (fp, write_targets) in segments {
-            for r in &all_rules {
-                if !tool_matches(&r.tool_name, tool_name) {
-                    continue;
+            for r in &deny {
+                if segment_hits(r, tool_name, fp, write_targets) {
+                    return Some(RuleEffect::Deny);
                 }
-                if r.decision != PermissionDecisionKind::Deny {
-                    continue;
-                }
-                if matcher_hits_segment(&r.matcher, fp, write_targets) {
-                    return Some(PermissionDecisionKind::Deny);
-                }
-            }
-            // 写目标跨工具维度：让 Edit/Write deny 规则兜底 Bash 写文件
-            for t in write_targets {
-                for r in &all_rules {
-                    if r.decision != PermissionDecisionKind::Deny {
-                        continue;
-                    }
-                    if matches!(
-                        r.matcher,
-                        PermissionMatcher::FilePath { .. } | PermissionMatcher::BashWithPath { .. }
-                    ) && r.matcher.matches(None, Some(t))
-                    {
-                        return Some(PermissionDecisionKind::Deny);
+                // 跨工具：FilePath deny 兜底 Bash 写文件目标
+                for t in write_targets {
+                    if r.matches_path(t) {
+                        return Some(RuleEffect::Deny);
                     }
                 }
             }
         }
 
-        // 阶段 2：全部段都至少命中一条 allow
+        // 阶段 2：全部段命中 allow → Allow
         let all_allow = segments.iter().all(|(fp, write_targets)| {
-            all_rules.iter().any(|r| {
-                tool_matches(&r.tool_name, tool_name)
-                    && r.decision == PermissionDecisionKind::Allow
-                    && matcher_hits_segment(&r.matcher, fp, write_targets)
-            })
+            allow.iter().any(|r| segment_hits(r, tool_name, fp, write_targets))
         });
         if all_allow {
-            return Some(PermissionDecisionKind::Allow);
+            return Some(RuleEffect::Allow);
         }
         None
     }
 
-    /// 检查是否有 Allow 规则匹配给定路径（不限 tool_name）。
-    /// 用于 dispatcher 路径越界检查，让跨 session 的 Project / Global 路径规则生效。
+    /// 检查给定路径是否被允许（rule 中的 path/Any 类 allow，或 paths 白名单命中）。
     pub fn allows_path(
         &self,
         session_id: Option<&str>,
         workdir: Option<&Path>,
         path: &str,
     ) -> bool {
-        self.reload_if_stale();
         if let Some(sid) = session_id {
-            let session_rules = self.session_rules.lock().unwrap();
-            if let Some(rules) = session_rules.get(sid) {
-                if rules.iter().any(|r| {
-                    r.decision == PermissionDecisionKind::Allow
-                        && r.matcher.matches(None, Some(path))
-                }) {
+            let views = self.session_views.lock().unwrap();
+            if let Some((allow, _)) = views.get(sid) {
+                if allow.iter().any(|p| p.matches_path(path)) {
                     return true;
                 }
             }
         }
-        let persisted = self.persisted_rules.lock().unwrap();
-        persisted.iter().any(|r| {
-            matches!(r.scope, PermissionScope::Project | PermissionScope::Global)
-                && workdir_matches(r, workdir)
-                && r.decision == PermissionDecisionKind::Allow
-                && r.matcher.matches(None, Some(path))
-        })
+        if let Some(wd) = workdir {
+            self.refresh_project(wd);
+            let enc = projects::encode_workdir(wd);
+            let projects = self.projects.lock().unwrap();
+            if let Some(view) = projects.get(&enc) {
+                if view.allow.iter().any(|p| p.matches_path(path)) {
+                    return true;
+                }
+                if view.paths.iter().any(|p| path_starts_with(path, p)) {
+                    return true;
+                }
+            }
+        }
+        self.refresh_global();
+        let g = self.global.lock().unwrap();
+        if g.allow.iter().any(|p| p.matches_path(path)) {
+            return true;
+        }
+        g.paths.iter().any(|p| path_starts_with(path, p))
     }
 
-    /// 给一条路径创建 wildcard (`"*"`) tool_name 的 FilePath Allow 规则。
-    /// 路径审批选了「加入本项目 / 加入全局」后调用。
-    pub fn add_path_rule(
+    /// 增加一条 allow / deny pattern。
+    pub fn add(
         &self,
-        session_id: Option<&str>,
-        workdir: Option<PathBuf>,
-        path: String,
         scope: PermissionScope,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        decision: RuleEffect,
+        pattern: String,
     ) -> AppResult<()> {
-        let rule = PermissionRule {
-            id: new_rule_id(),
-            scope,
-            tool_name: "*".to_string(),
-            matcher: PermissionMatcher::FilePath { path_prefix: path },
-            decision: PermissionDecisionKind::Allow,
-            created_at: chrono::Utc::now().timestamp_millis(),
-            created_by: "user".to_string(),
-            workdir: if scope == PermissionScope::Project {
-                workdir
-            } else {
-                None
-            },
-        };
-        self.add(session_id, rule)
-    }
-
-    /// 增加规则：Session 仅写内存（落 jsonl 由 Recorder 负责）；Project / Global 重写
-    /// `~/.hebbian/permissions.json`，同步更新 in-memory cache 与 mtime。
-    pub fn add(&self, session_id: Option<&str>, rule: PermissionRule) -> AppResult<()> {
-        match rule.scope {
+        // 校验 pattern 合法
+        let parsed = Permission::parse(&pattern)?;
+        match scope {
             PermissionScope::Once => Ok(()),
             PermissionScope::Session => {
                 let sid = session_id
-                    .ok_or_else(|| common::AppError::msg("Session scope 需要 session_id"))?;
-                self.session_rules
-                    .lock()
-                    .unwrap()
+                    .ok_or_else(|| AppError::msg("Session scope 需要 session_id"))?;
+                let mut views = self.session_views.lock().unwrap();
+                let entry = views
                     .entry(sid.to_string())
-                    .or_default()
-                    .push(rule);
+                    .or_insert_with(|| (Vec::new(), Vec::new()));
+                let target = match decision {
+                    RuleEffect::Allow => &mut entry.0,
+                    RuleEffect::Deny => &mut entry.1,
+                };
+                if !target.iter().any(|p| p.raw == parsed.raw) {
+                    target.push(parsed);
+                }
                 Ok(())
             }
-            PermissionScope::Project | PermissionScope::Global => {
-                if rule.scope == PermissionScope::Project && rule.workdir.is_none() {
-                    return Err(common::AppError::msg("Project scope 规则必须带 workdir"));
-                }
-                self.reload_if_stale();
-                let mut g = self.persisted_rules.lock().unwrap();
-                g.push(rule);
-                let file = permissions_store::PermissionsFile { rules: g.clone() };
-                permissions_store::save(&self.data_dir, &file)?;
-                // 写完更新 mtime 缓存，避免触发自身的"已变更" reload。
-                *self.last_loaded_mtime.lock().unwrap() = permissions_store::mtime(&self.data_dir);
+            PermissionScope::Project => {
+                let wd = workdir
+                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                let mut p = self.projects.lock().unwrap();
+                let view = p.entry(enc).or_default();
+                push_unique(view, decision, parsed);
+                let file = view.to_file();
+                permissions_store::save_project(&self.data_dir, wd, &file)?;
+                view.mtime = permissions_store::project_mtime(&self.data_dir, Some(wd));
+                Ok(())
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let mut g = self.global.lock().unwrap();
+                push_unique(&mut g, decision, parsed);
+                let file = g.to_file();
+                permissions_store::save_global(&self.data_dir, &file)?;
+                g.mtime = permissions_store::global_mtime(&self.data_dir);
                 Ok(())
             }
         }
     }
 
-    /// 移除规则（按 id）。Session / Project / Global 都查；持久化规则命中则重写文件。
-    pub fn remove(&self, session_id: Option<&str>, rule_id: &str) -> AppResult<bool> {
-        if let Some(sid) = session_id {
-            let mut session_rules = self.session_rules.lock().unwrap();
-            if let Some(rules) = session_rules.get_mut(sid) {
-                let before = rules.len();
-                rules.retain(|r| r.id != rule_id);
-                if rules.len() != before {
-                    return Ok(true);
-                }
+    /// 删除一条 pattern。返回是否真删了。
+    pub fn remove(
+        &self,
+        scope: PermissionScope,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        decision: RuleEffect,
+        pattern: &str,
+    ) -> AppResult<bool> {
+        match scope {
+            PermissionScope::Once => Ok(false),
+            PermissionScope::Session => {
+                let Some(sid) = session_id else { return Ok(false) };
+                let mut views = self.session_views.lock().unwrap();
+                let Some(entry) = views.get_mut(sid) else { return Ok(false) };
+                let target = match decision {
+                    RuleEffect::Allow => &mut entry.0,
+                    RuleEffect::Deny => &mut entry.1,
+                };
+                let before = target.len();
+                target.retain(|p| p.raw != pattern);
+                Ok(target.len() != before)
             }
-        }
-        let mut g = self.persisted_rules.lock().unwrap();
-        let before = g.len();
-        g.retain(|r| r.id != rule_id);
-        if g.len() != before {
-            let file = permissions_store::PermissionsFile { rules: g.clone() };
-            permissions_store::save(&self.data_dir, &file)?;
-            *self.last_loaded_mtime.lock().unwrap() = permissions_store::mtime(&self.data_dir);
-            Ok(true)
-        } else {
-            Ok(false)
+            PermissionScope::Project => {
+                let wd = workdir
+                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                let mut p = self.projects.lock().unwrap();
+                let Some(view) = p.get_mut(&enc) else { return Ok(false) };
+                let removed = remove_unique(view, decision, pattern);
+                if removed {
+                    let file = view.to_file();
+                    permissions_store::save_project(&self.data_dir, wd, &file)?;
+                    view.mtime = permissions_store::project_mtime(&self.data_dir, Some(wd));
+                }
+                Ok(removed)
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let mut g = self.global.lock().unwrap();
+                let removed = remove_unique(&mut g, decision, pattern);
+                if removed {
+                    let file = g.to_file();
+                    permissions_store::save_global(&self.data_dir, &file)?;
+                    g.mtime = permissions_store::global_mtime(&self.data_dir);
+                }
+                Ok(removed)
+            }
         }
     }
 
-    /// 列规则：scope=Some(Session) 时需要 session_id；Project / Global 不需要。
-    /// Project 列出所有 Project 规则（不按 workdir 过滤——CLI/调试用途；
-    /// 匹配阶段才按 workdir 过滤）。
-    pub fn list(&self, scope: PermissionScope, session_id: Option<&str>) -> Vec<PermissionRule> {
-        self.reload_if_stale();
+    /// 列 patterns：返回原字符串。
+    pub fn list(
+        &self,
+        scope: PermissionScope,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        decision: RuleEffect,
+    ) -> Vec<String> {
         match scope {
             PermissionScope::Once => Vec::new(),
-            PermissionScope::Session => session_id
-                .and_then(|sid| self.session_rules.lock().unwrap().get(sid).cloned())
-                .unwrap_or_default(),
-            PermissionScope::Project | PermissionScope::Global => self
-                .persisted_rules
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|r| r.scope == scope)
-                .cloned()
-                .collect(),
+            PermissionScope::Session => {
+                let Some(sid) = session_id else { return Vec::new() };
+                let views = self.session_views.lock().unwrap();
+                let Some((a, d)) = views.get(sid) else { return Vec::new() };
+                let list = match decision {
+                    RuleEffect::Allow => a,
+                    RuleEffect::Deny => d,
+                };
+                list.iter().map(|p| p.raw.clone()).collect()
+            }
+            PermissionScope::Project => {
+                if let Some(wd) = workdir {
+                    self.refresh_project(wd);
+                    let enc = projects::encode_workdir(wd);
+                    let p = self.projects.lock().unwrap();
+                    p.get(&enc)
+                        .map(|v| select_list(v, decision).iter().map(|p| p.raw.clone()).collect())
+                        .unwrap_or_default()
+                } else {
+                    self.projects
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .flat_map(|v| select_list(v, decision).iter().map(|p| p.raw.clone()).collect::<Vec<_>>())
+                        .collect()
+                }
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let g = self.global.lock().unwrap();
+                select_list(&g, decision).iter().map(|p| p.raw.clone()).collect()
+            }
         }
     }
 
-    /// 清空某 scope。Session 仅内存；Project / Global 重写文件。
-    pub fn clear(&self, scope: PermissionScope, session_id: Option<&str>) -> AppResult<()> {
+    /// 列 paths 白名单。
+    pub fn list_paths(&self, scope: PermissionScope, workdir: Option<&Path>) -> Vec<PathBuf> {
+        match scope {
+            PermissionScope::Project => {
+                let Some(wd) = workdir else { return Vec::new() };
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                self.projects
+                    .lock()
+                    .unwrap()
+                    .get(&enc)
+                    .map(|v| v.paths.clone())
+                    .unwrap_or_default()
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                self.global.lock().unwrap().paths.clone()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// 增加一条 paths 白名单条目。
+    pub fn add_path(
+        &self,
+        scope: PermissionScope,
+        workdir: Option<&Path>,
+        path: PathBuf,
+    ) -> AppResult<()> {
+        match scope {
+            PermissionScope::Project => {
+                let wd = workdir
+                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                let mut p = self.projects.lock().unwrap();
+                let view = p.entry(enc).or_default();
+                if !view.paths.contains(&path) {
+                    view.paths.push(path);
+                }
+                let file = view.to_file();
+                permissions_store::save_project(&self.data_dir, wd, &file)?;
+                view.mtime = permissions_store::project_mtime(&self.data_dir, Some(wd));
+                Ok(())
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let mut g = self.global.lock().unwrap();
+                if !g.paths.contains(&path) {
+                    g.paths.push(path);
+                }
+                let file = g.to_file();
+                permissions_store::save_global(&self.data_dir, &file)?;
+                g.mtime = permissions_store::global_mtime(&self.data_dir);
+                Ok(())
+            }
+            _ => Err(AppError::msg("add_path 仅支持 Global / Project").into()),
+        }
+    }
+
+    /// 删除一条 paths 白名单条目。
+    pub fn remove_path(
+        &self,
+        scope: PermissionScope,
+        workdir: Option<&Path>,
+        path: &Path,
+    ) -> AppResult<bool> {
+        match scope {
+            PermissionScope::Project => {
+                let wd = workdir
+                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                let mut p = self.projects.lock().unwrap();
+                let Some(view) = p.get_mut(&enc) else { return Ok(false) };
+                let before = view.paths.len();
+                view.paths.retain(|p| p.as_path() != path);
+                let removed = view.paths.len() != before;
+                if removed {
+                    let file = view.to_file();
+                    permissions_store::save_project(&self.data_dir, wd, &file)?;
+                    view.mtime = permissions_store::project_mtime(&self.data_dir, Some(wd));
+                }
+                Ok(removed)
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let mut g = self.global.lock().unwrap();
+                let before = g.paths.len();
+                g.paths.retain(|p| p.as_path() != path);
+                let removed = g.paths.len() != before;
+                if removed {
+                    let file = g.to_file();
+                    permissions_store::save_global(&self.data_dir, &file)?;
+                    g.mtime = permissions_store::global_mtime(&self.data_dir);
+                }
+                Ok(removed)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// 清空某 scope 的所有规则 + paths。
+    pub fn clear(
+        &self,
+        scope: PermissionScope,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+    ) -> AppResult<()> {
         match scope {
             PermissionScope::Once => Ok(()),
             PermissionScope::Session => {
                 if let Some(sid) = session_id {
-                    self.session_rules.lock().unwrap().remove(sid);
+                    self.session_views.lock().unwrap().remove(sid);
                 }
                 Ok(())
             }
-            PermissionScope::Project | PermissionScope::Global => {
-                let mut g = self.persisted_rules.lock().unwrap();
-                g.retain(|r| r.scope != scope);
-                let file = permissions_store::PermissionsFile { rules: g.clone() };
-                permissions_store::save(&self.data_dir, &file)?;
-                *self.last_loaded_mtime.lock().unwrap() = permissions_store::mtime(&self.data_dir);
+            PermissionScope::Project => {
+                let wd = workdir
+                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                self.refresh_project(wd);
+                let enc = projects::encode_workdir(wd);
+                let mut p = self.projects.lock().unwrap();
+                if let Some(view) = p.get_mut(&enc) {
+                    *view = PermissionsView::default();
+                    let file = view.to_file();
+                    permissions_store::save_project(&self.data_dir, wd, &file)?;
+                    view.mtime = permissions_store::project_mtime(&self.data_dir, Some(wd));
+                }
+                Ok(())
+            }
+            PermissionScope::Global => {
+                self.refresh_global();
+                let mut g = self.global.lock().unwrap();
+                *g = PermissionsView::default();
+                permissions_store::save_global(&self.data_dir, &g.to_file())?;
+                g.mtime = permissions_store::global_mtime(&self.data_dir);
                 Ok(())
             }
         }
     }
 }
 
-/// 生成一条规则的 uuid id。
-pub fn new_rule_id() -> String {
-    uuid::Uuid::new_v4().to_string()
+fn select_list(view: &PermissionsView, decision: RuleEffect) -> &[Permission] {
+    match decision {
+        RuleEffect::Allow => &view.allow,
+        RuleEffect::Deny => &view.deny,
+    }
+}
+
+fn push_unique(view: &mut PermissionsView, decision: RuleEffect, p: Permission) {
+    let list = match decision {
+        RuleEffect::Allow => &mut view.allow,
+        RuleEffect::Deny => &mut view.deny,
+    };
+    if !list.iter().any(|x| x.raw == p.raw) {
+        list.push(p);
+    }
+}
+
+fn remove_unique(view: &mut PermissionsView, decision: RuleEffect, pattern: &str) -> bool {
+    let list = match decision {
+        RuleEffect::Allow => &mut view.allow,
+        RuleEffect::Deny => &mut view.deny,
+    };
+    let before = list.len();
+    list.retain(|p| p.raw != pattern);
+    list.len() != before
+}
+
+fn match_view(
+    view: &PermissionsView,
+    tool_name: &str,
+    fingerprint: Option<&str>,
+    path: Option<&str>,
+) -> Option<RuleEffect> {
+    if view.deny.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+        return Some(RuleEffect::Deny);
+    }
+    if view.allow.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+        return Some(RuleEffect::Allow);
+    }
+    None
+}
+
+fn segment_hits(
+    p: &Permission,
+    tool_name: &str,
+    fingerprint: &str,
+    write_targets: &[String],
+) -> bool {
+    if p.matches(tool_name, Some(fingerprint), None) {
+        return true;
+    }
+    write_targets
+        .iter()
+        .any(|t| p.matches(tool_name, Some(fingerprint), Some(t)))
+}
+
+fn path_starts_with(target: &str, prefix: &Path) -> bool {
+    let prefix_str = prefix.to_string_lossy();
+    if target == prefix_str {
+        return true;
+    }
+    let trimmed = prefix_str.trim_end_matches('/').trim_end_matches('\\');
+    if let Some(rest) = target.strip_prefix(trimmed) {
+        rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\')
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> std::path::PathBuf {
+    fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hebbian-perm-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
 
-    fn bash_rule(prefix: &str, scope: PermissionScope) -> PermissionRule {
-        PermissionRule {
-            id: new_rule_id(),
-            scope,
-            tool_name: "Bash".into(),
-            matcher: PermissionMatcher::Bash {
-                command_prefix: prefix.into(),
-            },
-            decision: PermissionDecisionKind::Allow,
-            created_at: 0,
-            created_by: "user".into(),
-            workdir: None,
-        }
+    #[test]
+    fn parse_bash_simple() {
+        let p = Permission::parse("Bash(xargs)").unwrap();
+        assert!(p.matches("Bash", Some("xargs -L 1 echo"), None));
+        assert!(!p.matches("Bash", Some("other"), None));
+        assert!(!p.matches("Edit", Some("xargs"), None));
     }
 
     #[test]
-    fn global_rule_persists_and_reloads() {
+    fn parse_bash_with_path() {
+        let p = Permission::parse("Bash(rm:/tmp/)").unwrap();
+        assert!(p.matches("Bash", Some("rm -rf foo"), Some("/tmp/foo")));
+        assert!(!p.matches("Bash", Some("rm -rf foo"), Some("/var/foo")));
+    }
+
+    #[test]
+    fn parse_file_path() {
+        let p = Permission::parse("Edit(/Users/x/proj)").unwrap();
+        assert!(p.matches("Edit", None, Some("/Users/x/proj/src/a.rs")));
+        assert!(!p.matches("Edit", None, Some("/Users/y/other")));
+    }
+
+    #[test]
+    fn parse_network() {
+        let p = Permission::parse("WebFetch(github.com)").unwrap();
+        assert!(p.matches("WebFetch", None, Some("https://api.github.com")));
+    }
+
+    #[test]
+    fn parse_any() {
+        let p = Permission::parse("Bash").unwrap();
+        assert!(p.matches("Bash", Some("anything"), None));
+        assert!(!p.matches("Edit", None, Some("/x")));
+    }
+
+    #[test]
+    fn parse_empty_errors() {
+        assert!(Permission::parse("").is_err());
+        assert!(Permission::parse("Bash(").is_err());
+    }
+
+    #[test]
+    fn global_allow_persists_and_reloads() {
         let dir = tmp("global");
         let store = PermissionStore::open(&dir).unwrap();
         store
-            .add(None, bash_rule("git status", PermissionScope::Global))
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(git status)".to_string(),
+            )
             .unwrap();
         drop(store);
         let store2 = PermissionStore::open(&dir).unwrap();
         let dec = store2.find(None, None, "Bash", Some("git status -uno"), None);
-        assert_eq!(dec, Some(PermissionDecisionKind::Allow));
+        assert_eq!(dec, Some(RuleEffect::Allow));
+    }
+
+    #[test]
+    fn deny_overrides_allow() {
+        let dir = tmp("deny");
+        let store = PermissionStore::open(&dir).unwrap();
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(git)".to_string(),
+            )
+            .unwrap();
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Deny,
+                "Bash(git push)".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.find(None, None, "Bash", Some("git status"), None),
+            Some(RuleEffect::Allow)
+        );
+        assert_eq!(
+            store.find(None, None, "Bash", Some("git push origin"), None),
+            Some(RuleEffect::Deny)
+        );
     }
 
     #[test]
@@ -569,111 +935,108 @@ mod tests {
         let dir = tmp("precedence");
         let store = PermissionStore::open(&dir).unwrap();
         store
-            .add(None, bash_rule("git", PermissionScope::Global))
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(git)".to_string(),
+            )
             .unwrap();
         let sid = "s1";
-        let mut deny = bash_rule("git push", PermissionScope::Session);
-        deny.decision = PermissionDecisionKind::Deny;
-        store.load_session_rules(sid, vec![deny]);
+        store
+            .add(
+                PermissionScope::Session,
+                Some(sid),
+                None,
+                RuleEffect::Deny,
+                "Bash(git push)".to_string(),
+            )
+            .unwrap();
         assert_eq!(
             store.find(Some(sid), None, "Bash", Some("git push origin"), None),
-            Some(PermissionDecisionKind::Deny)
+            Some(RuleEffect::Deny)
         );
         assert_eq!(
             store.find(Some(sid), None, "Bash", Some("git status"), None),
-            Some(PermissionDecisionKind::Allow)
+            Some(RuleEffect::Allow)
         );
     }
 
     #[test]
-    fn project_rule_scoped_by_workdir() {
+    fn project_scope_isolated_by_workdir() {
         let dir = tmp("project");
         let store = PermissionStore::open(&dir).unwrap();
-        let proj_dir = PathBuf::from("/Users/x/proj/foo");
-        let mut rule = bash_rule("cd", PermissionScope::Project);
-        rule.workdir = Some(proj_dir.clone());
-        store.add(None, rule).unwrap();
-
-        // 当前 workdir = proj_dir 子目录 → 命中
-        assert_eq!(
-            store.find(
+        let proj_a = PathBuf::from("/Users/x/proj/foo");
+        let proj_b = PathBuf::from("/Users/x/proj/bar");
+        store
+            .add(
+                PermissionScope::Project,
                 None,
-                Some(&proj_dir.join("src")),
-                "Bash",
-                Some("cd /tmp/foo"),
-                None
-            ),
-            Some(PermissionDecisionKind::Allow)
+                Some(&proj_a),
+                RuleEffect::Allow,
+                "Bash(cd)".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.find(None, Some(&proj_a), "Bash", Some("cd /tmp/foo"), None),
+            Some(RuleEffect::Allow)
         );
-        // 别的项目 workdir → 不命中
         assert_eq!(
-            store.find(
-                None,
-                Some(Path::new("/Users/x/proj/bar")),
-                "Bash",
-                Some("cd /tmp/foo"),
-                None
-            ),
+            store.find(None, Some(&proj_b), "Bash", Some("cd /tmp/foo"), None),
             None
         );
     }
 
     #[test]
-    fn matcher_file_path_prefix() {
-        let m = PermissionMatcher::FilePath {
-            path_prefix: "/etc/".into(),
-        };
-        assert!(m.matches(None, Some("/etc/passwd")));
-        assert!(!m.matches(None, Some("/home/etc/x")));
+    fn global_paths_whitelist_allows_path() {
+        let dir = tmp("paths");
+        let store = PermissionStore::open(&dir).unwrap();
+        store
+            .add_path(PermissionScope::Global, None, PathBuf::from("/etc"))
+            .unwrap();
+        assert!(store.allows_path(None, None, "/etc/hosts"));
+        assert!(!store.allows_path(None, None, "/usr/local"));
     }
 
     #[test]
-    fn ensure_session_view_does_not_clear_existing() {
-        let dir = tmp("ensure");
+    fn list_and_remove() {
+        let dir = tmp("list");
         let store = PermissionStore::open(&dir).unwrap();
-        let sid = "s1";
-        store.load_session_rules(sid, vec![bash_rule("cd", PermissionScope::Session)]);
-        // ensure 在已存在视图时必须保留规则——这是 chat.rs bug 修复的核心保证
-        store.ensure_session_view(sid);
-        assert_eq!(
-            store.find(Some(sid), None, "Bash", Some("cd /tmp"), None),
-            Some(PermissionDecisionKind::Allow),
-            "ensure_session_view 不应清空已有规则"
-        );
-    }
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(ls)".to_string(),
+            )
+            .unwrap();
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Deny,
+                "Bash(rm)".to_string(),
+            )
+            .unwrap();
+        let allows = store.list(PermissionScope::Global, None, None, RuleEffect::Allow);
+        let denies = store.list(PermissionScope::Global, None, None, RuleEffect::Deny);
+        assert_eq!(allows, vec!["Bash(ls)".to_string()]);
+        assert_eq!(denies, vec!["Bash(rm)".to_string()]);
 
-    #[test]
-    fn external_file_edit_is_hot_loaded() {
-        // 用户手动改 permissions.json，下一次 find 必须看到新规则。
-        let dir = tmp("hotload");
-        let store = PermissionStore::open(&dir).unwrap();
-        // 初始无规则
-        assert_eq!(store.find(None, None, "Bash", Some("ls"), None), None);
-
-        // 模拟外部进程改文件
-        let file = permissions_store::PermissionsFile {
-            rules: vec![bash_rule("ls", PermissionScope::Global)],
-        };
-        // 设法让 mtime 一定变化（同一秒内写入 mtime 可能相同）
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        permissions_store::save(&dir, &file).unwrap();
-        // 再 touch 一次保证 mtime 跳变（防同毫秒精度）
-        let _ = std::fs::OpenOptions::new()
-            .write(true)
-            .open(permissions_store::path(&dir))
-            .and_then(|f| f.set_len(f.metadata()?.len()));
-
-        // 等待文件系统 mtime 推进
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let new_file = permissions_store::PermissionsFile {
-            rules: vec![bash_rule("ls", PermissionScope::Global)],
-        };
-        permissions_store::save(&dir, &new_file).unwrap();
-
-        assert_eq!(
-            store.find(None, None, "Bash", Some("ls -la"), None),
-            Some(PermissionDecisionKind::Allow),
-            "外部修改 permissions.json 应在下一次 find 时生效"
-        );
+        let removed = store
+            .remove(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(ls)",
+            )
+            .unwrap();
+        assert!(removed);
+        let allows = store.list(PermissionScope::Global, None, None, RuleEffect::Allow);
+        assert!(allows.is_empty());
     }
 }

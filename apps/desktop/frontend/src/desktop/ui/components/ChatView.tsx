@@ -384,11 +384,7 @@ export function ChatView() {
         </div>
         <div className="flex items-center gap-2 no-drag relative">
           <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
-            {currentSession?.workdir &&
-            currentSession.workdir !== "~/" &&
-            currentSession.workdir !== "~"
-              ? "项目设置"
-              : "对话设置"}
+            {currentSession?.project_id ? "项目设置" : "对话设置"}
           </Button>
         </div>
       </header>

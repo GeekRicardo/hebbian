@@ -255,9 +255,15 @@ impl Session {
             .unwrap_or_default();
 
         if needs_environment {
+            let extra_paths = self
+                .permission_store
+                .as_ref()
+                .map(|s| s.effective_paths(Some(self.workspace.workdir())))
+                .unwrap_or_default();
             let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace)
                 .with_run_mode(self.run_mode)
-                .with_background_tasks(bg_summaries.clone());
+                .with_background_tasks(bg_summaries.clone())
+                .with_extra_paths(extra_paths);
             final_text = prepend_environment(final_text, &snapshot);
 
             // 规则文件注入：全局 + 项目规则文件，包装成 <system-reminder>

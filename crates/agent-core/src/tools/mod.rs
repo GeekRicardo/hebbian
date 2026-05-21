@@ -60,7 +60,7 @@ pub trait Tool: Send + Sync {
 /// 此时 Edit 工具的"必须先 Read"约束会被跳过（行为与历史 Write 工具兼容）。
 pub fn default_tools(
     workspace: Arc<Workspace>,
-    skill_dirs: &[PathBuf],
+    skill_dirs: &[(skill::SkillSource, PathBuf)],
     bg_log_dir: Option<PathBuf>,
     phase: crate::wakeup::PhaseChannel,
     shells: background::BackgroundShells,
@@ -68,7 +68,12 @@ pub fn default_tools(
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
 ) -> Vec<Box<dyn Tool>> {
-    let skills = skill::load_skills(skill_dirs);
+    let mut skills = skill::load_skills(skill_dirs);
+    // disabled 的 skill 不暴露给模型（架构 §6.1.3 用户级 UX）
+    if let Some(dd) = data_dir.as_ref() {
+        crate::storage::skills::apply_disabled(dd, &mut skills);
+    }
+    let skills: Vec<_> = skills.into_iter().filter(|s| s.enabled).collect();
     vec![
         Box::new(bash::BashTool::new(
             workspace.clone(),

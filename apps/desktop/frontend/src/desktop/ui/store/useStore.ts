@@ -1178,7 +1178,21 @@ export const useStore = create<AppState>((set, get) => ({
       api.listTools().then((tools) => set({ availableTools: tools })).catch(() => {}),
     ]);
     const first = get().sessions[0];
-    if (first) await get().openSession(first.id);
+    if (first) {
+      // 启动时若最新对话属于一个项目（project_id 在项目列表里存在），把侧栏
+      // 切到「项目」模式并定位到该项目；普通对话保持「全部」默认。
+      const projects = get().projects;
+      if (
+        first.project_id &&
+        projects.some((p) => p.id === first.project_id)
+      ) {
+        set({
+          projectSidebarMode: "projects",
+          selectedProjectId: first.project_id,
+        });
+      }
+      await get().openSession(first.id);
+    }
   },
 
   async refreshProviders() {

@@ -26,6 +26,7 @@ pub mod run_checkpoint;
 pub mod sessions;
 pub mod sessions_dir;
 pub mod settings;
+pub mod skills;
 pub mod tool_results;
 
 use std::path::{Path, PathBuf};

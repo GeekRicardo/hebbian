@@ -27,9 +27,7 @@ use tokio::sync::oneshot;
 
 use crate::definition::{DefaultPermission, PermissionPolicy};
 use crate::effects::{EffectClass, Effects};
-use crate::permissions::{
-    new_rule_id, PermissionDecisionKind, PermissionMatcher, PermissionRule, PermissionStore,
-};
+use crate::permissions::{PermissionStore, RuleEffect};
 
 /// 单次工具调用的权限决策结果。
 #[derive(Debug)]
@@ -211,8 +209,8 @@ impl HitlGate {
             };
             if let Some(dec) = store_decision {
                 return match dec {
-                    PermissionDecisionKind::Allow => PermissionDecision::Approved,
-                    PermissionDecisionKind::Deny => PermissionDecision::Denied {
+                    RuleEffect::Allow => PermissionDecision::Approved,
+                    RuleEffect::Deny => PermissionDecision::Denied {
                         reason: "PermissionStore 规则拒绝".into(),
                     },
                 };
@@ -423,9 +421,14 @@ impl HitlGate {
                 drop(learned);
                 // (2) PermissionStore：让 session.jsonl 也能回放出同样的规则
                 if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
-                    let rule = build_rule(tool_name, pattern, PermissionScope::Session, None);
-                    if let Some(rule) = rule {
-                        if let Err(e) = store.add(Some(sid.as_str()), rule) {
+                    if let Some(pat) = build_pattern(tool_name, pattern) {
+                        if let Err(e) = store.add(
+                            PermissionScope::Session,
+                            Some(sid.as_str()),
+                            None,
+                            RuleEffect::Allow,
+                            pat,
+                        ) {
                             tracing::warn!(error = %e, "PermissionStore.add(Session) 失败");
                         }
                     }
@@ -446,9 +449,14 @@ impl HitlGate {
                     );
                     return;
                 };
-                let rule = build_rule(tool_name, pattern, PermissionScope::Project, Some(wd));
-                if let Some(rule) = rule {
-                    if let Err(e) = store.add(None, rule) {
+                if let Some(pat) = build_pattern(tool_name, pattern) {
+                    if let Err(e) = store.add(
+                        PermissionScope::Project,
+                        None,
+                        Some(wd.as_path()),
+                        RuleEffect::Allow,
+                        pat,
+                    ) {
                         tracing::warn!(error = %e, "PermissionStore.add(Project) 失败");
                     }
                 }
@@ -461,9 +469,14 @@ impl HitlGate {
                     );
                     return;
                 };
-                let rule = build_rule(tool_name, pattern, PermissionScope::Global, None);
-                if let Some(rule) = rule {
-                    if let Err(e) = store.add(None, rule) {
+                if let Some(pat) = build_pattern(tool_name, pattern) {
+                    if let Err(e) = store.add(
+                        PermissionScope::Global,
+                        None,
+                        None,
+                        RuleEffect::Allow,
+                        pat,
+                    ) {
                         tracing::warn!(error = %e, "PermissionStore.add(Global) 失败");
                     }
                 }
@@ -472,38 +485,19 @@ impl HitlGate {
     }
 }
 
-fn build_rule(
-    tool_name: &str,
-    pattern: Option<&str>,
-    scope: PermissionScope,
-    workdir: Option<PathBuf>,
-) -> Option<PermissionRule> {
-    let matcher = match (tool_name, pattern) {
-        ("Bash", Some(prefix)) | ("PowerShell", Some(prefix)) => {
-            let prefix = prefix.trim();
-            if prefix.is_empty() {
+/// 把 (tool_name, command/path pattern) 拼成 PermissionStore 字符串 pattern 语法。
+/// 例：("Bash", Some("git status")) → "Bash(git status)"；("Read", None) → "Read"。
+fn build_pattern(tool_name: &str, pattern: Option<&str>) -> Option<String> {
+    match pattern {
+        None => Some(tool_name.to_string()),
+        Some(p) => {
+            let p = p.trim();
+            if p.is_empty() {
                 return None;
             }
-            PermissionMatcher::Bash {
-                command_prefix: prefix.to_string(),
-            }
+            Some(format!("{tool_name}({p})"))
         }
-        (_, None) => PermissionMatcher::Any,
-        // 其它工具暂时把 pattern 当 path_prefix
-        (_, Some(prefix)) => PermissionMatcher::FilePath {
-            path_prefix: prefix.to_string(),
-        },
-    };
-    Some(PermissionRule {
-        id: new_rule_id(),
-        scope,
-        tool_name: tool_name.to_string(),
-        matcher,
-        decision: PermissionDecisionKind::Allow,
-        created_at: chrono::Utc::now().timestamp_millis(),
-        created_by: "user".to_string(),
-        workdir,
-    })
+    }
 }
 
 impl Default for HitlGate {

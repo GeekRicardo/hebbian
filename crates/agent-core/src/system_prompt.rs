@@ -50,6 +50,9 @@ pub struct EnvironmentSnapshot {
     /// 渲染一个 `<background_tasks>` 子块，让模型立刻看到。
     /// 元组：(task_id, state_label, command, elapsed_secs)
     pub background_tasks: Vec<BackgroundTaskSummary>,
+    /// PermissionStore 的 paths 白名单（架构 §6.1.2）：global + project paths 合并后的
+    /// 扩展可访问目录。与 `allowed_paths`（workspace 自带）独立渲染，标签 `<extra_path>`。
+    pub extra_paths: Vec<PathBuf>,
 }
 
 /// `<background_tasks>` 渲染所需的最小信息。
@@ -73,7 +76,21 @@ impl EnvironmentSnapshot {
             date: today_iso(),
             run_mode: None,
             background_tasks: Vec::new(),
+            extra_paths: Vec::new(),
         }
+    }
+
+    /// builder-style：注入 PermissionStore 的 paths 白名单（global + project 合并），
+    /// 跟 workspace.allowed_paths 去重。
+    pub fn with_extra_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        let mut dedup: Vec<PathBuf> = Vec::new();
+        for p in paths {
+            if !self.allowed_paths.contains(&p) && !dedup.contains(&p) {
+                dedup.push(p);
+            }
+        }
+        self.extra_paths = dedup;
+        self
     }
 
     /// builder-style：设置当前 run_mode。
@@ -93,6 +110,7 @@ impl EnvironmentSnapshot {
         let mut s = render_environment_xml(
             &self.workdir,
             &self.allowed_paths,
+            &self.extra_paths,
             self.platform,
             self.shell.as_deref(),
             &self.date,
@@ -141,6 +159,7 @@ pub fn prepend_background_tasks(text: String, tasks: &[BackgroundTaskSummary]) -
 fn render_environment_xml(
     workdir: &Path,
     allowed_paths: &[PathBuf],
+    extra_paths: &[PathBuf],
     platform: &str,
     shell: Option<&str>,
     date: &str,
@@ -150,6 +169,9 @@ fn render_environment_xml(
     s.push_str(&format!("  <cwd>{}</cwd>\n", workdir.display()));
     for d in allowed_paths {
         s.push_str(&format!("  <allowed_path>{}</allowed_path>\n", d.display()));
+    }
+    for d in extra_paths {
+        s.push_str(&format!("  <extra_path>{}</extra_path>\n", d.display()));
     }
     s.push_str(&format!("  <platform>{platform}</platform>\n"));
     if let Some(sh) = shell {
@@ -224,6 +246,7 @@ mod tests {
         let xml = render_environment_xml(
             Path::new("/tmp/work"),
             &[PathBuf::from("/tmp/extra")],
+            &[PathBuf::from("/etc")],
             "darwin",
             Some("zsh"),
             "2026-05-10",
@@ -232,6 +255,7 @@ mod tests {
         assert!(xml.starts_with("<environment>"));
         assert!(xml.contains("<cwd>/tmp/work</cwd>"));
         assert!(xml.contains("<allowed_path>/tmp/extra</allowed_path>"));
+        assert!(xml.contains("<extra_path>/etc</extra_path>"));
         assert!(xml.contains("<platform>darwin</platform>"));
         assert!(xml.contains("<shell>zsh</shell>"));
         assert!(xml.contains("<date>2026-05-10</date>"));
@@ -248,9 +272,30 @@ mod tests {
             date: "2026-05-10".into(),
             run_mode: None,
             background_tasks: Vec::new(),
+            extra_paths: Vec::new(),
         };
         let out = prepend_environment("hello".into(), &snap);
         assert!(out.starts_with("<environment>"));
         assert!(out.ends_with("hello"));
+    }
+
+    #[test]
+    fn with_extra_paths_dedup_against_allowed_paths() {
+        let mut snap = EnvironmentSnapshot {
+            workdir: PathBuf::from("/tmp"),
+            allowed_paths: vec![PathBuf::from("/tmp/a")],
+            platform: "darwin",
+            shell: None,
+            date: "2026-05-10".into(),
+            run_mode: None,
+            background_tasks: Vec::new(),
+            extra_paths: Vec::new(),
+        };
+        snap = snap.with_extra_paths(vec![
+            PathBuf::from("/tmp/a"), // 跟 allowed_paths 重复
+            PathBuf::from("/etc"),
+            PathBuf::from("/etc"), // 自我重复
+        ]);
+        assert_eq!(snap.extra_paths, vec![PathBuf::from("/etc")]);
     }
 }

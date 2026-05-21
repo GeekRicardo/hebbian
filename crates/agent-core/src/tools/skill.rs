@@ -1,4 +1,11 @@
-//! Skill 系统：从 `~/.claude/skills/` 和 `<cwd>/.claude/skills/` 加载 SKILL.md 并按需注入。
+//! Skill 系统（架构 §6.1.3）：按三层来源加载 SKILL.md 并按需注入：
+//!
+//! 1. `~/.hebbian/skills/`                          ← 全局
+//! 2. `~/.hebbian/projects/<enc(workdir)>/skills/`  ← 项目私有（hebbian 内聚）
+//! 3. `<workdir>/.claude/skills/`                   ← 项目代码内嵌（跟 git 同步）
+//!
+//! 同名 skill 后者覆盖前者。`~/.claude/skills/` **不默认加载**——通过
+//! [`crate::storage::skills::import_from_claude`] 一次性导入。
 //!
 //! - SKILL.md 头部 frontmatter（YAML）解析 name + description
 //! - SkillTool 是「读取 SKILL.md 套壳」：模型给出 skill 名，我们把整篇内容塞回去
@@ -11,55 +18,63 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common::{AppError, AppResult};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::Tool;
+use crate::storage::projects;
 
 const MAX_SKILL_BYTES: u64 = 200 * 1024;
 const MAX_DESC_PREVIEW: usize = 200;
 
 /// 一个加载好的 skill
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
     pub source: SkillSource,
+    /// 用户在 hebbian 里是否启用该 skill。`false` 时 SkillTool 不会把它暴露给模型。
+    /// 由 `storage::skills::apply_disabled` 根据 `~/.hebbian/disabled_skills.json` 填写。
+    pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SkillSource {
-    /// `~/.claude/skills/<name>/SKILL.md`
-    User,
-    /// `<workdir>/.claude/skills/<name>/SKILL.md`
+    /// `~/.hebbian/skills/<name>/SKILL.md`
+    Global,
+    /// `~/.hebbian/projects/<enc>/skills/<name>/SKILL.md`
     Project,
+    /// `<workdir>/.claude/skills/<name>/SKILL.md`
+    ProjectCode,
 }
 
-/// 默认 skill 目录：`~/.claude/skills` + `<workdir>/.claude/skills`
-pub fn default_skill_dirs(workdir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        out.push(home.join(".claude/skills"));
-    }
-    out.push(workdir.join(".claude/skills"));
-    out
+/// 默认 skill 目录（含 source 标签），按"前 → 后覆盖"顺序排列。
+pub fn default_skill_dirs(data_dir: &Path, workdir: &Path) -> Vec<(SkillSource, PathBuf)> {
+    vec![
+        (SkillSource::Global, data_dir.join("skills")),
+        (
+            SkillSource::Project,
+            projects::project_dir(data_dir, workdir).join("skills"),
+        ),
+        (SkillSource::ProjectCode, workdir.join(".claude/skills")),
+    ]
 }
 
-/// 从给定的目录列表加载 skills。后面的目录会覆盖前面的同名 skill
-/// （约定：列表前段 = user/global，后段 = project，project 优先）。
-pub fn load_skills(dirs: &[PathBuf]) -> Vec<Skill> {
+/// 从带 source 的目录列表加载 skills。后面的目录会覆盖前面的同名 skill。
+pub fn load_skills(sources: &[(SkillSource, PathBuf)]) -> Vec<Skill> {
     let mut out: BTreeMap<String, Skill> = BTreeMap::new();
-    for (idx, dir) in dirs.iter().enumerate() {
-        let source = if idx == 0 {
-            SkillSource::User
-        } else {
-            SkillSource::Project
-        };
-        load_dir_into(dir, source, &mut out);
+    for (source, dir) in sources {
+        load_dir_into(dir, *source, &mut out);
     }
     out.into_values().collect()
 }
 
+/// 与 Claude Code 行为一致（loadSkillsDir.ts:423-431）：只查一层
+/// `<skills_dir>/<skill-name>/SKILL.md`，不递归。`Skill.name` 使用**目录名**——
+/// frontmatter 的 `name` 字段当 displayName，不参与 lookup（避免目录名与
+/// frontmatter name 不一致时 read_skill_md 拼路径失败）。
 fn load_dir_into(dir: &Path, source: SkillSource, out: &mut BTreeMap<String, Skill>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -76,9 +91,10 @@ fn load_dir_into(dir: &Path, source: SkillSource, out: &mut BTreeMap<String, Ski
         let Ok(content) = std::fs::read_to_string(&skill_md) else {
             continue;
         };
-        let (name_opt, desc_opt) = parse_frontmatter(&content);
-        let name = name_opt
-            .or_else(|| path.file_name().map(|s| s.to_string_lossy().to_string()))
+        let (_name_opt, desc_opt) = parse_frontmatter(&content);
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed".into());
         let description = desc_opt.unwrap_or_else(|| extract_first_paragraph(&content));
         out.insert(
@@ -88,6 +104,7 @@ fn load_dir_into(dir: &Path, source: SkillSource, out: &mut BTreeMap<String, Ski
                 description,
                 path: skill_md,
                 source,
+                enabled: true,
             },
         );
     }
@@ -166,15 +183,17 @@ fn render_description(skills: &[Skill]) -> String {
     );
     if skills.is_empty() {
         s.push_str(
-            "当前**没有**可用的 skills。用户可以在 `~/.claude/skills/<name>/SKILL.md` \
-             或项目 `.claude/skills/<name>/SKILL.md` 里创建。",
+            "当前**没有**可用的 skills。用户可以在 `~/.hebbian/skills/<name>/SKILL.md`、\
+             项目目录 `~/.hebbian/projects/<enc>/skills/<name>/SKILL.md` 或项目代码内嵌的 \
+             `<workdir>/.claude/skills/<name>/SKILL.md` 里创建。",
         );
     } else {
         s.push_str("可用 skills（按名字调用）：\n");
         for skill in skills {
             let scope = match skill.source {
-                SkillSource::User => "user",
+                SkillSource::Global => "global",
                 SkillSource::Project => "project",
+                SkillSource::ProjectCode => "project-code",
             };
             let preview = first_words(&skill.description, 80);
             s.push_str(&format!("- `{}` ({scope}): {preview}\n", skill.name));

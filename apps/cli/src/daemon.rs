@@ -496,12 +496,19 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
     );
 
     // Skill dirs
-    let skill_dirs = {
+    let skill_dirs: Vec<(agent_core::tools::skill::SkillSource, std::path::PathBuf)> = {
         let configured = prior
             .skill_dirs
             .clone()
             .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
-        if configured.is_empty() { default_skill_dirs(&workdir) } else { configured }
+        if configured.is_empty() {
+            default_skill_dirs(data_dir, &workdir)
+        } else {
+            configured
+                .into_iter()
+                .map(|p| (agent_core::tools::skill::SkillSource::Global, p))
+                .collect()
+        }
     };
 
     // Phase channel + background shells
@@ -551,10 +558,14 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
     std::env::set_var(agent_core::tools::exit_plan_mode::ENV_SESSION_ID, session_id);
 
     let run_mode = *state.run_mode.lock().unwrap();
-    let enabled_tools = prior
-        .enabled_tools
-        .clone()
-        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
+    let enabled_tools = {
+        let s = prior.enabled_tools.clone().unwrap_or_default();
+        if s.is_empty() {
+            settings.conversation.enabled_tools.clone()
+        } else {
+            s
+        }
+    };
     let global_rules = prior
         .global_rules
         .clone()

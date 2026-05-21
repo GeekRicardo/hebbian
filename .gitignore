@@ -46,3 +46,6 @@ scripts/.venv/
 
 # IDE 自动保存的对话截图
 image/
+
+.hebbian/
+.playwright-cli/

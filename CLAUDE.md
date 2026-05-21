@@ -90,6 +90,35 @@
 
   changelog 那一条里写「借鉴了 openhanako 的 XXX 函数 / 这是 issue #468 的根因 / 之前我们是怎样 / 现在改成怎样 / 好处坏处」
 
+### 步骤 3.1：UI 文案纪律（给用户看的字必须是人话）
+
+**适用范围**：Desktop / hebweb 前端 UI 字符串（label / description / placeholder / toast / tooltip / dialog body 等所有终端用户能看到的文本）。
+
+**禁止**：把架构、路径、模块、source 枚举值、内部命名等内部行话写到 UI 文案。例：
+
+  反例（✗）：
+  ```
+  按 workdir /Users/ricardo/code/ricardo/rust/hebbian 加载三层来源：global / project / project_code（代码内嵌）
+  当前对话未设置 workdir，项目级 skill 不可导入
+  selected 写入 ~/.hebbian/projects/<enc>/skills/
+  ```
+  → 用户看到「workdir」「项目级 skill」「project_code」「<enc>」一脸懵，且暴露内部目录细节像在写后端文档。
+
+  正例（✓）：
+  ```
+  已加载的 Skills
+  当前对话没绑定项目，没法装到「当前项目」里——选「全局」试试
+  ```
+
+**写法**：
+- 用户视角，问"这个用户当下要决策/操作什么"，只说他要的信息
+- 避免：路径、目录、source 枚举名（`global` / `project` / `project_code`）、字段名、文件名
+- 状态徽章可以保留简短英文（`global` / `project`）做颜色标签，但**说明文字不要重复这些词**
+- 错误 / 提示用动作建议（"先在设置里选个项目"）而不是状态描述（"workdir 为空")
+- 凡是写出包含 `~/` / `<encode>` / 字段名 / Rust 类型名 / 内部模块名的字符串：**重写**
+
+**自检**：写完一段 UI 文案后问自己——"如果我妈打开看到这句话，她能懂吗"。懂不了就改。
+
 ### 步骤 4：验证
 
 ```bash
@@ -147,11 +176,16 @@ pnpm tauri dev
 # 启动 Desktop（GUI surface）
 pnpm tauri dev
 
-# 启动 heb CLI daemon（AI 自主调试 surface，2026-05-20 changelog）
-cargo build -p heb
+# 启动 heb CLI daemon（AI 脚本化调试 surface，2026-05-20 changelog）
+cargo build -p hebbian-cli
 ./target/debug/heb new --provider=<id> --workdir <dir>
 
-# 调试模型 IO（Desktop / heb 启动前导出环境变量）
+# 启动 hebweb（浏览器/Playwright surface，2026-05-21 changelog）
+cargo build -p hebbian-web-server
+cd apps/desktop/frontend && pnpm build && cd -    # 首次或前端改动后
+./target/debug/hebweb --port 38080                 # 之后访问 http://127.0.0.1:38080
+
+# 调试模型 IO（任一 surface 启动前导出环境变量）
 HEBBIAN_DUMP_MODEL_IO=1 pnpm tauri dev
 # 输出位置：~/.hebbian/sessions/<session_id>/model_io.jsonl
 
@@ -159,28 +193,23 @@ HEBBIAN_DUMP_MODEL_IO=1 pnpm tauri dev
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 pnpm tauri dev
 ```
 
-Desktop 与 heb daemon 共享同一个数据目录 `~/.hebbian/`（文件锁保护并发写）。任一 surface 能复现的 agent_core 问题，另一个也能。
+Desktop / heb / hebweb 三个 surface 共享同一个数据目录 `~/.hebbian/`（文件锁保护并发写）。任一 surface 能复现的 agent_core 问题，另两个也能。
 
 ---
 
-## ⚠️ 调试 bug 前必做：先用 `heb` CLI 自主复现
+## ⚠️ 调试 bug 前必做：先用 `heb` CLI 或 `hebweb` 自主复现
 
 **适用范围**：用户报 bug / 自己发现 agent 行为异常 / 验证修复是否真的解决问题。
 
-### 步骤 1：判定是否能用 heb 复现
+### 步骤 1：判定走哪个 surface 复现
 
-`heb` daemon 与 Desktop 共享 `~/.hebbian/`，走相同的 agent_core 主路径。只要问题不在 GUI 层，就**优先用 heb 自主复现**，不要立刻让用户去 Desktop 重跑。
+三个 surface 走相同的 agent_core 主路径，行为对称。哪个最快能复现就用哪个，**不要立刻让用户去 Desktop 重跑**：
 
-| 能 heb 复现 | 不能 heb 复现（必须 Desktop） |
-|------------|----------------------------|
-| agent 行为问题（工具调用错、回答跑偏、死循环） | UI 渲染 / 样式问题 |
-| 工具执行问题（Read/Write/Edit/Bash/Grep） | Tauri 命令分发本身的 bug |
-| 权限审批流程问题 | 前端事件流翻译错位（chat.rs ↔ types.ts） |
-| 多轮上下文 / 缓存命中问题 | 输入框 / 侧边栏 / 设置弹窗交互 |
-| Provider / model 协议问题 | EditsWorktree 的可视化 diff |
-| Session 持久化 / 崩溃恢复问题 | 流式 bubble 折叠 / portal 渲染 |
-| HITL 阻塞 / cancel 行为 | 全局快捷键、菜单、托盘 |
-| Prompt / RunMode / Hooks 行为 | |
+| 问题类型 | 首选 surface | 理由 |
+|---------|------------|------|
+| agent 行为（工具调用错、回答跑偏、死循环、多轮上下文、缓存、HITL、cancel、prompt、RunMode、Hooks、provider 协议、session 持久化 / 崩溃恢复） | **heb CLI** | NDJSON 事件流可脚本化 + 完整 model_io.jsonl + 最快上手 |
+| UI 渲染 / 样式 / 工具卡片显示 / 流式 bubble 折叠 / 输入框 / 侧边栏 / 设置弹窗 / 审批/提问弹窗 UX / EditsWorktree 可视化 diff / 前端 store 状态机 | **hebweb + Playwright** | 同一份 React 代码 + 真实 agent_core 数据 + DOM/截图/点击可控（详见 [docs/heb-cli-debug.md §9](docs/heb-cli-debug.md)） |
+| Tauri 命令分发本身的 bug / 全局快捷键 / 菜单 / 托盘 / 系统通知 / 文件对话框 | **Desktop**（最后兜底） | hebweb 没有 Tauri native 能力对应 |
 
 ### 步骤 2：读 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)
 

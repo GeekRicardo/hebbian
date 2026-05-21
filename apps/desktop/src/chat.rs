@@ -163,11 +163,15 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .skill_dirs
         .clone()
         .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
-    let skill_dirs = if configured_skill_dirs.is_empty() {
-        default_skill_dirs(&workdir)
-    } else {
-        configured_skill_dirs
-    };
+    let skill_dirs: Vec<(agent_core::tools::skill::SkillSource, std::path::PathBuf)> =
+        if configured_skill_dirs.is_empty() {
+            default_skill_dirs(data_dir, &workdir)
+        } else {
+            configured_skill_dirs
+                .into_iter()
+                .map(|p| (agent_core::tools::skill::SkillSource::Global, p))
+                .collect()
+        };
 
     let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
@@ -201,15 +205,26 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     ));
     let definition = AgentDefinition::default();
 
-    let session_enabled_tools = session
-        .enabled_tools
-        .clone()
-        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
-    let effective_enabled_tools = if args.enabled_tools.is_empty() {
-        session_enabled_tools
-    } else {
+    // 优先级：args（前端 send_message 显式传） > session.enabled_tools（非空） > 全局 settings
+    // 注意：旧版本把 session.enabled_tools = Some([]) 当作"明确不启用工具"——实践中
+    // 这条路径只造成"全局设了工具但当前对话用不上"的 UX bug；当前语义已改为
+    // Some([]) 也下沉到全局，保留"明确清空"能力到 SessionSettingsDialog 的「恢复继承」按钮。
+    let session_tools = session.enabled_tools.clone().unwrap_or_default();
+    let effective_enabled_tools = if !args.enabled_tools.is_empty() {
         args.enabled_tools.clone()
+    } else if !session_tools.is_empty() {
+        session_tools
+    } else {
+        settings.conversation.enabled_tools.clone()
     };
+    tracing::debug!(
+        session_id = %args.session_id,
+        effective_enabled_tools = ?effective_enabled_tools,
+        global_enabled_tools = ?settings.conversation.enabled_tools,
+        session_enabled_tools = ?session.enabled_tools,
+        args_enabled_tools = ?args.enabled_tools,
+        "send_message: resolved enabled_tools",
+    );
 
     // HEBBIAN_DUMP_MODEL_IO=1 时把每次模型 request/response 落到
     // <data_dir>/sessions/<session_id>.model_io.jsonl，方便桌面调试 prompt / token / tool schema。
@@ -1359,16 +1374,25 @@ pub async fn build_preview_payload(
         .skill_dirs
         .clone()
         .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
-    let skill_dirs = if configured_skill_dirs.is_empty() {
-        default_skill_dirs(&workdir)
-    } else {
-        configured_skill_dirs
-    };
+    let skill_dirs: Vec<(agent_core::tools::skill::SkillSource, std::path::PathBuf)> =
+        if configured_skill_dirs.is_empty() {
+            default_skill_dirs(data_dir, &workdir)
+        } else {
+            configured_skill_dirs
+                .into_iter()
+                .map(|p| (agent_core::tools::skill::SkillSource::Global, p))
+                .collect()
+        };
 
-    let session_enabled_tools = session
-        .enabled_tools
-        .clone()
-        .unwrap_or_else(|| settings.conversation.enabled_tools.clone());
+    // preview 用同样的优先级链：session 非空 → session；否则全局
+    let session_enabled_tools = {
+        let s = session.enabled_tools.clone().unwrap_or_default();
+        if s.is_empty() {
+            settings.conversation.enabled_tools.clone()
+        } else {
+            s
+        }
+    };
 
     // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具。
     // 预览路径不会真发命令,bg_log_dir + phase 都用占位 None / 空 channel。
@@ -1396,7 +1420,11 @@ pub async fn build_preview_payload(
 
     // 首条 user message 头部要追加 <environment> 块（与 Session::append_user 一致），
     // preview 时按同一逻辑还原，确保「显示 JSON」与实际发给模型的 payload 一致。
-    let env_snapshot = EnvironmentSnapshot::from_workspace(&workspace);
+    let extra_paths_preview = PermissionStore::open(data_dir)
+        .map(|s| s.effective_paths(Some(&workdir)))
+        .unwrap_or_default();
+    let env_snapshot = EnvironmentSnapshot::from_workspace(&workspace)
+        .with_extra_paths(extra_paths_preview);
     let env_block = env_snapshot.render();
 
     // 规则文件注入：与 Session::append_user 一致
@@ -1465,7 +1493,7 @@ pub async fn build_preview_payload(
             "initial_allowed_paths": initial_allowed_paths,
             "runtime_allowed_paths": session.runtime_allowed_paths,
             "pending_runtime_allowed_paths": session.pending_runtime_allowed_paths,
-            "skill_dirs": skill_dirs,
+            "skill_dirs": skill_dirs.iter().map(|(_, p)| p.display().to_string()).collect::<Vec<_>>(),
         }
     }))
 }
