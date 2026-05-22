@@ -24,7 +24,7 @@ import {
   Terminal,
   SquareTerminal,
   CircleStop,
-  BookOpen,
+  ScrollText,
   Edit3,
   Search,
   Sparkles,
@@ -575,7 +575,7 @@ function ToolIcon({ name }: { name?: string | null }) {
   if (name === "Bash" || name === "PowerShell") return <Terminal className={cls} />;
   if (name === "BashOutput") return <SquareTerminal className={cls} />;
   if (name === "KillShell") return <CircleStop className={cls} />;
-  if (name === "Read") return <BookOpen className={cls} />;
+  if (name === "Read") return <ScrollText className={cls} />;
   if (name === "Write" || name === "Edit") return <Edit3 className={cls} />;
   if (name === "Grep" || name === "Glob") return <Search className={cls} />;
   if (name === "Skill") return <Sparkles className={cls} />;
@@ -1149,7 +1149,7 @@ function DefaultToolDetail({ call }: { call: ToolCallItem }) {
         </div>
         <div
           className={cn(
-            "overflow-auto rounded-md border border-border bg-muted/40",
+            "overflow-auto bg-muted/30",
             !expanded && "max-h-48"
           )}
         >
@@ -1303,21 +1303,19 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
   }
 
   return (
-    <div className="overflow-hidden border border-border bg-background">
-      <DiffViewer
-        beforeText={beforeText}
-        afterText={afterText}
-        filePath={filePath}
-        actionLabel={actionLabel}
-        badge={badge}
-        mode={viewMode}
-        onCycleMode={cycleMode}
-        expanded={expanded}
-        onToggleExpanded={toggleExpanded}
-        streaming={streamingFlag}
-        maxRows={20}
-      />
-    </div>
+    <DiffViewer
+      beforeText={beforeText}
+      afterText={afterText}
+      filePath={filePath}
+      actionLabel={actionLabel}
+      badge={badge}
+      mode={viewMode}
+      onCycleMode={cycleMode}
+      expanded={expanded}
+      onToggleExpanded={toggleExpanded}
+      streaming={streamingFlag}
+      maxRows={20}
+    />
   );
 }
 
@@ -1437,7 +1435,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
   }
   if (name === "image_generation") {
     return (
-      <div className="grid overflow-hidden rounded-md border border-border bg-background md:grid-cols-[160px_minmax(0,1fr)]">
+      <div className="grid overflow-hidden bg-background md:grid-cols-[160px_minmax(0,1fr)]">
         <div className="min-h-32 bg-[radial-gradient(circle_at_35%_35%,rgba(22,119,255,0.28),transparent_28%),radial-gradient(circle_at_70%_65%,rgba(18,166,111,0.24),transparent_30%),linear-gradient(135deg,#f8fafc,#edf1f7)]" />
         <div className="space-y-2 p-2 text-[14px]">
           <div className="rounded-md border border-border bg-muted/40 px-2 py-1 text-muted-foreground">
@@ -1451,7 +1449,7 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
   if (isTaskListTool(name)) {
     // 浮动 TaskPanel 显示最新状态，这里只回放本次调用提交的快照
     return (
-      <div className="overflow-hidden rounded-md border border-border bg-background">
+      <div className="overflow-hidden bg-background">
         <TodoChecklist todos={parseTodos(call.argumentsText)} />
       </div>
     );
@@ -1472,7 +1470,10 @@ function ToolCallTimeline({
   return (
     <div className="relative mt-3 space-y-1 rounded-md bg-muted/70 py-1.5 pl-6 pr-2">
       {calls.map((call, index) => {
-        const active = expandedKeys.has(call.key);
+        // 未 done 时（streaming / running / failed）默认展开，让运行中的 tool
+        // 边输出边看；done 后立即折叠，靠用户手动 toggle 展开看 detail。
+        // 这跟 ReasoningBlock 的"流完立即折叠"是一致语义。
+        const active = call.status !== "done" || expandedKeys.has(call.key);
         // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
         // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / 未来若新增 failed=红。
         // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
@@ -1484,7 +1485,7 @@ function ToolCallTimeline({
               ? "animate-breathe bg-primary"
               : (call.status as string) === "failed" ||
                 (call.status as string) === "error"
-                ? "bg-red-500"
+                ? "bg-rose-400"
                 : "bg-muted-foreground/40";
         return (
           <div
@@ -1507,7 +1508,10 @@ function ToolCallTimeline({
             />
             <div
               className={cn(
-                active && "overflow-hidden rounded-b-md border border-border bg-background"
+                // border 始终占 1px，避免 active 切换时几何偏移导致 button 行抖动；
+                // 折叠态 border-transparent 看不到，展开态切到 border-border 显形
+                "overflow-hidden rounded-md border border-transparent",
+                active && "border-border bg-background"
               )}
             >
               {call.name === "Read" ? (
@@ -1531,7 +1535,7 @@ function ToolCallTimeline({
                       : "";
                     return (
                       <>
-                        <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <ScrollText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
                           {path}
                         </span>
@@ -1639,10 +1643,15 @@ function ReasoningBlock({
   text: string;
   streaming: boolean;
 }) {
-  // 流式时默认展开、写完默认折叠
+  // 流式时展开、流完立即折叠（不等整个 loop 结束）。
+  // 用 prev ref detect streaming 边界变化，避免覆盖用户在 streaming 期间的手动 toggle。
   const [open, setOpen] = useState(streaming);
+  const prevStreamingRef = useRef(streaming);
   useEffect(() => {
-    if (streaming) setOpen(true);
+    if (prevStreamingRef.current !== streaming) {
+      setOpen(streaming);
+    }
+    prevStreamingRef.current = streaming;
   }, [streaming]);
 
   const trimmed = text.trim();
@@ -1761,29 +1770,6 @@ export const MessageBubble = memo(function MessageBubble({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
     () => new Set()
   );
-  // 已经自动展开过的 streaming key，避免用户折叠后又被强行展开。
-  const autoExpandedRef = useRef<Set<string>>(new Set());
-
-  // 架构 §4.13.9：Edit/Write 流式时默认把卡片展开，用户能边写边看 diff 流动。
-  // 仅第一次出现时展开一次，后续跟随用户的折叠选择。
-  useEffect(() => {
-    if (!streamingParts?.length) return;
-    let changed = false;
-    const next = new Set(expandedToolCalls);
-    for (const p of streamingParts) {
-      if (p.type !== "tool_call") continue;
-      if (p.name !== "Edit" && p.name !== "Write") continue;
-      const key = `streaming-${p.index}`;
-      if (autoExpandedRef.current.has(key)) continue;
-      autoExpandedRef.current.add(key);
-      if (!next.has(key)) {
-        next.add(key);
-        changed = true;
-      }
-    }
-    if (changed) setExpandedToolCalls(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamingParts]);
   const [showRawText, setShowRawText] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef<HTMLDivElement>(null);

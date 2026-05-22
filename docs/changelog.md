@@ -3488,3 +3488,39 @@
 - **微调（同批追加）**:
   - 工具调用状态点中心精确对齐竖线中心：button 不再嵌外层 grid + 内层 span，本身就是 `h-1.5 w-1.5 rounded-full`，`-left-[17.5px]` 让点中心落到 `-14.5px`（= 竖线 `-left-[15px] w-px` 的中心）
   - done 状态绿色 `emerald-500` → `green-400`（用户：「绿色偏多巴胺一点 亮一点」）
+
+### 2026-05-22 — 工具调用渲染统一 + reasoning/tool 自动折叠 + 多巴胺色板 + HoverHint portal 化
+
+- **Why**: 卡片化重构第二阶段交付后，用户给了张当前工具调用展开/折叠两态的截图，指出 4 个根因问题：
+  1. **边线变粗**：展开态有三层 border 嵌套（外层 wrapper `border` + button 行 `border-b` + detail 内具体工具又一圈 `border`），交界处叠加成 2px
+  2. **下圆角错位**：`EditDiffDetail` 非放大态用平直 border（无 rounded）跟外层 wrapper 的 `rounded-b-md` 错位
+  3. **抖动**：折叠态没 border，展开态突然出现 1px border → button 行被推内 1px，视觉颠一下
+  4. **运行时展开/完成折叠**没做对：当前 reasoning 流式 true→false 不主动折叠，要整个 loop 结束才折；tool call 只对 Edit/Write 流式展开，其他工具不展开
+- **改动**:
+  - [docs/tool-call-rendering-mock.html](tool-call-rendering-mock.html): 独立 mock 复刻当前 token，演示 6 个对照场景（折叠态多状态点 + Read/Bash/Edit/TodoWrite/DefaultToolDetail 展开态），供用户审视觉再动组件。这次没用 Tailwind，纯 CSS 自己复刻一套相同 token 命名，方便未来再改时不依赖工程化运行环境
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx):
+    - **ToolCallTimeline 抖动消除 + 边线统一**：active wrapper 改 `overflow-hidden rounded-md border border-transparent` 默认占 1px、`active && border-border bg-background` 时变形 → border 几何空间始终保留；同时 `rounded-b-md` → `rounded-md`（完整圆角，不再"只下圆角"）
+    - **去嵌套 border**：`DefaultToolDetail` Input 表格去 `rounded-md border border-border` → 只留 `bg-muted/30`；`image_generation` 容器去 `rounded-md border border-border` → 只留 `bg-background`；`TodoChecklist` 容器同样去
+    - **运行时展开/完成折叠**：`ToolCallTimeline` 内 `active` 判断改成 `call.status !== "done" || expandedKeys.has(call.key)` —— streaming/running/failed 默认展开、done 立即折叠，单元自身完成即折叠（不再等 loop 结束）。`ReasoningBlock` 用 `prevStreamingRef` 检测 streaming 边界，true→false 立即 `setOpen(false)`（仍尊重用户在 streaming 期间的手动 toggle）
+    - **清理 dead code**：删 `autoExpandedRef` + Edit/Write 流式自动展开 useEffect（18 行）—— status-based 自动展开机制覆盖了它
+    - **failed 状态点色调一致**：`bg-red-500` → `bg-rose-400`，跟其他色调多巴胺化协同
+    - **Read 图标**：`BookOpen` → `ScrollText`（卷轴 + 文字，更"读取/查看"语义；全文 3 处一并替换：import + ToolIcon + Read 卡片头）
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx):
+    - **EditDiffDetail 非放大态去 border 包装**：删 `<div className="overflow-hidden border border-border bg-background">` 包装，直接 `return <DiffViewer .../>` → 边线归外层 wrapper 统一负责、下圆角对齐
+    - **create 模式单栏绿**（用户：「old_string 为空就是新建 不要左右分栏 只展示新增 也是绿色」）：DiffViewer 加 `isCreate = !beforeText && !!afterText` 检测，跟 `mode === "inline"` 共用渲染分支走 `InlineDiff` —— 每行 `bg-green-500/10 text-green-700` 单栏 + 行号 + `+` 号（跟 split 右栏 add 行**完全一样**的 token），不再走 split 留半屏空白左栏
+    - **DiffHeader 加 `hideModeToggle` prop**：create 时隐藏 split↔inline 切换按钮（语义上 create 没有差异，切换无意义）
+    - **文件名 hover 显示完整路径可复制**（用户：「跟模型选择器 hover 是一样的」）：DiffHeader 文件名用 `<PathHint path={filePath}>` 包装，复用 `HoverHint` 的 keep-open delay + `select-text pointer-events-auto`
+    - **GitHub PR 风格 +N −M**（用户：「显示成熟悉的 +xx -xx」）：`changeCount: number` 拆成 `addCount` / `removeCount`（按 `r.kind === "add" / "remove"` 分别统计），header 用 `<span class="text-green-700">+N</span>` `<span class="text-rose-600">−M</span>` 渲染，tabular-nums + mono。减号用 `U+2212` 字宽对齐 `+`。无变更时整段隐藏
+  - [apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx](../apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx): **portal 化**（用户：「hover 没有浮动到最上面，被工具标题栏挡住了」）。根因：`position: absolute + z-50` 受祖先 `overflow:hidden` 裁剪（ToolCallTimeline 卡片必须 `overflow-hidden` 让 rounded 生效）。修法：浮层 `createPortal` 到 `document.body` + `position: fixed`，坐标通过 `anchorRef.getBoundingClientRect()` 算出，scroll/resize 时跟随更新。所有用 HoverHint 的地方（PathHint × Sidebar 项目目录 / ChatInput path chips / DiffHeader 文件名）一并受益
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): **多巴胺色板**（用户：「红色蓝色也是 偏多巴胺一点」）。light + dark 同步：
+    - `--primary` `210 100% 56%` → `217 91% 60%`（Tailwind blue-500 风格，更饱和明亮）
+    - `--destructive` light `0 84% 60%` → `350 92% 62%`、dark 同色相 `350 85% 58%`（玫红多巴胺，跟 status dot `rose-400` 同色系协同）
+    - `--ring` 跟 primary 同步
+    - 影响：新建对话按钮 / 输入框上方项目 chip / ContextRing 默认色 / running 状态点呼吸 / focus ring / markdown 链接 / destructive 按钮，全部多巴胺化
+- **影响范围**: 仅前端；HoverHint portal 化对所有调用者（Sidebar / ChatInput / DiffHeader）都生效，行为变化 = "永远浮在最顶层"。`tsc --noEmit` 通过
+- **架构.md 评估**: 纯 surface 视觉层；token 调整（`--primary` / `--destructive` 加亮）影响所有引用这些 token 的子组件但**语义不变**；自动展开/折叠语义跟 ReasoningBlock 之前的"流式展开"行为保持一致，不破坏既定 §4 / §8 决策
+- **留尾巴**:
+  - HoverHint portal 化后，浮层不继承父级 stacking context，可能跟某些第三方 modal/drawer 的 z-index 打架——但项目内没看到 z-index > 100 的层，暂时安全
+  - DiffPanel 现有 `dummy "" hover-text-emerald-100` 之类的 emerald 字段已不再用，回头清理
+  - `statusLabel` 仍是 dead code（前次留尾巴），保留以备复用
+  - ToolCallTimeline 用户在 streaming 期间无法手动折叠正在运行的 tool call —— `status !== "done"` 优先级高于 `expandedKeys`。这跟 ChatGPT / Claude.ai 行为一致，运行中数据正在流，折叠了也意义不大；done 后用户能正常 toggle

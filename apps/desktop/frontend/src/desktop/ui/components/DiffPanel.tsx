@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { PathHint } from "@/desktop/ui/components/PathHint";
 import type { DiffPayload, EditEntry } from "@/desktop/ui/types";
 
 /**
@@ -271,9 +272,12 @@ export function DiffViewer({
     });
   }, []);
 
-  const changeCount = diffRows.filter((r) => r.kind !== "same").length;
+  const addCount = diffRows.filter((r) => r.kind === "add").length;
+  const removeCount = diffRows.filter((r) => r.kind === "remove").length;
 
   const isEmpty = !beforeText && !afterText;
+  // 新建文件场景：old_string 为空、after 非空 → 没有"差异"语义，单栏纯 add 视图最直观
+  const isCreate = !beforeText && !!afterText;
   const heightStyle = maxRowsToStyle(maxRows);
 
   return (
@@ -283,8 +287,10 @@ export function DiffViewer({
         actionLabel={actionLabel ?? ""}
         badge={badge}
         mode={mode}
-        changeCount={changeCount}
+        addCount={addCount}
+        removeCount={removeCount}
         onCycleMode={onCycleMode}
+        hideModeToggle={isCreate}
         expanded={expanded}
         onToggleExpanded={onToggleExpanded}
         onClose={onClose}
@@ -294,7 +300,9 @@ export function DiffViewer({
         <div className="flex-1 px-3 py-6 text-center text-[12px] text-muted-foreground">
           {streaming ? "等待参数…" : "文件为空（无变更）"}
         </div>
-      ) : mode === "inline" ? (
+      ) : isCreate || mode === "inline" ? (
+        // 新建文件没有差异语义，强走 inline 模式：全 add 行 + 绿底 + 行号，
+        // 视觉跟 split 的右侧栏一致但去掉空白左栏
         <InlineDiff
           renderRows={renderRows}
           items={items}
@@ -322,8 +330,10 @@ function DiffHeader({
   actionLabel,
   badge,
   mode,
-  changeCount,
+  addCount,
+  removeCount,
   onCycleMode,
+  hideModeToggle,
   expanded,
   onToggleExpanded,
   onClose,
@@ -333,8 +343,11 @@ function DiffHeader({
   actionLabel: string;
   badge?: string;
   mode: DiffMode;
-  changeCount: number;
+  addCount: number;
+  removeCount: number;
   onCycleMode: () => void;
+  /** create / 单栏 add-only 场景下隐藏 split↔inline 切换按钮 */
+  hideModeToggle?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
   onClose?: () => void;
@@ -348,12 +361,11 @@ function DiffHeader({
     <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
       <div className="min-w-0 flex items-center gap-2">
         {filePath && (
-          <span
-            className="truncate text-[12px] font-medium font-mono"
-            title={filePath}
-          >
-            {pathLeaf(filePath)}
-          </span>
+          <PathHint path={filePath}>
+            <span className="truncate text-[12px] font-medium font-mono">
+              {pathLeaf(filePath)}
+            </span>
+          </PathHint>
         )}
         {actionLabel && (
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -365,20 +377,34 @@ function DiffHeader({
             {badge}
           </span>
         )}
-        <span className="text-[10px] text-muted-foreground">
-          {changeCount === 0 ? "无变更" : `${changeCount} 行差异`}
-        </span>
+        {/* GitHub PR 风格：+N -M 分开渲染，绿/红 token；无变更则隐藏 */}
+        {(addCount > 0 || removeCount > 0) && (
+          <span className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] tabular-nums">
+            {addCount > 0 && (
+              <span className="text-green-700 dark:text-green-400">
+                +{addCount}
+              </span>
+            )}
+            {removeCount > 0 && (
+              <span className="text-rose-600 dark:text-rose-400">
+                −{removeCount}
+              </span>
+            )}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={onCycleMode}
-          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={`当前：${modeLabel}。点击切换 split ↔ inline。`}
-        >
-          <ModeIcon className="h-3.5 w-3.5" />
-          <span>{modeLabel}</span>
-        </button>
+        {!hideModeToggle && (
+          <button
+            type="button"
+            onClick={onCycleMode}
+            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={`当前：${modeLabel}。点击切换 split ↔ inline。`}
+          >
+            <ModeIcon className="h-3.5 w-3.5" />
+            <span>{modeLabel}</span>
+          </button>
+        )}
         {onToggleExpanded && (
           <button
             type="button"
