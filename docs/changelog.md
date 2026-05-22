@@ -3248,3 +3248,14 @@
   - React Hooks Rules 是运行时检查（dev 模式 React 抛 invariant 错误，prod 直接乱套），静态分析（tsc / TypeScript Language Server）抓不到；ESLint 的 `react-hooks/rules-of-hooks` 能抓但 vite 默认不跑 lint
   - 下次写「hooks 上移到 conditional return 之前」这种重构必跑一次 Playwright sanity check
 - **留尾巴**: 无
+
+### 2026-05-22 — 删 MessageBubble hot path 上残留的 console.debug
+
+- **Why**: 用户报 desktop console 一直刷 `[Debug] [buildAssistantRenderParts] tool groups – Object`。又一处临时诊断日志忘删 —— [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `buildAssistantRenderParts` 在 streaming bubble 的 render 流程里每个 delta 都跑一次，console.debug 的参数对象里还做 `filter / map / .map(c => c.key)` 等实时计算，跟前几次清掉的 useStore.ts / agent_loop.rs 的 hot-path 日志是同一种坑
+- **改动**:
+  - [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 删 `buildAssistantRenderParts` 末尾 14 行 toolGroups 诊断 console.debug
+- **影响范围**: 仅前端观测代码，零功能改动
+- **验证**:
+  - `pnpm exec tsc --noEmit` clean / `pnpm build` clean
+  - 全 frontend grep 剩余 `console.debug/log` 数量 = 0；`console.warn/error/info` 还剩 8 处但都是一次性事件错误处理（App init / WS 连接），不在 hot path
+- **留尾巴**: 无

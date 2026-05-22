@@ -248,20 +248,6 @@ function buildAssistantRenderParts(
       }
     });
     pushToolGroup(out, pendingTools);
-    const toolGroups = out.filter(r => r.type === "tool_group");
-    if (toolGroups.length > 0) {
-      console.debug("[buildAssistantRenderParts] tool groups", {
-        streamingPartsCount: streamingParts.length,
-        toolPartsCount: streamingParts.filter(p => p.type === "tool_call").length,
-        toolGroupsCount: toolGroups.length,
-        groups: toolGroups.map(g => ({
-          callsCount: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.length,
-          callKeys: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.key),
-          callIds: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.id),
-          callIndices: (g as { type: "tool_group"; calls: ToolCallItem[] }).calls.map(c => c.index),
-        })),
-      });
-    }
     return out;
   }
 
