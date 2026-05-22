@@ -1,67 +1,76 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  Pause,
-  Play,
-  Clock,
-  Terminal,
-  X,
-  Square,
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Pause,
+  Square,
+  Terminal,
 } from "lucide-react";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
-import type { SessionBackgroundReport, BackgroundTaskInfo } from "@/desktop/ui/types";
+import type {
+  BackgroundTaskInfo,
+  Message,
+  SessionBackgroundReport,
+} from "@/desktop/ui/types";
 
 /**
- * 架构 §4.12.9：BackgroundTask 浮动框。
- *
- * 与 FloatingTaskPanel 并列在右侧（top-[110px]），展示本 session 当前的：
- * - bg shells（running / exited / killed / failed）
- * - 还在等的 cron 唤醒
- * - 挂起态（若 agent_loop 已 emit RunSuspended）
- *
- * **session-scoped**——只看当前 session 的后台任务，跨 session 互不可见
- * （架构 §4.12.2 修订）。
- *
- * 三种状态:
- * - 没 shells + 没 cron + 未挂起 → 整个组件不渲染
- * - 有内容 → 默认展开；点 X 折叠为药丸
- * - 折叠 → 显示「N 后台 / 挂起 12s」药丸；点开恢复
+ * 旧版本浮动框——已被 RightSidebar 内的 `BackgroundTaskTab` 替代（架构 §4.12.9 修订）。
+ * 保留 export 占位让老的 import 还能通过类型检查；本身永远不渲染。
  */
 export function BackgroundTaskPanel() {
+  return null;
+}
+
+/**
+ * 工作台 sidebar 内的「后台任务」tab 内容（架构 §4.12.9 修订）。
+ *
+ * 数据源单一化（借鉴 Claude Code 派的 transcript-as-source-of-truth，附录 D.4）：
+ * - 主源：`session.messages` 里所有 Bash + `run_in_background:true`（或前台超时转后台）
+ *   的 tool_call —— 这是历史完整账本，已完成 task **永远不会从这里消失**
+ * - 实时状态 / 输出：从注册表 polling（每 3s 拉一次 `listBackgroundTasks`）+
+ *   按 task_id join；展开卡片时再 polling 一次 `readBackgroundTaskOutput` 取增量
+ *
+ * 排序：running 优先 → 其余按 tool_call 在 messages 中的出现顺序（时间序）。
+ * 已完成 task：默认折叠态（只显示 task_id + cmd + 状态徽章），点开看完整输出。
+ */
+export function BackgroundTaskTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const suspended = useStore((s) => s.suspended);
+  const messages = useStore((s) => s.currentSession?.messages ?? []);
   const [report, setReport] = useState<SessionBackgroundReport | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [now, setNow] = useState<number>(Date.now());
-  const lastSessionIdRef = useRef<string | null>(null);
+  const lastSessionRef = useRef<string | null>(null);
 
-  // 切换 session 时重置面板（包括展开 / 折叠状态）
+  // 切换 session 时清状态
   useEffect(() => {
-    if (lastSessionIdRef.current !== sessionId) {
-      lastSessionIdRef.current = sessionId;
+    if (lastSessionRef.current !== sessionId) {
+      lastSessionRef.current = sessionId;
       setReport(null);
-      setCollapsed(false);
+      setExpanded(new Set());
     }
   }, [sessionId]);
 
-  // 轮询当前 session 的后台情况；3s 一次足够（bg 任务变化粒度本来就是秒级）
+  // 注册表轮询（3s 一次足够，task 状态变化粒度本来就是秒级）
   useEffect(() => {
     if (!sessionId) {
       setReport(null);
       return;
     }
     let cancelled = false;
-    async function refresh() {
+    const refresh = async () => {
       try {
-        const r = await api.listBackgroundTasks(sessionId!);
+        const r = await api.listBackgroundTasks(sessionId);
         if (!cancelled) setReport(r);
       } catch {
-        // 静默——典型失败是 session 已删；下次轮询会自动消失
+        // 静默——session 已删等场景，下次轮询自动消失
       }
-    }
+    };
     refresh();
     const t = setInterval(refresh, 3000);
     return () => {
@@ -70,30 +79,31 @@ export function BackgroundTaskPanel() {
     };
   }, [sessionId]);
 
-  // 滴答：让"已挂起 N 秒"和 cron 倒计时实时更新
+  // 1Hz tick：让"挂起 N s"和 cron 倒计时实时更新
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const runningShells = (report?.shells ?? []).filter((s) => s.state === "running");
-  const exitedShells = (report?.shells ?? []).filter((s) => s.state !== "running");
+  const items = useMemo(
+    () => deriveBackgroundTasks(messages, report),
+    [messages, report]
+  );
+
+  if (!sessionId) {
+    return <EmptyHint icon={<Terminal />}>当前没打开对话</EmptyHint>;
+  }
+
   const pendingCrons = report?.pending_crons ?? [];
-  // 上次中断：有 checkpoint 但调度器没在等任何事件（典型是进程重启后），
-  // 且当前没在 live 挂起态。这种情况下 wakeup 不会自动触发，提示用户发消息继续。
   const orphanedCheckpoint =
     !!report?.has_suspended_checkpoint &&
     !suspended &&
-    runningShells.length === 0 &&
+    items.every((it) => it.status !== "running") &&
     pendingCrons.length === 0;
-  const hasAny =
-    !!suspended ||
-    orphanedCheckpoint ||
-    runningShells.length > 0 ||
-    pendingCrons.length > 0 ||
-    exitedShells.length > 0;
 
-  if (!sessionId || !hasAny) return null;
+  const suspendedElapsedSec = suspended
+    ? Math.max(0, Math.round((now - suspended.suspendedAtMs) / 1000))
+    : 0;
 
   async function killShell(taskId: string) {
     if (!sessionId) return;
@@ -105,191 +115,364 @@ export function BackgroundTaskPanel() {
     }
   }
 
-  const suspendedElapsedSec = suspended
-    ? Math.max(0, Math.round((now - suspended.suspendedAtMs) / 1000))
-    : 0;
-
-  const summary = (() => {
-    const parts: string[] = [];
-    if (runningShells.length) parts.push(`${runningShells.length} 后台`);
-    if (pendingCrons.length) parts.push(`${pendingCrons.length} 定时`);
-    if (suspended) parts.push(`挂起 ${suspendedElapsedSec}s`);
-    if (orphanedCheckpoint) parts.push("上次中断");
-    return parts.join(" · ") || "后台任务";
-  })();
-
-  if (collapsed) {
-    return (
-      <button
-        type="button"
-        onClick={() => setCollapsed(false)}
-        className="pointer-events-auto absolute right-4 top-[110px] z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-background hover:text-foreground"
-        title="展开后台任务面板"
-      >
-        {suspended ? (
-          <Pause className="h-3 w-3" />
-        ) : (
-          <Terminal className="h-3 w-3" />
-        )}
-        <span>{summary}</span>
-      </button>
-    );
-  }
-
   return (
-    <div className="pointer-events-auto absolute right-4 top-[110px] z-30 w-[280px] overflow-hidden rounded-lg border border-border bg-background/95 shadow-md backdrop-blur">
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-2.5 py-1.5">
-        <div className="min-w-0">
-          <div className="text-[11px] font-medium leading-tight">后台任务</div>
-          <div className="mt-0.5 text-[10px] text-muted-foreground">{summary}</div>
+    <div className="flex flex-col text-[12px]">
+      {/* 状态横幅（挂起 / 中断 checkpoint） */}
+      {suspended && (
+        <div className="m-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5">
+          <Pause className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0 text-[11px] leading-tight">
+            <div className="font-medium text-amber-700 dark:text-amber-300">
+              Run 已挂起 {suspendedElapsedSec}s
+            </div>
+            <div className="mt-0.5 text-amber-700/80 dark:text-amber-300/80">
+              {suspended.reason === "background_task"
+                ? `等 ${suspended.waitingForTaskIds.join(", ") || "?"} 完成`
+                : suspended.reason === "cron"
+                  ? suspended.resumesAtMs != null
+                    ? `${Math.max(0, Math.round((suspended.resumesAtMs - now) / 1000))}s 后唤醒`
+                    : "定时唤醒"
+                  : "等待"}
+            </div>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setCollapsed(true)}
-          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="收起"
-          aria-label="收起后台任务面板"
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-
-      <div className="max-h-[60vh] overflow-auto px-2.5 py-2">
-        {suspended && (
-          <div className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5">
-            <Pause className="mt-0.5 h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
-            <div className="min-w-0 text-[11px] leading-tight">
-              <div className="font-medium text-amber-700 dark:text-amber-300">
-                Run 已挂起 {suspendedElapsedSec}s
-              </div>
-              <div className="mt-0.5 text-amber-700/80 dark:text-amber-300/80">
-                {suspended.reason === "background_task"
-                  ? `等 ${suspended.waitingForTaskIds.join(", ") || "?"} 完成`
-                  : suspended.reason === "cron"
-                    ? suspended.resumesAtMs != null
-                      ? `${Math.max(0, Math.round((suspended.resumesAtMs - now) / 1000))}s 后唤醒`
-                      : "定时唤醒"
-                    : "等待"}
-              </div>
+      )}
+      {orphanedCheckpoint && (
+        <div className="m-2 flex items-start gap-1.5 rounded-md border border-orange-500/30 bg-orange-500/10 px-2 py-1.5">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
+          <div className="min-w-0 text-[11px] leading-tight">
+            <div className="font-medium text-orange-700 dark:text-orange-300">
+              上次会话中断
+            </div>
+            <div className="mt-0.5 text-orange-700/80 dark:text-orange-300/80">
+              checkpoint 已落盘但调度器不在等。发新消息会从中断点继续。
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {orphanedCheckpoint && (
-          <div className="mb-2 flex items-start gap-1.5 rounded-md border border-orange-500/30 bg-orange-500/10 px-2 py-1.5">
-            <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
-            <div className="min-w-0 text-[11px] leading-tight">
-              <div className="font-medium text-orange-700 dark:text-orange-300">
-                上次会话中断
-              </div>
-              <div className="mt-0.5 text-orange-700/80 dark:text-orange-300/80">
-                checkpoint 已落盘但调度器不在等。发新消息会从中断点继续。
-              </div>
-            </div>
-          </div>
-        )}
-
-        {runningShells.length > 0 && (
-          <ShellSection
-            title="运行中"
-            shells={runningShells}
-            highlight
-            onKill={killShell}
-          />
-        )}
-        {pendingCrons.length > 0 && (
-          <div className="mt-1">
-            <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-              定时唤醒
-            </div>
-            {pendingCrons.map((c) => (
-              <div
-                key={`${c.run_id}-${c.fire_at_ms}`}
-                className="flex items-start gap-1.5 rounded-md border border-border bg-muted/20 px-2 py-1 text-[11px] mt-1"
-              >
-                <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate" title={c.reason}>
-                    {c.reason || "(无说明)"}
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {c.seconds_remaining}s 后唤醒
-                  </div>
+      {/* cron 待唤醒 */}
+      {pendingCrons.length > 0 && (
+        <div className="mx-2 mt-2">
+          <SectionLabel>定时唤醒</SectionLabel>
+          {pendingCrons.map((c) => (
+            <div
+              key={`${c.run_id}-${c.fire_at_ms}`}
+              className="mt-1 flex items-start gap-1.5 rounded-md border border-border bg-muted/20 px-2 py-1 text-[11px]"
+            >
+              <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate" title={c.reason}>
+                  {c.reason || "(无说明)"}
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  {c.seconds_remaining}s 后唤醒
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-        {exitedShells.length > 0 && (
-          <ShellSection title="已结束" shells={exitedShells} highlight={false} />
-        )}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 任务列表 */}
+      {items.length === 0 ? (
+        <EmptyHint icon={<Terminal />}>
+          还没有后台任务。
+          <br />
+          <span className="text-[10px]">
+            模型用 <code className="rounded bg-muted px-1">Bash run_in_background=true</code> 启动任务后会出现在这里。
+          </span>
+        </EmptyHint>
+      ) : (
+        <div className="flex flex-col">
+          {items.map((item) => (
+            <TaskCard
+              key={item.task_id ?? item.tool_call_id}
+              item={item}
+              sessionId={sessionId}
+              expanded={expanded.has(item.task_id ?? item.tool_call_id)}
+              onToggle={() =>
+                setExpanded((prev) => {
+                  const key = item.task_id ?? item.tool_call_id;
+                  const next = new Set(prev);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+              onKill={item.task_id ? () => killShell(item.task_id!) : undefined}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function ShellSection({
-  title,
-  shells,
-  highlight,
+interface TaskItem {
+  /** 注册表 task_id；某些异常 case 模型 result 还没 parse 出来时为 null */
+  task_id: string | null;
+  /** 对应 tool_call.id，用于在 chat 区滚动定位 */
+  tool_call_id: string;
+  /** 对应 message.id，用于 `[data-message-id="..."]` 锚点跳转 */
+  message_id: string;
+  command: string;
+  status: "running" | "exited" | "killed" | "failed" | "unknown";
+  /** 注册表里的实时元信息（如果还在） */
+  shell?: BackgroundTaskInfo;
+  /** 最终 tool result 文本 */
+  result?: string | null;
+  duration_ms?: number | null;
+}
+
+/**
+ * 从 session.messages 派生历史 + 用注册表 join 实时状态。
+ * messages 是 source of truth：完成的 task 永远在 messages 里，不依赖注册表保留。
+ */
+function deriveBackgroundTasks(
+  messages: Message[],
+  report: SessionBackgroundReport | null
+): TaskItem[] {
+  const shellsByTaskId = new Map<string, BackgroundTaskInfo>();
+  for (const s of report?.shells ?? []) {
+    shellsByTaskId.set(s.task_id, s);
+  }
+  const consumed = new Set<string>();
+  const items: TaskItem[] = [];
+
+  // 1. 从 messages 找历史 Bash bg task（含前台超时转后台的）
+  for (const m of messages) {
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.name !== "Bash") continue;
+      const input = (tc.input as Record<string, any> | undefined) ?? {};
+      const explicit = input.run_in_background === true;
+      const result = tc.result ?? "";
+      const taskId = extractTaskId(result);
+      // 仅前台正常结束的 Bash 不该出现（没 task_id 且 explicit=false）
+      if (!explicit && !taskId) continue;
+      const shell = taskId ? shellsByTaskId.get(taskId) : undefined;
+      if (taskId) consumed.add(taskId);
+      const status: TaskItem["status"] = shell
+        ? (shell.state as TaskItem["status"])
+        : tc.result
+          ? "exited"
+          : "running";
+      items.push({
+        task_id: taskId,
+        tool_call_id: tc.id,
+        message_id: m.id,
+        command: typeof input.command === "string" ? input.command : "(无命令)",
+        status,
+        shell,
+        result: tc.result,
+        duration_ms: tc.duration_ms,
+      });
+    }
+  }
+  // 2. 注册表有但 messages 还没记到的（task 刚启动 / tool_result 还没回来 / 上次会话残留）
+  for (const s of report?.shells ?? []) {
+    if (consumed.has(s.task_id)) continue;
+    items.push({
+      task_id: s.task_id,
+      tool_call_id: `pending-${s.task_id}`,
+      message_id: "",
+      command: s.command,
+      status: s.state as TaskItem["status"],
+      shell: s,
+    });
+  }
+  // 3. 排序：running 优先（按 elapsed_secs 升序新的在前）；其他保持 messages 时序
+  const runningItems = items.filter((it) => it.status === "running");
+  const otherItems = items.filter((it) => it.status !== "running");
+  runningItems.sort((a, b) => {
+    const ae = a.shell?.elapsed_secs ?? 0;
+    const be = b.shell?.elapsed_secs ?? 0;
+    return ae - be;
+  });
+  return [...runningItems, ...otherItems];
+}
+
+const TASK_ID_RE = /task_id=([a-zA-Z0-9_]+)/;
+function extractTaskId(result: string): string | null {
+  const m = result.match(TASK_ID_RE);
+  return m ? m[1] : null;
+}
+
+function TaskCard({
+  item,
+  sessionId,
+  expanded,
+  onToggle,
   onKill,
 }: {
-  title: string;
-  shells: BackgroundTaskInfo[];
-  highlight: boolean;
-  onKill?: (taskId: string) => void;
+  item: TaskItem;
+  sessionId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onKill?: () => void;
+}) {
+  const isRunning = item.status === "running";
+  const [liveOutput, setLiveOutput] = useState<string>("");
+  const cursorRef = useRef<number>(0);
+
+  // 卡片展开 + 任务运行中：polling 实时输出（~600ms 一次）
+  useEffect(() => {
+    if (!expanded || !isRunning || !item.task_id) return;
+    cursorRef.current = 0;
+    setLiveOutput("");
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const out = await api.readBackgroundTaskOutput(
+          sessionId,
+          item.task_id!,
+          cursorRef.current
+        );
+        if (cancelled) return;
+        if (out.chunk) {
+          setLiveOutput((prev) => prev + out.chunk);
+        }
+        cursorRef.current = out.total_bytes;
+      } catch {
+        // 静默——task 已 GC 时下次取空 chunk
+      }
+    };
+    tick();
+    const t = setInterval(tick, 600);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [expanded, isRunning, sessionId, item.task_id]);
+
+  const scrollToToolCall = () => {
+    if (!item.message_id) return;
+    const el = document.querySelector(
+      `[data-message-id="${item.message_id}"]`
+    );
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-primary/40");
+      setTimeout(() => el.classList.remove("ring-2", "ring-primary/40"), 1500);
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "border-b border-border/60 transition-colors",
+        isRunning && "bg-amber-500/5"
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="block w-full px-3 py-2 text-left hover:bg-accent/30"
+      >
+        <div className="flex items-center gap-1.5">
+          <StatusDot status={item.status} />
+          <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            {item.task_id ?? "pending"}
+          </code>
+          {item.shell ? (
+            <span className="shrink-0 text-[10px] text-muted-foreground">
+              {item.shell.elapsed_secs}s
+            </span>
+          ) : item.duration_ms != null ? (
+            <span className="shrink-0 text-[10px] text-muted-foreground">
+              {Math.round(item.duration_ms / 1000)}s
+            </span>
+          ) : null}
+          {!isRunning && (
+            <span className="ml-1 rounded bg-muted px-1 text-[9px] uppercase text-muted-foreground">
+              {item.status}
+            </span>
+          )}
+          <span className="ml-auto text-muted-foreground">
+            {expanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </span>
+        </div>
+        <div
+          className="mt-1 truncate font-mono text-[11px] text-foreground/85"
+          title={item.command}
+        >
+          $ {item.command}
+        </div>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/60 bg-background/40 px-3 py-2">
+          <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+            {item.message_id && (
+              <button
+                type="button"
+                onClick={scrollToToolCall}
+                className="hover:text-primary hover:underline"
+              >
+                ↑ 跳转到对话
+              </button>
+            )}
+            {isRunning && onKill && (
+              <button
+                type="button"
+                onClick={onKill}
+                className="ml-auto inline-flex items-center gap-1 text-destructive hover:underline"
+                title="停止该任务"
+              >
+                <Square className="h-3 w-3" />
+                停止
+              </button>
+            )}
+          </div>
+          <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200">
+            {isRunning
+              ? liveOutput || "等待输出…"
+              : item.result || "(无输出)"}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusDot({ status }: { status: TaskItem["status"] }) {
+  const color =
+    status === "running"
+      ? "bg-amber-500 animate-pulse"
+      : status === "exited"
+        ? "bg-emerald-500"
+        : status === "killed" || status === "failed"
+          ? "bg-red-500"
+          : "bg-zinc-400";
+  return <span className={cn("h-2 w-2 shrink-0 rounded-full", color)} />;
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+function EmptyHint({
+  icon,
+  children,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="mt-1">
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-        {title}
-      </div>
-      {shells.map((s) => (
-        <div
-          key={s.task_id}
-          className={cn(
-            "flex items-start gap-1.5 rounded-md px-2 py-1 text-[11px] mt-1 border",
-            highlight
-              ? "border-primary/30 bg-primary/5"
-              : "border-border bg-muted/20"
-          )}
-        >
-          {highlight ? (
-            <Play className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
-          ) : (
-            <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1">
-              <code className="font-mono text-[10px] text-muted-foreground shrink-0">
-                {s.task_id}
-              </code>
-              {!highlight && (
-                <span className="rounded bg-muted px-1 text-[9px] uppercase text-muted-foreground">
-                  {s.state}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 truncate font-mono text-foreground/90" title={s.command}>
-              {s.command}
-            </div>
-            <div className="mt-0.5 text-[10px] text-muted-foreground">
-              {s.elapsed_secs}s
-            </div>
-          </div>
-          {onKill && highlight && (
-            <button
-              type="button"
-              onClick={() => onKill(s.task_id)}
-              className="shrink-0 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              title={`停止 ${s.task_id}`}
-              aria-label={`停止 ${s.task_id}`}
-            >
-              <Square className="h-3 w-3" />
-            </button>
-          )}
+    <div className="grid h-full place-items-center px-4 py-8 text-center text-[11px] text-muted-foreground">
+      <div>
+        <div className="mx-auto mb-2 opacity-40 [&_svg]:h-5 [&_svg]:w-5">
+          {icon}
         </div>
-      ))}
+        <div className="leading-snug">{children}</div>
+      </div>
     </div>
   );
 }

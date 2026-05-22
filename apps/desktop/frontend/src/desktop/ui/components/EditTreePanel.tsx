@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
-import { FilePenLine, Plus, Rewind, X, ChevronDown, ChevronRight } from "lucide-react";
+import { FilePenLine, Plus, Rewind, ChevronDown, ChevronRight } from "lucide-react";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
@@ -8,23 +8,24 @@ import type { EditEntry } from "@/desktop/ui/types";
 import { DiffPanel } from "./DiffPanel";
 
 /**
- * 架构 §4.13：EditTree 浮动卡片。
- *
- * 展示当前 session 所有 Edit 工具快照条目，支持：
- * - 折叠药丸 / 展开卡片
- * - 按文件路径查看 before/after 差异
- * - 单次回退（revert）
- *
- * 三种状态：
- * - 无快照条目 → 组件不渲染
- * - 有条目 → 默认展开；点 X 折叠为药丸
- * - 折叠 → 显示「N 次修改」药丸；点开恢复
+ * 旧版本浮动卡片——已被 RightSidebar 内的 `EditTreeTab` 替代（架构 §4.13.x 修订）。
+ * 保留 export 占位让老的 import 还能通过类型检查；本身永远不渲染。
  */
 export function EditTreePanel() {
+  return null;
+}
+
+/**
+ * 工作台 sidebar 内的「修改文件」tab 内容（架构 §4.13 修订）。
+ *
+ * 展示当前 session 所有 Edit 工具快照，按文件路径分组、支持单次回退。
+ * 数据源（`useStore.editSnapshots`）跟原浮动版一致，只是脱离浮动定位，
+ * 嵌入 RightSidebar tab 区。空状态显示 hint 而不是 return null（沿 sidebar 风格）。
+ */
+export function EditTreeTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const editSnapshots = useStore((s) => s.editSnapshots);
   const revertEdit = useStore((s) => s.revertEdit);
-  const [collapsed, setCollapsed] = useState(false);
   const [diffEntry, setDiffEntry] = useState<EditEntry | null>(null);
   const [reverting, setReverting] = useState<Set<string>>(new Set());
 
@@ -43,11 +44,6 @@ export function EditTreePanel() {
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  if (!sessionId || editSnapshots.length === 0) return null;
-
-  const activeEntries = editSnapshots.filter((e) => !e.reverted);
-  const revertedEntries = editSnapshots.filter((e) => e.reverted);
-
   async function handleRevert(snapshotId: string) {
     if (!sessionId) return;
     setReverting((prev) => new Set(prev).add(snapshotId));
@@ -65,68 +61,59 @@ export function EditTreePanel() {
     }
   }
 
-  if (collapsed) {
+  if (!sessionId) {
     return (
-      <button
-        type="button"
-        onClick={() => setCollapsed(false)}
-        className="pointer-events-auto absolute right-4 top-[150px] z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-background hover:text-foreground"
-        title="展开 Edit 修改树"
-      >
-        <FilePenLine className="h-3 w-3" />
-        <span>
-          {activeEntries.length} 次修改
-          {revertedEntries.length > 0 && `（${revertedEntries.length} 已回退）`}
-        </span>
-      </button>
+      <div className="grid h-full place-items-center px-4 py-8 text-center text-[11px] text-muted-foreground">
+        <div>
+          <FilePenLine className="mx-auto mb-2 h-5 w-5 opacity-40" />
+          当前没打开对话
+        </div>
+      </div>
     );
   }
 
-  return (
-    <>
-      <div className="pointer-events-auto absolute right-4 top-[150px] z-30 w-[300px] overflow-hidden rounded-lg border border-border bg-background/95 shadow-md backdrop-blur">
-        <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-2.5 py-1.5">
-          <div className="min-w-0">
-            <div className="text-[11px] font-medium leading-tight">修改记录</div>
-            <div className="mt-0.5 text-[10px] text-muted-foreground">
-              {activeEntries.length} 次修改
-              {revertedEntries.length > 0 && ` · ${revertedEntries.length} 已回退`}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setCollapsed(true)}
-            className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="收起"
-            aria-label="收起修改记录面板"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-
-        <div className="max-h-[50vh] overflow-auto">
-          {activeEntries.length > 0 && (
-            <EditSection
-              entries={activeEntries}
-              reverting={reverting}
-              onRevert={handleRevert}
-              onDiff={setDiffEntry}
-            />
-          )}
-          {revertedEntries.length > 0 && (
-            <EditSection
-              title="已回退"
-              entries={revertedEntries}
-              reverting={reverting}
-              onRevert={undefined}
-              onDiff={setDiffEntry}
-              dimmed
-            />
-          )}
+  if (editSnapshots.length === 0) {
+    return (
+      <div className="grid h-full place-items-center px-4 py-8 text-center text-[11px] text-muted-foreground">
+        <div>
+          <FilePenLine className="mx-auto mb-2 h-5 w-5 opacity-40" />
+          还没有 Edit 修改。
+          <br />
+          <span className="text-[10px]">
+            模型用 <code className="rounded bg-muted px-1">Edit</code> 修改文件后会出现在这里。
+          </span>
         </div>
       </div>
+    );
+  }
 
-      {diffEntry && sessionId && (
+  const activeEntries = editSnapshots.filter((e) => !e.reverted);
+  const revertedEntries = editSnapshots.filter((e) => e.reverted);
+
+  return (
+    <>
+      <div className="text-[12px]">
+        {activeEntries.length > 0 && (
+          <EditSection
+            entries={activeEntries}
+            reverting={reverting}
+            onRevert={handleRevert}
+            onDiff={setDiffEntry}
+          />
+        )}
+        {revertedEntries.length > 0 && (
+          <EditSection
+            title="已回退"
+            entries={revertedEntries}
+            reverting={reverting}
+            onRevert={undefined}
+            onDiff={setDiffEntry}
+            dimmed
+          />
+        )}
+      </div>
+
+      {diffEntry && (
         <DiffPanel
           sessionId={sessionId}
           entry={diffEntry}

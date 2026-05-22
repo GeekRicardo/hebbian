@@ -7,9 +7,8 @@ import {
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
 import { MessageList } from "./MessageList";
-import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
 import { ModelIoInspector } from "./ModelIoInspector";
-import { EditTreePanel } from "./EditTreePanel";
+import { RightSidebar } from "./RightSidebar";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -538,10 +537,6 @@ export function ChatView() {
           streaming={isStreaming}
         />
       )}
-
-      <BackgroundTaskPanel />
-
-      <EditTreePanel />
 
       {/* chat 区域：header 下方、ChatInput 上方的消息列表区。
           所有"放大预览"（DiffViewer fullscreen / ExpandButton 放大）都 portal 到下面的

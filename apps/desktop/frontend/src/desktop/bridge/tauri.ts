@@ -25,6 +25,7 @@ import type {
   RuleFileState,
   SearchHit,
   Session,
+  BackgroundTaskOutputDto,
   SessionBackgroundReport,
   SessionMeta,
   ToolInfo,
@@ -284,6 +285,22 @@ export const api = {
   /** 强杀指定 session 的 bg shell。返回最终状态（exited/killed/failed）。 */
   killBackgroundTask: (sessionId: string, taskId: string) =>
     invoke<string>("kill_background_task", { sessionId, taskId }),
+
+  /**
+   * polling 某个后台 task 的最新输出 + 状态。前端每个展开的卡片维护自己的
+   * cursor（上一次返回的 total_bytes），传回后只拿增量；同一 task 多个监听
+   * 互不干扰（read_at 不动 shell 内部 read_cursor）。
+   */
+  readBackgroundTaskOutput: (
+    sessionId: string,
+    taskId: string,
+    cursor: number
+  ) =>
+    invoke<BackgroundTaskOutputDto>("read_background_task_output", {
+      sessionId,
+      taskId,
+      cursor,
+    }),
 
   // ── rules ──
   /** 从 workdir + allowed_paths 发现所有规则文件（CLAUDE.md / AGENTS.md 等） */

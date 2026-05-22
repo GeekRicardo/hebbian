@@ -1084,6 +1084,50 @@ struct SessionBackgroundReport {
     has_suspended_checkpoint: bool,
 }
 
+/// `read_background_task_output` 的返回值。前端 BackgroundTaskPanel 调它轮询
+/// 某个后台 task 的最新输出 + 状态。
+#[derive(Debug, Clone, serde::Serialize)]
+struct BackgroundTaskOutput {
+    /// 已读到的总字节数（下次调用传回作为新 cursor）。
+    total_bytes: u64,
+    /// 自上次 cursor 之后的新增内容（UTF-8 lossy）。空字符串 = 没有新增量。
+    chunk: String,
+    /// 当前 shell 状态："running" / "exited" / "killed" / "failed"。
+    state: String,
+    /// 因 tail buffer 容量被永久丢弃的字节数（非 0 时前端可提示「输出有间断」）。
+    bytes_dropped: u64,
+}
+
+/// 读取某个后台 task 的最新输出片段。前端 polling 调用：每个展开的 task 卡片
+/// 一个定时器（~500ms），传回上一次的 `total_bytes` 作为 cursor，本次只拿增量。
+/// task 已不在注册表 → 返回空 chunk + state="exited"（后续切到 message.tool_call.result 显示）。
+#[tauri::command]
+fn read_background_task_output(
+    session_id: String,
+    task_id: String,
+    cursor: u64,
+) -> AppResult<BackgroundTaskOutput> {
+    let shells = agent_core::tools::background::registry_for_session(&session_id);
+    let Some(shell) = shells.get(&task_id) else {
+        return Ok(BackgroundTaskOutput {
+            total_bytes: cursor,
+            chunk: String::new(),
+            state: "exited".into(),
+            bytes_dropped: 0,
+        });
+    };
+    // BackgroundShell.read_incremental 自带 cursor 推进——但 polling 场景需要按
+    // 调用方传入的 cursor 取，不动 shell 内部 read_cursor（避免和其他读者抢游标）。
+    // 用 snapshot_from_cursor 实现（如果还没有就内联走 read_incremental + 回滚）。
+    let snap = shell.read_at(cursor);
+    Ok(BackgroundTaskOutput {
+        total_bytes: snap.total_bytes,
+        chunk: snap.content,
+        state: snap.state.label().to_string(),
+        bytes_dropped: snap.bytes_dropped,
+    })
+}
+
 /// 强杀本 session 注册表中的某个 bg shell（包装 BackgroundShells.kill）。
 /// surface 用：BackgroundTaskPanel 上的「停止」按钮。
 #[tauri::command]
@@ -1862,6 +1906,7 @@ pub fn run() {
             set_skill_enabled,
             delete_skill,
             list_background_tasks,
+            read_background_task_output,
             kill_background_task,
             get_settings,
             save_settings,

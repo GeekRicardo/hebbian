@@ -587,6 +587,19 @@ export interface SessionBackgroundReport {
   has_suspended_checkpoint: boolean;
 }
 
+/**
+ * `read_background_task_output` 的返回值。前端 polling 取增量。
+ * `total_bytes` 是下次调用要回传的 cursor；`chunk` 是自上次 cursor 后的新增内容。
+ * `state` ∈ "running" / "exited" / "killed" / "failed"。task 已不在注册表时返回
+ * 空 chunk + state="exited"，让前端切到 message.tool_call.result 显示。
+ */
+export interface BackgroundTaskOutputDto {
+  total_bytes: number;
+  chunk: string;
+  state: string;
+  bytes_dropped: number;
+}
+
 export interface DeviceCodeInfo {
   device_code: string;
   user_code: string;

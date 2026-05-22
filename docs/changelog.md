@@ -3360,3 +3360,47 @@
 - **留尾巴**:
   - BashTool 自动 arm 的端到端单测未写——OnceLock global scheduler 在并发测试间会串扰。本期通过单元测 wakeup_xml + arm_bg_task + 手测一起兜住；如果将来要做 isolated 端到端，需要把 WakeupScheduler 改成可注入（参数化 BashTool 接受 Arc<WakeupScheduler>）
   - arm_bg_task 现在没 dedupe——同一个 task_id 多次 arm 会多次投递终态事件。当前 BashTool 只在 register / promote 两处 arm，重复风险很小；但 WaitForTask + BashTool 自动 arm 可能对同一 task 各 arm 一次。短期可接受（前端三分支兜得住重复通知），长期可以让 BgWatch 去重
+
+### 2026-05-22 — 右侧工作台 sidebar：BackgroundTask / EditTree 浮动卡收编为可挤压式两 tab + 实时输出 polling
+
+- **Why**: 用户痛点——`BackgroundTaskPanel` 与 `EditTreePanel` 都是 `absolute right-4 top-[110px/150px]` 浮动框，互相重叠遮挡；完成的后台任务从注册表 GC 后整个面板消失（"完成就找不到了"），用户没法回溯历史。需求：参考 mock 改为右侧可挤压式工作台 sidebar，两 tab（后台任务 / 修改文件），完成的 task 折叠保留不消失，可拖动宽度
+- **改动**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs): `BackgroundShell` 加 `read_at(cursor)` 方法——按外部传入的 absolute cursor 取增量，**不动**内部 read_cursor。给 surface polling 用，每个查询者维护自己的 cursor 互不干扰。`read_incremental` 仍然推进内部 cursor 给 BashOutput 工具用，两者并存
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 新增 Tauri 命令 `read_background_task_output(session_id, task_id, cursor)` → `BackgroundTaskOutput { total_bytes, chunk, state, bytes_dropped }`。task 已不在注册表时返回空 chunk + state="exited"（前端回落到 message.tool_call.result 显示）。注册到 invoke_handler
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) + [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 加 `api.readBackgroundTaskOutput(...)` + `BackgroundTaskOutputDto`
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx)（**新建**）:
+    - 不浮动：作为 App horizontal flex 同级元素挤压 chat（不是 absolute overlay）
+    - 默认宽度 320px，左边缘 4px 可拖（240-600 范围），整体可折叠到 36px 图标列
+    - 两个 tab：「后台任务」「修改文件」
+    - 状态全部 localStorage 持久化：`hebbian.rightSidebar.width` / `.collapsed` / `.tab`
+  - [apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx): 重写为 `BackgroundTaskTab`（旧 `BackgroundTaskPanel` export 保留但返回 null 兜底）
+    - 数据源单一化（借鉴 CC 派 transcript-as-source-of-truth）：主源 `session.messages` 派生 Bash + `run_in_background:true`（或前台超时转后台）的 tool_call 历史；实时状态用 `listBackgroundTasks` 每 3s polling join；展开卡片时 `readBackgroundTaskOutput` 每 600ms polling 取增量
+    - **完成的 task 永远不消失**——messages 是历史账本，注册表只补实时状态
+    - 排序：running 优先（按 elapsed_secs 升序）→ 其他按 messages 时间序
+    - 卡片折叠态：状态徽章 + task_id + cmd 一行；展开后：实时输出终端样式 + 「↑ 跳转到对话」按钮（按 `[data-message-id]` 滚动 chat 并高亮 1.5s）+ 「停止」按钮（仅运行中）
+    - 状态横幅：Run 挂起 / 上次中断 checkpoint / cron 倒计时 全部保留
+  - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 重写为 `EditTreeTab`（旧 `EditTreePanel` 同样返回 null）。去掉 absolute 定位，空状态显示 hint 而不是 return null（沿 sidebar 风格）。`EditSection` 子组件逻辑保留不动
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 移除 `<BackgroundTaskPanel />` / `<EditTreePanel />` 浮动挂载点
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): 在 `<ChatView />` 后挂 `<RightSidebar />`——App root 已经是 horizontal flex，sidebar 自动占据右侧
+  - [docs/架构.md](./架构.md): §4.12.9 整段重写为新的 sidebar 设计；§13 决策表加一行
+- **影响范围**: agent-core / desktop backend / desktop frontend / docs。**全部 additive**：旧 `BackgroundTaskPanel` / `EditTreePanel` export 保留兜底（永远 return null 不影响）；BackgroundShell 加新方法不动现有；新 Tauri 命令 + 类型 additive。两个面板的 anchor message-id 跳转复用现有 `[data-message-id]`（MessageBubble 已经有这个 attr）
+- **取舍**:
+  - **浮动 vs 挤压式**：选挤压。浮动覆盖 chat 区域且互相打架；挤压让用户始终能看到完整的两边布局，需要更多 chat 区域可以折叠 sidebar
+  - **panel 数据源 = 注册表 vs transcript 派生**：选 transcript 派生为主。注册表内存上限 16 + 完成会 GC，无法保留历史；transcript 是天然账本，完成任务永远在那。代价：第一时间状态拿不到（要等 tool_result 写回 messages），但用户体感是「先看到 placeholder」可以接受
+  - **跨读者 cursor 隔离**：BackgroundShell::read_incremental 推进内部 cursor 是 BashOutput 工具的语义（"取自上次以来的增量"），加 read_at(cursor) 不动内部 cursor 给 surface 用。两套 API 各自清晰，不混用
+  - **polling 频率**：listBackgroundTasks 3s + readBackgroundTaskOutput 600ms。前者粒度粗（状态变化是秒级）；后者要相对快（实时输出体感），但 React 每秒不超过 2 次更新可承受
+  - **EditTreePanel 旧 export 删 vs 保留**：保留返回 null。如果哪里有 `import { EditTreePanel } from ...` 漏改的，至少不报错也不会渲染坏的浮动框；下一版本可清理
+- **验证**:
+  - `cargo check --workspace` clean；`cargo test -p agent-core --lib` 239 全过；`pnpm exec tsc --noEmit` clean
+  - **下一轮 desktop dev 手测 TODO**：
+    1. 启动 desktop dev，右侧应该看到一个 320px 工作台 sidebar；点 tab 切换后台任务 / 修改文件
+    2. 拖左边缘改宽度，记忆刷新后保留
+    3. 点折叠按钮，sidebar 收到 36px 图标列；点图标恢复
+    4. 让模型跑一个 `run_in_background: true` 的命令，看后台任务 tab 出现卡片，展开能看到实时输出
+    5. 让模型 Edit 一个文件，看修改文件 tab 出现条目，支持 diff 预览 + revert
+    6. 切换 session，sidebar 状态不丢；完成的 task 切回来仍然能看到
+- **留尾巴**:
+  - 跳转锚点依赖 MessageBubble 的 `[data-message-id]` 属性——本期假设它存在（多数路径已有），如果某个 bubble 漏挂会跳不过去。下次顺手补全
+  - `useStore.currentSession?.messages` 直接订阅可能在 messages 很多时重新派生 items 列表频繁；后续可加 `useMemo` deps 优化（当前 messages 引用本身就 stable，问题不大）
+  - mock 里的「上下文 / 工具 / 设置」3 个 tab 没做——只完成「后台任务 / 修改文件」2 tab。其余 tab 等用户提需求再补
+  - 左侧 Sidebar 没改宽度可拖；如果用户也想要左 sidebar 同款拖拽，复用 RightSidebar 里的拖拽逻辑外提一个 hook 即可

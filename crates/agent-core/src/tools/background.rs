@@ -169,6 +169,35 @@ impl BackgroundShell {
         self.notify.notify_waiters();
     }
 
+    /// 按外部传入的 absolute cursor 取增量，**不动**内部 read_cursor。
+    /// surface polling 用——每个查询者维护自己的 cursor，互不干扰。
+    /// `cursor`：上一次拿到的 `total_bytes`；首次传 0。
+    pub fn read_at(&self, cursor: u64) -> ReadOutput {
+        let inner = self.inner.lock().expect("background shell mutex");
+        let total = inner.total_bytes;
+        if cursor >= total {
+            return ReadOutput {
+                content: String::new(),
+                state: inner.state.clone(),
+                bytes_dropped: 0,
+                total_bytes: total,
+            };
+        }
+        let tail_start = total.saturating_sub(inner.tail.len() as u64);
+        let bytes_dropped = tail_start.saturating_sub(cursor);
+        let effective_start = cursor.max(tail_start);
+        let skip = (effective_start - tail_start) as usize;
+        let take = inner.tail.len().saturating_sub(skip);
+        let bytes: Vec<u8> = inner.tail.iter().skip(skip).take(take).copied().collect();
+        let content = String::from_utf8_lossy(&bytes).into_owned();
+        ReadOutput {
+            content,
+            state: inner.state.clone(),
+            bytes_dropped,
+            total_bytes: total,
+        }
+    }
+
     /// 读取自上次以来未读的输出。`max_bytes` 控制单次返回上限。
     pub fn read_incremental(&self, max_bytes: usize) -> ReadOutput {
         let mut inner = self.inner.lock().expect("background shell mutex");

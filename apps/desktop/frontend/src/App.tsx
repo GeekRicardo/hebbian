@@ -4,6 +4,7 @@ import { listen } from "@/desktop/bridge/transport";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { Sidebar } from "@/desktop/ui/components/Sidebar";
 import { ChatView } from "@/desktop/ui/components/ChatView";
+import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
 import { ProvidersDialog } from "@/desktop/ui/components/ProvidersDialog";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
 import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
@@ -84,6 +85,7 @@ export default function App() {
     <div className="h-screen w-screen flex overflow-hidden bg-background text-foreground">
       <Sidebar />
       <ChatView />
+      <RightSidebar />
       <ProvidersDialog />
       <SessionSettingsDialog />
       <PromptsDialog />
