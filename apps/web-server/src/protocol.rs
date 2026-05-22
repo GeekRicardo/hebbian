@@ -28,54 +28,6 @@ pub enum WsClientMessage {
     },
 }
 
-// ─── Bridge 协议（Tauri 前端 invoke proxy）─────────────────────────────────
-//
-// 让 hebweb 不重复实现 desktop 命令——把 Tauri 前端 WebView 当作 invoke 代理：
-//   - desktop 启动时前端 outbound 连 mediator 的 /ws/bridge，注册自己
-//   - mediator 收到 client invoke 时，如果有 bridge，转发给 bridge
-//   - bridge 在 Tauri 前端调真实 `invoke(cmd, args)` → 拿结果 → 回传
-//
-// Step 1：仅代理 sync invoke。Channel 流式事件 / listen 全局事件待 Step 2。
-
-/// bridge → server（Tauri 前端 → mediator）
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BridgeInbound {
-    /// 注册自己为 invoke proxy（连上 mediator 后第一条消息）
-    Register { client_label: String },
-    /// 对 mediator 发来的 proxy_invoke 的响应
-    ProxyResponse {
-        req_id: String,
-        ok: bool,
-        #[serde(default)]
-        data: Option<Value>,
-        #[serde(default)]
-        error: Option<String>,
-    },
-    /// 流式 Channel 事件转发（send_message 等命令携带的 Tauri Channel<EngineEvent>）。
-    /// bridge 端把 channel.onmessage 的每条 event 通过这条消息推到 mediator，
-    /// mediator 路由到对应 session 的所有订阅 ws。
-    ChannelEvent {
-        req_id: String,
-        session_id: String,
-        payload: Value,
-    },
-}
-
-/// server → bridge（mediator → Tauri 前端）
-#[derive(Debug, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BridgeOutbound {
-    /// 注册成功
-    Welcome { server_version: &'static str },
-    /// 让 bridge 执行一次 Tauri invoke
-    ProxyInvoke {
-        req_id: String,
-        cmd: String,
-        args: Value,
-    },
-}
-
 /// server → client
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]

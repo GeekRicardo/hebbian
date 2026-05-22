@@ -23,7 +23,6 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::info;
 
-mod bridge;
 mod chat_helpers;
 mod events;
 mod protocol;

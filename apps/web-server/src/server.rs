@@ -40,8 +40,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
-use crate::bridge::{BridgeClient, BridgeRegistry, ProxyResult};
-use crate::protocol::{BridgeInbound, BridgeOutbound, WsClientMessage, WsServerMessage};
+use crate::protocol::{WsClientMessage, WsServerMessage};
 use crate::session::{run_turn, SessionRuntime};
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -58,10 +57,6 @@ pub struct ServerState {
     /// 复用 desktop 同一个业务 facade。CoreClient trait 暴露的 25+ 方法
     /// 直接可用——无需 hebweb 自己再 wrap 一遍 storage / model_gateway API。
     pub core: Arc<LocalCoreClient>,
-    /// Tauri 前端 invoke proxy 注册表。bridge 在时，client 的 invoke 优先走 bridge
-    /// （等价于 desktop 完整命令集，含 OAuth / EditsWorktree 等）；不在时 fallback
-    /// 到 hebweb 自己的 LocalCoreClient 实现（35 个已镜像命令）。
-    pub bridges: BridgeRegistry,
 }
 
 impl ServerState {
@@ -79,7 +74,6 @@ impl ServerState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             permission_store,
             core,
-            bridges: BridgeRegistry::new(),
         }
     }
 
@@ -144,8 +138,7 @@ impl ServerState {
 pub fn build_router(state: ServerState, static_dir: Option<PathBuf>) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(healthz))
-        .route("/ws", get(ws_upgrade))
-        .route("/ws/bridge", get(bridge_upgrade));
+        .route("/ws", get(ws_upgrade));
 
     if let Some(dir) = static_dir {
         if dir.exists() {
@@ -162,13 +155,11 @@ pub fn build_router(state: ServerState, static_dir: Option<PathBuf>) -> Router {
 
 async fn healthz(State(state): State<ServerState>) -> impl IntoResponse {
     let active: Vec<String> = state.sessions.read().await.keys().cloned().collect();
-    let bridges = state.bridges.count().await;
     Json(json!({
         "ok": true,
         "version": SERVER_VERSION,
         "data_dir": state.data_dir.display().to_string(),
         "active_sessions": active,
-        "bridges": bridges,
     }))
 }
 
@@ -177,88 +168,6 @@ async fn ws_upgrade(
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
-}
-
-async fn bridge_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_bridge(socket, state))
-}
-
-// ─── bridge 端 WS 处理 ─────────────────────────────────────────────────────
-
-async fn handle_bridge(socket: WebSocket, state: ServerState) {
-    let (mut sender, mut receiver) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<BridgeOutbound>();
-
-    // 发送任务：BridgeOutbound → ws text
-    let send_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            let Ok(text) = serde_json::to_string(&msg) else { continue };
-            if sender.send(WsMessage::Text(text)).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // 等首条 register
-    let label = match receiver.next().await {
-        Some(Ok(WsMessage::Text(t))) => match serde_json::from_str::<BridgeInbound>(&t) {
-            Ok(BridgeInbound::Register { client_label }) => client_label,
-            _ => {
-                info!("bridge: 首条不是 register，关闭");
-                return;
-            }
-        },
-        _ => return,
-    };
-
-    let bridge = Arc::new(BridgeClient::new(label.clone(), out_tx.clone()));
-    state.bridges.register(bridge.clone()).await;
-    info!(label = %label, "bridge registered");
-    let _ = out_tx.send(BridgeOutbound::Welcome { server_version: SERVER_VERSION });
-
-    // 消费 bridge 上来的 ProxyResponse，唤醒对应 pending oneshot
-    let pending = bridge.pending();
-    while let Some(Ok(msg)) = receiver.next().await {
-        let text = match msg {
-            WsMessage::Text(t) => t,
-            WsMessage::Close(_) => break,
-            _ => continue,
-        };
-        let Ok(parsed) = serde_json::from_str::<BridgeInbound>(&text) else {
-            warn!("bridge: 收到非法消息 {text}");
-            continue;
-        };
-        match parsed {
-            BridgeInbound::ProxyResponse { req_id, ok, data, error } => {
-                if let Some(tx) = pending.lock().await.remove(&req_id) {
-                    let _ = tx.send(ProxyResult { ok, data, error });
-                } else {
-                    warn!(req_id = %req_id, "bridge: ProxyResponse 没有对应 pending");
-                }
-            }
-            BridgeInbound::ChannelEvent { req_id: _, session_id, payload } => {
-                // 流式事件转发：找到 / 创建对应 SessionRuntime，把 payload 当作
-                // 已序列化的 engine-event 广播出去。所有订阅该 session 的 ws 都会收到。
-                match state.ensure_runtime(&session_id).await {
-                    Ok(runtime) => runtime.broadcast(WsServerMessage::Event {
-                        session_id: session_id.clone(),
-                        name: "engine-event".to_string(),
-                        payload,
-                    }),
-                    Err(e) => warn!(session_id = %session_id, error = %e, "bridge ChannelEvent: ensure_runtime 失败"),
-                }
-            }
-            BridgeInbound::Register { .. } => {} // 注册阶段已处理，后续 ignore
-        }
-    }
-
-    info!(label = %label, "bridge disconnected");
-    state.bridges.unregister(&label).await;
-    drop(out_tx);
-    let _ = send_task.await;
 }
 
 // ─── 单 WS 连接 ────────────────────────────────────────────────────────────
@@ -360,26 +269,7 @@ async fn dispatch_invoke(
     args: Value,
     session_id: Option<String>,
 ) -> Result<Option<Value>> {
-    // Step 2：bridge 在场就把**所有** invoke 都走 bridge——desktop 那边有完整的
-    // SessionContext + HitlState + chat 管线，能跑 send_message / approve / answer 等
-    // 流式对话命令。channel 事件通过 BridgeInbound::ChannelEvent 路径回流到 hebweb，
-    // 按 session_id broadcast 给所有订阅该 session 的 ws。
-    //
-    // bridge 不在场时 fallback 到 hebweb 自己镜像的 35 个命令 + 本地 SessionRuntime。
-    if let Some(bridge) = state.bridges.pick().await {
-        // 完全透传 args 给 desktop——前端 tauri.ts 已经按 desktop Tauri command
-        // 签名传了对应字段；这里如果擅自补 sessionId 会污染那些不需要 session 的命令
-        // （例如 list_background_tasks），desktop 端会报 "invalid args".
-        let _ = session_id;
-        match bridge.proxy_invoke(cmd.to_string(), args.clone()).await {
-            Ok(res) if res.ok => return Ok(res.data),
-            Ok(res) => return Err(anyhow!("{}", res.error.unwrap_or_default())),
-            Err(e) => {
-                warn!(cmd = %cmd, error = %e, "bridge proxy 失败，fallback 到 hebweb 本地实现");
-            }
-        }
-    }
-
+    let _ = session_id;
     match cmd {
         // 核心交互
         "list_sessions" => cmd_list_sessions(state).await.map(Some),
@@ -450,7 +340,7 @@ async fn dispatch_invoke(
         "scan_skill_github" => cmd_core_scan_skill_github(state, args).await.map(Some),
         "set_skill_enabled" => cmd_core_set_skill_enabled(state, args).await.map(|_| None),
         "delete_skill" => cmd_core_delete_skill(state, args).await.map(Some),
-        // ─── Round 1 standalone helpers（复刻 desktop chat / title_gen，不依赖 bridge）
+        // ─── 复刻 desktop chat / title_gen 的 standalone helpers
         "compact_session" => cmd_compact_session(state, args).await.map(Some),
         "get_context_usage" => cmd_get_context_usage(state, args).await.map(Some),
         "generate_session_title" => cmd_generate_session_title(state, args).await.map(Some),
@@ -461,10 +351,10 @@ async fn dispatch_invoke(
             cmd_update_session_settings(state, args).await.map(Some)
         }
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
-        // 其余 desktop Tauri command 在 v1 浏览器 surface 暂不实现
-        // OAuth 系列、edits diff/revert、preview_payload 等需要 desktop bridge
+        // 其余 desktop Tauri command（OAuth 14 / Edits 4 / preview_payload / file dialog / ...）
+        // 在 hebweb 浏览器 surface 尚未镜像；需要时按 Round 1 模式照搬 desktop 实现
         other => Err(anyhow!(
-            "command `{other}` not implemented in hebweb v1 (use Desktop for now)"
+            "command `{other}` not implemented in hebweb (mirror from desktop lib.rs when needed)"
         )),
     }
 }
@@ -523,9 +413,6 @@ fn need_session(session_id: Option<String>) -> Result<String> {
     session_id.ok_or_else(|| anyhow!("missing `session_id`"))
 }
 
-// 注：原 Step 1 的 `is_local_runtime_command` 隔离名单已删除——Step 2 让 bridge 在场时
-// 全部命令都走 bridge，包括 send_message（channel 事件回流由 BridgeInbound::ChannelEvent
-// 路由）。bridge 不在场时所有命令仍 fallback 到 hebweb 本地实现。
 
 /// 接受 `content` 或 `text` 任一字段，让 hebweb 同时兼容 desktop 前端（用 content）
 /// 与 heb CLI / 简化的脚本客户端（多半用 text）。
@@ -1299,9 +1186,9 @@ async fn cmd_core_delete_skill(state: &ServerState, args: Value) -> Result<Value
 #[allow(dead_code)]
 fn _force_ordering_import(_: Ordering) {}
 
-// ─── Round 1 standalone command handlers ───────────────────────────────────
-// 让 hebweb 不需要 desktop bridge 也能镜像这些命令——复刻自 desktop lib.rs + chat.rs。
-// bridge 在场时这些分支不会进（dispatch 优先 bridge）；不在场时它们让 hebweb 独立完整。
+// ─── 镜像自 desktop lib.rs / chat.rs 的命令实现 ────────────────────────────
+// hebweb 是独立的 surface，所有命令都自己实现。未镜像的（OAuth / Edits / preview_payload
+// 等）按需照 desktop 实现照搬过来。
 
 async fn cmd_get_context_usage(state: &ServerState, args: Value) -> Result<Value> {
     let sid = args
@@ -1412,7 +1299,7 @@ async fn cmd_kill_background_task_local(args: Value) -> Result<Value> {
 }
 
 /// 读 session 的 `model_io.jsonl`，返回 `Vec<DumpEntry-as-Value>`。
-/// 与 desktop `list_session_model_io` 同语义；bridge 不在场时直接读 hebweb 自己的 data_dir。
+/// 与 desktop `list_session_model_io` 同语义；直接读 hebweb 自己的 data_dir。
 async fn cmd_list_session_model_io(state: &ServerState, args: Value) -> Result<Value> {
     let sid = args
         .get("sessionId")

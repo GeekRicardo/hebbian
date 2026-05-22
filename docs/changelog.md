@@ -3290,3 +3290,28 @@
 - **留尾巴**:
   - 没静态验证证明"流式期间打开 Inspector 不卡"。memo 改动是 React 标准 perf 模式，理论上 props 稳定就一定生效，但实际效果以真实跑数据 + 用户感知为准
   - 子组件（RequestDetail / MessageRow / PrettyJson）仍没 memo。Inspector 自身 useState 更新时（如切换 selected）仍会重渲整个子树。如果真感到切换 selected 卡，再叠这一层 memo
+
+### 2026-05-21 — 删除 desktop invoke proxy bridge，hebweb 完全 standalone
+
+- **Why**: hebweb 已经走 standalone 路线（Round 1 已镜像 42/66 命令），bridge 路线（让 desktop 当 invoke proxy 转发 Tauri 命令）只在 desktop 在跑时有用，作为 v1 stop-gap 价值消失。维护负担实在：心跳 + 重连 + Channel proxy + IPv6 / WKWebSocket 边角全是为了一个奇葩双进程场景。删了架构更纯净：hebweb = 完整独立 surface，desktop = 独立 Tauri 应用，只通过 `~/.hebbian/` 文件锁共享数据
+- **删除内容**:
+  - [apps/web-server/src/bridge.rs](../apps/web-server/src/bridge.rs)（已删）：BridgeClient + BridgeRegistry + ProxyResult，~110 SLOC
+  - [apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts](../apps/desktop/frontend/src/desktop/bridge/desktop-bridge.ts)（已删）：outbound WS + tauriInvoke 转发 + 心跳 + 自动重连，~115 SLOC
+  - `apps/web-server/src/protocol.rs`：删 `BridgeInbound`（Register / ProxyResponse / ChannelEvent）+ `BridgeOutbound`（Welcome / ProxyInvoke）
+  - `apps/web-server/src/server.rs`：删 `ServerState.bridges` 字段、`/ws/bridge` 路由、`handle_bridge`、dispatch 入口的 bridge 优先转发逻辑、healthz `bridges` 字段
+  - `apps/web-server/src/main.rs`：删 `mod bridge;`
+  - `apps/desktop/frontend/src/App.tsx`：删 `startDesktopBridge()` 启动与相关 import
+- **保留内容**:
+  - `apps/desktop/frontend/src/desktop/bridge/transport.ts` 保留：仍是前端 invoke/listen/Channel 的 runtime-detect 抽象（Tauri / WS 二选一），bridge 删了不影响 standalone WS 路径
+- **文档同步**:
+  - [docs/heb-cli-debug.md §9.2](heb-cli-debug.md) 启动命令回退到 `--port 38080` 默认（不再要求 `--addr [::]:`，那是 bridge 场景才需要）
+  - [docs/heb-cli-debug.md §9.6.2](heb-cli-debug.md) 实战示例去掉 "接 bridge" 步骤
+  - [docs/heb-cli-debug.md §9.8](heb-cli-debug.md) 已镜像命令计数从 35 改成 42（Round 1 已补完那批）；未镜像剩 ~24 个明确为"按需照 chat_helpers 模式搬"
+  - [docs/heb-cli-debug.md §9.9](heb-cli-debug.md) 改写为 "hebweb 与 desktop 互不依赖"，含历史 bridge 删除原因
+- **影响范围**:
+  - hebweb 自身简化：少 ~225 SLOC、少一条 WS 路由、少一个 RWLock<HashMap> 状态字段
+  - 行为变化：hebweb 仅走自己镜像的 42 命令；剩 ~24 个 desktop 专有命令在浏览器调用会拿到 `not_implemented`（之前 bridge 在场时可走代理拿到响应）
+  - cargo check / pnpm tsc 全绿
+- **留尾巴**:
+  - 剩余 desktop 专有命令需要按 Round 1 (`chat_helpers.rs`) 模式逐个镜像：OAuth 14 个 + Edits 4 个 + preview_session_payload + file_dialog 2 个 + 别的杂项
+  - bridge 设计仍可在 git 历史 commit `54e008b` 找到，未来若有"两进程实时互通"的强需求可以复活
