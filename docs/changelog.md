@@ -3102,3 +3102,42 @@
   - `cargo test -p model-gateway --lib` 84 passed；`cargo test -p agent-core --lib` 235 passed
   - 复现路径：重启 desktop dev / heb daemon，跑任意对话 + 工具调用，stderr 中 `model_gateway::providers::*` 行应短而清晰
 - **留尾巴**: 无
+
+### 2026-05-22 — Model I/O 调试器：Cmd+F 全局搜索 + 跨请求命中提示 + 右侧锚点条
+
+- **Why**:
+  - 排查 bug 时定位字段靠肉眼翻 —— 真发出去的 system prompt / messages / response 体量大，需要快速跳词。VSCode / Chrome 都按 Cmd+F，调试器没有就反直觉
+  - 用户第一版反馈：搜 `call_` 没结果 —— tool_calls JSON 里的 `"id": "call_xxx"` 是嵌套字符串，第一版只收集纯字符串字段（system / content / reasoning）做 slot 搜索，嵌套漏了
+  - 左侧 `#1 #2 #3` 请求列表不知道"另外哪个请求里也有这个词"，要逐个点开找
+  - 第一版 mark 高亮加了 `px-0.5` padding，命中字符往后挤了 2px，破坏字符原始宽度
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`:
+    - **FindCtx 重设**：只传 `{ query, regex, caseSensitive }`，**每个 PrettyStringInner 自己 `findMatches`** —— 包括 PrettyJson 嵌套里的字符串。`tool_calls` 里的 `"command": "ls /tmp"`、`"id": "call_..."` 等都自动参与搜索
+    - **DOM 后置统计**：顶层 `useLayoutEffect` 用 `detailRef.querySelectorAll("mark[data-find-match]")` 数 totalMatches，避免上层维护"参与搜索的 slot 列表"。`MutationObserver(childList + subtree)` 兜底折叠/展开节点后重数
+    - **active 切换走 DOM**：`useLayoutEffect` 移除老 `data-active`、给第 N 个 mark 加 `data-active="true"` + `scrollIntoView({block:"center", behavior:"smooth"})`。**不通过 React 重渲染** —— 否则 active 每变一次整个 PrettyStringInner 都要重算 findMatches
+    - **mark 高亮零 padding**：CSS 改 `bg-yellow-300 text-black dark:bg-yellow-400/80 data-[active=true]:bg-amber-400` —— 去掉 `px-0.5`，命中字符保持原始宽度，无往后挤
+    - **左侧 RequestRow matchCount 徽章**：顶层 `perEntryMatchCount = useMemo` 对每条 entry 收集所有文本（含 JSON.stringify(tool_calls/results)）跑 findMatches，把每条的命中数传给 `RequestRow`。命中 > 0 时左边一道 `border-l-2 border-l-yellow-400` 条 + 行首显示黄色徽章数字
+    - **MatchMinimap** 右侧滚动条边的命中位置锚点条：每个 mark 按 `offsetTop / scrollHeight` 比例画小色块，活跃的琥珀色加宽，其他黄色；点击跳到对应匹配。`ResizeObserver` 监听容器高度变化重算位置
+    - **Cmd/Ctrl+F**：抽屉打开时 capture 阶段拦截快捷键（不挡 chat 全局 find）；Esc 优先级：zoom modal > find > drawer-close
+    - **FindBar 浮动**：渲染在 detail section 的 `absolute top-3 right-4` z-40，section 是 `relative + overflow-y-auto`；内容滚动时搜索框不跟着走
+- **影响范围**:
+  - 前端单组件改动，无后端 / 协议变化
+  - 复用 `FindBar` + `findMatches` + `isLocalFindShortcut`（chat 已有），保证两处搜索体验一致
+- **取舍**:
+  - **slot 收集 vs DOM 后置数**：第一版 slot 收集只覆盖到上层指定的纯字符串字段（system / reasoning / content / response.text/reasoning/error）。要让"全文搜"覆盖 tool_calls JSON 嵌套，要么递归构造 slot keys（key 命名复杂、调用点处处传 findKey 易漏），要么改 DOM 后置数。决策：DOM 后置数 —— 写少错少，**自动覆盖** 所有 PrettyStringInner（含未来新增的嵌套位置），不用上层逐个加 findKey
+  - **active 用 React state vs DOM 属性**：active 频繁变（每次回车），如果通过 React state 传到 PrettyStringInner，整棵子树都要重渲染（包括重新跑 findMatches）。决策：DOM-level 切换 `data-active`，React 端只管 `findActive` 数字 —— 视觉切换由 CSS `data-[active=true]:bg-amber-400` 完成
+  - **左侧徽章 vs 全部高亮 row**：徽章数字更精准（"另外 3 个请求也有匹配，分别 5/2/8 处"），row 全高亮信息密度低。决策：徽章 + 左边一道色条 + 行首数字
+  - **mark padding vs 字符抖动**：常规 mark 加 padding 视觉更柔和，但等宽字体下命中字符会左右挪位。decision：**只着色不加 padding** —— 调试场景"看清原始字符位置"比"高亮柔和"重要
+- **验证**:
+  - `pnpm exec tsc --noEmit` clean；`pnpm build` clean
+  - 手测路径（请你实测）：
+    1. 抽屉打开 → Cmd+F → 搜索框出现在 detail section 右上角
+    2. 输入 `call_` → tool_calls JSON 里的 `"id"` 值高亮 + 右侧滚动条边出现锚点条
+    3. 回车：跳到下一匹配，琥珀色，自动滚到视口中间；左下角数字 `current / total` 更新
+    4. 输入有命中的词 → 左侧 #1 #2 命中数 > 0 的行有黄色边条 + 行首徽章数字
+    5. 点击右侧滚动条边小色块 → 直接跳到对应位置
+    6. Esc → 关 find（不关抽屉）；再 Esc → 关抽屉
+- **留尾巴**:
+  - 折叠态的 carried-over messages / 折叠的 PrettyJson 对象**不参与可视搜索**（DOM 没渲染），但 `perEntryMatchCount` 会算出包含的命中数 —— 用户看到徽章但搜索栏 total 为 0，可能困惑。后续可以让 query 触发 carried-over 自动展开，或者标注 "X 处命中在折叠区域，点击展开"
+  - PrettyJson 默认 open=true 所以正常字段都搜得到；但用户主动折叠后命中数会突然变化（MutationObserver 会重数）—— 行为正确但 UX 上没明示
+  - 暂不支持搜索"哪个请求行"专属（如 `#3`）或"哪个 message 序号"等结构化查询 —— 全文匹配已经够用

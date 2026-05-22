@@ -3,7 +3,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -22,6 +24,8 @@ import {
 import { api } from "@/desktop/bridge/tauri";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn } from "@/desktop/ui/lib/utils";
+import { FindBar, findMatches } from "./FindBar";
+import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
 
 /**
  * Session 级 Model I/O 调试器。
@@ -91,6 +95,13 @@ export function ModelIoInspector({ sessionId, open, onClose }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // ─── Cmd+F 全局搜索状态 ─────────────────────────────────────────────────
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findRegex, setFindRegex] = useState(false);
+  const [findCase, setFindCase] = useState(false);
+  const [findActive, setFindActive] = useState(0);
+  const detailRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
@@ -113,17 +124,139 @@ export function ModelIoInspector({ sessionId, open, onClose }: Props) {
     if (open) refresh();
   }, [open, refresh]);
 
-  // ESC 关闭抽屉
+  const current = entries[selected];
+
+  /**
+   * find context 只透传 query/regex/case，每个 PrettyStringInner（包括 PrettyJson
+   * 嵌套里的）自己 findMatches + render mark —— 这样 tool_calls / results JSON 里
+   * 的 `"id": "call_xxx"` `"command": "ls /tmp"` 等嵌套字符串也都自动参与搜索。
+   */
+  const findCtxValue = useMemo<FindCtxValue | null>(
+    () =>
+      findOpen && findQuery
+        ? { query: findQuery, regex: findRegex, caseSensitive: findCase }
+        : null,
+    [findOpen, findQuery, findRegex, findCase]
+  );
+
+  /**
+   * 左侧请求列表的"每条 entry 包含多少个匹配"——给 RequestRow 显示徽章，
+   * 让用户立刻看出"另外哪个请求里也有这个词"。这里**不**依赖 DOM，提前算好
+   * 即可；嵌套 JSON 用 JSON.stringify 粗略覆盖（搜 key 名 / value 都能命中）。
+   */
+  const perEntryMatchCount = useMemo<number[]>(() => {
+    if (!findOpen || !findQuery) return entries.map(() => 0);
+    const collectTexts = (entry: ModelIoEntry): string[] => {
+      const out: string[] = [];
+      if (entry.request?.system) out.push(entry.request.system);
+      entry.request?.messages?.forEach((m) => {
+        if (m.reasoning) out.push(m.reasoning);
+        if (m.content) out.push(m.content);
+        if (m.tool_calls?.length) out.push(JSON.stringify(m.tool_calls));
+        if (m.results?.length) out.push(JSON.stringify(m.results));
+        if (m.attachments?.length) out.push(JSON.stringify(m.attachments));
+      });
+      if (entry.response?.error) out.push(entry.response.error);
+      if (entry.response?.reasoning) out.push(entry.response.reasoning);
+      if (entry.response?.text) out.push(entry.response.text);
+      if (entry.response?.calls?.length)
+        out.push(JSON.stringify(entry.response.calls));
+      return out;
+    };
+    return entries.map((entry) => {
+      let count = 0;
+      for (const t of collectTexts(entry)) {
+        count += findMatches(t, findQuery, findRegex, findCase).length;
+      }
+      return count;
+    });
+  }, [entries, findOpen, findQuery, findRegex, findCase]);
+
+  /**
+   * 顶层 totalMatches 由 DOM 后置数 `<mark data-find-match>` 元素得到 ——
+   * 当前 entry 的所有 PrettyStringInner（含 PrettyJson 嵌套）渲染后，
+   * 数总数即是。query 或 entry 变化触发 layout effect 重数。
+   */
+  const [totalMatches, setTotalMatches] = useState(0);
+  useLayoutEffect(() => {
+    const node = detailRef.current;
+    if (!node || !findOpen || !findQuery) {
+      setTotalMatches(0);
+      return;
+    }
+    const recount = () => {
+      const marks = node.querySelectorAll("mark[data-find-match]");
+      setTotalMatches(marks.length);
+    };
+    recount();
+    // 折叠/展开 message、PrettyJson 节点会改变 mark 数量 —— MutationObserver 兜底
+    const mo = new MutationObserver(recount);
+    mo.observe(node, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [findOpen, findQuery, findRegex, findCase, selected]);
+
+  // active 超界时回 0（query 变短、匹配减少）
+  useEffect(() => {
+    if (findActive >= totalMatches) setFindActive(0);
+  }, [totalMatches, findActive]);
+
+  // 切换 entry / 关抽屉时关 find
+  useEffect(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    setFindActive(0);
+  }, [selected, open]);
+
+  /**
+   * active 切换：用 DOM querySelectorAll 找第 N 个 mark，加 `data-active="true"`，
+   * scrollIntoView。**不通过 React 重渲染** —— 否则 active 每变一次整个 PrettyStringInner
+   * 都要重算 findMatches。
+   */
+  useLayoutEffect(() => {
+    const node = detailRef.current;
+    if (!node) return;
+    const marks = node.querySelectorAll<HTMLElement>("mark[data-find-match]");
+    marks.forEach((m) => {
+      if (m.dataset.active === "true") delete m.dataset.active;
+    });
+    if (!findOpen || totalMatches === 0) return;
+    const target = marks[findActive];
+    if (target) {
+      target.dataset.active = "true";
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [findActive, totalMatches, findOpen]);
+
+  // ESC 关闭抽屉 / find（zoom 自己 capture 阶段已先吃掉 Esc，所以不互相干扰）
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (findOpen) {
+          setFindOpen(false);
+          e.stopPropagation();
+          return;
+        }
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, findOpen]);
 
-  const current = entries[selected];
+  // Cmd/Ctrl+F 拉起搜索（仅抽屉打开时拦截，不挡 chat 的全局 find）
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isLocalFindShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
 
   // 计算 diff: 当前请求的 messages 与上一条请求 messages 的"前缀重叠"长度。
   // 重叠的部分是 carried over，剩下的是本次新增。
@@ -222,6 +355,7 @@ export function ModelIoInspector({ sessionId, open, onClose }: Props) {
                       entry={e}
                       index={idx}
                       active={idx === selected}
+                      matchCount={perEntryMatchCount[idx] ?? 0}
                       onClick={() => setSelected(idx)}
                     />
                   ))}
@@ -229,14 +363,54 @@ export function ModelIoInspector({ sessionId, open, onClose }: Props) {
               )}
             </aside>
 
-            {/* 右：详情 */}
-            <section className="flex-1 min-w-0 overflow-y-auto">
-              {current ? (
-                <RequestDetail
-                  entry={current}
-                  carriedOverCount={carriedOverCount}
-                  index={selected}
+            {/* 右：详情 —— 相对定位让 FindBar 浮在右上角 */}
+            <section
+              ref={detailRef}
+              className="relative flex-1 min-w-0 overflow-y-auto"
+            >
+              <FindBar
+                open={findOpen}
+                onClose={() => setFindOpen(false)}
+                state={{
+                  query: findQuery,
+                  regex: findRegex,
+                  caseSensitive: findCase,
+                  current: totalMatches === 0 ? 0 : findActive + 1,
+                  total: totalMatches,
+                }}
+                onChange={(patch) => {
+                  if (patch.query !== undefined) setFindQuery(patch.query);
+                  if (patch.regex !== undefined) setFindRegex(patch.regex);
+                  if (patch.caseSensitive !== undefined) setFindCase(patch.caseSensitive);
+                  setFindActive(0);
+                }}
+                onPrev={() =>
+                  setFindActive((i) =>
+                    totalMatches === 0 ? 0 : (i - 1 + totalMatches) % totalMatches
+                  )
+                }
+                onNext={() =>
+                  setFindActive((i) =>
+                    totalMatches === 0 ? 0 : (i + 1) % totalMatches
+                  )
+                }
+              />
+              {findOpen && totalMatches > 0 ? (
+                <MatchMinimap
+                  containerRef={detailRef}
+                  activeIdx={findActive}
+                  onJump={setFindActive}
+                  totalMatches={totalMatches}
                 />
+              ) : null}
+              {current ? (
+                <FindCtx.Provider value={findCtxValue}>
+                  <RequestDetail
+                    entry={current}
+                    carriedOverCount={carriedOverCount}
+                    index={selected}
+                  />
+                </FindCtx.Provider>
               ) : null}
             </section>
           </div>
@@ -265,11 +439,13 @@ function RequestRow({
   entry,
   index,
   active,
+  matchCount,
   onClick,
 }: {
   entry: ModelIoEntry;
   index: number;
   active: boolean;
+  matchCount: number;
   onClick: () => void;
 }) {
   const usage = entry.response?.usage;
@@ -281,12 +457,24 @@ function RequestRow({
       onClick={onClick}
       className={cn(
         "px-3 py-2 border-b border-border cursor-pointer hover:bg-accent/40 transition-colors",
-        active && "bg-accent"
+        active && "bg-accent",
+        // 搜索激活且本行有命中 —— 左边一道黄色细条，跟搜索框颜色一致
+        matchCount > 0 && "border-l-2 border-l-yellow-400"
       )}
       data-testid="model-io-row"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">#{index + 1}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium">#{index + 1}</span>
+          {matchCount > 0 ? (
+            <span
+              className="text-[10px] px-1 py-0.5 rounded bg-yellow-400/30 text-yellow-700 dark:text-yellow-300 tabular-nums"
+              title={`本请求包含 ${matchCount} 个匹配`}
+            >
+              {matchCount}
+            </span>
+          ) : null}
+        </div>
         <span
           className={cn(
             "text-[10px] px-1.5 py-0.5 rounded",
@@ -440,12 +628,16 @@ function MessageRow({
     <div className="px-3 py-2 border-t border-border bg-muted/20 space-y-2">
       {msg.reasoning ? (
         <PayloadField label="reasoning">
-          <PrettyStringInner value={msg.reasoning} />
+          <PrettyStringInner
+            value={msg.reasoning}
+          />
         </PayloadField>
       ) : null}
       {msg.content ? (
         <PayloadField label="content">
-          <PrettyStringInner value={msg.content} />
+          <PrettyStringInner
+            value={msg.content}
+          />
         </PayloadField>
       ) : null}
       {msg.tool_calls && msg.tool_calls.length > 0 ? (
@@ -532,7 +724,9 @@ function ResponseBlock({ response }: { response: ModelIoResponse }) {
       ) : null}
       {response?.reasoning ? (
         <PayloadField label="reasoning">
-          <PrettyStringInner value={response.reasoning} />
+          <PrettyStringInner
+            value={response.reasoning}
+          />
         </PayloadField>
       ) : null}
       {response?.text ? (
@@ -585,6 +779,77 @@ function ResponseBlock({ response }: { response: ModelIoResponse }) {
           {body}
         </ZoomedModal>
       )}
+    </div>
+  );
+}
+
+/**
+ * 右侧滚动条边的"匹配锚点条" —— 类似 VSCode 的 minimap 命中指示。
+ * 每个 `<mark data-find-match>` 在容器内的相对垂直位置画一个小方块，
+ * 点击 → 跳到该匹配。activeIdx 高亮琥珀色，其他黄色。
+ *
+ * 实现：useLayoutEffect 收集所有 mark 的 offsetTop 算百分比；用 ResizeObserver
+ * 监听容器尺寸变化（折叠 message / 切换 entry 时位置会变）+ scrollHeight
+ * 也会变。简化起见：依赖 totalMatches / activeIdx 重算一次足够（用户翻请求时
+ * useFindController 会 reset，触发重算）。
+ */
+function MatchMinimap({
+  containerRef,
+  activeIdx,
+  onJump,
+  totalMatches,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  activeIdx: number;
+  onJump: (i: number) => void;
+  totalMatches: number;
+}) {
+  const [positions, setPositions] = useState<number[]>([]);
+
+  useLayoutEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const compute = () => {
+      const marks = node.querySelectorAll<HTMLElement>("mark[data-find-match]");
+      const total = node.scrollHeight || 1;
+      const pos: number[] = [];
+      marks.forEach((m) => {
+        // offsetTop 是相对最近 positioned ancestor；section 是 relative，
+        // mark 内嵌任意层级，offsetTop 仍是相对 section。除以 scrollHeight 得
+        // 它在整段内容里的垂直百分比
+        pos.push(m.offsetTop / total);
+      });
+      setPositions(pos);
+    };
+    compute();
+    // 容器大小 / 内容高度变化时重算（如折叠展开 message / 字段）
+    const ro = new ResizeObserver(compute);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [containerRef, totalMatches, activeIdx]);
+
+  if (positions.length === 0) return null;
+
+  return (
+    <div
+      className="absolute top-12 right-0.5 bottom-2 w-3 pointer-events-none z-30"
+      aria-hidden="true"
+    >
+      {positions.map((p, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onJump(i)}
+          title={`匹配 ${i + 1} / ${positions.length}`}
+          style={{ top: `${p * 100}%` }}
+          className={cn(
+            "absolute right-0 h-1.5 rounded-sm pointer-events-auto transition-colors",
+            i === activeIdx
+              ? "w-3 bg-amber-500 hover:bg-amber-600"
+              : "w-2 bg-yellow-400/70 hover:bg-yellow-500"
+          )}
+        />
+      ))}
     </div>
   );
 }
@@ -920,48 +1185,26 @@ function PrimitiveValue({ value }: { value: unknown }): ReactNode {
 }
 
 /**
- * 把单个字符串渲染成"真字符 + 控制字符 marker"。
- * 短且无控制字符的直接原样输出，避免无谓节点。
+ * 把单个字符串渲染成"真字符 + 控制字符 marker"。可选接收 `findKey` 让本字段
+ * 参与 Cmd+F 全局搜索 —— 调用方提供唯一 key，本组件从 FindContext 拿对应
+ * `matches`（事先在顶层算好），把命中区间包 `<mark>` 高亮；`active` 命中
+ * 额外标 `data-active="true"` 让外层 scrollIntoView 跳过去。
  */
 function PrettyStringInner({ value }: { value: string }): ReactNode {
-  // 不含任何控制字符（< 0x20 或 = 0x7f）就直接原样输出，避免无谓 React 节点
-  if (!hasControlChar(value)) {
+  const find = useContext(FindCtx);
+  const matches =
+    find && find.query
+      ? findMatches(value, find.query, find.regex, find.caseSensitive)
+      : null;
+
+  // 没匹配 / 不含控制字符 —— 直接返回原文，零额外节点
+  if (!matches?.length && !hasControlChar(value)) {
     return value;
   }
-  const parts: ReactNode[] = [];
-  let buf = "";
-  let key = 0;
-  const flush = () => {
-    if (buf) {
-      parts.push(buf);
-      buf = "";
-    }
-  };
-  for (const ch of value) {
-    const code = ch.codePointAt(0)!;
-    if (ch === "\n") {
-      flush();
-      parts.push(<Marker key={`m${key++}`} sym="↵" tone="sky" />);
-      parts.push("\n");
-    } else if (ch === "\t") {
-      flush();
-      parts.push(<Marker key={`m${key++}`} sym="→" tone="emerald" />);
-      parts.push("\t");
-    } else if (ch === "\r") {
-      flush();
-      parts.push(<Marker key={`m${key++}`} sym="⏎" tone="cyan" />);
-      // 不输出真 \r —— 在 HTML pre 里它和 \n 组合行为受 user-agent 影响，
-      // 单纯 marker 已足以提示"原数据里有 \r"
-    } else if (code < 32 || code === 127) {
-      flush();
-      const hex = code.toString(16).padStart(2, "0").toUpperCase();
-      parts.push(<Marker key={`m${key++}`} sym={`\\x${hex}`} tone="amber" />);
-    } else {
-      buf += ch;
-    }
+  if (matches?.length) {
+    return renderWithMatchesAndControlChars(value, matches);
   }
-  flush();
-  return <>{parts}</>;
+  return <>{expandControlChars(value, "s")}</>;
 }
 
 function Marker({
@@ -995,6 +1238,101 @@ function Marker({
  */
 /** 放大态会通过 context 传到 PayloadField，让它去掉 max-h 限制让内容自然撑满 modal */
 const ZoomContext = createContext(false);
+
+/**
+ * Cmd+F 全局搜索状态。只传 query / regex / caseSensitive ——
+ * 每个 PrettyStringInner（含 PrettyJson 嵌套里的）自己拿 context 跑 findMatches，
+ * 命中部分包成 `<mark data-find-match>`。totalMatches 和 active 跳转由顶层用
+ * `detailRef.querySelectorAll("mark[data-find-match]")` 后置统计 + DOM-level 切换
+ * `data-active` 属性完成 —— 这样**所有**字符串字段（包括 tool_calls JSON 里的
+ * `"id": "call_xxx"`、`"command": "ls /tmp"` 等嵌套字符串）都自动参与搜索，
+ * 不用上层逐个收集 slot。
+ */
+interface FindCtxValue {
+  query: string;
+  regex: boolean;
+  caseSensitive: boolean;
+}
+const FindCtx = createContext<FindCtxValue | null>(null);
+
+/**
+ * 同时处理"控制字符可视化"和"搜索命中高亮"。matches 是 value 的字节区间。
+ *
+ * - active 状态**不在这里**渲染（由顶层用 DOM querySelectorAll 后置切换 `data-active`），
+ *   避免 active 一变就 re-render 整个 PrettyStringInner
+ * - **不加 padding** —— 只用 background 着色，保持字符原始宽度，避免命中处文字往后挤
+ */
+function renderWithMatchesAndControlChars(
+  value: string,
+  matches: Array<[number, number]>
+): ReactNode {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  matches.forEach(([s, e], matchIdx) => {
+    if (s > cursor) {
+      parts.push(
+        ...expandControlChars(value.slice(cursor, s), `pre-${matchIdx}`)
+      );
+    }
+    parts.push(
+      <mark
+        key={`m-${matchIdx}`}
+        data-find-match
+        // 只着色不加 padding —— 浏览器 <mark> 默认黄底，这里覆盖统一色
+        // data-active="true" 由顶层 DOM 切换，对应 CSS 见 globals 或 inline 样式
+        className="bg-yellow-300 text-black dark:bg-yellow-400/80 data-[active=true]:bg-amber-400"
+      >
+        {expandControlChars(value.slice(s, e), `match-${matchIdx}`)}
+      </mark>
+    );
+    cursor = e;
+  });
+  if (cursor < value.length) {
+    parts.push(...expandControlChars(value.slice(cursor), "tail"));
+  }
+  return <>{parts}</>;
+}
+
+/**
+ * 把一段纯文本切成 [文字, marker, 文字, marker, ...] 数组。
+ * 抽出来给 PrettyStringInner 和 renderWithMatchesAndControlChars 共用。
+ */
+function expandControlChars(value: string, keyPrefix: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let buf = "";
+  let key = 0;
+  const flush = () => {
+    if (buf) {
+      parts.push(buf);
+      buf = "";
+    }
+  };
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if (ch === "\n") {
+      flush();
+      parts.push(<Marker key={`${keyPrefix}-n${key++}`} sym="↵" tone="sky" />);
+      parts.push("\n");
+    } else if (ch === "\t") {
+      flush();
+      parts.push(<Marker key={`${keyPrefix}-t${key++}`} sym="→" tone="emerald" />);
+      parts.push("\t");
+    } else if (ch === "\r") {
+      flush();
+      parts.push(<Marker key={`${keyPrefix}-r${key++}`} sym="⏎" tone="cyan" />);
+    } else if (code < 32 || code === 127) {
+      flush();
+      const hex = code.toString(16).padStart(2, "0").toUpperCase();
+      parts.push(
+        <Marker key={`${keyPrefix}-x${key++}`} sym={`\\x${hex}`} tone="amber" />
+      );
+    } else {
+      buf += ch;
+    }
+  }
+  flush();
+  return parts;
+}
 
 function PayloadField({
   label,
