@@ -242,22 +242,29 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     }
   }, [findActive, totalMatches, findOpen]);
 
-  // ESC 关闭抽屉 / find（zoom 自己 capture 阶段已先吃掉 Esc，所以不互相干扰）
+  // findOpen 通过 ref 暴露给 Esc listener —— 避免 React 18 batched updates 让
+  // 闭包内的 findOpen 处于 stale 状态（造成 Esc 误关抽屉而不是关 find）
+  const findOpenRef = useRef(findOpen);
+  findOpenRef.current = findOpen;
+
+  // ESC 关闭抽屉 / find。capture 阶段拦截 —— 早于 FindBar input 的 React onKeyDown，
+  // 也早于 chat 区域的 ChatView listener；保证 modelio 抽屉打开时 Esc 优先关 find
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (findOpen) {
+        if (findOpenRef.current) {
           setFindOpen(false);
+          e.preventDefault();
           e.stopPropagation();
           return;
         }
         onClose();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, findOpen]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
 
   // Cmd/Ctrl+F 拉起搜索（仅抽屉打开时拦截，不挡 chat 的全局 find）
   useEffect(() => {
@@ -378,11 +385,10 @@ export const ModelIoInspector = memo(function ModelIoInspector({
               )}
             </aside>
 
-            {/* 右：详情 —— 相对定位让 FindBar 浮在右上角 */}
-            <section
-              ref={detailRef}
-              className="relative flex-1 min-w-0 overflow-y-auto"
-            >
+            {/* 右：详情。外层 wrapper 是 relative 容器持有 FindBar / Minimap，
+                section 自己只负责滚动 —— 避免 absolute child 在 overflow:auto 容器内
+                被某些浏览器当成 in-flow 内容跟随滚动消失 */}
+            <div className="relative flex-1 min-w-0 flex flex-col">
               <FindBar
                 open={findOpen}
                 onClose={() => setFindOpen(false)}
@@ -418,16 +424,21 @@ export const ModelIoInspector = memo(function ModelIoInspector({
                   totalMatches={totalMatches}
                 />
               ) : null}
-              {current ? (
-                <FindCtx.Provider value={findCtxValue}>
-                  <RequestDetail
-                    entry={current}
-                    carriedOverCount={carriedOverCount}
-                    index={selected}
-                  />
-                </FindCtx.Provider>
-              ) : null}
-            </section>
+              <section
+                ref={detailRef}
+                className="flex-1 min-w-0 overflow-y-auto"
+              >
+                {current ? (
+                  <FindCtx.Provider value={findCtxValue}>
+                    <RequestDetail
+                      entry={current}
+                      carriedOverCount={carriedOverCount}
+                      index={selected}
+                    />
+                  </FindCtx.Provider>
+                ) : null}
+              </section>
+            </div>
           </div>
         )}
       </div>
