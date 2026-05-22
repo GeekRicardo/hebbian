@@ -76,8 +76,6 @@ interface Props {
   streaming?: boolean;
   prompt?: Prompt;
   userAvatar?: string;
-  /** 当前会话:用于在「显示原始 JSON」时拼出截至该消息的 messages 载荷。 */
-  session?: Session;
   onFork?: (id: string) => void;
   /**
    * 重新生成。对 assistant 消息：以前一条 user 消息为锚重跑。
@@ -102,12 +100,12 @@ interface Props {
   archived?: boolean;
   /** 仅 compact_boundary：摘要是否展开（点击主体切换） */
   summaryExpanded?: boolean;
-  /** 仅 compact_boundary：点击分隔条主体切换摘要展示 */
-  onToggleSummary?: () => void;
+  /** 仅 compact_boundary：点击分隔条主体切换摘要展示。参数为本 boundary 消息 id。 */
+  onToggleSummary?: (messageId: string) => void;
   /** 仅 compact_boundary：原始历史是否展开（点击「历史对话」按钮切换） */
   historyExpanded?: boolean;
-  /** 仅 compact_boundary：点击「历史对话」按钮切换 */
-  onToggleHistory?: () => void;
+  /** 仅 compact_boundary：点击「历史对话」按钮切换。参数为本 boundary 消息 id。 */
+  onToggleHistory?: (messageId: string) => void;
   /** 仅 compact_boundary：该 boundary 折叠了多少条原始历史消息 */
   archivedCount?: number;
 }
@@ -1744,7 +1742,6 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   prompt,
   userAvatar,
-  session,
   onFork,
   onRegenerate,
   onEdit,
@@ -1908,7 +1905,7 @@ export const MessageBubble = memo(function MessageBubble({
           <div className="flex-1 h-px bg-border" />
           <button
             type="button"
-            onClick={onToggleSummary}
+            onClick={onToggleSummary ? () => onToggleSummary(message.id) : undefined}
             title={summaryOn ? "点击折叠压缩摘要" : "点击查看压缩摘要"}
             className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
           >
@@ -1925,7 +1922,7 @@ export const MessageBubble = memo(function MessageBubble({
           {count > 0 && (
             <button
               type="button"
-              onClick={onToggleHistory}
+              onClick={onToggleHistory ? () => onToggleHistory(message.id) : undefined}
               title={
                 historyOn
                   ? "点击折叠原始历史对话"

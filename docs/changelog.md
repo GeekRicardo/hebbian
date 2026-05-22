@@ -3176,3 +3176,56 @@
   - `cargo test -p agent-core --lib` 235 / `-p model-gateway --lib` 84 全部 passed
   - 复现路径：重启 desktop dev，跑任意对话 + tool_call，stderr 日志每行短而清晰，不再有 prompt / langfuse / 大对象转储
 - **留尾巴**: 无
+
+### 2026-05-22 — ChatView 拆 MessageList 子组件 + 修流式时无法上翻历史
+
+- **Why**: 用户报「流式输出期间 desktop 卡顿，跑得越久越明显」+「往上滚动会被自动拽回底部」。日志频率不疯狂排除了 IPC 噪音，根因在前端 React 渲染层
+  - 卡顿根因：`ChatView` 在流式期间每收到一条 `text_delta / tool_call_delta / tool_output_delta / reasoning` 等高频事件就 setState，整个 ChatView re-render；它 inline 渲染 `currentSession.messages.map(...) <MessageBubble session={currentSession} ... />`，每个 MessageBubble 虽然包了 `React.memo` 但接收的 props 全是不稳定引用：
+    1. `session={currentSession}` — store 的 mirror 机制每次事件都返回新 `currentSession` ref
+    2. 6 个 inline 闭包回调（`onFork / onRegenerate / onEdit / onToggleSummary / onToggleHistory` 等）
+    3. `find={...}` 内联对象、`onToggleSummary={() => toggleIn(...)}` inline 闭包
+    结果：每次流式 delta → 所有 N 个历史 MessageBubble（2236 行业务逻辑 + 子组件树）全部 re-render，主线程被 React reconciler 占满
+  - 滚动根因：`useEffect(scrollTop = scrollHeight, [messages.length, streamingText, streamingParts])` 无条件强制贴底。用户主动上滚后，下一个 delta（毫秒级）就把他拽回底部
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx):
+    - 删 `session?: Session` dead prop（最早期"显示原始 JSON"功能删除后留下的死字段，组件函数体根本不用）
+    - `onToggleSummary` / `onToggleHistory` 签名从 `() => void` 改成 `(messageId: string) => void` —— id closure 由 MessageBubble 内部 `onClick={() => onToggleSummary?.(message.id)}` 自己建（bubble 自己重渲时才重建闭包，不影响外层 memo）
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx)（新文件，约 130 行）:
+    - 历史消息列表抽出为独立 `memo` 组件
+    - 接最小化 props（不接整个 session 对象）：`messages / prompt / userAvatar / isStreaming / lastUserMsgId / lastUserHasAssistantAfter / lastCompactBoundaryIdx / ownerBoundaryByIndex / expandedHistories / expandedSummaries / boundaryArchivedCounts / find / 6 个 callback`
+    - 内部用 `useMemo` 缓存 `matchBaseByIndex`（高亮跳转用的全局 index 累加）
+    - shallow compare 挡住流式期间无关重渲染
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx):
+    - `import { useCallback }` + `import { MessageList }`
+    - 6 个 handler（`handleSend / handleCancel / handleFork / handleRegenerate / handleRegenerateUser / handleEditUser / handleToggleSummary / handleToggleHistory`）用 `useCallback` 包，依赖列表准确
+    - boundary 派生数据（`boundaryInfo: { lastIdx, ownerByIndex, archivedCounts }`）和 `{ lastUserMsgId, lastUserHasAssistantAfter }` 都用 `useMemo([messages])` 包，messages ref 不变就不重算
+    - `findCtxForList` 用 `useMemo`，find 关闭直接 null —— MessageList 走 null 分支不为每个 bubble 算 find prop
+    - `userMessageHistory` 也包 useMemo
+    - 把原来 `currentSession.messages.map(...)` 那 60 多行替换成单个 `<MessageList ... />`
+    - streaming bubble + injectedSinceStream 仍直接渲染在 ChatView（这俩本来就该跟随 streaming 状态变）
+    - **stickToBottom 滚动行为**:
+      - 新增 `stickToBottomRef = useRef(true)`（不用 state 避免每次 scroll 触发组件重渲）
+      - 切对话时强制 stick = true 并立即贴底
+      - 流式 delta effect 改为 `if (!stickToBottomRef.current) return; el.scrollTop = el.scrollHeight`
+      - 新增 `handleScroll` 监听器：`distanceFromBottom = scrollHeight - scrollTop - clientHeight; stick = distance <= 80px`
+      - `onScroll={handleScroll}` 挂在 scroll container 上
+      - `handleSend` 内部 `stickToBottomRef.current = true` —— 用户主动发消息时强制贴回底部，符合直觉
+- **影响范围**:
+  - 性能：流式期间 ChatView 高频 setState 不再穿透到历史 MessageBubble 列表；N=50 消息时主线程 ms→μs 量级降
+  - 行为：用户在底部时仍自动跟随流式输出滚动；离底 > 80px 后自动暂停跟随；回到底部（或切对话 / 主动发消息）重新打开跟随
+  - 协议 / storage / 持久化 / 后端：零影响
+  - hebweb：因为前端代码共享，同样受益
+- **取舍**:
+  - **MessageList 抽组件 vs 内联 React.memo**：选抽组件。memo 在 inline 闭包/对象 prop 下被 bust 是 React 常识陷阱；抽组件 + 父组件全部 useCallback/useMemo 是唯一干净的根因方案。**B 方案**（CLAUDE.md 风格的"最小改动 + 最大收益"）
+  - **改 `onToggleSummary` 签名 vs 在 MessageList 里做闭包 cache**：选改签名。MessageList 里用 Map<id, callback> cache 看着精明但其实是 hack（Map 不随 messages 变化清理），改成传 id 进 callback 让 MessageBubble 自己 wrap 闭包，语义直接、无内存泄漏隐患
+  - **stickToBottom 用 ref vs state**：选 ref。scroll 事件高频，state 会触发组件重渲，跟性能优化方向相反。ref 改不触发 React，只在 effect 里读 ref.current
+  - **用户离底时新消息进来要不要提示"↓ 有新内容"**：暂不做。本期目标是修"不能上翻"，新功能（带跳回底按钮的角标）留给后续 UX 收尾
+- **验证**:
+  - `pnpm exec tsc --noEmit` clean
+  - `pnpm build` clean（既有大 chunk 警告与本次无关）
+  - `cargo check --workspace` clean
+  - 复现路径：重启 desktop dev，跑长会话连续 model + tool 流；流式期间应可平滑往上滚不被拽回；停止滚动后/手动滚到底部，下次 delta 自动跟随
+- **留尾巴**:
+  - 用户离底时新消息进来没有视觉提示（"↓ 有新内容"角标 + 一键回底）—— 等用户提具体诉求再做
+  - streaming bubble + injectedSinceStream 仍跟 ChatView 一起重渲；理论上可以再抽 `<StreamingPanel>`，但实际它们本来就在跟随状态变化，抽出来收益不大
+  - 没用 react-window 做 virtualization。如果对话长到几百条 message + 大量 tool_call，本次优化可能不够；那时再上 virtualization

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown, FileJson } from "lucide-react";
 import {
@@ -6,6 +6,7 @@ import {
   FloatingTaskPanel,
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
+import { MessageList } from "./MessageList";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
 import { ModelIoInspector } from "./ModelIoInspector";
 import { EditTreePanel } from "./EditTreePanel";
@@ -49,6 +50,13 @@ export function ChatView() {
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * 自动贴底逻辑：用户在底部时才自动滚；一旦用户主动往上滚（离底 > BOTTOM_SLACK_PX）
+   * 就关掉自动滚，避免流式 delta 把他拽回去。回到底部时（或新 session 切换）重新打开。
+   *
+   * 用 ref 不用 state 是因为 onScroll 不应该触发组件重渲染（一秒可能几十次）。
+   */
+  const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
   const [modelIoOpen, setModelIoOpen] = useState(false);
 
@@ -61,17 +69,18 @@ export function ChatView() {
   const [expandedHistories, setExpandedHistories] = useState<Set<string>>(
     () => new Set()
   );
-  function toggleIn(
+  // Set state 的切换闭包：每次给 setter 传新 Set（React 浅比较生效）
+  const toggleInSet = (
     setter: React.Dispatch<React.SetStateAction<Set<string>>>,
     id: string
-  ) {
+  ) => {
     setter((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  };
 
   // ==== 对话内查找状态 ====
   const [findOpen, setFindOpen] = useState(false);
@@ -115,10 +124,31 @@ export function ChatView() {
     setActive(0);
   }, [currentSession?.id, setActive]);
 
+  // 切对话时强制贴回底部 + 重置 stick 标志
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    stickToBottomRef.current = true;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [currentSession?.id]);
+
+  // 流式 delta / 新消息：仅当用户当前贴底时才自动滚。
+  // 这里依赖 streamingText / streamingParts 等高频变化的 ref 来触发 effect，
+  // 但 effect 内部 O(1)：读一次 scrollTop / scrollHeight，没贴底直接 return。
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
+
+  // 监听用户滚动：离底超过阈值就关掉自动滚，回到底部再打开。
+  const BOTTOM_SLACK_PX = 80;
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+  }, []);
 
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
@@ -190,109 +220,168 @@ export function ChatView() {
       : "";
   const promptSummary = activePrompt?.name ?? "无 Agent";
   const isStreaming = !!streamingMessageId;
-  const userMessageHistory = currentSession.messages
-    .filter((m) => m.role === "user")
-    .map((m) => m.content);
+  const userMessageHistory = useMemo(
+    () => currentSession.messages.filter((m) => m.role === "user").map((m) => m.content),
+    [currentSession.messages]
+  );
 
   const latestTodos = extractLatestTodoSnapshot(currentSession, streamingParts);
 
-  // 每条 compact_boundary 之前的消息默认折叠：模型已不再读，需要点击分隔条展开。
-  // 多次压缩时每条 boundary 独立展开/折叠。
-  const boundaryIndices: number[] = [];
-  currentSession.messages.forEach((m, i) => {
-    if (m.meta?.type === "compact_boundary") boundaryIndices.push(i);
-  });
-  const lastCompactBoundaryIdx =
-    boundaryIndices.length > 0
-      ? boundaryIndices[boundaryIndices.length - 1]
-      : -1;
+  /**
+   * 一次性算出 boundary 相关派生：indices / lastIdx / 每条非 boundary 归属哪个 boundary id /
+   * 每个 boundary 折叠多少条原始消息。这些都只依赖 messages 数组本身（同一 ref 时不重算）。
+   *
+   * 算完用 useMemo 缓存：传给 MessageList 时 props ref 稳定，配合 memo 屏蔽无关重渲染。
+   */
+  const messages = currentSession.messages;
+  const boundaryInfo = useMemo(() => {
+    const indices: number[] = [];
+    messages.forEach((m, i) => {
+      if (m.meta?.type === "compact_boundary") indices.push(i);
+    });
+    const lastIdx = indices.length > 0 ? indices[indices.length - 1] : -1;
 
-  // 找到指定消息归属的 boundary id（它之后最近的一个 boundary 的 message id）。
-  // 没有则返回 null（属于最后一段，不会被折叠）。
-  function nextBoundaryId(idx: number): string | null {
-    const next = boundaryIndices.find((b) => b > idx);
-    return next === undefined ? null : currentSession!.messages[next].id;
-  }
-
-  // 每条 boundary 折叠了多少条历史消息（含 marker 之前同段所有非 marker 消息）。
-  const boundaryArchivedCounts: Record<string, number> = {};
-  let prevBoundaryEnd = -1;
-  for (const b of boundaryIndices) {
-    const id = currentSession.messages[b].id;
-    let count = 0;
-    for (let j = prevBoundaryEnd + 1; j < b; j++) {
-      if (currentSession.messages[j].role !== "marker") count++;
+    const ownerByIndex: Array<string | null> = new Array(messages.length).fill(null);
+    let cursor = 0;
+    for (let i = 0; i < messages.length; i++) {
+      while (cursor < indices.length && indices[cursor] <= i) cursor++;
+      ownerByIndex[i] =
+        cursor < indices.length ? messages[indices[cursor]].id : null;
     }
-    boundaryArchivedCounts[id] = count;
-    prevBoundaryEnd = b;
-  }
+
+    const archivedCounts: Record<string, number> = {};
+    let prevEnd = -1;
+    for (const b of indices) {
+      const id = messages[b].id;
+      let count = 0;
+      for (let j = prevEnd + 1; j < b; j++) {
+        if (messages[j].role !== "marker") count++;
+      }
+      archivedCounts[id] = count;
+      prevEnd = b;
+    }
+
+    return { lastIdx, ownerByIndex, archivedCounts };
+  }, [messages]);
 
   // 最近一条 user 消息：允许「编辑后重跑」；
   // 若它之后没有 assistant 回复（被中断 / 失败），还允许「重新生成」。
-  let lastUserMsgId: string | null = null;
-  let lastUserHasAssistantAfter = false;
-  for (let i = currentSession.messages.length - 1; i >= 0; i--) {
-    const m = currentSession.messages[i];
-    if (m.role === "user") {
-      lastUserMsgId = m.id;
-      for (let j = i + 1; j < currentSession.messages.length; j++) {
-        if (currentSession.messages[j].role === "assistant") {
-          lastUserHasAssistantAfter = true;
-          break;
+  const { lastUserMsgId, lastUserHasAssistantAfter } = useMemo(() => {
+    let id: string | null = null;
+    let hasAssistantAfter = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user") {
+        id = m.id;
+        for (let j = i + 1; j < messages.length; j++) {
+          if (messages[j].role === "assistant") {
+            hasAssistantAfter = true;
+            break;
+          }
         }
+        break;
       }
-      break;
     }
-  }
+    return { lastUserMsgId: id, lastUserHasAssistantAfter: hasAssistantAfter };
+  }, [messages]);
 
-  async function handleSend(content: string, attachments: MessageAttachment[]) {
-    try {
-      await sendUserMessage(content, attachments);
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-    }
-  }
+  const handleSend = useCallback(
+    async (content: string, attachments: MessageAttachment[]) => {
+      // 用户主动发消息 → 期望看到自己刚发的消息，强制贴回底部
+      // （即使之前在看历史）。流式 delta 也会重新跟随到底。
+      stickToBottomRef.current = true;
+      try {
+        await sendUserMessage(content, attachments);
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+      }
+    },
+    [sendUserMessage]
+  );
 
-  async function handleCancel() {
+  const handleCancel = useCallback(async () => {
     try {
       await cancelStreaming();
     } catch (e: any) {
       toast.error(e.message || String(e));
     }
-  }
-  async function handleFork(msgId: string) {
-    try {
-      await forkSession(msgId);
-      toast.success("已创建分支");
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-    }
-  }
-  async function handleRegenerate(msgId: string) {
-    if (isStreaming) return;
-    try {
-      await regenerateFrom(msgId);
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-    }
-  }
-  async function handleRegenerateUser(msgId: string) {
-    if (isStreaming) return;
-    try {
-      await regenerateFromUser(msgId);
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-    }
-  }
-  async function handleEditUser(msgId: string, nextContent: string) {
-    if (isStreaming) throw new Error("生成中，无法编辑消息");
-    try {
-      await editAndRerun(msgId, nextContent);
-    } catch (e: any) {
-      toast.error(e.message || String(e));
-      throw e;
-    }
-  }
+  }, [cancelStreaming]);
+
+  const handleFork = useCallback(
+    async (msgId: string) => {
+      try {
+        await forkSession(msgId);
+        toast.success("已创建分支");
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+      }
+    },
+    [forkSession]
+  );
+
+  const handleRegenerate = useCallback(
+    async (msgId: string) => {
+      if (isStreaming) return;
+      try {
+        await regenerateFrom(msgId);
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+      }
+    },
+    [isStreaming, regenerateFrom]
+  );
+
+  const handleRegenerateUser = useCallback(
+    async (msgId: string) => {
+      if (isStreaming) return;
+      try {
+        await regenerateFromUser(msgId);
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+      }
+    },
+    [isStreaming, regenerateFromUser]
+  );
+
+  const handleEditUser = useCallback(
+    async (msgId: string, nextContent: string) => {
+      if (isStreaming) throw new Error("生成中，无法编辑消息");
+      try {
+        await editAndRerun(msgId, nextContent);
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+        throw e;
+      }
+    },
+    [isStreaming, editAndRerun]
+  );
+
+  const handleToggleSummary = useCallback(
+    (id: string) => toggleInSet(setExpandedSummaries, id),
+    []
+  );
+  const handleToggleHistory = useCallback(
+    (id: string) => toggleInSet(setExpandedHistories, id),
+    []
+  );
+
+  /**
+   * find 上下文打包：依赖搜索状态 + matchesPerMessage + activeLocation。
+   * find 关闭时直接 null —— MessageList 走 null 分支，不为每个 bubble 算 find prop。
+   */
+  const findCtxForList = useMemo(
+    () =>
+      findOpen && findQuery
+        ? {
+            query: findQuery,
+            regex: findRegex,
+            caseSensitive: findCase,
+            matchesPerMessage,
+            activeLocation,
+          }
+        : null,
+    [findOpen, findQuery, findRegex, findCase, matchesPerMessage, activeLocation]
+  );
   async function handleRegenTitle() {
     setTitleLoading(true);
     try {
@@ -446,72 +535,40 @@ export function ChatView() {
           #chat-fullscreen-anchor，确保只覆盖此区域、不挡 sidebar / 标题栏 / 输入框。
           详见架构.md §4.13.9 chat 区域定义。 */}
       <div className="relative flex-1 min-h-0">
-      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto">
-        {currentSession.messages.length === 0 && !isStreaming && (
+      <div
+        ref={scrollRef}
+        className="absolute inset-0 overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {messages.length === 0 && !isStreaming && (
           <div className="px-6 py-10 text-center text-sm text-muted-foreground">
             发送第一条消息开始对话
           </div>
         )}
+        <MessageList
+          messages={messages}
+          prompt={activePrompt}
+          userAvatar={userAvatar}
+          isStreaming={isStreaming}
+          lastUserMsgId={lastUserMsgId}
+          lastUserHasAssistantAfter={lastUserHasAssistantAfter}
+          lastCompactBoundaryIdx={boundaryInfo.lastIdx}
+          ownerBoundaryByIndex={boundaryInfo.ownerByIndex}
+          expandedHistories={expandedHistories}
+          expandedSummaries={expandedSummaries}
+          boundaryArchivedCounts={boundaryInfo.archivedCounts}
+          find={findCtxForList}
+          onFork={handleFork}
+          onRegenerate={handleRegenerate}
+          onRegenerateUser={handleRegenerateUser}
+          onEdit={handleEditUser}
+          onToggleSummary={handleToggleSummary}
+          onToggleHistory={handleToggleHistory}
+        />
         <div>
-          {currentSession.messages.map((m, i) => {
-            const isBoundary = m.meta?.type === "compact_boundary";
-            // 非 boundary 消息：归属下一个 boundary，未展开"历史对话"则不渲染
-            if (!isBoundary) {
-              const owner = nextBoundaryId(i);
-              if (owner !== null && !expandedHistories.has(owner)) {
-                return null;
-              }
-            }
-            const isLatestUser = m.role === "user" && m.id === lastUserMsgId;
-            const onRegenerate =
-              m.role === "assistant"
-                ? handleRegenerate
-                : isLatestUser && !lastUserHasAssistantAfter && !isStreaming
-                  ? handleRegenerateUser
-                  : undefined;
-            const onEdit =
-              isLatestUser && !isStreaming ? handleEditUser : undefined;
-            return (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              session={currentSession}
-              prompt={activePrompt}
-              userAvatar={userAvatar}
-              onFork={handleFork}
-              onRegenerate={onRegenerate}
-              onEdit={onEdit}
-              archived={lastCompactBoundaryIdx > 0 && i < lastCompactBoundaryIdx}
-              summaryExpanded={isBoundary && expandedSummaries.has(m.id)}
-              onToggleSummary={
-                isBoundary ? () => toggleIn(setExpandedSummaries, m.id) : undefined
-              }
-              historyExpanded={isBoundary && expandedHistories.has(m.id)}
-              onToggleHistory={
-                isBoundary ? () => toggleIn(setExpandedHistories, m.id) : undefined
-              }
-              archivedCount={isBoundary ? boundaryArchivedCounts[m.id] : undefined}
-              find={
-                findOpen && findQuery
-                  ? {
-                      query: findQuery,
-                      regex: findRegex,
-                      caseSensitive: findCase,
-                      activeLocalIdx:
-                        activeLocation?.msgIdx === i
-                          ? activeLocation!.localIdx
-                          : null,
-                      matchBaseIdx: 0,
-                    }
-                  : undefined
-              }
-            />
-            );
-          })}
           {isStreaming && (
             <MessageBubble
               streaming
-              session={currentSession}
               prompt={activePrompt}
               userAvatar={userAvatar}
               streamingParts={streamingParts}
@@ -554,7 +611,6 @@ export function ChatView() {
               <MessageBubble
                 key={m.id}
                 message={m}
-                session={currentSession}
                 prompt={activePrompt}
                 userAvatar={userAvatar}
               />
