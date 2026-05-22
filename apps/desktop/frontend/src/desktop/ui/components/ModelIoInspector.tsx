@@ -205,12 +205,22 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     if (findActive >= totalMatches) setFindActive(0);
   }, [totalMatches, findActive]);
 
-  // 切换 entry / 关抽屉时关 find
+  // 关抽屉时彻底重置 find；**不**在 selected 变化时关 find ——
+  // 之前合并写 `[selected, open]` 触发了一个隐 race：用户开抽屉后立刻按 Cmd+F，
+  // 但异步 refresh() 此时才 resolve、setSelected(N-1) 触发本 effect 把 findOpen
+  // 又设回 false。FindBar 来不及显示就被关掉，用户看到"Cmd+F 没反应"
   useEffect(() => {
-    setFindOpen(false);
-    setFindQuery("");
+    if (!open) {
+      setFindOpen(false);
+      setFindQuery("");
+      setFindActive(0);
+    }
+  }, [open]);
+
+  // 切换 entry 时只重置 findActive（保留 query 让搜索词跨请求复用）
+  useEffect(() => {
     setFindActive(0);
-  }, [selected, open]);
+  }, [selected]);
 
   /**
    * active 切换：用 DOM querySelectorAll 找第 N 个 mark，加 `data-active="true"`，
