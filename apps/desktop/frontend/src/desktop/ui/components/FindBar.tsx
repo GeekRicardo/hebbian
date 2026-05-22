@@ -34,7 +34,7 @@ export function FindBar({ open, onClose, state, onChange, onPrev, onNext }: Prop
   const invalid = state.query.length > 0 && state.total === 0;
 
   return (
-    <div className="absolute top-3 right-4 z-40 flex items-center gap-1 rounded-lg border border-border bg-background shadow-lg px-2 py-1.5 animate-slide-up">
+    <div className="absolute top-3 right-4 z-[55] flex items-center gap-1 rounded-lg border border-border bg-background shadow-lg px-2 py-1.5 animate-slide-up">
       <input
         ref={inputRef}
         value={state.query}

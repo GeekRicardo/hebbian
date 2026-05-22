@@ -107,6 +107,17 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   const [findCase, setFindCase] = useState(false);
   const [findActive, setFindActive] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
+  // 抽屉宽度可拖动调整；持久化到 localStorage 让下次打开记住
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return 700;
+    const saved = Number(window.localStorage.getItem("modelIoDrawerWidth"));
+    return Number.isFinite(saved) && saved >= 400 ? saved : 700;
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("modelIoDrawerWidth", String(drawerWidth));
+    }
+  }, [drawerWidth]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
@@ -302,19 +313,29 @@ export const ModelIoInspector = memo(function ModelIoInspector({
 
   if (!open) return null;
 
+  // 容器**不**铺满 / 不加遮罩 —— 让左侧 chat 区域保持可见、可滚动、可点
+  // 抽屉只占右侧，宽度可拖（drawerWidth 状态 + localStorage 持久化）
   return (
-    <div className="fixed inset-0 z-[100] flex" role="dialog" aria-modal="true">
-      {/* 半透明遮罩 —— 点它关闭 */}
-      <div
-        className="absolute inset-0 bg-background/40 backdrop-blur-[2px]"
-        onClick={onClose}
+    <div
+      id="model-io-drawer-root"
+      className="fixed top-0 right-0 bottom-0 z-[100] border-l border-border bg-background shadow-2xl flex"
+      style={{ width: drawerWidth }}
+      role="complementary"
+      data-testid="model-io-drawer"
+    >
+      {/* 左侧 resize handle —— 拖动改 drawerWidth；hover/active 加深可见 */}
+      <ResizeHandle
+        onResize={(delta) => {
+          setDrawerWidth((w) => {
+            // 向左拖（delta<0）加宽；向右拖（delta>0）缩窄
+            const next = w - delta;
+            const min = 400;
+            const max = Math.min(1400, window.innerWidth - 200);
+            return Math.max(min, Math.min(max, next));
+          });
+        }}
       />
-      {/* 右侧抽屉 */}
-      <div
-        id="model-io-drawer-root"
-        className="relative ml-auto h-full w-[min(1100px,75vw)] border-l border-border bg-background shadow-2xl flex flex-col"
-        data-testid="model-io-drawer"
-      >
+      <div className="flex-1 min-w-0 flex flex-col">
         <header className="h-12 shrink-0 px-4 flex items-center justify-between border-b border-border">
           <div className="flex items-center gap-2">
             <Button
@@ -445,6 +466,45 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     </div>
   );
 });
+
+/**
+ * 抽屉左缘可拖动 handle。鼠标按下进入"拖动模式"——document mousemove 监听
+ * 把 dx 累加 emit 给 onResize，mouseup 退出。期间锁 cursor 为 col-resize、
+ * 关闭 text selection，否则拖文字会高亮。
+ */
+function ResizeHandle({ onResize }: { onResize: (deltaX: number) => void }) {
+  const dragging = useRef(false);
+  const lastX = useRef(0);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 z-[1] select-none"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        dragging.current = true;
+        lastX.current = e.clientX;
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        const onMove = (ev: MouseEvent) => {
+          if (!dragging.current) return;
+          const delta = ev.clientX - lastX.current;
+          lastX.current = ev.clientX;
+          onResize(delta);
+        };
+        const onUp = () => {
+          dragging.current = false;
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      }}
+    />
+  );
+}
 
 function EmptyState() {
   return (
