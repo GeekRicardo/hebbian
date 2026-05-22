@@ -1722,14 +1722,23 @@ export const useStore = create<AppState>((set, get) => ({
   async regenerateFrom(assistantMsgId) {
     const cur = get().currentSession;
     if (!cur) return;
-    const idx = cur.messages.findIndex((m) => m.id === assistantMsgId);
-    if (idx < 1) return;
-    const prevUser = cur.messages[idx - 1];
-    if (prevUser.role !== "user") return;
-    await api.truncateInclusive(cur.id, prevUser.id);
+    const targetIdx = cur.messages.findIndex((m) => m.id === assistantMsgId);
+    if (targetIdx < 1) return;
+    // 重新生成的语义：回到最近一条 user message，丢掉它之后的一切（已完成的
+    // assistant、cancel 留下的 partial assistant、Interrupted / 切换 marker、
+    // tool 结果……），重新触发一轮 stream。只看 idx-1 的旧实现遇到 marker /
+    // 历次累积的 partial 时要么早 return 不响应，要么截到错位置——必须做完整
+    // 回溯。
+    let userIdx = targetIdx - 1;
+    while (userIdx >= 0 && cur.messages[userIdx].role !== "user") {
+      userIdx--;
+    }
+    if (userIdx < 0) return;
+    const targetUser = cur.messages[userIdx];
+    await api.truncateInclusive(cur.id, targetUser.id);
     const refreshed = await api.getSession(cur.id);
     set({ currentSession: refreshed });
-    await get().sendUserMessage(prevUser.content, prevUser.attachments ?? []);
+    await get().sendUserMessage(targetUser.content, targetUser.attachments ?? []);
   },
 
   async regenerateFromUser(userMsgId) {

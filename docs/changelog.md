@@ -3524,3 +3524,17 @@
   - DiffPanel 现有 `dummy "" hover-text-emerald-100` 之类的 emerald 字段已不再用，回头清理
   - `statusLabel` 仍是 dead code（前次留尾巴），保留以备复用
   - ToolCallTimeline 用户在 streaming 期间无法手动折叠正在运行的 tool call —— `status !== "done"` 优先级高于 `expandedKeys`。这跟 ChatGPT / Claude.ai 行为一致，运行中数据正在流，折叠了也意义不大；done 后用户能正常 toggle
+
+### 2026-05-22 — 修复"重新生成"在历次 cancel 累积下不能正确覆盖之前生成的
+
+- **Why**: 用户反馈点了多次"重新生成"后，session 历史里同一条 user message 后面累积了 7 个 assistant + 6 个 Interrupted marker（现场：`~/.hebbian/sessions/202605210931-9d2c1247/session.jsonl`），下次发请求时 messages 数组里背靠背 6 个 assistant 全部带给模型，又脏又费 token。正确语义应该是：每次"重新生成"覆盖之前的，无论之前是完成的还是 cancel 留下的 partial
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) `regenerateFrom`: 改回退算法。旧实现只看 `messages[idx-1]`，遇到不是 user 就早 return —— 但 cancel 流程会在 partial assistant 后面 push 一条 `Interrupted` marker（[apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) `persist_interrupted_assistant_output`），切 reasoning / provider 也会 push 切换 marker。所以重新生成时 idx-1 经常是 marker 而非 user。新实现：从 `idx-1` 往前线性扫，跳过 assistant / marker / tool 等任意非 user 角色，找到最近一条 user message，`truncate_inclusive(thatUser.id)` 一次性清掉它之后的所有累积，再 `sendUserMessage` 重发
+- **影响范围**: 仅前端 store。后端 `truncate_inclusive` 不动（行为正确），protocol 不变。`regenerateFromUser` / `editAndRerun` 已经直接持有 user message id，不受影响
+- **架构.md 评估**: 落在 §8 Desktop 命令系统的 store 内部行为修正，不引入新协议字段、不改 storage 模型、不动 agent_core 主路径。"重新生成"的语义本来就是回到上一条 user 重发，旧实现是个 off-by-step 的窄路径，不算设计变更
+- **复现 vs 验证**:
+  - **现场复现**: `~/.hebbian/sessions/202605210931-9d2c1247/session.jsonl` 行 8-15 共 7 个 assistant + 6 个 `MessageMeta::Interrupted` marker 累积在同一条 user 后；model_io 倒数第 1 次请求 `messages` 数组角色序列 `..., user, assistant, assistant, assistant, assistant, assistant, assistant, user, ...` —— 修前完整复现现象
+  - **验证（用户在 desktop dev 模式手动验证）**: 启动 stream → 中途点停止 → 点该条 assistant 上的"重新生成" → 看 `~/.hebbian/sessions/<sid>/session.jsonl` 该 user message 后面应该**只有 1 条新的 assistant**（或 `assistant + Interrupted marker` 一对，如果又 cancel 了），不再累积
+- **留尾巴**:
+  - 现场 partial 目录有 12 个孤儿 `.lock` 残留文件（无对应 `.partial.jsonl` 数据）。[crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs) `delete_partial` 只删 `.partial.jsonl`，不删 `.lock`，导致每次 cancel/正常结束都漏一个 lock 文件。独立 bug，本次未修
+  - 「为什么会累积 6 次」这条用户行为路径仍未完全锁定：理论上每次"重新生成"都该 truncate 干净，但现场 user id `8bed4a09` 跨 6 次 cancel 一直没换。可能路径：用户点的不是按钮而是走 `inputQueues` + `drainNext` 路径（[useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) L1525）—— drainNext 不带 truncate。本次只修语义正确性，不动 drainNext，下次重现时再补
