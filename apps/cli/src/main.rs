@@ -144,7 +144,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _guard = observability::init("heb", "warn");
+    observability::init("warn");
     let cli = Cli::parse();
 
     match cli.command {

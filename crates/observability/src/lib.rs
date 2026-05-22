@@ -1,204 +1,24 @@
 //! Hebbian 可观测性入口。
 //!
-//! 通过 [`init`] 一次性挂上：
-//! - `tracing_subscriber::fmt`（stderr 日志，env-filter 控制级别）
-//! - `tracing-opentelemetry` layer（把 `tracing` span 镜像成 OTel span）
-//! - OTLP HTTP exporter（trace + metrics），由 `OTEL_EXPORTER_OTLP_ENDPOINT` 控制
+//! 当前定位：**只装本地 stderr 日志**，不接外部 trace/metric backend。
 //!
-//! 没设 `OTEL_EXPORTER_OTLP_ENDPOINT` 时只装 stderr 日志，零网络副作用。
+//! 想看模型 IO 原文走 `~/.hebbian/sessions/<sid>/model_io.jsonl` + Model I/O
+//! 调试器抽屉 / `heb model-io <sid>`；想看 transcript 走 `session.jsonl`。
+//! 跨服务追踪 / SRE 监控大盘场景目前不存在，所以不挂 OTLP。
 //!
-//! ## 环境变量
-//!
-//! - `OTEL_EXPORTER_OTLP_ENDPOINT`：OTLP HTTP base URL（如 `http://localhost:4318`）。
-//! - `OTEL_EXPORTER_OTLP_HEADERS`：标准 OTel header 字符串，`k1=v1,k2=v2`，用于鉴权。
-//! - `HEBBIAN_OTEL_METRICS`：`0/false/off` 时关闭 metric 导出。默认 on。
-//!
-//! ## 内置 OTel 后台 runtime
-//!
-//! [`init`] 是同步函数，可以在 `#[tokio::main]` 之外的入口（如 Tauri 的 sync `run()`）
-//! 直接调用。批处理导出 task 跑在 observability 内部独占的 multi-thread runtime
-//! 上（1 worker），不依赖 surface 是否提供 tokio 上下文。
-//!
-//! ## Span 层级
-//!
-//! ```text
-//! run                                ← agent-core::harness::spawn_run
-//! ├── turn                           ← agent-core::agent_loop 每轮
-//! │   ├── compaction (条件触发)
-//! │   ├── microcompact (条件触发)
-//! │   ├── model.request              ← model-gateway provider
-//! │   │     attrs: gen_ai.system / .request.model / .usage.* / hebbian.streaming
-//! │   ├── tool.call                  ← agent-core::dispatch 每个 call
-//! │   │   ├── permission.check (条件触发)
-//! │   │     attrs: tool.name / .class / .outcome / .duration_ms
-//! ```
+//! 历史背景：本 crate 之前装过完整 `tracing-opentelemetry` + OTLP HTTP exporter
+//! + Histogram/Counter，但大字段（gen_ai.prompt / langfuse.*）一旦挂上 INFO span，
+//! `tracing_subscriber::fmt` 默认会把它们串到每条事件前缀刷屏，且 Langfuse 已停用。
+//! 详见 2026-05-22 changelog。
 
 pub mod attr;
-pub mod metrics;
 
-use std::collections::HashMap;
+use tracing_subscriber::EnvFilter;
 
-use once_cell::sync::Lazy;
-use opentelemetry::{global, KeyValue};
-use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::{
-    metrics::{PeriodicReader, SdkMeterProvider},
-    runtime,
-    trace::TracerProvider,
-    Resource,
-};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-/// OTel 批量导出 task 跑的内部 runtime。1 worker 即可（导出量小、阻塞少）。
-static OTEL_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("otel-export")
-        .enable_all()
-        .build()
-        .expect("build OTel export runtime")
-});
-
-/// `init` 返回的守卫。drop 时刷新并关闭 trace / metric provider，
-/// 进程退出前丢失数据的概率显著降低。
-pub struct OtelGuard {
-    tracer_provider: Option<TracerProvider>,
-    meter_provider: Option<SdkMeterProvider>,
-}
-
-impl Drop for OtelGuard {
-    fn drop(&mut self) {
-        if let Some(tp) = self.tracer_provider.take() {
-            let _ = tp.shutdown();
-        }
-        if let Some(mp) = self.meter_provider.take() {
-            let _ = mp.shutdown();
-        }
-    }
-}
-
-/// 一站式初始化：装日志 + (可选) OTLP 导出。同步函数，任何线程都能调。
+/// 装本地 stderr 日志。同步函数，任何线程都能调；重复调用安全。
 ///
-/// `OTEL_EXPORTER_OTLP_ENDPOINT` 缺失时只装 stderr 日志，返回空守卫。
-/// 重复调用安全（subscriber 已注册时静默跳过）。
-pub fn init(service_name: &str, default_filter: &str) -> OtelGuard {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_writer(std::io::stderr);
-
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
-    let Some(endpoint) = endpoint else {
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt_layer)
-            .try_init();
-        return OtelGuard {
-            tracer_provider: None,
-            meter_provider: None,
-        };
-    };
-
-    // 进入内部 runtime：BatchSpanProcessor / PeriodicReader spawn 后台 task 时
-    // 会落到 OTEL_RT 上，与 surface 的 runtime 完全隔离。
-    let _enter = OTEL_RT.enter();
-
-    let resource = Resource::new(vec![
-        KeyValue::new("service.name", service_name.to_string()),
-        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-    ]);
-
-    let endpoint = endpoint.trim_end_matches('/').to_string();
-    let headers = parse_otlp_headers();
-    let metrics_enabled = metrics_export_enabled();
-
-    let mut span_builder = opentelemetry_otlp::SpanExporter::builder()
-        .with_http()
-        .with_endpoint(format!("{endpoint}/v1/traces"))
-        .with_protocol(Protocol::HttpBinary);
-    if !headers.is_empty() {
-        span_builder = span_builder.with_headers(headers.clone());
-    }
-    let span_exporter = span_builder.build().expect("build OTLP span exporter");
-    let tracer_provider = TracerProvider::builder()
-        .with_resource(resource.clone())
-        .with_batch_exporter(span_exporter, runtime::Tokio)
-        .build();
-    let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "hebbian");
-    global::set_tracer_provider(tracer_provider.clone());
-
-    let meter_provider = if metrics_enabled {
-        let mut metric_builder = opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_endpoint(format!("{endpoint}/v1/metrics"))
-            .with_protocol(Protocol::HttpBinary);
-        if !headers.is_empty() {
-            metric_builder = metric_builder.with_headers(headers);
-        }
-        let metric_exporter = metric_builder.build().expect("build OTLP metric exporter");
-        let reader = PeriodicReader::builder(metric_exporter, runtime::Tokio).build();
-        let provider = SdkMeterProvider::builder()
-            .with_resource(resource)
-            .with_reader(reader)
-            .build();
-        global::set_meter_provider(provider.clone());
-        Some(provider)
-    } else {
-        None
-    };
-
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
-    if let Err(e) = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt_layer)
-        .with(otel_layer)
-        .try_init()
-    {
-        eprintln!("[observability] subscriber init failed (otel_layer not active): {e}");
-    }
-
-    OtelGuard {
-        tracer_provider: Some(tracer_provider),
-        meter_provider,
-    }
-}
-
-/// 解析 `OTEL_EXPORTER_OTLP_HEADERS`（OTel 标准格式 `k1=v1,k2=v2`）。
-/// 空 / 缺失返回空 map。值里允许出现 `=`（按第一个 `=` 切）。
-fn parse_otlp_headers() -> HashMap<String, String> {
-    let Ok(raw) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") else {
-        return HashMap::new();
-    };
-    raw.split(',')
-        .filter_map(|pair| {
-            let mut it = pair.splitn(2, '=');
-            let k = it.next()?.trim();
-            let v = it.next()?.trim();
-            if k.is_empty() {
-                None
-            } else {
-                Some((k.to_string(), v.to_string()))
-            }
-        })
-        .collect()
-}
-
-/// `HEBBIAN_OTEL_METRICS=0/false/off` 时关闭 metric 导出。默认 on。
-fn metrics_export_enabled() -> bool {
-    std::env::var("HEBBIAN_OTEL_METRICS")
-        .map(|v| {
-            !matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off"
-            )
-        })
-        .unwrap_or(true)
-}
-
-/// 仅装 stderr 日志，不接 OTLP。在不需要 OTel 时使用。
-pub fn init_logging_only(default_filter: &str) {
+/// `RUST_LOG` 优先；否则用 `default_filter`。
+pub fn init(default_filter: &str) {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let _ = tracing_subscriber::fmt()

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::future::{join_all, BoxFuture};
-use observability::{attr, metrics};
+use observability::attr;
 use protocol::{
     ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, RiskLevel,
     UserAnswer,
@@ -749,12 +749,10 @@ impl ToolDispatcher {
                     hebbian.permission.request_id = %request_id,
                     hebbian.permission.decision = Empty,
                 );
-                let wait_started = Instant::now();
                 let answer = waiter
                     .instrument(permission_span.clone())
                     .await
                     .unwrap_or(UserAnswer::Cancelled);
-                let wait_ms = wait_started.elapsed().as_millis() as f64;
                 let answer_label = match &answer {
                     UserAnswer::Selected { .. } => "selected",
                     UserAnswer::SelectedMulti { .. } => "selected_multi",
@@ -762,7 +760,6 @@ impl ToolDispatcher {
                     UserAnswer::Cancelled => "cancelled",
                 };
                 permission_span.record(attr::PERMISSION_DECISION, answer_label);
-                metrics::record_permission_wait("ask", answer_label, wait_ms);
 
                 sink(state.event(EventPayload::UserQuestionAnswered {
                     request_id,
@@ -778,7 +775,7 @@ impl ToolDispatcher {
                 } else {
                     attr::outcome::OK
                 };
-                record_tool_outcome(outcome, &call.name, wait_ms, false, content.len());
+                record_tool_outcome(outcome, &call.name, 0.0, false, content.len());
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -860,13 +857,10 @@ async fn await_path_decision(
         hebbian.permission.request_id = %request_id,
         hebbian.permission.decision = Empty,
     );
-    let wait_started = Instant::now();
     let decision_result = waiter.instrument(permission_span.clone()).await;
-    let wait_ms = wait_started.elapsed().as_millis() as f64;
     let decision = decision_result.map_err(|_| "路径审批通道已关闭".to_string())?;
     let decision_label = approval_decision_label(&decision);
     permission_span.record(attr::PERMISSION_DECISION, decision_label);
-    metrics::record_permission_wait("path_access", decision_label, wait_ms);
 
     sink(state.event(EventPayload::PermissionResolved {
         request_id,
@@ -921,13 +915,10 @@ async fn await_permission_decision(
                 hebbian.permission.request_id = %request_id,
                 hebbian.permission.decision = Empty,
             );
-            let wait_started = Instant::now();
             let outcome_result = waiter.instrument(permission_span.clone()).await;
-            let wait_ms = wait_started.elapsed().as_millis() as f64;
             let outcome = outcome_result.map_err(|_| "审批通道已关闭".to_string())?;
             let decision_label = approval_decision_label(&outcome);
             permission_span.record(attr::PERMISSION_DECISION, decision_label);
-            metrics::record_permission_wait("tool_call", decision_label, wait_ms);
 
             sink(state.event(EventPayload::PermissionResolved {
                 request_id,
@@ -942,13 +933,12 @@ async fn await_permission_decision(
     }
 }
 
-fn record_tool_outcome(outcome: &str, tool: &str, duration_ms: f64, truncated: bool, bytes: usize) {
+fn record_tool_outcome(outcome: &str, tool: &str, _duration_ms: f64, truncated: bool, bytes: usize) {
     let span = tracing::Span::current();
     span.record(attr::TOOL_OUTCOME, outcome);
     span.record(attr::TOOL_TRUNCATED, truncated);
     span.record(attr::TOOL_RESULT_SIZE, bytes as i64);
     span.record(attr::TOOL_NAME, tool);
-    metrics::record_tool_duration(tool, outcome, duration_ms);
 }
 
 /// 把"被拒"渲染为 ToolStarted/Finished + ToolResult，让 transcript 一致。

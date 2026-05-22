@@ -56,7 +56,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _guard = observability::init("hebweb", "info");
+    observability::init("info");
 
     let args = Args::parse();
     let data_dir = args

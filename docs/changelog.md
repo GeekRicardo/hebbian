@@ -3141,3 +3141,38 @@
   - 折叠态的 carried-over messages / 折叠的 PrettyJson 对象**不参与可视搜索**（DOM 没渲染），但 `perEntryMatchCount` 会算出包含的命中数 —— 用户看到徽章但搜索栏 total 为 0，可能困惑。后续可以让 query 触发 carried-over 自动展开，或者标注 "X 处命中在折叠区域，点击展开"
   - PrettyJson 默认 open=true 所以正常字段都搜得到；但用户主动折叠后命中数会突然变化（MutationObserver 会重数）—— 行为正确但 UX 上没明示
   - 暂不支持搜索"哪个请求行"专属（如 `#3`）或"哪个 message 序号"等结构化查询 —— 全文匹配已经够用
+
+### 2026-05-22 — 拆掉 OTLP / metrics 上报层，observability crate 缩成本地 stderr 日志 + attr 常量
+
+- **Why**: 用户指示"直接去掉 langfuse 部分以及上报部分，我现在就 model-io 来看就行了"。承认现状：项目主人一个人开发，没有跨服务追踪 / SRE 监控大盘场景；Langfuse 已在 2026-05-21 关停；真要看模型 IO 已有 `model_io.jsonl` + Model I/O 调试器 + `heb model-io` 三个准确即时的入口。继续为 OTLP exporter 维护"字段裁剪 / endpoint 配置 / header 鉴权 / Lazy meter dead 代码"性价比不高 —— 也是过去几次刷屏（langfuse.* / gen_ai.prompt）的根源。直接拆干净
+- **改动**:
+  - [crates/observability/Cargo.toml](../crates/observability/Cargo.toml): 删 `tokio` / `tracing-opentelemetry` / `opentelemetry` / `opentelemetry_sdk` / `opentelemetry-otlp` / `opentelemetry-semantic-conventions` / `once_cell` 7 个依赖，只剩 `tracing` + `tracing-subscriber`
+  - [crates/observability/src/lib.rs](../crates/observability/src/lib.rs): 大幅简化（200+ 行 → 30 行）。删 `OtelGuard` / `OTEL_RT` lazy runtime / `parse_otlp_headers` / `metrics_export_enabled` / `init_logging_only`。`init(default_filter)` 签名瘦身为单参数，只装 `tracing_subscriber::fmt`（stderr + env-filter）
+  - [crates/observability/src/metrics.rs](../crates/observability/src/metrics.rs): **整个文件删除**（167 行 Histogram / Counter / record_* 函数全无）
+  - [crates/observability/src/attr.rs](../crates/observability/src/attr.rs): 保留 —— 其他 crate 仍用 span field key 常量避免 magic string
+  - [crates/model-gateway/src/instrument.rs](../crates/model-gateway/src/instrument.rs): 删 `finish_span_and_metrics` / `record_usage_on_span` / `record_usage_metrics` / `error_finish_reason` 共 4 个函数；`InstrumentedClient::complete` / `stream` 简化为创建 span + 内层调用（没有 finish 钩子）；make_span 字段只剩 4 个小字段
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 删 4 处 `metrics::record_turn_duration` + 3 处 `metrics::record_run_outcome` 调用；`use observability::{attr, metrics}` 改成 `use observability::attr`；`turn_started: Instant` 不再算时延，删除 binding；保留 `span.record(STOP_REASON / OUTCOME, ...)` 调用
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 删 3 处 `metrics::record_permission_wait` + 1 处 `metrics::record_tool_duration`；`use observability::{attr, metrics}` 改成 `use observability::attr`；删 2 处 `wait_started` / `wait_ms` 已无消费方的局部 binding；`record_tool_outcome` 的 `duration_ms` 参数加 `_` 前缀
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `observability::init` 调用从 `(service_name, filter)` 改成 `(filter)`，删 `.manage(otel_guard)` Tauri state；注释里 OTEL_EXPORTER_OTLP_* 解释删
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs) / [apps/web-server/src/main.rs](../apps/web-server/src/main.rs): 同上，`let _guard = observability::init(...)` 改成 `observability::init(filter)`
+  - [docs/架构.md](../docs/架构.md):
+    - §1.0 顶层图：`Observability (OTLP/Metrics)` → `Observability (本地 stderr)`
+    - crate 树注释：`tracing + OTLP + metrics` → `tracing + 本地 stderr 日志（attr 常量）`
+    - §4.10 整章重写：明确"只装本地 stderr 日志，不接外部上报"的立场 + 列原因 + 列保留 / 删除的具体清单 + 说明未来想恢复 OTLP 走 git history 重装
+- **影响范围**:
+  - stderr：不再有 model.request span 上的大字段（prompt / completion / langfuse.*），每条 INFO 日志最多带 `model.request{gen_ai.system=... gen_ai.request.model=... streaming=...}: target: message`，单行 < 200 字符
+  - OTLP：**不再上报任何 trace 或 metric**。`OTEL_EXPORTER_OTLP_ENDPOINT` 等环境变量不再被读
+  - 测试：`cargo test -p agent-core --lib` 235 / `cargo test -p model-gateway --lib` 84 全过
+  - 依赖体积：release 二进制少一坨 opentelemetry-otlp + reqwest-rustls 链路
+  - 协议 / storage / 持久化 / 前端 / IPC：零影响
+- **取舍**:
+  - **彻底拆 OTLP vs 自定义 FormatFields 屏蔽 span 大字段**：选拆。后者保留 OTLP 但引入 fmt 层定制；项目没消费方，复杂度大于收益
+  - **保留 attr 模块 vs 一起删**：保留。span field key 常量避免 magic string 散落
+  - **保留 span.record(...) 调用 vs 删干净**：保留。调用本身是 no-op；删干净需要顺手清掉 `info_span!` 里所有 `= Empty` 声明，工作量大于收益
+  - **`record_tool_outcome` 的 `duration_ms` 参数留 `_` 前缀 vs 删参数**：留。删参数要改 6 处 call site，留 `_` 前缀代价更小
+- **验证**:
+  - `cargo check --workspace` clean
+  - `cargo build --workspace` clean（hebbian-web-server 既有 dead_code 警告与本次无关）
+  - `cargo test -p agent-core --lib` 235 / `-p model-gateway --lib` 84 全部 passed
+  - 复现路径：重启 desktop dev，跑任意对话 + tool_call，stderr 日志每行短而清晰，不再有 prompt / langfuse / 大对象转储
+- **留尾巴**: 无

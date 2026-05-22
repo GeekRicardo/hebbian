@@ -1723,17 +1723,11 @@ fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequ
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 从 CWD 向上递归找 `.env` 并加载到进程环境。已有的 shell env 不会被覆盖
-    // （shell > .env 优先级符合 12-factor 直觉）。必须早于 observability::init，
-    // 否则 OTEL_EXPORTER_OTLP_* 读不到。dev 模式 CWD 在 apps/desktop，向上找命中
+    // （shell > .env 优先级符合 12-factor 直觉）。dev 模式 CWD 在 apps/desktop，向上找命中
     // workspace 根的 .env；release 包从可执行文件所在目录向上找，需要时再加 from_path 兜底。
     let _ = dotenvy::dotenv();
 
-    // 同步入口：observability::init 内部用独占 tokio runtime 跑 OTel 导出 task，
-    // 与 Tauri 的 runtime 完全隔离。OTEL_EXPORTER_OTLP_ENDPOINT 未设时只装日志。
-    let otel_guard = observability::init(
-        "hebbian-desktop",
-        "agent_core=debug,model_gateway=info,warn",
-    );
+    observability::init("agent_core=debug,model_gateway=info,warn");
 
     // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
@@ -1760,7 +1754,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(HitlState::default()))
         .manage(Arc::new(ForceAutomodeState::default()))
-        .manage(otel_guard)
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
