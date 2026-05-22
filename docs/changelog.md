@@ -3259,3 +3259,34 @@
   - `pnpm exec tsc --noEmit` clean / `pnpm build` clean
   - 全 frontend grep 剩余 `console.debug/log` 数量 = 0；`console.warn/error/info` 还剩 8 处但都是一次性事件错误处理（App init / WS 连接），不在 hot path
 - **留尾巴**: 无
+
+### 2026-05-22 — 修流式跑时打开 Model I/O 抽屉直接卡死 — ModelIoInspector 没 memo
+
+- **Why**: 用户报「跑的时候打开 modelio 面板直接卡住，关也关不掉，滚动也卡」。根因在前端渲染传播链：
+  - ChatView 在流式期间每收到 `text_delta / tool_call_delta / tool_output_delta / reasoning` 等高频事件就 setState，整个 ChatView re-render
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx) `ModelIoInspector` **没包 React.memo** —— 跟着 ChatView 重渲
+  - Inspector 重渲触发内部 RequestDetail / N 条 MessageRow / 每条 MessageRow 里的嵌套 PrettyJson 全部重渲
+  - 一次 request 可能 50-200 条 messages，每条 message 里有 reasoning / content / tool_calls / results / attachments 等多个 PrettyJson 嵌套，**每秒几十次**这种重渲就把主线程堵死
+  - "关也关不掉" 是因为主线程被 React reconciler 占满，关闭按钮的 click 事件排不进队列
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx):
+    - `import { memo }` 补上
+    - `export function ModelIoInspector(...)` 改成 `export const ModelIoInspector = memo(function ModelIoInspector(...))`
+    - 末尾 `}` 改成 `});`
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx):
+    - 新增 `closeModelIo = useCallback(() => setModelIoOpen(false), [])` —— 给 memo 化的 Inspector 提供稳定 onClose 引用，避免 inline 闭包让 memo bust
+    - `onClose={() => setModelIoOpen(false)}` → `onClose={closeModelIo}`
+- **影响范围**:
+  - 静态分析：Inspector 三个 props 都稳定引用 —— `sessionId: string` / `open: boolean` / `onClose: useCallback`，memo 默认 shallow compare 全过 → 流式期间 ChatView 重渲不再穿透到 Inspector
+  - Inspector 自身 useState (selected/entries/findOpen 等) 的内部更新照常触发 Inspector 自己 + 子组件 re-render，但这只在用户操作 Inspector UI 时发生
+  - 关闭按钮点击事件能正常排进主线程队列
+  - 协议 / storage / 持久化 / 后端：零影响
+- **取舍**:
+  - **顶层 memo Inspector vs 给每个 MessageRow / PrettyJson 子组件加 memo**：选顶层 memo。流式 ChatView 重渲是问题源头，从 Inspector 这一层切断传播链是收益最大的单点改动。子组件 memo 收益边际递减（只在 Inspector 自己 setState 触发的子树更新时才有效）；如本次改完仍卡，再叠子组件 memo
+  - **抽 Inspector 出 ChatView 挂到 App 根 vs 保持在 ChatView 内部 + memo**：选 memo。抽到 App 根能彻底解耦但要从 store 直接读 `currentSession.id`，且 z-index / portal 锚点位置都要重新设计。memo 方案改 2 行 + 1 行 useCallback，效益足够
+- **验证**:
+  - `pnpm exec tsc --noEmit` clean / `pnpm build` clean
+  - 真实跑 hebweb + Playwright：HTTP 200 / `hasError: false` / Inspector 在 currentSession=null 时正常 early return（用户首启路径走得通）。**流式期间打开 Inspector 是否真的不卡**需要真 chat 数据 + 实流式跑，请用户在 desktop dev 验证
+- **留尾巴**:
+  - 没静态验证证明"流式期间打开 Inspector 不卡"。memo 改动是 React 标准 perf 模式，理论上 props 稳定就一定生效，但实际效果以真实跑数据 + 用户感知为准
+  - 子组件（RequestDetail / MessageRow / PrettyJson）仍没 memo。Inspector 自身 useState 更新时（如切换 selected）仍会重渲整个子树。如果真感到切换 selected 卡，再叠这一层 memo

@@ -1,5 +1,6 @@
 import {
   createContext,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -89,7 +90,11 @@ interface Props {
   onClose: () => void;
 }
 
-export function ModelIoInspector({ sessionId, open, onClose }: Props) {
+export const ModelIoInspector = memo(function ModelIoInspector({
+  sessionId,
+  open,
+  onClose,
+}: Props) {
   const [entries, setEntries] = useState<ModelIoEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -418,7 +423,7 @@ export function ModelIoInspector({ sessionId, open, onClose }: Props) {
       </div>
     </div>
   );
-}
+});
 
 function EmptyState() {
   return (

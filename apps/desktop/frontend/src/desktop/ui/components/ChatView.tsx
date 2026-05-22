@@ -324,6 +324,12 @@ export function ChatView() {
     []
   );
 
+  // 给 memo 化的 ModelIoInspector 提供稳定的 onClose 引用，避免每次 ChatView
+  // 重渲都生成新闭包让 memo bust。流式期间 ChatView 每条 delta 都重渲，没这层
+  // 稳定引用 Inspector 也会跟着重渲（内含 RequestDetail/N 条 MessageRow/嵌套
+  // PrettyJson），主线程被堵死。
+  const closeModelIo = useCallback(() => setModelIoOpen(false), []);
+
   /**
    * find 上下文打包：依赖搜索状态 + matchesPerMessage + activeLocation。
    * find 关闭时直接 null —— MessageList 走 null 分支，不为每个 bubble 算 find prop。
@@ -501,7 +507,7 @@ export function ChatView() {
         <ModelIoInspector
           sessionId={currentSession.id}
           open={modelIoOpen}
-          onClose={() => setModelIoOpen(false)}
+          onClose={closeModelIo}
         />
       ) : null}
 
