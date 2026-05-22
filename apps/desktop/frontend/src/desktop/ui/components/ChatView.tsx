@@ -176,64 +176,23 @@ export function ChatView() {
     if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [findOpen, active, totalMatches]);
 
-  if (!currentSession) {
-    return (
-      <div
-        className="flex-1 flex flex-col items-center justify-center text-center px-6 drag-region"
-        data-tauri-drag-region
-      >
-        <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-lg mb-4 no-drag">
-          <Sparkles className="w-7 h-7" />
-        </div>
-        <h2 className="text-lg font-semibold no-drag">开始一场新的对话</h2>
-        <p className="text-sm text-muted-foreground mt-1 max-w-sm no-drag">
-          在左侧点击 <b>新建对话</b>，或先前往供应商配置添加你的 API Key。
-        </p>
-        <div className="mt-5 flex items-center gap-2 no-drag">
-          <Button
-            onClick={() => {
-              newSession().catch((e) => {
-                toast.error(e.message || String(e));
-              });
-            }}
-          >
-            新建对话
-          </Button>
-          <Button variant="outline" onClick={() => setProviderDialogOpen(true)}>
-            供应商配置
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // ⚠️ 所有 hooks 必须在 early return 之前完成（React Hooks Rules）。
+  // currentSession 可能为 null（初次启动 / 还没选 session）—— 下面所有派生 hooks
+  // 都用 nullable handle，return 留到 hooks 全部声明之后再判。
 
-  const activePrompt = currentSession.prompt_id
-    ? prompts.find((p) => p.id === currentSession.prompt_id)
-    : undefined;
-  const sessionStarted = hasSessionStarted(currentSession);
-  const promptSelectionUnlocked = !sessionStarted;
-  const fallbackPromptId = pendingPromptId || promptsFile.default_prompt_id || "";
-  const editablePromptId = currentSession.prompt_id ?? fallbackPromptId;
-  const normalizedPromptId =
-    editablePromptId && prompts.some((p) => p.id === editablePromptId)
-      ? editablePromptId
-      : "";
-  const promptSummary = activePrompt?.name ?? "无 Agent";
+  // 简单派生：useCallback 的依赖会用到，必须在 useCallback 之前声明
   const isStreaming = !!streamingMessageId;
-  const userMessageHistory = useMemo(
-    () => currentSession.messages.filter((m) => m.role === "user").map((m) => m.content),
-    [currentSession.messages]
-  );
 
-  const latestTodos = extractLatestTodoSnapshot(currentSession, streamingParts);
+  const messages = currentSession?.messages ?? [];
+  const userMessageHistory = useMemo(
+    () => messages.filter((m) => m.role === "user").map((m) => m.content),
+    [messages]
+  );
 
   /**
    * 一次性算出 boundary 相关派生：indices / lastIdx / 每条非 boundary 归属哪个 boundary id /
    * 每个 boundary 折叠多少条原始消息。这些都只依赖 messages 数组本身（同一 ref 时不重算）。
-   *
-   * 算完用 useMemo 缓存：传给 MessageList 时 props ref 稳定，配合 memo 屏蔽无关重渲染。
    */
-  const messages = currentSession.messages;
   const boundaryInfo = useMemo(() => {
     const indices: number[] = [];
     messages.forEach((m, i) => {
@@ -382,6 +341,54 @@ export function ChatView() {
         : null,
     [findOpen, findQuery, findRegex, findCase, matchesPerMessage, activeLocation]
   );
+
+  // ── 以下为非-hook 派生 & early return。所有 hooks 必须在这条线之上。 ──
+
+  if (!currentSession) {
+    return (
+      <div
+        className="flex-1 flex flex-col items-center justify-center text-center px-6 drag-region"
+        data-tauri-drag-region
+      >
+        <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-lg mb-4 no-drag">
+          <Sparkles className="w-7 h-7" />
+        </div>
+        <h2 className="text-lg font-semibold no-drag">开始一场新的对话</h2>
+        <p className="text-sm text-muted-foreground mt-1 max-w-sm no-drag">
+          在左侧点击 <b>新建对话</b>，或先前往供应商配置添加你的 API Key。
+        </p>
+        <div className="mt-5 flex items-center gap-2 no-drag">
+          <Button
+            onClick={() => {
+              newSession().catch((e) => {
+                toast.error(e.message || String(e));
+              });
+            }}
+          >
+            新建对话
+          </Button>
+          <Button variant="outline" onClick={() => setProviderDialogOpen(true)}>
+            供应商配置
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const activePrompt = currentSession.prompt_id
+    ? prompts.find((p) => p.id === currentSession.prompt_id)
+    : undefined;
+  const sessionStarted = hasSessionStarted(currentSession);
+  const promptSelectionUnlocked = !sessionStarted;
+  const fallbackPromptId = pendingPromptId || promptsFile.default_prompt_id || "";
+  const editablePromptId = currentSession.prompt_id ?? fallbackPromptId;
+  const normalizedPromptId =
+    editablePromptId && prompts.some((p) => p.id === editablePromptId)
+      ? editablePromptId
+      : "";
+  const promptSummary = activePrompt?.name ?? "无 Agent";
+  const latestTodos = extractLatestTodoSnapshot(currentSession, streamingParts);
+
   async function handleRegenTitle() {
     setTitleLoading(true);
     try {

@@ -3229,3 +3229,22 @@
   - 用户离底时新消息进来没有视觉提示（"↓ 有新内容"角标 + 一键回底）—— 等用户提具体诉求再做
   - streaming bubble + injectedSinceStream 仍跟 ChatView 一起重渲；理论上可以再抽 `<StreamingPanel>`，但实际它们本来就在跟随状态变化，抽出来收益不大
   - 没用 react-window 做 virtualization。如果对话长到几百条 message + 大量 tool_call，本次优化可能不够；那时再上 virtualization
+
+### 2026-05-22 — 修 ChatView 一片空白 — 上一条 perf 改动违反 React Hooks Rules
+
+- **Why**: 用户报 `7a95f30` 提交后打开 desktop 一片空白。根因：上一条 perf 改动里我新加的 `useMemo` / `useCallback`（`boundaryInfo / lastUserMsgId / handleSend / handleFork / ...` 等 11 处 hook）写在了已存在的 `if (!currentSession) return <空白页>` 后面。当 `currentSession` 为 null（初次启动 / 还没选 session）时早 return 跳过下半段所有 hooks → React 渲染前后 hook 调用次数不一致，运行时抛 "Rendered fewer hooks than expected"，整组件树爆掉，root 一片空白。**typed 检查（tsc）和 build（vite）都无法捕获 hooks-order 运行时违反**——这是我没自测就提交的代价
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx):
+    - 把所有新加的 `useMemo` / `useCallback`（boundaryInfo / lastUserMsg / 6 个 useCallback / findCtxForList）上移到 `if (!currentSession) return` **之前**
+    - 内部所有 `currentSession.messages` 用法改成 `const messages = currentSession?.messages ?? []` —— null 时回退到空数组，hooks 仍然按相同顺序调用，只是结果空
+    - `isStreaming = !!streamingMessageId` 从 early return 之后移到 hooks 区段开头（多个 useCallback 依赖它）
+    - early return + 非-hook 派生（`activePrompt / sessionStarted / promptSelectionUnlocked / fallbackPromptId / editablePromptId / normalizedPromptId / promptSummary / latestTodos`）+ 普通 `function handleRegenTitle / handlePromptChange` 全部放到 hooks 区段之后、main return 之前
+    - 加注释「⚠️ 所有 hooks 必须在 early return 之前完成（React Hooks Rules）」+ 「── 以下为非-hook 派生 & early return。所有 hooks 必须在这条线之上。──」分隔提示
+- **验证（这次自测了）**:
+  - `pnpm exec tsc --noEmit` clean / `pnpm build` clean
+  - **真实跑 hebweb + Playwright 验证**：`hebweb --port 38090 --static-dir apps/desktop/dist`，Playwright 打开 → 检查 console errors（只有无关的 favicon 404）+ DOM (`bodyTextLen=90, rootChildren=1, rootHtmlLen=10350`) → 看到 ChatView 的"开始一场新的对话 / 新建对话 / 供应商配置"早 return 内容 → 点击「新建对话」按钮 → `rootHtmlLen` 从 10350 增到 12020、`hasError: false`，ChatView 在 `currentSession` 有值的分支也成功渲染
+- **教训**:
+  - CLAUDE.md「修 bug 必经流程」阶段 B 明确要"修完后再用同一脚本验证现象消失"。我上次只跑了 tsc + build，没跑真实渲染，被「编译过 ≠ React Hooks Rules 合规」坑了
+  - React Hooks Rules 是运行时检查（dev 模式 React 抛 invariant 错误，prod 直接乱套），静态分析（tsc / TypeScript Language Server）抓不到；ESLint 的 `react-hooks/rules-of-hooks` 能抓但 vite 默认不跑 lint
+  - 下次写「hooks 上移到 conditional return 之前」这种重构必跑一次 Playwright sanity check
+- **留尾巴**: 无
