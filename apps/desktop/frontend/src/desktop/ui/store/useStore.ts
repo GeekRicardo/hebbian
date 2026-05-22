@@ -982,13 +982,39 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
   async triggerWakeupResume(sessionId, wakeupXml) {
+    // 三分支决策（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed 自动通知"）：
+    //   active run（slot.requestId 在）→ 走 inject_user_message 插 PendingInputs，
+    //     当前 agent_loop 在下一个 boundary drain，**不开新 run**
+    //   idle 前台 → 开新 run / resume checkpoint（旧路径）
+    //   非前台 → 暂存到 pendingWakeups，切回该 session 时自动消费
     const cur = get().currentSession;
-    if (cur?.id === sessionId) {
-      // 前台 session：复用 sendUserMessage 路径，backend 检测 checkpoint 走 resume
+    const isForeground = cur?.id === sessionId;
+    const slot = get().sessionStreams[sessionId];
+    const activeRequestId = slot?.requestId;
+
+    if (isForeground && activeRequestId) {
+      try {
+        // wakeup XML 是 system notification，**不**push 到 injectedSinceStream 显示——
+        // 它不是用户主动发的消息，UI 不该把它当用户气泡渲染。落盘 / transcript 由
+        // agent_loop drain pending_inputs 时统一处理。
+        await api.injectUserMessage(sessionId, activeRequestId, wakeupXml, []);
+        return;
+      } catch (e) {
+        // active run 已结束的边界 race → 回落到开新 run 路径
+        console.warn(
+          "[triggerWakeupResume] inject failed, falling back to sendUserMessage:",
+          e
+        );
+      }
+    }
+
+    if (isForeground) {
+      // 前台 idle：复用 sendUserMessage（backend 检测 checkpoint 走 resume；
+      // 无 checkpoint 走新 run）
       await get().sendUserMessage(wakeupXml, []);
       return;
     }
-    // 非前台：暂存到 pendingWakeups，等用户切到这个 session 时自动消费
+    // 非前台：暂存
     get().queueWakeupForSession(sessionId, wakeupXml);
   },
 

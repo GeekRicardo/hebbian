@@ -538,3 +538,238 @@ xL_ = 30_000        ms     PushNotification idle 阈值
 recurringMaxAgeMs = 604_800_000 ms  循环 cron 7 天过期
 cacheLeadMs       =      15_000 ms  整点提前点火量
 ```
+
+---
+
+## 附录 C：2.1.144 增量复查（2026-05-22）
+
+本附录记录一次针对新版本 2.1.144（2026-05-19 发布）的复查发现，主线机制与 2.1.140 一致（§1-§7 仍然成立），只新增以下数据。
+
+### C.1 实地捕获的 `<task-notification>` 样本
+
+复查过程中，被探索的 CC 自己（VSCode 插件外的 native CLI）恰好通过 system-reminder 通道注入了一条真实通知到当前对话——直接复制如下，作为 §8.1 通知载荷格式的实例：
+
+```
+[SYSTEM NOTIFICATION - NOT USER INPUT]
+This is an automated background-task event, NOT a message from the user.
+Do NOT interpret this as user acknowledgement, confirmation, or response to any pending question.
+
+<task-notification>
+<task-id>bnr0t3sed</task-id>
+<tool-use-id>toolu_01WM1EPcA4ycAraqh8wyhPMv</tool-use-id>
+<output-file>/private/tmp/claude-502/.../tasks/bnr0t3sed.output</output-file>
+<status>completed</status>
+<summary>Background command "TaskOutput 工具用法" completed (exit code 0)</summary>
+</task-notification>
+```
+
+补充几个 §8.1 没写到的细节：
+
+- **头部前缀**：`[SYSTEM NOTIFICATION - NOT USER INPUT]` + 显式声明「不是用户回应，别把它当 confirm」——一段强 prompt-injection 防御
+- **`<tool-use-id>` 字段**：把通知关联回触发它的 `tool_call.id`（如 `toolu_01WM1EPcA4ycAraqh8wyhPMv`），让模型在 transcript 里能反查上下文
+- **status 枚举**：从 binary 看是 `completed / killed / stopped` 三态
+- **task_id 形态**：9 字符 base36 风格（如 `bnr0t3sed`），不是 UUID
+
+hebbian `<wakeup>` 协议（§4.12.5）目前缺这个头部前缀——下一轮迭代可以照抄。
+
+### C.2 工具名 alias 表
+
+binary 里直接看到的：
+
+```js
+{
+  AgentOutputTool: "TaskOutput",
+  BashOutputTool:  "TaskOutput",
+  ListPeers:       "ListAgents",
+  Brief:           "SendUserMessage"
+}
+```
+
+`TaskOutput` 是统一对外名，`BashOutputTool` / `AgentOutputTool` 是内部 class。`Brief → SendUserMessage` 也很有意思——内部叫「简报」，对模型暴露成「给用户发消息」。
+
+### C.3 Bash 启动后的提示文本
+
+```
+Command running in background with ID: bnr0t3sed.
+Output is being written to: /private/tmp/claude-502/<encoded-cwd>/<session>/tasks/bnr0t3sed.output.
+You will be notified when it completes.
+To check interim output, use Read on that file path.
+```
+
+**关键设计**：CC 鼓励模型用 `Read` 工具直接读 output 文件（享受 offset/limit 分页），不优先走 `TaskOutput`。也就是说 `TaskOutput` 主要服务于「无文件路径的 task」（如 hosted agent）；纯 Bash 任务 Read 文件即可。
+
+hebbian 当前用专门的 `BashOutput` 拿 task_id 拉——和 CC 设计哲学有差异。短期不动，长期可参考。
+
+### C.4 完整 hook 体系（24 项，2.1.144）
+
+binary 里穷举到的 hook 名单，按字母排序：
+
+```
+ConfigChange         CwdChanged           Elicitation
+ElicitationResult    FileChanged          Notification
+PermissionDenied     PermissionRequest    PostCompact
+PostToolBatch        PostToolUse          PostToolUseFailure
+PreCompact           PreToolUse           SessionEnd
+SessionStart         Setup                Stop
+SubagentStop         TaskCompleted        TaskCreated
+TeammateIdle         UserPromptExpansion  UserPromptSubmit
+WorktreeRemove
+```
+
+与后台任务 / wakeup 相关的几个：
+
+- **`Stop`**：「Right before Claude concludes its response」——turn 结束前钩子。用于「确认无 active task 才允许结束」
+- **`SubagentStop`**：subagent 结束前
+- **`PostToolBatch`**：「Fires once after every tool call in a batch has resolved, before the next model request. Input includes `tool_calls` (array of `{tool_name, tool_input, tool_use_id, tool_response}`)」——**批粒度**，比 PostToolUse 单粒度更高效
+- **`FileChanged`**：watched file 变化时触发（配合 Monitor 工具或 `monitors.json` 声明式 watch）
+- **`TaskCreated` / `TaskCompleted`**：teammate 任务级
+- **`Notification`**：notification 派发时（type ∈ `permission_prompt / idle_prompt / auth_success / elicitation_dialog / elicitation_complete / elicitation_response`）
+
+### C.5 async hook + exit code 2 唤醒
+
+binary 关键短语：
+
+```
+If true, hook runs in background and wakes the model on exit code 2 (blocking error). Implies async.
+```
+
+**含义**：hook 可声明 `async: true`，进程后台运行；退出 code 2 时**唤醒模型**——和 hebbian wakeup 思路完全一致。借鉴价值高（让 hook 共享 wakeup 协议）。
+
+### C.6 plugin-level `monitors.json` 声明式 watch
+
+```
+Background watch scripts the host arms as persistent Monitor tasks
+(unsandboxed, same trust tier as hooks) so plugins need not instruct
+the model to arm them.
+When omitted, monitors/monitors.json at the plugin root is loaded if present.
+```
+
+CC 插件根目录可以放 `monitors/monitors.json`，host 启动时自动 arm 这些 Monitor task——模型不用在 transcript 里主动 arm。
+
+这跟 §9.3 A 节推荐的 `MonitorTool` 是配套：工具级 + 插件级两种 arm 方式。
+
+### C.7 background session 概念（升格设计）
+
+```
+Delete a background session and its worktree. Unlike `stop`, works on already-exited sessions.
+Restart a background session (or all of them) so it picks up the current Claude binary.
+```
+
+CC 把「长跑任务」可以升格为 **background session**（独立 git worktree）。
+- `stop` 杀进程
+- `delete` 同时删 session 和 worktree（已退出的也能删）
+- `restart` 重启 session 以拾取最新 binary 版本
+
+这是比 §1 / §2 的 background shell 更高层抽象——session-level 隔离。hebbian 当前 BackgroundShells 是单进程 / 单 log 文件，没有 worktree 隔离。
+
+升级路径（如果未来需要）：当 task 超过某阈值（运行 > 5 min 或 output > N KB）自动 promote 为 session-with-worktree。
+
+### C.8 telemetry 命名空间
+
+```
+tengu_bash_command_explicitly_backgrounded     # 模型显式 run_in_background=true
+tengu_bash_command_timeout_backgrounded        # 超时转后台
+tengu_powershell_command_explicitly_backgrounded
+tengu_powershell_command_interrupt_backgrounded
+tengu_powershell_command_timeout_backgrounded
+```
+
+`tengu` 是 CC 内部 telemetry 前缀（疑似 internal codename）。三态：explicitly / timeout / interrupt（用户 Ctrl+B）。hebbian 未来加 telemetry 时可参考这套命名。
+
+---
+
+## 附录 D：UI 端形态分析
+
+复查 2.1.144 的 webview UI 端，意外发现：
+
+### D.1 webview 几乎全是 monaco editor
+
+| 文件 | 大小 | 内容 |
+|---|---|---|
+| `extension.js` | ~2 MB | host 端 IPC 转发；几乎无业务文本 |
+| `webview/index.js` | ~4.8 MB | 99% 是 monaco editor bundle + tailwind 工具类 |
+| `webview/index.css` | ~375 KB | 同上，主要 monaco 类名 |
+
+webview 里反复 grep 业务关键词（`BackgroundTask` / `sidebar` / `RunSuspended` / `background_task`）**全部 0 命中**。
+
+### D.2 推断：CC 没有专门的「后台任务面板」UI
+
+所有 task 状态信息都通过 chat 流呈现：
+
+- task 启动 → 普通 tool_call 卡片（带「Background task ID: ...」result）
+- task 通知 → 在新的一轮 turn 里以 `<task-notification>` 段显示在 transcript
+- task 输出 → 模型 Read output 文件，结果以普通 Read tool_call 卡片显示
+
+**没有右侧 sidebar / 独立浮动 panel**——所有信息时间序混排在对话流。
+
+### D.3 CC 派 vs hebbian 派 UI 哲学对比
+
+| 维度 | CC（chat 流内嵌） | hebbian 当前（独立面板） |
+|---|---|---|
+| 信息源 | 单一：transcript | 双：注册表 + transcript |
+| 「当前在跑什么」可见性 | 需翻历史 transcript | 一眼可见 |
+| 跳转 | 自由滚动 | 用户提议「点卡片跳到对应 chat tool_call」 |
+| 已完成 task | 通知 XML 一直留 transcript | 注册表清掉 / panel 不显示 |
+| 简单度 | UI 简单，逻辑全在 transcript | 需要数据同步 |
+| 多任务体感 | 同时跑 5 个 monitor 时很乱 | panel 聚类清晰 |
+
+### D.4 hebbian 后续 panel 重构方向（结合用户需求）
+
+用户已要求：
+1. 完成的 task 不消失（折叠保留）
+2. 按 tool_call 顺序展示（running 优先）
+3. 点击卡片跳转 chat 对应 tool_call 位置
+4. 右侧 VSCode 风 sidebar（小图标 → hover 稍大 → 点击展开挤压 chat）
+
+这是 CC 派 + hebbian 派的折中——**保留 hebbian 的「独立 panel」形态，但把数据源单一化（panel 仅作为 transcript 的过滤聚合视图）**：
+
+```
+session.messages (source of truth)
+  └── filter(tool_call.name === "Bash" && input.run_in_background)
+       └── 排序：[运行中 (查 BackgroundShells.get)] + [已完成 (按 tool_call 顺序)]
+            └── 渲染：每张卡片
+                ├── 命令 + 状态徽章 (running / exited / killed / failed)
+                ├── 实时输出（运行中：polling /read_background_task_output）
+                ├── 已完成：从 tool_call.result 取最终输出
+                └── 点击 → scroll-to-message(`#msg-${tool_call.message_id}`)
+```
+
+收益：
+
+- panel 不持有独立状态，永远跟 transcript 一致
+- session 切换 / 重启都不会丢历史 task
+- 用户表述「点击跳转」自然落到 message id 锚点
+
+---
+
+## 附录 E：针对当前 sidebar 重构的借鉴优先级
+
+按用户对当前 hebbian sidebar 重构需求的相关性排序（与 §10 的工具体系借鉴不同，这里聚焦 UI / UX）：
+
+### E.1 直接借鉴
+
+1. **`<task-notification>` 头部前缀**（CC 派 prompt injection 防御）
+   - 现状：hebbian wakeup 注入的 user message 没有「这不是用户消息」头部
+   - 改：`<wakeup>` 协议加 `[SYSTEM NOTIFICATION - NOT USER INPUT]` 前缀
+   - 收益：模型不会把通知误判为用户 confirm
+
+2. **task 输出落到磁盘文件、模型用 Read 读路径**（vs 走专门工具）
+   - CC：output 在 `<session>/tasks/<task_id>.output`，模型 Read 该路径
+   - hebbian：output 在 `<session>/bg/<task_id>.log`，模型用 BashOutput 拉
+   - 后续优化方向：可以告诉模型路径让它 Read，BashOutput 主要给「需要等通知 + 增量游标」场景
+
+### E.2 不冲突但可参考
+
+3. **「completed task 不消失」 = 数据源单一化（transcript-derived）**
+   - 见附录 D.4
+   - 改：BackgroundTaskPanel 数据源切到 session.messages 派生
+
+4. **PostToolBatch hook**（与 panel 重构无关，但是顺手的工程价值）
+   - 改：hebbian PostToolUse 改 batch 粒度（一批 tool_call 完成后触发一次）
+
+### E.3 与用户需求正交，不在本轮做
+
+5. CC 派的「全部 in chat 流」UI ——用户明确要 sidebar 设计，不采纳
+6. Monitor 工具体系（见 §9.3.A）——独立大特性，未来路线图
+7. background session + worktree（见 §C.7）——长期演进方向
+

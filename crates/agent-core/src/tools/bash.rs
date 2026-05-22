@@ -145,6 +145,10 @@ impl Tool for BashTool {
             .register(command.to_string(), cwd_str, background, log_dir, child);
 
         if background {
+            // 自动 arm 通知（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed will notify"）：
+            // task 进入终态时 WakeupScheduler 投递 BgTaskFinished 事件，surface 据此
+            // 把 task-notification 注入下一轮 user message——不要求模型显式调 WaitForTask。
+            arm_auto_notification(&ctx, &shell.task_id);
             let mut text = format!(
                 "[bash] 已在后台启动：task_id={} cmd=`{}`\n",
                 shell.task_id, command
@@ -153,7 +157,7 @@ impl Tool for BashTool {
                 text.push_str(&format!("完整输出落盘到：{}\n", p.display()));
             }
             text.push_str(&format!(
-                "用 BashOutput {{\"task_id\": \"{}\"}} 查询进度。",
+                "用 BashOutput {{\"task_id\": \"{}\"}} 查询进度；完成时会自动通知你，无需 poll。",
                 shell.task_id
             ));
             return Ok(text);
@@ -191,12 +195,15 @@ impl Tool for BashTool {
         if !exited {
             // 超时：进程仍在跑，转后台。
             shell.promote_to_background();
+            // 与显式 run_in_background=true 同款自动 arm 通知：超时转后台后，task 终态
+            // 也由 WakeupScheduler 主动通知，模型不需要 poll。
+            arm_auto_notification(&ctx, &shell.task_id);
             let mut text = format!(
                 "[bash] 命令在 {timeout}s 内未结束，已转后台：task_id={}\n",
                 shell.task_id
             );
             text.push_str(&format!(
-                "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止。\n",
+                "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止；完成时会自动通知。\n",
                 shell.task_id
             ));
             if !buffer.is_empty() {
@@ -212,6 +219,30 @@ impl Tool for BashTool {
         self.shells.unregister(&shell.task_id);
         Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES))
     }
+}
+
+/// 启动后台 task 后自动 arm 一个 WakeupScheduler 监听（架构 §4.12.5 修订）。
+/// task 终态时投递 BgTaskFinished 事件，surface 据此把 task-notification 注入下一轮
+/// user message——CC 2.1 同款"completed 自动通知"。携带 `tool_use_id` 让通知能反查
+/// 到触发它的 tool_call。
+///
+/// 没有 session_id / run_id（CLI 单跑 / 单测路径）时跳过——没有完整 RunState 串接，
+/// arm 也唤不醒任何 ResumeHandler，徒增日志噪音。
+fn arm_auto_notification(ctx: &ToolCtx, task_id: &str) {
+    let (Some(sid), Some(rid)) = (ctx.session_id.as_deref(), ctx.run_id.as_deref()) else {
+        return;
+    };
+    let call_id = if ctx.call_id.is_empty() {
+        None
+    } else {
+        Some(ctx.call_id.clone())
+    };
+    crate::wakeup::WakeupScheduler::global().arm_bg_task(
+        sid.to_string(),
+        rid.to_string(),
+        task_id.to_string(),
+        call_id,
+    );
 }
 
 /// 把 shell 当前未读的 tail buffer 抽出来：emit 给 surface 一份、累加到本地 buffer 一份。
@@ -433,6 +464,8 @@ mod tests {
         let ctx = crate::tools::ToolCtx {
             call_id: "test_call".into(),
             progress: Some(progress.clone()),
+            session_id: None,
+            run_id: None,
         };
 
         // 三行隔 300ms 输出——足够 forwarder 抽到 ≥2 段 chunk。
@@ -478,6 +511,8 @@ mod tests {
         let ctx = crate::tools::ToolCtx {
             call_id: "test_call".into(),
             progress: Some(progress.clone()),
+            session_id: None,
+            run_id: None,
         };
 
         let out = bash

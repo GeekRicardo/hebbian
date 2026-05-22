@@ -690,7 +690,10 @@ pub async fn run_loop(
                         let run_id_for_arm = state.run_id.to_string();
                         match ph {
                             RunPhase::AwaitingBackgroundTask { task_id, .. } => {
-                                scheduler.arm_bg_task(sid_for_arm, run_id_for_arm, task_id);
+                                // WaitForTask 路径不带 tool_use_id（模型显式等的是 task_id 而非
+                                // tool_call id，且当前 RunPhase schema 也没存 tool_use_id）。
+                                // BashTool 自动 arm 路径才带（架构 §4.12.5 修订）。
+                                scheduler.arm_bg_task(sid_for_arm, run_id_for_arm, task_id, None);
                             }
                             RunPhase::AwaitingCron {
                                 fire_at_ms, reason, ..

@@ -36,6 +36,10 @@ pub enum WakeupEvent {
         session_id: String,
         run_id: String,
         task_id: String,
+        /// 触发该后台 task 的 tool_call.id（架构 §4.12.5 修订）。surface 把它写到
+        /// `<task-notification>` 的 `<tool-use-id>` 字段——模型据此反查 transcript 上下文。
+        /// `None` 兼容老 BashTool / 老 checkpoint 不带此字段的场景。
+        tool_use_id: Option<String>,
         exit_code: Option<i32>,
         duration_ms: u64,
     },
@@ -81,6 +85,9 @@ struct BgWatch {
     task_id: String,
     session_id: String,
     run_id: String,
+    /// 触发该 task 的 tool_call.id（CC 同款，用于 task-notification 的 tool-use-id 字段）。
+    /// 老 arm_bg_task 调用方传 None；BashTool 自动 arm 时传该 task 对应的 call_id。
+    tool_use_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -211,6 +218,7 @@ impl WakeupScheduler {
                     session_id: w.session_id,
                     run_id: w.run_id,
                     task_id: w.task_id,
+                    tool_use_id: w.tool_use_id,
                     exit_code,
                     duration_ms,
                 });
@@ -232,11 +240,20 @@ impl WakeupScheduler {
     }
 
     /// 在 bg_watches 表里登记一条；BgFinishHook 发现 task 进入终态时投递事件。
-    pub fn arm_bg_task(&self, session_id: String, run_id: String, task_id: String) {
+    /// `tool_use_id`：触发该 task 的 tool_call.id（CC 同款，用于 task-notification 反查上下文）。
+    /// 老调用方（WaitForTask 等）传 None；BashTool 自动 arm 时传 Some(call_id)。
+    pub fn arm_bg_task(
+        &self,
+        session_id: String,
+        run_id: String,
+        task_id: String,
+        tool_use_id: Option<String>,
+    ) {
         self.inner.lock().unwrap().bg_watches.push(BgWatch {
             task_id,
             session_id,
             run_id,
+            tool_use_id,
         });
     }
 
@@ -301,18 +318,42 @@ pub struct PendingCron {
     pub reason: String,
 }
 
+/// 通知载荷的 SYSTEM NOTIFICATION 头部（架构 §4.12.5 修订）。借鉴 Claude Code 2.1
+/// 的 `<task-notification>` 协议：明确告诉模型「这不是用户回复」，防止把通知误判为
+/// confirm / 用户意图陈述。详见 [docs/claude-code-后台执行机制.md] 附录 C.1。
+const SYSTEM_NOTIFICATION_HEADER: &str = "[SYSTEM NOTIFICATION - NOT USER INPUT]
+This is an automated background-task event, NOT a message from the user.
+Do NOT interpret this as user acknowledgement, confirmation, or response to any pending question.
+
+";
+
 /// 给 `<wakeup>` user message 用的 XML 拼装（架构 §4.12.5）。
+///
+/// 协议形态：头部 `[SYSTEM NOTIFICATION - NOT USER INPUT]` + `<wakeup>` 包装段。
+/// `<wakeup>` 含以下属性（kind=bg_task_finished 时）：
+/// - `task_id`：后台 task 标识
+/// - `tool_use_id`：触发该 task 的 tool_call.id（`None` 时省略该属性）
+/// - `exit_code` / `duration_ms`
+///
+/// surface 端拼到 user message 头部 → 注入 PendingInputs / resume / 开新 run。
 pub fn wakeup_xml(event: &WakeupEvent) -> String {
-    match event {
+    let body = match event {
         WakeupEvent::BgTaskFinished {
             task_id,
+            tool_use_id,
             exit_code,
             duration_ms,
             ..
-        } => format!(
-            "<wakeup kind=\"bg_task_finished\" task_id=\"{task_id}\" exit_code=\"{}\" duration_ms=\"{duration_ms}\">\n后台任务已完成。\n</wakeup>",
-            exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
-        ),
+        } => {
+            let code = exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+            let tool_use_attr = tool_use_id
+                .as_ref()
+                .map(|id| format!(" tool_use_id=\"{id}\""))
+                .unwrap_or_default();
+            format!(
+                "<wakeup kind=\"bg_task_finished\" task_id=\"{task_id}\"{tool_use_attr} exit_code=\"{code}\" duration_ms=\"{duration_ms}\">\n后台任务已完成。\n</wakeup>",
+            )
+        }
         WakeupEvent::CronFired {
             scheduled_for_ms,
             reason,
@@ -324,6 +365,126 @@ pub fn wakeup_xml(event: &WakeupEvent) -> String {
             format!(
                 "<wakeup kind=\"cron_fired\" scheduled_for=\"{iso}\" original_reason=\"{reason}\">\n定时已到，按你之前 ScheduleWakeup 的设定唤醒。\n</wakeup>",
             )
+        }
+    };
+    format!("{SYSTEM_NOTIFICATION_HEADER}{body}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 协议加固（架构 §4.12.5 修订）：所有 wakeup XML 都必须带
+    /// `[SYSTEM NOTIFICATION - NOT USER INPUT]` 头部，否则模型可能把
+    /// 通知误判为用户回复 / confirm。
+    #[test]
+    fn wakeup_xml_always_carries_system_notification_header() {
+        let bg = WakeupEvent::BgTaskFinished {
+            session_id: "sess_test".into(),
+            run_id: "run_test".into(),
+            task_id: "bash_001".into(),
+            tool_use_id: None,
+            exit_code: Some(0),
+            duration_ms: 1234,
+        };
+        let cron = WakeupEvent::CronFired {
+            session_id: "sess_test".into(),
+            run_id: "run_test".into(),
+            scheduled_for_ms: 0,
+            reason: "test reason".into(),
+        };
+        for xml in [wakeup_xml(&bg), wakeup_xml(&cron)] {
+            assert!(
+                xml.starts_with("[SYSTEM NOTIFICATION - NOT USER INPUT]"),
+                "缺 SYSTEM NOTIFICATION 头部：{xml}"
+            );
+            assert!(
+                xml.contains("NOT a message from the user"),
+                "缺 NOT a message from the user 声明：{xml}"
+            );
+        }
+    }
+
+    /// BgTaskFinished 携带 tool_use_id 时 XML 必须含 tool_use_id 属性
+    /// （surface 据此把 task-notification 关联回触发它的 tool_call）。
+    #[test]
+    fn wakeup_xml_carries_tool_use_id_when_present() {
+        let bg = WakeupEvent::BgTaskFinished {
+            session_id: "sess".into(),
+            run_id: "run".into(),
+            task_id: "bash_007".into(),
+            tool_use_id: Some("toolu_abc123".into()),
+            exit_code: Some(0),
+            duration_ms: 5000,
+        };
+        let xml = wakeup_xml(&bg);
+        assert!(
+            xml.contains("tool_use_id=\"toolu_abc123\""),
+            "tool_use_id 属性丢失：{xml}"
+        );
+        assert!(xml.contains("task_id=\"bash_007\""));
+        assert!(xml.contains("exit_code=\"0\""));
+    }
+
+    /// tool_use_id=None 时 XML 不应出现这个属性（避免空字符串污染）。
+    #[test]
+    fn wakeup_xml_omits_tool_use_id_when_absent() {
+        let bg = WakeupEvent::BgTaskFinished {
+            session_id: "sess".into(),
+            run_id: "run".into(),
+            task_id: "bash_001".into(),
+            tool_use_id: None,
+            exit_code: Some(2),
+            duration_ms: 1000,
+        };
+        let xml = wakeup_xml(&bg);
+        assert!(!xml.contains("tool_use_id"), "不该出现 tool_use_id：{xml}");
+        assert!(xml.contains("task_id=\"bash_001\""));
+    }
+
+    /// 投递端到端：arm_bg_task → BgTaskFinished 事件携带传入的 tool_use_id。
+    /// 用一个 fresh WakeupScheduler 跑（避免与 global() 串扰）。
+    #[tokio::test]
+    async fn arm_bg_task_propagates_tool_use_id_to_event() {
+        use tokio::sync::mpsc;
+        let (tx, mut rx) = mpsc::unbounded_channel::<WakeupEvent>();
+        let scheduler = WakeupScheduler {
+            inner: Mutex::new(SchedulerInner::default()),
+            tx,
+        };
+        // 注册一个 session 的 shells，arm task 但让它立刻 terminal——
+        // 用 echo true 命令，wait_terminal 后扫描必投递 BgTaskFinished。
+        let shells = crate::tools::background::BackgroundShells::new();
+        scheduler.register_session_shells("sess".into(), shells.clone());
+        let child = tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg("true")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let shell = shells.register("true".into(), "/".into(), true, None, child);
+        shell.wait_terminal().await;
+        scheduler.arm_bg_task(
+            "sess".into(),
+            "run".into(),
+            shell.task_id.clone(),
+            Some("toolu_xyz".into()),
+        );
+        // 手动触发一次扫描（绕过 spawn 的后台 thread）
+        scheduler.scan_bg();
+        let evt = rx.recv().await.expect("BgTaskFinished should be sent");
+        match evt {
+            WakeupEvent::BgTaskFinished {
+                task_id,
+                tool_use_id,
+                ..
+            } => {
+                assert_eq!(task_id, shell.task_id);
+                assert_eq!(tool_use_id.as_deref(), Some("toolu_xyz"));
+            }
+            other => panic!("expected BgTaskFinished, got {other:?}"),
         }
     }
 }

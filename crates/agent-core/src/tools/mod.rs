@@ -42,11 +42,17 @@ pub trait ToolProgress: Send + Sync {
 }
 
 /// Tool::execute 的上下文（架构 §4.4.1）。除工具自身的 input 外，dispatcher
-/// 还需把 call 元信息 + 流式 progress 通道塞进来。**默认 noop**：单测、CLI
-/// 直接 invoke 工具时构造一个空 ctx 即可。
+/// 还需把 call 元信息 + 流式 progress 通道 + run/session 标识塞进来。
+/// **默认 noop**：单测、CLI 直接 invoke 工具时构造一个空 ctx 即可。
+///
+/// `session_id` / `run_id`：BashTool 在 register 后台 task 时需要它们调
+/// `WakeupScheduler::arm_bg_task`——让 task 终态时自动通知模型（架构 §4.12.5）。
+/// 老 ToolCtx::noop() 路径不带，BashTool 自动 arm 时检测到 None 就跳过。
 pub struct ToolCtx {
     pub call_id: String,
     pub progress: Option<Arc<dyn ToolProgress>>,
+    pub session_id: Option<String>,
+    pub run_id: Option<String>,
 }
 
 impl ToolCtx {
@@ -55,6 +61,8 @@ impl ToolCtx {
         Self {
             call_id: String::new(),
             progress: None,
+            session_id: None,
+            run_id: None,
         }
     }
 

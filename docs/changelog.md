@@ -3315,3 +3315,48 @@
 - **留尾巴**:
   - 剩余 desktop 专有命令需要按 Round 1 (`chat_helpers.rs`) 模式逐个镜像：OAuth 14 个 + Edits 4 个 + preview_session_payload + file_dialog 2 个 + 别的杂项
   - bridge 设计仍可在 git 历史 commit `54e008b` 找到，未来若有"两进程实时互通"的强需求可以复活
+
+### 2026-05-22 — DiffPanel 浮层去掉 rounded-xl，改成直角
+
+- **Why**: 用户视觉偏好——DiffHeader 顶栏跟着外层圆角，看起来不利落，要求直角
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx) 818 / 830 行的 DiffPanel 外层容器去掉 `rounded-xl`：放大态（fullscreen 浮层）和默认浮层都改成直角
+  - DiffHeader（348 行）自身没有 `rounded` 类，圆角是从外层 `rounded-xl + overflow-hidden` 视觉裁切来的，所以改外层是最干净的方案
+- **影响范围**: 仅前端 DiffPanel 浮层四角；不动协议、不动 agent_core
+- **留尾巴**: 无
+
+### 2026-05-22 — Wakeup 协议加固 + BashTool 自动 arm（CC 派 + hebbian 派共存）
+
+- **Why**: 探索 Claude Code 2.1.144（[docs/claude-code-后台执行机制.md](./claude-code-后台执行机制.md) 附录 C/D/E）后发现 hebbian 漏掉了一条核心机制——**模型没显式调 `WaitForTask` 时后台任务完成不会主动通知模型**。当前 wakeup arm 只在 `WaitForTask` / `ScheduleWakeup` 工具触发时发生；BashTool `run_in_background:true` 启动的 task 完成只能等下次用户消息时合并到 system_prompt 的 `<background_tasks>` 块——模型不知道任务结果，体验割裂。CC 默认行为是「completed 自动通知」，hebbian 应该做同款默认，同时保留 WaitForTask 显式停（hebbian 独有，省 token 路径）。还顺手把 `<wakeup>` XML 加固了 prompt injection 防御
+- **改动**:
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs):
+    - `wakeup_xml` 输出固定 `[SYSTEM NOTIFICATION - NOT USER INPUT]` 头部（借鉴 CC 2.1 `<task-notification>` 协议，明确告诉模型「这不是用户回复」防 prompt injection）
+    - `WakeupEvent::BgTaskFinished` 加 `tool_use_id: Option<String>` 字段；`<wakeup>` XML 加同名属性，让通知能反查触发它的 tool_call
+    - `BgWatch` 内部存 `tool_use_id`；`arm_bg_task(...)` 签名加这个参数；`scan_bg` 投递事件时透传
+    - 4 个单测覆盖（NOTIFICATION 头部恒存在 / tool_use_id Some 时含属性 / None 时省属性 / arm→scan 端到端透传）
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): `ToolCtx` 加 `session_id` / `run_id` 两字段（noop 默认 None）。给 BashTool auto-arm 用——dispatch 构造时填实际值，单测/CLI/不需要 wakeup 的工具忽略
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs):
+    - 新增 `arm_auto_notification(ctx, task_id)` 辅助函数：检查 session_id / run_id 都 Some 才调 `WakeupScheduler::global().arm_bg_task(... Some(call_id))`
+    - `run_in_background: true` 路径 register 后立即调；前台命令超时转后台路径 promote 后调
+    - 返回给模型的提示文本加「完成时会自动通知你，无需 poll」
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 构造 ToolCtx 时填入 `session_id_for_hooks.clone()` 和 `state.run_id.to_string()`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): WaitForTask 路径调用 `arm_bg_task` 加 `None` 兜底（RunPhase schema 没存 tool_use_id）
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `triggerWakeupResume` 重写为三分支
+    - **active run（slot.requestId 在）**：调 `api.injectUserMessage(sid, requestId, wakeupXml, [])` 走 PendingInputs 插队，**不开新 run**，**不**push 到 injectedSinceStream（wakeup 不是用户消息，UI 不该当用户气泡渲染）
+    - **idle 前台**：复用 sendUserMessage（backend 检测 checkpoint 走 resume；无 checkpoint 走新 run）
+    - **非前台**：暂存到 pendingWakeups（旧路径，用户切回该 session 时自动消费）
+  - [docs/架构.md](./架构.md): §4.12.5 加 SYSTEM NOTIFICATION 头部 + tool_use_id 属性说明；§4.12.6 路由改为 Active / Suspended / Idle 三分支明确触发源；§13 决策表追加一行
+- **影响范围**: protocol-adjacent / agent-core / desktop frontend / docs。**全部 additive**：WakeupEvent 字段 default-deserialize 兼容；wakeup XML 头部对模型语义安全；老 surface 行为不变。WaitForTask + Suspended 路径完全保留，模型显式调时 agent 真停（hebbian 独有省 token 路径）
+- **取舍**:
+  - **BashTool 自动 arm vs 显式 arm**：选自动。CC 派的「不需要模型主动协调」更接近模型实际偏好，让默认行为 work-out-of-the-box。代价：每个 background bash 都登记一个 watch，registry 多一点开销（可忽略）
+  - **wakeup XML 头部加 vs 不加**：选加。CC 二进制里这段头部有真实工程价值（防 prompt injection），抄过来零成本零风险
+  - **active 分支走 inject vs 开新 run**：选 inject。active run 还在跑时再开新 run 会冲突；走 PendingInputs 把 wakeup 当下一条 user input 插进去最自然，与「用户在流式中插队」走同一通路
+  - **UI 是否显示 wakeup 为用户气泡**：选不显示。wakeup 是 system notification，模型应该当系统输入而不是用户的话；UI 渲染成用户气泡会让用户误以为是自己发的
+  - **WaitForTask 砍 vs 保留**：保留。CC 没有这条路径所以 30 min 编译期间每个 turn 都消耗 model 调用；hebbian 保留它给「真的没事干 + 等长任务」场景省 token
+- **验证**:
+  - `cargo test -p agent-core --lib wakeup::` 4 个新单测全过；`cargo test -p agent-core --lib` 239 全过（235 → 239 +4）
+  - `cargo check --workspace` clean；`pnpm exec tsc --noEmit` clean
+  - **下一轮 desktop dev 手测 TODO**：跑一个 `run_in_background: true` 的 bash 命令（如 `sleep 10 && echo done`），观察：1) 模型不调 WaitForTask 也能在 task 完成时收到 `<wakeup>` 注入；2) 通知头部含 `[SYSTEM NOTIFICATION - NOT USER INPUT]`；3) 如果 active run 仍在跑（模型在做别的事），wakeup 不开新 run，从 PendingInputs 在下一个 model step 之前 drain
+- **留尾巴**:
+  - BashTool 自动 arm 的端到端单测未写——OnceLock global scheduler 在并发测试间会串扰。本期通过单元测 wakeup_xml + arm_bg_task + 手测一起兜住；如果将来要做 isolated 端到端，需要把 WakeupScheduler 改成可注入（参数化 BashTool 接受 Arc<WakeupScheduler>）
+  - arm_bg_task 现在没 dedupe——同一个 task_id 多次 arm 会多次投递终态事件。当前 BashTool 只在 register / promote 两处 arm，重复风险很小；但 WaitForTask + BashTool 自动 arm 可能对同一 task 各 arm 一次。短期可接受（前端三分支兜得住重复通知），长期可以让 BgWatch 去重

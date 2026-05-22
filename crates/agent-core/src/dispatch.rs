@@ -505,6 +505,8 @@ impl ToolDispatcher {
                 let tool_ctx = ToolCtx {
                     call_id: call.id.clone(),
                     progress: Some(progress),
+                    session_id: session_id_for_hooks.clone(),
+                    run_id: Some(state.run_id.to_string()),
                 };
                 let (raw, exec_failed) = match tool {
                     Some(t) => match t.execute_streaming(tool_ctx, effective_input.clone()).await {
