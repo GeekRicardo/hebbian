@@ -815,7 +815,7 @@ export function DiffPanel({ sessionId, entry, onClose }: DiffPanelProps) {
           onClick={() => setExpanded(false)}
         />
         <div
-          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden border border-border bg-background shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           {content}
@@ -827,7 +827,7 @@ export function DiffPanel({ sessionId, entry, onClose }: DiffPanelProps) {
   // 非阻塞浮层：portal 到 chat 区域；仅卡片本身接收点击，背景透传到聊天界面。
   return (
     <FullscreenPortal>
-      <div className="pointer-events-auto absolute right-4 top-4 w-[85%] max-w-[960px] max-h-[calc(100%-2rem)] flex flex-col rounded-xl border border-border bg-background/95 shadow-xl backdrop-blur">
+      <div className="pointer-events-auto absolute right-4 top-4 w-[85%] max-w-[960px] max-h-[calc(100%-2rem)] flex flex-col border border-border bg-background/95 shadow-xl backdrop-blur">
         {content}
       </div>
     </FullscreenPortal>

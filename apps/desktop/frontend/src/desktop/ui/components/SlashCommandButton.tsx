@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Slash } from "lucide-react";
 
 import { cn } from "@/desktop/ui/lib/utils";
 import {
@@ -48,8 +47,16 @@ export function SlashCommandButton({ disabled, onPick }: Props) {
           open && "bg-muted text-foreground"
         )}
         title="插入命令"
+        aria-label="插入命令"
       >
-        <Slash className="w-4 h-4" />
+        <span
+          className={cn(
+            "inline-flex h-4 w-4 items-center justify-center rounded-[3px]",
+            "border border-current text-[9px] leading-none font-medium"
+          )}
+        >
+          /
+        </span>
       </button>
       {open && (
         <div

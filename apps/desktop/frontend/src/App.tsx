@@ -82,7 +82,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex overflow-hidden bg-background text-foreground">
+    <div className="h-screen w-screen flex overflow-hidden bg-muted/40 text-foreground">
       <Sidebar />
       <ChatView />
       <RightSidebar />

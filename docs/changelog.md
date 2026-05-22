@@ -3404,3 +3404,87 @@
   - `useStore.currentSession?.messages` 直接订阅可能在 messages 很多时重新派生 items 列表频繁；后续可加 `useMemo` deps 优化（当前 messages 引用本身就 stable，问题不大）
   - mock 里的「上下文 / 工具 / 设置」3 个 tab 没做——只完成「后台任务 / 修改文件」2 tab。其余 tab 等用户提需求再补
   - 左侧 Sidebar 没改宽度可拖；如果用户也想要左 sidebar 同款拖拽，复用 RightSidebar 里的拖拽逻辑外提一个 hook 即可
+
+### 2026-05-22 — MessageBubble 里 Edit/Write 工具卡片去掉圆角，与 DiffPanel 直角统一
+
+- **Why**: 上一条 DiffPanel 改动只覆盖 EditTreePanel 走的浮层路径，但用户在 chat 气泡里直接看到的 Edit/Write 工具卡片（inline 内嵌版 + 放大后的 fullscreen 浮层）仍是圆角，看起来不一致；用户口头反馈"还是有 edit 工具"圆角
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) 1298 行 `EditDiffDetail` 放大态 fullscreen 浮层：去掉 `rounded-xl`
+  - 同文件 1322 行 inline 内嵌版 diff 卡片容器：去掉 `rounded-md`
+- **影响范围**: 仅前端 Edit/Write 工具卡片四角；不动协议、不动 agent_core
+- **留尾巴**: 其他工具（通用 ToolDetailExpanded 浮层 1050 行 `rounded-xl`、Bash/Grep/Glob 等读类卡片 `rounded-md`）未一并改——本次只针对用户明确点的 Edit 工具；如果想全局统一直角，下次集中扫一遍 rounded 类清单
+
+### 2026-05-22 — Read 工具卡片头简化为「只显示文件路径」
+
+- **Why**: 用户视觉偏好——Read 调用的卡片头跟其他工具一样显示「图标 + Read + 读取文件 + basename + 状态」太啰嗦；Read 一行的全部价值就是「读了哪个文件」，其他都是噪音。改成只展示完整文件路径，最干净
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) ToolCallsBlock 渲染处加 `call.name === "Read"` 分支：button 改成 flex 单 cell，只渲染 `file_path`（完整路径，font-mono、truncate），不显示 ToolIcon / 工具名 / actionLabel / status 徽章
+  - 其他工具走原有 4-cell grid（图标 + 名字 + 描述+summary + 状态）不变
+- **影响范围**: 仅前端 Read 工具卡片头那一行；agent_core / 协议 / 后端不动
+- **留尾巴**:
+  - Read 卡片头丢了 status 徽章——目前所有 Read 调用基本是瞬态完成，看不到 running 也无伤大雅；如果未来有耗时长的 Read（如远程文件、大文件分页）出现需求再补
+  - 卡片展开后内部 ToolCallDetail 内容不变；折叠态 chevron 按钮仍在左侧 `-left-[22px]`
+
+### 2026-05-22 — desktop 前端按参考图思路做卡片化重构（左 Sidebar 拆两块、ChatView 极简化、ModelI/O 移到工作台）
+
+- **Why**: 用户给了张「浅灰工作台 + 圆角分块卡片」的参考图（[docs/frontend-hebbian-redesign-mock.html](frontend-hebbian-redesign-mock.html) 同向），列了 8 点具体改造诉求——核心是「靠卡片化分块替代横向 border 切割」的视觉语言。原 Sidebar / ChatView header / ChatInput 全靠 `border-b/border-t/border-r` 切割，密度高但视觉碎；用户希望主操作（项目/对话设置）合到列表卡内、调试入口（Model I/O）退到工作台、命令按钮的视觉重量降下来
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 外层底色改 `bg-muted/40`，内部拆两块圆角卡——上方 brand 卡（保留 macOS traffic-light 留空 `pt-8`），下方列表卡（mode toggle / 新建对话 / 项目编辑 / 搜索 / 列表 / hairline / 底栏全部聚拢）。底栏新增「项目设置 / 对话设置」按钮（`SlidersHorizontal`，文案依 `currentSession.project_id` 切换），从 ChatView 搬过来；hairline 用 `border-t` 替代外层 padding-only 分隔
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): header 去掉 `border-b`；删除「Model I/O」「项目设置 / 对话设置」按钮；删除 `ModelIoInspector` 渲染 + `modelIoOpen` state + `closeModelIo` callback——ownership 整体迁移给 RightSidebar
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 外层去掉 `border-t border-border`（输入框上方分割线）；内层去掉 `max-w-3xl mx-auto`（让输入框跟着中央列全宽）；删除 textarea 右侧那一列独立 TokenStats + ContextRing，改放进底部工具条 ModelPickerButton 左侧（外包 `[&_button]:h-7 [&_button]:w-7` 让图标小一号）。拖拽手柄 / textarea 自带 `overflow-y-auto` 保留
+  - [apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx): 弃用 lucide 的 `Slash`（一个大的左斜杠），改用 `<span>/` + 外圈 `rounded-full border border-current` 圆环，跟 `+` 加号同样视觉重量
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 持有 `modelIoOpen` state + 渲染 `ModelIoInspector`（Drawer 形式，不进 tab 内嵌——320px 容不下密集 inspector）。`debugEnabled && sessionId` 时显示入口：折叠态作为图标列最后一个图标；展开态在顶栏 tab bar 右侧、折叠按钮左边
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 新增 `debugEnabled: boolean` + `setDebugEnabled(v)`，持久化到 `localStorage["hebbian.debugEnabled"]`。**纯前端 UI 开关，不影响后端日志落盘**（那个仍由 `HEBBIAN_DUMP_MODEL_IO` 环境变量控制）
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): GeneralPane 新增「日志（开启 debug）」checkbox，绑 store 而不是 draft（即时生效、不进 AppSettings 后端持久化）
+- **影响范围**: 仅前端（apps/desktop/frontend），不动协议 / agent_core / storage / Tauri 命令。hebweb / desktop 两 surface 共享同一份 React 代码，改动同步生效（与"两 surface 视觉对称"原则一致）。`tsc --noEmit` + `vite build` 均通过
+- **架构.md 评估**: 纯 surface 视觉层，未触动 §3 / §4.x / §6 / §7 / §8 任一既定 API；debug 字段走 localStorage 不进 §6 storage；ModelI/O 入口位置变化属于 surface UI element 重定位，不破坏 desktop ↔ hebweb 兼容
+- **留尾巴**:
+  - 没改 App.tsx 整体底色——目前三列从左到右是「浅灰 sidebar / 白 ChatView / 浅灰 RightSidebar」；如果用户希望中间也变浅灰（让 chat 内容卡片化浮起来），后续把 App 外层背景改成 `bg-muted/40` 即可，但中央消息区目前没有 card wrapper，需要同步加一层 ChatView 卡才协调
+  - RightSidebar 仍用单层布局（顶栏 + tab body），没像左 Sidebar 那样卡片化；如果对称性是诉求再做
+  - ChatInput 底部 cache/context 图标的 `[&_button]:h-7 [&_button]:w-7` 强制缩小是粗暴方案——只对 `<button>` 子节点生效，对 ContextRing 内部 SVG 不影响；视觉验收时如果还想更小可以给 ContextRing / TokenStatsPanel 加 size prop
+  - 「项目设置 / 对话设置」按钮从 ChatView header 搬到 Sidebar 底栏后稍微反直觉（它属于"当前会话"而非"会话列表"）——但用户明确要求，且换来了 ChatView header 的极简，权衡可接受
+  - 验证只跑了 tsc / vite build；UI 视觉验收要 `pnpm tauri dev` 或 hebweb 启动看实际渲染——如果哪个分块的圆角 / padding / hairline 不对再调
+
+### 2026-05-22 — Read 工具卡片头改造：图标 + 完整文件路径 + 可选范围，删掉 detail 里冗余的 ReadHeader
+
+- **Why**: 上一条把 Read 卡片头简化成「只显示 file_path」不对，用户原意是——卡片头那栏要保留「图标 + 文件路径」，**且**当有 offset/limit 时显示范围；**且**之前展开 detail 顶部还有一个独立的 `ReadHeader`（`path:#offset+limit`）跟卡片头重复，要整个删掉。所谓"两个文件名"指的就是这两处。范围里也不要 `#` 前缀（之前 ReadHeader 用 `#offset+limit` 那种格式被否决）
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) ToolCallsBlock Read 分支：button 内渲染改成 `<BookOpen icon> <file_path>` + 可选 `<range>`。range 格式：有 offset+limit → `${offset}-${offset+limit-1}`（如 100-199）；只有 offset → `${offset}+`；都没有 → 不渲染 range span
+  - 同文件删掉 `ReadHeader` 组件定义（原 936-950 行）和它在 detail 渲染处的调用（原 1377 行）——Read 工具展开后 detail 直接显示 `<ToolPre>{result}</ToolPre>`，不再重复显示文件名
+- **影响范围**: 仅前端 Read 工具渲染；其他工具卡片不变；agent_core / 协议 / 后端不动
+- **留尾巴**:
+  - Read 卡片头仍丢了 status 徽章（沿用上一条决策）；如果需要长 Read 看到 running 状态再加
+  - 改后 file_path 是 callArgs 解析出的原始字符串，可能是绝对路径也可能是相对路径——按模型怎么传就怎么显示，不再做 basename 压缩，理由：完整路径信息量大、能直接读 / 区分同名文件
+
+### 2026-05-22 — 卡片化重构第二阶段：灰底统一 + 圆角加大 + 工具调用左侧状态点
+
+- **Why**: 上一条卡片化首版交付后，用户连续来了好几轮 visual polish 反馈。归纳成几条根因 + 修法：
+  1. **左右两侧比中间深 2% L**——`bg-muted/40` 在 App.tsx 已经叠一层，Sidebar / RightSidebar 又叠一层，alpha 叠加损失。**修**：底色只在 App.tsx 设一次，子组件透下来
+  2. **list 卡 / 输入框底边不齐**——根因不是 padding 不对称，而是 ChatInput 底部「附件提示行」始终占行高（即使无附件）把输入框 card 下边推下去约 22px。**修**：附件提示行改 `attachments.length > 0` 条件渲染
+  3. **chat surface 不连续**——header / 输入框外框是 `bg-background/80 backdrop-blur-md`、消息列表默认白、user/assistant bubble 分别 `bg-background` / `bg-accent/30`，四种近似但不等同的「白」。**修**：全部去 bg，统一透过 App `bg-muted/40` 灰底
+  4. **工具调用列表视觉啰嗦**——左侧 chevron 箭头 + 右侧状态点 + 状态文字三处都在表达「展开/状态」。**合并**：左侧 chevron 替换为彩色状态点（done 绿 / running 蓝呼吸 / streaming 灰 / failed 预留红），右侧整列删除（grid `[18px_88px_1fr_auto]` → `[18px_88px_1fr]`）
+- **改动**:
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): 主背景 `bg-background` → `bg-muted/40`（三列同源底色）
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css):
+    - 灰系 token 全部下压 ~4% L：`--accent` 95.9→90、`--muted` 95.9→92、`--secondary` 95.9→93、`--border` 90→88（一站加重所有 hover / 选中 / 工具底色）
+    - 滚动条 10px → 6px + `scrollbar-width: thin`
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 外层去重复的 `bg-muted/40`；品牌区去 `rounded-xl border bg-card shadow-sm`（用户：「hebbian 标题去掉框试试」）；list 卡 `rounded-xl` → `rounded-3xl`、`shadow-sm` → `shadow-md`；底部 padding `p-2` → `p-2 pb-3` 跟 ChatInput pb-3 对齐
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 外层 bg + backdrop-blur 去掉；左右 padding 改 `pl-2 pr-4` 让两侧对称到 16px；附件提示行改条件渲染；输入框 card 圆角 → `rounded-3xl`、`shadow-md`
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): header 去 `bg-background/80 backdrop-blur-md`
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): bubble 取消 user/assistant bg 区分全透下灰底；`ToolCallTimeline` 重构——左侧状态点取代 chevron + 右侧状态删除 + grid 减一列 + 外层 `bg-muted/30` → `bg-muted/70`
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 折叠态 + 展开态都去重复的 `bg-muted/40`
+  - [apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx): `rounded-full` 圆环 → `rounded-[3px]` 方圆角（用户：「方形略有圆角」）；尺寸 `h-5 w-5 text-[11px]` → `h-4 w-4 text-[9px]`（用户：「再小一点」）
+  - [apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx): 主按钮图标 `Coins` → 两个 `Database` 错位叠加（用户：「缓存图标用类似两个桶的那种」）。一前一后，前者偏右下、后者偏左上半透明，象征 cache 读 + 写双层
+  - **附带提交**（会话开始前 git status 已 modified、本次会话未改动，工作区干净起见一并 commit）：
+    - [apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx): zustand selector 用 `s.currentSession?.messages ?? []` 每次产生新数组触发 "getSnapshot should be cached" 警告 + 潜在无限循环。改成 `messagesRaw ?? EMPTY_MESSAGES`（module 常量），selector 只取 raw 引用，`??` fallback 放组件 body
+    - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): 浮层去 `rounded-xl`，跟之前 MessageBubble Edit/Write 工具卡片直角化保持一致
+- **影响范围**: 仅前端；不动协议 / agent_core / storage。`tsc --noEmit` + `vite build` 均通过
+- **架构.md 评估**: 纯 surface 视觉层；token 调整（accent/muted/secondary 加深、scrollbar 变窄）影响所有用到这些 token 的子组件，但**用法语义不变**，不破坏 §3 / §4 / §6 / §8 任一既定决策
+- **留尾巴**:
+  - `statusLabel` 函数现在没有调用者了（dead code，tsc 没报）；保留以备复用，需要清的话顺手删
+  - `failed` 状态点（红色）当前不会触发——`ToolCallStatus` 只有 `"streaming" | "running" | "done"` 三态；后端若加 `failed` 枚举，前端代码分支自然激活
+  - 取消 user/assistant bubble bg 区分后，消息边界变弱。如果跑下来「看不出哪条结束了」，下一轮加 hairline 或左侧 accent stripe
+  - 缓存图标用两个 Database 叠加是 CSS 拼接，不是单一图标；如果觉得视觉不够干净，下一轮换 inline SVG 自画或回到 `Coins`
+- **微调（同批追加）**:
+  - 工具调用状态点中心精确对齐竖线中心：button 不再嵌外层 grid + 内层 span，本身就是 `h-1.5 w-1.5 rounded-full`，`-left-[17.5px]` 让点中心落到 `-14.5px`（= 竖线 `-left-[15px] w-px` 的中心）
+  - done 状态绿色 `emerald-500` → `green-400`（用户：「绿色偏多巴胺一点 亮一点」）

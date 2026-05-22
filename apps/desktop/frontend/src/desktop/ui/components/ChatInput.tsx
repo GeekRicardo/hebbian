@@ -551,8 +551,8 @@ export function ChatInput({
     (!disabled && !sending && (!!value.trim() || attachments.length > 0));
 
   return (
-    <div className="border-t border-border bg-background/80 backdrop-blur-md px-4 pt-0 pb-3">
-      <div className="max-w-3xl mx-auto">
+    <div className="pl-2 pr-4 pt-0 pb-3">
+      <div>
         {/* 拖拽手柄 */}
         <div
           onPointerDown={onGripPointerDown}
@@ -566,13 +566,12 @@ export function ChatInput({
           <GripHorizontal className="w-4 h-4 text-muted-foreground/60 group-hover:text-muted-foreground transition-colors" />
         </div>
 
-        <div className="flex items-end gap-1">
         <div
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDraggingFiles(false)}
           className={cn(
-            "flex-1 min-w-0 relative rounded-xl border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring transition",
+            "relative rounded-3xl border border-input bg-background shadow-md focus-within:ring-2 focus-within:ring-ring transition",
             draggingFiles && "border-primary ring-2 ring-primary/30",
             disabled && "opacity-60"
           )}
@@ -789,6 +788,19 @@ export function ChatInput({
             </div>
 
             <div className="flex items-center gap-1">
+              <div className="mr-0.5 flex items-center gap-0.5 [&_button]:h-7 [&_button]:w-7">
+                <TokenStatsPanel stats={tokenStats} />
+                {contextUsage && (
+                  <ContextRing
+                    used={contextUsage.used_tokens}
+                    budget={contextUsage.budget_tokens}
+                    onClick={() => {
+                      if (compacting) return;
+                      void runCompact("");
+                    }}
+                  />
+                )}
+              </div>
               <ModelPickerButton />
               {(() => {
                 // streaming 时：输入框有内容 → 按钮做入队（同 Enter）；否则做中断生成。
@@ -846,31 +858,11 @@ export function ChatInput({
           </div>
         </div>
 
-          {/* 紧贴输入框右侧的状态条：左 = TokenStats（hover 浮出统计），
-              右 = ContextRing（hover 显示百分比，点击运行 /compact）。
-              默认无边框，hover 才出方形大圆角边框，让视觉重量给输入框本身。 */}
-          <div className="flex items-center gap-0.5 pb-2 shrink-0">
-            <TokenStatsPanel stats={tokenStats} />
-            {contextUsage && (
-              <ContextRing
-                used={contextUsage.used_tokens}
-                budget={contextUsage.budget_tokens}
-                onClick={() => {
-                  if (compacting) return;
-                  void runCompact("");
-                }}
-              />
-            )}
+        {attachments.length > 0 && (
+          <div className="mt-1.5 px-1 text-[11px] text-muted-foreground">
+            已添加 {attachments.length} 个附件
           </div>
-        </div>
-
-        <div className="flex items-center justify-between mt-1.5 px-1 text-[11px] text-muted-foreground">
-          <span>
-            {attachments.length > 0
-              ? `已添加 ${attachments.length} 个附件`
-              : ""}
-          </span>
-        </div>
+        )}
       </div>
     </div>
   );

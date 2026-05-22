@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpFromLine, Coins, Database, Layers } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Database, Layers } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import type { TokenStats } from "@/desktop/ui/types";
 
@@ -32,7 +32,11 @@ export function TokenStatsPanel({ stats, size = 14, className }: Props) {
         style={{ width: size + 8, height: size + 8 }}
         aria-label="Token 用量"
       >
-        <Coins className="w-3 h-3" />
+        {/* 「两个桶」造型：两个 Database 圆柱错位叠加，象征 cache 读 + 写双层 */}
+        <span className="relative inline-block h-3 w-3">
+          <Database className="absolute left-0 top-0 h-2.5 w-2.5 opacity-50" />
+          <Database className="absolute -right-px -bottom-px h-2.5 w-2.5" />
+        </span>
       </button>
 
       <div

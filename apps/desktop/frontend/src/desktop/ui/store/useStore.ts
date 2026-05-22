@@ -745,6 +745,12 @@ interface AppState {
   setPendingPromptId: (v: string) => void;
   setUserAvatar: (v: string) => void;
   toggleTheme: () => void;
+  /**
+   * 「日志」开关：开启后右侧工作台会显示 Model I/O 入口。
+   * 仅前端 UI 行为开关，不改变后端日志落盘策略（那个走 HEBBIAN_DUMP_MODEL_IO 环境变量）。
+   */
+  debugEnabled: boolean;
+  setDebugEnabled: (v: boolean) => void;
 
   runSearch: (
     query: string,
@@ -795,6 +801,7 @@ export const useStore = create<AppState>((set, get) => ({
   searchRegex: false,
   searching: false,
   theme: (localStorage.getItem("theme") as any) ?? "light",
+  debugEnabled: localStorage.getItem("hebbian.debugEnabled") === "1",
   availableTools: [],
   // 默认只开启搜索/抓取；生图等额外工具需要用户手动开启
   enabledTools: new Set<string>(
@@ -1903,6 +1910,11 @@ export const useStore = create<AppState>((set, get) => ({
     // 持久化到 localStorage，下次启动保持用户选择
     localStorage.setItem("enabledTools", JSON.stringify(Array.from(next)));
     set({ enabledTools: next });
+  },
+
+  setDebugEnabled(v) {
+    localStorage.setItem("hebbian.debugEnabled", v ? "1" : "0");
+    set({ debugEnabled: v });
   },
 
   toggleTheme() {

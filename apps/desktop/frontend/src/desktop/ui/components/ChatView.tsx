@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, FileJson } from "lucide-react";
+import { Sparkles, ChevronDown } from "lucide-react";
 import {
   MessageBubble,
   FloatingTaskPanel,
   extractLatestTodoSnapshot,
 } from "./MessageBubble";
 import { MessageList } from "./MessageList";
-import { ModelIoInspector } from "./ModelIoInspector";
-import { RightSidebar } from "./RightSidebar";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -41,7 +39,6 @@ export function ChatView() {
     editAndRerun,
     regenerateTitle,
     setProviderDialogOpen,
-    setSettingsOpen,
     newSession,
     pendingPromptId,
     setPendingPromptId,
@@ -57,7 +54,6 @@ export function ChatView() {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
-  const [modelIoOpen, setModelIoOpen] = useState(false);
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -323,12 +319,6 @@ export function ChatView() {
     []
   );
 
-  // 给 memo 化的 ModelIoInspector 提供稳定的 onClose 引用，避免每次 ChatView
-  // 重渲都生成新闭包让 memo bust。流式期间 ChatView 每条 delta 都重渲，没这层
-  // 稳定引用 Inspector 也会跟着重渲（内含 RequestDetail/N 条 MessageRow/嵌套
-  // PrettyJson），主线程被堵死。
-  const closeModelIo = useCallback(() => setModelIoOpen(false), []);
-
   /**
    * find 上下文打包：依赖搜索状态 + matchesPerMessage + activeLocation。
    * find 关闭时直接 null —— MessageList 走 null 分支，不为每个 bubble 算 find prop。
@@ -423,7 +413,7 @@ export function ChatView() {
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full relative">
       <header
-        className="relative z-50 h-14 shrink-0 pl-4 pr-4 flex items-center justify-between border-b border-border bg-background/80 backdrop-blur-md drag-region"
+        className="relative z-50 h-14 shrink-0 pl-4 pr-4 flex items-center justify-between drag-region"
         data-tauri-drag-region
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -485,30 +475,7 @@ export function ChatView() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 no-drag relative">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setModelIoOpen(true)}
-            title="查看本会话所有发给模型的请求 / 响应"
-            data-testid="open-model-io"
-          >
-            <FileJson className="w-3.5 h-3.5 mr-1" />
-            Model I/O
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
-            {currentSession?.project_id ? "项目设置" : "对话设置"}
-          </Button>
-        </div>
       </header>
-
-      {currentSession?.id ? (
-        <ModelIoInspector
-          sessionId={currentSession.id}
-          open={modelIoOpen}
-          onClose={closeModelIo}
-        />
-      ) : null}
 
       <FindBar
         open={findOpen}

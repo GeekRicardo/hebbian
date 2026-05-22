@@ -38,10 +38,16 @@ export function BackgroundTaskPanel() {
  * 排序：running 优先 → 其余按 tool_call 在 messages 中的出现顺序（时间序）。
  * 已完成 task：默认折叠态（只显示 task_id + cmd + 状态徽章），点开看完整输出。
  */
+// zustand selector 必须返回 stable 引用——`?? []` 每次产生新数组会触发
+// "getSnapshot should be cached" 无限循环。selector 只取 raw 引用，
+// `??` fallback 放到组件 body 里执行。
+const EMPTY_MESSAGES: Message[] = [];
+
 export function BackgroundTaskTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const suspended = useStore((s) => s.suspended);
-  const messages = useStore((s) => s.currentSession?.messages ?? []);
+  const messagesRaw = useStore((s) => s.currentSession?.messages);
+  const messages = messagesRaw ?? EMPTY_MESSAGES;
   const [report, setReport] = useState<SessionBackgroundReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [now, setNow] = useState<number>(Date.now());
@@ -179,9 +185,6 @@ export function BackgroundTaskTab() {
         <EmptyHint icon={<Terminal />}>
           还没有后台任务。
           <br />
-          <span className="text-[10px]">
-            模型用 <code className="rounded bg-muted px-1">Bash run_in_background=true</code> 启动任务后会出现在这里。
-          </span>
         </EmptyHint>
       ) : (
         <div className="flex flex-col">

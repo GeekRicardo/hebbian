@@ -7,6 +7,7 @@ import {
   MessagesSquare,
   Settings,
   Server,
+  SlidersHorizontal,
   Moon,
   Sun,
   Trash2,
@@ -96,6 +97,7 @@ export function Sidebar() {
     regenerateTitle,
     setProviderDialogOpen,
     setAppSettingsOpen,
+    setSettingsOpen,
     newSession,
     toggleTheme,
     theme,
@@ -447,9 +449,10 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col border-r border-border bg-card/30">
+    <aside className="w-64 shrink-0 flex flex-col gap-2 p-2 pb-3">
+      {/* 品牌区：无框、溶进浅灰底；仍保留 macOS traffic-light 留空（pt-8） */}
       <div
-        className="h-16 px-5 pt-8 flex items-start border-b border-border drag-region"
+        className="h-16 px-5 pt-8 flex items-start drag-region"
         data-tauri-drag-region
       >
         <div className="flex items-center gap-2 pointer-events-none">
@@ -461,6 +464,8 @@ export function Sidebar() {
         </div>
       </div>
 
+      {/* 列表卡：项目/对话切换 + 列表 + 底栏（hairline 分隔）全部聚到一块 */}
+      <div className="flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card shadow-md overflow-hidden">
       <div className="px-3 py-3 no-drag">
         <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-1">
           <button
@@ -727,7 +732,7 @@ export function Sidebar() {
         )}
       </div>
 
-      <div className="border-t border-border p-2 flex items-center gap-1 no-drag">
+      <div className="border-t border-border p-1.5 flex items-center gap-0.5 no-drag">
         <Button
           variant="ghost"
           size="icon"
@@ -744,6 +749,16 @@ export function Sidebar() {
         >
           <Settings className="w-4 h-4" />
         </Button>
+        {currentSession && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSettingsOpen(true)}
+            title={currentSession.project_id ? "项目设置" : "对话设置"}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+          </Button>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -753,6 +768,7 @@ export function Sidebar() {
         >
           {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </Button>
+      </div>
       </div>
     </aside>
   );

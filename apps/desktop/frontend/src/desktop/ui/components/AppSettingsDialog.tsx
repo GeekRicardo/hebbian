@@ -164,8 +164,10 @@ type PaneProps = {
 };
 
 function GeneralPane({ draft, setDraft }: PaneProps) {
+  const debugEnabled = useStore((s) => s.debugEnabled);
+  const setDebugEnabled = useStore((s) => s.setDebugEnabled);
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <label className="flex items-center gap-2 cursor-pointer select-none">
         <input
           type="checkbox"
@@ -180,6 +182,21 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
         />
         <span className="text-sm">开机启动</span>
       </label>
+
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={debugEnabled}
+            onChange={(e) => setDebugEnabled(e.target.checked)}
+            className="h-4 w-4 rounded"
+          />
+          <span className="text-sm">日志（开启 debug）</span>
+        </label>
+        <p className="pl-6 text-xs text-muted-foreground">
+          开启后右侧工作台会显示 Model I/O 入口，便于查看模型请求 / 响应原文。
+        </p>
+      </div>
     </div>
   );
 }

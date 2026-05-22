@@ -39,16 +39,16 @@
     --card-foreground: 240 10% 3.9%;
     --primary: 210 100% 56%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 4.8% 95.9%;
+    --secondary: 240 4.8% 93%;
     --secondary-foreground: 240 10% 3.9%;
-    --muted: 240 4.8% 95.9%;
+    --muted: 240 4.8% 92%;
     --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
+    --accent: 240 4.8% 90%;
     --accent-foreground: 240 10% 3.9%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
+    --border: 240 5.9% 88%;
+    --input: 240 5.9% 88%;
     --ring: 210 100% 56%;
     --radius: 0.75rem;
   }
@@ -87,10 +87,10 @@
       "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
 
-  /* 滚动条样式 */
+  /* 滚动条样式：窄条 + 透明 track + hover 加深 */
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -100,6 +100,10 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-muted-foreground/50;
+  }
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
   }
 }
 

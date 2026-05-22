@@ -933,22 +933,6 @@ function WakeupNotice({ content, info }: { content: string; info: WakeupInfo }) 
   );
 }
 
-function ReadHeader({ call }: { call: ToolCallItem }) {
-  const args = callArgs(call);
-  const path = argString(args, "file_path") || "file";
-  const offset = argString(args, "offset");
-  const limit = argString(args, "limit");
-  const range = offset ? `#${offset}${limit ? `+${limit}` : ""}` : "#";
-  return (
-    <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
-      <BookOpen className="h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 truncate font-mono">
-        {path}:{range}
-      </span>
-    </div>
-  );
-}
-
 function WriteHeader({ call, label = "write" }: { call: ToolCallItem; label?: string }) {
   const args = callArgs(call);
   const path = argString(args, "file_path") || "file";
@@ -1295,7 +1279,7 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
           onClick={() => setExpanded(false)}
         />
         <div
-          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          className="pointer-events-auto absolute inset-3 flex flex-col overflow-hidden border border-border bg-background shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <DiffViewer
@@ -1319,7 +1303,7 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-background">
+    <div className="overflow-hidden border border-border bg-background">
       <DiffViewer
         beforeText={beforeText}
         afterText={afterText}
@@ -1374,7 +1358,6 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
         <ExpandButton title={title}>
           <ToolPre>{result}</ToolPre>
         </ExpandButton>
-        <ReadHeader call={call} />
         <ToolPre>{result}</ToolPre>
       </div>
     );
@@ -1487,9 +1470,22 @@ function ToolCallTimeline({
 }) {
   if (calls.length === 0) return null;
   return (
-    <div className="relative mt-3 space-y-1 rounded-md bg-muted/30 py-1.5 pl-6 pr-2">
+    <div className="relative mt-3 space-y-1 rounded-md bg-muted/70 py-1.5 pl-6 pr-2">
       {calls.map((call, index) => {
         const active = expandedKeys.has(call.key);
+        // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
+        // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / 未来若新增 failed=红。
+        // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
+        // failed 分支预留，等后端加枚举时自然激活。
+        const statusDot =
+          call.status === "done"
+            ? "bg-green-400"
+            : call.status === "running"
+              ? "animate-breathe bg-primary"
+              : (call.status as string) === "failed" ||
+                (call.status as string) === "error"
+                ? "bg-red-500"
+                : "bg-muted-foreground/40";
         return (
           <div
             key={call.key}
@@ -1502,54 +1498,75 @@ function ToolCallTimeline({
               type="button"
               onClick={() => onToggle(call.key)}
               aria-label={active ? "折叠工具调用" : "展开工具调用"}
-              className="absolute -left-[22px] top-[5px] inline-flex h-[18px] w-[15px] cursor-pointer items-center justify-center text-muted-foreground"
-            >
-              <ChevronRight
-                className={cn(
-                  "h-[15px] w-[15px] transition-transform",
-                  active && "rotate-90"
-                )}
-              />
-            </button>
+              // 竖线在 -left-[15px] w-px，中心 -14.5；让 button 本身就是圆点，
+              // 中心 = -17.5 + 3 = -14.5，精确对齐竖线
+              className={cn(
+                "absolute -left-[17.5px] top-[11px] h-1.5 w-1.5 cursor-pointer rounded-full",
+                statusDot
+              )}
+            />
             <div
               className={cn(
                 active && "overflow-hidden rounded-b-md border border-border bg-background"
               )}
             >
-              <button
-                type="button"
-                onClick={() => onToggle(call.key)}
-                className={cn(
-                  "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left",
-                  active && "border-b border-border bg-muted/30"
-                )}
-              >
-                <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
-                  <ToolIcon name={call.name} />
-                </span>
-                <span className="whitespace-nowrap text-[12px] font-semibold">
-                  {call.name || "工具调用"}
-                </span>
-                <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-                  <span className="truncate">{callDescription(call)}</span>
-                  <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
-                    {callSummary(call)}
-                  </code>
-                </span>
-                <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground">
-                  <span
-                    className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      call.status === "done"
-                        ? "bg-muted-foreground/45"
-                        : call.status === "running"
-                        ? "animate-pulse bg-muted-foreground/60"
-                        : "animate-pulse bg-muted-foreground/40"
-                    )}
-                  />
-                  {statusLabel(call.status)}
-                </span>
-              </button>
+              {call.name === "Read" ? (
+                <button
+                  type="button"
+                  onClick={() => onToggle(call.key)}
+                  className={cn(
+                    "flex min-h-8 w-full cursor-pointer items-center gap-2 px-1 py-1 text-left",
+                    active && "border-b border-border bg-muted/30"
+                  )}
+                >
+                  {(() => {
+                    const args = callArgs(call);
+                    const path = argString(args, "file_path") || "读取文件";
+                    const offset = argString(args, "offset");
+                    const limit = argString(args, "limit");
+                    const range = offset
+                      ? limit
+                        ? `${offset}-${Number(offset) + Number(limit) - 1}`
+                        : `${offset}+`
+                      : "";
+                    return (
+                      <>
+                        <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
+                          {path}
+                        </span>
+                        {range && (
+                          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                            {range}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onToggle(call.key)}
+                  className={cn(
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
+                    active && "border-b border-border bg-muted/30"
+                  )}
+                >
+                  <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+                    <ToolIcon name={call.name} />
+                  </span>
+                  <span className="whitespace-nowrap text-[12px] font-semibold">
+                    {call.name || "工具调用"}
+                  </span>
+                  <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+                    <span className="truncate">{callDescription(call)}</span>
+                    <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
+                      {callSummary(call)}
+                    </code>
+                  </span>
+                </button>
+              )}
               {active && (
                 <>
                   <ToolCallDetail call={call} />
@@ -2079,7 +2096,6 @@ export const MessageBubble = memo(function MessageBubble({
       title={archived ? "已被压缩，模型不再读取此消息（点击右上角圆环可再次压缩）" : undefined}
       className={cn(
         "group relative flex gap-3 px-6 py-4",
-        isUser ? "bg-background" : "bg-accent/30",
         archived && "opacity-50 hover:opacity-100 transition-opacity"
       )}
     >
