@@ -329,4 +329,8 @@ M2 ~ M4：persistence / memory / observability / multi-agent / channels / TUI / 
 
 ## License
 
-私人项目，按需使用。
+本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)：源码公开，允许个人学习、研究、修改、再分发；**禁止任何商业用途**（包括但不限于销售、内嵌商用产品、对外提供付费服务、企业内部商业运营场景使用）。
+
+商用授权请单独联系作者协商。
+
+> 注：PolyForm Noncommercial 严格意义上不属于 OSI 定义的「开源」（OSI 第 6 条禁止限制使用领域），属于 source-available 协议。如需 OSI 认证的开源协议，目前不提供。

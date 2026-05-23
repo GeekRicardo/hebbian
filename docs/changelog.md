@@ -3960,3 +3960,20 @@
   - `<msg_id>.partial.jsonl.lock` 文件 best-effort 留在磁盘（`delete_partial` 只删主文件，不删 sentinel lock 文件）。无害，下次 append 会复用同一份 lock
   - 架构.md §4.9 / recorder.rs 模块注释仍写"★ 单 jsonl 唯一文件 + partial sidecar"暗示 recorder.rs 同时承担 partial 写入，实际 partial 写入在 sessions_dir.rs，折叠规则在 sessions.rs。注释下次清理
 - **关联**: 架构.md §4.9.3；2026-05-20 / 2026-05-21 partial sidecar 两条上游修复（本次接通它们漏掉的读出侧）
+
+### 2026-05-23 — 新增 LICENSE：PolyForm Noncommercial 1.0.0（禁止商用的 source-available 协议）
+
+- **Why**: 仓库一直没有正式协议（README 旧文案只写「私人项目，按需使用」，缺乏法律效力且对外不清晰）。用户要求「开源但不允许商用」，需要一份明确的书面授权
+- **选型权衡**:
+  - **PolyForm Noncommercial 1.0.0**（选中）：专为软件设计、SPDX 已收录（`PolyForm-Noncommercial-1.0.0`）、措辞清晰、定义了「商业用途 / 非营利组织 / 个人使用」三类边界；缺点是不属 OSI 认证「开源」
+  - **CC BY-NC 4.0**（弃）：CC 官方声明不推荐用于软件（专利与代码再分发条款缺失）
+  - **BSL 1.1**（弃）：是延迟开源（N 年后转 OSS），不是永久禁商用，与诉求不符
+  - **AGPL-3.0**（弃）：OSI 认证开源但不禁商用，只能用 copyleft 增加商用成本，绕开「禁止」原意
+  - 结论：用户原话「不允许商用」=「source-available + noncommercial」，PolyForm 是软件领域的标准答案
+- **改动**:
+  - 新增 [LICENSE](../LICENSE)：PolyForm Noncommercial 1.0.0 官方全文（来自 polyformproject.org），`Required Notice` 占位填 `Copyright Ricardo (https://github.com/GeekRicardo/hebbian)`
+  - [README.md](../README.md) §License：替换「私人项目，按需使用」一句话占位为 PolyForm 说明 + 商用联系入口 + OSI 边界提示，避免对外宣传时被误读为「OSI 开源」
+- **影响范围**: 项目治理文件（LICENSE / README）。代码、协议、storage、surface 全无关。无破坏兼容
+- **留尾巴**:
+  - 暂未在 `Cargo.toml` 加 `license-file = "LICENSE"`：workspace 根没有 `[workspace.package]` 段，各 crate 也未在元数据中声明协议；如果未来发布到 crates.io 或希望 `cargo metadata` / 第三方扫描器能识别，需要在每个 crate 的 `[package]` 段加 `license-file = "../../LICENSE"`。本次未做是因为目前没有发布计划，避免无谓改动
+  - 商用联系方式只在 README 留了「单独联系作者」一句，没留具体邮箱 / 表单。需要时再补
