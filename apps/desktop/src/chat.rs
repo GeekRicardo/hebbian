@@ -115,10 +115,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         + Send
         + Sync,
 ) -> AppResult<Message> {
-    let prior_session = sessions::load(data_dir, &args.session_id)?;
-
-    // 恢复上次崩溃/强退中断的 partial assistant 输出，追加到 session.jsonl 后清理文件。
-    recover_and_save_interrupted_partials(data_dir, &args.session_id);
+    // send 入口：先把上次中断残留的 partial 折叠进 session.jsonl，再读历史。
+    // 内部的 sessions::load 是纯读路径（避免 turn 进行中误把活跃 partial 当成中断）。
+    let prior_session = sessions::load_with_partial_recovery(data_dir, &args.session_id)?;
 
     let user_msg = Message {
         id: sessions::new_id(),
@@ -440,82 +439,6 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     if let Some(pw) = partial_writer { pw.delete(); }
 
     Ok(assistant_msg)
-}
-
-/// 扫描 partial 目录，把所有残留的中断输出追加到 session.jsonl，然后删除 partial 文件。
-/// 失败静默——恢复是 best-effort，不影响正常会话流程。
-fn recover_and_save_interrupted_partials(data_dir: &Path, session_id: &str) {
-    let partials = match sessions_dir::recover_interrupted_partials(data_dir, session_id) {
-        Ok(v) if !v.is_empty() => v,
-        _ => return,
-    };
-    for partial in partials {
-        if let Some(msg) = partial_to_interrupted_message(&partial) {
-            let _ = sessions::append_message(data_dir, session_id, msg);
-        }
-        let _ = sessions_dir::delete_partial(data_dir, session_id, &partial.msg_id);
-    }
-    // 插入中断标记，让前端显示"此处曾被中断"分隔线。
-    let marker = Message {
-        id: sessions::new_id(),
-        role: Role::Marker,
-        content: String::new(),
-        attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: Some(MessageMeta::Interrupted),
-    };
-    let _ = sessions::append_message(data_dir, session_id, marker);
-}
-
-/// 把 [`sessions_dir::RecoveredPartial`] 转成可落盘的 [`Message`]。
-/// text / reasoning / tool_calls 全空时返回 `None`（无内容无需保存）。
-fn partial_to_interrupted_message(
-    partial: &sessions_dir::RecoveredPartial,
-) -> Option<Message> {
-    let mut parts: Vec<MessagePart> = Vec::new();
-    if !partial.reasoning.is_empty() {
-        parts.push(MessagePart::Reasoning { text: partial.reasoning.clone() });
-    }
-    if !partial.text.is_empty() {
-        parts.push(MessagePart::Text { text: partial.text.clone() });
-    }
-    for (idx, (name, args)) in &partial.tool_calls {
-        parts.push(MessagePart::ToolCall {
-            id: format!("recovered-{idx}"),
-            name: name.as_deref().unwrap_or("unknown").to_string(),
-            input: serde_json::from_str(args).unwrap_or(serde_json::Value::Null),
-            arguments: args.clone(),
-            result: None,
-            duration_ms: None,
-        });
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    let tool_calls: Vec<MessageToolCall> = partial
-        .tool_calls
-        .values()
-        .enumerate()
-        .map(|(i, (name, args))| MessageToolCall {
-            id: format!("recovered-{i}"),
-            name: name.as_deref().unwrap_or("unknown").to_string(),
-            input: serde_json::from_str(args).unwrap_or(serde_json::Value::Null),
-            result: None,
-            duration_ms: None,
-        })
-        .collect();
-    Some(Message {
-        id: sessions::new_id(),
-        role: Role::Assistant,
-        content: partial.text.clone(),
-        attachments: Vec::new(),
-        tool_calls,
-        parts,
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
-    })
 }
 
 fn assistant_message_from_recorded_parts(

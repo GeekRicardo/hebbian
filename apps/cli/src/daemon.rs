@@ -455,8 +455,10 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
     let data_dir = &state.data_dir;
     let session_id = &state.session_id;
 
-    // 加载 session（transcript 从 jsonl 重建）
-    let prior = sessions::load(data_dir, session_id)?;
+    // 加载 session（transcript 从 jsonl 重建）。
+    // 走带 partial 恢复的入口：把上次进程中断时残留在 partial sidecar 里的流式输出
+    // 折叠成 Assistant + Interrupted marker 落进 jsonl，再读最终视图。
+    let prior = sessions::load_with_partial_recovery(data_dir, session_id)?;
 
     // 持久化 user message
     let user_msg = Message {

@@ -310,7 +310,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let data_dir = &runtime.data_dir;
     let session_id = &runtime.session_id;
 
-    let prior = sessions::load(data_dir, session_id)?;
+    // send 入口：先把上次中断残留的 partial 折叠进 jsonl 再读历史（同 chat::send_and_save）。
+    let prior = sessions::load_with_partial_recovery(data_dir, session_id)?;
 
     // 持久化 user message
     let user_msg = Message {

@@ -3932,3 +3932,31 @@
   - **没引入"全选 / 全反选"工具栏**：每组 checkbox 已经能批量切换；用户真要"启用所有 collection 内所有 skill"会去 enabled_tools 大开关——SkillsPane 不再加更高级的批量入口，保持 surface 简单
 - **影响范围**: SkillsPane.tsx 一个文件；后端 0 改动（沿用现有 `set_skill_enabled` / `delete_skill_collection` API）；持久化 0 影响（展开状态不入盘）
 - **验证**: `pnpm exec tsc --noEmit` 0 error；视觉验证留给用户重启 desktop 后试用
+
+### 2026-05-23 — partial sidecar 接通"加载历史时也恢复"+ 折叠规则收紧 + 末尾追加中断话术
+
+- **Why**: 用户反复反馈"进程中断后已输出内容没存进 session.jsonl"。架构 §4.9.3 的 partial sidecar 设计前后被修过三次（2026-05-09 storage API、2026-05-20 chat.rs 接入 desktop observer、2026-05-21 BufWriter 截胡修复），写入侧已经稳了，但还有两个洞没堵：
+  1. **触发时机**：`recover_and_save_interrupted_partials` 只在 `chat::send_and_save` 入口被调一次。用户重启 desktop 加载历史时，UI 渲染走 `get_session → CoreClient::load_session → sessions::load`，根本不扫 partial → 重启后看到的就是缺了一截的 session.jsonl，必须等用户再发一条消息才补救
+  2. **折叠规则太宽**：`sessions_dir::PartialFragment::ToolCall` 里 `name: Option<String>`，流式 delta 后续 chunk 帧只带 `arguments_chunk` 不重传 name；折叠时 `name = None`，旧代码用 `name.as_deref().unwrap_or("unknown")` 直接落盘 → 历史里多出一堆 `{name:"unknown", input:null}` 的伪 tool_call，模型读 transcript 误以为真的发起过那次调用。同时残片末尾既没人话也没机读标识，AI 拿到上下文判断不出"这段是中断残片"
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs):
+    - 新增 `pub fn recover_and_append_interrupted_partials(data_dir, id)`：扫 `<session>/partial/`，把每个残留 fragment 文件折叠成一段 `Assistant + Interrupted marker` 追加进 `session.jsonl`，并删 partial 主文件。直接走底层 `append_line + ensure_jsonl`，**不**走 `append_message`——后者内部又调 `load`，会导致递归
+    - 新增 `INTERRUPTED_TAIL_NOTICE = "—— 输出在此中断，以上为本轮残留片段 ——"`：在 recovered assistant 末尾同时落到 `MessagePart::Text` 与 `content`。content 进 model transcript，AI 读历史能识别"上一轮没走完"；part 给 surface 直接渲染同一行人话
+    - 翻译规则收紧（私有 helper `partial_to_interrupted_message`）：
+      - 无 `name` 的 tool_call 直接丢——见上 Why
+      - 有 `name` 的保留，arguments 即便不是合法 JSON 也保留原文（input 落 `Null`），让模型自己判断"这次调用没走完"
+      - text / reasoning / 有名 tool_call 全空时返回 None（无内容不写）
+    - 新增 `pub fn load_with_partial_recovery(data_dir, id)`：先 recover 再 `load`。**`load` 保持纯读不内嵌 recover**——`append_message` / `rename` / `set_run_mode` 这些 mutator 内部会反复调 `load`，turn 进行中活跃 partial 还在被写，触发 recover 会把当前 turn 当成"中断"误折叠（曾在测试 `pending_inputs_*_not_double_written` 上撞过红 → 改成只在 surface 入口显式触发）
+    - 加 `load_with_partial_recovery_folds_residue_and_drops_unnamed_tool_calls` 回归测试：手写 partial 含 text + reasoning + Bash (有名) + 匿名 tool_call，断言落盘后只有 Bash 一个 tool_call、末尾带话术、marker 紧跟、partial 文件被删、二次 load 幂等
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs) `LocalCoreClient::load_session`：改走 `load_with_partial_recovery`。desktop UI 通过 `get_session` Tauri 命令加载历史时自动恢复
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs):
+    - send 入口 `prior_session = sessions::load_with_partial_recovery(...)`，替换旧的 "load + recover_and_save 单独调一次" 两步式调用
+    - 删除本地 `recover_and_save_interrupted_partials` + `partial_to_interrupted_message` 共 75 行——这套实现现在统一收在 agent-core，三个 surface 共用一份折叠规则
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) / [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) send 入口同步换成 `load_with_partial_recovery`。CLI / hebweb 自己**不写** partial（它们的 `SessionConfig::recorder = None`，见 2026-05-21 留尾巴），但它们可能加载 desktop 创建的 session，下一次 user message 触发 send 时该恢复就恢复
+- **影响范围**: agent-core / desktop / cli / hebweb。新增公共 API `load_with_partial_recovery` 与 `recover_and_append_interrupted_partials` 与常量 `INTERRUPTED_TAIL_NOTICE`，纯加法不改既有签名；jsonl 格式不变；协议不变。三个 surface 加载历史的入口现在统一走带恢复的路径
+- **现场 A/B 验证**: 把用户最新 session `~/.hebbian/sessions/202605231018-63c87bf2` 拷到 `/tmp/h-verify`，对比修改前后 session.jsonl 折叠出来的 assistant 段——旧 `recovered-N / name:"Ask" / input:null / content=""` vs 新 `name:"Ask" / input:null / content="—— 输出在此中断，以上为本轮残留片段 ——"`。中断话术真的进了主 jsonl，重启 desktop 拉历史能看到这段
+- **留尾巴**:
+  - partial 写入端 `name` 缺失是真正的根因之一——desktop observer 在 `EventPayload::ToolCallStarted` 首帧透了 name，但生产 partial.jsonl 里观察到几乎所有 ToolCall fragment 都没 name → 说明流式协议层根本没产出 `ToolCallStarted` 事件，只有 `ToolCallDelta`。这是 model-gateway 流式 adapter 的问题，本次没动；丢 unnamed 是兜底
+  - `<msg_id>.partial.jsonl.lock` 文件 best-effort 留在磁盘（`delete_partial` 只删主文件，不删 sentinel lock 文件）。无害，下次 append 会复用同一份 lock
+  - 架构.md §4.9 / recorder.rs 模块注释仍写"★ 单 jsonl 唯一文件 + partial sidecar"暗示 recorder.rs 同时承担 partial 写入，实际 partial 写入在 sessions_dir.rs，折叠规则在 sessions.rs。注释下次清理
+- **关联**: 架构.md §4.9.3；2026-05-20 / 2026-05-21 partial sidecar 两条上游修复（本次接通它们漏掉的读出侧）

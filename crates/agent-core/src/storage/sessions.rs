@@ -965,6 +965,13 @@ pub fn list(data_dir: &Path) -> AppResult<Vec<SessionMeta>> {
     Ok(out)
 }
 
+/// 纯读：找到 session 的 jsonl 或 legacy json 并解析。**不触发 partial 恢复**——
+/// 该函数在 turn 进行中被 [`append_message`] / [`rename`] 等内部写入路径反复调用，
+/// 此时活跃 partial 还在被流式 append，若内嵌 recover 会把当前 turn 当成"中断"误折叠。
+///
+/// Surface 加载会话历史的入口请用 [`load_with_partial_recovery`]——它在打开
+/// jsonl 之前会先把上次进程中断时残留的 partial sidecar 折叠成
+/// `Assistant + Interrupted marker` 写入主 jsonl。
 pub fn load(data_dir: &Path, id: &str) -> AppResult<Session> {
     if let Some(p) = find_jsonl(data_dir, id)? {
         return read_jsonl(&p);
@@ -973,6 +980,133 @@ pub fn load(data_dir: &Path, id: &str) -> AppResult<Session> {
         return common::storage::read_json_required(&p);
     }
     Err(AppError::msg(format!("session {id} not found")))
+}
+
+/// Surface 入口语义：恢复 partial 残留后再加载 session。
+/// 桌面 / CLI / hebweb 在用户打开会话历史 / 发送新消息前应走这条路径。
+pub fn load_with_partial_recovery(data_dir: &Path, id: &str) -> AppResult<Session> {
+    if let Err(e) = recover_and_append_interrupted_partials(data_dir, id) {
+        tracing::warn!(session = %id, error = %e, "恢复 partial 失败");
+    }
+    load(data_dir, id)
+}
+
+/// 中断恢复时追加在残片末尾的话术。同时进 `MessagePart::Text` 与 `content`，
+/// 模型读 transcript 能识别"上一轮输出未走完"，UI 直接渲染同一行。
+pub const INTERRUPTED_TAIL_NOTICE: &str = "输出中断";
+
+/// 扫描 `<session>/partial/` 残留文件，折叠成 assistant 消息追加进 session.jsonl，
+/// 紧跟一条 `Interrupted` marker，并删除 partial 文件。返回追加的中断段数量。
+///
+/// 仅在 session.jsonl 已存在时执行（避免为孤立 partial 创建空 session）；
+/// 不递归调用 `load`，使用 `find_jsonl` 直接定位文件，规避恢复期间的重入。
+pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> AppResult<usize> {
+    let partials = super::sessions_dir::recover_interrupted_partials(data_dir, id)?;
+    if partials.is_empty() {
+        return Ok(0);
+    }
+    let Some(path) = find_jsonl(data_dir, id)? else {
+        return Ok(0);
+    };
+    let mut appended = 0usize;
+    for p in &partials {
+        if let Some(msg) = partial_to_interrupted_message(p) {
+            append_line(&path, &RolloutLine::Message(msg))?;
+            append_line(
+                &path,
+                &RolloutLine::Message(Message {
+                    id: new_id(),
+                    role: Role::Marker,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: now(),
+                    meta: Some(MessageMeta::Interrupted),
+                }),
+            )?;
+            appended += 1;
+        }
+        let _ = super::sessions_dir::delete_partial(data_dir, id, &p.msg_id);
+    }
+    Ok(appended)
+}
+
+/// 把 partial 折叠结果翻译成可落盘的 assistant 消息。
+///
+/// 规则：
+/// - 无 `name` 的 tool_call 直接丢——name 缺失意味着流式 delta 首帧没透过来，
+///   只剩残缺 arguments，模型读不出工具身份、UI 也无法渲染，留下只是噪声
+/// - 有 `name` 的保留，arguments 即便不是合法 JSON 也保留原文（input 落 Null），
+///   让模型在下一轮自行判断"这次工具调用没走完"
+/// - 末尾追加 [`INTERRUPTED_TAIL_NOTICE`]：part 与 content 各加一份
+/// - text / reasoning / 有名 tool_call 全空时返回 None（无内容无需保存）
+fn partial_to_interrupted_message(
+    partial: &super::sessions_dir::RecoveredPartial,
+) -> Option<Message> {
+    let named_tool_calls: Vec<(u32, String, String)> = partial
+        .tool_calls
+        .iter()
+        .filter_map(|(idx, (name, args))| name.as_ref().map(|n| (*idx, n.clone(), args.clone())))
+        .collect();
+
+    if partial.text.is_empty() && partial.reasoning.is_empty() && named_tool_calls.is_empty() {
+        return None;
+    }
+
+    let mut parts: Vec<MessagePart> = Vec::new();
+    if !partial.reasoning.is_empty() {
+        parts.push(MessagePart::Reasoning {
+            text: partial.reasoning.clone(),
+        });
+    }
+    if !partial.text.is_empty() {
+        parts.push(MessagePart::Text {
+            text: partial.text.clone(),
+        });
+    }
+    for (idx, name, args) in &named_tool_calls {
+        let input: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+        parts.push(MessagePart::ToolCall {
+            id: format!("recovered-{idx}"),
+            name: name.clone(),
+            input,
+            arguments: args.clone(),
+            result: None,
+            duration_ms: None,
+        });
+    }
+    parts.push(MessagePart::Text {
+        text: INTERRUPTED_TAIL_NOTICE.to_string(),
+    });
+
+    let mut content = partial.text.clone();
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(INTERRUPTED_TAIL_NOTICE);
+
+    let tool_calls: Vec<MessageToolCall> = named_tool_calls
+        .iter()
+        .map(|(idx, name, args)| MessageToolCall {
+            id: format!("recovered-{idx}"),
+            name: name.clone(),
+            input: serde_json::from_str(args).unwrap_or(Value::Null),
+            result: None,
+            duration_ms: None,
+        })
+        .collect();
+
+    Some(Message {
+        id: new_id(),
+        role: Role::Assistant,
+        content,
+        attachments: Vec::new(),
+        tool_calls,
+        parts,
+        created_at: now(),
+        meta: None,
+    })
 }
 
 /// 把 old `<date>/<id>.jsonl` 或平铺 `<id>.jsonl` 迁移到新布局 `<id>/session.jsonl`。
@@ -1904,6 +2038,135 @@ mod tests {
                 .matched_in,
             "content"
         );
+    }
+
+    /// 回归：上次进程中断时残留在 partial sidecar 的流式输出，必须能在 surface 下次
+    /// 加载会话时折叠进 session.jsonl，并满足三条规则：
+    /// 1. 无 `name` 的 tool_call 直接丢弃——流式 delta 没透首帧 name 时只剩残缺 args，
+    ///    保留会让模型读到 "unknown" 误以为真的发起过那次调用
+    /// 2. 有 `name` 的 tool_call 保留，arguments 即便不是合法 JSON 也保留原文
+    /// 3. 残片末尾追加 [`INTERRUPTED_TAIL_NOTICE`]——同时进 part 与 content，
+    ///    模型读 transcript 能看到"上一轮没走完"
+    /// 4. 紧跟一条 `Interrupted` marker；partial 文件被删除
+    #[test]
+    fn load_with_partial_recovery_folds_residue_and_drops_unnamed_tool_calls() {
+        let dir = temp_data_dir("partial-recovery");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+
+        // 模拟流式中断后磁盘上残留的 partial：text + reasoning + 一个有名 tool_call
+        // (Bash) + 一个无名 tool_call（只有 args chunk，没透 name）。
+        let msg_id = "msg-interrupted";
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::Reasoning {
+                text: "想想看…".into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::Text {
+                text: "我打算先".into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolCall {
+                index: 0,
+                name: Some("Bash".into()),
+                arguments_chunk: r#"{"command":"l"#.into(),
+            },
+        )
+        .unwrap();
+        super::super::sessions_dir::append_partial(
+            &dir,
+            &s.id,
+            msg_id,
+            &super::super::sessions_dir::PartialFragment::ToolCall {
+                index: 1,
+                name: None,
+                arguments_chunk: r#"{"path":""#.into(),
+            },
+        )
+        .unwrap();
+
+        let loaded = load_with_partial_recovery(&dir, &s.id).unwrap();
+        assert_eq!(
+            loaded.messages.len(),
+            2,
+            "应追加 1 条 assistant + 1 条 Interrupted marker"
+        );
+        let assistant = &loaded.messages[0];
+        let marker = &loaded.messages[1];
+
+        assert_eq!(assistant.role, Role::Assistant);
+        assert!(
+            assistant.content.ends_with(INTERRUPTED_TAIL_NOTICE),
+            "content 末尾必须带中断话术，便于 AI 读历史时识别：{}",
+            assistant.content
+        );
+        assert!(
+            assistant.content.contains("我打算先"),
+            "content 必须保留中断前的可见文本：{}",
+            assistant.content
+        );
+
+        let part_kinds: Vec<&str> = assistant
+            .parts
+            .iter()
+            .map(|p| match p {
+                MessagePart::Reasoning { .. } => "reasoning",
+                MessagePart::Text { .. } => "text",
+                MessagePart::ToolCall { .. } => "tool_call",
+            })
+            .collect();
+        assert_eq!(
+            part_kinds,
+            vec!["reasoning", "text", "tool_call", "text"],
+            "parts 顺序：reasoning / 残片文本 / 仅保留 Bash 一个 tool_call / 末尾中断话术"
+        );
+
+        let tool_call_names: Vec<&str> = assistant
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                MessagePart::ToolCall { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_call_names,
+            vec!["Bash"],
+            "无名 tool_call 必须被丢弃，仅保留有名"
+        );
+        assert_eq!(assistant.tool_calls.len(), 1);
+        assert_eq!(assistant.tool_calls[0].name, "Bash");
+
+        assert_eq!(marker.role, Role::Marker);
+        assert!(matches!(marker.meta, Some(MessageMeta::Interrupted)));
+
+        // partial 主文件应被删除（避免下次再被恢复一遍）；.lock 文件 best-effort 留底。
+        let partial_main = dir
+            .join("sessions")
+            .join(&s.id)
+            .join("partial")
+            .join(format!("{msg_id}.partial.jsonl"));
+        assert!(
+            !partial_main.exists(),
+            "partial 主文件应被删除：{}",
+            partial_main.display()
+        );
+
+        // 二次 load 不再追加（恢复是幂等的，否则每次刷新都会插一对 assistant+marker）。
+        let loaded_again = load_with_partial_recovery(&dir, &s.id).unwrap();
+        assert_eq!(loaded_again.messages.len(), 2, "幂等：重复加载不应再次追加");
     }
 
     #[test]
