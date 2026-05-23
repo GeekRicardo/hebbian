@@ -1422,7 +1422,6 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
     const args = callArgs(call);
     return (
       <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2 text-[14px] text-muted-foreground">
-        <div>只读记录：Ask 的真实选择控件在输入框上方，这里仅回放问题和返回。</div>
         <div className="font-medium text-foreground">
           {argString(args, "question") || "用户提问"}
         </div>
