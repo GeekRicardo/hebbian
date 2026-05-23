@@ -21,6 +21,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Maximize2,
+  Minimize2,
+  Code,
 } from "lucide-react";
 import { api } from "@/desktop/bridge/tauri";
 import { Button } from "@/desktop/ui/components/ui/button";
@@ -713,31 +715,31 @@ function MessageRow({
   const body = (
     <div className="px-3 py-2 border-t border-border bg-muted/20 space-y-2">
       {msg.reasoning ? (
-        <PayloadField label="reasoning">
+        <PayloadField label="reasoning" copyText={msg.reasoning}>
           <PrettyStringInner
             value={msg.reasoning}
           />
         </PayloadField>
       ) : null}
       {msg.content ? (
-        <PayloadField label="content">
+        <PayloadField label="content" copyText={msg.content}>
           <PrettyStringInner
             value={msg.content}
           />
         </PayloadField>
       ) : null}
       {msg.tool_calls && msg.tool_calls.length > 0 ? (
-        <PayloadField label="tool_calls">
+        <PayloadField label="tool_calls" copyJson={msg.tool_calls}>
           <PrettyJson value={msg.tool_calls} />
         </PayloadField>
       ) : null}
       {msg.results && msg.results.length > 0 ? (
-        <PayloadField label="tool results">
+        <PayloadField label="tool results" copyJson={msg.results}>
           <PrettyJson value={msg.results} />
         </PayloadField>
       ) : null}
       {msg.attachments && msg.attachments.length > 0 ? (
-        <PayloadField label="attachments">
+        <PayloadField label="attachments" copyJson={msg.attachments}>
           <PrettyJson value={msg.attachments} />
         </PayloadField>
       ) : null}
@@ -809,19 +811,19 @@ function ResponseBlock({ response }: { response: ModelIoResponse }) {
         </pre>
       ) : null}
       {response?.reasoning ? (
-        <PayloadField label="reasoning">
+        <PayloadField label="reasoning" copyText={response.reasoning}>
           <PrettyStringInner
             value={response.reasoning}
           />
         </PayloadField>
       ) : null}
       {response?.text ? (
-        <PayloadField label="text">
+        <PayloadField label="text" copyText={response.text}>
           <PrettyStringInner value={response.text} />
         </PayloadField>
       ) : null}
       {response?.calls && response.calls.length > 0 ? (
-        <PayloadField label="tool_calls">
+        <PayloadField label="tool_calls" copyJson={response.calls}>
           <PrettyJson value={response.calls} />
         </PayloadField>
       ) : null}
@@ -1072,8 +1074,185 @@ function formatTs(ts: string): string {
  * 3. **字符串控制字符**：标量字符串走 [`PrettyStringInner`]，把 `\n` `\t` `\r`
  *    展开为真字符 + 可视 marker（`↵` `→` `⏎` `\xNN`），marker `select-none` 不参与复制。
  */
+/**
+ * Cmd/Ctrl+C 选中复制时拦截，遍历 selection 的 fragment 自己生成 plain text——
+ * 浏览器对当前 DOM（多层 flex + 每个 token 独立 span）默认 serialization 在
+ * 几乎每个边界塞 \n，复制出来全是零散单词。这里按节点 tagName 来判：
+ *   - div / pre / p / li 视作"一行"边界 → 末尾 \n
+ *   - span / button / inline 元素 → 同行连续
+ *   - 含 `select-none` className 的节点跳过（chevron 占位 / marker / 复制按钮）
+ * 复制的是用户**实际选中的部分**，不是整片 JSON——避免"选了一行结果复制了全文"。
+ */
+function serializeSelectionFragment(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? "";
+  }
+  if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    let out = "";
+    node.childNodes.forEach((child) => {
+      out += serializeSelectionFragment(child);
+    });
+    return out;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+  const el = node as Element;
+  const className = typeof el.className === "string" ? el.className : "";
+  if (className.includes("select-none")) return "";
+
+  let inner = "";
+  el.childNodes.forEach((child) => {
+    inner += serializeSelectionFragment(child);
+  });
+
+  const tag = el.tagName.toLowerCase();
+  if (tag === "br") return "\n";
+  if (tag === "div" || tag === "pre" || tag === "p" || tag === "li") {
+    // 行级元素：末尾保证一个 \n（inner 已带 \n 时不重复加）
+    return inner.replace(/\n+$/, "") + "\n";
+  }
+  return inner;
+}
+
 function PrettyJson({ value }: { value: unknown }) {
-  return <PrettyJsonNode value={value} keyLabel={null} isLast />;
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const handler = (e: ClipboardEvent) => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!el.contains(range.commonAncestorContainer)) return;
+      const fragment = range.cloneContents();
+      const text = serializeSelectionFragment(fragment);
+      if (!text) return;
+      e.preventDefault();
+      e.clipboardData?.setData("text/plain", text);
+    };
+    el.addEventListener("copy", handler);
+    return () => el.removeEventListener("copy", handler);
+  }, []);
+
+  return (
+    <div ref={rootRef}>
+      <PrettyJsonNode value={value} keyLabel={null} isLast />
+    </div>
+  );
+}
+
+/**
+ * 双按钮复制（content / reasoning 等长字符串字段）：
+ * - 主按钮：复制渲染后内容（真换行 / 真制表符，跟视觉一致），方便粘到 markdown / 编辑器
+ * - 副按钮：复制原格式（`\n` `\t` 还原为字面转义序列），方便粘到代码 / JSON 文件
+ * 副按钮平时 opacity-0 偏左 1px，hover 主按钮（或 wrapper 任意位置）时滑出。
+ */
+function StringCopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState<"rendered" | "raw" | null>(null);
+
+  async function copy(mode: "rendered" | "raw") {
+    const text =
+      mode === "rendered" ? value : JSON.stringify(value).slice(1, -1);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(mode);
+      setTimeout(() => setCopied(null), 1200);
+    } catch {
+      // 静默：clipboard 权限被拒下次 hover 重试即可
+    }
+  }
+
+  return (
+    <span
+      className="group/strcopy relative inline-flex items-center select-none"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        onClick={() => copy("rendered")}
+        title="复制（渲染后内容，跟视觉一致）"
+        aria-label="复制渲染后内容"
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {copied === "rendered" ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Copy className="h-3 w-3" />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => copy("raw")}
+        title="复制原格式（\n \t 保留为字面转义）"
+        aria-label="复制原格式"
+        className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground opacity-0 -translate-x-1 transition-all duration-150 group-hover/strcopy:opacity-100 group-hover/strcopy:translate-x-0"
+      >
+        {copied === "raw" ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Code className="h-3 w-3" />
+        )}
+      </button>
+    </span>
+  );
+}
+
+/**
+ * 双按钮复制：
+ * - 主按钮：复制格式化 JSON（`null, 2` 缩进，跟视觉一致）
+ * - 副按钮：复制压缩 JSON（一行），平时 opacity-0 + 偏左 1px，hover wrapper 时滑出
+ * 按钮自己 stopPropagation，避免点击触发外层 chevron 展开/折叠等行为。
+ */
+function JsonCopyButton({ value }: { value: unknown }) {
+  const [copied, setCopied] = useState<"pretty" | "compact" | null>(null);
+
+  async function copy(mode: "pretty" | "compact") {
+    const text =
+      mode === "pretty"
+        ? JSON.stringify(value, null, 2)
+        : JSON.stringify(value);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(mode);
+      setTimeout(() => setCopied(null), 1200);
+    } catch {
+      // swallow：clipboard 权限被拒不需要打扰用户，下次 hover 重试即可
+    }
+  }
+
+  return (
+    <span
+      className="group/copy relative inline-flex items-center select-none"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        onClick={() => copy("pretty")}
+        title="复制格式化 JSON"
+        aria-label="复制格式化 JSON"
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {copied === "pretty" ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Copy className="h-3 w-3" />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => copy("compact")}
+        title="复制压缩 JSON（一行）"
+        aria-label="复制压缩 JSON"
+        className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground opacity-0 -translate-x-1 transition-all duration-150 group-hover/copy:opacity-100 group-hover/copy:translate-x-0"
+      >
+        {copied === "compact" ? (
+          <Check className="h-3 w-3 text-emerald-500" />
+        ) : (
+          <Minimize2 className="h-3 w-3" />
+        )}
+      </button>
+    </span>
+  );
 }
 
 /**
@@ -1124,6 +1303,7 @@ function PrettyJsonNode({
       closeBracket={closeBracket}
       entries={entries}
       isLast={isLast}
+      rawValue={value}
     />
   );
 }
@@ -1135,6 +1315,7 @@ function CollapsibleJsonNode({
   closeBracket,
   entries,
   isLast,
+  rawValue,
 }: {
   keyLabel: string | null;
   isArray: boolean;
@@ -1142,6 +1323,8 @@ function CollapsibleJsonNode({
   closeBracket: string;
   entries: Array<[string | number, unknown]>;
   isLast: boolean;
+  /** 这个层级原始的 value（用于复制按钮序列化），上层 PrettyJsonNode 透传 */
+  rawValue: unknown;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -1165,6 +1348,11 @@ function CollapsibleJsonNode({
         </button>
         <JsonKey label={keyLabel} />
         <span>{openBracket}</span>
+        {/* 行内复制按钮：紧跟开头 { 或 [，hover 整行才显示（行 group 控制可见性，
+            内部 group/copy 再控制副按钮 hover 滑出）；位置稳定，展开/折叠态共用 */}
+        <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+          <JsonCopyButton value={rawValue} />
+        </span>
         {!open && (
           <>
             <span className="italic text-muted-foreground text-[10px] select-none">
@@ -1423,14 +1611,24 @@ function expandControlChars(value: string, keyPrefix: string): ReactNode[] {
 function PayloadField({
   label,
   children,
+  copyText,
+  copyJson,
 }: {
   label: string;
   children: ReactNode;
+  /** 字符串字段：标题行右侧渲染 StringCopyButton（双按钮：渲染后 / 原格式） */
+  copyText?: string;
+  /** JSON 字段：标题行右侧渲染 JsonCopyButton（双按钮：格式化 / 压缩单行） */
+  copyJson?: unknown;
 }) {
   const zoomed = useContext(ZoomContext);
   return (
     <div>
-      <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
+      <div className="flex items-center justify-between gap-2 mb-1 min-h-[20px]">
+        <span className="text-[10px] text-muted-foreground">{label}</span>
+        {copyText !== undefined && <StringCopyButton value={copyText} />}
+        {copyJson !== undefined && <JsonCopyButton value={copyJson} />}
+      </div>
       <div
         className={cn(
           "text-[11px] bg-background/60 p-2 rounded overflow-auto font-mono whitespace-pre-wrap break-words",
