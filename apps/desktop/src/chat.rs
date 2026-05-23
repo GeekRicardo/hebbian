@@ -1706,6 +1706,16 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             from: from.clone(),
             to: to.clone(),
         }),
+        TurnFinished { stop_reason, .. } => Some(EngineEvent::TurnFinished {
+            stop_reason: match stop_reason {
+                protocol::StopReason::EndTurn => "end_turn",
+                protocol::StopReason::MaxIterations => "max_iterations",
+                protocol::StopReason::PermissionDenied => "permission_denied",
+                protocol::StopReason::Cancelled => "cancelled",
+                protocol::StopReason::Failed => "failed",
+            }
+            .to_string(),
+        }),
         UserQuestionRequested {
             request_id,
             question,

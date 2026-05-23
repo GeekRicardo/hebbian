@@ -234,6 +234,33 @@ function removeFromSet<T>(s: Set<T>, item: T): Set<T> {
 }
 
 /**
+ * Run 内时间线条目（架构 §4.2 + §4.12.5）。run 跑到一半时把"已完成 turn 快照"
+ * 和"streaming 中插队的 user message"按真实发生顺序穿插起来，避免插队消息被
+ * 错乱地黏在下一轮 assistant 输出之后。
+ *
+ * - `assistant_frozen`：一次 turn 的 TurnFinished 事件触发——把当时的
+ *   streamingText / streamingParts 原样冻结，渲染走标准 MessageBubble
+ *   （`streaming=false`，仍喂 streamingParts 复用渲染路径）
+ * - `user_injected`：streaming 期间调 inject_user_message 即写即落后，
+ *   后端返回的持久化 Message 直接放进来
+ *
+ * run 结束 reload session 时 slot 被清掉，由 session.messages 接管最终顺序。
+ */
+type LiveTimelineItem =
+  | {
+      kind: "assistant_frozen";
+      /** 冻结时的临时 id；reload 后会被真正的 message id 替代 */
+      id: string;
+      text: string;
+      parts: StreamingAssistantPart[];
+      created_at: number;
+    }
+  | {
+      kind: "user_injected";
+      message: Message;
+    };
+
+/**
  * 单个 session 在跑时的所有"软状态"（流式正文 / 推理 / 工具 / HITL）。
  * 全局字段（`streamingText` 等）只是 currentSession 这个槽的只读镜像。
  * 这样切到别的会话时，当前会话的状态不会被新会话的流冲掉，
@@ -245,11 +272,15 @@ type SessionStream = {
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
   /**
-   * 「立即发送」期间临时显示的 user message：渲染时排在 streaming bubble **之后**，
-   * 视觉上紧跟当前正在跑的 assistant，下一轮 assistant 输出再接着它。
-   * run 结束时 reload session 拿到完整 messages，slot 整个被清掉，由 messages 接管。
+   * Run 内时间线：当前 Run 内已完成的 turn 快照 + 期间插队的 user message，
+   * 按发生顺序排好。渲染时整段排在持久化 messages 之后、当前 streaming bubble 之前。
+   *
+   * `assistantInsertPos` 维护"下一个 TurnFinished 快照应该插在哪儿"——
+   * 每次 TurnFinished 时把当前 streaming 内容插入到这个位置，然后把游标
+   * 推到末尾，使得之后到达的 user injection 排在该 turn 之后、下一个 turn 之前。
    */
-  injectedSinceStream: Message[];
+  liveTimeline: LiveTimelineItem[];
+  assistantInsertPos: number;
   pendingApproval: PendingApproval | null;
   pendingApprovalQueue: PendingApproval[];
   pendingQuestion: PendingQuestion | null;
@@ -283,7 +314,7 @@ const EMPTY_MIRROR = {
   streamingMessageId: null as string | null,
   streamingText: "",
   streamingParts: [] as StreamingAssistantPart[],
-  injectedSinceStream: [] as Message[],
+  liveTimeline: [] as LiveTimelineItem[],
   activeRequestId: null as string | null,
   pendingApproval: null as PendingApproval | null,
   pendingApprovalQueue: [] as PendingApproval[],
@@ -300,7 +331,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     streamingMessageId: slot.streamingMessageId,
     streamingText: slot.streamingText,
     streamingParts: slot.streamingParts,
-    injectedSinceStream: slot.injectedSinceStream,
+    liveTimeline: slot.liveTimeline,
     activeRequestId: slot.requestId,
     pendingApproval: slot.pendingApproval,
     pendingApprovalQueue: slot.pendingApprovalQueue,
@@ -417,6 +448,33 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   if (e.type === "run_mode_changed") {
     // 运行模式切换通知（架构 §10.2）：更新当前 RunMode 标签，状态栏 / 顶栏可消费。
     return { ...slot, currentRunMode: e.to };
+  }
+  if (e.type === "turn_finished") {
+    // Turn 边界（架构 §3 / §4.2）：把当前 streamingText / streamingParts 冻结成一条
+    // assistant_frozen，按 assistantInsertPos 插入到 liveTimeline——既走在该 Turn
+    // 期间到达的 user injection **之前**（保留视觉因果），又留出末尾空间让后续
+    // injection 落在它之后。游标推到末尾，下个 Turn 的快照会自然排在新 injection
+    // 之后。streaming 字段清空，等下个 Turn 起新 bubble。
+    if (slot.streamingText.length === 0 && slot.streamingParts.length === 0) {
+      // 空 Turn（例如直接走到 suspended 路径），无内容可冻结。
+      return slot;
+    }
+    const frozen: LiveTimelineItem = {
+      kind: "assistant_frozen",
+      id: `frozen-${slot.requestId}-${slot.liveTimeline.length}`,
+      text: slot.streamingText,
+      parts: slot.streamingParts,
+      created_at: Date.now(),
+    };
+    const next = [...slot.liveTimeline];
+    next.splice(slot.assistantInsertPos, 0, frozen);
+    return {
+      ...slot,
+      streamingText: "",
+      streamingParts: [],
+      liveTimeline: next,
+      assistantInsertPos: next.length,
+    };
   }
   if (e.type === "user_question_requested") {
     const q: PendingQuestion = {
@@ -552,8 +610,12 @@ interface AppState {
   streamingMessageId: string | null;
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
-  /** 「立即发送」期间临时显示的 user message：渲染在 streaming bubble 之后。 */
-  injectedSinceStream: Message[];
+  /**
+   * Run 内时间线（架构 §4.2 + §4.12.5）：已完成 turn 快照 + streaming 期间
+   * 插队的 user message，按真实顺序。ChatView 据此把"插队 → 下个 turn 输出"
+   * 渲染成正确的因果次序。镜像自 currentSession 的 slot。
+   */
+  liveTimeline: LiveTimelineItem[];
   activeRequestId: string | null;
   /** 当前对话 AutoMode 判官累计标记（镜像自 currentSession 的 slot）。 */
   autoJudgedNotes: AutoJudgedNote[];
@@ -811,7 +873,7 @@ export const useStore = create<AppState>((set, get) => ({
   streamingMessageId: null,
   streamingText: "",
   streamingParts: [],
-  injectedSinceStream: [],
+  liveTimeline: [],
   activeRequestId: null,
   autoJudgedNotes: [],
   currentRunMode: null,
@@ -1108,15 +1170,20 @@ export const useStore = create<AppState>((set, get) => ({
         target.content,
         target.attachments
       );
-      // 把 user message 排在 streaming bubble **之后**临时显示——不动 messages 列表，
-      // 避免它跑到当前正在跑的 assistant 之前。run 结束时 slot 整个被清掉，由 reload
-      // 后的 session.messages 接管最终顺序。
+      // 把 user message 按真实时间序追加到 liveTimeline 末尾——这样它落在当前
+      // 正在 streaming 的那个 Turn 之后（视觉上紧跟当前 assistant），同时下一次
+      // TurnFinished 会把新 Turn 的 assistant 快照插到 assistantInsertPos
+      // （即此 user 之前），用户后续插队消息又落到那个新 assistant 之后，依次类推。
+      // run 结束 slot 被清掉时，由 reload 后的 session.messages 接管最终顺序。
       set((state) => {
         const slot = state.sessionStreams[sessionId];
         if (!slot) return state;
         const updated: SessionStream = {
           ...slot,
-          injectedSinceStream: [...slot.injectedSinceStream, persisted],
+          liveTimeline: [
+            ...slot.liveTimeline,
+            { kind: "user_injected", message: persisted },
+          ],
         };
         const isForeground = state.currentSession?.id === sessionId;
         return {
@@ -1570,7 +1637,8 @@ export const useStore = create<AppState>((set, get) => ({
         streamingMessageId: tempId,
         streamingText: "",
         streamingParts: [],
-        injectedSinceStream: [],
+        liveTimeline: [],
+        assistantInsertPos: 0,
         pendingApproval: null,
         pendingApprovalQueue: [],
         pendingQuestion: null,

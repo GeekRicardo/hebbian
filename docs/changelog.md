@@ -3992,3 +3992,57 @@
 - **留尾巴**:
   - 如果 GitHub scanner 未来用更激进的 fuzz 匹配（如跨字符串拼接 reassembly），这个绕过会失效；届时只能改成 build.rs 编译时从环境变量注入，或彻底改成「让用户自带 client_id/secret」。当前 scanner 不做 reassembly，简单拼接已足够
   - 同文件 `CLAUDE_CLIENT_ID`（line 137）与 `CODEX_CLIENT_ID` 也是 installed-app 公开值；scanner 本次没报警（这两个是裸 UUID，没有 `GOCSPX-` 那样的强识别前缀），暂不动；如未来被识别，按同样套路 `concat!` 拆即可
+
+### 2026-05-24 — 修复 streaming 中插队的 user message 在下一轮 assistant 输出后才"显形"的错乱顺序
+
+- **Why**: 用户在 Turn N 正在跑（模型流 / tool_call 执行）时插了一条新消息，UI 看着是排在正在跑的 assistant 之后；但 Turn N 跑完、Turn N+1 因为 PendingInputs drain 起来后，Turn N+1 的新输出仍然被追加到**同一个** streaming bubble 上——视觉上变成"插队 user 跑到 Turn N+1 的输出后面"。因果倒挂，用户每次插队都得自我安慰一下"它其实读到了"。根因：前端 store 把整次 Run 只维持一个 streaming bubble（`streamingText` / `streamingParts`），多 Turn 共用同一个累加器；插队 user 走的 `injectedSinceStream` 临时数组永远渲染在那一个 bubble 之后，没有"Turn 边界"的概念把它切开
+- **方案权衡**:
+  - **每次 PendingInputs drain 时把当前 streaming 内容塞回 `session.messages`** ✗：messages 是后端落盘视图，前端不该擅自插，且 run 结束时 reload 会重复
+  - **本次选中：暴露 agent_core 已有的 `TurnFinished` 协议事件给前端 + 重构 slot 内时间线**：`TurnFinished` 之前只在 desktop chat.rs 内部消费（落 turn_messages 用于分段落盘），没翻到 EngineEvent。把它翻出来，前端按事件把当前 streaming 内容"冻结"成一条 timeline 快照，插队 user 也走同一条 timeline，按真实顺序穿插。下个 Turn 起新的 streaming bubble 从空开始
+- **改动**:
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs) `EngineEvent`：新增 `TurnFinished { stop_reason }` variant（additive，老 surface 忽略未知 variant）
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) `agent_event_to_engine_event`：把 `EventPayload::TurnFinished` 翻成 `EngineEvent::TurnFinished`，`stop_reason` 用 snake_case 字符串
+  - [apps/web-server/src/events.rs](../apps/web-server/src/events.rs) `EngineEvent` + `translate`：同步加入 `TurnFinished` 翻译，让 hebweb surface 共享同一行为
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) `EngineEvent` 联合体：加入 `turn_finished` 变体
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) `SessionStream`：
+    - 删 `injectedSinceStream: Message[]`，换成 `liveTimeline: LiveTimelineItem[]` + `assistantInsertPos: number`
+    - `LiveTimelineItem` 两种：`assistant_frozen`（冻结时的 streamingText + streamingParts 原样保留）/ `user_injected`（持久化 Message）
+    - `applyEventToSlot` 处理 `turn_finished`：把当前 streaming 内容按 assistantInsertPos 插入 timeline → 游标推到末尾 → 清空 streamingText / streamingParts，下个 Turn 自然起新 bubble
+    - `flushQueuedItem` 注入成功后改成 push 到 `liveTimeline` 末尾（kind=user_injected）
+    - `mirrorFromSlot` / `EMPTY_MIRROR` / `AppState.liveTimeline` 同步改字段名
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx)：
+    - 删掉单独的 `injectedSinceStream.map` 渲染块
+    - 在 `MessageList` 后按 `liveTimeline` 顺序渲染：`assistant_frozen` 复用 `MessageBubble` + `streamingParts`（不带 `streaming` 标志，复用已有渲染路径，无需额外类型转换）；`user_injected` 直接渲染
+    - streaming bubble 移到 `liveTimeline` **之后**渲染，且仅在 `streamingText.length > 0 || streamingParts.length > 0` 时才显示（避免冻结后那一瞬间显示一个空 bubble）
+- **影响范围**: 协议公开层（EngineEvent additive 新 variant，向前向后兼容）/ desktop + hebweb 翻译路径 / 前端 store 软状态结构 / ChatView 渲染顺序。所有变更都是 additive，老 jsonl / 老 session 兼容；CLI 不走 `agent_event_to_engine_event`（NDJSON 直接 forward AgentEvent），不受影响
+- **A/B 验证（heb CLI 复现）**:
+  - 阶段 A 复现：起 heb new，发首条让模型连 ToolCall + 文本回复（如「请用 Bash 跑 `seq 1 5`，然后告诉我结果」），趁工具执行中 `heb input` 插一条 `请也告诉我系统时间`。NDJSON 流里看到 `step_started(tool)` → `tool_done` → 旧版本：插队消息后面紧接 `text_delta` 把"系统时间"的回答追加到原 bubble，而插队 user 仍排在最后
+  - 阶段 B 验证：跑同一条复现脚本——同一时刻收到的事件流不变（CLI 路径未改），但 desktop / hebweb 渲染按 `turn_finished` 切 bubble；ChatView 看到的就是 `assistant_1(Bash 结果) → user_injection → assistant_2(系统时间)`，因果对齐
+- **留尾巴**:
+  - `LiveTimelineItem` 是 store 内部类型，没暴露到外部 types.ts；如果未来 hebweb v2 把"已冻结 turn"也想做选择/编辑（fork / regenerate），需要把 `assistant_frozen` 升级成带稳定 id 的真 Message（目前 id 形如 `frozen-<requestId>-<n>`，run 结束 reload 后会被覆盖，不参与 fork 路径）
+  - `streaming` 标志整体仍由 `streamingMessageId` 决定，TurnFinished 之间的间隙 isStreaming 仍 true（slot 还没删）；UI 上"流式中"指示器（呼吸点 / Cancel 按钮）仍持续亮起，符合"Run 没结束"的语义
+  - `step_finished(model)` 现在仍不被 store 消费——`TurnFinished` 才是冻结点，与 §4.2 的 Step / Turn 概念对齐（Step 是 model/tool 子粒度，Turn 才是一次完整"模型决策 + 后续 tool 批")
+- **关联**: 架构.md §3（Run/Turn 边界事件已列 TurnFinished）/ §4.2 / §4.12.5（PendingInputs drain 时机）
+
+### 2026-05-24 — 修复 Edit/Write「整个目录」一次审批后子文件仍反复审批；项目级目录列表显示用相对路径
+
+- **Why**:
+  - 用户反馈：审批 Edit 弹窗里选「整个目录 + 本项目」记忆一次后，同一目录下的子文件、子目录里的文件**仍被反复审批**。表面看像「agent_loop 每次循环没读取新审批列表」，实际是后端规则匹配的 path 参数被传成 `None`，规则永远命中不到 → 走默认 Ask 重新审批。`PermissionStore` 内存视图本身是进程内 `Mutex<HashMap>`，`add()` 后下次 `find()` 立刻能读到，不存在"重读"问题。
+  - 借鉴 Claude Code 2.1.144 extension.js 里目录匹配函数（`dirname(x) === V || x.startsWith(V + sep)`，再用 realpath 处理 symlink）：父目录规则**递归覆盖**所有子目录文件，UI 只暴露 `dirname(file)` 作为「Allow this directory」按钮——hebbian 前后端设计本来就跟它一致，只差最后一公里没接通。
+  - 顺手把项目级 / 会话级目录列表的渲染优化：路径在当前 workdir 下时显示相对路径（如 `src/skills/`），不在时显示完整路径；全局列表保持完整路径不变——让项目内的目录条目摆脱长前缀噪音，扫一眼就懂。
+- **改动**:
+  - `crates/agent-core/src/permissions/mod.rs`: 新增 `PermissionStore::find_for_paths(sid, wd, tool, fp, &[path])`，语义对称 `find_for_segments`——任一 path 命中 deny → Deny；全部命中 allow → Allow；`paths` 为空时退化为 `find(.., None)` 让 `Arg::Any`（工具名级）规则继续生效。新增 3 条单测覆盖子目录命中、多 path 全允许 / 任一拒绝、空 paths 兜底。
+  - `crates/agent-core/src/tools/hitl.rs::HitlGate::check` step 5b: 非 Bash 工具改走 `find_for_paths(.., &effects.paths)`，把 effects 已经分析好的 file_path 真正传给 matcher。新增 1 条集成测试 `project_directory_rule_matches_subfile_without_reapproval`，完整模拟「Edit /foo/bar/a.rs 审批 → AllowAndRemember(Project, "/foo/bar/") → 再 Edit /foo/bar/sub/b.rs 应直接 Approved → Edit /elsewhere/c.rs 仍审批」。
+  - `apps/desktop/frontend/src/desktop/ui/lib/utils.ts`: 新增 `relativizeIfUnder(path, base)`——base 为空 / path 不在 base 下时原样返回，否则返回 base 之后的相对部分（base 自身 → `.`）。
+  - `apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx::PathListField`: 加 `relativeTo?: string | null` prop。条目渲染从 `pathLeaf(d)` 改成 `relativeTo ? relativizeIfUnder(d, relativeTo) : pathLeaf(d)`；底层 onChange 仍回传绝对路径，仅影响显示。
+  - `apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx`: 项目侧边栏「允许访问的路径」传 `relativeTo={projectWorkdir(selectedProject)}`。
+  - `apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx`: 会话设置「允许访问的路径」传 `relativeTo={workdir ?? inheritedWorkdir}`（会话级 workdir 优先于全局默认）。
+  - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`: 全局默认面板**不传** `relativeTo`，保留完整路径——全局没有「项目」的概念，相对化反而误导。
+- **影响范围**:
+  - `agent-core::permissions` 加一个 pub 方法、`agent-core::tools::hitl` 改一个分支判断；协议、storage 文件格式、前端 IPC 都未变。
+  - Desktop UI 三处调用方各传 / 不传一个 prop；视觉只在「目录在 workdir 下时改为相对路径」这一点变化，无交互行为差异。
+  - 跑了 `cargo test -p agent-core --lib` 全 275 个测试 pass、`cargo check --workspace` 干净、`pnpm exec tsc --noEmit` 干净。
+- **留尾巴**:
+  - 项目级 / Session 级权限规则（`Edit(/path/)`、`Bash(git)` 等 PermissionStore 内的 patterns）目前没有 UI 入口可查看 / 编辑——只能通过审批弹窗写入。`AppSettingsDialog::PermissionsPane` 写死 `scope: "global"`，要让用户回看项目级规则需要在 `SessionSettingsDialog` 加一个「权限」CollapsibleSection，复用同一组件但 scope=project + workdir 注入。这次没做，等下次有用户反馈再加。
+  - `find_for_paths` 的「全部命中 allow」语义意味着多 path 工具（如 Bash 段级 write_targets 已走 segments，不影响）必须对每条 path 都有 allow 规则才整体放行；对 Edit/Write 这种永远只有 1 个 file_path 的工具行为完全等同；未来若有工具一次传多 path（如 Move(from, to)），需要确认两条 path 都被审批过的语义是否符合预期。
+- **关联**: 架构.md §4.5（HITL）/ §4.6（PermissionStore）。

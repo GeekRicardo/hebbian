@@ -511,6 +511,16 @@ export type EngineEvent =
       to: string;
     }
   | {
+      /**
+       * Turn 边界——一次"模型请求 + 可选 tool_call 批"结束（架构 §3 / §4.2）。
+       * 前端据此把当前 streaming bubble 冻结成"已完成 turn 快照"，下一个 Turn 起
+       * 一个新的 streaming bubble；保证 streaming 中的插队 user message 总是落在
+       * 它真正回应的那个 Turn 之后、下一个 Turn 之前。
+       */
+      type: "turn_finished";
+      stop_reason: string;
+    }
+  | {
       type: "user_question_requested";
       request_id: string;
       question: string;

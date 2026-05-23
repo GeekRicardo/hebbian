@@ -28,7 +28,7 @@ export function ChatView() {
     streamingMessageId,
     streamingText,
     streamingParts,
-    injectedSinceStream,
+    liveTimeline,
     autoJudgedNotes,
     currentRunMode,
     sendUserMessage,
@@ -541,7 +541,36 @@ export function ChatView() {
           onToggleHistory={handleToggleHistory}
         />
         <div>
-          {isStreaming && (
+          {/* Run 内时间线：已完成 turn 快照 + streaming 期间的插队 user message，
+              按真实发生顺序排好（架构 §4.2 + §4.12.5）。冻结快照走标准 MessageBubble
+              复用渲染（streaming=false，但仍喂 streamingParts），下个 Turn 的输出
+              起新的 streaming bubble 接在末尾——这样插队消息总落在它真正回应的
+              Turn 之后、下个 Turn 之前。 */}
+          {isStreaming &&
+            liveTimeline.map((item) =>
+              item.kind === "assistant_frozen" ? (
+                <MessageBubble
+                  key={item.id}
+                  prompt={activePrompt}
+                  userAvatar={userAvatar}
+                  streamingParts={item.parts}
+                  message={{
+                    id: item.id,
+                    role: "assistant",
+                    content: item.text,
+                    created_at: item.created_at,
+                  }}
+                />
+              ) : (
+                <MessageBubble
+                  key={item.message.id}
+                  message={item.message}
+                  prompt={activePrompt}
+                  userAvatar={userAvatar}
+                />
+              )
+            )}
+          {isStreaming && (streamingText.length > 0 || streamingParts.length > 0) && (
             <MessageBubble
               streaming
               prompt={activePrompt}
@@ -578,17 +607,6 @@ export function ChatView() {
                 [{n.toolName}]
                 {n.reason ? <span className="opacity-70">：{n.reason}</span> : null}
               </div>
-            ))}
-          {/* 「立即发送」插入的 user message：紧跟当前 streaming bubble 之后展示，
-              下一轮 assistant 输出会接在它后面。run 结束 reload session 时此列表被清空。 */}
-          {isStreaming &&
-            injectedSinceStream.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                prompt={activePrompt}
-                userAvatar={userAvatar}
-              />
             ))}
         </div>
       </div>

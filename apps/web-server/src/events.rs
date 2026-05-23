@@ -77,6 +77,14 @@ pub enum EngineEvent {
         from: String,
         to: String,
     },
+    /// Turn 边界——一次"模型请求 + 可选 tool_call 批"结束（架构 §3 / §4.2）。
+    /// 前端据此把当前 streaming bubble 冻结成"已完成 turn 快照"，下一个 Turn 起新
+    /// streaming bubble；streaming 中的插队 user message 才能落在它真正回应的 Turn
+    /// 之后、下个 Turn 之前。
+    TurnFinished {
+        /// "end_turn" / "max_iterations" / "permission_denied" / "cancelled" / "failed"
+        stop_reason: String,
+    },
     UserQuestionRequested {
         request_id: String,
         question: String,
@@ -232,6 +240,16 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
         RunModeChanged { from, to } => EngineEvent::RunModeChanged {
             from: from.clone(),
             to: to.clone(),
+        },
+        TurnFinished { stop_reason, .. } => EngineEvent::TurnFinished {
+            stop_reason: match stop_reason {
+                protocol::StopReason::EndTurn => "end_turn",
+                protocol::StopReason::MaxIterations => "max_iterations",
+                protocol::StopReason::PermissionDenied => "permission_denied",
+                protocol::StopReason::Cancelled => "cancelled",
+                protocol::StopReason::Failed => "failed",
+            }
+            .to_string(),
         },
         SessionTitleChanged { session_id, title } => EngineEvent::SessionTitleChanged {
             session_id: session_id.clone(),

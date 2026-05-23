@@ -116,6 +116,14 @@ pub enum EngineEvent {
         step_kind: String,
         step_index: u32,
     },
+    /// Turn 边界——一次"模型请求 + 可选 tool_call 批"结束（架构 §3 / §4.2）。
+    /// surface 用它把 streaming bubble 冻结成"已完成 turn 快照"；下一个 Turn 的输出
+    /// 起一个新的 streaming bubble，从而保证 streaming 中的插队 user message 总是
+    /// 落在它真正回应的那个 Turn 之后、下一个 Turn 之前。
+    TurnFinished {
+        /// "end_turn" / "max_iterations" / "cancelled"
+        stop_reason: String,
+    },
     /// 运行模式切换（架构 §10.2）。前端用来刷新状态栏 mode 标签。
     RunModeChanged {
         from: String,
