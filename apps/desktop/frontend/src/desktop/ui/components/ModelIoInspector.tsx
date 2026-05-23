@@ -24,6 +24,8 @@ import {
   Minimize2,
   Code,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "@/desktop/bridge/tauri";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -611,6 +613,7 @@ function RequestDetail({
 }) {
   const [showCarried, setShowCarried] = useState(false);
   const [systemOpen, setSystemOpen] = useState(false);
+  const [systemZoomed, setSystemZoomed] = useZoom();
 
   const newCount = (entry.request?.messages?.length ?? 0) - carriedOverCount;
 
@@ -628,18 +631,29 @@ function RequestDetail({
         />
       </div>
 
-      {/* system prompt（默认折叠） */}
+      {/* system prompt（默认折叠 + 放大按钮：放大后可切渲染/原文）*/}
       {entry.request?.system ? (
-        <CollapsibleBlock
-          open={systemOpen}
-          onToggle={() => setSystemOpen((v) => !v)}
-          label="system prompt"
-          sublabel={`${entry.request.system.length} 字符`}
-        >
-          <pre className="px-3 py-2 text-[11px] whitespace-pre-wrap break-words bg-muted/30 max-h-[400px] overflow-auto rounded font-mono">
-            <PrettyStringInner value={entry.request.system} />
-          </pre>
-        </CollapsibleBlock>
+        <>
+          <CollapsibleBlock
+            open={systemOpen}
+            onToggle={() => setSystemOpen((v) => !v)}
+            label="system prompt"
+            sublabel={`${entry.request.system.length} 字符`}
+            rightExtras={<ZoomButton onClick={() => setSystemZoomed(true)} />}
+          >
+            <pre className="px-3 py-2 text-[11px] whitespace-pre-wrap break-words bg-muted/30 max-h-[400px] overflow-auto rounded font-mono">
+              <PrettyStringInner value={entry.request.system} />
+            </pre>
+          </CollapsibleBlock>
+          {systemZoomed && (
+            <ZoomedModal
+              title="system prompt"
+              onClose={() => setSystemZoomed(false)}
+            >
+              <SystemPromptZoomBody value={entry.request.system} />
+            </ZoomedModal>
+          )}
+        </>
       ) : null}
 
       {/* messages */}
@@ -950,31 +964,92 @@ function CollapsibleBlock({
   label,
   sublabel,
   children,
+  rightExtras,
 }: {
   open: boolean;
   onToggle: () => void;
   label: string;
   sublabel?: string;
   children: React.ReactNode;
+  /** header 右侧额外按钮（如 ZoomButton），共享 header 的 group hover */
+  rightExtras?: ReactNode;
 }) {
   return (
-    <div className="border border-border rounded overflow-hidden">
-      <button
-        onClick={onToggle}
-        className="w-full px-3 py-1.5 flex items-center gap-2 text-left hover:bg-accent/30 bg-muted/30"
-      >
-        {open ? (
-          <ChevronDown className="w-3 h-3 shrink-0" />
-        ) : (
-          <ChevronRight className="w-3 h-3 shrink-0" />
-        )}
-        <span className="text-xs">{label}</span>
-        {sublabel ? (
-          <span className="text-[10px] text-muted-foreground">{sublabel}</span>
-        ) : null}
-      </button>
+    <div className="group border border-border rounded overflow-hidden">
+      <div className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-accent/30 bg-muted/30">
+        <button
+          onClick={onToggle}
+          className="flex-1 flex items-center gap-2 text-left min-w-0"
+        >
+          {open ? (
+            <ChevronDown className="w-3 h-3 shrink-0" />
+          ) : (
+            <ChevronRight className="w-3 h-3 shrink-0" />
+          )}
+          <span className="text-xs">{label}</span>
+          {sublabel ? (
+            <span className="text-[10px] text-muted-foreground">{sublabel}</span>
+          ) : null}
+        </button>
+        {rightExtras}
+      </div>
       {open ? <div>{children}</div> : null}
     </div>
+  );
+}
+
+/**
+ * 放大态下的 system prompt 渲染器：默认走 markdown（system prompt 通常是有标题 /
+ * 列表 / 代码块的结构化文本，渲染后能秒看结构），用户可以点「原文」切到纯 monospace
+ * 模式查看真实换行 / 缩进。state 保留在组件内，开关放大态时重置为默认（markdown）。
+ */
+function SystemPromptZoomBody({ value }: { value: string }) {
+  const [mode, setMode] = useState<"rendered" | "raw">("rendered");
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-1">
+        <ViewModeChip active={mode === "rendered"} onClick={() => setMode("rendered")}>
+          渲染
+        </ViewModeChip>
+        <ViewModeChip active={mode === "raw"} onClick={() => setMode("raw")}>
+          原文
+        </ViewModeChip>
+      </div>
+      {mode === "rendered" ? (
+        <div className="markdown text-[13px] leading-relaxed break-words">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+        </div>
+      ) : (
+        <pre className="text-[12px] whitespace-pre-wrap break-words bg-muted/30 p-3 rounded font-mono">
+          <PrettyStringInner value={value} />
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function ViewModeChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "px-2.5 py-1 text-xs rounded border transition-colors",
+        active
+          ? "border-primary text-primary bg-primary/10"
+          : "border-border text-muted-foreground hover:bg-accent/40",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
