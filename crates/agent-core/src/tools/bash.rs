@@ -149,18 +149,11 @@ impl Tool for BashTool {
             // task 进入终态时 WakeupScheduler 投递 BgTaskFinished 事件，surface 据此
             // 把 task-notification 注入下一轮 user message——不要求模型显式调 WaitForTask。
             arm_auto_notification(&ctx, &shell.task_id);
-            let mut text = format!(
-                "[bash] 已在后台启动：task_id={} cmd=`{}`\n",
-                shell.task_id, command
-            );
-            if let Some(p) = shell.log_path() {
-                text.push_str(&format!("完整输出落盘到：{}\n", p.display()));
-            }
-            text.push_str(&format!(
-                "用 BashOutput {{\"task_id\": \"{}\"}} 查询进度；完成时会自动通知你，无需 poll。",
-                shell.task_id
-            ));
-            return Ok(text);
+            // 极简一行：task_id 是模型下一步唯一需要的信息。
+            // BashOutput / KillShell 的用法 / 自动通知机制都在工具描述里讲一次就够，
+            // 每条 tool_result 不重复；日志路径模型用不上（无 fs 读权限），surface
+            // BackgroundTaskPanel 已展示，不污染 transcript。
+            return Ok(format!("[{}] 已在后台启动", shell.task_id));
         }
 
         // 前台等待：要么进程退出，要么超时。等待期间持续抽 tail buffer 增量，
@@ -198,16 +191,11 @@ impl Tool for BashTool {
             // 与显式 run_in_background=true 同款自动 arm 通知：超时转后台后，task 终态
             // 也由 WakeupScheduler 主动通知，模型不需要 poll。
             arm_auto_notification(&ctx, &shell.task_id);
-            let mut text = format!(
-                "[bash] 命令在 {timeout}s 内未结束，已转后台：task_id={}\n",
-                shell.task_id
-            );
-            text.push_str(&format!(
-                "继续用 BashOutput {{\"task_id\": \"{}\"}} 查询，或 KillShell 终止；完成时会自动通知。\n",
-                shell.task_id
-            ));
+            // 转后台同样极简——已产出的 output 还要保留（模型需要它继续推理），
+            // 但不再重复工具用法和通知机制说明。
+            let mut text = format!("[{}] {timeout}s 内未结束，已转后台", shell.task_id);
             if !buffer.is_empty() {
-                text.push_str("--- 已产出 ---\n");
+                text.push_str("\n--- 已产出 ---\n");
                 text.push_str(&buffer);
             }
             return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
@@ -338,7 +326,7 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("已转后台"));
-        assert!(out.contains("task_id=bash_"));
+        assert!(out.contains("[bash_"));
         // 注册表里应该能找到这个 task，且 is_background 已被 promote 翻为 true
         let tasks = shells.list();
         assert_eq!(tasks.len(), 1);

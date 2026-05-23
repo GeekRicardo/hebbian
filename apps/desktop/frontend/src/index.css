@@ -174,3 +174,28 @@
 .animate-breathe {
   animation: breathe 1.6s ease-in-out infinite;
 }
+
+/* 「跳转到 tool_call」时给目标卡片一个短暂的边框闪烁，
+   提示用户「就是这条」。配合 lib/focusToolCall.ts。 */
+@keyframes focus-flash {
+  0% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.45);
+    background-color: hsl(var(--primary) / 0.12);
+  }
+  60% {
+    box-shadow: 0 0 0 4px hsl(var(--primary) / 0.25);
+    background-color: hsl(var(--primary) / 0.06);
+  }
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+    background-color: transparent;
+  }
+}
+
+.focus-flash {
+  animation: focus-flash 850ms ease-out;
+  /* border-radius 不写死——box-shadow 会自动沿目标元素自身的 border-radius 绘制。
+     目标元素（带 data-tool-call-id）自带 rounded-md / rounded-lg 等 tailwind class
+     时，闪烁的圆角跟它本身完全一致；无圆角时退化为矩形闪烁。这样不同卡片（tool_call /
+     edit / 其他锚点）都不会出现"闪烁圆角跟卡片圆角不一致"。 */
+}

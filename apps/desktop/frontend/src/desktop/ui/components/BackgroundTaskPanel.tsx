@@ -12,6 +12,7 @@ import {
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { focusToolCall } from "@/desktop/ui/lib/focusToolCall";
 import type {
   BackgroundTaskInfo,
   Message,
@@ -295,7 +296,10 @@ function deriveBackgroundTasks(
   return [...runningItems, ...otherItems];
 }
 
-const TASK_ID_RE = /task_id=([a-zA-Z0-9_]+)/;
+// 兼容新旧两种格式：
+// 新（2026-05-22 精简文案后）：`[bash_001] 已在后台启动` / `[bash_001] 60s 内未结束，已转后台`
+// 旧：`task_id=bash_001 cmd=...`
+const TASK_ID_RE = /(?:task_id=|\[)(bash_\d+)/;
 function extractTaskId(result: string): string | null {
   const m = result.match(TASK_ID_RE);
   return m ? m[1] : null;
@@ -348,16 +352,11 @@ function TaskCard({
     };
   }, [expanded, isRunning, sessionId, item.task_id]);
 
-  const scrollToToolCall = () => {
-    if (!item.message_id) return;
-    const el = document.querySelector(
-      `[data-message-id="${item.message_id}"]`
-    );
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("ring-2", "ring-primary/40");
-      setTimeout(() => el.classList.remove("ring-2", "ring-primary/40"), 1500);
-    }
+  // 跳到 chat 区域里对应的 Bash 工具卡片，并展开 + 边框闪烁——比之前只滚到
+  // message bubble 更精确，跟 EditTree 用同一套 focusToolCall 机制。
+  const jumpToToolCall = () => {
+    if (item.tool_call_id.startsWith("pending-")) return; // 还没在 messages 里就放弃
+    focusToolCall(item.tool_call_id);
   };
 
   return (
@@ -369,7 +368,12 @@ function TaskCard({
     >
       <button
         type="button"
-        onClick={onToggle}
+        onClick={() => {
+          // 点击整行：同时切展开态 + 跳到 chat 里对应的工具卡片（折叠态也跳，
+          // 因为用户的意图就是"我想看看这次后台任务在对话里哪个位置")
+          onToggle();
+          jumpToToolCall();
+        }}
         className="block w-full px-3 py-2 text-left hover:bg-accent/30"
       >
         <div className="flex items-center gap-1.5">
@@ -408,17 +412,8 @@ function TaskCard({
       </button>
       {expanded && (
         <div className="border-t border-border/60 bg-background/40 px-3 py-2">
-          <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            {item.message_id && (
-              <button
-                type="button"
-                onClick={scrollToToolCall}
-                className="hover:text-primary hover:underline"
-              >
-                ↑ 跳转到对话
-              </button>
-            )}
-            {isRunning && onKill && (
+          {isRunning && onKill && (
+            <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
               <button
                 type="button"
                 onClick={onKill}
@@ -428,8 +423,8 @@ function TaskCard({
                 <Square className="h-3 w-3" />
                 停止
               </button>
-            )}
-          </div>
+            </div>
+          )}
           <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200">
             {isRunning
               ? liveOutput || "等待输出…"

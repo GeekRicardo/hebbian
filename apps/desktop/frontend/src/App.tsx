@@ -15,6 +15,9 @@ interface WakeupFiredPayload {
   session_id: string;
   run_id: string;
   wakeup_xml: string;
+  /** 架构 §4.12.5 修订：后端 WakeupEvent::message_meta() 投影出来的结构化 meta。
+   *  前端透传给 inject/send 命令，落盘 user message 时挂上 → view 据此渲染系统通知条。 */
+  meta: import("@/desktop/ui/types").MessageMeta;
 }
 
 interface EditRevertedPayload {
@@ -38,10 +41,10 @@ export default function App() {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
     listen<WakeupFiredPayload>("wakeup-fired", (e) => {
-      const { session_id, wakeup_xml } = e.payload;
+      const { session_id, wakeup_xml, meta } = e.payload;
       const store = useStore.getState();
       const isForeground = store.currentSession?.id === session_id;
-      void store.triggerWakeupResume(session_id, wakeup_xml);
+      void store.triggerWakeupResume(session_id, wakeup_xml, meta);
       if (!isForeground) {
         const meta = store.sessions.find((s) => s.id === session_id);
         toast.info(`后台任务已完成：${meta?.title ?? session_id}`, {

@@ -40,6 +40,7 @@ import {
   AlarmClock,
 } from "lucide-react";
 import type {
+  EditEntry,
   Message,
   MessagePart,
   Prompt,
@@ -47,7 +48,11 @@ import type {
   StreamingAssistantPart,
   ToolCallStatus,
 } from "@/desktop/ui/types";
+
+// 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
+const EMPTY_EDIT_ENTRIES: EditEntry[] = [];
 import { cn } from "@/desktop/ui/lib/utils";
+import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
@@ -1192,7 +1197,9 @@ function DefaultToolDetail({ call }: { call: ToolCallItem }) {
  */
 function EditDiffDetail({ call }: { call: ToolCallItem }) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const editSnapshots = useStore((s) => s.editSnapshots);
+  const editSnapshots = useStore(
+    (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_EDIT_ENTRIES,
+  );
   const [viewMode, setViewMode] = useState<DiffMode>("split");
   const [expanded, setExpanded] = useState(false);
   const [fullPayload, setFullPayload] = useState<{
@@ -1466,6 +1473,22 @@ function ToolCallTimeline({
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
 }) {
+  // 监听 sidebar / 任何外部组件派发的「跳到这个 call」事件：
+  // 如果是本 timeline 持有的某条 call，就把它展开（已展开则不动）。
+  // 滚动 + 闪烁由 focusToolCall util 自己负责，不需要在这里做。
+  useEffect(() => {
+    function handler(e: Event) {
+      const callId = (e as CustomEvent<string>).detail;
+      const match = calls.find((c) => c.id === callId);
+      if (!match) return;
+      if (match.status !== "done") return; // 未 done 默认展开，不需要触发
+      if (expandedKeys.has(match.key)) return;
+      onToggle(match.key);
+    }
+    window.addEventListener(FOCUS_TOOL_CALL_EVENT, handler);
+    return () => window.removeEventListener(FOCUS_TOOL_CALL_EVENT, handler);
+  }, [calls, expandedKeys, onToggle]);
+
   if (calls.length === 0) return null;
   return (
     <div className="relative mt-3 space-y-1 rounded-md bg-muted/70 py-1.5 pl-6 pr-2">
@@ -1473,7 +1496,15 @@ function ToolCallTimeline({
         // 未 done 时（streaming / running / failed）默认展开，让运行中的 tool
         // 边输出边看；done 后立即折叠，靠用户手动 toggle 展开看 detail。
         // 这跟 ReasoningBlock 的"流完立即折叠"是一致语义。
-        const active = call.status !== "done" || expandedKeys.has(call.key);
+        //
+        // 例外：Read / Grep / Glob / Ask 等「查询类」工具运行中默认不展开——
+        // 输出量大但用户多半不关心实时进度（Read 输出文件全文滚屏、Grep 输出大堆
+        // 匹配行），自动展开反而把消息流挤到底。继续靠用户手动 toggle。
+        const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
+        const autoExpand = !READ_LIKE.has(call.name ?? "");
+        const active =
+          expandedKeys.has(call.key) ||
+          (autoExpand && call.status !== "done");
         // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
         // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / 未来若新增 failed=红。
         // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
@@ -1490,7 +1521,12 @@ function ToolCallTimeline({
         return (
           <div
             key={call.key}
-            className={cn("relative", index === calls.length - 1 && "pb-0")}
+            data-tool-call-id={call.id}
+            // rounded-md：跟外层 tool_group 容器（line 1494 也是 rounded-md）保持一致——
+            // focus-flash 闪烁时 box-shadow 沿这个 wrapper 自身的 border-radius 绘制，
+            // 视觉上贴着卡片本身边缘的圆角，不再"小一圈"。平时 wrapper 无背景 / 边框，
+            // 圆角不可见——仅 focus-flash 期间 box-shadow 才显示。
+            className={cn("relative rounded-md", index === calls.length - 1 && "pb-0")}
           >
             {index !== calls.length - 1 && (
               <div className="absolute -left-[15px] top-6 bottom-[-8px] w-px bg-border" />

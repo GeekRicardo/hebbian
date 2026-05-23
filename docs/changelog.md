@@ -3538,3 +3538,244 @@
 - **留尾巴**:
   - 现场 partial 目录有 12 个孤儿 `.lock` 残留文件（无对应 `.partial.jsonl` 数据）。[crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs) `delete_partial` 只删 `.partial.jsonl`，不删 `.lock`，导致每次 cancel/正常结束都漏一个 lock 文件。独立 bug，本次未修
   - 「为什么会累积 6 次」这条用户行为路径仍未完全锁定：理论上每次"重新生成"都该 truncate 干净，但现场 user id `8bed4a09` 跨 6 次 cancel 一直没换。可能路径：用户点的不是按钮而是走 `inputQueues` + `drainNext` 路径（[useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) L1525）—— drainNext 不带 truncate。本次只修语义正确性，不动 drainNext，下次重现时再补
+
+### 2026-05-22 — 精简 Bash / BashOutput 的 tool_result 文案，去掉对模型无用的字段
+
+- **Why**: 用户反馈 `run_in_background=true` 时返回三行："已在后台启动 task_id=bash_001 cmd=`sleep 15`" / "完整输出落盘到：<path>" / "用 BashOutput {...} 查询进度；完成时会自动通知你，无需 poll"。三处冗余：(1) `cmd=` 在回显模型自己刚发的 args；(2) 日志路径模型用不上（无 fs 读权限，必须走 BashOutput），它是给人 / surface UI 看的，BackgroundTaskPanel 已经展示；(3) BashOutput / KillShell 用法与"完成自动通知"机制都在工具 description 里讲过一次，每条 tool_result 重复一遍是反模式，长会话会被这段说明污染上下文
+- **改动**:
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 显式后台分支由 3 行压成 1 行 `[bash_001] 已在后台启动`；超时转后台分支由 2 行说明 + 已产出压成 `[bash_001] Ns 内未结束，已转后台` + 已产出
+  - [crates/agent-core/src/tools/bash_output.rs](../crates/agent-core/src/tools/bash_output.rs): 删除 `[完整日志：<path>]` 行；把 `[task_id=X status=Y]` 压成 `[bash_001 running]` 单行头（保留 task_id 让模型同时管多个后台任务时能区分输出来源）
+  - 单测 `timeout_transitions_to_background` 断言由 `task_id=bash_` 改为 `[bash_`，跟新文案对齐
+- **影响范围**: 仅 tool_result 字符串面貌，不动协议 / 不动 ToolCallFinished payload / 不动 surface 渲染逻辑；对话上下文中后台任务相关的 tool_result token 占用减约 60%（从 ~80 tokens 缩到 ~10）
+- **取舍**: 完全删掉 `[bash_001 ...]` 这种开头标签更省 token，但模型同时调多次 BashOutput 时容易把不同 task 的输出搞混——保留 task_id 在头部一字段，是清晰性 / 紧凑性的折中
+- **留尾巴**: 无
+
+### 2026-05-23 — 插队消息（含 wakeup notification）即写即落 jsonl，cancel/崩溃不丢
+
+- **Why**: 用户追问"插队消息不写 jsonl 是不是会导致进程重启丢失？cancel 也会丢吧？"——复查实现确认：[apps/desktop/src/lib.rs inject_user_message](../apps/desktop/src/lib.rs) 仅 push PendingInputs（纯内存），落盘走 [apps/desktop/src/chat.rs:359-426 persist_interleaved_pending_inputs](../apps/desktop/src/chat.rs) 在 run 结束时统一处理；但 Cancelled / Failed 分支 early return Err **完全跳过持久化**，进程崩溃同样丢。最严重场景：长跑后台任务完成的事实没有 transcript 痕迹——下次 user 发消息时模型完全不知道"bash_004 已 exit 0"，违背 wakeup "完成自动通知模型"的核心承诺
+- **借鉴**: 调研了 codex 的 [InputQueue (codex-rs/core/src/session/input_queue.rs)](../../codex/codex-rs/core/src/session/input_queue.rs) + [tasks/mod.rs on_task_finished](../../codex/codex-rs/core/src/tasks/mod.rs)——codex 也是 in-memory PendingInput + turn 结束统一 record，本质和 hebbian 同问题（崩溃丢），仅靠 idle_pending_input 多一层减损 cancel 场景；调研了 Claude Code 真实 jsonl 字段（`uuid` / `parentUuid` / `isMeta` / `isCompactSummary` / `isSidechain` 等）+ extension.js bundle 的 `if(z.isMeta===true||z.isCompactSummary===true) return;` 过滤逻辑——CC 是**真正即写即落**到 jsonl，view 通过 boolean flag 区分普通 user vs 系统注入。`<task-notification>` 不写 jsonl（CC 用 reconstruct 兜底）。Hebbian 选 CC 路线
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `MessageMeta` 加 `SystemNotification { kind, task_id?, tool_use_id? }` variant（tagged enum 加 variant 不破坏现有 match 点，且编译期穷尽——加新 variant 时所有 match 处会被编译器拍醒）；`MessageMeta::is_system_notification()` + `Message::is_system_notification()` 两个 helper
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs): `WakeupEvent::message_meta()` 把事件投影成结构化 `MessageMeta::SystemNotification`——bg_task_finished 带 task_id / tool_use_id，cron_fired 仅带 kind
+  - [apps/desktop/src/lib.rs inject_user_message](../apps/desktop/src/lib.rs): 加 `meta: Option<MessageMeta>` 参数；**第一步 sessions::append_message 落盘**，第二步推 PendingInputs；inject_pending_input 失败时不报错——降级为"仅落盘"（消息已在 jsonl，next sendUserMessage rebuild 自然看到）
+  - [apps/desktop/src/lib.rs send_message](../apps/desktop/src/lib.rs): 加 meta 参数透传到 [chat::SendArgs.user_meta](../apps/desktop/src/chat.rs)；idle 路径下 wakeup 走 sendMessage 时落盘 user message 带 meta
+  - [apps/desktop/src/chat.rs send_and_save_in_data_dir_with_client_factory](../apps/desktop/src/chat.rs): 删除 `persist_interleaved_pending_inputs` 路径（pending 已在 inject 时即写即落，run 结束 double-write 会重复条目）+ `user_message_from_pending_input` 辅助函数；新引入 `had_pending_during_run` 判定，保留"多 turn 无插队 → 单段落盘"vs"有插队 → 多段落盘"的语义差异
+  - [apps/desktop/src/lib.rs:1828 set_resume_handler](../apps/desktop/src/lib.rs): emit "wakeup-fired" 时 payload 同时带 `wakeup_xml`（给 model 看）和 `meta`（给 surface 落盘 / view 渲染）
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `MessageMeta` union 加 `system_notification` variant；[bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) `injectUserMessage` / `sendMessage` 加 meta 可选参数透传给后端
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): `WakeupFiredPayload` 加 `meta` 字段，listen 调用透传给 `triggerWakeupResume`
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `sendUserMessage` 加 meta 可选参数；`triggerWakeupResume` 签名 `(sessionId, xml, meta)`，active inject / idle send / 非前台 queueWakeup 三条路径都带 meta；`pendingWakeups` 类型由 `Record<string, string>` 改为 `Record<string, { xml, meta }>`；`openSession` 消费 pendingWakeup 时改调 `triggerWakeupResume` 而非 `sendUserMessage`，复用三分支决策 + 透传 meta
+- **影响范围**: 协议层（IpcCommand 加可选 meta 字段，旧客户端不传 = None，向前向后兼容）/ jsonl schema（MessageMeta 加 variant，老 jsonl 不带 = None，向前向后兼容）/ Rust agent-core / desktop chat 持久化路径 / desktop / frontend ui store + types + App.tsx
+- **测试**:
+  - Rust: [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs) 加 3 个单测——`system_notification_meta_round_trip_and_helper`（正例：带 meta 的 wakeup user message 落盘后 round-trip + is_system_notification true）/ `is_system_notification_false_for_plain_and_other_meta`（反例：meta=None + meta=Interrupted + meta=CompactBoundary 都 false）/ `system_notification_serializes_with_snake_case_tag`（序列化稳定：type tag "system_notification" + tool_use_id=None 时 skip 字段）
+  - Rust: [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) 两个老 test 改名 + 改断言反映新设计——`pending_inputs_not_double_written_on_run_end` / `pending_inputs_between_assistant_turns_not_double_written`，断言 jsonl 里不再出现"老路径 push pending 但未走 inject"的 user 条目
+  - TS: `tsc --noEmit` 0 错
+  - Rust: agent-core 242 + desktop 17 全过；workspace cargo check 通过
+- **取舍记录**:
+  - 排序方案：放弃 parent_id 链（CC 主要用它给 fork/branch 重挂接，Hebbian v1 无此场景）；放弃单纯 timestamp 排序（无法处理 assistant streaming 完成时刻 vs wakeup 到达时刻的乱序）；选定**append-only 物理顺序 + MessageMeta tagged enum + view 渲染按 flag**——跟 CC 1:1 对齐
+  - 没用 boolean `is_meta` 字段（用户的简化诉求）：用 `Option<MessageMeta>` enum + variant 模式匹配比 dict-style boolean 更安全（编译期穷尽匹配，加新 variant 时所有 match 处会被编译器拍醒，避免静默漏分支）。view 端的判定方便程度也接近——Rust `msg.is_system_notification()` / TS `msg.meta?.type === "system_notification"` 都一行
+  - 视觉边缘情况：assistant streaming 期间 wakeup 在 t=10s 到达 → jsonl 物理顺序是 `user → wakeup(t=10) → assistant(t=60 流完)`；view 渲染按物理顺序时 wakeup 出现在 assistant 之前。接受这一点——wakeup 渲染为紧凑灰色系统通知条，不像普通 user 气泡那么打断视觉。**v2 可考虑加 `after_request_id` 可选字段重排**，本次先做最小 schema 改动
+- **留尾巴**:
+  - 暂未对"非前台 session 收到 wakeup 后切回时"做端到端 surface 验证（pendingWakeups 路径已改为透传 meta + 调 triggerWakeupResume，单元层 OK 但 UI 上面要手动 dev 模式跑一次确认）
+  - 未来支持 fork/branch 编辑历史回退时，可考虑加 `parent_id` 字段——届时 schema 仍兼容
+
+### 2026-05-23 — 修复 edits-worktree 四处 bug：revert 一直 broken / create 无法回退 / sidebar 重启后空 / hebweb 缺命令
+
+- **Why**: 用户问「为什么右侧 sidebar 修改文件栏没显示」，端到端排查后发现 worktree 这套机制从交付以来积压了 4 个真 bug，其中 Bug A 让 revert 100% 失败。整轮 bash + Rust 探测过程见 /tmp/wt-test/。
+  - **Bug A（致命）**：`run_git` 对 stdout 调了 `.trim()`——`git diff` 输出末尾的 `\n` 是 patch 格式硬要求，丢掉后 `git apply --check` 报 `corrupt patch at line 7`。也就是说反向 patch 路径从未真正工作过。原 Rust 单元测试都没盖到端到端 snapshot→revert，所以一直没暴。
+  - **Bug B（严重）**：`revert()` 对 `EditAction::Create` 没分支判断，直接喂空 `before_sha` 给 `git diff`，报 `fatal: bad revision ''`。也就是 metadata 里所有 create 类型的 entry 永远回不了。
+  - **Bug C（严重）**：前端 `editSnapshots` 挂在 run-scoped 的 `SessionStream` slot 里；`refreshEdits` 里 `if (!slot) return state` 直接吞掉后端拉回的全量数据。后果：应用重启后切到老 session（slot 不存在）或 run 结束 slot 被删，sidebar 立刻显示空——即便 metadata.json 有几十条历史 entry。
+  - **Bug D（中等）**：hebweb 接了 `EditsWorktree` 给 dispatch 用，但没在 invoke 路由表里暴露 `list_edits / diff_edit / revert_edit / edits_worktree_status` 四个命令。也就是 hebweb 上 EditTree 从来没工作过——违反 §7 / §4.13 的「三 surface 对称」原则。
+- **改动**:
+  - `crates/agent-core/src/edits/mod.rs`:
+    - `run_git`：去掉 `.trim()`，stdout 原样返回；rev-parse HEAD 的返回值由 `git_commit` 自己 trim
+    - `revert()`：按 `entry.action` 分派——`Create` 直接 `fs::remove_file`（已被用户手动删则视作回退已达成）；`Modify` / `Overwrite` 仍走反向 patch
+    - tests 模块加 4 个端到端回归测试（modify+revert / create+revert / 外部干扰冲突保护 / list_entries 新实例可读），把曾经长期 broken 的属性钉死
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`:
+    - 删除 `SessionStream.editSnapshots` / `EMPTY_MIRROR.editSnapshots` / `mirrorFromSlot.editSnapshots`
+    - 顶层新加 `sessionEditSnapshots: Record<sessionId, EditEntry[]>`，跟 run 完全解耦
+    - `applyEventToSlot` 移除两个 edit 分支；事件分发入口里改成单独写 `sessionEditSnapshots`
+    - `refreshEdits` / `revertEdit` 改写 `sessionEditSnapshots[sid]`，去掉 `if (!slot) return state` 守卫
+  - `apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx`:
+    - 数据源改读 `s.sessionEditSnapshots[currentSessionId] ?? []`
+    - useEffect 主动 `refreshEdits()` 兜底（兼容 hebweb 无事件流场景）
+    - 回退按钮：非「该文件最新一次 Edit」加 `title` 提示「可能因后续修改而冲突」
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: `EditDiffDetail` 同步改新数据源
+  - `apps/web-server/src/server.rs`: 加 `build_edits_worktree_for` + `cmd_list_edits / cmd_diff_edit / cmd_revert_edit / cmd_edits_worktree_status`，注册到 `dispatch_invoke`；hebweb 单 ws 单 tab 不广播 edit-reverted（前端 revertEdit 自己 refreshEdits 兜底）
+  - `docs/架构.md` §4.13.2: revert 路径改成 action 分派的伪代码；补「反向 patch 固有局限」与「`run_git` 不能 trim」两段实现陷阱
+  - `docs/架构.md` §4.13.10: 补「前端 store 是 session-scoped，不挂 run-scoped slot」一段
+- **影响范围**: agent-core / desktop frontend / web-server / 架构.md。协议 / 持久化文件格式没动，metadata.json 与 EditEntry schema 完全兼容旧数据。
+- **留尾巴**:
+  - Bug A 修复后旧 session 里那 3 条 create entry 也终于可以回退了（删文件路径），但 modify 类型的旧 entry 没法重新生成 before_sha——它们的反向 patch 之前就跑过、失败过、用户没察觉
+  - hebweb 没有「跨客户端广播 edit-reverted」事件流；多个浏览器 tab 同时开同一 session 时，A tab 回退后 B tab 不会自动刷新（要手动切 tab 触发 refreshEdits）。当前不算高优先级
+  - 反向 patch 对「中间那次 Edit 回退」的固有限制（T4 测试已证）现已通过 tooltip 提示用户，但没做更聪明的处理（如向前累加多 hunk 合成 patch）——目前由用户决策是否尝试
+
+### 2026-05-23 — 修复 EditDiffDetail / EditTreeTab 因 zustand selector 返回新空数组造成的无限渲染
+
+- **Why**: 上一条 Bug C 修复后 dev 模式实际打开页面立刻抛 React 错误。原因是 `useStore((s) => sessionId ? s.sessionEditSnapshots[sessionId] ?? [] : [])` 每次都新建 `[]`，zustand 用 `Object.is` 浅比较判定 state 变了 → 触发新 render → 新 `[]` → 无限循环。typecheck / cargo check 都看不出来这种运行时反模式，只有真跑 UI 才会暴露——B 阶段验证不能只跑 tsc。
+- **改动**:
+  - `MessageBubble.tsx` / `EditTreePanel.tsx`：各自加模块级 `const EMPTY_*: EditEntry[] = []` 稳定引用，selector fallback 改用它
+- **影响范围**: 仅前端两个组件，无协议/数据格式变更
+- **留尾巴**: 无。这是 zustand 经典「派生新引用」反模式，将来其他地方若新加类似 selector，记得 fallback 用模块级常量
+
+### 2026-05-23 — 右侧 sidebar 点击修改/任务 → 跳转 chat 区域 + 展开 + 闪烁
+
+- **Why**: 用户在「修改文件」/「后台任务」tab 里看到的条目，希望点击后直接定位到 chat 里那次 Edit / Bash 调用的工具卡片（而不是弹独立的 DiffPanel）。架构 §4.13.10 原版本「点条目 → 弹 DiffPanel」是早期设计，sidebar 化后改成跳转更符合「sidebar 是 chat 区域的索引」这个心智模型。
+- **改动**:
+  - 新增 `apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts`: 通用工具——派发 `focus-tool-call` CustomEvent + 两帧后 scrollIntoView + 加 `focus-flash` class
+  - `MessageBubble.tsx`: `ToolCallTimeline` 给每个 tool_call 最外层 wrapper 加 `data-tool-call-id={call.id}`；监听全局 `focus-tool-call`，若该 timeline 持有匹配 call 则展开（done 才需要，未 done 默认就展开）
+  - `EditTreePanel.tsx`: 删掉「对比」按钮 + `DiffPanel` 弹层；整行 hover 可点击，点击 → `focusToolCall(entry.call_id)`；保留行末 Rewind 图标作回退，`e.stopPropagation()` 防止点回退连带跳转
+  - `BackgroundTaskPanel.tsx`: 删掉「↑ 跳转到对话」文本按钮和旧版 `scrollToToolCall` 实现（只滚到 message bubble 不展开 tool_call）；整行点击 = `onToggle() + focusToolCall(item.tool_call_id)`；pending（任务还没在 messages 里）短路不跳
+  - `index.css`: 加 `@keyframes focus-flash` —— 850ms 蓝色 box-shadow ring + 半透明背景，跟主题色统一
+  - 顺便：保留 `DiffPanel` 组件本身——`MessageBubble.tsx` 里的 `EditDiffDetail`（chat 卡片放大态）还在用
+- **影响范围**: 仅前端 4 个文件。无协议 / store / 后端变化
+- **留尾巴**:
+  - sidebar 上的修改条目原来通过 DiffPanel 看 before/after 全文 diff——现在该入口消失，要看 diff 必须点 chat 区域里的工具卡片再点放大。如果用户反馈不方便，可考虑给行末加一个独立"全文 diff"图标
+  - `focusToolCall` 用 `requestAnimationFrame` × 2 等 expand 渲染完——React 18 concurrent 模式下，复杂 message 树可能需要更多帧；若发现首次点击偶发 miss-scroll，改成 `setTimeout(0)` 或观察 expand state 后再 scroll
+  - `data-tool-call-id` 只覆盖 ToolCallTimeline 路径（消息历史区）；如果未来 streaming bubble 里也有独立 tool_call 渲染（不走 timeline），需要补上锚点
+
+### 2026-05-23 — heb CLI 端到端验证 wakeup 即写即落 + 补 cli 缺失的 resume_handler + 拆 cli 端 double-write
+
+- **Why**: 前一条 2026-05-23（插队消息即写即落）只在 desktop 侧 wire up，端到端验证未做。按 CLAUDE.md「修 bug 必经流程：先复现 → 修 → 再复现验证」流程，需要用 heb CLI 跑真实 LLM + Bash 后台任务，看 jsonl 时序是否符合"user → wakeup → assistant 流完才落盘"的设计承诺。验证过程中又发现 cli 路径有两处与 desktop 不对称的缺陷：
+  1. **cli 端没注册 WakeupScheduler::set_resume_handler**——[wakeup.rs:188](../crates/agent-core/src/wakeup.rs) 投递事件后无人接，只 `warn` 一下就丢。所以 heb 端 wakeup 根本不会落盘到 jsonl（前端 listen `wakeup-fired` 调 inject 这套 desktop 走得通的链路，cli 不存在）
+  2. **cli 端 [daemon.rs:647](../apps/cli/src/daemon.rs) 的 run-end 二次落盘 consumed_pending_inputs**——是 desktop 端 chat.rs:359-426 的姊妹代码，desktop 端已在 2026-05-23 修订里拆掉，cli 还在，所以 cli 跑时 wakeup 会被写两次（resume_handler 即写即落一次 + run-end 把 in-memory 队列 drain 出来再写一次，jsonl 重复条目）
+- **改动**:
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) `run()`：daemon 启动时立即 `WakeupScheduler::set_resume_handler(...)` 注册闭包——handler 内 `sessions::append_message` 即写即落（带 `MessageMeta::SystemNotification`）+ 推 `state.pending_inputs` in-memory 队列。session_id 过滤：本 daemon 只处理自己的 session 事件，避免多 daemon 跑同进程时互相窜消息
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) `run_turn()` 行 647：删除 "持久化插队的 user 消息" 那段（consumed_inputs 遍历 + append），改为单纯 drain 清空。run-end 只追加 assistant，跟 desktop chat.rs 行为对齐
+- **端到端验证**（heb CLI + kiro/claude-sonnet-4.6 + 真实 LLM）：
+  - prompt: "请直接发起两个 Bash tool_call：1) sleep 10 设 run_in_background=true，2) sleep 65 timeout_secs=70"
+  - **T+~10s** bash_001 (sleep 10) 完成：jsonl 立即（**早于 assistant stream 完成**）追加 user message + `meta:{type:"system_notification", kind:"bg_task_finished", task_id:"bash_001", tool_use_id:"tooluse_FPDCT..."}` ✅
+  - **T+~75s** assistant 流完：assistant entry 落盘，jsonl 最终序列 = `[meta, user_orig, wakeup(bash_001), assistant(含 2 tool_calls)]` ✅ 物理顺序按 append-only
+  - **修补前的 jsonl** 在 entry 3 + entry 5 看到两条完全相同的 wakeup（task_id="bash_001" 重复）→ 修补 cli double-write 后只剩一条 ✅
+  - bash_002 (sleep 65 前台) 不触发 wakeup（前台命令前面 2026-05-22 改动后 unregister + 不 arm_auto_notification）——符合预期，前台命令结果直接进 assistant tool_result 即可
+- **未覆盖 / 留尾巴**:
+  - **cancel 场景的 wakeup 持久化**：本次未真实验证。代码层分析：[wakeup.rs:282 discard_run](../crates/agent-core/src/wakeup.rs) 在 cancel 时清掉 bg_watches → BgFinishHook 不再扫该 task → wakeup event 根本不会投递到 resume_handler → 即使 task 后台跑完也不写 jsonl。**这是 wakeup 调度机制本身的设计问题**（cancel 把"等待通知"的意图也一起取消），不在本次"即写即落"任务范围。要彻底"cancel 不丢 wakeup"需要：让 bg_watch 不依附 run_id（按 session 级保留）/ 或 cancel 时不 discard 已 arm 的 watch。下一个专门 PR 处理
+  - 进程崩溃（kill -9 hebbian）场景：bash 子进程会随父进程死，所以不存在"bash 完成但 hebbian 没了"。该场景不是问题
+- **影响范围**: hebbian-cli 一个文件 / 行为修正层面；不破坏协议或 jsonl schema；前面 2026-05-23 desktop 端改动通过 cli 端到端反向验证生效
+- **测试**:
+  - cargo build -p hebbian-cli 通过；cargo workspace lib 测试 354 全过；TS 0 错
+  - 端到端：上方"端到端验证"已记录
+
+### 2026-05-23 — view 层 wakeup 重排：wakeup 卡片视觉上挪到对应 assistant 之后
+
+- **Why**: 用户实际跑 sleep 10 后台 + sleep 65 前台 后截图反馈：wakeup 系统通知卡片被插到两个 tool_call 卡片**前面**——视觉上 wakeup 在它要回应的 tool_call 之前出现，反直觉。本次任务前一条 changelog 里我标记了"v1 接受这视觉妥协"，用户不接受。
+- **根因**: jsonl 物理顺序是 `user_orig → wakeup(t=10s 即写即落) → assistant(t=75s stream 完成才落盘)`。view 严格按物理顺序渲染，wakeup 自然出现在 assistant 之前。但逻辑上 wakeup 是 tool_call 的回应——理应在 tool_call **之后**显示。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx): 新增 `reorderForWakeupView(messages)` 纯函数——返回原 index 的新序列（视觉顺序）。规则：`user.meta.system_notification` 带 `tool_use_id` 的条目，若它**之后**存在 `tool_calls` 含该 id 的 assistant，把它"推迟"到该 assistant 之后渲染；找不到匹配则保留原位（兜底）。`.map((m, i) => ...)` 改为 `viewOrder.map((i) => ...)`——`i` 仍是物理原 index，所以 `ownerBoundaryByIndex[i]` / `find.activeLocation.msgIdx === i` / `matchBaseByIndex[i]` / `archived` 判定全都不破，**纯视觉层重排**。
+- **取舍**:
+  - 备选方案 A（jsonl schema 加 `after_message_id` 字段）：要扩 schema、要写入时已知 assistant id（streaming 中还没 id）—— 复杂且时机难。pass
+  - 备选方案 B（assistant 落盘时**回追** wakeup 重写）：jsonl 不再是 append-only，破坏简单性。pass
+  - 选定方案 C（纯 view 层 reorder）：不动 jsonl schema / 不动后端 / 不动 model transcript 顺序（model 仍按物理顺序看 transcript，对它语义无影响——wakeup 出现在 assistant 之前在因果上是对的，因为 wakeup 先到达）。只改前端一个 helper + .map 循环。代码量 ~50 行。
+- **测试**:
+  - inline node sanity check（前端无 vitest，加测试框架代价大）覆盖 5 场景：
+    1. 用户实际场景 `[user, wakeup, assistant]` → `[0, 2, 1]` ✅
+    2. wakeup 物理已在 assistant 后 → 保持不动 ✅
+    3. wakeup 的 tool_use_id 没对应 assistant → 兜底原位 ✅
+    4. 无 wakeup 的纯对话 → 全保持 ✅
+    5. 两个 wakeup 关联同一 assistant 的不同 tool_call → assistant 后跟随两个 wakeup ✅
+  - tsc 通过（pre-existing 的 ModelIoInspector.tsx `StringCopyButton` typo 跟本次无关，是别人 in-progress 改动残留）
+- **影响范围**: 仅 MessageList.tsx 一个文件 / view 渲染层；不影响 jsonl 持久化、不影响 model transcript rebuild、不影响 fork-edit 等其他 view 路径
+- **留尾巴**: 无
+
+### 2026-05-23 — 把 skills 注册成 `//` 命令（兑现架构 §8.4 的「内置 + skills」承诺）
+
+- **Why**: 用户希望 `//` 命令系统不止 `//force-automode` 一条；想直接在输入框敲 `//commit` 调用 `~/.hebbian/skills/commit/SKILL.md`。参考项目 Claude Code 同样把每个 skill 暴露成 `/<name>` 命令并显示在命令面板里。架构 §8.4 对比表早就在 hebbian 列里写「内置 + skills」，这次把它从画饼变成实际能力。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 把 `SkillItem` / `SkillSource` 从 `SkillsPane.tsx` 提到公共类型，供 bridge / lib 复用（SkillsPane re-export 以不破坏老调用点）
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `api.listSkills(workdir)`，封装现有 `list_skills` Tauri command（后端无改动）
+  - [apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts](../apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts): 重构 dispatch——内置 registry 仍在 module 内（如 `force-automode`），skill 命令由调用方运行时传入 `skills: SkillItem[]`；同时把静态 `slashCommandCatalog` 拆成 `builtinSlashCommands` 常量 + `buildSlashCommandCatalog(skills)` 函数；`SlashContext` 加 `sendPrompt(text)` 供 skill 分支调用
+  - [apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx): 改为 `commands` props 显式注入；popup 分两组渲染（"命令" / "Skills"），skill 行尾显示 source 角标（global / project / code）
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): workdir 变化时 `api.listSkills` 拉一次；submit 路径传入 `skills` + `sendPrompt`（复用现有 `onSend` 副作用：清空 attachments、setSending 翻转、catch 统一 toast）
+  - [docs/架构.md](../docs/架构.md) §8: §8.1 拆出"内置控制命令 vs skill 命令"两类语义；§8.2 拆成表 A（内置）+ 表 B（skill 命令模板）；§8.3 增加 disabled skill 失败模式；§8.4 对比表更新
+- **语义关键点**:
+  - Skill 命令的执行**不直接读 SKILL.md 内嵌进 prompt**。前端只负责把 `//<name> [args]` 改写成 `/<name> [args]` 走 `onSend`——模型读到后会主动调用 `Skill` 工具，由 `SkillTool` 在 `tool_result` 里回填 SKILL.md 内容。这条路径直接复用既有工具调用主流程：HITL 审批、权限规则、Recorder 持久化全部沿用，**0 改动 agent-core**。
+  - 借鉴自 Claude Code（webview 里 `Skill` 工具 permission card 的 `permissionRequest` 把 `/<name>` 作为参数走 HITL）：它后端是构造一次 tool_use + tool_result 直接注入 transcript。hebbian 选了更轻的"改写成 user message 让模型决策"——好处：完全不动 agent-core / chat.rs / 协议；代价：依赖模型看到 `/<name>` 后主动调 `Skill` 工具，理论上比"硬注入"的 100% 触发率略低，但 `SkillTool::description` 里已写明可用 skill 列表，模型一般会正确选择。
+  - **与 §8.1.5 "本地派发不写历史" 的张力**：skill 命令必然写入 transcript，因为模型必须看到上下文才能调工具。§8.1 已显式标注这是两类命令的差异，不是矛盾。
+- **影响范围**: 仅 apps/desktop/frontend（前端 5 个文件 + 一份 types 重命名）+ docs；agent-core / 后端 / 协议 / 持久化 0 改动；老对话 / 老 jsonl 完全兼容
+- **留尾巴**:
+  - 用户在 SkillsPane 导入新 skill 后 ChatInput 不会立刻刷新 `skills` 状态（要切对话 / 改 workdir 触发 useEffect）。改动成本低（加全局事件 + store 监听），但不影响"键入命令"主路径——典型用户不会"刚导入立刻就敲 `//`"。后续如果有人反馈再补
+  - SkillTool 现有的 `parameters_schema` 只支持 `{ skill }` 一个字段，args 实际只是 user message 里的自由文本上下文。如果将来要让 args 影响 SKILL.md 的展开（如模板替换），需要扩 SkillTool 的 schema + 协议字段，再回头改这里的转发文本格式
+
+### 2026-05-23 — 修复 Run::Suspended 路径误报「事件流意外关闭」
+
+- **Why**: 用户报 bug：模型并发 `Bash(sleep 65, timeout=60)` + `Bash(sleep 10, run_in_background=true)` 后转后台、再调 `WaitForTask(bash_002)`，把 Run 推进 Suspended 中间态（架构 §4.12.5）。三个 surface 都立即抛错：「请求失败：事件流意外关闭」。
+  - 根因：`agent_loop.rs` 走 `Err(ModelError::Suspended)` 时**有意不 emit RunFinished / RunFailed / RunCancelled**（架构 §4.12.1 设计意图——Suspended 不是终态），只 emit `RunSuspended`。
+  - 而 `RunHandle::drive`（[crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs)）的合约只认这三种终态——`RunSuspended` 不在分支里，drive 继续 recv → channel 因 agent_loop task 退出而 close → `recv()` 返回 `None` → 走死路径 `TurnSummary::failed("事件流意外关闭")`。三个 surface 把它当成真错误透传，前端 toast 报错。
+  - 与"切换对话"无关——切换 session 让用户切回时撞见这条已经投递的报错，看起来像是切换触发的而已。
+- **改动**:
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs):
+    - `TurnOutcome` 新增 `Suspended` variant（usage=None：token 总额已写进 RunCheckpoint，wakeup resume 时由 agent_loop 续累，surface 不要重复累加）
+    - `RunHandle::drive` 把 `EventPayload::RunSuspended` 视为合法终态，break 出 loop
+    - `is_critical_event` 把 `RunSuspended` / `RunResumed` 列为关键事件——channel 满载时不丢，否则 surface 永远停在挂起 UI
+    - 加 4 个回归单测（`harness::tests`）：
+      1. `drive_treats_run_suspended_as_terminal` —— 钉住 Suspended 终态语义
+      2. `drive_does_not_report_stream_closed_after_suspended` —— 复现"RunSuspended 后 channel 关闭被误报为 Failed"原 bug
+      3. `drive_still_reports_failed_when_channel_drops_silently` —— 控制组：channel 静默 drop（agent_loop 异常退出，不发 RunSuspended）仍判为 Failed("事件流意外关闭")，不能被新分支吞掉
+      4. `run_suspended_and_resumed_are_critical` —— 钉住 critical 事件名单
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `match summary.outcome` 让 `Done | Suspended` 走同一段 assistant 落盘逻辑——transcript 不进 checkpoint（§4.12.3），resume 时从 jsonl 重建本轮 assistant
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): 同步合并 `Done | Suspended` 分支
+  - [apps/cli/src/session.rs](../apps/cli/src/session.rs): 同步合并 `Done | Suspended` 分支
+  - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs): 同步合并 `Done | Suspended` 分支
+- **设计影响评估**（CLAUDE.md 5 问）:
+  1. 不与架构.md 相悖。修的是 driver 合约漏洞——架构 §4.12.1 已经说清 Suspended 是中间态、§4.12.8 已经说清 "RunFinished 不会在 Suspended 时 emit"，driver 该认这个事件
+  2. 符合既定设计：命名严格遵循 §4.4.7 PascalCase；落盘走 storage 模块；不改对外协议字段
+  3. 不引入新设计：`TurnOutcome::Suspended` 是 surface ↔ driver 的内部约定，不进 EventPayload / IPC / jsonl，不需要架构.md 新章节
+  4. 影响范围：agent-core 一个 enum 加一个 variant（向后兼容——下游 surface 4 处都已加分支）；不动 EventPayload / EngineEvent / DaemonEvent / Tauri 命令；老 RunCheckpoint 兼容
+  5. 取舍：考虑过"在 agent_loop 里发 RunFinished 兜底"——被否决，会破坏 RunCheckpoint 语义 + 让 wakeup 重 spawn 时事件序列出现两次 RunFinished。在 driver 合约层加一个分支是最小切口
+- **阶段 A 复现**: 加单测后**先临时把 `EventPayload::RunSuspended` 分支退回到 `_ => {}`**（旧实现），`cargo test -p agent-core --lib harness::tests` 跑出 `expected Suspended, got Failed("事件流意外关闭")` —— 与用户截图错误一字不差。控制组 `drive_still_reports_failed_when_channel_drops_silently` 保持 pass，证明测试不是无脑全过
+- **阶段 B 验证**: 恢复修复后 4 个单测全 pass；`cargo test --workspace --lib` 全部 358 个测试 0 fail；`cargo check --workspace` 通过；`pnpm exec tsc --noEmit` 0 错误
+- **影响范围**: `agent-core` / `desktop` / `cli` (`session` + `daemon`) / `web-server` 共 5 个文件；`TurnOutcome` 是 crate 内部 enum，不进协议；4 个 surface 已同步处理新分支，外部调用方（前端 / IPC 客户端）无感
+- **留尾巴**:
+  - 当前 Suspended 也通过 chat.rs 走 assistant 落盘——如果 agent_loop 在 Suspended 时已经独立落过 assistant（看了一遍没找到这种路径），会出现重复条目。本次依赖现状"agent_loop 不直接 append_message"的事实；后续如果改 agent_loop 自己落盘，要把这里也同步改
+  - cli/session.rs 的 Suspended 路径目前是直接 commit 全部 final_text 到 transcript——CLI 不支持 wakeup resume（hebbian-cli 是单 turn 工具，没有 daemon 模式之外的挂起态），实质上走不进这条分支。保留 `Done | Suspended` 合并主要是为了一致性 + 防呆，不会引起行为差异
+
+### 2026-05-23 — 修复 SkillTool 强制按目录名 lookup 导致 frontmatter `name` 不同时找不到
+
+- **Why**: 用户用上面那条加的 `//` skill 命令系统时撞到 bug——`~/.hebbian/skills/karpathy/SKILL.md` 的 frontmatter 写 `name: karpathy-guidelines`（这是 Claude Code 风格的常见命名：目录名简写、frontmatter 用完整名）；模型按 CLAUDE.md 里"必须遵循 /karpathy-guidelines"调 Skill 工具，但 SkillTool 之前注释明说"frontmatter name 不参与 lookup"，结果直接报"未找到 skill `karpathy-guidelines`"。模型没做错，是 hebbian lookup 太死板
+- **改动**:
+  - [crates/agent-core/src/tools/skill.rs](../crates/agent-core/src/tools/skill.rs):
+    - `Skill` 新增 `alias: Option<String>` 字段（仅当 frontmatter `name:` ≠ 目录名时填）；新增 `display_name()` 取 alias 优先、`matches(key)` 双名兜底
+    - `load_dir_into` 不再丢弃 frontmatter name，存到 `alias`
+    - `execute` lookup 改用 `Skill::matches`——目录名 / alias 任一命中
+    - `render_description` 在两个名字不同时同时列出（如 `` `karpathy-guidelines`（或 `karpathy`，global）``），让模型知道哪个名字都行
+    - 测试加 `frontmatter_alias_is_callable_alongside_dir_name`（核心回归——目录名 + 带斜杠 alias 两条路径都验）和 `alias_is_none_when_frontmatter_matches_dir_name`（避免冗余 alias）
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `SkillItem` 加 `alias?: string | null`（与后端 serde `skip_serializing_if = Option::is_none` 对齐）
+  - [apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts](../apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts):
+    - 加 `skillDisplayName(s)` 复用后端 alias 优先策略
+    - `buildSlashCommandCatalog`：popup 公开名用 alias（与模型在 SkillTool description 里看到的列表一致——用户敲 `//karpathy-guidelines` 一定能在 popup 里看到对应项）
+    - `dispatchSlashCommand`：匹配规则 `s.name === name || s.alias === name`，转发文本用公开名
+- **设计点**:
+  - 保持 `Skill.name = 目录名` 不变（read_skill_md 靠它拼路径；老代码 / 老测试不破坏）。alias 只是"用户能调用的额外名字"
+  - 之前的注释说"frontmatter name 不参与 lookup 是为了避免拼路径失败"——这条理由实际不成立，因为 Skill 结构已经存了完整 `path: PathBuf`，lookup 跟拼路径完全解耦。本次顺便把那条注释改写成正确解释
+  - 借鉴 Claude Code 的实践：`~/.claude/skills/<dir>/SKILL.md` 里 frontmatter name 经常跟目录名不同，这是合法 / 推荐模式。hebbian 强制要求二者一致 = 给用户出难题
+- **影响范围**: agent-core/tools/skill（数据结构 + lookup 行为）+ desktop frontend（types + dispatch）；老 skill（frontmatter name = 目录名 / 无 frontmatter name）行为不变；上面 2026-05-23 那条加的 `//` 命令系统从这条修复后才真正能跑通用户场景
+- **复现 + 验证**:
+  - **复现（修前）**：用户 CLAUDE.md 写「必须遵循 /karpathy-guidelines」→ 模型调 `Skill({skill: "/karpathy-guidelines"})` → 后端报错 "Skill: 未找到 skill `karpathy-guidelines`"
+  - **验证（修后）**：`cargo test -p agent-core --lib tools::skill` 5/5 通过——新加的 `frontmatter_alias_is_callable_alongside_dir_name` 覆盖 A/B：A) 旧路径 `{skill: "karpathy"}` 仍 OK；B) 新路径 `{skill: "/karpathy-guidelines"}` 也 OK；`pnpm exec tsc --noEmit` 通过
+- **留尾巴**: `SkillTool::description` 是 `new` 里一次性 render 的字符串；本次改 description 后老 session 下一次发请求会用新 description——prompt-cache 命中率会有一次性微降，是预期内代价
+
+### 2026-05-23 — 修复 settings.json 里 `~/` 路径不展开导致 SkillTool 加载空列表
+
+- **Why**: 上一条改完用户重启 desktop 后 Skill 工具**仍然报"未找到 skill `karpathy`"**，连目录名都找不到——意味着 SkillTool 加载到的 skills 列表是**空**。复现：`cat ~/.hebbian/settings.json` → `conversation.skill_dirs = ["~/.hebbian/skills"]`。`std::fs::read_dir("~/.hebbian/skills")` 拿到字面 `~`（tilde 是 shell 语法糖，fs 层不展开）→ 目录不存在 → 静默返回空。chat.rs:170-178 的 `configured_skill_dirs` 一旦非空就**只用配置目录**（不再叠加 default_skill_dirs 的三层），所以这个 `~/` bug 把整个 skill 链路打断
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs):
+    - 新增 `pub fn expand_home(&Path) -> PathBuf`：处理 `~` / `~/foo`（仅前缀展开，中间出现的 `~hostname` 不动）；`$HOME` 拿不到时原样返回（不假装成功）
+    - 新增私有 `expand_home_in_settings(&mut Settings)`：扫 `workdir` / `allowed_paths` / `skill_dirs` / `global_rules` 四个 path 字段统一展开
+    - `load()` 末尾调用——in-memory 展开但**不回写文件**，保持 settings.json 里 `~/` 表达不变（用户的便携性意图保留）
+    - 单测 `load_expands_tilde_in_path_fields`（覆盖 workdir / allowed_paths 含绝对路径混合 / skill_dirs / `~` 单字符 / global_rules 全套）+ `expand_home_handles_edge_cases`（覆盖 `~` / `~/` / `~/foo` / `/etc/~hostname` 非前缀场景 / `/abs` 透传）
+- **根因 vs 补丁的取舍**:
+  - **补丁**：在 chat.rs:170-178 那一处加 expand。代价：cli/daemon.rs:511、web-server/session.rs:395 同样路径也得同改；以后 allowed_paths / workdir 再出 `~/` 问题还得继续打补丁
+  - **根因（本次选）**：在 settings 进 in-memory 的边界一次性展开。所有下游 surface 拿到的就是绝对路径，fs 操作直接可用；新的 path 字段加进来时只要把它加进 `expand_home_in_settings` 就行——不靠下游记得调 helper
+  - 为什么不在 save() 里反向 collapse 绝对路径回 `~/`：会引入"用户写的绝对路径在 save 后变成 `~/...`"的语义变化（如果路径恰好在 home_dir 下），有 surprise；本次选择 in-memory 展开 + 文件保持原样的方案，避免这个 surprise，代价仅是用户后续编辑 settings.json 时看到自己原本写的 `~/` 仍然在
+- **影响范围**: 只动 `crates/agent-core/src/storage/settings.rs`（含新增 4 个测试用例）；下游 chat.rs / cli/daemon.rs / web-server/session.rs 三处 `settings.conversation.skill_dirs` 读取点无需改——它们直接拿到已展开的绝对路径；前端 / 协议 / 持久化 0 改动
+- **设计取舍 5 问**:
+  1. 与架构.md 相悖？否——架构.md §6.2 storage 模块没明文规定 path 字段是否含 `~`，本次只是补齐边界处理
+  2. 符合既定设计？是——settings 模块本就负责 path 字段的运行时形态规整（参见同一文件里的 `normalize_legacy_tool_names`）
+  3. 引入新设计？否——`expand_home` 是 path 处理 helper，不进协议、不改字段语义
+  4. 影响其他模块？三个 surface 的 chat 路径，全部受益，行为只往好的方向变（原本 `~/` 路径完全失效，修后正常工作）
+  5. 取舍：选根因不打补丁
+- **复现 + 验证**:
+  - **阶段 A 复现**：用户 settings.json 实际是 `{"conversation":{"skill_dirs":["~/.hebbian/skills"]}}`；模型在 desktop chat 里调 `Skill({skill: "/karpathy-guidelines"})` 或 `Skill({skill: "/karpathy"})` 都报"未找到"。控制实验：把 settings.json 改成绝对路径 `/Users/ricardo/.hebbian/skills`，模型再调用一切正常——确认根因
+  - **阶段 B 验证**：`cargo test -p agent-core --lib storage::settings` 4/4 通过；`cargo test --workspace --lib` 362 个测试 0 fail；用户重启 desktop 后应当能看到 karpathy / hallmark / graphify / playwright-cli 4 个 skill 在 SkillTool description 里
+- **留尾巴**:
+  - session.skill_dirs（用户在 SessionSettingsDialog 单独设的）目前**不走** settings 路径，是直接从 jsonl `meta` 读出来的 PathBuf。如果哪天有人在 session 层手填 `~/` 也会遇到同样 bug——届时把 `expand_home` 公开 API 用到 storage/sessions.rs 的读取点即可（已 `pub`）。本次不主动修，因为没复现到，留 helper 给将来
+  - chat.rs:170-178 的 fallback 语义（configured_skill_dirs 非空就**完全替换**默认三层，而不是追加 / 覆盖单层）是另一个独立设计问题——用户写 `skill_dirs=["~/.hebbian/skills"]` 本意可能是"确认全局目录在这里"，但实际效果是"只用 global、丢 project 和 project_code"。本次不动，等用户复现到再讨论是要改成"非空 = 追加"还是保持"非空 = 完整覆盖"

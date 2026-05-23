@@ -310,7 +310,9 @@ impl CliSession {
         let summary = handle.drive(&mut observer).await;
 
         match summary.outcome {
-            TurnOutcome::Done => {
+            // 架构 §4.12.1：Suspended 与 Done 走同一段持久化——transcript 从 jsonl
+            // 重建（§4.12.3），本轮 assistant 必须落盘；不报错让 cli 静静等 wakeup。
+            TurnOutcome::Done | TurnOutcome::Suspended => {
                 let text = observer.renderer.take_final_text();
                 if !text.is_empty() {
                     self.inner.commit_assistant(text.clone(), Vec::new());

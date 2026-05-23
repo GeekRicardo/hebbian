@@ -400,6 +400,20 @@ impl RunHandle {
                         usage: None,
                     };
                 }
+                // 架构 §4.12.1 / §4.12.5：Suspended 是 Run 的合法中间态——agent_loop
+                // 已经 emit TurnFinished(EndTurn) 收尾，但不会发 RunFinished（等 wakeup
+                // 再 resume）。channel 在 task 退出后会关闭，driver 必须把 RunSuspended
+                // 视为终态收 turn，否则下面的 `recv` 拿到 None → 误报"事件流意外关闭"。
+                //
+                // usage 字段不在本 outcome 暴露：token 总数已经写进 RunCheckpoint，
+                // 等 wakeup resume 时由 agent_loop 继续累；如果在这里也吐一份会让
+                // surface 把同一段消耗重复累进 session.token_stats。
+                EventPayload::RunSuspended { .. } => {
+                    break TurnSummary {
+                        outcome: TurnOutcome::Suspended,
+                        usage: None,
+                    };
+                }
                 _ => {}
             }
         };
@@ -469,6 +483,11 @@ pub enum TurnOutcome {
     Done,
     Failed(String),
     Cancelled,
+    /// Run 进入 Suspended 中间态（架构 §4.12.1）——agent_loop 已 emit RunSuspended +
+    /// 落 RunCheckpoint，等 WakeupScheduler 唤醒后再 resume。surface 处理上跟 Done
+    /// 几乎一致（要把当前累积的 assistant 段落盘到 jsonl，因为 transcript 不进
+    /// checkpoint，resume 时从 jsonl 重建——§4.12.3）；区别是**不报错、不结束 run**。
+    Suspended,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -566,6 +585,8 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::RunFinished { .. }
             | EventPayload::RunFailed { .. }
             | EventPayload::RunCancelled
+            | EventPayload::RunSuspended { .. }
+            | EventPayload::RunResumed { .. }
             | EventPayload::TurnStarted { .. }
             | EventPayload::TurnFinished { .. }
             | EventPayload::PermissionRequested { .. }
@@ -578,4 +599,164 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::TextDone { .. }
             | EventPayload::SessionTitleChanged { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! `RunHandle::drive` 在 Suspended 路径的回归测试。
+    //!
+    //! 复现历史 bug（架构 §4.12.5）：模型调 `WaitForTask` / `ScheduleWakeup` 后，
+    //! agent_loop emit `RunSuspended` → emit `TurnFinished(EndTurn)` → 退出（不 emit
+    //! `RunFinished`），event channel 在 task drop 后关闭。旧版 `drive` 拿到 `recv()
+    //! → None` 直接判 `TurnSummary::failed("事件流意外关闭")`，三个 surface 都把它
+    //! 透传成报错——前端就是用户看到的「请求失败：事件流意外关闭」。
+    //!
+    //! 现在 `drive` 必须把 `RunSuspended` 视为合法终态、return
+    //! `TurnOutcome::Suspended`。
+    use super::*;
+    use protocol::{ResumeCause, SuspendReason};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn make_handle(events: mpsc::Receiver<Event>) -> RunHandle {
+        RunHandle {
+            run_id: RunId::new(),
+            events,
+            hitl: Arc::new(HitlGate::default()),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn ev(run_id: &RunId, seq: u64, payload: EventPayload) -> Event {
+        Event::now(run_id.clone(), seq, payload)
+    }
+
+    struct NoopObserver;
+
+    #[async_trait]
+    impl TurnObserver for NoopObserver {
+        fn on_event(&mut self, _event: &Event) {}
+        async fn on_permission_request(
+            &mut self,
+            _request_id: &PermissionRequestId,
+            _kind: &PermissionKind,
+            _summary: &str,
+        ) -> Option<ApprovalDecision> {
+            None
+        }
+        async fn on_question(
+            &mut self,
+            _request_id: &PermissionRequestId,
+            _question: &str,
+            _options: &[QuestionOption],
+            _multi: bool,
+        ) -> Option<UserAnswer> {
+            None
+        }
+    }
+
+    /// channel 在 RunSuspended 之后被关闭——这正是 agent_loop 走 ModelError::Suspended
+    /// 时的行为。drive 必须返回 Suspended，而不是 Failed("事件流意外关闭")。
+    #[tokio::test]
+    async fn drive_treats_run_suspended_as_terminal() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let mut handle = make_handle(rx);
+        let rid = handle.run_id.clone();
+
+        tx.send(ev(
+            &rid,
+            0,
+            EventPayload::RunSuspended {
+                reason: SuspendReason::BackgroundTask,
+                resumes_at_ms: None,
+                waiting_for_task_ids: vec!["bash_002".to_string()],
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx); // 模拟 agent_loop task 退出 → send 端 drop → recv 之后返回 None
+
+        let summary = handle.drive(&mut NoopObserver).await;
+        match summary.outcome {
+            TurnOutcome::Suspended => {}
+            other => panic!("expected Suspended, got {other:?}"),
+        }
+        assert!(summary.usage.is_none(), "Suspended 不应吐 usage，否则 surface 会重复累加");
+    }
+
+    /// 历史 bug 的反向用例：如果 drive 漏掉 RunSuspended 终态识别，
+    /// channel 关闭就会被误报为 "事件流意外关闭"。本测试钉住正确行为。
+    #[tokio::test]
+    async fn drive_does_not_report_stream_closed_after_suspended() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let mut handle = make_handle(rx);
+        let rid = handle.run_id.clone();
+
+        // 先发一些正常事件，再发 Suspended，再关 channel——模拟真实 agent_loop。
+        tx.send(ev(&rid, 0, EventPayload::TurnStarted { turn_id: protocol::TurnId::new(), turn: 0 }))
+            .await
+            .unwrap();
+        tx.send(ev(
+            &rid,
+            1,
+            EventPayload::TurnFinished {
+                turn_id: protocol::TurnId::new(),
+                turn: 0,
+                stop_reason: protocol::StopReason::EndTurn,
+            },
+        ))
+        .await
+        .unwrap();
+        tx.send(ev(
+            &rid,
+            2,
+            EventPayload::RunSuspended {
+                reason: SuspendReason::Cron,
+                resumes_at_ms: Some(0),
+                waiting_for_task_ids: vec![],
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let summary = handle.drive(&mut NoopObserver).await;
+        match summary.outcome {
+            TurnOutcome::Failed(msg) => {
+                panic!("RunSuspended 之后 channel 关闭被误报为 Failed: {msg}")
+            }
+            TurnOutcome::Suspended => {}
+            other => panic!("expected Suspended, got {other:?}"),
+        }
+    }
+
+    /// 健壮性：channel 直接关闭（既没发 RunFinished 也没发 RunSuspended）仍应判为
+    /// Failed("事件流意外关闭")——这条路径表明 agent_loop 异常退出，与 Suspended 路径
+    /// 完全不同，不能被新分支误吞掉。
+    #[tokio::test]
+    async fn drive_still_reports_failed_when_channel_drops_silently() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let mut handle = make_handle(rx);
+        drop(tx);
+
+        let summary = handle.drive(&mut NoopObserver).await;
+        match summary.outcome {
+            TurnOutcome::Failed(msg) if msg.contains("事件流意外关闭") => {}
+            other => panic!("expected Failed(事件流意外关闭), got {other:?}"),
+        }
+    }
+
+    /// 看一眼 RunResumed 也应是 critical event（满载时不丢）——
+    /// resume 后没有这条事件 surface 永远停在挂起 UI。
+    #[test]
+    fn run_suspended_and_resumed_are_critical() {
+        assert!(is_critical_event(&EventPayload::RunSuspended {
+            reason: SuspendReason::BackgroundTask,
+            resumes_at_ms: None,
+            waiting_for_task_ids: vec![],
+        }));
+        assert!(is_critical_event(&EventPayload::RunResumed {
+            cause: ResumeCause::UserMessageArrived,
+        }));
+    }
 }

@@ -23,7 +23,7 @@ use agent_core::{
 use async_trait::async_trait;
 use common::{
     attachments::MessageAttachment,
-    runtime::{ConsumedPendingInputs, PendingInputs, PendingUserInput},
+    runtime::{ConsumedPendingInputs, PendingInputs},
     CancelFlag,
 };
 use model_gateway::{self, config::Provider};
@@ -41,6 +41,10 @@ pub struct SendArgs {
     pub session_id: String,
     pub user_content: String,
     pub attachments: Vec<MessageAttachment>,
+    /// 给落盘的 user message 附加的 meta（架构 §4.12.5）。idle 路径下 wakeup 通过
+    /// send_message 触发新 run 时用——让物理 jsonl 里这条 user message 带
+    /// `MessageMeta::SystemNotification` 标记，view 区别渲染。`None` = 普通用户输入。
+    pub user_meta: Option<agent_core::storage::sessions::MessageMeta>,
     pub stream: bool,
     pub enabled_tools: Vec<String>,
     pub cancel_flag: CancelFlag,
@@ -124,7 +128,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         tool_calls: Vec::new(),
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
+        meta: args.user_meta.clone(),
     };
     let session = sessions::append_message(data_dir, &args.session_id, user_msg)?;
 
@@ -356,17 +360,26 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         partial_writer,
         ..
     } = observer;
-    let mut pending_inputs_to_persist = args
+    // pending / wakeup 插队消息已在 inject_user_message 即时落盘（架构 §4.12.5 修订），
+    // run 结束这里**不再二次落盘**，避免 jsonl 出现重复条目。
+    // 但仍需读 consumed_pending_inputs 判定本次 run 内是否真发生过插队 drain——
+    // 发生过：assistant 已按 turn 切成多段（turn_messages 非空且各段独立），落盘要分段写；
+    // 未发生：用全 run 的 parts 拼成单段 assistant（保持老行为，避免多 turn 但无插队
+    // 时被无谓拆成多段卡片）。
+    let had_pending_during_run = args
         .consumed_pending_inputs
         .as_ref()
-        .map(|slot| slot.lock().unwrap().clone())
-        .unwrap_or_default();
+        .map(|slot| !slot.lock().unwrap().is_empty())
+        .unwrap_or(false);
     if let Some(pending) = args.pending_inputs.as_ref() {
-        pending_inputs_to_persist.extend(std::mem::take(&mut *pending.lock().unwrap()));
+        pending.lock().unwrap().clear();
     }
 
     match summary.outcome {
-        TurnOutcome::Done => {}
+        // 架构 §4.12.1：Suspended 是 Run 的合法中间态，下面跟 Done 走同一段
+        // assistant 落盘逻辑——transcript 不进 checkpoint（§4.12.3），resume 时
+        // agent_loop 从 session.jsonl 重建，所以本轮模型已经说过的话必须落盘。
+        TurnOutcome::Done | TurnOutcome::Suspended => {}
         TurnOutcome::Cancelled => {
             persist_interrupted_assistant_output(
                 data_dir,
@@ -392,17 +405,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         }
     }
 
-    let assistant_msg = if pending_inputs_to_persist.is_empty() {
-        let assistant_msg = assistant_message_from_recorded_parts(
-            parts,
-            partial_output,
-            tool_calls,
-            output_attachments,
-        );
-        sessions::append_message(data_dir, &args.session_id, assistant_msg.clone())?;
-        if let Some(pw) = partial_writer { pw.delete(); }
-        assistant_msg
-    } else {
+    // Done：写 assistant 段。
+    // - had_pending_during_run=true：run 内发生过 PendingInputs drain，assistant 被切成多段
+    //   （turn_messages 含各段）→ 分段写。各段之间逻辑上夹着的插队 user message 已经在
+    //   inject_user_message 时即写即落，物理 jsonl 已经有了，这里仅追加 assistant 段。
+    // - had_pending_during_run=false：用全 run 累积的 parts 拼成单段 assistant 落盘，
+    //   保持原有"一次 run = 一条 assistant message"语义（多 turn 但无插队的常态）。
+    let assistant_msg = if had_pending_during_run {
         if turn_messages.is_empty() {
             turn_messages.push(assistant_message_from_recorded_parts(
                 parts,
@@ -414,19 +423,21 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         if let Some(last) = turn_messages.last_mut() {
             last.attachments = output_attachments;
         }
-        let assistant_msg = turn_messages
-            .last()
-            .cloned()
-            .unwrap_or_else(empty_assistant_message);
-        persist_interleaved_pending_inputs(
-            data_dir,
-            &args.session_id,
-            turn_messages,
-            pending_inputs_to_persist,
-        )?;
-        if let Some(pw) = partial_writer { pw.delete(); }
-        assistant_msg
+        for assistant in &turn_messages {
+            sessions::append_message(data_dir, &args.session_id, assistant.clone())?;
+        }
+        turn_messages.last().cloned().unwrap_or_else(empty_assistant_message)
+    } else {
+        let m = assistant_message_from_recorded_parts(
+            parts,
+            partial_output,
+            tool_calls,
+            output_attachments,
+        );
+        sessions::append_message(data_dir, &args.session_id, m.clone())?;
+        m
     };
+    if let Some(pw) = partial_writer { pw.delete(); }
 
     Ok(assistant_msg)
 }
@@ -507,39 +518,6 @@ fn partial_to_interrupted_message(
     })
 }
 
-fn persist_interleaved_pending_inputs(
-    data_dir: &Path,
-    session_id: &str,
-    assistant_messages: Vec<Message>,
-    pending_inputs: Vec<PendingUserInput>,
-) -> AppResult<()> {
-    if pending_inputs.len() == assistant_messages.len().saturating_sub(1) {
-        for (index, assistant) in assistant_messages.into_iter().enumerate() {
-            sessions::append_message(data_dir, session_id, assistant)?;
-            if let Some(input) = pending_inputs.get(index) {
-                sessions::append_message(
-                    data_dir,
-                    session_id,
-                    user_message_from_pending_input(input),
-                )?;
-            }
-        }
-        return Ok(());
-    }
-
-    let mut assistants = assistant_messages.into_iter();
-    if let Some(first) = assistants.next() {
-        sessions::append_message(data_dir, session_id, first)?;
-    }
-    for input in &pending_inputs {
-        sessions::append_message(data_dir, session_id, user_message_from_pending_input(input))?;
-    }
-    for assistant in assistants {
-        sessions::append_message(data_dir, session_id, assistant)?;
-    }
-    Ok(())
-}
-
 fn assistant_message_from_recorded_parts(
     mut parts: AssistantPartsRecorder,
     partial_output: String,
@@ -571,18 +549,6 @@ fn assistant_message_from_recorded_parts(
     }
 }
 
-fn user_message_from_pending_input(input: &PendingUserInput) -> Message {
-    Message {
-        id: sessions::new_id(),
-        role: Role::User,
-        content: input.content.clone(),
-        attachments: input.attachments.clone(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
-    }
-}
 
 fn empty_assistant_message() -> Message {
     assistant_message_from_recorded_parts(
@@ -2524,6 +2490,7 @@ mod tests {
                 SendArgs {
                     session_id: session.id,
                     user_content: "run tools".to_string(),
+                    user_meta: None,
                     attachments: Vec::new(),
                     stream: true,
                     enabled_tools: vec!["missing_a".to_string(), "missing_b".to_string()],
@@ -2586,6 +2553,7 @@ mod tests {
                 SendArgs {
                     session_id: session.id,
                     user_content: "run tools".to_string(),
+                    user_meta: None,
                     attachments: Vec::new(),
                     stream: true,
                     enabled_tools: vec!["missing_first".to_string(), "missing_second".to_string()],
@@ -2623,8 +2591,13 @@ mod tests {
         });
     }
 
+    /// 架构 §4.12.5 修订：streaming 中 push 进 PendingInputs 的消息**不再**由 run 结束
+    /// 时统一落盘——落盘必须走 inject_user_message 即写即落。这里的 test 模拟"老路径
+    /// 仅 push pending（没调 inject 落盘）"场景，验证：
+    /// - assistant 段仍按正确顺序落盘（model 在 in-memory transcript 看到了插队，输出了"后续回答"）
+    /// - jsonl 里**不**出现没经 inject 落盘的插队 user 条目（避免行为漂移）
     #[test]
-    fn persists_consumed_pending_inputs_after_current_assistant() {
+    fn pending_inputs_not_double_written_on_run_end() {
         tauri::async_runtime::block_on(async {
             let data_dir = temp_data_dir();
             save_test_provider(&data_dir);
@@ -2646,6 +2619,7 @@ mod tests {
                 SendArgs {
                     session_id: session.id.clone(),
                     user_content: "第一条".to_string(),
+                    user_meta: None,
                     attachments: Vec::new(),
                     stream: true,
                     enabled_tools: vec!["missing_tool".to_string()],
@@ -2674,12 +2648,13 @@ mod tests {
                 .iter()
                 .map(|m| (m.role, m.content.clone()))
                 .collect();
+            // 新设计：pending push 不自动落盘，jsonl 里没有未经 inject 的插队 user 条目。
+            // 但 assistant 仍按 model invoke 顺序被切成多段写入，证明 in-memory drain 正常工作。
             assert_eq!(
                 roles_and_content,
                 vec![
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "正在输出".to_string()),
-                    (Role::User, "插队消息".to_string()),
                     (Role::Assistant, "后续回答".to_string()),
                 ]
             );
@@ -2688,8 +2663,11 @@ mod tests {
         });
     }
 
+    /// 架构 §4.12.5 修订：同 [`pending_inputs_not_double_written_on_run_end`]——
+    /// 跨 turn 的 PendingInput drain 路径，validate run 结束不再二次落盘 pending。
+    /// （inject_user_message 即写即落，由专门测试覆盖；这里仅证旧路径不再 double-write）
     #[test]
-    fn persists_injected_input_between_assistant_turns_in_same_run() {
+    fn pending_inputs_between_assistant_turns_not_double_written() {
         tauri::async_runtime::block_on(async {
             let data_dir = temp_data_dir();
             save_test_provider(&data_dir);
@@ -2711,6 +2689,7 @@ mod tests {
                 SendArgs {
                     session_id: session.id.clone(),
                     user_content: "第一条".to_string(),
+                    user_meta: None,
                     attachments: Vec::new(),
                     stream: true,
                     enabled_tools: Vec::new(),
@@ -2739,12 +2718,13 @@ mod tests {
                 .iter()
                 .map(|m| (m.role, m.content.clone()))
                 .collect();
+            // 新设计：pending push 路径不再自动落盘 user 插队条目。
+            // assistant 仍按 turn 切成两段写入——证 in-memory drain 让 model 在 turn 2 看到了插队。
             assert_eq!(
                 roles_and_content,
                 vec![
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "第一段".to_string()),
-                    (Role::User, "插队消息".to_string()),
                     (Role::Assistant, "第二段".to_string()),
                 ]
             );

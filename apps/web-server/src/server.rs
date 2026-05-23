@@ -17,11 +17,13 @@ use std::sync::{
 
 use agent_core::{
     core_client::{CoreClient, LocalCoreClient},
+    edits::{self, EditsWorktree},
     permissions::PermissionStore,
     storage::{
         projects as projects_store, prompts as prompts_store, sessions as sessions_store,
         sessions_dir, settings as settings_store,
     },
+    workspace::Workspace,
 };
 use anyhow::{anyhow, Result};
 use axum::{
@@ -351,7 +353,12 @@ async fn dispatch_invoke(
             cmd_update_session_settings(state, args).await.map(Some)
         }
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
-        // 其余 desktop Tauri command（OAuth 14 / Edits 4 / preview_payload / file dialog / ...）
+        // Edits Worktree（架构 §4.13）
+        "list_edits" => cmd_list_edits(state, args).await.map(Some),
+        "diff_edit" => cmd_diff_edit(state, args).await.map(Some),
+        "revert_edit" => cmd_revert_edit(state, args).await.map(Some),
+        "edits_worktree_status" => cmd_edits_worktree_status(state, args).await.map(Some),
+        // 其余 desktop Tauri command（OAuth 14 / preview_payload / file dialog / ...）
         // 在 hebweb 浏览器 surface 尚未镜像；需要时按 Round 1 模式照搬 desktop 实现
         other => Err(anyhow!(
             "command `{other}` not implemented in hebweb (mirror from desktop lib.rs when needed)"
@@ -1370,4 +1377,121 @@ async fn cmd_update_session_settings(state: &ServerState, args: Value) -> Result
     }
     let saved = sessions_store::save(&state.data_dir, s).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(saved)?)
+}
+
+// ─── Edits Worktree（架构 §4.13） ─────────────────────────────────────────
+//
+// 镜像 desktop 的 4 个 Tauri command。hebweb 是单浏览器 tab 一个 ws，
+// 没有 desktop 的多窗口同步问题，revert 不再向其他客户端广播 edit-reverted；
+// 前端 revertEdit 拿到 success 后会自己 refreshEdits 拉权威列表兜底。
+
+fn build_edits_worktree_for(state: &ServerState, session_id: &str) -> Result<EditsWorktree> {
+    let session = sessions_store::load(&state.data_dir, session_id)
+        .map_err(|e| anyhow!("加载 session 失败: {e}"))?;
+    let settings = settings_store::load(&state.data_dir);
+    let workdir = session
+        .workdir
+        .clone()
+        .or_else(|| settings.conversation.workdir.clone())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let initial_allowed_paths = session
+        .allowed_paths
+        .clone()
+        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
+    let workspace = Workspace::with_runtime_state(
+        workdir,
+        initial_allowed_paths,
+        session.runtime_allowed_paths,
+        session.pending_runtime_allowed_paths,
+    );
+    Ok(EditsWorktree::new(&state.data_dir, session_id, &workspace))
+}
+
+async fn cmd_list_edits(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let wd = edits::metadata::worktree_dir(&state.data_dir, sid);
+    let meta = edits::metadata::load_metadata(&wd).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(meta.entries)?)
+}
+
+async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let snap = args
+        .get("snapshotId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `snapshotId`"))?;
+    let worktree = build_edits_worktree_for(state, sid)?;
+    if !worktree.enabled().await {
+        return Err(anyhow!("git 不可用，无法生成 diff"));
+    }
+    let entries = worktree.list_entries().map_err(|e| anyhow!("{e}"))?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.snapshot_id == snap)
+        .ok_or_else(|| anyhow!("找不到该快照"))?;
+    let (before_text, after_text) =
+        worktree.diff_text(&entry).await.map_err(|e| anyhow!("{e}"))?;
+    Ok(json!({
+        "before_text": before_text,
+        "after_text": after_text,
+        "before_sha": entry.before_sha,
+        "after_sha": entry.after_sha,
+        "file_path": entry.real_path,
+        "action": format!("{:?}", entry.action).to_lowercase(),
+    }))
+}
+
+async fn cmd_revert_edit(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let snap = args
+        .get("snapshotId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `snapshotId`"))?;
+    let worktree = build_edits_worktree_for(state, sid)?;
+    if !worktree.enabled().await {
+        return Err(anyhow!("git 不可用，回退功能已禁用"));
+    }
+    let entries = worktree.list_entries().map_err(|e| anyhow!("{e}"))?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.snapshot_id == snap)
+        .ok_or_else(|| anyhow!("找不到该快照"))?;
+    if entry.reverted {
+        return Err(anyhow!("该快照已回退过"));
+    }
+    match worktree.revert(&entry).await {
+        Ok(()) => {
+            worktree.mark_reverted(snap).map_err(|e| anyhow!("{e}"))?;
+            Ok(json!({ "success": true }))
+        }
+        Err(e) => Ok(json!({ "success": false, "error": e.to_string() })),
+    }
+}
+
+async fn cmd_edits_worktree_status(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let worktree = build_edits_worktree_for(state, sid)?;
+    let enabled = worktree.enabled().await;
+    let entry_count = if enabled {
+        worktree.list_entries().map(|e| e.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(json!({
+        "enabled": enabled,
+        "entry_count": entry_count,
+    }))
 }

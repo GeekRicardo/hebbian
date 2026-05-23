@@ -495,7 +495,10 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
 
     match summary.outcome {
-        TurnOutcome::Done => {
+        // 架构 §4.12.1：Suspended 与 Done 走同一段落盘——transcript 从 jsonl 重建
+        // （§4.12.3），本轮 assistant 段和 pending drained 的 user message 都要持久化；
+        // 不发 Error event 让 web 前端正常显示挂起态，等 wakeup resume。
+        TurnOutcome::Done | TurnOutcome::Suspended => {
             if let Some(msg) = observer.turn.build_message() {
                 sessions::append_message(data_dir, session_id, msg)?;
             }

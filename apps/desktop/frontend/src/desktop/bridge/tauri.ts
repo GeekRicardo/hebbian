@@ -13,6 +13,7 @@ import type {
   ImportedToken,
   Message,
   MessageAttachment,
+  MessageMeta,
   Prompt,
   PromptsFile,
   Provider,
@@ -28,6 +29,7 @@ import type {
   BackgroundTaskOutputDto,
   SessionBackgroundReport,
   SessionMeta,
+  SkillItem,
   ToolInfo,
   WorkspaceProject,
   WorkspaceProjectInput,
@@ -137,7 +139,11 @@ export const api = {
   generateSessionTitle: (id: string) =>
     invoke<Session>("generate_session_title", { id }),
 
-  /** 发送消息，enabledTools 为本轮启用的工具名称列表（空 = 纯对话模式） */
+  /**
+   * 发送消息，enabledTools 为本轮启用的工具名称列表（空 = 纯对话模式）。
+   * meta 可选：传入则给落盘的 user message 附加 metadata（架构 §4.12.5），
+   * idle 路径下的 wakeup notification 走这里时带 `{type:"system_notification", ...}`。
+   */
   sendMessage: (
     sessionId: string,
     content: string,
@@ -145,7 +151,8 @@ export const api = {
     stream: boolean,
     enabledTools: string[],
     requestId: string,
-    onEvent: (e: EngineEvent) => void
+    onEvent: (e: EngineEvent) => void,
+    meta?: MessageMeta | null
   ) => {
     const channel = new Channel<EngineEvent>();
     channel.onmessage = onEvent;
@@ -156,6 +163,7 @@ export const api = {
       stream,
       enabledTools,
       requestId,
+      meta: meta ?? null,
       onEvent: channel,
     });
   },
@@ -164,21 +172,28 @@ export const api = {
     invoke<boolean>("cancel_message", { requestId }),
 
   /**
-   * 「立即发送」入口：streaming 中往当前 run 的 pending 队列推一条 user message，
-   * 后端持久化到 session.json 后返回 Message——前端拿到后立刻渲染到 chat 区域，
-   * agent_loop 在下一次 model.request 之前会 drain 出来加入 transcript。
+   * 「立即发送」入口（架构 §4.12.5 修订）：
+   *
+   * 即写即落——后端**先**把 user message 追加到 session.jsonl（带 meta 标记），
+   * **再**推到当前 run 的 pending 队列。run 在跑则 agent_loop 在下一次 model.request
+   * 之前 drain；run 已结束也不报错——消息已落盘，下次发消息会从 jsonl rebuild 看到。
+   *
+   * meta 可选：wakeup notification 路径传 `{type:"system_notification", kind:"bg_task_finished", task_id, tool_use_id}`；
+   * 普通用户插队不传（meta=null）。
    */
   injectUserMessage: (
     sessionId: string,
     requestId: string,
     content: string,
-    attachments: MessageAttachment[]
+    attachments: MessageAttachment[],
+    meta?: MessageMeta | null
   ) =>
     invoke<Message>("inject_user_message", {
       sessionId,
       requestId,
       content,
       attachments,
+      meta: meta ?? null,
     }),
 
   /**
@@ -277,6 +292,17 @@ export const api = {
 
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),
+
+  /**
+   * 架构 §6.1.3 / §8：列出当前 workdir 下加载的三层 skills——
+   * `~/.hebbian/skills`、`~/.hebbian/projects/<enc>/skills`、`<workdir>/.claude/skills`。
+   * 用于 `//<skill-name>` 命令的注册表与 popup 列表。
+   *
+   * 无 workdir 时传 `"."`，后端只能列到 global 那一层（project / project_code 会因
+   * 路径无效自动跳过）；与 SkillsPane 的处理一致。
+   */
+  listSkills: (workdir: string) =>
+    invoke<SkillItem[]>("list_skills", { workdir }),
 
   /** 架构 §4.12.9：拉取当前 session 的后台任务报告（含 shells / cron / 挂起态）。 */
   listBackgroundTasks: (sessionId: string) =>

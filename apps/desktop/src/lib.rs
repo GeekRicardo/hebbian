@@ -593,6 +593,7 @@ async fn send_message(
     stream: bool,
     enabled_tools: Vec<String>,
     request_id: String,
+    meta: Option<agent_core::storage::sessions::MessageMeta>,
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let runtime = cancellation::register(request_id.clone());
@@ -603,6 +604,7 @@ async fn send_message(
             session_id,
             user_content: content,
             attachments,
+            user_meta: meta,
             stream,
             enabled_tools,
             cancel_flag: runtime.cancel.clone(),
@@ -625,10 +627,13 @@ fn cancel_message(request_id: String) -> bool {
 }
 
 /// 「立即发送」入口：在 streaming 中把 user message 注入到当前 run 的 pending 队列，
-/// 并把它持久化到 session.json + 返回给前端立刻渲染到 chat 区域。
+/// 即写即落（架构 §4.12.5 修订 / 借鉴 CC）：消息**先**追加到 session.jsonl（带 meta
+/// 标记），**再**推 PendingInputs in-memory 队列。run 在跑则 agent_loop 在下一次
+/// model.request 之前 drain 出来加入 transcript；run 不活跃则消息已落盘，下一次
+/// sendUserMessage 从 jsonl rebuild 时自然包含。
 ///
-/// agent_loop 在下一次 model.request 之前会把 pending 列表 drain 出来作为新的 user
-/// message 加入 transcript（不打断当前 agent loop，下一个 iteration 立刻可见）。
+/// 这样 cancel / 崩溃 / run 失败任一路径都不丢插队消息——尤其 wakeup 这种系统注入的
+/// 通知（带 `MessageMeta::SystemNotification`）丢了 surface 无法补救。
 #[tauri::command]
 fn inject_user_message(
     app: AppHandle,
@@ -636,19 +641,10 @@ fn inject_user_message(
     request_id: String,
     content: String,
     attachments: Vec<common::attachments::MessageAttachment>,
+    meta: Option<agent_core::storage::sessions::MessageMeta>,
 ) -> AppResult<agent_core::storage::sessions::Message> {
     use agent_core::storage::sessions::{self, Message, Role};
     let dd = data_dir(&app)?;
-    let injected = cancellation::inject_pending_input(
-        &request_id,
-        common::runtime::PendingUserInput {
-            content: content.clone(),
-            attachments: attachments.clone(),
-        },
-    );
-    if !injected {
-        return Err(AppError::msg("当前 run 已结束，无法引导插队"));
-    }
 
     let user_msg = Message {
         id: sessions::new_id(),
@@ -658,9 +654,25 @@ fn inject_user_message(
         tool_calls: Vec::new(),
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
+        meta,
     };
-    let _ = sessions::load(&dd, &session_id)?;
+
+    // 1) 即写即落：jsonl 优先，cancel / 崩溃 / run 已结束都不丢
+    sessions::append_message(&dd, &session_id, user_msg.clone())?;
+
+    // 2) 推 in-memory 队列：让正在跑的 agent_loop 在下次 ModelStep 之前看到。
+    //    run 不活跃返回 false——不报错，消息已落盘，surface 后续 rebuild 自然可见。
+    let injected = cancellation::inject_pending_input(
+        &request_id,
+        common::runtime::PendingUserInput {
+            content,
+            attachments,
+        },
+    );
+    if !injected {
+        tracing::debug!(session_id, request_id, "inject: run 不活跃，仅落盘不入队");
+    }
+
     Ok(user_msg)
 }
 
@@ -1827,10 +1839,14 @@ pub fn run() {
             let resume_handle = app.handle().clone();
             agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(
                 move |event| {
+                    // payload 同时带 wakeup_xml（喂给 model）和结构化 meta
+                    // （架构 §4.12.5 修订）。前端把 meta 透传给 inject/send 命令，
+                    // 后端落盘时挂到 user message 上，view 据此渲染为系统通知条。
                     let payload = serde_json::json!({
                         "session_id": event.session_id(),
                         "run_id": event.run_id(),
                         "wakeup_xml": agent_core::wakeup::wakeup_xml(&event),
+                        "meta": event.message_meta(),
                     });
                     if let Err(e) = resume_handle.emit("wakeup-fired", payload) {
                         tracing::warn!(error = %e, "failed to emit wakeup-fired tauri event");

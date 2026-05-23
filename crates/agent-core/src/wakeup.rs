@@ -66,6 +66,30 @@ impl WakeupEvent {
             }
         }
     }
+
+    /// 把 event 投影成结构化 `MessageMeta::SystemNotification`——surface 把它和
+    /// wakeup_xml 一起 emit 给前端，前端落盘 user message 时直接挂上，
+    /// 不用自己 parse XML 抽 task_id / tool_use_id。
+    pub fn message_meta(&self) -> crate::storage::sessions::MessageMeta {
+        match self {
+            WakeupEvent::BgTaskFinished {
+                task_id,
+                tool_use_id,
+                ..
+            } => crate::storage::sessions::MessageMeta::SystemNotification {
+                kind: "bg_task_finished".to_string(),
+                task_id: Some(task_id.clone()),
+                tool_use_id: tool_use_id.clone(),
+            },
+            WakeupEvent::CronFired { .. } => {
+                crate::storage::sessions::MessageMeta::SystemNotification {
+                    kind: "cron_fired".to_string(),
+                    task_id: None,
+                    tool_use_id: None,
+                }
+            }
+        }
+    }
 }
 
 /// 注册到 scheduler 的 resume 回调。App 层（desktop / cli）实现它——拿

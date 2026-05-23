@@ -644,30 +644,17 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
         }
     }
 
-    // 持久化插队的 user 消息（consumed_pending_inputs）
-    let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
+    // 架构 §4.12.5 修订：插队 user message（含 wakeup notification）已经在 wakeup
+    // resume_handler / 主动 inject 路径即写即落到 jsonl，run 结束不再二次落盘 consumed，
+    // 避免 jsonl 出现重复条目（跟 desktop chat.rs 的修订对齐）。drain 干净避免 leak。
+    consumed_inputs.lock().unwrap().clear();
 
     match summary.outcome {
-        TurnOutcome::Done => {
-            // 先持久化 assistant，再持久化注入的 user messages
+        // 架构 §4.12.1：Suspended 是 Run 的合法中间态，落 assistant 段跟 Done 一致——
+        // transcript 不进 checkpoint（§4.12.3），resume 时从 jsonl 重建本轮 assistant。
+        TurnOutcome::Done | TurnOutcome::Suspended => {
             if let Some(msg) = observer.turn.build_message() {
                 sessions::append_message(data_dir, session_id, msg)?;
-            }
-            for input in consumed {
-                sessions::append_message(
-                    data_dir,
-                    session_id,
-                    Message {
-                        id: sessions::new_id(),
-                        role: Role::User,
-                        content: input.content,
-                        attachments: input.attachments,
-                        tool_calls: Vec::new(),
-                        parts: Vec::new(),
-                        created_at: Utc::now().timestamp_millis(),
-                        meta: None,
-                    },
-                )?;
             }
         }
         TurnOutcome::Cancelled => {
@@ -917,6 +904,53 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 
     // ── 宣告启动 ──
     state.emit(&DaemonEvent::Started { session_id: session_id.clone() });
+
+    // ── 注册 wakeup resume_handler（架构 §4.12.5 修订）──
+    // BgFinishHook 检测到 bash_xxx 进入终态 → 投递 BgTaskFinished event。
+    // 这里把 wakeup XML 即写即落到 session.jsonl（带 SystemNotification meta），
+    // 同时 push 到 PendingInputs in-memory 队列（如果 run 在跑则 agent_loop drain 看到）。
+    // 跟 desktop inject_user_message 行为对称——cancel / 崩溃也不丢，下次 run 启动时
+    // jsonl rebuild 自然把这条 user message 纳入 transcript。
+    {
+        let handler_state = state.clone();
+        agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(
+            move |event| {
+                // 只处理本 daemon 的 session（同 session_id 才落盘到本进程的 jsonl）
+                if event.session_id() != handler_state.session_id {
+                    return;
+                }
+                let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
+                let meta = event.message_meta();
+                let user_msg = sessions::Message {
+                    id: sessions::new_id(),
+                    role: sessions::Role::User,
+                    content: wakeup_xml.clone(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: Some(meta),
+                };
+                // 1) 即写即落 jsonl（崩溃 / cancel 都不丢）
+                if let Err(e) = sessions::append_message(
+                    &handler_state.data_dir,
+                    &handler_state.session_id,
+                    user_msg,
+                ) {
+                    tracing::warn!(error = %e, "wakeup: append_message failed");
+                    return;
+                }
+                // 2) 推 in-memory 队列：active run 期间 agent_loop 在 ModelStep 之前 drain；
+                //    无 active run 时静默——消息已落盘，下次 input 启 run 时 rebuild 看见。
+                if let Some(slot) = handler_state.pending_inputs.lock().unwrap().as_ref() {
+                    slot.lock().unwrap().push(common::runtime::PendingUserInput {
+                        content: wakeup_xml,
+                        attachments: Vec::new(),
+                    });
+                }
+            },
+        ));
+    }
 
     // ── 接收 IPC 连接（独立 task）──
     let state_for_ipc = state.clone();

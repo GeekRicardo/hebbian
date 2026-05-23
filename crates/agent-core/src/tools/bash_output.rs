@@ -70,18 +70,19 @@ impl Tool for BashOutputTool {
         }
 
         let snapshot = shell.read_incremental(READ_CHUNK_BYTES);
-        let mut text = String::new();
-        text.push_str(&format!(
-            "[task_id={} status={}]\n",
-            shell.task_id,
-            snapshot.state.label()
-        ));
-        if let Some(p) = shell.log_path() {
-            text.push_str(&format!("[完整日志：{}]\n", p.display()));
-        }
+        // 状态标签：running / exited 都合并到一行 task_id 头里，
+        // 模型同时管多个后台任务时一眼能区分这是哪个 task 的输出 + 当前态。
+        let status = match &snapshot.state {
+            ShellState::Running => "running".to_string(),
+            ShellState::Exited { code: Some(c) } => format!("exit {c}"),
+            ShellState::Exited { code: None } => "terminated".to_string(),
+            ShellState::Killed => "killed".to_string(),
+            ShellState::Failed { error } => format!("failed: {error}"),
+        };
+        let mut text = format!("[{} {}]\n", shell.task_id, status);
         if snapshot.bytes_dropped > 0 {
             text.push_str(&format!(
-                "[警告] 因 buffer 上限丢失了 {} 字节较早输出\n",
+                "[warn] buffer 上限丢失开头 {} 字节\n",
                 snapshot.bytes_dropped
             ));
         }
@@ -92,19 +93,6 @@ impl Tool for BashOutputTool {
             }
         } else if !snapshot.state.is_terminal() {
             text.push_str("(无新输出)\n");
-        }
-        match snapshot.state {
-            ShellState::Exited { code: Some(c) } => {
-                text.push_str(&format!("[exit {c}]"));
-            }
-            ShellState::Exited { code: None } => {
-                text.push_str("[terminated by signal]");
-            }
-            ShellState::Killed => text.push_str("[killed]"),
-            ShellState::Failed { error } => {
-                text.push_str(&format!("[failed: {error}]"));
-            }
-            ShellState::Running => {}
         }
         Ok(text)
     }

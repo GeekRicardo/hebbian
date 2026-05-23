@@ -114,6 +114,17 @@ export type MessageMeta =
       type: "reasoning_switch";
       from?: ReasoningConfig | null;
       to?: ReasoningConfig | null;
+    }
+  // 架构 §4.12.5 修订：系统注入的通知（wakeup / cron 等）。物理 role 仍为 user
+  // （喂给 model API），但 view 层据此渲染成系统通知条而不是用户气泡。
+  | {
+      type: "system_notification";
+      /** 通知来源类别：bg_task_finished / cron_fired 等。 */
+      kind: string;
+      /** 关联的后台 task_id（bg_task_finished 才有）。 */
+      task_id?: string | null;
+      /** 触发该通知的 tool_call.id；surface 用它把通知关联回 tool_call 卡片。 */
+      tool_use_id?: string | null;
     };
 
 /** 当前 session 的上下文用量（来自 get_context_usage / compact_session） */
@@ -303,6 +314,28 @@ export interface RuleFileInfo {
 /** 前端保存的规则文件开关状态 */
 export interface RuleFileState {
   path: string;
+  enabled: boolean;
+}
+
+/**
+ * 架构 §6.1.3：一条已加载的 skill；后端 `list_skills` 返回的形态。
+ * 与 [`crate::tools::skill::Skill`] 字段对齐。
+ */
+export type SkillSource = "global" | "project" | "project_code";
+
+export interface SkillItem {
+  /** 目录名——`<skills_dir>/<name>/SKILL.md` 拼路径用，永远存在。 */
+  name: string;
+  /**
+   * frontmatter `name:` 字段，仅当与目录名**不同**时存在。命令面板优先展示它作为
+   * 公开名（Claude Code 风格 skill 经常目录名简写、frontmatter 名完整，如
+   * `karpathy` → `karpathy-guidelines`）；dispatchSlashCommand 时 alias / name
+   * 任一命中即可。
+   */
+  alias?: string | null;
+  description: string;
+  path: string;
+  source: SkillSource;
   enabled: boolean;
 }
 

@@ -73,6 +73,28 @@ pub enum MessageMeta {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<common::reasoning::ReasoningConfig>,
     },
+    /// 系统注入的通知（架构 §4.12.5 修订 / 借鉴 CC 2.1 `<task-notification>`）。
+    /// 物理 role 仍是 `User`（model API 必须 user/assistant/system 三选一，给 model 看的
+    /// 后台事件只能借 user 通道），`content` 是 `<wakeup>...</wakeup>` 等 LLM 可读 XML。
+    /// 通过 meta 标记让 surface 区别渲染为系统通知条而非用户气泡，避免视觉污染。
+    SystemNotification {
+        /// 通知来源类别：`bg_task_finished` / `cron_fired`。
+        kind: String,
+        /// 关联的后台 task_id（`bg_task_finished` 才有）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// 触发该通知的 tool_call.id；surface 据此把通知卡片关联回触发它的 tool_call。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+    },
+}
+
+impl MessageMeta {
+    /// 是否是给 surface 区别渲染用的 system-notification（wakeup / cron 等）。
+    /// 调用方：MessageBubble 渲染、jsonl rebuild 决定是否纳入 model transcript（纳入）。
+    pub fn is_system_notification(&self) -> bool {
+        matches!(self, MessageMeta::SystemNotification { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +146,16 @@ pub struct Message {
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<MessageMeta>,
+}
+
+impl Message {
+    /// 这条消息是不是 system-notification（wakeup / cron 等系统注入的通知）。
+    /// 渲染时区别于普通用户气泡，rebuild 模型 transcript 时仍纳入（model 应当看见后台事件）。
+    pub fn is_system_notification(&self) -> bool {
+        self.meta
+            .as_ref()
+            .is_some_and(MessageMeta::is_system_notification)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1511,6 +1543,102 @@ mod tests {
             loaded.allowed_paths,
             Some(vec![PathBuf::from("/tmp/extra")])
         );
+    }
+
+    /// 正例：带 SystemNotification meta 的 user message 落盘后 round-trip 字段保留；
+    /// is_system_notification 返回 true。
+    #[test]
+    fn system_notification_meta_round_trip_and_helper() {
+        let dir = temp_data_dir("sysnotif_round_trip");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let wakeup = Message {
+            id: new_id(),
+            role: Role::User,
+            content: "<wakeup kind=\"bg_task_finished\">...</wakeup>".into(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: now(),
+            meta: Some(MessageMeta::SystemNotification {
+                kind: "bg_task_finished".into(),
+                task_id: Some("bash_003".into()),
+                tool_use_id: Some("call_xyz".into()),
+            }),
+        };
+        assert!(wakeup.is_system_notification(), "is_system_notification 正例必须为 true");
+        append_message(&dir, &s.id, wakeup.clone()).unwrap();
+        let loaded = load(&dir, &s.id).unwrap();
+        let reloaded = loaded.messages.last().expect("wakeup 已落盘");
+        match &reloaded.meta {
+            Some(MessageMeta::SystemNotification { kind, task_id, tool_use_id }) => {
+                assert_eq!(kind, "bg_task_finished");
+                assert_eq!(task_id.as_deref(), Some("bash_003"));
+                assert_eq!(tool_use_id.as_deref(), Some("call_xyz"));
+            }
+            other => panic!("meta round-trip 失败，got {other:?}"),
+        }
+        assert!(
+            reloaded.is_system_notification(),
+            "load 回来后 is_system_notification 仍应为 true"
+        );
+    }
+
+    /// 反例：
+    /// 1. meta=None 的普通 user message → is_system_notification 必须为 false
+    /// 2. meta=Some(其它 variant) → is_system_notification 也必须为 false
+    ///    （CompactBoundary / Interrupted / Switch / ReasoningSwitch 不算系统通知）
+    #[test]
+    fn is_system_notification_false_for_plain_and_other_meta() {
+        let plain = Message {
+            id: "m1".into(),
+            role: Role::User,
+            content: "hi".into(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+        };
+        assert!(!plain.is_system_notification(), "meta=None 不应被当作 system notification");
+
+        let interrupted = Message {
+            meta: Some(MessageMeta::Interrupted),
+            ..plain.clone()
+        };
+        assert!(
+            !interrupted.is_system_notification(),
+            "Interrupted variant 不应被当作 system notification"
+        );
+
+        let compact = Message {
+            meta: Some(MessageMeta::CompactBoundary {
+                summary: "...".into(),
+                before_tokens: 100,
+                after_tokens: 50,
+            }),
+            ..plain.clone()
+        };
+        assert!(
+            !compact.is_system_notification(),
+            "CompactBoundary variant 不应被当作 system notification"
+        );
+    }
+
+    /// 序列化稳定性：SystemNotification 必须以 type tag "system_notification"
+    /// 写入 jsonl（snake_case），让前端 / 老脚本能稳定 deserialize。
+    #[test]
+    fn system_notification_serializes_with_snake_case_tag() {
+        let meta = MessageMeta::SystemNotification {
+            kind: "bg_task_finished".into(),
+            task_id: Some("bash_001".into()),
+            tool_use_id: None,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"type\":\"system_notification\""), "got {json}");
+        assert!(json.contains("\"kind\":\"bg_task_finished\""));
+        assert!(json.contains("\"task_id\":\"bash_001\""));
+        // tool_use_id=None 必须省略（skip_serializing_if）
+        assert!(!json.contains("tool_use_id"), "None 应被 skip：{json}");
     }
 
     #[test]

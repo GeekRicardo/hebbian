@@ -7,6 +7,7 @@ import type {
   EngineEvent,
   Message,
   MessageAttachment,
+  MessageMeta,
   PendingApproval,
   PendingQuestion,
   Prompt,
@@ -259,8 +260,6 @@ type SessionStream = {
   currentRunMode: string | null;
   /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
   suspended: SuspendedInfo | null;
-  /** 架构 §4.13：当前 stream 中 Edit 工具产生的快照条目（EditSnapshotCreated 事件累积）。 */
-  editSnapshots: EditEntry[];
 };
 
 export type SuspendedInfo = {
@@ -293,7 +292,6 @@ const EMPTY_MIRROR = {
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
   suspended: null as SuspendedInfo | null,
-  editSnapshots: [] as EditEntry[],
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -311,7 +309,6 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     autoJudgedNotes: slot.autoJudgedNotes,
     currentRunMode: slot.currentRunMode,
     suspended: slot.suspended,
-    editSnapshots: slot.editSnapshots,
   };
 }
 
@@ -449,42 +446,51 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       ),
     };
   }
+  // edit_snapshot_created / edit_reverted / edit_revert_failed 不挂 slot——
+  // editSnapshots 是 session-scoped 的持久化镜像（架构 §4.13），跟 run 生命周期
+  // 解耦。这三类事件在事件分发的上层另行写入 sessionEditSnapshots。
+  return slot;
+}
+
+/** edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
+function applyEditEvent(
+  current: Record<string, EditEntry[]>,
+  sessionId: string,
+  e: EngineEvent,
+): Record<string, EditEntry[]> | null {
   if (e.type === "edit_snapshot_created") {
-    return {
-      ...slot,
-      editSnapshots: [
-        ...slot.editSnapshots,
-        {
-          snapshot_id: e.snapshot_id,
-          call_id: e.call_id,
-          tool: "Edit",
-          real_path: e.file_path,
-          action: e.action,
-          before_sha: e.before_sha,
-          after_sha: e.after_sha,
-          before_bytes: e.before_bytes,
-          after_bytes: e.after_bytes,
-          ts_ms: Date.now(),
-          reverted: false,
-        },
-      ],
-    };
+    const existing = current[sessionId] ?? [];
+    // 去重：补全量拉取后又收到同名事件时，避免重复 push
+    if (existing.some((x) => x.snapshot_id === e.snapshot_id)) return null;
+    const next: EditEntry[] = [
+      ...existing,
+      {
+        snapshot_id: e.snapshot_id,
+        call_id: e.call_id,
+        tool: "Edit",
+        real_path: e.file_path,
+        action: e.action,
+        before_sha: e.before_sha,
+        after_sha: e.after_sha,
+        before_bytes: e.before_bytes,
+        after_bytes: e.after_bytes,
+        ts_ms: Date.now(),
+        reverted: false,
+      },
+    ];
+    return { ...current, [sessionId]: next };
   }
   if (e.type === "edit_reverted") {
-    return {
-      ...slot,
-      editSnapshots: slot.editSnapshots.map((entry) =>
-        entry.snapshot_id === e.snapshot_id
-          ? { ...entry, reverted: true, reverted_at_ms: Date.now() }
-          : entry
-      ),
-    };
+    const existing = current[sessionId];
+    if (!existing) return null;
+    const next = existing.map((entry) =>
+      entry.snapshot_id === e.snapshot_id
+        ? { ...entry, reverted: true, reverted_at_ms: Date.now() }
+        : entry,
+    );
+    return { ...current, [sessionId]: next };
   }
-  if (e.type === "edit_revert_failed") {
-    // 状态不变——revert 失败由 Tauri command 的 reject 路径 toast 提示
-    return slot;
-  }
-  return slot;
+  return null;
 }
 
 function applyToolDone(
@@ -555,8 +561,14 @@ interface AppState {
   currentRunMode: string | null;
   /** 架构 §4.12：当前对话 Run 是否被挂起。 */
   suspended: SuspendedInfo | null;
-  /** 架构 §4.13：当前 stream 中 Edit 工具产生的快照条目。 */
-  editSnapshots: EditEntry[];
+  /**
+   * 架构 §4.13：每个 session 的 Edit 快照列表。
+   * - 持久化真相源是后端 `~/.hebbian/sessions/<sid>/edits-worktree/.hebbian-edits.json`
+   * - 增量由 EditSnapshotCreated / EditReverted 事件维护
+   * - 全量由 `refreshEdits` 在 openSession 时拉一次
+   * - **session-scoped**：跟 run 生命周期解耦（run 结束 slot 删除时不会跟着清掉）
+   */
+  sessionEditSnapshots: Record<string, EditEntry[]>;
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
@@ -606,14 +618,20 @@ interface AppState {
   pendingQuestionQueue: PendingQuestion[];
   resolveQuestion: (answer: QuestionAnswerPayload) => Promise<void>;
 
-  // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup XML，按 sessionId 暂存。
+  // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup XML + 结构化 meta，
+  // 按 sessionId 暂存。
   // - 若 wakeup 到达时该 session 是 currentSession，立刻自动发出
   // - 否则暂存到这里，下次 openSession 时消费
-  pendingWakeups: Record<string, string>;
+  // meta 跟着 xml 一起暂存——切回 session 触发时仍需要 meta 标识系统通知样式。
+  pendingWakeups: Record<string, { xml: string; meta: MessageMeta }>;
   /** 自动唤醒：把 wakeup XML 作 user message 发给该 session（不论前后台）。 */
-  triggerWakeupResume: (sessionId: string, wakeupXml: string) => Promise<void>;
-  /** 给指定 session 排队一条 wakeup XML，等 openSession 时消费。 */
-  queueWakeupForSession: (sessionId: string, wakeupXml: string) => void;
+  triggerWakeupResume: (
+    sessionId: string,
+    wakeupXml: string,
+    meta: MessageMeta
+  ) => Promise<void>;
+  /** 给指定 session 排队一条 wakeup XML + meta，等 openSession 时消费。 */
+  queueWakeupForSession: (sessionId: string, wakeupXml: string, meta: MessageMeta) => void;
 
   // 运行时输入队列：每个 session 一条 FIFO 队列，streaming 期间用户排进的
   // 后续 user message 暂存于此，当前 turn 跑完后自动按顺序消费。
@@ -687,7 +705,15 @@ interface AppState {
   forkSession: (msgId: string) => Promise<void>;
   regenerateTitle: () => Promise<void>;
 
-  sendUserMessage: (content: string, attachments?: MessageAttachment[]) => Promise<void>;
+  /**
+   * 发送 user message 并触发 run。`meta` 可选——为 wakeup notification 等系统注入
+   * 走 idle 路径时用，会被透传到后端落盘的 user message 上（架构 §4.12.5）。
+   */
+  sendUserMessage: (
+    content: string,
+    attachments?: MessageAttachment[],
+    meta?: MessageMeta | null
+  ) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
   /** 用同样内容重跑指定的 user 消息（被中断或失败时用）。 */
@@ -855,7 +881,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   contextUsage: null,
   compacting: false,
-  editSnapshots: [],
+  sessionEditSnapshots: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -885,21 +911,20 @@ export const useStore = create<AppState>((set, get) => ({
   async revertEdit(sessionId: string, snapshotId: string) {
     const result = await api.revertEdit(sessionId, snapshotId);
     if (result.success) {
-      // 更新前端 editSnapshots 列表中的 reverted 标记
+      // 立刻给当前列表打 reverted 标，UI 不用等后端 refresh 才置灰
       set((state) => {
-        const slot = state.sessionStreams[sessionId];
-        if (!slot) return state;
-        const updatedEntry = slot.editSnapshots.map((e) =>
-          e.snapshot_id === snapshotId ? { ...e, reverted: true, reverted_at_ms: Date.now() } : e
+        const existing = state.sessionEditSnapshots[sessionId];
+        if (!existing) return state;
+        const next = existing.map((e) =>
+          e.snapshot_id === snapshotId
+            ? { ...e, reverted: true, reverted_at_ms: Date.now() }
+            : e,
         );
-        const nextSlot: SessionStream = { ...slot, editSnapshots: updatedEntry };
-        const isForeground = state.currentSession?.id === sessionId;
         return {
-          sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
-          ...(isForeground ? mirrorFromSlot(nextSlot) : {}),
+          sessionEditSnapshots: { ...state.sessionEditSnapshots, [sessionId]: next },
         };
       });
-      // 同步刷新后端数据
+      // 用后端权威数据兜底（修正 reverted_at_ms 等字段）
       const cur = get().currentSession;
       if (cur?.id === sessionId) {
         get().refreshEdits();
@@ -914,17 +939,11 @@ export const useStore = create<AppState>((set, get) => ({
     if (!cur) return;
     try {
       const entries = await api.listEdits(cur.id);
-      set((state) => {
-        const slot = state.sessionStreams[cur.id];
-        if (!slot) return state;
-        const nextSlot: SessionStream = { ...slot, editSnapshots: entries };
-        return {
-          sessionStreams: { ...state.sessionStreams, [cur.id]: nextSlot },
-          ...mirrorFromSlot(nextSlot),
-        };
-      });
+      set((state) => ({
+        sessionEditSnapshots: { ...state.sessionEditSnapshots, [cur.id]: entries },
+      }));
     } catch {
-      // 静默——edits-worktree 不可用时 entries 保持原样
+      // 静默——edits-worktree 不可用时不动旧数据
     }
   },
 
@@ -983,17 +1002,19 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   pendingWakeups: {},
-  queueWakeupForSession(sessionId, wakeupXml) {
+  queueWakeupForSession(sessionId, wakeupXml, meta) {
     set((state) => ({
-      pendingWakeups: { ...state.pendingWakeups, [sessionId]: wakeupXml },
+      pendingWakeups: { ...state.pendingWakeups, [sessionId]: { xml: wakeupXml, meta } },
     }));
   },
-  async triggerWakeupResume(sessionId, wakeupXml) {
-    // 三分支决策（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed 自动通知"）：
-    //   active run（slot.requestId 在）→ 走 inject_user_message 插 PendingInputs，
-    //     当前 agent_loop 在下一个 boundary drain，**不开新 run**
-    //   idle 前台 → 开新 run / resume checkpoint（旧路径）
-    //   非前台 → 暂存到 pendingWakeups，切回该 session 时自动消费
+  async triggerWakeupResume(sessionId, wakeupXml, meta) {
+    // 三分支决策（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed 自动通知"）。
+    // meta = `{type:"system_notification", kind, task_id?, tool_use_id?}` 由后端 emit
+    // wakeup-fired 时附带，三条路径都把它透传到后端落盘——view 据此渲染系统通知条。
+    //   active run（slot.requestId 在）→ 走 inject_user_message 即写即落 + 推 PendingInputs，
+    //     agent_loop 在下一个 boundary drain，**不开新 run**
+    //   idle 前台 → 开新 run / resume checkpoint（走 sendUserMessage，meta 透传）
+    //   非前台 → 暂存到 pendingWakeups（含 meta），切回该 session 时消费
     const cur = get().currentSession;
     const isForeground = cur?.id === sessionId;
     const slot = get().sessionStreams[sessionId];
@@ -1001,13 +1022,10 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (isForeground && activeRequestId) {
       try {
-        // wakeup XML 是 system notification，**不**push 到 injectedSinceStream 显示——
-        // 它不是用户主动发的消息，UI 不该把它当用户气泡渲染。落盘 / transcript 由
-        // agent_loop drain pending_inputs 时统一处理。
-        await api.injectUserMessage(sessionId, activeRequestId, wakeupXml, []);
+        await api.injectUserMessage(sessionId, activeRequestId, wakeupXml, [], meta);
         return;
       } catch (e) {
-        // active run 已结束的边界 race → 回落到开新 run 路径
+        // active run 已结束的边界 race → 回落到开新 run 路径（仍带 meta）
         console.warn(
           "[triggerWakeupResume] inject failed, falling back to sendUserMessage:",
           e
@@ -1016,13 +1034,12 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     if (isForeground) {
-      // 前台 idle：复用 sendUserMessage（backend 检测 checkpoint 走 resume；
-      // 无 checkpoint 走新 run）
-      await get().sendUserMessage(wakeupXml, []);
+      // 前台 idle：复用 sendUserMessage，把 meta 透传给后端 send_message 命令
+      await get().sendUserMessage(wakeupXml, [], meta);
       return;
     }
-    // 非前台：暂存
-    get().queueWakeupForSession(sessionId, wakeupXml);
+    // 非前台：暂存（含 meta），切回时由 openSession 调 triggerWakeupResume 消费
+    get().queueWakeupForSession(sessionId, wakeupXml, meta);
   },
 
   inputQueues: {},
@@ -1360,9 +1377,10 @@ export const useStore = create<AppState>((set, get) => ({
       };
     });
     if (pendingWakeup) {
-      // 用 microtask 异步触发，避免在 openSession 内嵌套 sendUserMessage 的 set 调用
+      // 用 microtask 异步触发，避免在 openSession 内嵌套 sendUserMessage 的 set 调用；
+      // 走 triggerWakeupResume 确保选最优路径（active inject vs idle send）且带上 meta。
       queueMicrotask(() => {
-        void get().sendUserMessage(pendingWakeup, []);
+        void get().triggerWakeupResume(id, pendingWakeup.xml, pendingWakeup.meta);
       });
     }
     get().refreshContextUsage();
@@ -1493,7 +1511,7 @@ export const useStore = create<AppState>((set, get) => ({
     await get().refreshSessions();
   },
 
-  async sendUserMessage(content, attachments = []) {
+  async sendUserMessage(content, attachments = [], meta = null) {
     const cur = get().currentSession;
     if (!cur) return;
 
@@ -1560,7 +1578,6 @@ export const useStore = create<AppState>((set, get) => ({
         autoJudgedNotes: [],
         currentRunMode: null,
         suspended: null,
-        editSnapshots: [],
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
@@ -1607,6 +1624,14 @@ export const useStore = create<AppState>((set, get) => ({
               void get().refreshSessions();
               return;
             }
+            // Edit 快照事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
+            if (e.type === "edit_snapshot_created" || e.type === "edit_reverted") {
+              set((state) => {
+                const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
+                return next === null ? state : { sessionEditSnapshots: next };
+              });
+              return;
+            }
             set((state) => {
               const slot = state.sessionStreams[sessionId];
               // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
@@ -1624,6 +1649,7 @@ export const useStore = create<AppState>((set, get) => ({
               };
             });
           },
+          meta,
         );
         const stillForeground = get().currentSession?.id === sessionId;
         if (stillForeground) {
@@ -1724,13 +1750,19 @@ export const useStore = create<AppState>((set, get) => ({
     if (!cur) return;
     const targetIdx = cur.messages.findIndex((m) => m.id === assistantMsgId);
     if (targetIdx < 1) return;
-    // 重新生成的语义：回到最近一条 user message，丢掉它之后的一切（已完成的
-    // assistant、cancel 留下的 partial assistant、Interrupted / 切换 marker、
-    // tool 结果……），重新触发一轮 stream。只看 idx-1 的旧实现遇到 marker /
-    // 历次累积的 partial 时要么早 return 不响应，要么截到错位置——必须做完整
-    // 回溯。
+    // 重新生成的语义：回到最近一条**真实** user message，丢掉它之后的一切（已完成的
+    // assistant、cancel 留下的 partial assistant、Interrupted / 切换 marker、tool 结果、
+    // wakeup 系统通知……），重新触发一轮 stream。
+    //
+    // 关键过滤（架构 §4.12.5 修订）：wakeup notification 物理 role 也是 "user"，
+    // 但带 `meta.system_notification` 标识——它不是用户主动发的消息，重新生成不该
+    // 把它当作目标。回溯时同样跳过。
     let userIdx = targetIdx - 1;
-    while (userIdx >= 0 && cur.messages[userIdx].role !== "user") {
+    while (
+      userIdx >= 0 &&
+      (cur.messages[userIdx].role !== "user" ||
+        cur.messages[userIdx].meta?.type === "system_notification")
+    ) {
       userIdx--;
     }
     if (userIdx < 0) return;
