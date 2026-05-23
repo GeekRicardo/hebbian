@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ChevronDown, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
@@ -125,19 +125,22 @@ export function RunModeChip({ sessionId, disabled }: Props) {
           onClick={(e) => e.stopPropagation()}
           className="absolute bottom-full left-0 mb-1 min-w-[260px] rounded-lg border border-border bg-card shadow-lg z-[90] overflow-hidden animate-slide-up"
         >
-          {MODE_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => pick(o.value)}
-              className={cn(
-                "w-full flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-accent text-left",
-                o.value === mode && "bg-accent/60"
-              )}
-            >
-              <span className="font-medium">{o.label}</span>
-              <span className="text-xs text-muted-foreground">{o.desc}</span>
-            </button>
+          {/* hairline 用 `mx-3` 缩进，两端留 12px；hover bg 全宽 */}
+          {MODE_OPTIONS.map((o, i) => (
+            <Fragment key={o.value}>
+              {i > 0 && <div className="h-px bg-border mx-3" />}
+              <button
+                type="button"
+                onClick={() => pick(o.value)}
+                className={cn(
+                  "w-full flex flex-col gap-0.5 px-3 py-2 text-sm hover:bg-accent text-left",
+                  o.value === mode && "bg-accent/60"
+                )}
+              >
+                <span className="font-medium">{o.label}</span>
+                <span className="text-xs text-muted-foreground">{o.desc}</span>
+              </button>
+            </Fragment>
           ))}
         </div>
       )}

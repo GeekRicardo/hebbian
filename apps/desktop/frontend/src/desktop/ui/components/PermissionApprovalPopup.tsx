@@ -241,8 +241,11 @@ export function PermissionApprovalPopup() {
     : null;
 
   return (
-    <div className="px-4 pb-2">
-      <div className="max-w-3xl mx-auto pr-[50px]">
+    // max-w + mx-auto 提到最外层：原来外层 `px-4 pb-2` 没限宽，左右两侧虽透明但
+    // 仍是 div 节点，会拦截鼠标事件挡住下面的 chat 消息。提到外层后只有居中那块
+    // max-w-3xl 区域是 div，左右空白真的"不存在"，点击穿透到下面。
+    <div className="max-w-3xl mx-auto px-4 pb-2">
+      <div className="pr-[50px]">
         <div
           className={cn(
             "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden",

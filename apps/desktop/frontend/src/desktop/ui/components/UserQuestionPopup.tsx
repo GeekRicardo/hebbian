@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { CircleHelp, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -129,15 +129,16 @@ export function UserQuestionPopup() {
             </span>
           </div>
 
-          {/* 选项列表 */}
-          <div className="px-1.5 py-1.5 flex flex-col gap-px">
+          {/* 选项列表：选项 button 贴 popup 两端 hover bg 全宽，hairline mx-3 缩进留 12px */}
+          <div>
             {pending.options.map((opt, idx) => {
               const checked = isMulti
                 ? multiSelected.includes(opt.label)
                 : selected === opt.label;
               return (
+                <Fragment key={`${idx}-${opt.label}`}>
+                  {idx > 0 && <div className="h-px bg-border mx-3" />}
                 <button
-                  key={`${idx}-${opt.label}`}
                   type="button"
                   onClick={() =>
                     isMulti ? toggleMulti(opt.label) : setSelected(opt.label)
@@ -145,10 +146,10 @@ export function UserQuestionPopup() {
                   disabled={submitting}
                   aria-pressed={checked}
                   className={cn(
-                    "w-full text-left px-2 py-1 rounded-md transition-colors text-sm border flex items-start gap-2",
+                    "w-full text-left px-3 py-1.5 transition-colors text-sm flex items-start gap-2",
                     checked
-                      ? "border-primary bg-primary/10"
-                      : "border-transparent hover:bg-muted"
+                      ? "bg-primary/10 text-primary"
+                      : "hover:bg-muted"
                   )}
                 >
                   {isMulti ? (
@@ -181,20 +182,23 @@ export function UserQuestionPopup() {
                     )}
                   </span>
                 </button>
+                </Fragment>
               );
             })}
 
             {/* "其他"：仅单选模式提供 */}
             {!isMulti && (
+              <>
+              {pending.options.length > 0 && <div className="h-px bg-border mx-3" />}
               <button
                 type="button"
                 onClick={() => setSelected(OTHER_KEY)}
                 disabled={submitting}
                 className={cn(
-                  "w-full text-left px-2 py-1 rounded-md transition-colors text-sm border",
+                  "w-full text-left px-3 py-1.5 transition-colors text-sm",
                   selected === OTHER_KEY
-                    ? "border-primary bg-primary/10"
-                    : "border-dashed border-muted-foreground/30 hover:bg-muted"
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-muted text-muted-foreground"
                 )}
               >
                 {selected === OTHER_KEY ? (
@@ -219,6 +223,7 @@ export function UserQuestionPopup() {
                   </div>
                 )}
               </button>
+              </>
             )}
           </div>
 
