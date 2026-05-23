@@ -299,7 +299,36 @@ pub fn list_skills_in_dir(src_dir: &Path) -> Vec<String> {
 /// - `src_dir`：扫描根（可多层嵌套）
 /// - `selected_relative_paths`：若给定，仅拷贝这些相对路径对应的 skill；为 None 则全部
 /// - 落盘到 hebbian 时**目录名 = ScannedSkill.name**（最后一段），不保留嵌套层级
+///
+/// **协议约束**：`selected_relative_paths` 里的字符串必须与 [`ScannedSkill::relative_path`]
+/// 精确匹配（包含空字符串表示"src_dir 自身就是一个 skill"的顶层 case）。前端如果
+/// 传了绝对 `dir_path` 会全部 miss——这种情况现在 fail-loud 报错，不再悄悄返回空数组。
+///
+/// Global scope 时会在 `~/.hebbian/skill_collections.json` 写一条 "dir" 来源的
+/// collection 记录用于 UI 分组（[§6.1.3](../../docs/架构.md)）。
 pub fn import_from_dir(
+    data_dir: &Path,
+    scope: ImportScope,
+    workdir: Option<&Path>,
+    src_dir: &Path,
+    selected_relative_paths: Option<&[String]>,
+    overwrite: bool,
+) -> AppResult<Vec<ImportedSkill>> {
+    let imported = import_from_dir_impl(
+        data_dir,
+        scope,
+        workdir,
+        src_dir,
+        selected_relative_paths,
+        overwrite,
+    )?;
+    record_dir_collection_if_global(data_dir, scope, src_dir, &imported);
+    Ok(imported)
+}
+
+/// `import_from_dir` 实现主体，不写 collection——`import_from_github` 复用此函数
+/// 避免双写（GitHub 路径在外层自己写 GitHub 来源的 collection）。
+fn import_from_dir_impl(
     data_dir: &Path,
     scope: ImportScope,
     workdir: Option<&Path>,
@@ -322,6 +351,26 @@ pub fn import_from_dir(
         None => scanned.iter().collect(),
     };
     if chosen.is_empty() {
+        // 用户明确选了几个但全部 miss——大概率是 selection key 用错（传了绝对路径
+        // 而不是 relative_path）。fail-loud，否则前端只会看到 toast "已导入 0 个"
+        // 一脸懵
+        if let Some(filter) = selected_relative_paths {
+            if !filter.is_empty() {
+                let sample = scanned
+                    .iter()
+                    .take(3)
+                    .map(|s| s.relative_path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AppError::msg(format!(
+                    "选中的 skill 一个都没匹配上（传入 {} 个 path，src_dir 扫到 {} 个；\
+                     selection key 必须是相对路径，如 `{}`）",
+                    filter.len(),
+                    scanned.len(),
+                    sample
+                )));
+            }
+        }
         return Ok(Vec::new());
     }
     let dst_root = match scope {
@@ -404,9 +453,53 @@ pub fn import_from_github(
         Some(p) => tmp.join(p.trim_start_matches('/')),
         None => tmp.clone(),
     };
-    let result = import_from_dir(data_dir, scope, workdir, &root, selected_relative_paths, overwrite);
+    // 走 _impl 不写 collection——下面统一写 GitHub 来源的 collection 记录
+    let result = import_from_dir_impl(
+        data_dir,
+        scope,
+        workdir,
+        &root,
+        selected_relative_paths,
+        overwrite,
+    );
     cleanup(&tmp);
-    result
+    let imported = result?;
+
+    // 架构 §6.1.3：Global scope 写一条 collection 记录用于 UI 分组 + 整组卸载。
+    // Project scope 已经用 project_dir 自然隔离，不需要再加一层；
+    // 空导入（用户取消 / 全部 skip）也不记录——避免空 collection 残留。
+    if scope == ImportScope::Global && !imported.is_empty() {
+        let label = super::skill_collections::label_from_github(repo_url);
+        let source = super::skill_collections::CollectionSource::Github {
+            repo_url: repo_url.to_string(),
+            subpath: subpath.map(String::from).filter(|s| !s.is_empty()),
+        };
+        let skills = imported.iter().map(|i| i.name.clone()).collect();
+        if let Err(e) = super::skill_collections::record_import(data_dir, label, source, skills) {
+            tracing::warn!(error = %e, "记录 skill collection 失败，仅 skill 已落盘");
+        }
+    }
+    Ok(imported)
+}
+
+/// import_from_dir 的 collection 写入分支。同样仅作用于 Global scope。
+fn record_dir_collection_if_global(
+    data_dir: &Path,
+    scope: ImportScope,
+    src_dir: &Path,
+    imported: &[ImportedSkill],
+) {
+    if scope != ImportScope::Global || imported.is_empty() {
+        return;
+    }
+    let label = super::skill_collections::label_from_dir(src_dir);
+    let source = super::skill_collections::CollectionSource::Dir {
+        src_dir: src_dir.to_path_buf(),
+    };
+    let skills = imported.iter().map(|i| i.name.clone()).collect();
+    if let Err(e) = super::skill_collections::record_import(data_dir, label, source, skills) {
+        tracing::warn!(error = %e, "记录 skill collection 失败，仅 skill 已落盘");
+    }
 }
 
 /// 内部 helper：从给定 `src_root` 拷贝指定一组 skill 名字到目标 scope。
@@ -574,5 +667,139 @@ mod tests {
         // 传 demo 自身
         let result = list_skills_in_dir(&dir.join("demo"));
         assert_eq!(result, vec!["demo".to_string()]);
+    }
+
+    /// 回归 2026-05-23：GitHub marketplace 仓库（如 obra/superpowers）顶层有
+    /// `skills/<name>/SKILL.md` 嵌套结构，relative_path 是 `skills/<name>`。
+    /// 前端按这个 key 选中后导入应当正确命中。
+    #[test]
+    fn import_from_dir_filters_by_relative_path_with_nested_layout() {
+        let data_dir = tmp("nested-data");
+        let src_root = tmp("nested-src");
+        // 模拟 superpowers 布局：repo-root/skills/<name>/SKILL.md
+        let skills_root = src_root.join("skills");
+        std::fs::create_dir_all(&skills_root).unwrap();
+        write_skill(&skills_root, "alpha", "# alpha");
+        write_skill(&skills_root, "beta", "# beta");
+        write_skill(&skills_root, "gamma", "# gamma");
+
+        // 只选 alpha + gamma
+        let selected = vec!["skills/alpha".to_string(), "skills/gamma".to_string()];
+        let imported = import_from_dir(
+            &data_dir,
+            ImportScope::Global,
+            None,
+            &src_root,
+            Some(&selected),
+            true,
+        )
+        .unwrap();
+        let mut names: Vec<&str> = imported.iter().map(|i| i.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "gamma"]);
+        // 没选 beta
+        assert!(!data_dir.join("skills").join("beta").exists());
+    }
+
+    /// 回归 2026-05-23：前端如果错把绝对 dir_path 传给 import（之前的 bug），
+    /// 后端 fail-loud 报错而不是悄悄返回 0，让用户能立刻看到 selection key 用错了。
+    #[test]
+    fn import_from_dir_fails_loud_when_all_selections_miss() {
+        let data_dir = tmp("miss-data");
+        let src_root = tmp("miss-src");
+        write_skill(&src_root, "real", "# real");
+
+        // 模拟前端错传绝对路径
+        let bad_selection = vec![src_root.join("real").display().to_string()];
+        let err = import_from_dir(
+            &data_dir,
+            ImportScope::Global,
+            None,
+            &src_root,
+            Some(&bad_selection),
+            true,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("一个都没匹配上"), "unexpected: {msg}");
+        // 错误信息里给出正确格式示例（relative_path）
+        assert!(msg.contains("relative") || msg.contains("real"));
+    }
+
+    /// 回归 2026-05-23：Global scope 的 import 应当写一条 skill collection 记录
+    /// 用于 SkillsPane 分组展示（架构 §6.1.3）。
+    #[test]
+    fn import_from_dir_records_collection_for_global_scope() {
+        let data_dir = tmp("coll-global");
+        let src_root = tmp("coll-global-src");
+        write_skill(&src_root, "alpha", "# alpha");
+        write_skill(&src_root, "beta", "# beta");
+
+        let imported = import_from_dir(
+            &data_dir,
+            ImportScope::Global,
+            None,
+            &src_root,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(imported.len(), 2);
+
+        let file = crate::storage::skill_collections::load(&data_dir);
+        assert_eq!(file.collections.len(), 1);
+        let c = &file.collections[0];
+        // label 应当是 src_root 的 basename
+        let expected_label = src_root.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(c.label, expected_label);
+        // source 是 Dir 类型
+        match &c.source {
+            crate::storage::skill_collections::CollectionSource::Dir { src_dir } => {
+                assert_eq!(src_dir, &src_root);
+            }
+            other => panic!("expected Dir source, got {other:?}"),
+        }
+        // skills 列表正确（顺序可能不一致，比较 set）
+        let mut got: Vec<&str> = c.skills.iter().map(String::as_str).collect();
+        got.sort();
+        assert_eq!(got, vec!["alpha", "beta"]);
+    }
+
+    /// Project scope 的 import 不写 collection——project_dir 自然分组，不需要再加一层。
+    #[test]
+    fn import_from_dir_no_collection_for_project_scope() {
+        let data_dir = tmp("coll-proj");
+        let src_root = tmp("coll-proj-src");
+        write_skill(&src_root, "x", "# x");
+        let wd = PathBuf::from("/Users/x/proj");
+        let _ = import_from_dir(
+            &data_dir,
+            ImportScope::Project,
+            Some(&wd),
+            &src_root,
+            None,
+            true,
+        )
+        .unwrap();
+        let file = crate::storage::skill_collections::load(&data_dir);
+        assert!(file.collections.is_empty());
+    }
+
+    /// 空 selection（用户没选）走 None 等价分支——返回空，不报错。
+    #[test]
+    fn import_from_dir_empty_selection_returns_empty_without_error() {
+        let data_dir = tmp("empty-sel-data");
+        let src_root = tmp("empty-sel-src");
+        write_skill(&src_root, "a", "# a");
+        let imported = import_from_dir(
+            &data_dir,
+            ImportScope::Global,
+            None,
+            &src_root,
+            Some(&Vec::<String>::new()),
+            true,
+        )
+        .unwrap();
+        assert!(imported.is_empty());
     }
 }

@@ -30,13 +30,36 @@ const MAX_DESC_PREVIEW: usize = 200;
 /// 一个加载好的 skill
 #[derive(Debug, Clone, Serialize)]
 pub struct Skill {
+    /// 目录名——`<skills_dir>/<name>/SKILL.md` 拼路径用，永远存在。
     pub name: String,
+    /// frontmatter `name:` 字段，仅当与目录名**不同**时填。模型在 prompt 里
+    /// 看到的「公开名」优先取它（如果有），调用 Skill 工具时按 name 或 alias 任一匹配。
+    /// 用于支持 Claude Code 风格的 skill——目录名是简写、frontmatter 写完整名。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub description: String,
     pub path: PathBuf,
     pub source: SkillSource,
     /// 用户在 hebbian 里是否启用该 skill。`false` 时 SkillTool 不会把它暴露给模型。
     /// 由 `storage::skills::apply_disabled` 根据 `~/.hebbian/disabled_skills.json` 填写。
     pub enabled: bool,
+    /// 所属 collection id（架构 §6.1.3）。仅给 `CoreClient::list_skills` 这条
+    /// 路径用——前端按它分组展示。SkillTool 运行时路径不填（None），不影响模型。
+    /// 仅 Global source 的 skill 可能有值；Project / ProjectCode 永远 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
+}
+
+impl Skill {
+    /// 模型在 prompt / 命令面板里看到的公开名：frontmatter alias 优先，回退目录名。
+    pub fn display_name(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.name)
+    }
+
+    /// SkillTool 调用时是否命中该 skill：目录名或 alias 任一匹配。
+    pub fn matches(&self, key: &str) -> bool {
+        self.name == key || self.alias.as_deref() == Some(key)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,10 +94,13 @@ pub fn load_skills(sources: &[(SkillSource, PathBuf)]) -> Vec<Skill> {
     out.into_values().collect()
 }
 
-/// 与 Claude Code 行为一致（loadSkillsDir.ts:423-431）：只查一层
-/// `<skills_dir>/<skill-name>/SKILL.md`，不递归。`Skill.name` 使用**目录名**——
-/// frontmatter 的 `name` 字段当 displayName，不参与 lookup（避免目录名与
-/// frontmatter name 不一致时 read_skill_md 拼路径失败）。
+/// 只查一层 `<skills_dir>/<skill-name>/SKILL.md`，不递归。
+///
+/// `Skill.name` 永远是目录名（read_skill_md 靠它拼路径）；frontmatter 的 `name`
+/// 字段若存在且与目录名不同，存到 `Skill.alias`——既作为模型 prompt 里的公开名，
+/// 也参与 lookup 兜底匹配。这样 `~/.hebbian/skills/karpathy/` 里
+/// `name: karpathy-guidelines` 的 skill 可以被 `/karpathy` 或 `/karpathy-guidelines`
+/// 任一调到（Claude Code 风格的 skill 经常这么写）。
 fn load_dir_into(dir: &Path, source: SkillSource, out: &mut BTreeMap<String, Skill>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -91,20 +117,23 @@ fn load_dir_into(dir: &Path, source: SkillSource, out: &mut BTreeMap<String, Ski
         let Ok(content) = std::fs::read_to_string(&skill_md) else {
             continue;
         };
-        let (_name_opt, desc_opt) = parse_frontmatter(&content);
+        let (name_opt, desc_opt) = parse_frontmatter(&content);
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed".into());
+        let alias = name_opt.filter(|n| !n.is_empty() && n != &name);
         let description = desc_opt.unwrap_or_else(|| extract_first_paragraph(&content));
         out.insert(
             name.clone(),
             Skill {
                 name,
+                alias,
                 description,
                 path: skill_md,
                 source,
                 enabled: true,
+                collection_id: None,
             },
         );
     }
@@ -196,7 +225,16 @@ fn render_description(skills: &[Skill]) -> String {
                 SkillSource::ProjectCode => "project-code",
             };
             let preview = first_words(&skill.description, 80);
-            s.push_str(&format!("- `{}` ({scope}): {preview}\n", skill.name));
+            // alias != 目录名时同时列出，让模型知道两个名字都能调（不少 Claude Code
+            // 风格 skill 目录名是简写 / frontmatter name 是完整名，如 karpathy /
+            // karpathy-guidelines）
+            match &skill.alias {
+                Some(alias) => s.push_str(&format!(
+                    "- `{alias}`（或 `{}`，{scope}）: {preview}\n",
+                    skill.name
+                )),
+                None => s.push_str(&format!("- `{}` ({scope}): {preview}\n", skill.name)),
+            }
         }
     }
     s
@@ -245,7 +283,7 @@ impl Tool for SkillTool {
         let skill = self
             .skills
             .iter()
-            .find(|s| s.name == name)
+            .find(|s| s.matches(name))
             .ok_or_else(|| AppError::msg(format!("Skill: 未找到 skill `{name}`")))?;
 
         let meta = std::fs::metadata(&skill.path)
@@ -332,5 +370,56 @@ mod tests {
         let tool = SkillTool::new(Vec::new());
         let res = tool.execute(json!({"skill": "missing"})).await;
         assert!(res.is_err());
+    }
+
+    /// 回归 2026-05-23：~/.hebbian/skills/karpathy/SKILL.md 的 frontmatter
+    /// `name: karpathy-guidelines` 之前会被丢弃，导致模型按 `/karpathy-guidelines`
+    /// 调用时 SkillTool lookup 失败。
+    #[tokio::test]
+    async fn frontmatter_alias_is_callable_alongside_dir_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        write_skill(
+            &skills_dir,
+            "karpathy",
+            "name: karpathy-guidelines\ndescription: Behavioral guidelines",
+            "Karpathy body",
+        );
+
+        let mut m = BTreeMap::new();
+        load_dir_into(&skills_dir, SkillSource::Global, &mut m);
+        let skills: Vec<_> = m.into_values().collect();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "karpathy");
+        assert_eq!(skills[0].alias.as_deref(), Some("karpathy-guidelines"));
+        assert_eq!(skills[0].display_name(), "karpathy-guidelines");
+
+        let tool = SkillTool::new(skills);
+        // 目录名调用照常工作
+        let by_dir = tool.execute(json!({"skill": "karpathy"})).await.unwrap();
+        assert!(by_dir.contains("Karpathy body"));
+        // 带前缀斜杠 + frontmatter 完整名也能命中
+        let by_alias = tool
+            .execute(json!({"skill": "/karpathy-guidelines"}))
+            .await
+            .unwrap();
+        assert!(by_alias.contains("Karpathy body"));
+    }
+
+    /// frontmatter `name:` 等于目录名时 alias 应为 None（避免冗余显示）。
+    #[test]
+    fn alias_is_none_when_frontmatter_matches_dir_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        write_skill(
+            &skills_dir,
+            "commit",
+            "name: commit\ndescription: same",
+            "body",
+        );
+        let mut m = BTreeMap::new();
+        load_dir_into(&skills_dir, SkillSource::Global, &mut m);
+        let skills: Vec<_> = m.into_values().collect();
+        assert_eq!(skills[0].alias, None);
     }
 }

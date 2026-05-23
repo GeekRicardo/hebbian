@@ -48,4 +48,6 @@ scripts/.venv/
 image/
 
 .hebbian/
+.hebbian
 .playwright-cli/
+.codegraph/

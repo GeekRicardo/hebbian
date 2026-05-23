@@ -27,6 +27,7 @@ pub mod run_checkpoint;
 pub mod sessions;
 pub mod sessions_dir;
 pub mod settings;
+pub mod skill_collections;
 pub mod skills;
 pub mod tool_results;
 

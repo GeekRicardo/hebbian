@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -8,6 +8,10 @@ import { Button } from "@/desktop/ui/components/ui/button";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Input, Label } from "@/desktop/ui/components/ui/input";
 import { cn } from "@/desktop/ui/lib/utils";
+import type { SkillCollection, SkillItem } from "@/desktop/ui/types";
+
+// 老调用路径仍想从本文件 import SkillItem 时不破坏。
+export type { SkillItem };
 
 /** 跳过 SKILL.md 头部的 YAML frontmatter（`---\n...\n---\n`），只返回正文。 */
 function stripFrontmatter(text: string): string {
@@ -25,13 +29,17 @@ function stripFrontmatter(text: string): string {
   return lines.slice(end + 1).join("\n").replace(/^\n+/, "");
 }
 
-export type SkillItem = {
-  name: string;
-  description: string;
-  path: string;
-  source: "global" | "project" | "project_code";
-  enabled: boolean;
-};
+/** 给 UI 用：把 collection.source 渲染成一行简短描述。 */
+function formatSource(s: SkillCollection["source"]): string {
+  if (s.kind === "github") {
+    const base = s.repo_url.replace(/\.git$/, "").replace(/\/+$/, "");
+    return s.subpath ? `${base} (${s.subpath})` : base;
+  }
+  if (s.kind === "local") {
+    return s.path;
+  }
+  return s.src_dir;
+}
 
 type ScannedSkill = {
   name: string;
@@ -57,6 +65,7 @@ export function SkillsPane({
   scope: "global" | "project";
 }) {
   const [skills, setSkills] = useState<SkillItem[]>([]);
+  const [collections, setCollections] = useState<SkillCollection[]>([]);
   const [claudeSkills, setClaudeSkills] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
@@ -83,18 +92,97 @@ export function SkillsPane({
     setLoading(true);
     try {
       const wd = effectiveWorkdir || ".";
-      const [list, claudeList] = await Promise.all([
+      const [list, claudeList, colls] = await Promise.all([
         invoke<SkillItem[]>("list_skills", { workdir: wd }),
         invoke<string[]>("list_claude_skills"),
+        invoke<SkillCollection[]>("list_skill_collections"),
       ]);
       setSkills(list);
       setClaudeSkills(claudeList);
+      setCollections(colls);
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     } finally {
       setLoading(false);
     }
   }, [effectiveWorkdir]);
+
+  // 架构 §6.1.3：把 skills 按 collection_id 分组——同一来源（GitHub 仓库 / 本地目录）
+  // 一次性导入的归一组，未分组的（手放 / 老导入 / 非 Global source）归到末尾默认段。
+  const grouped = useMemo(() => {
+    const collMap = new Map<string, SkillCollection>();
+    for (const c of collections) collMap.set(c.id, c);
+    const byCollection = new Map<string, SkillItem[]>();
+    const ungrouped: SkillItem[] = [];
+    for (const s of skills) {
+      if (s.collection_id && collMap.has(s.collection_id)) {
+        const arr = byCollection.get(s.collection_id) ?? [];
+        arr.push(s);
+        byCollection.set(s.collection_id, arr);
+      } else {
+        ungrouped.push(s);
+      }
+    }
+    // 用 collections 的原始顺序（按 imported_at append）渲染分组
+    const orderedCollectionIds = collections
+      .map((c) => c.id)
+      .filter((id) => byCollection.has(id));
+    return { byCollection, ungrouped, collMap, orderedCollectionIds };
+  }, [skills, collections]);
+
+  /**
+   * 每组的展开状态——默认**全部折叠**（state 存"展开"集合，初始为空集）。
+   * 用户展开过的会保留到下次 dialog 关闭重开（state 跟 component 生命周期一致），
+   * reload() 不重置。卸载某 collection 后对应 id 仍可能留在 set 里——无害（渲染时
+   * 找不到 collection 就不显示）。
+   */
+  const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
+  function toggleExpanded(id: string) {
+    setExpandedCollections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  /**
+   * 整组启用/禁用：全启用 → 全禁；其他状态（全禁或部分）→ 全启。
+   * 单个 skill 的 set_skill_enabled API 已有，前端 loop 调即可——批量
+   * 通常 N≤20，不是 hot path 不值得加新后端 API。
+   */
+  async function toggleCollectionEnabled(items: SkillItem[]) {
+    if (items.length === 0) return;
+    const allOn = items.every((s) => s.enabled);
+    const next = !allOn;
+    try {
+      for (const s of items) {
+        if (s.enabled === next) continue;
+        await invoke("set_skill_enabled", { name: s.name, enabled: next });
+      }
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
+
+  async function uninstallCollection(c: SkillCollection) {
+    const count = c.skills.length;
+    if (
+      !confirm(
+        `卸载「${c.label}」整组？将删除 ${count} 个 skill 目录（来源：${formatSource(c.source)}）`
+      )
+    ) {
+      return;
+    }
+    try {
+      const deleted = await invoke<string[]>("delete_skill_collection", { id: c.id });
+      toast.success(`已卸载「${c.label}」（${deleted.length} 个 skill）`);
+      await reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
+    }
+  }
 
   useEffect(() => {
     reload();
@@ -234,9 +322,14 @@ export function SkillsPane({
       toast.error("请至少选一个 skill");
       return;
     }
-    // 找到选中的 ScannedSkill 取 dir_path 作为 selectedPaths（后端用 dir_path 做 key）
+    // scanSelected 用 dir_path 当**勾选标识**（绝对路径，scanResults 内永远唯一，
+    // 不怕同名不同层级撞 key）；但传给后端 import 必须用 **relative_path**——
+    // 后端 import_from_dir / import_from_github 会重新 scan 一次 src_dir 拿到
+    // 新一批 ScannedSkill 再按 relative_path filter。GitHub 场景尤其重要：
+    // scan 时 clone 到 /tmp/hebbian-scan-<uuidA>，import 时又 clone 到 uuidB，
+    // 两次的绝对 dir_path 完全不同，只有 relative_path 跨调用稳定。
     const chosen = scanResults.filter((s) => scanSelected.has(s.dir_path));
-    const selectedPaths = chosen.map((s) => s.dir_path);
+    const selectedPaths = chosen.map((s) => s.relative_path);
     setScanImporting(true);
     try {
       let imported: { name: string; overwritten: boolean }[];
@@ -330,57 +423,106 @@ export function SkillsPane({
         {skills.length === 0 ? (
           <p className="text-xs text-muted-foreground">暂无</p>
         ) : (
-          <ul className="space-y-1">
-            {skills.map((s) => (
-              <li key={`${s.source}:${s.name}`}>
-                <div
-                  className={cn(
-                    "flex items-start gap-2 px-2 py-1.5 rounded border hover:bg-accent/40 transition-colors",
-                    !s.enabled && "opacity-50"
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={s.enabled}
-                    onChange={() => toggleSkillEnabled(s)}
-                    className="mt-1 h-3.5 w-3.5 rounded shrink-0"
-                    aria-label={s.enabled ? `禁用 ${s.name}` : `启用 ${s.name}`}
-                    title={s.enabled ? "启用中（取消勾选 = 禁用）" : "已禁用"}
-                  />
-                  <span
-                    className={cn(
-                      "shrink-0 mt-0.5 px-1.5 py-0.5 text-[10px] rounded font-medium",
-                      s.source === "global" && "bg-blue-500/15 text-blue-700 dark:text-blue-300",
-                      s.source === "project" && "bg-purple-500/15 text-purple-700 dark:text-purple-300",
-                      s.source === "project_code" && "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300"
-                    )}
-                  >
-                    {s.source}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => openPreview(s)}
-                    className="min-w-0 flex-1 text-left cursor-pointer"
-                  >
-                    <div className="font-mono text-sm">{s.name}</div>
-                    <div className="text-xs text-muted-foreground line-clamp-2">
-                      {s.description}
-                    </div>
-                  </button>
-                  {s.source !== "project_code" && (
+          <div className="space-y-3">
+            {/* 按集合分组：每组带折叠 chevron + 三态组开关 + label + 来源 + 卸载按钮 */}
+            {grouped.orderedCollectionIds.map((cid) => {
+              const meta = grouped.collMap.get(cid)!;
+              const items = grouped.byCollection.get(cid)!;
+              const isExpanded = expandedCollections.has(cid);
+              const enabledCount = items.filter((s) => s.enabled).length;
+              const groupState: "all" | "none" | "partial" =
+                enabledCount === items.length
+                  ? "all"
+                  : enabledCount === 0
+                  ? "none"
+                  : "partial";
+              return (
+                <div key={cid} className="rounded border">
+                  <div className="flex items-center justify-between gap-2 px-2 py-1.5 bg-muted/30">
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(cid)}
+                      className="flex items-center gap-1.5 min-w-0 flex-1 text-left hover:opacity-80"
+                      title={isExpanded ? "折叠" : "展开"}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      )}
+                      <GroupCheckbox
+                        state={groupState}
+                        onToggle={() => toggleCollectionEnabled(items)}
+                        label={
+                          groupState === "all"
+                            ? `禁用整组「${meta.label}」`
+                            : `启用整组「${meta.label}」`
+                        }
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">
+                          {meta.label}
+                          <span className="ml-2 text-xs text-muted-foreground font-normal">
+                            {items.length} 个
+                            {groupState === "partial" && (
+                              <span className="ml-1">· 已启用 {enabledCount}</span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground truncate">
+                          {formatSource(meta.source)}
+                        </div>
+                      </div>
+                    </button>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => doDelete(s)}
-                      aria-label={`删除 ${s.name}`}
+                      onClick={() => uninstallCollection(meta)}
+                      title={`卸载整组「${meta.label}」`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
+                      <span className="ml-1 text-xs">卸载组</span>
                     </Button>
+                  </div>
+                  {isExpanded && (
+                    <ul className="space-y-1 p-1 border-t">
+                      {items.map((s) => (
+                        <SkillRow
+                          key={`${s.source}:${s.name}`}
+                          s={s}
+                          onToggleEnabled={toggleSkillEnabled}
+                          onPreview={openPreview}
+                          onDelete={doDelete}
+                        />
+                      ))}
+                    </ul>
                   )}
                 </div>
-              </li>
-            ))}
-          </ul>
+              );
+            })}
+
+            {/* 未分组：手放 / 老导入的 Global + Project + ProjectCode 全归这里 */}
+            {grouped.ungrouped.length > 0 && (
+              <div>
+                {grouped.orderedCollectionIds.length > 0 && (
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/80 px-1 pb-1">
+                    未分组
+                  </div>
+                )}
+                <ul className="space-y-1">
+                  {grouped.ungrouped.map((s) => (
+                    <SkillRow
+                      key={`${s.source}:${s.name}`}
+                      s={s}
+                      onToggleEnabled={toggleSkillEnabled}
+                      onPreview={openPreview}
+                      onDelete={doDelete}
+                    />
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
         )}
       </section>
 
@@ -766,5 +908,110 @@ export function SkillsPane({
       </div>
     )}
     </>
+  );
+}
+
+/**
+ * 三态分组开关。
+ * - `all`：勾选（点击 = 全禁）
+ * - `none`：未勾选（点击 = 全启）
+ * - `partial`：indeterminate（点击 = 全启——朝"启用"方向收敛比"禁用"更友好）
+ *
+ * 用原生 `<input type="checkbox">` + 手动设 `indeterminate`（React 不通过 props 控制
+ * 这个属性，必须用 ref / effect）；点击事件 stopPropagation 避免冒泡触发组 header 折叠。
+ */
+function GroupCheckbox({
+  state,
+  onToggle,
+  label,
+}: {
+  state: "all" | "none" | "partial";
+  onToggle: () => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "partial";
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={state === "all"}
+      onChange={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="h-3.5 w-3.5 rounded shrink-0"
+      aria-label={label}
+      title={label}
+    />
+  );
+}
+
+/**
+ * 单条 skill 行——分组内 / 未分组两条渲染路径复用。
+ *
+ * source 徽标保留：即使在集合分组里也用色块区分 global/project/project_code，
+ * 避免用户混淆"这是哪一层"。
+ */
+function SkillRow({
+  s,
+  onToggleEnabled,
+  onPreview,
+  onDelete,
+}: {
+  s: SkillItem;
+  onToggleEnabled: (s: SkillItem) => void;
+  onPreview: (s: SkillItem) => void;
+  onDelete: (s: SkillItem) => void;
+}) {
+  return (
+    <li>
+      <div
+        className={cn(
+          "flex items-start gap-2 px-2 py-1.5 rounded border hover:bg-accent/40 transition-colors",
+          !s.enabled && "opacity-50"
+        )}
+      >
+        <input
+          type="checkbox"
+          checked={s.enabled}
+          onChange={() => onToggleEnabled(s)}
+          className="mt-1 h-3.5 w-3.5 rounded shrink-0"
+          aria-label={s.enabled ? `禁用 ${s.name}` : `启用 ${s.name}`}
+          title={s.enabled ? "启用中（取消勾选 = 禁用）" : "已禁用"}
+        />
+        <span
+          className={cn(
+            "shrink-0 mt-0.5 px-1.5 py-0.5 text-[10px] rounded font-medium",
+            s.source === "global" && "bg-blue-500/15 text-blue-700 dark:text-blue-300",
+            s.source === "project" && "bg-purple-500/15 text-purple-700 dark:text-purple-300",
+            s.source === "project_code" && "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300"
+          )}
+        >
+          {s.source}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPreview(s)}
+          className="min-w-0 flex-1 text-left cursor-pointer"
+        >
+          <div className="font-mono text-sm">{s.name}</div>
+          <div className="text-xs text-muted-foreground line-clamp-2">{s.description}</div>
+        </button>
+        {s.source !== "project_code" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onDelete(s)}
+            aria-label={`删除 ${s.name}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        )}
+      </div>
+    </li>
   );
 }

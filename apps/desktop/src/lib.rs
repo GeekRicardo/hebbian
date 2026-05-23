@@ -1075,6 +1075,24 @@ fn delete_skill(
         .map_err(map_core_err)
 }
 
+/// 列出全部 skill collection（架构 §6.1.3）。前端按返回的 id / source / label
+/// 在 SkillsPane 分组渲染。
+#[tauri::command]
+fn list_skill_collections(
+    app: AppHandle,
+) -> AppResult<Vec<agent_core::storage::skill_collections::SkillCollection>> {
+    Ok(core(&app)?.list_skill_collections())
+}
+
+/// 删除一整个 collection——同时把该 collection 里的 skill 物理目录一并清掉。
+/// 返回实际删除成功的 skill 名字（用户手动改名 / 已删除的会被 graceful skip）。
+#[tauri::command]
+fn delete_skill_collection(app: AppHandle, id: String) -> AppResult<Vec<String>> {
+    core(&app)?
+        .delete_skill_collection(&id)
+        .map_err(map_core_err)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct BackgroundTaskInfo {
     task_id: String,
@@ -1921,6 +1939,8 @@ pub fn run() {
             read_skill_md,
             set_skill_enabled,
             delete_skill,
+            list_skill_collections,
+            delete_skill_collection,
             list_background_tasks,
             read_background_task_output,
             kill_background_task,

@@ -3779,3 +3779,156 @@
 - **留尾巴**:
   - session.skill_dirs（用户在 SessionSettingsDialog 单独设的）目前**不走** settings 路径，是直接从 jsonl `meta` 读出来的 PathBuf。如果哪天有人在 session 层手填 `~/` 也会遇到同样 bug——届时把 `expand_home` 公开 API 用到 storage/sessions.rs 的读取点即可（已 `pub`）。本次不主动修，因为没复现到，留 helper 给将来
   - chat.rs:170-178 的 fallback 语义（configured_skill_dirs 非空就**完全替换**默认三层，而不是追加 / 覆盖单层）是另一个独立设计问题——用户写 `skill_dirs=["~/.hebbian/skills"]` 本意可能是"确认全局目录在这里"，但实际效果是"只用 global、丢 project 和 project_code"。本次不动，等用户复现到再讨论是要改成"非空 = 追加"还是保持"非空 = 完整覆盖"
+
+### 2026-05-23 — 修复 SkillsPane 从 GitHub / 本地目录导入时 selection key 协议错位（导入 0 个）
+
+- **Why**: 用户用 SkillsPane 导入 https://github.com/obra/superpowers（典型 marketplace 仓库布局——repo-root/skills/`<name>`/SKILL.md，14 个 skill），勾选后点导入显示"已导入 0 个"。`scan_skill_dir` 单测早就有，但**没有任何端到端验证 selection 的 key 类型在前后端一致**——前端按 dir_path（绝对路径）勾选，传给后端时**也传的是 dir_path**；后端 import_from_dir 按 `s.relative_path` filter，永远全 miss，返回空数组。GitHub 场景更隐蔽：scan 时 clone 到 `/tmp/hebbian-scan-<uuidA>`，import 时**又 clone 一次到 uuidB**，两次的绝对 dir_path 不可能相同，跨调用 dir_path 完全不稳定
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx) line 235: `selectedPaths = chosen.map(s => s.relative_path)`（之前是 `s.dir_path`）；旧注释「后端用 dir_path 做 key」直接是错的，改成完整解释——scanSelected 用 dir_path 当**勾选标识**（同一次 scan 结果内永远唯一）+ 传给后端 import 用 **relative_path**（跨调用稳定）
+  - [crates/agent-core/src/storage/skills.rs](../crates/agent-core/src/storage/skills.rs) `import_from_dir`: selection 全 miss 时改为 fail-loud `Err`（之前悄悄 `Ok(Vec::new())`）；错误信息带"扫到几个 / 传入几个 / 正确格式示例"，下次有人传错能立刻看到
+  - [crates/agent-core/src/storage/skills.rs](../crates/agent-core/src/storage/skills.rs): doc 注释强调"selected_relative_paths 里的字符串必须与 ScannedSkill::relative_path 精确匹配"
+  - 测试加 3 条：`import_from_dir_filters_by_relative_path_with_nested_layout`（模拟 superpowers 的 `skills/<name>` 嵌套布局，按相对路径 selection 正确命中）、`import_from_dir_fails_loud_when_all_selections_miss`（前端传绝对路径时返错 + 错误信息包含"一个都没匹配上"）、`import_from_dir_empty_selection_returns_empty_without_error`（空 selection ≠ miss，仍按 None 等价处理）
+  - 新增 [crates/agent-core/examples/scan_skill_dir.rs](../crates/agent-core/examples/scan_skill_dir.rs)：端到端验证工具，支持 `cargo run --example scan_skill_dir -- scan <path>` 看本地扫描结果、`cargo run --example scan_skill_dir -- gh <repo-url> [subpath] [rel1,rel2,...]` 跑完整 scan_skill_github + import_from_github 链路。本次就是用它对真实 obra/superpowers 跑了端到端验证（14 个 scan + 3 个 selected import 成功）
+- **scan_skill_dir 已支持的布局**（之前担心不够兼容，验证一遍发现都覆盖了）:
+  - 顶层就是一个 skill（root/SKILL.md）—— `list_skills_in_dir_detects_self_as_skill` 已测
+  - 顶层 = collection root，子目录是 skill（root/`<name>`/SKILL.md）—— `import_from_dir_handles_collection_root` 已测
+  - 顶层有 `skills/` 子目录，下面才是 skill（root/skills/`<name>`/SKILL.md）—— Claude Code marketplace 风格，本次端到端验证 + `import_from_dir_filters_by_relative_path_with_nested_layout` 单测覆盖
+  - 任意嵌套深度（depth ≤ 8）；找到 SKILL.md 就停止深入，跳过 `.xxx` / `node_modules` / `target` —— scan_skill_dir 既有行为
+- **复现 + 验证**:
+  - **阶段 A 复现**: `cargo run --example scan_skill_dir -p agent-core -- gh https://github.com/obra/superpowers` → scan 出 14 个 skill ✅；然后**修前**前端调用模式（传 dir_path）等价于在 example 里传 `"/tmp/hebbian-scan-<uuid>/skills/brainstorming"`——后端会全 miss → 旧行为 `Ok(Vec::new())` ✅ 复现到"导入 0 个"
+  - **阶段 B 验证**: 同一脚本传 `selection="skills/brainstorming,skills/test-driven-development,skills/writing-skills"` 跑修后代码 → 实际 clone 1 次 + 拷贝 3 个 skill 落到目标目录，每个 SKILL.md 完整 ✅；单测 `cargo test -p agent-core --lib storage::skills` 9/9；`pnpm exec tsc --noEmit` 0 错误
+- **设计取舍 5 问**:
+  1. 与架构.md 相悖？否——架构.md 没规定 SkillsPane 协议，本次只是把前后端 schema 对齐到「relative_path 作为跨调用 selection key」
+  2. 符合既定设计？是——后端早就用 relative_path filter，是前端注释抄错 + 实现跟着错
+  3. 引入新设计？否——`scan_skill_dir` 已经能处理各种布局，scan 层 0 改动
+  4. 影响其他模块？只动 SkillsPane.tsx 一处 + storage/skills.rs 加 fail-loud；现有调用方（仅 SkillsPane）跟着新协议工作；agent-core 其他地方不读这条路径
+  5. 取舍：选 fail-loud 而不是 silent miss——多 5 行错误信息，省下次又被 silently 坑半天的时间
+- **影响范围**: 一个前端文件（一行真实逻辑 + 注释修正）+ 一个后端文件（fail-loud 分支 + doc 改写）+ 4 个单测 + 1 个 example；其他 surface（CLI / hebweb）不调用 SkillsPane 这条路径；持久化 / 协议 / 老 session 0 影响
+- **留尾巴**:
+  - examples/scan_skill_dir.rs 是真能跑的端到端调试工具，将来用户报 marketplace 类问题时可以直接复用——但它不在 CI 跑（cargo test 不会 build examples by default），如果接口签名变了不会马上发现。每次改 scan_skill_dir / import_from_dir 等公开 API 后请手动跑一遍这个 example
+  - SkillsPane 的"扫描到几个 / 已导入几个"toast 信息可以再调一下（目前 import 0 个就 toast "已导入 0 个" 看着像成功了，但有 fail-loud 兜底后这条路径会先走 error toast）——本次不动
+
+### 2026-05-23 — Skill 集合（collections）：按来源分组展示 + 整组卸载（架构 §6.1.3.1）
+
+- **Why**: 上一条 GitHub 导入修好后用户立刻反馈"导入后的 skills 都是平铺的，claude code 应该会区分属于哪个集合吧（比如仓库，目录）"——确实，从 obra/superpowers 一次导入 14 个 skill 后跟原本 `~/.hebbian/skills/` 里手放的 karpathy / hallmark 等混在一起，看不出哪些来自一个来源、也没法一键卸载整组。参考 Claude Code 的 marketplace 三层结构（marketplace > plugin > skills），但本次只取最简的"集合"一层——只解决显示分组需求，等真需要版本 / 升级 / manifest 概念时再升级
+- **改动**:
+  - 新增 [crates/agent-core/src/storage/skill_collections.rs](../crates/agent-core/src/storage/skill_collections.rs):
+    - `SkillCollection { id, label, source, imported_at, skills[] }` 数据结构（id=uuid v4 / source 是 tagged enum: github | dir / skills 列表是目录名）
+    - CRUD: `load` / `save` / `append`（同 id 替换）/ `remove`（返回被删记录）/ `find_by_skill`（反查）/ `record_import`（便捷入口，自动生成 uuid + 时间戳）
+    - label helper：`label_from_github`（取 URL 末段、去 `.git`）/ `label_from_dir`（basename）
+    - 7 条单测覆盖 round-trip / remove / 空 skill 拒绝 / label 推断 / source display / append 同 id 替换 / load 不存在文件返回 default
+  - [crates/agent-core/src/storage/skills.rs](../crates/agent-core/src/storage/skills.rs):
+    - 把 `import_from_dir` 主体抽出 `import_from_dir_impl`；公开版本包它 + 写 dir source 的 collection 记录
+    - `import_from_github` 改成走 `_impl`（避免双写）+ 自己写 github source 的 collection 记录
+    - 仅 Global scope 触发写入；空导入不触发；写失败用 `tracing::warn!` 不阻断主流程
+    - 加 2 条集成测试：`import_from_dir_records_collection_for_global_scope`、`import_from_dir_no_collection_for_project_scope`
+  - [crates/agent-core/src/storage/mod.rs](../crates/agent-core/src/storage/mod.rs): export skill_collections
+  - [crates/agent-core/src/tools/skill.rs](../crates/agent-core/src/tools/skill.rs):
+    - `Skill` 加 `collection_id: Option<String>`（`#[serde(skip_serializing_if = "Option::is_none")]`）；hot path（`SkillTool`）永远填 None；仅 `CoreClient::list_skills` 路径填值
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs):
+    - `list_skills` 加载后用一次性 collections.json 索引给 Global skill 附上 `collection_id`
+    - Trait 加 `list_skill_collections` / `delete_skill_collection`：后者删 JSON 记录 + 物理删 skill 目录（个别已被用户改名 / 删除的 graceful skip）
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 新增 Tauri 命令 `list_skill_collections` / `delete_skill_collection`，注册到 handler 列表
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `SkillItem.collection_id?: string | null`；新增 `SkillCollection` 类型
+  - [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx):
+    - `reload()` 并发拉 `list_skill_collections`
+    - `useMemo grouped`：按 collection_id 分组，未分组放末尾（用 collections 的原序——按 imported_at append——保持稳定渲染顺序）
+    - JSX 改为「分组卡片 + 未分组列表」结构，每组带 label / source 描述 / "卸载组"按钮
+    - 把单条 skill 渲染抽成 `SkillRow` 组件，两条渲染路径复用
+    - `uninstallCollection`：confirm 后调 delete_skill_collection，成功后 reload
+    - 加 helper `formatSource` 把 `CollectionSource` 渲染成简短描述串
+  - [docs/架构.md](../docs/架构.md) §6.1.3.1 新增小节描述 collection 模型 + 写入时机 + 关联方式 + SkillsPane UX + 与 Claude Code marketplace 体系的差异
+  - 复用上一条修复加的 [examples/scan_skill_dir.rs](../crates/agent-core/examples/scan_skill_dir.rs) 做端到端验证（无需新加 example）
+- **设计决策**:
+  - **为什么不学 Claude Code 完整 marketplace 体系（marketplace > plugin > skills 三层 + version + commit sha）**：当前用户需求纯粹是"区分来源"的显示问题，没要求版本管理 / 升级 / hooks / commands。完整 plugin 系统需要 ~800 行 + 改 SkillTool 加载路径，是个独立大改造。采纳「先 A 后 B」的渐进策略，留下从"集合"升级到"plugin marketplace"的可能（D43 候选）
+  - **为什么 Project scope 不写 collection**：`~/.hebbian/projects/<enc>/skills/` 已经被 project_dir 自然分组——同 workdir 下的所有 skill 视为一组，跨 workdir 互不影响。再加一层 collection 会产生「project + collection」二维网格，UX 不友好
+  - **为什么 `collection_id` 写在 `Skill` 结构而不是返回独立 DTO**：保持 SkillTool 这条 hot path 不变（运行时拿到的 Skill 里 collection_id 一直是 None，不影响 description render）；前端拿同一个 SkillItem 类型多读一个字段，UI 代码更直接
+  - **为什么 collection 索引在 list_skills 里 join 而不是让 load_skills 直接读 collections.json**：load_skills 在 hot path（每次 send 都会跑），不该读不必要的文件。`CoreClient::list_skills` 只有 SkillsPane 调，每次进 UI 才读 collections.json
+- **复现 + 验证**（按 CLAUDE.md「先复现 → 修 → 再复现」）:
+  - **阶段 A 复现**: 修前 SkillsPane 里 14 个从 obra/superpowers 来的 skill 与 4 个手放 skill 完全平铺，区分不开
+  - **阶段 B 验证**:
+    - 单测: `cargo test -p agent-core --lib 'storage::skill'` 18/18 pass（含新加的 7 条 skill_collections + 2 条集成测试）
+    - 端到端: `cargo run --example scan_skill_dir -- gh https://github.com/obra/superpowers "" "skills/brainstorming,skills/test-driven-development"` 跑完后 `cat <tmp>/skill_collections.json` ✅ 记录 label=superpowers / source.kind=github / repo_url 正确 / skills=2 个目录名
+    - 编译: `cargo check --workspace` 0 error；`pnpm exec tsc --noEmit` 0 error
+- **影响范围**: agent-core/storage 新增 1 文件 + skills.rs 重构 import 路径 + tools/skill.rs 加字段 + core_client 加 2 个 trait method；desktop/lib.rs 加 2 个 Tauri 命令；前端 types + SkillsPane.tsx 加分组 UI；架构.md §6.1.3.1 + §6.2 文件清单。现有不带 collection 的 skill 仍正常工作（前端归到"未分组"）；老的 `~/.hebbian/skill_collections.json` 不存在 = 视为空文件，0 迁移成本
+- **留尾巴**:
+  - 用户手动改 `~/.hebbian/skills/<name>/` 目录名后，对应 collection 的 `skills[]` 里那条记录会变成 dangling—— `find_by_skill` 不会再命中，`delete_skill_collection` 时该项 graceful skip。本次不写"自动 prune dangling skill names"的清理工具，等用户报问题
+  - collection 文件目前没有"重新连接到一个已存在的 skill"的入口（用户在 SkillsPane 手放 skill 后没法事后归到某个 collection）。Claude Code 也没这个，是合理的——collection 的语义就是"一次性导入产生"，不该后期可编辑
+  - `delete_skill_collection` 会**物理删除** skill 目录，与"仅删 metadata"是两个不同 UX——本次只暴露前者（"卸载整组"），后者（如果将来有"重命名集合"等需求）按需再加
+  - Project scope 的 import 走"未分组"路径——如果用户在 SessionSettingsDialog 里导入 superpowers，14 个 skill 全归到"未分组"。这是 V1 妥协；后续如有强需求把 collection 概念扩展到 Project scope，需要把 collections.json 移到 `~/.hebbian/projects/<enc>/skill_collections.json` 双层管理
+
+### 2026-05-23 — partial sidecar 接通"加载历史时也恢复"+ 折叠规则收紧 + 末尾追加中断话术
+
+- **Why**: 用户反复反馈"进程中断后已输出内容没存进 session.jsonl"。架构 §4.9.3 的 partial sidecar 设计前后被修过三次（2026-05-09 storage API、2026-05-20 chat.rs 接入 desktop observer、2026-05-21 BufWriter 截胡修复），写入侧已经稳了，但还有两个洞没堵：
+  1. **触发时机**：`recover_and_save_interrupted_partials` 只在 `chat::send_and_save` 入口被调一次。用户重启 desktop 加载历史时，UI 渲染走 `get_session → CoreClient::load_session → sessions::load`，根本不扫 partial → 重启后看到的就是缺了一截的 session.jsonl，必须等用户再发一条消息才补救
+  2. **折叠规则太宽**：[sessions_dir::PartialFragment::ToolCall] 里 `name: Option<String>`，流式 delta 后续 chunk 帧（OpenAI/DeepSeek 风格）只带 `arguments_chunk` 不重传 name；折叠时 `name = None`，旧代码用 `name.as_deref().unwrap_or("unknown")` 直接落盘 → 历史里多出一堆 `{name:"unknown", input:null}` 的伪 tool_call，模型读 transcript 误以为真的发起过那次调用。同时残片末尾既没人话也没机读标识，AI 拿到上下文判断不出"这段是中断残片"
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs):
+    - 新增 `pub fn recover_and_append_interrupted_partials(data_dir, id)`：扫 `<session>/partial/`，把每个残留 fragment 文件折叠成一段 `Assistant + Interrupted marker` 追加进 `session.jsonl`，并删 partial 主文件。直接走底层 `append_line + ensure_jsonl`，**不**走 `append_message`——后者内部又调 `load`，会导致递归
+    - 新增 `INTERRUPTED_TAIL_NOTICE = "—— 输出在此中断，以上为本轮残留片段 ——"`：在 recovered assistant 末尾同时落到 `MessagePart::Text` 与 `content`。content 进 model transcript，AI 读历史能识别"上一轮没走完"；part 给 surface 直接渲染同一行人话
+    - 翻译规则收紧（私有 helper `partial_to_interrupted_message`）：
+      - 无 `name` 的 tool_call 直接丢——见上 Why
+      - 有 `name` 的保留，arguments 即便不是合法 JSON 也保留原文（input 落 `Null`），让模型自己判断"这次调用没走完"
+      - text / reasoning / 有名 tool_call 全空时返回 None（无内容不写）
+    - 新增 `pub fn load_with_partial_recovery(data_dir, id)`：先 recover 再 `load`。**`load` 保持纯读不内嵌 recover**——`append_message` / `rename` / `set_run_mode` 这些 mutator 内部会反复调 `load`，turn 进行中活跃 partial 还在被写，触发 recover 会把当前 turn 当成"中断"误折叠（曾在测试 `pending_inputs_*_not_double_written` 上撞过红 → 改成只在 surface 入口显式触发）
+    - 加 `load_with_partial_recovery_folds_residue_and_drops_unnamed_tool_calls` 回归测试：手写 partial 含 text + reasoning + Bash (有名) + 匿名 tool_call，断言落盘后只有 Bash 一个 tool_call、末尾带话术、marker 紧跟、partial 文件被删、二次 load 幂等
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs) `LocalCoreClient::load_session`：改走 `load_with_partial_recovery`。desktop UI 通过 `get_session` Tauri 命令加载历史时自动恢复
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs):
+    - send 入口 `prior_session = sessions::load_with_partial_recovery(...)`，替换旧的 "load + recover_and_save 单独调一次" 两步式调用
+    - 删除本地 `recover_and_save_interrupted_partials` + `partial_to_interrupted_message` 共 75 行——这套实现现在统一收在 agent-core，三个 surface 共用一份折叠规则
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) / [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) send 入口同步换成 `load_with_partial_recovery`。CLI / hebweb 自己**不写** partial（它们的 `SessionConfig::recorder = None`，见 2026-05-21 留尾巴），但它们可能加载 desktop 创建的 session，下一次 user message 触发 send 时该恢复就恢复
+- **影响范围**: agent-core / desktop / cli / hebweb。新增公共 API `load_with_partial_recovery` 与 `recover_and_append_interrupted_partials` 与常量 `INTERRUPTED_TAIL_NOTICE`，纯加法不改既有签名；jsonl 格式不变；协议不变。三个 surface 加载历史的入口现在统一走带恢复的路径
+- **现场 A/B 验证**: 把用户最新 session `~/.hebbian/sessions/202605231018-63c87bf2` 拷到 `/tmp/h-verify`，对比修改前后 session.jsonl 折叠出来的 assistant 段——旧 `recovered-N / name:"Ask" / input:null / content=""` vs 新 `name:"Ask" / input:null / content="—— 输出在此中断，以上为本轮残留片段 ——"`。中断话术真的进了主 jsonl，重启 desktop 拉历史能看到这段
+- **留尾巴**:
+  - partial 写入端 `name` 缺失是真正的根因之一——desktop observer 在 `EventPayload::ToolCallStarted` 首帧透了 name，但 `ToolCallDelta` 帧 `name: None` 时 `if entry.0.is_none() { entry.0 = name; }` 会把已有的 name 保护住（看似没问题）。然而生产 partial.jsonl 里观察到**几乎所有 ToolCall fragment 都没 name** —— 说明流式协议层根本没产出 `ToolCallStarted` 事件，只有 `ToolCallDelta`。这是 model-gateway 流式 adapter 的问题，本次没动；丢 unnamed 是兜底
+  - `<msg_id>.partial.jsonl.lock` 文件 best-effort 留在磁盘（`delete_partial` 只删主文件，不删 sentinel lock 文件）。无害，下次 append 会复用同一份 lock。如要彻底清理可在 Recoverer 末尾再 `remove_file` 一下 `<path>.lock`，本次未做
+  - 架构.md §4.9 / recorder.rs 模块注释仍写"★ 单 jsonl 唯一文件 + partial sidecar"暗示 recorder.rs 同时承担 partial 写入，实际 partial 写入在 sessions_dir.rs，折叠规则在 sessions.rs。注释下次清理
+- **关联**: 架构.md §4.9.3；2026-05-20 / 2026-05-21 partial sidecar 两条上游修复（本次接通它们漏掉的读出侧）
+
+### 2026-05-23 — Skill 集合补虚拟「Local」分支：每个孤儿 skill 自动成组（架构 §6.1.3.1）
+
+- **Why**: 上一条「skill 集合」做完之后用户反馈"Karpathy 他是一个目录里直接就是一个 SKILL.md 他自己就算一个分组 只不过他是属于 Karpathy 这个目录的"。`~/.hebbian/skills/karpathy/SKILL.md` 这种用户手放的 skill 没经过 `import_from_*`，sidecar 里没记录——上一条的 UI 把它们归到"未分组"段，没体现出 karpathy 自己也是个"单 skill 集合"
+- **改动**:
+  - [crates/agent-core/src/storage/skill_collections.rs](../crates/agent-core/src/storage/skill_collections.rs):
+    - `CollectionSource` 加 `Local { path: PathBuf }` 变体——表示"自动合成、不落盘"的虚拟集合
+    - 新公开 helper：`synthetic_local_id(name) -> "local:<name>"`、`is_synthetic_local_id(id)`、`skill_name_from_local_id(id)`
+    - 单测 `local_id_helpers_round_trip` 覆盖 helper 的命名空间约定
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs):
+    - `list_skills`：之前没 sidecar 记录的 Global skill 现在自动填 `collection_id = "local:<name>"`，整个 Global 层不再有 collection_id=null 的 skill
+    - `list_skill_collections`：先返回 sidecar 显式集合，然后扫 `~/.hebbian/skills/` 给每个没被覆盖的目录合成一条 Local 集合（label=目录名 / source=Local / imported_at=mtime / skills=[name]）。虚拟集合**不写盘**，仅运行时生成
+    - `delete_skill_collection`：接到 `"local:<name>"` id 时改走"删单个 skill 目录"分支（等价 `delete_skill(Global, name)`，但走 collection API 入口让前端 UX 一致）
+    - 新增 3 条单测：纯孤儿场景 / sidecar + 孤儿混合场景 / 虚拟 id 删除路径
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `SkillCollection["source"]` union 加 `{ kind: "local"; path: string }`
+  - [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx): `formatSource` 加 local 分支显示 path
+  - [docs/架构.md](../docs/架构.md) §6.1.3.1 加"虚拟集合"小节描述 id 命名空间 / 合成时机 / 删除路径
+- **设计点**:
+  - **id 命名空间用 `"local:"` 前缀**：sidecar 用 uuid v4，不会跟 `local:` 撞车。如果将来加别的虚拟集合（如 Project scope 的 self-collection），用 `project-local:` / `pcode-local:` 类似前缀扩展
+  - **虚拟集合不落盘**：扫 dir + sidecar diff 是 O(N) 廉价操作；落盘的代价是用户每次手改 skill 目录要同步维护文件，反而麻烦。运行时合成始终一致
+  - **`Local.path` 字段冗余但有用**：实际可以从 `data_dir + skills/ + name` 推算，但 UI 显示用、跨进程边界一次性把全路径打过去比让前端拼路径干净
+  - **空 SkillsPane 行为**：所有 Global skill 都有 collection_id 后，"未分组"段在仅 Global 场景永远空。Project / ProjectCode source 仍走"未分组"——这是设计意图（项目层不打 collection 标签）
+- **影响范围**: agent-core 两个文件 + 前端 types + SkillsPane 一处 helper + 架构.md §6.1.3.1；老 sidecar 数据 100% 兼容；前端 0 改 UI 结构（同样的 `grouped.byCollection` 渲染逻辑直接生效）
+- **复现 + 验证**:
+  - **阶段 A 复现**：用户手放 4 个 skill 在 SkillsPane 全归到「未分组」段一团展示；单测 `list_skill_collections_synthesizes_local_for_orphan_skills` 先验旧行为"sidecar 空 + 手放 N 个 = list_skill_collections 返回 0 条"——这就是用户看到的"无分组"
+  - **阶段 B 验证**：新行为下 sidecar 空 + 手放 2 个 skill → 返回 2 条 Local 集合 ✅；sidecar 1 个 collection 含 2 个 skill + 1 个孤儿 skill → 返回 2 条（1 sidecar + 1 Local）✅；delete `"local:karpathy"` 真删 `~/.hebbian/skills/karpathy/` 目录 ✅；`cargo test --workspace --lib` 379+ 测试 0 fail；`pnpm exec tsc --noEmit` 0 error
+- **留尾巴**:
+  - 虚拟集合的 `delete_skill_collection` 跟 `delete_skill` 物理动作完全一样——保留两个 API 是为前端 UX 一致（"卸载组"按钮统一调 delete_skill_collection），不算技术债
+  - 用户之前一次性导入的 obra/superpowers 14 个 skill 仍然显示为 14 个独立 Local 集合（除非用户在新代码 import_from_github 路径再导入一次写出 sidecar）。这是设计意图——我没做"反向推断"，因为无法 reliable 区分"14 个孤儿 skill 恰好同一时间被放进来"和"用户故意手放的 14 个独立 skill"。要合并请重导入
+
+### 2026-05-23 — SkillsPane 集合默认折叠 + 组级三态开关
+
+- **Why**: 用户："每个分组默认折叠 分组或单个都允许启用/禁用"。上一条 UI 把所有 skill 列表完全展开 + 单 skill 开关够用，但 14 个 skill 的 superpowers 一展开就一长条；且整组想一键启/禁还得逐个点
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx):
+    - 加 `expandedCollections: Set<string>` state——默认空集 = 全部折叠；`toggleExpanded(id)` 切换
+    - 加 `toggleCollectionEnabled(items)`：全启用 → 全禁；其他（全禁 / 部分）→ 全启；前端 loop 调单个 `set_skill_enabled`（N≤20 不是 hot path，不值得加新后端批量 API）
+    - 重写集合卡片 header：左侧 chevron 触发折叠、然后是三态 checkbox（组级开关）+ label + 计数（部分启用时显示"已启用 N"），右侧保留"卸载组"按钮；点 chevron / label 区域折叠（整个 header 是一个 button）；checkbox `stopPropagation` 防误触折叠
+    - body（`<ul>`）外加 `isExpanded` 条件渲染——折叠时只显示 header 一行
+    - 新增 `GroupCheckbox` 子组件：原生 `<input type="checkbox">` 用 ref 在 effect 里设 `indeterminate`（React props 不接这个属性，必须 imperative 控制）
+  - `useRef` 加入 React import
+- **设计点**:
+  - **state 存"展开"而非"折叠"**：默认空集 = 全折叠；用户展开后状态保留到 dialog 关闭重开（component unmount）。reload 不重置——`useState` 跟生命周期一致，跟数据无关
+  - **partial → 全启**：朝启用方向收敛对用户更友好——禁用是更危险的方向，让用户专注一个个去禁；启用容易、批量启没什么风险
+  - **单 skill 集合也折叠**：行为统一；header 上已有 label + 开关 + 卸载按钮，折叠态下信息够用；展开看 description
+  - **没引入"全选 / 全反选"工具栏**：每组 checkbox 已经能批量切换；用户真要"启用所有 collection 内所有 skill"会去 enabled_tools 大开关——SkillsPane 不再加更高级的批量入口，保持 surface 简单
+- **影响范围**: SkillsPane.tsx 一个文件；后端 0 改动（沿用现有 `set_skill_enabled` / `delete_skill_collection` API）；持久化 0 影响（展开状态不入盘）
+- **验证**: `pnpm exec tsc --noEmit` 0 error；视觉验证留给用户重启 desktop 后试用

@@ -236,6 +236,12 @@ pub trait CoreClient: Send + Sync {
         workdir: Option<&Path>,
         name: &str,
     ) -> Result<bool, CoreError>;
+    /// 列出全部 skill collection（架构 §6.1.3）。仅 Global 来源——同时给 list_skills 路径
+    /// 用来 join skill→collection_id。
+    fn list_skill_collections(&self) -> Vec<crate::storage::skill_collections::SkillCollection>;
+    /// 删除一个 collection；同时把该 collection 里的 skill 目录从
+    /// `~/.hebbian/skills/<name>/` 物理删除。返回被删除的 skill 名列表。
+    fn delete_skill_collection(&self, id: &str) -> Result<Vec<String>, CoreError>;
 
     // === 同步 API：工具菜单（UI 用）===
 
@@ -348,7 +354,10 @@ impl CoreClient for LocalCoreClient {
     }
 
     fn load_session(&self, session_id: &str) -> Result<sessions_store::Session, CoreError> {
-        sessions_store::load(&self.data_dir, session_id).map_err(CoreError::from)
+        // 走带 partial 恢复的路径：surface 加载会话历史时，先把上次中断残留的 partial
+        // 折叠成 Assistant + Interrupted marker 落进 jsonl，再返回最终视图。
+        sessions_store::load_with_partial_recovery(&self.data_dir, session_id)
+            .map_err(CoreError::from)
     }
 
     fn delete_session(&self, session_id: &str) -> Result<(), CoreError> {
@@ -599,6 +608,28 @@ impl CoreClient for LocalCoreClient {
         let dirs = crate::tools::skill::default_skill_dirs(&self.data_dir, workdir);
         let mut skills = crate::tools::skill::load_skills(&dirs);
         crate::storage::skills::apply_disabled(&self.data_dir, &mut skills);
+        // 架构 §6.1.3：给 Global skill 附上所属 collection id。两类来源：
+        //   1. sidecar 记录（一次 import 多个 skill 时显式 id=uuid）
+        //   2. 虚拟集合（用户手放 / 无 sidecar 的孤儿 skill，id=`local:<name>`）
+        // 二者互斥——sidecar 命中优先，未命中走虚拟。
+        // 这样 SkillsPane UI 没有"未分组"段，每个 skill 都属于某个集合（要么真实
+        // 来源、要么 self-collection）。
+        let collections = crate::storage::skill_collections::load(&self.data_dir).collections;
+        let mut index: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::with_capacity(collections.len() * 4);
+        for c in &collections {
+            for skill_name in &c.skills {
+                index.insert(skill_name.as_str(), c.id.as_str());
+            }
+        }
+        for s in skills.iter_mut() {
+            if matches!(s.source, crate::tools::skill::SkillSource::Global) {
+                s.collection_id = match index.get(s.name.as_str()) {
+                    Some(id) => Some((*id).to_string()),
+                    None => Some(crate::storage::skill_collections::synthetic_local_id(&s.name)),
+                };
+            }
+        }
         skills
     }
 
@@ -714,11 +745,216 @@ impl CoreClient for LocalCoreClient {
         }
     }
 
+    fn list_skill_collections(&self) -> Vec<crate::storage::skill_collections::SkillCollection> {
+        use crate::storage::skill_collections::{
+            synthetic_local_id, CollectionSource, SkillCollection,
+        };
+        // sidecar 显式记录 + 为每个孤儿 Global skill 合成一条虚拟 collection。
+        // 虚拟 collection 不落盘——只在运行时给 UI 用，每个 skill 自成一组
+        // （label = skill 目录名 / 1 个 skill）。
+        let mut out = crate::storage::skill_collections::load(&self.data_dir).collections;
+        let covered: std::collections::HashSet<String> = out
+            .iter()
+            .flat_map(|c| c.skills.iter().cloned())
+            .collect();
+
+        let skills_root = self.data_dir.join("skills");
+        let Ok(entries) = std::fs::read_dir(&skills_root) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || !path.join("SKILL.md").exists() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
+            if covered.contains(&name) {
+                continue;
+            }
+            out.push(SkillCollection {
+                id: synthetic_local_id(&name),
+                label: name.clone(),
+                source: CollectionSource::Local { path: path.clone() },
+                // 用目录 mtime 当 imported_at，给前端排序用——拿不到就给空串
+                imported_at: std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                    .unwrap_or_default(),
+                skills: vec![name],
+            });
+        }
+        out
+    }
+
+    fn delete_skill_collection(&self, id: &str) -> Result<Vec<String>, CoreError> {
+        // 虚拟 collection 不在 sidecar 里，直接按 id 后缀解析 skill 名删目录。
+        if let Some(skill_name) =
+            crate::storage::skill_collections::skill_name_from_local_id(id)
+        {
+            let dir = self.data_dir.join("skills").join(skill_name);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)
+                    .map_err(|e| CoreError::from(common::AppError::from(e)))?;
+                return Ok(vec![skill_name.to_string()]);
+            }
+            return Ok(Vec::new());
+        }
+
+        let removed = crate::storage::skill_collections::remove(&self.data_dir, id)
+            .map_err(CoreError::from)?;
+        let Some(c) = removed else {
+            return Ok(Vec::new());
+        };
+        // 把 collection 里的 skill 目录从 `~/.hebbian/skills/<name>/` 物理删除。
+        // 个别 skill 目录可能因为用户手动改名 / 已删除而不存在——graceful skip，
+        // 整体不报错；返回值里只包含**实际删除成功**的 skill 名。
+        let mut deleted = Vec::new();
+        for name in &c.skills {
+            let dir = self.data_dir.join("skills").join(name);
+            if dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    tracing::warn!(
+                        error = %e,
+                        skill = %name,
+                        "卸载 collection 时删除 skill 目录失败，跳过"
+                    );
+                    continue;
+                }
+                deleted.push(name.clone());
+            }
+        }
+        Ok(deleted)
+    }
+
     fn list_tools(&self) -> Vec<ToolInfo> {
         tools::tool_manifest()
     }
 
     fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::skill_collections::{
+        self, CollectionSource, SkillCollection, SkillCollectionsFile,
+    };
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir()
+            .join(format!("hebbian-core-client-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn write_skill(skills_root: &Path, name: &str, body: &str) {
+        let d = skills_root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), body).unwrap();
+    }
+
+    fn make_client(data_dir: PathBuf) -> LocalCoreClient {
+        LocalCoreClient::new(None, data_dir, None)
+    }
+
+    /// 回归 2026-05-23：用户在 `~/.hebbian/skills/karpathy/SKILL.md` 手放的
+    /// skill 没经过 import，sidecar 没记录——`list_skill_collections` 应当
+    /// 为它合成一条 Local collection，前端 UI 才能把它独立分组而不归到"未分组"。
+    #[test]
+    fn list_skill_collections_synthesizes_local_for_orphan_skills() {
+        let data_dir = tmp("synth-local");
+        let skills_root = data_dir.join("skills");
+        write_skill(&skills_root, "karpathy", "# karpathy");
+        write_skill(&skills_root, "hallmark", "# hallmark");
+
+        let client = make_client(data_dir.clone());
+        let mut collections = client.list_skill_collections();
+        collections.sort_by(|a, b| a.label.cmp(&b.label));
+
+        assert_eq!(collections.len(), 2);
+        assert_eq!(collections[0].label, "hallmark");
+        assert_eq!(collections[0].id, "local:hallmark");
+        assert!(matches!(collections[0].source, CollectionSource::Local { .. }));
+        assert_eq!(collections[0].skills, vec!["hallmark".to_string()]);
+
+        assert_eq!(collections[1].label, "karpathy");
+        assert_eq!(collections[1].id, "local:karpathy");
+    }
+
+    /// sidecar collection 与孤儿 skill 同时存在时，前者优先（其内成员不被
+    /// 重复合成 Local），其他孤儿仍各自合成。
+    #[test]
+    fn list_skill_collections_mixes_sidecar_and_local() {
+        let data_dir = tmp("mix");
+        let skills_root = data_dir.join("skills");
+        // sidecar 集合「superpowers」覆盖两个 skill
+        write_skill(&skills_root, "brainstorming", "# b");
+        write_skill(&skills_root, "writing-skills", "# w");
+        // 一个孤儿 skill
+        write_skill(&skills_root, "karpathy", "# k");
+
+        skill_collections::save(
+            &data_dir,
+            &SkillCollectionsFile {
+                collections: vec![SkillCollection {
+                    id: "fixed-id".into(),
+                    label: "superpowers".into(),
+                    source: CollectionSource::Github {
+                        repo_url: "https://github.com/obra/superpowers".into(),
+                        subpath: None,
+                    },
+                    imported_at: "2026-05-23T00:00:00Z".into(),
+                    skills: vec!["brainstorming".into(), "writing-skills".into()],
+                }],
+            },
+        )
+        .unwrap();
+
+        let client = make_client(data_dir.clone());
+        let collections = client.list_skill_collections();
+        assert_eq!(collections.len(), 2);
+
+        // sidecar 集合保持原样
+        let sp = collections.iter().find(|c| c.label == "superpowers").unwrap();
+        assert_eq!(sp.id, "fixed-id");
+        assert_eq!(sp.skills.len(), 2);
+
+        // karpathy 自成一组
+        let kp = collections.iter().find(|c| c.label == "karpathy").unwrap();
+        assert_eq!(kp.id, "local:karpathy");
+        assert!(matches!(kp.source, CollectionSource::Local { .. }));
+
+        // list_skills 给 sidecar 成员填正确 id，给 karpathy 填虚拟 id
+        let skills = client.list_skills(&PathBuf::from("/tmp/nowhere"));
+        let brain = skills.iter().find(|s| s.name == "brainstorming").unwrap();
+        assert_eq!(brain.collection_id.as_deref(), Some("fixed-id"));
+        let karp = skills.iter().find(|s| s.name == "karpathy").unwrap();
+        assert_eq!(karp.collection_id.as_deref(), Some("local:karpathy"));
+    }
+
+    /// `delete_skill_collection` 接受虚拟 id：按 id 后缀解析 skill 名，删该单个目录。
+    /// 行为等价于 `delete_skill(Global, name)`，但走 collection API 入口保持前端 UX 一致。
+    #[test]
+    fn delete_skill_collection_handles_synthetic_local_id() {
+        let data_dir = tmp("delete-synth");
+        let skills_root = data_dir.join("skills");
+        write_skill(&skills_root, "karpathy", "# k");
+        write_skill(&skills_root, "hallmark", "# h");
+
+        let client = make_client(data_dir.clone());
+        let deleted = client.delete_skill_collection("local:karpathy").unwrap();
+        assert_eq!(deleted, vec!["karpathy".to_string()]);
+        assert!(!skills_root.join("karpathy").exists());
+        // 旁边那个不受影响
+        assert!(skills_root.join("hallmark").exists());
+
+        // 二次删除 / 目录不存在——返回空，不报错
+        let again = client.delete_skill_collection("local:karpathy").unwrap();
+        assert!(again.is_empty());
     }
 }

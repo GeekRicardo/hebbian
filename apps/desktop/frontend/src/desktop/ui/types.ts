@@ -337,6 +337,32 @@ export interface SkillItem {
   path: string;
   source: SkillSource;
   enabled: boolean;
+  /**
+   * 所属 collection id（架构 §6.1.3）。仅 Global source 的 skill 可能有值；
+   * Project / ProjectCode 永远 null/缺失。前端按这个分组展示。
+   */
+  collection_id?: string | null;
+}
+
+/**
+ * Skill 集合（架构 §6.1.3）：一次从 GitHub 仓库或本地目录批量导入的 skill 包。
+ * SkillsPane 按 id 分组展示，支持"卸载整组"。
+ */
+export interface SkillCollection {
+  id: string;
+  label: string;
+  source:
+    | { kind: "github"; repo_url: string; subpath?: string | null }
+    | { kind: "dir"; src_dir: string }
+    /**
+     * 虚拟集合（架构 §6.1.3.1）：用户手放 / 老导入的 skill 没有 sidecar 记录时，
+     * 后端 `list_skill_collections` 为每个孤儿 skill 合成一条 Local 集合
+     * （label = skill 目录名，path = 物理目录绝对路径）。前端把它们跟显式集合
+     * 一样按 id 分组渲染——id 形如 `local:<skill-name>`。
+     */
+    | { kind: "local"; path: string };
+  imported_at: string;
+  skills: string[];
 }
 
 export interface AppSettings {

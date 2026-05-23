@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BriefcaseBusiness,
   FilePlus2,
@@ -27,11 +27,14 @@ import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { PathTypeIcon } from "@/desktop/ui/components/workspaceFields";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
-import { dispatchSlashCommand } from "@/desktop/ui/lib/slashCommands";
+import {
+  buildSlashCommandCatalog,
+  dispatchSlashCommand,
+} from "@/desktop/ui/lib/slashCommands";
 import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
-import type { MessageAttachment } from "@/desktop/ui/types";
+import type { MessageAttachment, SkillItem } from "@/desktop/ui/types";
 
 interface Props {
   onSend: (content: string, attachments: MessageAttachment[]) => Promise<void>;
@@ -108,6 +111,27 @@ export function ChatInput({
 
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
+
+  // 架构 §6.1.3 / §8：当前 workdir 下加载的三层 skills，驱动 `//<skill-name>` 命令注册表
+  // 和 SlashCommandButton 的 popup 列表。workdir 变化时刷新；失败时退回空数组（仍可用
+  // 内置命令）。SkillsPane 在用户导入新 skill 后没有跨组件通知，这里只做 best-effort 刷新——
+  // 用户重启 / 切对话 / 改 workdir 都能拿到最新列表，足够低成本场景。
+  const [skills, setSkills] = useState<SkillItem[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.listSkills(activeWorkdir || ".");
+        if (!cancelled) setSkills(list);
+      } catch {
+        if (!cancelled) setSkills([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkdir]);
+  const slashCatalog = useMemo(() => buildSlashCommandCatalog(skills), [skills]);
 
   useEffect(() => {
     if (!addMenuOpen) return;
@@ -243,13 +267,31 @@ export function ChatInput({
       await runCompact(args);
       return;
     }
-    // `//` 命令系统（架构 §8）：以 `//` 开头的输入一律本地派发，绝不发给模型——
-    // 即便命令名陌生也走 error 分支并提示用户，避免伪命令污染对话。
+    // `//` 命令系统（架构 §8）：
+    // - 内置控制命令（如 //force-automode）→ 本地派发，不发给模型
+    // - skill 命令（如 //commit）→ 通过 sendPrompt 改写成 `/<name> [args]` 走正常发送路径
+    // - 未知命令 → 错误 toast，绝不降级成 prompt 发给模型（fail-closed）
     if (v.startsWith("//")) {
-      const result = await dispatchSlashCommand(v, {
-        sessionId: currentSession?.id ?? null,
-        toast,
-      });
+      const result = await dispatchSlashCommand(
+        v,
+        {
+          sessionId: currentSession?.id ?? null,
+          toast,
+          sendPrompt: async (text) => {
+            setSending(true);
+            const queuedAttachments = attachments;
+            setAttachments([]);
+            try {
+              void onSend(text, queuedAttachments).catch((e: any) => {
+                toast.error(e?.message || String(e));
+              });
+            } finally {
+              setSending(false);
+            }
+          },
+        },
+        skills
+      );
       if (result.handled) {
         if (result.error) {
           toast.error(result.error);
@@ -764,6 +806,7 @@ export function ChatInput({
             </div>
             <SlashCommandButton
               disabled={inputDisabled}
+              commands={slashCatalog}
               onPick={(cmd) => {
                 const trailingSpace = cmd.args.length > 0 ? " " : "";
                 const insertion = `//${cmd.name}${trailingSpace}`;

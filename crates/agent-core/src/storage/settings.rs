@@ -104,7 +104,46 @@ pub fn load(data_dir: &Path) -> Settings {
             tracing::warn!(error = %e, "normalize enabled_tools 回写失败，仅内存生效");
         }
     }
+    // 把所有 path 字段里的 `~/` 展开成绝对路径。`std::fs` 不识别 tilde（那是 shell
+    // 语法糖），如果用户在 settings.json 写了 `"~/.hebbian/skills"` 之类，下游
+    // read_dir 会拿到字面 `~`，悄悄返回空——SkillTool 看起来"没加载到任何 skill"。
+    // 这里 in-memory 展开但不回写文件，用户在 settings.json 里仍能看到 `~/` 表达。
+    expand_home_in_settings(&mut settings);
     settings
+}
+
+/// 把所有 `~` / `~/...` 形式的 path 字段就地展开成绝对路径。
+fn expand_home_in_settings(s: &mut Settings) {
+    if let Some(ref mut wd) = s.conversation.workdir {
+        *wd = expand_home(wd);
+    }
+    for p in &mut s.conversation.allowed_paths {
+        *p = expand_home(p);
+    }
+    for p in &mut s.conversation.skill_dirs {
+        *p = expand_home(p);
+    }
+    for p in &mut s.conversation.global_rules {
+        *p = expand_home(p);
+    }
+}
+
+/// `~` → `$HOME`、`~/foo` → `$HOME/foo`；其他原样返回。`$HOME` 拿不到时也原样返回
+/// （比让 fs 操作拿一个垃圾值更友好——下游会自然报错）。
+pub fn expand_home(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if s != "~" && !s.starts_with("~/") {
+        return p.to_path_buf();
+    }
+    let Some(home) = dirs::home_dir() else {
+        return p.to_path_buf();
+    };
+    let rest = s.trim_start_matches('~').trim_start_matches('/');
+    if rest.is_empty() {
+        home
+    } else {
+        home.join(rest)
+    }
 }
 
 /// 已知的工具名迁移映射（老 → 新）。新工具加入时这里无需改——只迁移已废弃的别名。
@@ -175,5 +214,59 @@ mod tests {
         assert!(text.contains("WebSearch"));
         assert!(text.contains("Fetch"));
         assert!(!text.contains("web_search"));
+    }
+
+    /// 回归 2026-05-23：用户在 `~/.hebbian/settings.json` 写
+    /// `"skill_dirs":["~/.hebbian/skills"]`，下游 std::fs::read_dir 拿到字面 `~`
+    /// 默默返回空，SkillTool 看起来"加载不到任何 skill"。load 必须把 `~/` 展开。
+    #[test]
+    fn load_expands_tilde_in_path_fields() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let dir = tmp("tilde-expand");
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{
+              "conversation": {
+                "workdir": "~/work",
+                "allowed_paths": ["~/code", "/abs/path"],
+                "skill_dirs": ["~/.hebbian/skills", "~"],
+                "global_rules": ["~/.claude/CLAUDE.md"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let s = load(&dir);
+        assert_eq!(s.conversation.workdir.as_deref(), Some(home.join("work").as_path()));
+        assert_eq!(
+            s.conversation.allowed_paths,
+            vec![home.join("code"), PathBuf::from("/abs/path")]
+        );
+        assert_eq!(
+            s.conversation.skill_dirs,
+            vec![home.join(".hebbian/skills"), home.clone()]
+        );
+        assert_eq!(
+            s.conversation.global_rules,
+            vec![home.join(".claude/CLAUDE.md")]
+        );
+    }
+
+    #[test]
+    fn expand_home_handles_edge_cases() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        assert_eq!(expand_home(&PathBuf::from("~")), home);
+        assert_eq!(expand_home(&PathBuf::from("~/")), home);
+        assert_eq!(expand_home(&PathBuf::from("~/foo")), home.join("foo"));
+        // 仅前缀展开，中间出现的 `~` 不动（合法目录名场景）
+        assert_eq!(
+            expand_home(&PathBuf::from("/etc/~hostname")),
+            PathBuf::from("/etc/~hostname")
+        );
+        // 已经是绝对路径——原样返回
+        assert_eq!(expand_home(&PathBuf::from("/abs")), PathBuf::from("/abs"));
     }
 }
