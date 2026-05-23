@@ -4,8 +4,11 @@ import { FilePenLine, Plus, Rewind, ChevronDown, ChevronRight } from "lucide-rea
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
+import { focusToolCall } from "@/desktop/ui/lib/focusToolCall";
 import type { EditEntry } from "@/desktop/ui/types";
-import { DiffPanel } from "./DiffPanel";
+
+// 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
+const EMPTY_ENTRIES: EditEntry[] = [];
 
 /**
  * 旧版本浮动卡片——已被 RightSidebar 内的 `EditTreeTab` 替代（架构 §4.13.x 修订）。
@@ -19,19 +22,25 @@ export function EditTreePanel() {
  * 工作台 sidebar 内的「修改文件」tab 内容（架构 §4.13 修订）。
  *
  * 展示当前 session 所有 Edit 工具快照，按文件路径分组、支持单次回退。
- * 数据源（`useStore.editSnapshots`）跟原浮动版一致，只是脱离浮动定位，
+ * 数据源（`useStore.sessionEditSnapshots[currentSessionId]`，session-scoped），
  * 嵌入 RightSidebar tab 区。空状态显示 hint 而不是 return null（沿 sidebar 风格）。
  */
 export function EditTreeTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const editSnapshots = useStore((s) => s.editSnapshots);
+  const editSnapshots = useStore(
+    (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_ENTRIES,
+  );
   const revertEdit = useStore((s) => s.revertEdit);
-  const [diffEntry, setDiffEntry] = useState<EditEntry | null>(null);
+  const refreshEdits = useStore((s) => s.refreshEdits);
   const [reverting, setReverting] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
+    // 切到本 tab 时主动拉一次后端权威列表——覆盖「应用启动后没开过 run」的场景：
+    // openSession 那边的 refreshEdits 也会跑，这里是兜底（特别是 hebweb 上 listen
+    // 不到 edit 事件、只能靠拉的场景）。
+    void refreshEdits();
     api.editsWorktreeStatus(sessionId)
       .then((status) => {
         if (!cancelled && !status.enabled && status.entry_count === 0) {
@@ -42,7 +51,7 @@ export function EditTreeTab() {
       })
       .catch(() => { /* 静默 */ });
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, refreshEdits]);
 
   async function handleRevert(snapshotId: string) {
     if (!sessionId) return;
@@ -91,36 +100,24 @@ export function EditTreeTab() {
   const revertedEntries = editSnapshots.filter((e) => e.reverted);
 
   return (
-    <>
-      <div className="text-[12px]">
-        {activeEntries.length > 0 && (
-          <EditSection
-            entries={activeEntries}
-            reverting={reverting}
-            onRevert={handleRevert}
-            onDiff={setDiffEntry}
-          />
-        )}
-        {revertedEntries.length > 0 && (
-          <EditSection
-            title="已回退"
-            entries={revertedEntries}
-            reverting={reverting}
-            onRevert={undefined}
-            onDiff={setDiffEntry}
-            dimmed
-          />
-        )}
-      </div>
-
-      {diffEntry && (
-        <DiffPanel
-          sessionId={sessionId}
-          entry={diffEntry}
-          onClose={() => setDiffEntry(null)}
+    <div className="text-[12px]">
+      {activeEntries.length > 0 && (
+        <EditSection
+          entries={activeEntries}
+          reverting={reverting}
+          onRevert={handleRevert}
         />
       )}
-    </>
+      {revertedEntries.length > 0 && (
+        <EditSection
+          title="已回退"
+          entries={revertedEntries}
+          reverting={reverting}
+          onRevert={undefined}
+          dimmed
+        />
+      )}
+    </div>
   );
 }
 
@@ -129,14 +126,12 @@ function EditSection({
   entries,
   reverting,
   onRevert,
-  onDiff,
   dimmed,
 }: {
   title?: string;
   entries: EditEntry[];
   reverting: Set<string>;
   onRevert?: (snapshotId: string) => void;
-  onDiff: (entry: EditEntry) => void;
   dimmed?: boolean;
 }) {
   // 按文件路径分组
@@ -195,40 +190,49 @@ function EditSection({
               </span>
             </button>
             {expanded &&
-              fileEntries.map((entry) => (
-                <div
-                  key={entry.snapshot_id}
-                  className={cn(
-                    "ml-5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]",
-                    dimmed && "opacity-40"
-                  )}
-                >
-                  <span className="flex-1 truncate text-muted-foreground">
-                    {entry.action === "create" ? "创建" : entry.action === "overwrite" ? "覆写" : "修改"}
-                    {" · "}
-                    {entry.before_bytes === entry.after_bytes
-                      ? `${entry.before_bytes}B`
-                      : `${entry.before_bytes}→${entry.after_bytes}B`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onDiff(entry)}
-                    className="rounded px-1 text-[9px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              fileEntries.map((entry, idx) => {
+                // 反向 patch 的天然限制：回退非最新一次 Edit 时，patch 的上下文
+                // 行可能已被后续 Edit 改动，git apply 会拒绝。让用户提前知道。
+                const isLatest = idx === fileEntries.length - 1;
+                const revertHint = isLatest
+                  ? "撤销本次修改"
+                  : "撤销此次修改；若后续 Edit 改动了同一段，可能因冲突失败";
+                return (
+                  <div
+                    key={entry.snapshot_id}
+                    className={cn(
+                      "ml-5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors",
+                      !dimmed && "hover:bg-accent/40 cursor-pointer",
+                      dimmed && "opacity-40"
+                    )}
+                    onClick={() => focusToolCall(entry.call_id)}
+                    title="跳到对话里的这次修改"
+                    role="button"
                   >
-                    对比
-                  </button>
-                  {onRevert && !entry.reverted && (
-                    <button
-                      type="button"
-                      onClick={() => onRevert(entry.snapshot_id)}
-                      disabled={reverting.has(entry.snapshot_id)}
-                      className="rounded px-1 text-[9px] text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
-                    >
-                      <Rewind className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                    <span className="flex-1 truncate text-muted-foreground">
+                      {entry.action === "create" ? "创建" : entry.action === "overwrite" ? "覆写" : "修改"}
+                      {" · "}
+                      {entry.before_bytes === entry.after_bytes
+                        ? `${entry.before_bytes}B`
+                        : `${entry.before_bytes}→${entry.after_bytes}B`}
+                    </span>
+                    {onRevert && !entry.reverted && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRevert(entry.snapshot_id);
+                        }}
+                        disabled={reverting.has(entry.snapshot_id)}
+                        title={revertHint}
+                        className="rounded px-1 text-[9px] text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
+                      >
+                        <Rewind className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         );
       })}

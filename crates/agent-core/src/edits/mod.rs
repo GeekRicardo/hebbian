@@ -118,9 +118,13 @@ impl EditsWorktree {
         Ok(Some(Snapshot { sha, file_bytes }))
     }
 
-    /// 回退单次 Edit：
-    /// 1. 生成反向 patch（`git diff after before -- <mirrored>`）
-    /// 2. 拷贝真实文件 → 镜像位置（备份当前状态）
+    /// 回退单次 Edit。按 entry.action 分派：
+    /// - `Create`：直接删除真实文件（before 状态本就是「不存在」）
+    /// - `Modify` / `Overwrite`：生成 after→before 反向 patch，apply 到当前真实文件
+    ///
+    /// 反向 patch 路径：
+    /// 1. `git diff after before -- <mirrored>`（**保留 stdout 原样**，patch 末尾换行不能丢，否则 `git apply` 报 `corrupt patch`）
+    /// 2. 拷贝真实文件 → 镜像位置（apply 的目标 = 当前状态）
     /// 3. `git apply --check` 探测冲突；无冲突则 `git apply`
     /// 4. 拷贝镜像 → 真实文件
     ///
@@ -130,6 +134,29 @@ impl EditsWorktree {
             return Err(AppError::msg("git 不可用，回退功能已禁用"));
         }
         let real_path = Path::new(&entry.real_path);
+
+        // create 的 before 状态 = 文件不存在；patch 路径走不通（before_sha 为空 ref）。
+        // 语义上回退 = 删除文件即可。
+        if matches!(entry.action, protocol::EditAction::Create) {
+            match tokio::fs::remove_file(real_path).await {
+                Ok(()) => return Ok(()),
+                // 用户已经手动删了——视作回退已达成的等价状态
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => {
+                    return Err(AppError::msg(format!(
+                        "删除 create 文件失败 {}: {e}",
+                        real_path.display()
+                    )))
+                }
+            }
+        }
+
+        // Modify / Overwrite：走反向 patch
+        if entry.before_sha.is_empty() {
+            return Err(AppError::msg(
+                "非 create 类型但 before_sha 为空，metadata 损坏",
+            ));
+        }
 
         let patch = self
             .git_diff(&entry.after_sha, &entry.before_sha, real_path)
@@ -262,7 +289,10 @@ impl EditsWorktree {
             &["commit", "--allow-empty", "-m", message],
         )
         .await?;
-        run_git(&self.worktree_dir, &["rev-parse", "HEAD"]).await
+        // rev-parse 返回 `<sha>\n`；存进 EditEntry 前要 trim，否则字符串 sha 带换行
+        // 会污染后续 git 命令拼接。
+        let raw = run_git(&self.worktree_dir, &["rev-parse", "HEAD"]).await?;
+        Ok(raw.trim().to_string())
     }
 
     async fn git_diff(&self, from_sha: &str, to_sha: &str, real_path: &Path) -> AppResult<String> {
@@ -350,6 +380,11 @@ async fn check_git() -> bool {
         .unwrap_or(false)
 }
 
+/// 跑一条 git 命令，返回 **原样** stdout（不 trim）。
+///
+/// 不能 trim 的原因：`git diff` / `git show` 的输出末尾的 `\n` 是 patch / 文件
+/// 内容的一部分，吃掉后 `git apply` 会报 `corrupt patch`；调用方需要 sha 之类
+/// 短串时自己 `.trim()`。
 async fn run_git(dir: &Path, args: &[&str]) -> AppResult<String> {
     let dir = dir.to_path_buf();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -372,7 +407,7 @@ async fn run_git(dir: &Path, args: &[&str]) -> AppResult<String> {
             "git {error_label} 退出码非零: {stderr}"
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn hash_path(path: &Path) -> String {
@@ -410,5 +445,173 @@ mod tests {
         let mirrored = wt.mirrored_path(real);
         assert!(mirrored.to_string_lossy().contains("_external"));
         assert!(mirrored.ends_with("hosts"));
+    }
+
+    // ── 端到端：snapshot → revert ────────────────────────────────────────
+    //
+    // 这一组测试固化一个曾经长期 broken 的属性：worktree 的反向 patch 回退
+    // 必须真的能把文件改回去。回归点是 `run_git` 之前对 stdout 调用 `.trim()`，
+    // 吃掉了 `git diff` 输出末尾的 `\n`，导致 patch 永远 `corrupt`。
+
+    fn fake_entry(
+        real: &Path,
+        before_sha: String,
+        after_sha: String,
+        action: protocol::EditAction,
+    ) -> metadata::EditEntry {
+        metadata::EditEntry {
+            snapshot_id: "s".into(),
+            call_id: "c".into(),
+            tool: "Edit".into(),
+            real_path: real.to_string_lossy().to_string(),
+            action,
+            before_sha,
+            after_sha,
+            before_bytes: 0,
+            after_bytes: 0,
+            ts_ms: 0,
+            reverted: false,
+            reverted_at_ms: None,
+        }
+    }
+
+    /// 同步检查 git 可用；不可用时打印跳过。所有依赖 git 的测试都走这一关。
+    async fn require_git_or_skip(wt: &EditsWorktree) -> bool {
+        if !wt.enabled().await {
+            eprintln!("跳过：当前环境没有 git CLI");
+            return false;
+        }
+        true
+    }
+
+    #[tokio::test]
+    async fn snapshot_then_revert_restores_modify() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let real = ws.path().join("foo.txt");
+        tokio::fs::write(&real, b"line-1\n").await.unwrap();
+        let workspace = Workspace::new(ws.path(), Vec::new());
+        let wt = EditsWorktree::new(dd.path(), "sid", &workspace);
+        if !require_git_or_skip(&wt).await {
+            return;
+        }
+
+        let before = wt
+            .snapshot_before("c1", &real)
+            .await
+            .unwrap()
+            .expect("before snapshot");
+        tokio::fs::write(&real, b"line-1\nline-2\n").await.unwrap();
+        let after = wt
+            .snapshot_after("c1", &real)
+            .await
+            .unwrap()
+            .expect("after snapshot");
+
+        let entry = fake_entry(
+            &real,
+            before.sha,
+            after.sha,
+            protocol::EditAction::Modify,
+        );
+        wt.revert(&entry)
+            .await
+            .expect("revert 应当成功（trim 不再破坏 patch）");
+
+        let got = tokio::fs::read_to_string(&real).await.unwrap();
+        assert_eq!(got, "line-1\n", "文件没被回退到 before 状态");
+    }
+
+    #[tokio::test]
+    async fn revert_create_deletes_file() {
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let real = ws.path().join("new.txt");
+        let workspace = Workspace::new(ws.path(), Vec::new());
+        let wt = EditsWorktree::new(dd.path(), "sid", &workspace);
+        if !require_git_or_skip(&wt).await {
+            return;
+        }
+
+        // before：文件不存在，snapshot_before 会因 mirror_file 失败而 Err，
+        // dispatch 路径用 unwrap_or(None) 吞掉——这里复现该兼容。
+        let before_sha = wt
+            .snapshot_before("c2", &real)
+            .await
+            .ok()
+            .flatten()
+            .map(|s| s.sha)
+            .unwrap_or_default();
+        tokio::fs::write(&real, b"hello\n").await.unwrap();
+        let after = wt
+            .snapshot_after("c2", &real)
+            .await
+            .unwrap()
+            .expect("after snapshot");
+
+        let entry = fake_entry(&real, before_sha, after.sha, protocol::EditAction::Create);
+        wt.revert(&entry)
+            .await
+            .expect("create 类型 revert 应直接删文件");
+
+        assert!(!real.exists(), "create 回退后真实文件应被删除");
+    }
+
+    #[tokio::test]
+    async fn revert_rejects_when_user_changed_same_line() {
+        // 模型 Edit 后用户绕开 Edit 又动了同一段文本——git apply --check 应当冲突，
+        // 不动真实文件。这是「保留用户改动」的硬保证。
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let real = ws.path().join("foo.txt");
+        tokio::fs::write(&real, b"alpha\nbeta\ngamma\n").await.unwrap();
+        let workspace = Workspace::new(ws.path(), Vec::new());
+        let wt = EditsWorktree::new(dd.path(), "sid", &workspace);
+        if !require_git_or_skip(&wt).await {
+            return;
+        }
+
+        let before = wt.snapshot_before("c3", &real).await.unwrap().unwrap();
+        tokio::fs::write(&real, b"alpha\nBETA-EDIT\ngamma\n").await.unwrap();
+        let after = wt.snapshot_after("c3", &real).await.unwrap().unwrap();
+
+        // 用户在 Edit 改过的那一行再动一下
+        tokio::fs::write(&real, b"alpha\nBETA-USER\ngamma\n").await.unwrap();
+
+        let entry = fake_entry(&real, before.sha, after.sha, protocol::EditAction::Modify);
+        let err = wt.revert(&entry).await.unwrap_err();
+        assert!(
+            err.to_string().contains("冲突"),
+            "应当报冲突，实际: {err}"
+        );
+
+        let got = tokio::fs::read_to_string(&real).await.unwrap();
+        assert_eq!(got, "alpha\nBETA-USER\ngamma\n", "冲突时不能动用户文件");
+    }
+
+    #[tokio::test]
+    async fn list_entries_works_on_fresh_instance() {
+        // 模拟「desktop 重启」：写一份 metadata，然后用全新的 EditsWorktree
+        // 实例（sessionStreams 一定不存在）拿 list_entries——后端必须能读到。
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(ws.path(), Vec::new());
+        let wt = EditsWorktree::new(dd.path(), "sid", &workspace);
+
+        let dir = metadata::worktree_dir(dd.path(), "sid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = metadata::EditsMetadata {
+            version: 1,
+            entries: vec![fake_entry(
+                Path::new("/tmp/x"),
+                String::new(),
+                "abcd".into(),
+                protocol::EditAction::Create,
+            )],
+        };
+        metadata::save_metadata(&dir, &meta).unwrap();
+
+        let entries = wt.list_entries().unwrap();
+        assert_eq!(entries.len(), 1);
     }
 }
