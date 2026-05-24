@@ -193,7 +193,8 @@ impl HitlGate {
         }
 
         // 5b) PermissionStore（Session → Project → Global）—— 长期规则
-        //     Bash/PowerShell 段级查询：全段 allow 才整体 allow，任一 deny 即整体 deny。
+        //     Bash/PowerShell 走段级查询；其它工具按 effects.paths 多路径查询
+        //     （让 `Edit(/dir/)` 这类目录前缀规则真正命中子文件，否则会反复审批）。
         if let Some(store) = &self.permission_store {
             let sid = self.session_id.as_deref();
             let wd = self.workdir.as_deref();
@@ -204,6 +205,13 @@ impl HitlGate {
                     .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
                     .collect();
                 store.find_for_segments(sid, wd, tool_name, &seg_pairs)
+            } else if !effects.paths.is_empty() {
+                let path_strs: Vec<String> = effects
+                    .paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                store.find_for_paths(sid, wd, tool_name, fingerprint, &path_strs)
             } else {
                 store.find(sid, wd, tool_name, fingerprint, None)
             };
@@ -693,6 +701,68 @@ mod tests {
         assert!(fingerprint_matches("git status\t-uno", "git status"));
         assert!(!fingerprint_matches("git statusbad", "git status"));
         assert!(!fingerprint_matches("gits", "git"));
+    }
+
+    /// 回归：Edit/Write 类工具，用户审批后选「整个目录 + 本项目」记忆，
+    /// 同一目录下不同子文件不应再次触发审批。
+    /// 修前 HitlGate::check 把 path 传 None 给 store.find，`Edit(/dir/)` 规则永远不命中。
+    #[test]
+    fn project_directory_rule_matches_subfile_without_reapproval() {
+        let dir = std::env::temp_dir().join(format!(
+            "hebbian-hitl-subdir-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(PermissionStore::open(&dir).unwrap());
+        let workdir = PathBuf::from("/Users/x/proj");
+        let gate = HitlGate::new(PermissionPolicy::default())
+            .with_store(store, "sess-1", Some(workdir.clone()));
+
+        // 第一次：Edit /foo/bar/a.rs → NeedsApproval；用户选 AllowAndRemember(Project, "/foo/bar/")
+        let edit_a = Effects {
+            paths: vec![PathBuf::from("/foo/bar/a.rs")],
+            command_fingerprint: None,
+            network: false,
+            domain: None,
+            risk: RiskLevel::Medium,
+            class: EffectClass::Mutating,
+            is_concurrent_safe: false,
+            segments: Vec::new(),
+            dangerous_kinds: Vec::new(),
+        };
+        let decision = gate.check("Edit", &edit_a);
+        let req_id = match decision {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected NeedsApproval, got {other:?}"),
+        };
+        gate.resolve(
+            &req_id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Project,
+                pattern: Some("/foo/bar/".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+
+        // 第二次：Edit /foo/bar/sub/b.rs（同目录不同子文件）→ 应当直接 Approved
+        let edit_b = Effects {
+            paths: vec![PathBuf::from("/foo/bar/sub/b.rs")],
+            ..edit_a.clone()
+        };
+        match gate.check("Edit", &edit_b) {
+            PermissionDecision::Approved => {}
+            other => panic!("expected Approved for subdirectory file, got {other:?}"),
+        }
+
+        // 第三次：Edit /elsewhere/c.rs（不在前缀下）→ 仍审批
+        let edit_c = Effects {
+            paths: vec![PathBuf::from("/elsewhere/c.rs")],
+            ..edit_a
+        };
+        match gate.check("Edit", &edit_c) {
+            PermissionDecision::NeedsApproval { .. } => {}
+            other => panic!("expected NeedsApproval for path outside rule, got {other:?}"),
+        }
     }
 
     /// 危险复合模式：即使有 allow 规则也强制审批，且 resolve(AllowAndRemember)

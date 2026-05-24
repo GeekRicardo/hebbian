@@ -24,6 +24,24 @@ export function pathLeaf(path: string) {
   return parts[parts.length - 1] || trimmed || "";
 }
 
+/**
+ * 若 path 在 base 目录下，返回相对部分（`base` 自身 → "."；`base/x` → "x"）；
+ * 否则原样返回 path。base 为空时直接原样返回。
+ * 用于把项目级允许路径渲染为「workdir 相对路径」减少噪音。
+ */
+export function relativizeIfUnder(path: string, base?: string | null): string {
+  if (!base) return path;
+  const norm = (s: string) => s.replace(/[\\/]+$/, "");
+  const b = norm(base);
+  const p = norm(path);
+  if (!b) return path;
+  if (p === b) return ".";
+  if (p.startsWith(b + "/") || p.startsWith(b + "\\")) {
+    return p.slice(b.length + 1);
+  }
+  return path;
+}
+
 export function hasSessionStarted(
   session?: { messages?: Array<{ role: string }> } | null
 ) {

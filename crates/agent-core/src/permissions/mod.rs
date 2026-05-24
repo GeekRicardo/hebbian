@@ -368,6 +368,47 @@ impl PermissionStore {
         None
     }
 
+    /// 多路径查询（架构 §4.6）：非 Bash 工具的 `effects.paths` 可能含一条或多条
+    /// 路径（如 `Edit { file_path }`、Glob/Grep 的 search root）。语义对称
+    /// [`Self::find_for_segments`]：
+    /// - 任一 path 命中 deny → `Deny`
+    /// - 所有 path 都命中 allow → `Allow`
+    /// - 否则 `None`（落到默认策略）
+    ///
+    /// `paths` 为空时退化为 `find(.., None)`——让 `Arg::Any`（`Edit` 这种工具名级
+    /// 规则）仍能生效。修复了 HitlGate::check 早期版本只传 `None` 导致
+    /// `Edit(/dir/)` 类目录前缀规则下次永远命中不到 → 子文件反复审批的 bug。
+    pub fn find_for_paths(
+        &self,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        paths: &[String],
+    ) -> Option<RuleEffect> {
+        if paths.is_empty() {
+            return self.find(session_id, workdir, tool_name, fingerprint, None);
+        }
+        for p in paths {
+            if matches!(
+                self.find(session_id, workdir, tool_name, fingerprint, Some(p)),
+                Some(RuleEffect::Deny)
+            ) {
+                return Some(RuleEffect::Deny);
+            }
+        }
+        let all_allow = paths.iter().all(|p| {
+            matches!(
+                self.find(session_id, workdir, tool_name, fingerprint, Some(p)),
+                Some(RuleEffect::Allow)
+            )
+        });
+        if all_allow {
+            return Some(RuleEffect::Allow);
+        }
+        None
+    }
+
     /// Bash / PowerShell 段级查询（架构 §4.4.2）：
     /// 每段 `(fingerprint, write_targets)`：任一段命中 deny → Deny；全部段命中 allow → Allow。
     pub fn find_for_segments(
@@ -997,6 +1038,122 @@ mod tests {
             .unwrap();
         assert!(store.allows_path(None, None, "/etc/hosts"));
         assert!(!store.allows_path(None, None, "/usr/local"));
+    }
+
+    /// 回归：`Edit(/foo/bar/)` 规则必须能匹配 `/foo/bar/` 下的任意子文件
+    /// （父目录前缀递归覆盖子目录，与 Claude Code 的 dirname/starts_with 语义对齐）。
+    /// 修前 HitlGate::check 把 path 传成 None 导致这条规则永远不命中 → 子文件反复审批。
+    #[test]
+    fn find_for_paths_matches_subdirectory_under_project_rule() {
+        let dir = tmp("subdir");
+        let store = PermissionStore::open(&dir).unwrap();
+        let proj = PathBuf::from("/Users/x/proj");
+        store
+            .add(
+                PermissionScope::Project,
+                None,
+                Some(&proj),
+                RuleEffect::Allow,
+                "Edit(/foo/bar/)".to_string(),
+            )
+            .unwrap();
+        // 直接父目录下的文件 → Allow
+        let dec = store.find_for_paths(
+            None,
+            Some(&proj),
+            "Edit",
+            None,
+            &["/foo/bar/x.rs".to_string()],
+        );
+        assert_eq!(dec, Some(RuleEffect::Allow));
+        // 更深子目录的文件 → Allow（递归覆盖）
+        let dec = store.find_for_paths(
+            None,
+            Some(&proj),
+            "Edit",
+            None,
+            &["/foo/bar/sub/deep/y.rs".to_string()],
+        );
+        assert_eq!(dec, Some(RuleEffect::Allow));
+        // 同级别但不在前缀下的文件 → 未决（落回默认策略，仍审批）
+        let dec = store.find_for_paths(
+            None,
+            Some(&proj),
+            "Edit",
+            None,
+            &["/foo/other/z.rs".to_string()],
+        );
+        assert_eq!(dec, None);
+    }
+
+    /// 多 path 全允许才整体 Allow；任一 path 命中 deny 即整体 Deny。
+    #[test]
+    fn find_for_paths_multi_path_semantics() {
+        let dir = tmp("multipath");
+        let store = PermissionStore::open(&dir).unwrap();
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Edit(/tmp/)".to_string(),
+            )
+            .unwrap();
+        // 两条都在 /tmp/ 下 → Allow
+        let dec = store.find_for_paths(
+            None,
+            None,
+            "Edit",
+            None,
+            &["/tmp/a.txt".to_string(), "/tmp/b/c.txt".to_string()],
+        );
+        assert_eq!(dec, Some(RuleEffect::Allow));
+        // 一条不在 allow 前缀下 → 未决（不整体 Allow）
+        let dec = store.find_for_paths(
+            None,
+            None,
+            "Edit",
+            None,
+            &["/tmp/a.txt".to_string(), "/etc/passwd".to_string()],
+        );
+        assert_eq!(dec, None);
+        // 加一条 deny，任一命中即整体 Deny
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Deny,
+                "Edit(/etc/)".to_string(),
+            )
+            .unwrap();
+        let dec = store.find_for_paths(
+            None,
+            None,
+            "Edit",
+            None,
+            &["/tmp/a.txt".to_string(), "/etc/passwd".to_string()],
+        );
+        assert_eq!(dec, Some(RuleEffect::Deny));
+    }
+
+    /// 空 paths 退化到 find(None) —— `Arg::Any`（工具名级 `Edit`）仍生效。
+    #[test]
+    fn find_for_paths_empty_falls_back_to_tool_name_rule() {
+        let dir = tmp("anyfb");
+        let store = PermissionStore::open(&dir).unwrap();
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Edit".to_string(),
+            )
+            .unwrap();
+        let dec = store.find_for_paths(None, None, "Edit", None, &[]);
+        assert_eq!(dec, Some(RuleEffect::Allow));
     }
 
     #[test]

@@ -23,7 +23,7 @@ import { toast } from "sonner";
 import { PathHint } from "@/desktop/ui/components/PathHint";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Input, Label } from "@/desktop/ui/components/ui/input";
-import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
+import { cn, pathLeaf, relativizeIfUnder } from "@/desktop/ui/lib/utils";
 
 /** 单选目录输入：path + 「选择」按钮，placeholder 通常用来显示全局默认值。 */
 export function DirPicker({
@@ -177,6 +177,10 @@ export function PathTypeIcon({
  * - `lockedPaths`：这些条目仅展示，不可删除（用于"对话已开始后锁定的路径"等场景）。
  *   `paths` 里凡是出现在 `lockedPaths` 中的项，会渲染锁图标且没有移除按钮。
  * - `lockedHint`：当存在 locked 条目时，在列表上方显示的一行提示。
+ * - `relativeTo`：可选基准目录。条目路径在该目录下时显示为相对路径
+ *   （如 `./src/x` 或 `src/x`），不在或未传则显示完整路径。仅影响渲染，
+ *   onChange 回传的仍是原始绝对路径。用于项目级目录列表减少视觉噪音；
+ *   全局级不传即可保持完整路径。
  */
 export function PathListField({
   label,
@@ -189,6 +193,7 @@ export function PathListField({
   lockedHint,
   allowFiles = false,
   maxVisibleRows,
+  relativeTo,
 }: {
   label: string;
   paths: string[];
@@ -200,6 +205,7 @@ export function PathListField({
   lockedHint?: string;
   allowFiles?: boolean;
   maxVisibleRows?: number;
+  relativeTo?: string | null;
 }) {
   const showingInherited = paths.length === 0 && (inheritedPaths?.length ?? 0) > 0;
   const lockedSet = useMemo(() => new Set(lockedPaths ?? []), [lockedPaths]);
@@ -322,7 +328,7 @@ export function PathListField({
                         locked && "text-muted-foreground"
                       )}
                     >
-                      {pathLeaf(d)}
+                      {relativeTo ? relativizeIfUnder(d, relativeTo) : pathLeaf(d)}
                       {inherited && (
                         <span className="ml-1.5 not-italic font-sans text-[10px] text-muted-foreground/70">
                           （全局默认）

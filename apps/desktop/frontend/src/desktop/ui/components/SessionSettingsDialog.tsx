@@ -318,6 +318,7 @@ export function SessionSettingsDialog() {
             paths={allowedPaths ?? []}
             inheritedPaths={allowedPaths === null ? inheritedAllowedPaths : undefined}
             onChange={(paths) => setAllowedPaths(paths)}
+            relativeTo={workdir ?? inheritedWorkdir}
             lockedPaths={
               // 对话已开始：当前 session 持久化里已知的路径全部 locked。
               // 用户在 UI 里新加的（还在 state 里、还没保存）不在 locked 里，可删。

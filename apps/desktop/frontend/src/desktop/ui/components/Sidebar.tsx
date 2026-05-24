@@ -563,6 +563,7 @@ export function Sidebar() {
                   emptyHint="暂无额外路径"
                   allowFiles
                   maxVisibleRows={5}
+                  relativeTo={projectWorkdir(selectedProject)}
                 />
               </div>
             </div>
