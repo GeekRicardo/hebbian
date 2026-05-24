@@ -329,6 +329,10 @@ pub struct DeepseekStreamState {
     pub thinking_done: bool,
     /// 上一条 chunk 的 `p` 字段；用于「sticky path」省略写法。
     pub last_path: String,
+    /// SSE 中 `accumulated_token_usage` 的最新值。DeepSeek web 协议不分 input/output/cache，
+    /// 只给一个单调递增的总用量；流末最大值约等于本轮的总 token 消耗。
+    /// 协议层只负责抓取最大值，由 provider 决定怎么映射成 Usage。
+    pub accumulated_token_usage: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -356,6 +360,10 @@ fn parse_chunk(
     thinking_enabled: bool,
     state: &mut DeepseekStreamState,
 ) -> DeepseekChunkResult {
+    // 在按 path 分发之前先把 accumulated_token_usage 全部嗅出来——它出现在
+    // 初始 response 对象、嵌套 BATCH 子项等多个位置，单调递增，取最大即可。
+    harvest_accumulated_token_usage(chunk, state);
+
     let mut out = DeepseekChunkResult::default();
     // sticky path：path 字段缺失时沿用上一条 chunk 的 path
     let raw_path = chunk.get("p").and_then(Value::as_str);
@@ -536,6 +544,54 @@ fn consume_response_fragments(
         if !content.is_empty() {
             push_with_split(state, parts, kind, content);
         }
+    }
+}
+
+/// 递归扫 SSE chunk 把 `accumulated_token_usage` 嗅出来回填到 state。
+///
+/// DeepSeek web 协议把累计 token 用量放在多个位置：
+/// 1. 初始 response 对象 `{"v":{"response":{...,"accumulated_token_usage":0,...}}}`
+/// 2. 末尾 BATCH 子项 `{"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":6370}, ...]}`
+///
+/// 这个值单调递增，取最大覆盖即可。should_skip_path 仍然会忽略掉这些 path 不进
+/// content 通道——本函数只是在 skip 之前抢一次值。
+fn harvest_accumulated_token_usage(node: &Value, state: &mut DeepseekStreamState) {
+    match node {
+        Value::Object(map) => {
+            // 形态 A：路径形式 `{"p":"accumulated_token_usage","v":N}`，N 可能是 i64/f64
+            if let (Some(Value::String(p)), Some(v)) = (map.get("p"), map.get("v")) {
+                if p.ends_with("accumulated_token_usage") {
+                    if let Some(n) = v.as_u64() {
+                        state.accumulated_token_usage = state.accumulated_token_usage.max(n);
+                    } else if let Some(n) = v.as_f64() {
+                        if n >= 0.0 {
+                            state.accumulated_token_usage =
+                                state.accumulated_token_usage.max(n as u64);
+                        }
+                    }
+                }
+            }
+            // 形态 B：作为字段名直接出现在某个对象里（初始 response）
+            if let Some(v) = map.get("accumulated_token_usage") {
+                if let Some(n) = v.as_u64() {
+                    state.accumulated_token_usage = state.accumulated_token_usage.max(n);
+                } else if let Some(n) = v.as_f64() {
+                    if n >= 0.0 {
+                        state.accumulated_token_usage =
+                            state.accumulated_token_usage.max(n as u64);
+                    }
+                }
+            }
+            for v in map.values() {
+                harvest_accumulated_token_usage(v, state);
+            }
+        }
+        Value::Array(items) => {
+            for it in items {
+                harvest_accumulated_token_usage(it, state);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1147,6 +1203,31 @@ mod tests {
         let mut state = DeepseekStreamState::default();
         let r = parse(r#"{"p":"response/status","v":"FINISHED"}"#, &mut state);
         assert!(r.finished);
+    }
+
+    #[test]
+    fn accumulated_token_usage_picks_up_from_initial_response_object() {
+        // 形态 1：初始 response 整对象里包含 accumulated_token_usage=0
+        // 形态 2：尾部 BATCH 子项给出最终累计 6370
+        // 协议层应取最大值（单调递增），让 provider 落到 Usage.input_tokens。
+        let mut state = DeepseekStreamState::default();
+        let _ = parse(
+            r#"{"v":{"response":{"message_id":2,"accumulated_token_usage":0,"fragments":[{"id":2,"type":"THINK","content":"x"}]}}}"#,
+            &mut state,
+        );
+        assert_eq!(state.accumulated_token_usage, 0);
+        let _ = parse(
+            r#"{"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":6370},{"p":"quasi_status","v":"FINISHED"}]}"#,
+            &mut state,
+        );
+        assert_eq!(state.accumulated_token_usage, 6370);
+
+        // 再来一条更小的数值不应该覆盖（max 语义）
+        let _ = parse(
+            r#"{"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":100}]}"#,
+            &mut state,
+        );
+        assert_eq!(state.accumulated_token_usage, 6370);
     }
 
     #[test]

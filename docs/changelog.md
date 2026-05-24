@@ -4062,3 +4062,24 @@
   - DeepSeek web 协议拿不到 prompt_cache_hit / cache_creation 分项，TokenStatsPanel 的 cache 栏对 DeepSeek-OAuth 会话仍永远是 0 —— 这是 chat.deepseek.com 协议本身的限制。想看 cache 命中只能用 `DeepSeek-API`（kind=openai，走 api.deepseek.com）。
   - `output_tokens` 这里也填 0，因为 `accumulated_token_usage` 是 input+output 合计，没办法拆开。如果未来有需要，可以在 stream 内用 `full.chars().count() / 3` 之类粗估输出 token，但目前没场景需要。
 - **关联**: 架构.md §4.11 model adapter（lookup 表 dispatch 策略）/ §5 Model Gateway（provider Usage 映射）。
+
+### 2026-05-24 — 修复跨上游网关 model id（dot vs dash）匹配 + 标注 kiro/Sub2API 无 usage 的上游限制
+
+- **Why**: 用户继续报告 kiro / Sub2api-Anthropic / 等第三方 Anthropic 兼容网关下 thinking 不出、context window 显示错。诊断后发现两个独立根因：(a) 这些网关把 Anthropic 模型版本号写成 `claude-opus-4.7`（带 dot），而我方所有 `m.contains("opus-4-7")` 关键字都是 dash 形式，匹配不上 → `anthropic_thinking_mode` 错落到 LegacyEnabled，stream 不发 thinking_delta，且 `context_window_for` / `modelSupportsReasoning` / `anthropicExposesLongContextToggle` 都按错的家族算；(b) kiro 网关本身**完全不发** SSE 的 `message_start` / `message_delta` 事件（用 RUST_LOG=trace 实测 kiro 只发 `content_block_start/stop/message_stop` 三种事件），所以 Anthropic provider 解析器拿不到任何 usage —— 这是网关侧的协议缺陷，我方无法在 client 层修复。
+- **改动**:
+  - [crates/common/src/reasoning.rs](../crates/common/src/reasoning.rs): 新增 `normalize_model_id(s)` —— 小写 + dot→dash 单点归一化。`anthropic_thinking_mode` / `anthropic_long_context_uses_beta` / `openai_skips_reasoning` / `openai_supports_xhigh` / `openai_supports_reasoning` 全部走这一遍。关键字相应改成 dash 形式（`gpt-5.5` → `gpt-5-5`、`gpt-5.4` → `gpt-5-4`、`gpt-5.1-codex-max` → `gpt-5-1-codex-max`），dot 形式归一化后等效，旧 dash 输入完全兼容。
+  - [crates/model-gateway/src/context_window.rs](../crates/model-gateway/src/context_window.rs): `context_window_for` 入口同样走 `normalize_model_id`；`v3.2` 关键字改成 `v3-2`、`gpt-5.5/5.4` 关键字改成 dash。
+  - [apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts](../apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts): 新增导出 `normalizeModelId(s)`（与 Rust 同源逻辑），`contextWindowFor` 入口先归一化；关键字同步改成 dash 形式。
+  - [apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts](../apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts): 从 contextWindow 引入 `normalizeModelId`，所有 `model.toLowerCase()` 替换为归一化调用。关键字同步改 dash。
+  - 单测补强：
+    - `crates/common/src/reasoning.rs::dot_versioned_model_ids_recognized_via_normalize` 覆盖 `claude-opus-4.7` → Opus47Adaptive、`gpt-5.5` 走 xhigh
+    - `crates/model-gateway/src/context_window.rs::dot_versioned_model_ids_resolved_after_normalize` 覆盖各家族 dot 变体的 window 解析
+    - `crates/model-gateway/src/context_window.rs::anthropic_gateway_serving_gpt_models_uses_openai_table` 覆盖「Sub2API kind=anthropic 挂 gpt-5.5」要走 OpenAI 表（1M）的语义
+    - `crates/model-gateway/src/protocols/anthropic.rs::dot_versioned_opus_4_7_walks_opus47_branch` end-to-end 验证 dot id 让 `build_body` 走 Opus47 schema（区别 marker：`thinking.display="summarized"`）
+    - `crates/model-gateway/src/protocols/anthropic.rs::dot_versioned_sonnet_4_5_stays_legacy_branch` 防回归：4.5 系列不能错走 Opus47
+- **影响范围**: common（normalize helper 是新增公开 API）+ model-gateway（context_window / protocols-anthropic 内部 lookup）+ desktop 前端（contextWindow / reasoning）。不破坏协议、不破坏 sessions jsonl 兼容性、不动 EventPayload。
+- **复现 / 验证**: 阶段 A 用 kiro provider 跑 `heb new --provider=<kiro> --model claude-opus-4.7` + `heb input "1+1"`，事件流 `run_finished input_tokens=0 output_tokens=0 cache_read_tokens=0` + zero reasoning。RUST_LOG trace 显示 anthropic stream 收到的事件类型只有 `content_block_start / content_block_stop / message_stop`，没有 `message_start` / `message_delta` —— kiro 上游网关协议缺陷。阶段 B 编译 + 单测 `cargo test -p model-gateway --lib dot_versioned`（3 个全过）+ `cargo test -p hebbian-common --lib`（8 个全过）+ `pnpm exec tsc --noEmit` 干净。**前端 ContextRing + ModelPicker 现在能为 dot-versioned 模型（claude-opus-4.7 / claude-sonnet-4.6 / gpt-5.5 / deepseek-v3.2 等）显示对的 1M / 200k / 163840 等数值，跨 kind 网关（anthropic 网关挂 gpt-5.5 / openai 端点挂 claude-opus-4.7）也都走对的表。**
+- **留尾巴**:
+  - kiro / Sub2API 等第三方网关如果不在 SSE 里转发 `message_start` 和 `message_delta` 事件，cache / input / output token 都拿不到 —— **这是上游网关协议缺陷，我方无法修复**。诊断方式：`RUST_LOG="model_gateway=trace" heb new ... 2>err.log`，看 `anthropic stream: unparsed event` 行里是否包含 `message_start`。若没有，让用户去找网关方让上游补上这两个事件；或者切到 Anthropic 官方 endpoint / kiro 之外的网关。
+  - Opus 4.7 在原生 Anthropic API 下走的是 `complete_then_emit` 路径（providers/anthropic.rs::stream 里见 `matches!(...Opus47Adaptive)` 分支）；但 kiro 因为 `req.reasoning` 默认 None（heb CLI 没有 `--reasoning` 标志，desktop UI 才会填上），所以走的是普通 stream。这次没修这个 CLI gap，留给下次有需要再加 `heb new --reasoning-effort=extra` flag。
+- **关联**: 架构.md §4.11 model adapter；与同日上一条 (model-first context window dispatch) 是同一组用户需求的连续修复。

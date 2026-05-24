@@ -247,6 +247,16 @@ impl ModelClient for DeepseekClient {
             });
         }
 
+        // DeepSeek web 协议只暴露一个 `accumulated_token_usage`（input+output 合计，
+        // 不分 cache）。把它落到 `input_tokens`（语义上"已用 token 总量"），output/cache
+        // 保留 0——比当前全 0 强，且不撒谎说有 cache 命中。
+        let usage = Usage {
+            input_tokens: state.accumulated_token_usage,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        };
+
         // 解析 tool_calls：在最终文本里找 `<tool_calls>` 块
         let (clean_text, tool_calls) = proto::extract_tool_calls(&full);
         if !tool_calls.is_empty() {
@@ -264,7 +274,7 @@ impl ModelClient for DeepseekClient {
                 reasoning: full_reasoning,
                 calls: tool_calls,
                 attachments: Vec::new(),
-                usage: Usage::default(),
+                usage,
             });
         }
 
@@ -272,7 +282,7 @@ impl ModelClient for DeepseekClient {
             text: full,
             reasoning: full_reasoning,
             attachments: Vec::new(),
-            usage: Usage::default(),
+            usage,
         })
     }
 }

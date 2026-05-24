@@ -2,6 +2,7 @@
 // 任意一边新增模型家族时，记得两侧同步。
 
 import type { ReasoningConfig, ReasoningEffort } from "@/desktop/ui/types";
+import { normalizeModelId } from "@/desktop/ui/lib/contextWindow";
 
 // ── Anthropic：thinking 模式分三档（与 Rust AnthropicThinkingMode 对齐） ──
 
@@ -13,7 +14,7 @@ export type AnthropicThinkingMode =
 export function anthropicThinkingMode(
   model: string
 ): AnthropicThinkingMode | null {
-  const m = model.toLowerCase();
+  const m = normalizeModelId(model);
   if (m.includes("opus-4-7")) return "opus_47_adaptive";
   if (m.includes("opus-4-6") || m.includes("sonnet-4-6")) return "adaptive_46";
   if (
@@ -38,7 +39,7 @@ export function anthropicSupportsThinking(model: string): boolean {
  * `anthropic-beta: context-1m-2025-08-07` 才能开启 1M——这部分模型 UI 上要给开关。
  */
 export function anthropicExposesLongContextToggle(model: string): boolean {
-  const m = model.toLowerCase();
+  const m = normalizeModelId(model);
   if (
     m.includes("opus-4-7") ||
     m.includes("opus-4-6") ||
@@ -53,22 +54,22 @@ export function anthropicExposesLongContextToggle(model: string): boolean {
 
 /** o1-mini 等完全不支持 reasoning_effort 的模型。 */
 export function openaiSkipsReasoning(model: string): boolean {
-  return model.toLowerCase().startsWith("o1-mini");
+  return normalizeModelId(model).startsWith("o1-mini");
 }
 
 /** 支持 `reasoning_effort=xhigh` 的模型：gpt-5.4 / 5.5 / 5.1-codex-max。 */
 export function openaiSupportsXhigh(model: string): boolean {
-  const m = model.toLowerCase();
+  const m = normalizeModelId(model);
   return (
-    m.startsWith("gpt-5.4") ||
-    m.startsWith("gpt-5.5") ||
-    m.includes("gpt-5.1-codex-max")
+    m.startsWith("gpt-5-4") ||
+    m.startsWith("gpt-5-5") ||
+    m.includes("gpt-5-1-codex-max")
   );
 }
 
 export function openaiSupportsReasoning(model: string): boolean {
   if (openaiSkipsReasoning(model)) return false;
-  const m = model.toLowerCase();
+  const m = normalizeModelId(model);
   if (m.startsWith("gpt-5")) return true;
   return (
     m.startsWith("o1") ||
@@ -78,14 +79,51 @@ export function openaiSupportsReasoning(model: string): boolean {
   );
 }
 
+// ── DeepSeek ──
+
+/**
+ * 该 DeepSeek 模型是否支持 thinking。
+ *
+ * 不依赖 providerType — 用户经常用 anthropic-kind 网关代理 deepseek-v4-pro，
+ * 这种情况下 providerKind 是 anthropic 但模型是 deepseek，必须按模型名识别。
+ *
+ * 规则：v4 系列、`deepseek-reasoner`、`deepseek-r1` 支持 thinking。
+ *      `*-nothinking` 后缀显式关闭。
+ */
+export function deepseekSupportsReasoning(model: string): boolean {
+  const m = normalizeModelId(model);
+  if (!m.includes("deepseek")) return false;
+  if (m.includes("nothinking")) return false;
+  if (m.includes("v4")) return true;
+  if (m.includes("reasoner")) return true;
+  if (m.includes("r1")) return true;
+  return false;
+}
+
+/** DeepSeek v4 系列：UI 上「极高」档实际下发 `xhigh` effort（其他档原样下发）。 */
+export function deepseekSupportsXhigh(model: string): boolean {
+  const m = normalizeModelId(model);
+  return m.includes("deepseek-v4");
+}
+
 // ── 跨家族 ──
 
+/**
+ * 模型是否暴露 thinking 控件。**按模型名优先识别**，再按 provider kind 兜底。
+ *
+ * 跨 kind 场景：anthropic-kind 网关代理 deepseek-v4-pro 时，必须当 deepseek 看；
+ * openai-kind 端点代理 claude-opus-4-7 时，必须当 anthropic 看。
+ */
 export function modelSupportsReasoning(
   providerKind: string,
   model: string
 ): boolean {
+  if (deepseekSupportsReasoning(model)) return true;
+  if (anthropicSupportsThinking(model)) return true;
+  if (openaiSupportsReasoning(model)) return true;
   if (providerKind === "anthropic") return anthropicSupportsThinking(model);
   if (providerKind === "openai") return openaiSupportsReasoning(model);
+  if (providerKind === "deepseek") return deepseekSupportsReasoning(model);
   return false;
 }
 
@@ -93,6 +131,9 @@ export function modelExposesLongContextToggle(
   providerKind: string,
   model: string
 ): boolean {
+  const m = model.toLowerCase();
+  // 只有 anthropic 原生 Sonnet/Opus 老版有 1M beta 开关；deepseek/openai 走自己的协议。
+  if (m.includes("claude")) return anthropicExposesLongContextToggle(model);
   if (providerKind === "anthropic") return anthropicExposesLongContextToggle(model);
   return false;
 }
@@ -143,6 +184,13 @@ export function effortDisplay(
   if (providerKind === "openai") {
     if (effort === "extra") {
       return openaiSupportsXhigh(model) ? "xhigh" : "high";
+    }
+    return effort;
+  }
+  // DeepSeek v4 系列：「极高」档实际下发 xhigh，其余原样。
+  if (deepseekSupportsReasoning(model)) {
+    if (effort === "extra") {
+      return deepseekSupportsXhigh(model) ? "xhigh" : "high";
     }
     return effort;
   }

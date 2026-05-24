@@ -143,10 +143,20 @@ pub enum AnthropicThinkingMode {
     LegacyEnabled,
 }
 
+/// 把 model id 归一化用于匹配：小写 + 把版本号里的 `.` 全部翻成 `-`。
+///
+/// 同一款模型在不同上游网关里命名风格不统一——Anthropic 官方 / Codex 用 `opus-4-7`，
+/// Sub2API / 一些第三方网关用 `opus-4.7`；OpenAI 用 `gpt-5.5`、DeepSeek 用 `v3.2` /
+/// `v3-2` 都见过。所有靠 model id 识别家族的 helper 都先走这一遍，免得到处写
+/// `contains("opus-4-7") || contains("opus-4.7")`。
+pub fn normalize_model_id(model: &str) -> String {
+    model.to_ascii_lowercase().replace('.', "-")
+}
+
 /// 判定 Anthropic 模型走哪种 thinking schema。
 /// `None` = 不支持 thinking（如 claude-3-5、claude-3-haiku）。
 pub fn anthropic_thinking_mode(model: &str) -> Option<AnthropicThinkingMode> {
-    let m = model.to_ascii_lowercase();
+    let m = normalize_model_id(model);
     if m.contains("opus-4-7") {
         return Some(AnthropicThinkingMode::Opus47Adaptive);
     }
@@ -175,7 +185,7 @@ pub fn anthropic_supports_thinking(model: &str) -> bool {
 /// - Sonnet 4 / Sonnet 4.5 / Opus 4 / 4.1 / 4.5 老 Sonnet 系列：需要 header。
 /// - Haiku 4.5 / 3.7 等：无 1M 支持，UI 不暴露这个开关。
 pub fn anthropic_long_context_uses_beta(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
+    let m = normalize_model_id(model);
     if m.contains("opus-4-7") || m.contains("opus-4-6") || m.contains("sonnet-4-6") {
         return false;
     }
@@ -198,7 +208,7 @@ pub const ANTHROPIC_LONG_CONTEXT_BETA: &str = "context-1m-2025-08-07";
 
 /// 该 OpenAI 模型是否完全不支持 reasoning_effort（典型：`o1-mini`）。
 pub fn openai_skips_reasoning(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
+    let m = normalize_model_id(model);
     // o1-mini 历史上不支持 reasoning_effort，不传字段免得 400
     m.starts_with("o1-mini")
 }
@@ -206,15 +216,15 @@ pub fn openai_skips_reasoning(model: &str) -> bool {
 /// 该 OpenAI 模型是否支持 `reasoning_effort=xhigh`。
 /// 当前已知支持 xhigh 的：gpt-5.4 系列、gpt-5.5 系列、gpt-5.1-codex-max。
 pub fn openai_supports_xhigh(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
-    m.starts_with("gpt-5.4") || m.starts_with("gpt-5.5") || m.contains("gpt-5.1-codex-max")
+    let m = normalize_model_id(model);
+    m.starts_with("gpt-5-4") || m.starts_with("gpt-5-5") || m.contains("gpt-5-1-codex-max")
 }
 
 /// 该 OpenAI 模型是否支持 reasoning_effort 控制（即配 reasoning UI 是否可见）。
 ///
 /// 覆盖：gpt-5* / o1（不含 mini）/ o3 / o4。
 pub fn openai_supports_reasoning(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
+    let m = normalize_model_id(model);
     if openai_skips_reasoning(&m) {
         return false;
     }
@@ -258,6 +268,26 @@ mod tests {
         );
         assert_eq!(anthropic_thinking_mode("claude-3-5-sonnet"), None);
         assert_eq!(anthropic_thinking_mode("claude-3-haiku"), None);
+    }
+
+    /// Sub2API / kiro 等第三方网关把 Anthropic 模型版本号写成带 dot 的
+    /// `claude-opus-4.7`、`claude-sonnet-4.6` 等；归一化后仍要走对的 schema。
+    #[test]
+    fn dot_versioned_model_ids_recognized_via_normalize() {
+        use AnthropicThinkingMode::*;
+        assert_eq!(
+            anthropic_thinking_mode("claude-opus-4.7"),
+            Some(Opus47Adaptive)
+        );
+        assert_eq!(anthropic_thinking_mode("claude-opus-4.6"), Some(Adaptive46));
+        assert_eq!(
+            anthropic_thinking_mode("claude-sonnet-4.6"),
+            Some(Adaptive46)
+        );
+        assert!(!anthropic_exposes_long_context_toggle("claude-opus-4.7"));
+        assert!(anthropic_exposes_long_context_toggle("claude-opus-4.1"));
+        assert!(openai_supports_xhigh("gpt-5-5"));
+        assert!(openai_supports_xhigh("gpt-5.5"));
     }
 
     #[test]

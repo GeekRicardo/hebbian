@@ -682,9 +682,63 @@ mod tests {
         assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
     }
 
-    // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────
     use crate::types::ToolCall;
     use common::ReasoningEffort;
+
+    /// Sub2API / kiro 等第三方网关把 Anthropic 模型版本号写成 `claude-opus-4.7` 形式
+    /// （dot 而非 dash）。`anthropic_thinking_mode` 必须能识别 dot 变体，让 build_body
+    /// 走 Opus47Adaptive 分支（区别于 LegacyEnabled：thinking 块多了 `display:"summarized"`，
+    /// 这是 4.7 在 stream 下能发 thinking_delta 的关键），否则错落到 LegacyEnabled 没 display 字段
+    /// 4.7 stream 不发 thinking_delta。
+    #[test]
+    fn dot_versioned_opus_4_7_walks_opus47_branch() {
+        let req = ModelRequest {
+            model: "claude-opus-4.7".into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: Some(common::ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(ReasoningEffort::Extra),
+                long_context: None,
+            }),
+        };
+        let body = build_body(&req, false, false).unwrap();
+        assert_eq!(
+            body["thinking"]["display"], "summarized",
+            "dot variant of opus-4-7 must walk Opus47Adaptive branch (has display:summarized), body={body}"
+        );
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body["thinking"]["budget_tokens"].is_number());
+    }
+
+    /// Legacy（如 sonnet-4.5）不能错走 Opus47 —— 区别就是没有 `display` 字段。
+    #[test]
+    fn dot_versioned_sonnet_4_5_stays_legacy_branch() {
+        let req = ModelRequest {
+            model: "claude-sonnet-4.5".into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: Some(common::ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(ReasoningEffort::High),
+                long_context: None,
+            }),
+        };
+        let body = build_body(&req, false, false).unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body["thinking"]["budget_tokens"].is_number());
+        // LegacyEnabled 不该带 display
+        assert!(
+            body["thinking"].get("display").is_none(),
+            "sonnet-4.5 must NOT have thinking.display (that's Opus47 marker), body={body}"
+        );
+    }
+
+    // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────
 
     fn req_for_deepseek_anthropic(
         reasoning: Option<common::ReasoningConfig>,
