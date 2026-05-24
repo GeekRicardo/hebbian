@@ -51,6 +51,7 @@ import type {
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
 const EMPTY_EDIT_ENTRIES: EditEntry[] = [];
+const EMPTY_STR_ARR: string[] = [];
 import { cn } from "@/desktop/ui/lib/utils";
 import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
@@ -573,6 +574,40 @@ function callDescription(call: ToolCallItem): string {
   const userDesc = argString(args, "description");
   if (userDesc) return userDesc;
   return defaultActionLabel(name);
+}
+
+/**
+ * Read 工具显示路径的相对化：
+ * - 在 workdir 内 → 相对 workdir 的路径（去掉公共前缀）
+ * - 在某个 allowed_path 内 → `{该 allowed_path 的 basename}/相对路径`
+ *   例：allowed = `/Users/ricardo/code/xxx1`、绝对 = `/Users/ricardo/code/xxx1/a/b.ts`
+ *       → `xxx1/a/b.ts`
+ * - 否则 → 原始绝对路径
+ *
+ * 用 `startsWith(p + "/")` 而不是 `startsWith(p)`，避免 `/foo/bar` 被 `/foo/ba` 命中。
+ */
+function relativizeReadPath(
+  absolute: string,
+  workdir: string | null | undefined,
+  allowedPaths: string[],
+): string {
+  if (!absolute) return absolute;
+  const trim = (s: string) => s.replace(/\/+$/, "");
+  if (workdir) {
+    const w = trim(workdir);
+    if (absolute === w) return ".";
+    if (absolute.startsWith(w + "/")) return absolute.slice(w.length + 1);
+  }
+  for (const raw of allowedPaths) {
+    const p = trim(raw);
+    if (!p) continue;
+    const base = p.slice(p.lastIndexOf("/") + 1) || p;
+    if (absolute === p) return base;
+    if (absolute.startsWith(p + "/")) {
+      return `${base}/${absolute.slice(p.length + 1)}`;
+    }
+  }
+  return absolute;
 }
 
 function ToolIcon({ name }: { name?: string | null }) {
@@ -1472,6 +1507,13 @@ function ToolCallTimeline({
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
 }) {
+  // Read 工具显示路径用：在 workdir 内显示相对路径、在 allowed_paths 之一内显示
+  // `<basename>/...`、否则显示完整绝对路径。沿用当前 session 的实际 workdir / allowed_paths。
+  const workdir = useStore((s) => s.currentSession?.workdir ?? null);
+  const allowedPaths = useStore(
+    (s) => s.currentSession?.allowed_paths ?? EMPTY_STR_ARR,
+  );
+
   // 监听 sidebar / 任何外部组件派发的「跳到这个 call」事件：
   // 如果是本 timeline 持有的某条 call，就把它展开（已展开则不动）。
   // 滚动 + 闪烁由 focusToolCall util 自己负责，不需要在这里做。
@@ -1554,7 +1596,7 @@ function ToolCallTimeline({
                   type="button"
                   onClick={() => onToggle(call.key)}
                   className={cn(
-                    "flex min-h-8 w-full cursor-pointer items-center gap-2 px-1 py-1 text-left",
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(40px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left",
                     active && "border-b border-border bg-muted/30"
                   )}
                 >
@@ -1568,16 +1610,24 @@ function ToolCallTimeline({
                         ? `${offset}-${Number(offset) + Number(limit) - 1}`
                         : `${offset}+`
                       : "";
+                    const display = relativizeReadPath(path, workdir, allowedPaths);
                     return (
                       <>
-                        <ScrollText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
-                          {path}
+                        <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+                          <ScrollText className="h-3.5 w-3.5" />
                         </span>
-                        {range && (
+                        <span className="whitespace-nowrap text-[12px] font-semibold">
+                          Read
+                        </span>
+                        <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
+                          {display}
+                        </span>
+                        {range ? (
                           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                             {range}
                           </span>
+                        ) : (
+                          <span />
                         )}
                       </>
                     );
