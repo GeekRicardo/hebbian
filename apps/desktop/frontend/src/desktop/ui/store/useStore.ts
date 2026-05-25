@@ -450,14 +450,20 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, currentRunMode: e.to };
   }
   if (e.type === "turn_finished") {
-    // Turn 边界（架构 §3 / §4.2）：把当前 streamingText / streamingParts 冻结成一条
-    // assistant_frozen，按 assistantInsertPos 插入到 liveTimeline——既走在该 Turn
-    // 期间到达的 user injection **之前**（保留视觉因果），又留出末尾空间让后续
-    // injection 落在它之后。游标推到末尾，下个 Turn 的快照会自然排在新 injection
-    // 之后。streaming 字段清空，等下个 Turn 起新 bubble。
+    // Turn 边界（架构 §3 / §4.2）：**只在本 Turn 期间真的发生过 user 插队**时才切
+    // bubble——与 chat.rs `had_pending_during_run` 落盘语义对齐：
+    //   - 无插队：整个 Run 累积成一条 assistant message（多 Turn 共用一个 bubble）
+    //   - 有插队：按 Turn 分段落盘，每段对应一个 assistant message
+    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过 user_injected → 切；
+    // 否则维持当前 streamingText / streamingParts 累积，下个 Turn 接着 stream。
+    const hasPendingInjection = slot.liveTimeline
+      .slice(slot.assistantInsertPos)
+      .some((item) => item.kind === "user_injected");
+    if (!hasPendingInjection) return slot;
     if (slot.streamingText.length === 0 && slot.streamingParts.length === 0) {
-      // 空 Turn（例如直接走到 suspended 路径），无内容可冻结。
-      return slot;
+      // 插队消息已挂在末尾但当前 Turn 没产出（罕见，例如审批拒绝直接终止）——
+      // 不冻结空 bubble，只把游标推过 timeline 末尾，下个 Turn 起新 streaming。
+      return { ...slot, assistantInsertPos: slot.liveTimeline.length };
     }
     const frozen: LiveTimelineItem = {
       kind: "assistant_frozen",

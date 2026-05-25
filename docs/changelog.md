@@ -4024,6 +4024,18 @@
   - `step_finished(model)` 现在仍不被 store 消费——`TurnFinished` 才是冻结点，与 §4.2 的 Step / Turn 概念对齐（Step 是 model/tool 子粒度，Turn 才是一次完整"模型决策 + 后续 tool 批")
 - **关联**: 架构.md §3（Run/Turn 边界事件已列 TurnFinished）/ §4.2 / §4.12.5（PendingInputs drain 时机）
 
+### 2026-05-24 — 修订当日 turn 切 bubble 触发条件，避免无插队 Run 被切成 N 个独立 bubble
+
+- **Why**: 当日上一条把 `turn_finished` 当成"无条件切 bubble"的信号——结果一次没有插队的 Run 里有 N 个 Turn（如 Read → text+Edit → text 总结），UI 渲染成 3 个独立的 assistant bubble。误读了 Turn 与 assistant message 的对应关系：[apps/desktop/src/chat.rs:407-438](../apps/desktop/src/chat.rs#L407-L438) 显示——`had_pending_during_run=false` 时整个 Run 聚合成**一条** assistant message（多 Turn 共用），只有 `had_pending_during_run=true`（真的发生过 PendingInputs drain）时才按 Turn 分段
+- **方案**: `applyEventToSlot` 的 `turn_finished` 处理加守卫——`assistantInsertPos` 之后的 `liveTimeline` 里出现过 `user_injected` 才切（说明该 Turn 期间确实有插队，下个 Turn 是响应插队）；没插队则什么都不做，让 streamingText / streamingParts 继续累积，跟后端落盘的"一条 assistant message"对齐
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) `applyEventToSlot` 的 `turn_finished` 分支：用 `slot.liveTimeline.slice(assistantInsertPos).some(item => item.kind === "user_injected")` 守卫；false 直接 `return slot`；额外处理"插队挂着但 Turn 无产出"的退化路径——只把游标推到末尾，不冻结空 bubble
+- **影响范围**: 仅前端 store，行为修正不破坏 API。protocol / 翻译路径 / ChatView 渲染逻辑都不动
+- **测试**:
+  - 无插队 Run（Read → text+Edit → text 总结）：3 个 Turn 走完仍然渲染成**一条** streaming bubble，与 reload 后的 session.messages 单条 assistant 对齐 ✓
+  - 有插队 Run：assistant_1 (含本 Turn 全部 tool_calls) → user_injection → assistant_2 ✓
+- **留尾巴**: 无
+
 ### 2026-05-24 — 修复 Edit/Write「整个目录」一次审批后子文件仍反复审批；项目级目录列表显示用相对路径
 
 - **Why**:
