@@ -69,6 +69,10 @@ import {
   inferDiffAction,
   parsePartialEditArgs,
 } from "@/desktop/ui/lib/parsePartialEditArgs";
+import {
+  lineOfOldString,
+  useOriginalFileText,
+} from "@/desktop/ui/lib/useDiffBaseLine";
 import { findMatches, highlight } from "./FindBar";
 import {
   canShowRawMessage,
@@ -1232,6 +1236,7 @@ function DefaultToolDetail({ call }: { call: ToolCallItem }) {
  */
 function EditDiffDetail({ call }: { call: ToolCallItem }) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
+  const workdir = useStore((s) => s.currentSession?.workdir ?? null);
   const editSnapshots = useStore(
     (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_EDIT_ENTRIES,
   );
@@ -1288,6 +1293,19 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
   const afterText = useFull ? fullPayload!.after : argSides.afterText;
   const filePath = (useFull ? fullPayload!.file_path : partial.file_path) ?? "";
 
+  // args 局部 diff 渲染时（流式 / 非放大 detail），读盘原文件给出 old_string
+  // 真实起始行号；放大态 fullPayload 已是完整文件，行号天然正确。
+  const isCreateAction = action === "create" || call.name === "Write";
+  const enableBaseLookup = !useFull && !isCreateAction && !!partial.old_string;
+  const originalText = useOriginalFileText(
+    partial.file_path,
+    workdir,
+    enableBaseLookup,
+  );
+  const baseLine = enableBaseLookup && originalText
+    ? lineOfOldString(originalText, partial.old_string ?? "")
+    : 1;
+
   const streamingFlag = call.status === "streaming";
   const badge = (() => {
     if (call.status === "streaming") return "实时预览";
@@ -1338,6 +1356,8 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
             onClose={() => setExpanded(false)}
             className="min-h-0 flex-1"
             collapseContext={useFull ? 3 : undefined}
+            baseLineBefore={baseLine}
+            baseLineAfter={baseLine}
           />
         </div>
       </FullscreenPortal>
@@ -1356,7 +1376,9 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
       expanded={expanded}
       onToggleExpanded={toggleExpanded}
       streaming={streamingFlag}
-      maxRows={20}
+      maxRows={14}
+      baseLineBefore={baseLine}
+      baseLineAfter={baseLine}
     />
   );
 }
@@ -1596,7 +1618,7 @@ function ToolCallTimeline({
                   type="button"
                   onClick={() => onToggle(call.key)}
                   className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(40px,auto)_minmax(0,1fr)_auto] items-center gap-2 px-1 py-1 text-left",
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(40px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
                     active && "border-b border-border bg-muted/30"
                   )}
                 >
@@ -1611,6 +1633,9 @@ function ToolCallTimeline({
                         : `${offset}+`
                       : "";
                     const display = relativizeReadPath(path, workdir, allowedPaths);
+                    // 行号合并到路径后面，`:#xx-xx` 形式——选中复制粘到外部工具
+                    // 是「path:#100-150」一体的 vscode 风格 anchor，不再拆成两列
+                    const displayWithRange = range ? `${display}:#${range}` : display;
                     return (
                       <>
                         <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
@@ -1620,15 +1645,8 @@ function ToolCallTimeline({
                           Read
                         </span>
                         <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
-                          {display}
+                          {displayWithRange}
                         </span>
-                        {range ? (
-                          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                            {range}
-                          </span>
-                        ) : (
-                          <span />
-                        )}
                       </>
                     );
                   })()}

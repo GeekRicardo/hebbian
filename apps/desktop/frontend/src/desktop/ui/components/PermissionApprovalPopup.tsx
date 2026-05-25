@@ -24,6 +24,10 @@ import {
   parsePartialEditArgs,
   type PartialEditArgs,
 } from "@/desktop/ui/lib/parsePartialEditArgs";
+import {
+  lineOfOldString,
+  useOriginalFileText,
+} from "@/desktop/ui/lib/useDiffBaseLine";
 
 /**
  * 把 BashTool 推送的命令指纹切成"前缀按钮"。
@@ -94,6 +98,8 @@ export function PermissionApprovalPopup() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // hover 某个 MemoryOption 时，在 Bash 命令预览里把对应 pattern 段高亮（cross-link）
+  const [hoveredPattern, setHoveredPattern] = useState<string | null>(null);
 
   // ⚠️ hook 必须在组件顶层、所有提前 return 之前调用——把 useMemo 放在 `if (!pending)`
   // 之后会让 hook 调用次数随 pending 变化，React 抛"Rendered more hooks than during
@@ -290,6 +296,11 @@ export function PermissionApprovalPopup() {
         {/* 工具输入参数预览（tool_call） */}
         {isEditLike && editArgs ? (
           <ApprovalEditDiff toolName={pending.toolName} args={editArgs} />
+        ) : !isPathAccess &&
+          (pending.toolName === "Bash" || pending.toolName === "PowerShell") ? (
+          // Bash / PowerShell 用结构化预览：command / description / timeout / background
+          // 比原始 JSON 直观；hoveredPattern 命中时高亮对应命令段（跟 MemoryRecallPanel 联动）
+          <BashArgsPreview args={pending.input} highlight={hoveredPattern} />
         ) : (
           !isPathAccess &&
           inputPreview &&
@@ -323,6 +334,7 @@ export function PermissionApprovalPopup() {
           <MemoryRecallPanel
             options={memoryOptions}
             disabled={submitting}
+            onHoverPattern={setHoveredPattern}
             onApply={(picked, scope) => {
               // picked 至少 1 条：第一条做 pattern，其余进 extra_patterns。
               // 工具名级（pattern=null）走 picked[0].pattern === null 单独分支。
@@ -508,10 +520,18 @@ function ApprovalEditDiff({
 }) {
   const [viewMode, setViewMode] = useState<DiffMode>("split");
   const [expanded, setExpanded] = useState(false);
+  const workdir = useStore((s) => s.currentSession?.workdir ?? null);
   const { beforeText, afterText } = diffSidesFromArgs(toolName, args);
   const action = inferDiffAction(toolName, args);
   const actionLabel =
     action === "create" ? "创建文件" : action === "overwrite" ? "覆盖文件" : "修改文件";
+
+  // 审批弹窗里 before = old_string 是文件片段；读盘拿到原文 indexOf 出真实起始行号
+  const enableBaseLookup = action === "modify" && !!args.old_string;
+  const originalText = useOriginalFileText(args.file_path, workdir, enableBaseLookup);
+  const baseLine = enableBaseLookup && originalText
+    ? lineOfOldString(originalText, args.old_string ?? "")
+    : 1;
 
   // 放大态接管 Esc，避免直接关掉审批弹窗
   useEffect(() => {
@@ -553,6 +573,8 @@ function ApprovalEditDiff({
             onToggleExpanded={toggleExpanded}
             onClose={() => setExpanded(false)}
             className="min-h-0 flex-1"
+            baseLineBefore={baseLine}
+            baseLineAfter={baseLine}
           />
         </div>
       </FullscreenPortal>
@@ -571,7 +593,9 @@ function ApprovalEditDiff({
         onCycleMode={cycleMode}
         expanded={expanded}
         onToggleExpanded={toggleExpanded}
-        maxRows={20}
+        maxRows={14}
+        baseLineBefore={baseLine}
+        baseLineAfter={baseLine}
       />
     </div>
   );
@@ -597,10 +621,98 @@ type MemoryOption = {
  * 一次性把 N 条勾选转成 N 条 PermissionRule 落盘。比"每行 × 3 chip"信息密度更高，
  * 且 compound 命令的 segment roots 可逐段细调。
  */
+/**
+ * Bash / PowerShell 审批的结构化参数预览：解析 args.command / description / timeout_secs /
+ * run_in_background，替代原始 JSON 字符串，让人一眼看清「跑什么、要不要后台、多久 timeout」。
+ *
+ * highlight 来自 MemoryRecallPanel 的 hover 状态——hover 某个 `git *` / `git status` 类
+ * pattern 时，命令文本里对应段会被 mark 染色（cross-link 帮用户对照"勾这个 pattern 等于允许命令里这一段"）
+ */
+function BashArgsPreview({
+  args,
+  highlight,
+}: {
+  args: unknown;
+  highlight: string | null;
+}) {
+  const data =
+    args && typeof args === "object"
+      ? (args as Record<string, unknown>)
+      : null;
+  const command = typeof data?.command === "string" ? data.command : "";
+  const description =
+    typeof data?.description === "string" ? data.description : "";
+  const timeoutSecs =
+    typeof data?.timeout_secs === "number"
+      ? data.timeout_secs
+      : typeof data?.timeout === "number"
+        ? data.timeout
+        : null;
+  const background = data?.run_in_background === true;
+
+  if (!command) {
+    return (
+      <pre className="text-[11px] text-muted-foreground/90 px-3 py-2 max-h-32 overflow-auto bg-background/50 font-mono whitespace-pre-wrap break-all">
+        {JSON.stringify(args, null, 2)}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="px-3 py-2 max-h-40 overflow-auto bg-background/50 text-[12px] space-y-1.5">
+      {description && (
+        <div className="text-muted-foreground/85">{description}</div>
+      )}
+      <div className="font-mono text-foreground whitespace-pre-wrap break-all">
+        <span className="text-muted-foreground/60 select-none">$ </span>
+        {highlightCommand(command, highlight)}
+      </div>
+      {(timeoutSecs !== null || background) && (
+        <div className="flex items-center gap-3 text-[11px] text-muted-foreground/80">
+          {background && <span className="font-mono">run_in_background</span>}
+          {timeoutSecs !== null && (
+            <span className="font-mono">timeout {timeoutSecs}s</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function highlightCommand(command: string, highlight: string | null): ReactNode {
+  if (!highlight || !command) return command;
+  // pattern 后缀 ` *` 是 compound 段的通配符（如 `git *`）；高亮时只用根命令字面量
+  const needle = highlight.replace(/\s*\*\s*$/, "").trim();
+  if (!needle) return command;
+  // 多处出现都高亮（cd /tmp && cd /foo 这种 `cd` 命中两次都染色）
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  while (cursor <= command.length) {
+    const idx = command.indexOf(needle, cursor);
+    if (idx < 0) {
+      parts.push(command.slice(cursor));
+      break;
+    }
+    if (idx > cursor) parts.push(command.slice(cursor, idx));
+    parts.push(
+      <mark
+        key={key++}
+        className="rounded bg-primary/20 px-0.5 text-primary"
+      >
+        {command.slice(idx, idx + needle.length)}
+      </mark>,
+    );
+    cursor = idx + needle.length;
+  }
+  return <>{parts}</>;
+}
+
 function MemoryRecallPanel({
   options,
   disabled,
   onApply,
+  onHoverPattern,
 }: {
   options: MemoryOption[];
   disabled?: boolean;
@@ -608,6 +720,8 @@ function MemoryRecallPanel({
     picked: MemoryOption[],
     scope: "session" | "project" | "global",
   ) => void;
+  /** hover label 时回调 pattern（leave 时回调 null）—— 让外层 Bash 预览高亮对应段 */
+  onHoverPattern?: (pattern: string | null) => void;
 }) {
   const [checked, setChecked] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {};
@@ -691,27 +805,39 @@ function MemoryRecallPanel({
 
       {/* pattern checkboxes */}
       <div className="flex flex-col gap-0.5 max-h-44 overflow-auto">
-        {options.map((opt) => (
-          <label
-            key={opt.key}
-            className="flex items-center gap-2 text-[12px] cursor-pointer hover:bg-muted/40 px-1.5 py-1 rounded select-none"
-            data-testid={`memory-option-${opt.key}`}
-          >
-            <input
-              type="checkbox"
-              checked={!!checked[opt.key]}
-              onChange={() => toggle(opt.key)}
-              className="accent-primary"
-              disabled={disabled}
-            />
-            <code className="font-mono text-[12px] truncate flex-1 min-w-0">
-              {opt.label}
-            </code>
-            <span className="text-muted-foreground text-[10px] shrink-0">
-              {opt.hint}
-            </span>
-          </label>
-        ))}
+        {options.map((opt) => {
+          const isChecked = !!checked[opt.key];
+          return (
+            <label
+              key={opt.key}
+              onMouseEnter={() => onHoverPattern?.(opt.pattern)}
+              onMouseLeave={() => onHoverPattern?.(null)}
+              className={cn(
+                "flex items-center gap-2 text-[12px] cursor-pointer px-1.5 py-1 rounded select-none transition-colors",
+                isChecked
+                  ? "hover:bg-muted/40"
+                  : "opacity-60 hover:opacity-100 hover:bg-muted/30",
+              )}
+              data-testid={`memory-option-${opt.key}`}
+            >
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={() => toggle(opt.key)}
+                className="accent-primary"
+                disabled={disabled}
+              />
+              <code
+                className={cn(
+                  "font-mono text-[12px] truncate flex-1 min-w-0",
+                  isChecked ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {opt.label}
+              </code>
+            </label>
+          );
+        })}
       </div>
 
       {/* scope 按钮：把当前勾选项写成规则 */}

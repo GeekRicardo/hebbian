@@ -41,6 +41,7 @@ import {
 } from "@/desktop/ui/lib/searchHighlight";
 import type { SessionMeta, WorkspaceProject } from "@/desktop/ui/types";
 import { animations } from "@/assets/animations";
+import { BUILD_INFO } from "@/buildInfo";
 
 type GroupKey = "today" | "yesterday" | "last7" | "last30" | "older";
 
@@ -455,12 +456,24 @@ export function Sidebar() {
         className="h-16 px-5 pt-8 flex items-start drag-region"
         data-tauri-drag-region
       >
-        <div className="flex items-center gap-2 pointer-events-none">
+        <div className="flex items-end gap-2 pointer-events-none">
           <LoopingWebm
             src={animations.brandMark}
-            className="h-7 w-7 rounded-md shadow-sm"
+            className="h-7 w-7 rounded-md shadow-sm shrink-0"
           />
-          <span className="text-sm font-semibold">Hebbian</span>
+          {/* `Hebbian` 字号视觉跟 logo 高度对齐（h-7 = 28px）：
+              text-2xl=24px + leading-none 让 cap-height 紧贴 logo；
+              版本号小字 baseline 对齐 Hebbian 底（items-end + -mb-0.5 微调） */}
+          <div
+            className="flex items-end gap-1"
+            title={`build ${BUILD_INFO.build} · ${BUILD_INFO.builtAt}`}
+          >
+            <span className="text-2xl font-semibold leading-none">Hebbian</span>
+            <span className="text-[9px] font-mono leading-none text-muted-foreground/70 -mb-0.5">
+              v{BUILD_INFO.version}·{BUILD_INFO.commit}
+              {BUILD_INFO.dirty ? "+" : ""}
+            </span>
+          </div>
         </div>
       </div>
 

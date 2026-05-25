@@ -43,6 +43,7 @@ export function ChatView() {
     pendingPromptId,
     setPendingPromptId,
     updateCurrentConfig,
+    debugEnabled,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -464,17 +465,19 @@ export function ChatView() {
                   无 Agent
                 </span>
               )
-            ) : (
-              <span
-                className="max-w-[220px] truncate text-[11px] text-muted-foreground drag-region"
-                title={promptSummary}
-                data-tauri-drag-region
-              >
-                {promptSummary}
-              </span>
-            )}
+            ) : null /* session 已锁定 prompt 后不再显示其名字——位置让给 header 右侧的 debug session id（debug off 时整行空） */}
           </div>
         </div>
+        {/* debug 开启时在 header 右侧显示当前对话的 session 文件夹 id
+            （~/.hebbian/sessions/<id>），方便对照 jsonl */}
+        {debugEnabled && currentSession?.id ? (
+          <span
+            className="ml-auto shrink-0 truncate font-mono text-[10px] text-muted-foreground/70 no-drag select-text max-w-[260px]"
+            title={`session ${currentSession.id}`}
+          >
+            {currentSession.id}
+          </span>
+        ) : null}
       </header>
 
       <FindBar
