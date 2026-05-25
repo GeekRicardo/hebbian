@@ -4095,3 +4095,34 @@
   - kiro / Sub2API 等第三方网关如果不在 SSE 里转发 `message_start` 和 `message_delta` 事件，cache / input / output token 都拿不到 —— **这是上游网关协议缺陷，我方无法修复**。诊断方式：`RUST_LOG="model_gateway=trace" heb new ... 2>err.log`，看 `anthropic stream: unparsed event` 行里是否包含 `message_start`。若没有，让用户去找网关方让上游补上这两个事件；或者切到 Anthropic 官方 endpoint / kiro 之外的网关。
   - Opus 4.7 在原生 Anthropic API 下走的是 `complete_then_emit` 路径（providers/anthropic.rs::stream 里见 `matches!(...Opus47Adaptive)` 分支）；但 kiro 因为 `req.reasoning` 默认 None（heb CLI 没有 `--reasoning` 标志，desktop UI 才会填上），所以走的是普通 stream。这次没修这个 CLI gap，留给下次有需要再加 `heb new --reasoning-effort=extra` flag。
 - **关联**: 架构.md §4.11 model adapter；与同日上一条 (model-first context window dispatch) 是同一组用户需求的连续修复。
+
+### 2026-05-25 — 新增构建版本号注入 + Sidebar 左上角 Hebbian 文字右下显示
+
+- **Why**: 用户希望每次 `pnpm tauri build` 产出一个会变化的版本标识、直接显示在 Desktop 左上角 Hebbian 品牌区，方便肉眼分辨自己装的是哪个版本（避免装新版后看不出有没有真的换上）。
+- **改动**:
+  - [apps/desktop/vite.config.ts](../apps/desktop/vite.config.ts): 加 `buildInfo()` 在 vite 启动 / build 时同步抽取 `tauri.conf.json` 的 `version` + `git rev-list --count HEAD` 当 build 序号 + `git rev-parse --short HEAD` 当 commit + working tree dirty 标记 + 当前 ISO 时间，通过 vite `define` 注入到全局 `__BUILD_INFO__` 常量。git 命令任何一个失败都 fallback 到空串 / 0 / unknown，不阻塞非仓库环境下的构建。
+  - [apps/desktop/frontend/src/buildInfo.ts](../apps/desktop/frontend/src/buildInfo.ts): 新文件。`declare` 出 `__BUILD_INFO__` 的类型并导出 `BUILD_INFO`，避免每处使用都重复声明，且 TypeScript 拿到准确类型。
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 品牌区把 "Hebbian" 文字 和 小字 `v<version>·<sha>[+]` 用 `flex items-end` 底对齐，挂在 "Hebbian" 右下；`title` 写完整版本（version / build 序号 / commit / dirty / 构建时间），鼠标 hover 显示。dirty 加 `+` 后缀。
+- **影响范围**: 仅 desktop frontend，无 Rust / 协议 / agent_core / storage 影响；hebweb 因为是同一份前端代码，会自动跟随显示版本号。`pnpm tauri dev` 启动也会 stamp 一次（用 dev 时 HEAD 的 sha）；dev 模式启动后改文件不会变 sha（git 没新 commit），但 dirty 标记会在 vite 重启时刷新——足够用了，避免每次 hot reload 都重算 git。
+- **复现 / 验证**: 阶段 A（缺失基线）：旧代码 Sidebar 不读 BUILD_INFO，UI 看不到版本号。阶段 B：`pnpm exec tsc --noEmit` 干净；`pnpm exec vite build` 干净；产物 `dist/assets/index-*.js` 中 grep 到 `"8ed6419"`（当前 HEAD 短 sha），与 `git rev-parse --short HEAD` 一致。
+- **留尾巴**: 无。后续如果想做"用户复制粘贴报 bug 时一并复制版本号"，可以让点击品牌区把完整 BUILD_INFO toast 出来 / 复制到剪贴板；未实现，等用户需要再加。
+- **关联**: 架构.md 无章节冲突（纯 UI + 构建工具）。
+
+### 2026-05-25 — 修复 DeepSeek-API（OpenAI 兼容路径）与 v4 Anthropic 端点 thinking 默认被显式关闭
+
+- **Why**: 用户报告 deepseek-v4-pro 在 DeepSeek-API（kind=openai，api.deepseek.com）下不出 thinking。复现：heb CLI 跑 `用一句话回答：1+1 等于几`，事件流 0 条 `reasoning` 事件、`text_done` 只有 "2。"（明显敷衍——没思考过）；usage 正常（input=6641, cache_read=2432）。诊断：`protocols/openai.rs::apply_deepseek_compat` 在 `req.reasoning == None` 时把 `is_some_and(c.is_enabled())` 当成 false，发出 `thinking: { type: "disabled" }` 显式关掉 thinking，并剥掉 reasoning_effort。同样的 bug 在 `protocols/anthropic.rs` 的 DeepSeek v4 dialect 分支里也存在。问题语义：ReasoningConfig 的 `None` 应是「沿用模型默认」——DeepSeek-V4 / deepseek-reasoner / deepseek-r1 这类 thinking-capable 模型的模型默认 = ON（与 chat.deepseek.com web 协议默认、openhanako known-models.json `reasoning: true`、DeepSeek-TUI、Proma `detectThinkingCapability` 全部一致），不该被解读成「显式关闭」。
+- **改动**:
+  - [crates/model-gateway/src/protocols/openai.rs](../crates/model-gateway/src/protocols/openai.rs): `apply_deepseek_compat` 把 enabled 判定从 `is_some_and(c.is_enabled())` 改成 `map_or(true, |c| c.enabled.unwrap_or(true))`。语义：`None` / `Some({enabled: None, ...})` 都视为「模型默认 = ON」；只有显式 `Some({enabled: Some(false), ...})` 才视为关闭。desktop UI 显式关 thinking 的路径（写入 `enabled: Some(false)`）行为完全不变。
+  - [crates/model-gateway/src/protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs): DeepSeek v4 dialect 分支同步改用 `map_or(true, ...)`。
+  - [crates/common/src/reasoning.rs](../crates/common/src/reasoning.rs): 更正 `ReasoningConfig` 注释——旧注释说"多数模型默认关闭"对 DeepSeek thinking 系列不准确；改成「模型默认值因家族而异，DeepSeek thinking-capable 默认 ON，其它默认 OFF」，并提醒 build_body 走家族 default 时不能依赖 `is_enabled()`（它只代表"调用方明确表态"语义）。
+  - 单测补强：
+    - `protocols::openai::deepseek_compat_tests::deepseek_v4_with_none_reasoning_defaults_to_thinking_on`（reasoning=None → thinking enabled + effort=high + max_tokens=65536）
+    - `protocols::openai::deepseek_compat_tests::deepseek_v4_with_enabled_none_defaults_to_thinking_on`（Some({enabled:None, effort:high}) → enabled, effort=high）
+    - `protocols::anthropic::tests::deepseek_v4_anthropic_with_none_reasoning_defaults_to_thinking_on`（同上，Anthropic 端点 dialect 一并保护）
+  - 既有测试不动：`deepseek_thinking_disabled_emits_explicit_off`（显式 enabled=Some(false) 仍走 disabled 分支）保留 —— 等同于回归保护用户「显式关 thinking」的语义不被影响。
+- **影响范围**: model-gateway（protocols/openai + protocols/anthropic 各一处 enabled 判定 + common::reasoning 注释）。不破坏协议、不动 EventPayload、不动 sessions jsonl 兼容性。
+- **复现 / 验证**: 阶段 A `heb new --provider=<DeepSeek-API> --model deepseek-v4-pro` + `heb input "用一句话回答：1+1 等于几"`，事件流 `{"event":"run_finished",...}` 后 reasoning 事件 0 条。阶段 B 同一脚本，事件流 reasoning **18 条**、text_done="1+1 等于 2。"（不再敷衍）、output_tokens 从 2 提到 27（包含 reasoning_content token）。`cargo test -p model-gateway --lib deepseek` 47/47 passed。
+- **留尾巴**:
+  - desktop UI 上对 DeepSeek 模型新建会话时，前端会主动写入 `enabled: Some(true)`，行为不受本次修复影响。但「桌面历史里有显式存了 enabled=Some(false) 的会话」如果用户切到 DeepSeek-V4，仍会被关 thinking——这是用户显式选择，按设计应当尊重。
+  - model_io_dump.jsonl 里 `request.thinking` / `request.reasoning_effort` 字段是 ModelRequest 抽象层的字段（dump 模块写的是抽象层，不是真实 wire body），所以即使修复后 dump 里这两字段仍是 null——这是 dump 模块的局限，wire body 上的 thinking/reasoning_effort 已经由 apply_deepseek_compat 注入。若以后需要 dump wire body 排查，需另开一条 trace 通道，不在本次范围。
+- **关联**: 架构.md §4.11 model adapter / §5 Model Gateway；与 2026-05-24 两条修复（model-first dispatch + dot/dash 归一化）属同一组用户反馈的连续修复（DeepSeek 端到端显示问题）。

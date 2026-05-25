@@ -93,11 +93,20 @@ impl ReasoningEffort {
     }
 }
 
-/// 推理 / thinking 行为。`enabled = None` 表示「沿用模型默认」（多数模型默认关闭）。
+/// 推理 / thinking 行为。`enabled = None` 表示「沿用模型默认」。
+///
+/// **模型默认值因家族而异**——provider 的 build_body 各自处理：
+/// - DeepSeek thinking-capable（`deepseek-v4-*` / `deepseek-reasoner` / `deepseek-r1`）：
+///   默认 ON（与 chat.deepseek.com web 协议、openhanako `reasoning: true`、
+///   DeepSeek-TUI 默认一致）
+/// - OpenAI / Anthropic 其它非 thinking 家族：默认 OFF（即不发 reasoning 字段）
+///
+/// `is_enabled()` 只用于「调用方明确表态」语义；走「模型默认」分支时不能依赖它，
+/// 应该按家族在 build_body 里直接判 `req.reasoning.as_ref().map_or(family_default, ...)`。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReasoningConfig {
-    /// 是否启用 thinking / reasoning。`None` = 用模型默认；
-    /// 对支持 thinking 的模型，UI 默认填 `Some(true)`。
+    /// 是否启用 thinking / reasoning。`None` = 用模型默认（DeepSeek thinking 系列默认 ON）；
+    /// 对其他支持 thinking 的模型，UI 默认填 `Some(true)`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     /// 推理强度。`None` = 用 [`ReasoningEffort::default()`]（Extra）。

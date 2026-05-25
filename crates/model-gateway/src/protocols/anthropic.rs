@@ -60,7 +60,14 @@ pub fn build_body(
         //   - disabled: `thinking: { type: "disabled" }`，剥掉 output_config
         //   - max_tokens 与 OpenAI 兼容路径同步抬升到 65536 / 131072
         //   - tool_use 多轮 fail-closed：历史里带 tool_use 的 assistant 消息必须有非空 thinking
-        let enabled = req.reasoning.as_ref().is_some_and(|c| c.is_enabled());
+        //
+        // ReasoningConfig 的 None / enabled=None 都解读为「沿用模型默认」——
+        // DeepSeek-V4 的模型默认是 thinking ON（与 web 协议 + 同类项目对齐）。
+        // 只有显式 enabled=Some(false) 才视为关闭。
+        let enabled = req
+            .reasoning
+            .as_ref()
+            .map_or(true, |c| c.enabled.unwrap_or(true));
         if enabled {
             for msg in &messages {
                 ensure_deepseek_anthropic_tool_thinking(msg)?;
@@ -791,6 +798,21 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["output_config"]["effort"], "max");
         assert_eq!(body["max_tokens"], 131_072);
+    }
+
+    /// reasoning=None 时，DeepSeek v4 Anthropic 端点应当走「模型默认 = ON」。
+    /// 历史 bug：把 None 视为显式关，导致 heb CLI 默认会话拿不到 thinking。
+    /// None 时 effort fallback 是 "high"（保守档），要 max 需 Some({effort: Extra,...})。
+    #[test]
+    fn deepseek_v4_anthropic_with_none_reasoning_defaults_to_thinking_on() {
+        let body = build_body(
+            &req_for_deepseek_anthropic(None, "", false, 8192),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["output_config"]["effort"], "high");
     }
 
     #[test]

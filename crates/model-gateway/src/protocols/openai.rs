@@ -141,7 +141,16 @@ fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), Mod
     let Some(map) = body.as_object_mut() else {
         return Ok(());
     };
-    let enabled = req.reasoning.as_ref().is_some_and(|c| c.is_enabled());
+    // ReasoningConfig 的 None / enabled=None 语义都是「沿用模型默认」。
+    // DeepSeek-V4 / deepseek-reasoner 这类 thinking-capable 模型的模型默认 = ON
+    // （与 chat.deepseek.com web 协议、openhanako known-models.json `reasoning: true`、
+    //  DeepSeek-TUI、Proma `detectThinkingCapability` 全部一致）。
+    // 只有用户显式 `enabled: Some(false)` 才视为关闭——这样 heb CLI 没有 --reasoning
+    // 标志的会话也能拿到 thinking，desktop UI 显式关 thinking 的路径不受影响。
+    let enabled = req
+        .reasoning
+        .as_ref()
+        .map_or(true, |c| c.enabled.unwrap_or(true));
     if !enabled {
         map.insert("thinking".into(), json!({ "type": "disabled" }));
         map.remove("reasoning_effort");
@@ -1407,6 +1416,33 @@ mod deepseek_compat_tests {
         let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false).unwrap();
         assert_eq!(body["thinking"]["type"], "disabled");
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    /// reasoning=None 时 deepseek-v4-pro 应当沿用「模型默认 = ON」，与 web 协议、
+    /// openhanako / DeepSeek-TUI / Proma 行为一致。heb CLI 没有 --reasoning 标志的
+    /// 会话曾因此走到 thinking.disabled 分支拿不到 reasoning_content，是回归保护点。
+    ///
+    /// reasoning=None 时 effort 用 fallback `"high"`（最稳的 DeepSeek 档位），
+    /// 对应 max_tokens 抬到 65536；要拿到 max 档需显式传 Some({effort: Extra, ...})。
+    #[test]
+    fn deepseek_v4_with_none_reasoning_defaults_to_thinking_on() {
+        let body = build_body(&req_for("deepseek-v4-pro", None, 8192), false).unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["max_tokens"], 65_536);
+    }
+
+    /// reasoning=Some({enabled: None, ...}) 同样视为「模型默认」，对 deepseek-v4 也 ON。
+    #[test]
+    fn deepseek_v4_with_enabled_none_defaults_to_thinking_on() {
+        let cfg = ReasoningConfig {
+            enabled: None,
+            effort: Some(ReasoningEffort::High),
+            long_context: None,
+        };
+        let body = build_body(&req_for("deepseek-v4-pro", Some(cfg), 8192), false).unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "high");
     }
 
     #[test]
