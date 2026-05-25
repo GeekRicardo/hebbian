@@ -4158,3 +4158,36 @@
 - **复现 / 验证**: `pnpm exec tsc --noEmit` 干净；hebweb 启动后在 ModelPicker 下拉里点开 deepseek-v4-pro / claude-opus-4.7 等模型，应见两个胶囊开关代替原方块 checkbox。
 - **留尾巴**: 无。
 - **关联**: 架构.md §8 Desktop 命令系统（UI 控件）；前一条 2026-05-25 修复保证 DeepSeek thinking 在 None 配置下也能默认 ON，本条让用户在 UI 上能直观看到/切换这一行为。
+
+
+### 2026-05-25 — ModelIoInspector 默认贴底 + 详情右下角悬浮"回到顶/底"按钮
+
+- **Why**: 用户排查 bug 90% 时间盯着「最新请求」和「该请求的响应」，但之前 inspector 打开后：左侧请求列表自动选中末条但不滚到末条（高列表里末条在屏幕外要手动滑），右侧详情默认从顶部 system prompt 起头展示（要拖到底才能看响应）。叠加加载长 system prompt 时双手都得动两次。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx):
+    - 新增 `listRef` 指向左侧 `<ol>`，给 `RequestRow` 加 `data-row-index` 属性
+    - 选中变化触发 `useLayoutEffect`：列表里选中行 `scrollIntoView({ block: "nearest" })`、详情面板 `scrollTop = scrollHeight` 贴底。`findOpen` 时跳过详情贴底，让原有 active-mark scrollIntoView 接管，避免和 find 跳转打架
+    - 新增 `ScrollEndsButtons` 组件：绝对定位在详情容器右下角（`absolute bottom-3 right-4`，外层 relative 容器持有，不在 overflow:auto 内 → 滚动时位置不变）；监听 detail section 的 scroll + ResizeObserver，根据 `scrollTop` / `scrollHeight` 切换"已到顶/底"灰显，内容比视口短时整体隐藏
+- **影响范围**: 纯前端 UI；不动协议、不动后端、不动 model_io.jsonl 落盘格式。
+- **关键取舍**:
+  - 滚到底用 `scrollTop = scrollHeight` 而非 `scrollIntoView`：避免 entries 切换瞬间触发 smooth 滚动动画累计，selected 变化是高频动作（点列表、新请求落盘）。
+  - 悬浮按钮放在 `relative flex-1` 容器内、`<section>` 外：滚动时按钮真的"固定"而不是 overflow 内绝对定位被裁剪。
+  - 与右侧 MatchMinimap 错开：minimap 在 `right-0.5 w-3`（占右侧 14px），按钮在 `right-4`（16px 起算）避免重叠。
+  - `disabled` 状态而非隐藏：避免顶/底时按钮消失带来的"控件跳动"——位置稳定优于条件渲染。
+- **复现 / 验证**: `pnpm exec tsc --noEmit` 干净。手动验证路径：在多 turn 长会话里 `Cmd+I` 打开 inspector → 左列表末条应已可见且高亮 → 右侧详情应停在响应附近（看到 response 卡片）→ 滚动到顶后右下角"回到底部"按钮可点；反之亦然。
+- **留尾巴**: 无。
+- **关联**: 架构.md §4.10 Observability（model_io 调试）。
+
+### 2026-05-25 — ModelIoInspector 抽屉改成"右侧贴边 + 左侧浮起"的卡片观感（左圆角 + 左向阴影）
+
+- **Why**: 用户反馈抽屉紧贴窗口右/上/下三边像"切掉"而不是"打开"；中间试过整体缩进 12px 让四周都留呼吸空间，但用户进一步澄清——抽屉本质仍是右侧抽屉，右边别留缝，只要靠阴影让它**看上去**飘在主窗口之上即可。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx): 根容器 className 改为 `top-0 right-0 bottom-0 border-l rounded-l-xl overflow-hidden shadow-[-16px_0_40px_-12px_rgba(0,0,0,0.35)]`。位置回到贴边铺满，只在左侧加圆角，并把阴影换成自定义负 X-offset 的左向投影（取代默认四向 `shadow-2xl`）。
+- **影响范围**: 纯视觉；不动协议、不动数据、不动滚动行为。
+- **关键取舍**:
+  - 不用 `shadow-2xl`：默认阴影朝四向铺，朝右那半被窗口边吞掉是浪费；自定义 `-16px 0 40px -12px` 把所有阴影预算集中在左侧，浮起感更明显。
+  - 只圆左侧两角（`rounded-l-xl`）+ 仅左侧描边（`border-l`）：右贴边的那一侧不需要圆角和描边，否则反而像"切了一刀又没贴齐"。
+  - `overflow-hidden` 保留：让内部 `ol` / `section` 在圆角内裁出干净边缘；二者本身 `overflow-y-auto` 各管各的滚动，不受外层裁剪影响。
+- **复现 / 验证**: `pnpm exec tsc --noEmit` 干净；`pnpm tauri dev` 后 `Cmd+I` 打开 inspector，目视确认右/上/下三向贴窗口边、左侧两角圆滑、阴影只从左缘向外晕开。
+- **留尾巴**: 无。
+- **关联**: 紧接上一条「ModelIoInspector 默认贴底 + 悬浮按钮」。

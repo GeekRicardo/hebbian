@@ -16,6 +16,8 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronDown,
+  ChevronsUp,
+  ChevronsDown,
   Copy,
   Check,
   PanelLeftClose,
@@ -111,6 +113,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   const [findCase, setFindCase] = useState(false);
   const [findActive, setFindActive] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLOListElement>(null);
   // 抽屉宽度可拖动调整；持久化到 localStorage 让下次打开记住
   const [drawerWidth, setDrawerWidth] = useState<number>(() => {
     if (typeof window === "undefined") return 700;
@@ -237,6 +240,17 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     setFindActive(0);
   }, [selected]);
 
+  // 选中 entry 变化 → 左侧列表把它滚到可视区；详情面板滚到底（默认看响应）。
+  // findOpen 时跳过详情自动滚底，让下面那条 active-mark scrollIntoView 接管。
+  useLayoutEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-row-index="${selected}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+    if (findOpen) return;
+    const detail = detailRef.current;
+    if (detail) detail.scrollTop = detail.scrollHeight;
+  }, [selected, entries.length, findOpen]);
+
   /**
    * active 切换：用 DOM querySelectorAll 找第 N 个 mark，加 `data-active="true"`，
    * scrollIntoView。**不通过 React 重渲染** —— 否则 active 每变一次整个 PrettyStringInner
@@ -318,11 +332,12 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   if (!open) return null;
 
   // 容器**不**铺满 / 不加遮罩 —— 让左侧 chat 区域保持可见、可滚动、可点
-  // 抽屉只占右侧，宽度可拖（drawerWidth 状态 + localStorage 持久化）
+  // 抽屉右侧贴窗口边、上下铺满；左侧靠圆角 + 强阴影制造"浮"感（卡片飘在主窗口之上）。
+  // 宽度可拖（drawerWidth 状态 + localStorage 持久化）
   return (
     <div
       id="model-io-drawer-root"
-      className="fixed top-0 right-0 bottom-0 z-[100] border-l border-border bg-background shadow-2xl flex"
+      className="fixed top-0 right-0 bottom-0 z-[100] border-l border-border bg-background rounded-l-xl flex overflow-hidden shadow-[-16px_0_40px_-12px_rgba(0,0,0,0.35)]"
       style={{ width: drawerWidth }}
       role="complementary"
       data-testid="model-io-drawer"
@@ -395,7 +410,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
               )}
             >
               {sidebarOpen && (
-                <ol className="h-full overflow-y-auto">
+                <ol ref={listRef} className="h-full overflow-y-auto">
                   {entries.map((e, idx) => (
                     <RequestRow
                       key={`${e.run_id}-${e.turn}-${idx}`}
@@ -463,6 +478,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
                   </FindCtx.Provider>
                 ) : null}
               </section>
+              {current ? <ScrollEndsButtons containerRef={detailRef} /> : null}
             </div>
           </div>
         )}
@@ -545,6 +561,7 @@ function RequestRow({
   return (
     <li
       onClick={onClick}
+      data-row-index={index}
       className={cn(
         "px-3 py-2 border-b border-border cursor-pointer hover:bg-accent/40 transition-colors",
         active && "bg-accent",
@@ -952,6 +969,79 @@ function MatchMinimap({
           )}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * 详情面板右下角悬浮的"回到顶/底"按钮。绝对定位在 detailRef 的外层 relative 容器里，
+ * 所以滚动 detail section 时按钮位置不变。
+ *
+ * 显示策略：只在内容真比视口高时才出现；scrollTop 决定哪一个高亮可点（已在顶/底
+ * 的那个置灰但仍保留位置，避免按钮反复出现导致跳动）。
+ */
+function ScrollEndsButtons({
+  containerRef,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [atTop, setAtTop] = useState(true);
+  const [atBottom, setAtBottom] = useState(true);
+  const [scrollable, setScrollable] = useState(false);
+
+  useLayoutEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    const update = () => {
+      const can = node.scrollHeight - node.clientHeight > 4;
+      setScrollable(can);
+      setAtTop(node.scrollTop <= 2);
+      setAtBottom(node.scrollHeight - node.scrollTop - node.clientHeight <= 2);
+    };
+    update();
+    node.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    return () => {
+      node.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, [containerRef]);
+
+  if (!scrollable) return null;
+
+  const scrollTo = (top: number) => {
+    containerRef.current?.scrollTo({ top, behavior: "smooth" });
+  };
+
+  return (
+    <div className="absolute bottom-3 right-4 z-[2] flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => scrollTo(0)}
+        disabled={atTop}
+        title="回到顶部"
+        className={cn(
+          "w-7 h-7 rounded-full border border-border shadow-md flex items-center justify-center bg-background/90 backdrop-blur transition-opacity",
+          atTop ? "opacity-40 cursor-default" : "hover:bg-accent cursor-pointer"
+        )}
+      >
+        <ChevronsUp className="w-3.5 h-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          scrollTo(containerRef.current?.scrollHeight ?? 0)
+        }
+        disabled={atBottom}
+        title="回到底部"
+        className={cn(
+          "w-7 h-7 rounded-full border border-border shadow-md flex items-center justify-center bg-background/90 backdrop-blur transition-opacity",
+          atBottom ? "opacity-40 cursor-default" : "hover:bg-accent cursor-pointer"
+        )}
+      >
+        <ChevronsDown className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }
