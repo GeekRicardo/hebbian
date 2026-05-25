@@ -4126,3 +4126,35 @@
   - desktop UI 上对 DeepSeek 模型新建会话时，前端会主动写入 `enabled: Some(true)`，行为不受本次修复影响。但「桌面历史里有显式存了 enabled=Some(false) 的会话」如果用户切到 DeepSeek-V4，仍会被关 thinking——这是用户显式选择，按设计应当尊重。
   - model_io_dump.jsonl 里 `request.thinking` / `request.reasoning_effort` 字段是 ModelRequest 抽象层的字段（dump 模块写的是抽象层，不是真实 wire body），所以即使修复后 dump 里这两字段仍是 null——这是 dump 模块的局限，wire body 上的 thinking/reasoning_effort 已经由 apply_deepseek_compat 注入。若以后需要 dump wire body 排查，需另开一条 trace 通道，不在本次范围。
 - **关联**: 架构.md §4.11 model adapter / §5 Model Gateway；与 2026-05-24 两条修复（model-first dispatch + dot/dash 归一化）属同一组用户反馈的连续修复（DeepSeek 端到端显示问题）。
+
+### 2026-05-25 — Edit/Write diff 渲染：真实文件行号 + 流式粘底滚动 + 减少行高占用
+
+- **Why**: 之前 Edit 工具卡片里的 diff 行号永远从 1 开始累加（因为 beforeText 是 args.old_string 这段局部片段，buildRenderRows 不知道它在原文件里的真实起点），用户对照原文件时要心算偏移。另外流式追加新行不会自动滚到底，得手动滚动看最新；以及流式时 `maxRows=20` 撑得太高把消息流挤掉。
+- **改动**:
+  - [apps/desktop/src/lib.rs](apps/desktop/src/lib.rs): 新增 `read_text_file` Tauri 命令（仅服务于 UI 渲染，限制 8MiB / 必须是 regular file）。
+  - [apps/web-server/src/server.rs](apps/web-server/src/server.rs): 镜像同名 `cmd_read_text_file`，保证 hebweb / desktop 行为对称。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](apps/desktop/frontend/src/desktop/bridge/tauri.ts): 暴露 `api.readTextFile(path)`。
+  - [apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts](apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts): 新增 hook `useOriginalFileText` + 纯函数 `lineOfOldString`——读盘缓存 + indexOf 定位 old_string 起始行号；MessageBubble / PermissionApprovalPopup 共用。
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): `DiffViewer` 新增 `baseLineBefore` / `baseLineAfter` props（默认 1），`buildRenderRows` 行号累加器从 `base-1` 起算；InlineDiff / SplitDiff 加 `useStickyBottomScroll`——streaming 时新内容到达自动 scrollTo bottom，用户主动向上滚后解除粘连，回到底部自动恢复。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `EditDiffDetail` 在非放大态（流式 / 非放大 detail）读原文件算 base 传给 DiffViewer；流式 `maxRows` 由 20 → 14（去掉约 1/3 高度）。
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): `ApprovalEditDiff` 同步用 base 行号；`maxRows` 由 20 → 14。
+- **影响范围**: desktop + hebweb 两个 surface 共同加 `read_text_file` 命令；纯渲染细节，不改协议、不改 EditEntry / DiffPayload、不影响落盘格式。
+- **关键取舍**:
+  - 行号定位走「前端 indexOf」而不是后端返回：流式态 EditEntry 还没生成，只能前端实时算；统一后让审批 / 流式 / 非放大 detail 三个状态都走同一路径，避免后端为 UI 行号额外塞 metadata。
+  - `old_string` 命中多次时取第一次出现的位置——`agent-core` 的 `unique_match` 校验已保证后端落盘时 old_string 全局唯一，所以 UI 第一次匹配位置 = 实际落点。
+  - 粘底滚动用 `useRef` 而不是 state：避免每次 scroll 触发 React 重渲染。
+  - `read_text_file` 不做 Workspace::is_allowed 校验：仅 UI 显示用，模型给的 file_path 真要被落盘还要经 agent-core 那层权限关。读不到（路径错 / 超 8MiB / 相对路径无法解析）就 fallback 到 base=1，不影响主流程。
+- **留尾巴**: 无。
+- **关联**: 架构.md §4.13 EditsWorktree / §4.13.8 流式预览 / §4.13.9 三态共用 DiffViewer。
+
+
+### 2026-05-25 — ModelPicker 内 thinking / 1M 上下文开关从 checkbox 改成圆润 pill toggle
+
+- **Why**: 用户反馈 ModelPickerButton 里的"启用 thinking"和"1M 上下文"原生 checkbox 与项目其它地方（SessionSettingsDialog 的流式输出开关）风格不统一，希望换成更优雅的圆润开关。同时确认问题：DeepSeek 系列模型支持 thinking 开关——v4-* / reasoner / r1 默认 ON，可显式关；`*-nothinking` 后缀的模型本身无 thinking 能力（不显示开关）。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx): 抽出 `PillToggle` 子组件——`h-4 w-7` 圆角胶囊 + 圆白点平移，复用 SessionSettingsDialog 流式输出开关的视觉语言但缩到适配 11px popup 字号。`ReasoningControls` 的两处 `<input type="checkbox">`（启用 thinking + 1M 上下文）都换成 `PillToggle`。`<label>` 外层改成 `<div>`（label 包 button role=switch 会产生焦点歧义）。
+  - 行为完全不变：默认值仍是 `reasoning.enabled ?? true`（用户问的"默认开"已是当前行为）；onChange 接 setReasoning 写入 session 配置。
+- **影响范围**: 纯 UI；不动协议、不动 store、不动后端。
+- **复现 / 验证**: `pnpm exec tsc --noEmit` 干净；hebweb 启动后在 ModelPicker 下拉里点开 deepseek-v4-pro / claude-opus-4.7 等模型，应见两个胶囊开关代替原方块 checkbox。
+- **留尾巴**: 无。
+- **关联**: 架构.md §8 Desktop 命令系统（UI 控件）；前一条 2026-05-25 修复保证 DeepSeek thinking 在 None 配置下也能默认 ON，本条让用户在 UI 上能直观看到/切换这一行为。

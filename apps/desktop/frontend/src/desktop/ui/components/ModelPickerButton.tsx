@@ -26,6 +26,41 @@ function isProviderEnabled(p: Provider) {
   return p.enabled !== false;
 }
 
+/**
+ * Mini pill toggle：popup 里的紧凑型开关，复用 SessionSettingsDialog 流式输出的视觉
+ * 语言（圆角胶囊 + 小圆点），缩到 h-4 w-7 以适配 11px 字号的环境。
+ */
+function PillToggle({
+  checked,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors",
+        checked ? "bg-primary" : "bg-muted"
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3 w-3 rounded-full bg-white shadow-sm transform transition-transform mt-0.5",
+          checked ? "translate-x-3.5" : "translate-x-0.5"
+        )}
+      />
+    </button>
+  );
+}
+
 function ReasoningControls({
   providerKind,
   model,
@@ -49,15 +84,14 @@ function ReasoningControls({
     >
       {showReasoning && (
         <>
-          <label className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted-foreground">启用 thinking</span>
-            <input
-              type="checkbox"
+            <PillToggle
               checked={enabled}
-              onChange={(e) => onChange({ ...reasoning, enabled: e.target.checked })}
-              className="h-3.5 w-3.5 cursor-pointer accent-primary"
+              onChange={(next) => onChange({ ...reasoning, enabled: next })}
+              ariaLabel="启用 thinking"
             />
-          </label>
+          </div>
           <div className="flex items-center justify-between gap-2 text-[11px]">
             <span
               className="text-muted-foreground shrink-0"
@@ -92,20 +126,17 @@ function ReasoningControls({
         </>
       )}
       {showLongContext && (
-        <label
+        <div
           className="flex items-center justify-between text-[11px]"
           title="开启后请求会带 anthropic-beta: context-1m-2025-08-07，把 Sonnet/Opus 旧版本上下文从 200k 抬到 1M"
         >
           <span className="text-muted-foreground">1M 上下文</span>
-          <input
-            type="checkbox"
+          <PillToggle
             checked={longContext}
-            onChange={(e) =>
-              onChange({ ...reasoning, long_context: e.target.checked })
-            }
-            className="h-3.5 w-3.5 cursor-pointer accent-primary"
+            onChange={(next) => onChange({ ...reasoning, long_context: next })}
+            ariaLabel="1M 上下文"
           />
-        </label>
+        </div>
       )}
     </div>
   );
