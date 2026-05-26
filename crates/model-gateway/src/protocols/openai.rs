@@ -127,13 +127,6 @@ fn is_deepseek_thinking_model(model: &str) -> bool {
     m.starts_with("deepseek-v4") || m == "deepseek-reasoner"
 }
 
-/// DeepSeek thinking 模式下，带 tool_calls 的 assistant 历史消息必须携带 reasoning_content。
-/// 缺失时抛错，让 surface 提示用户压缩当前会话或开新会话——
-/// 比悄悄丢推理链导致后续 server 400 更可控。
-const DEEPSEEK_TOOL_REASONING_MISSING: &str =
-    "DeepSeek thinking 模式下，历史里带 tool_calls 的 assistant 消息缺失 reasoning_content。\
-     请压缩当前会话或开新会话后再继续使用 DeepSeek thinking。";
-
 fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), ModelError> {
     if !is_deepseek_thinking_model(&req.model) {
         return Ok(());
@@ -165,10 +158,8 @@ fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), Mod
         }
         return Ok(());
     }
-    // enabled 路径：
-    //   - fail-closed 校验所有「带 tool_calls 的 assistant 消息」必须有 reasoning_content 字段
-    //   - 同时把这些 assistant 消息的 content:null 收紧成空字符串
-    //     （v4 thinking + tool_replay 契约要求 content 非 null）
+    // enabled 路径：带 tool_calls 的 assistant 回放必须携带 reasoning_content；
+    // 模型可能本来就没返回推理字段，此时按 DeepSeek 接口契约补空字符串。
     if let Some(msgs) = map.get_mut("messages").and_then(|m| m.as_array_mut()) {
         for msg in msgs.iter_mut() {
             let Some(obj) = msg.as_object_mut() else {
@@ -184,9 +175,8 @@ fn apply_deepseek_compat(body: &mut Value, req: &ModelRequest) -> Result<(), Mod
             if !has_tool_calls {
                 continue;
             }
-            let has_reasoning = obj.get("reasoning_content").is_some_and(Value::is_string);
-            if !has_reasoning {
-                return Err(ModelError::Other(DEEPSEEK_TOOL_REASONING_MISSING.into()));
+            if !obj.get("reasoning_content").is_some_and(Value::is_string) {
+                obj.insert("reasoning_content".into(), Value::String(String::new()));
             }
             if matches!(obj.get("content"), Some(Value::Null) | None) {
                 obj.insert("content".into(), Value::String(String::new()));
@@ -1496,19 +1486,22 @@ mod deepseek_compat_tests {
     }
 
     #[test]
-    fn deepseek_thinking_tool_call_history_missing_reasoning_fails_closed() {
-        // 历史 assistant 带 tool_calls 但 reasoning 是空——thinking enabled 下 fail-closed
+    fn deepseek_thinking_tool_call_history_missing_reasoning_gets_empty_string() {
         let cfg = ReasoningConfig {
             enabled: Some(true),
             effort: Some(ReasoningEffort::Extra),
             long_context: None,
         };
         let req = req_with_tool_call_history("deepseek-v4-pro", Some(cfg), "");
-        let err = build_body(&req, false).unwrap_err();
-        assert!(
-            matches!(err, ModelError::Other(ref s) if s.contains("reasoning_content")),
-            "got: {err:?}"
-        );
+        let body = build_body(&req, false).unwrap();
+        let msgs = body["messages"].as_array().expect("messages array");
+        let assistant = msgs
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("assistant msg");
+
+        assert_eq!(assistant["reasoning_content"], "");
+        assert_eq!(assistant["content"], "");
     }
 
     #[test]

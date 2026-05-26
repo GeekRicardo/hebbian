@@ -4488,3 +4488,13 @@
 - **影响范围**: 纯 Desktop / hebweb 前端视觉与布局；不动协议、不动后端、不动持久化格式。
 - **复现 / 验证**: 已用 `pnpm build` 构建通过，并用 hebweb + Playwright 量过下沉/上浮对齐点；最终移除 streaming ring 动画后不再引入额外动画重绘。
 - **留尾巴**: 无。
+
+### 2026-05-26 — 修复 DeepSeek thinking 工具回放缺 reasoning_content 时被本地拦截
+
+- **Why**: 用户给出的 session `202605261009-f79ad003` 里，多轮 DeepSeek v4 tool_call 历史确实存在 assistant 带 `tool_calls` 但没有 `reasoning_content` 的情况；之前 OpenAI-compatible 适配层 fail-closed，导致下一次请求在本地报「请压缩当前会话或开新会话」，但对照 DeepSeek-Reasonix 后确认兼容做法应是补空字符串继续回放。
+- **改动**:
+  - [crates/model-gateway/src/protocols/openai.rs](../crates/model-gateway/src/protocols/openai.rs): DeepSeek thinking enabled 分支中，对带 `tool_calls` 且缺 `reasoning_content` 的 assistant 历史消息回填空字符串，同时保留 `content:null` 收紧为空字符串的既有处理。
+  - [crates/model-gateway/src/protocols/openai.rs](../crates/model-gateway/src/protocols/openai.rs): 新增/调整回归测试，覆盖缺 reasoning 的 tool_call 历史可构造请求、已有 reasoning 继续保留、thinking disabled 仍剥离 reasoning。
+  - [docs/架构.md](架构.md): 同步 §5.2.1 DeepSeek 方言契约，明确 OpenAI 兼容路径缺 `reasoning_content` 回填空串，Anthropic Messages 路径仍 fail-closed。
+- **影响范围**: model-gateway 的 OpenAI-compatible DeepSeek v4/deepseek-reasoner 请求构造与架构文档；不改 session 落盘格式、不改 surface 事件协议、不破坏非 DeepSeek 或 thinking disabled 路径。
+- **留尾巴**: 未真实调用 DeepSeek 服务端验证 400/200，只用目标 session 的 model_io 和单元测试验证请求构造契约；后续若服务端改为要求非空推理链，再回到压缩/摘要策略讨论。
