@@ -57,6 +57,7 @@ import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
+import { CodeBlock } from "@/desktop/ui/components/CodeBlock";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import {
@@ -633,18 +634,21 @@ function ToolIcon({ name }: { name?: string | null }) {
   return <Boxes className={cls} />;
 }
 
-function isTaskListTool(name?: string | null): boolean {
+export function isTaskListTool(name?: string | null): boolean {
   return name === "TaskList" || name === "Task" || name === "TodoWrite";
 }
 
-type TodoStatus = "pending" | "in_progress" | "completed";
-interface TodoItem {
+export type TodoStatus = "pending" | "in_progress" | "completed";
+export interface TodoItem {
+  /** 稳定 id。Rust 端 normalize 时根据 content+activeForm 算 FNV hash，模型可覆盖。
+   *  sidebar 用 id 重叠判定"是不是同一份 todo 列表的更新（同 block）"。 */
+  id?: string;
   content: string;
   status: TodoStatus;
   activeForm?: string;
 }
 
-function parseTodos(argumentsText: string): TodoItem[] {
+export function parseTodos(argumentsText: string): TodoItem[] {
   const trimmed = (argumentsText || "").trim();
   if (!trimmed) return [];
   let parsed: unknown;
@@ -673,7 +677,8 @@ function parseTodos(argumentsText: string): TodoItem[] {
             ? rawStatus
             : "pending";
         const activeForm = typeof t.activeForm === "string" ? t.activeForm : undefined;
-        return { content, status, activeForm };
+        const id = typeof t.id === "string" ? t.id : undefined;
+        return { id, content, status, activeForm };
       }
       return null;
     })
@@ -734,121 +739,10 @@ function TodoChecklist({ todos }: { todos: TodoItem[] }) {
   );
 }
 
-export function extractLatestTodoSnapshot(
-  session: Session | undefined,
-  streamingParts?: StreamingAssistantPart[] | null
-): TodoItem[] | null {
-  if (streamingParts && streamingParts.length) {
-    for (let i = streamingParts.length - 1; i >= 0; i--) {
-      const p = streamingParts[i];
-      if (p.type !== "tool_call" || !isTaskListTool(p.name)) continue;
-      const text = p.input === undefined ? formatJsonLike(p.arguments) : formatJsonLike(p.input);
-      const todos = parseTodos(text);
-      if (todos.length) return todos;
-    }
-  }
-  const messages = session?.messages;
-  if (!messages?.length) return null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant") continue;
-    const parts = msg.parts ?? [];
-    for (let j = parts.length - 1; j >= 0; j--) {
-      const p = parts[j];
-      if (p.type === "tool_call" && isTaskListTool(p.name)) {
-        const text = p.arguments || formatJsonLike(p.input);
-        const todos = parseTodos(text);
-        if (todos.length) return todos;
-      }
-    }
-    const legacy = msg.tool_calls ?? [];
-    for (let j = legacy.length - 1; j >= 0; j--) {
-      const c = legacy[j];
-      if (isTaskListTool(c.name)) {
-        const todos = parseTodos(formatJsonLike(c.input));
-        if (todos.length) return todos;
-      }
-    }
-  }
-  return null;
-}
-
-export function FloatingTaskPanel({
-  todos,
-  streaming,
-}: {
-  todos: TodoItem[];
-  streaming?: boolean;
-}) {
-  const total = todos.length;
-  const doneCount = todos.filter((t) => t.status === "completed").length;
-  const activeCount = todos.filter((t) => t.status === "in_progress").length;
-  const allDone = total > 0 && doneCount === total;
-  // mount 时若 session 已是全部完成态，默认收起；否则展开
-  const [collapsed, setCollapsed] = useState(allDone);
-  const prevAllDoneRef = useRef(allDone);
-
-  // 仅在 "未完成 -> 全部完成" 的瞬间自动收起一次，
-  // 用户主动展开 / 关闭后的选择保留，新增 todo 不会强行弹出
-  useEffect(() => {
-    if (!prevAllDoneRef.current && allDone && !streaming) {
-      setCollapsed(true);
-    }
-    prevAllDoneRef.current = allDone;
-  }, [allDone, streaming]);
-
-  if (total === 0) return null;
-  const progress = Math.round((doneCount / total) * 100);
-
-  if (collapsed) {
-    return (
-      <button
-        type="button"
-        onClick={() => setCollapsed(false)}
-        className="pointer-events-auto absolute right-4 top-[64px] z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-background hover:text-foreground"
-        title="展开任务列表"
-      >
-        <ClipboardCheck className="h-3 w-3" />
-        <span>
-          任务 {doneCount}/{total}
-        </span>
-      </button>
-    );
-  }
-
-  return (
-    <div className="pointer-events-auto absolute right-4 top-[64px] z-30 w-[280px] overflow-hidden rounded-lg border border-border bg-background/95 shadow-md backdrop-blur">
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-2.5 py-1.5">
-        <div className="min-w-0">
-          <div className="text-[11px] font-medium leading-tight">任务列表</div>
-          <div className="mt-0.5 text-[10px] text-muted-foreground">
-            {doneCount}/{total} 完成{activeCount > 0 ? ` · 进行中 ${activeCount}` : ""}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full bg-muted-foreground/60 transition-all"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setCollapsed(true)}
-            className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="收起"
-            aria-label="收起任务列表"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      </div>
-      <div className="max-h-[60vh] overflow-auto">
-        <TodoChecklist todos={todos} />
-      </div>
-    </div>
-  );
-}
+// FloatingTaskPanel / extractLatestTodoSnapshot 已下线（2026-05-26）：
+// todo 列表只在右侧工作台「任务清单」tab 展示，避免与 sidebar 重复 + 浮在 chat 上挡正文。
+// 工具卡片 body 里的 TodoChecklist + parseTodos 保留——chat 流里那张 TodoWrite 工具卡片
+// 还要展示该次调用的入参快照。
 
 /**
  * 工件徽标（架构 §4.4.9）：工具输出超阈值时落盘后，让用户一眼看到
@@ -1565,9 +1459,12 @@ function ToolCallTimeline({
         // 匹配行），自动展开反而把消息流挤到底。继续靠用户手动 toggle。
         const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
         const autoExpand = !READ_LIKE.has(call.name ?? "");
-        const active =
-          expandedKeys.has(call.key) ||
-          (autoExpand && call.status !== "done");
+        // `expandedKeys` 语义 = 「相对默认值的显式翻转」。默认展开的 running tool
+        // 点击 → 命中 expandedKeys → 折叠成功；再点击 → 移出 expandedKeys → 回到默认。
+        // 旧实现把它当「显式展开集合」用 OR 拼起来，在 autoExpand 路径下用户怎么点
+        // active 都是 true（OR 的右分支恒真），折不下去——这就是 bug。
+        const defaultExpanded = autoExpand && call.status !== "done";
+        const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
         // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
         // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / 未来若新增 failed=红。
         // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
@@ -1692,49 +1589,8 @@ function ToolCallTimeline({
   );
 }
 
-function extractText(node: React.ReactNode): string {
-  if (node == null || typeof node === "boolean") return "";
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(extractText).join("");
-  if (typeof node === "object" && "props" in node) {
-    return extractText((node as React.ReactElement<{ children?: React.ReactNode }>).props.children);
-  }
-  return "";
-}
-
-function CodeBlock({ children, ...rest }: React.HTMLAttributes<HTMLPreElement>) {
-  const [copied, setCopied] = useState(false);
-  const code = extractText(children).replace(/\n$/, "");
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("复制失败");
-    }
-  }
-
-  return (
-    <div className="group/code relative">
-      <pre {...rest}>{children}</pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        title="复制代码"
-        className="absolute right-2 top-2 inline-flex items-center gap-1 rounded border border-border bg-background/80 px-1.5 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover/code:opacity-100"
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-emerald-500" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" />
-        )}
-      </button>
-    </div>
-  );
-}
-
+// CodeBlock / extractText 已抽到 ./CodeBlock 共享给 PlanTab / MarkdownRenderer 等。
+// markdownComponents 也复用一份配置，避免本文件再单独维护。
 const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
   typeof ReactMarkdown
 >["components"];

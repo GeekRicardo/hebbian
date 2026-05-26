@@ -91,6 +91,11 @@ pub enum EngineEvent {
         /// UI 据此展示每段独立 allow 按钮 + 「整条都允许」按钮。
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         command_segments: Vec<String>,
+        /// Plan 审批专属：plan markdown + 元信息，仅 kind="plan" 时填（架构 §4.4.5）。
+        /// 前端用它在 PermissionApprovalPopup 里渲染完整 plan 预览 + 三按钮
+        /// （通过 / 编辑后通过 / 重新规划带反馈）。
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        plan: Option<PlanPermissionDto>,
     },
     /// 审批已被回应（无论 approve / deny）。前端关闭弹窗。
     PermissionResolved {
@@ -177,9 +182,85 @@ pub enum EngineEvent {
         session_id: String,
         title: String,
     },
+    /// TodoWrite 工具更新了 todo 列表（架构 §4.4.6）。前端用整列表覆盖右
+    /// sidebar 的 Todos tab。落盘由 agent_core 完成，前端只需刷视图。
+    TodoListUpdated {
+        todos: Vec<TodoItemDto>,
+    },
+    /// PlanMode 下 ExitPlanMode 落盘了一份 plan markdown，紧随后会有
+    /// `PermissionRequested { kind: "plan" }` 走审批闸口（架构 §4.4.5）。
+    PlanReady {
+        plan_id: String,
+        plan_path: String,
+        plan_markdown: String,
+        summary: String,
+    },
+    /// 用户在 plan tab / 审批 popup 加了一条 plan 评论。surface 追加到面板；
+    /// 下一轮 user message 发送时 agent_core 把未消费 comments 包成
+    /// `<plan_comments>` 段注入。
+    PlanCommentAdded {
+        plan_id: String,
+        comment: PlanCommentDto,
+    },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanPermissionDto {
+    pub plan_id: String,
+    pub plan_path: String,
+    pub plan_markdown: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TodoItemDto {
+    pub id: String,
+    pub content: String,
+    #[serde(rename = "activeForm")]
+    pub active_form: String,
+    /// "pending" / "in_progress" / "completed"
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCommentDto {
+    pub id: String,
+    pub plan_id: String,
+    pub anchor: String,
+    pub body: String,
+    pub created_at_ms: i64,
+    pub consumed: bool,
+}
+
+impl From<protocol::todo::TodoItem> for TodoItemDto {
+    fn from(t: protocol::todo::TodoItem) -> Self {
+        Self {
+            id: t.id,
+            content: t.content,
+            active_form: t.active_form,
+            status: match t.status {
+                protocol::todo::TodoStatus::Pending => "pending".into(),
+                protocol::todo::TodoStatus::InProgress => "in_progress".into(),
+                protocol::todo::TodoStatus::Completed => "completed".into(),
+            },
+        }
+    }
+}
+
+impl From<protocol::todo::PlanComment> for PlanCommentDto {
+    fn from(c: protocol::todo::PlanComment) -> Self {
+        Self {
+            id: c.id,
+            plan_id: c.plan_id,
+            anchor: c.anchor,
+            body: c.body,
+            created_at_ms: c.created_at_ms,
+            consumed: c.consumed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

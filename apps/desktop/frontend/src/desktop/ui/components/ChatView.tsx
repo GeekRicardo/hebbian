@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown } from "lucide-react";
-import {
-  MessageBubble,
-  FloatingTaskPanel,
-  extractLatestTodoSnapshot,
-} from "./MessageBubble";
+import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
@@ -383,7 +379,6 @@ export function ChatView() {
       ? editablePromptId
       : "";
   const promptSummary = activePrompt?.name ?? "无 Agent";
-  const latestTodos = extractLatestTodoSnapshot(currentSession, streamingParts);
 
   async function handleRegenTitle() {
     setTitleLoading(true);
@@ -500,13 +495,9 @@ export function ChatView() {
         onNext={next}
       />
 
-      {latestTodos && latestTodos.length > 0 && (
-        <FloatingTaskPanel
-          key={currentSession.id}
-          todos={latestTodos}
-          streaming={isStreaming}
-        />
-      )}
+      {/* FloatingTaskPanel 已下线（2026-05-26）：todo 列表只在右侧工作台「任务清单」tab 展示，
+          避免与 sidebar 重复 + 浮在 chat 上挡正文。TodoListUpdated 事件由 RightSidebar
+          监听，自动展开 sidebar 并聚焦该 tab。 */}
 
       {/* chat 区域：header 下方、ChatInput 上方的消息列表区。
           所有"放大预览"（DiffViewer fullscreen / ExpandButton 放大）都 portal 到下面的
@@ -623,7 +614,26 @@ export function ChatView() {
 
       <PermissionApprovalPopup />
 
-      <div className="relative">
+      {/* ChatInput 包裹层的"三态"：
+          - 全新对话（无任何消息且未在跑）→ 整块上移到 chat 区中部 + 宽度收 1/4（视觉对齐
+            "新对话居中"模板，输入框比正式会话短一截，强调"还没开始"）。
+          - 跑步态（streaming）→ translate-y-0 全宽贴底（"动画式下沉"，幅度=漂浮高度+24px）。
+          - 跑完 / 历史会话静默态 → 上抬 24px 全宽（让卡片跟窗口底脱开一点"飘"的观感）。
+          translateY 不改 flex 流分配，所以 messages 区高度始终是 flex-1，第一条消息
+          一发出来就自然填满，输入框跟着下沉到底——transition-all 让 transform 和 width
+          一起平滑过渡。 */}
+      {/* 用 margin-bottom 而不是 translateY：translateY 只视觉位移，messages 区高度
+          不变，上浮后会把最后一条消息盖住；margin-bottom 算进 flex 主轴尺寸，会让
+          flex-1 的 messages 区跟着压缩，消息和输入框各占各的空间。 */}
+      <div
+        className={`relative mx-auto transition-all duration-300 ease-out ${
+          messages.length === 0 && !isStreaming
+            ? "w-3/4 mb-[44vh]"
+            : isStreaming
+            ? "w-full mb-0"
+            : "w-full mb-[46px]"
+        }`}
+      >
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-10">
           <UserQuestionPopup />
         </div>

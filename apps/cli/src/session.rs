@@ -76,17 +76,6 @@ impl CliSession {
         if let (Some(store), Some(p)) = (&permission_store, persist_ref.as_ref()) {
             store.load_session_rules(&p.session_id, Vec::new());
         }
-        // ExitPlanMode 工具靠 env var 拿 data_dir + session_id（架构 §4.4.5 hack 路径）。
-        if let Some(p) = persist_ref.as_ref() {
-            std::env::set_var(
-                agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
-                p.data_dir.to_string_lossy().to_string(),
-            );
-            std::env::set_var(
-                agent_core::tools::exit_plan_mode::ENV_SESSION_ID,
-                &p.session_id,
-            );
-        }
         let inner = Session::new(
             Arc::new(harness),
             SessionConfig {

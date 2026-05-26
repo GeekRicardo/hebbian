@@ -300,6 +300,12 @@ export interface Session {
   global_rules?: string[] | null;
   /** 项目规则文件开关状态。null = 自动发现（workdir 下的默认 on）。 */
   rules_files?: RuleFileState[] | null;
+  /** TodoWrite 工具维护的当前 todo 列表（架构 §4.4.6）。落盘 jsonl，重启可恢复。 */
+  todos?: TodoItem[];
+  /** PlanMode ExitPlanMode 落盘后写入"当前 plan"的绝对路径（架构 §4.4.5）。 */
+  active_plan?: string | null;
+  /** 进入 PlanMode 之前的 RunMode；ExitPlanMode 审批通过后据此切回去（架构 §4.4.5）。 */
+  pre_plan_mode?: string | null;
 }
 
 /** 规则文件来源（决定默认开关状态） */
@@ -480,6 +486,12 @@ export type EngineEvent =
        * UI 据此展示每段独立 allow 按钮 + 「整条都允许」按钮。
        */
       command_segments?: string[];
+      /**
+       * Plan 审批专属（架构 §4.4.5），仅 kind="plan" 时填。前端据此在
+       * PermissionApprovalPopup 渲染完整 plan markdown + 三按钮
+       * （通过 / 编辑后通过 / 重新规划带反馈）。
+       */
+      plan?: PlanPermissionDto | null;
     }
   | {
       type: "permission_resolved";
@@ -561,7 +573,63 @@ export type EngineEvent =
       type: "session_title_changed";
       session_id: string;
       title: string;
+    }
+  | {
+      /** TodoWrite 工具更新了 todo 列表（架构 §4.4.6）。整列表覆盖。 */
+      type: "todo_list_updated";
+      todos: TodoItem[];
+    }
+  | {
+      /** ExitPlanMode 落盘了一份 plan markdown，紧随会有 permission_requested(kind=plan)。 */
+      type: "plan_ready";
+      plan_id: string;
+      plan_path: string;
+      plan_markdown: string;
+      summary: string;
+    }
+  | {
+      /** 用户加了一条 plan 评论。前端追加到当前 plan 的 comment 列表。 */
+      type: "plan_comment_added";
+      plan_id: string;
+      comment: PlanComment;
     };
+
+/** TodoWrite 工具维护的单项 todo。三态 checkbox。 */
+export interface TodoItem {
+  id: string;
+  content: string;
+  activeForm: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** Plan 评论（用户对 plan markdown 加的反馈）。 */
+export interface PlanComment {
+  id: string;
+  plan_id: string;
+  /** 锚定 plan markdown 某段（v1 用纯文本，例如 "L12-15" 或选段首尾词）。 */
+  anchor: string;
+  body: string;
+  created_at_ms: number;
+  /** 是否已被注入到下一轮 user message。 */
+  consumed: boolean;
+}
+
+/** Plan 审批 popup 渲染需要的元信息（permission_requested kind=plan 附带）。 */
+export interface PlanPermissionDto {
+  plan_id: string;
+  plan_path: string;
+  plan_markdown: string;
+  summary: string;
+}
+
+/** Plan 列表元数据（list_session_plans 返回）。 */
+export interface PlanMeta {
+  plan_id: string;
+  plan_path: string;
+  title: string;
+  updated_at_ms: number;
+  is_active: boolean;
+}
 
 /** 一次待审批请求（HITL） */
 export interface PendingApproval {
@@ -577,6 +645,8 @@ export interface PendingApproval {
   fingerprint?: string | null;
   /** Bash 多段命令的所有段 fingerprint，compound 时由 UI 展开每段独立按钮 */
   commandSegments?: string[];
+  /** Plan 审批专用（架构 §4.4.5）：plan markdown + 元信息，仅 kind="plan" 时填 */
+  plan?: PlanPermissionDto | null;
 }
 
 /** 用户对审批的回应 */

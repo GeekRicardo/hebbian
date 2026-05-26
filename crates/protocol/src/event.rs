@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::error::ErrorReport;
 use crate::ids::{AgentRef, PermissionRequestId, RunId, TurnId};
 use crate::permission::{ApprovalDecision, PermissionKind};
+use crate::todo::{PlanComment, TodoItem};
 
 /// Core 向外的统一输出。一个 run 的事件流是有序、可重放、自描述的。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +185,27 @@ pub enum EventPayload {
     SessionTitleChanged {
         session_id: String,
         title: String,
+    },
+
+    // —— Todo / Plan（架构 §4.4.5 / §4.4.6） ——
+    /// TodoWrite 工具更新了 todo 列表。surface 端用整列表覆盖（与工具入参一致）。
+    /// 落盘走 [`MetaUpdate::todos`]，重启可恢复。
+    TodoListUpdated {
+        todos: Vec<TodoItem>,
+    },
+    /// PlanMode 下 agent 调 ExitPlanMode 后，plan markdown 落盘完成。
+    /// 紧接着会 emit `PermissionRequested { kind: Plan { .. } }` 等用户审批。
+    PlanReady {
+        plan_id: String,
+        plan_path: String,
+        plan_markdown: String,
+        summary: String,
+    },
+    /// 用户对当前 plan 加了一条评论。surface 追加到面板；下一轮 user message
+    /// 发送时 agent-core 会把未消费 comments 拼进 SEMI 段（架构 §9.3）。
+    PlanCommentAdded {
+        plan_id: String,
+        comment: PlanComment,
     },
 
     // —— 编辑快照（§4.13） ——

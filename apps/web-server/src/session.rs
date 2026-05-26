@@ -385,7 +385,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     agent_core::wakeup::WakeupScheduler::global()
         .register_session_shells(session_id.clone(), shells.clone());
 
-    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
+    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir, Some(workspace.workdir()));
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
 
     let bg_log_dir = Some(sessions_dir::bg_dir(data_dir, session_id));
@@ -412,12 +412,6 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     if let Some(store) = &runtime.permission_store {
         store.ensure_session_view(session_id);
     }
-
-    std::env::set_var(
-        agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
-        data_dir.to_string_lossy().to_string(),
-    );
-    std::env::set_var(agent_core::tools::exit_plan_mode::ENV_SESSION_ID, session_id);
 
     let run_mode = *runtime.run_mode.lock().unwrap();
     let enabled_tools = {

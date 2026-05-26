@@ -31,9 +31,12 @@ use crate::{
     effects::{analyze_effects, EffectClass},
     permissions::PermissionStore,
     run_state::RunState,
+    storage::{plan_comments, plans, sessions as session_store},
     tools::{
+        exit_plan_mode::{self, EXIT_PLAN_MODE_TOOL_NAME},
         hitl::{HitlGate, PermissionDecision},
         registry::ToolRegistry,
+        todo_write::{self, TODO_WRITE_TOOL_NAME},
         ToolCtx, ToolProgress, ASK_TOOL_NAME,
     },
     workspace::Workspace,
@@ -158,6 +161,10 @@ impl ToolDispatcher {
             let dispatch_index = dispatch_offset + call_index;
             tasks.push(if call.name == ASK_TOOL_NAME {
                 self.spawn_ask(call.clone(), call_index, dispatch_index)
+            } else if call.name == TODO_WRITE_TOOL_NAME {
+                self.spawn_todo_write(call.clone(), call_index, dispatch_index)
+            } else if call.name == EXIT_PLAN_MODE_TOOL_NAME {
+                self.spawn_exit_plan_mode(call.clone(), call_index, dispatch_index)
             } else {
                 self.spawn_tool(call.clone(), call_index, dispatch_index)
             });
@@ -456,13 +463,18 @@ impl ToolDispatcher {
                 // —— Edit 工具快照：执行前拍 before（架构 §4.13.2）——
                 // 按真实文件路径加排他锁，确保 snapshot_before + execute + snapshot_after
                 // 不被其他 run 对同一文件的 Edit 打断（架构 §4.13.4）。
+                // 拿锁失败（如 30s 超时）直接跳过快照，不阻塞 Edit 本身。
                 let _edit_lock = if call.name == "Edit" {
-                    edits_worktree_for_snapshot.as_ref().and_then(|wt| {
-                        effective_input["file_path"]
-                            .as_str()
-                            .map(Path::new)
-                            .and_then(|fp| wt.lock_file(fp).ok())
-                    })
+                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
+                        let fp = effective_input["file_path"].as_str().map(Path::new);
+                        if let Some(fp) = fp {
+                            wt.lock_file(fp).await.ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -790,6 +802,368 @@ impl ToolDispatcher {
                 if cancellation::is_cancelled(&cancel) {
                     return Err(ModelError::Cancelled);
                 }
+
+                Ok((
+                    call_index,
+                    ToolResult {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content,
+                        artifact: None,
+                    },
+                ))
+            }
+            .instrument(tool_span),
+        )
+    }
+
+    /// TodoWrite short-circuit（架构 §4.4.6）。
+    ///
+    /// 不进 HITL / hooks / artifact 通路——直接：
+    /// 1. 解析 input.todos
+    /// 2. 落盘到 session.jsonl 的 `MetaUpdate { todos }`（持久化，重启可恢复）
+    /// 3. emit `TodoListUpdated` 让 surface 更新右 sidebar
+    /// 4. emit `ToolCallStarted/Finished` 让 transcript 一致
+    fn spawn_todo_write(
+        &self,
+        call: ToolCall,
+        call_index: usize,
+        dispatch_index: usize,
+    ) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
+        let state = self.state.clone();
+        let sink = self.sink.clone();
+        let data_dir = self.data_dir_for_artifacts.clone();
+        let session_id = self.session_id_for_hooks.clone();
+
+        let tool_span = tracing::info_span!(
+            "tool.call",
+            otel.name = "tool.TodoWrite",
+            otel.kind = "internal",
+            hebbian.tool.name = TODO_WRITE_TOOL_NAME,
+            hebbian.tool.call_id = %call.id,
+            hebbian.tool.class = "read_only",
+            hebbian.tool.outcome = Empty,
+        );
+
+        Box::pin(
+            async move {
+                sink(state.event(EventPayload::ToolCallStarted {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                }));
+
+                let parsed = match todo_write::parse_input(call.input.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("TodoWrite 入参解析失败: {e}");
+                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: msg.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                        }));
+                        return Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content: msg,
+                                artifact: None,
+                            },
+                        ));
+                    }
+                };
+                let todos = todo_write::normalize(parsed.todos);
+                let summary_text = todo_write::summary(&todos);
+
+                // 落盘：data_dir + session_id 都有时持久化；单测路径（None）跳过。
+                // 整列表覆盖语义——模型负责自己维护任务集；不在 dispatcher 层做累积合并。
+                if let (Some(dd), Some(sid)) = (data_dir.as_deref(), session_id.as_deref()) {
+                    if let Err(e) = session_store::set_todos(dd, sid, todos.clone()) {
+                        warn!(error = %e, "TodoWrite: 持久化 todos 失败");
+                    }
+                }
+
+                // 通知 surface：右 sidebar 更新
+                sink(state.event(EventPayload::TodoListUpdated {
+                    todos: todos.clone(),
+                }));
+
+                record_tool_outcome(
+                    attr::outcome::OK,
+                    &call.name,
+                    0.0,
+                    false,
+                    summary_text.len(),
+                );
+                sink(state.event(EventPayload::ToolCallFinished {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    result: summary_text.clone(),
+                    duration_ms: 0,
+                    truncated: false,
+                    artifact_path: None,
+                }));
+
+                Ok((
+                    call_index,
+                    ToolResult {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content: summary_text,
+                        artifact: None,
+                    },
+                ))
+            }
+            .instrument(tool_span),
+        )
+    }
+
+    /// ExitPlanMode short-circuit（架构 §4.4.5）。
+    ///
+    /// 流程：
+    /// 1. 解析 input → 落 `plans/plan-<ts>.md` → 持久化 active_plan
+    /// 2. emit `ToolCallStarted` + `PlanReady`
+    /// 3. 开 HITL approval + emit `PermissionRequested { kind: Plan { ... } }`
+    /// 4. 等用户 `ApprovalDecision`：
+    ///    - `AllowOnce` / `AllowAndRemember` → 切回 pre_plan_mode（+ emit
+    ///      `RunModeChanged`）；tool result = "[Plan approved] ..." + 未消费评论
+    ///    - `Deny` → 留 PlanMode；result = "[Plan rejected]"
+    ///    - `DenyWithFeedback { feedback }` → 留 PlanMode；result 含反馈让
+    ///       模型按反馈改 plan
+    /// 5. 不论批/拒，emit `ToolCallFinished` 让 transcript 一致
+    fn spawn_exit_plan_mode(
+        &self,
+        call: ToolCall,
+        call_index: usize,
+        dispatch_index: usize,
+    ) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
+        let state = self.state.clone();
+        let sink = self.sink.clone();
+        let hitl = self.hitl.clone();
+        let data_dir = self.data_dir_for_artifacts.clone();
+        let session_id = self.session_id_for_hooks.clone();
+
+        let tool_span = tracing::info_span!(
+            "tool.call",
+            otel.name = "tool.ExitPlanMode",
+            otel.kind = "internal",
+            hebbian.tool.name = EXIT_PLAN_MODE_TOOL_NAME,
+            hebbian.tool.call_id = %call.id,
+            hebbian.tool.class = "needs_human_input",
+            hebbian.tool.outcome = Empty,
+        );
+
+        Box::pin(
+            async move {
+                sink(state.event(EventPayload::ToolCallStarted {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                }));
+
+                let parsed = match exit_plan_mode::parse_input(call.input.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("ExitPlanMode 入参解析失败: {e}");
+                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: msg.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                        }));
+                        return Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content: msg,
+                                artifact: None,
+                            },
+                        ));
+                    }
+                };
+
+                let (dd, sid) = match (data_dir.as_deref(), session_id.as_deref()) {
+                    (Some(d), Some(s)) => (d, s),
+                    _ => {
+                        let msg = "ExitPlanMode 需要 data_dir + session_id 才能落盘 / 审批".to_string();
+                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: msg.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                        }));
+                        return Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content: msg,
+                                artifact: None,
+                            },
+                        ));
+                    }
+                };
+
+                // 落盘 plan markdown
+                let plan_path = match plans::save_plan(dd, sid, &parsed.plan_markdown) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("ExitPlanMode 落盘失败: {e}");
+                        warn!(error = %e, "ExitPlanMode save_plan failed");
+                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: msg.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                        }));
+                        return Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content: msg,
+                                artifact: None,
+                            },
+                        ));
+                    }
+                };
+                let plan_id = exit_plan_mode::plan_id_from_path(&plan_path);
+                let plan_path_str = plan_path.display().to_string();
+
+                // 持久化 active_plan
+                if let Err(e) = session_store::set_active_plan(dd, sid, Some(plan_path_str.clone()))
+                {
+                    warn!(error = %e, "ExitPlanMode set_active_plan failed");
+                }
+
+                sink(state.event(EventPayload::PlanReady {
+                    plan_id: plan_id.clone(),
+                    plan_path: plan_path_str.clone(),
+                    plan_markdown: parsed.plan_markdown.clone(),
+                    summary: parsed.summary.clone(),
+                }));
+
+                // 开 HITL approval；workspace 维度（hitl 学习指纹不持久化 plan 审批）。
+                let (request_id, waiter) = hitl.open_approval(None, None);
+                sink(state.event(EventPayload::PermissionRequested {
+                    request_id: request_id.clone(),
+                    kind: PermissionKind::Plan {
+                        plan_id: plan_id.clone(),
+                        plan_path: plan_path_str.clone(),
+                        plan_markdown: parsed.plan_markdown.clone(),
+                        summary: parsed.summary.clone(),
+                        steps: Vec::new(),
+                    },
+                    summary: if parsed.summary.is_empty() {
+                        "计划待审批".to_string()
+                    } else {
+                        parsed.summary.clone()
+                    },
+                    risk: RiskLevel::Low,
+                }));
+
+                let permission_span = tracing::info_span!(
+                    "permission.check",
+                    hebbian.permission.kind = "plan",
+                    hebbian.permission.request_id = %request_id,
+                    hebbian.permission.decision = Empty,
+                );
+                let decision = waiter
+                    .instrument(permission_span.clone())
+                    .await
+                    .unwrap_or(ApprovalDecision::Deny);
+                let decision_label = approval_decision_label(&decision);
+                permission_span.record(attr::PERMISSION_DECISION, decision_label);
+
+                sink(state.event(EventPayload::PermissionResolved {
+                    request_id,
+                    decision: decision.clone(),
+                }));
+
+                // 拼未消费 plan_comments（不论通过/拒绝都拼——拒绝路径让模型也看到用户评论）
+                let mut content = String::new();
+                let unconsumed = plan_comments::list_unconsumed(dd, sid, &plan_id)
+                    .unwrap_or_default();
+
+                match decision {
+                    ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => {
+                        // 切回 pre_plan_mode（从 session 当前快照里读）
+                        if let Ok(s) = session_store::load(dd, sid) {
+                            let target_mode = s
+                                .pre_plan_mode
+                                .unwrap_or(crate::run_mode::RunMode::AskBeforeEdits);
+                            if let Err(e) = session_store::set_run_mode(dd, sid, target_mode) {
+                                warn!(error = %e, "ExitPlanMode: set_run_mode 失败");
+                            } else {
+                                sink(state.event(EventPayload::RunModeChanged {
+                                    from: format!("{:?}", crate::run_mode::RunMode::PlanMode),
+                                    to: format!("{:?}", target_mode),
+                                }));
+                            }
+                            // 清空 pre_plan_mode（已消费）
+                            let _ = session_store::set_pre_plan_mode(dd, sid, None);
+                        }
+                        content.push_str("[Plan approved] Proceeding with implementation.\n\n");
+                        content.push_str(&parsed.plan_markdown);
+                    }
+                    ApprovalDecision::Deny => {
+                        content.push_str(
+                            "[Plan rejected by user] Stay in PlanMode and revise the plan.",
+                        );
+                    }
+                    ApprovalDecision::DenyWithFeedback { ref feedback } => {
+                        content.push_str(
+                            "[Plan rejected by user — please revise]\n\nUser feedback:\n",
+                        );
+                        content.push_str(feedback);
+                    }
+                }
+
+                // 评论拼接 + mark consumed
+                if !unconsumed.is_empty() {
+                    content.push_str("\n\n<plan_comments>\n");
+                    for c in &unconsumed {
+                        content.push_str(&format!("- [{}] {}\n", c.anchor, c.body));
+                    }
+                    content.push_str("</plan_comments>");
+                    let ids: Vec<String> = unconsumed.iter().map(|c| c.id.clone()).collect();
+                    if let Err(e) = plan_comments::mark_consumed(dd, sid, &plan_id, ids) {
+                        warn!(error = %e, "ExitPlanMode: mark_consumed failed");
+                    }
+                }
+
+                record_tool_outcome(
+                    attr::outcome::OK,
+                    &call.name,
+                    0.0,
+                    false,
+                    content.len(),
+                );
+                sink(state.event(EventPayload::ToolCallFinished {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    result: content.clone(),
+                    duration_ms: 0,
+                    truncated: false,
+                    artifact_path: None,
+                }));
 
                 Ok((
                     call_index,
@@ -1173,6 +1547,116 @@ mod tests {
         assert_eq!(results[0].name, "Bash");
 
         surface.await.unwrap();
+    }
+
+    /// 回归测试：spawn_todo_write short-circuit 真的把 todos 落盘到 jsonl 的
+    /// meta_update 行——这是"任务完成后右侧 sidebar 消失" bug 的根因区域，
+    /// 用集成测试钉住。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn todo_write_short_circuit_persists_to_jsonl() {
+        use crate::storage::sessions;
+        use protocol::todo::TodoStatus;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().to_path_buf();
+        // 先建一个 session 让 jsonl 文件存在
+        let session = sessions::create(
+            &data_dir,
+            "openai".into(),
+            "gpt-x".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        let session_id = session.id.clone();
+
+        let workspace = Workspace::new(&data_dir, Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![Box::new(
+            crate::tools::todo_write::TodoWriteTool,
+        )
+            as Box<dyn crate::tools::Tool>]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            model_id: None,
+            judge_client: None,
+            force_automode: false,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            // 关键：传 data_dir + session_id，让 short-circuit 走落盘分支
+            session_id_for_hooks: Some(session_id.clone()),
+            data_dir_for_artifacts: Some(data_dir.clone()),
+            permission_store: None,
+            edits_worktree: None,
+        };
+
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "TodoWrite".into(),
+            input: serde_json::json!({
+                "todos": [
+                    { "id": "t1", "content": "写代码", "activeForm": "正在写代码", "status": "in_progress" },
+                    { "id": "t2", "content": "跑测试", "activeForm": "正在跑测试", "status": "pending" }
+                ]
+            }),
+        };
+
+        // 收集事件做断言
+        let collector = tokio::spawn(async move {
+            let mut events = Vec::new();
+            while let Some(e) = rx.recv().await {
+                events.push(e);
+            }
+            events
+        });
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+                .await
+                .expect("dispatch 应在 5s 内完成");
+        let results = result.expect("dispatch 不应返回错误");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "TodoWrite");
+
+        // 断言 1：事件流里包含 TodoListUpdated
+        drop(dispatcher);
+        let events = collector.await.unwrap();
+        let has_todo_event = events.iter().any(|e| {
+            matches!(&e.payload, EventPayload::TodoListUpdated { todos } if todos.len() == 2)
+        });
+        assert!(
+            has_todo_event,
+            "应有 TodoListUpdated 事件；实际事件: {:?}",
+            events.iter().map(|e| std::mem::discriminant(&e.payload)).collect::<Vec<_>>()
+        );
+
+        // 断言 2：jsonl 文件含 meta_update 行 + todos 字段
+        let path = crate::storage::sessions_dir::session_jsonl_path(&data_dir, &session_id);
+        let content = std::fs::read_to_string(&path).unwrap();
+        let meta_update_lines: Vec<&str> = content
+            .lines()
+            .filter(|l| l.contains("\"type\":\"meta_update\"") && l.contains("todos"))
+            .collect();
+        assert!(
+            !meta_update_lines.is_empty(),
+            "session.jsonl 必须有 meta_update todos 行；实际内容:\n{content}"
+        );
+
+        // 断言 3：load 出来的 Session.todos 含 2 条
+        let loaded = sessions::load(&data_dir, &session_id).unwrap();
+        assert_eq!(loaded.todos.len(), 2);
+        assert_eq!(loaded.todos[0].status, TodoStatus::InProgress);
+        assert_eq!(loaded.todos[1].status, TodoStatus::Pending);
     }
 
     #[test]

@@ -532,7 +532,7 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
         .register_session_shells(session_id.clone(), shells.clone());
 
     // Hooks
-    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
+    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir, Some(workspace.workdir()));
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
 
     // bg log dir + ReadStateTracker + EditsWorktree
@@ -563,13 +563,6 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
     if let Some(store) = &state.permission_store {
         store.ensure_session_view(session_id);
     }
-
-    // ExitPlanMode 通过 env var 拿 data_dir + session_id
-    std::env::set_var(
-        agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
-        data_dir.to_string_lossy().to_string(),
-    );
-    std::env::set_var(agent_core::tools::exit_plan_mode::ENV_SESSION_ID, session_id);
 
     let run_mode = *state.run_mode.lock().unwrap();
     let enabled_tools = {

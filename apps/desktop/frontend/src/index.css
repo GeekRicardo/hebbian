@@ -199,3 +199,36 @@
      时，闪烁的圆角跟它本身完全一致；无圆角时退化为矩形闪烁。这样不同卡片（tool_call /
      edit / 其他锚点）都不会出现"闪烁圆角跟卡片圆角不一致"。 */
 }
+
+/* 从下向上滑入 + 渐显——给所有 popup/弹层、Drawer 入场用。
+   hebbian 多处写了 `animate-slide-up` 但之前没有对应的 keyframes，这里补齐。 */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 150ms ease-out;
+}
+
+/* 反向：向上滑出 + 渐隐——抽屉退场用。配合 React 端 onAnimationEnd 卸载组件。 */
+@keyframes slide-down-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.animate-slide-down-out {
+  animation: slide-down-out 160ms ease-in forwards;
+}

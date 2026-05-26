@@ -156,6 +156,24 @@ pub fn prepend_background_tasks(text: String, tasks: &[BackgroundTaskSummary]) -
     s
 }
 
+/// 把 `<plan_comments>` 块前置到 user content（架构 §4.4.5）。
+/// 用户在 plan tab / 审批 popup 加的评论以 unconsumed 状态落盘，每次发 user
+/// message 前由 [`crate::session::Session::append_user`] 抓出来注入，让 agent
+/// 在下一轮 ModelStep 看到。注入后调 [`crate::storage::plan_comments::mark_consumed`]
+/// 标记已消费。空 vec 时调用方应跳过本函数。
+pub fn prepend_plan_comments(text: String, comments: &[protocol::todo::PlanComment]) -> String {
+    if comments.is_empty() {
+        return text;
+    }
+    let mut s = String::from("<plan_comments>\n");
+    for c in comments {
+        s.push_str(&format!("  - [{}] {}\n", c.anchor, c.body));
+    }
+    s.push_str("</plan_comments>\n\n");
+    s.push_str(&text);
+    s
+}
+
 fn render_environment_xml(
     workdir: &Path,
     allowed_paths: &[PathBuf],

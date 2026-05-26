@@ -12,6 +12,7 @@ pub mod safe_commands;
 pub mod schedule_wakeup;
 pub mod shell_parse;
 pub mod skill;
+pub mod todo_write;
 pub mod wait_for_task;
 pub mod web_fetch;
 pub mod web_search;
@@ -149,6 +150,7 @@ pub fn default_tools(
         Box::new(edit::EditTool::new(workspace.clone(), read_state_tracker)),
         Box::new(grep::GrepTool::new(workspace)),
         Box::new(skill::SkillTool::new(skills)),
+        Box::new(todo_write::TodoWriteTool),
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
         Box::new(exit_plan_mode::ExitPlanModeTool),
@@ -167,6 +169,7 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Edit",
     "Grep",
     "Skill",
+    "TodoWrite",
 ];
 
 pub fn is_builtin_tool(name: &str) -> bool {

@@ -3,6 +3,7 @@ mod engine;
 mod error;
 mod force_automode;
 mod hitl;
+mod notch;
 mod window_control;
 
 pub use engine::EngineEvent;
@@ -349,6 +350,22 @@ fn build_edits_worktree(
         session.pending_runtime_allowed_paths,
     );
     Ok(edits::EditsWorktree::new(data_dir, session_id, &workspace))
+}
+
+/// 读取磁盘文件文本内容。供 UI 显示 Edit 工具 diff 时用 `old_string` 在原文里
+/// indexOf 定位起始行号；不是 agent 的工具，仅服务于 UI 渲染。
+///
+/// 拒绝非文件路径和过大文件（>8MiB），避免渲染极端 case 卡死前端。
+#[tauri::command]
+fn read_text_file(path: PathBuf) -> AppResult<String> {
+    let meta = std::fs::metadata(&path)?;
+    if !meta.is_file() {
+        return Err(AppError::msg("not a regular file"));
+    }
+    if meta.len() > 8 * 1024 * 1024 {
+        return Err(AppError::msg("file too large"));
+    }
+    Ok(std::fs::read_to_string(&path)?)
 }
 
 #[tauri::command]
@@ -815,6 +832,156 @@ async fn generate_session_title(app: AppHandle, id: String) -> AppResult<Session
 #[tauri::command]
 fn list_tools(app: AppHandle) -> AppResult<Vec<ToolInfo>> {
     Ok(core(&app)?.list_tools())
+}
+
+// ========== Todo / Plan / Plan Comments（架构 §4.4.5 / §4.4.6）==========
+
+/// 当前 session 的 todo 列表（按 jsonl MetaUpdate 折叠）。
+#[tauri::command]
+fn list_todos(app: AppHandle, session_id: String) -> AppResult<Vec<engine::TodoItemDto>> {
+    let dd = data_dir(&app)?;
+    let session = sessions::load(&dd, &session_id)?;
+    Ok(session.todos.into_iter().map(Into::into).collect())
+}
+
+#[derive(serde::Serialize)]
+struct PlanMeta {
+    plan_id: String,
+    plan_path: String,
+    /// markdown 首行（去掉 `# ` 前缀）作为短标题；为空时回落到 plan_id
+    title: String,
+    /// Unix epoch ms。文件 mtime。
+    updated_at_ms: i64,
+    /// 是否是 session 当前 active_plan
+    is_active: bool,
+}
+
+/// 列出 session 下所有历史 plan（按 mtime 倒序）。
+#[tauri::command]
+fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanMeta>> {
+    let dd = data_dir(&app)?;
+    let session = sessions::load(&dd, &session_id)?;
+    let active = session.active_plan.clone();
+    let dir = agent_core::storage::plans::dir_for_session(&dd, &session_id);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let plan_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if plan_id.is_empty() {
+            continue;
+        }
+        let updated_at_ms = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let title = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.lines().next().map(|l| l.trim_start_matches('#').trim().to_string()))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| plan_id.clone());
+        let plan_path_str = path.display().to_string();
+        let is_active = active.as_deref() == Some(plan_path_str.as_str());
+        out.push(PlanMeta {
+            plan_id,
+            plan_path: plan_path_str,
+            title,
+            updated_at_ms,
+            is_active,
+        });
+    }
+    out.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    Ok(out)
+}
+
+/// 读取指定 plan 文件的 markdown 内容。
+#[tauri::command]
+fn read_plan_markdown(app: AppHandle, session_id: String, plan_id: String) -> AppResult<String> {
+    let dd = data_dir(&app)?;
+    let path = agent_core::storage::plans::dir_for_session(&dd, &session_id)
+        .join(format!("{plan_id}.md"));
+    let bytes = agent_core::storage::lock::read_locked(&path)?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// 用户编辑 plan markdown 后保存（供 PlanApprovalPopup 「编辑后通过」用）。
+/// 原文件覆盖。
+#[tauri::command]
+fn update_plan_markdown(
+    app: AppHandle,
+    session_id: String,
+    plan_id: String,
+    markdown: String,
+) -> AppResult<()> {
+    let dd = data_dir(&app)?;
+    let path = agent_core::storage::plans::dir_for_session(&dd, &session_id)
+        .join(format!("{plan_id}.md"));
+    agent_core::storage::lock::write_atomic(&path, markdown.as_bytes())?;
+    Ok(())
+}
+
+/// 列出某个 plan 的所有 comments（含已消费的）。
+#[tauri::command]
+fn list_plan_comments(
+    app: AppHandle,
+    session_id: String,
+    plan_id: String,
+) -> AppResult<Vec<engine::PlanCommentDto>> {
+    let dd = data_dir(&app)?;
+    let comments = agent_core::storage::plan_comments::list_comments(&dd, &session_id, &plan_id)?;
+    Ok(comments.into_iter().map(Into::into).collect())
+}
+
+/// 给指定 plan 加一条评论。返回带 id / created_at_ms 填好的 comment。
+#[tauri::command]
+fn add_plan_comment(
+    app: AppHandle,
+    session_id: String,
+    plan_id: String,
+    anchor: String,
+    body: String,
+) -> AppResult<engine::PlanCommentDto> {
+    let dd = data_dir(&app)?;
+    let comment = protocol::todo::PlanComment {
+        // 进程内单调 id：epoch ms + counter 已经够，避免引入 ulid 依赖
+        id: new_comment_id(),
+        plan_id: plan_id.clone(),
+        anchor,
+        body,
+        created_at_ms: 0, // append_comment 会补
+        consumed: false,
+    };
+    let saved =
+        agent_core::storage::plan_comments::append_comment(&dd, &session_id, &plan_id, comment)?;
+    Ok(saved.into())
+}
+
+fn new_comment_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("pc-{ts:x}-{seq:x}")
 }
 
 // ========== 权限规则与路径白名单（架构 §4.6 / §6.1.2）==========
@@ -1830,7 +1997,9 @@ pub fn run() {
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(permission_store)
         .manage(core_client)
+        .manage(notch::create_notch_state())
         .setup(|app| {
+            notch::initialize_notch(app.handle())?;
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，
@@ -1922,6 +2091,12 @@ pub fn run() {
             set_run_mode,
             generate_session_title,
             list_tools,
+            list_todos,
+            list_session_plans,
+            read_plan_markdown,
+            update_plan_markdown,
+            list_plan_comments,
+            add_plan_comment,
             list_permissions,
             add_permission,
             remove_permission,
@@ -1953,6 +2128,7 @@ pub fn run() {
             approve_path_access,
             list_edits,
             diff_edit,
+            read_text_file,
             revert_edit,
             edits_worktree_status,
             oauth_codex_start,
@@ -1969,6 +2145,10 @@ pub fn run() {
             oauth_gemini_refresh,
             oauth_gemini_cli_import,
             deepseek_login,
+            notch::notify_dismiss,
+            notch::notify_click,
+            notch::notify_set_position,
+            notch::notify_resize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

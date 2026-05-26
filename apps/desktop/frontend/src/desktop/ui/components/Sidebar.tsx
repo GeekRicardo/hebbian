@@ -478,7 +478,9 @@ export function Sidebar() {
       </div>
 
       {/* 列表卡：项目/对话切换 + 列表 + 底栏（hairline 分隔）全部聚到一块 */}
-      <div className="flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card shadow-md overflow-hidden">
+      {/* 左侧 sidebar 主体卡片（logo 下方的整张白卡）。双向阴影：朝右散得多（主投影），
+          朝左散得少（薄薄一层让卡片左缘也跟窗口边脱开），整体浮起感更对称。 */}
+      <div className="flex flex-1 min-h-0 flex-col rounded-3xl border border-border bg-card shadow-[10px_0_28px_-10px_rgba(0,0,0,0.28),-4px_0_16px_-8px_rgba(0,0,0,0.16)] overflow-hidden">
       <div className="px-3 py-3 no-drag">
         <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-1">
           <button

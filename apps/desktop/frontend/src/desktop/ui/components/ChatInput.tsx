@@ -3,7 +3,6 @@ import {
   BriefcaseBusiness,
   FilePlus2,
   FolderOpen,
-  GripHorizontal,
   Loader2,
   Plus,
   X,
@@ -17,10 +16,12 @@ import {
 } from "@/desktop/ui/components/chatInputHistory";
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
 import { ContextRing } from "@/desktop/ui/components/ContextRing";
+import { DrawerToggle, InputDrawer } from "@/desktop/ui/components/InputDrawer";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { ModelPickerButton } from "@/desktop/ui/components/ModelPickerButton";
 import { PathHint } from "@/desktop/ui/components/PathHint";
+import { ReasoningEffortPill } from "@/desktop/ui/components/ReasoningEffortPill";
 import { RunModeChip } from "@/desktop/ui/components/RunModeChip";
 import { SlashCommandButton } from "@/desktop/ui/components/SlashCommandButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
@@ -74,6 +75,7 @@ export function ChatInput({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chipScrollRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef<{ startY: number; startH: number } | null>(null);
   const compositionRef = useRef({
     isComposing: false,
@@ -111,6 +113,8 @@ export function ChatInput({
 
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
+  // 二级抽屉（RunMode / Reasoning / 状态）展开态——故意不持久化，每次新进默认折叠
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // 架构 §6.1.3 / §8：当前 workdir 下加载的三层 skills，驱动 `//<skill-name>` 命令注册表
   // 和 SlashCommandButton 的 popup 列表。workdir 变化时刷新；失败时退回空数组（仍可用
@@ -254,9 +258,25 @@ export function ChatInput({
       window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
   }, []);
 
+  // chip 行展开时鼠标垂直滚轮 → 横向滚动；要 active listener 才能 preventDefault
+  // 阻止页面跟着滚。dep 上 path 数量保证 chip 行 mount/unmount 时重新绑定。
+  useEffect(() => {
+    const el = chipScrollRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      el!.scrollLeft += e.deltaY;
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [activeWorkdir, activeAllowedPaths.length, activeProject]);
+
   async function submit() {
     const v = value.trim();
     if ((!v && attachments.length === 0) || sending) return;
+    // 用户开始发送/入队，抽屉自动折叠——这时焦点应该回到对话本身。
+    setDrawerOpen(false);
     // streaming 时回车不再直接发送，而是入队（FIFO 自动消费）。
     if (isStreaming) {
       enqueueAndClear("tail");
@@ -330,6 +350,7 @@ export function ChatInput({
   async function enqueueHeadAndFlush() {
     const v = value.trim();
     if (!v && attachments.length === 0) return;
+    setDrawerOpen(false);
     enqueueInput(v, attachments, "head");
     setValue("");
     setAttachments([]);
@@ -594,26 +615,29 @@ export function ChatInput({
 
   return (
     <div className="pl-2 pr-4 pt-0 pb-3">
-      <div>
-        {/* 拖拽手柄 */}
+      <div className="pt-2 relative">
+        {/* 上边框拖拽热区：贴在外壳顶 border 外侧 ~6px 区域，光标变 ns-resize 暗示可拖；
+            双击恢复自适应高度。不画可见手柄——保持视觉干净。 */}
         <div
           onPointerDown={onGripPointerDown}
           onPointerMove={onGripPointerMove}
           onPointerUp={onGripPointerUp}
           onPointerCancel={onGripPointerUp}
           onDoubleClick={onGripDoubleClick}
-          className="h-3 flex items-center justify-center cursor-ns-resize group"
-          title="拖拽调整高度（双击恢复自适应）"
-        >
-          <GripHorizontal className="w-4 h-4 text-muted-foreground/60 group-hover:text-muted-foreground transition-colors" />
-        </div>
-
+          className="absolute -top-1 left-6 right-6 h-2 cursor-ns-resize z-10"
+          title="拖动调整高度（双击恢复自适应）"
+          aria-label="拖动调整输入框高度"
+        />
+        {/* 白色输入卡片：保留独立 rounded-3xl border 完整圆角。`relative z-10` 让它
+            盖住下方抽屉的负 margin 钻入部分——视觉上抽屉从白色卡片下端"伸出"。 */}
         <div
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDraggingFiles(false)}
           className={cn(
-            "relative rounded-3xl border border-input bg-background shadow-md focus-within:ring-2 focus-within:ring-ring transition",
+            // 主投影朝上散得多（投到消息区之上）；副投影 Y=0、spread 收紧——只在卡片四周
+            // 烘出薄薄一圈光晕，不向下延伸，避免视觉底比 sidebar 主体卡片低几像素。
+            "relative z-10 rounded-3xl border border-input bg-background shadow-[0_-10px_28px_-10px_rgba(0,0,0,0.28),0_0_12px_-6px_rgba(0,0,0,0.12)] focus-within:ring-2 focus-within:ring-ring transition",
             draggingFiles && "border-primary ring-2 ring-primary/30",
             disabled && "opacity-60"
           )}
@@ -626,89 +650,123 @@ export function ChatInput({
               className="px-3 pt-2"
             />
           )}
-          {(activeProject || activeWorkdir || activeAllowedPaths.length > 0) && (
+          {activeProject ? (
+            /* activeProject 模式：项目名是高频可见信息，单 chip 不折叠 */
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
-              {activeProject ? (
-                <HoverHint
-                  hint={
-                    <span className="flex max-w-[320px] flex-col gap-1 font-mono">
-                      {activeWorkdir && (
-                        <span className="break-words">{activeWorkdir}</span>
-                      )}
-                      {activeWorkdir && activeAllowedPaths.length > 0 && (
-                        <span className="flex flex-col gap-0.5 py-0.5" aria-hidden="true">
-                          <span className="h-px bg-border" />
-                          <span className="h-px bg-border" />
-                        </span>
-                      )}
-                      {activeAllowedPaths.map((dir) => (
-                        <span key={dir} className="break-words">
-                          {dir}
-                        </span>
-                      ))}
-                    </span>
-                  }
-                  align="start"
-                >
-                  <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-medium">
-                    <BriefcaseBusiness className="w-3 h-3" />
-                    <span className="truncate max-w-[220px]">
-                      {activeProject.name}
-                    </span>
+              <HoverHint
+                hint={
+                  <span className="flex max-w-[320px] flex-col gap-1 font-mono">
+                    {activeWorkdir && (
+                      <span className="break-words">{activeWorkdir}</span>
+                    )}
+                    {activeWorkdir && activeAllowedPaths.length > 0 && (
+                      <span className="flex flex-col gap-0.5 py-0.5" aria-hidden="true">
+                        <span className="h-px bg-border" />
+                        <span className="h-px bg-border" />
+                      </span>
+                    )}
+                    {activeAllowedPaths.map((dir) => (
+                      <span key={dir} className="break-words">
+                        {dir}
+                      </span>
+                    ))}
                   </span>
-                </HoverHint>
-              ) : (
-                <>
-                    <HoverHint hint="清空所有路径选择" align="start">
-                    <button
-                      type="button"
-                      onClick={clearWorkspaceSelections}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      aria-label="清空所有路径选择"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </HoverHint>
-                  {activeWorkdir && (
-                    <PathHint path={activeWorkdir}>
-                      <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group">
-                        <FolderOpen className="w-3 h-3" />
-                        <span className="truncate max-w-[200px]">
-                          {pathLeaf(activeWorkdir)}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={clearWorkdir}
-                          className="opacity-50 hover:opacity-100"
-                          aria-label="移除项目"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    </PathHint>
-                  )}
-                  {activeAllowedPaths.map((d) => (
-                    <PathHint key={d} path={d}>
-                      <span className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group">
-                        <PathTypeIcon path={d} className="w-3 h-3" />
-                        <span className="truncate max-w-[200px]">
-                          {pathLeaf(d)}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeAllowedPath(d)}
-                          className="opacity-50 hover:opacity-100"
-                          aria-label="移除路径"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    </PathHint>
-                  ))}
-                </>
-              )}
+                }
+                align="start"
+              >
+                <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-medium">
+                  <BriefcaseBusiness className="w-3 h-3" />
+                  <span className="truncate max-w-[220px]">
+                    {activeProject.name}
+                  </span>
+                </span>
+              </HoverHint>
             </div>
-          )}
+          ) : (activeWorkdir || activeAllowedPaths.length > 0) ? (
+            /* 散装路径模式：折叠态低调图标 + 数量；hover 整组向右展开。
+               用嵌套 grid-cols 0fr→1fr + flex-1 min-w-0 让 chip 容器**充满 chip 行剩余空间**，
+               不再被 max-w-[520px] 卡在卡片左半边；内层 flex-nowrap + overflow-x-auto + 鼠标
+               滚轮转横滚（在上方 useEffect 里）。 */
+            <div className="group/chips flex items-center gap-1.5 px-3 pt-2 min-w-0">
+              <span
+                className="inline-flex items-center gap-1 text-primary text-[11px] font-mono shrink-0 transition-colors"
+                title="项目和允许路径（hover 展开）"
+                aria-label="项目和允许路径"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                <span className="tabular-nums">
+                  {(activeWorkdir ? 1 : 0) + activeAllowedPaths.length}
+                </span>
+              </span>
+              <div
+                className={cn(
+                  "grid flex-1 min-w-0",
+                  "grid-cols-[0fr] group-hover/chips:grid-cols-[1fr]",
+                  "transition-[grid-template-columns] duration-200 ease-out"
+                )}
+              >
+                <div
+                  ref={chipScrollRef}
+                  className={cn(
+                    "min-w-0 overflow-x-auto",
+                    // 隐藏滚动条但保留滚动能力
+                    "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                    "opacity-0 pointer-events-none transition-opacity duration-200",
+                    "group-hover/chips:opacity-100 group-hover/chips:pointer-events-auto"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 flex-nowrap whitespace-nowrap">
+                    <HoverHint hint="清空所有路径选择" align="start">
+                      <button
+                        type="button"
+                        onClick={clearWorkspaceSelections}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-muted text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0"
+                        aria-label="清空所有路径选择"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </HoverHint>
+                    {activeWorkdir && (
+                      <PathHint path={activeWorkdir}>
+                        <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-mono group shrink-0">
+                          <FolderOpen className="w-3 h-3" />
+                          <span className="truncate max-w-[200px]">
+                            {pathLeaf(activeWorkdir)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={clearWorkdir}
+                            className="opacity-50 hover:opacity-100"
+                            aria-label="移除项目"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      </PathHint>
+                    )}
+                    {activeAllowedPaths.map((d) => (
+                      <PathHint key={d} path={d}>
+                        <span className="inline-flex items-center gap-1 rounded-md bg-muted text-muted-foreground px-2 py-0.5 text-[11px] font-mono group shrink-0">
+                          <PathTypeIcon path={d} className="w-3 h-3" />
+                          <span className="truncate max-w-[200px]">
+                            {pathLeaf(d)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeAllowedPath(d)}
+                            className="opacity-50 hover:opacity-100"
+                            aria-label="移除路径"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      </PathHint>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <input
             ref={fileInputRef}
             type="file"
@@ -743,8 +801,9 @@ export function ChatInput({
             className="w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
           />
 
-          {/* 底部工具条：左 = + 菜单 / `//` 命令 / RunMode chip，右 = 模型选择 + 发送 */}
-          <div className="flex items-center justify-between px-2 pb-2">
+          {/* 底部工具条：左 = + 菜单 / `//` 命令 / 模型选择，右 = 发送。
+              pb-0 让按钮紧贴 DrawerToggle / 白色卡片底边——视觉重心下沉。 */}
+          <div className="flex items-center justify-between px-2 pb-0">
             <div className="flex items-center gap-1">
             <div className="relative" ref={addMenuRef}>
               <button
@@ -824,27 +883,10 @@ export function ChatInput({
                 });
               }}
             />
-            <RunModeChip
-              sessionId={currentSession?.id ?? null}
-              disabled={inputDisabled}
-            />
+            <ModelPickerButton />
             </div>
 
             <div className="flex items-center gap-1">
-              <div className="mr-0.5 flex items-center gap-0.5 [&_button]:h-7 [&_button]:w-7">
-                <TokenStatsPanel stats={tokenStats} />
-                {contextUsage && (
-                  <ContextRing
-                    used={contextUsage.used_tokens}
-                    budget={contextUsage.budget_tokens}
-                    onClick={() => {
-                      if (compacting) return;
-                      void runCompact("");
-                    }}
-                  />
-                )}
-              </div>
-              <ModelPickerButton />
               {(() => {
                 // streaming 时：输入框有内容 → 按钮做入队（同 Enter）；否则做中断生成。
                 const hasDraft = !!value.trim() || attachments.length > 0;
@@ -899,7 +941,58 @@ export function ChatInput({
               })()}
             </div>
           </div>
+
+          {/* 抽屉触发条：白色卡片内最底部一条 chevron，点击切换下方反色抽屉 */}
+          <DrawerToggle
+            open={drawerOpen}
+            onToggle={() => setDrawerOpen((v) => !v)}
+            disabled={inputDisabled}
+          />
         </div>
+
+        {/* 二级抽屉：紧贴白色卡片下方的独立反色卡片。
+            左侧运行设置（RunMode / Reasoning），右侧只读状态（工作目录末段 / token / 上下文环）。
+            折叠时整个卡片 unmount——这样里面的 popup（Reasoning 上拉菜单等）不会被任何
+            overflow-hidden 祖先裁切。 */}
+        <InputDrawer
+          open={drawerOpen}
+          left={
+            <>
+              <RunModeChip
+                sessionId={currentSession?.id ?? null}
+                disabled={inputDisabled}
+              />
+              <ReasoningEffortPill />
+            </>
+          }
+          right={
+            <>
+              {activeWorkdir && (
+                <HoverHint hint={activeWorkdir} align="end">
+                  <span className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground">
+                    <FolderOpen className="w-3 h-3" />
+                    <span className="truncate max-w-[160px] font-mono">
+                      {pathLeaf(activeWorkdir)}
+                    </span>
+                  </span>
+                </HoverHint>
+              )}
+              <div className="flex items-center gap-0.5 [&_button]:h-7 [&_button]:w-7">
+                <TokenStatsPanel stats={tokenStats} />
+                {contextUsage && (
+                  <ContextRing
+                    used={contextUsage.used_tokens}
+                    budget={contextUsage.budget_tokens}
+                    onClick={() => {
+                      if (compacting) return;
+                      void runCompact("");
+                    }}
+                  />
+                )}
+              </div>
+            </>
+          }
+        />
 
         {attachments.length > 0 && (
           <div className="mt-1.5 px-1 text-[11px] text-muted-foreground">

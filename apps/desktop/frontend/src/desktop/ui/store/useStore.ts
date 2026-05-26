@@ -10,6 +10,7 @@ import type {
   MessageMeta,
   PendingApproval,
   PendingQuestion,
+  PlanComment,
   Prompt,
   PromptsFile,
   Provider,
@@ -21,6 +22,7 @@ import type {
   Session,
   SessionMeta,
   StreamingAssistantPart,
+  TodoItem,
   ToolInfo,
   WorkspaceProject,
   WorkspaceProjectInput,
@@ -291,6 +293,19 @@ type SessionStream = {
   currentRunMode: string | null;
   /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
   suspended: SuspendedInfo | null;
+  /**
+   * TodoWrite 维护的 todo 列表（架构 §4.4.6）。
+   * 落盘到 session.jsonl，启动时由 list_todos 拉一次，之后跟 todo_list_updated 事件增量。
+   */
+  todos: TodoItem[];
+  /**
+   * 当前活跃 plan（架构 §4.4.5）。`null` = 当前没有 plan。
+   * - 通过 plan_ready 事件设置；ExitPlanMode 审批通过/拒绝后保留在 store 里供回看
+   * - markdown 是初始版本，用户走"编辑后通过"路径会让后端覆盖 plan 文件
+   */
+  activePlan: { plan_id: string; plan_path: string; markdown: string; summary: string } | null;
+  /** Plan id → 该 plan 的评论列表。前端在 plan tab / 审批 popup 渲染。 */
+  planComments: Record<string, PlanComment[]>;
 };
 
 export type SuspendedInfo = {
@@ -323,6 +338,9 @@ const EMPTY_MIRROR = {
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
   suspended: null as SuspendedInfo | null,
+  todos: [] as TodoItem[],
+  activePlan: null as SessionStream["activePlan"],
+  planComments: {} as Record<string, PlanComment[]>,
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -340,6 +358,9 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     autoJudgedNotes: slot.autoJudgedNotes,
     currentRunMode: slot.currentRunMode,
     suspended: slot.suspended,
+    todos: slot.todos,
+    activePlan: slot.activePlan,
+    planComments: slot.planComments,
   };
 }
 
@@ -405,6 +426,7 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       kind: e.kind ?? "tool_call",
       fingerprint: e.fingerprint ?? null,
       commandSegments: e.command_segments ?? [],
+      plan: e.plan ?? null,
     };
     if (slot.pendingApproval) {
       return { ...slot, pendingApprovalQueue: [...slot.pendingApprovalQueue, approval] };
@@ -510,10 +532,98 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       ),
     };
   }
+  if (e.type === "todo_list_updated") {
+    // 整列表覆盖（架构 §4.4.6）
+    return { ...slot, todos: e.todos };
+  }
+  if (e.type === "plan_ready") {
+    // ExitPlanMode 落盘了一份新 plan；记下当前活跃 plan。后续 permission_requested
+    // 携带同一 plan 内容由 popup 直接消费。
+    return {
+      ...slot,
+      activePlan: {
+        plan_id: e.plan_id,
+        plan_path: e.plan_path,
+        markdown: e.plan_markdown,
+        summary: e.summary,
+      },
+    };
+  }
+  if (e.type === "plan_comment_added") {
+    const existing = slot.planComments[e.plan_id] ?? [];
+    return {
+      ...slot,
+      planComments: { ...slot.planComments, [e.plan_id]: [...existing, e.comment] },
+    };
+  }
   // edit_snapshot_created / edit_reverted / edit_revert_failed 不挂 slot——
   // editSnapshots 是 session-scoped 的持久化镜像（架构 §4.13），跟 run 生命周期
   // 解耦。这三类事件在事件分发的上层另行写入 sessionEditSnapshots。
   return slot;
+}
+
+/**
+ * 从 session.active_plan 绝对路径反推前端 store 用的 activePlan 形状。
+ * markdown 字段留空，由 PlanTab 打开时再 read_plan_markdown 懒加载填充。
+ */
+function activePlanFromPath(
+  planPath: string,
+): { plan_id: string; plan_path: string; markdown: string; summary: string } | null {
+  const planId =
+    planPath
+      .split(/[/\\]/)
+      .pop()
+      ?.replace(/\.md$/, "") ?? "";
+  if (!planId) return null;
+  return { plan_id: planId, plan_path: planPath, markdown: "", summary: "" };
+}
+
+/**
+ * 给指定 sessionId 的 slot 打一个 patch；slot 不存在则用 EMPTY_MIRROR + sensible
+ * defaults 起一个新 slot（只放 todo / plan 这类 idempotent 状态，不掺 streaming）。
+ * 若该 session 当前是 currentSession，同步刷顶层镜像字段。
+ */
+function patchSessionSlot(
+  set: (
+    partial:
+      | Partial<AppState>
+      | ((state: AppState) => Partial<AppState> | AppState)
+  ) => void,
+  get: () => AppState,
+  sessionId: string,
+  patch: (slot: SessionStream) => SessionStream,
+) {
+  set((state) => {
+    const prev = state.sessionStreams[sessionId];
+    const base: SessionStream =
+      prev ??
+      ({
+        requestId: "",
+        streamingMessageId: null,
+        streamingText: "",
+        streamingParts: [],
+        liveTimeline: [],
+        assistantInsertPos: 0,
+        pendingApproval: null,
+        pendingApprovalQueue: [],
+        pendingQuestion: null,
+        pendingQuestionQueue: [],
+        autoJudgedNotes: [],
+        currentRunMode: null,
+        suspended: null,
+        todos: [],
+        activePlan: null,
+        planComments: {},
+      } satisfies SessionStream);
+    const next = patch(base);
+    const isCurrent = state.currentSession?.id === sessionId;
+    return {
+      sessionStreams: { ...state.sessionStreams, [sessionId]: next },
+      ...(isCurrent ? mirrorFromSlot(next) : {}),
+    };
+  });
+  // 避免某些 closure 不复制 get 引用——保留参数兼容 zustand 旧 API。
+  void get;
 }
 
 /** edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
@@ -629,6 +739,12 @@ interface AppState {
   currentRunMode: string | null;
   /** 架构 §4.12：当前对话 Run 是否被挂起。 */
   suspended: SuspendedInfo | null;
+  /** 当前对话的 todo 列表（镜像自 slot）。 */
+  todos: TodoItem[];
+  /** 当前对话的活跃 plan（镜像自 slot）。 */
+  activePlan: SessionStream["activePlan"];
+  /** 当前对话的 plan_id → 评论列表（镜像自 slot）。 */
+  planComments: Record<string, PlanComment[]>;
   /**
    * 架构 §4.13：每个 session 的 Edit 快照列表。
    * - 持久化真相源是后端 `~/.hebbian/sessions/<sid>/edits-worktree/.hebbian-edits.json`
@@ -676,6 +792,27 @@ interface AppState {
   revertEdit: (sessionId: string, snapshotId: string) => Promise<void>;
   /** 从后端重新加载当前 session 的 edits 条目列表。 */
   refreshEdits: () => Promise<void>;
+
+  // ── Todo / Plan（架构 §4.4.5 / §4.4.6）──
+  /** 用整列表覆盖指定 session slot 的 todos——TodoTab 拉初值 / 修复重连时用。 */
+  replaceSessionStreamTodos: (sessionId: string, todos: TodoItem[]) => void;
+  /** 设定指定 session 的"活跃 plan"快照——PlanTab 切换历史 plan 时用。 */
+  setSessionActivePlan: (
+    sessionId: string,
+    plan: { plan_id: string; plan_path: string; markdown: string; summary: string } | null,
+  ) => void;
+  /** 用整列表覆盖 sessionId / planId 下的 comments——PlanTab 拉初值时用。 */
+  replaceSessionPlanComments: (
+    sessionId: string,
+    planId: string,
+    comments: PlanComment[],
+  ) => void;
+  /** 给某 plan 追加一条本地评论（add_plan_comment 命令返回后调用）。 */
+  appendSessionPlanComment: (
+    sessionId: string,
+    planId: string,
+    comment: PlanComment,
+  ) => void;
 
   // HITL — 当前一轮 run 中悬挂的审批请求
   pendingApproval: PendingApproval | null;
@@ -884,6 +1021,9 @@ export const useStore = create<AppState>((set, get) => ({
   autoJudgedNotes: [],
   currentRunMode: null,
   suspended: null,
+  todos: [],
+  activePlan: null,
+  planComments: {},
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
   providerDialogOpen: false,
@@ -1013,6 +1153,30 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       // 静默——edits-worktree 不可用时不动旧数据
     }
+  },
+
+  // ── Todo / Plan slot 写入器（架构 §4.4.5 / §4.4.6）──
+  // 共用 patchSlot：拿 slot snapshot → 写回 → 若是 currentSession 同步镜像
+  replaceSessionStreamTodos(sessionId: string, todos: TodoItem[]) {
+    patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, todos }));
+  },
+  setSessionActivePlan(sessionId, plan) {
+    patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, activePlan: plan }));
+  },
+  replaceSessionPlanComments(sessionId, planId, comments) {
+    patchSessionSlot(set, get, sessionId, (slot) => ({
+      ...slot,
+      planComments: { ...slot.planComments, [planId]: comments },
+    }));
+  },
+  appendSessionPlanComment(sessionId, planId, comment) {
+    patchSessionSlot(set, get, sessionId, (slot) => {
+      const existing = slot.planComments[planId] ?? [];
+      return {
+        ...slot,
+        planComments: { ...slot.planComments, [planId]: [...existing, comment] },
+      };
+    });
   },
 
   pendingApproval: null,
@@ -1456,6 +1620,17 @@ export const useStore = create<AppState>((set, get) => ({
         void get().triggerWakeupResume(id, pendingWakeup.xml, pendingWakeup.meta);
       });
     }
+    // 把持久化的 todos / active_plan 从 Session 字段同步进 slot——
+    // Session 字段已经在 api.getSession 里返回（agent_core 折叠 jsonl 时填充），
+    // 这里直接落到 slot，避免 TodoTab 用户切到 tab 才拉数据的延迟。
+    // 重启后用户首次打开 session 立刻能在 sidebar 看到上次的任务清单。
+    if (s.todos && s.todos.length > 0) {
+      get().replaceSessionStreamTodos(id, s.todos);
+    }
+    if (s.active_plan) {
+      const plan = activePlanFromPath(s.active_plan);
+      if (plan) get().setSessionActivePlan(id, plan);
+    }
     get().refreshContextUsage();
     get().refreshEdits();
   },
@@ -1638,6 +1813,13 @@ export const useStore = create<AppState>((set, get) => ({
       const requestId =
         crypto.randomUUID?.() ??
         `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // 新 run 起始时保留上一轮的 todos / activePlan / planComments——这些是
+      // session 级持久化状态（架构 §4.4.5 / §4.4.6），不该跟 streaming 一起清。
+      // 之前注释说"不清空"但代码却写了 `[]`，是真正让 sidebar todo "一发新消息就消失"
+      // 的前端根因。
+      const priorSlot = get().sessionStreams[sessionId];
+      const priorSession =
+        get().currentSession?.id === sessionId ? get().currentSession : null;
       const initialSlot: SessionStream = {
         requestId,
         streamingMessageId: tempId,
@@ -1650,8 +1832,15 @@ export const useStore = create<AppState>((set, get) => ({
         pendingQuestion: null,
         pendingQuestionQueue: [],
         autoJudgedNotes: [],
-        currentRunMode: null,
+        currentRunMode: priorSlot?.currentRunMode ?? null,
         suspended: null,
+        todos: priorSlot?.todos ?? priorSession?.todos ?? [],
+        activePlan:
+          priorSlot?.activePlan ??
+          (priorSession?.active_plan
+            ? activePlanFromPath(priorSession.active_plan)
+            : null),
+        planComments: priorSlot?.planComments ?? {},
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
@@ -1734,7 +1923,14 @@ export const useStore = create<AppState>((set, get) => ({
               currentSession: fresh,
               sessionStreams: rest,
               runningSessions: removeFromSet(state.runningSessions, sessionId),
+              // run 结束时 slot 被清掉 → 顶层 streaming 等字段走 EMPTY_MIRROR；
+              // 但 todos / active_plan 是持久化状态，run 结束不应该跟着清空——
+              // 从 fresh session（agent_core 折叠 jsonl 后的最新快照）拿回来。
               ...mirrorFromSlot(undefined),
+              todos: fresh.todos ?? [],
+              activePlan: fresh.active_plan
+                ? activePlanFromPath(fresh.active_plan)
+                : null,
             };
           });
           get().refreshContextUsage();

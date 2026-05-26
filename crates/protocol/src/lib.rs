@@ -9,6 +9,7 @@ pub mod event;
 pub mod ids;
 pub mod permission;
 pub mod submission;
+pub mod todo;
 
 pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
@@ -18,3 +19,4 @@ pub use permission::{
     ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,
 };
 pub use submission::{Op, Submission, UserInput};
+pub use todo::{PlanComment, TodoItem, TodoStatus};

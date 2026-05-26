@@ -78,8 +78,28 @@ pub enum PermissionKind {
         tool_name: String,
         paths: Vec<String>,
     },
-    /// 计划审批（"按这个计划继续吗？"）
-    Plan { steps: Vec<String> },
+    /// 计划审批（"按这个计划继续吗？"）。PlanMode 下 agent 调 ExitPlanMode 时
+    /// 触发；surface 端用 plan_markdown 渲染完整预览，配合三按钮（通过 /
+    /// 编辑后通过 / 重新规划带反馈）。
+    ///
+    /// - `plan_id` 与同 session 下 `plans/<plan_id>.md` 文件名对齐
+    /// - `plan_path` 落盘绝对路径（surface 可直接 read_plan_markdown 重新拉取）
+    /// - `plan_markdown` 当前内容快照（编辑后通过的话由 surface 走
+    ///   `update_plan_markdown` 命令 patch 文件再发 AllowOnce）
+    /// - `summary` 短句摘要，UI 列表 / 通知用
+    /// - `steps` 历史字段，留作向前兼容；新版本不再使用
+    Plan {
+        #[serde(default)]
+        plan_id: String,
+        #[serde(default)]
+        plan_path: String,
+        #[serde(default)]
+        plan_markdown: String,
+        #[serde(default)]
+        summary: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        steps: Vec<String>,
+    },
     /// 长 run 继续审批
     ContinueLongRun { iterations_used: u32 },
 }

@@ -291,6 +291,39 @@ impl Session {
             // 非首条 user message：单独前置 `<background_tasks>` 块
             final_text = crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
         }
+
+        // 架构 §4.4.5：当前 active_plan 存在 unconsumed comments 时把它们包成
+        // `<plan_comments>` 块前置，让 agent 在下一轮 ModelStep 看到用户对 plan
+        // 的反馈，并把它们标记为 consumed（不会被注入第二次）。
+        if let (Some(dd), Some(sid)) = (self.data_dir.as_deref(), self.session_id.as_deref()) {
+            if let Ok(s) = crate::storage::sessions::load(dd, sid) {
+                if let Some(plan_path) = s.active_plan.as_deref() {
+                    let plan_id = std::path::Path::new(plan_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if !plan_id.is_empty() {
+                        if let Ok(unconsumed) =
+                            crate::storage::plan_comments::list_unconsumed(dd, sid, plan_id)
+                        {
+                            if !unconsumed.is_empty() {
+                                final_text = crate::system_prompt::prepend_plan_comments(
+                                    final_text,
+                                    &unconsumed,
+                                );
+                                let ids: Vec<String> =
+                                    unconsumed.iter().map(|c| c.id.clone()).collect();
+                                if let Err(e) = crate::storage::plan_comments::mark_consumed(
+                                    dd, sid, plan_id, ids,
+                                ) {
+                                    tracing::warn!(error = %e, "plan_comments::mark_consumed failed");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // UserPromptSubmit hook（架构 §4.8.1）：fire-and-forget，把最终 user text 发给外部 hook。
         // 当前实现不消费 hook 返回，完整 Modify patch 协议留增量。
         if !self.hooks.is_empty() {

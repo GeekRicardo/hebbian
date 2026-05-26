@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 use crate::rules::RuleFileState;
 use crate::run_mode::RunMode;
+use protocol::todo::TodoItem;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -223,6 +224,22 @@ pub struct Session {
     /// 项目规则文件开关状态。None = 自动发现（workdir 下的默认 on）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules_files: Option<Vec<RuleFileState>>,
+    /// TodoWrite 工具维护的当前 todo 列表（架构 §4.4.6）。
+    /// 模型每次调 TodoWrite 时整列表覆盖；落盘走 [`MetaUpdate::todos`]，
+    /// 重启可恢复并在右侧 sidebar 第 3 个 tab 展示。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub todos: Vec<TodoItem>,
+    /// PlanMode 下 ExitPlanMode 通过审批前后写入的"当前 plan"绝对路径
+    /// （形如 `~/.hebbian/sessions/<sid>/plans/plan-<ts>.md`）。
+    /// `None` 表示当前 session 没有待审批 / 已审批的 plan。历史 plan 仍可在
+    /// 目录里列出，这里只标当前活跃那份（架构 §4.4.5）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_plan: Option<String>,
+    /// 进入 PlanMode 之前的 [`RunMode`]，用于 ExitPlanMode 审批通过后切回去
+    /// （架构 §4.4.5）。默认 `None`——表示从未进过 PlanMode；如果未来切到
+    /// PlanMode 时找不到 pre_plan_mode 则回落到 `AskBeforeEdits`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_plan_mode: Option<RunMode>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -363,6 +380,16 @@ pub struct RolloutMeta {
     pub global_rules: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules_files: Option<Vec<RuleFileState>>,
+    /// TodoWrite 维护的 todo 列表当前快照（架构 §4.4.6）。save 全量重写时把
+    /// 在 jsonl 末尾累积的 meta_update 行折叠回这里，避免下次 load 丢失。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub todos: Vec<TodoItem>,
+    /// PlanMode 下当前活跃 plan 的绝对路径（架构 §4.4.5）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_plan: Option<String>,
+    /// 进入 PlanMode 之前的 RunMode；ExitPlanMode 审批通过后切回去用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_plan_mode: Option<RunMode>,
 }
 
 /// 可变字段补丁。每个 `Some(_)` 字段都会按 last-wins 覆盖到最终 [`Session`]。
@@ -408,6 +435,24 @@ pub struct MetaUpdate {
     pub global_rules: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules_files: Option<Vec<RuleFileState>>,
+    /// TodoWrite 整列表覆盖（架构 §4.4.6）。空 vec 也是有效值（清空 todo）。
+    /// 用 `Option<Vec<_>>` 区分"本次更新不动 todos"和"清空 todos"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todos: Option<Vec<TodoItem>>,
+    /// ExitPlanMode 落盘 plan 后写入"当前 plan"绝对路径（架构 §4.4.5）。
+    /// `None` = 本次更新不动；要清空走 [`clear_active_plan`]。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_plan: Option<String>,
+    /// 显式清空 `active_plan`（plan revert / session reset 等场景）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_active_plan: bool,
+    /// 进入 PlanMode 时记录的"切换前 RunMode"。审批通过后据此切回去。
+    /// `None` = 本次更新不动；要清空走 [`clear_pre_plan_mode`]。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_plan_mode: Option<RunMode>,
+    /// 显式清空 `pre_plan_mode`（ExitPlanMode 审批通过、切回非 PlanMode 后调用）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_pre_plan_mode: bool,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -675,6 +720,9 @@ fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -
         run_mode: s.run_mode,
         global_rules: s.global_rules.clone(),
         rules_files: s.rules_files.clone(),
+        todos: s.todos.clone(),
+        active_plan: s.active_plan.clone(),
+        pre_plan_mode: s.pre_plan_mode,
     }
 }
 
@@ -699,6 +747,9 @@ fn apply_meta(s: &mut Session, m: RolloutMeta) {
     s.run_mode = m.run_mode;
     s.global_rules = m.global_rules.clone();
     s.rules_files = m.rules_files;
+    s.todos = m.todos;
+    s.active_plan = m.active_plan;
+    s.pre_plan_mode = m.pre_plan_mode;
     s.created_at = m.created_at;
 }
 
@@ -757,6 +808,22 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     if let Some(v) = u.rules_files {
         s.rules_files = Some(v);
     }
+    if let Some(v) = u.todos {
+        s.todos = v;
+    }
+    // active_plan：先看 clear 再看 set，让 clear 与 set 不能同帧并存——若并存以 set 为准。
+    if u.clear_active_plan {
+        s.active_plan = None;
+    }
+    if let Some(v) = u.active_plan {
+        s.active_plan = Some(v);
+    }
+    if u.clear_pre_plan_mode {
+        s.pre_plan_mode = None;
+    }
+    if let Some(v) = u.pre_plan_mode {
+        s.pre_plan_mode = Some(v);
+    }
 }
 
 /// 把 jsonl 文件折叠回一个完整 [`Session`]。
@@ -810,6 +877,9 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
         run_mode: RunMode::default(),
         global_rules: None,
         rules_files: None,
+        todos: Vec::new(),
+        active_plan: None,
+        pre_plan_mode: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -1260,6 +1330,9 @@ pub fn create_with_source(
         run_mode: RunMode::default(),
         global_rules: None,
         rules_files: None,
+        todos: Vec::new(),
+        active_plan: None,
+        pre_plan_mode: None,
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1377,6 +1450,9 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         run_mode: src.run_mode,
         global_rules: src.global_rules.clone(),
         rules_files: src.rules_files.clone(),
+        todos: src.todos.clone(),
+        active_plan: src.active_plan.clone(),
+        pre_plan_mode: src.pre_plan_mode,
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1418,13 +1494,87 @@ pub fn rename(data_dir: &Path, id: &str, title: String) -> AppResult<Session> {
 
 /// 切换会话 [`RunMode`]，追加一行 [`MetaUpdate`] 即可（不重写 messages）。
 /// 与 [`rename`] 同 pattern，IO 成本与切换频次匹配。
+///
+/// **pre_plan_mode 自动管理**（架构 §4.4.5）：当且仅当
+/// **从非 PlanMode 进 PlanMode** 时，把当前 run_mode 同时记到 pre_plan_mode，
+/// 让 ExitPlanMode 审批通过后能切回去。其他切换不动 pre_plan_mode；
+/// dispatch 路径离开 PlanMode 时如要清空请显式调 [`set_pre_plan_mode`]。
 pub fn set_run_mode(data_dir: &Path, id: &str, mode: RunMode) -> AppResult<Session> {
     let path = ensure_jsonl(data_dir, id)?;
+    let prev = load(data_dir, id).ok();
+    let record_pre_plan_mode = match (prev.as_ref().map(|s| s.run_mode), mode) {
+        (Some(from), RunMode::PlanMode) if from != RunMode::PlanMode => Some(from),
+        _ => None,
+    };
     append_line(
         &path,
         &RolloutLine::MetaUpdate(MetaUpdate {
             at: now(),
             run_mode: Some(mode),
+            pre_plan_mode: record_pre_plan_mode,
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// TodoWrite 工具更新 todo 列表（架构 §4.4.6）。整列表覆盖语义。
+/// 沿用 [`set_run_mode`] 的 append-only MetaUpdate 模式。
+pub fn set_todos(data_dir: &Path, id: &str, todos: Vec<TodoItem>) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            todos: Some(todos),
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// ExitPlanMode 落盘 plan 后写入"当前 plan"绝对路径（架构 §4.4.5）。
+/// 传 `None` 表示清空 active_plan（如 plan revert / 切回 PlanMode 前的状态）。
+pub fn set_active_plan(
+    data_dir: &Path,
+    id: &str,
+    plan_path: Option<String>,
+) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    let (set, clear) = match plan_path {
+        Some(p) => (Some(p), false),
+        None => (None, true),
+    };
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            active_plan: set,
+            clear_active_plan: clear,
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// 进入 PlanMode 时记录"切换前 RunMode"（架构 §4.4.5）。
+/// 传 `None` 表示清空（ExitPlanMode 审批通过、切回非 PlanMode 后调用）。
+pub fn set_pre_plan_mode(
+    data_dir: &Path,
+    id: &str,
+    mode: Option<RunMode>,
+) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    let (set, clear) = match mode {
+        Some(m) => (Some(m), false),
+        None => (None, true),
+    };
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            pre_plan_mode: set,
+            clear_pre_plan_mode: clear,
             ..Default::default()
         }),
     )?;
@@ -1640,6 +1790,100 @@ mod tests {
             },
         )
         .expect("append message")
+    }
+
+    /// 回归测试：set_todos 落 meta_update 行后，全量 save 重写 jsonl，todos 不能丢。
+    /// 这是 2026-05-26 "完成的 todo 在 sidebar 消失" bug 的真正根因——save 调
+    /// write_jsonl_full 把 meta + messages 重写，把累积的 meta_update 行抹掉，
+    /// 同时 RolloutMeta 缺 todos 字段，没法把当前 todos 折叠到新写的 meta 行里。
+    #[test]
+    fn set_todos_survives_full_save_rewrite() {
+        use protocol::todo::{TodoItem, TodoStatus};
+        let dir = temp_data_dir("todos-save");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let todos = vec![TodoItem {
+            id: "t1".into(),
+            content: "Write code".into(),
+            active_form: "Writing code".into(),
+            status: TodoStatus::Completed,
+        }];
+        set_todos(&dir, &s.id, todos.clone()).unwrap();
+        // append 一条 message 然后全量 save——模拟 chat.rs accumulate_session_tokens 路径
+        let loaded = load(&dir, &s.id).unwrap();
+        assert_eq!(loaded.todos.len(), 1, "set_todos 应已让 load 看到 todos");
+        let mut s2 = loaded;
+        s2.token_stats = Some(TokenStats { input_tokens: 100, ..Default::default() });
+        save(&dir, s2).unwrap();
+        // 再 load 应仍看到 todos——bug 时这里会 0
+        let after_save = load(&dir, &s.id).unwrap();
+        assert_eq!(
+            after_save.todos.len(),
+            1,
+            "save 全量重写后 todos 不能消失；token_stats 持久化路径会触发 save"
+        );
+        assert_eq!(after_save.todos[0].status, TodoStatus::Completed);
+    }
+
+    #[test]
+    fn set_todos_persists_and_load_restores() {
+        use protocol::todo::{TodoItem, TodoStatus};
+        let dir = temp_data_dir("todos");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        // 初始无 todos
+        assert!(s.todos.is_empty());
+
+        let todos = vec![
+            TodoItem {
+                id: "t1".into(),
+                content: "Write code".into(),
+                active_form: "Writing code".into(),
+                status: TodoStatus::InProgress,
+            },
+            TodoItem {
+                id: "t2".into(),
+                content: "Run tests".into(),
+                active_form: "Running tests".into(),
+                status: TodoStatus::Pending,
+            },
+        ];
+        set_todos(&dir, &s.id, todos.clone()).expect("set_todos");
+
+        // load 折叠 jsonl 应得到完整 todos
+        let loaded = load(&dir, &s.id).unwrap();
+        assert_eq!(loaded.todos.len(), 2);
+        assert_eq!(loaded.todos[0].id, "t1");
+        assert_eq!(loaded.todos[0].status, TodoStatus::InProgress);
+
+        // jsonl 文件本身必须包含 meta_update 行
+        let path = crate::storage::sessions_dir::session_jsonl_path(&dir, &s.id);
+        let content = std::fs::read_to_string(&path).unwrap();
+        let has_meta_update = content
+            .lines()
+            .any(|l| l.contains("\"type\":\"meta_update\"") && l.contains("todos"));
+        assert!(
+            has_meta_update,
+            "session.jsonl 应有 meta_update todos 行；内容:\n{content}"
+        );
+
+        // 全部标 completed 再写一次，确认 last-wins 折叠正确
+        let todos2 = vec![
+            TodoItem {
+                id: "t1".into(),
+                content: "Write code".into(),
+                active_form: "Writing code".into(),
+                status: TodoStatus::Completed,
+            },
+            TodoItem {
+                id: "t2".into(),
+                content: "Run tests".into(),
+                active_form: "Running tests".into(),
+                status: TodoStatus::Completed,
+            },
+        ];
+        set_todos(&dir, &s.id, todos2).expect("set_todos 2");
+        let loaded2 = load(&dir, &s.id).unwrap();
+        assert_eq!(loaded2.todos.len(), 2);
+        assert!(loaded2.todos.iter().all(|t| t.status == TodoStatus::Completed));
     }
 
     #[test]
@@ -1863,6 +2107,9 @@ mod tests {
             run_mode: RunMode::default(),
             global_rules: None,
             rules_files: None,
+            todos: Vec::new(),
+            active_plan: None,
+            pre_plan_mode: None,
             created_at: now_ts,
             updated_at: now_ts,
         };

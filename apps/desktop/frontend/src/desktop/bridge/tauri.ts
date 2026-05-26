@@ -14,6 +14,8 @@ import type {
   Message,
   MessageAttachment,
   MessageMeta,
+  PlanComment,
+  PlanMeta,
   Prompt,
   PromptsFile,
   Provider,
@@ -30,6 +32,7 @@ import type {
   SessionBackgroundReport,
   SessionMeta,
   SkillItem,
+  TodoItem,
   ToolInfo,
   WorkspaceProject,
   WorkspaceProjectInput,
@@ -472,6 +475,12 @@ export const api = {
   diffEdit: (sessionId: string, snapshotId: string) =>
     invoke<DiffPayload>("diff_edit", { sessionId, snapshotId }),
 
+  /**
+   * 读盘文件文本——服务于 UI 渲染（如 Edit diff 在原文里 indexOf 定位真实行号）。
+   * 上限 8MiB；不是目录 / 不存在会抛错，调用方需 catch fallback。
+   */
+  readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
+
   /** 回退单次 Edit。返回 `{ success, error? }`。 */
   revertEdit: (sessionId: string, snapshotId: string) =>
     invoke<RevertResult>("revert_edit", { sessionId, snapshotId }),
@@ -479,6 +488,41 @@ export const api = {
   /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
   editsWorktreeStatus: (sessionId: string) =>
     invoke<EditsWorktreeStatus>("edits_worktree_status", { sessionId }),
+
+  // ── Todo / Plan / Plan Comments（架构 §4.4.5 / §4.4.6）──
+  /** 当前 session 的 todo 列表（从 jsonl 折叠出）。打开 session / 切换时拉一次，之后跟事件增量。 */
+  listTodos: (sessionId: string) =>
+    invoke<TodoItem[]>("list_todos", { sessionId }),
+
+  /** 列出 session 下所有历史 plan（按 mtime 倒序），用于 PlanTab 顶部下拉。 */
+  listSessionPlans: (sessionId: string) =>
+    invoke<PlanMeta[]>("list_session_plans", { sessionId }),
+
+  /** 读取指定 plan 文件的 markdown 内容。 */
+  readPlanMarkdown: (sessionId: string, planId: string) =>
+    invoke<string>("read_plan_markdown", { sessionId, planId }),
+
+  /** 用户"编辑后通过"路径：覆盖 plan 文件内容；调用方随后发 allow_once 即可。 */
+  updatePlanMarkdown: (sessionId: string, planId: string, markdown: string) =>
+    invoke<void>("update_plan_markdown", { sessionId, planId, markdown }),
+
+  /** 列出某 plan 的所有评论（含已消费）。 */
+  listPlanComments: (sessionId: string, planId: string) =>
+    invoke<PlanComment[]>("list_plan_comments", { sessionId, planId }),
+
+  /** 给指定 plan 加一条评论。返回带 id / created_at_ms 填好的 comment。 */
+  addPlanComment: (
+    sessionId: string,
+    planId: string,
+    anchor: string,
+    body: string
+  ) =>
+    invoke<PlanComment>("add_plan_comment", {
+      sessionId,
+      planId,
+      anchor,
+      body,
+    }),
 };
 
 export interface DeepseekLoginInput {

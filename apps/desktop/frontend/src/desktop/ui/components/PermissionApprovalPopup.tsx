@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Check,
+  ClipboardList,
   FolderOpen,
   FolderTree,
   Globe,
   Maximize2,
   MessageSquareWarning,
   Minimize2,
+  Pencil,
   Shield,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { MarkdownRenderer } from "@/desktop/ui/components/MarkdownRenderer";
 import {
   DiffViewer,
   FullscreenPortal,
@@ -197,6 +201,13 @@ export function PermissionApprovalPopup() {
   if (!pending) return null;
 
   const isPathAccess = pending.kind === "path_access";
+  const isPlan = pending.kind === "plan";
+
+  // Plan 审批走独立 popup（架构 §4.4.5）：渲染 plan markdown + 三按钮
+  // （通过 / 编辑后通过 / 重新规划带反馈）。复用 resolveApproval 通路。
+  if (isPlan) {
+    return <PlanApprovalPopup />;
+  }
 
   async function send(decision: Parameters<typeof resolveApproval>[0]) {
     setSubmitting(true);
@@ -863,6 +874,284 @@ function MemoryRecallPanel({
           <Globe className="w-3.5 h-3.5" />,
           "写到 ~/.hebbian/permissions.json，所有对话生效",
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Plan 审批专用 popup（架构 §4.4.5）。
+ *
+ * 与普通 tool_call 审批共用底层 HITL 通路（`resolveApproval`），但 UI 形态完全
+ * 不同：上半是 plan markdown 完整预览，下半三按钮（通过 / 编辑后通过 / 重新规划
+ * 带反馈）。AutoMode 下挂 10s 自动通过倒计时（架构 §4.4.5 第三条）。
+ *
+ * "编辑后通过" 的实现：用户改完 markdown 后先调 update_plan_markdown patch 文件，
+ * 再发 allow_once——这样既不污染 ApprovalDecision 协议，也保证 transcript 看到
+ * 的就是用户编辑后的版本。
+ */
+function PlanApprovalPopup() {
+  const pending = useStore((s) => s.pendingApproval);
+  const resolveApproval = useStore((s) => s.resolveApproval);
+  const currentSessionId = useStore((s) => s.currentSession?.id ?? null);
+  const currentRunMode = useStore((s) => s.currentRunMode);
+  const sessionPlanComments = useStore((s) => s.planComments);
+  const replaceComments = useStore((s) => s.replaceSessionPlanComments);
+
+  const planInfo = pending?.plan ?? null;
+  const [editMode, setEditMode] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [feedbackMode, setFeedbackMode] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  // AutoMode 10s 倒计时
+  const autoCountdown = currentRunMode === "auto" || currentRunMode === "AutoMode" ? 10 : null;
+  const [remaining, setRemaining] = useState<number | null>(autoCountdown);
+  const [autoCancelled, setAutoCancelled] = useState(false);
+  const remainingRef = useRef<number | null>(remaining);
+  useEffect(() => {
+    remainingRef.current = remaining;
+  }, [remaining]);
+
+  // 切换不同 plan 时重置局部状态
+  useEffect(() => {
+    setEditMode(false);
+    setFeedbackMode(false);
+    setFeedback("");
+    setEditText(planInfo?.plan_markdown ?? "");
+    setRemaining(autoCountdown);
+    setAutoCancelled(false);
+  }, [planInfo?.plan_id, autoCountdown]);
+
+  // 加载评论
+  useEffect(() => {
+    if (!currentSessionId || !planInfo?.plan_id) return;
+    let cancelled = false;
+    api
+      .listPlanComments(currentSessionId, planInfo.plan_id)
+      .then((cs) => {
+        if (!cancelled) replaceComments(currentSessionId, planInfo.plan_id, cs);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSessionId, planInfo?.plan_id, replaceComments]);
+
+  // 倒计时
+  useEffect(() => {
+    if (remaining === null || autoCancelled || editMode || feedbackMode) return;
+    if (remaining <= 0) {
+      void approve();
+      return;
+    }
+    const t = setTimeout(() => setRemaining((r) => (r === null ? null : r - 1)), 1000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remaining, autoCancelled, editMode, feedbackMode]);
+
+  if (!pending || !planInfo) return null;
+
+  async function approve() {
+    setSubmitting(true);
+    try {
+      // 若处于编辑模式，先 patch plan 文件，再发 allow_once
+      if (editMode && currentSessionId && planInfo) {
+        await api.updatePlanMarkdown(currentSessionId, planInfo.plan_id, editText);
+      }
+      await resolveApproval({ kind: "allow_once" });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function reject() {
+    setSubmitting(true);
+    try {
+      await resolveApproval({ kind: "deny" });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function rejectWithFeedback() {
+    if (!feedback.trim()) {
+      toast.error("请描述要修改的点");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await resolveApproval({ kind: "deny_with_feedback", feedback: feedback.trim() });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const comments = sessionPlanComments[planInfo.plan_id] ?? [];
+  const unconsumedCount = comments.filter((c) => !c.consumed).length;
+
+  return (
+    <div
+      className={cn(
+        "mx-auto px-4 pb-2",
+        fullscreen ? "max-w-5xl" : "max-w-3xl"
+      )}
+    >
+      <div className="pr-[50px]">
+        <div className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150">
+          {/* 头部 */}
+          <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
+            <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
+            <span className="flex-1 truncate text-sm font-medium">
+              AI 提交了一份计划，等你审批
+            </span>
+            {planInfo.summary && (
+              <span className="truncate text-[11px] text-muted-foreground">
+                {planInfo.summary}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setFullscreen((v) => !v)}
+              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={fullscreen ? "缩小" : "放大"}
+            >
+              {fullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+
+          {/* 主体：markdown 预览 / 编辑器 */}
+          <div
+            className={cn(
+              "overflow-auto",
+              fullscreen ? "max-h-[70vh]" : "max-h-[42vh]"
+            )}
+          >
+            {editMode ? (
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                className="block h-full min-h-[40vh] w-full resize-none border-0 bg-background p-3 font-mono text-xs leading-relaxed focus:outline-none"
+              />
+            ) : (
+              <MarkdownRenderer
+                markdown={planInfo.plan_markdown}
+                className="prose prose-sm max-w-none p-3 dark:prose-invert"
+              />
+            )}
+          </div>
+
+          {/* 评论提示 */}
+          {unconsumedCount > 0 && (
+            <div className="border-t border-border bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+              你对该 plan 加了 {unconsumedCount} 条待发送评论，审批后会和决定一起送给 AI。
+            </div>
+          )}
+
+          {/* 反馈输入框 */}
+          {feedbackMode && (
+            <div className="border-t border-border bg-background/60 px-3 py-2">
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="告诉 AI 你想怎么改这份计划（会作为下一轮的 user message 注入）"
+                rows={3}
+                className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+              />
+            </div>
+          )}
+
+          {/* 按钮组 */}
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border bg-background/60 px-2 py-2">
+            {feedbackMode ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackMode(false);
+                    setFeedback("");
+                  }}
+                  disabled={submitting}
+                  className="h-8 rounded-md px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={rejectWithFeedback}
+                  disabled={submitting || !feedback.trim()}
+                  className="h-8 rounded-md bg-destructive px-3 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                >
+                  提交反馈让 AI 重做
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={approve}
+                  disabled={submitting}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  {editMode ? "保存并通过" : "通过，开干"}
+                  {remaining !== null && !autoCancelled && !editMode && (
+                    <span className="ml-1 text-[10px] opacity-80">({remaining}s)</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAutoCancelled(true);
+                    setRemaining(null);
+                    setEditMode((v) => !v);
+                  }}
+                  disabled={submitting}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-muted px-3 text-sm transition-colors hover:bg-muted/80 disabled:opacity-50"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  {editMode ? "退出编辑" : "编辑后通过"}
+                </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAutoCancelled(true);
+                    setRemaining(null);
+                    setFeedbackMode(true);
+                  }}
+                  disabled={submitting}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  <MessageSquareWarning className="h-3.5 w-3.5" />
+                  重新规划
+                </button>
+                <button
+                  type="button"
+                  onClick={reject}
+                  disabled={submitting}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-destructive/10 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  拒绝
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

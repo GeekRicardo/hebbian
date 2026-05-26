@@ -1,9 +1,8 @@
 //! PlanMode 退出时把 plan markdown 落盘（架构 §4.4.5 / §6.1）。
 //!
 //! 路径形如 `~/.hebbian/sessions/<sid>/plans/plan-<yyyymmddHHmmss>.md`。
-//! 调用方负责拿到 `data_dir + session_id`；本期 ExitPlanMode 走 env var
-//! `HEBBIAN_CURRENT_DATA_DIR` / `HEBBIAN_CURRENT_SESSION_ID` 兜底（hack），
-//! Step 4 CoreClient 重构完成后改为构造时注入。
+//! 调用方（[`crate::dispatch::ToolDispatcher`] 的 ExitPlanMode short-circuit
+//! 分支）负责传入 `data_dir + session_id`。
 
 use std::path::{Path, PathBuf};
 

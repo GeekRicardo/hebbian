@@ -337,7 +337,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   return (
     <div
       id="model-io-drawer-root"
-      className="fixed top-0 right-0 bottom-0 z-[100] border-l border-border bg-background rounded-l-xl flex overflow-hidden shadow-[-16px_0_40px_-12px_rgba(0,0,0,0.35)]"
+      className="fixed top-0 right-0 bottom-0 z-[100] border-l border-border bg-background rounded-l-3xl flex overflow-hidden shadow-[-11px_11px_10px_0px_rgba(0,0,0,0.40)]"
       style={{ width: drawerWidth }}
       role="complementary"
       data-testid="model-io-drawer"
@@ -373,6 +373,14 @@ export const ModelIoInspector = memo(function ModelIoInspector({
             <h2 className="text-sm font-medium">Model I/O 调试器</h2>
             <span className="text-xs text-muted-foreground">
               {entries.length} 次请求
+            </span>
+            {/* 当前对话的 session 目录名（~/.hebbian/sessions/<id>）—— 跟 ChatView header
+                debug 显示的 id 一致，方便在 modelio 抽屉里直接对照 jsonl 找文件 */}
+            <span
+              className="select-text truncate max-w-[280px] font-mono text-[10px] text-muted-foreground/70"
+              title={`session ${sessionId}`}
+            >
+              {sessionId}
             </span>
           </div>
           <div className="flex items-center gap-1">

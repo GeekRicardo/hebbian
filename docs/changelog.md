@@ -4178,6 +4178,53 @@
 - **留尾巴**: 无。
 - **关联**: 架构.md §4.10 Observability（model_io 调试）。
 
+### 2026-05-25 — 修 EditsWorktree::lock_file 同步 fd-lock 在 join_all 多 Edit 同 path 时死锁
+
+- **Why**: 用户报告 desktop 一次 turn 里 5 个 tool_call 同时执行后整轮 hang 几小时不动。`sample` 桌面主进程拿到栈，3 秒 2424 个样本全在 `agent_core::dispatch::ToolDispatcher::spawn_tool::{closure}` → `EditsWorktree::lock_file`。根因：`lock_file` 内是 `fs2::FileExt::lock_exclusive()` 同步阻塞 syscall，直接放在 `join_all` 的 `BoxFuture` 里。模型一次返回 N 个 Edit 都指向同一份文件时，N 个 future 各占一个 tokio worker 等同一把 fd-lock，第一名拿到锁后内部 `await snapshot_before`（`git_commit` 子进程）已无 worker 可调度，整轮确定性死锁。fd-lock 是非可取消的 syscall，`select!` / cancel / 超时都救不回来。
+- **改动**:
+  - `crates/agent-core/src/edits/mod.rs`: `lock_file` 改成 `async fn`，两层互斥——
+    1. in-process：`EditsWorktree` 持 `AsyncMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>`，同进程同 path 在 async 层串行化，不耗 tokio worker
+    2. inter-process：`tokio::task::spawn_blocking` 包 `try_lock_exclusive` + 50ms 轮询 + 30s 上限。超时返回 `Err`，dispatcher `.ok()` 折叠成 `None`，等价于「跳过快照但 Edit 继续」，与 `git 不可用 → enabled=false` 同质降级路径
+  - `FileLockGuard` 增持 `OwnedMutexGuard<()>` 字段，Drop 时按声明顺序释放 fd-lock → async guard
+  - `crates/agent-core/src/dispatch.rs`: spawn_tool 内 `wt.lock_file(fp).ok()` → `wt.lock_file(fp).await.ok()`，结构相同语义不变
+  - 新增回归测试 `edits::tests::lock_file_concurrent_same_path_does_not_deadlock`：5 个 future 并发拿同 path 锁，必须在 5s 内全部完成。`multi_thread, worker_threads=4` 模拟 worker 池可被同 path 同步 syscall 饱和的场景。当前修复后 ~100ms 通过；未来若有人把 `spawn_blocking` 包裹拆掉或把 per-path async Mutex 去掉，此测试将卡到 5s timeout panic，拦得住回退
+- **影响范围**: agent-core 内部实现；`lock_file` 签名 sync → async（破坏调用方），仅 dispatch.rs 一处调用方同步改完。对外协议、metadata 格式、session.jsonl 一行不动。两个 surface（desktop / heb CLI / hebweb）共享 ~/.hebbian 数据目录的跨进程互斥语义保持不变（仍是 fd-lock）。
+- **关键取舍**:
+  - 为什么不直接用 `tokio::sync::Mutex` 全替代 fd-lock：fd-lock 是跨进程互斥的最后防线（desktop + heb daemon + hebweb 三个 surface 可同时打开同一 ~/.hebbian），异步锁只能管同进程
+  - 为什么不引入 `fs4` 的 `lock_exclusive_async`：fs2/fs4 的 async 实现在多数平台仍走 spawn_blocking + sync syscall，没有真正的内核级 fcntl 异步，直接自己写更可控
+  - 为什么 30s 超时而不是无限等：fd-lock 没有内核 timeout，进程被 SIGKILL 后内核虽自动释放但 stale .lock 文件会残留；卡 30s 后降级跳过快照比永久 hang 用户更可接受。Edit 本身不阻塞——和 git 不可用的降级路径同质
+  - 为什么 per-path async Mutex 不做 GC：HashMap 按 real_path 增长，单 session 期最多几百个文件，内存可忽略；做 GC 反而引入"释放期间又拿"的竞态，karpathy 原则下不过度设计
+- **复现 / 验证**:
+  - 阶段 A 现场：用户报 desktop 5 个 tool_call 卡数小时。`sample 24638 3 -mayDie` 抓桌面主进程栈，3 秒 2424 样本全在 `agent_core::dispatch::ToolDispatcher::spawn_tool::{closure}` → `agent_core::edits::EditsWorktree::lock_file`；其余 tokio worker 全 idle 在 `park_condvar`。session.jsonl / model_io.jsonl / tool_results / partial sidecar 自死锁起完全静止——非常符合"一个 future 永远不返回，整个 join_all 等不到收尾"
+  - 阶段 B 验证：`cargo test -p agent-core --lib edits::` 9/9 通过（含新加的 5 并发同 path 测试 ~110ms 完成）；`cargo check --workspace` 干净；`pnpm exec tsc --noEmit` 干净
+  - 现场救援：杀掉 PID 24638 重启 desktop，SIGKILL 后内核自动释放 fd-lock，`.lock` 残留文件无害；这次 turn 的 5 个 tool_call 结果会丢，重连 session 走 partial recovery 路径
+- **留尾巴**:
+  - 架构.md §4.13.4 已同步描述两层互斥与 30s 超时降级
+  - `storage/lock.rs` 里的 `acquire_exclusive_lock` 也是同步 `lock_exclusive`，但它走的是 session.jsonl / providers.json / permissions.json 这类**写后立即释放**的短临界区，没有"在持锁期间 await 子进程"模式，目前没死锁风险；如果后续发现 storage 也卡，同样手术
+  - fd-lock 30s 后跳过快照时，前端没有「这次 Edit 没拍快照、回退按钮灰掉」的提示。当前 metadata 不写 entry 就够了——但用户体验上可加一个 `EditSnapshotSkipped` event，下个迭代
+- **关联**: 架构.md §4.13.4 已更新；现场 session `~/.hebbian/sessions/202605231549-59d52e61/`
+
+### 2026-05-25 — 修前端 running 状态 tool_call 卡片点击不能折叠
+
+- **Why**: 用户报告多个 tool_call 同时执行时，正在运行的 tool 卡片默认展开（这是设计意图），但点击 header 折不下去——再点也展不开后再折。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: `ToolCallTimeline` 内单条 call 的 `active` 计算从「显式展开集合 OR auto-expand 且未 done」改成「以默认值为基线，expandedKeys 翻转默认」
+- **根因**: 旧实现 `const active = expandedKeys.has(call.key) || (autoExpand && status !== "done")`，两个分支用 OR 拼起来。tool 正在 running 时 OR 右分支恒为 true，无论 expandedKeys 怎么变（add/remove）active 都是 true → 折叠不下去。`onToggle` 本身没坏，是 active 的二值表达式错了
+- **新语义**: `defaultExpanded = autoExpand && status !== "done"`；`active = expandedKeys.has(key) ? !defaultExpanded : defaultExpanded`。
+  - running auto-expand tool 初始：defaultExpanded=true、未 toggle → active=true（保持默认展开）
+  - 点击 → expandedKeys.add → active=!true=false（折叠成功）
+  - 再点 → expandedKeys.delete → active=true（恢复默认展开）
+  - done 后：defaultExpanded=false、未 toggle → active=false（自动折叠）
+  - done 后点击 → expandedKeys.add → active=!false=true（展开看 detail）
+  - 完美对称，符合"以默认为基线，点击就是翻转默认"的直觉
+- **影响范围**: 纯前端，仅 ToolCallTimeline 单条 call 的可见性条件；onToggle / setExpandedToolCalls / focus 事件 effect 一行不动。Read/Grep/Glob/Ask 等 READ_LIKE 工具行为不变（defaultExpanded=false 永远，active 完全靠 expandedKeys 决定）。
+- **复现 / 验证**:
+  - 阶段 A 复现：modle 一轮返回多个非 READ_LIKE tool_call（Edit / Bash / TodoWrite 等），运行中点击卡片 header → 折不下去
+  - 阶段 B 验证：`pnpm exec tsc --noEmit` 干净；需要桌面 surface 复跑同一现象——running auto-expand 的 tool 卡片点一下应折叠、再点回展开、done 后默认折叠、点一下展开。当前用户跑的是已 build 的 `.app`，要看到这次修复得跑 `pnpm tauri dev` 或 rebuild .app
+- **留尾巴**: focus_tool_call 事件 effect（line 1542-1553）仍按旧的"未 done 默认展开就不触发"判断，新语义下如果用户主动折叠了 running tool 又被 focus 跳进来，effect 不会重新展开它——边角情况，先不动；后续若要更稳健，把 active 的判断函数化、effect 复用即可
+- **关联**: 无
+
+
 ### 2026-05-25 — ModelIoInspector 抽屉改成"右侧贴边 + 左侧浮起"的卡片观感（左圆角 + 左向阴影）
 
 - **Why**: 用户反馈抽屉紧贴窗口右/上/下三边像"切掉"而不是"打开"；中间试过整体缩进 12px 让四周都留呼吸空间，但用户进一步澄清——抽屉本质仍是右侧抽屉，右边别留缝，只要靠阴影让它**看上去**飘在主窗口之上即可。
@@ -4191,3 +4238,253 @@
 - **复现 / 验证**: `pnpm exec tsc --noEmit` 干净；`pnpm tauri dev` 后 `Cmd+I` 打开 inspector，目视确认右/上/下三向贴窗口边、左侧两角圆滑、阴影只从左缘向外晕开。
 - **留尾巴**: 无。
 - **关联**: 紧接上一条「ModelIoInspector 默认贴底 + 悬浮按钮」。
+
+### 2026-05-25 — Stop hook 语义对齐 Claude Code / Codex + 引入 InjectFollowup 让"修完代码自动 verify"闭环
+
+- **Why**: 用户问 Claude Code 是怎么做"修改完之后后置检查（cargo check / tsc / 跑测试）"的，对照梳理后发现：Claude Code 2.1 和 Codex codex-rs::hooks 都用 **Stop hook + 失败回投** 实现这套闭环——模型说"我做完了"准备出 turn 时跑 verify 脚本，失败时把错误信息作为 system-reminder 注入下一轮让模型自己续修。hebbian 已经有 11 个 hook 点位但 **Stop 语义错位**（之前 = 外部 cancel，占用了行业标准点位名），且没有"把脚本失败信息塞回模型"的回投通道。结果就是用户没法直接挂 `cargo check` 当后置验证，而这是 Rust 项目最常见的需求
+- **改动**:
+  - [docs/架构.md](../docs/架构.md) §4.8 重写：Stop 语义改为"turn 自然结束（model end_turn 且无 pending tool）"，与 Claude Code / Codex 对齐；外部 cancel 复用 `Notification { level: "cancel" }`；新增 §4.8.3 描述 InjectFollowup 协议（exit != 0 + outcome="inject" + reminder → 包成 `<hook-feedback>` user message 注入下一轮）；hooks.json 新增 `mode: sync/async`（对齐 Codex `HookExecutionMode`）+ `timeout_secs`；§4.8.6 对比表加 Claude Code 2.1 / Codex 列。§13 加 3 条决策行
+  - [crates/agent-core/src/hooks/types.rs](../crates/agent-core/src/hooks/types.rs): `HookOutcome` 新增 `InjectFollowup(String)` 变体，文档说明仅 Stop 点位由 agent_loop 消费；`HookPoint::Stop` 文档更新为新语义
+  - [crates/agent-core/src/hooks/external.rs](../crates/agent-core/src/hooks/external.rs): 新增 `HookExecMode { Sync, Async }`（对齐 Codex 命名）；`HookRule` 加 `mode` + `timeout_secs`；Async 模式走 fire-and-forget（spawn 后立刻返回 None，stdout 不读，不影响主流程）；JSON 响应解析 `outcome: "inject"` + `reminder` 字段；**Shell 风格降级**：仅 Stop 点位，脚本不输出 JSON 但 exit != 0 + 有 stdout/stderr → 自动构造 InjectFollowup(stdout)，让用户能直接挂 `cargo check 2>&1 | tail -50` 这种"哑脚本"而不强迫写 JSON 包装
+  - [crates/agent-core/src/hooks/mod.rs](../crates/agent-core/src/hooks/mod.rs): 导出 `HookExecMode`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs):
+    - cancel 路径的 `HookPoint::Stop` → `HookPoint::Notification { level: "cancel" }`（Stop 不再代表 cancel）
+    - `ModelResponse::Done` 分支在 push_assistant + drain_pending_inputs 之后、break Ok 之前触发 Stop hook；InjectFollowup 时把 reminder 包成 `[SYSTEM NOTIFICATION - NOT USER INPUT]\n<hook-feedback source="Stop">...</hook-feedback>`（XML 头部借鉴 wakeup_xml 的协议加固，防止模型误判为用户回复）push_user 进 transcript 后 continue（不退出 loop）；drain_pending_inputs 已 > 0 时不跑 Stop hook（用户中途插了新消息，turn 实质未"自然结束"）
+    - 引入 `MAX_STOP_INJECTIONS = 3` 与 per-run `stop_hook_injections: u32` 计数，防 verify 脚本永远失败把 loop 跑爆；超过即放弃注入正常出 turn
+- **影响范围**: agent-core；HookOutcome / HookPoint 都是 enum additive（新增 variant，旧匹配臂不破坏）；HookRule 加 optional 字段（旧 hooks.json 不需要改）；**Stop 点位语义变化**——但 hebbian 尚未对外发布生产、~/.hebbian/hooks.json 检查过用户机器上不存在，可接受。Desktop / heb CLI / hebweb 三个 surface 共享 agent_core，行为一致
+- **关键取舍**:
+  - 为什么 Stop = turn-end 而不是新加 `AgentTurnEnd` 点位：Claude Code / Codex / CodeIsland 都用 `Stop` 表示 turn 自然结束，新加点位反而与生态偏离。早期 hebbian Stop=cancel 是设计错位，趁未发布期纠正
+  - 为什么没引入 `asyncRewake`-类型的"async 完成后再 poke agent"机制：后置 verify 一律走 Sync + timeout 兜底（cargo check 60s / tsc 30s 内可接受），避免引入 spawn + channel + agent_loop poll 的回投通道复杂度。真正的 Async 仅用于审计/通知/上报（fire-and-forget）
+  - 为什么 InjectFollowup 用 `<hook-feedback>` XML 包装而不是直接 push 纯文本：跟 wakeup_xml 协议加固一致——`[SYSTEM NOTIFICATION - NOT USER INPUT]` 头部 + 显式标签让模型清楚这是 hook 反馈不是用户回复
+  - 为什么 MAX_STOP_INJECTIONS = 3：cargo check 修不好的真实故障一般 1-2 次就该让用户介入；3 次是经验值，给"先改 A 引出 B、再改 B 引出 C"留余地，超过就停止自动续跑
+  - 为什么 shell 风格降级仅 Stop 点位：其他点位（PreToolUse / Permission 等）需要明确的 allow/deny/modify 语义，让"哑脚本"通过 exit != 0 自动 inject 会破坏审批语义。Stop 是终态、注入只影响下一轮，安全
+- **复现 / 验证**:
+  - 单元层验证：`cargo test -p agent-core --lib hooks::` 8/8 通过，含 6 个 parse_json_outcome 单元测试 + 2 个真 spawn 子进程的端到端测试（`stop_hook_inject_outcome_propagates_via_hook_manager` 验 JSON 协议、`stop_hook_shell_degraded_inject_on_nonzero_exit` 验 shell 风格降级）。`cargo test -p agent-core --lib` 整体 284 passed
+  - `cargo check --workspace` 干净
+  - Surface 端到端验证（按 CLAUDE.md §修 bug 必经流程）：手动验证待补——写 `~/.hebbian/hooks.json` 挂 `cargo check` 到 Stop 点位，用 heb CLI 起个 Rust workdir 的 session，让模型故意编辑出一个编译错误并出 turn → 事件流应能看到 turn 自然结束后又起新 turn，新 turn 第一条 user message 是 `<hook-feedback source="Stop">...cargo check...</hook-feedback>`，模型应基于错误信息再发起 Edit 修复
+- **留尾巴**:
+  - **Surface 端到端验证**：尚未在真 heb CLI 跑通"挂 cargo check Stop hook → 模型故意写错 → 自动修复"的完整复现脚本。下一轮要补到 docs/heb-cli-debug.md §4 pattern 里，给后续 agent 一个可复用的复现路径
+  - **没暴露 Stop hook 状态给 surface**：Claude Code 有 `statusMessage` 字段在 spinner 上显示「Running cargo check…」，hebbian 目前 verify 期间用户看不到反馈。后续可加 `EventPayload::StopHookRunning { name }` + `StopHookFinished { exit_code, injected: bool }`，desktop/hebweb 渲染一行 toast
+  - **没做 prompt / agent hook type**：Claude Code 有 `type: "prompt"`（小 LLM 评判 hook 输出）和 `type: "agent"`（Haiku 子 agent 验证）。这两种比 shell command 更适合"语义级"后置验证（"测试是否真的覆盖了改动"），但需要 model gateway 集成 + 路由 Haiku 子调用，留作下一 PR
+  - **InjectFollowup 计数粒度**：当前是 per-Run 计数，跨 Run 重置。如果用户连续 send_message 走多个 Run、每次都触发 Stop hook 失败 → 每次都有 3 次注入额度，理论上可能让模型陷入"每轮被回投但每次都触底"。短期可观察后再判断是否需要 per-session 总计上限
+- **关联**: 架构.md §4.8 重写 + §13 加 3 条决策；用户先问"修完后置检查怎么做"→ 给出 Claude Code / Codex 对比 → 用户让加上。参考实现：Claude Code 2.1 settings schema（`asyncRewake` / `rewakeMessage`）、Codex `codex-rs/hooks/src/events/stop.rs` 的 `StopOutcome::continuation_fragments`
+
+### 2026-05-25 — Stop hook 子进程 cwd 注入 + 写入 5 个常用代码 verify 脚本
+
+- **Why**: 紧接上一条「Stop hook 语义对齐」。用户挂 cargo check / tsc 当后置 verify 时立刻撞到一个设计缺漏——hook 子进程 cwd 继承的是 daemon 启动目录（一般是 `~` 或 `/`），不是 session.workdir，导致 `cargo check` 在错误目录跑直接 not-found。根因不修就没法用，所以顺手补完后再加用户机器上的 hook 配置
+- **改动**:
+  - [crates/agent-core/src/hooks/types.rs](../crates/agent-core/src/hooks/types.rs): `HookPoint::Stop` 加 `workdir: Option<String>` 字段，文档说明子进程会把它设为 cwd
+  - [crates/agent-core/src/hooks/external.rs](../crates/agent-core/src/hooks/external.rs): 新增 `point_workdir(&HookPoint)` 辅助；run_one 在 spawn `Command` 时若拿到 cwd 就 `.current_dir(dir)`（sync / async 两条路径都加）；`describe_point` Stop 分支把 workdir 暴露到 stdin payload，让脚本里也能拿到（虽然主要靠 cwd）
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): turn 自然结束触发 Stop hook 时，把 `workspace.workdir().to_string_lossy()` 填入字段
+  - [docs/架构.md](../docs/架构.md) §4.8.2: 补"子进程 cwd"段，说明 Stop 设 workdir、其它点位 hook 脚本自检的范式
+  - 新增端到端测试 `hooks::external::tests::stop_hook_sets_cwd_from_workdir`：tempdir + `pwd` 脚本，断言 spawn 子进程的 stdout 等于传入的 workdir
+  - 用户机器配置（不在 git 里，仅本地）：
+    - `~/.hebbian/hooks/verify-rust.sh` — 探测 `Cargo.toml` 后跑 `cargo check --workspace --message-format=short`
+    - `~/.hebbian/hooks/verify-ts.sh` — 探测 `tsconfig.json + package.json`，monorepo 路径（`apps/* / apps/*/frontend / packages/*`）也扫一层；跑 `pnpm exec tsc --noEmit`
+    - `~/.hebbian/hooks/verify-python.sh` — 探测 `pyproject.toml / setup.py / requirements.txt`，优先 ruff、其次 pyright；都没装就跳
+    - `~/.hebbian/hooks/verify-go.sh` — 探测 `go.mod` 后跑 `go vet ./...`
+    - `~/.hebbian/hooks/audit-bash.sh` — PreToolUse 点位 matcher: Bash，async 模式，把 stdin JSON 追加到 `audit.log`（2MB 滚动）
+    - `~/.hebbian/hooks.json` — 上述 4 个 verify 挂 Stop（sync，timeout 30-90s）+ audit 挂 PreToolUse（async）
+- **影响范围**: agent-core（HookPoint::Stop 加字段是 enum additive，所有 match 臂同步更新）；docs；用户机器 `~/.hebbian/hooks/` 与 `~/.hebbian/hooks.json` 新建。Desktop / heb CLI / hebweb 三 surface 共享 agent_core，行为一致
+- **关键取舍**:
+  - 为什么只在 HookPoint::Stop 加 workdir 而不是所有点位：Stop 是唯一"后置 verify 必须知道项目根"的点位。PreToolUse 关心工具名/input 不关心 cwd，SessionStart 已有 workdir 字段，其它点位 hook 脚本若需要 cwd 走 stdin payload 拿。最小动作，避免大改 enum
+  - 为什么探测脚本默认 exit 0 透明跳过：hook 是**全局配置**而 workdir 是**单 session 属性**——同一份 hooks.json 在 Rust / TS / Python / 非项目目录都会被调用。如果探测不命中就 exit 1 注入，会让纯文档 session 也被骚扰。"探测优先 + 透明跳过"是用户日常体感最干净的范式
+  - 为什么 verify-ts 扫 monorepo 一层而不是只看根：hebbian 自己就是 root 没 tsconfig、frontend 在 `apps/desktop/frontend` 的形态——一层扫描覆盖 90% 的真实 monorepo 布局，又不会扫到 node_modules 里去
+  - 为什么 audit-bash 用 async：审计是单纯 side-effect，不需要影响主流程；如果 sync 跑 + timeout 兜底也行但每次 Bash 都阻塞几十 ms 没意义
+  - 为什么 hooks.json 里 command 写绝对路径而不是 `~/...`：split_whitespace 切 command 时 `~` 不会被 shell 展开（因为没经过 shell）。绝对路径无歧义
+- **复现 / 验证**:
+  - 单元层：`cargo test -p agent-core --lib hooks::` 9 passed（新增 `stop_hook_sets_cwd_from_workdir` 用 tempdir + pwd 脚本断言 cwd 真的被设为 workdir）；`cargo check --workspace` 干净；`cargo test -p agent-core --lib` 整体 285 passed
+  - 脚本现场验证：
+    - 在 hebbian repo 跑 `~/.hebbian/hooks/verify-rust.sh` → exit 0（无错通过）
+    - `cd apps/desktop/frontend && ~/.hebbian/hooks/verify-ts.sh` → exit 0
+    - `cd /tmp && 跑全部 4 个 verify-*.sh` → 全 exit 0 透明跳过（没探测到目标项目）
+    - 临时项目故意写错（`let x: u32 = "string"`）跑 `verify-rust.sh` → exit 1 + stdout 是 `cargo check 失败（cwd=…）：src/main.rs:1:26: error[E0308]: mismatched types`，正是 InjectFollowup shell 降级路径需要的形态
+    - `echo '{"event":"PreToolUse",...}' | audit-bash.sh && tail -1 audit.log` → 时间戳 + payload 写入正常
+  - 完整 Surface 验证（heb CLI 起 session、模型故意写错触发 InjectFollowup 续修）：尚未跑通端到端，留尾巴
+- **留尾巴**:
+  - **heb CLI 端到端验证脚本待补**：写一个 docs/heb-cli-debug.md §4 pattern，用 fixture session 验证"模型 → cargo check 失败 → InjectFollowup → 模型修复"完整链路。是上一条遗留同款尾巴
+  - **hooks.json `~` 展开**：当前 split_whitespace 不展开 `~`，用户改 hooks.json 时容易写错。后续可在 load_hooks_config 里手动做 `~` → `$HOME` 替换（仅命令首段，args 不动避免破坏 sed/awk 等含 `~` 字面量的脚本）
+  - **PreToolUse / PostToolUse 没传 workdir**：未来如果有"按文件路径 path-aware 审计"需求（如 Edit 改的文件 + 当前 workdir 算相对路径再 grep blocklist），可以把 workdir 也加进 PreToolUse / PostToolUse；现在不做避免过度设计
+  - **verify-ts.sh tsconfig.json 扫描深度**：固定一层 `apps/* / packages/*`，深 monorepo 多层嵌套（apps/foo/packages/bar）会漏。先观察一段时间，必要时改成 `find -maxdepth 3` 跑一次
+- **关联**: 紧接上一条「Stop hook 语义对齐 Claude Code / Codex」；架构.md §4.8.2 补充子进程 cwd 段
+
+### 2026-05-25 — TodoWrite 工具补完 + PlanMode 审批闸口 + Plan 评论流（右 sidebar 双 tab）
+
+- **Why**: 三件协同的事用户拍板做：
+  1. 架构 §4.4.6 列了 13 个内置工具，但 `TodoWrite` 在 [crates/agent-core/src/tools/](../crates/agent-core/src/tools/) 一直缺实现，模型调它会 "unknown tool"；且无持久化、无 sidebar 展示
+  2. `ExitPlanMode` 已存在（[exit_plan_mode.rs](../crates/agent-core/src/tools/exit_plan_mode.rs)）但其文件头自承"env var hack（Step 4 重构改）"、无 `PlanReady` 事件、**没有用户审批闸口**——agent 出完 plan 后直接自动切回 mode 开干，相当于自说自话
+  3. 借鉴 claude-code VSCode 扩展的 `planCommentsByChannel` / `open_markdown_preview` / `plan_comment` 路径（webview/index.js:1439），让用户能对 plan 选段加评论给 agent 看到——hebbian 完全没有
+- **改动**（按依赖拓扑自底向上）:
+  - **protocol crate**:
+    - 新增 [crates/protocol/src/todo.rs](../crates/protocol/src/todo.rs): `TodoItem` / `TodoStatus { Pending, InProgress, Completed }` / `PlanComment { id, plan_id, anchor, body, created_at_ms, consumed }`
+    - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): `EventPayload` 加 `TodoListUpdated` / `PlanReady { plan_id, plan_path, plan_markdown, summary }` / `PlanCommentAdded`
+    - [crates/protocol/src/permission.rs](../crates/protocol/src/permission.rs): 扩 `PermissionKind::Plan` 字段 `{ plan_id, plan_path, plan_markdown, summary, steps }`（steps 留作向前兼容，新版本不再使用）
+  - **agent-core storage**:
+    - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `Session` / `MetaUpdate` 加 `todos / active_plan / pre_plan_mode` 三字段；`MetaUpdate` 加 `clear_active_plan` / `clear_pre_plan_mode` 布尔表达"显式清空"语义；新增 `set_todos` / `set_active_plan` / `set_pre_plan_mode`；**`set_run_mode` 自动管理 pre_plan_mode**——从非 PlanMode 进 PlanMode 时把当前 mode 记到 pre_plan_mode（同一 MetaUpdate 行原子写入）
+    - 新增 [crates/agent-core/src/storage/plan_comments.rs](../crates/agent-core/src/storage/plan_comments.rs): append-only `plan-<ts>.comments.jsonl`，jsonl 行 = `Append(PlanComment)` / `MarkConsumed { ids }`，list 折叠规则：append → push，mark_consumed → 命中 id 翻 consumed
+  - **agent-core tools**:
+    - 新增 [crates/agent-core/src/tools/todo_write.rs](../crates/agent-core/src/tools/todo_write.rs): Tool trait 实现，name=`TodoWrite`，schema = `{ todos: [{ id?, content, activeForm, status }] }`；execute 兜底返回汇总文本，真正落盘 / emit 由 dispatcher short-circuit 完成
+    - 重写 [crates/agent-core/src/tools/exit_plan_mode.rs](../crates/agent-core/src/tools/exit_plan_mode.rs): **干掉 env var hack**（`ENV_DATA_DIR` / `ENV_SESSION_ID` 常量删除），改 dispatcher short-circuit 走构造时拿到的 `data_dir + session_id`；Tool::execute 兜底报错（正常路径不会被调到）
+    - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): 注册 `TodoWriteTool` 到 default_tools + `BUILTIN_TOOL_NAMES` 加 `TodoWrite`
+  - **agent-core dispatch + 上下文注入**:
+    - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `run_calls` 加两个 short-circuit 分支（TodoWrite / ExitPlanMode），与 Ask 同 pattern。`spawn_todo_write` 走 `sessions::set_todos` 落盘 + emit `TodoListUpdated`。`spawn_exit_plan_mode` 走 `plans::save_plan` → `sessions::set_active_plan` → emit `PlanReady` → `hitl.open_approval` + emit `PermissionRequested(Plan)` → 等 `ApprovalDecision`：通过 → `set_run_mode(pre_plan_mode)` + emit `RunModeChanged`；拒绝 → 留 PlanMode；评论拼接 + `plan_comments::mark_consumed`
+    - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): `append_user` 末尾检查 `session.active_plan` 的 unconsumed comments，调 `prepend_plan_comments` 把 `<plan_comments>` 段拼到 user content（不污染 system prompt 保 cache，§9.3 同款 SEMI 段），发送后批量 `mark_consumed`
+    - [crates/agent-core/src/system_prompt.rs](../crates/agent-core/src/system_prompt.rs): 新增 `prepend_plan_comments` helper
+  - **desktop bridge**:
+    - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs): `EngineEvent` 加 `TodoListUpdated` / `PlanReady` / `PlanCommentAdded` 三 variant + `PermissionRequested` 加 `plan: Option<PlanPermissionDto>` 字段；新增 DTO `TodoItemDto` / `PlanCommentDto` / `PlanPermissionDto`，从 protocol 类型 `impl From` 转换
+    - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `agent_event_to_engine_event` 加三 variant 翻译 + Plan kind 翻译时塞 plan 元信息；删除老的 `std::env::set_var` ExitPlanMode env var 推送（4 处调用点：desktop/chat.rs / cli/session.rs / cli/daemon.rs / web-server/session.rs）
+    - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 加 6 个 Tauri 命令 `list_todos` / `list_session_plans` / `read_plan_markdown` / `update_plan_markdown` / `list_plan_comments` / `add_plan_comment` + 注册到 invoke_handler；新增 `PlanMeta { plan_id, plan_path, title, updated_at_ms, is_active }` DTO
+  - **前端**:
+    - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `EngineEvent` union 加 3 variant；新增 `TodoItem` / `PlanComment` / `PlanPermissionDto` / `PlanMeta` 类型；`PendingApproval` 加 `plan?: PlanPermissionDto | null`
+    - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 6 个 invoke wrapper
+    - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `SessionStream` 加 `todos / activePlan / planComments` 三字段；EMPTY_MIRROR + mirrorFromSlot 同步；applyEventToSlot 加三 case；新增 4 个 action `replaceSessionStreamTodos` / `setSessionActivePlan` / `replaceSessionPlanComments` / `appendSessionPlanComment` + 共用 helper `patchSessionSlot`
+    - 抽公共组件 [apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx](../apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx) + [MarkdownRenderer.tsx](../apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx)（从 MessageBubble.tsx 提出 `<ReactMarkdown remarkPlugins={[remarkGfm]}>` + `pre: CodeBlock` 配置，让 plan / popup / message 共用）
+    - 新增 [apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx): 三态 checkbox 列表（pending / in_progress 半勾 / completed 删除线 + 折叠）+ 顶部进度条
+    - 新增 [apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx): 顶部下拉切换历史 plan，主区 markdown 预览，选段触发"💬 加评论"按钮（自动用选段头 40 字作为 anchor），底部评论列表 + 输入框
+    - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): `TabId` 扩到 4 个 `"tasks" | "edits" | "todos" | "plans"`；顶栏 tab 全宽展示完整中文标签 + 横向 `overflow-x-auto`，新组件 `TabScroller` 监听 wheel 把垂直滚轮转横向滚动（不抢断边界处事件，免按 Shift）；折叠 / Model I/O 按钮固定右侧不参与滚动
+    - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): Plan kind 走独立 `PlanApprovalPopup` 子组件（全屏切换 + markdown 预览 + 三按钮"通过 / 编辑后通过 / 重新规划带反馈" + AutoMode 10s 倒计时）。"编辑后通过" = 先 invoke `update_plan_markdown` patch 文件，再发 `AllowOnce`；不污染 ApprovalDecision schema
+  - **文档**: [docs/架构.md §4.4.5](../docs/架构.md) 重写 PlanMode 工作流（HITL 审批闸口 + plan 评论流 + 落盘目录布局 + 全链路时序图）
+- **影响范围**: protocol / agent-core / desktop / 前端 / docs；MetaUpdate 加 5 个 `Option<T>` / `bool` 字段，全部 `serde(default, skip_serializing_if)`，老 jsonl 反序列化兼容；`PermissionKind::Plan` 字段全部 `serde(default)`，旧 `steps` 字段保留向前兼容
+- **设计取舍**:
+  - **审批走 HITL 既有路径**（不另起 `approve_plan` 命令）：复用 `PermissionRequested` / `PermissionResolved` / `respond_permission` 等成熟基础设施；`DenyWithFeedback` 自然承担"重新规划带反馈"语义——feedback 作为 transcript 一部分喂模型
+  - **TodoWrite / ExitPlanMode 走 dispatcher short-circuit**：而非 Tool trait execute——Tool trait 不持有 `data_dir + session_id + hitl + sink` 上下文，加进去会污染所有工具；dispatcher 已经持有，分发分支增加几行更干净（与 Ask 工具同 pattern）
+  - **plan 评论独立 jsonl，不进 session.jsonl**：评论数量级小但生命周期与 session.jsonl 不一致（plan 可能被 revert / 多个 plan 并存）；独立文件让 mark_consumed 是 append-only 不需要重写整个 session
+  - **`set_run_mode` 自动管 pre_plan_mode**：调用方不用关心，所有 surface（desktop / cli / hebweb）切到 PlanMode 都自动记 from，避免每个 surface 各自实现一遍
+  - **claude-code 派"todo 渲染在 tool call 卡片"vs hebbian 派"sidebar tab"取舍**: hebbian 同时保留——sidebar tab 是持久化视图（重启可见），tool call 卡片可选（暂未实现，留作后续）。`TodoListUpdated` 事件让两者数据源一致
+- **留尾巴**:
+  - **MessageBubble.tsx TodoWrite tool call body 渲染优化**：当前 TodoWrite tool 调用在 chat 流里仍是普通工具卡片显示 input JSON。可以仿 claude-code [webview/index.js:2026 `CG1` 类](file:///Users/ricardo/.vscode/extensions/anthropic.claude-code-2.1.144-darwin-arm64/webview/index.js) 加一个专门的 body 渲染（三态 checkbox 列表）。v1 不做，sidebar tab 已能完整覆盖需求
+  - **plan 评论 anchor v1 是纯文本字符串**（如 "L12-15" 或选段头 40 字）：v2 改为 selection range / char offset 精确锚定，UI 上能高亮 plan markdown 里对应段
+  - **跨窗口 plan_comments 实时同步**：当前一个窗口加评论不会广播给其他窗口（其他窗口下次 `list_plan_comments` 拉到最新）。`PlanCommentAdded` 事件已经预留，后续可在 add_plan_comment Tauri 命令里走全局 broadcast
+  - **TodoWrite tool call 卡片折叠**：当前每次 TodoWrite 都在 chat 流里产生一张卡片，长会话里会重复出现。可以在 MessageBubble 里把同一 turn 的连续 TodoWrite 折叠
+  - **CLI 端的 plan comments 入口未做**：heb CLI 还没 `heb add-plan-comment` 命令，目前只有 Desktop UI 能加评论。后续按 CLAUDE.md "现有 heb 命令不够用时：允许新增" 流程补
+  - **AutoMode 倒计时下沉到前端**: 后端 ExitPlanMode 不再做"AutoMode 10s 自动切"——架构 §4.4.5 老描述"AutoMode 10s 倒计时"现在由 PermissionApprovalPopup 里 `PlanApprovalPopup` 子组件实现。如果未来要支持后端定时器（如 surface 离线时），需把这部分逻辑下沉到 dispatcher 等待 ApprovalDecision 处加超时分支
+- **关联**: 借鉴 claude-code 2.1.144 VSCode 扩展的 plan_comment / Plan 审批流（[webview/index.js:1439](file:///Users/ricardo/.vscode/extensions/anthropic.claude-code-2.1.144-darwin-arm64/webview/index.js) 显示 plan markdown preview + 评论流路径），及其 TodoWrite 渲染（[index.js:2026 `CG1` 类](file:///Users/ricardo/.vscode/extensions/anthropic.claude-code-2.1.144-darwin-arm64/webview/index.js) 三态 checkbox）；架构.md §4.4.5 / §4.4.6 / §3.1 同步更新
+
+### 2026-05-25 — Hook 配置分全局 + 项目两层追加合并
+
+- **Why**: 紧接 Stop hook 系列。用户问"如果是 project 级别，怎么加 hook 让其检查整个项目是否可用"——当前 `load_hooks_config(data_dir)` 只读全局 `~/.hebbian/hooks.json`，项目专属 verify（某 monorepo 要 `pnpm test:unit`、某 Go 服要跑专属 smoke、某 Python 项目要跑 ruff 自定义规则）没地方挂。架构 §6.1 决策"项目相关配置聚拢到 `projects/<enc>/` 便于扩展（permissions / skills / **未来的 hooks**）"早已预留这个延伸，现在补上
+- **改动**:
+  - [crates/agent-core/src/hooks/external.rs](../crates/agent-core/src/hooks/external.rs):
+    - 签名改 `load_hooks_config(data_dir: &Path, workdir: Option<&Path>) -> HookConfig`
+    - 拆出 `fn load_hooks_file(&Path) -> HookConfig` 复用单文件加载逻辑
+    - 项目层路径 = `<data_dir>/projects/<encode(workdir)>/hooks.json`，复用 `storage::projects::encode_workdir`
+    - 同点位 hooks 数组**追加**（global 先、project 后）；HookManager 仍按"第一个非 Continue 胜出"
+    - 任一层缺失/解析失败仅 warn 不报错，与 PermissionStore 同质降级
+  - 三个 surface 调用点同步更新：[apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) / [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)，都传入 `Some(workspace.workdir())`
+  - 单测新增 `load_hooks_config_merges_global_and_project_layers` + `load_hooks_config_without_workdir_only_reads_global`：验证合并语义 + 兼容 None workdir 场景
+  - [docs/架构.md](../docs/架构.md) §4.8.2 加"两层配置"段；§13 加一行决策
+- **影响范围**: agent-core hooks 模块 + 三个 surface 共 4 个文件 + docs。`load_hooks_config` 签名破坏——但 `pub` 调用方仅 surface 三处（grep 全仓确认），同步改完后不再有遗留。enum / config schema 都没动，hooks.json 文件格式向后兼容（旧用户配置原样生效）
+- **关键取舍**:
+  - **为什么追加而不是覆盖**：跟 PermissionRule 同质——"全局 rule + 项目 rule 都跑"的语义清晰好懂；覆盖式（项目有该点位就吃掉全局）会让用户改一个项目的 verify 时不小心把全局 audit 也禁掉。需要"项目想绕过全局"的极端场景，让脚本里 read stdin payload 后自行 `exit 0`
+  - **为什么没改成 per-session HookManager**：HookManager 是进程级单例 + load 一次。改 per-session 要么传 workdir 给 HookManager（侵入 trait），要么每个 session 单独 new 一份（HookManager 持 Vec<Box<dyn Hook>> 不是 zero-cost）。当前"启动时一次合并"对 session 内行为已经足够正确——hook config 改动需要重启 session 的语义与 permissions/skills 一致
+  - **为什么 `workdir: Option<&Path>` 而不是必填**：测试场景 / 非典型 surface（如 fixture / repl-without-workspace）不一定有 workdir，None 时退化为旧行为是更宽松的契约
+  - **为什么不把 encode_workdir 路径放到 hooks 模块自己算**：复用 `storage::projects::encode_workdir` 让 hooks.json 与 permissions.json / workspace.json 的目录布局完全对齐——用户改 hook 时跟改 permission 是同一个心智模型
+- **复现 / 验证**:
+  - 单元层：`cargo test -p agent-core --lib hooks::` **11 passed**（新增 2 个层合并测试）；`cargo check --workspace` 干净
+  - 现场链路（用户怎么挂项目级 hook）：
+    1. `mkdir -p ~/.hebbian/projects/-Users-ricardo-code-ricardo-rust-hebbian/`
+    2. 项目目录里写 `hooks.json`，挂"启动测试"或"项目独有 verify"
+    3. 重启 desktop / heb daemon，对应 workdir 的 session 同时拿到 global + project hooks
+- **留尾巴**:
+  - **项目级 hooks 没有 UI**：用户改项目 hook 要手动 `mkdir`，没有"设置 → 项目 → Hooks"的可视化入口。下一轮可加：SessionSettingsDialog 的"项目"tab 里追加 hooks 编辑器（与 permissions / skills 同位置）
+  - **encoded-workdir 拼错没报错**：当前合并是悄悄的——如果项目目录路径拼错，hooks.json 静默被跳过且不 warn。可以加一个 debug! log 让排查时能看到"加载了哪些层"
+  - **重启才生效**：hooks.json 改动需要重启 session，跟 permissions 的热加载（决策 4.6.2）行为不一致。如果使用频繁可下一轮加 hooks 的 mtime 检查 + reload
+- **关联**: 架构.md §6.1 / §4.8.2 / §13 新决策；紧接前两条 Stop hook 系列
+
+### 2026-05-25 — ChatInput 重排：底部工具条精简 + 二级深色抽屉 + chip 折叠 + 上边框拖拽
+
+- **Why**: 用户给了一张外部产品的输入框截图，要把输入框拆成「日常区 + 设置/状态抽屉」两层。
+  原因是当前底部工具条挤了 6 类元素（+ / `//` / RunMode / TokenStats / ContextRing / Model / 发送），高频和低频混排，视觉密度过高；
+  textarea 上方的 chip 行也会在 allowed_paths 多时把"输入"这件事的视觉重心挤掉
+- **改动**:
+  - **新建** `apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx`：
+    - `DrawerToggle`：白色卡片底部一条 14px chevron 触发条，hover 染色 + 旋转指示，点击切换抽屉
+    - `InputDrawer`：用 `grid-template-rows: 0fr ↔ 1fr` 做高度动画（比 max-height 黑魔法稳；动画结束后行高自动跟随真实内容），配合 opacity 渐变；视觉是 `rounded-2xl bg-muted/70 border` 的二级卡片
+    - `open` 由调用方持有，故意不持久化（每次进入界面默认折叠——避免上次的展开态干扰当前心智）
+  - **新建** `apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx`：紧贴 RunMode 的思考强度 pill，点击 low → medium → high → extra 循环；模型不支持 reasoning 时 return null。状态走 `store.setReasoning`，与 ModelPicker popup 里的 `ReasoningControls` 共享同一份数据（SSoT 不冲突）
+  - **改动** `ChatInput.tsx`：
+    - 移除原顶部 12px 拖拽手柄；改为白色卡片 `absolute -top-2 left-6 right-6 h-3 cursor-ns-resize` 的隐形拖拽热区——光标变化暗示可拖、双击恢复自适应；视觉上无可见手柄
+    - 底部工具条精简：左只剩 [+ / SlashCommandButton]、右只剩 [ModelPickerButton / 发送]；RunModeChip / TokenStatsPanel / ContextRing 三项下沉到抽屉
+    - chip 行 hover-expand：activeProject 模式仍单 chip 不折叠（项目名高频），散装 workdir/allowed_paths 模式折叠成 `[FolderOpen + count]` 徽章，hover 时用 grid-cols 0fr→1fr 向右展开
+    - 卡片底部内嵌 `DrawerToggle`；卡片下方平铺 `InputDrawer`：左侧 [RunModeChip + ReasoningEffortPill]，右侧 [workdir 末段 chip + TokenStats + ContextRing]
+- **影响范围**:
+  - 仅 desktop / hebweb 前端 UI；不动协议、storage、agent_core、system prompt
+  - `ReasoningControls` 在 ModelPicker popup 里**保留**——抽屉里的 pill 是另一条编辑入口，store 是 SSoT 不会冲突；保留双入口的原因：popup 里还有 thinking on/off 和 1M 上下文开关，effort 一起留着上下文更完整
+  - 行为变化：
+    - allowed_paths 列表默认不可见——hover 才展开；用户要 X 移除某条路径变两步交互（hover 展开 + 点 X）
+    - 顶部不再有可见拖拽手柄；用户首次可能找不到拖拽热区——靠 cursor 变化暗示
+    - 运行模式 / 思考强度 / 上下文环 / token 用量默认看不到——展开抽屉才看；首次使用可能错过 "Plan 模式" 入口
+- **取舍**:
+  - 抽屉颜色没做截图那种纯黑反差（hebbian token 体系下硬塞黑色会让里面的 RunModeChip / ContextRing 子组件的 `hover:bg-muted` 等 token 失效）；先用 `bg-muted/70` 制造一档对比，子组件原样可用，视觉沉降感弱一点但代价小
+  - 抽屉默认不持久化展开态——用户原话明确"默认折叠"；后续如果发现新用户找不到 Plan 模式入口，再考虑首次启动展开一次然后记住
+- **留尾巴**:
+  - 抽屉**没做截图第二行那三个大按钮**（Terminal / File search / Search）——hebbian 当前没有对应的全局命令面板/项目内搜索入口；以后真要做再讨论塞什么
+  - **拖拽热区不可见**：用户首次使用可能不知道输入框上边框能拖；考虑后续在 hover 时给上边框加一条 1px 高亮提示
+  - **抽屉空状态**：currentSession 为 null 时 RunModeChip 渲染但 disabled，ReasoningEffortPill / workdir / TokenStats / ContextRing 都不渲染——抽屉可能完全空但仍有触发条；可在 InputDrawer 加一个空态文案
+- **验证**: `pnpm exec tsc --noEmit` 通过；视觉需在 `pnpm tauri dev` 桌面端打开看（已有 dev 进程在跑，HMR 自动应用）
+
+### 2026-05-25 — ChatInput 抽屉迭代：连体卡片 + 反色背景 + ModelPicker 移左 + Reasoning 上拉菜单
+
+- **Why**: 上一条 ChatInput 抽屉的反馈：
+  1. 抽屉和白色输入框是两块独立卡片，截图里是连体的
+  2. 底色不够反差——截图是白底 + 黑底的强反差，hebbian 上一版用 `bg-muted/70` 太弱
+  3. 模型选择按钮和发送按钮挤在右侧，应当移到左侧
+  4. 思考强度 pill 点击循环切换不直观，应当上拉菜单点击选择
+  5. 抽屉触发条有 hover 底色显得多余
+- **改动**:
+  - **`InputDrawer.tsx`**:
+    - 抽屉容器加 `dark` class，让里面的 design token 自动切到 dark 主题——light 主题下整体变深色（反色 ✓），dark 主题下视觉一致（不变反但也不刺眼）
+    - 抽屉内层 `rounded-b-3xl`（顺承外壳的圆角），自己处理下边圆角而不依赖外壳 overflow-hidden
+    - 去掉自身的 border / margin-top，紧贴上方白色输入区——视觉连体
+    - `DrawerToggle` 去掉 `hover:bg-muted/40`，仅保留 chevron 颜色变化 + 旋转
+  - **`ReasoningEffortPill.tsx`**: 从"点击循环切换"重写为"点击向上弹出菜单选择"，参考 `RunModeChip` 的 popup 模式（absolute bottom-full + 列表 + outside-click 关闭）。菜单里每行显示档位名 + 实际下发值（如 extra → xhigh）
+  - **`ChatInput.tsx`**:
+    - 拖拽热区从原"白色卡片内 absolute" 移到"外壳 relative wrap 内 absolute"——这样外壳可以承担整张连体卡片的边框/圆角/阴影/ring/streaming-ring，不必由白色输入区单独承担
+    - 外壳故意**不**加 `overflow-hidden`——否则会裁掉里面所有 absolute bottom-full popup（addMenu / SlashCommand / ModelPicker / RunMode / Reasoning）。改由抽屉内层自己 `rounded-b-3xl` 实现"连体"圆角
+    - `ModelPickerButton` 从右侧工具条移到左侧（紧邻 `SlashCommandButton`）——右侧只剩发送按钮
+    - `InputDrawer` 从"外壳之外平铺"移到"外壳之内、DrawerToggle 之后"——抽屉成为整张连体卡片的下半部分
+- **影响范围**:
+  - 仅 desktop / hebweb 前端 UI
+  - **行为变化**：
+    - light 主题下抽屉看起来"反色"非常明显（深底浅字）；dark 主题下抽屉和上方白色区颜色一致（无对比但不突兀）——dark 用户的"沉降感"靠 border-t-input 分隔线传达，比 light 弱一档
+    - RunMode popup / Reasoning popup 在抽屉里向上弹时，**也会受 `dark` class 影响切到 dark 主题**——视觉上 popup 也是深色卡片，和抽屉风格一致（这是好事，不冲突）
+    - 拖拽附件高亮 / streaming-ring 现在包整张连体卡片（含抽屉），原来只包白色卡片——这是预期的合理变化
+- **取舍**:
+  - 外壳没用 overflow-hidden 让抽屉的下边圆角和外壳 border 之间有 ~1px 颜色差（border-input 1px 弧线 vs 抽屉 bg）——视觉上更像"border 包住抽屉"，可接受
+  - dark 主题下抽屉没做反向反色（变 light）——shadcn 没标准 `.light` class，硬注入 CSS var 不优雅；hebbian 大部分场景 light，先这样
+- **留尾巴**:
+  - **dark 主题下抽屉视觉沉降弱**：如果有用户用 dark 主题且反馈"看不出抽屉"，再考虑硬注入 light token 反色
+  - **抽屉内的 chip hover popup 也受 dark 影响**：RunMode 下拉菜单是深色卡片——和原 light 模式风格不同但和抽屉一致；如果发现混搭难看再做"popup 强制跳出 dark scope"
+- **关联**: 紧接上一条 ChatInput 抽屉首版
+
+### 2026-05-26 — 下线 chat 区浮动任务列表，TodoWrite 事件触发右 sidebar 自动聚焦
+
+- **Why**: 加完右侧 sidebar「任务清单」tab 后，chat 区里历史浮动 `FloatingTaskPanel`（ChatView.tsx 504 处）显示同一份 todos——双份展示既冗余又挡正文。用户拍板：去掉浮动卡，TodoWrite 一旦更新就让 sidebar 自己跳出来聚焦
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 移除 `<FloatingTaskPanel />` mount + `latestTodos` 计算 + 相关 import
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 删除 `extractLatestTodoSnapshot` / `FloatingTaskPanel` 两个 exported 函数；保留 `TodoChecklist` / `parseTodos`——工具卡片 body 里仍要渲染那次 TodoWrite 调用的入参快照（与流式期同源）
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 新增 effect 监听 store.todos 的 `(id, status)` 拼接 hash 变化；除首次 mount 外，任何变化都 `setCollapsed(false)` + `setTab("todos")` 自动聚焦
+- **影响范围**: 前端 chat / sidebar UI；不动后端、不动协议
+- **设计取舍**:
+  - **任意 todos 变化都抢焦点 vs 只在"从空到非空"抢一次**: 选前者，符合用户原话"新增任务列表时自动聚焦"——agent 加新任务/勾完一项都是值得告知用户的事件；后者会让中途的状态变化提示丢失
+  - **首次 mount 跳过抢焦点**: 切换 session / 打开应用时如果有上次留下的非空 todos，会无视用户的 STORAGE_TAB 偏好直接跳到 todos——很烦。仅在 mount 后真实事件触发时抢焦点
+  - **保留 TodoChecklist / parseTodos**: chat 流里那张 TodoWrite 工具卡片仍要展示"这次调用具体是哪些 todo"——它是 transcript 的一部分（与 sidebar 的"当前活跃 todo 列表"是两个语义：卡片是历史快照，sidebar 是当前状态）
+- **留尾巴**:
+  - **折叠态下的"不抢出来只闪徽章"档**: 当前 TodoWrite 触发会强制 uncollapse；若用户希望保持折叠态只在 todos 图标上闪红点，再加一档静默通知。先观察体感
+  - **跨 session 切换时不抢焦点**: 切到另一个 session 时如果该 session 有非空 todos，因 mountedRef 重置不抢焦点；若发现"切回老 session 看不到 todo 还以为没了"再加一次主动跳转
+- **关联**: 紧接 2026-05-25 「TodoWrite 持久化 + PlanMode 审批闸口 + Plan 评论流」
+
+
+
+### 2026-05-26 — 调整 Desktop 侧栏、输入框与 ModelIO 抽屉浮起阴影和输入框位置
+
+- **Why**: 用户希望左侧对话列表卡片、底部输入框、ModelIO 抽屉形成统一的浮起视觉；输入框在新对话时居中且更短，生成时下沉，完成后上浮，同时 chat 内容区要跟随上浮避免遮挡；尝试过 streaming ring 动画后发现输出变卡，最终移除动画。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 调整 logo 下方 sidebar 主体卡片阴影，右侧主投影、左侧轻投影。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 去掉可见拖动图标，仅保留上边缘拖动热区；调整输入框阴影。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 输入框容器改为 empty / streaming / idle 三态宽度和 margin-bottom，chat 区域随输入框上浮压缩，避免遮挡输出。
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx): ModelIO 抽屉左圆角改成与输入框一致的 3xl，阴影改为指定的左下投影。
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 移除输入框 streaming ring 动画，保留原有全局入场动画定义。
+- **影响范围**: 纯 Desktop / hebweb 前端视觉与布局；不动协议、不动后端、不动持久化格式。
+- **复现 / 验证**: 已用 `pnpm build` 构建通过，并用 hebweb + Playwright 量过下沉/上浮对齐点；最终移除 streaming ring 动画后不再引入额外动画重绘。
+- **留尾巴**: 无。

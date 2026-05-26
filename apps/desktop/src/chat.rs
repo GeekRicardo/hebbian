@@ -1,6 +1,7 @@
 use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hitl::HitlState;
+use crate::notch::emit_notification;
 use agent_core::storage::{
     sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
@@ -80,7 +81,9 @@ pub async fn send_and_save(
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
+    let app_for_notch = app.clone();
     send_and_save_in_data_dir(&dd, args, move |event| {
+        emit_notification(&app_for_notch, &event);
         let _ = on_event.send(event);
     })
     .await
@@ -176,7 +179,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 .collect()
         };
 
-    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir);
+    let hook_cfg = agent_core::hooks::load_hooks_config(data_dir, Some(workspace.workdir()));
     let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
     // 架构 §4.12.3：BashTool 转后台时把 stdout/stderr 落到 `<sid>/bg/<task_id>.log`。
     let bg_log_dir = Some(agent_core::storage::sessions_dir::bg_dir(
@@ -242,18 +245,6 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     if let Some(store) = &args.permission_store {
         store.ensure_session_view(&args.session_id);
     }
-
-    // ExitPlanMode 工具靠 env var 拿 data_dir + session_id（架构 §4.4.5 hack 路径）。
-    // 进程级共享 env 在多窗口并发时会被覆盖，本期接受这个限制——Step 4 CoreClient
-    // 重构时改为构造时注入。
-    std::env::set_var(
-        agent_core::tools::exit_plan_mode::ENV_DATA_DIR,
-        data_dir.to_string_lossy().to_string(),
-    );
-    std::env::set_var(
-        agent_core::tools::exit_plan_mode::ENV_SESSION_ID,
-        &args.session_id,
-    );
 
     let used_global_rules = session
         .global_rules
@@ -1606,45 +1597,61 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             summary,
             risk,
         } => {
-            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments) = match kind {
-                agent_core::types::PermissionKind::ToolCall {
-                    tool_name,
-                    input,
-                    fingerprint,
-                    command_segments,
-                } => (
-                    "tool_call",
-                    tool_name.clone(),
-                    input.clone(),
-                    Vec::<String>::new(),
-                    fingerprint.clone(),
-                    command_segments.clone(),
-                ),
-                agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
-                    "path_access",
-                    tool_name.clone(),
-                    serde_json::Value::Null,
-                    paths.clone(),
-                    None,
-                    Vec::new(),
-                ),
-                agent_core::types::PermissionKind::Plan { .. } => (
-                    "plan",
-                    String::new(),
-                    serde_json::Value::Null,
-                    Vec::new(),
-                    None,
-                    Vec::new(),
-                ),
-                agent_core::types::PermissionKind::ContinueLongRun { .. } => (
-                    "continue_long_run",
-                    String::new(),
-                    serde_json::Value::Null,
-                    Vec::new(),
-                    None,
-                    Vec::new(),
-                ),
-            };
+            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments, plan) =
+                match kind {
+                    agent_core::types::PermissionKind::ToolCall {
+                        tool_name,
+                        input,
+                        fingerprint,
+                        command_segments,
+                    } => (
+                        "tool_call",
+                        tool_name.clone(),
+                        input.clone(),
+                        Vec::<String>::new(),
+                        fingerprint.clone(),
+                        command_segments.clone(),
+                        None,
+                    ),
+                    agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
+                        "path_access",
+                        tool_name.clone(),
+                        serde_json::Value::Null,
+                        paths.clone(),
+                        None,
+                        Vec::new(),
+                        None,
+                    ),
+                    agent_core::types::PermissionKind::Plan {
+                        plan_id,
+                        plan_path,
+                        plan_markdown,
+                        summary: plan_summary,
+                        steps: _,
+                    } => (
+                        "plan",
+                        String::new(),
+                        serde_json::Value::Null,
+                        Vec::new(),
+                        None,
+                        Vec::new(),
+                        Some(crate::engine::PlanPermissionDto {
+                            plan_id: plan_id.clone(),
+                            plan_path: plan_path.clone(),
+                            plan_markdown: plan_markdown.clone(),
+                            summary: plan_summary.clone(),
+                        }),
+                    ),
+                    agent_core::types::PermissionKind::ContinueLongRun { .. } => (
+                        "continue_long_run",
+                        String::new(),
+                        serde_json::Value::Null,
+                        Vec::new(),
+                        None,
+                        Vec::new(),
+                        None,
+                    ),
+                };
             Some(EngineEvent::PermissionRequested {
                 request_id: request_id.0.clone(),
                 kind: kind_str.into(),
@@ -1655,6 +1662,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 paths,
                 fingerprint,
                 command_segments,
+                plan,
             })
         }
         PermissionResolved {
@@ -1791,6 +1799,24 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
         SessionTitleChanged { session_id, title } => Some(EngineEvent::SessionTitleChanged {
             session_id: session_id.clone(),
             title: title.clone(),
+        }),
+        TodoListUpdated { todos } => Some(EngineEvent::TodoListUpdated {
+            todos: todos.iter().cloned().map(Into::into).collect(),
+        }),
+        PlanReady {
+            plan_id,
+            plan_path,
+            plan_markdown,
+            summary,
+        } => Some(EngineEvent::PlanReady {
+            plan_id: plan_id.clone(),
+            plan_path: plan_path.clone(),
+            plan_markdown: plan_markdown.clone(),
+            summary: summary.clone(),
+        }),
+        PlanCommentAdded { plan_id, comment } => Some(EngineEvent::PlanCommentAdded {
+            plan_id: plan_id.clone(),
+            comment: comment.clone().into(),
         }),
         _ => None,
     }

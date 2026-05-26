@@ -20,6 +20,7 @@ pub mod lock;
 pub mod model_io;
 pub mod oauth;
 pub mod permissions;
+pub mod plan_comments;
 pub mod plans;
 pub mod projects;
 pub mod prompts;
