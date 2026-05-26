@@ -188,7 +188,7 @@ export function BackgroundTaskTab() {
           <br />
         </EmptyHint>
       ) : (
-        <div className="flex flex-col">
+        <div className="flex flex-col space-y-2 px-2 py-2">
           {items.map((item) => (
             <TaskCard
               key={item.task_id ?? item.tool_call_id}
@@ -362,7 +362,12 @@ function TaskCard({
   return (
     <div
       className={cn(
-        "border-b border-border/60 transition-colors",
+        "overflow-hidden rounded-md border border-border/60 bg-background transition-all",
+        // 默认：与大卡片同款的模糊散开阴影；hover 才切成 neobrutalism 错位
+        "shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.10),-1px_1px_2px_-1px_rgba(0,0,0,0.06)]",
+        "dark:shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.45),-1px_1px_2px_-1px_rgba(0,0,0,0.3)]",
+        "hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.50),-18px_21px_14px_-1px_rgba(0,0,0,0.16)] dark:hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.75),-18px_21px_14px_-1px_rgba(0,0,0,0.40)]",
+        "hover:translate-x-px hover:-translate-y-px hover:border-border",
         isRunning && "bg-amber-500/5"
       )}
     >

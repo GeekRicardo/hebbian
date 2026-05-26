@@ -145,9 +145,9 @@ function EditSection({
   }
 
   return (
-    <div className="px-2.5 py-2">
+    <div className="space-y-2 px-2 py-2">
       {title && (
-        <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
           {title}
         </div>
       )}
@@ -156,7 +156,18 @@ function EditSection({
         const expanded = expandedGroups.has(groupKey);
         const latest = fileEntries[0];
         return (
-          <div key={groupKey} className="mb-1">
+          <div
+            key={groupKey}
+            className={cn(
+              "overflow-hidden rounded-md border border-border/60 bg-background transition-all",
+              // 默认：与大卡片同款的模糊散开阴影；hover 才切成 neobrutalism 错位
+              "shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.10),-1px_1px_2px_-1px_rgba(0,0,0,0.06)]",
+              "dark:shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.45),-1px_1px_2px_-1px_rgba(0,0,0,0.3)]",
+              "hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.50),-18px_21px_14px_-1px_rgba(0,0,0,0.16)] dark:hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.75),-18px_21px_14px_-1px_rgba(0,0,0,0.40)]",
+              "hover:translate-x-px hover:-translate-y-px hover:border-border",
+              dimmed && "opacity-60",
+            )}
+          >
             <button
               type="button"
               onClick={() =>
@@ -167,10 +178,7 @@ function EditSection({
                   return next;
                 })
               }
-              className={cn(
-                "flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-[11px] transition-colors hover:bg-accent/50",
-                dimmed && "opacity-50"
-              )}
+              className="flex w-full items-center gap-1 px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-accent/30"
             >
               {fileEntries.length > 1 ? (
                 expanded ? (
@@ -189,19 +197,20 @@ function EditSection({
                 {formatTime(latest.ts_ms)}
               </span>
             </button>
-            {expanded &&
-              fileEntries.map((entry, idx) => {
-                // 反向 patch 的天然限制：回退非最新一次 Edit 时，patch 的上下文
-                // 行可能已被后续 Edit 改动，git apply 会拒绝。让用户提前知道。
-                const isLatest = idx === fileEntries.length - 1;
-                const revertHint = isLatest
-                  ? "撤销本次修改"
-                  : "撤销此次修改；若后续 Edit 改动了同一段，可能因冲突失败";
-                return (
+            {expanded && (
+              <div className="border-t border-border/40 bg-muted/20 py-1">
+                {fileEntries.map((entry, idx) => {
+                  // 反向 patch 的天然限制：回退非最新一次 Edit 时，patch 的上下文
+                  // 行可能已被后续 Edit 改动，git apply 会拒绝。让用户提前知道。
+                  const isLatest = idx === fileEntries.length - 1;
+                  const revertHint = isLatest
+                    ? "撤销本次修改"
+                    : "撤销此次修改；若后续 Edit 改动了同一段，可能因冲突失败";
+                  return (
                   <div
                     key={entry.snapshot_id}
                     className={cn(
-                      "ml-5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors",
+                      "flex items-center gap-1 px-3 py-1 text-[10px] transition-colors",
                       !dimmed && "hover:bg-accent/40 cursor-pointer",
                       dimmed && "opacity-40"
                     )}
@@ -232,7 +241,9 @@ function EditSection({
                     )}
                   </div>
                 );
-              })}
+                })}
+              </div>
+            )}
           </div>
         );
       })}
