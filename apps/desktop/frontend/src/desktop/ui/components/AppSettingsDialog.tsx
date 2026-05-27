@@ -5,6 +5,7 @@ import {
   Bot,
   ChevronRight,
   FolderOpen,
+  Maximize2,
   Plug,
   RefreshCw,
   ScrollText,
@@ -1042,13 +1043,23 @@ function LogPane({ draft, setDraft }: PaneProps) {
           实时日志
           <span className="text-xs text-muted-foreground font-mono">{logPath}</span>
         </label>
-        <button
-          type="button"
-          onClick={() => termRef.current?.clear()}
-          className="text-xs text-muted-foreground hover:text-foreground underline"
-        >
-          清空
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => termRef.current?.clear()}
+            className="text-xs text-muted-foreground hover:text-foreground underline"
+          >
+            清空
+          </button>
+          <button
+            type="button"
+            onClick={() => api.openLogViewerWindow()}
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+            title="在独立窗口中查看"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* ghostty-web 终端挂载点；flex-1 撑满剩余高度 */}

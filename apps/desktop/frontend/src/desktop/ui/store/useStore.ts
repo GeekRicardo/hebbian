@@ -1228,6 +1228,16 @@ export const useStore = create<AppState>((set, get) => ({
       sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
       ...mirrorFromSlot(nextSlot),
     }));
+    console.info("[permission.approval] frontend submitting tool approval", {
+      sessionId,
+      requestId: pending.requestId,
+      kind: pending.kind,
+      toolName: pending.toolName,
+      decision: decision.kind,
+      scope: decision.kind === "allow_and_remember" ? decision.scope ?? "session" : undefined,
+      pattern: decision.kind === "allow_and_remember" ? decision.pattern ?? null : null,
+      extraPatterns: decision.kind === "allow_and_remember" ? decision.extraPatterns ?? [] : [],
+    });
     try {
       await api.approvePermission(
         pending.requestId,
@@ -1241,7 +1251,18 @@ export const useStore = create<AppState>((set, get) => ({
           ? decision.extraPatterns ?? []
           : []
       );
+      console.info("[permission.approval] frontend tool approval accepted", {
+        sessionId,
+        requestId: pending.requestId,
+        decision: decision.kind,
+      });
     } catch (e) {
+      console.error("[permission.approval] frontend tool approval failed", {
+        sessionId,
+        requestId: pending.requestId,
+        decision: decision.kind,
+        error: e,
+      });
       // 失败时恢复 slot 上的弹窗，让用户重试
       set((state) => {
         const live = state.sessionStreams[sessionId];
@@ -2188,6 +2209,14 @@ export const useStore = create<AppState>((set, get) => ({
       sessionStreams: { ...state.sessionStreams, [sessionId]: nextSlot },
       ...mirrorFromSlot(nextSlot),
     }));
+    console.info("[permission.approval] frontend submitting path approval", {
+      sessionId,
+      requestId: pending.requestId,
+      kind: pending.kind,
+      toolName: pending.toolName,
+      paths: pending.paths ?? [],
+      scope,
+    });
     try {
       await api.approvePathAccess(
         pending.requestId,
@@ -2195,6 +2224,11 @@ export const useStore = create<AppState>((set, get) => ({
         scope,
         sessionId
       );
+      console.info("[permission.approval] frontend path approval accepted", {
+        sessionId,
+        requestId: pending.requestId,
+        scope,
+      });
       // 重新拉一下 session（this_session 时 allowed_paths 已落盘）；
       // global 触发 settings 刷新；this_project / once 只动 PermissionStore，无需额外拉数据。
       if (scope === "this_session") {
@@ -2209,6 +2243,12 @@ export const useStore = create<AppState>((set, get) => ({
         await get().refreshAppSettings();
       }
     } catch (e) {
+      console.error("[permission.approval] frontend path approval failed", {
+        sessionId,
+        requestId: pending.requestId,
+        scope,
+        error: e,
+      });
       set((state) => {
         const live = state.sessionStreams[sessionId];
         if (!live) return state;

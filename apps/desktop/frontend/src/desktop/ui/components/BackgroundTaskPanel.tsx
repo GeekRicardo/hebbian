@@ -13,6 +13,7 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { focusToolCall } from "@/desktop/ui/lib/focusToolCall";
+import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
 import type {
   BackgroundTaskInfo,
   Message,
@@ -430,11 +431,16 @@ function TaskCard({
               </button>
             </div>
           )}
-          <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200">
-            {isRunning
-              ? liveOutput || "等待输出…"
-              : item.result || "(无输出)"}
-          </pre>
+          <pre
+            className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200"
+            dangerouslySetInnerHTML={{
+              __html: ansiToHtml(
+                isRunning
+                  ? liveOutput || "等待输出…"
+                  : item.result || "(无输出)"
+              ),
+            }}
+          />
         </div>
       )}
     </div>

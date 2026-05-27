@@ -54,6 +54,7 @@ import type {
 const EMPTY_EDIT_ENTRIES: EditEntry[] = [];
 const EMPTY_STR_ARR: string[] = [];
 import { cn } from "@/desktop/ui/lib/utils";
+import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
 import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
@@ -1008,9 +1009,8 @@ function ToolPre({ children, dark = false }: { children: string; dark?: boolean 
           ? "bg-slate-950 text-slate-100 font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]"
           : "text-foreground font-mono"
       )}
-    >
-      {children}
-    </pre>
+      dangerouslySetInnerHTML={{ __html: ansiToHtml(children) }}
+    />
   );
 }
 
