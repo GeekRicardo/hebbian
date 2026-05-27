@@ -99,8 +99,7 @@ export function ChatInput({
   const currentSession = useStore((s) => s.currentSession);
   const projects = useStore((s) => s.projects);
 
-  // chip 数据源直接用 pending：openSession 会把 pending 同步成目标对话的实际值，
-  // setPending* 也会同步更新当前 session，二者保持一致——所以这里只看一边即可。
+  // activeWorkdir 用 pending 即可：openSession 会同步 pending 值。
   const activeWorkdir = pendingWorkdir;
   const activeAllowedPaths = pendingAllowedPaths;
   const activeProject = currentSession?.project_id
@@ -453,6 +452,7 @@ export function ChatInput({
   async function attachPathCandidates(paths: string[]) {
     const newAttachments: MessageAttachment[] = [];
     const newDirs: string[] = [];
+    const missingPaths: string[] = [];
     for (const p of paths) {
       try {
         const res = await api.attachPath(p);
@@ -469,7 +469,7 @@ export function ChatInput({
             }
             break;
           case "missing":
-            toast.error(`找不到路径：${res.path}`);
+            missingPaths.push(p);
             break;
           case "unsupported":
             toast.error(res.reason);
@@ -488,6 +488,24 @@ export function ChatInput({
         toast.success(`已添加 ${newDirs.length} 个目录`);
       } catch (e: any) {
         toast.error(e?.message ?? String(e));
+      }
+    }
+    // 找不到的路径当普通文本插入 textarea
+    if (missingPaths.length > 0) {
+      const insertText = missingPaths.join("\n");
+      const el = textareaRef.current;
+      if (el) {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const before = value.slice(0, start);
+        const after = value.slice(end);
+        const next = before + insertText + after;
+        setValue(next);
+        requestAnimationFrame(() => {
+          const cursor = start + insertText.length;
+          el.setSelectionRange(cursor, cursor);
+          el.focus();
+        });
       }
     }
   }

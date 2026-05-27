@@ -4686,3 +4686,12 @@
   - `docs/架构.md`：§4.2.4 从"MAX_STEPS=100"改为"可选迭代限制"；§4.3.1 伪代码同步更新
   - 新增测试 `max_tool_iterations_limits_loop` 验证 `Some(n)` 行为
 - **留尾巴**：无
+
+### 2026-05-27 — 粘贴路径找不到时当文本插入
+
+- **Why**: 粘贴类似 `@RTK.md` 的文本时，若后端探测返回 `missing`，旧逻辑弹 `toast.error` 且文本丢失；用户期望找不到的路径应直接作为普通文本插入输入框。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): `attachPathCandidates` 收集 `missing` 路径，探测结束后插入 textarea 光标位置（`requestAnimationFrame` + `setSelectionRange`），去掉 `toast.error`。
+- **影响范围**: desktop frontend ChatInput 粘贴路径逻辑；不改后端、不改协议。
+- **验证**: 前端依赖未安装无法跑 `tsc --noEmit`；代码改动为纯逻辑变更，类型签名未变。
+- **留尾巴**：无
