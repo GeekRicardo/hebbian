@@ -35,7 +35,9 @@ use model_gateway::{
     health::ProviderModelTestResult,
 };
 use std::path::PathBuf;
-use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{
+    ipc::Channel, AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
     // 架构 §6.1 / 决策 D10：Desktop 多窗口/多进程共享 ~/.hebbian/。
@@ -882,6 +884,40 @@ fn approve_permission(
         },
         other => return Err(AppError::msg(format!("未知 decision: {other}"))),
     };
+    let decision_label = match &decision {
+        protocol::ApprovalDecision::AllowOnce => "allow_once",
+        protocol::ApprovalDecision::AllowAndRemember { .. } => "allow_and_remember",
+        protocol::ApprovalDecision::Deny => "deny",
+        protocol::ApprovalDecision::DenyWithFeedback { .. } => "deny_with_feedback",
+    };
+    let (scope_label, pattern_label, extra_patterns_label) = match &decision {
+        protocol::ApprovalDecision::AllowAndRemember {
+            scope,
+            pattern,
+            extra_patterns,
+        } => {
+            let scope_label = match scope {
+                protocol::PermissionScope::Once => "once",
+                protocol::PermissionScope::Session => "session",
+                protocol::PermissionScope::Project => "project",
+                protocol::PermissionScope::Global => "global",
+            };
+            (
+                scope_label,
+                pattern.as_deref().unwrap_or(""),
+                extra_patterns.join(","),
+            )
+        }
+        _ => ("", "", String::new()),
+    };
+    tracing::info!(
+        request_id = %request_id,
+        decision = decision_label,
+        scope = scope_label,
+        pattern = pattern_label,
+        extra_patterns = %extra_patterns_label,
+        "permission.approval: desktop backend received tool approval"
+    );
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
 }
@@ -1740,6 +1776,16 @@ fn approve_path_access(
         },
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     };
+    tracing::info!(
+        request_id = %request_id,
+        scope = %scope,
+        paths = %paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        "permission.approval: desktop backend received path approval"
+    );
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
 }
@@ -2100,6 +2146,44 @@ async fn deepseek_login(
     oauth::deepseek::deepseek_login(input).await
 }
 
+// ── 日志查看器独立窗口 ────────────────────────────────────────────────
+
+const LOG_VIEWER_LABEL: &str = "log-viewer";
+
+#[tauri::command]
+fn open_log_viewer_window(app: AppHandle) -> AppResult<()> {
+    // 单例：已存在则只聚焦
+    if let Some(w) = app.get_webview_window(LOG_VIEWER_LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        LOG_VIEWER_LABEL,
+        WebviewUrl::App("/?log-viewer=1".into()),
+    )
+    .title("日志查看器")
+    .inner_size(960.0, 640.0)
+    .min_inner_size(480.0, 320.0)
+    .always_on_top(true)
+    .visible(true)
+    .focused(true)
+    .build()
+    .map_err(|e| AppError::msg(format!("创建日志窗口失败: {e}")))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_log_viewer_always_on_top(app: AppHandle, always_on_top: bool) -> AppResult<()> {
+    let w = app
+        .get_webview_window(LOG_VIEWER_LABEL)
+        .ok_or_else(|| AppError::msg("日志窗口未打开"))?;
+    w.set_always_on_top(always_on_top)
+        .map_err(|e| AppError::msg(format!("设置置顶失败: {e}")))?;
+    Ok(())
+}
+
 // ========== App startup ==========
 
 /// 关窗时若仍有 pending HITL 或正在跑的 run：
@@ -2138,8 +2222,7 @@ fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequ
 async fn subscribe_log_stream(
     on_log: tauri::ipc::Channel<observability::LogLine>,
 ) -> AppResult<()> {
-    let tx = observability::log_sender()
-        .ok_or_else(|| AppError::msg("日志系统未初始化"))?;
+    let tx = observability::log_sender().ok_or_else(|| AppError::msg("日志系统未初始化"))?;
     let mut rx = tx.subscribe();
     tokio::spawn(async move {
         loop {
@@ -2361,6 +2444,8 @@ pub fn run() {
             notch::notify_click,
             notch::notify_set_position,
             notch::notify_resize,
+            open_log_viewer_window,
+            set_log_viewer_always_on_top,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

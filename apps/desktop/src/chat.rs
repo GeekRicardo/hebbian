@@ -1031,6 +1031,21 @@ fn text_from_parts(parts: &[MessagePart]) -> Option<String> {
 
 fn record_tool_event(tool_calls: &mut Vec<MessageToolCall>, event: &AgentEvent) {
     match &event.payload {
+        AgentEventPayload::ToolCallDelta {
+            index, id, name, ..
+        } => {
+            // 流式传输中填充 tool_calls 字段，确保中断时 tool calls 能落盘。
+            if tool_calls.len() <= *index {
+                tool_calls.resize_with(*index + 1, empty_tool_call);
+            }
+            let call = &mut tool_calls[*index];
+            if let Some(id) = id {
+                call.id.clone_from(id);
+            }
+            if let Some(name) = name {
+                call.name.clone_from(name);
+            }
+        }
         AgentEventPayload::ToolCallStarted {
             index,
             call_id,

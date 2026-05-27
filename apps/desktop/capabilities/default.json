@@ -1,10 +1,13 @@
 {
   "identifier": "desktop-default",
-  "description": "Default capability for the main desktop window.",
-  "windows": ["main"],
+  "description": "Default capability for the main desktop window and log viewer.",
+  "windows": ["main", "log-viewer"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "dialog:default",
     "opener:default"
   ]

@@ -89,7 +89,11 @@ impl<S> Layer<S> for BroadcastLayer
 where
     S: tracing::Subscriber,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let Some(tx) = LOG_TX.get() else { return };
         if tx.receiver_count() == 0 {
             return;
@@ -103,7 +107,12 @@ where
         event.record(&mut visitor);
 
         let ts = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-        let _ = tx.send(LogLine { level, target, message: visitor.0, ts });
+        let _ = tx.send(LogLine {
+            level,
+            target,
+            message: visitor.0,
+            ts,
+        });
     }
 }
 
