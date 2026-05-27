@@ -184,17 +184,15 @@ impl Tool for EditTool {
                 Some(swapped) => match find_matches(&normalized_content, &swapped) {
                     Some(c) => (swapped, c),
                     None => {
-                        return Err(AppError::msg(format!(
-                            "Edit: 文件中找不到 old_string（已尝试 \\uXXXX 转义/反转义两种形式都不匹配）。请重新 Read 并复制确切的上下文。\nold_string: {}",
-                            old_string
-                        )));
+                        return Err(AppError::msg(
+                            "Edit: 文件中找不到 old_string（已尝试 \\uXXXX 转义/反转义两种形式都不匹配）。请重新 Read 并复制确切的上下文。",
+                        ));
                     }
                 },
                 None => {
-                    return Err(AppError::msg(format!(
-                        "Edit: 文件中找不到 old_string。请重新 Read 并复制确切的上下文。\nold_string: {}",
-                        old_string
-                    )));
+                    return Err(AppError::msg(
+                        "Edit: 文件中找不到 old_string。请重新 Read 并复制确切的上下文。",
+                    ));
                 }
             },
         };
@@ -202,7 +200,7 @@ impl Tool for EditTool {
         // ── Step 11: 唯一性（errorCode 9）
         if match_count > 1 && !replace_all {
             return Err(AppError::msg(format!(
-                "Edit: 匹配到 {match_count} 处，但 replace_all=false。请加更多上下文以唯一定位，或设 replace_all=true。\nold_string: {old_string}"
+                "Edit: 匹配到 {match_count} 处，但 replace_all=false。请加更多上下文以唯一定位，或设 replace_all=true。"
             )));
         }
 
