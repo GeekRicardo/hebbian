@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>hebbian sidebar 卡片阴影调参</title>
+    <style>
+      :root {
+        --bg: #f6f4ef;
+        --card-bg: #ffffff;
+        --border: #e4e0d6;
+        --text: #2a261d;
+        --muted: #8a8470;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #18170e;
+          --card-bg: #232014;
+          --border: #3a3520;
+          --text: #efeacc;
+          --muted: #a89d70;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        min-height: 100vh;
+      }
+      .preview {
+        padding: 32px 24px;
+        background: var(--bg);
+      }
+      .preview-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        max-width: 280px;
+        transition: all 0.18s ease;
+        cursor: pointer;
+      }
+      .card-title {
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      .card-sub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .card.demo:hover {
+        translate: 1px -1px;
+        border-color: color-mix(in srgb, var(--border), var(--text) 30%);
+      }
+      .controls {
+        background: var(--card-bg);
+        border-left: 1px solid var(--border);
+        padding: 24px 18px;
+        font-size: 13px;
+      }
+      .controls h1 {
+        font-size: 14px;
+        margin: 0 0 18px 0;
+      }
+      .group {
+        margin-bottom: 18px;
+        padding-bottom: 18px;
+        border-bottom: 1px dashed var(--border);
+      }
+      .group:last-of-type {
+        border-bottom: none;
+      }
+      .row {
+        margin-bottom: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .row label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .row .val {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--text);
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: #ca8a04;
+      }
+      .layer-title {
+        font-weight: 600;
+        font-size: 12px;
+        margin-bottom: 8px;
+        color: var(--text);
+      }
+      .out {
+        margin-top: 16px;
+        padding: 10px 12px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: all;
+      }
+      .copy-hint {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      button.copy {
+        margin-top: 8px;
+        background: var(--text);
+        color: var(--bg);
+        border: none;
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.copy:hover {
+        opacity: 0.85;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <div class="preview">
+        <div class="preview-title">把鼠标移到下面三张卡片上预览 hover 阴影 ↓</div>
+        <div class="card demo" id="card1">
+          <div class="card-title">写代码</div>
+          <div class="card-sub">编写实现</div>
+        </div>
+        <div class="card demo" id="card2">
+          <div class="card-title">跑测试</div>
+          <div class="card-sub">运行单元测试</div>
+        </div>
+        <div class="card demo" id="card3">
+          <div class="card-title">提交</div>
+          <div class="card-sub">git commit + push</div>
+        </div>
+
+        <div class="preview-title" style="margin-top: 32px">
+          点击查看效果（伪 hover，方便锁定状态调参）：
+        </div>
+        <div class="card demo locked" id="card-locked">
+          <div class="card-title">点我锁定 hover 阴影</div>
+          <div class="card-sub">再点一次取消锁定</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <h1>hover 阴影调参</h1>
+
+        <div class="group">
+          <div class="layer-title">主层（贴近本体）</div>
+          <div class="row">
+            <label>X 偏移（负 = 往左）</label>
+            <span class="val" id="v-x1">-5</span>
+          </div>
+          <input id="x1" type="range" min="-20" max="0" value="-5" />
+          <div class="row">
+            <label>Y 偏移（正 = 往下）</label>
+            <span class="val" id="v-y1">5</span>
+          </div>
+          <input id="y1" type="range" min="0" max="20" value="5" />
+          <div class="row">
+            <label>blur（模糊半径）</label>
+            <span class="val" id="v-b1">4</span>
+          </div>
+          <input id="b1" type="range" min="0" max="30" value="4" />
+          <div class="row">
+            <label>spread（扩散，可负）</label>
+            <span class="val" id="v-s1">-1</span>
+          </div>
+          <input id="s1" type="range" min="-10" max="10" value="-1" />
+          <div class="row">
+            <label>透明度 × 100</label>
+            <span class="val" id="v-a1">24</span>
+          </div>
+          <input id="a1" type="range" min="0" max="100" value="24" />
+        </div>
+
+        <div class="group">
+          <div class="layer-title">远层（往外散开，可关）</div>
+          <div class="row">
+            <label>启用远层</label>
+            <input id="far-enable" type="checkbox" checked />
+          </div>
+          <div class="row">
+            <label>X 偏移</label>
+            <span class="val" id="v-x2">-10</span>
+          </div>
+          <input id="x2" type="range" min="-40" max="0" value="-10" />
+          <div class="row">
+            <label>Y 偏移</label>
+            <span class="val" id="v-y2">12</span>
+          </div>
+          <input id="y2" type="range" min="0" max="40" value="12" />
+          <div class="row">
+            <label>blur</label>
+            <span class="val" id="v-b2">14</span>
+          </div>
+          <input id="b2" type="range" min="0" max="60" value="14" />
+          <div class="row">
+            <label>spread</label>
+            <span class="val" id="v-s2">-4</span>
+          </div>
+          <input id="s2" type="range" min="-15" max="10" value="-4" />
+          <div class="row">
+            <label>透明度 × 100</label>
+            <span class="val" id="v-a2">10</span>
+          </div>
+          <input id="a2" type="range" min="0" max="100" value="10" />
+        </div>
+
+        <div class="layer-title" style="margin-top: 4px">
+          CSS box-shadow（点击 copy 按钮复制）
+        </div>
+        <div class="out" id="out"></div>
+        <div class="out" id="out-tw" style="margin-top: 6px"></div>
+        <button class="copy" id="copy-css">复制 CSS</button>
+        <button class="copy" id="copy-tw">复制 Tailwind shadow-[...]</button>
+        <div class="copy-hint">
+          Tailwind 风格已用下划线替代空格 —— 可直接粘到 className 里。
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const fields = ["x1", "y1", "b1", "s1", "a1", "x2", "y2", "b2", "s2", "a2"];
+      const farEnable = $("far-enable");
+
+      function build() {
+        const v = {};
+        fields.forEach((f) => (v[f] = Number($(f).value)));
+        const layer1 = `${v.x1}px ${v.y1}px ${v.b1}px ${v.s1}px rgba(0,0,0,${(
+          v.a1 / 100
+        ).toFixed(2)})`;
+        const layer2 = `${v.x2}px ${v.y2}px ${v.b2}px ${v.s2}px rgba(0,0,0,${(
+          v.a2 / 100
+        ).toFixed(2)})`;
+        const css = farEnable.checked ? `${layer1}, ${layer2}` : layer1;
+        const tw = (farEnable.checked
+          ? `${v.x1}px_${v.y1}px_${v.b1}px_${v.s1}px_rgba(0,0,0,${(
+              v.a1 / 100
+            ).toFixed(2)}),${v.x2}px_${v.y2}px_${v.b2}px_${v.s2}px_rgba(0,0,0,${(
+              v.a2 / 100
+            ).toFixed(2)})`
+          : `${v.x1}px_${v.y1}px_${v.b1}px_${v.s1}px_rgba(0,0,0,${(
+              v.a1 / 100
+            ).toFixed(2)})`
+        ).replace(/\s/g, "");
+        return { css, tw, v };
+      }
+
+      function refresh() {
+        const { css, tw, v } = build();
+        fields.forEach((f) => ($("v-" + f).textContent = v[f]));
+        $("out").textContent = "box-shadow: " + css + ";";
+        $("out-tw").textContent = "shadow-[" + tw + "]";
+        document
+          .querySelectorAll(".card.demo")
+          .forEach((el) => el.style.setProperty("--hover-shadow", css));
+        // 锁定卡片直接套
+        const lk = $("card-locked");
+        if (lk.classList.contains("active")) {
+          lk.style.boxShadow = css;
+        } else {
+          lk.style.boxShadow = "";
+        }
+      }
+
+      const style = document.createElement("style");
+      style.textContent = `.card.demo:hover { box-shadow: var(--hover-shadow); }`;
+      document.head.appendChild(style);
+
+      fields.forEach((f) => $(f).addEventListener("input", refresh));
+      farEnable.addEventListener("change", refresh);
+
+      $("card-locked").addEventListener("click", (e) => {
+        e.currentTarget.classList.toggle("active");
+        refresh();
+      });
+
+      $("copy-css").addEventListener("click", () => {
+        navigator.clipboard.writeText($("out").textContent);
+      });
+      $("copy-tw").addEventListener("click", () => {
+        navigator.clipboard.writeText($("out-tw").textContent);
+      });
+
+      refresh();
+    </script>
+  </body>
+</html>
