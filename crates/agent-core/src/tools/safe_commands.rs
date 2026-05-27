@@ -265,11 +265,10 @@ mod tests {
 
     #[test]
     fn find_with_exec_unsafe() {
-        // `{}` 会被 shell_parse 嗅探为 subshell/group → dangerous，已被 BashTool::classify
-        // 当作 destructive 拦截。这里两手都验：dangerous 起作用，且就算落到 is_safe，
-        // -exec flag 也独立把它判为不安全。
+        // `-exec` flag 是不安全的，由 is_safe 判定。
+        // tree-sitter 把 `{}` 正确解析为 concatenation，不再产生 false positive dangerous。
         let parsed = parse("find . -type f -exec echo {} +").unwrap();
-        assert!(parsed.dangerous);
+        assert!(!parsed.dangerous);
 
         let direct = first("find . -type f -exec foo");
         assert!(!is_safe(&direct));

@@ -176,6 +176,14 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
         return Err(ParseError::Empty);
     }
 
+    if let Ok(parsed) = parse_with_tree_sitter(line) {
+        return Ok(parsed);
+    }
+
+    parse_fallback(line)
+}
+
+fn parse_fallback(line: &str) -> Result<ParsedShell, ParseError> {
     let parse_line = strip_heredoc_bodies(line);
     let segments = split_top_level(&parse_line)?;
 
@@ -273,6 +281,387 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
         danger_reason: reason,
         dangerous_kinds,
     })
+}
+
+fn parse_with_tree_sitter(line: &str) -> Result<ParsedShell, ParseError> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .map_err(|e| ParseError::Tokenize(format!("tree-sitter language load failed: {e}")))?;
+    let tree = parser
+        .parse(line, None)
+        .ok_or_else(|| ParseError::Tokenize("tree-sitter parse returned None".into()))?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return Err(ParseError::Tokenize("tree-sitter parse error".into()));
+    }
+
+    let mut commands = Vec::new();
+    let mut dangerous_kinds = Vec::new();
+    let mut reason: Option<String> = None;
+    let mut previous_command_end: Option<usize> = None;
+    collect_ast_commands(
+        line,
+        root,
+        &mut commands,
+        &mut previous_command_end,
+        &mut dangerous_kinds,
+        &mut reason,
+    );
+
+    if commands.is_empty() {
+        return Err(ParseError::Tokenize(
+            "tree-sitter found no plain commands".into(),
+        ));
+    }
+
+    for cmd in commands.iter_mut() {
+        let mut extra = collect_argv_write_targets(cmd);
+        cmd.write_targets.append(&mut extra);
+    }
+
+    // 敏感 env-var 检测（与 fallback 路径对齐）
+    for cmd in &commands {
+        let sensitive: Vec<String> = cmd
+            .env_prefix
+            .iter()
+            .filter(|e| is_sensitive_env(e))
+            .cloned()
+            .collect();
+        if !sensitive.is_empty() {
+            push_dangerous_kind(
+                &mut dangerous_kinds,
+                DangerousKind::SensitiveEnvPrefix(sensitive),
+            );
+        }
+    }
+
+    for k in detect_dangerous_patterns(&commands) {
+        if !dangerous_kinds.contains(&k) {
+            dangerous_kinds.push(k);
+        }
+    }
+
+    let dangerous = !dangerous_kinds.is_empty();
+    if dangerous && reason.is_none() {
+        reason = Some(
+            dangerous_kinds
+                .iter()
+                .map(DangerousKind::label)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+
+    Ok(ParsedShell {
+        commands,
+        dangerous,
+        danger_reason: reason,
+        dangerous_kinds,
+    })
+}
+
+fn collect_ast_commands(
+    source: &str,
+    node: tree_sitter::Node<'_>,
+    commands: &mut Vec<ParsedCommand>,
+    previous_command_end: &mut Option<usize>,
+    dangerous_kinds: &mut Vec<DangerousKind>,
+    reason: &mut Option<String>,
+) {
+    match node.kind() {
+        "redirected_statement" => {
+            // redirected_statement wraps a command/pipeline with its redirects at the outer level.
+            // Extract the body command, then apply redirects from the outer node.
+            if let Some(body) = node.child_by_field_name("body") {
+                // Find the first redirect's start byte to detect positional args
+                // tree-sitter sometimes doesn't capture unnamed tokens (like `-` for stdin)
+                // between the body and the first redirect.
+                let first_redirect_start = (0..node.child_count()).find_map(|i| {
+                    let c = node.child(i)?;
+                    match c.kind() {
+                        "file_redirect" | "heredoc_redirect" | "herestring_redirect"
+                            if node.field_name_for_child(i as u32) == Some("redirect") =>
+                        {
+                            Some(c.start_byte())
+                        }
+                        _ => None,
+                    }
+                });
+
+                // Recurse into body (could be command, pipeline, etc.)
+                collect_ast_commands(
+                    source,
+                    body,
+                    commands,
+                    previous_command_end,
+                    dangerous_kinds,
+                    reason,
+                );
+
+                // Extract positional args from the gap between body and first redirect
+                // (e.g., `python3 - <<'PY'` — the `-` is not captured by tree-sitter)
+                if let Some(redirect_start) = first_redirect_start {
+                    let body_end = body.end_byte();
+                    if body_end < redirect_start {
+                        if let Some(gap) = source.get(body_end..redirect_start) {
+                            for token in gap.split_ascii_whitespace() {
+                                if !token.is_empty() {
+                                    if let Some(cmd) = commands.last_mut() {
+                                        cmd.argv.push(token.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply redirects from redirected_statement to the last command collected
+                if let Some(cmd) = commands.last_mut() {
+                    apply_redirects_from_ast(source, node, cmd);
+                }
+
+                // For heredoc_redirects containing a pipeline (e.g., `cat <<'EOF' | grep hello`),
+                // tree-sitter puts the pipeline node inside the heredoc_redirect.
+                // Extract those commands as additional segments.
+                for idx in 0..node.child_count() {
+                    let child = match node.child(idx) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    if child.kind() == "heredoc_redirect" {
+                        let mut inner_cursor = child.walk();
+                        for inner_child in child.children(&mut inner_cursor) {
+                            if inner_child.kind() == "pipeline" {
+                                collect_ast_commands(
+                                    source,
+                                    inner_child,
+                                    commands,
+                                    previous_command_end,
+                                    dangerous_kinds,
+                                    reason,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Update previous_command_end based on the last command collected
+            }
+            return;
+        }
+        "command" => {
+            if let Some(cmd) = command_from_ast(source, node) {
+                if ast_node_contains_complex(source, node) {
+                    push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+                    reason.get_or_insert_with(|| "command injection".into());
+                }
+                if previous_command_end
+                    .and_then(|end| source.get(end..node.start_byte()))
+                    .is_some_and(separator_contains_newline_without_operator)
+                {
+                    push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+                    reason.get_or_insert_with(|| "newline plain command injection".into());
+                }
+                *previous_command_end = Some(node.end_byte());
+                commands.push(cmd);
+                return;
+            }
+        }
+        "command_substitution" | "process_substitution" | "subshell" | "compound_statement" => {
+            push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+            reason.get_or_insert_with(|| format!("{} requires approval", node.kind()));
+        }
+        "comment" => {
+            if comment_text_is_injection(source, node) {
+                push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+                reason.get_or_insert_with(|| "comment injection".into());
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if !child.is_named() {
+            if child.kind() == "&" {
+                push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+                reason.get_or_insert_with(|| "background execution".into());
+            }
+            continue;
+        }
+        collect_ast_commands(
+            source,
+            child,
+            commands,
+            previous_command_end,
+            dangerous_kinds,
+            reason,
+        );
+    }
+}
+
+fn command_from_ast(source: &str, node: tree_sitter::Node<'_>) -> Option<ParsedCommand> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(source, name_node)?;
+    let mut argv = Vec::new();
+    let mut env_prefix = Vec::new();
+    let mut write_targets = Vec::new();
+    let mut has_heredoc = false;
+
+    let child_count = node.child_count();
+    for idx in 0..child_count {
+        let Some(child) = node.child(idx) else {
+            continue;
+        };
+        let field = node.field_name_for_child(idx as u32);
+        match (field, child.kind()) {
+            (Some("name"), _) => argv.push(name.clone()),
+            (Some("argument"), _) => {
+                if let Some(text) = shell_word_text(source, child) {
+                    argv.push(text);
+                }
+            }
+            (_, "variable_assignment") => {
+                if let Some(text) = node_text(source, child) {
+                    argv.push(text.clone());
+                    env_prefix.push(text);
+                }
+            }
+            (Some("redirect"), "file_redirect") | (None, "file_redirect") => {
+                if redirect_is_write(source, child) {
+                    if let Some(target) = redirect_destination(source, child) {
+                        write_targets.push(target);
+                    }
+                }
+            }
+            (Some("redirect"), "heredoc_redirect")
+            | (Some("redirect"), "herestring_redirect")
+            | (None, "heredoc_redirect")
+            | (None, "herestring_redirect") => {
+                has_heredoc = true;
+            }
+            (_, "command_substitution") | (_, "process_substitution") | (_, "subshell") => {}
+            (None, "-") => argv.push("-".to_string()),
+            _ => {}
+        }
+    }
+
+    if argv.is_empty() {
+        argv.push(name.clone());
+    }
+    let root = argv[0].clone();
+    let (stripped_env, _) = strip_prefix(&argv);
+    for env in stripped_env {
+        if !env_prefix.contains(&env) {
+            env_prefix.push(env);
+        }
+    }
+    Some(ParsedCommand {
+        root,
+        argv,
+        env_prefix,
+        write_targets,
+        has_heredoc,
+    })
+}
+
+fn apply_redirects_from_ast(source: &str, node: tree_sitter::Node<'_>, cmd: &mut ParsedCommand) {
+    let child_count = node.child_count();
+    for idx in 0..child_count {
+        let Some(child) = node.child(idx) else {
+            continue;
+        };
+        match (node.field_name_for_child(idx as u32), child.kind()) {
+            (Some("redirect"), "file_redirect") | (None, "file_redirect") => {
+                if redirect_is_write(source, child) {
+                    if let Some(target) = redirect_destination(source, child) {
+                        cmd.write_targets.push(target);
+                    }
+                }
+            }
+            (Some("redirect"), "heredoc_redirect")
+            | (Some("redirect"), "herestring_redirect")
+            | (None, "heredoc_redirect")
+            | (None, "herestring_redirect") => {
+                cmd.has_heredoc = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn ast_node_contains_complex(source: &str, node: tree_sitter::Node<'_>) -> bool {
+    match node.kind() {
+        "command_substitution" | "process_substitution" | "subshell" | "compound_statement" => {
+            return true;
+        }
+        "comment" => return comment_text_is_injection(source, node),
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .any(|child| ast_node_contains_complex(source, child));
+    found
+}
+
+fn shell_word_text(source: &str, node: tree_sitter::Node<'_>) -> Option<String> {
+    let raw = node_text(source, node)?;
+    Some(strip_shell_quotes(&raw))
+}
+
+fn strip_shell_quotes(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    if raw.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[raw.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[raw.len() - 1] == b'"'))
+    {
+        raw[1..raw.len() - 1].to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
+fn redirect_is_write(source: &str, node: tree_sitter::Node<'_>) -> bool {
+    let Some(text) = node_text(source, node) else {
+        return false;
+    };
+    let trimmed = text.trim_start();
+    trimmed.starts_with('>') || trimmed.starts_with("&>") || fd_redirect_is_write(trimmed)
+}
+
+fn fd_redirect_is_write(s: &str) -> bool {
+    let mut chars = s.chars();
+    let mut saw_digit = false;
+    while chars.next().is_some_and(|c| c.is_ascii_digit()) {
+        saw_digit = true;
+    }
+    saw_digit && chars.as_str().starts_with('>')
+}
+
+fn redirect_destination(source: &str, node: tree_sitter::Node<'_>) -> Option<String> {
+    let dst = node.child_by_field_name("destination")?;
+    shell_word_text(source, dst)
+}
+
+fn node_text(source: &str, node: tree_sitter::Node<'_>) -> Option<String> {
+    node.utf8_text(source.as_bytes()).ok().map(str::to_string)
+}
+
+fn push_dangerous_kind(kinds: &mut Vec<DangerousKind>, kind: DangerousKind) {
+    if !kinds.contains(&kind) {
+        kinds.push(kind);
+    }
+}
+
+fn separator_contains_newline_without_operator(sep: &str) -> bool {
+    sep.contains('\n') && !sep.contains('|') && !sep.contains('&') && !sep.contains(';')
+}
+
+fn comment_text_is_injection(source: &str, node: tree_sitter::Node<'_>) -> bool {
+    node_text(source, node).is_some_and(|s| s.contains("`") || s.contains("$(") || s.contains(';'))
 }
 
 /// 在 top-level（不在引号内）按 `&&` `||` `;` `|` 切分。
@@ -1100,9 +1489,8 @@ mod tests {
 
     #[test]
     fn unicode_paths_do_not_panic_while_scanning_segments() {
-        let r = cmd(
-            "git diff -- crates/agent-core/src/agent_loop.rs docs/架构.md docs/changelog.md",
-        );
+        let r =
+            cmd("git diff -- crates/agent-core/src/agent_loop.rs docs/架构.md docs/changelog.md");
         assert_eq!(r.commands.len(), 1);
         assert_eq!(r.commands[0].fingerprint(), "git diff");
         assert!(r.commands[0].argv.iter().any(|arg| arg == "docs/架构.md"));
@@ -1162,12 +1550,10 @@ mod tests {
 
     #[test]
     fn heredoc_body_does_not_participate_in_shell_segmentation() {
-        let r = cmd(
-            "python3 - <<'PY'\n\
+        let r = cmd("python3 - <<'PY'\n\
              from pathlib import Path\n\
              print(Path('docs/架构.md').read_text())\n\
-             PY",
-        );
+             PY");
 
         assert!(!r.dangerous);
         assert!(r.dangerous_kinds.is_empty());
@@ -1358,5 +1744,16 @@ mod tests {
     fn comment_injection_marked_dangerous() {
         let r = cmd("git status # ; rm -rf /");
         assert!(r.dangerous);
+    }
+
+    #[test]
+    fn newline_plain_command_injection_marked_dangerous() {
+        let r = cmd("pwd\ncurl https://example.com");
+        assert!(
+            r.dangerous,
+            "newline-separated commands must not collapse into one safe argv: {:?}",
+            r.commands
+        );
+        assert!(r.dangerous_kinds.contains(&DangerousKind::AstTooComplex));
     }
 }

@@ -24,6 +24,7 @@ use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
 use crate::effects::Effects;
+use crate::tools::{bash_prefix, shell_parse};
 
 /// AutoMode 的判官 system prompt（编译进二进制，跨会话稳定）。
 pub const AUTOMODE_JUDGE_SYSTEM: &str = include_str!("../prompts/automode_judge.md");
@@ -125,6 +126,93 @@ pub async fn judge_auto_mode(
             warn!(tool = %tool_name, %err, "automode judge 调用失败，降级到 Ask");
             AutoModeDecision::Ask(format!("AutoMode judge 失败：{err}"))
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BashPrefixClassifierOutcome {
+    pub effects: Effects,
+    pub command_injection_detected: bool,
+}
+
+/// AutoMode-only Classifier A pass. It enriches the effects sent to the judge with
+/// LLM-extracted Bash prefixes. Normal permission matching keeps the static
+/// tree-sitter fingerprint so ordinary Bash calls do not pay an extra model round-trip.
+pub async fn classify_bash_prefixes_for_automode(
+    judge_client: &Arc<dyn ModelClient>,
+    current_model_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+    effects: &Effects,
+) -> BashPrefixClassifierOutcome {
+    let mut enriched = effects.clone();
+    let mut command_injection_detected = false;
+
+    if !matches!(tool_name, "Bash" | "PowerShell") || !is_allowed_model(current_model_id) {
+        return BashPrefixClassifierOutcome {
+            effects: enriched,
+            command_injection_detected,
+        };
+    }
+
+    let Some(raw) = tool_input
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return BashPrefixClassifierOutcome {
+            effects: enriched,
+            command_injection_detected,
+        };
+    };
+
+    let Ok(parsed) = shell_parse::parse(raw) else {
+        return BashPrefixClassifierOutcome {
+            effects: enriched,
+            command_injection_detected,
+        };
+    };
+
+    for (index, cmd) in parsed.commands.iter().enumerate() {
+        let segment_text = cmd.argv.join(" ");
+        let classified =
+            match bash_prefix::classify_prefix(judge_client, current_model_id, &segment_text).await
+            {
+                Ok(Some(result)) => result,
+                Ok(None) => continue,
+                Err(err) => {
+                    warn!(%err, segment = %segment_text, "bash prefix classifier failed");
+                    continue;
+                }
+            };
+
+        match classified {
+            bash_prefix::BashPrefix::Prefix(prefix) => {
+                if let Some(seg) = enriched.segments.get_mut(index) {
+                    seg.fingerprint = prefix.clone();
+                    if index == 0 {
+                        enriched.command_fingerprint = Some(prefix);
+                    }
+                }
+            }
+            bash_prefix::BashPrefix::None => {}
+            bash_prefix::BashPrefix::CommandInjectionDetected => {
+                command_injection_detected = true;
+                if !enriched
+                    .dangerous_kinds
+                    .iter()
+                    .any(|kind| kind == "ast-too-complex")
+                {
+                    enriched.dangerous_kinds.push("ast-too-complex".to_string());
+                }
+            }
+        }
+    }
+
+    BashPrefixClassifierOutcome {
+        effects: enriched,
+        command_injection_detected,
     }
 }
 
@@ -277,6 +365,43 @@ fn parse_decision(raw: &str) -> AutoModeDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use common::CancelFlag;
+    use model_gateway::types::{ModelStreamEvent, Usage};
+    use serde_json::json;
+
+    struct StaticClassifierClient {
+        output: &'static str,
+    }
+
+    #[async_trait]
+    impl ModelClient for StaticClassifierClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            Ok(ModelResponse::Done {
+                text: self.output.to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
 
     #[test]
     fn parse_allow() {
@@ -340,5 +465,57 @@ mod tests {
             AutoModeDecision::Deny("x".into()).collapse_ask_to_deny(),
             AutoModeDecision::Deny(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn bash_prefix_classifier_enriches_judge_effects() {
+        let effects =
+            crate::effects::analyze_effects("Bash", &json!({"command": "python3 script.py arg"}));
+        assert_eq!(
+            effects.command_fingerprint.as_deref(),
+            Some("python3 script.py")
+        );
+
+        let client: Arc<dyn ModelClient> = Arc::new(StaticClassifierClient {
+            output: "prefix: python3",
+        });
+        let outcome = classify_bash_prefixes_for_automode(
+            &client,
+            "gpt-5.5",
+            "Bash",
+            &json!({"command": "python3 script.py arg"}),
+            &effects,
+        )
+        .await;
+
+        assert!(!outcome.command_injection_detected);
+        assert_eq!(
+            outcome.effects.command_fingerprint.as_deref(),
+            Some("python3")
+        );
+        assert_eq!(outcome.effects.segments[0].fingerprint, "python3");
+    }
+
+    #[tokio::test]
+    async fn bash_prefix_classifier_marks_injection_for_judge() {
+        let effects = crate::effects::analyze_effects("Bash", &json!({"command": "echo ok"}));
+        let client: Arc<dyn ModelClient> = Arc::new(StaticClassifierClient {
+            output: "command_injection_detected",
+        });
+        let outcome = classify_bash_prefixes_for_automode(
+            &client,
+            "gpt-5.5",
+            "Bash",
+            &json!({"command": "echo ok"}),
+            &effects,
+        )
+        .await;
+
+        assert!(outcome.command_injection_detected);
+        assert!(outcome
+            .effects
+            .dangerous_kinds
+            .iter()
+            .any(|kind| kind == "ast-too-complex"));
     }
 }
