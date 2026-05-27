@@ -197,8 +197,10 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("hebbian-skill-coll-test-{name}-{}", uuid::Uuid::new_v4()));
+        let d = std::env::temp_dir().join(format!(
+            "hebbian-skill-coll-test-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -282,10 +284,7 @@ mod tests {
             label_from_github("https://github.com/obra/superpowers.git"),
             "superpowers"
         );
-        assert_eq!(
-            label_from_github("https://github.com/foo/bar/"),
-            "bar"
-        );
+        assert_eq!(label_from_github("https://github.com/foo/bar/"), "bar");
         assert_eq!(
             label_from_dir(&PathBuf::from("/Users/me/proj/skills-dir")),
             "skills-dir"

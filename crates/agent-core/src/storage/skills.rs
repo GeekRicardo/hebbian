@@ -76,10 +76,8 @@ pub fn set_skill_enabled(data_dir: &Path, name: &str, enabled: bool) -> AppResul
 /// 把 disabled_skills.json 的状态打到 skills 列表的 `enabled` 字段上。
 /// 调用方有完整 skill 列表时用这个统一处理。
 pub fn apply_disabled(data_dir: &Path, skills: &mut [crate::tools::skill::Skill]) {
-    let set: std::collections::HashSet<String> = load_disabled(data_dir)
-        .disabled
-        .into_iter()
-        .collect();
+    let set: std::collections::HashSet<String> =
+        load_disabled(data_dir).disabled.into_iter().collect();
     for s in skills.iter_mut() {
         s.enabled = !set.contains(&s.name);
     }
@@ -153,7 +151,10 @@ const MAX_SCAN_DEPTH: usize = 8;
 /// 该目录（避免一个 skill 内部嵌套被误抓）。跳过 `.xxx` / node_modules / target。
 pub fn scan_skill_dir(src_dir: &Path) -> AppResult<Vec<ScannedSkill>> {
     if !src_dir.exists() {
-        return Err(AppError::msg(format!("源目录不存在：{}", src_dir.display())));
+        return Err(AppError::msg(format!(
+            "源目录不存在：{}",
+            src_dir.display()
+        )));
     }
     let mut out = Vec::new();
     walk_scan(src_dir, src_dir, &mut out, 0);
@@ -248,10 +249,7 @@ fn parse_yaml_field(content: &str, field: &str) -> Option<String> {
 
 /// 浅 clone 一个 git 仓库到临时目录后扫 skills，**结束清理**。
 /// 用户从前端选哪些导入后，由调用方再调一次 `import_from_github` 真正拷贝。
-pub fn scan_skill_github(
-    repo_url: &str,
-    subpath: Option<&str>,
-) -> AppResult<Vec<ScannedSkill>> {
+pub fn scan_skill_github(repo_url: &str, subpath: Option<&str>) -> AppResult<Vec<ScannedSkill>> {
     let tmp = std::env::temp_dir().join(format!("hebbian-scan-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp)?;
     let clone_res = std::process::Command::new("git")
@@ -575,7 +573,10 @@ mod tests {
     }
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("hebbian-skills-test-{name}-{}", uuid::Uuid::new_v4()));
+        let d = std::env::temp_dir().join(format!(
+            "hebbian-skills-test-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -597,7 +598,11 @@ mod tests {
             import_from_dir(&data_dir, ImportScope::Global, None, &src, None, true).unwrap();
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].name, "my-skill");
-        assert!(data_dir.join("skills").join("my-skill").join("SKILL.md").exists());
+        assert!(data_dir
+            .join("skills")
+            .join("my-skill")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[test]
@@ -622,15 +627,8 @@ mod tests {
         let data_dir = tmp("proj-no-wd");
         let src_root = tmp("proj-src");
         write_skill(&src_root, "x", "# x");
-        let err = import_from_dir(
-            &data_dir,
-            ImportScope::Project,
-            None,
-            &src_root,
-            None,
-            true,
-        )
-        .unwrap_err();
+        let err = import_from_dir(&data_dir, ImportScope::Project, None, &src_root, None, true)
+            .unwrap_err();
         assert!(err.to_string().contains("workdir"));
     }
 
@@ -735,15 +733,8 @@ mod tests {
         write_skill(&src_root, "alpha", "# alpha");
         write_skill(&src_root, "beta", "# beta");
 
-        let imported = import_from_dir(
-            &data_dir,
-            ImportScope::Global,
-            None,
-            &src_root,
-            None,
-            true,
-        )
-        .unwrap();
+        let imported =
+            import_from_dir(&data_dir, ImportScope::Global, None, &src_root, None, true).unwrap();
         assert_eq!(imported.len(), 2);
 
         let file = crate::storage::skill_collections::load(&data_dir);

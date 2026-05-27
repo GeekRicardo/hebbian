@@ -551,13 +551,7 @@ mod tests {
     #[test]
     fn delete_removes_project_dir() {
         let dir = tmp("delete");
-        let saved = create(
-            &dir,
-            "X".to_string(),
-            PathBuf::from("/tmp/x"),
-            vec![],
-        )
-        .unwrap();
+        let saved = create(&dir, "X".to_string(), PathBuf::from("/tmp/x"), vec![]).unwrap();
         let proj_dir = project_dir_by_id(&dir, &saved.id);
         assert!(proj_dir.exists());
         delete(&dir, &saved.id).unwrap();

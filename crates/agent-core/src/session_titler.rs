@@ -108,7 +108,9 @@ async fn try_generate_for_session(data_dir: &Path, session: &Session) -> Option<
         .ok()?;
     let client = model_gateway::build_client(provider).ok()?;
 
-    let title = generate_title(client.as_ref(), &model, &first_user).await.ok()?;
+    let title = generate_title(client.as_ref(), &model, &first_user)
+        .await
+        .ok()?;
     if title.is_empty() {
         None
     } else {

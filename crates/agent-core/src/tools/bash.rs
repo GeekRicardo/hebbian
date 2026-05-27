@@ -166,9 +166,8 @@ impl Tool for BashTool {
         let mut buffer = String::new();
         let exited = loop {
             // 终态或 deadline 到点都退出循环；中间每 ~200ms 抽一次增量。
-            let tick = tokio::time::sleep_until(
-                tokio::time::Instant::now() + Duration::from_millis(200),
-            );
+            let tick =
+                tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_millis(200));
             tokio::select! {
                 biased;
                 _ = shell.wait_terminal() => {
@@ -330,7 +329,10 @@ mod tests {
         // 注册表里应该能找到这个 task，且 is_background 已被 promote 翻为 true
         let tasks = shells.list();
         assert_eq!(tasks.len(), 1);
-        assert!(tasks[0].is_background(), "超时转后台后必须 is_background=true");
+        assert!(
+            tasks[0].is_background(),
+            "超时转后台后必须 is_background=true"
+        );
         // kill 它，避免测试结束后还有 sleep 进程
         let id = tasks[0].task_id.clone();
         shells.kill(&id).await;
@@ -343,10 +345,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
         let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
-        let out = t
-            .execute(json!({"command": "echo hello"}))
-            .await
-            .unwrap();
+        let out = t.execute(json!({"command": "echo hello"})).await.unwrap();
         assert!(out.contains("hello"));
         // 注册表必须为空：前台 ls 不该残留为"已结束的后台任务"
         assert!(

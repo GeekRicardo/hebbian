@@ -25,10 +25,8 @@ fn main() {
 
             // 第 4 个参数：要导入的 relative_path 列表（逗号分隔）
             if let Some(selected) = args.get(3) {
-                let tmp = std::env::temp_dir().join(format!(
-                    "hebbian-example-data-{}",
-                    uuid::Uuid::new_v4()
-                ));
+                let tmp = std::env::temp_dir()
+                    .join(format!("hebbian-example-data-{}", uuid::Uuid::new_v4()));
                 std::fs::create_dir_all(&tmp).unwrap();
                 let sel: Vec<String> = selected.split(',').map(String::from).collect();
                 println!("\n--- import to {tmp:?} with selection: {sel:?}");

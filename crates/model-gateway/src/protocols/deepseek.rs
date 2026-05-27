@@ -577,8 +577,7 @@ fn harvest_accumulated_token_usage(node: &Value, state: &mut DeepseekStreamState
                     state.accumulated_token_usage = state.accumulated_token_usage.max(n);
                 } else if let Some(n) = v.as_f64() {
                     if n >= 0.0 {
-                        state.accumulated_token_usage =
-                            state.accumulated_token_usage.max(n as u64);
+                        state.accumulated_token_usage = state.accumulated_token_usage.max(n as u64);
                     }
                 }
             }

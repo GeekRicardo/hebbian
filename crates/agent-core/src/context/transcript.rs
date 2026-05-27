@@ -245,7 +245,7 @@ fn flush_assistant_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sessions::{MessageToolCall, MessagePart};
+    use crate::storage::sessions::{MessagePart, MessageToolCall};
     use serde_json::json;
 
     fn assistant(parts: Vec<MessagePart>, tool_calls: Vec<MessageToolCall>) -> Message {

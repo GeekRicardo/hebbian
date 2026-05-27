@@ -1535,11 +1535,7 @@ pub fn set_todos(data_dir: &Path, id: &str, todos: Vec<TodoItem>) -> AppResult<S
 
 /// ExitPlanMode 落盘 plan 后写入"当前 plan"绝对路径（架构 §4.4.5）。
 /// 传 `None` 表示清空 active_plan（如 plan revert / 切回 PlanMode 前的状态）。
-pub fn set_active_plan(
-    data_dir: &Path,
-    id: &str,
-    plan_path: Option<String>,
-) -> AppResult<Session> {
+pub fn set_active_plan(data_dir: &Path, id: &str, plan_path: Option<String>) -> AppResult<Session> {
     let path = ensure_jsonl(data_dir, id)?;
     let (set, clear) = match plan_path {
         Some(p) => (Some(p), false),
@@ -1559,11 +1555,7 @@ pub fn set_active_plan(
 
 /// 进入 PlanMode 时记录"切换前 RunMode"（架构 §4.4.5）。
 /// 传 `None` 表示清空（ExitPlanMode 审批通过、切回非 PlanMode 后调用）。
-pub fn set_pre_plan_mode(
-    data_dir: &Path,
-    id: &str,
-    mode: Option<RunMode>,
-) -> AppResult<Session> {
+pub fn set_pre_plan_mode(data_dir: &Path, id: &str, mode: Option<RunMode>) -> AppResult<Session> {
     let path = ensure_jsonl(data_dir, id)?;
     let (set, clear) = match mode {
         Some(m) => (Some(m), false),
@@ -1812,7 +1804,10 @@ mod tests {
         let loaded = load(&dir, &s.id).unwrap();
         assert_eq!(loaded.todos.len(), 1, "set_todos 应已让 load 看到 todos");
         let mut s2 = loaded;
-        s2.token_stats = Some(TokenStats { input_tokens: 100, ..Default::default() });
+        s2.token_stats = Some(TokenStats {
+            input_tokens: 100,
+            ..Default::default()
+        });
         save(&dir, s2).unwrap();
         // 再 load 应仍看到 todos——bug 时这里会 0
         let after_save = load(&dir, &s.id).unwrap();
@@ -1883,7 +1878,10 @@ mod tests {
         set_todos(&dir, &s.id, todos2).expect("set_todos 2");
         let loaded2 = load(&dir, &s.id).unwrap();
         assert_eq!(loaded2.todos.len(), 2);
-        assert!(loaded2.todos.iter().all(|t| t.status == TodoStatus::Completed));
+        assert!(loaded2
+            .todos
+            .iter()
+            .all(|t| t.status == TodoStatus::Completed));
     }
 
     #[test]
@@ -1943,12 +1941,19 @@ mod tests {
                 tool_use_id: Some("call_xyz".into()),
             }),
         };
-        assert!(wakeup.is_system_notification(), "is_system_notification 正例必须为 true");
+        assert!(
+            wakeup.is_system_notification(),
+            "is_system_notification 正例必须为 true"
+        );
         append_message(&dir, &s.id, wakeup.clone()).unwrap();
         let loaded = load(&dir, &s.id).unwrap();
         let reloaded = loaded.messages.last().expect("wakeup 已落盘");
         match &reloaded.meta {
-            Some(MessageMeta::SystemNotification { kind, task_id, tool_use_id }) => {
+            Some(MessageMeta::SystemNotification {
+                kind,
+                task_id,
+                tool_use_id,
+            }) => {
                 assert_eq!(kind, "bg_task_finished");
                 assert_eq!(task_id.as_deref(), Some("bash_003"));
                 assert_eq!(tool_use_id.as_deref(), Some("call_xyz"));
@@ -1977,7 +1982,10 @@ mod tests {
             created_at: 0,
             meta: None,
         };
-        assert!(!plain.is_system_notification(), "meta=None 不应被当作 system notification");
+        assert!(
+            !plain.is_system_notification(),
+            "meta=None 不应被当作 system notification"
+        );
 
         let interrupted = Message {
             meta: Some(MessageMeta::Interrupted),
@@ -2012,7 +2020,10 @@ mod tests {
             tool_use_id: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
-        assert!(json.contains("\"type\":\"system_notification\""), "got {json}");
+        assert!(
+            json.contains("\"type\":\"system_notification\""),
+            "got {json}"
+        );
         assert!(json.contains("\"kind\":\"bg_task_finished\""));
         assert!(json.contains("\"task_id\":\"bash_001\""));
         // tool_use_id=None 必须省略（skip_serializing_if）

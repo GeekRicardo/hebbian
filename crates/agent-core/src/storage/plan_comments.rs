@@ -78,8 +78,7 @@ pub fn list_comments(
         match serde_json::from_str::<PlanCommentLine>(trimmed) {
             Ok(PlanCommentLine::Append(c)) => out.push(c),
             Ok(PlanCommentLine::MarkConsumed { ids }) => {
-                let set: std::collections::HashSet<&str> =
-                    ids.iter().map(String::as_str).collect();
+                let set: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
                 for c in out.iter_mut() {
                     if set.contains(c.id.as_str()) {
                         c.consumed = true;

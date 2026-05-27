@@ -375,7 +375,12 @@ impl BackgroundShells {
         };
 
         let shell = Arc::new(BackgroundShell::new(
-            task_id, command, cwd, is_background, kill_tx, log_path,
+            task_id,
+            command,
+            cwd,
+            is_background,
+            kill_tx,
+            log_path,
         ));
 
         {
@@ -543,7 +548,13 @@ mod tests {
     async fn captures_output_and_exits() {
         let shells = BackgroundShells::new();
         let child = spawn_bash("echo hello && echo world");
-        let shell = shells.register("echo hello && echo world".into(), "/".into(), false, None, child);
+        let shell = shells.register(
+            "echo hello && echo world".into(),
+            "/".into(),
+            false,
+            None,
+            child,
+        );
         shell.wait_terminal().await;
         let out = shell.read_incremental(READ_CHUNK_BYTES);
         assert!(out.content.contains("hello"));
@@ -599,13 +610,7 @@ mod tests {
         assert_eq!(shells.list().len(), 1);
 
         // terminal 条目：unregister 返回 true，列表为空
-        let done = shells.register(
-            "true".into(),
-            "/".into(),
-            false,
-            None,
-            spawn_bash("true"),
-        );
+        let done = shells.register("true".into(), "/".into(), false, None, spawn_bash("true"));
         done.wait_terminal().await;
         assert!(shells.unregister(&done.task_id));
         assert_eq!(shells.list().len(), 1); // 只剩仍 running 的那个

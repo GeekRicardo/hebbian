@@ -120,7 +120,9 @@ pub fn normalize(items: Vec<TodoInputItem>) -> Vec<TodoItem> {
         .map(|it| {
             let content = it.content.trim().to_string();
             let active_form = it.active_form.trim().to_string();
-            let id = it.id.unwrap_or_else(|| stable_todo_id(&content, &active_form));
+            let id = it
+                .id
+                .unwrap_or_else(|| stable_todo_id(&content, &active_form));
             TodoItem {
                 id,
                 content,

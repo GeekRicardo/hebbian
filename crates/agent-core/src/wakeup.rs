@@ -369,7 +369,9 @@ pub fn wakeup_xml(event: &WakeupEvent) -> String {
             duration_ms,
             ..
         } => {
-            let code = exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+            let code = exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into());
             let tool_use_attr = tool_use_id
                 .as_ref()
                 .map(|id| format!(" tool_use_id=\"{id}\""))
