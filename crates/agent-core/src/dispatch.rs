@@ -468,12 +468,22 @@ impl ToolDispatcher {
                             let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
                             // judge 必须看到 hebbian 静态分析的全量 effects（segments /
                             // write_targets / dangerous_kinds），不重复解析 shell。
+                            let prefix_outcome =
+                                crate::automode::classify_bash_prefixes_for_automode(
+                                    judge,
+                                    model_id_str,
+                                    &call_name_for_judge,
+                                    &call_input_for_judge,
+                                    &effects_for_judge,
+                                )
+                                .await;
+                            let judge_effects = prefix_outcome.effects;
                             let raw_decision = crate::automode::judge_auto_mode(
                                 judge,
                                 model_id_str,
                                 &call_name_for_judge,
                                 &call_input_for_judge,
-                                &effects_for_judge,
+                                &judge_effects,
                                 &[],
                             )
                             .await;
@@ -629,6 +639,7 @@ impl ToolDispatcher {
                     progress: Some(progress),
                     session_id: session_id_for_hooks.clone(),
                     run_id: Some(state.run_id.to_string()),
+                    cancel: Some(cancel.clone()),
                 };
                 let (raw, exec_failed) = match tool {
                     Some(t) => match t.execute_streaming(tool_ctx, effective_input.clone()).await {

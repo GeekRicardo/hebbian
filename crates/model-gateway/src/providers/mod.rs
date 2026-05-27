@@ -130,7 +130,12 @@ where
             return Err(ModelError::Cancelled);
         }
 
-        match op().await {
+        // 用 select! 竞争：cancel 先到就立即返回，不等 HTTP 响应。
+        let result = tokio::select! {
+            result = op() => result,
+            _ = wait_for_cancel(cancel.clone()) => return Err(ModelError::Cancelled),
+        };
+        match result {
             Ok(value) => return Ok(value),
             Err(err) => {
                 attempt += 1;

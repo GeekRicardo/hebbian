@@ -164,10 +164,19 @@ impl Tool for BashTool {
         // 所以我们本地 buffer 累加 forward 出去的内容，最后聚合返回。
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
         let mut buffer = String::new();
+        let mut user_cancelled = false;
         let exited = loop {
-            // 终态或 deadline 到点都退出循环；中间每 ~200ms 抽一次增量。
+            // 终态 / deadline / 用户取消都退出循环；中间每 ~200ms 抽一次增量。
             let tick =
                 tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_millis(200));
+            // 有 cancel flag 时监听取消信号；没有时用 pending() 永不触发。
+            let cancel_flag = ctx.cancel.clone();
+            let cancel_fut = async move {
+                match cancel_flag {
+                    Some(flag) => wait_for_cancel(flag).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
                 biased;
                 _ = shell.wait_terminal() => {
@@ -178,11 +187,28 @@ impl Tool for BashTool {
                     drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
                     break false;
                 }
+                _ = cancel_fut => {
+                    drain_into(&shell, &ctx, &mut buffer, usize::MAX);
+                    user_cancelled = true;
+                    break false;
+                }
                 _ = tick => {
                     drain_into(&shell, &ctx, &mut buffer, READ_CHUNK_BYTES);
                 }
             }
         };
+
+        if user_cancelled {
+            // 用户点了停止：立即 kill 子进程，返回已产出内容。
+            self.shells.kill(&shell.task_id).await;
+            self.shells.unregister(&shell.task_id);
+            let mut text = buffer;
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("[已中断]");
+            return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
+        }
 
         if !exited {
             // 超时：进程仍在跑，转后台。
@@ -270,6 +296,14 @@ fn format_finished(buffer: &str, state: &ShellState) -> String {
         text.push_str("(无输出)");
     }
     text
+}
+
+/// 异步等待 cancel flag 置位（50ms 轮询）。
+async fn wait_for_cancel(cancel: common::CancelFlag) {
+    use std::sync::atomic::Ordering;
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 fn truncate_bytes(s: &str, limit: usize) -> String {
@@ -453,6 +487,7 @@ mod tests {
             progress: Some(progress.clone()),
             session_id: None,
             run_id: None,
+            cancel: None,
         };
 
         // 三行隔 300ms 输出——足够 forwarder 抽到 ≥2 段 chunk。
@@ -500,6 +535,7 @@ mod tests {
             progress: Some(progress.clone()),
             session_id: None,
             run_id: None,
+            cancel: None,
         };
 
         let out = bash

@@ -1,6 +1,7 @@
 pub mod background;
 pub mod bash;
 pub mod bash_output;
+pub mod bash_prefix;
 pub mod edit;
 pub mod exit_plan_mode;
 pub mod grep;
@@ -26,7 +27,7 @@ use async_trait::async_trait;
 use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
 use serde_json::Value;
 
-use common::AppResult;
+use common::{AppResult, CancelFlag};
 
 use crate::read_state::ReadStateTracker;
 use crate::workspace::Workspace;
@@ -51,11 +52,15 @@ pub trait ToolProgress: Send + Sync {
 /// `session_id` / `run_id`：BashTool 在 register 后台 task 时需要它们调
 /// `WakeupScheduler::arm_bg_task`——让 task 终态时自动通知模型（架构 §4.12.5）。
 /// 老 ToolCtx::noop() 路径不带，BashTool 自动 arm 时检测到 None 就跳过。
+///
+/// `cancel`：dispatcher 注入的取消标志。`BashTool` 在前台等待循环中检测到它置位
+/// 后立即 kill 子进程并返回已产出内容，不再等待命令跑完。
 pub struct ToolCtx {
     pub call_id: String,
     pub progress: Option<Arc<dyn ToolProgress>>,
     pub session_id: Option<String>,
     pub run_id: Option<String>,
+    pub cancel: Option<CancelFlag>,
 }
 
 impl ToolCtx {
@@ -66,6 +71,7 @@ impl ToolCtx {
             progress: None,
             session_id: None,
             run_id: None,
+            cancel: None,
         }
     }
 

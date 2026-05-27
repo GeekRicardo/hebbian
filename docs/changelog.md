@@ -4695,3 +4695,29 @@
 - **影响范围**: desktop frontend ChatInput 粘贴路径逻辑；不改后端、不改协议。
 - **验证**: 前端依赖未安装无法跑 `tsc --noEmit`；代码改动为纯逻辑变更，类型签名未变。
 - **留尾巴**：无
+
+### 2026-05-27 — Bash effects 接入 tree-sitter AST 与 AutoMode prefix classifier
+
+- **Why**: 用户要求参考 docs/权限沙箱调研和 Claude Code 做法，把 Bash 的 tree-sitter AST 解析和 LLM classifier 补上。旧 tokenizer 对换行裸命令、heredoc、AST 复杂结构的边界太粗；同时 AutoMode judge 需要更接近 Classifier A 的 Bash prefix 视图。
+- **改动**:
+  - [crates/agent-core/Cargo.toml](../crates/agent-core/Cargo.toml) / [Cargo.lock](../Cargo.lock): 新增 `tree-sitter` 与 `tree-sitter-bash`。
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): `parse()` 优先走 tree-sitter-bash AST，抽取 command / pipeline / redirected_statement / heredoc 形态；识别 command substitution、process substitution、subshell、后台 `&`、注释/换行注入为 `ast-too-complex`；保留原 tokenizer 作为保守 fallback。新增换行注入回归测试，既有 heredoc、中文路径、敏感 env、重定向目标测试保持通过。
+  - [crates/agent-core/src/tools/bash_prefix.rs](../crates/agent-core/src/tools/bash_prefix.rs): 新增 Bash Prefix Classifier A 模块，包含本地 prefix fallback、LLM prompt、`prefix:` / `none` / `command_injection_detected` 严格输出解析与单测。
+  - [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs) / [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): AutoMode judge 前对 Bash/PowerShell 段调用 prefix classifier enrich judge effects；classifier 失败或返回 `none` 时保留静态 tree-sitter effects。普通 PermissionStore 匹配仍用静态 effects，避免每条 Bash 都多一次 LLM 调用，也避免把 `rm /tmp/x` 收窄成 `rm` 后扩大 allow 面。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs) / [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): 补齐当前未完成的 `ToolCtx.cancel` 贯通，前台 Bash 监听 run cancel 后 kill 子进程并返回已输出内容；这是编译收尾，不改变工具协议。
+  - [crates/agent-core/src/tools/safe_commands.rs](../crates/agent-core/src/tools/safe_commands.rs): 更新 `find -exec` 测试期望，tree-sitter 不再把 `{}` 误判成 group/subshell，`-exec` 仍由 safe command 规则判不安全。
+  - [docs/架构.md](架构.md): 同步 §4.4.2 / §4.4.4 / §13，明确 tree-sitter 优先、`env_prefix` 分离 + 敏感 env 强制审批、Classifier A 仅作为 AutoMode judge 前辅助层。
+- **影响范围**: agent-core Bash effects / AutoMode judge 输入 / Bash 前台取消；不改 protocol，不改 PermissionStore 文件格式，不改 session.jsonl。AutoMode 下每个 Bash 段最多多一次 classifier LLM 调用；非 AutoMode 无额外模型调用。
+- **验证**: `cargo test -p agent-core tools::shell_parse::tests --lib`、`cargo test -p agent-core tools::bash_prefix::tests --lib`、`cargo test -p agent-core automode::tests --lib`、`cargo test -p agent-core effects::tests --lib`、`cargo test -p agent-core --lib`、`cargo check -p agent-core --tests`、`cargo check --workspace`、`cargo fmt --check`、`git diff --check` 已通过。
+- **留尾巴**: 尚未跑真实 Desktop AutoMode 手动验证；Classifier A 当前只 enrich AutoMode judge，不进入普通静态规则匹配路径，后续如果要全量照搬 Claude Code 的 prefix allowlist，需要单独设计成本、失败策略与 UI 语义。
+
+### 2026-05-27 — 修复点击停止按钮不能立即中断的问题
+
+- **Why**: 用户点击停止后，如果后端正在请求模型（非流式路径，如 Anthropic/Gemini 带工具调用）或正在执行 Bash 工具，cancel flag 置位但不被检查，导致要等请求跑完或命令退出才真正中断。
+- **改动**:
+  - `crates/agent-core/src/tools/mod.rs`：`ToolCtx` 新增 `cancel: Option<CancelFlag>` 字段，`noop()` 默认 None。dispatcher 注入后工具可感知用户取消。
+  - `crates/agent-core/src/tools/bash.rs`：`execute_streaming` 的前台等待 `tokio::select!` 加第三个 cancel 分支；检测到取消时立即 kill 子进程、unregister，返回已产出内容并附 `[已中断]` 后缀。新增 `wait_for_cancel` 本地异步函数（50ms 轮询，与 model-gateway 同款）。
+  - `crates/agent-core/src/dispatch.rs`：`spawn_tool` 构造 `ToolCtx` 时传入 `cancel: Some(cancel.clone())`。
+  - `crates/model-gateway/src/providers/mod.rs`：`retry_request` 里用 `tokio::select!` 竞争 `op().await` 与 `wait_for_cancel`，cancel 先到立即返回 `ModelError::Cancelled`，不再等 HTTP 响应。覆盖所有 provider（anthropic / openai / gemini / deepseek）。
+- **影响范围**: agent-core（tools 模块 + dispatch）、model-gateway（providers/mod.rs）；不改协议、不改 EventPayload，不影响 surface。
+- **留尾巴**: `wait_for_cancel` 在 model-gateway 的 `providers/mod.rs` 和 agent-core 的 `bash.rs` 各有一份实现（50ms 轮询）。若后续想统一可提取到 `common::runtime`，需给 common 加 tokio 依赖。
