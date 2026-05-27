@@ -265,7 +265,7 @@ export function PermissionApprovalPopup() {
       <div className="pr-[50px]">
         <div
           className={cn(
-            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden",
+            "w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden pointer-events-auto",
             "animate-in fade-in slide-in-from-bottom-2 duration-150"
           )}
         >
@@ -1006,7 +1006,7 @@ function PlanApprovalPopup() {
       )}
     >
       <div className="pr-[50px]">
-        <div className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150">
+        <div className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-lg pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150">
           {/* 头部 */}
           <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
             <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
