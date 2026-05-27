@@ -1594,8 +1594,8 @@ function ToolCallTimeline({
                     {call.name || "工具调用"}
                   </span>
                   <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-                    <span className="truncate">{callDescription(call)}</span>
-                    <code className="max-w-[360px] truncate font-mono text-[11px] text-foreground">
+   <span className="shrink-0">{callDescription(call)}</span>
+         <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
                       {callSummary(call)}
                     </code>
                   </span>
