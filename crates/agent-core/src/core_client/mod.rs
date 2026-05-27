@@ -21,8 +21,8 @@ use async_trait::async_trait;
 
 use crate::permissions::{PermissionStore, RuleEffect};
 use crate::storage::{
-    permissions as permissions_store, projects as projects_store, prompts as prompts_store,
-    sessions as sessions_store, settings as settings_store,
+    mcp as mcp_store, permissions as permissions_store, projects as projects_store,
+    prompts as prompts_store, sessions as sessions_store, settings as settings_store,
 };
 use crate::tools::{self as tools, ToolInfo};
 use crate::Harness;
@@ -246,6 +246,12 @@ pub trait CoreClient: Send + Sync {
     // === 同步 API：工具菜单（UI 用）===
 
     fn list_tools(&self) -> Vec<ToolInfo>;
+
+    // === 同步 API：MCP ===
+
+    fn get_mcp_config(&self) -> crate::mcp::config::McpConfig;
+    fn save_mcp_config(&self, config: crate::mcp::config::McpConfig) -> Result<(), CoreError>;
+    async fn discover_mcp_tools(&self) -> Vec<crate::tools::McpToolReport>;
 
     // === 数据目录访问 ===
 
@@ -626,7 +632,9 @@ impl CoreClient for LocalCoreClient {
             if matches!(s.source, crate::tools::skill::SkillSource::Global) {
                 s.collection_id = match index.get(s.name.as_str()) {
                     Some(id) => Some((*id).to_string()),
-                    None => Some(crate::storage::skill_collections::synthetic_local_id(&s.name)),
+                    None => Some(crate::storage::skill_collections::synthetic_local_id(
+                        &s.name,
+                    )),
                 };
             }
         }
@@ -644,14 +652,8 @@ impl CoreClient for LocalCoreClient {
         names: Option<&[String]>,
         overwrite: bool,
     ) -> Result<Vec<crate::storage::skills::ImportedSkill>, CoreError> {
-        crate::storage::skills::import_from_claude(
-            &self.data_dir,
-            scope,
-            workdir,
-            names,
-            overwrite,
-        )
-        .map_err(CoreError::from)
+        crate::storage::skills::import_from_claude(&self.data_dir, scope, workdir, names, overwrite)
+            .map_err(CoreError::from)
     }
 
     fn scan_skill_dir(
@@ -738,7 +740,8 @@ impl CoreClient for LocalCoreClient {
             }
         };
         if dir.exists() {
-            std::fs::remove_dir_all(&dir).map_err(|e| CoreError::from(common::AppError::from(e)))?;
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| CoreError::from(common::AppError::from(e)))?;
             Ok(true)
         } else {
             Ok(false)
@@ -753,10 +756,8 @@ impl CoreClient for LocalCoreClient {
         // 虚拟 collection 不落盘——只在运行时给 UI 用，每个 skill 自成一组
         // （label = skill 目录名 / 1 个 skill）。
         let mut out = crate::storage::skill_collections::load(&self.data_dir).collections;
-        let covered: std::collections::HashSet<String> = out
-            .iter()
-            .flat_map(|c| c.skills.iter().cloned())
-            .collect();
+        let covered: std::collections::HashSet<String> =
+            out.iter().flat_map(|c| c.skills.iter().cloned()).collect();
 
         let skills_root = self.data_dir.join("skills");
         let Ok(entries) = std::fs::read_dir(&skills_root) else {
@@ -791,9 +792,7 @@ impl CoreClient for LocalCoreClient {
 
     fn delete_skill_collection(&self, id: &str) -> Result<Vec<String>, CoreError> {
         // 虚拟 collection 不在 sidecar 里，直接按 id 后缀解析 skill 名删目录。
-        if let Some(skill_name) =
-            crate::storage::skill_collections::skill_name_from_local_id(id)
-        {
+        if let Some(skill_name) = crate::storage::skill_collections::skill_name_from_local_id(id) {
             let dir = self.data_dir.join("skills").join(skill_name);
             if dir.exists() {
                 std::fs::remove_dir_all(&dir)
@@ -833,6 +832,19 @@ impl CoreClient for LocalCoreClient {
         tools::tool_manifest()
     }
 
+    fn get_mcp_config(&self) -> crate::mcp::config::McpConfig {
+        mcp_store::load(&self.data_dir)
+    }
+
+    fn save_mcp_config(&self, config: crate::mcp::config::McpConfig) -> Result<(), CoreError> {
+        mcp_store::save(&self.data_dir, &config).map_err(CoreError::from)
+    }
+
+    async fn discover_mcp_tools(&self) -> Vec<crate::tools::McpToolReport> {
+        let config = mcp_store::load(&self.data_dir);
+        tools::mcp::discover_tool_reports(&config).await
+    }
+
     fn data_dir(&self) -> &Path {
         &self.data_dir
     }
@@ -846,8 +858,10 @@ mod tests {
     };
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("hebbian-core-client-{name}-{}", uuid::Uuid::new_v4()));
+        let d = std::env::temp_dir().join(format!(
+            "hebbian-core-client-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -879,7 +893,10 @@ mod tests {
         assert_eq!(collections.len(), 2);
         assert_eq!(collections[0].label, "hallmark");
         assert_eq!(collections[0].id, "local:hallmark");
-        assert!(matches!(collections[0].source, CollectionSource::Local { .. }));
+        assert!(matches!(
+            collections[0].source,
+            CollectionSource::Local { .. }
+        ));
         assert_eq!(collections[0].skills, vec!["hallmark".to_string()]);
 
         assert_eq!(collections[1].label, "karpathy");
@@ -920,7 +937,10 @@ mod tests {
         assert_eq!(collections.len(), 2);
 
         // sidecar 集合保持原样
-        let sp = collections.iter().find(|c| c.label == "superpowers").unwrap();
+        let sp = collections
+            .iter()
+            .find(|c| c.label == "superpowers")
+            .unwrap();
         assert_eq!(sp.id, "fixed-id");
         assert_eq!(sp.skills.len(), 2);
 

@@ -1545,6 +1545,23 @@
 - **影响范围**: agent-core loop 与 desktop chat 单测；不改协议、不改 Tauri command、不改 session 文件结构。
 - **留尾巴**: 无。
 
+### 2026-05-27 — 新增 MCP 配置页与动态工具接入
+
+- **Why**: 用户要求 Hebbian 支持 MCP 配置，兼容所有常见 MCP transport，并在设置里提供专门页面，既能表单添加，也能粘贴 JSON 添加。
+- **改动**:
+  - [crates/agent-core/src/mcp/config.rs](../crates/agent-core/src/mcp/config.rs): MCP 配置解析兼容 `mcpServers` / `servers`，支持 `stdio`、`streamable_http`、`sse` 三种 transport，并校验 command/url 必填项。
+  - [crates/agent-core/src/storage/mcp.rs](../crates/agent-core/src/storage/mcp.rs) / [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs) / [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 新增 `~/.hebbian/mcp.json` 持久化与 CoreClient/Tauri 同步 API。
+  - [crates/agent-core/src/mcp/client.rs](../crates/agent-core/src/mcp/client.rs) / [crates/agent-core/src/tools/mcp.rs](../crates/agent-core/src/tools/mcp.rs): 新增 MCP stdio、Streamable HTTP、legacy SSE 的 initialize / tools/list / tools/call 客户端，动态注册为 `Mcp__<server>__<tool>` 工具。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx) / [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) / [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 设置页新增 MCP tab，支持表单添加和粘贴 JSON 保存。
+  - [docs/架构.md](架构.md): 同步 MCP storage、同步 API、动态工具和 transport 取舍。
+- **影响范围**: agent-core / desktop / cli / web-server / docs；新增 `mcp.json` 文件格式和动态工具命名，不改变已有 session/protocol 存储格式。MCP 工具仍走现有 HITL：stdio 按 mutating 兜底，HTTP/SSE 按 network。
+- **验证**:
+  - `cargo test -p agent-core mcp --lib` 通过。
+  - `cargo check -p agent-core --tests` 通过。
+  - `cargo check -p hebbian` 通过（仅既有 notch warning）。
+  - `pnpm --dir apps/desktop exec tsc --noEmit` 通过。
+- **留尾巴**: MCP 每次工具发现/调用会新建 transport session，尚未实现连接池；如果某些 server 明显依赖长生命周期 session，需要后续把连接复用收敛到 session-scoped pool。
+
 ### 2026-05-19 — 忽略 understand-anything 本地知识图谱产物
 
 - **Why**: 用户明确要求 `understand-anything` 生成目录不要进入提交，只作为本机分析缓存保留。
@@ -4489,6 +4506,15 @@
 - **复现 / 验证**: 已用 `pnpm build` 构建通过，并用 hebweb + Playwright 量过下沉/上浮对齐点；最终移除 streaming ring 动画后不再引入额外动画重绘。
 - **留尾巴**: 无。
 
+### 2026-05-26 — 修复同一轮工具审批记住后仍重复弹窗
+
+- **Why**: 用户发现审批命令选择写入全局/项目/本对话后，同一个 agent loop turn 内后续相同命令仍会再次要求审批；根因是同批 tool calls 会先并发创建多个 pending，第一条审批的 AllowAndRemember 只影响之后的新 check，不能唤醒已经排队的 pending。
+- **改动**:
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): pending tool approval 记录创建时的 effects；AllowAndRemember 写入 Session/Project/Global 规则后，重新评估当前 pending 表中已被新规则覆盖的审批，并自动以 AllowOnce 唤醒。
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): 增加 Bash 命令前缀与 Edit 路径前缀在 Session/Project/Global 三种 scope 下的同批 pending 回归测试。
+- **影响范围**: agent-core HITL / PermissionStore 命中路径；不改协议、不改 surface API。危险复合模式仍强制审批且不可记忆。
+- **留尾巴**: 前端队列里可能短暂显示已经自动放行的下一条审批，现有 PermissionResolved 会正常出队；若用户感知到闪烁，再考虑批量折叠 UI 事件。
+
 ### 2026-05-26 — 修复 DeepSeek thinking 工具回放缺 reasoning_content 时被本地拦截
 
 - **Why**: 用户给出的 session `202605261009-f79ad003` 里，多轮 DeepSeek v4 tool_call 历史确实存在 assistant 带 `tool_calls` 但没有 `reasoning_content` 的情况；之前 OpenAI-compatible 适配层 fail-closed，导致下一次请求在本地报「请压缩当前会话或开新会话」，但对照 DeepSeek-Reasonix 后确认兼容做法应是补空字符串继续回放。
@@ -4498,3 +4524,105 @@
   - [docs/架构.md](架构.md): 同步 §5.2.1 DeepSeek 方言契约，明确 OpenAI 兼容路径缺 `reasoning_content` 回填空串，Anthropic Messages 路径仍 fail-closed。
 - **影响范围**: model-gateway 的 OpenAI-compatible DeepSeek v4/deepseek-reasoner 请求构造与架构文档；不改 session 落盘格式、不改 surface 事件协议、不破坏非 DeepSeek 或 thinking disabled 路径。
 - **留尾巴**: 未真实调用 DeepSeek 服务端验证 400/200，只用目标 session 的 model_io 和单元测试验证请求构造契约；后续若服务端改为要求非空推理链，再回到压缩/摘要策略讨论。
+
+### 2026-05-26 — 修复 streaming 插队消息在当前 assistant 前面显示
+
+- **Why**: 用户反馈“立即插队”后，前端仍把插队的 user message 放在正在输出的 agent message 前面；正确视觉应是：当前正在输出的 assistant bubble 保持原位置继续输出，插队 user message 临时排在它后面；等当前 step/turn 跑完并触发 `TurnFinished`，后续 assistant 输出再新开一条 bubble，排在插队 user message 后面。根因是 2026-05-24 的 `liveTimeline` 修复把插队 user 和冻结 assistant 统一进 timeline 后，ChatView 又把整个 `liveTimeline` 永远渲染在当前 streaming bubble 之前；同一 Turn 尚未冻结时，新 append 的 `user_injected` 就被画到了当前 streaming 之前。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts): 新增 `runningTimelineRenderItems`，按 `assistantInsertPos` 把当前 streaming bubble 插入运行中 timeline，而不是固定放在所有 timeline 之后。
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 用纯 TypeScript 测试锁定两种关键顺序：初次插队应为 `streaming → user`；已有冻结 turn 后，下一条 streaming 应为 `assistant_frozen → user1 → streaming → user2`。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 把 slot 内已有的 `assistantInsertPos` 同步到当前会话镜像，供 ChatView 渲染使用。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 使用 `runningTimelineRenderItems(liveTimeline, assistantInsertPos, hasStreaming)` 渲染运行中消息；`assistant_frozen` / `user_injected` 仍走原 MessageBubble 路径，当前 streaming bubble 只改变插入位置。
+- **影响范围**: 仅 Desktop / hebweb 前端运行中渲染顺序；不改协议、不改 agent-core、不改 session.jsonl 落盘格式。`TurnFinished` 冻结逻辑保持不变，最终 reload 后仍由真实 `session.messages` 接管。
+- **验证**:
+  - 先写红测：`pnpm --dir apps/desktop exec tsc --target ES2020 --module commonjs --moduleResolution node --skipLibCheck --esModuleInterop --outDir /tmp/hebbian-live-order-test frontend/src/desktop/ui/components/liveTimelineOrder.test.ts` 初次失败于缺少 `./liveTimelineOrder`。
+  - 修复后同一命令 + `node /tmp/hebbian-live-order-test/liveTimelineOrder.test.js` 通过。
+  - `pnpm --dir apps/desktop exec tsc --noEmit` 通过。
+- **留尾巴**: 还需用 hebweb + 浏览器跑一次真实 streaming 插队视觉验证，确认 DOM 顺序与纯函数测试一致。
+
+
+### 2026-05-26 — 修复切换会话后插队前 assistant 与任务清单消失
+
+- **Why**: 用户反馈立即插队后切到别的对话再切回，插队前正在跑的 agent 消息不见了，右侧任务清单也被清空。根因是 active run 中插队 user 已经落盘，但对应 assistant 和 TodoWrite 快照仍在前端 sessionStreams 软状态里；重新 load session 后，落盘 history 与 liveTimeline 发生重叠，而 TodoTab 只扫落盘消息/当前 streamingParts，没有读运行中 todo 快照。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): active streaming 时从 persisted messages 中过滤已由 liveTimeline 接管的插队 user，并让查找、压缩边界、最近 user 操作都基于同一份渲染消息列表。
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts): 增加 persisted history 与 live timeline 的去重 helper，并补充纯函数回归测试。
+  - [apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx) / [todoBlocksForDisplay.ts](../apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts): 右侧任务清单优先显示 store.todos 的 active run 当前快照，未运行时再回退到历史消息扫描。
+- **影响范围**: desktop/hebweb 前端渲染层；不改协议、不改 agent-core、不改 session.jsonl，兼容既有会话。
+- **验证**: 已跑 `liveTimelineOrder.test.ts`、`todoBlocksForDisplay.test.ts` 的 standalone tsc+node 回归测试；已跑 `pnpm --dir apps/desktop exec tsc --noEmit` 与 `pnpm --dir apps/desktop build`。
+- **留尾巴**: 还需用 hebweb/浏览器实际跑一遍插队后切换会话的 UI 路径，确认 DOM 顺序与右侧 Todo 展示符合预期。
+
+### 2026-05-26 — 修复 Skill 大内容被工具结果落盘替换
+
+- **Why**: 用户要求 Skill tool 读取不要加落盘、直接全量返回；根因是 SkillTool 已经返回完整 SKILL.md，但 dispatcher 的大输出通用逻辑会把非 Read 工具超过 6KB 的结果写入 `tool_results` 并把模型上下文替换成路径指针，违背 Skill 作为指令注入必须完整回填的语义。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 将 `Skill` 纳入直接结果通路，和 `Read` 一样跳过 artifact materialize 与 dispatcher 截断，确保 `ToolCallFinished.result` 和回灌模型的 `ToolResult.content` 都是完整 skill 内容。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 新增 `skill_tool_returns_full_large_content_without_artifact` 回归测试，覆盖超过 6KB 的 Skill 内容不生成 `tool_results/<call_id>.txt`、不带 artifact、不标记 truncated。
+  - [docs/架构.md](架构.md): 同步 L1 大输出落盘规则，明确 `Skill` 与 `Read` 一样跳过 dispatcher artifact/truncation。
+- **影响范围**: agent-core dispatcher 工具结果处理与架构文档；不改协议、不改 surface API、不改 session 存储格式。Skill 大内容会完整进入模型上下文，但受 SkillTool 自身 200KB 上限约束。
+- **验证**:
+  - 红测：`cargo test -p agent-core dispatch::tests::skill_tool_returns_full_large_content_without_artifact -- --nocapture` 修复前失败于 `results[0].artifact.is_none()`。
+  - 修复后：同一测试通过；`cargo test -p agent-core dispatch::tests::materialize -- --nocapture` 通过；`cargo check -p agent-core --tests` 通过；`cargo test -p agent-core --lib` 通过；`cargo check --workspace` 通过（仅既有 warning）。
+- **留尾巴**: 无。
+
+### 2026-05-27 — 日志落盘功能完整闭环：settings 持久化 + 实时日志面板
+
+- **Why**: 设置页「日志」tab 的开关此前只存 localStorage，重装或清浏览器缓存后丢失；Rust 侧 `append_dispatch_log` 每次写日志都扫整个 logs 目录做 rotation 清理，高频写入时性能浪费；LogPane 只显示本次前端会话内存中的条目，打开日志 tab 时看不到之前已落盘的历史。
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs): `GeneralSettings` 新增 `log_enabled: bool`（`#[serde(default)]`），持久化到 `settings.json`；零 migration 风险（旧文件反序列化默认 false）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `append_dispatch_log` rotation 清理改为原子时钟限速（每小时至多执行一次，`AtomicI64` 记录上次清理时间戳），避免高频写入时重复扫目录；新增 `read_dispatch_log` Tauri 命令，读取今天的日志文件内容返回给前端。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `readDispatchLog()` bridge 函数。
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `AppSettings.general` 加 `log_enabled: boolean`。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `refreshAppSettings` / `saveAppSettings` 加载/保存后同步 `logEnabled` store 状态，使 `settings.json` 成为唯一权威来源。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): `LogPane` 接收 `draft`/`setDraft`，toggle 同时写 `draft.general.log_enabled`（保存时落盘）和 `setLogEnabled`（立即生效）；mount 时异步读取今天的日志文件作为历史内容，`baselineCount` 机制保证历史与新增条目不重叠显示。
+- **影响范围**: Desktop surface；不改协议、不改 agent-core 主路径、不改 session.jsonl；`log_enabled` 字段 additive，不破坏老 settings.json。
+- **验证**: `cargo check --manifest-path apps/desktop/Cargo.toml` 无新增错误；`pnpm --dir apps/desktop/frontend exec tsc --noEmit` 零错误。
+- **留尾巴**: heb CLI / hebweb surface 暂不读 `log_enabled` 设置（CLI 无 GUI 日志面板，hebweb 同前端但尚未挂 Tauri 命令），日志落盘功能只在 Desktop surface 生效。
+
+### 2026-05-27 — MCP 设置页自动发现工具并展示详情
+
+- **Why**: 用户反馈 MCP 服务添加后需要自动发现有哪些 func，已添加服务要显示工具数量，点击后弹窗展示每个工具和 desc；同时设置页点击 MCP tab 曾遇到空配置触发 `Object.entries` 崩溃。
+- **改动**:
+  - [crates/agent-core/src/mcp/client.rs](../crates/agent-core/src/mcp/client.rs): `McpToolInfo` 增加运行时工具名；legacy SSE 的 initialized 通知改为不捕获非 `Sync` stream 的 helper，修复 `Tool::execute` / CoreClient async future 非 `Send` 编译错误。
+  - [crates/agent-core/src/tools/mcp.rs](../crates/agent-core/src/tools/mcp.rs) / [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs) / [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 新增按 server 分组的 `discoverMcpTools` 同步 API/Tauri 命令；单个 server 发现失败只返回该 server 的错误，不阻塞其他 server。
+  - [apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts](../apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts) / [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): MCP 配置归一化集中到纯函数，空值返回空配置；保存/刷新后自动发现工具，服务行显示工具数量或错误，详情弹窗列出工具名与描述。
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) / [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 补齐 MCP 工具报告类型和前端 bridge。
+  - [docs/架构.md](架构.md): 同步 MCP 工具发现 API、设置页显示语义和错误隔离策略。
+- **影响范围**: agent-core MCP 客户端/工具注册、Desktop Tauri command、Desktop/hebweb 共享前端设置页；不改 session.jsonl、不改对话事件协议，`mcp.json` 兼容原格式。
+- **验证**:
+  - 红测：新增 `mcpSettings.test.ts` 后，`pnpm --dir apps/desktop exec tsc --noEmit` 先失败于缺少 `mcpSettings` 模块。
+  - 修复后：`cargo check -p agent-core --tests` 通过；`pnpm --dir apps/desktop exec tsc --noEmit` 通过。
+- **留尾巴**: MCP transport 仍沿用每次发现/调用新建 session 的实现；如果用户配置的 server 依赖长连接状态，后续再做 session-scoped pool。
+
+### 2026-05-27 — 对齐 Grep 工具卡片样式并显示搜索位置
+
+- **Why**: Grep 工具结果卡片内层边框带圆角，和其他工具展开内容风格不一致；同时卡片只显示 query，没有显示这次在哪个目录搜索。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Grep 搜索结果内层改为直角样式，并在展开详情中按设置显示 `path` / `cwd` 搜索位置。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 把应用设置传入消息气泡，供工具卡片渲染读取。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx) / [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts) / [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) / [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs): 新增 `show_grep_search_path` 设置项，默认开启；旧 settings 缺字段时前端归一化为开启。
+- **影响范围**: Desktop/hebweb 前端工具观察展示与应用设置；不改工具协议、不改 session.jsonl、不影响模型请求。
+- **验证**: `apps/desktop/node_modules/.bin/tsc --noEmit` 已确认本次新增 `appSettings` 类型错误修复；当前仍失败于既有 `DispatchLog` / `LogLine` 类型错误。`cargo check -p hebbian` 当前仍失败于既有 `tokio` / `LogLine` 相关错误。
+
+### 2026-05-27 — 升级日志系统：全量 tracing 广播 + 实时彩色 LogPane
+
+- **Why**: 用户希望设置页日志面板不只显示工具调度事件，而是捕获全部 `pnpm tauri dev` 终端输出（INFO/WARN/ERROR 等），并按日志级别着色，面板高度也要撑满设置对话框。
+- **改动**:
+  - [crates/observability/Cargo.toml](../crates/observability/Cargo.toml) / [crates/observability/src/lib.rs](../crates/observability/src/lib.rs): 新增 `BroadcastLayer`（实现 `tracing_subscriber::Layer`），拦截全量 tracing 事件并广播到 `broadcast::Sender<LogLine>`；新增 `LogLine` 结构（含 level/target/message/ts）；文件输出改为 `tracing_appender::rolling::daily`；`init()` 同时启动三路输出（stderr ANSI + 文件 rotate + 前端广播）。`WorkerGuard` 以 `OnceLock<Mutex<WorkerGuard>>` 存 static，绕过 `!Sync` 限制。
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): 补充 `tokio` 依赖（`sync` feature）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 移除 `append_dispatch_log` / `read_dispatch_log` 命令，新增 `subscribe_log_stream`（Tauri Channel 订阅 broadcast）和 `read_log_file`（读取今天日志文件）。`Channel::send` 吃值语义，去掉 `&line` 的引用传递。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): 新增 `subscribeLogStream` / `readLogFile`，移除旧的 `appendDispatchLog` / `readDispatchLog`。
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `LogLine` 对齐后端结构（level/target/message/ts）；`LogEntry = LogLine` 作为别名。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 移除 `logEngineEvent` 函数和引擎事件处理里的工具调度日志捕获；`appendLogEntry` 直接接受 `LogLine`，移除旧的 `api.appendDispatchLog` 调用。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): 重写 `LogPane`——mount 时 `api.subscribeLogStream` 订阅实时广播 + `api.readLogFile()` 加载历史；按 level 着色（ERROR 红/WARN 黄/INFO 绿/DEBUG 蓝/TRACE 灰）；终端区域改为 `flex-1` 撑满设置对话框剩余高度；路径描述改为实际文件路径。日志 tab 的父容器切换为 `overflow-hidden` 以配合内层终端独立滚动。
+- **影响范围**: observability crate（breaking: `init` 参数不变，但新增 static）；Desktop surface（Tauri 命令替换，不破坏 CLI / hebweb）；前端 LogPane 完全重写，旧的 `LogEntry.id` / `LogEntry.type` / `LogEntry.msg` 字段已废弃。
+- **留尾巴**: `BroadcastLayer` 没有订阅者时直接 early-return，零开销；Channel 关闭后后端 spawn 自动退出，无需显式取消。历史日志以纯文本行展示，未做结构化解析着色（可后续改进）。
+
+### 2026-05-27 — 日志面板升级为 ghostty-web 真实终端渲染
+
+- **Why**: ANSI 转义码在自定义 React div 里显示为乱码（`[3m`/`[0m`）；用户明确要求用 ghostty-web 渲染，获得与 pnpm tauri dev 终端一致的真彩色体验。
+- **改动**:
+  - [apps/desktop/package.json](../apps/desktop/package.json): 新增 `ghostty-web@^0.4.0` 依赖。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): 移除自定义 div 终端 + ANSI strip 方案；改为 `ghostty-web` `Terminal` + `FitAddon` 方案。mount 时 `ensureWasm()` 加载 WASM（模块级单例），`term.open()` + `fit.observeResize()` 自动适配容器尺寸；历史文件内容原样 write（ANSI 颜色直接渲染）；实时 `subscribeLogStream` 回调附加 ANSI 颜色码（ERROR 红/WARN 黄/INFO 绿/DEBUG 蓝/TRACE 灰）再 write；unmount 时 `cancel` + `term.dispose()`。
+- **影响范围**: Desktop/hebweb 前端设置页日志面板展示；不影响 Rust 后端、协议、agent-core。
+- **留尾巴**: ghostty-web 的 WASM 文件（`ghostty-vt.wasm`）由 Vite 通过 `import.meta.url` 解析，需确认 Tauri production build 时 WASM 文件被正确复制到 `dist/assets/`；开发模式下 Vite dev server 直接 serve，无问题。

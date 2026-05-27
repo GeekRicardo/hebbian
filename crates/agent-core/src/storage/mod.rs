@@ -8,6 +8,7 @@
 //! - [`prompts`]：用户 persona 列表（prompts.json）
 //! - [`settings`]：全局通用 settings.json
 //! - [`permissions`]：Global 级审批规则（架构 §4.6 / §4.5.4）
+//! - [`mcp`]：MCP server 配置（mcp.json）
 //! - [`tool_results`]：工具结果 txt（含大输出落盘 + 压缩占位符）
 //! - [`compactions`]：/compact 时压缩前 markdown
 //! - [`oauth`]：provider OAuth 凭据（目录占位）
@@ -17,6 +18,7 @@
 
 pub mod compactions;
 pub mod lock;
+pub mod mcp;
 pub mod model_io;
 pub mod oauth;
 pub mod permissions;

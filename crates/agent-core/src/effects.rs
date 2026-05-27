@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use protocol::RiskLevel;
 use serde_json::Value;
+use tracing::info;
 
 use crate::tools::{safe_commands, shell_parse};
 
@@ -179,6 +180,17 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
 
         "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
 
+        name if name.starts_with("Mcp__") => {
+            let server = input
+                .get("_server_transport")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match server {
+                "streamable_http" | "sse" => Effects::network(None),
+                _ => Effects::mutating(Vec::new()),
+            }
+        }
+
         _ => Effects::mutating(Vec::new()),
     }
 }
@@ -271,6 +283,48 @@ fn analyze_shell(input: &Value) -> Effects {
 
     if first_fingerprint.is_none() {
         first_fingerprint = Some(raw.to_string());
+    }
+
+    // —— shell 解析日志 ——
+    {
+        let seg_list: Vec<String> = segments
+            .iter()
+            .map(|s| {
+                if s.write_targets.is_empty() {
+                    s.fingerprint.clone()
+                } else {
+                    format!("{}[w:{}]", s.fingerprint, s.write_targets.join(","))
+                }
+            })
+            .collect();
+        let dangerous_list: Vec<&str> = dangerous_kinds.iter().map(|s| s.as_str()).collect();
+        if classify_readonly {
+            let safe_rules: Vec<String> = if let Ok(p) = &parsed {
+                p.commands
+                    .iter()
+                    .filter(|c| safe_commands::is_safe(c))
+                    .map(|c| c.fingerprint())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            info!(
+                segments = seg_list.join(" | "),
+                safe_rules = safe_rules.join(", "),
+                "shell_parse: ReadOnly (all commands in safe list)"
+            );
+        } else if dangerous_kinds.is_empty() {
+            info!(
+                segments = seg_list.join(" | "),
+                "shell_parse: Destructive (not in safe list or has write targets)"
+            );
+        } else {
+            info!(
+                segments = seg_list.join(" | "),
+                dangerous_kinds = ?dangerous_list,
+                "shell_parse: Destructive + dangerous patterns"
+            );
+        }
     }
 
     if classify_readonly {

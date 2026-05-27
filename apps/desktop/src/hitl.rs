@@ -13,16 +13,32 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agent_core::tools::hitl::HitlGate;
+use common::runtime::CancelFlag;
 
 #[derive(Default)]
 pub struct HitlState {
     pending: Mutex<HashMap<String, Arc<HitlGate>>>,
+    runs: Mutex<HashMap<String, (CancelFlag, Arc<HitlGate>)>>,
 }
 
 impl HitlState {
+    /// 关联一次前端 request_id 到当前 run 的取消标志和 HitlGate。
+    pub fn track_run(&self, request_id: String, cancel: CancelFlag, gate: Arc<HitlGate>) {
+        self.runs.lock().unwrap().insert(request_id, (cancel, gate));
+    }
+
     /// 关联 `request_id` 到当前 run 的 HitlGate。
     pub fn track(&self, request_id: String, gate: Arc<HitlGate>) {
         self.pending.lock().unwrap().insert(request_id, gate);
+    }
+
+    pub fn cancel_run(&self, request_id: &str) -> bool {
+        let Some((cancel, gate)) = self.runs.lock().unwrap().get(request_id).cloned() else {
+            return false;
+        };
+        cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        gate.cancel_all_pending();
+        true
     }
 
     pub fn resolve_approval(
@@ -64,6 +80,10 @@ impl HitlState {
             .lock()
             .unwrap()
             .retain(|_id, g| !Arc::ptr_eq(g, gate));
+        self.runs
+            .lock()
+            .unwrap()
+            .retain(|_id, (_cancel, g)| !Arc::ptr_eq(g, gate));
     }
 
     /// 把所有 pending 的审批 / 提问按"取消"resolve；用于 desktop 关窗等场景，
@@ -71,14 +91,24 @@ impl HitlState {
     /// 返回被取消的 gate 唯一数量（去重后）。
     pub fn cancel_all_pending(&self) -> usize {
         let gates: Vec<Arc<HitlGate>> = {
-            let mut pending = self.pending.lock().unwrap();
             let mut seen: Vec<Arc<HitlGate>> = Vec::new();
+            let mut pending = self.pending.lock().unwrap();
             for gate in pending.values() {
                 if !seen.iter().any(|g| Arc::ptr_eq(g, gate)) {
                     seen.push(gate.clone());
                 }
             }
             pending.clear();
+            drop(pending);
+
+            let mut runs = self.runs.lock().unwrap();
+            for (cancel, gate) in runs.values() {
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                if !seen.iter().any(|g| Arc::ptr_eq(g, gate)) {
+                    seen.push(gate.clone());
+                }
+            }
+            runs.clear();
             seen
         };
         let count = gates.len();

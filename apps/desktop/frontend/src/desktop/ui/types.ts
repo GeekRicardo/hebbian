@@ -374,6 +374,8 @@ export interface SkillCollection {
 export interface AppSettings {
   general: {
     launch_at_login: boolean;
+    show_grep_search_path: boolean;
+    log_enabled: boolean;
   };
   conversation: {
     workdir?: string | null;
@@ -385,6 +387,39 @@ export interface AppSettings {
   agents: {
     default_prompt_id?: string | null;
   };
+}
+
+export type McpTransport = "stdio" | "streamable_http" | "sse";
+
+export interface McpServerConfig {
+  name?: string;
+  transport?: McpTransport | null;
+  command?: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url?: string | null;
+  headers: Record<string, string>;
+  disabled: boolean;
+}
+
+export interface McpConfig {
+  mcp_servers: Record<string, McpServerConfig>;
+}
+
+export interface McpToolInfo {
+  server_name: string;
+  name: string;
+  runtime_name: string;
+  description: string;
+  input_schema: unknown;
+}
+
+export interface McpToolReport {
+  server_name: string;
+  transport: McpTransport;
+  disabled: boolean;
+  tools: McpToolInfo[];
+  error?: string | null;
 }
 
 export interface SessionMeta {
@@ -702,6 +737,18 @@ export interface ToolInfo {
   /** 对应 lucide-react 图标名称（kebab-case） */
   icon: string;
 }
+
+/** 实时日志行（与后端 observability::LogLine 字段对齐）。 */
+export interface LogLine {
+  level: "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE";
+  target: string;
+  message: string;
+  /** "HH:MM:SS.mmm" */
+  ts: string;
+}
+
+/** @deprecated 用 LogLine 替代 */
+export type LogEntry = LogLine;
 
 /** 架构 §4.12.9：BackgroundTaskPanel 轮询拉到的后台任务条目。 */
 export interface BackgroundTaskInfo {

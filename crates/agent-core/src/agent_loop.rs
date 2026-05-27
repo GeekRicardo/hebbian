@@ -13,7 +13,7 @@ use crate::{
     },
     definition::CompactionPolicy,
     dispatch::ToolDispatcher,
-    hooks::{HookManager, HookPoint},
+    hooks::{HookManager, HookOutcome, HookPoint},
     model_io_dump::{self, DumpEntry, ModelIoDump},
     run_state::RunState,
     system_prompt::compose_system_prompt,
@@ -34,6 +34,10 @@ use model_gateway::{
 use protocol::ResumeCause;
 
 const MAX_TOOL_ITERATIONS: u32 = 100;
+
+/// Stop hook 在一个 Run 内最多注入多少次 reminder（架构 §4.8.3）。超过即放弃注入正常出 turn。
+/// 防 cargo check 永远修不好把 loop 跑爆。
+const MAX_STOP_INJECTIONS: u32 = 3;
 
 /// Run 从挂起态恢复时携带的初始状态（架构 §4.12.6）。Harness 在 spawn_run 时
 /// 把它放进 [`LoopParams`]——agent_loop 入口据此恢复计数器，并 emit
@@ -244,20 +248,26 @@ pub async fn run_loop(
 
     let run_start = Instant::now();
     let mut output_attachments = Vec::new();
+    // Stop hook 已经在本 Run 注入了几次（架构 §4.8.3 防死循环），上限
+    // `MAX_STOP_INJECTIONS` 后即使脚本继续 inject 也忽略，turn 正常出。
+    let mut stop_hook_injections: u32 = 0;
 
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
             debug!("run cancelled");
             hitl.cancel_all_pending();
-            // Stop hook（架构 §4.8.1）：fire-and-forget，把用户取消事件转给外部 hook。
+            // 架构 §4.8.1 修订：cancel 走 Notification(level="cancel")，
+            // 不再占用 Stop 点位（Stop 现表示"turn 自然结束 + 后置 verify"）。
+            // fire-and-forget：通知外部 hook 但不等结果。
             if !hooks.is_empty() {
                 let sid = session_id.clone().unwrap_or_default();
-                let hooks_for_stop = hooks.clone();
+                let hooks_for_cancel = hooks.clone();
                 tokio::spawn(async move {
-                    let _ = hooks_for_stop
-                        .trigger(&HookPoint::Stop {
+                    let _ = hooks_for_cancel
+                        .trigger(&HookPoint::Notification {
                             session_id: sid,
-                            reason: "user_cancelled".to_string(),
+                            level: "cancel".to_string(),
+                            message: "user_cancelled".to_string(),
                         })
                         .await;
                 });
@@ -364,6 +374,7 @@ pub async fn run_loop(
             BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
         all_filter.extend(enabled_tools.iter().cloned());
         tool_defs.extend(registry.definitions(&all_filter));
+        tool_defs.extend(registry.mcp_definitions());
         if !enabled_tools.is_empty() {
             tool_defs.extend(hosted_tool_definitions(enabled_tools));
         }
@@ -433,14 +444,12 @@ pub async fn run_loop(
                             ModelStreamEvent::ReasoningDelta { text } => {
                                 EventPayload::Reasoning { text }
                             }
-                            ModelStreamEvent::ToolCallDelta(delta) => {
-                                EventPayload::ToolCallDelta {
-                                    index: stream_tool_call_offset + delta.index,
-                                    id: delta.id,
-                                    name: delta.name,
-                                    arguments_delta: delta.arguments_delta,
-                                }
-                            }
+                            ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
+                                index: stream_tool_call_offset + delta.index,
+                                id: delta.id,
+                                name: delta.name,
+                                arguments_delta: delta.arguments_delta,
+                            },
                         };
                         on_event_for_stream(state_for_stream.event(payload));
                     },
@@ -523,8 +532,44 @@ pub async fn run_loop(
                     transcript,
                 ) > 0
                 {
+                    // 用户在本 turn 内插了新消息——turn 实质未"自然结束"，
+                    // 不跑 Stop hook，直接续跑（与原逻辑一致）。
                     output_attachments = all_attachments;
                     continue;
+                }
+
+                // 架构 §4.8.3：turn 自然结束 → 跑 Stop hook 做后置 verify。
+                // 拿到 InjectFollowup 时 push 一条 `<hook-feedback>` user message，
+                // 不退出 loop，进入下一轮让模型修复。
+                // 上限 MAX_STOP_INJECTIONS 防 cargo check 永远修不好把 loop 跑爆。
+                if !hooks.is_empty() && stop_hook_injections < MAX_STOP_INJECTIONS {
+                    let sid = session_id.clone().unwrap_or_default();
+                    let wd = workspace.workdir().to_string_lossy().into_owned();
+                    let outcome = hooks
+                        .trigger(&HookPoint::Stop {
+                            session_id: sid,
+                            reason: "end_turn".to_string(),
+                            workdir: Some(wd),
+                        })
+                        .await;
+                    if let HookOutcome::InjectFollowup(reminder) = outcome {
+                        let trimmed = reminder.trim();
+                        if !trimmed.is_empty() {
+                            stop_hook_injections += 1;
+                            info!(
+                                attempt = stop_hook_injections,
+                                max = MAX_STOP_INJECTIONS,
+                                reminder_len = trimmed.len(),
+                                "Stop hook injected follow-up; resuming turn",
+                            );
+                            let wrapped = format!(
+                                "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<hook-feedback source=\"Stop\">\n{trimmed}\n</hook-feedback>",
+                            );
+                            transcript.push_user(wrapped, Vec::new());
+                            output_attachments = all_attachments;
+                            continue;
+                        }
+                    }
                 }
                 break Ok(AssistantOutput {
                     text,

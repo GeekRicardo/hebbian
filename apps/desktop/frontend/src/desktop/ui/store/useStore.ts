@@ -5,6 +5,7 @@ import type {
   ContextUsage,
   EditEntry,
   EngineEvent,
+  LogEntry,
   Message,
   MessageAttachment,
   MessageMeta,
@@ -94,6 +95,16 @@ function persistGlobalRules(rules: string[] | null) {
   } else {
     localStorage.setItem(GLOBAL_RULES_KEY, JSON.stringify(rules));
   }
+}
+
+function normalizeAppSettings(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    general: {
+      ...settings.general,
+      show_grep_search_path: settings.general.show_grep_search_path ?? true,
+    },
+  };
 }
 
 function persistLastSessionConfig(config: {
@@ -330,6 +341,7 @@ const EMPTY_MIRROR = {
   streamingText: "",
   streamingParts: [] as StreamingAssistantPart[],
   liveTimeline: [] as LiveTimelineItem[],
+  assistantInsertPos: 0,
   activeRequestId: null as string | null,
   pendingApproval: null as PendingApproval | null,
   pendingApprovalQueue: [] as PendingApproval[],
@@ -350,6 +362,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     streamingText: slot.streamingText,
     streamingParts: slot.streamingParts,
     liveTimeline: slot.liveTimeline,
+    assistantInsertPos: slot.assistantInsertPos,
     activeRequestId: slot.requestId,
     pendingApproval: slot.pendingApproval,
     pendingApprovalQueue: slot.pendingApprovalQueue,
@@ -732,6 +745,7 @@ interface AppState {
    * 渲染成正确的因果次序。镜像自 currentSession 的 slot。
    */
   liveTimeline: LiveTimelineItem[];
+  assistantInsertPos: number;
   activeRequestId: string | null;
   /** 当前对话 AutoMode 判官累计标记（镜像自 currentSession 的 slot）。 */
   autoJudgedNotes: AutoJudgedNote[];
@@ -983,6 +997,14 @@ interface AppState {
   debugEnabled: boolean;
   setDebugEnabled: (v: boolean) => void;
 
+  /** 工具调度日志开关 */
+  logEnabled: boolean;
+  setLogEnabled: (v: boolean) => void;
+  /** 日志条目缓冲区（上限 5000） */
+  logEntries: LogEntry[];
+  appendLogEntry: (line: LogEntry) => void;
+  clearLogEntries: () => void;
+
   runSearch: (
     query: string,
     caseSensitive?: boolean,
@@ -1001,6 +1023,8 @@ function applyTheme(t: "light" | "dark") {
   else document.documentElement.classList.remove("dark");
 }
 
+const LOG_CAPACITY = 5000;
+
 export const useStore = create<AppState>((set, get) => ({
   providersFile: { providers: [], default_provider_id: null },
   promptsFile: { prompts: [], default_prompt_id: null },
@@ -1017,6 +1041,7 @@ export const useStore = create<AppState>((set, get) => ({
   streamingText: "",
   streamingParts: [],
   liveTimeline: [],
+  assistantInsertPos: 0,
   activeRequestId: null,
   autoJudgedNotes: [],
   currentRunMode: null,
@@ -1036,6 +1061,8 @@ export const useStore = create<AppState>((set, get) => ({
   searching: false,
   theme: (localStorage.getItem("theme") as any) ?? "light",
   debugEnabled: localStorage.getItem("hebbian.debugEnabled") === "1",
+  logEnabled: localStorage.getItem("hebbian.logEnabled") === "1",
+  logEntries: [],
   availableTools: [],
   // 默认只开启搜索/抓取；生图等额外工具需要用户手动开启
   enabledTools: new Set<string>(
@@ -2111,12 +2138,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
   appSettings: null,
   async refreshAppSettings() {
-    const s = await api.getSettings();
-    set({ appSettings: s });
+    const s = normalizeAppSettings(await api.getSettings());
+    set({ appSettings: s, logEnabled: s.general.log_enabled });
   },
   async saveAppSettings(settings: AppSettings) {
-    await api.saveSettings(settings);
-    set({ appSettings: settings });
+    const normalized = normalizeAppSettings(settings);
+    await api.saveSettings(normalized);
+    set({ appSettings: normalized, logEnabled: normalized.general.log_enabled });
   },
   async updateCurrentSessionSettings(patch) {
     const cur = get().currentSession;
@@ -2226,6 +2254,21 @@ export const useStore = create<AppState>((set, get) => ({
   setDebugEnabled(v) {
     localStorage.setItem("hebbian.debugEnabled", v ? "1" : "0");
     set({ debugEnabled: v });
+  },
+
+  setLogEnabled(v) {
+    localStorage.setItem("hebbian.logEnabled", v ? "1" : "0");
+    set({ logEnabled: v });
+  },
+  appendLogEntry(line) {
+    set((state) => {
+      const next = [...state.logEntries, line];
+      if (next.length > LOG_CAPACITY) next.splice(0, next.length - LOG_CAPACITY);
+      return { logEntries: next };
+    });
+  },
+  clearLogEntries() {
+    set({ logEntries: [] });
   },
 
   toggleTheme() {

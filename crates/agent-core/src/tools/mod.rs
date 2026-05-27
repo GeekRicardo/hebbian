@@ -6,6 +6,8 @@ pub mod exit_plan_mode;
 pub mod grep;
 pub mod hitl;
 pub mod kill_shell;
+pub mod mcp;
+pub use mcp::McpToolReport;
 pub mod read;
 pub mod registry;
 pub mod safe_commands;
@@ -157,6 +159,31 @@ pub fn default_tools(
     ]
 }
 
+pub async fn default_tools_with_mcp(
+    workspace: Arc<Workspace>,
+    skill_dirs: &[(skill::SkillSource, PathBuf)],
+    bg_log_dir: Option<PathBuf>,
+    phase: crate::wakeup::PhaseChannel,
+    shells: background::BackgroundShells,
+    data_dir: Option<PathBuf>,
+    session_id: Option<String>,
+    read_state_tracker: Option<Arc<ReadStateTracker>>,
+    mcp_config: crate::mcp::config::McpConfig,
+) -> Vec<Box<dyn Tool>> {
+    let mut tools = default_tools(
+        workspace,
+        skill_dirs,
+        bg_log_dir,
+        phase,
+        shells,
+        data_dir,
+        session_id,
+        read_state_tracker,
+    );
+    tools.extend(mcp::discover_tools(&mcp_config).await);
+    tools
+}
+
 /// 内置工具名（每次 ModelRequest 自动注入；不在 UI 工具菜单中暴露）。
 /// 顺序与 `default_tools` 中的注册顺序对齐。
 pub const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -260,7 +287,7 @@ pub struct ToolInfo {
 /// 暴露给 UI 的工具菜单。**内置工具**（ask / Bash / Read / Edit / Grep / Skill）
 /// 默认开启且不可见，**不出现**在这个列表中。
 pub fn tool_manifest() -> Vec<ToolInfo> {
-    vec![
+    let tools = vec![
         ToolInfo {
             name: "WebSearch".into(),
             description: "DuckDuckGo 网络搜索".into(),
@@ -276,5 +303,12 @@ pub fn tool_manifest() -> Vec<ToolInfo> {
             description: "生成图片".into(),
             icon: "image".into(),
         },
-    ]
+    ];
+    tools
+}
+
+pub fn tool_manifest_with_mcp(config: &crate::mcp::config::McpConfig) -> Vec<ToolInfo> {
+    let mut tools = tool_manifest();
+    tools.extend(mcp::manifest(config));
+    tools
 }

@@ -5,6 +5,10 @@ import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
+import {
+  filterMessagesDuplicatedInLiveTimeline,
+  runningTimelineRenderItems,
+} from "./liveTimelineOrder";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { runModeLabel } from "./RunModeChip";
 import { UserQuestionPopup } from "./UserQuestionPopup";
@@ -25,6 +29,7 @@ export function ChatView() {
     streamingText,
     streamingParts,
     liveTimeline,
+    assistantInsertPos,
     autoJudgedNotes,
     currentRunMode,
     sendUserMessage,
@@ -40,6 +45,7 @@ export function ChatView() {
     setPendingPromptId,
     updateCurrentConfig,
     debugEnabled,
+    appSettings,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -80,15 +86,33 @@ export function ChatView() {
   const [findRegex, setFindRegex] = useState(false);
   const [findCase, setFindCase] = useState(false);
 
+  const isStreaming = !!streamingMessageId;
+  const rawMessages = currentSession?.messages ?? [];
+  const liveTimelineMessages = useMemo(
+    () => liveTimeline.flatMap((item) => (item.kind === "user_injected" ? [item.message] : [])),
+    [liveTimeline]
+  );
+  const messages = useMemo(
+    () =>
+      isStreaming
+        ? filterMessagesDuplicatedInLiveTimeline(rawMessages, liveTimelineMessages)
+        : rawMessages,
+    [isStreaming, rawMessages, liveTimelineMessages]
+  );
+  const userMessageHistory = useMemo(
+    () => rawMessages.filter((m) => m.role === "user").map((m) => m.content),
+    [rawMessages]
+  );
+
   // 计算每条消息的匹配区间（只对非 marker 生效）
   const matchesPerMessage = useMemo(() => {
     if (!currentSession || !findOpen || !findQuery) return [];
-    return currentSession.messages.map((m) =>
+    return messages.map((m) =>
       m.role === "marker"
         ? ([] as Array<[number, number]>)
         : findMatches(m.content, findQuery, findRegex, findCase)
     );
-  }, [currentSession, findOpen, findQuery, findRegex, findCase]);
+  }, [currentSession, messages, findOpen, findQuery, findRegex, findCase]);
 
   const totalMatches = useMemo(
     () => matchesPerMessage.reduce((s, a) => s + a.length, 0),
@@ -173,14 +197,6 @@ export function ChatView() {
   // 都用 nullable handle，return 留到 hooks 全部声明之后再判。
 
   // 简单派生：useCallback 的依赖会用到，必须在 useCallback 之前声明
-  const isStreaming = !!streamingMessageId;
-
-  const messages = currentSession?.messages ?? [];
-  const userMessageHistory = useMemo(
-    () => messages.filter((m) => m.role === "user").map((m) => m.content),
-    [messages]
-  );
-
   /**
    * 一次性算出 boundary 相关派生：indices / lastIdx / 每条非 boundary 归属哪个 boundary id /
    * 每个 boundary 折叠多少条原始消息。这些都只依赖 messages 数组本身（同一 ref 时不重算）。
@@ -541,12 +557,36 @@ export function ChatView() {
               起新的 streaming bubble 接在末尾——这样插队消息总落在它真正回应的
               Turn 之后、下个 Turn 之前。 */}
           {isStreaming &&
-            liveTimeline.map((item) =>
-              item.kind === "assistant_frozen" ? (
+            runningTimelineRenderItems(
+              liveTimeline,
+              assistantInsertPos,
+              streamingText.length > 0 || streamingParts.length > 0
+            ).map((renderItem) => {
+              if (renderItem.kind === "streaming") {
+                return (
+                  <MessageBubble
+                    key="streaming"
+                    streaming
+                    prompt={activePrompt}
+                    userAvatar={userAvatar}
+                    appSettings={appSettings ?? undefined}
+                    streamingParts={streamingParts}
+                    message={{
+                      id: "streaming",
+                      role: "assistant",
+                      content: streamingText,
+                      created_at: Date.now(),
+                    }}
+                  />
+                );
+              }
+              const item = renderItem.item;
+              return item.kind === "assistant_frozen" ? (
                 <MessageBubble
                   key={item.id}
                   prompt={activePrompt}
                   userAvatar={userAvatar}
+                  appSettings={appSettings ?? undefined}
                   streamingParts={item.parts}
                   message={{
                     id: item.id,
@@ -561,23 +601,10 @@ export function ChatView() {
                   message={item.message}
                   prompt={activePrompt}
                   userAvatar={userAvatar}
+                  appSettings={appSettings ?? undefined}
                 />
-              )
-            )}
-          {isStreaming && (streamingText.length > 0 || streamingParts.length > 0) && (
-            <MessageBubble
-              streaming
-              prompt={activePrompt}
-              userAvatar={userAvatar}
-              streamingParts={streamingParts}
-              message={{
-                id: "streaming",
-                role: "assistant",
-                content: streamingText,
-                created_at: Date.now(),
-              }}
-            />
-          )}
+              );
+            })}
           {/* RunMode 状态标签（架构 §10.2）：仅在 run_mode_changed 事件来过后显示，
               ChatView 内悬浮一行——目前 UI 没有正式状态栏，先以轻量提示出现。 */}
           {isStreaming && currentRunMode ? (

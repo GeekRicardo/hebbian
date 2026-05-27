@@ -47,6 +47,7 @@ import type {
   Session,
   StreamingAssistantPart,
   ToolCallStatus,
+  AppSettings,
 } from "@/desktop/ui/types";
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
@@ -86,6 +87,7 @@ interface Props {
   message: Message;
   streaming?: boolean;
   prompt?: Prompt;
+  appSettings?: AppSettings;
   userAvatar?: string;
   onFork?: (id: string) => void;
   /**
@@ -1028,7 +1030,15 @@ function RenderedMarkdown({ text }: { text: string }) {
   );
 }
 
-function SearchResults({ call, web }: { call: ToolCallItem; web?: boolean }) {
+function SearchResults({
+  call,
+  web,
+  showPath = true,
+}: {
+  call: ToolCallItem;
+  web?: boolean;
+  showPath?: boolean;
+}) {
   const expanded = useContext(ToolDetailExpandedContext);
   const rows = (call.result || "")
     .split(/\r?\n/)
@@ -1037,12 +1047,22 @@ function SearchResults({ call, web }: { call: ToolCallItem; web?: boolean }) {
     .slice(0, expanded ? 500 : 20);
   const args = callArgs(call);
   const query = argString(args, "query") || argString(args, "pattern");
+  const path = !web && showPath ? argString(args, "path") : "";
   const fallback = rows.length ? rows : ["等待返回…"];
   return (
-    <div className={cn("space-y-1.5 overflow-auto", !expanded && "max-h-48")}>
-      {query && (
-        <div className="mb-1 text-[13px] text-muted-foreground">
-          query: <span className="font-medium text-foreground">{query}</span>
+    <div className={cn("overflow-auto", !expanded && "max-h-48")}>
+      {(query || path) && (
+        <div className="border-b border-border/40 px-2 py-1 text-[13px] text-muted-foreground">
+          {query && (
+            <div>
+              query: <span className="font-medium text-foreground">{query}</span>
+            </div>
+          )}
+          {path && (
+            <div>
+              path: <span className="font-medium text-foreground">{path}</span>
+            </div>
+          )}
         </div>
       )}
       {fallback.map((line, i) => {
@@ -1056,7 +1076,7 @@ function SearchResults({ call, web }: { call: ToolCallItem; web?: boolean }) {
           );
         };
         return (
-          <div key={i} className="rounded-md border border-border bg-background px-2 py-1.5 text-[13px]">
+          <div key={i} className="border-b border-border/40 bg-background px-2 py-1.5 text-[13px] last:border-b-0">
             {web && maybeUrl ? (
               <a
                 href={maybeUrl}
@@ -1277,7 +1297,13 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
   );
 }
 
-function ToolCallDetail({ call }: { call: ToolCallItem }) {
+function ToolCallDetail({
+  call,
+  appSettings,
+}: {
+  call: ToolCallItem;
+  appSettings?: AppSettings;
+}) {
   const name = call.name || "工具调用";
   const result = call.result || "等待返回…";
   const title = `${name} · ${callSummary(call)}`;
@@ -1333,12 +1359,14 @@ function ToolCallDetail({ call }: { call: ToolCallItem }) {
     return <EditDiffDetail call={call} />;
   }
   if (name === "Grep" || name === "Glob") {
+    const showSearchPath =
+      name === "Grep" ? appSettings?.general.show_grep_search_path ?? true : true;
     return (
       <div className="relative">
         <ExpandButton title={title}>
-          <SearchResults call={call} />
+          <SearchResults call={call} showPath={showSearchPath} />
         </ExpandButton>
-        <SearchResults call={call} />
+        <SearchResults call={call} showPath={showSearchPath} />
       </div>
     );
   }
@@ -1418,10 +1446,12 @@ function ToolCallTimeline({
   calls,
   expandedKeys,
   onToggle,
+  appSettings,
 }: {
   calls: ToolCallItem[];
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
+  appSettings?: AppSettings;
 }) {
   // Read 工具显示路径用：在 workdir 内显示相对路径、在 allowed_paths 之一内显示
   // `<basename>/...`、否则显示完整绝对路径。沿用当前 session 的实际 workdir / allowed_paths。
@@ -1506,7 +1536,7 @@ function ToolCallTimeline({
               className={cn(
                 // border 始终占 1px，避免 active 切换时几何偏移导致 button 行抖动；
                 // 折叠态 border-transparent 看不到，展开态切到 border-border 显形
-                "overflow-hidden rounded-md border border-transparent",
+                "overflow-hidden border border-transparent",
                 active && "border-border bg-background"
               )}
             >
@@ -1573,7 +1603,7 @@ function ToolCallTimeline({
               )}
               {active && (
                 <>
-                  <ToolCallDetail call={call} />
+                  <ToolCallDetail call={call} appSettings={appSettings} />
                   {call.artifactPath && (
                     <div className="border-t border-border p-2">
                       <ArtifactBadge path={call.artifactPath} />
@@ -1661,11 +1691,13 @@ function AssistantParts({
   streaming,
   expandedKeys,
   onToggle,
+  appSettings,
 }: {
   parts: AssistantRenderPart[];
   streaming?: boolean;
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
+  appSettings?: AppSettings;
 }) {
   if (parts.length === 0) {
     return streaming ? <span>▍</span> : null;
@@ -1701,6 +1733,7 @@ function AssistantParts({
             calls={part.calls}
             expandedKeys={expandedKeys}
             onToggle={onToggle}
+            appSettings={appSettings}
           />
         );
       })}
@@ -1724,6 +1757,7 @@ export const MessageBubble = memo(function MessageBubble({
   historyExpanded,
   onToggleHistory,
   archivedCount,
+  appSettings,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
@@ -2032,6 +2066,7 @@ export const MessageBubble = memo(function MessageBubble({
             return next;
           })
         }
+        appSettings={appSettings}
       />
     );
   }

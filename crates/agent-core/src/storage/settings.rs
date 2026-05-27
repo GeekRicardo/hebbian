@@ -23,11 +23,32 @@ pub struct Settings {
     pub agents: AgentDefaults,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralSettings {
     /// 开机启动（macOS / Windows）
     #[serde(default)]
     pub launch_at_login: bool,
+    /// Grep 工具结果中显示搜索位置。
+    #[serde(default = "default_show_grep_search_path")]
+    pub show_grep_search_path: bool,
+    /// 工具调度日志落盘开关。开启后每条 tool_start/done/permission 事件写入
+    /// `~/.hebbian/logs/dispatch-YYYY-MM-DD.log`，按天 rotate，保留 30 天。
+    #[serde(default)]
+    pub log_enabled: bool,
+}
+
+impl Default for GeneralSettings {
+    fn default() -> Self {
+        Self {
+            launch_at_login: false,
+            show_grep_search_path: default_show_grep_search_path(),
+            log_enabled: false,
+        }
+    }
+}
+
+fn default_show_grep_search_path() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,7 +259,10 @@ mod tests {
         )
         .unwrap();
         let s = load(&dir);
-        assert_eq!(s.conversation.workdir.as_deref(), Some(home.join("work").as_path()));
+        assert_eq!(
+            s.conversation.workdir.as_deref(),
+            Some(home.join("work").as_path())
+        );
         assert_eq!(
             s.conversation.allowed_paths,
             vec![home.join("code"), PathBuf::from("/abs/path")]

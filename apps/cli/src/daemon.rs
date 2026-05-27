@@ -20,8 +20,7 @@ use agent_core::{
     run_mode::RunMode,
     storage::{
         sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role, TokenStats},
-        sessions_dir,
-        settings as settings_store,
+        sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
     workspace::Workspace,
@@ -112,10 +111,10 @@ impl DaemonState {
 
     fn inject(&self, text: String) -> bool {
         if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
-            inputs
-                .lock()
-                .unwrap()
-                .push(PendingUserInput { content: text, attachments: Vec::new() });
+            inputs.lock().unwrap().push(PendingUserInput {
+                content: text,
+                attachments: Vec::new(),
+            });
             true
         } else {
             false
@@ -125,6 +124,12 @@ impl DaemonState {
     fn stop(&self) {
         if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
             flag.store(true, Ordering::SeqCst);
+        }
+        for (_id, tx) in self.pending_approvals.lock().unwrap().drain() {
+            let _ = tx.send(ApprovalDecision::Deny);
+        }
+        for (_id, tx) in self.pending_questions.lock().unwrap().drain() {
+            let _ = tx.send(UserAnswer::Cancelled);
         }
     }
 }
@@ -153,19 +158,33 @@ impl TurnData {
     fn handle_event(&mut self, payload: &EventPayload) {
         match payload {
             EventPayload::Reasoning { text } => {
-                self.parts.push(MessagePart::Reasoning { text: text.clone() });
+                self.parts
+                    .push(MessagePart::Reasoning { text: text.clone() });
             }
             EventPayload::TextDone { full_text } => {
                 self.full_text = full_text.clone();
                 // 把最终文字同步进 parts
-                self.parts.retain(|p| !matches!(p, MessagePart::Text { .. }));
-                self.parts.push(MessagePart::Text { text: full_text.clone() });
+                self.parts
+                    .retain(|p| !matches!(p, MessagePart::Text { .. }));
+                self.parts.push(MessagePart::Text {
+                    text: full_text.clone(),
+                });
             }
-            EventPayload::ToolCallStarted { call_id, name, input, .. } => {
+            EventPayload::ToolCallStarted {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
                 self.pending_tools
                     .insert(call_id.clone(), (name.clone(), input.clone()));
             }
-            EventPayload::ToolCallFinished { call_id, result, duration_ms, .. } => {
+            EventPayload::ToolCallFinished {
+                call_id,
+                result,
+                duration_ms,
+                ..
+            } => {
                 if let Some((name, input)) = self.pending_tools.remove(call_id) {
                     let tc = MessageToolCall {
                         id: call_id.clone(),
@@ -213,7 +232,10 @@ struct DaemonObserver {
 
 impl DaemonObserver {
     fn new(state: Arc<DaemonState>) -> Self {
-        Self { state, turn: TurnData::new() }
+        Self {
+            state,
+            turn: TurnData::new(),
+        }
     }
 }
 
@@ -274,42 +296,53 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
             cache_read_tokens: *total_cache_read_tokens,
             duration_ms: *duration_ms,
         }),
-        EventPayload::RunFailed { error } => {
-            Some(DaemonEvent::RunFailed { error: error.message.clone() })
-        }
+        EventPayload::RunFailed { error } => Some(DaemonEvent::RunFailed {
+            error: error.message.clone(),
+        }),
         EventPayload::RunCancelled => Some(DaemonEvent::RunCancelled),
-        EventPayload::RunSuspended { reason, .. } => {
-            Some(DaemonEvent::RunSuspended { reason: format!("{reason:?}") })
-        }
-        EventPayload::RunResumed { cause } => {
-            Some(DaemonEvent::RunResumed { cause: format!("{cause:?}") })
-        }
+        EventPayload::RunSuspended { reason, .. } => Some(DaemonEvent::RunSuspended {
+            reason: format!("{reason:?}"),
+        }),
+        EventPayload::RunResumed { cause } => Some(DaemonEvent::RunResumed {
+            cause: format!("{cause:?}"),
+        }),
         EventPayload::TextDelta { text } => Some(DaemonEvent::TextDelta { text: text.clone() }),
-        EventPayload::TextDone { full_text } => {
-            Some(DaemonEvent::TextDone { full_text: full_text.clone() })
-        }
+        EventPayload::TextDone { full_text } => Some(DaemonEvent::TextDone {
+            full_text: full_text.clone(),
+        }),
         EventPayload::Reasoning { text } => Some(DaemonEvent::Reasoning { text: text.clone() }),
-        EventPayload::ToolCallStarted { call_id, name, input, .. } => {
-            Some(DaemonEvent::ToolStart {
-                id: call_id.clone(),
-                name: name.clone(),
-                input: input.clone(),
-            })
-        }
+        EventPayload::ToolCallStarted {
+            call_id,
+            name,
+            input,
+            ..
+        } => Some(DaemonEvent::ToolStart {
+            id: call_id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        }),
         EventPayload::ToolCallOutputDelta { call_id, chunk, .. } => {
             Some(DaemonEvent::ToolOutputDelta {
                 id: call_id.clone(),
                 chunk: chunk.clone(),
             })
         }
-        EventPayload::ToolCallFinished { call_id, result, duration_ms, .. } => {
-            Some(DaemonEvent::ToolDone {
-                id: call_id.clone(),
-                result: result.chars().take(500).collect(),
-                duration_ms: *duration_ms,
-            })
-        }
-        EventPayload::PermissionRequested { request_id, kind, summary, risk } => {
+        EventPayload::ToolCallFinished {
+            call_id,
+            result,
+            duration_ms,
+            ..
+        } => Some(DaemonEvent::ToolDone {
+            id: call_id.clone(),
+            result: result.chars().take(500).collect(),
+            duration_ms: *duration_ms,
+        }),
+        EventPayload::PermissionRequested {
+            request_id,
+            kind,
+            summary,
+            risk,
+        } => {
             let (tool_name, kind_str, fingerprint, command_segments, input, paths) = match kind {
                 PermissionKind::ToolCall {
                     tool_name,
@@ -361,32 +394,39 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
                 paths,
             })
         }
-        EventPayload::PermissionResolved { request_id, decision } => {
-            Some(DaemonEvent::PermissionResolved {
-                request_id: request_id.as_str().to_string(),
-                decision: format!("{decision:?}"),
-            })
-        }
-        EventPayload::UserQuestionRequested { request_id, question, options, multi } => {
-            Some(DaemonEvent::QuestionRequested {
-                request_id: request_id.as_str().to_string(),
-                question: question.clone(),
-                options: options
-                    .iter()
-                    .map(|o| QuestionOptionDto {
-                        label: o.label.clone(),
-                        description: o.description.clone(),
-                    })
-                    .collect(),
-                multi: *multi,
-            })
-        }
+        EventPayload::PermissionResolved {
+            request_id,
+            decision,
+        } => Some(DaemonEvent::PermissionResolved {
+            request_id: request_id.as_str().to_string(),
+            decision: format!("{decision:?}"),
+        }),
+        EventPayload::UserQuestionRequested {
+            request_id,
+            question,
+            options,
+            multi,
+        } => Some(DaemonEvent::QuestionRequested {
+            request_id: request_id.as_str().to_string(),
+            question: question.clone(),
+            options: options
+                .iter()
+                .map(|o| QuestionOptionDto {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect(),
+            multi: *multi,
+        }),
         EventPayload::UserQuestionAnswered { request_id, .. } => {
-            Some(DaemonEvent::QuestionAnswered { request_id: request_id.as_str().to_string() })
+            Some(DaemonEvent::QuestionAnswered {
+                request_id: request_id.as_str().to_string(),
+            })
         }
-        EventPayload::RunModeChanged { from, to } => {
-            Some(DaemonEvent::RunModeChanged { from: from.clone(), to: to.clone() })
-        }
+        EventPayload::RunModeChanged { from, to } => Some(DaemonEvent::RunModeChanged {
+            from: from.clone(),
+            to: to.clone(),
+        }),
         EventPayload::SessionTitleChanged { session_id, title } => {
             Some(DaemonEvent::SessionTitleChanged {
                 session_id: session_id.clone(),
@@ -411,7 +451,11 @@ impl NamedModelClient {
         model: String,
         reasoning: Option<common::ReasoningConfig>,
     ) -> Self {
-        Self { inner, model, reasoning }
+        Self {
+            inner,
+            model,
+            reasoning,
+        }
     }
 
     fn patch(&self, mut req: ModelRequest) -> ModelRequest {
@@ -481,14 +525,16 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
         .find(|p| p.id == state.provider_id)
         .ok_or_else(|| anyhow!("provider {} 不存在，请先在 desktop 配置", state.provider_id))?
         .clone();
-    let provider =
-        model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-            .await
-            .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
     let inner = model_gateway::build_client(provider)
         .map_err(|e| anyhow!("构建 model client 失败: {e}"))?;
-    let client: Arc<dyn ModelClient> =
-        Arc::new(NamedModelClient::new(inner, state.model.clone(), state.reasoning.clone()));
+    let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(
+        inner,
+        state.model.clone(),
+        state.reasoning.clone(),
+    ));
 
     // Workspace
     let settings = settings_store::load(data_dir);
@@ -542,7 +588,7 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
 
     // Harness
     let harness = Arc::new(Harness::new(
-        agent_core::tools::default_tools(
+        agent_core::tools::default_tools_with_mcp(
             workspace.clone(),
             &skill_dirs,
             bg_log_dir,
@@ -551,7 +597,9 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
             Some(data_dir.to_path_buf()),
             Some(session_id.clone()),
             Some(read_state_tracker),
-        ),
+            agent_core::storage::mcp::load(data_dir),
+        )
+        .await,
         HookManager::new(external_hooks),
     ));
 
@@ -653,7 +701,9 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
             }
         }
         TurnOutcome::Cancelled => {
-            state.emit(&DaemonEvent::Error { message: "run 已取消".to_string() });
+            state.emit(&DaemonEvent::Error {
+                message: "run 已取消".to_string(),
+            });
         }
         TurnOutcome::Failed(err) => {
             state.emit(&DaemonEvent::Error { message: err });
@@ -822,7 +872,11 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 
     // ── 解析 provider / model ──
     let providers_file = providers::load(&data_dir)?;
-    let (provider_id, model) = resolve_provider_model(&providers_file, args.provider.as_deref(), args.model.as_deref())?;
+    let (provider_id, model) = resolve_provider_model(
+        &providers_file,
+        args.provider.as_deref(),
+        args.model.as_deref(),
+    )?;
 
     // ── session ──
     let session_id = match args.session_id {
@@ -898,7 +952,9 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     });
 
     // ── 宣告启动 ──
-    state.emit(&DaemonEvent::Started { session_id: session_id.clone() });
+    state.emit(&DaemonEvent::Started {
+        session_id: session_id.clone(),
+    });
 
     // ── 注册 wakeup resume_handler（架构 §4.12.5 修订）──
     // BgFinishHook 检测到 bash_xxx 进入终态 → 投递 BgTaskFinished event。
@@ -908,43 +964,43 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     // jsonl rebuild 自然把这条 user message 纳入 transcript。
     {
         let handler_state = state.clone();
-        agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(
-            move |event| {
-                // 只处理本 daemon 的 session（同 session_id 才落盘到本进程的 jsonl）
-                if event.session_id() != handler_state.session_id {
-                    return;
-                }
-                let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
-                let meta = event.message_meta();
-                let user_msg = sessions::Message {
-                    id: sessions::new_id(),
-                    role: sessions::Role::User,
-                    content: wakeup_xml.clone(),
-                    attachments: Vec::new(),
-                    tool_calls: Vec::new(),
-                    parts: Vec::new(),
-                    created_at: chrono::Utc::now().timestamp_millis(),
-                    meta: Some(meta),
-                };
-                // 1) 即写即落 jsonl（崩溃 / cancel 都不丢）
-                if let Err(e) = sessions::append_message(
-                    &handler_state.data_dir,
-                    &handler_state.session_id,
-                    user_msg,
-                ) {
-                    tracing::warn!(error = %e, "wakeup: append_message failed");
-                    return;
-                }
-                // 2) 推 in-memory 队列：active run 期间 agent_loop 在 ModelStep 之前 drain；
-                //    无 active run 时静默——消息已落盘，下次 input 启 run 时 rebuild 看见。
-                if let Some(slot) = handler_state.pending_inputs.lock().unwrap().as_ref() {
-                    slot.lock().unwrap().push(common::runtime::PendingUserInput {
+        agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(move |event| {
+            // 只处理本 daemon 的 session（同 session_id 才落盘到本进程的 jsonl）
+            if event.session_id() != handler_state.session_id {
+                return;
+            }
+            let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
+            let meta = event.message_meta();
+            let user_msg = sessions::Message {
+                id: sessions::new_id(),
+                role: sessions::Role::User,
+                content: wakeup_xml.clone(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: Some(meta),
+            };
+            // 1) 即写即落 jsonl（崩溃 / cancel 都不丢）
+            if let Err(e) = sessions::append_message(
+                &handler_state.data_dir,
+                &handler_state.session_id,
+                user_msg,
+            ) {
+                tracing::warn!(error = %e, "wakeup: append_message failed");
+                return;
+            }
+            // 2) 推 in-memory 队列：active run 期间 agent_loop 在 ModelStep 之前 drain；
+            //    无 active run 时静默——消息已落盘，下次 input 启 run 时 rebuild 看见。
+            if let Some(slot) = handler_state.pending_inputs.lock().unwrap().as_ref() {
+                slot.lock()
+                    .unwrap()
+                    .push(common::runtime::PendingUserInput {
                         content: wakeup_xml,
                         attachments: Vec::new(),
                     });
-                }
-            },
-        ));
+            }
+        }));
     }
 
     // ── 接收 IPC 连接（独立 task）──
@@ -967,7 +1023,9 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     // ── 主循环：依次处理每条输入 ──
     while let Some(text) = input_rx.recv().await {
         if let Err(e) = run_turn(state.clone(), text).await {
-            state.emit(&DaemonEvent::Error { message: e.to_string() });
+            state.emit(&DaemonEvent::Error {
+                message: e.to_string(),
+            });
         }
     }
 

@@ -26,8 +26,7 @@ use agent_core::{
     run_mode::RunMode,
     storage::{
         sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role, TokenStats},
-        sessions_dir,
-        settings as settings_store,
+        sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
     workspace::Workspace,
@@ -96,10 +95,10 @@ impl SessionRuntime {
 
     pub fn inject(&self, text: String) -> bool {
         if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
-            inputs
-                .lock()
-                .unwrap()
-                .push(PendingUserInput { content: text, attachments: Vec::new() });
+            inputs.lock().unwrap().push(PendingUserInput {
+                content: text,
+                attachments: Vec::new(),
+            });
             true
         } else {
             false
@@ -109,6 +108,12 @@ impl SessionRuntime {
     pub fn stop(&self) {
         if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
             flag.store(true, Ordering::SeqCst);
+        }
+        for (_id, tx) in self.pending_approvals.lock().unwrap().drain() {
+            let _ = tx.send(ApprovalDecision::Deny);
+        }
+        for (_id, tx) in self.pending_questions.lock().unwrap().drain() {
+            let _ = tx.send(UserAnswer::Cancelled);
         }
     }
 
@@ -153,18 +158,32 @@ impl TurnData {
         use protocol::EventPayload::*;
         match payload {
             Reasoning { text } => {
-                self.parts.push(MessagePart::Reasoning { text: text.clone() });
+                self.parts
+                    .push(MessagePart::Reasoning { text: text.clone() });
             }
             TextDone { full_text } => {
                 self.full_text = full_text.clone();
-                self.parts.retain(|p| !matches!(p, MessagePart::Text { .. }));
-                self.parts.push(MessagePart::Text { text: full_text.clone() });
+                self.parts
+                    .retain(|p| !matches!(p, MessagePart::Text { .. }));
+                self.parts.push(MessagePart::Text {
+                    text: full_text.clone(),
+                });
             }
-            ToolCallStarted { call_id, name, input, .. } => {
+            ToolCallStarted {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
                 self.pending_tools
                     .insert(call_id.clone(), (name.clone(), input.clone()));
             }
-            ToolCallFinished { call_id, result, duration_ms, .. } => {
+            ToolCallFinished {
+                call_id,
+                result,
+                duration_ms,
+                ..
+            } => {
                 if let Some((name, input)) = self.pending_tools.remove(call_id) {
                     let tc = MessageToolCall {
                         id: call_id.clone(),
@@ -267,7 +286,11 @@ impl NamedModelClient {
         model: String,
         reasoning: Option<common::ReasoningConfig>,
     ) -> Self {
-        Self { inner, model, reasoning }
+        Self {
+            inner,
+            model,
+            reasoning,
+        }
     }
 
     fn patch(&self, mut req: ModelRequest) -> ModelRequest {
@@ -334,10 +357,9 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         .find(|p| p.id == runtime.provider_id)
         .ok_or_else(|| anyhow!("provider {} 不存在", runtime.provider_id))?
         .clone();
-    let provider =
-        model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-            .await
-            .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
     let inner = model_gateway::build_client(provider)
         .map_err(|e| anyhow!("构建 model client 失败: {e}"))?;
     let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(
@@ -393,7 +415,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let edits_worktree = Arc::new(EditsWorktree::new(data_dir, session_id, &workspace));
 
     let harness = Arc::new(Harness::new(
-        agent_core::tools::default_tools(
+        agent_core::tools::default_tools_with_mcp(
             workspace.clone(),
             &skill_dirs,
             bg_log_dir,
@@ -402,7 +424,9 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             Some(data_dir.to_path_buf()),
             Some(session_id.clone()),
             Some(read_state_tracker),
-        ),
+            agent_core::storage::mcp::load(data_dir),
+        )
+        .await,
         HookManager::new(external_hooks),
     ));
 
@@ -466,7 +490,10 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         Some(consumed_inputs.clone()),
     );
 
-    let mut observer = WebObserver { runtime: runtime.clone(), turn: TurnData::new() };
+    let mut observer = WebObserver {
+        runtime: runtime.clone(),
+        turn: TurnData::new(),
+    };
     let summary = handle.drive(&mut observer).await;
 
     runtime.clear_active();

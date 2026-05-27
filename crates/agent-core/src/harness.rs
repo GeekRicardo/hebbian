@@ -345,6 +345,13 @@ impl RunHandle {
             let Some(event) = self.recv().await else {
                 return TurnSummary::failed("事件流意外关闭");
             };
+            if self.cancelled_hitl_request(&event.payload) {
+                self.hitl.cancel_all_pending();
+                continue;
+            }
+            if self.is_stale_hitl_request(&event.payload) {
+                continue;
+            }
             observer.on_event(&event);
 
             match &event.payload {
@@ -423,6 +430,23 @@ impl RunHandle {
         summary
     }
 
+    fn cancelled_hitl_request(&self, payload: &EventPayload) -> bool {
+        matches!(
+            payload,
+            EventPayload::PermissionRequested { .. } | EventPayload::UserQuestionRequested { .. }
+        ) && self.cancel.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn is_stale_hitl_request(&self, payload: &EventPayload) -> bool {
+        match payload {
+            EventPayload::PermissionRequested { request_id, .. }
+            | EventPayload::UserQuestionRequested { request_id, .. } => {
+                !self.hitl.is_pending(request_id)
+            }
+            _ => false,
+        }
+    }
+
     /// terminal 事件之后继续 recv 直到通道关闭或超时——把可能晚到的 trailing 事件
     /// （如 [`EventPayload::SessionTitleChanged`]）转给 observer。
     async fn drain_trailing_events<O: TurnObserver>(
@@ -438,7 +462,13 @@ impl RunHandle {
             }
             let remaining = deadline - now;
             match tokio::time::timeout(remaining, self.events.recv()).await {
-                Ok(Some(event)) => observer.on_event(&event),
+                Ok(Some(event)) => {
+                    if self.cancelled_hitl_request(&event.payload) {
+                        self.hitl.cancel_all_pending();
+                    } else if !self.is_stale_hitl_request(&event.payload) {
+                        observer.on_event(&event);
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => break,
             }
@@ -615,14 +645,18 @@ mod tests {
     //! `TurnOutcome::Suspended`。
     use super::*;
     use protocol::{ResumeCause, SuspendReason};
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     fn make_handle(events: mpsc::Receiver<Event>) -> RunHandle {
+        make_handle_with_hitl(events, Arc::new(HitlGate::default()))
+    }
+
+    fn make_handle_with_hitl(events: mpsc::Receiver<Event>, hitl: Arc<HitlGate>) -> RunHandle {
         RunHandle {
             run_id: RunId::new(),
             events,
-            hitl: Arc::new(HitlGate::default()),
+            hitl,
             cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -655,6 +689,189 @@ mod tests {
         }
     }
 
+    struct CountingObserver {
+        permission_requests: Arc<AtomicUsize>,
+        questions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl TurnObserver for CountingObserver {
+        fn on_event(&mut self, _event: &Event) {}
+        async fn on_permission_request(
+            &mut self,
+            _request_id: &PermissionRequestId,
+            _kind: &PermissionKind,
+            _summary: &str,
+        ) -> Option<ApprovalDecision> {
+            self.permission_requests.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+        async fn on_question(
+            &mut self,
+            _request_id: &PermissionRequestId,
+            _question: &str,
+            _options: &[QuestionOption],
+            _multi: bool,
+        ) -> Option<UserAnswer> {
+            self.questions.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn drive_skips_permission_request_that_is_no_longer_pending() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let hitl = Arc::new(HitlGate::default());
+        let (request_id, _waiter) = hitl.open_approval(Some("Bash"), Some("cargo check"));
+        hitl.resolve(&request_id, ApprovalDecision::AllowOnce);
+        let mut handle = make_handle_with_hitl(rx, hitl);
+        let rid = handle.run_id.clone();
+
+        tx.send(ev(
+            &rid,
+            0,
+            EventPayload::PermissionRequested {
+                request_id,
+                kind: PermissionKind::ToolCall {
+                    tool_name: "Bash".to_string(),
+                    input: serde_json::json!({ "command": "cargo check" }),
+                    fingerprint: Some("cargo check".to_string()),
+                    command_segments: vec!["cargo check".to_string()],
+                },
+                summary: "工具 Bash 请求执行".to_string(),
+                risk: protocol::RiskLevel::Medium,
+            },
+        ))
+        .await
+        .unwrap();
+        tx.send(ev(
+            &rid,
+            1,
+            EventPayload::RunFinished {
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                duration_ms: 0,
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let permission_requests = Arc::new(AtomicUsize::new(0));
+        let questions = Arc::new(AtomicUsize::new(0));
+        let mut observer = CountingObserver {
+            permission_requests: permission_requests.clone(),
+            questions,
+        };
+
+        let summary = handle.drive(&mut observer).await;
+        match summary.outcome {
+            TurnOutcome::Done => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        assert_eq!(permission_requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn drive_cancels_pending_permission_before_observer_when_cancelled() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let hitl = Arc::new(HitlGate::default());
+        let (request_id, waiter) = hitl.open_approval(Some("Bash"), Some("cargo check"));
+        let mut handle = make_handle_with_hitl(rx, hitl);
+        handle.cancel.store(true, Ordering::SeqCst);
+        let rid = handle.run_id.clone();
+
+        tx.send(ev(
+            &rid,
+            0,
+            EventPayload::PermissionRequested {
+                request_id,
+                kind: PermissionKind::ToolCall {
+                    tool_name: "Bash".to_string(),
+                    input: serde_json::json!({ "command": "cargo check" }),
+                    fingerprint: Some("cargo check".to_string()),
+                    command_segments: vec!["cargo check".to_string()],
+                },
+                summary: "工具 Bash 请求执行".to_string(),
+                risk: protocol::RiskLevel::Medium,
+            },
+        ))
+        .await
+        .unwrap();
+        tx.send(ev(&rid, 1, EventPayload::RunCancelled))
+            .await
+            .unwrap();
+        drop(tx);
+
+        let permission_requests = Arc::new(AtomicUsize::new(0));
+        let questions = Arc::new(AtomicUsize::new(0));
+        let mut observer = CountingObserver {
+            permission_requests: permission_requests.clone(),
+            questions,
+        };
+
+        let summary = handle.drive(&mut observer).await;
+        match summary.outcome {
+            TurnOutcome::Cancelled => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+        assert_eq!(permission_requests.load(Ordering::SeqCst), 0);
+        assert!(matches!(waiter.await.unwrap(), ApprovalDecision::Deny));
+    }
+
+    #[tokio::test]
+    async fn drive_skips_question_request_that_is_no_longer_pending() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let hitl = Arc::new(HitlGate::default());
+        let (request_id, _waiter) = hitl.open_question();
+        hitl.answer(&request_id, UserAnswer::Cancelled);
+        let mut handle = make_handle_with_hitl(rx, hitl);
+        let rid = handle.run_id.clone();
+
+        tx.send(ev(
+            &rid,
+            0,
+            EventPayload::UserQuestionRequested {
+                request_id,
+                question: "继续吗？".to_string(),
+                options: vec![],
+                multi: false,
+            },
+        ))
+        .await
+        .unwrap();
+        tx.send(ev(
+            &rid,
+            1,
+            EventPayload::RunFinished {
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                duration_ms: 0,
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let permission_requests = Arc::new(AtomicUsize::new(0));
+        let questions = Arc::new(AtomicUsize::new(0));
+        let mut observer = CountingObserver {
+            permission_requests,
+            questions: questions.clone(),
+        };
+
+        let summary = handle.drive(&mut observer).await;
+        match summary.outcome {
+            TurnOutcome::Done => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        assert_eq!(questions.load(Ordering::SeqCst), 0);
+    }
+
     /// channel 在 RunSuspended 之后被关闭——这正是 agent_loop 走 ModelError::Suspended
     /// 时的行为。drive 必须返回 Suspended，而不是 Failed("事件流意外关闭")。
     #[tokio::test]
@@ -681,7 +898,10 @@ mod tests {
             TurnOutcome::Suspended => {}
             other => panic!("expected Suspended, got {other:?}"),
         }
-        assert!(summary.usage.is_none(), "Suspended 不应吐 usage，否则 surface 会重复累加");
+        assert!(
+            summary.usage.is_none(),
+            "Suspended 不应吐 usage，否则 surface 会重复累加"
+        );
     }
 
     /// 历史 bug 的反向用例：如果 drive 漏掉 RunSuspended 终态识别，
@@ -693,9 +913,16 @@ mod tests {
         let rid = handle.run_id.clone();
 
         // 先发一些正常事件，再发 Suspended，再关 channel——模拟真实 agent_loop。
-        tx.send(ev(&rid, 0, EventPayload::TurnStarted { turn_id: protocol::TurnId::new(), turn: 0 }))
-            .await
-            .unwrap();
+        tx.send(ev(
+            &rid,
+            0,
+            EventPayload::TurnStarted {
+                turn_id: protocol::TurnId::new(),
+                turn: 0,
+            },
+        ))
+        .await
+        .unwrap();
         tx.send(ev(
             &rid,
             1,

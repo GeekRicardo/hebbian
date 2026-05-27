@@ -19,12 +19,13 @@ use agent_core::edits::metadata::EditEntry;
 use agent_core::permissions::PermissionStore;
 use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
+    mcp as mcp_store,
     projects::{WorkspaceProject, WorkspaceProjectInput},
     prompts::{Prompt, PromptsFile},
     sessions::{self as sessions, Message, MessageMeta, Role, SearchHit, Session, SessionMeta},
     settings::{self as settings_store, Settings},
 };
-use agent_core::tools::ToolInfo;
+use agent_core::tools::{McpToolReport, ToolInfo};
 use agent_core::workspace::Workspace;
 use common::runtime as cancellation;
 use model_gateway::{
@@ -630,6 +631,7 @@ async fn send_message(
             hitl: Some(hitl.inner().clone()),
             permission_store: permission_store.inner().clone(),
             force_automode: force_automode_enabled,
+            request_id: Some(request_id.clone()),
         },
         on_event,
     )
@@ -639,8 +641,10 @@ async fn send_message(
 }
 
 #[tauri::command]
-fn cancel_message(request_id: String) -> bool {
-    cancellation::cancel(&request_id)
+fn cancel_message(hitl: State<'_, Arc<HitlState>>, request_id: String) -> bool {
+    let cancelled = cancellation::cancel(&request_id);
+    let hitl_cancelled = hitl.cancel_run(&request_id);
+    cancelled || hitl_cancelled
 }
 
 /// 「立即发送」入口：在 streaming 中把 user message 注入到当前 run 的 pending 队列，
@@ -893,7 +897,11 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
             .unwrap_or(0);
         let title = std::fs::read_to_string(&path)
             .ok()
-            .and_then(|s| s.lines().next().map(|l| l.trim_start_matches('#').trim().to_string()))
+            .and_then(|s| {
+                s.lines()
+                    .next()
+                    .map(|l| l.trim_start_matches('#').trim().to_string())
+            })
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| plan_id.clone());
         let plan_path_str = path.display().to_string();
@@ -914,8 +922,8 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
 #[tauri::command]
 fn read_plan_markdown(app: AppHandle, session_id: String, plan_id: String) -> AppResult<String> {
     let dd = data_dir(&app)?;
-    let path = agent_core::storage::plans::dir_for_session(&dd, &session_id)
-        .join(format!("{plan_id}.md"));
+    let path =
+        agent_core::storage::plans::dir_for_session(&dd, &session_id).join(format!("{plan_id}.md"));
     let bytes = agent_core::storage::lock::read_locked(&path)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
@@ -930,8 +938,8 @@ fn update_plan_markdown(
     markdown: String,
 ) -> AppResult<()> {
     let dd = data_dir(&app)?;
-    let path = agent_core::storage::plans::dir_for_session(&dd, &session_id)
-        .join(format!("{plan_id}.md"));
+    let path =
+        agent_core::storage::plans::dir_for_session(&dd, &session_id).join(format!("{plan_id}.md"));
     agent_core::storage::lock::write_atomic(&path, markdown.as_bytes())?;
     Ok(())
 }
@@ -1028,7 +1036,13 @@ fn add_permission(
     let scope = parse_perm_scope(&scope)?;
     let effect = parse_rule_effect(&effect)?;
     core(&app)?
-        .add_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, pattern)
+        .add_permission(
+            scope,
+            session_id.as_deref(),
+            workdir.as_deref(),
+            effect,
+            pattern,
+        )
         .map_err(map_core_err)
 }
 
@@ -1044,7 +1058,13 @@ fn remove_permission(
     let scope = parse_perm_scope(&scope)?;
     let effect = parse_rule_effect(&effect)?;
     core(&app)?
-        .remove_permission(scope, session_id.as_deref(), workdir.as_deref(), effect, &pattern)
+        .remove_permission(
+            scope,
+            session_id.as_deref(),
+            workdir.as_deref(),
+            effect,
+            &pattern,
+        )
         .map_err(map_core_err)
 }
 
@@ -1222,7 +1242,9 @@ fn read_skill_md(path: PathBuf) -> AppResult<String> {
 
 #[tauri::command]
 fn set_skill_enabled(app: AppHandle, name: String, enabled: bool) -> AppResult<()> {
-    core(&app)?.set_skill_enabled(&name, enabled).map_err(map_core_err)
+    core(&app)?
+        .set_skill_enabled(&name, enabled)
+        .map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -1383,6 +1405,21 @@ fn get_settings(app: AppHandle) -> AppResult<Settings> {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> AppResult<()> {
     core(&app)?.save_settings(settings).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn get_mcp_config(app: AppHandle) -> AppResult<mcp_store::McpConfig> {
+    Ok(core(&app)?.get_mcp_config())
+}
+
+#[tauri::command]
+fn save_mcp_config(app: AppHandle, config: mcp_store::McpConfig) -> AppResult<()> {
+    core(&app)?.save_mcp_config(config).map_err(map_core_err)
+}
+
+#[tauri::command]
+async fn discover_mcp_tools(app: AppHandle) -> AppResult<Vec<McpToolReport>> {
+    Ok(core(&app)?.discover_mcp_tools().await)
 }
 
 /// 更新对话级设置（workdir / allowed_paths / enabled_tools / skill_dirs）。
@@ -1555,17 +1592,17 @@ fn approve_path_access(
         "this_session" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Session,
             pattern: None,
-        extra_patterns: Vec::new(),
+            extra_patterns: Vec::new(),
         },
         "this_project" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Project,
             pattern: None,
-        extra_patterns: Vec::new(),
+            extra_patterns: Vec::new(),
         },
         "global" => protocol::ApprovalDecision::AllowAndRemember {
             scope: protocol::PermissionScope::Global,
             pattern: None,
-        extra_patterns: Vec::new(),
+            extra_patterns: Vec::new(),
         },
         other => return Err(AppError::msg(format!("未知 scope: {other}"))),
     };
@@ -1961,6 +1998,42 @@ fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequ
     });
 }
 
+/// 订阅结构化日志流（全量 tracing 事件）。
+/// 前端 LogPane 打开时调用；Channel 对象被 GC 后后端 send 失败，任务自动退出。
+#[tauri::command]
+async fn subscribe_log_stream(
+    on_log: tauri::ipc::Channel<observability::LogLine>,
+) -> AppResult<()> {
+    let tx = observability::log_sender()
+        .ok_or_else(|| AppError::msg("日志系统未初始化"))?;
+    let mut rx = tx.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(line) => {
+                    if on_log.send(line).is_err() {
+                        break; // 前端 Channel 已关闭
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // 消费太慢跳过丢失的消息，继续
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+/// 读取今天的日志文件内容（供 LogPane 历史展示）。文件不存在返回空字符串。
+#[tauri::command]
+fn read_log_file() -> AppResult<String> {
+    match observability::today_log_path() {
+        Some(p) if p.exists() => std::fs::read_to_string(&p).map_err(AppError::from),
+        _ => Ok(String::new()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 从 CWD 向上递归找 `.env` 并加载到进程环境。已有的 shell env 不会被覆盖
@@ -2121,6 +2194,9 @@ pub fn run() {
             kill_background_task,
             get_settings,
             save_settings,
+            get_mcp_config,
+            save_mcp_config,
+            discover_mcp_tools,
             update_session_settings,
             discover_rules_files,
             discover_all_rules,
@@ -2145,6 +2221,8 @@ pub fn run() {
             oauth_gemini_refresh,
             oauth_gemini_cli_import,
             deepseek_login,
+            subscribe_log_stream,
+            read_log_file,
             notch::notify_dismiss,
             notch::notify_click,
             notch::notify_set_position,

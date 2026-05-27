@@ -85,8 +85,22 @@ pub enum HookPoint {
         level: String,
         message: String,
     },
-    /// 外部请求停止（cancel）。
-    Stop { session_id: String, reason: String },
+    /// Turn 自然结束（模型 stop_reason=end_turn 且无 pending tool_call）。
+    ///
+    /// 与 Claude Code 2.1 / Codex codex-rs::hooks 的 Stop 语义对齐：用于挂"后置 verify"
+    /// 脚本（cargo check / tsc / 跑测试），脚本失败时返回 [`HookOutcome::InjectFollowup`]
+    /// 让 agent_loop 续跑修复（架构 §4.8.3）。外部 cancel 走 [`HookPoint::Notification`]
+    /// `{ level: "cancel" }`，不再占用 Stop。
+    ///
+    /// `workdir` 是 session 的工作目录绝对路径——外部 hook spawn 子进程时设为
+    /// `current_dir(workdir)`，让 `cargo check` / `pnpm tsc` 这类相对路径命令在
+    /// 用户项目根目录里跑。`None` 时不设 cwd（继承 daemon 启动目录，仅在 surface
+    /// 没绑定 workspace 的场景出现）。
+    Stop {
+        session_id: String,
+        reason: String,
+        workdir: Option<String>,
+    },
 }
 
 impl HookPoint {
@@ -139,4 +153,14 @@ pub enum HookOutcome {
     Block(String),
     /// 改写当前 payload。dispatcher 按点位类型识别 patch 内可用字段。
     Modify(HookPatch),
+    /// 注入一段 reminder 文本作为下一轮 user message，让 agent 续跑（架构 §4.8.3）。
+    ///
+    /// 仅在 [`HookPoint::Stop`] 点位由 agent_loop 消费——拿到后包成
+    /// `<hook-feedback source="<event>">...</hook-feedback>` push 进 transcript，
+    /// 不退出 loop，进入下一 turn。其它点位返回该值视为 [`Continue`] 忽略。
+    ///
+    /// 防死循环：每个 Run 最多注入 `MAX_STOP_INJECTIONS = 3` 次，超过即放弃注入正常出 turn。
+    ///
+    /// [`Continue`]: HookOutcome::Continue
+    InjectFollowup(String),
 }

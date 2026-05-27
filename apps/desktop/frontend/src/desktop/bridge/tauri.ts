@@ -14,6 +14,8 @@ import type {
   Message,
   MessageAttachment,
   MessageMeta,
+  McpConfig,
+  McpToolReport,
   PlanComment,
   PlanMeta,
   Prompt,
@@ -34,6 +36,7 @@ import type {
   SkillItem,
   TodoItem,
   ToolInfo,
+  LogLine,
   WorkspaceProject,
   WorkspaceProjectInput,
 } from "@/desktop/ui/types";
@@ -340,6 +343,10 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
     invoke<void>("save_settings", { settings }),
+  getMcpConfig: () => invoke<McpConfig>("get_mcp_config"),
+  saveMcpConfig: (config: McpConfig) =>
+    invoke<void>("save_mcp_config", { config }),
+  discoverMcpTools: () => invoke<McpToolReport[]>("discover_mcp_tools"),
 
   /**
    * 更新对话级设置；任一字段不传 = 保持原值，传 `null` = 显式清空（回退全局默认）。
@@ -488,6 +495,19 @@ export const api = {
   /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
   editsWorktreeStatus: (sessionId: string) =>
     invoke<EditsWorktreeStatus>("edits_worktree_status", { sessionId }),
+
+  // ── log stream ──
+  /** 订阅实时日志流。传入 handler；取消时调返回的 cancel 函数（将 active 置 false 忽略后续推送）。 */
+  subscribeLogStream: (onLog: (line: LogLine) => void): (() => void) => {
+    let active = true;
+    const channel = new Channel<LogLine>();
+    channel.onmessage = (line) => { if (active) onLog(line); };
+    invoke<void>("subscribe_log_stream", { onLog: channel }).catch(() => {});
+    return () => { active = false; };
+  },
+  /** 读取今天的日志文件内容（供 LogPane 加载历史）。文件不存在返回空字符串。 */
+  readLogFile: () =>
+    invoke<string>("read_log_file"),
 
   // ── Todo / Plan / Plan Comments（架构 §4.4.5 / §4.4.6）──
   /** 当前 session 的 todo 列表（从 jsonl 折叠出）。打开 session / 切换时拉一次，之后跟事件增量。 */

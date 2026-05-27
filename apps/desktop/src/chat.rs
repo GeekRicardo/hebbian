@@ -65,6 +65,7 @@ pub struct SendArgs {
     /// 下生效：判官 Ask 折叠为 Deny。Desktop 用 `//force-automode` 命令切换，
     /// 状态由 `ForceAutomodeState` 进程级持有；测试场景传 `false`。
     pub force_automode: bool,
+    pub request_id: Option<String>,
 }
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -197,7 +198,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let read_state_tracker = Arc::new(ReadStateTracker::new());
     let edits_worktree = Arc::new(EditsWorktree::new(data_dir, &args.session_id, &workspace));
     let harness = Arc::new(Harness::new(
-        agent_core::tools::default_tools(
+        agent_core::tools::default_tools_with_mcp(
             workspace.clone(),
             &skill_dirs,
             bg_log_dir,
@@ -206,7 +207,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             Some(data_dir.to_path_buf()),
             Some(args.session_id.clone()),
             Some(read_state_tracker),
-        ),
+            agent_core::storage::mcp::load(data_dir),
+        )
+        .await,
         HookManager::new(external_hooks),
     ));
     let definition = AgentDefinition::default();
@@ -312,8 +315,17 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         ),
     };
     let hitl = handle.hitl().clone();
+    if let (Some(state), Some(request_id)) = (&args.hitl, args.request_id.as_ref()) {
+        state.track_run(request_id.clone(), args.cancel_flag.clone(), hitl.clone());
+    }
 
-    let mut observer = DesktopObserver::new(args.hitl.clone(), hitl.clone(), &emit_event, data_dir, &args.session_id);
+    let mut observer = DesktopObserver::new(
+        args.hitl.clone(),
+        hitl.clone(),
+        &emit_event,
+        data_dir,
+        &args.session_id,
+    );
     let summary = handle.drive(&mut observer).await;
     if let Some(state) = &args.hitl {
         state.forget(&hitl);
@@ -378,7 +390,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 &parts.parts,
                 &tool_calls,
             )?;
-            if let Some(pw) = partial_writer { pw.delete(); }
+            if let Some(pw) = partial_writer {
+                pw.delete();
+            }
             return Err(AppError::msg("请求已中断"));
         }
         TurnOutcome::Failed(error) => {
@@ -390,7 +404,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 &tool_calls,
                 &error,
             )?;
-            if let Some(pw) = partial_writer { pw.delete(); }
+            if let Some(pw) = partial_writer {
+                pw.delete();
+            }
             return Err(AppError::msg(error));
         }
     }
@@ -416,7 +432,10 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         for assistant in &turn_messages {
             sessions::append_message(data_dir, &args.session_id, assistant.clone())?;
         }
-        turn_messages.last().cloned().unwrap_or_else(empty_assistant_message)
+        turn_messages
+            .last()
+            .cloned()
+            .unwrap_or_else(empty_assistant_message)
     } else {
         let m = assistant_message_from_recorded_parts(
             parts,
@@ -427,7 +446,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         sessions::append_message(data_dir, &args.session_id, m.clone())?;
         m
     };
-    if let Some(pw) = partial_writer { pw.delete(); }
+    if let Some(pw) = partial_writer {
+        pw.delete();
+    }
 
     Ok(assistant_msg)
 }
@@ -462,7 +483,6 @@ fn assistant_message_from_recorded_parts(
         meta: None,
     }
 }
-
 
 fn empty_assistant_message() -> Message {
     assistant_message_from_recorded_parts(
@@ -626,12 +646,16 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
                 }
                 // non-streaming 路径只发 TextDone，没有 TextDelta
                 EventPayload::TextDone { full_text } if !full_text.is_empty() && !pw.wrote_text => {
-                    pw.append(&PartialFragment::Text { text: full_text.clone() });
+                    pw.append(&PartialFragment::Text {
+                        text: full_text.clone(),
+                    });
                 }
                 EventPayload::Reasoning { text } => {
                     pw.append(&PartialFragment::Reasoning { text: text.clone() });
                 }
-                EventPayload::ToolCallStarted { index, name, input, .. } => {
+                EventPayload::ToolCallStarted {
+                    index, name, input, ..
+                } => {
                     let args = serde_json::to_string(input)
                         .ok()
                         .filter(|s| s != "null")
@@ -642,7 +666,12 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
                         arguments_chunk: args,
                     });
                 }
-                EventPayload::ToolCallDelta { index, name, arguments_delta, .. } => {
+                EventPayload::ToolCallDelta {
+                    index,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
                     if let Some(chunk) = arguments_delta {
                         pw.append(&PartialFragment::ToolCall {
                             index: *index as u32,
@@ -1270,20 +1299,25 @@ pub async fn build_preview_payload(
     // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具。
     // 预览路径不会真发命令,bg_log_dir + phase 都用占位 None / 空 channel。
     // BackgroundShells 用临时本地实例（预览只生成 tool schema，不真跑命令）。
-    let registry = ToolRegistry::new(agent_core::tools::default_tools(
-        workspace.clone(),
-        &skill_dirs,
-        None,
-        agent_core::wakeup::new_phase_channel(),
-        agent_core::tools::background::BackgroundShells::new(),
-        None,
-        None,
-        None,
-    ));
+    let registry = ToolRegistry::new(
+        agent_core::tools::default_tools_with_mcp(
+            workspace.clone(),
+            &skill_dirs,
+            None,
+            agent_core::wakeup::new_phase_channel(),
+            agent_core::tools::background::BackgroundShells::new(),
+            None,
+            None,
+            None,
+            agent_core::storage::mcp::load(data_dir),
+        )
+        .await,
+    );
     let mut tool_defs = ask_only_definitions();
     let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
     all_filter.extend(session_enabled_tools.iter().cloned());
     tool_defs.extend(registry.definitions(&all_filter));
+    tool_defs.extend(registry.mcp_definitions());
     if !session_enabled_tools.is_empty() {
         tool_defs.extend(hosted_tool_definitions(&session_enabled_tools));
     }
@@ -1296,8 +1330,8 @@ pub async fn build_preview_payload(
     let extra_paths_preview = PermissionStore::open(data_dir)
         .map(|s| s.effective_paths(Some(&workdir)))
         .unwrap_or_default();
-    let env_snapshot = EnvironmentSnapshot::from_workspace(&workspace)
-        .with_extra_paths(extra_paths_preview);
+    let env_snapshot =
+        EnvironmentSnapshot::from_workspace(&workspace).with_extra_paths(extra_paths_preview);
     let env_block = env_snapshot.render();
 
     // 规则文件注入：与 Session::append_user 一致
@@ -1925,12 +1959,8 @@ mod tests {
         sessions_dir::ensure_session_dirs(&dir, sid).unwrap();
 
         let mut pw = PartialFileWriter::new(&dir, sid, "msg-x".into());
-        pw.append(&PartialFragment::Text {
-            text: "hel".into(),
-        });
-        pw.append(&PartialFragment::Text {
-            text: "lo".into(),
-        });
+        pw.append(&PartialFragment::Text { text: "hel".into() });
+        pw.append(&PartialFragment::Text { text: "lo".into() });
         pw.append(&PartialFragment::Reasoning {
             text: "思考片段".into(),
         });
@@ -2459,6 +2489,7 @@ mod tests {
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
+                    request_id: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -2522,6 +2553,7 @@ mod tests {
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
+                    request_id: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -2588,6 +2620,7 @@ mod tests {
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
+                    request_id: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {
@@ -2658,6 +2691,7 @@ mod tests {
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
+                    request_id: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {

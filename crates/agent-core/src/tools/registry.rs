@@ -38,6 +38,18 @@ impl ToolRegistry {
             .collect()
     }
 
+    pub fn mcp_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools
+            .values()
+            .filter(|t| t.name().starts_with("Mcp__"))
+            .map(|t| ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
