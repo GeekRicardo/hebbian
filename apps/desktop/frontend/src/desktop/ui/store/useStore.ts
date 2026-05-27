@@ -680,6 +680,10 @@ function applyEditEvent(
   return null;
 }
 
+function activeRequestForSession(state: AppState, sessionId: string): string | null {
+  return state.sessionStreams[sessionId]?.requestId ?? null;
+}
+
 function applyToolDone(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_done" }>
@@ -1085,7 +1089,7 @@ export const useStore = create<AppState>((set, get) => ({
         // 写入失败仍然保留 pending，让用户可以重试；session 端就保留旧值
       }
       try {
-        const fresh = await api.getSession(cur.id);
+        const fresh = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
         set({ currentSession: fresh });
       } catch {
         /* ignore */
@@ -1106,7 +1110,7 @@ export const useStore = create<AppState>((set, get) => ({
         /* ignore */
       }
       try {
-        const fresh = await api.getSession(cur.id);
+        const fresh = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
         set({ currentSession: fresh });
       } catch {
         /* ignore */
@@ -1136,7 +1140,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ compacting: true });
     try {
       const usage = await api.compactSession(cur.id, customInstructions);
-      const fresh = await api.getSession(cur.id);
+      const fresh = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
       set({ contextUsage: usage, currentSession: fresh });
     } finally {
       set({ compacting: false });
@@ -1610,7 +1614,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   async openSession(id) {
-    const s = await api.getSession(id);
+    const activeRequestId = activeRequestForSession(get(), id);
+    const s = await api.getSession(id, activeRequestId);
     persistLastSessionConfig({
       providerId: s.provider_id,
       model: s.model,
@@ -1827,7 +1832,10 @@ export const useStore = create<AppState>((set, get) => ({
             const latest =
               get().currentSession?.id === sessionId
                 ? get().currentSession
-                : await api.getSession(sessionId);
+                : await api.getSession(
+                    sessionId,
+                    activeRequestForSession(get(), sessionId)
+                  );
             if (!latest) return;
             await sendForSession(latest, head.content, head.attachments);
           })().catch(() => {
@@ -1943,7 +1951,10 @@ export const useStore = create<AppState>((set, get) => ({
         );
         const stillForeground = get().currentSession?.id === sessionId;
         if (stillForeground) {
-          const fresh = await api.getSession(sessionId);
+          const fresh = await api.getSession(
+            sessionId,
+            activeRequestForSession(get(), sessionId)
+          );
           set((state) => {
             const { [sessionId]: _drop, ...rest } = state.sessionStreams;
             return {
@@ -1998,14 +2009,20 @@ export const useStore = create<AppState>((set, get) => ({
         });
         if (String(err?.message ?? err).includes("请求已中断")) {
           if (stillForeground) {
-            const fresh = await api.getSession(sessionId);
+            const fresh = await api.getSession(
+              sessionId,
+              activeRequestForSession(get(), sessionId)
+            );
             set({ currentSession: fresh });
           }
           await get().refreshSessions();
           return;
         }
         try {
-          const fresh = await api.getSession(sessionId);
+          const fresh = await api.getSession(
+            sessionId,
+            activeRequestForSession(get(), sessionId)
+          );
           if (get().currentSession?.id === sessionId) {
             set({ currentSession: fresh });
           }
@@ -2065,7 +2082,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (userIdx < 0) return;
     const targetUser = cur.messages[userIdx];
     await api.truncateInclusive(cur.id, targetUser.id);
-    const refreshed = await api.getSession(cur.id);
+    const refreshed = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
     set({ currentSession: refreshed });
     await get().sendUserMessage(targetUser.content, targetUser.attachments ?? []);
   },
@@ -2076,7 +2093,7 @@ export const useStore = create<AppState>((set, get) => ({
     const target = cur.messages.find((m) => m.id === userMsgId);
     if (!target || target.role !== "user") return;
     await api.truncateInclusive(cur.id, userMsgId);
-    const refreshed = await api.getSession(cur.id);
+    const refreshed = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
     set({ currentSession: refreshed });
     await get().sendUserMessage(target.content, target.attachments ?? []);
   },
@@ -2087,7 +2104,7 @@ export const useStore = create<AppState>((set, get) => ({
     const target = cur.messages.find((m) => m.id === userMsgId);
     if (!target || target.role !== "user") return;
     await api.truncateInclusive(cur.id, userMsgId);
-    const refreshed = await api.getSession(cur.id);
+    const refreshed = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
     set({ currentSession: refreshed });
     await get().sendUserMessage(content, attachments ?? target.attachments ?? []);
   },
@@ -2181,7 +2198,10 @@ export const useStore = create<AppState>((set, get) => ({
       // 重新拉一下 session（this_session 时 allowed_paths 已落盘）；
       // global 触发 settings 刷新；this_project / once 只动 PermissionStore，无需额外拉数据。
       if (scope === "this_session") {
-        const fresh = await api.getSession(sessionId);
+        const fresh = await api.getSession(
+          sessionId,
+          activeRequestForSession(get(), sessionId)
+        );
         if (get().currentSession?.id === sessionId) {
           set({ currentSession: fresh });
         }

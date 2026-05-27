@@ -64,7 +64,8 @@ export const api = {
 
   // sessions
   listSessions: () => invoke<SessionMeta[]>("list_sessions"),
-  getSession: (id: string) => invoke<Session>("get_session", { id }),
+  getSession: (id: string, activeRequestId?: string | null) =>
+    invoke<Session>("get_session", { id, activeRequestId: activeRequestId ?? null }),
   createSession: (
     providerId: string,
     model: string,

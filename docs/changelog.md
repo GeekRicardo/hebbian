@@ -4626,3 +4626,15 @@
   - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): 移除自定义 div 终端 + ANSI strip 方案；改为 `ghostty-web` `Terminal` + `FitAddon` 方案。mount 时 `ensureWasm()` 加载 WASM（模块级单例），`term.open()` + `fit.observeResize()` 自动适配容器尺寸；历史文件内容原样 write（ANSI 颜色直接渲染）；实时 `subscribeLogStream` 回调附加 ANSI 颜色码（ERROR 红/WARN 黄/INFO 绿/DEBUG 蓝/TRACE 灰）再 write；unmount 时 `cancel` + `term.dispose()`。
 - **影响范围**: Desktop/hebweb 前端设置页日志面板展示；不影响 Rust 后端、协议、agent-core。
 - **留尾巴**: ghostty-web 的 WASM 文件（`ghostty-vt.wasm`）由 Vite 通过 `import.meta.url` 解析，需确认 Tauri production build 时 WASM 文件被正确复制到 `dist/assets/`；开发模式下 Vite dev server 直接 serve，无问题。
+
+### 2026-05-27 — 修复切回运行中对话误显示“用户中断对话”
+
+- **Why**: 用户反馈一个对话仍在运行时切到另一个对话再切回来，前端会把切换前已经流出的内容显示成一块，并在后面追加“用户中断对话”；实际 agent_loop 没有收到 cancel，只是后续不再正确推进 UI。根因是 `get_session/openSession` 会无条件执行 partial sidecar 恢复，把当前进程仍在增长的活跃 partial 当成“上次崩溃残留”折叠进 `session.jsonl`，并删除 partial。
+- **改动**:
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs): `RuntimeHandle` 记录 `session_id`，新增 `register_for_session` 与 `has_active_run_for_session`，让 view load 能确认 request 是否属于同一会话的 active run。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `send_message` 按 session 注册 runtime；`get_session` 新增可选 `active_request_id`，同 session request 仍 active 时走纯读 `sessions::load`，否则保留原 partial recovery；新增两条回归测试覆盖 active partial 不恢复、其他 session 的 active request 不阻止崩溃残留恢复。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) / [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `getSession` 调用在 session 仍有 streaming slot 时传 active request id，切回运行中对话不会触发 partial 恢复。
+  - [docs/架构.md](架构.md): 明确 §4.9 partial sidecar 的恢复边界：active run 的 partial 是实时状态，不是中断残留。
+- **影响范围**: Desktop surface、common runtime、session view-load 路径与架构文档；不改 EventPayload，不改 session.jsonl 格式。崩溃重启后 registry 为空，残留 partial 仍会按原设计恢复成 interrupted。
+- **验证**: 修复前新增 `view_load_does_not_recover_partial_for_active_request` 红测失败；修复后 `cargo test -p hebbian view_load_` 通过；`cargo check -p hebbian` 通过（仅既有 notch warnings）；`pnpm --dir apps/desktop exec tsc --noEmit` 通过；`git diff --check` 通过。
+- **留尾巴**: 未跑真实 Tauri/浏览器手动切换会话截图验证；当前以后端回归测试和前端类型检查覆盖该路径。

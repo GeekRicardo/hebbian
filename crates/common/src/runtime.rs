@@ -28,6 +28,7 @@ pub type ConsumedPendingInputs = Arc<Mutex<Vec<PendingUserInput>>>;
 /// 一次 run 的运行时控制点：取消标志 + pending 输入队列。
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
+    pub session_id: Option<String>,
     pub cancel: CancelFlag,
     pub pending_inputs: PendingInputs,
     pub consumed_pending_inputs: ConsumedPendingInputs,
@@ -41,7 +42,12 @@ fn registry() -> &'static Mutex<HashMap<String, RuntimeHandle>> {
 }
 
 pub fn register(request_id: String) -> RuntimeHandle {
+    register_for_session(request_id, None)
+}
+
+pub fn register_for_session(request_id: String, session_id: Option<String>) -> RuntimeHandle {
     let handle = RuntimeHandle {
+        session_id,
         cancel: Arc::new(AtomicBool::new(false)),
         pending_inputs: Arc::new(Mutex::new(Vec::new())),
         consumed_pending_inputs: Arc::new(Mutex::new(Vec::new())),
@@ -74,6 +80,15 @@ pub fn cancel_all() -> usize {
 /// 当前是否有已注册（in-flight）的 run。
 pub fn has_active_runs() -> bool {
     !registry().lock().unwrap().is_empty()
+}
+
+/// Whether a specific session/request pair is still registered as an in-flight run.
+pub fn has_active_run_for_session(request_id: &str, session_id: &str) -> bool {
+    registry()
+        .lock()
+        .unwrap()
+        .get(request_id)
+        .is_some_and(|handle| handle.session_id.as_deref() == Some(session_id))
 }
 
 /// 把一条 pending input 推入指定 request_id 的运行时队列。

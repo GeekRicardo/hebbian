@@ -44,6 +44,115 @@ fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
     Ok(agent_core::storage::default_data_dir())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_core::storage::sessions_dir::{self, PartialFragment};
+
+    fn temp_data_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-desktop-lib-{name}-{}", sessions::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn view_load_does_not_recover_partial_for_active_request() {
+        let data_dir = temp_data_dir("active-partial");
+        let session = sessions::create(
+            &data_dir,
+            "openai".to_string(),
+            "gpt-test".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        sessions_dir::append_partial(
+            &data_dir,
+            &session.id,
+            "msg-live",
+            &PartialFragment::Text {
+                text: "仍在输出".to_string(),
+            },
+        )
+        .unwrap();
+
+        let request_id = format!("req-{}", sessions::new_id());
+        let _handle =
+            cancellation::register_for_session(request_id.clone(), Some(session.id.clone()));
+        let core = LocalCoreClient::new(None, data_dir.clone(), None);
+
+        let loaded =
+            load_session_for_view(&data_dir, &core, &session.id, Some(&request_id)).unwrap();
+
+        assert!(
+            loaded.messages.is_empty(),
+            "活跃 run 的 view load 只能读 session.jsonl，不能把 partial 折叠成中断消息"
+        );
+        let partial = data_dir
+            .join("sessions")
+            .join(&session.id)
+            .join("partial")
+            .join("msg-live.partial.jsonl");
+        assert!(
+            partial.exists(),
+            "活跃 partial 必须保留给仍在跑的 run 继续写"
+        );
+
+        cancellation::unregister(&request_id);
+    }
+
+    #[test]
+    fn view_load_still_recovers_partial_for_unrelated_active_request() {
+        let data_dir = temp_data_dir("unrelated-active-partial");
+        let active = sessions::create(
+            &data_dir,
+            "openai".to_string(),
+            "gpt-test".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        let crashed = sessions::create(
+            &data_dir,
+            "openai".to_string(),
+            "gpt-test".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        sessions_dir::append_partial(
+            &data_dir,
+            &crashed.id,
+            "msg-crashed",
+            &PartialFragment::Text {
+                text: "残留输出".to_string(),
+            },
+        )
+        .unwrap();
+
+        let request_id = format!("req-{}", sessions::new_id());
+        let _handle =
+            cancellation::register_for_session(request_id.clone(), Some(active.id.clone()));
+        let core = LocalCoreClient::new(None, data_dir.clone(), None);
+
+        let loaded =
+            load_session_for_view(&data_dir, &core, &crashed.id, Some(&request_id)).unwrap();
+
+        assert_eq!(
+            loaded.messages.len(),
+            2,
+            "其他 session 的 active requestId 不能阻止崩溃 partial 恢复"
+        );
+        assert!(matches!(
+            loaded.messages.last().and_then(|m| m.meta.as_ref()),
+            Some(sessions::MessageMeta::Interrupted)
+        ));
+
+        cancellation::unregister(&request_id);
+    }
+}
+
 // ========== Providers ==========
 //
 // 架构 §7.1：surface 调 CoreClient 转发到 storage / model_gateway。
@@ -133,8 +242,33 @@ fn list_sessions(app: AppHandle) -> AppResult<Vec<SessionMeta>> {
 }
 
 #[tauri::command]
-fn get_session(app: AppHandle, id: String) -> AppResult<Session> {
-    core(&app)?.load_session(&id).map_err(map_core_err)
+fn get_session(
+    app: AppHandle,
+    id: String,
+    active_request_id: Option<String>,
+) -> AppResult<Session> {
+    let core = core(&app)?;
+    load_session_for_view(
+        &data_dir(&app)?,
+        core.as_ref(),
+        &id,
+        active_request_id.as_deref(),
+    )
+}
+
+fn load_session_for_view(
+    data_dir: &std::path::Path,
+    core: &dyn CoreClient,
+    id: &str,
+    active_request_id: Option<&str>,
+) -> AppResult<Session> {
+    // 切回仍在跑的会话时，partial sidecar 是活跃流式状态，不是崩溃残留。
+    if active_request_id
+        .is_some_and(|request_id| cancellation::has_active_run_for_session(request_id, id))
+    {
+        return sessions::load(data_dir, id);
+    }
+    core.load_session(id).map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -614,7 +748,7 @@ async fn send_message(
     meta: Option<agent_core::storage::sessions::MessageMeta>,
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
-    let runtime = cancellation::register(request_id.clone());
+    let runtime = cancellation::register_for_session(request_id.clone(), Some(session_id.clone()));
     let force_automode_enabled = force_automode.is_enabled(&session_id);
     let result = chat::send_and_save(
         &app,
