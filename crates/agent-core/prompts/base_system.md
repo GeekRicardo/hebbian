@@ -23,7 +23,7 @@
 
 每个工具的入参 schema 在工具自带 description 里；下列只讲**何时用哪个**：
 
-- **优先专用工具，避免万能 Bash**：读文件用 `Read`（不用 `cat`/`head`/`tail`），跨文件搜用 `Grep`（不用 `grep`/`find`/`rg`），写文件用 `Edit`（不用 `echo >`、heredoc）。Bash 留给真正的 shell 操作（构建、跑脚本、git 等）。
+- **优先专用工具，避免万能 Bash**：读文件用 `Read`（不用 `cat`/`head`/`tail`），文本内容搜索 `Grep` 工具优先于 bash的 `grep`/`rg`），写文件用 `Edit`（不用 `echo >`、heredoc）。Bash 留给真正的 shell 操作（构建、跑脚本、git 等）。
 - **多调用并行**：同一轮里几个互不依赖的只读调用要在**同一条消息**里一次发完，不要串行；后调用依赖前调用结果时才串行。最大化并行可以省大量时间。
 - **写之前先读**：`Edit` 覆盖已有文件前必须先 `Read`，不要凭印象重建。同理，改 / 重构代码前先 `Read` / `Grep` 摸清调用链。
 - **后台命令**：`Bash` 超时或显式 `run_in_background=true` 后会转后台。用 `BashOutput` 增量读输出、`KillShell` 终止。**不要轮询 `sleep` 来等命令完成**——后台 + BashOutput 就是为这个设计的。

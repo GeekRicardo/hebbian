@@ -270,20 +270,6 @@ impl Session {
                 .with_background_tasks(bg_summaries.clone())
                 .with_extra_paths(extra_paths);
             final_text = prepend_environment(final_text, &snapshot);
-
-            // 规则文件注入：全局 + 项目规则文件，包装成 <system-reminder>
-            // 紧跟 <environment> 之后、user text 之前
-            let allowed_paths = self.workspace.initial_allowed_paths();
-            let rules_content = crate::rules::resolve_injection_files(
-                &self.global_rules,
-                self.rules_files.as_deref(),
-                self.workspace.workdir(),
-                allowed_paths,
-            );
-            let rules_block = crate::rules::format_injection(&rules_content);
-            if !rules_block.is_empty() {
-                final_text = format!("{rules_block}\n{final_text}");
-            }
         } else if !bg_summaries.is_empty() {
             // 非首条 user message：单独前置 `<background_tasks>` 块
             final_text = crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
@@ -423,6 +409,17 @@ impl Session {
         self.run_with_runtime_inputs(cancel, pending_inputs, None)
     }
 
+    fn resolve_system_rules(&self) -> Option<String> {
+        let files = crate::rules::resolve_injection_files(
+            &self.global_rules,
+            self.rules_files.as_deref(),
+            self.workspace.workdir(),
+            self.workspace.initial_allowed_paths(),
+        );
+        let block = crate::rules::format_injection(&files);
+        if block.is_empty() { None } else { Some(block) }
+    }
+
     /// Desktop surface 需要在 run 结束后把已消费的 PendingInputs 按正确顺序落盘。
     pub fn run_with_runtime_inputs(
         &self,
@@ -464,6 +461,7 @@ impl Session {
                 resume_from: None,
                 edits_worktree: self.edits_worktree.clone(),
                 max_tool_iterations: None,
+                system_rules: self.resolve_system_rules(),
             },
         )
     }
@@ -524,6 +522,7 @@ impl Session {
                 resume_from: Some(resume_from),
                 edits_worktree: self.edits_worktree.clone(),
                 max_tool_iterations: None,
+                system_rules: self.resolve_system_rules(),
             },
         )
     }

@@ -126,6 +126,8 @@ pub struct LoopParams<'a> {
     /// 工具迭代次数上限。`None` 表示不限制（主 agent 默认行为）；
     /// `Some(n)` 在达到 n 次后中断循环（subagent 场景可按需启用）。
     pub max_tool_iterations: Option<u32>,
+    /// 规则文件渲染后的 `<system-reminder>` 块，追加到 system prompt 末尾。
+    pub system_rules: Option<String>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -199,6 +201,7 @@ pub async fn run_loop(
         resume_from,
         edits_worktree,
         max_tool_iterations,
+        system_rules,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -393,9 +396,19 @@ pub async fn run_loop(
         }
         let has_tools = !tool_defs.is_empty();
 
-        // system prompt = BASE 常量 + 用户 persona。环境信息（cwd / allowed_paths / runtime
-        // 追加）走 user message 的 `<environment>` / `<workspace-update>` 块——保 prompt cache。
-        let combined_system = compose_system_prompt(transcript.system.as_deref());
+        // system prompt = BASE 常量 + 用户 persona + rules。
+        // 环境信息（cwd / allowed_paths）走 user message 的 `<environment>` 块保 cache；
+        // rules 内容（CLAUDE.md 等）本身变化极少，进 system 段保证每轮都有权威约束力。
+        let combined_system = {
+            let mut s = compose_system_prompt(transcript.system.as_deref());
+            if let Some(r) = &system_rules {
+                if !r.is_empty() {
+                    s.push('\n');
+                    s.push_str(r);
+                }
+            }
+            s
+        };
 
         let req = ModelRequest {
             model: String::new(),
@@ -1036,6 +1049,7 @@ mod tests {
                 resume_from: None,
                 edits_worktree: None,
                 max_tool_iterations: None,
+                system_rules: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1093,6 +1107,7 @@ mod tests {
                 resume_from: None,
                 edits_worktree: None,
                 max_tool_iterations: None,
+                system_rules: None,
             },
             Arc::new(|_| {}),
         )
@@ -1162,6 +1177,7 @@ mod tests {
                 resume_from: None,
                 edits_worktree: None,
                 max_tool_iterations: None,
+                system_rules: None,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -1284,6 +1300,7 @@ mod tests {
                 resume_from: None,
                 edits_worktree: None,
                 max_tool_iterations: Some(2),
+                system_rules: None,
             },
             Arc::new(|_| {}),
         )

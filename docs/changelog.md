@@ -4721,3 +4721,15 @@
   - `crates/model-gateway/src/providers/mod.rs`：`retry_request` 里用 `tokio::select!` 竞争 `op().await` 与 `wait_for_cancel`，cancel 先到立即返回 `ModelError::Cancelled`，不再等 HTTP 响应。覆盖所有 provider（anthropic / openai / gemini / deepseek）。
 - **影响范围**: agent-core（tools 模块 + dispatch）、model-gateway（providers/mod.rs）；不改协议、不改 EventPayload，不影响 surface。
 - **留尾巴**: `wait_for_cancel` 在 model-gateway 的 `providers/mod.rs` 和 agent-core 的 `bash.rs` 各有一份实现（50ms 轮询）。若后续想统一可提取到 `common::runtime`，需给 common 加 tokio 依赖。
+
+### 2026-05-27 — 将 CLAUDE.md rules 从首条 user message 迁移到 system 段
+
+- **Why**: `~/.claude/CLAUDE.md` 等规则文件的内容（包括 codegraph MCP 工具使用指引）之前注入到第一条 user message 的 `<system-reminder>` 块。模型在面对指令冲突时 system prompt 优先级高于 user message，而 `base_system.md` 的"跨文件搜用 Grep"明确覆盖了 user message 里的 codegraph 指引，导致 agent 始终走 Grep 而不用 codegraph。同时 base_system.md 的措辞把 Grep 设为唯一代码搜索工具，进一步阻断了 codegraph 生效。
+- **改动**:
+  - `crates/agent-core/src/harness.rs`：`RunParams` 新增 `system_rules: Option<String>` 字段
+  - `crates/agent-core/src/agent_loop.rs`：`LoopParams` 新增 `system_rules: Option<String>`，每轮 model request 前将 rules 追加到 system prompt 末尾；补全测试用例的 `system_rules: None`
+  - `crates/agent-core/src/session.rs`：新增 `resolve_system_rules()` 私有方法；两处 `RunParams` 构建均传入 `system_rules`；移除原先在 `append_user` 里把 rules 注入首条 user message 的逻辑
+  - `apps/desktop/src/chat.rs`：预览 JSON 逻辑同步——rules 挪到 system 段，首条 user message 只保留 `<environment>` 块
+  - `crates/agent-core/prompts/base_system.md`：工具策略章节改为"文本搜索用 Grep 工具（不用 bash grep/rg）"，去掉 Grep 对代码搜索的独占语义，并添加"若有更专用的代码索引工具（如 codegraph MCP），优先用它们做符号和结构查询"
+- **影响范围**: agent-core（session / agent_loop / harness）、desktop chat 预览；不改 protocol、不改 EventPayload、不改 session.jsonl 格式。rules 内容现在随每轮 ModelRequest 的 system 字段发送（CLAUDE.md 极少改动，实践中 prompt cache 仍可高频命中）。
+- **留尾巴**: 环境变量、时间等易变信息仍走 user message `<environment>` 块，未受影响。若未来 CLAUDE.md 频繁改动导致 cache miss 率上升，可考虑给 rules 段单独建 cache breakpoint（需 model-gateway 层支持分段缓存）。

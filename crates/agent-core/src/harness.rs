@@ -85,6 +85,9 @@ pub struct RunParams {
     pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
     /// 工具迭代次数上限。`None` 表示不限制。
     pub max_tool_iterations: Option<u32>,
+    /// 规则文件渲染后的 `<system-reminder>` 块，追加到 system prompt 末尾。
+    /// 由 Session 在 spawn_run 前解析，注入 system 段保证每轮都可见。
+    pub system_rules: Option<String>,
 }
 
 /// Core 对外门面。
@@ -235,6 +238,7 @@ impl Harness {
             resume_from,
             edits_worktree,
             max_tool_iterations,
+            system_rules,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -269,6 +273,7 @@ impl Harness {
                 resume_from,
                 edits_worktree,
                 max_tool_iterations,
+                system_rules,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

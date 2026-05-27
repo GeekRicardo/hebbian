@@ -1337,8 +1337,26 @@ pub async fn build_preview_payload(
         tool_defs.extend(hosted_tool_definitions(&session_enabled_tools));
     }
 
-    // system = BASE prompt + 用户 persona（与 agent_loop::compose_system_prompt 一致）
-    let combined_system = compose_system_prompt(session.system_prompt.as_deref());
+    // system = BASE prompt + 用户 persona + rules（与 agent_loop 一致）
+    let combined_system = {
+        let mut s = compose_system_prompt(session.system_prompt.as_deref());
+        let used_global_rules_for_system = session
+            .global_rules
+            .clone()
+            .unwrap_or_else(|| settings.conversation.global_rules.clone());
+        let rules_content_for_system = agent_core::rules::resolve_injection_files(
+            &used_global_rules_for_system,
+            session.rules_files.as_deref(),
+            &workdir,
+            &initial_allowed_paths,
+        );
+        let rules_block_for_system = agent_core::rules::format_injection(&rules_content_for_system);
+        if !rules_block_for_system.is_empty() {
+            s.push('\n');
+            s.push_str(&rules_block_for_system);
+        }
+        s
+    };
 
     // 首条 user message 头部要追加 <environment> 块（与 Session::append_user 一致），
     // preview 时按同一逻辑还原，确保「显示 JSON」与实际发给模型的 payload 一致。
@@ -1348,19 +1366,6 @@ pub async fn build_preview_payload(
     let env_snapshot =
         EnvironmentSnapshot::from_workspace(&workspace).with_extra_paths(extra_paths_preview);
     let env_block = env_snapshot.render();
-
-    // 规则文件注入：与 Session::append_user 一致
-    let used_global_rules = session
-        .global_rules
-        .clone()
-        .unwrap_or_else(|| settings.conversation.global_rules.clone());
-    let rules_content = agent_core::rules::resolve_injection_files(
-        &used_global_rules,
-        session.rules_files.as_deref(),
-        &workdir,
-        &initial_allowed_paths,
-    );
-    let rules_block = agent_core::rules::format_injection(&rules_content);
 
     let mut first_user_pending = true;
 
@@ -1374,9 +1379,6 @@ pub async fn build_preview_payload(
             Role::User => {
                 let mut value = preview_user_content(m);
                 if first_user_pending {
-                    if !rules_block.is_empty() {
-                        prepend_environment_to_preview(&mut value, &rules_block);
-                    }
                     prepend_environment_to_preview(&mut value, &env_block);
                     first_user_pending = false;
                 }
