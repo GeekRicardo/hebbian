@@ -35,9 +35,36 @@ export function HoverHint({
   const closeTimerRef = useRef<number | null>(null);
 
   const updateRect = useCallback(() => {
-    if (anchorRef.current) {
-      setRect(anchorRef.current.getBoundingClientRect());
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const r = anchor.getBoundingClientRect();
+
+    // 若 anchor 已经被某个滚动祖先 (overflow auto/scroll/hidden) 横向裁切到不可见，
+    // 关掉 popup——否则 portal 出去的 popup 会"飘"到容器外的 sidebar 区域。
+    let parent: HTMLElement | null = anchor.parentElement;
+    while (parent && parent !== document.body) {
+      const style = window.getComputedStyle(parent);
+      const ox = style.overflowX;
+      const oy = style.overflowY;
+      const clips =
+        ox === "auto" || ox === "scroll" || ox === "hidden" ||
+        oy === "auto" || oy === "scroll" || oy === "hidden";
+      if (clips) {
+        const pr = parent.getBoundingClientRect();
+        if (
+          r.right <= pr.left ||
+          r.left >= pr.right ||
+          r.bottom <= pr.top ||
+          r.top >= pr.bottom
+        ) {
+          setOpen(false);
+          return;
+        }
+      }
+      parent = parent.parentElement;
     }
+
+    setRect(r);
   }, []);
 
   useEffect(() => {

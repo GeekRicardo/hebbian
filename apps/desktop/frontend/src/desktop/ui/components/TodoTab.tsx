@@ -8,6 +8,7 @@ import {
   type TodoItem,
   type TodoStatus,
 } from "./MessageBubble";
+import { todoBlocksForDisplay, type TodoDisplayBlock } from "./todoBlocksForDisplay";
 import type { Session, StreamingAssistantPart } from "@/desktop/ui/types";
 
 /**
@@ -23,10 +24,15 @@ import type { Session, StreamingAssistantPart } from "@/desktop/ui/types";
 export function TodoTab() {
   const currentSession = useStore((s) => s.currentSession);
   const streamingParts = useStore((s) => s.streamingParts);
+  const todos = useStore((s) => s.todos);
 
-  const blocks = useMemo(
+  const fallbackBlocks = useMemo(
     () => extractTodoBlocks(currentSession ?? undefined, streamingParts),
     [currentSession, streamingParts],
+  );
+  const blocks = useMemo(
+    () => todoBlocksForDisplay(todos, fallbackBlocks),
+    [todos, fallbackBlocks],
   );
 
   if (!currentSession) {
@@ -53,12 +59,7 @@ export function TodoTab() {
   );
 }
 
-type Block = {
-  key: string;
-  todos: TodoItem[];
-  ts: number;
-  streaming: boolean;
-};
+type Block = TodoDisplayBlock<TodoItem>;
 
 function TodoBlock({ block, defaultOpen }: { block: Block; defaultOpen: boolean }) {
   const total = block.todos.length;

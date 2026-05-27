@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -124,6 +124,14 @@ interface DiffViewerProps {
    * 仅在拿到完整文件（含未改动上下文）时有意义，调用方在 detail+expanded 时传 3。
    */
   collapseContext?: number;
+  /**
+   * 行号起点：`beforeText` 实际对应原文件的第几行（1-based）。默认 1。
+   * 流式 / 审批 / 非放大 detail 态拿到的 beforeText 只是 `old_string` 局部，
+   * 调用方在原文中 indexOf 出起始行号传进来，行号槽才能显示真实位置。
+   */
+  baseLineBefore?: number;
+  /** afterText 的起点行号。一般跟 baseLineBefore 一致（同一处替换），默认 1。 */
+  baseLineAfter?: number;
 }
 
 /**
@@ -150,9 +158,13 @@ interface RenderRow {
   diffIdx: number;
 }
 
-function buildRenderRows(diffRows: DiffRow[]): RenderRow[] {
-  let bn = 0;
-  let an = 0;
+function buildRenderRows(
+  diffRows: DiffRow[],
+  baseBefore = 1,
+  baseAfter = 1,
+): RenderRow[] {
+  let bn = baseBefore - 1;
+  let an = baseAfter - 1;
   return diffRows.map((row, i) => {
     let beforeNum: number | null = null;
     let afterNum: number | null = null;
@@ -216,6 +228,39 @@ function buildCollapsibleView(
 const DIFF_LINE_PX = 18;
 const DIFF_VIEWPORT_PADDING_PX = 16;
 
+/**
+ * 流式态下让 diff 视口自动粘底：
+ * - 新内容到达且当前粘底 → scrollTop = scrollHeight
+ * - 用户主动向上滚 → 解除粘底，新内容不再强拉到底
+ * - 用户重新滚回底部 → 自动恢复粘底
+ *
+ * 仅在 `streaming = true` 时生效；非流式态行为不变。
+ */
+function useStickyBottomScroll(streaming: boolean, signal: unknown) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
+
+  const onScroll = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    stickRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+  }, []);
+
+  useEffect(() => {
+    if (!streaming) return;
+    const el = ref.current;
+    if (!el || !stickRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [streaming, signal]);
+
+  // streaming 由 false → true 时重置粘底意图（新一轮 edit 默认跟随）
+  useEffect(() => {
+    if (streaming) stickRef.current = true;
+  }, [streaming]);
+
+  return { ref, onScroll };
+}
+
 function maxRowsToStyle(
   maxRows: number | undefined,
 ): React.CSSProperties | undefined {
@@ -249,12 +294,17 @@ export function DiffViewer({
   className,
   maxRows,
   collapseContext,
+  baseLineBefore = 1,
+  baseLineAfter = 1,
 }: DiffViewerProps) {
   const diffRows = useMemo(
     () => computeDiff(beforeText.split("\n"), afterText.split("\n")),
     [beforeText, afterText],
   );
-  const renderRows = useMemo(() => buildRenderRows(diffRows), [diffRows]);
+  const renderRows = useMemo(
+    () => buildRenderRows(diffRows, baseLineBefore, baseLineAfter),
+    [diffRows, baseLineBefore, baseLineAfter],
+  );
   const items = useMemo<DiffViewItem[] | null>(() => {
     if (collapseContext && collapseContext > 0) {
       return buildCollapsibleView(diffRows, collapseContext);
@@ -520,6 +570,7 @@ function InlineDiff({
   toggleGroup,
 }: DiffListProps) {
   const lastNonRemoveIdx = findLastNonRemoveIdx(renderRows);
+  const { ref: scrollRef, onScroll } = useStickyBottomScroll(streaming, renderRows);
 
   const renderRow = (r: RenderRow) => {
     let sign: "+" | "-" | " ";
@@ -553,6 +604,8 @@ function InlineDiff({
 
   return (
     <div
+      ref={scrollRef}
+      onScroll={onScroll}
       className="flex-1 overflow-auto font-mono text-[11px] leading-relaxed"
       style={heightStyle}
     >
@@ -599,6 +652,7 @@ function SplitDiff({
   toggleGroup,
 }: DiffListProps) {
   const lastNonRemoveIdx = findLastNonRemoveIdx(renderRows);
+  const { ref: scrollRef, onScroll } = useStickyBottomScroll(streaming, renderRows);
 
   const PlaceholderCell = (
     <div className="min-h-[1.4em] flex-1 min-w-0 bg-muted/10" />
@@ -656,6 +710,8 @@ function SplitDiff({
 
   return (
     <div
+      ref={scrollRef}
+      onScroll={onScroll}
       className="flex-1 overflow-auto font-mono text-[11px] leading-relaxed"
       style={heightStyle}
     >
