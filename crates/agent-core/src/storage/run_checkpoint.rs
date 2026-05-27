@@ -47,7 +47,7 @@ pub struct RunCheckpoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
 
-    /// agent_loop 内的迭代计数（用于 MAX_TOOL_ITERATIONS 续算）。
+    /// agent_loop 内的迭代计数（用于 max_tool_iterations 续算）。
     pub iteration: u32,
     pub model_step_index: u32,
     pub tool_step_index: u32,

@@ -4638,3 +4638,51 @@
 - **影响范围**: Desktop surface、common runtime、session view-load 路径与架构文档；不改 EventPayload，不改 session.jsonl 格式。崩溃重启后 registry 为空，残留 partial 仍会按原设计恢复成 interrupted。
 - **验证**: 修复前新增 `view_load_does_not_recover_partial_for_active_request` 红测失败；修复后 `cargo test -p hebbian view_load_` 通过；`cargo check -p hebbian` 通过（仅既有 notch warnings）；`pnpm --dir apps/desktop exec tsc --noEmit` 通过；`git diff --check` 通过。
 - **留尾巴**: 未跑真实 Tauri/浏览器手动切换会话截图验证；当前以后端回归测试和前端类型检查覆盖该路径。
+
+### 2026-05-27 — 修复同批多条 Bash 反复审批
+
+- **Why**: 用户反馈模型一次返回多个 Bash，命令里拆出 `cd / cd / grep / cat` 后每个 tool_call 都要审批；即使选择本 session 允许，后面再次遇到 `cd` 仍然弹。根因有两层：(1) dispatcher 会在同批 join 前预创建所有 Bash pending，第一条审批写入的 session 规则来不及影响第二条；(2) `multi-cd` 被归为强制审批且不可记忆的危险模式，导致普通多段 `cd && cd && grep && cat` 即使规则齐全也被拦回人工审批。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): Bash/PowerShell 在同批 tool call 中改为顺序派发；普通工具仍批量并发。新增 `remember_first_compound_bash_auto_resolves_matching_pending_call` 覆盖同批两个相似 Bash 只产生一次审批。
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): 移除 `multi-cd` 危险模式；重复 cd 只作为普通段级命令参与全段 allow 判定，`cd-git-compound` / `write-git-meta` / `rm-rf-root` / `ast-too-complex` 仍强制审批且不可记忆。
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): 新增 session 记忆回归测试，覆盖 `cd && cd && grep && cat` 第二次直接 Approved，以及已 pending 的匹配 Bash 被第一条 AllowAndRemember 自动 AllowOnce。
+  - [crates/agent-core/prompts/automode_judge.md](../crates/agent-core/prompts/automode_judge.md) / [docs/架构.md](架构.md): 同步危险模式列表，明确普通多段 cd 走段级全匹配，不再作为不可记忆危险模式。
+- **影响范围**: agent-core dispatcher / shell effects / HITL 测试与 AutoMode prompt；不改协议、不改 session.jsonl、不改 PermissionStore pattern 格式。
+- **验证**: 修复前新增 `session_remember_approves_repeated_benign_multi_cd_compound_bash` 红测失败于第二次仍 `NeedsApproval`；修复后 `cargo test -p agent-core session_remember_ --lib`、`cargo test -p agent-core remember_first_compound_bash_auto_resolves_matching_pending_call --lib`、`cargo test -p agent-core destructive_bash_resolves_after_approval --lib` 均通过。
+- **留尾巴**: 未跑真实 Desktop 弹窗手动验证；当前以后端 dispatcher/HITL 回归覆盖同批多 Bash 与 session 记忆路径。
+
+### 2026-05-27 — 增加 Bash 解析与审批匹配链路日志
+
+- **Why**: 用户需要在日志里直接看到 Bash 解析结果、审批规则是否命中、命中的层级（session/project/global），未命中时明确进入等待审批；同时需要前端用户点击审批、后端收到审批结果都有可追踪日志。
+- **改动**:
+  - [crates/agent-core/src/permissions/mod.rs](../crates/agent-core/src/permissions/mod.rs): 新增 `PermissionMatch` 和 `find_*_diagnostic` / `allows_path_diagnostic`，保留原 `find*` API 语义不变，但日志可拿到 scope 与原始 pattern。
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): 权限检查日志改为统一输出 `permission.match` / `permission.approval` / `permission.remember`，覆盖 session 记忆、PermissionStore session/project/global 命中、未命中等待审批、后端收到审批结果、记忆规则落点。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 路径审批日志输出 workspace/session artifact/PermissionStore path rule 命中层级，未命中时输出 `waiting_for_approval`，审批 waiter 收到结果时输出后端日志。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 前端提交工具审批和路径审批前后分别输出 `console.info`，失败输出 `console.error`。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs) / [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): Desktop Tauri 和 hebweb 后端收到审批命令时输出 request/decision/scope/pattern 日志。
+- **影响范围**: agent-core HITL/PermissionStore/dispatcher observability、Desktop/hebweb 审批入口和共享前端 store；不改 EventPayload、不改 session.jsonl、不改 PermissionStore 文件格式。
+- **验证**: 新增 `permissions::tests::find_diagnostic_reports_scope_and_pattern` 红测先失败于缺少诊断 API，修复后通过；`cargo check -p agent-core --tests`、`cargo check -p hebbian`、`cargo check -p hebbian-web-server`、`pnpm --dir apps/desktop exec tsc --noEmit`、`git diff --check` 均通过。
+- **留尾巴**: 未启动 `pnpm tauri dev` 做真实弹窗点击验证；当前以后端测试、Rust check 和前端类型检查覆盖日志链路的编译与调用点。
+
+### 2026-05-27 — 修复 Bash 解析中文路径时 byte boundary panic
+
+- **Why**: 用户贴出的 live log 显示 `git diff -- ... docs/架构.md ...` 触发 `byte index is not a char boundary` panic，导致 agent-core tokio worker 崩溃；根因是 shell parser 用 byte index 扫描并直接做 `&str` 切片，中文路径会让索引落在 UTF-8 字符内部。
+- **改动**:
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): `split_top_level` / `extract_redirections` / `scan_token` / `sniff_complex_structure` 改为按 UTF-8 字符边界推进；保留 ASCII shell 操作符、重定向和 fd dup 的原有判定。
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): 新增中文路径回归测试，覆盖 `git diff -- docs/架构.md` 不 panic，以及中文参数在管道和重定向扫描后不变成 mojibake。
+- **影响范围**: agent-core Bash effects 解析实现；不改协议、不改审批语义、不改 PermissionStore 格式。
+- **验证**: 修复前新增 `unicode_paths_do_not_panic_while_scanning_segments` 红测稳定复现同类 panic；修复后 `cargo test -p agent-core unicode_paths_do_not_panic_while_scanning_segments --lib` 与 `cargo test -p agent-core tools::shell_parse::tests --lib` 均通过。
+- **留尾巴**: 尚未跑完整 workspace check；本次只针对 shell parser 的 Unicode panic 做最小修复。
+
+### 2025-07-18
+
+**移除主 agent_loop 的 100 次工具调用硬限制，改为可选配置**
+
+- **Why**：用户要求主 agent 不限制工具调用次数；同时保留未来 subagent 可按需启用限制的能力
+- **影响范围**：
+  - `crates/agent-core/src/agent_loop.rs`：删除 `const MAX_TOOL_ITERATIONS`，`LoopParams` 新增 `max_tool_iterations: Option<u32>` 字段，迭代检查改为 `if let Some(max)` 分支
+  - `crates/agent-core/src/harness.rs`：`AgentHarnessParams` 同步新增 `max_tool_iterations` 字段
+  - `crates/agent-core/src/storage/run_checkpoint.rs`：注释中旧常量名更新
+  - `docs/架构.md`：§4.2.4 从"MAX_STEPS=100"改为"可选迭代限制"；§4.3.1 伪代码同步更新
+  - 新增测试 `max_tool_iterations_limits_loop` 验证 `Some(n)` 行为
+- **留尾巴**：无

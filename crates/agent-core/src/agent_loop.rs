@@ -33,8 +33,6 @@ use model_gateway::{
 };
 use protocol::ResumeCause;
 
-const MAX_TOOL_ITERATIONS: u32 = 100;
-
 /// Stop hook 在一个 Run 内最多注入多少次 reminder（架构 §4.8.3）。超过即放弃注入正常出 turn。
 /// 防 cargo check 永远修不好把 loop 跑爆。
 const MAX_STOP_INJECTIONS: u32 = 3;
@@ -125,6 +123,9 @@ pub struct LoopParams<'a> {
     pub resume_from: Option<RunResumeState>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照。
     pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
+    /// 工具迭代次数上限。`None` 表示不限制（主 agent 默认行为）；
+    /// `Some(n)` 在达到 n 次后中断循环（subagent 场景可按需启用）。
+    pub max_tool_iterations: Option<u32>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -197,13 +198,14 @@ pub async fn run_loop(
         phase,
         resume_from,
         edits_worktree,
+        max_tool_iterations,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
     let run_span = tracing::Span::current();
 
     // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
-    // 计数器从 checkpoint 起步，保证 MAX_TOOL_ITERATIONS 累积、Step index 单调。
+    // 计数器从 checkpoint 起步，保证 max_tool_iterations 累积、Step index 单调。
     let (
         mut iteration,
         mut tool_call_dispatch_offset,
@@ -483,7 +485,15 @@ pub async fn run_loop(
 
         let response = match response_result {
             Ok(response) => response,
-            Err(e) => break Err(e),
+            Err(e) => {
+                turn_span.record(attr::STOP_REASON, "failed");
+                emit(EventPayload::TurnFinished {
+                    turn_id: turn_id.clone(),
+                    turn: turn_index,
+                    stop_reason: StopReason::Failed,
+                });
+                break Err(e);
+            }
         };
 
         match response {
@@ -607,16 +617,18 @@ pub async fn run_loop(
                 output_attachments.extend(attachments);
                 transcript.push_assistant_with_reasoning(text, reasoning, calls.clone());
 
-                if iteration >= MAX_TOOL_ITERATIONS {
-                    let msg = format!("已达到最大工具调用轮数 {MAX_TOOL_ITERATIONS}");
-                    tracing::warn!(max_iterations = MAX_TOOL_ITERATIONS, "max iterations");
-                    turn_span.record(attr::STOP_REASON, "max_iterations");
-                    emit(EventPayload::TurnFinished {
-                        turn_id: turn_id.clone(),
-                        turn: turn_index,
-                        stop_reason: StopReason::MaxIterations,
-                    });
-                    break Err(ModelError::Other(msg));
+                if let Some(max) = max_tool_iterations {
+                    if iteration >= max {
+                        let msg = format!("已达到最大工具调用轮数 {max}");
+                        tracing::warn!(max_iterations = max, "max iterations");
+                        turn_span.record(attr::STOP_REASON, "max_iterations");
+                        emit(EventPayload::TurnFinished {
+                            turn_id: turn_id.clone(),
+                            turn: turn_index,
+                            stop_reason: StopReason::MaxIterations,
+                        });
+                        break Err(ModelError::Other(msg));
+                    }
                 }
                 iteration += 1;
                 turn_span.record("hebbian.turn.tool_calls", calls.len());
@@ -1023,6 +1035,7 @@ mod tests {
                 phase: None,
                 resume_from: None,
                 edits_worktree: None,
+                max_tool_iterations: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1079,6 +1092,7 @@ mod tests {
                 phase: None,
                 resume_from: None,
                 edits_worktree: None,
+                max_tool_iterations: None,
             },
             Arc::new(|_| {}),
         )
@@ -1147,6 +1161,7 @@ mod tests {
                 phase: None,
                 resume_from: None,
                 edits_worktree: None,
+                max_tool_iterations: None,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -1181,5 +1196,105 @@ mod tests {
             ] if user.text == "ToolStep 后的引导"
                 && second.text == "已按引导继续"
         ));
+    }
+
+    #[tokio::test]
+    async fn max_tool_iterations_limits_loop() {
+        struct AlwaysToolCallClient {
+            calls: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl ModelClient for AlwaysToolCallClient {
+            fn provider_id(&self) -> &str {
+                "test"
+            }
+
+            fn supports_streaming_tools(&self) -> bool {
+                true
+            }
+
+            async fn complete(
+                &self,
+                _req: ModelRequest,
+                _cancel: CancelFlag,
+            ) -> Result<ModelResponse, ModelError> {
+                unreachable!("test uses streaming")
+            }
+
+            async fn stream(
+                &self,
+                _req: ModelRequest,
+                _cancel: CancelFlag,
+                on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+            ) -> Result<ModelResponse, ModelError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                on_event(ModelStreamEvent::TextDelta {
+                    text: "tool call".to_string(),
+                });
+                Ok(ModelResponse::ToolCalls {
+                    text: "tool call".to_string(),
+                    reasoning: String::new(),
+                    calls: vec![model_gateway::types::ToolCall {
+                        id: "call_always".to_string(),
+                        name: "missing_tool".to_string(),
+                        input: serde_json::json!({}),
+                    }],
+                    attachments: Vec::new(),
+                    usage: Usage::default(),
+                })
+            }
+        }
+
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("反复调用工具".to_string(), Vec::new());
+
+        let client = AlwaysToolCallClient {
+            calls: AtomicUsize::new(0),
+        };
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+
+        let err = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                model_id: None,
+                judge_client: None,
+                force_automode: false,
+                data_dir: None,
+                session_id: None,
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: Some(2),
+            },
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect_err("should fail when max_tool_iterations exceeded");
+
+        assert!(
+            matches!(&err, ModelError::Other(msg) if msg.contains("已达到最大工具调用轮数 2")),
+            "error should mention max iterations, got: {err:?}"
+        );
+        // iteration check happens after model call: iterations 0,1,2 → 3 calls
+        assert_eq!(client.calls.load(Ordering::SeqCst), 3);
     }
 }

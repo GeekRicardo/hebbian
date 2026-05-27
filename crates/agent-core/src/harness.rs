@@ -83,6 +83,8 @@ pub struct RunParams {
     pub resume_from: Option<crate::agent_loop::RunResumeState>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照。
     pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
+    /// 工具迭代次数上限。`None` 表示不限制。
+    pub max_tool_iterations: Option<u32>,
 }
 
 /// Core 对外门面。
@@ -232,6 +234,7 @@ impl Harness {
             phase,
             resume_from,
             edits_worktree,
+            max_tool_iterations,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -265,6 +268,7 @@ impl Harness {
                 phase,
                 resume_from,
                 edits_worktree,
+                max_tool_iterations,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");
@@ -347,6 +351,9 @@ impl RunHandle {
             };
             if self.cancelled_hitl_request(&event.payload) {
                 self.hitl.cancel_all_pending();
+                // 仍推给 observer，让前端能收到 PermissionRequested / UserQuestionRequested
+                // 事件以及后续的 TurnFinished / RunCancelled，避免前端残留悬空状态。
+                observer.on_event(&event);
                 continue;
             }
             if self.is_stale_hitl_request(&event.payload) {
