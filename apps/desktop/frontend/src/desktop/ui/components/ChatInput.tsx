@@ -442,7 +442,9 @@ export function ChatInput({
     }
     const text = e.clipboardData.getData("text/plain");
     const candidates = parsePathCandidates(text);
-    if (candidates.length === 0) return;
+    const nonEmptyLines = text.split(/\r?\n/).filter((l) => l.trim()).length;
+    // 只有粘贴内容全部由路径行组成才拦截；混有普通文本（日志、代码等）时放行
+    if (candidates.length === 0 || candidates.length < nonEmptyLines) return;
     e.preventDefault();
     await attachPathCandidates(candidates);
   }
