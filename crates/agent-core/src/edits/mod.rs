@@ -9,12 +9,15 @@
 //! - 无 git CLI → enabled=false，整套机制降级，不阻塞 Edit 本身
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use fs2::FileExt;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use common::{AppError, AppResult};
 
@@ -24,6 +27,17 @@ pub mod metadata;
 
 use metadata::{load_metadata, save_metadata, worktree_dir, EditEntry};
 
+/// 同进程内每个 real_path 对应一把 async Mutex，dispatch 时同 path 的多个 Edit
+/// 在 async 层串行化，**不阻塞 tokio worker**。
+/// 跨进程的互斥仍由后面的 fd-lock 负责（架构 §4.13.4）。
+type PerPathLocks = AsyncMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>;
+
+/// fd-lock 单次 try_lock_exclusive 的重试间隔与总超时上限。
+/// 超时后返回错误，调用方（dispatcher）`.ok()` 后等价于跳过快照——
+/// 与「git 不可用 → enabled=false」是同质降级路径，不阻塞 Edit 本身。
+const FD_LOCK_POLL_INTERVAL_MS: u64 = 50;
+const FD_LOCK_TIMEOUT_SECS: u64 = 30;
+
 /// 单次 snapshot 的结果。
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -31,17 +45,28 @@ pub struct Snapshot {
     pub file_bytes: u64,
 }
 
-/// 文件互斥锁 guard（架构 §4.13.4）。按真实文件路径排他锁，确保
-/// 同一文件的 snapshot + execute + snapshot_after 不被并发打断。
-/// Drop 时自动释放 fs2 锁。
+/// 文件互斥锁 guard（架构 §4.13.4）。同时持有：
+/// - in-process async Mutex guard：保证同进程同 path 串行化
+/// - fd-lock 文件：保证跨进程互斥
+/// Drop 时按字段声明顺序先释放 fd-lock 再释放 async guard。
 pub struct FileLockGuard {
-    _file: File,
+    fd_lock: Option<File>,
+    _async_guard: OwnedMutexGuard<()>,
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        if let Some(file) = self.fd_lock.take() {
+            let _ = fs2::FileExt::unlock(&file);
+        }
+    }
 }
 
 pub struct EditsWorktree {
     worktree_dir: PathBuf,
     workspace_root: PathBuf,
     git_available: Mutex<Option<bool>>,
+    per_path_locks: PerPathLocks,
 }
 
 impl EditsWorktree {
@@ -50,6 +75,7 @@ impl EditsWorktree {
             worktree_dir: worktree_dir(data_dir, session_id),
             workspace_root: workspace.workdir().to_path_buf(),
             git_available: Mutex::new(None),
+            per_path_locks: AsyncMutex::new(HashMap::new()),
         }
     }
 
@@ -66,22 +92,68 @@ impl EditsWorktree {
         ok
     }
 
-    /// 按真实文件绝对路径获取排他 fd-lock（架构 §4.13.4）。
+    /// 按真实文件绝对路径获取排他锁（架构 §4.13.4）。
     /// 调用方应在 `snapshot_before` 之前获取此锁，`snapshot_after` 之后释放。
-    /// lock 文件路径：`<worktree>/.locks/<hash(real_path)>.lock`
-    pub fn lock_file(&self, real_path: &Path) -> AppResult<FileLockGuard> {
+    ///
+    /// 两层互斥：
+    /// 1. **in-process**：先拿 per-path async Mutex，同进程同 path 在 async 层串行，
+    ///    不会让 fd-lock 同步 syscall 阻塞 tokio worker。
+    /// 2. **inter-process**：再 `spawn_blocking` 调 `try_lock_exclusive` + 50ms 轮询，
+    ///    总超时 30s。fd-lock 文件路径：`<worktree>/.locks/<hash(real_path)>.lock`
+    ///
+    /// 30s 超时返回 `Err`——dispatcher 用 `.ok()` 折叠成 `None`，等价于「跳过快照
+    /// 但 Edit 继续」，与 git 不可用时的降级路径同质。
+    pub async fn lock_file(&self, real_path: &Path) -> AppResult<FileLockGuard> {
+        let mutex = {
+            let mut map = self.per_path_locks.lock().await;
+            map.entry(real_path.to_path_buf())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+        let async_guard = mutex.lock_owned().await;
+
         let lock_path = self.lock_path_for(real_path);
         if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                AppError::msg(format!("创建 .locks 目录失败 {}: {e}", parent.display()))
+            })?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&lock_path)?;
-        file.lock_exclusive()
-            .map_err(|e| AppError::msg(format!("获取文件锁失败 {}: {e}", real_path.display())))?;
-        Ok(FileLockGuard { _file: file })
+        let real_path_disp = real_path.display().to_string();
+        let fd_lock = tokio::task::spawn_blocking(move || -> AppResult<File> {
+            let file = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .map_err(|e| {
+                    AppError::msg(format!("打开 lock 文件失败 {}: {e}", lock_path.display()))
+                })?;
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(FD_LOCK_TIMEOUT_SECS);
+            loop {
+                match file.try_lock_exclusive() {
+                    Ok(()) => return Ok(file),
+                    Err(_) => {
+                        if std::time::Instant::now() >= deadline {
+                            return Err(AppError::msg(format!(
+                                "{}s 内无法获取 {} 的跨进程文件锁",
+                                FD_LOCK_TIMEOUT_SECS, real_path_disp
+                            )));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            FD_LOCK_POLL_INTERVAL_MS,
+                        ));
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|e| AppError::msg(format!("spawn_blocking join: {e}")))??;
+
+        Ok(FileLockGuard {
+            fd_lock: Some(fd_lock),
+            _async_guard: async_guard,
+        })
     }
 
     /// Edit 执行前快照。git 不可用时返回 `Ok(None)`——调用方跳过，不阻塞 Edit。
@@ -508,12 +580,7 @@ mod tests {
             .unwrap()
             .expect("after snapshot");
 
-        let entry = fake_entry(
-            &real,
-            before.sha,
-            after.sha,
-            protocol::EditAction::Modify,
-        );
+        let entry = fake_entry(&real, before.sha, after.sha, protocol::EditAction::Modify);
         wt.revert(&entry)
             .await
             .expect("revert 应当成功（trim 不再破坏 patch）");
@@ -564,7 +631,9 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let real = ws.path().join("foo.txt");
-        tokio::fs::write(&real, b"alpha\nbeta\ngamma\n").await.unwrap();
+        tokio::fs::write(&real, b"alpha\nbeta\ngamma\n")
+            .await
+            .unwrap();
         let workspace = Workspace::new(ws.path(), Vec::new());
         let wt = EditsWorktree::new(dd.path(), "sid", &workspace);
         if !require_git_or_skip(&wt).await {
@@ -572,18 +641,19 @@ mod tests {
         }
 
         let before = wt.snapshot_before("c3", &real).await.unwrap().unwrap();
-        tokio::fs::write(&real, b"alpha\nBETA-EDIT\ngamma\n").await.unwrap();
+        tokio::fs::write(&real, b"alpha\nBETA-EDIT\ngamma\n")
+            .await
+            .unwrap();
         let after = wt.snapshot_after("c3", &real).await.unwrap().unwrap();
 
         // 用户在 Edit 改过的那一行再动一下
-        tokio::fs::write(&real, b"alpha\nBETA-USER\ngamma\n").await.unwrap();
+        tokio::fs::write(&real, b"alpha\nBETA-USER\ngamma\n")
+            .await
+            .unwrap();
 
         let entry = fake_entry(&real, before.sha, after.sha, protocol::EditAction::Modify);
         let err = wt.revert(&entry).await.unwrap_err();
-        assert!(
-            err.to_string().contains("冲突"),
-            "应当报冲突，实际: {err}"
-        );
+        assert!(err.to_string().contains("冲突"), "应当报冲突，实际: {err}");
 
         let got = tokio::fs::read_to_string(&real).await.unwrap();
         assert_eq!(got, "alpha\nBETA-USER\ngamma\n", "冲突时不能动用户文件");
@@ -613,5 +683,37 @@ mod tests {
 
         let entries = wt.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
+    }
+
+    /// 回归：5 个 future 并发拿同 path 的 lock_file 必须在 5s 内全部 ok。
+    /// 修复前 `file.lock_exclusive()` 是同步阻塞 syscall 直接吃 tokio worker，
+    /// `join_all` 5 个同 path Edit 会让进程死锁；现在两层互斥（in-process async
+    /// Mutex + spawn_blocking 包 fd-lock），N 并发应当顺次串行通过。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn lock_file_concurrent_same_path_does_not_deadlock() {
+        use futures_util::future::join_all;
+        let ws = tempfile::tempdir().unwrap();
+        let dd = tempfile::tempdir().unwrap();
+        let real = ws.path().join("hot.txt");
+        tokio::fs::write(&real, b"x").await.unwrap();
+        let workspace = Workspace::new(ws.path(), Vec::new());
+        let wt = Arc::new(EditsWorktree::new(dd.path(), "sid", &workspace));
+
+        let mut tasks = Vec::new();
+        for _ in 0..5 {
+            let wt = wt.clone();
+            let real = real.clone();
+            tasks.push(async move {
+                let _guard = wt.lock_file(&real).await.expect("lock_file");
+                // 模拟临界区 IO（用 tokio::time::sleep 不阻塞 worker）
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            });
+        }
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(5), join_all(tasks)).await;
+        assert!(
+            outcome.is_ok(),
+            "5 个同 path 并发 lock_file 应在 5s 内全部完成，否则视为死锁回退"
+        );
     }
 }

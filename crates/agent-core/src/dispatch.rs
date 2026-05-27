@@ -198,6 +198,36 @@ impl ToolDispatcher {
         let class_label = effect_class_label(effects.class);
         let fingerprint = effects.command_fingerprint.clone();
 
+        // —— 工具派发日志：effects 分析结果 ——
+        {
+            let segment_summary: Vec<String> = effects
+                .segments
+                .iter()
+                .map(|s| {
+                    if s.write_targets.is_empty() {
+                        s.fingerprint.clone()
+                    } else {
+                        format!("{}[w={}]", s.fingerprint, s.write_targets.join(","))
+                    }
+                })
+                .collect();
+            let path_summary: Vec<String> = effects
+                .paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                class = class_label,
+                fingerprint = fingerprint.as_deref().unwrap_or(""),
+                segments = segment_summary.join(" | "),
+                dangerous_kinds = ?effects.dangerous_kinds,
+                paths = path_summary.join(", "),
+                "effects analysis"
+            );
+        }
+
         // 路径越界检查（同步）。
         // 当前 session 数据目录（`~/.hebbian/sessions/<sid>/`）下的文件是 agent
         // 自己的工具输出（line_trunc/、tool_results/、bg/ 等），永远视为在界内，
@@ -229,8 +259,25 @@ impl ToolDispatcher {
             .collect();
 
         let path_pending = if out_of_scope.is_empty() {
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                total = effects.paths.len(),
+                "path scope: all paths in bounds"
+            );
             None
         } else {
+            let out_str: Vec<String> = out_of_scope
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                out_of_scope = out_str.join(", "),
+                total = effects.paths.len(),
+                "path scope: some paths out of bounds, requesting approval"
+            );
             Some(self.request_path_approval(&call.name, out_of_scope))
         };
 
@@ -347,6 +394,11 @@ impl ToolDispatcher {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let is_edit = matches!(call_name_for_judge.as_str(), "Edit" | "edit");
                         if is_edit {
+                            info!(
+                                tool = %call_name_for_judge,
+                                call_id = %call.id,
+                                "EditAutomatically: NeedsApproval → AllowOnce (file edit shortcut)"
+                            );
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
                                 tool_name: call_name_for_judge.clone(),
                                 decision: "allow".to_string(),
@@ -378,11 +430,20 @@ impl ToolDispatcher {
                             .await;
                             // force_automode 子开关：把 Ask 折叠成 Deny + reason 头部
                             // 加 force-automode: 前缀。让"放手跑"模式不被 ASK 打断。
+                            let raw_label = raw_decision.as_label();
                             let decision = if force_automode {
                                 raw_decision.collapse_ask_to_deny()
                             } else {
                                 raw_decision
                             };
+                            info!(
+                                tool = %call_name_for_judge,
+                                call_id = %call.id,
+                                raw = raw_label,
+                                final = decision.as_label(),
+                                force_automode = force_automode,
+                                "AutoMode: judge decision"
+                            );
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
                                 tool_name: call_name_for_judge.clone(),
                                 decision: decision.as_label().to_string(),
@@ -607,7 +668,8 @@ impl ToolDispatcher {
                 // 即便不短也不该把错误升格成需要 Read 的工件。
                 // Read 是分页工具，自身已做单行截断 + 整体 6KB 输出截断 + offset/limit 提示，
                 // 再走 materialize 会形成"Read → 落盘 → Read 落盘文件 → 再落盘"的死循环。
-                let (materialized, artifact) = if exec_failed || call.name == "Read" {
+                let direct_result = matches!(call.name.as_str(), "Read" | "Skill");
+                let (materialized, artifact) = if exec_failed || direct_result {
                     (raw, None)
                 } else {
                     materialize_tool_output(
@@ -617,9 +679,9 @@ impl ToolDispatcher {
                         data_dir_for_artifacts.as_deref(),
                     )
                 };
-                // Read 自身的截断标志着"输出被裁减了，agent 应该改 offset/limit"，
-                // 所以 truncated 只用 dispatch 侧的截断标记，不混用 Read 自己生成的消息。
-                let (mut content, truncated) = if call.name == "Read" {
+                // Read 自身的截断标志着"输出被裁减了，agent 应该改 offset/limit"；Skill 是指令注入，
+                // 也必须原样回填给模型。二者都不混用 dispatch 侧的截断标记。
+                let (mut content, truncated) = if direct_result {
                     (materialized, false)
                 } else {
                     truncate_tool_result(materialized)
@@ -996,7 +1058,8 @@ impl ToolDispatcher {
                 let (dd, sid) = match (data_dir.as_deref(), session_id.as_deref()) {
                     (Some(d), Some(s)) => (d, s),
                     _ => {
-                        let msg = "ExitPlanMode 需要 data_dir + session_id 才能落盘 / 审批".to_string();
+                        let msg =
+                            "ExitPlanMode 需要 data_dir + session_id 才能落盘 / 审批".to_string();
                         record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
                         sink(state.event(EventPayload::ToolCallFinished {
                             index: dispatch_index,
@@ -1099,8 +1162,8 @@ impl ToolDispatcher {
 
                 // 拼未消费 plan_comments（不论通过/拒绝都拼——拒绝路径让模型也看到用户评论）
                 let mut content = String::new();
-                let unconsumed = plan_comments::list_unconsumed(dd, sid, &plan_id)
-                    .unwrap_or_default();
+                let unconsumed =
+                    plan_comments::list_unconsumed(dd, sid, &plan_id).unwrap_or_default();
 
                 match decision {
                     ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => {
@@ -1149,13 +1212,7 @@ impl ToolDispatcher {
                     }
                 }
 
-                record_tool_outcome(
-                    attr::outcome::OK,
-                    &call.name,
-                    0.0,
-                    false,
-                    content.len(),
-                );
+                record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
@@ -1253,17 +1310,16 @@ async fn await_path_decision(
                     let _ = session_id; // session paths 不持久化（workspace 内存即可）
                     let workdir_buf;
                     let (scope_for_path, workdir_for_path) = match scope {
-                        protocol::PermissionScope::Once
-                        | protocol::PermissionScope::Session => continue,
+                        protocol::PermissionScope::Once | protocol::PermissionScope::Session => {
+                            continue
+                        }
                         protocol::PermissionScope::Project => {
                             workdir_buf = workspace.workdir().to_path_buf();
                             (scope, Some(workdir_buf.as_path()))
                         }
                         protocol::PermissionScope::Global => (scope, None),
                     };
-                    if let Err(e) =
-                        store.add_path(scope_for_path, workdir_for_path, p.clone())
-                    {
+                    if let Err(e) = store.add_path(scope_for_path, workdir_for_path, p.clone()) {
                         tracing::warn!(error = %e, path = %p.display(), "paths 持久化失败");
                     }
                 }
@@ -1309,7 +1365,13 @@ async fn await_permission_decision(
     }
 }
 
-fn record_tool_outcome(outcome: &str, tool: &str, _duration_ms: f64, truncated: bool, bytes: usize) {
+fn record_tool_outcome(
+    outcome: &str,
+    tool: &str,
+    _duration_ms: f64,
+    truncated: bool,
+    bytes: usize,
+) {
     let span = tracing::Span::current();
     span.record(attr::TOOL_OUTCOME, outcome);
     span.record(attr::TOOL_TRUNCATED, truncated);
@@ -1560,21 +1622,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().to_path_buf();
         // 先建一个 session 让 jsonl 文件存在
-        let session = sessions::create(
-            &data_dir,
-            "openai".into(),
-            "gpt-x".into(),
-            None,
-            None,
-        )
-        .unwrap();
+        let session =
+            sessions::create(&data_dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
         let session_id = session.id.clone();
 
         let workspace = Workspace::new(&data_dir, Vec::new());
-        let registry = Arc::new(ToolRegistry::new(vec![Box::new(
-            crate::tools::todo_write::TodoWriteTool,
-        )
-            as Box<dyn crate::tools::Tool>]));
+        let registry =
+            Arc::new(ToolRegistry::new(vec![
+                Box::new(crate::tools::todo_write::TodoWriteTool) as Box<dyn crate::tools::Tool>,
+            ]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
@@ -1620,10 +1676,9 @@ mod tests {
             events
         });
 
-        let result =
-            tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
-                .await
-                .expect("dispatch 应在 5s 内完成");
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("dispatch 应在 5s 内完成");
         let results = result.expect("dispatch 不应返回错误");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "TodoWrite");
@@ -1631,13 +1686,16 @@ mod tests {
         // 断言 1：事件流里包含 TodoListUpdated
         drop(dispatcher);
         let events = collector.await.unwrap();
-        let has_todo_event = events.iter().any(|e| {
-            matches!(&e.payload, EventPayload::TodoListUpdated { todos } if todos.len() == 2)
-        });
+        let has_todo_event = events.iter().any(
+            |e| matches!(&e.payload, EventPayload::TodoListUpdated { todos } if todos.len() == 2),
+        );
         assert!(
             has_todo_event,
             "应有 TodoListUpdated 事件；实际事件: {:?}",
-            events.iter().map(|e| std::mem::discriminant(&e.payload)).collect::<Vec<_>>()
+            events
+                .iter()
+                .map(|e| std::mem::discriminant(&e.payload))
+                .collect::<Vec<_>>()
         );
 
         // 断言 2：jsonl 文件含 meta_update 行 + todos 字段
@@ -1657,6 +1715,91 @@ mod tests {
         assert_eq!(loaded.todos.len(), 2);
         assert_eq!(loaded.todos[0].status, TodoStatus::InProgress);
         assert_eq!(loaded.todos[1].status, TodoStatus::Pending);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skill_tool_returns_full_large_content_without_artifact() {
+        use crate::tools::skill::{Skill, SkillSource, SkillTool};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("data");
+        let skills_dir = tmp.path().join("skills").join("big");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let large_body = "S".repeat(MAX_TOOL_RESULT_INLINE + 1);
+        let skill_path = skills_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_path,
+            format!("---\nname: big\ndescription: Big skill\n---\n{large_body}"),
+        )
+        .unwrap();
+
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(SkillTool::new(vec![Skill {
+                name: "big".to_string(),
+                alias: None,
+                description: "Big skill".to_string(),
+                path: skill_path,
+                source: SkillSource::Global,
+                enabled: true,
+                collection_id: None,
+            }])) as Box<dyn crate::tools::Tool>,
+        ]));
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: Arc::new(crate::tools::hitl::HitlGate::default()),
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            model_id: None,
+            judge_client: None,
+            force_automode: false,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: Some("sid-skill".to_string()),
+            data_dir_for_artifacts: Some(data_dir.clone()),
+            permission_store: None,
+            edits_worktree: None,
+        };
+
+        let call = ToolCall {
+            id: "call_skill".into(),
+            name: "Skill".into(),
+            input: serde_json::json!({ "skill": "big" }),
+        };
+
+        let results = dispatcher.run_calls(&[call], 0).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Skill");
+        assert!(results[0].artifact.is_none());
+        assert!(results[0].content.ends_with(&large_body));
+        assert!(!results[0].content.contains("已落盘到"));
+        assert!(!data_dir
+            .join("sessions/sid-skill/tool_results/call_skill.txt")
+            .exists());
+
+        let mut finished = None;
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::ToolCallFinished {
+                result,
+                truncated,
+                artifact_path,
+                ..
+            } = event.payload
+            {
+                finished = Some((result, truncated, artifact_path));
+            }
+        }
+        let (event_result, truncated, artifact_path) = finished.expect("Skill should finish");
+        assert!(!truncated);
+        assert_eq!(artifact_path, None);
+        assert!(event_result.ends_with(&large_body));
     }
 
     #[test]

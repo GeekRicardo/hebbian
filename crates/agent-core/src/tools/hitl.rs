@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 
 use protocol::{ApprovalDecision, PermissionRequestId, PermissionScope, UserAnswer};
 use tokio::sync::oneshot;
+use tracing::info;
 
 use crate::definition::{DefaultPermission, PermissionPolicy};
 use crate::effects::{EffectClass, Effects};
@@ -51,6 +52,7 @@ enum Pending {
         /// 路径越界审批走 `open_approval(None, None)` 不写 learned 表。
         tool_name: Option<String>,
         fingerprint: Option<String>,
+        effects: Option<Effects>,
         /// 危险复合模式（架构 §4.4.2.2）触发的审批：resolve 时即使收到
         /// AllowAndRemember 也**不**落 learned 表 / PermissionStore——cd-git-compound
         /// 这类不可信复合不该一键放行同类后续命令。
@@ -135,66 +137,202 @@ impl HitlGate {
     /// 3. 收到 `ApprovalDecision` 后决定是否执行
     pub fn check(&self, tool_name: &str, effects: &Effects) -> PermissionDecision {
         let fingerprint = effects.command_fingerprint.as_deref();
+
+        if let Some(decision) = self.check_without_policy(tool_name, effects) {
+            return decision;
+        }
+
+        // 6) 静态策略按名命中
+        if self.policy.auto_approve.iter().any(|n| n == tool_name) {
+            info!(
+                tool = %tool_name,
+                "permission: policy.auto_approve → Approved"
+            );
+            return PermissionDecision::Approved;
+        }
+        if self.policy.always_ask.iter().any(|n| n == tool_name) {
+            info!(
+                tool = %tool_name,
+                "permission: policy.always_ask → NeedsApproval"
+            );
+            return self.needs_approval(tool_name, fingerprint, effects);
+        }
+
+        // 7) 按 effects 默认行为
+        let decision = match effects.class {
+            EffectClass::Network | EffectClass::Mutating | EffectClass::Destructive => {
+                match self.policy.default_action {
+                    DefaultPermission::Auto => {
+                        info!(
+                            tool = %tool_name,
+                            class = ?effects.class,
+                            "permission: default_action=Auto → Approved"
+                        );
+                        PermissionDecision::Approved
+                    }
+                    DefaultPermission::Ask => {
+                        info!(
+                            tool = %tool_name,
+                            class = ?effects.class,
+                            "permission: default_action=Ask → NeedsApproval"
+                        );
+                        self.needs_approval(tool_name, fingerprint, effects)
+                    }
+                    DefaultPermission::Deny => {
+                        info!(
+                            tool = %tool_name,
+                            class = ?effects.class,
+                            "permission: default_action=Deny → Denied"
+                        );
+                        PermissionDecision::Denied {
+                            reason: "策略默认拒绝".into(),
+                        }
+                    }
+                }
+            }
+            EffectClass::ReadOnly | EffectClass::NeedsHumanInput => {
+                unreachable!("已在前面分支短路")
+            }
+        };
+        decision
+    }
+
+    fn check_without_policy(
+        &self,
+        tool_name: &str,
+        effects: &Effects,
+    ) -> Option<PermissionDecision> {
+        let fingerprint = effects.command_fingerprint.as_deref();
         let has_segments = !effects.segments.is_empty();
+
+        let fp_display = fingerprint.unwrap_or("");
+        let class_label = match effects.class {
+            EffectClass::ReadOnly => "ReadOnly",
+            EffectClass::Mutating => "Mutating",
+            EffectClass::Destructive => "Destructive",
+            EffectClass::Network => "Network",
+            EffectClass::NeedsHumanInput => "NeedsHumanInput",
+        };
 
         // 1) NeedsHumanInput 不走审批（dispatcher 走 ask 路径）
         if matches!(effects.class, EffectClass::NeedsHumanInput) {
-            return PermissionDecision::Approved;
+            info!(
+                tool = %tool_name,
+                "permission.check: NeedsHumanInput → Approved (ask path)"
+            );
+            return Some(PermissionDecision::Approved);
         }
 
         // 2) 用户显式"永久拒绝"优先于一切
         {
             let learned = self.learned.lock().unwrap();
             if learned.auto_denied_tools.iter().any(|n| n == tool_name) {
-                return PermissionDecision::Denied {
+                info!(
+                    tool = %tool_name,
+                    "permission.check: auto_denied_tools → Denied (用户已永久拒绝)"
+                );
+                return Some(PermissionDecision::Denied {
                     reason: "用户已永久拒绝该工具".into(),
-                };
+                });
             }
         }
 
-        // 3) 危险复合模式（架构 §4.4.2.2）：cd-git-compound / multi-cd / write-git-meta /
-        //    rm-rf-root / ast-too-complex 等命中任一种 → 强制走人工审批，覆盖一切 allow
-        //    规则，且 resolve 时禁止 AllowAndRemember 落盘。
+        // 3) 危险复合模式（架构 §4.4.2.2）：强制走人工审批，覆盖一切 allow 规则。
         if effects.has_dangerous_pattern() {
-            return self.needs_approval_no_remember(tool_name, fingerprint);
+            info!(
+                tool = %tool_name,
+                kinds = ?effects.dangerous_kinds,
+                "permission.check: dangerous pattern → NeedsApproval (no remember)"
+            );
+            return Some(self.needs_approval_no_remember(tool_name, fingerprint, effects));
         }
 
         // 4) ReadOnly 永远放行：effects 自报无副作用，always_ask 不该再拦。
-        //    例如 Bash 解析 `ls` 为 ReadOnly 后即便 always_ask 含 "Bash" 也直接通过。
         if matches!(effects.class, EffectClass::ReadOnly) {
-            return PermissionDecision::Approved;
+            info!(
+                tool = %tool_name,
+                fingerprint = fp_display,
+                "permission.check: ReadOnly → Approved (auto)"
+            );
+            return Some(PermissionDecision::Approved);
         }
 
         // 5) 用户累计的"允许并记住"——Bash/PowerShell 走段级匹配，其它工具退回工具名级。
-        //    Bash 段级语义：**全部段**都被某条 learned pattern 命中才算 Approved。
         {
             let learned = self.learned.lock().unwrap();
+            let patterns_count = learned.auto_approved_patterns.len();
+            let tools_count = learned.auto_approved_tools.len();
             if has_segments {
-                let all_seg_allowed = effects.segments.iter().all(|seg| {
-                    learned.auto_approved_patterns.iter().any(|(t, prefix)| {
+                let mut all_seg_allowed = true;
+                for seg in &effects.segments {
+                    let seg_matched = learned.auto_approved_patterns.iter().any(|(t, prefix)| {
                         t == tool_name && fingerprint_matches(&seg.fingerprint, prefix)
-                    })
-                });
+                    });
+                    if seg_matched {
+                        info!(
+                            tool = %tool_name,
+                            segment = %seg.fingerprint,
+                            "permission.check: segment matched learned pattern → allowed"
+                        );
+                    } else {
+                        info!(
+                            tool = %tool_name,
+                            segment = %seg.fingerprint,
+                            patterns_count = patterns_count,
+                            "permission.check: segment NOT matched in learned patterns"
+                        );
+                        all_seg_allowed = false;
+                    }
+                }
                 if all_seg_allowed {
-                    return PermissionDecision::Approved;
+                    info!(
+                        tool = %tool_name,
+                        n_segments = effects.segments.len(),
+                        "permission.check: all segments matched learned patterns → Approved"
+                    );
+                    return Some(PermissionDecision::Approved);
                 }
             } else if let Some(fp) = fingerprint {
-                if learned
+                let pat_matched = learned
                     .auto_approved_patterns
                     .iter()
-                    .any(|(t, prefix)| t == tool_name && fingerprint_matches(fp, prefix))
-                {
-                    return PermissionDecision::Approved;
+                    .any(|(t, prefix)| t == tool_name && fingerprint_matches(fp, prefix));
+                if pat_matched {
+                    info!(
+                        tool = %tool_name,
+                        fingerprint = %fp,
+                        "permission.check: fingerprint matched learned pattern → Approved"
+                    );
+                    return Some(PermissionDecision::Approved);
+                } else {
+                    info!(
+                        tool = %tool_name,
+                        fingerprint = %fp,
+                        patterns_count = patterns_count,
+                        "permission.check: fingerprint NOT matched in learned patterns"
+                    );
                 }
             }
-            if learned.auto_approved_tools.iter().any(|n| n == tool_name) {
-                return PermissionDecision::Approved;
+            let tool_matched = learned.auto_approved_tools.iter().any(|n| n == tool_name);
+            if tool_matched {
+                info!(
+                    tool = %tool_name,
+                    "permission.check: tool-level learned rule → Approved"
+                );
+                return Some(PermissionDecision::Approved);
+            }
+            if !has_segments && fingerprint.is_none() {
+                info!(
+                    tool = %tool_name,
+                    patterns_count = patterns_count,
+                    tools_count = tools_count,
+                    class = class_label,
+                    "permission.check: no learned rules matched (no fingerprint to match)"
+                );
             }
         }
 
         // 5b) PermissionStore（Session → Project → Global）—— 长期规则
-        //     Bash/PowerShell 走段级查询；其它工具按 effects.paths 多路径查询
-        //     （让 `Edit(/dir/)` 这类目录前缀规则真正命中子文件，否则会反复审批）。
         if let Some(store) = &self.permission_store {
             let sid = self.session_id.as_deref();
             let wd = self.workdir.as_deref();
@@ -204,50 +342,70 @@ impl HitlGate {
                     .iter()
                     .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
                     .collect();
-                store.find_for_segments(sid, wd, tool_name, &seg_pairs)
+                let r = store.find_for_segments(sid, wd, tool_name, &seg_pairs);
+                info!(
+                    tool = %tool_name,
+                    result = ?r.map(|r| format!("{:?}", r)),
+                    segments = ?seg_pairs.iter().map(|(f,_)| f).collect::<Vec<_>>(),
+                    "permission.check: PermissionStore.find_for_segments"
+                );
+                r
             } else if !effects.paths.is_empty() {
                 let path_strs: Vec<String> = effects
                     .paths
                     .iter()
                     .map(|p| p.to_string_lossy().into_owned())
                     .collect();
-                store.find_for_paths(sid, wd, tool_name, fingerprint, &path_strs)
+                let r = store.find_for_paths(sid, wd, tool_name, fingerprint, &path_strs);
+                info!(
+                    tool = %tool_name,
+                    result = ?r.map(|r| format!("{:?}", r)),
+                    paths = path_strs.join(", "),
+                    "permission.check: PermissionStore.find_for_paths"
+                );
+                r
             } else {
-                store.find(sid, wd, tool_name, fingerprint, None)
+                let r = store.find(sid, wd, tool_name, fingerprint, None);
+                info!(
+                    tool = %tool_name,
+                    result = ?r.map(|r| format!("{:?}", r)),
+                    "permission.check: PermissionStore.find"
+                );
+                r
             };
             if let Some(dec) = store_decision {
-                return match dec {
+                let label = match dec {
+                    RuleEffect::Allow => "Allow",
+                    RuleEffect::Deny => "Deny",
+                };
+                info!(
+                    tool = %tool_name,
+                    effect = label,
+                    "permission.check: PermissionStore hit → {}",
+                    label
+                );
+                return Some(match dec {
                     RuleEffect::Allow => PermissionDecision::Approved,
                     RuleEffect::Deny => PermissionDecision::Denied {
                         reason: "PermissionStore 规则拒绝".into(),
                     },
-                };
+                });
+            } else {
+                info!(
+                    tool = %tool_name,
+                    class = class_label,
+                    "permission.check: PermissionStore miss (no matching rule)"
+                );
             }
+        } else {
+            info!(
+                tool = %tool_name,
+                class = class_label,
+                "permission.check: no PermissionStore configured"
+            );
         }
 
-        // 6) 静态策略按名命中
-        if self.policy.auto_approve.iter().any(|n| n == tool_name) {
-            return PermissionDecision::Approved;
-        }
-        if self.policy.always_ask.iter().any(|n| n == tool_name) {
-            return self.needs_approval(tool_name, fingerprint);
-        }
-
-        // 7) 按 effects 默认行为
-        match effects.class {
-            EffectClass::Network | EffectClass::Mutating | EffectClass::Destructive => {
-                match self.policy.default_action {
-                    DefaultPermission::Auto => PermissionDecision::Approved,
-                    DefaultPermission::Ask => self.needs_approval(tool_name, fingerprint),
-                    DefaultPermission::Deny => PermissionDecision::Denied {
-                        reason: "策略默认拒绝".into(),
-                    },
-                }
-            }
-            EffectClass::ReadOnly | EffectClass::NeedsHumanInput => {
-                unreachable!("已在前面分支短路")
-            }
-        }
+        None
     }
 
     /// 显式开一张审批 pending（路径越界、长 run 续跑等无法用 `check` 表达的场景）。
@@ -260,7 +418,7 @@ impl HitlGate {
         tool_name: Option<&str>,
         fingerprint: Option<&str>,
     ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
-        self.open_approval_inner(tool_name, fingerprint, false)
+        self.open_approval_inner(tool_name, fingerprint, None, false)
     }
 
     /// 同 [`open_approval`](Self::open_approval)，但 resolve 时即使收到 `AllowAndRemember`
@@ -270,13 +428,30 @@ impl HitlGate {
         tool_name: Option<&str>,
         fingerprint: Option<&str>,
     ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
-        self.open_approval_inner(tool_name, fingerprint, true)
+        self.open_approval_inner(tool_name, fingerprint, None, true)
+    }
+
+    fn open_tool_approval(
+        &self,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        effects: &Effects,
+        refuse_remember: bool,
+    ) -> PermissionDecision {
+        let (request_id, waiter) = self.open_approval_inner(
+            Some(tool_name),
+            fingerprint,
+            Some(effects.clone()),
+            refuse_remember,
+        );
+        PermissionDecision::NeedsApproval { request_id, waiter }
     }
 
     fn open_approval_inner(
         &self,
         tool_name: Option<&str>,
         fingerprint: Option<&str>,
+        effects: Option<Effects>,
         refuse_remember: bool,
     ) -> (PermissionRequestId, oneshot::Receiver<ApprovalDecision>) {
         let request_id = PermissionRequestId::new();
@@ -287,6 +462,7 @@ impl HitlGate {
                 sender: tx,
                 tool_name: tool_name.map(str::to_owned),
                 fingerprint: fingerprint.map(str::to_owned),
+                effects,
                 refuse_remember,
             },
         );
@@ -304,6 +480,11 @@ impl HitlGate {
         (request_id, rx)
     }
 
+    /// request_id 是否仍在本 gate 的 pending 表里。
+    pub fn is_pending(&self, request_id: &PermissionRequestId) -> bool {
+        self.pending.lock().unwrap().contains_key(request_id)
+    }
+
     /// Surface 提交审批结果，唤醒对应 waiter。
     /// 当 `decision` 为 `AllowAndRemember` 且 scope 是 Session/Run 时按 pending 中保存的
     /// tool_name / fingerprint 写入 learned 表。
@@ -313,13 +494,19 @@ impl HitlGate {
             sender,
             tool_name,
             fingerprint,
+            effects: _,
             refuse_remember,
         }) = entry
         else {
             return;
         };
 
-        if let ApprovalDecision::AllowAndRemember { scope, pattern, extra_patterns } = &decision {
+        if let ApprovalDecision::AllowAndRemember {
+            scope,
+            pattern,
+            extra_patterns,
+        } = &decision
+        {
             if refuse_remember {
                 tracing::debug!(
                     tool = tool_name.as_deref().unwrap_or(""),
@@ -333,10 +520,53 @@ impl HitlGate {
                 for extra in extra_patterns {
                     self.remember(*scope, name, Some(extra.as_str()), fingerprint.as_deref());
                 }
+                self.resolve_matching_pending_after_remember(request_id);
             }
         }
 
         let _ = sender.send(decision);
+    }
+
+    fn resolve_matching_pending_after_remember(&self, current_request_id: &PermissionRequestId) {
+        let mut auto_resolved: Vec<oneshot::Sender<ApprovalDecision>> = Vec::new();
+        {
+            let mut pending = self.pending.lock().unwrap();
+            let matching_ids: Vec<PermissionRequestId> = pending
+                .iter()
+                .filter_map(|(id, entry)| {
+                    if id == current_request_id {
+                        return None;
+                    }
+                    let Pending::Approval {
+                        tool_name: Some(tool_name),
+                        effects: Some(effects),
+                        refuse_remember: false,
+                        ..
+                    } = entry
+                    else {
+                        return None;
+                    };
+                    if matches!(
+                        self.check_without_policy(tool_name, effects),
+                        Some(PermissionDecision::Approved)
+                    ) {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for id in matching_ids {
+                if let Some(Pending::Approval { sender, .. }) = pending.remove(&id) {
+                    auto_resolved.push(sender);
+                }
+            }
+        }
+
+        for sender in auto_resolved {
+            let _ = sender.send(ApprovalDecision::AllowOnce);
+        }
     }
 
     /// Surface 提交提问回应，唤醒对应 waiter。
@@ -362,9 +592,13 @@ impl HitlGate {
         }
     }
 
-    fn needs_approval(&self, tool_name: &str, fingerprint: Option<&str>) -> PermissionDecision {
-        let (request_id, waiter) = self.open_approval(Some(tool_name), fingerprint);
-        PermissionDecision::NeedsApproval { request_id, waiter }
+    fn needs_approval(
+        &self,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        effects: &Effects,
+    ) -> PermissionDecision {
+        self.open_tool_approval(tool_name, fingerprint, effects, false)
     }
 
     /// 同 [`needs_approval`](Self::needs_approval)，但 pending 带 `refuse_remember=true`。
@@ -373,9 +607,9 @@ impl HitlGate {
         &self,
         tool_name: &str,
         fingerprint: Option<&str>,
+        effects: &Effects,
     ) -> PermissionDecision {
-        let (request_id, waiter) = self.open_approval_no_remember(Some(tool_name), fingerprint);
-        PermissionDecision::NeedsApproval { request_id, waiter }
+        self.open_tool_approval(tool_name, fingerprint, effects, true)
     }
 
     /// 把 AllowAndRemember 翻成对应 scope 的记忆。
@@ -478,13 +712,9 @@ impl HitlGate {
                     return;
                 };
                 if let Some(pat) = build_pattern(tool_name, pattern) {
-                    if let Err(e) = store.add(
-                        PermissionScope::Global,
-                        None,
-                        None,
-                        RuleEffect::Allow,
-                        pat,
-                    ) {
+                    if let Err(e) =
+                        store.add(PermissionScope::Global, None, None, RuleEffect::Allow, pat)
+                    {
                         tracing::warn!(error = %e, "PermissionStore.add(Global) 失败");
                     }
                 }
@@ -708,15 +938,16 @@ mod tests {
     /// 修前 HitlGate::check 把 path 传 None 给 store.find，`Edit(/dir/)` 规则永远不命中。
     #[test]
     fn project_directory_rule_matches_subfile_without_reapproval() {
-        let dir = std::env::temp_dir().join(format!(
-            "hebbian-hitl-subdir-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-hitl-subdir-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(PermissionStore::open(&dir).unwrap());
         let workdir = PathBuf::from("/Users/x/proj");
-        let gate = HitlGate::new(PermissionPolicy::default())
-            .with_store(store, "sess-1", Some(workdir.clone()));
+        let gate = HitlGate::new(PermissionPolicy::default()).with_store(
+            store,
+            "sess-1",
+            Some(workdir.clone()),
+        );
 
         // 第一次：Edit /foo/bar/a.rs → NeedsApproval；用户选 AllowAndRemember(Project, "/foo/bar/")
         let edit_a = Effects {
@@ -762,6 +993,111 @@ mod tests {
         match gate.check("Edit", &edit_c) {
             PermissionDecision::NeedsApproval { .. } => {}
             other => panic!("expected NeedsApproval for path outside rule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remember_resolves_already_pending_matching_bash_approval_for_all_scopes() {
+        for scope in [
+            PermissionScope::Session,
+            PermissionScope::Project,
+            PermissionScope::Global,
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("hebbian-hitl-pending-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = Arc::new(PermissionStore::open(&dir).unwrap());
+            let gate = HitlGate::new(PermissionPolicy::default()).with_store(
+                store,
+                "sess-1",
+                Some(PathBuf::from("/Users/x/proj")),
+            );
+
+            let first = gate.check("Bash", &destructive_effects(Some("git status")));
+            let second = gate.check("Bash", &destructive_effects(Some("git status -uno")));
+            let first_id = match first {
+                PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+                other => panic!("expected first NeedsApproval for {scope:?}, got {other:?}"),
+            };
+            let mut second_waiter = match second {
+                PermissionDecision::NeedsApproval { waiter, .. } => waiter,
+                other => panic!("expected second NeedsApproval for {scope:?}, got {other:?}"),
+            };
+
+            gate.resolve(
+                &first_id,
+                ApprovalDecision::AllowAndRemember {
+                    scope,
+                    pattern: Some("git status".into()),
+                    extra_patterns: Vec::new(),
+                },
+            );
+
+            assert!(matches!(
+                second_waiter.try_recv(),
+                Ok(ApprovalDecision::AllowOnce)
+            ));
+        }
+    }
+
+    #[test]
+    fn remember_resolves_already_pending_matching_edit_approval_for_all_scopes() {
+        for scope in [
+            PermissionScope::Session,
+            PermissionScope::Project,
+            PermissionScope::Global,
+        ] {
+            let dir = std::env::temp_dir().join(format!(
+                "hebbian-hitl-edit-pending-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = Arc::new(PermissionStore::open(&dir).unwrap());
+            let gate = HitlGate::new(PermissionPolicy::default()).with_store(
+                store,
+                "sess-1",
+                Some(PathBuf::from("/Users/x/proj")),
+            );
+            let edit_a = Effects {
+                paths: vec![PathBuf::from("/foo/bar/a.rs")],
+                command_fingerprint: None,
+                network: false,
+                domain: None,
+                risk: RiskLevel::Medium,
+                class: EffectClass::Mutating,
+                is_concurrent_safe: false,
+                segments: Vec::new(),
+                dangerous_kinds: Vec::new(),
+            };
+            let edit_b = Effects {
+                paths: vec![PathBuf::from("/foo/bar/b.rs")],
+                ..edit_a.clone()
+            };
+
+            let first = gate.check("Edit", &edit_a);
+            let second = gate.check("Edit", &edit_b);
+            let first_id = match first {
+                PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+                other => panic!("expected first NeedsApproval for {scope:?}, got {other:?}"),
+            };
+            let mut second_waiter = match second {
+                PermissionDecision::NeedsApproval { waiter, .. } => waiter,
+                other => panic!("expected second NeedsApproval for {scope:?}, got {other:?}"),
+            };
+
+            gate.resolve(
+                &first_id,
+                ApprovalDecision::AllowAndRemember {
+                    scope,
+                    pattern: Some("/foo/bar/".into()),
+                    extra_patterns: Vec::new(),
+                },
+            );
+
+            assert!(matches!(
+                second_waiter.try_recv(),
+                Ok(ApprovalDecision::AllowOnce)
+            ));
         }
     }
 

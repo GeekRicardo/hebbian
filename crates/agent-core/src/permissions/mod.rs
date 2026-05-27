@@ -46,10 +46,7 @@ enum Arg {
     /// `<Tool>` 或 `<Tool>()` — 任意调用该工具
     Any,
     /// `Bash(cmd)` 或 `Bash(cmd:path)` — 命令前缀 + 可选路径前缀
-    Bash {
-        cmd: String,
-        path: Option<String>,
-    },
+    Bash { cmd: String, path: Option<String> },
     /// `<FileTool>(/path)` — 路径前缀
     Path { prefix: String },
     /// `<WebTool>(domain.com)` — 域名后缀
@@ -91,12 +88,7 @@ impl Permission {
     /// - `tool_name`：当前工具（如 `"Bash"`）
     /// - `fingerprint`：Bash 类工具的命令级指纹（如 `"git status -uno"`）
     /// - `path`：工具操作的路径或域名
-    pub fn matches(
-        &self,
-        tool_name: &str,
-        fingerprint: Option<&str>,
-        path: Option<&str>,
-    ) -> bool {
+    pub fn matches(&self, tool_name: &str, fingerprint: Option<&str>, path: Option<&str>) -> bool {
         if self.tool != "*" && self.tool != tool_name {
             return false;
         }
@@ -108,16 +100,16 @@ impl Permission {
                     .unwrap_or(false);
                 let path_ok = match pp {
                     None => true,
-                    Some(prefix) => path.map(|p| p.starts_with(prefix.as_str())).unwrap_or(false),
+                    Some(prefix) => path
+                        .map(|p| p.starts_with(prefix.as_str()))
+                        .unwrap_or(false),
                 };
                 cmd_ok && path_ok
             }
             Arg::Path { prefix } => path
                 .map(|p| p.starts_with(prefix.as_str()))
                 .unwrap_or(false),
-            Arg::Domain { suffix } => path
-                .map(|d| d.ends_with(suffix.as_str()))
-                .unwrap_or(false),
+            Arg::Domain { suffix } => path.map(|d| d.ends_with(suffix.as_str())).unwrap_or(false),
         }
     }
 
@@ -251,7 +243,9 @@ impl PermissionStore {
         }
         match permissions_store::load_global(&self.data_dir) {
             Ok(file) => *g = PermissionsView::from_file(file, current),
-            Err(e) => tracing::warn!(error = %e, "global permissions.json reload 失败，沿用旧 cache"),
+            Err(e) => {
+                tracing::warn!(error = %e, "global permissions.json reload 失败，沿用旧 cache")
+            }
         }
     }
 
@@ -267,27 +261,26 @@ impl PermissionStore {
                 *view = PermissionsView::default();
                 return;
             }
-            (None, None) => view.mtime.is_none()
-                && view.allow.is_empty()
-                && view.deny.is_empty()
-                && view.paths.is_empty(),
+            (None, None) => {
+                view.mtime.is_none()
+                    && view.allow.is_empty()
+                    && view.deny.is_empty()
+                    && view.paths.is_empty()
+            }
         };
         if !stale {
             return;
         }
         match permissions_store::load_project(&self.data_dir, workdir) {
             Ok(file) => *view = PermissionsView::from_file(file, current),
-            Err(e) => tracing::warn!(error = %e, enc, "project permissions.json reload 失败，沿用旧 cache"),
+            Err(e) => {
+                tracing::warn!(error = %e, enc, "project permissions.json reload 失败，沿用旧 cache")
+            }
         }
     }
 
     /// 给 session 视图灌入历史 pattern（surface 启动加载 session 时用）。
-    pub fn load_session_view(
-        &self,
-        session_id: &str,
-        allow: Vec<String>,
-        deny: Vec<String>,
-    ) {
+    pub fn load_session_view(&self, session_id: &str, allow: Vec<String>, deny: Vec<String>) {
         self.session_views.lock().unwrap().insert(
             session_id.to_string(),
             (parse_list(&allow), parse_list(&deny)),
@@ -362,7 +355,10 @@ impl PermissionStore {
         if deny.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
             return Some(RuleEffect::Deny);
         }
-        if allow.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+        if allow
+            .iter()
+            .any(|p| p.matches(tool_name, fingerprint, path))
+        {
             return Some(RuleEffect::Allow);
         }
         None
@@ -462,7 +458,9 @@ impl PermissionStore {
 
         // 阶段 2：全部段命中 allow → Allow
         let all_allow = segments.iter().all(|(fp, write_targets)| {
-            allow.iter().any(|r| segment_hits(r, tool_name, fp, write_targets))
+            allow
+                .iter()
+                .any(|r| segment_hits(r, tool_name, fp, write_targets))
         });
         if all_allow {
             return Some(RuleEffect::Allow);
@@ -520,8 +518,8 @@ impl PermissionStore {
         match scope {
             PermissionScope::Once => Ok(()),
             PermissionScope::Session => {
-                let sid = session_id
-                    .ok_or_else(|| AppError::msg("Session scope 需要 session_id"))?;
+                let sid =
+                    session_id.ok_or_else(|| AppError::msg("Session scope 需要 session_id"))?;
                 let mut views = self.session_views.lock().unwrap();
                 let entry = views
                     .entry(sid.to_string())
@@ -536,8 +534,7 @@ impl PermissionStore {
                 Ok(())
             }
             PermissionScope::Project => {
-                let wd = workdir
-                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                let wd = workdir.ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
                 self.refresh_project(wd);
                 let enc = projects::encode_workdir(wd);
                 let mut p = self.projects.lock().unwrap();
@@ -572,9 +569,13 @@ impl PermissionStore {
         match scope {
             PermissionScope::Once => Ok(false),
             PermissionScope::Session => {
-                let Some(sid) = session_id else { return Ok(false) };
+                let Some(sid) = session_id else {
+                    return Ok(false);
+                };
                 let mut views = self.session_views.lock().unwrap();
-                let Some(entry) = views.get_mut(sid) else { return Ok(false) };
+                let Some(entry) = views.get_mut(sid) else {
+                    return Ok(false);
+                };
                 let target = match decision {
                     RuleEffect::Allow => &mut entry.0,
                     RuleEffect::Deny => &mut entry.1,
@@ -584,12 +585,13 @@ impl PermissionStore {
                 Ok(target.len() != before)
             }
             PermissionScope::Project => {
-                let wd = workdir
-                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                let wd = workdir.ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
                 self.refresh_project(wd);
                 let enc = projects::encode_workdir(wd);
                 let mut p = self.projects.lock().unwrap();
-                let Some(view) = p.get_mut(&enc) else { return Ok(false) };
+                let Some(view) = p.get_mut(&enc) else {
+                    return Ok(false);
+                };
                 let removed = remove_unique(view, decision, pattern);
                 if removed {
                     let file = view.to_file();
@@ -623,9 +625,13 @@ impl PermissionStore {
         match scope {
             PermissionScope::Once => Vec::new(),
             PermissionScope::Session => {
-                let Some(sid) = session_id else { return Vec::new() };
+                let Some(sid) = session_id else {
+                    return Vec::new();
+                };
                 let views = self.session_views.lock().unwrap();
-                let Some((a, d)) = views.get(sid) else { return Vec::new() };
+                let Some((a, d)) = views.get(sid) else {
+                    return Vec::new();
+                };
                 let list = match decision {
                     RuleEffect::Allow => a,
                     RuleEffect::Deny => d,
@@ -638,21 +644,34 @@ impl PermissionStore {
                     let enc = projects::encode_workdir(wd);
                     let p = self.projects.lock().unwrap();
                     p.get(&enc)
-                        .map(|v| select_list(v, decision).iter().map(|p| p.raw.clone()).collect())
+                        .map(|v| {
+                            select_list(v, decision)
+                                .iter()
+                                .map(|p| p.raw.clone())
+                                .collect()
+                        })
                         .unwrap_or_default()
                 } else {
                     self.projects
                         .lock()
                         .unwrap()
                         .values()
-                        .flat_map(|v| select_list(v, decision).iter().map(|p| p.raw.clone()).collect::<Vec<_>>())
+                        .flat_map(|v| {
+                            select_list(v, decision)
+                                .iter()
+                                .map(|p| p.raw.clone())
+                                .collect::<Vec<_>>()
+                        })
                         .collect()
                 }
             }
             PermissionScope::Global => {
                 self.refresh_global();
                 let g = self.global.lock().unwrap();
-                select_list(&g, decision).iter().map(|p| p.raw.clone()).collect()
+                select_list(&g, decision)
+                    .iter()
+                    .map(|p| p.raw.clone())
+                    .collect()
             }
         }
     }
@@ -688,8 +707,7 @@ impl PermissionStore {
     ) -> AppResult<()> {
         match scope {
             PermissionScope::Project => {
-                let wd = workdir
-                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                let wd = workdir.ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
                 self.refresh_project(wd);
                 let enc = projects::encode_workdir(wd);
                 let mut p = self.projects.lock().unwrap();
@@ -726,12 +744,13 @@ impl PermissionStore {
     ) -> AppResult<bool> {
         match scope {
             PermissionScope::Project => {
-                let wd = workdir
-                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                let wd = workdir.ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
                 self.refresh_project(wd);
                 let enc = projects::encode_workdir(wd);
                 let mut p = self.projects.lock().unwrap();
-                let Some(view) = p.get_mut(&enc) else { return Ok(false) };
+                let Some(view) = p.get_mut(&enc) else {
+                    return Ok(false);
+                };
                 let before = view.paths.len();
                 view.paths.retain(|p| p.as_path() != path);
                 let removed = view.paths.len() != before;
@@ -775,8 +794,7 @@ impl PermissionStore {
                 Ok(())
             }
             PermissionScope::Project => {
-                let wd = workdir
-                    .ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
+                let wd = workdir.ok_or_else(|| AppError::msg("Project scope 需要 workdir"))?;
                 self.refresh_project(wd);
                 let enc = projects::encode_workdir(wd);
                 let mut p = self.projects.lock().unwrap();
@@ -833,10 +851,18 @@ fn match_view(
     fingerprint: Option<&str>,
     path: Option<&str>,
 ) -> Option<RuleEffect> {
-    if view.deny.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+    if view
+        .deny
+        .iter()
+        .any(|p| p.matches(tool_name, fingerprint, path))
+    {
         return Some(RuleEffect::Deny);
     }
-    if view.allow.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
+    if view
+        .allow
+        .iter()
+        .any(|p| p.matches(tool_name, fingerprint, path))
+    {
         return Some(RuleEffect::Allow);
     }
     None
