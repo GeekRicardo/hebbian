@@ -584,6 +584,24 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
         />
       </FieldRow>
 
+      <FieldRow label="命令 Shell" description="运行命令前先用这个 Shell 读取你的 PATH；留空时使用系统默认 Shell">
+        <input
+          type="text"
+          value={draft.general.shell ?? ""}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              general: {
+                ...draft.general,
+                shell: e.target.value.trim() ? e.target.value : null,
+              },
+            })
+          }
+          placeholder="/bin/zsh"
+          className="w-72 rounded-md border border-border bg-background px-2 py-1 text-sm"
+        />
+      </FieldRow>
+
       <FieldRow label="Debug 日志" description="开启后右侧工作台会显示 Model I/O 入口，便于查看模型请求/响应原文">
         <input
           type="checkbox"

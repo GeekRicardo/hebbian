@@ -103,6 +103,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     general: {
       ...settings.general,
       show_grep_search_path: settings.general.show_grep_search_path ?? true,
+      shell: settings.general.shell ?? null,
     },
   };
 }

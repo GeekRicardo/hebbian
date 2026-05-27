@@ -31,6 +31,9 @@ pub struct GeneralSettings {
     /// Grep 工具结果中显示搜索位置。
     #[serde(default = "default_show_grep_search_path")]
     pub show_grep_search_path: bool,
+    /// 工具执行前用于初始化 PATH 的 shell。空表示使用系统默认 shell。
+    #[serde(default = "default_shell")]
+    pub shell: Option<String>,
     /// 工具调度日志落盘开关。开启后每条 tool_start/done/permission 事件写入
     /// `~/.hebbian/logs/dispatch-YYYY-MM-DD.log`，按天 rotate，保留 30 天。
     #[serde(default)]
@@ -42,6 +45,7 @@ impl Default for GeneralSettings {
         Self {
             launch_at_login: false,
             show_grep_search_path: default_show_grep_search_path(),
+            shell: default_shell(),
             log_enabled: false,
         }
     }
@@ -49,6 +53,12 @@ impl Default for GeneralSettings {
 
 fn default_show_grep_search_path() -> bool {
     true
+}
+
+pub fn default_shell() -> Option<String> {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4733,3 +4733,208 @@
   - `crates/agent-core/prompts/base_system.md`：工具策略章节改为"文本搜索用 Grep 工具（不用 bash grep/rg）"，去掉 Grep 对代码搜索的独占语义，并添加"若有更专用的代码索引工具（如 codegraph MCP），优先用它们做符号和结构查询"
 - **影响范围**: agent-core（session / agent_loop / harness）、desktop chat 预览；不改 protocol、不改 EventPayload、不改 session.jsonl 格式。rules 内容现在随每轮 ModelRequest 的 system 字段发送（CLAUDE.md 极少改动，实践中 prompt cache 仍可高频命中）。
 - **留尾巴**: 环境变量、时间等易变信息仍走 user message `<environment>` 块，未受影响。若未来 CLAUDE.md 频繁改动导致 cache miss 率上升，可考虑给 rules 段单独建 cache breakpoint（需 model-gateway 层支持分段缓存）。
+
+### 2026-05-27 — 修订 D9：引入 subagent（Task 工具 + 单层 NestedRun + isolated/inherit 双模式）
+
+- **Why**: 用户提出要做 subagent，明确表示"先支持简单版本，可以自定义 system prompt + 专属工具"，且"后续会支持工作流式 subagent"。架构.md §13 原 D9 决策是「不做 multi-agent，删 Task* 工具」——本次决策修订。修订动机：(1) hebbian 已有的 Session / ToolRegistry / HitlGate / agent_loop 已经具备嵌套调用所需的全部砖块，缺的只是一个把它们组合的工具；(2) 用户实际诉求是「把界定清楚的子任务委托出去」，与早期假设的"完整 multi-agent 并发协作"边界不同——单层嵌套就够覆盖；(3) 完全不做等于断路线（已暗示后续要扩 workflow）。本次只做最薄底子：单个 `Task` 工具 + 一次 NestedRun + isolated/inherit 双模式，**不做** 并发 fanout、多层嵌套、跨 Run 持久 subagent 实例、专属 SubagentStart/Stop hooks。
+- **改动**（本次仅文档，代码后续 P1-P6 phase 落地）:
+  - [docs/架构.md](../docs/架构.md) §13 D9：原"不做，删 Task* 工具"改写为修订版决策，明确边界与新增的子决策（存储位置仅全局、启用状态两层 override、Task mode 由调用方选、子事件不进父流、子 Session ID 与父/子共享语义、内置工具数 13 → 14）
+  - §4.4.6：内置工具列表 13 → 14（追加 Task），改写"已删除"段说明 D9 修订
+  - §4.4.11（新增）：Subagent 与 NestedRun 完整设计——设计意图、isolated 数据流、inherit 模式、SubagentDefinition 文件格式（YAML frontmatter + body）、启用/禁用两层 override 语义、Task 工具 schema、与协议事件关系、与 HITL/Edits/Read 的共享、与参考项目对比、Phase 落地表
+  - §4.8.1 hooks 点位：把"SubagentStart / SubagentStop 暂不做（D9）"改写为"NestedRun 复用父 Session 的 hook 点位"
+  - §3.2 同步 API：新增 listSubagents / getSubagent / saveSubagent / deleteSubagent / setSubagentEnabled / listSubagentRuns / loadSubagentRun
+  - §6.1 目录布局：加 `~/.hebbian/subagents/<name>.md` + `enabled.json`（全局）+ `projects/<enc>/subagents/enabled.json`（项目级 override）+ `sessions/<parent>/subagents/<child>/`（子 NestedRun 落盘）
+  - §6.2 storage 模块：加 `subagents.rs`
+  - §16.2 / §16.3 / §16.11 对比表：Multi-agent 行更新（不再"不做"）；§16.11 优势栏新增"isolated/inherit 双模式由调用方选"
+- **影响范围**: 本次纯文档；后续代码 phase 会动 agent-core / protocol / desktop / hebweb。协议事件**不新增 variant**——子事件流不进父 surface，父只看到 ToolCall 三事件，保持向前兼容。
+- **关键设计取舍**:
+  - **定义存储仅全局**（不允许"项目代码内嵌"`.claude/agents/` 默认加载）：subagent 直接影响执行行为（模型 / 工具），不应被 git clone 后悄悄获得新身份。用户从 Claude Code 迁移要走 surface 端导入入口，与 skills 一致。代价：用户多走一步导入流程
+  - **启用状态分两层**（全局 `enabled.json` + 项目级 override）：项目级有显式值即覆盖，未设跟全局。代价：用户要理解"定义和启用是两件事"
+  - **mode 由调用方选而非定义里固定**：同一个 reviewer subagent 在不同场景下应能切 isolated/inherit；让父 agent 用参数选最灵活。代价：模型可能选错（mitigation：Task 工具 schema 的 description 写清两种模式适用场景，参考 Claude Code agents docs 用语）
+  - **子事件不进父流**：父 surface 流保持线性；子完整 transcript 单独 session.jsonl 落盘，UI 通过 `loadSubagentRun` 单独打开。代价：UI 要新做"子对话查看"入口
+  - **父子共享 HitlGate / ReadStateTracker / edits-worktree，不共享 transcript / cache / RunMode**：审批和文件状态在父级聚拢，避免双链锁；transcript/cache 隔离避免污染。代价：用户在子调用里点"始终允许"是写到父 Session 范围（而不是"仅此子调用"），需要弹窗 reason 加 `[subagent: xxx]` 前缀让用户知情
+- **后续 phase（参 §4.4.11.10）**:
+  - P1: agent-core 后端骨架（SubagentDefinition + SubagentRunner isolated 模式 + Task 工具）
+  - P2: inherit 模式 + 子 session.jsonl 落盘 + 子心跳摘要 emit
+  - P3: storage/subagents.rs（三层 enabled.json 读写 + frontmatter 解析）
+  - P4: 同步 API + 协议 ToolCall 字段补 subagent 元数据
+  - P5: 设置 UI（现有 `agents` tab 改名 `models`，新建 `agents` tab 给 subagent CRUD + 启用 toggle）
+  - P6: desktop / hebweb 翻译 + MessageBubble Task 卡片渲染
+- **留尾巴**:
+  - 本次仅文档；P1-P6 实施按 phase 切独立 commit + changelog
+  - 与 Claude Code marketplace 体系不对齐——hebbian 自有定义不接收 marketplace 推送；用户从 Claude Code `.claude/agents/` 导入靠手动入口
+  - inherit 模式下子继承父 transcript 是深拷贝，token 计费可能因父对话长而显著膨胀；后续 P2 落地时若实际跑出来过大，可加 "inherit + 自动微压缩" 选项
+
+### 2026-05-27 — Subagent 设计修订：配置位置改 settings.json + 子事件进父流嵌套渲染
+
+- **Why**: 同日讨论中用户提出三处调整：(1) 启用配置文件不要单独 `enabled.json`，全局放 `~/.hebbian/subagents/settings.json`、项目放 `~/.hebbian/projects/<enc>/settings.json` 的 `subagents` key；(2) 不要 session 维度的 subagent 配置；(3) 前端要把 subagent 渲染为一个 tool 框，子调用嵌套在框内呈现子层级——意味着子事件必须进父事件流而不是隔离落盘。
+- **改动**（仍是纯文档）:
+  - [docs/架构.md](../docs/架构.md) §6.1：项目目录布局删 `projects/<enc>/subagents/`，改为 `projects/<enc>/settings.json` 统一文件；全局 `~/.hebbian/subagents/enabled.json` 改名 `settings.json`
+  - §4.4.11.5：启用 override 语义改写——全局 `settings.json` 结构 `{ "enabled": {...} }`，项目 `settings.json` 再外包 `{ "subagents": { "enabled": {...} } }`，让 subagents 与未来其它项目级 toggle 共享一个文件
+  - §4.4.11.7：完全重写。子事件流**进父 surface 流**（不再"独立 channel + 父只看 ToolCall 三事件"），所有 EventPayload variant 加一个公共可选字段 `subagent_call_id: Option<String>`——顶层事件 None，子事件 = 父 Task 工具调用的 call_id；前端按这个字段把子事件挂到父 Task 卡片内部嵌套子层级
+  - §4.4.11.2 数据流：示意时间线改写，明确父 surface 同时收到父 Task 卡片事件 + 带 subagent_call_id 的子事件
+  - §3.1 协议事件：在 Event 列表末尾说明所有事件共享 `subagent_call_id` 字段及其语义
+  - §3.2 同步 API：删 `listSubagentRuns`（父 transcript 里 Task 卡片本身就是入口，前端遍历即可）；保留 `loadSubagentRun` 给"查看完整子对话" detail 视图
+  - §13 决策记录：「启用/禁用两层 override」与「子事件路径」两条决策同步改写
+  - §16.3 工具对比表：hebbian "子事件路径"那格更新为"进父事件流（带 subagent_call_id 字段）+ 子 session.jsonl 落盘 audit"
+  - §4.4.11.10 Phase 表 P2 / P6 描述同步更新为新方案
+- **影响范围**: 本次仍纯文档；后续 P1-P6 代码 phase 按新方案落地。**关键变化**：协议层需扩 EventPayload 公共字段（additive，向前兼容）；NestedRunner 实现需要把子 EventSink 包一层 "subagent_call_id 注入"装饰器
+- **关键取舍**:
+  - 项目级 settings 收敛到一个文件（不开 `subagents/` 子目录）：未来其它项目级 toggle（hooks_enabled / model_overrides）能复用，避免目录碎片化；代价：subagents 改名时该文件里 stale key 需手动清理（与全局 `settings.json` 同问题）
+  - 子事件用公共字段 `subagent_call_id` 而非新增 `SubagentDelta` 包装事件：（1）复用所有现有 variant 的 schema 与前端渲染组件（子工具卡片就是普通工具卡片，只是被嵌套）；（2）未来扩并发 fanout 时多个 NestedRun 用不同 call_id 区分语义自然；（3）只在 Recorder 转发处插一层装饰器即可，不动 EventPayload 主结构
+  - 删 `listSubagentRuns`：前端遍历父 transcript 找 name="Task" 工具卡片即可得到所有子 Run 列表，再多一个 list API 是冗余；保留 `loadSubagentRun` 是因为前端只持有事件流，detail 视图需要拉子 session.jsonl 看 partial sidecar / reasoning 等完整数据
+- **留尾巴**:
+  - P1 起手前要先在 protocol crate 给 EventPayload 加 `subagent_call_id` 字段——这是后续所有 phase 的协议前提
+  - 前端 MessageBubble 嵌套渲染的 UI 细节（缩进多少、背景色用哪个 token、子工具卡片是否可独立折叠）等 P5 实施时按 mock 定
+
+### 2026-05-27 — Subagent 设计追加：支持后台模式（run_in_background）+ BackgroundShells 升级为 BgTaskRegistry
+
+- **Why**: 同日讨论第四轮：用户要求 subagent 支持类似 Bash 的 `run_in_background` 后台模式，完成时通过任务 Notification（即 BgTaskFinished wakeup）通知父 agent。hebbian 已有 §4.12 BackgroundShells + WakeupScheduler + WaitForTask + `<wakeup>` XML 一整套长任务挂起 + 唤醒体系，subagent 后台正好对接进去，不需要新通路。
+- **改动**（仍纯文档）:
+  - [docs/架构.md](../docs/架构.md) §4.4.11.6 Task schema 加 `run_in_background: boolean` 参数（缺省 false）
+  - §4.4.11.7 新增"后台模式"小节（原 §4.4.11.7-10 顺延到 §4.4.11.8-11）：描述 spawn_background 流程、立即返回 task_id 给父、子终态时 WakeupScheduler 发 BgTaskFinished 通过 PendingInputs 插队成 `<wakeup>` user message、前端嵌套渲染下后台 Task 卡片"运行中"徽章 + 子事件实时流入卡片内嵌区域
+  - 关键架构升级：**BackgroundShells 升级为通用 BgTaskRegistry**——task_id 命名空间统一（`shell-{ulid}` / `subagent-{ulid}` 前缀路由），WaitForTask 按前缀分发到子 NestedRun 等待器或 Bash shell 等待器，BashOutput / KillShell 仍仅对 shell 前缀生效（subagent 不支持增量输出读 + 强杀，复杂度本期不做）
+  - §16.3 工具对比表"并发 fanout"行更新：从"不支持（本期）"改为"异步后台支持（run_in_background 走 BgTaskRegistry + Wakeup）；真正多 NestedRun 并行调度本期不做"
+  - §4.4.11.11 Phase 表新增 P4 "后台模式"专项（BackgroundShells 升级为 BgTaskRegistry + Task.run_in_background + spawn_background + WaitForTask 前缀路由），原 P3-P5 顺延到 P5-P7
+  - §13 决策记录追加一条"Subagent 后台模式（run_in_background）"——明确 task_id 命名空间共享、WaitForTask 前缀路由、BashOutput/KillShell 不扩 subagent，以及 BackgroundShells → BgTaskRegistry 改名对 §4.12.2-7 现有伪代码的影响
+- **影响范围**: 本次仍纯文档；P4 phase 实施时要改 §4.12.2-7 的 BackgroundShells 引用为 BgTaskRegistry（命名重构 + task_id 前缀路由）。**与 §4.12 体系完全复用**——没有新增 wakeup 路径 / 没有新事件 variant，BgTaskFinished 已有
+- **关键取舍**:
+  - **走 §4.12 现有 wakeup 体系而不是新通路**：subagent 后台完成"通知父" 等价 Bash 后台完成"通知父"，语义对称——共用一条 `<wakeup>` XML user message 路径让模型按统一格式收到通知。代价：subagent 后台与 Bash 后台共享 `<wakeup>` 头部格式，模型 prompt 描述需要写清楚"wakeup 可能来自 shell 也可能来自 subagent，看 kind 字段"
+  - **BgTaskRegistry 一般化而不是再加一个 SubagentRegistry**：避免两套并行的 task 注册表语义重叠；未来其它长任务（cloud agent / 远程编译 / Wait* 工具）一并归到这里。代价：现有 `BackgroundShells` 名字与变量名要全仓改成 `BgTaskRegistry`，影响面比加一个独立结构大，但语义清晰长期收益高
+  - **BashOutput / KillShell 不扩 subagent**：subagent 没有"实时输出 tail buffer"的概念（子事件已经在父事件流里实时呈现），强杀 subagent 需要把父 cancel flag 链路下沉，复杂度高；前台模式（run_in_background=false）父 agent_loop 阻塞等子，本来就直接同步阻塞，没有"强杀"语义需求。代价：用户从 Bash 后台模式迁移直觉的"我能 KillShell 这个子吗"会落空，文档要明确指出
+- **留尾巴**:
+  - BgTaskRegistry 是 P4 phase 才实施的命名重构；P1-P3 阶段先用 BackgroundShells 现名跑前台 + isolated/inherit，P4 起重构 + 引入 spawn_background。这是为了让 P1-P3 不被命名重构拖慢
+  - 后台 subagent 的"kind" 字段在 `<wakeup>` XML 里用 `kind="subagent_finished"`，与 Bash 的 `kind="bg_task_finished"` 区分——P4 落地时确定具体名字
+  - subagent 后台 + inherit 模式叠加是否合理：后台时父 agent_loop 继续往前跑，父 transcript 会变化，但子 NestedRun 启动时已经拍了快照——这是"快照后父继续走"的合理语义。文档无需特殊说明，但 P4 实施时要确认 deep-clone 时机在 spawn 前完成
+
+### 2026-05-27 — 调整 Read 工具卡片的摘要布局
+
+- **Why**: Read 工具卡片原本在工具名后直接显示路径，和 Bash / TodoWrite 等工具的「简短描述 + 参数」布局不一致；用户希望 Read 也显示「读取文件」描述，并让后续参数与其它工具上下对齐。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Read 工具卡片摘要改为「Read  读取文件  <路径>」，并把第二列宽度调到与其它工具描述列对齐。
+- **影响范围**: desktop / hebweb 前端工具卡片展示；不改协议、不改事件流、不改工具参数。
+- **留尾巴**: 无
+
+### 2026-05-27 — Subagent 设计追加：采纳 parallel tool use（同 step 并发 Task + 其他 tool 并发）
+
+- **Why**: 用户原话「允许 subagent 前台跟其他 tool 同时调用，也可以多个 subagent 一起跑」。之前 §4.4.11.1 边界写"一次只能跑一个 NestedRun，父 agent 等子完成才继续"，与新需求冲突——这条边界本是"前台 = 同步阻塞"的副作用描述；加上后台模式后已经过时，再加上 parallel tool use 后彻底失效。
+- **改动**（仍纯文档）:
+  - [docs/架构.md](../docs/架构.md) §4.4.11.1 边界节：「不做并发 fanout」改写为「并发模型（采纳 parallel tool use）」整段——同 step 并发（多个 tool_call 含多个 Task 一起 spawn，父等本 step 全部完成才进下一步）+ 多个 Task 同 step + 后台并发可叠加；同时列出"本期不做"的剩余项（单次 Task 入参语法糖扇出 / 跨 Run 持久 subagent / 多层嵌套 / Subagent* hook 点位）+ "并发下共享资源的协调"（HitlGate / edits-worktree / ReadStateTracker / token 成本）
+  - §4.4.11.8 嵌套渲染节：删除"本期不做并发 fanout，父子事件按时间线先后串行"过时陈述，改为"多个并发 NestedRun 用不同 call_id 自然分桶，前端按 call_id 分桶渲染"
+  - §16.2 / §16.3 / §4.4.11.10 三处对比表的「Multi-agent」 / 「并发 fanout」行同步更新
+  - §13 D9 决策行：把"不引入并发 fanout"改写为"并发模型采纳 parallel tool use（同 step + 后台叠加），不做的是单次 Task 入参语法糖扇出"
+  - §13 决策记录追加一条「Subagent 并发模型（parallel tool use）」——明确同 step 并发 + 共享资源协调（HitlGate 排队 / edits-worktree fd-lock fail / ReadStateTracker RwLock）+ 不做单次 Task 入参扇出
+- **影响范围**: 本次仍纯文档。**实施影响**：dispatcher 要把 Task 工具加入"并发安全"集合（与 Read / Grep 一同），P1 实施时需确认 hebbian 现有 `analyze_effects` + 并发分类逻辑能识别 Task；HitlGate 在多并发子审批场景下是否要 UX 优化（如批量审批、按子分组）留 P8 实测后再说。
+- **关键取舍**:
+  - **采纳 parallel tool use 而非串行单 NestedRun**：（1）用户明确要求；（2）这是行业标准并发模型，hebbian §16.2 现有「ReadOnly 并发」框架已经支持，只是把 Task 加入并发集合；（3）token 成本由模型自行权衡，core 不做硬限制。代价：并发审批弹窗按到达顺序排队 UX 拥挤、N 倍模型成本由用户感知
+  - **HitlGate 不做"批量审批"UX 优化**：当前 mpsc + 单一审批界面在 N 并发场景下会按时间顺序逐弹，弹窗 reason 加 `[subagent: <name>]` 前缀让用户分辨。代价：UX 拥挤；理由：先看实际跑出来频不频繁，频则后续做"按 subagent 分组的批量审批 sheet"
+  - **不做"单次 Task 入参语法糖扇出"（如 `Task([prompt1, prompt2])`）**：模型已经能通过 emit N 个独立 Task tool_call 自然扇出，语法糖只是入参形态变化，新增 schema 复杂度但语义不增。理由：奥卡姆——能不加就不加
+- **留尾巴**:
+  - 多并发子审批 UX 在真实使用时是否拥挤需要 P8 阶段观察；若频繁，后续做「按 subagent 分组批量审批 sheet」
+  - 多并发子写同一文件靠 edits-worktree fd-lock fail 兜底；子模型按工具失败处理时可能反复重试该文件——不是新问题（Bash + Edit 也有），不专门处理
+
+### 2026-05-27 — 修复运行中 assistant 占位与动图位置
+
+- **Why**: 用户发送消息后，agent 已经开始运行但首段模型输出到达前没有 assistant 头像；运行中动图还会跟着模型输出内容尾部显示，而不是固定在 agent 头像下方，导致聊天流视觉锚点不稳定。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 运行中的 assistant 占位从「已有 streaming 文本/部件」改为跟随 `isStreaming`，确保用户消息发送后立刻出现 agent 头像。
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts) / [liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 补充并命名运行中占位排序语义，覆盖首段输出前与用户插入消息场景。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 确认运行中动图挂在 assistant 头像列下，避免随正文内容流动。
+- **影响范围**: desktop/hebweb 前端渲染；不改协议、不改 agent-core，不破坏兼容。
+- **留尾巴**: 无
+
+### 2026-05-27 — Subagent P1：协议字段 + 存储层 + Task 工具骨架
+
+- **Why**: 推进 subagent 设计（架构 §4.4.11）落地——先把"配置 + 协议 + 工具骨架"做扎实，确保 schema / 启用合并 / 条件注入链路跑通，NestedRun 真路径 P2 阶段再接 dispatcher short-circuit。这样 P2 改动只需要替换 Task 工具的执行体，不必同时调整存储与协议。
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs): `Event` struct 加可选公共字段 `subagent_call_id: Option<String>`（与 `run_id` / `seq` / `at_ms` 同级，**不**塞到 `EventPayload` enum variant 里）。新增构造器 `Event::now_subagent(...)` 用于子 NestedRun 转发事件时标记归属。`Event::now` 行为不变（默认 `subagent_call_id = None`）。
+  - [docs/架构.md](../docs/架构.md) §3.1 / §4.4.11.8：把"所有 EventPayload variant 共享公共字段"的描述改正为"外层 Event struct 加一个可选字段"——之前的描述错把字段塞 enum variant 里，实际 enum 不支持公共字段。
+  - [crates/agent-core/src/storage/subagents.rs](../crates/agent-core/src/storage/subagents.rs)（新增）: `SubagentDefinition` 结构（name / description / tools / model / max_iterations / system_prompt / enabled）+ frontmatter 解析（YAML key:value 行）+ 两层 settings.json 读写：全局 `~/.hebbian/subagents/settings.json`（`{ "enabled": {...} }`）+ 项目 `~/.hebbian/projects/<enc>/settings.json` 的 `subagents` key（`{ "subagents": { "enabled": {...} }, ...其它字段透传 }`）。`load_for_workdir(data_dir, Some(workdir))` 合并语义按 §4.4.11.5：项目级有值 > 全局值 > 默认 true。`set_enabled` / `clear_enabled` / `delete_definition` / `save_definition` / `get_definition` 完整 CRUD。12 个单测覆盖解析、roundtrip、enabled override 优先级、项目 settings 其它字段透传保留、删除清理。
+  - [crates/agent-core/src/storage/mod.rs](../crates/agent-core/src/storage/mod.rs): 注册新模块 `pub mod subagents;`。
+  - [crates/agent-core/src/tools/task.rs](../crates/agent-core/src/tools/task.rs)（新增）: `TaskTool` + `TaskInput`（含 subagent_type / prompt / mode 枚举 isolated|inherit / description / run_in_background）+ `parse_input` 给 dispatcher short-circuit 复用。description 动态平铺所有启用的 subagent 让模型按描述选用，schema 完整（含 `run_in_background` 字段为 P4 预留）。`execute` 兜底返回错误说明 dispatcher short-circuit 未接入——P1 阶段 default_tools 条件注入兜底防止模型真调到这里。5 个单测覆盖 description 渲染、schema required、mode 默认 isolated、inherit + background 反序列化、未接入 short-circuit 时执行失败。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): 注册 `pub mod task;`；`default_tools` 加载 `load_for_workdir(data_dir, Some(workspace.workdir()))` 拿合并后定义，**仅当至少一个 enabled=true 时**追加 `TaskTool`（避免模型看到空 subagent 列表的 Task）。`BUILTIN_TOOL_NAMES` 不列 Task——它是条件注入工具。
+- **影响范围**: agent-core 新增 storage/subagents + tools/task；protocol Event struct 加 additive 字段（旧客户端反序列化忽略 `subagent_call_id` 字段，向前兼容）；default_tools 行为：无 subagent 定义时输出与之前 byte-equivalent；有定义时多一个 Task 工具暴露给模型。不改 dispatcher、不改 agent_loop、不改 protocol enum variant。
+- **验证**:
+  - `cargo check --workspace` 全部通过（仅 desktop 残留 unused warning，与本次无关）
+  - `cargo test -p agent-core --lib` 364/364 通过，含 12 个新增 storage::subagents 单测、5 个 tools::task 单测
+- **留尾巴**:
+  - P2 阶段做 SubagentRunner（嵌套 agent_loop）+ dispatcher short-circuit 路由 Task → SubagentRunner + 子 EventSink 装饰器注入 subagent_call_id；Task 工具的 `execute` 兜底错误那时会变成"理论上不可达"
+  - 解析的 frontmatter 极简（key:value 单行），目前不支持多行 list / nested map / 多行字符串；YAML 完整解析需要引入 `serde_yaml` 依赖，按需在 P2-P5 再补
+  - subagent 定义里的 `tools` 字段做"未知工具名校验"延后到 P2 SubagentRunner 实施时一并处理
+
+### 2026-05-27 — Subagent P2：NestedRun 主路径接入（isolated 前台同步）
+
+- **Why**: 推进架构 §4.4.11 落地的核心 phase——把 Task 工具从骨架升级为完整可运行的"嵌套 agent_loop"。本次做到 isolated 前台同步：父 agent emit 一次 `Task` tool_call → dispatcher short-circuit 路由到 SubagentRunner → 嵌套 agent_loop 跑完整 ModelStep + ToolStep 循环 → 子终态文本回灌父 transcript。子事件流经装饰器加 `subagent_call_id` 后转发到父 surface，按架构 §4.4.11.8 嵌套渲染。inherit 模式（§4.4.11.3）与 `run_in_background=true`（§4.4.11.7）暂返回提示性错误，留 P3 / P4 落地。
+- **改动**:
+  - [crates/agent-core/src/subagent/](../crates/agent-core/src/subagent/)（新增）：
+    - `mod.rs` 模块入口
+    - `ctx.rs`：`SubagentCtx`——跨 run 静态依赖（client / hooks / compaction_policy / data_dir / parent_session_id / stream / subagents 快照）；per-run 动态字段（parent_run_id / model_id / agent）由 dispatcher 运行时从 self.state / self.model_id 取，不重复存
+    - `runner.rs`：`SubagentRunner::execute(input)`——找定义 → 模式分流（isolated 走主路径，inherit / background 返回 TODO 错误）→ 构造子 transcript（system=subagent.system_prompt + user=prompt，**不**组装默认 6 段）→ 构造子 ToolRegistry（按 subagent.tools 白名单过滤 + 永远剔除 Task 自身防多层嵌套）→ 装饰子 EventSink（重写 event.run_id 为父 RunId + 填 subagent_call_id = 父 Task call_id）→ 跑 `agent_loop::run_loop` → 返回 `AssistantOutput.text`
+  - [crates/agent-core/src/tools/registry.rs](../crates/agent-core/src/tools/registry.rs)：`ToolRegistry` 加 `from_arcs(Vec<Arc<dyn Tool>>)` / `iter()` / `tool_names()`——给 SubagentRunner 过滤父 registry 后构造子 registry 用
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs)：
+    - `ToolDispatcher` 加字段 `subagent_ctx: Option<Arc<SubagentCtx>>`
+    - `run_calls` 路由：`call.name == TASK_TOOL_NAME` → `spawn_task`
+    - 新增 `spawn_task` short-circuit：emit `ToolCallStarted { name: "Task" }` → 解析 input → 取 ctx → 构造 `SubagentRunner`（parent_run_id 取自 `self.state.run_id`，parent_model_id 取自 `self.model_id`）→ `runner.execute().await` → emit `ToolCallFinished { result: <子终态文本> }`
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)：`LoopParams` 加字段 `subagent_ctx`；解构时取出；构造 `ToolDispatcher` 时透传
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs)：`RunParams` 加字段 `subagent_ctx`；`spawn_run` 解构 + 透传给 LoopParams
+  - [crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs)：新增 `build_subagent_ctx_snapshot()`——按当前 `data_dir + workspace.workdir` 调 `storage::subagents::load_for_workdir` 拿启用合并后的列表，过滤 enabled=true，无可用 subagent 返回 None；两处 `RunParams` 构造（`run_with_runtime_inputs` / `resume_with_runtime_inputs`）填上 `subagent_ctx: self.build_subagent_ctx_snapshot()`
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 注册 `pub mod subagent;`
+  - 5 处测试 ToolDispatcher 构造点 + 4 处测试 LoopParams 构造点：批量补 `subagent_ctx: None`（测试不接 subagent；Task 工具走 None 兜底）
+- **影响范围**: agent-core 内部协议在 RunParams / LoopParams / ToolDispatcher 三层加新字段（additive，default None）；protocol crate 不变（Event 字段在 P1 已加）；不改 surface / model-gateway。
+- **验证**:
+  - `cargo check --workspace` 通过（仅 desktop 残留 unused warning，与本次无关）
+  - `cargo test -p agent-core --lib` **364/364 通过**——所有现有单测继续通过
+- **关键设计落实**:
+  - **子 RunState 独立 RunId**：子 NestedRun 用全新 RunId / 独立 seq 计数，agent_loop 生成的 Event 带子 RunId。装饰器在转发到父 sink 之前**重写 run_id 为父 RunId** + 填 `subagent_call_id = parent_task_call_id`。这样父 surface 接收的事件全是父 RunId，按 subagent_call_id 分桶嵌套渲染（架构 §4.4.11.7）
+  - **子 ToolRegistry 剔除 Task**：`build_child_registry` 显式 skip `TASK_TOOL_NAME` 防多层嵌套（即使子 prompt 让模型调 Task 也会拿到"工具不存在"错误）
+  - **共享父 HitlGate / Workspace / EditsWorktree / ReadStateTracker**：子工具触发审批走父弹窗（reason 自带 subagent: 上下文，§4.4.11.9），写文件计入父 edits-worktree，Read 计入父 ReadStateTracker——P2 阶段直接复用父的 Arc，无需特殊处理
+  - **子 RunMode 默认 EditAutomatically**：避免子再弹模式选择（§4.4.11 决策记录），与 isolated 模式"独立子任务"语义吻合
+  - **子默认不带 phase / pending_inputs / model_io_dump**：子是同步前台一次性调用，不接 surface 输入注入 / 不挂起；P4 backbround 模式会单独处理 phase
+- **关键取舍**:
+  - **per-run 字段不进 SubagentCtx**：parent_run_id / model_id / agent 由 dispatcher 从自身字段（self.state.run_id / self.model_id）运行时取——SubagentCtx 只放跨 run 静态依赖，避免 Session 每次 spawn_run 重建带运行时字段的 ctx
+  - **session_id 暂留 None**：本期子不落 jsonl（P3 阶段实施 `sessions/<parent>/subagents/<child>/`），所以 LoopParams.session_id 给子填 None；data_dir 仍透传，便于子工具落 tool_results 时仍能用同一根目录
+  - **子也透传 subagent_ctx = None**：子 NestedRun 内部不允许再调 Task（已被 child_registry 剔除工具阻断），保险起见 LoopParams.subagent_ctx 也填 None
+  - **Session 注入而不是 Harness 注入**：subagent_ctx 是会话级语义（取决于 workdir + data_dir），Session 是承载这两个值的最自然位置；Harness 是进程级单例，注入会破坏"多窗口同时跑不同项目"
+- **留尾巴**:
+  - P3：inherit 模式（transcript 深拷贝）+ 子 session.jsonl 落盘到 `sessions/<parent_sid>/subagents/<child_sid>/`
+  - P4：`run_in_background=true` + BackgroundShells → BgTaskRegistry 命名重构 + WaitForTask 前缀路由
+  - P5：同步 API（listSubagents / saveSubagent / setEnabled / loadSubagentRun）
+  - P6 / P7：设置 UI tab + MessageBubble 嵌套渲染
+  - P8：桌面 dev 手动验证
+  - **尚未做的边界 case**：子工具调用失败时 Task 工具自身仍 emit `ToolCallFinished { result: 错误文本 }`——这是兜底，父模型可能误以为子任务"完成了"。后续考虑给 Task 工具的错误结果加更明确标记（如 `[子任务失败]` 前缀）
+  - 多并发子（parallel tool use 场景）在 P2 实际是支持的——dispatcher.run_calls 把 Task 当作普通可并发工具处理（不属于 serial_shell 集合），多个 Task tool_call 会并发跑独立 SubagentRunner。架构 §16.3 描述的"同 step 并发 + 后台并发"中"同 step"那一半在 P2 已生效
+
+### 2026-05-27 — 设置日志面板历史日志补色
+
+- **Why**: 设置里的实时日志面板只有打开时收到的实时日志有颜色；关闭期间写入文件的历史日志再次打开时按纯文本写入 xterm，导致日志级别不着色，排查后台输出时可读性退化。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx](../apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx): 新增历史行格式化逻辑，读取日志文件后按日志级别补 ANSI 颜色再写入 xterm；实时日志继续使用同一套级别颜色，并保留 target 暗色显示。
+- **影响范围**: 仅 Desktop 前端日志查看器；不改日志文件格式、不改 observability 后端、不影响协议或持久化兼容性。
+- **验证**:
+  - 复现：检查 `~/.hebbian/logs/hebbian.log.<date>` 历史行包含 `INFO/WARN/ERROR` 等级文本但没有统一等级颜色，面板关闭期间写入的内容重新打开时不会由实时事件路径加色。
+  - `npm exec -- pnpm exec tsc --noEmit`（在 `apps/desktop`）通过。
+  - `graphify update .` 已运行，AST 图谱更新完成。
+- **留尾巴**: 未跑 `pnpm tauri dev` 做人工 UI 目视验证；当前环境没有直接可用的 `pnpm` 命令，已用 `npm exec -- pnpm` 跑类型检查。
+
+### 2026-05-27 — 新增命令 Shell 设置并用用户 Shell 初始化 Bash PATH
+
+- **Why**: 用户在普通终端里能使用 `pnpm`，但 Hebbian 的 Bash 工具通过 `bash -lc` 执行时没有读取用户的 zsh 初始化配置，导致 PATH 与真实命令行不一致；Claude Code 的做法是先用用户 shell 捕获 PATH，再传给命令子进程。
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs): `general` 设置新增 `shell`，默认取系统 `SHELL` 环境变量，旧 settings 文件自动补默认值。
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs): Bash 工具执行前通过配置 shell 的 `-lic` 捕获 PATH，并把该 PATH 注入实际 `bash -lc` 子进程；新增回归测试覆盖 shell PATH 初始化。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)、[apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)、[apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)、[apps/web-server/src/session.rs](../apps/web-server/src/session.rs): 将设置中的 shell 传入工具注册链路，保持 Desktop / CLI / hebweb 三个 surface 一致。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)、[apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts)、[apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 设置弹窗新增「命令 Shell」输入项并兼容旧设置。
+- **影响范围**: agent-core / desktop / CLI / hebweb；新增可选 settings 字段，不改协议事件，不破坏旧配置兼容。
+- **留尾巴**: 目前每次 Bash 执行都会捕获一次 PATH，后续如果发现开销明显，可在工具实例或 session 级做缓存。
+
+### 2026-05-28 — 修复后台通知后 Desktop 把每次模型请求拆成独立 agent 块
+
+- **Why**: 用户反馈 Bash 后台任务完成并触发 Notification 后，后续同一轮里每一次模型请求都会在 Desktop 显示成独立 agent 块。根因是 Desktop 持久化 observer 把每个 `TurnFinished` 都当成用户可见分段边界；一旦本 run 有 pending/wakeup 被消费，就会把后续所有模型请求都拆开。
+- **改动**:
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): DesktopObserver 从“每个 `TurnFinished` 都分段”改为“仅当 `ConsumedPendingInputs` 相对本次 run 起点增长时分段”；pending 之前冻结一段，pending 之后的多次 model/tool 循环继续聚合为同一个 assistant 消息。分段检查只放在 `TurnFinished` / `TurnStarted` 这种用户可见边界，避免 `StepFinished` 早于 `TextDone` 到达时把段切在错误位置。新增回归测试覆盖“notification 后还有 tool loop + 末尾模型请求”只生成一个后续 agent 块。
+- **影响范围**: Desktop send_message 持久化与实时 observer；不改 protocol / agent-core 事件语义 / session.jsonl 格式。已有“立即发送”插队仍按 pending 分界拆段。
+- **验证**:
+  - `cargo test -p hebbian pending_input_does_not_split_every_followup_model_request` 先红后绿。
+  - `cargo test -p hebbian pending_inputs_` 通过。
+  - `cargo test -p agent-core pending_input` 通过。
+- **留尾巴**: 未跑 `pnpm tauri dev` 人工验证 Desktop UI；本次用 Desktop send_message 层单测覆盖落盘分段根因。

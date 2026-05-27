@@ -375,6 +375,7 @@ export interface AppSettings {
   general: {
     launch_at_login: boolean;
     show_grep_search_path: boolean;
+    shell?: string | null;
     log_enabled: boolean;
   };
   conversation: {

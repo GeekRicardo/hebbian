@@ -12,11 +12,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 use agent_core::{
+    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
     context::transcript::Transcript,
     definition::AgentDefinition,
     edits::EditsWorktree,
@@ -30,9 +31,8 @@ use agent_core::{
     },
     tools::{background, skill::default_skill_dirs},
     workspace::Workspace,
-    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use common::runtime::{PendingInputs, PendingUserInput};
@@ -424,6 +424,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             Some(data_dir.to_path_buf()),
             Some(session_id.clone()),
             Some(read_state_tracker),
+            settings.general.shell.clone(),
             agent_core::storage::mcp::load(data_dir),
         )
         .await,

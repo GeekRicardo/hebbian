@@ -597,6 +597,7 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
             Some(data_dir.to_path_buf()),
             Some(session_id.clone()),
             Some(read_state_tracker),
+            settings.general.shell.clone(),
             agent_core::storage::mcp::load(data_dir),
         )
         .await,
@@ -808,25 +809,20 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
             state.stop();
             IpcResponse::ok()
         }
-        IpcCommand::Mode { mode } => {
-            match RunMode::parse(&mode) {
-                Some(m) => {
-                    *state.run_mode.lock().unwrap() = m;
-                    IpcResponse::ok()
-                }
-                None => IpcResponse::err(format!(
-                    "无效 mode：{mode}（ask-before-edits | edit-automatically | plan-mode | auto-mode）"
-                )),
+        IpcCommand::Mode { mode } => match RunMode::parse(&mode) {
+            Some(m) => {
+                *state.run_mode.lock().unwrap() = m;
+                IpcResponse::ok()
             }
-        }
+            None => IpcResponse::err(format!(
+                "无效 mode：{mode}（ask-before-edits | edit-automatically | plan-mode | auto-mode）"
+            )),
+        },
         IpcCommand::Ping => {
             IpcResponse::with_data(serde_json::json!({ "session_id": state.session_id }))
         }
         IpcCommand::ListModelIo => {
-            match agent_core::storage::model_io::read_session(
-                &state.data_dir,
-                &state.session_id,
-            ) {
+            match agent_core::storage::model_io::read_session(&state.data_dir, &state.session_id) {
                 Ok(entries) => IpcResponse::with_data(serde_json::json!({ "entries": entries })),
                 Err(e) => IpcResponse::err(format!("读 model_io.jsonl 失败：{e}")),
             }

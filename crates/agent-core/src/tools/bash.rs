@@ -11,6 +11,7 @@
 //!
 //! [`safe_commands`]: super::safe_commands
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -18,16 +19,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{AppError, AppResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
-use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};
+use super::background::{BackgroundShells, READ_CHUNK_BYTES, ShellState};
 use super::{Tool, ToolCtx};
 use crate::workspace::Workspace;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_TIMEOUT_SECS: u64 = 600;
 const MAX_OUTPUT_BYTES: usize = 30_000;
+const SHELL_PATH_TIMEOUT_SECS: u64 = 10;
 
 pub struct BashTool {
     workspace: Arc<Workspace>,
@@ -36,6 +38,7 @@ pub struct BashTool {
     /// 回落到 tail-only。CLI 单跑 / 单测一般传 None；desktop chat.rs 传
     /// `~/.hebbian/sessions/<sid>/bg`。
     bg_log_dir: Option<PathBuf>,
+    shell: Option<String>,
 }
 
 impl BashTool {
@@ -43,11 +46,13 @@ impl BashTool {
         workspace: Arc<Workspace>,
         shells: BackgroundShells,
         bg_log_dir: Option<PathBuf>,
+        shell: Option<String>,
     ) -> Self {
         Self {
             workspace,
             shells,
             bg_log_dir,
+            shell,
         }
     }
 }
@@ -125,6 +130,9 @@ impl Tool for BashTool {
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .current_dir(&cwd);
+        if let Some(path) = resolve_shell_path(self.shell.as_deref()).await {
+            cmd.env("PATH", path);
+        }
 
         let child = cmd
             .spawn()
@@ -317,6 +325,44 @@ fn truncate_bytes(s: &str, limit: usize) -> String {
     format!("{}\n…[已截断，共 {} 字节]", &s[..end], s.len())
 }
 
+async fn resolve_shell_path(shell: Option<&str>) -> Option<OsString> {
+    let shell = shell
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| std::env::var("SHELL").ok())?;
+    let marker = format!("HEBBIAN_PATH_{}", uuid::Uuid::new_v4().simple());
+    let script = format!(
+        "printf '{marker}'; command printenv PATH; printf '{marker}'",
+        marker = marker
+    );
+    let output = tokio::time::timeout(
+        Duration::from_secs(SHELL_PATH_TIMEOUT_SECS),
+        Command::new(&shell)
+            .arg("-lic")
+            .arg(&script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (_, rest) = stdout.split_once(&marker)?;
+    let (path, _) = rest.split_once(&marker)?;
+    let path = path.trim();
+    if path.contains(':') || !path.is_empty() {
+        Some(OsString::from(path))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,7 +372,7 @@ mod tests {
     }
 
     fn tool(path: &std::path::Path) -> BashTool {
-        BashTool::new(workspace_at(path), BackgroundShells::new(), None)
+        BashTool::new(workspace_at(path), BackgroundShells::new(), None, None)
     }
 
     #[tokio::test]
@@ -337,6 +383,49 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn user_shell_path_is_loaded_before_running_bash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let marker_bin = bin_dir.join("hebbian-shell-marker");
+        std::fs::write(&marker_bin, "#!/bin/sh\necho shell-path-ok\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&marker_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let profile = tmp.path().join("profile.sh");
+        std::fs::write(
+            &profile,
+            format!(
+                "#!/bin/sh\nexport PATH=\"{}:$PATH\"\nshift\nexec /bin/sh -c \"$@\"\n",
+                bin_dir.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let shell = profile.display().to_string();
+        let bash = BashTool::new(
+            workspace_at(tmp.path()),
+            BackgroundShells::new(),
+            None,
+            Some(shell),
+        );
+
+        let out = bash
+            .execute(json!({"command": "hebbian-shell-marker"}))
+            .await
+            .unwrap();
+        assert!(out.contains("shell-path-ok"), "{out}");
     }
 
     #[tokio::test]
@@ -353,7 +442,7 @@ mod tests {
     async fn timeout_transitions_to_background() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let out = t
             .execute(json!({"command": "sleep 5", "timeout_secs": 1}))
             .await
@@ -378,7 +467,7 @@ mod tests {
     async fn foreground_exit_unregisters_from_registry() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let out = t.execute(json!({"command": "echo hello"})).await.unwrap();
         assert!(out.contains("hello"));
         // 注册表必须为空：前台 ls 不该残留为"已结束的后台任务"
@@ -394,7 +483,7 @@ mod tests {
     async fn explicit_background_keeps_in_registry() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let _ = t
             .execute(json!({"command": "sleep 30", "run_in_background": true}))
             .await
@@ -413,7 +502,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let bash_out = BashOutputTool::new(shells.clone());
         let kill = KillShellTool::new(shells.clone());
 
@@ -445,7 +534,7 @@ mod tests {
     async fn run_in_background_returns_immediately() {
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let started = std::time::Instant::now();
         let out = t
             .execute(json!({"command": "sleep 30", "run_in_background": true}))
@@ -478,7 +567,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None);
+        let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let progress = Arc::new(CaptureProgress {
             chunks: Mutex::new(Vec::new()),
         });
@@ -528,7 +617,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let shells = BackgroundShells::new();
-        let bash = BashTool::new(workspace_at(tmp.path()), shells, None);
+        let bash = BashTool::new(workspace_at(tmp.path()), shells, None, None);
         let progress = Arc::new(CaptureProgress(Mutex::new(Vec::new())));
         let ctx = crate::tools::ToolCtx {
             call_id: "test_call".into(),

@@ -15,6 +15,7 @@ pub mod safe_commands;
 pub mod schedule_wakeup;
 pub mod shell_parse;
 pub mod skill;
+pub mod task;
 pub mod todo_write;
 pub mod wait_for_task;
 pub mod web_fetch;
@@ -24,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
+use model_gateway::types::{IMAGE_GENERATION_TOOL_NAME, ToolDefinition};
 use serde_json::Value;
 
 use common::{AppResult, CancelFlag};
@@ -130,6 +131,7 @@ pub fn default_tools(
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
+    shell: Option<String>,
 ) -> Vec<Box<dyn Tool>> {
     let mut skills = skill::load_skills(skill_dirs);
     // disabled 的 skill 不暴露给模型（架构 §6.1.3 用户级 UX）
@@ -137,11 +139,25 @@ pub fn default_tools(
         crate::storage::skills::apply_disabled(dd, &mut skills);
     }
     let skills: Vec<_> = skills.into_iter().filter(|s| s.enabled).collect();
-    vec![
+
+    // 加载并合并 subagent 定义（架构 §4.4.11.5）：项目级 enabled 覆盖全局
+    // workspace.workdir 是项目根；data_dir 是 ~/.hebbian/
+    let subagents: Vec<_> = data_dir
+        .as_ref()
+        .map(|dd| {
+            crate::storage::subagents::load_for_workdir(dd, Some(workspace.workdir()))
+                .into_iter()
+                .filter(|d| d.enabled)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(bash::BashTool::new(
             workspace.clone(),
             shells.clone(),
             bg_log_dir,
+            shell,
         )),
         Box::new(bash_output::BashOutputTool::new(shells.clone())),
         Box::new(kill_shell::KillShellTool::new(shells.clone())),
@@ -162,7 +178,14 @@ pub fn default_tools(
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
         Box::new(exit_plan_mode::ExitPlanModeTool),
-    ]
+    ];
+
+    // Task 工具仅在加载到至少一个启用的 subagent 定义时注入（架构 §13 决策）：
+    // 没有定义时把工具暴露给模型只会污染上下文（模型调用必返回"找不到 subagent"错误）。
+    if !subagents.is_empty() {
+        tools.push(Box::new(task::TaskTool::new(subagents)));
+    }
+    tools
 }
 
 pub async fn default_tools_with_mcp(
@@ -174,6 +197,7 @@ pub async fn default_tools_with_mcp(
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
+    shell: Option<String>,
     mcp_config: crate::mcp::config::McpConfig,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools = default_tools(
@@ -185,6 +209,7 @@ pub async fn default_tools_with_mcp(
         data_dir,
         session_id,
         read_state_tracker,
+        shell,
     );
     tools.extend(mcp::discover_tools(&mcp_config).await);
     tools
@@ -192,6 +217,7 @@ pub async fn default_tools_with_mcp(
 
 /// 内置工具名（每次 ModelRequest 自动注入；不在 UI 工具菜单中暴露）。
 /// 顺序与 `default_tools` 中的注册顺序对齐。
+/// `Task` 走条件注入（仅当存在启用的 subagent 定义时），不列入这里。
 pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Bash",
     "BashOutput",
