@@ -2,7 +2,31 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Attach to Tauri WebView (Frontend TS)",
+      "name": "Debug Desktop (Rust)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--package=hebbian", "--no-default-features"],
+        "filter": {
+          "name": "hebbian",
+          "kind": "bin"
+        }
+      },
+      "program": "${cargo:program}",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "desktop:vite-dev",
+      "env": {
+        "RUST_LOG": "debug"
+      },
+      "initCommands": [
+        "process handle SIGHUP --stop false --pass false --notify false"
+      ],
+      "sourceMap": {
+        "/rustc/*": "${env:HOME}/.rustup/toolchains/nightly-*/lib/rustlib/src/rust"
+      }
+    },
+    {
+      "name": "Attach to WebView (Frontend TS)",
       "type": "chrome",
       "request": "attach",
       "port": 9222,
@@ -11,6 +35,64 @@
         "/@fs/*": "${workspaceFolder}/*",
         "/src/*": "${webRoot}/*"
       }
+    },
+    {
+      "name": "heb CLI",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--package=hebbian-cli"],
+        "filter": {
+          "name": "heb",
+          "kind": "bin"
+        }
+      },
+      "program": "${cargo:program}",
+      "args": ["new", "--provider=${input:provider}", "--workdir", "/tmp/repro"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "name": "hebweb",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--package=hebbian-web-server"],
+        "filter": {
+          "name": "hebweb",
+          "kind": "bin"
+        }
+      },
+      "program": "${cargo:program}",
+      "args": ["--port", "38080"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "name": "agent-core tests",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["test", "--package=agent-core", "--lib", "--no-run"],
+        "filter": {
+          "name": "agent_core-*",
+          "kind": "test"
+        }
+      },
+      "program": "${cargo:program}",
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "provider",
+      "type": "promptString",
+      "description": "Provider ID (e.g. openai, deepseek)"
     }
   ]
 }

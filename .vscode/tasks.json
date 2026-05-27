@@ -2,6 +2,28 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "desktop:tauri-dev-bg",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--dir", "apps/desktop", "tauri", "dev"],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "tauri",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*Compiling.*",
+          "endsPattern": ".*Finished.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
       "label": "desktop:vite-dev",
       "type": "shell",
       "command": "pnpm",
