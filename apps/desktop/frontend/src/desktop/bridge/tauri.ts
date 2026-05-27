@@ -509,6 +509,12 @@ export const api = {
   /** 读取今天的日志文件内容（供 LogPane 加载历史）。文件不存在返回空字符串。 */
   readLogFile: () =>
     invoke<string>("read_log_file"),
+  /** 打开独立日志查看器窗口（单例，已存在则聚焦）。 */
+  openLogViewerWindow: () =>
+    invoke<void>("open_log_viewer_window"),
+  /** 设置日志查看器窗口是否永远置顶。 */
+  setLogViewerAlwaysOnTop: (alwaysOnTop: boolean) =>
+    invoke<void>("set_log_viewer_always_on_top", { alwaysOnTop }),
 
   // ── Todo / Plan / Plan Comments（架构 §4.4.5 / §4.4.6）──
   /** 当前 session 的 todo 列表（从 jsonl 折叠出）。打开 session / 切换时拉一次，之后跟事件增量。 */
