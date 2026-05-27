@@ -33,6 +33,15 @@ pub enum RuleEffect {
     Deny,
 }
 
+/// 权限规则诊断命中结果。`find*` 保持只返回 effect；日志链路用这个结构说明
+/// 具体命中了哪一层和哪条 pattern。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionMatch {
+    pub effect: RuleEffect,
+    pub scope: PermissionScope,
+    pub pattern: String,
+}
+
 /// 解析后的 pattern。`raw` 保留原字符串，用于 list / remove / 落盘。
 #[derive(Debug, Clone)]
 pub struct Permission {
@@ -323,7 +332,19 @@ impl PermissionStore {
         fingerprint: Option<&str>,
         path: Option<&str>,
     ) -> Option<RuleEffect> {
-        // 收集每层视图的引用（避免锁嵌套）。
+        self.find_diagnostic(session_id, workdir, tool_name, fingerprint, path)
+            .map(|m| m.effect)
+    }
+
+    /// 同 [`Self::find`]，但返回命中的 scope 和原始 pattern，供审批日志定位。
+    pub fn find_diagnostic(
+        &self,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        path: Option<&str>,
+    ) -> Option<PermissionMatch> {
         if let Some(d) = self.find_in_session(session_id, tool_name, fingerprint, path) {
             return Some(d);
         }
@@ -332,14 +353,16 @@ impl PermissionStore {
             let enc = projects::encode_workdir(wd);
             let projects = self.projects.lock().unwrap();
             if let Some(view) = projects.get(&enc) {
-                if let Some(d) = match_view(view, tool_name, fingerprint, path) {
+                if let Some(d) =
+                    match_view(view, PermissionScope::Project, tool_name, fingerprint, path)
+                {
                     return Some(d);
                 }
             }
         }
         self.refresh_global();
         let g = self.global.lock().unwrap();
-        match_view(&g, tool_name, fingerprint, path)
+        match_view(&g, PermissionScope::Global, tool_name, fingerprint, path)
     }
 
     fn find_in_session(
@@ -348,18 +371,29 @@ impl PermissionStore {
         tool_name: &str,
         fingerprint: Option<&str>,
         path: Option<&str>,
-    ) -> Option<RuleEffect> {
+    ) -> Option<PermissionMatch> {
         let sid = session_id?;
         let views = self.session_views.lock().unwrap();
         let (allow, deny) = views.get(sid)?;
-        if deny.iter().any(|p| p.matches(tool_name, fingerprint, path)) {
-            return Some(RuleEffect::Deny);
-        }
-        if allow
+        if let Some(p) = deny
             .iter()
-            .any(|p| p.matches(tool_name, fingerprint, path))
+            .find(|p| p.matches(tool_name, fingerprint, path))
         {
-            return Some(RuleEffect::Allow);
+            return Some(PermissionMatch {
+                effect: RuleEffect::Deny,
+                scope: PermissionScope::Session,
+                pattern: p.raw.clone(),
+            });
+        }
+        if let Some(p) = allow
+            .iter()
+            .find(|p| p.matches(tool_name, fingerprint, path))
+        {
+            return Some(PermissionMatch {
+                effect: RuleEffect::Allow,
+                scope: PermissionScope::Session,
+                pattern: p.raw.clone(),
+            });
         }
         None
     }
@@ -382,27 +416,41 @@ impl PermissionStore {
         fingerprint: Option<&str>,
         paths: &[String],
     ) -> Option<RuleEffect> {
+        self.find_for_paths_diagnostic(session_id, workdir, tool_name, fingerprint, paths)
+            .map(|m| m.effect)
+    }
+
+    /// 同 [`Self::find_for_paths`]，但保留 scope/pattern 诊断信息。
+    pub fn find_for_paths_diagnostic(
+        &self,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        tool_name: &str,
+        fingerprint: Option<&str>,
+        paths: &[String],
+    ) -> Option<PermissionMatch> {
         if paths.is_empty() {
-            return self.find(session_id, workdir, tool_name, fingerprint, None);
+            return self.find_diagnostic(session_id, workdir, tool_name, fingerprint, None);
         }
         for p in paths {
-            if matches!(
-                self.find(session_id, workdir, tool_name, fingerprint, Some(p)),
-                Some(RuleEffect::Deny)
-            ) {
-                return Some(RuleEffect::Deny);
+            if let Some(hit) =
+                self.find_diagnostic(session_id, workdir, tool_name, fingerprint, Some(p))
+            {
+                if hit.effect == RuleEffect::Deny {
+                    return Some(hit);
+                }
             }
         }
-        let all_allow = paths.iter().all(|p| {
-            matches!(
-                self.find(session_id, workdir, tool_name, fingerprint, Some(p)),
-                Some(RuleEffect::Allow)
-            )
-        });
-        if all_allow {
-            return Some(RuleEffect::Allow);
+        let mut first_allow: Option<PermissionMatch> = None;
+        for p in paths {
+            match self.find_diagnostic(session_id, workdir, tool_name, fingerprint, Some(p)) {
+                Some(hit) if hit.effect == RuleEffect::Allow => {
+                    first_allow.get_or_insert(hit);
+                }
+                _ => return None,
+            }
         }
-        None
+        first_allow
     }
 
     /// Bash / PowerShell 段级查询（架构 §4.4.2）：
@@ -414,56 +462,161 @@ impl PermissionStore {
         tool_name: &str,
         segments: &[(String, Vec<String>)],
     ) -> Option<RuleEffect> {
+        self.find_for_segments_diagnostic(session_id, workdir, tool_name, segments)
+            .map(|m| m.effect)
+    }
+
+    /// 同 [`Self::find_for_segments`]，但保留第一条命中规则的诊断信息。
+    pub fn find_for_segments_diagnostic(
+        &self,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        tool_name: &str,
+        segments: &[(String, Vec<String>)],
+    ) -> Option<PermissionMatch> {
         if segments.is_empty() {
             return None;
         }
         // 收集所有层 allow + deny 引用
-        let mut allow: Vec<Permission> = Vec::new();
-        let mut deny: Vec<Permission> = Vec::new();
+        let mut allow: Vec<(PermissionScope, Permission)> = Vec::new();
+        let mut deny: Vec<(PermissionScope, Permission)> = Vec::new();
         if let Some(sid) = session_id {
             if let Some((a, d)) = self.session_views.lock().unwrap().get(sid) {
-                allow.extend(a.iter().cloned());
-                deny.extend(d.iter().cloned());
+                allow.extend(a.iter().cloned().map(|p| (PermissionScope::Session, p)));
+                deny.extend(d.iter().cloned().map(|p| (PermissionScope::Session, p)));
             }
         }
         if let Some(wd) = workdir {
             self.refresh_project(wd);
             let enc = projects::encode_workdir(wd);
             if let Some(view) = self.projects.lock().unwrap().get(&enc) {
-                allow.extend(view.allow.iter().cloned());
-                deny.extend(view.deny.iter().cloned());
+                allow.extend(
+                    view.allow
+                        .iter()
+                        .cloned()
+                        .map(|p| (PermissionScope::Project, p)),
+                );
+                deny.extend(
+                    view.deny
+                        .iter()
+                        .cloned()
+                        .map(|p| (PermissionScope::Project, p)),
+                );
             }
         }
         self.refresh_global();
         {
             let g = self.global.lock().unwrap();
-            allow.extend(g.allow.iter().cloned());
-            deny.extend(g.deny.iter().cloned());
+            allow.extend(
+                g.allow
+                    .iter()
+                    .cloned()
+                    .map(|p| (PermissionScope::Global, p)),
+            );
+            deny.extend(g.deny.iter().cloned().map(|p| (PermissionScope::Global, p)));
         }
 
         // 阶段 1：任一段命中 deny → Deny
         for (fp, write_targets) in segments {
-            for r in &deny {
+            for (scope, r) in &deny {
                 if segment_hits(r, tool_name, fp, write_targets) {
-                    return Some(RuleEffect::Deny);
+                    return Some(PermissionMatch {
+                        effect: RuleEffect::Deny,
+                        scope: *scope,
+                        pattern: r.raw.clone(),
+                    });
                 }
                 // 跨工具：FilePath deny 兜底 Bash 写文件目标
                 for t in write_targets {
                     if r.matches_path(t) {
-                        return Some(RuleEffect::Deny);
+                        return Some(PermissionMatch {
+                            effect: RuleEffect::Deny,
+                            scope: *scope,
+                            pattern: r.raw.clone(),
+                        });
                     }
                 }
             }
         }
 
         // 阶段 2：全部段命中 allow → Allow
+        let mut first_allow: Option<PermissionMatch> = None;
         let all_allow = segments.iter().all(|(fp, write_targets)| {
-            allow
+            let matched = allow
                 .iter()
-                .any(|r| segment_hits(r, tool_name, fp, write_targets))
+                .find(|(_, r)| segment_hits(r, tool_name, fp, write_targets));
+            if let Some((scope, r)) = matched {
+                first_allow.get_or_insert_with(|| PermissionMatch {
+                    effect: RuleEffect::Allow,
+                    scope: *scope,
+                    pattern: r.raw.clone(),
+                });
+                true
+            } else {
+                false
+            }
         });
         if all_allow {
-            return Some(RuleEffect::Allow);
+            return first_allow;
+        }
+        None
+    }
+
+    /// 诊断路径白名单命中层级。只返回 allow 命中；未命中返回 `None`。
+    pub fn allows_path_diagnostic(
+        &self,
+        session_id: Option<&str>,
+        workdir: Option<&Path>,
+        path: &str,
+    ) -> Option<PermissionMatch> {
+        if let Some(sid) = session_id {
+            let views = self.session_views.lock().unwrap();
+            if let Some((allow, _)) = views.get(sid) {
+                if let Some(p) = allow.iter().find(|p| p.matches_path(path)) {
+                    return Some(PermissionMatch {
+                        effect: RuleEffect::Allow,
+                        scope: PermissionScope::Session,
+                        pattern: p.raw.clone(),
+                    });
+                }
+            }
+        }
+        if let Some(wd) = workdir {
+            self.refresh_project(wd);
+            let enc = projects::encode_workdir(wd);
+            let projects = self.projects.lock().unwrap();
+            if let Some(view) = projects.get(&enc) {
+                if let Some(p) = view.allow.iter().find(|p| p.matches_path(path)) {
+                    return Some(PermissionMatch {
+                        effect: RuleEffect::Allow,
+                        scope: PermissionScope::Project,
+                        pattern: p.raw.clone(),
+                    });
+                }
+                if let Some(p) = view.paths.iter().find(|p| path_starts_with(path, p)) {
+                    return Some(PermissionMatch {
+                        effect: RuleEffect::Allow,
+                        scope: PermissionScope::Project,
+                        pattern: p.display().to_string(),
+                    });
+                }
+            }
+        }
+        self.refresh_global();
+        let g = self.global.lock().unwrap();
+        if let Some(p) = g.allow.iter().find(|p| p.matches_path(path)) {
+            return Some(PermissionMatch {
+                effect: RuleEffect::Allow,
+                scope: PermissionScope::Global,
+                pattern: p.raw.clone(),
+            });
+        }
+        if let Some(p) = g.paths.iter().find(|p| path_starts_with(path, p)) {
+            return Some(PermissionMatch {
+                effect: RuleEffect::Allow,
+                scope: PermissionScope::Global,
+                pattern: p.display().to_string(),
+            });
         }
         None
     }
@@ -475,33 +628,8 @@ impl PermissionStore {
         workdir: Option<&Path>,
         path: &str,
     ) -> bool {
-        if let Some(sid) = session_id {
-            let views = self.session_views.lock().unwrap();
-            if let Some((allow, _)) = views.get(sid) {
-                if allow.iter().any(|p| p.matches_path(path)) {
-                    return true;
-                }
-            }
-        }
-        if let Some(wd) = workdir {
-            self.refresh_project(wd);
-            let enc = projects::encode_workdir(wd);
-            let projects = self.projects.lock().unwrap();
-            if let Some(view) = projects.get(&enc) {
-                if view.allow.iter().any(|p| p.matches_path(path)) {
-                    return true;
-                }
-                if view.paths.iter().any(|p| path_starts_with(path, p)) {
-                    return true;
-                }
-            }
-        }
-        self.refresh_global();
-        let g = self.global.lock().unwrap();
-        if g.allow.iter().any(|p| p.matches_path(path)) {
-            return true;
-        }
-        g.paths.iter().any(|p| path_starts_with(path, p))
+        self.allows_path_diagnostic(session_id, workdir, path)
+            .is_some()
     }
 
     /// 增加一条 allow / deny pattern。
@@ -847,23 +975,32 @@ fn remove_unique(view: &mut PermissionsView, decision: RuleEffect, pattern: &str
 
 fn match_view(
     view: &PermissionsView,
+    scope: PermissionScope,
     tool_name: &str,
     fingerprint: Option<&str>,
     path: Option<&str>,
-) -> Option<RuleEffect> {
-    if view
+) -> Option<PermissionMatch> {
+    if let Some(p) = view
         .deny
         .iter()
-        .any(|p| p.matches(tool_name, fingerprint, path))
+        .find(|p| p.matches(tool_name, fingerprint, path))
     {
-        return Some(RuleEffect::Deny);
+        return Some(PermissionMatch {
+            effect: RuleEffect::Deny,
+            scope,
+            pattern: p.raw.clone(),
+        });
     }
-    if view
+    if let Some(p) = view
         .allow
         .iter()
-        .any(|p| p.matches(tool_name, fingerprint, path))
+        .find(|p| p.matches(tool_name, fingerprint, path))
     {
-        return Some(RuleEffect::Allow);
+        return Some(PermissionMatch {
+            effect: RuleEffect::Allow,
+            scope,
+            pattern: p.raw.clone(),
+        });
     }
     None
 }
@@ -1180,6 +1317,38 @@ mod tests {
             .unwrap();
         let dec = store.find_for_paths(None, None, "Edit", None, &[]);
         assert_eq!(dec, Some(RuleEffect::Allow));
+    }
+
+    #[test]
+    fn find_diagnostic_reports_scope_and_pattern() {
+        let dir = tmp("diag");
+        let store = PermissionStore::open(&dir).unwrap();
+        let sid = "s1";
+        store
+            .add(
+                PermissionScope::Global,
+                None,
+                None,
+                RuleEffect::Allow,
+                "Bash(git)".to_string(),
+            )
+            .unwrap();
+        store
+            .add(
+                PermissionScope::Session,
+                Some(sid),
+                None,
+                RuleEffect::Allow,
+                "Bash(grep)".to_string(),
+            )
+            .unwrap();
+
+        let hit = store
+            .find_diagnostic(Some(sid), None, "Bash", Some("grep foo"), None)
+            .expect("session rule should match");
+        assert_eq!(hit.effect, RuleEffect::Allow);
+        assert_eq!(hit.scope, PermissionScope::Session);
+        assert_eq!(hit.pattern, "Bash(grep)");
     }
 
     #[test]

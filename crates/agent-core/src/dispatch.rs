@@ -6,8 +6,9 @@
 //! - 提问通路（`ask` 工具）→ emit `UserQuestionRequested` + await
 //! - 工具执行（含超时输出截断）+ emit `ToolCallStarted` / `ToolCallFinished`
 //!
-//! 并发策略：`ReadOnly` 工具与同 turn 其他 ReadOnly 工具并发；需要 HITL
-//! 的工具因 `await` 自然串行（无需特殊调度）。
+//! 并发策略：普通工具保持批量并发；Bash/PowerShell 按顺序派发，确保用户对
+//! 第一条命令选择 AllowAndRemember 后，同一批后续 shell 命令能先命中记忆规则，
+//! 不会因为 pending 预创建而重复弹审批。
 //!
 //! [`agent_loop`]: super::agent_loop
 
@@ -152,6 +153,7 @@ impl ToolDispatcher {
     ) -> Result<Vec<ToolResult>, ModelError> {
         let mut tasks: Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>> =
             Vec::with_capacity(calls.len());
+        let mut results = Vec::with_capacity(calls.len());
 
         for (call_index, call) in calls.iter().enumerate() {
             if cancellation::is_cancelled(&self.cancel) {
@@ -159,7 +161,11 @@ impl ToolDispatcher {
                 break;
             }
             let dispatch_index = dispatch_offset + call_index;
-            tasks.push(if call.name == ASK_TOOL_NAME {
+            let serial_shell = matches!(call.name.as_str(), "Bash" | "PowerShell");
+            if serial_shell {
+                drain_tool_tasks(&mut tasks, &mut results).await?;
+            }
+            let task = if call.name == ASK_TOOL_NAME {
                 self.spawn_ask(call.clone(), call_index, dispatch_index)
             } else if call.name == TODO_WRITE_TOOL_NAME {
                 self.spawn_todo_write(call.clone(), call_index, dispatch_index)
@@ -167,13 +173,15 @@ impl ToolDispatcher {
                 self.spawn_exit_plan_mode(call.clone(), call_index, dispatch_index)
             } else {
                 self.spawn_tool(call.clone(), call_index, dispatch_index)
-            });
+            };
+            if serial_shell {
+                results.push(task.await?);
+            } else {
+                tasks.push(task);
+            }
         }
 
-        let mut results = Vec::with_capacity(tasks.len());
-        for outcome in join_all(tasks).await {
-            results.push(outcome?);
-        }
+        drain_tool_tasks(&mut tasks, &mut results).await?;
         results.sort_by_key(|(index, _)| *index);
         Ok(results.into_iter().map(|(_, r)| r).collect())
     }
@@ -232,31 +240,71 @@ impl ToolDispatcher {
         // 当前 session 数据目录（`~/.hebbian/sessions/<sid>/`）下的文件是 agent
         // 自己的工具输出（line_trunc/、tool_results/、bg/ 等），永远视为在界内，
         // 不触发 PathAccess 审批。范围限定到 session 目录，避免配置文件被随便读。
-        let out_of_scope: Vec<PathBuf> = effects
-            .paths
-            .iter()
-            .filter(|p| !self.workspace.allows(p))
-            .filter(|p| {
-                !self
-                    .data_dir_for_artifacts
-                    .as_ref()
-                    .zip(self.session_id_for_hooks.as_deref())
-                    .map_or(false, |(dd, sid)| {
-                        p.starts_with(&dd.join("sessions").join(sid))
-                    })
-            })
-            .filter(|p| {
-                // 也查 PermissionStore：Session/Project/Global FilePath Allow 规则覆盖的路径免审批
-                !self.permission_store.as_ref().map_or(false, |store| {
-                    store.allows_path(
-                        self.session_id_for_hooks.as_deref(),
-                        Some(self.workspace.workdir()),
-                        &p.to_string_lossy(),
-                    )
-                })
-            })
-            .cloned()
-            .collect();
+        let mut out_of_scope: Vec<PathBuf> = Vec::new();
+        for p in &effects.paths {
+            if self.workspace.allows(p) {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    path = %p.display(),
+                    matched = true,
+                    level = "workspace",
+                    "path scope: workspace allowed path matched"
+                );
+                continue;
+            }
+            let session_artifact_allowed = self
+                .data_dir_for_artifacts
+                .as_ref()
+                .zip(self.session_id_for_hooks.as_deref())
+                .map_or(false, |(dd, sid)| {
+                    p.starts_with(&dd.join("sessions").join(sid))
+                });
+            if session_artifact_allowed {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    path = %p.display(),
+                    matched = true,
+                    level = "session_artifact",
+                    "path scope: session artifact path allowed"
+                );
+                continue;
+            }
+            if let Some(hit) = self.permission_store.as_ref().and_then(|store| {
+                store.allows_path_diagnostic(
+                    self.session_id_for_hooks.as_deref(),
+                    Some(self.workspace.workdir()),
+                    &p.to_string_lossy(),
+                )
+            }) {
+                let level = match hit.scope {
+                    protocol::PermissionScope::Once => "once",
+                    protocol::PermissionScope::Session => "session",
+                    protocol::PermissionScope::Project => "project",
+                    protocol::PermissionScope::Global => "global",
+                };
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    path = %p.display(),
+                    matched = true,
+                    level,
+                    pattern = %hit.pattern,
+                    "path scope: PermissionStore path rule matched"
+                );
+                continue;
+            }
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                path = %p.display(),
+                matched = false,
+                result = "waiting_for_approval",
+                "path scope: no allowed path matched"
+            );
+            out_of_scope.push(p.clone());
+        }
 
         let path_pending = if out_of_scope.is_empty() {
             info!(
@@ -276,7 +324,8 @@ impl ToolDispatcher {
                 call_id = %call.id,
                 out_of_scope = out_str.join(", "),
                 total = effects.paths.len(),
-                "path scope: some paths out of bounds, requesting approval"
+                result = "waiting_for_approval",
+                "path scope: some paths out of bounds, waiting for approval"
             );
             Some(self.request_path_approval(&call.name, out_of_scope))
         };
@@ -1268,6 +1317,19 @@ impl ToolDispatcher {
     }
 }
 
+async fn drain_tool_tasks(
+    tasks: &mut Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>>,
+    results: &mut Vec<(usize, ToolResult)>,
+) -> Result<(), ModelError> {
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    for outcome in join_all(std::mem::take(tasks)).await {
+        results.push(outcome?);
+    }
+    Ok(())
+}
+
 /// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths +
 /// 持久化到 PermissionStore（让其他 session 也能共享）。
 async fn await_path_decision(
@@ -1294,6 +1356,11 @@ async fn await_path_decision(
     let decision = decision_result.map_err(|_| "路径审批通道已关闭".to_string())?;
     let decision_label = approval_decision_label(&decision);
     permission_span.record(attr::PERMISSION_DECISION, decision_label);
+    info!(
+        request_id = %request_id,
+        decision = decision_label,
+        "permission.approval: backend waiter received path approval decision"
+    );
 
     sink(state.event(EventPayload::PermissionResolved {
         request_id,
@@ -1351,6 +1418,11 @@ async fn await_permission_decision(
             let outcome = outcome_result.map_err(|_| "审批通道已关闭".to_string())?;
             let decision_label = approval_decision_label(&outcome);
             permission_span.record(attr::PERMISSION_DECISION, decision_label);
+            info!(
+                request_id = %request_id,
+                decision = decision_label,
+                "permission.approval: backend waiter received tool approval decision"
+            );
 
             sink(state.event(EventPayload::PermissionResolved {
                 request_id,
@@ -1609,6 +1681,108 @@ mod tests {
         assert_eq!(results[0].name, "Bash");
 
         surface.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remember_first_compound_bash_auto_resolves_matching_pending_call() {
+        use protocol::{EventPayload, PermissionKind, PermissionScope};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![Box::new(BashTool::new(
+            workspace.clone(),
+            crate::tools::background::BackgroundShells::new(),
+            None,
+        ))
+            as Box<dyn crate::tools::Tool>]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: hitl.clone(),
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            model_id: None,
+            judge_client: None,
+            force_automode: false,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+        };
+
+        let calls = vec![
+            ToolCall {
+                id: "call_1".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({
+                    "command": "cd crates && cd agent-core && grep dispatch Cargo.toml | cat",
+                    "cwd": tmp.path()
+                }),
+            },
+            ToolCall {
+                id: "call_2".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({
+                    "command": "cd crates && cd agent-core && grep package Cargo.toml | cat",
+                    "cwd": tmp.path()
+                }),
+            },
+        ];
+
+        let hitl_for_surface = hitl.clone();
+        let surface = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionRequested {
+                    request_id, kind, ..
+                } = &event.payload
+                {
+                    if let PermissionKind::ToolCall {
+                        command_segments, ..
+                    } = kind
+                    {
+                        requests.push(command_segments.clone());
+                    }
+                    if requests.len() == 1 {
+                        hitl_for_surface.resolve(
+                            request_id,
+                            ApprovalDecision::AllowAndRemember {
+                                scope: PermissionScope::Session,
+                                pattern: Some("cd".into()),
+                                extra_patterns: vec!["grep".into(), "cat".into()],
+                            },
+                        );
+                    } else if requests.len() > 1 {
+                        panic!("second matching Bash approval should be auto-resolved");
+                    }
+                }
+            }
+            requests
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&calls, 0))
+            .await
+            .expect("dispatch should complete after first approval");
+        let results = result.expect("dispatch should not return errors");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.name == "Bash"));
+
+        drop(dispatcher);
+        let requests = surface.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0],
+            vec!["cd crates", "cd agent-core", "grep dispatch", "cat"]
+        );
     }
 
     /// 回归测试：spawn_todo_write short-circuit 真的把 todos 落盘到 jsonl 的

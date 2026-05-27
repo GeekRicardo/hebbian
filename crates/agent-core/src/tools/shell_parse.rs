@@ -10,7 +10,7 @@
 //!   会**升级为 [`DangerousKind::SensitiveEnvPrefix`]** 强制审批，覆盖任何 allow 规则
 //!   ——保证 `LD_PRELOAD=evil ls` 不会被 `Bash(ls)` 静默放行
 //!
-//! 整行级再做一次 [`detect_dangerous_patterns`]：cd-git-compound / multi-cd /
+//! 整行级再做一次 [`detect_dangerous_patterns`]：cd-git-compound /
 //! write-git-meta / rm-rf-root / ast-too-complex。命中的危险模式**强制审批且不可
 //! 记忆**——HitlGate 据此拒绝 AllowAndRemember 写盘。
 //!
@@ -36,6 +36,9 @@ pub struct ParsedCommand {
     /// 段内识别到的写文件目标：`>` / `>>` / `tee` / `sed -i` / `cat >` / `python -c open(...,'w')`
     /// 等。绝对/相对路径原样保留，由调用方做 canonicalize / 越界检查。
     pub write_targets: Vec<String>,
+    /// 段内是否含 heredoc。heredoc body 不是 shell 语法的一部分，不能参与 `&&` / `|`
+    /// 拆段；但它会影响解释器 stdin，因此不自动归类为 ReadOnly。
+    pub has_heredoc: bool,
 }
 
 impl ParsedCommand {
@@ -98,8 +101,6 @@ pub struct ParsedShell {
 pub enum DangerousKind {
     /// `cd <path> && git ...`：可触发 target 目录的不可信 `.git/hooks`。
     CdGitCompound,
-    /// 单行多次 cd。
-    MultiCd,
     /// 写入 `.git/hooks/**` / `.git/config` / `HEAD` / `objects/...` / `refs/...`。
     WriteGitMeta(String),
     /// `rm -rf` 命中 `/` / `~` / `$HOME` / `..` 等根级路径。
@@ -114,7 +115,6 @@ impl DangerousKind {
     pub fn label(&self) -> &'static str {
         match self {
             DangerousKind::CdGitCompound => "cd-git-compound",
-            DangerousKind::MultiCd => "multi-cd",
             DangerousKind::WriteGitMeta(_) => "write-git-meta",
             DangerousKind::RmRfRoot(_) => "rm-rf-root",
             DangerousKind::SensitiveEnvPrefix(_) => "sensitive-env-prefix",
@@ -176,7 +176,8 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
         return Err(ParseError::Empty);
     }
 
-    let segments = split_top_level(line)?;
+    let parse_line = strip_heredoc_bodies(line);
+    let segments = split_top_level(&parse_line)?;
 
     let mut commands = Vec::with_capacity(segments.len());
     let mut dangerous = false;
@@ -189,7 +190,7 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
         }
 
         // 1) 抽离重定向 → write_targets，得到 cleaned segment 给 shlex
-        let (cleaned, write_targets) = extract_redirections(&seg);
+        let (cleaned, write_targets, has_heredoc) = extract_redirections(&seg);
 
         // 2) 复杂结构检测（$() / `…` / <(...) / >(...) / subshell / 后台 &）
         if let Some(why) = sniff_complex_structure(&cleaned) {
@@ -236,6 +237,7 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
             argv,
             env_prefix,
             write_targets,
+            has_heredoc,
         };
         commands.push(cmd);
     }
@@ -246,7 +248,7 @@ pub fn parse(line: &str) -> Result<ParsedShell, ParseError> {
         cmd.write_targets.append(&mut extra);
     }
 
-    // 8) 整行级危险模式（cd-git / multi-cd / write-git-meta / rm-rf-root）
+    // 8) 整行级危险模式（cd-git / write-git-meta / rm-rf-root）
     let extra_kinds = detect_dangerous_patterns(&commands);
     for k in extra_kinds {
         if !dangerous_kinds.contains(&k) {
@@ -284,27 +286,28 @@ fn split_top_level(line: &str) -> Result<Vec<String>, ParseError> {
     let mut i = 0;
 
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let Some(c) = char_at(line, i) else {
+            break;
+        };
 
         if in_single {
             buf.push(c);
             if c == '\'' {
                 in_single = false;
             }
-            i += 1;
+            i = next_char_index(line, i);
             continue;
         }
         if in_double {
             buf.push(c);
-            if c == '\\' && i + 1 < bytes.len() {
-                buf.push(bytes[i + 1] as char);
-                i += 2;
+            if c == '\\' && next_char_index(line, i) < bytes.len() {
+                i = push_escaped_char(line, &mut buf, i);
                 continue;
             }
             if c == '"' {
                 in_double = false;
             }
-            i += 1;
+            i = next_char_index(line, i);
             continue;
         }
 
@@ -312,17 +315,16 @@ fn split_top_level(line: &str) -> Result<Vec<String>, ParseError> {
             '\'' => {
                 in_single = true;
                 buf.push(c);
-                i += 1;
+                i = next_char_index(line, i);
             }
             '"' => {
                 in_double = true;
                 buf.push(c);
-                i += 1;
+                i = next_char_index(line, i);
             }
             '\\' if i + 1 < bytes.len() => {
                 buf.push(c);
-                buf.push(bytes[i + 1] as char);
-                i += 2;
+                i = push_escaped_char(line, &mut buf, i);
             }
             '&' if i + 1 < bytes.len() && bytes[i + 1] as char == '&' => {
                 push_segment(&mut out, &mut buf);
@@ -334,11 +336,11 @@ fn split_top_level(line: &str) -> Result<Vec<String>, ParseError> {
             }
             ';' | '|' => {
                 push_segment(&mut out, &mut buf);
-                i += 1;
+                i = next_char_index(line, i);
             }
             _ => {
                 buf.push(c);
-                i += 1;
+                i = next_char_index(line, i);
             }
         }
     }
@@ -358,39 +360,158 @@ fn push_segment(out: &mut Vec<String>, buf: &mut String) {
     }
 }
 
+fn char_at(s: &str, index: usize) -> Option<char> {
+    s.get(index..)?.chars().next()
+}
+
+fn next_char_index(s: &str, index: usize) -> usize {
+    index + char_at(s, index).map(char::len_utf8).unwrap_or(1)
+}
+
+fn push_escaped_char(s: &str, out: &mut String, index: usize) -> usize {
+    let next = next_char_index(s, index);
+    if let Some(escaped) = char_at(s, next) {
+        out.push(escaped);
+        next + escaped.len_utf8()
+    } else {
+        next
+    }
+}
+
+fn skip_ascii_ws(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && (bytes[index] == b' ' || bytes[index] == b'\t') {
+        index += 1;
+    }
+    index
+}
+
+fn scan_heredoc_delimiter(s: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = s.as_bytes();
+    let mut j = start;
+    if j < bytes.len() && bytes[j] == b'-' {
+        j += 1;
+    }
+    j = skip_ascii_ws(bytes, j);
+    let (delimiter, end) = scan_token(s, j)?;
+    Some((delimiter, end))
+}
+
+fn line_matches_heredoc_delimiter(line: &str, delimiter: &str) -> bool {
+    line.trim_end_matches(['\r', '\n']) == delimiter
+}
+
+fn collect_heredoc_delimiters(segment: &str) -> Vec<String> {
+    let bytes = segment.as_bytes();
+    let mut delimiters = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let Some(c) = char_at(segment, i) else {
+            break;
+        };
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            }
+            i = next_char_index(segment, i);
+            continue;
+        }
+        if in_double {
+            if c == '\\' && next_char_index(segment, i) < bytes.len() {
+                i = next_char_index(segment, next_char_index(segment, i));
+                continue;
+            }
+            if c == '"' {
+                in_double = false;
+            }
+            i = next_char_index(segment, i);
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_single = true;
+                i = next_char_index(segment, i);
+            }
+            '"' => {
+                in_double = true;
+                i = next_char_index(segment, i);
+            }
+            '<' if segment[i..].starts_with("<<") => {
+                let start = i + 2;
+                if let Some((delimiter, end)) = scan_heredoc_delimiter(segment, start) {
+                    delimiters.push(delimiter);
+                    i = end;
+                } else {
+                    i += 2;
+                }
+            }
+            _ => i = next_char_index(segment, i),
+        }
+    }
+
+    delimiters
+}
+
+fn strip_heredoc_bodies(line: &str) -> String {
+    let mut out = String::new();
+    let mut pending_delimiters: Vec<String> = Vec::new();
+    let mut lines = line.split_inclusive('\n').peekable();
+
+    while let Some(raw_line) = lines.next() {
+        out.push_str(raw_line);
+        let command_part = raw_line.trim_end_matches(['\r', '\n']);
+        pending_delimiters.extend(collect_heredoc_delimiters(command_part));
+
+        while let Some(delimiter) = pending_delimiters.first().cloned() {
+            let Some(body_line) = lines.next() else {
+                break;
+            };
+            if line_matches_heredoc_delimiter(body_line, &delimiter) {
+                pending_delimiters.remove(0);
+            }
+        }
+    }
+
+    out
+}
+
 /// 从段中抽出重定向写目标（`>` `>>` `&>` `2>` 等），返回 `(cleaned, targets)`。
 /// `<<EOF` heredoc 与 `< FILE` 读重定向不算写——前者写到子进程 stdin，后者纯读。
-fn extract_redirections(seg: &str) -> (String, Vec<String>) {
+fn extract_redirections(seg: &str) -> (String, Vec<String>, bool) {
     let bytes = seg.as_bytes();
     let mut cleaned = String::with_capacity(seg.len());
     let mut targets = Vec::new();
+    let mut has_heredoc = false;
 
     let mut in_single = false;
     let mut in_double = false;
     let mut i = 0;
 
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let Some(c) = char_at(seg, i) else {
+            break;
+        };
 
         if in_single {
             cleaned.push(c);
             if c == '\'' {
                 in_single = false;
             }
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
         if in_double {
             cleaned.push(c);
-            if c == '\\' && i + 1 < bytes.len() {
-                cleaned.push(bytes[i + 1] as char);
-                i += 2;
+            if c == '\\' && next_char_index(seg, i) < bytes.len() {
+                i = push_escaped_char(seg, &mut cleaned, i);
                 continue;
             }
             if c == '"' {
                 in_double = false;
             }
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
 
@@ -398,42 +519,38 @@ fn extract_redirections(seg: &str) -> (String, Vec<String>) {
         if c == '\'' {
             in_single = true;
             cleaned.push(c);
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
         if c == '"' {
             in_double = true;
             cleaned.push(c);
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
 
         // 重定向匹配：`>>` `>` `&>` `2>` `2>>` `1>` `1>>` `<<` heredoc
         // heredoc 不抽出（写到子进程 stdin，不写文件系统）；`<` 读，跳过
-        let rest = &seg[i..];
-        if rest.starts_with(">>")
-            || rest.starts_with("&>")
-            || rest.starts_with("1>>")
-            || rest.starts_with("2>>")
-            || rest.starts_with("1>")
-            || rest.starts_with("2>")
+        if seg[i..].starts_with(">>")
+            || seg[i..].starts_with("&>")
+            || seg[i..].starts_with("1>>")
+            || seg[i..].starts_with("2>>")
+            || seg[i..].starts_with("1>")
+            || seg[i..].starts_with("2>")
         {
-            let op_len = if rest.starts_with("1>>") || rest.starts_with("2>>") {
+            let op_len = if seg[i..].starts_with("1>>") || seg[i..].starts_with("2>>") {
                 3
-            } else if rest.starts_with(">>")
-                || rest.starts_with("&>")
-                || rest.starts_with("1>")
-                || rest.starts_with("2>")
+            } else if seg[i..].starts_with(">>")
+                || seg[i..].starts_with("&>")
+                || seg[i..].starts_with("1>")
+                || seg[i..].starts_with("2>")
             {
                 2
             } else {
                 1
             };
             // 跳过 op + 空白，抓 token 作为目标
-            let mut j = i + op_len;
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
+            let j = skip_ascii_ws(bytes, i + op_len);
             // fd 复制（`2>&1` / `1>&2` / `&>&-` 等）：scan_token 会因 `&` 开头返回 None,
             // 单纯跳 op 会把 `&1` 留在 cleaned 让后续 sniff 误判为后台 `&`。这里先识别
             // 整段 fd-dup 一次性消耗：op + 可选空白 + `&` + 数字/`-`。
@@ -454,10 +571,7 @@ fn extract_redirections(seg: &str) -> (String, Vec<String>) {
             continue;
         }
         if c == '>' {
-            let mut j = i + 1;
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
+            let j = skip_ascii_ws(bytes, i + 1);
             if let Some(dup_end) = scan_fd_dup(seg, j) {
                 i = dup_end;
                 continue;
@@ -472,16 +586,10 @@ fn extract_redirections(seg: &str) -> (String, Vec<String>) {
             }
             continue;
         }
-        if rest.starts_with("<<") {
+        if seg[i..].starts_with("<<") {
+            has_heredoc = true;
             // heredoc：跳过 `<<` + 可选 `-` + delimiter token；不抽目标
-            let mut j = i + 2;
-            if j < bytes.len() && bytes[j] == b'-' {
-                j += 1;
-            }
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-            if let Some((_, end)) = scan_token(seg, j) {
+            if let Some((_, end)) = scan_heredoc_delimiter(seg, i + 2) {
                 i = end;
             } else {
                 i += 2;
@@ -490,10 +598,7 @@ fn extract_redirections(seg: &str) -> (String, Vec<String>) {
         }
         if c == '<' {
             // 读重定向：跳过 `<` + token，不算写
-            let mut j = i + 1;
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
+            let j = skip_ascii_ws(bytes, i + 1);
             if let Some((_, end)) = scan_token(seg, j) {
                 i = end;
             } else {
@@ -503,10 +608,10 @@ fn extract_redirections(seg: &str) -> (String, Vec<String>) {
         }
 
         cleaned.push(c);
-        i += 1;
+        i = next_char_index(seg, i);
     }
 
-    (cleaned, targets)
+    (cleaned, targets, has_heredoc)
 }
 
 /// 识别 fd 复制（`&N` / `&-`）形态，返回吃完该段后的 end index。
@@ -539,7 +644,7 @@ fn scan_token(s: &str, start: usize) -> Option<(String, usize)> {
     if start >= bytes.len() {
         return None;
     }
-    let first = bytes[start] as char;
+    let first = char_at(s, start)?;
     if first == ' ' || first == '\t' || first == '|' || first == '&' || first == ';' {
         return None;
     }
@@ -549,47 +654,48 @@ fn scan_token(s: &str, start: usize) -> Option<(String, usize)> {
     let mut in_single = false;
     let mut in_double = false;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let Some(c) = char_at(s, i) else {
+            break;
+        };
         if in_single {
             if c == '\'' {
                 in_single = false;
-                i += 1;
+                i = next_char_index(s, i);
                 continue;
             }
             buf.push(c);
-            i += 1;
+            i = next_char_index(s, i);
             continue;
         }
         if in_double {
             if c == '"' {
                 in_double = false;
-                i += 1;
+                i = next_char_index(s, i);
                 continue;
             }
-            if c == '\\' && i + 1 < bytes.len() {
-                buf.push(bytes[i + 1] as char);
-                i += 2;
+            if c == '\\' && next_char_index(s, i) < bytes.len() {
+                i = push_escaped_char(s, &mut buf, i);
                 continue;
             }
             buf.push(c);
-            i += 1;
+            i = next_char_index(s, i);
             continue;
         }
         if c == '\'' {
             in_single = true;
-            i += 1;
+            i = next_char_index(s, i);
             continue;
         }
         if c == '"' {
             in_double = true;
-            i += 1;
+            i = next_char_index(s, i);
             continue;
         }
         if c == ' ' || c == '\t' || c == '|' || c == '&' || c == ';' || c == '>' || c == '<' {
             break;
         }
         buf.push(c);
-        i += 1;
+        i = next_char_index(s, i);
     }
     if buf.is_empty() {
         None
@@ -607,35 +713,39 @@ fn sniff_complex_structure(seg: &str) -> Option<&'static str> {
     let mut in_double = false;
     let mut i = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let Some(c) = char_at(seg, i) else {
+            break;
+        };
         if in_single {
             if c == '\'' {
                 in_single = false;
             }
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
         if in_double {
-            if c == '\\' && i + 1 < bytes.len() {
-                i += 2;
+            if c == '\\' && next_char_index(seg, i) < bytes.len() {
+                i = next_char_index(seg, next_char_index(seg, i));
                 continue;
             }
             if c == '"' {
                 in_double = false;
             }
-            i += 1;
+            i = next_char_index(seg, i);
             continue;
         }
         match c {
             '\'' => {
                 in_single = true;
-                i += 1;
+                i = next_char_index(seg, i);
             }
             '"' => {
                 in_double = true;
-                i += 1;
+                i = next_char_index(seg, i);
             }
-            '\\' if i + 1 < bytes.len() => i += 2,
+            '\\' if next_char_index(seg, i) < bytes.len() => {
+                i = next_char_index(seg, next_char_index(seg, i));
+            }
             '`' => return Some("backtick command substitution"),
             '$' if i + 1 < bytes.len() && bytes[i + 1] as char == '(' => {
                 return Some("$(...) command substitution");
@@ -652,7 +762,7 @@ fn sniff_complex_structure(seg: &str) -> Option<&'static str> {
             '#' if i == 0 || matches!(bytes[i - 1] as char, ' ' | '\t') => {
                 return Some("comment injection");
             }
-            _ => i += 1,
+            _ => i = next_char_index(seg, i),
         }
     }
     None
@@ -872,11 +982,8 @@ fn python_open_target(body: &str) -> Option<String> {
 pub fn detect_dangerous_patterns(commands: &[ParsedCommand]) -> Vec<DangerousKind> {
     let mut kinds = Vec::new();
 
-    // multi-cd / cd-git-compound
+    // cd-git-compound
     let cd_count = commands.iter().filter(|c| c.root == "cd").count();
-    if cd_count >= 2 {
-        kinds.push(DangerousKind::MultiCd);
-    }
     if cd_count >= 1 {
         // cd 之后是否出现 git 段
         let mut seen_cd = false;
@@ -992,6 +1099,25 @@ mod tests {
     }
 
     #[test]
+    fn unicode_paths_do_not_panic_while_scanning_segments() {
+        let r = cmd(
+            "git diff -- crates/agent-core/src/agent_loop.rs docs/架构.md docs/changelog.md",
+        );
+        assert_eq!(r.commands.len(), 1);
+        assert_eq!(r.commands[0].fingerprint(), "git diff");
+        assert!(r.commands[0].argv.iter().any(|arg| arg == "docs/架构.md"));
+    }
+
+    #[test]
+    fn unicode_paths_survive_top_level_split_and_redirection_scan() {
+        let r = cmd("cat docs/架构.md | grep 权限 > /tmp/审批.txt");
+        assert_eq!(r.commands.len(), 2);
+        assert_eq!(r.commands[0].argv, vec!["cat", "docs/架构.md"]);
+        assert_eq!(r.commands[1].argv, vec!["grep", "权限"]);
+        assert_eq!(r.commands[1].write_targets, vec!["/tmp/审批.txt"]);
+    }
+
+    #[test]
     fn fd_dup_not_a_write_target() {
         let r = cmd("foo 2>&1");
         // `&1` 是 fd dup，不当写目标
@@ -1032,6 +1158,34 @@ mod tests {
         assert!(r.dangerous_kinds.contains(&DangerousKind::AstTooComplex));
         let r = cmd("echo `whoami`");
         assert!(r.dangerous);
+    }
+
+    #[test]
+    fn heredoc_body_does_not_participate_in_shell_segmentation() {
+        let r = cmd(
+            "python3 - <<'PY'\n\
+             from pathlib import Path\n\
+             print(Path('docs/架构.md').read_text())\n\
+             PY",
+        );
+
+        assert!(!r.dangerous);
+        assert!(r.dangerous_kinds.is_empty());
+        assert_eq!(r.commands.len(), 1);
+        assert_eq!(r.commands[0].argv, vec!["python3", "-"]);
+        assert!(r.commands[0].has_heredoc);
+    }
+
+    #[test]
+    fn heredoc_body_operators_do_not_create_extra_segments() {
+        let r = cmd("cat <<'EOF' | grep hello\nhello && rm -rf /\nEOF");
+
+        assert!(!r.dangerous);
+        assert!(r.dangerous_kinds.is_empty());
+        assert_eq!(r.commands.len(), 2);
+        assert_eq!(r.commands[0].argv, vec!["cat"]);
+        assert!(r.commands[0].has_heredoc);
+        assert_eq!(r.commands[1].argv, vec!["grep", "hello"]);
     }
 
     #[test]
@@ -1127,9 +1281,17 @@ mod tests {
     }
 
     #[test]
-    fn dangerous_multi_cd() {
+    fn repeated_cd_is_plain_segmented_command() {
         let r = cmd("cd /a && cd /b && ls");
-        assert!(r.dangerous_kinds.contains(&DangerousKind::MultiCd));
+        assert!(!r.dangerous);
+        assert!(r.dangerous_kinds.is_empty());
+        assert_eq!(
+            r.commands
+                .iter()
+                .map(ParsedCommand::fingerprint)
+                .collect::<Vec<_>>(),
+            vec!["cd /a", "cd /b", "ls"]
+        );
     }
 
     #[test]

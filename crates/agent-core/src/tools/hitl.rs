@@ -28,7 +28,7 @@ use tracing::info;
 
 use crate::definition::{DefaultPermission, PermissionPolicy};
 use crate::effects::{EffectClass, Effects};
-use crate::permissions::{PermissionStore, RuleEffect};
+use crate::permissions::{PermissionMatch, PermissionStore, RuleEffect};
 
 /// 单次工具调用的权限决策结果。
 #[derive(Debug)]
@@ -78,6 +78,42 @@ struct LearnedRules {
 /// 则之后所有 Bash 调用（包括 `rm -rf /`）都会自动放行。这些工具应当走命令前缀级
 /// 记忆（`pattern=Some(...)`），UI 应只暴露前缀按钮。
 const NO_TOOL_LEVEL_MEMORY: &[&str] = &["Bash"];
+
+fn scope_label(scope: PermissionScope) -> &'static str {
+    match scope {
+        PermissionScope::Once => "once",
+        PermissionScope::Session => "session",
+        PermissionScope::Project => "project",
+        PermissionScope::Global => "global",
+    }
+}
+
+fn decision_label(decision: &ApprovalDecision) -> &'static str {
+    match decision {
+        ApprovalDecision::AllowOnce => "allow_once",
+        ApprovalDecision::AllowAndRemember { .. } => "allow_and_remember",
+        ApprovalDecision::Deny => "deny",
+        ApprovalDecision::DenyWithFeedback { .. } => "deny_with_feedback",
+    }
+}
+
+fn store_effect_label(effect: RuleEffect) -> &'static str {
+    match effect {
+        RuleEffect::Allow => "allow",
+        RuleEffect::Deny => "deny",
+    }
+}
+
+fn log_store_hit(tool_name: &str, hit: &PermissionMatch) {
+    info!(
+        tool = %tool_name,
+        matched = true,
+        level = scope_label(hit.scope),
+        effect = store_effect_label(hit.effect),
+        pattern = %hit.pattern,
+        "permission.match: PermissionStore rule matched"
+    );
+}
 
 /// HITL 统一闸门。
 ///
@@ -146,14 +182,19 @@ impl HitlGate {
         if self.policy.auto_approve.iter().any(|n| n == tool_name) {
             info!(
                 tool = %tool_name,
-                "permission: policy.auto_approve → Approved"
+                matched = true,
+                level = "policy",
+                "permission.match: policy.auto_approve → Approved"
             );
             return PermissionDecision::Approved;
         }
         if self.policy.always_ask.iter().any(|n| n == tool_name) {
             info!(
                 tool = %tool_name,
-                "permission: policy.always_ask → NeedsApproval"
+                matched = false,
+                level = "policy",
+                result = "waiting_for_approval",
+                "permission.match: policy.always_ask → waiting for approval"
             );
             return self.needs_approval(tool_name, fingerprint, effects);
         }
@@ -166,7 +207,9 @@ impl HitlGate {
                         info!(
                             tool = %tool_name,
                             class = ?effects.class,
-                            "permission: default_action=Auto → Approved"
+                            matched = true,
+                            level = "policy",
+                            "permission.match: default_action=Auto → Approved"
                         );
                         PermissionDecision::Approved
                     }
@@ -174,7 +217,10 @@ impl HitlGate {
                         info!(
                             tool = %tool_name,
                             class = ?effects.class,
-                            "permission: default_action=Ask → NeedsApproval"
+                            matched = false,
+                            level = "none",
+                            result = "waiting_for_approval",
+                            "permission.match: no allow rule matched → waiting for approval"
                         );
                         self.needs_approval(tool_name, fingerprint, effects)
                     }
@@ -182,7 +228,9 @@ impl HitlGate {
                         info!(
                             tool = %tool_name,
                             class = ?effects.class,
-                            "permission: default_action=Deny → Denied"
+                            matched = true,
+                            level = "policy",
+                            "permission.match: default_action=Deny → Denied"
                         );
                         PermissionDecision::Denied {
                             reason: "策略默认拒绝".into(),
@@ -218,7 +266,9 @@ impl HitlGate {
         if matches!(effects.class, EffectClass::NeedsHumanInput) {
             info!(
                 tool = %tool_name,
-                "permission.check: NeedsHumanInput → Approved (ask path)"
+                matched = true,
+                level = "ask_path",
+                "permission.match: NeedsHumanInput → Approved"
             );
             return Some(PermissionDecision::Approved);
         }
@@ -229,7 +279,10 @@ impl HitlGate {
             if learned.auto_denied_tools.iter().any(|n| n == tool_name) {
                 info!(
                     tool = %tool_name,
-                    "permission.check: auto_denied_tools → Denied (用户已永久拒绝)"
+                    matched = true,
+                    level = "session_memory",
+                    effect = "deny",
+                    "permission.match: auto_denied_tools → Denied"
                 );
                 return Some(PermissionDecision::Denied {
                     reason: "用户已永久拒绝该工具".into(),
@@ -242,7 +295,10 @@ impl HitlGate {
             info!(
                 tool = %tool_name,
                 kinds = ?effects.dangerous_kinds,
-                "permission.check: dangerous pattern → NeedsApproval (no remember)"
+                matched = false,
+                level = "dangerous_pattern",
+                result = "waiting_for_approval",
+                "permission.match: dangerous pattern → waiting for approval"
             );
             return Some(self.needs_approval_no_remember(tool_name, fingerprint, effects));
         }
@@ -252,7 +308,9 @@ impl HitlGate {
             info!(
                 tool = %tool_name,
                 fingerprint = fp_display,
-                "permission.check: ReadOnly → Approved (auto)"
+                matched = true,
+                level = "read_only",
+                "permission.match: ReadOnly → Approved"
             );
             return Some(PermissionDecision::Approved);
         }
@@ -272,14 +330,18 @@ impl HitlGate {
                         info!(
                             tool = %tool_name,
                             segment = %seg.fingerprint,
-                            "permission.check: segment matched learned pattern → allowed"
+                            matched = true,
+                            level = "session_memory",
+                            "permission.match: segment matched session learned pattern"
                         );
                     } else {
                         info!(
                             tool = %tool_name,
                             segment = %seg.fingerprint,
                             patterns_count = patterns_count,
-                            "permission.check: segment NOT matched in learned patterns"
+                            matched = false,
+                            level = "session_memory",
+                            "permission.match: segment not matched in session learned patterns"
                         );
                         all_seg_allowed = false;
                     }
@@ -288,7 +350,9 @@ impl HitlGate {
                     info!(
                         tool = %tool_name,
                         n_segments = effects.segments.len(),
-                        "permission.check: all segments matched learned patterns → Approved"
+                        matched = true,
+                        level = "session_memory",
+                        "permission.match: all segments matched session learned patterns → Approved"
                     );
                     return Some(PermissionDecision::Approved);
                 }
@@ -301,7 +365,9 @@ impl HitlGate {
                     info!(
                         tool = %tool_name,
                         fingerprint = %fp,
-                        "permission.check: fingerprint matched learned pattern → Approved"
+                        matched = true,
+                        level = "session_memory",
+                        "permission.match: fingerprint matched session learned pattern → Approved"
                     );
                     return Some(PermissionDecision::Approved);
                 } else {
@@ -309,7 +375,9 @@ impl HitlGate {
                         tool = %tool_name,
                         fingerprint = %fp,
                         patterns_count = patterns_count,
-                        "permission.check: fingerprint NOT matched in learned patterns"
+                        matched = false,
+                        level = "session_memory",
+                        "permission.match: fingerprint not matched in session learned patterns"
                     );
                 }
             }
@@ -317,7 +385,9 @@ impl HitlGate {
             if tool_matched {
                 info!(
                     tool = %tool_name,
-                    "permission.check: tool-level learned rule → Approved"
+                    matched = true,
+                    level = "session_memory",
+                    "permission.match: tool-level session learned rule → Approved"
                 );
                 return Some(PermissionDecision::Approved);
             }
@@ -327,7 +397,9 @@ impl HitlGate {
                     patterns_count = patterns_count,
                     tools_count = tools_count,
                     class = class_label,
-                    "permission.check: no learned rules matched (no fingerprint to match)"
+                    matched = false,
+                    level = "session_memory",
+                    "permission.match: no session learned rules matched"
                 );
             }
         }
@@ -336,18 +408,18 @@ impl HitlGate {
         if let Some(store) = &self.permission_store {
             let sid = self.session_id.as_deref();
             let wd = self.workdir.as_deref();
-            let store_decision = if has_segments {
+            let store_hit = if has_segments {
                 let seg_pairs: Vec<(String, Vec<String>)> = effects
                     .segments
                     .iter()
                     .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
                     .collect();
-                let r = store.find_for_segments(sid, wd, tool_name, &seg_pairs);
+                let r = store.find_for_segments_diagnostic(sid, wd, tool_name, &seg_pairs);
                 info!(
                     tool = %tool_name,
-                    result = ?r.map(|r| format!("{:?}", r)),
+                    result = ?r.as_ref().map(|r| format!("{:?}", r)),
                     segments = ?seg_pairs.iter().map(|(f,_)| f).collect::<Vec<_>>(),
-                    "permission.check: PermissionStore.find_for_segments"
+                    "permission.match: PermissionStore.find_for_segments"
                 );
                 r
             } else if !effects.paths.is_empty() {
@@ -356,35 +428,27 @@ impl HitlGate {
                     .iter()
                     .map(|p| p.to_string_lossy().into_owned())
                     .collect();
-                let r = store.find_for_paths(sid, wd, tool_name, fingerprint, &path_strs);
+                let r =
+                    store.find_for_paths_diagnostic(sid, wd, tool_name, fingerprint, &path_strs);
                 info!(
                     tool = %tool_name,
-                    result = ?r.map(|r| format!("{:?}", r)),
+                    result = ?r.as_ref().map(|r| format!("{:?}", r)),
                     paths = path_strs.join(", "),
-                    "permission.check: PermissionStore.find_for_paths"
+                    "permission.match: PermissionStore.find_for_paths"
                 );
                 r
             } else {
-                let r = store.find(sid, wd, tool_name, fingerprint, None);
+                let r = store.find_diagnostic(sid, wd, tool_name, fingerprint, None);
                 info!(
                     tool = %tool_name,
-                    result = ?r.map(|r| format!("{:?}", r)),
-                    "permission.check: PermissionStore.find"
+                    result = ?r.as_ref().map(|r| format!("{:?}", r)),
+                    "permission.match: PermissionStore.find"
                 );
                 r
             };
-            if let Some(dec) = store_decision {
-                let label = match dec {
-                    RuleEffect::Allow => "Allow",
-                    RuleEffect::Deny => "Deny",
-                };
-                info!(
-                    tool = %tool_name,
-                    effect = label,
-                    "permission.check: PermissionStore hit → {}",
-                    label
-                );
-                return Some(match dec {
+            if let Some(hit) = store_hit {
+                log_store_hit(tool_name, &hit);
+                return Some(match hit.effect {
                     RuleEffect::Allow => PermissionDecision::Approved,
                     RuleEffect::Deny => PermissionDecision::Denied {
                         reason: "PermissionStore 规则拒绝".into(),
@@ -394,14 +458,18 @@ impl HitlGate {
                 info!(
                     tool = %tool_name,
                     class = class_label,
-                    "permission.check: PermissionStore miss (no matching rule)"
+                    matched = false,
+                    level = "permission_store",
+                    "permission.match: PermissionStore miss"
                 );
             }
         } else {
             info!(
                 tool = %tool_name,
                 class = class_label,
-                "permission.check: no PermissionStore configured"
+                matched = false,
+                level = "permission_store",
+                "permission.match: no PermissionStore configured"
             );
         }
 
@@ -466,6 +534,14 @@ impl HitlGate {
                 refuse_remember,
             },
         );
+        info!(
+            request_id = %request_id,
+            tool = tool_name.unwrap_or(""),
+            fingerprint = fingerprint.unwrap_or(""),
+            refuse_remember,
+            result = "waiting_for_approval",
+            "permission.approval: opened pending approval"
+        );
         (request_id, rx)
     }
 
@@ -494,12 +570,51 @@ impl HitlGate {
             sender,
             tool_name,
             fingerprint,
-            effects: _,
+            effects,
             refuse_remember,
         }) = entry
         else {
+            info!(
+                request_id = %request_id,
+                decision = decision_label(&decision),
+                "permission.approval: resolve ignored, request not pending"
+            );
             return;
         };
+
+        let (decision_scope, decision_pattern, decision_extra_patterns) = match &decision {
+            ApprovalDecision::AllowAndRemember {
+                scope,
+                pattern,
+                extra_patterns,
+            } => (
+                scope_label(*scope),
+                pattern.as_deref().unwrap_or(""),
+                extra_patterns.join(","),
+            ),
+            _ => ("", "", String::new()),
+        };
+        let segment_summary = effects
+            .as_ref()
+            .map(|e| {
+                e.segments
+                    .iter()
+                    .map(|s| s.fingerprint.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+        info!(
+            request_id = %request_id,
+            tool = tool_name.as_deref().unwrap_or(""),
+            fingerprint = fingerprint.as_deref().unwrap_or(""),
+            segments = %segment_summary,
+            decision = decision_label(&decision),
+            scope = decision_scope,
+            pattern = decision_pattern,
+            extra_patterns = %decision_extra_patterns,
+            "permission.approval: backend received approval decision"
+        );
 
         if let ApprovalDecision::AllowAndRemember {
             scope,
@@ -528,7 +643,8 @@ impl HitlGate {
     }
 
     fn resolve_matching_pending_after_remember(&self, current_request_id: &PermissionRequestId) {
-        let mut auto_resolved: Vec<oneshot::Sender<ApprovalDecision>> = Vec::new();
+        let mut auto_resolved: Vec<(PermissionRequestId, oneshot::Sender<ApprovalDecision>)> =
+            Vec::new();
         {
             let mut pending = self.pending.lock().unwrap();
             let matching_ids: Vec<PermissionRequestId> = pending
@@ -559,12 +675,18 @@ impl HitlGate {
 
             for id in matching_ids {
                 if let Some(Pending::Approval { sender, .. }) = pending.remove(&id) {
-                    auto_resolved.push(sender);
+                    auto_resolved.push((id, sender));
                 }
             }
         }
 
-        for sender in auto_resolved {
+        for (id, sender) in auto_resolved {
+            info!(
+                request_id = %id,
+                current_request_id = %current_request_id,
+                decision = "allow_once",
+                "permission.approval: auto-resolved pending approval after remember"
+            );
             let _ = sender.send(ApprovalDecision::AllowOnce);
         }
     }
@@ -633,7 +755,14 @@ impl HitlGate {
         let _ = fingerprint; // 仅 debug 备用
         let _no_tool_level = NO_TOOL_LEVEL_MEMORY.contains(&tool_name);
         match scope {
-            PermissionScope::Once => {}
+            PermissionScope::Once => {
+                info!(
+                    tool = tool_name,
+                    pattern = pattern.unwrap_or(""),
+                    level = "once",
+                    "permission.remember: once scope, no rule persisted"
+                );
+            }
             PermissionScope::Session => {
                 // (1) in-memory learned（旧路径，立即对本 run 后续工具调用生效）
                 let mut learned = self.learned.lock().unwrap();
@@ -645,6 +774,12 @@ impl HitlGate {
                             if !learned.auto_approved_patterns.contains(&entry) {
                                 learned.auto_approved_patterns.push(entry);
                             }
+                            info!(
+                                tool = tool_name,
+                                pattern = prefix,
+                                level = "session",
+                                "permission.remember: stored session learned pattern"
+                            );
                         }
                     }
                     (None, false) => {
@@ -652,6 +787,11 @@ impl HitlGate {
                         if !learned.auto_approved_tools.contains(&name) {
                             learned.auto_approved_tools.push(name);
                         }
+                        info!(
+                            tool = tool_name,
+                            level = "session",
+                            "permission.remember: stored session learned tool"
+                        );
                     }
                     (None, true) => {
                         tracing::debug!(
@@ -669,9 +809,16 @@ impl HitlGate {
                             Some(sid.as_str()),
                             None,
                             RuleEffect::Allow,
-                            pat,
+                            pat.clone(),
                         ) {
                             tracing::warn!(error = %e, "PermissionStore.add(Session) 失败");
+                        } else {
+                            info!(
+                                tool = tool_name,
+                                pattern = %pat,
+                                level = "session",
+                                "permission.remember: stored PermissionStore rule"
+                            );
                         }
                     }
                 }
@@ -697,9 +844,16 @@ impl HitlGate {
                         None,
                         Some(wd.as_path()),
                         RuleEffect::Allow,
-                        pat,
+                        pat.clone(),
                     ) {
                         tracing::warn!(error = %e, "PermissionStore.add(Project) 失败");
+                    } else {
+                        info!(
+                            tool = tool_name,
+                            pattern = %pat,
+                            level = "project",
+                            "permission.remember: stored PermissionStore rule"
+                        );
                     }
                 }
             }
@@ -712,10 +866,21 @@ impl HitlGate {
                     return;
                 };
                 if let Some(pat) = build_pattern(tool_name, pattern) {
-                    if let Err(e) =
-                        store.add(PermissionScope::Global, None, None, RuleEffect::Allow, pat)
-                    {
+                    if let Err(e) = store.add(
+                        PermissionScope::Global,
+                        None,
+                        None,
+                        RuleEffect::Allow,
+                        pat.clone(),
+                    ) {
                         tracing::warn!(error = %e, "PermissionStore.add(Global) 失败");
+                    } else {
+                        info!(
+                            tool = tool_name,
+                            pattern = %pat,
+                            level = "global",
+                            "permission.remember: stored PermissionStore rule"
+                        );
                     }
                 }
             }
@@ -1037,6 +1202,129 @@ mod tests {
                 second_waiter.try_recv(),
                 Ok(ApprovalDecision::AllowOnce)
             ));
+        }
+    }
+
+    #[test]
+    fn session_remember_approves_repeated_benign_multi_cd_compound_bash() {
+        let gate = HitlGate::default();
+        let first = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "cd crates && cd agent-core && grep -R dispatch src | cat"
+            }),
+        );
+
+        assert_eq!(
+            first
+                .segments
+                .iter()
+                .map(|s| s.fingerprint.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cd crates", "cd agent-core", "grep dispatch", "cat"]
+        );
+        let req_id = match gate.check("Bash", &first) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected first compound command to need approval, got {other:?}"),
+        };
+
+        gate.resolve(
+            &req_id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("cd".into()),
+                extra_patterns: vec!["grep".into(), "cat".into()],
+            },
+        );
+
+        let second = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "cd crates && cd agent-core && grep -R ToolDispatcher src | cat"
+            }),
+        );
+        match gate.check("Bash", &second) {
+            PermissionDecision::Approved => {}
+            other => {
+                panic!("expected remembered benign compound command to approve, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn session_remember_resolves_pending_benign_multi_cd_compound_bash() {
+        let gate = HitlGate::default();
+        let first = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "cd crates && cd agent-core && grep -R dispatch src | cat"
+            }),
+        );
+        let second = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "cd crates && cd agent-core && grep -R ToolDispatcher src | cat"
+            }),
+        );
+
+        let first_id = match gate.check("Bash", &first) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected first compound command to need approval, got {other:?}"),
+        };
+        let mut second_waiter = match gate.check("Bash", &second) {
+            PermissionDecision::NeedsApproval { waiter, .. } => waiter,
+            other => panic!("expected second compound command to need approval, got {other:?}"),
+        };
+
+        gate.resolve(
+            &first_id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("cd".into()),
+                extra_patterns: vec!["grep".into(), "cat".into()],
+            },
+        );
+
+        assert!(matches!(
+            second_waiter.try_recv(),
+            Ok(ApprovalDecision::AllowOnce)
+        ));
+    }
+
+    #[test]
+    fn session_remember_approves_repeated_heredoc_bash() {
+        let gate = HitlGate::default();
+        let first = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('docs/架构.md').read_text())\nPY"
+            }),
+        );
+
+        assert!(first.dangerous_kinds.is_empty());
+        let req_id = match gate.check("Bash", &first) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected heredoc command to need approval, got {other:?}"),
+        };
+
+        gate.resolve(
+            &req_id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("python3".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+
+        let second = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({
+                "command": "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('docs/changelog.md').read_text())\nPY"
+            }),
+        );
+        match gate.check("Bash", &second) {
+            PermissionDecision::Approved => {}
+            other => panic!("expected remembered heredoc command to approve, got {other:?}"),
         }
     }
 

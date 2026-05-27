@@ -180,7 +180,7 @@ pub fn is_safe(cmd: &ParsedCommand) -> bool {
 
     // 0) 段内有任何写文件目标（重定向 / tee / sed -i / python -c "open(...,'w')" / ...）
     //    → 一律不安全。哪怕 root 是 echo / cat 也不行。
-    if !cmd.write_targets.is_empty() {
+    if !cmd.write_targets.is_empty() || cmd.has_heredoc {
         return false;
     }
 
