@@ -545,6 +545,41 @@ async fn cmd_approve_permission(
         },
         _ => return Err(anyhow!("invalid decision: {decision_str}")),
     };
+    let decision_label = match &decision {
+        ApprovalDecision::AllowOnce => "allow_once",
+        ApprovalDecision::AllowAndRemember { .. } => "allow_and_remember",
+        ApprovalDecision::Deny => "deny",
+        ApprovalDecision::DenyWithFeedback { .. } => "deny_with_feedback",
+    };
+    let (resolved_scope, resolved_pattern, resolved_extra_patterns) = match &decision {
+        ApprovalDecision::AllowAndRemember {
+            scope,
+            pattern,
+            extra_patterns,
+        } => {
+            let scope = match scope {
+                PermissionScope::Once => "once",
+                PermissionScope::Session => "session",
+                PermissionScope::Project => "project",
+                PermissionScope::Global => "global",
+            };
+            (
+                scope,
+                pattern.as_deref().unwrap_or(""),
+                extra_patterns.join(","),
+            )
+        }
+        _ => ("", "", String::new()),
+    };
+    info!(
+        session_id = %sid,
+        request_id = %request_id,
+        decision = decision_label,
+        scope = resolved_scope,
+        pattern = resolved_pattern,
+        extra_patterns = %resolved_extra_patterns,
+        "permission.approval: web backend received approval"
+    );
 
     let runtime = state.ensure_runtime(&sid).await?;
     let tx = runtime

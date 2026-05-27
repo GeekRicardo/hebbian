@@ -639,8 +639,6 @@ export function ChatView() {
         />
       </div>
 
-      <PermissionApprovalPopup />
-
       {/* ChatInput 包裹层的"三态"：
           - 全新对话（无任何消息且未在跑）→ 整块上移到 chat 区中部 + 宽度收 1/4（视觉对齐
             "新对话居中"模板，输入框比正式会话短一截，强调"还没开始"）。
@@ -661,6 +659,9 @@ export function ChatView() {
             : "w-full mb-[46px]"
         }`}
       >
+        <div className="absolute inset-x-0 bottom-full pointer-events-none z-20">
+          <PermissionApprovalPopup />
+        </div>
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-10">
           <UserQuestionPopup />
         </div>
