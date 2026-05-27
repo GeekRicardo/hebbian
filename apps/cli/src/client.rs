@@ -25,7 +25,10 @@ pub async fn list_sessions() -> Result<()> {
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("{}", serde_json::to_string_pretty(&json!({"sessions": []}))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({"sessions": []}))?
+            );
             return Ok(());
         }
         Err(e) => return Err(anyhow!("读取 {} 失败：{e}", dir.display())),
@@ -33,8 +36,12 @@ pub async fn list_sessions() -> Result<()> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else { continue };
-        let Some(sid) = name.strip_suffix(".sock") else { continue };
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(sid) = name.strip_suffix(".sock") else {
+            continue;
+        };
 
         match ping_socket(sid).await {
             Ok(()) => alive.push(json!({"session_id": sid, "socket": path.display().to_string()})),
@@ -73,9 +80,7 @@ async fn ping_socket(session_id: &str) -> Result<()> {
 pub async fn send_command(session_id: &str, cmd: IpcCommand) -> Result<()> {
     let path = socket_path(session_id);
     let stream = UnixStream::connect(&path).await.map_err(|e| {
-        anyhow!(
-            "无法连接 daemon（session {session_id}）：{e}\n提示：先用 `heb new` 启动 daemon"
-        )
+        anyhow!("无法连接 daemon（session {session_id}）：{e}\n提示：先用 `heb new` 启动 daemon")
     })?;
 
     let (reader, mut writer) = stream.into_split();
@@ -88,8 +93,8 @@ pub async fn send_command(session_id: &str, cmd: IpcCommand) -> Result<()> {
     let mut resp_line = String::new();
     buf.read_line(&mut resp_line).await?;
 
-    let resp: IpcResponse = serde_json::from_str(resp_line.trim())
-        .map_err(|e| anyhow!("daemon 响应解析失败：{e}"))?;
+    let resp: IpcResponse =
+        serde_json::from_str(resp_line.trim()).map_err(|e| anyhow!("daemon 响应解析失败：{e}"))?;
 
     if !resp.ok {
         return Err(anyhow!(

@@ -13,7 +13,9 @@ pub mod todo;
 
 pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
-pub use event::{EditAction, Event, EventPayload, ResumeCause, RiskLevel, StepKind, StopReason, SuspendReason};
+pub use event::{
+    EditAction, Event, EventPayload, ResumeCause, RiskLevel, StepKind, StopReason, SuspendReason,
+};
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
 pub use permission::{
     ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,

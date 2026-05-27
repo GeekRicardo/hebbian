@@ -64,8 +64,7 @@ pub struct ContextUsageDto {
 /// 计算 session 当前上下文用量（与 desktop `chat::context_usage` 等价）。
 pub async fn context_usage(data_dir: &Path, session_id: &str) -> Result<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id).map_err(|e| anyhow!("{e}"))?;
-    let transcript =
-        Transcript::from_session(session.system_prompt.clone(), &session.messages);
+    let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
     let used = agent_core::context::budget::estimate_transcript_tokens(
         transcript.system.as_deref(),
         &transcript.entries,
@@ -74,7 +73,10 @@ pub async fn context_usage(data_dir: &Path, session_id: &str) -> Result<ContextU
         Ok(p) => model_gateway::context_window::resolve_context_window(&p, &session.model).await,
         Err(_) => 200_000,
     };
-    Ok(ContextUsageDto { used_tokens: used, budget_tokens: budget })
+    Ok(ContextUsageDto {
+        used_tokens: used,
+        budget_tokens: budget,
+    })
 }
 
 /// 主动压缩当前 session（与 desktop `chat::compact_session` 等价）。
@@ -84,8 +86,8 @@ pub async fn compact_session(
     custom_instructions: Option<String>,
 ) -> Result<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id).map_err(|e| anyhow!("{e}"))?;
-    let provider = model_gateway::config::get(data_dir, &session.provider_id)
-        .map_err(|e| anyhow!("{e}"))?;
+    let provider =
+        model_gateway::config::get(data_dir, &session.provider_id).map_err(|e| anyhow!("{e}"))?;
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
         .await
         .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
@@ -96,8 +98,7 @@ pub async fn compact_session(
     // 用 ForcedModelClient 把 request 的 model 字段强制改成本次 compact 用的 model
     let client: Arc<dyn ModelClient> = Arc::new(ForcedModelClient { inner, model });
 
-    let transcript =
-        Transcript::from_session(session.system_prompt.clone(), &session.messages);
+    let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
     let result = agent_core::context::compaction::compact_with_llm(
         client.as_ref(),
         transcript.system.as_deref(),

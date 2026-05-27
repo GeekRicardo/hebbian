@@ -14,9 +14,15 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
-    TextDelta { text: String },
-    TextDone { full_text: String },
-    Reasoning { text: String },
+    TextDelta {
+        text: String,
+    },
+    TextDone {
+        full_text: String,
+    },
+    Reasoning {
+        text: String,
+    },
     ToolCallDelta {
         index: usize,
         id: Option<String>,
@@ -119,47 +125,85 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
     use EventPayload::*;
     Some(match &event.payload {
         TextDelta { text } => EngineEvent::TextDelta { text: text.clone() },
-        TextDone { full_text } => EngineEvent::TextDone { full_text: full_text.clone() },
+        TextDone { full_text } => EngineEvent::TextDone {
+            full_text: full_text.clone(),
+        },
         Reasoning { text } => EngineEvent::Reasoning { text: text.clone() },
-        ToolCallDelta { index, id, name, arguments_delta } => EngineEvent::ToolCallDelta {
+        ToolCallDelta {
+            index,
+            id,
+            name,
+            arguments_delta,
+        } => EngineEvent::ToolCallDelta {
             index: *index,
             id: id.clone(),
             name: name.clone(),
             arguments_delta: arguments_delta.clone(),
         },
-        ToolCallStarted { index, call_id, name, input } => EngineEvent::ToolStart {
+        ToolCallStarted {
+            index,
+            call_id,
+            name,
+            input,
+        } => EngineEvent::ToolStart {
             index: *index,
             id: call_id.clone(),
             name: name.clone(),
             input: input.clone(),
         },
-        ToolCallFinished { index, call_id, result, duration_ms, artifact_path, .. } => {
-            EngineEvent::ToolDone {
-                index: *index,
-                id: call_id.clone(),
-                result: result.clone(),
-                duration_ms: *duration_ms,
-                artifact_path: artifact_path.clone(),
-            }
-        }
-        ToolCallOutputDelta { index, call_id, chunk } => EngineEvent::ToolOutputDelta {
+        ToolCallFinished {
+            index,
+            call_id,
+            result,
+            duration_ms,
+            artifact_path,
+            ..
+        } => EngineEvent::ToolDone {
+            index: *index,
+            id: call_id.clone(),
+            result: result.clone(),
+            duration_ms: *duration_ms,
+            artifact_path: artifact_path.clone(),
+        },
+        ToolCallOutputDelta {
+            index,
+            call_id,
+            chunk,
+        } => EngineEvent::ToolOutputDelta {
             index: *index,
             id: call_id.clone(),
             chunk: chunk.clone(),
         },
-        RunFailed { error } => EngineEvent::Error { message: error.message.clone() },
-        RunSuspended { reason, resumes_at_ms, waiting_for_task_ids } => {
-            EngineEvent::RunSuspended {
-                reason: format!("{reason:?}").to_lowercase(),
-                resumes_at_ms: *resumes_at_ms,
-                waiting_for_task_ids: waiting_for_task_ids.clone(),
-            }
-        }
-        RunResumed { cause } => EngineEvent::RunResumed { cause: format!("{cause:?}") },
-        PermissionRequested { request_id, kind, summary, risk } => {
+        RunFailed { error } => EngineEvent::Error {
+            message: error.message.clone(),
+        },
+        RunSuspended {
+            reason,
+            resumes_at_ms,
+            waiting_for_task_ids,
+        } => EngineEvent::RunSuspended {
+            reason: format!("{reason:?}").to_lowercase(),
+            resumes_at_ms: *resumes_at_ms,
+            waiting_for_task_ids: waiting_for_task_ids.clone(),
+        },
+        RunResumed { cause } => EngineEvent::RunResumed {
+            cause: format!("{cause:?}"),
+        },
+        PermissionRequested {
+            request_id,
+            kind,
+            summary,
+            risk,
+        } => {
             use protocol::PermissionKind::*;
-            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments) = match kind {
-                ToolCall { tool_name, input, fingerprint, command_segments } => (
+            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments) = match kind
+            {
+                ToolCall {
+                    tool_name,
+                    input,
+                    fingerprint,
+                    command_segments,
+                } => (
                     "tool_call",
                     tool_name.clone(),
                     input.clone(),
@@ -175,7 +219,14 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                     None,
                     Vec::new(),
                 ),
-                Plan { .. } => ("plan", String::new(), Value::Null, Vec::new(), None, Vec::new()),
+                Plan { .. } => (
+                    "plan",
+                    String::new(),
+                    Value::Null,
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
                 ContinueLongRun { .. } => (
                     "continue_long_run",
                     String::new(),
@@ -197,7 +248,10 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 command_segments,
             }
         }
-        PermissionResolved { request_id, decision } => {
+        PermissionResolved {
+            request_id,
+            decision,
+        } => {
             use protocol::ApprovalDecision::*;
             EngineEvent::PermissionResolved {
                 request_id: request_id.as_str().to_string(),
@@ -209,20 +263,23 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 },
             }
         }
-        UserQuestionRequested { request_id, question, options, multi } => {
-            EngineEvent::UserQuestionRequested {
-                request_id: request_id.as_str().to_string(),
-                question: question.clone(),
-                options: options
-                    .iter()
-                    .map(|o| QuestionOptionDto {
-                        label: o.label.clone(),
-                        description: o.description.clone(),
-                    })
-                    .collect(),
-                multi: *multi,
-            }
-        }
+        UserQuestionRequested {
+            request_id,
+            question,
+            options,
+            multi,
+        } => EngineEvent::UserQuestionRequested {
+            request_id: request_id.as_str().to_string(),
+            question: question.clone(),
+            options: options
+                .iter()
+                .map(|o| QuestionOptionDto {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect(),
+            multi: *multi,
+        },
         UserQuestionAnswered { request_id, answer } => {
             use protocol::UserAnswer::*;
             let (kind, text) = match answer {

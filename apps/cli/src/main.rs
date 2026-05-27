@@ -72,10 +72,7 @@ enum Command {
     },
 
     /// 发送用户输入（有活跃 run 时自动注入，无则开新 run）
-    Input {
-        session_id: String,
-        text: String,
-    },
+    Input { session_id: String, text: String },
 
     /// 批准权限审批
     Allow {
@@ -148,7 +145,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::New { session_id, provider, model, workdir, run_mode, data_dir } => {
+        Command::New {
+            session_id,
+            provider,
+            model,
+            workdir,
+            run_mode,
+            data_dir,
+        } => {
             daemon::run(daemon::DaemonArgs {
                 session_id,
                 provider,
@@ -164,27 +168,52 @@ async fn main() -> Result<()> {
             client::send_command(&session_id, IpcCommand::Send { text }).await
         }
 
-        Command::Allow { session_id, request_id, scope, pattern, extra_patterns } => {
+        Command::Allow {
+            session_id,
+            request_id,
+            scope,
+            pattern,
+            extra_patterns,
+        } => {
             client::send_command(
                 &session_id,
-                IpcCommand::Allow { request_id, scope, pattern, extra_patterns },
+                IpcCommand::Allow {
+                    request_id,
+                    scope,
+                    pattern,
+                    extra_patterns,
+                },
             )
             .await
         }
 
-        Command::Deny { session_id, request_id } => {
-            client::send_command(&session_id, IpcCommand::Deny { request_id }).await
-        }
+        Command::Deny {
+            session_id,
+            request_id,
+        } => client::send_command(&session_id, IpcCommand::Deny { request_id }).await,
 
-        Command::DenyFeedback { session_id, request_id, feedback } => {
+        Command::DenyFeedback {
+            session_id,
+            request_id,
+            feedback,
+        } => {
             client::send_command(
                 &session_id,
-                IpcCommand::DenyWithFeedback { request_id, feedback },
+                IpcCommand::DenyWithFeedback {
+                    request_id,
+                    feedback,
+                },
             )
             .await
         }
 
-        Command::Answer { session_id, request_id, value, custom, cancel } => {
+        Command::Answer {
+            session_id,
+            request_id,
+            value,
+            custom,
+            cancel,
+        } => {
             let (kind, value) = if cancel {
                 ("cancelled".into(), String::new())
             } else if custom {
@@ -192,20 +221,24 @@ async fn main() -> Result<()> {
             } else {
                 ("selected".into(), value)
             };
-            client::send_command(&session_id, IpcCommand::Answer { request_id, kind, value }).await
+            client::send_command(
+                &session_id,
+                IpcCommand::Answer {
+                    request_id,
+                    kind,
+                    value,
+                },
+            )
+            .await
         }
 
-        Command::Stop { session_id } => {
-            client::send_command(&session_id, IpcCommand::Stop).await
-        }
+        Command::Stop { session_id } => client::send_command(&session_id, IpcCommand::Stop).await,
 
         Command::Mode { session_id, mode } => {
             client::send_command(&session_id, IpcCommand::Mode { mode }).await
         }
 
-        Command::Ping { session_id } => {
-            client::send_command(&session_id, IpcCommand::Ping).await
-        }
+        Command::Ping { session_id } => client::send_command(&session_id, IpcCommand::Ping).await,
 
         Command::ListSessions => client::list_sessions().await,
 

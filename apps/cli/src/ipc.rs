@@ -32,7 +32,10 @@ pub enum IpcCommand {
     /// 拒绝审批
     Deny { request_id: String },
     /// 拒绝并注入反馈
-    DenyWithFeedback { request_id: String, feedback: String },
+    DenyWithFeedback {
+        request_id: String,
+        feedback: String,
+    },
     /// 回答 agent 提问
     Answer {
         request_id: String,
@@ -69,13 +72,25 @@ pub struct IpcResponse {
 
 impl IpcResponse {
     pub fn ok() -> Self {
-        Self { ok: true, error: None, data: None }
+        Self {
+            ok: true,
+            error: None,
+            data: None,
+        }
     }
     pub fn err(msg: impl ToString) -> Self {
-        Self { ok: false, error: Some(msg.to_string()), data: None }
+        Self {
+            ok: false,
+            error: Some(msg.to_string()),
+            data: None,
+        }
     }
     pub fn with_data(data: Value) -> Self {
-        Self { ok: true, error: None, data: Some(data) }
+        Self {
+            ok: true,
+            error: None,
+            data: Some(data),
+        }
     }
 }
 
@@ -84,7 +99,9 @@ impl IpcResponse {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum DaemonEvent {
     /// daemon 启动完成，输出 session_id
-    Started { session_id: String },
+    Started {
+        session_id: String,
+    },
     RunStarted,
     RunFinished {
         input_tokens: u64,
@@ -92,18 +109,41 @@ pub enum DaemonEvent {
         cache_read_tokens: u64,
         duration_ms: u64,
     },
-    RunFailed { error: String },
+    RunFailed {
+        error: String,
+    },
     RunCancelled,
-    RunSuspended { reason: String },
-    RunResumed { cause: String },
-    TextDelta { text: String },
-    TextDone { full_text: String },
-    Reasoning { text: String },
-    ToolStart { id: String, name: String, input: Value },
+    RunSuspended {
+        reason: String,
+    },
+    RunResumed {
+        cause: String,
+    },
+    TextDelta {
+        text: String,
+    },
+    TextDone {
+        full_text: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    ToolStart {
+        id: String,
+        name: String,
+        input: Value,
+    },
     /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待时按 chunk 推过来；
     /// 自动化脚本可以 tail 这个看命令实时进度，不必等 ToolDone。
-    ToolOutputDelta { id: String, chunk: String },
-    ToolDone { id: String, result: String, duration_ms: u64 },
+    ToolOutputDelta {
+        id: String,
+        chunk: String,
+    },
+    ToolDone {
+        id: String,
+        result: String,
+        duration_ms: u64,
+    },
     PermissionRequested {
         request_id: String,
         kind: String,
@@ -124,20 +164,33 @@ pub enum DaemonEvent {
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         paths: Vec<String>,
     },
-    PermissionResolved { request_id: String, decision: String },
+    PermissionResolved {
+        request_id: String,
+        decision: String,
+    },
     QuestionRequested {
         request_id: String,
         question: String,
         options: Vec<QuestionOptionDto>,
         multi: bool,
     },
-    QuestionAnswered { request_id: String },
-    RunModeChanged { from: String, to: String },
+    QuestionAnswered {
+        request_id: String,
+    },
+    RunModeChanged {
+        from: String,
+        to: String,
+    },
     /// 新会话首轮跑完后，agent_core 后台 task 生成的标题已落盘 jsonl。
     /// CLI 自动化脚本可监听这条做侧边栏 / 提示更新；落盘已由 agent_core 完成，
     /// 客户端不需要再回写。
-    SessionTitleChanged { session_id: String, title: String },
-    Error { message: String },
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

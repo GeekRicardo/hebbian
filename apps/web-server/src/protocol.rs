@@ -56,9 +56,19 @@ pub enum WsServerMessage {
 
 impl WsServerMessage {
     pub fn ok(id: String, data: Option<Value>) -> Self {
-        Self::InvokeResponse { id, ok: true, data, error: None }
+        Self::InvokeResponse {
+            id,
+            ok: true,
+            data,
+            error: None,
+        }
     }
     pub fn err(id: String, error: impl ToString) -> Self {
-        Self::InvokeResponse { id, ok: false, data: None, error: Some(error.to_string()) }
+        Self::InvokeResponse {
+            id,
+            ok: false,
+            data: None,
+            error: Some(error.to_string()),
+        }
     }
 }

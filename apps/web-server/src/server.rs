@@ -165,10 +165,7 @@ async fn healthz(State(state): State<ServerState>) -> impl IntoResponse {
     }))
 }
 
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<ServerState>,
-) -> impl IntoResponse {
+async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<ServerState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
@@ -181,7 +178,9 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
     // 发送任务：把 WsServerMessage 序列化后写到 ws
     let send_task = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
-            let Ok(text) = serde_json::to_string(&msg) else { continue };
+            let Ok(text) = serde_json::to_string(&msg) else {
+                continue;
+            };
             if sender.send(WsMessage::Text(text)).await.is_err() {
                 break;
             }
@@ -189,7 +188,9 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
     });
 
     // 握手
-    let _ = out_tx.send(WsServerMessage::Hello { server_version: SERVER_VERSION });
+    let _ = out_tx.send(WsServerMessage::Hello {
+        server_version: SERVER_VERSION,
+    });
 
     // 当前订阅的 session（同一连接同时只订阅一个；切换时 abort 旧 task）
     let mut event_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -245,7 +246,12 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
                     t.abort();
                 }
             }
-            WsClientMessage::Invoke { id, cmd, args, session_id } => {
+            WsClientMessage::Invoke {
+                id,
+                cmd,
+                args,
+                session_id,
+            } => {
                 let response = dispatch_invoke(&state, &cmd, args, session_id).await;
                 let msg = match response {
                     Ok(data) => WsServerMessage::ok(id, data),
@@ -277,12 +283,18 @@ async fn dispatch_invoke(
         "list_sessions" => cmd_list_sessions(state).await.map(Some),
         "get_session" => cmd_get_session(state, args).await.map(Some),
         "create_session" => cmd_create_session(state, args).await.map(Some),
-        "send_message" => cmd_send_message(state, args, session_id).await.map(|_| None),
-        "inject_user_message" => {
-            cmd_inject_user_message(state, args, session_id).await.map(|_| None)
-        }
-        "approve_permission" => cmd_approve_permission(state, args, session_id).await.map(|_| None),
-        "answer_question" => cmd_answer_question(state, args, session_id).await.map(|_| None),
+        "send_message" => cmd_send_message(state, args, session_id)
+            .await
+            .map(|_| None),
+        "inject_user_message" => cmd_inject_user_message(state, args, session_id)
+            .await
+            .map(|_| None),
+        "approve_permission" => cmd_approve_permission(state, args, session_id)
+            .await
+            .map(|_| None),
+        "answer_question" => cmd_answer_question(state, args, session_id)
+            .await
+            .map(|_| None),
         "cancel_message" => cmd_cancel_message(state, session_id).await.map(|_| None),
         // 前端 init 必需的只读命令（直接读 ~/.hebbian/ 文件）
         "get_providers" => cmd_get_providers(state).await.map(Some),
@@ -312,9 +324,13 @@ async fn dispatch_invoke(
         "delete_project" => cmd_delete_project(state, args).await.map(|_| None),
         // mode
         "get_run_mode" => cmd_get_run_mode(state, session_id).await.map(Some),
-        "set_run_mode" => cmd_set_run_mode(state, args, session_id).await.map(|_| None),
+        "set_run_mode" => cmd_set_run_mode(state, args, session_id)
+            .await
+            .map(|_| None),
         "get_force_automode" => cmd_get_force_automode(state, session_id).await.map(Some),
-        "set_force_automode" => cmd_set_force_automode(state, args, session_id).await.map(|_| None),
+        "set_force_automode" => cmd_set_force_automode(state, args, session_id)
+            .await
+            .map(|_| None),
         // ─── 走 LocalCoreClient facade（与 desktop 共享同一份业务逻辑）
         "get_provider" => cmd_core_get_provider(state, args).await.map(Some),
         "fetch_provider_models" => cmd_core_fetch_provider_models(state, args).await.map(Some),
@@ -325,19 +341,17 @@ async fn dispatch_invoke(
         "remove_permission" => cmd_core_remove_permission(state, args).await.map(Some),
         "clear_permissions" => cmd_core_clear_permissions(state, args).await.map(|_| None),
         "list_permission_paths" => cmd_core_list_permission_paths(state, args).await.map(Some),
-        "add_permission_path" => cmd_core_add_permission_path(state, args).await.map(|_| None),
-        "remove_permission_path" => {
-            cmd_core_remove_permission_path(state, args).await.map(Some)
-        }
+        "add_permission_path" => cmd_core_add_permission_path(state, args)
+            .await
+            .map(|_| None),
+        "remove_permission_path" => cmd_core_remove_permission_path(state, args).await.map(Some),
         "list_skills" => cmd_core_list_skills(state, args).await.map(Some),
         "list_claude_skills" => cmd_core_list_claude_skills(state).await.map(Some),
         "import_claude_skills" => cmd_core_import_claude_skills(state, args).await.map(Some),
-        "import_skills_from_dir" => {
-            cmd_core_import_skills_from_dir(state, args).await.map(Some)
-        }
-        "import_skills_from_github" => {
-            cmd_core_import_skills_from_github(state, args).await.map(Some)
-        }
+        "import_skills_from_dir" => cmd_core_import_skills_from_dir(state, args).await.map(Some),
+        "import_skills_from_github" => cmd_core_import_skills_from_github(state, args)
+            .await
+            .map(Some),
         "scan_skill_dir" => cmd_core_scan_skill_dir(state, args).await.map(Some),
         "scan_skill_github" => cmd_core_scan_skill_github(state, args).await.map(Some),
         "set_skill_enabled" => cmd_core_set_skill_enabled(state, args).await.map(|_| None),
@@ -349,13 +363,12 @@ async fn dispatch_invoke(
         "discover_rules_files" => cmd_discover_rules_files(args).await.map(Some),
         "list_background_tasks" => cmd_list_background_tasks_local(args).await.map(Some),
         "kill_background_task" => cmd_kill_background_task_local(args).await.map(Some),
-        "update_session_settings" => {
-            cmd_update_session_settings(state, args).await.map(Some)
-        }
+        "update_session_settings" => cmd_update_session_settings(state, args).await.map(Some),
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
         // Edits Worktree（架构 §4.13）
         "list_edits" => cmd_list_edits(state, args).await.map(Some),
         "diff_edit" => cmd_diff_edit(state, args).await.map(Some),
+        "read_text_file" => cmd_read_text_file(args).await.map(Some),
         "revert_edit" => cmd_revert_edit(state, args).await.map(Some),
         "edits_worktree_status" => cmd_edits_worktree_status(state, args).await.map(Some),
         // 其余 desktop Tauri command（OAuth 14 / preview_payload / file dialog / ...）
@@ -411,15 +424,13 @@ async fn cmd_create_session(state: &ServerState, args: Value) -> Result<Value> {
         "hebweb".to_string(),
     )
     .map_err(|e| anyhow!("{e}"))?;
-    sessions_dir::ensure_session_dirs(&state.data_dir, &session.id)
-        .map_err(|e| anyhow!("{e}"))?;
+    sessions_dir::ensure_session_dirs(&state.data_dir, &session.id).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(session)?)
 }
 
 fn need_session(session_id: Option<String>) -> Result<String> {
     session_id.ok_or_else(|| anyhow!("missing `session_id`"))
 }
-
 
 /// 接受 `content` 或 `text` 任一字段，让 hebweb 同时兼容 desktop 前端（用 content）
 /// 与 heb CLI / 简化的脚本客户端（多半用 text）。
@@ -490,12 +501,22 @@ async fn cmd_approve_permission(
         .get("scope")
         .and_then(|v| v.as_str())
         .unwrap_or("session");
-    let pattern = args.get("pattern").and_then(|v| v.as_str()).map(str::to_string);
-    let feedback = args.get("feedback").and_then(|v| v.as_str()).map(str::to_string);
+    let pattern = args
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let feedback = args
+        .get("feedback")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let extra_patterns: Vec<String> = args
         .get("extraPatterns")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let scope = match scope_str {
@@ -513,8 +534,7 @@ async fn cmd_approve_permission(
         },
         "deny" => ApprovalDecision::Deny,
         "deny_with_feedback" => ApprovalDecision::DenyWithFeedback {
-            feedback: feedback
-                .ok_or_else(|| anyhow!("deny_with_feedback requires `feedback`"))?,
+            feedback: feedback.ok_or_else(|| anyhow!("deny_with_feedback requires `feedback`"))?,
         },
         // 简短形态（heb CLI 风格）
         "allow" if scope_str == "once" => ApprovalDecision::AllowOnce,
@@ -527,7 +547,11 @@ async fn cmd_approve_permission(
     };
 
     let runtime = state.ensure_runtime(&sid).await?;
-    let tx = runtime.pending_approvals.lock().unwrap().remove(&request_id);
+    let tx = runtime
+        .pending_approvals
+        .lock()
+        .unwrap()
+        .remove(&request_id);
     match tx {
         Some(tx) => {
             let _ = tx.send(decision);
@@ -562,7 +586,11 @@ async fn cmd_answer_question(
     let labels: Vec<String> = args
         .get("labels")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let answer = match kind {
@@ -573,7 +601,11 @@ async fn cmd_answer_question(
     };
 
     let runtime = state.ensure_runtime(&sid).await?;
-    let tx = runtime.pending_questions.lock().unwrap().remove(&request_id);
+    let tx = runtime
+        .pending_questions
+        .lock()
+        .unwrap()
+        .remove(&request_id);
     match tx {
         Some(tx) => {
             let _ = tx.send(answer);
@@ -631,8 +663,8 @@ async fn cmd_upsert_provider(state: &ServerState, args: Value) -> Result<Value> 
     let provider: model_gateway::config::Provider =
         serde_json::from_value(args.get("provider").cloned().unwrap_or(Value::Null))
             .map_err(|e| anyhow!("missing/invalid `provider`: {e}"))?;
-    let saved = model_gateway::config::upsert(&state.data_dir, provider)
-        .map_err(|e| anyhow!("{e}"))?;
+    let saved =
+        model_gateway::config::upsert(&state.data_dir, provider).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(saved)?)
 }
 
@@ -645,7 +677,10 @@ async fn cmd_upsert_prompt(state: &ServerState, args: Value) -> Result<Value> {
 }
 
 async fn cmd_delete_prompt(state: &ServerState, args: Value) -> Result<()> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     prompts_store::delete(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
@@ -657,7 +692,10 @@ async fn cmd_set_default_prompt(state: &ServerState, args: Value) -> Result<Valu
 }
 
 async fn cmd_rename_session(state: &ServerState, args: Value) -> Result<Value> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
@@ -668,7 +706,10 @@ async fn cmd_rename_session(state: &ServerState, args: Value) -> Result<Value> {
 }
 
 async fn cmd_delete_session(state: &ServerState, args: Value) -> Result<()> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     // 同时从内存里移除 SessionRuntime
     state.sessions.write().await.remove(id);
     sessions_store::delete(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
@@ -690,24 +731,29 @@ async fn cmd_fork_session(state: &ServerState, args: Value) -> Result<Value> {
 }
 
 async fn cmd_truncate_after(state: &ServerState, args: Value) -> Result<Value> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     let mid = args
         .get("messageId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `messageId`"))?;
-    let s = sessions_store::truncate_after(&state.data_dir, id, mid)
-        .map_err(|e| anyhow!("{e}"))?;
+    let s = sessions_store::truncate_after(&state.data_dir, id, mid).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(s)?)
 }
 
 async fn cmd_truncate_inclusive(state: &ServerState, args: Value) -> Result<Value> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     let mid = args
         .get("messageId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `messageId`"))?;
-    let s = sessions_store::truncate_inclusive(&state.data_dir, id, mid)
-        .map_err(|e| anyhow!("{e}"))?;
+    let s =
+        sessions_store::truncate_inclusive(&state.data_dir, id, mid).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(s)?)
 }
 
@@ -716,7 +762,10 @@ async fn cmd_search_sessions(state: &ServerState, args: Value) -> Result<Value> 
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `query`"))?;
-    let case_sensitive = args.get("caseSensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+    let case_sensitive = args
+        .get("caseSensitive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let regex = args.get("regex").and_then(|v| v.as_bool()).unwrap_or(false);
     let hits = sessions_store::search(&state.data_dir, query, case_sensitive, regex)
         .map_err(|e| anyhow!("{e}"))?;
@@ -724,7 +773,10 @@ async fn cmd_search_sessions(state: &ServerState, args: Value) -> Result<Value> 
 }
 
 async fn cmd_update_session_config(state: &ServerState, args: Value) -> Result<Value> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     let mut s = sessions_store::load(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
     if let Some(p) = args.get("providerId").and_then(|v| v.as_str()) {
         s.provider_id = p.to_string();
@@ -733,16 +785,27 @@ async fn cmd_update_session_config(state: &ServerState, args: Value) -> Result<V
         s.model = m.to_string();
     }
     if let Some(sp) = args.get("systemPrompt").and_then(|v| v.as_str()) {
-        s.system_prompt = if sp.is_empty() { None } else { Some(sp.to_string()) };
+        s.system_prompt = if sp.is_empty() {
+            None
+        } else {
+            Some(sp.to_string())
+        };
     }
     if let Some(pid) = args.get("promptId").and_then(|v| v.as_str()) {
-        s.prompt_id = if pid.is_empty() { None } else { Some(pid.to_string()) };
+        s.prompt_id = if pid.is_empty() {
+            None
+        } else {
+            Some(pid.to_string())
+        };
     }
     if let Some(stream) = args.get("stream").and_then(|v| v.as_bool()) {
         s.stream = stream;
     }
     let reasoning_val = args.get("reasoning").cloned();
-    let clear_reasoning = args.get("clearReasoning").and_then(|v| v.as_bool()).unwrap_or(false);
+    let clear_reasoning = args
+        .get("clearReasoning")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if let Some(v) = reasoning_val {
         if !v.is_null() {
             let r: common::ReasoningConfig =
@@ -775,7 +838,10 @@ async fn cmd_save_project(state: &ServerState, args: Value) -> Result<Value> {
 }
 
 async fn cmd_delete_project(state: &ServerState, args: Value) -> Result<()> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     projects_store::delete(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
@@ -806,10 +872,7 @@ async fn cmd_set_run_mode(
     Ok(())
 }
 
-async fn cmd_get_force_automode(
-    state: &ServerState,
-    session_id: Option<String>,
-) -> Result<Value> {
+async fn cmd_get_force_automode(state: &ServerState, session_id: Option<String>) -> Result<Value> {
     let sid = need_session(session_id)?;
     let runtime = state.ensure_runtime(&sid).await?;
     Ok(Value::Bool(runtime.force_automode.load(Ordering::SeqCst)))
@@ -842,7 +905,10 @@ fn map_core_err(e: agent_core::core_client::CoreError) -> anyhow::Error {
 }
 
 async fn cmd_core_get_provider(state: &ServerState, args: Value) -> Result<Value> {
-    let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing `id`"))?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
     let p = state.core.get_provider(id).map_err(map_core_err)?;
     Ok(serde_json::to_value(p)?)
 }
@@ -851,7 +917,11 @@ async fn cmd_core_fetch_provider_models(state: &ServerState, args: Value) -> Res
     let provider: model_gateway::config::Provider =
         serde_json::from_value(args.get("provider").cloned().unwrap_or(Value::Null))
             .map_err(|e| anyhow!("missing/invalid `provider`: {e}"))?;
-    let models = state.core.fetch_provider_models(provider).await.map_err(map_core_err)?;
+    let models = state
+        .core
+        .fetch_provider_models(provider)
+        .await
+        .map_err(map_core_err)?;
     Ok(serde_json::to_value(models)?)
 }
 
@@ -864,7 +934,11 @@ async fn cmd_core_test_provider_model(state: &ServerState, args: Value) -> Resul
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `model`"))?
         .to_string();
-    let result = state.core.test_provider(provider, model).await.map_err(map_core_err)?;
+    let result = state
+        .core
+        .test_provider(provider, model)
+        .await
+        .map_err(map_core_err)?;
     Ok(serde_json::to_value(result)?)
 }
 
@@ -889,8 +963,16 @@ fn parse_effect(s: &str) -> agent_core::permissions::RuleEffect {
 }
 
 async fn cmd_core_list_permissions(state: &ServerState, args: Value) -> Result<Value> {
-    let scope = parse_scope(args.get("scope").and_then(|v| v.as_str()).unwrap_or("global"));
-    let effect = parse_effect(args.get("effect").and_then(|v| v.as_str()).unwrap_or("allow"));
+    let scope = parse_scope(
+        args.get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global"),
+    );
+    let effect = parse_effect(
+        args.get("effect")
+            .and_then(|v| v.as_str())
+            .unwrap_or("allow"),
+    );
     let session_id = args.get("sessionId").and_then(|v| v.as_str());
     let workdir = args
         .get("workdir")
@@ -903,8 +985,16 @@ async fn cmd_core_list_permissions(state: &ServerState, args: Value) -> Result<V
 }
 
 async fn cmd_core_add_permission(state: &ServerState, args: Value) -> Result<()> {
-    let scope = parse_scope(args.get("scope").and_then(|v| v.as_str()).unwrap_or("global"));
-    let effect = parse_effect(args.get("effect").and_then(|v| v.as_str()).unwrap_or("allow"));
+    let scope = parse_scope(
+        args.get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global"),
+    );
+    let effect = parse_effect(
+        args.get("effect")
+            .and_then(|v| v.as_str())
+            .unwrap_or("allow"),
+    );
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -923,8 +1013,16 @@ async fn cmd_core_add_permission(state: &ServerState, args: Value) -> Result<()>
 }
 
 async fn cmd_core_remove_permission(state: &ServerState, args: Value) -> Result<Value> {
-    let scope = parse_scope(args.get("scope").and_then(|v| v.as_str()).unwrap_or("global"));
-    let effect = parse_effect(args.get("effect").and_then(|v| v.as_str()).unwrap_or("allow"));
+    let scope = parse_scope(
+        args.get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global"),
+    );
+    let effect = parse_effect(
+        args.get("effect")
+            .and_then(|v| v.as_str())
+            .unwrap_or("allow"),
+    );
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -942,7 +1040,11 @@ async fn cmd_core_remove_permission(state: &ServerState, args: Value) -> Result<
 }
 
 async fn cmd_core_clear_permissions(state: &ServerState, args: Value) -> Result<()> {
-    let scope = parse_scope(args.get("scope").and_then(|v| v.as_str()).unwrap_or("global"));
+    let scope = parse_scope(
+        args.get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global"),
+    );
     let session_id = args.get("sessionId").and_then(|v| v.as_str());
     let workdir = args
         .get("workdir")
@@ -956,7 +1058,10 @@ async fn cmd_core_clear_permissions(state: &ServerState, args: Value) -> Result<
 }
 
 async fn cmd_core_list_permission_paths(state: &ServerState, args: Value) -> Result<Value> {
-    let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("global");
+    let scope_str = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global");
     let scope = match scope_str {
         "project" => PermissionScope::Project,
         "session" => PermissionScope::Session,
@@ -971,7 +1076,10 @@ async fn cmd_core_list_permission_paths(state: &ServerState, args: Value) -> Res
 }
 
 async fn cmd_core_add_permission_path(state: &ServerState, args: Value) -> Result<()> {
-    let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("global");
+    let scope_str = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global");
     let scope = match scope_str {
         "project" => PermissionScope::Project,
         _ => PermissionScope::Global,
@@ -992,7 +1100,10 @@ async fn cmd_core_add_permission_path(state: &ServerState, args: Value) -> Resul
 }
 
 async fn cmd_core_remove_permission_path(state: &ServerState, args: Value) -> Result<Value> {
-    let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("global");
+    let scope_str = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global");
     let scope = match scope_str {
         "project" => PermissionScope::Project,
         _ => PermissionScope::Global,
@@ -1028,7 +1139,11 @@ async fn cmd_core_list_claude_skills(state: &ServerState) -> Result<Value> {
 
 async fn cmd_core_import_claude_skills(state: &ServerState, args: Value) -> Result<Value> {
     use agent_core::storage::skills::ImportScope;
-    let scope = match args.get("scope").and_then(|v| v.as_str()).unwrap_or("global") {
+    let scope = match args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global")
+    {
         "project" => ImportScope::Project,
         _ => ImportScope::Global,
     };
@@ -1036,11 +1151,15 @@ async fn cmd_core_import_claude_skills(state: &ServerState, args: Value) -> Resu
         .get("workdir")
         .and_then(|v| v.as_str())
         .map(std::path::PathBuf::from);
-    let names: Option<Vec<String>> = args
-        .get("names")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect());
-    let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+    let names: Option<Vec<String>> = args.get("names").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect()
+    });
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let imported = state
         .core
         .import_claude_skills(scope, workdir.as_deref(), names.as_deref(), overwrite)
@@ -1050,7 +1169,11 @@ async fn cmd_core_import_claude_skills(state: &ServerState, args: Value) -> Resu
 
 async fn cmd_core_import_skills_from_dir(state: &ServerState, args: Value) -> Result<Value> {
     use agent_core::storage::skills::ImportScope;
-    let scope = match args.get("scope").and_then(|v| v.as_str()).unwrap_or("global") {
+    let scope = match args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global")
+    {
         "project" => ImportScope::Project,
         _ => ImportScope::Global,
     };
@@ -1063,12 +1186,19 @@ async fn cmd_core_import_skills_from_dir(state: &ServerState, args: Value) -> Re
         .or_else(|| args.get("src_dir"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `srcDir`"))?;
-    let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(true);
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let selected: Option<Vec<String>> = args
         .get("selectedPaths")
         .or_else(|| args.get("selected_paths"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect());
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        });
     let imported = state
         .core
         .import_skills_from_dir(
@@ -1084,7 +1214,11 @@ async fn cmd_core_import_skills_from_dir(state: &ServerState, args: Value) -> Re
 
 async fn cmd_core_import_skills_from_github(state: &ServerState, args: Value) -> Result<Value> {
     use agent_core::storage::skills::ImportScope;
-    let scope = match args.get("scope").and_then(|v| v.as_str()).unwrap_or("global") {
+    let scope = match args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global")
+    {
         "project" => ImportScope::Project,
         _ => ImportScope::Global,
     };
@@ -1101,12 +1235,19 @@ async fn cmd_core_import_skills_from_github(state: &ServerState, args: Value) ->
         .get("subpath")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(true);
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let selected: Option<Vec<String>> = args
         .get("selectedPaths")
         .or_else(|| args.get("selected_paths"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect());
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        });
     let imported = state
         .core
         .import_skills_from_github(
@@ -1169,7 +1310,11 @@ async fn cmd_core_set_skill_enabled(state: &ServerState, args: Value) -> Result<
 
 async fn cmd_core_delete_skill(state: &ServerState, args: Value) -> Result<Value> {
     use agent_core::tools::skill::SkillSource;
-    let source = match args.get("source").and_then(|v| v.as_str()).unwrap_or("global") {
+    let source = match args
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("global")
+    {
         "project" => SkillSource::Project,
         "project_code" => SkillSource::ProjectCode,
         _ => SkillSource::Global,
@@ -1242,7 +1387,11 @@ async fn cmd_discover_rules_files(args: Value) -> Result<Value> {
     let allowed: Vec<PathBuf> = args
         .get("allowedPaths")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(PathBuf::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(PathBuf::from))
+                .collect()
+        })
         .unwrap_or_default();
     let files = agent_core::rules::discover(&workdir, &allowed);
     // 与 desktop RuleFileInfo 同结构：{ path, source }
@@ -1329,17 +1478,20 @@ async fn cmd_update_session_settings(state: &ServerState, args: Value) -> Result
     };
     let take_paths = |key: &str| -> Option<Vec<PathBuf>> {
         args.get(key).and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(PathBuf::from)).collect()
+            arr.iter()
+                .filter_map(|v| v.as_str().map(PathBuf::from))
+                .collect()
         })
     };
     let take_strs = |key: &str| -> Option<Vec<String>> {
         args.get(key).and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
         })
     };
-    let take_bool = |key: &str| -> bool {
-        args.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
-    };
+    let take_bool =
+        |key: &str| -> bool { args.get(key).and_then(|v| v.as_bool()).unwrap_or(false) };
 
     if take_bool("clearWorkdir") {
         s.workdir = None;
@@ -1436,8 +1588,10 @@ async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
         .into_iter()
         .find(|e| e.snapshot_id == snap)
         .ok_or_else(|| anyhow!("找不到该快照"))?;
-    let (before_text, after_text) =
-        worktree.diff_text(&entry).await.map_err(|e| anyhow!("{e}"))?;
+    let (before_text, after_text) = worktree
+        .diff_text(&entry)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
     Ok(json!({
         "before_text": before_text,
         "after_text": after_text,
@@ -1446,6 +1600,23 @@ async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
         "file_path": entry.real_path,
         "action": format!("{:?}", entry.action).to_lowercase(),
     }))
+}
+
+async fn cmd_read_text_file(args: Value) -> Result<Value> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `path`"))?;
+    let path = std::path::PathBuf::from(path);
+    let meta = std::fs::metadata(&path).map_err(|e| anyhow!("{e}"))?;
+    if !meta.is_file() {
+        return Err(anyhow!("not a regular file"));
+    }
+    if meta.len() > 8 * 1024 * 1024 {
+        return Err(anyhow!("file too large"));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}"))?;
+    Ok(Value::String(text))
 }
 
 async fn cmd_revert_edit(state: &ServerState, args: Value) -> Result<Value> {
