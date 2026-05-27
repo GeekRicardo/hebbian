@@ -101,9 +101,7 @@ pub struct McpToolReport {
     pub error: Option<String>,
 }
 
-pub async fn discover_tool_reports(
-    config: &crate::mcp::config::McpConfig,
-) -> Vec<McpToolReport> {
+pub async fn discover_tool_reports(config: &crate::mcp::config::McpConfig) -> Vec<McpToolReport> {
     let mut out = Vec::new();
     for server in config.mcp_servers.values() {
         if server.disabled {

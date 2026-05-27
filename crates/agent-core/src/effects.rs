@@ -72,7 +72,7 @@ pub struct Effects {
     pub is_concurrent_safe: bool,
     /// Bash/PowerShell 的段级 effects。其它工具为空 vec。
     pub segments: Vec<SegmentEffect>,
-    /// 命中的危险复合模式 label（cd-git-compound / multi-cd / write-git-meta / ...）。
+    /// 命中的危险复合模式 label（cd-git-compound / write-git-meta / ...）。
     pub dangerous_kinds: Vec<String>,
 }
 
@@ -517,5 +517,18 @@ mod tests {
             .dangerous_kinds
             .iter()
             .any(|k| k == "sensitive-env-prefix"));
+    }
+
+    #[test]
+    fn bash_heredoc_is_approvable_but_not_dangerous_no_remember() {
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('docs/架构.md').read_text())\nPY"}),
+        );
+
+        assert!(matches!(e.class, EffectClass::Destructive));
+        assert_eq!(e.command_fingerprint.as_deref(), Some("python3"));
+        assert_eq!(e.segments.len(), 1);
+        assert!(e.dangerous_kinds.is_empty());
     }
 }

@@ -20,7 +20,6 @@ must be denied, or requires the human to make the call.
   - `network` / `domain` — for `Fetch`/`WebSearch`.
   - `dangerous_kinds` — patterns Hebbian's static layer flagged. Possible values:
     - `cd-git-compound` — `cd <path> && git ...` (target directory's `.git/hooks` may be untrusted).
-    - `multi-cd` — more than one `cd` in a single line.
     - `write-git-meta` — writes to `.git/hooks/**` / `.git/config` / `HEAD` / `objects/**` / `refs/**`.
     - `rm-rf-root` — `rm -rf` hitting `/` / `~` / `$HOME` / `..` / root-level globs.
     - `sensitive-env-prefix` — inline `LD_PRELOAD` / `DYLD_INSERT_LIBRARIES` / `PYTHONPATH` / `NODE_OPTIONS` / `IFS` etc.
@@ -88,7 +87,7 @@ effects.segments=[
   {fingerprint: "cat /Users/alice/.ssh/id_rsa"},
   {fingerprint: "rm build", write_targets: []}
 ]
-effects.dangerous_kinds=["cd-git-compound"? no — multi-cd? no — just a compound]
+effects.dangerous_kinds=[]
 ```
 Output:
 ```

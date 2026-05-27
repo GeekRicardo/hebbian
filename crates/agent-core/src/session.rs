@@ -463,6 +463,7 @@ impl Session {
                 phase: self.phase.clone(),
                 resume_from: None,
                 edits_worktree: self.edits_worktree.clone(),
+                max_tool_iterations: None,
             },
         )
     }
@@ -522,6 +523,7 @@ impl Session {
                 phase,
                 resume_from: Some(resume_from),
                 edits_worktree: self.edits_worktree.clone(),
+                max_tool_iterations: None,
             },
         )
     }
