@@ -5223,3 +5223,13 @@
 - **影响范围**：agent-core 全部工具层 + wakeup + subagent runner；三个 surface 的 session 起跑路径。协议、持久化格式不变；`registry_for_session` 公开签名不变（返回类型改名但 API 一致）。
 - **验证**：`cargo check --workspace` 通过；`cargo test -p agent-core --lib` 373 通过（1 个预存失败 `output_capped_with_offset_limit_hint` 与本次无关——`read.rs` 的 `MAX_OUTPUT_BYTES` 工作区改动导致截断阈值测试失效，待单独修复）。
 - **留尾巴**：P3.1c（子 session 事件双写到子 session.jsonl）、P5（同步 API）、P6（设置 UI）、P7（MessageBubble Task 嵌套渲染）、P8（端到端验证）待续。后台 subagent 的 WakeupScheduler 注册需要 parent_session_id，单测路径（ctx.parent_session_id=None）会返回错误——这是预期行为，不影响生产路径。
+
+### 2026-05-28 — P5：Subagent 同步 API（CoreClient + Tauri 命令）
+
+- **Why**：路线图 P5（架构 §4.4.11.5）：把 subagent CRUD 操作暴露给 surface，为 P6 设置 UI 提供数据层支撑。
+- **改动**:
+  - [crates/agent-core/src/core_client/mod.rs](../crates/agent-core/src/core_client/mod.rs)：新增 `SubagentScope` 枚举（`Global` / `Project(PathBuf)`，可序列化）；`CoreClient` trait 加 6 个方法：`list_subagents` / `get_subagent` / `save_subagent` / `delete_subagent` / `set_subagent_enabled` / `load_subagent_run`；`LocalCoreClient` 对应实现（全部转发到 `storage::subagents`）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs)：新增 6 个 Tauri 命令（同名）并注册到 `invoke_handler`。
+- **影响范围**：agent-core core_client trait（additive，不破坏现有实现）；Desktop surface 新增 6 个 Tauri 命令。CLI / hebweb 暂未暴露（P5 范围仅 Desktop）。
+- **验证**：`cargo check --workspace` 通过；`cargo test -p agent-core --lib` 373 通过。
+- **留尾巴**：CLI daemon / hebweb 的 subagent API 暴露留后续；P6 设置 UI 待续。

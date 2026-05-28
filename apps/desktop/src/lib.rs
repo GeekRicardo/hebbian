@@ -1463,6 +1463,61 @@ fn delete_skill_collection(app: AppHandle, id: String) -> AppResult<Vec<String>>
         .map_err(map_core_err)
 }
 
+// ─── Subagent 同步 API（架构 §4.4.11.5 / P5）─────────────────────────────────
+
+#[tauri::command]
+fn list_subagents(
+    app: AppHandle,
+    workdir: Option<PathBuf>,
+) -> AppResult<Vec<agent_core::storage::subagents::SubagentDefinition>> {
+    Ok(core(&app)?.list_subagents(workdir.as_deref()))
+}
+
+#[tauri::command]
+fn get_subagent(
+    app: AppHandle,
+    name: String,
+) -> AppResult<agent_core::storage::subagents::SubagentDefinition> {
+    core(&app)?.get_subagent(&name).map_err(map_core_err)
+}
+
+#[tauri::command]
+fn save_subagent(app: AppHandle, name: String, content: String) -> AppResult<()> {
+    core(&app)?
+        .save_subagent(&name, &content)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn delete_subagent(app: AppHandle, name: String, workdir: Option<PathBuf>) -> AppResult<()> {
+    core(&app)?
+        .delete_subagent(&name, workdir.as_deref())
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn set_subagent_enabled(
+    app: AppHandle,
+    name: String,
+    scope: agent_core::core_client::SubagentScope,
+    enabled: bool,
+) -> AppResult<()> {
+    core(&app)?
+        .set_subagent_enabled(&name, scope, enabled)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn load_subagent_run(
+    app: AppHandle,
+    parent_session_id: String,
+    child_session_id: String,
+) -> AppResult<agent_core::storage::sessions::Session> {
+    core(&app)?
+        .load_subagent_run(&parent_session_id, &child_session_id)
+        .map_err(map_core_err)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct BackgroundTaskInfo {
     task_id: String,
@@ -2417,6 +2472,12 @@ pub fn run() {
             delete_skill,
             list_skill_collections,
             delete_skill_collection,
+            list_subagents,
+            get_subagent,
+            save_subagent,
+            delete_subagent,
+            set_subagent_enabled,
+            load_subagent_run,
             list_background_tasks,
             read_background_task_output,
             kill_background_task,

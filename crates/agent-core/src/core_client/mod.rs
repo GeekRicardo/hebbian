@@ -23,6 +23,7 @@ use crate::permissions::{PermissionStore, RuleEffect};
 use crate::storage::{
     mcp as mcp_store, permissions as permissions_store, projects as projects_store,
     prompts as prompts_store, sessions as sessions_store, settings as settings_store,
+    subagents as subagents_store,
 };
 use crate::tools::{self as tools, ToolInfo};
 use crate::Harness;
@@ -33,6 +34,15 @@ use protocol::{Op, PermissionScope, Submission, SubmissionId};
 pub mod http;
 
 pub use http::HttpCoreClient;
+
+/// Subagent 启用 scope（架构 §4.4.11.5）。
+/// `Global` → `~/.hebbian/subagents/settings.json`；
+/// `Project(workdir)` → `~/.hebbian/projects/<enc>/settings.json` 的 `subagents` 段。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum SubagentScope {
+    Global,
+    Project(std::path::PathBuf),
+}
 
 /// CoreClient 错误。绝大多数路径转发 storage 错误（已是 `AppError`）；
 /// `Unsupported` 用于占位方法。
@@ -242,6 +252,35 @@ pub trait CoreClient: Send + Sync {
     /// 删除一个 collection；同时把该 collection 里的 skill 目录从
     /// `~/.hebbian/skills/<name>/` 物理删除。返回被删除的 skill 名列表。
     fn delete_skill_collection(&self, id: &str) -> Result<Vec<String>, CoreError>;
+
+    // === 同步 API：Subagents（架构 §4.4.11.5 / P5）===
+
+    /// 列出所有 subagent 定义，合并两层 enabled 状态。`workdir=None` 时只查全局层。
+    fn list_subagents(
+        &self,
+        workdir: Option<&Path>,
+    ) -> Vec<subagents_store::SubagentDefinition>;
+    /// 读单个 subagent 的完整定义（已解析）。
+    fn get_subagent(&self, name: &str) -> Result<subagents_store::SubagentDefinition, CoreError>;
+    /// 写 subagent 定义文件（frontmatter + body 原始内容）。写前校验 frontmatter 合法性。
+    fn save_subagent(&self, name: &str, content: &str) -> Result<(), CoreError>;
+    /// 删除 subagent 定义文件 + 两层 settings.json 中的 enabled 项。
+    fn delete_subagent(&self, name: &str, workdir: Option<&Path>) -> Result<(), CoreError>;
+    /// 设置 subagent 在某 scope 下的启用状态。
+    fn set_subagent_enabled(
+        &self,
+        name: &str,
+        scope: SubagentScope,
+        enabled: bool,
+    ) -> Result<(), CoreError>;
+    /// 加载子 session 完整 transcript（"查看完整子对话"视图用）。
+    /// `child_session_id` 是短 id（不含父路径前缀），函数内部组合为
+    /// `<parent_session_id>/subagents/<child_session_id>`。
+    fn load_subagent_run(
+        &self,
+        parent_session_id: &str,
+        child_session_id: &str,
+    ) -> Result<sessions_store::Session, CoreError>;
 
     // === 同步 API：工具菜单（UI 用）===
 
@@ -826,6 +865,46 @@ impl CoreClient for LocalCoreClient {
             }
         }
         Ok(deleted)
+    }
+
+    fn list_subagents(&self, workdir: Option<&Path>) -> Vec<subagents_store::SubagentDefinition> {
+        subagents_store::load_for_workdir(&self.data_dir, workdir)
+    }
+
+    fn get_subagent(&self, name: &str) -> Result<subagents_store::SubagentDefinition, CoreError> {
+        subagents_store::get_definition(&self.data_dir, name).map_err(CoreError::from)
+    }
+
+    fn save_subagent(&self, name: &str, content: &str) -> Result<(), CoreError> {
+        subagents_store::save_definition(&self.data_dir, name, content).map_err(CoreError::from)
+    }
+
+    fn delete_subagent(&self, name: &str, workdir: Option<&Path>) -> Result<(), CoreError> {
+        subagents_store::delete_definition(&self.data_dir, name, workdir).map_err(CoreError::from)
+    }
+
+    fn set_subagent_enabled(
+        &self,
+        name: &str,
+        scope: SubagentScope,
+        enabled: bool,
+    ) -> Result<(), CoreError> {
+        let enable_scope = match &scope {
+            SubagentScope::Global => subagents_store::EnableScope::Global,
+            SubagentScope::Project(wd) => subagents_store::EnableScope::Project(wd.as_path()),
+        };
+        subagents_store::set_enabled(&self.data_dir, enable_scope, name, enabled)
+            .map_err(CoreError::from)
+    }
+
+    fn load_subagent_run(
+        &self,
+        parent_session_id: &str,
+        child_session_id: &str,
+    ) -> Result<sessions_store::Session, CoreError> {
+        let composed = format!("{parent_session_id}/subagents/{child_session_id}");
+        sessions_store::load_with_partial_recovery(&self.data_dir, &composed)
+            .map_err(CoreError::from)
     }
 
     fn list_tools(&self) -> Vec<ToolInfo> {
