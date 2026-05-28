@@ -16,7 +16,7 @@
 //!   BashOutput 增量查询，磁盘 log 给完整 Read。两条互不依赖：日志文件打开失败
 //!   不影响命令运行，仅 fallback 到 tail-only。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -269,33 +269,72 @@ pub struct ReadOutput {
     pub total_bytes: u64,
 }
 
+/// 后台子 agent 任务（`Task run_in_background=true`）的状态追踪（架构 §4.4.11.7）。
+/// WakeupScheduler 的 scan_bg 按 `subagent-` 前缀路由到这里检查终态。
+pub struct BgSubagentTask {
+    pub task_id: String,
+    pub started_at: Instant,
+    done: AtomicBool,
+    success: AtomicBool,
+}
+
+impl BgSubagentTask {
+    fn new(task_id: String) -> Self {
+        Self {
+            task_id,
+            started_at: Instant::now(),
+            done: AtomicBool::new(false),
+            success: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done.load(Ordering::Relaxed)
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.success.load(Ordering::Relaxed)
+    }
+
+    /// 子 agent 完成时调用（成功 / 失败均需调用）。
+    pub fn finish(&self, success: bool) {
+        self.success.store(success, Ordering::Relaxed);
+        self.done.store(true, Ordering::Relaxed);
+    }
+
+    pub fn elapsed_ms(&self) -> u64 {
+        self.started_at.elapsed().as_millis() as u64
+    }
+}
+
 /// session-scoped 注册表（架构 §4.12.2 修订）。每个 session 持有自己一份，
 /// 跨会话不可见。Clone 等价于持 Arc——同一 session 内的 BashTool /
 /// BashOutputTool / KillShellTool 共享同一份；跨 chat() 调用
 /// 通过 [`registry_for_session`] 拿同一把（按 session_id 路由）。
+/// 同时管理 Bash shell（`bash_NNN`）与后台 subagent（`subagent-*`）两类任务。
 #[derive(Clone, Default)]
-pub struct BackgroundShells {
+pub struct BgTaskRegistry {
     inner: Arc<Mutex<Inner>>,
     counter: Arc<AtomicU64>,
 }
 
-/// 进程内的 `session_id → BackgroundShells` 路由表（**不是**进程级单一注册表）。
-/// 同一 session 多次 chat() 调用拿到同一份 BackgroundShells；不同 session 完全隔离。
-/// CLI 等无 session 的路径直接用 `BackgroundShells::new()`，不入路由表。
+/// 进程内的 `session_id → BgTaskRegistry` 路由表（**不是**进程级单一注册表）。
+/// 同一 session 多次 chat() 调用拿到同一份 BgTaskRegistry；不同 session 完全隔离。
+/// CLI 等无 session 的路径直接用 `BgTaskRegistry::new()`，不入路由表。
 static SESSION_REGISTRY: std::sync::OnceLock<
-    Mutex<std::collections::HashMap<String, BackgroundShells>>,
+    Mutex<std::collections::HashMap<String, BgTaskRegistry>>,
 > = std::sync::OnceLock::new();
 
-fn session_registry() -> &'static Mutex<std::collections::HashMap<String, BackgroundShells>> {
+fn session_registry() -> &'static Mutex<std::collections::HashMap<String, BgTaskRegistry>> {
     SESSION_REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-/// 按 session_id 取（或首次创建）该 session 的 BackgroundShells。
+/// 按 session_id 取（或首次创建）该 session 的 BgTaskRegistry。
 /// 同一 session 多次调用返回同一份；不同 session 互不可见。
-pub fn registry_for_session(session_id: &str) -> BackgroundShells {
+pub fn registry_for_session(session_id: &str) -> BgTaskRegistry {
     let mut map = session_registry().lock().expect("session registry mutex");
     map.entry(session_id.to_string())
-        .or_insert_with(BackgroundShells::default)
+        .or_insert_with(BgTaskRegistry::default)
         .clone()
 }
 
@@ -317,9 +356,10 @@ pub fn registered_session_ids() -> Vec<String> {
 #[derive(Default)]
 struct Inner {
     shells: Vec<Arc<BackgroundShell>>,
+    subagents: HashMap<String, Arc<BgSubagentTask>>,
 }
 
-impl BackgroundShells {
+impl BgTaskRegistry {
     pub fn new() -> Self {
         Self::default()
     }
@@ -459,6 +499,28 @@ impl BackgroundShells {
         shell.wait_terminal().await;
         Some(shell.state())
     }
+
+    /// 注册一个后台 subagent 任务（`Task run_in_background=true`）。
+    /// 返回 Arc 供 SubagentRunner 在完成时调用 `finish()`。
+    pub fn register_subagent(&self, task_id: String) -> Arc<BgSubagentTask> {
+        let task = Arc::new(BgSubagentTask::new(task_id.clone()));
+        self.inner
+            .lock()
+            .expect("bg task registry mutex")
+            .subagents
+            .insert(task_id, task.clone());
+        task
+    }
+
+    /// 按 task_id 查后台 subagent 任务（`subagent-*` 前缀）。
+    pub fn get_subagent(&self, task_id: &str) -> Option<Arc<BgSubagentTask>> {
+        self.inner
+            .lock()
+            .expect("bg task registry mutex")
+            .subagents
+            .get(task_id)
+            .cloned()
+    }
 }
 
 fn spawn_reader<R>(
@@ -546,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn captures_output_and_exits() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let child = spawn_bash("echo hello && echo world");
         let shell = shells.register(
             "echo hello && echo world".into(),
@@ -564,7 +626,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_is_incremental() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let child = spawn_bash("echo a; sleep 0.1; echo b");
         let shell = shells.register("...".into(), "/".into(), false, None, child);
 
@@ -585,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn kill_marks_killed() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let child = spawn_bash("sleep 30");
         let shell = shells.register("sleep 30".into(), "/".into(), false, None, child);
         let id = shell.task_id.clone();
@@ -597,7 +659,7 @@ mod tests {
     /// 保护 BashTool 误调（虽然代码路径上不会，但防御性边界要有）。
     #[tokio::test]
     async fn unregister_only_removes_terminal() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         // running 条目：unregister 返回 false，列表仍含该条目
         let still_running = shells.register(
             "sleep 30".into(),
@@ -626,7 +688,7 @@ mod tests {
     /// BashTool 前台超时转后台路径用它。
     #[tokio::test]
     async fn promote_flips_is_background() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let s = shells.register(
             "sleep 1".into(),
             "/".into(),
@@ -642,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn registry_caps_to_max_when_terminal() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         for _ in 0..(MAX_BACKGROUND_SHELLS + 4) {
             let child = spawn_bash("true");
             let s = shells.register("true".into(), "/".into(), false, None, child);
@@ -655,7 +717,7 @@ mod tests {
     #[tokio::test]
     async fn writes_log_file_when_log_dir_given() {
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let child = spawn_bash("echo hi; echo oops >&2");
         let shell = shells.register(
             "echo hi; echo oops >&2".into(),

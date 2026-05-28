@@ -187,7 +187,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     let model = session.model.clone();
     let reasoning = session.reasoning.clone();
 
-    let client = build_client(provider, model, reasoning)?;
+    let client = build_client(provider, model.clone(), reasoning)?;
 
     // Workspace：session 字段优先；没设则用全局设置；都没设则 ~/
     let settings = global_settings::load(data_dir);
@@ -234,7 +234,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     ));
     // 架构 §4.12.4：phase channel 让挂起工具把"挂起请求"递给 agent_loop。
     let phase = agent_core::wakeup::new_phase_channel();
-    // 架构 §4.12.2 修订：BackgroundShells 是 session-scoped，跨 chat() 调用通过
+    // 架构 §4.12.2 修订：BgTaskRegistry 是 session-scoped，跨 chat() 调用通过
     // `registry_for_session` 拿同一份；不同 session 完全隔离。
     let shells = agent_core::tools::background::registry_for_session(&args.session_id);
     // 把本 session 的 shells 注册到 WakeupScheduler，BgFinishHook 才能扫到。
@@ -253,7 +253,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             Some(args.session_id.clone()),
             Some(read_state_tracker),
             settings.general.shell.clone(),
-            agent_core::storage::mcp::load(data_dir),
+            agent_core::storage::mcp::load(data_dir)
+                .with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
         HookManager::new(external_hooks),
@@ -317,7 +318,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             permission_store: args.permission_store.clone(),
             session_id: Some(args.session_id.clone()),
             run_mode: prior_session.run_mode,
-            model_id: None,
+            model_id: Some(model.clone()),
             force_automode: args.force_automode,
             data_dir: Some(data_dir.to_path_buf()),
             phase: Some(phase.clone()),
@@ -1420,19 +1421,20 @@ pub async fn build_preview_payload(
 
     // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具。
     // 预览路径不会真发命令,bg_log_dir + phase 都用占位 None / 空 channel。
-    // BackgroundShells 用临时本地实例（预览只生成 tool schema，不真跑命令）。
+    // BgTaskRegistry 用临时本地实例（预览只生成 tool schema，不真跑命令）。
     let registry = ToolRegistry::new(
         agent_core::tools::default_tools_with_mcp(
             workspace.clone(),
             &skill_dirs,
             None,
             agent_core::wakeup::new_phase_channel(),
-            agent_core::tools::background::BackgroundShells::new(),
+            agent_core::tools::background::BgTaskRegistry::new(),
             None,
             None,
             None,
             settings.general.shell.clone(),
-            agent_core::storage::mcp::load(data_dir),
+            agent_core::storage::mcp::load(data_dir)
+                .with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
     );
@@ -2072,6 +2074,8 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     fn temp_data_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -2229,6 +2233,76 @@ mod tests {
                         usage: Usage::default(),
                     })
                 }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
+    struct AutoModeProbeClient {
+        calls: AtomicUsize,
+        saw_auto_judge: Arc<std::sync::atomic::AtomicBool>,
+        seen_models: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ModelClient for AutoModeProbeClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            self.seen_models.lock().unwrap().push(req.model.clone());
+            self.saw_auto_judge
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(ModelResponse::Done {
+                text: "ALLOW".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.seen_models.lock().unwrap().push(req.model.clone());
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                        index: 0,
+                        id: Some("call_bash".to_string()),
+                        name: Some("Bash".to_string()),
+                        arguments_delta: Some("{\"command\":\"touch automode-ok\"}".to_string()),
+                    }));
+                    Ok(ModelResponse::ToolCalls {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        calls: vec![ToolCall {
+                            id: "call_bash".to_string(),
+                            name: "Bash".to_string(),
+                            input: serde_json::json!({"command": "touch automode-ok"}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => Ok(ModelResponse::Done {
+                    text: "done".to_string(),
+                    reasoning: String::new(),
+                    attachments: Vec::new(),
+                    usage: Usage::default(),
+                }),
                 _ => unreachable!("unexpected extra model call"),
             }
         }
@@ -2861,6 +2935,90 @@ mod tests {
                 })
                 .collect();
             assert_eq!(tool_names, vec!["missing_first", "missing_second"]);
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn desktop_send_passes_session_model_to_automode_judge() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let workdir = data_dir.join("workspace");
+            std::fs::create_dir_all(&workdir).unwrap();
+            let mut session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "claude-opus-4.7".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            session.workdir = Some(workdir);
+            session.run_mode = agent_core::run_mode::RunMode::AutoMode;
+            sessions::save(&data_dir, session.clone()).unwrap();
+
+            let saw_auto_judge = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let seen_models = Arc::new(Mutex::new(Vec::new()));
+            let events = Arc::new(Mutex::new(Vec::<EngineEvent>::new()));
+            let saw_auto_judge_for_factory = saw_auto_judge.clone();
+            let seen_models_for_factory = seen_models.clone();
+            let events_for_emit = events.clone();
+
+            let result = tokio::time::timeout(
+                Duration::from_secs(8),
+                send_and_save_in_data_dir_with_client_factory(
+                    &data_dir,
+                    SendArgs {
+                        session_id: session.id.clone(),
+                        user_content: "run command".to_string(),
+                        user_meta: None,
+                        attachments: Vec::new(),
+                        stream: true,
+                        enabled_tools: vec!["Bash".to_string()],
+                        cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                        pending_inputs: None,
+                        consumed_pending_inputs: None,
+                        pending_inputs_accepting: None,
+                        hitl: None,
+                        permission_store: None,
+                        force_automode: true,
+                        request_id: None,
+                    },
+                    move |event| {
+                        events_for_emit.lock().unwrap().push(event);
+                    },
+                    move |_provider, _model, _reasoning| {
+                        Ok(Arc::new(AutoModeProbeClient {
+                            calls: AtomicUsize::new(0),
+                            saw_auto_judge: saw_auto_judge_for_factory.clone(),
+                            seen_models: seen_models_for_factory.clone(),
+                        }) as Arc<dyn ModelClient>)
+                    },
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "AutoMode judge should resolve Bash approval without hanging; events={:?}",
+                    events.lock().unwrap()
+                )
+            });
+
+            result.unwrap();
+            assert!(
+                saw_auto_judge.load(std::sync::atomic::Ordering::SeqCst),
+                "AutoMode judge should be called for the session model"
+            );
+            assert!(
+                seen_models
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|model| model == "claude-opus-4.7"),
+                "model requests should carry the selected session model"
+            );
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });

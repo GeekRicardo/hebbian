@@ -9,17 +9,17 @@ use async_trait::async_trait;
 use common::{AppError, AppResult};
 use serde_json::{json, Value};
 
-use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};
+use super::background::{BgTaskRegistry, ShellState, READ_CHUNK_BYTES};
 use super::Tool;
 
 const MAX_WAIT_MS: u64 = 30_000;
 
 pub struct BashOutputTool {
-    shells: BackgroundShells,
+    shells: BgTaskRegistry,
 }
 
 impl BashOutputTool {
-    pub fn new(shells: BackgroundShells) -> Self {
+    pub fn new(shells: BgTaskRegistry) -> Self {
         Self { shells }
     }
 }
@@ -59,6 +59,11 @@ impl Tool for BashOutputTool {
         let Some(task_id) = input["task_id"].as_str() else {
             return Ok(render_listing(&self.shells.list()));
         };
+        if task_id.starts_with("subagent-") {
+            return Err(AppError::msg(
+                "BashOutput 只能查询 Bash 后台进程，后台 subagent 任务完成后会自动发送通知",
+            ));
+        }
         let shell = self
             .shells
             .get(task_id)
@@ -139,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn lists_when_no_task_id() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         shells.register("true".into(), "/".into(), false, None, spawn("true"));
         let tool = BashOutputTool::new(shells);
         let out = tool.execute(json!({})).await.unwrap();
@@ -148,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn reads_incremental_with_wait() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let s = shells.register(
             "echo a; sleep 0.05; echo b".into(),
             "/".into(),
@@ -166,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_task_id_errors() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let tool = BashOutputTool::new(shells);
         let res = tool.execute(json!({"task_id": "bash_999"})).await;
         assert!(res.is_err());

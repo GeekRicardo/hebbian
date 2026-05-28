@@ -7,15 +7,15 @@ use async_trait::async_trait;
 use common::{AppError, AppResult};
 use serde_json::{json, Value};
 
-use super::background::BackgroundShells;
+use super::background::BgTaskRegistry;
 use super::Tool;
 
 pub struct KillShellTool {
-    shells: BackgroundShells,
+    shells: BgTaskRegistry,
 }
 
 impl KillShellTool {
-    pub fn new(shells: BackgroundShells) -> Self {
+    pub fn new(shells: BgTaskRegistry) -> Self {
         Self { shells }
     }
 }
@@ -48,6 +48,11 @@ impl Tool for KillShellTool {
         let task_id = input["task_id"]
             .as_str()
             .ok_or_else(|| AppError::msg("KillShell: 缺少 task_id"))?;
+        if task_id.starts_with("subagent-") {
+            return Err(AppError::msg(
+                "KillShell 只能终止 Bash 后台进程，不能终止后台 subagent 任务",
+            ));
+        }
         let state = self
             .shells
             .kill(task_id)
@@ -65,7 +70,7 @@ mod tests {
 
     #[tokio::test]
     async fn kill_running_process() {
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let child = Command::new("bash")
             .arg("-lc")
             .arg("sleep 30")
@@ -82,7 +87,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_task_id_errors() {
-        let tool = KillShellTool::new(BackgroundShells::new());
+        let tool = KillShellTool::new(BgTaskRegistry::new());
         let res = tool.execute(json!({"task_id": "bash_xx"})).await;
         assert!(res.is_err());
     }

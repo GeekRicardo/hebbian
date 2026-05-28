@@ -620,7 +620,8 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
             Some(session_id.clone()),
             Some(read_state_tracker),
             settings.general.shell.clone(),
-            agent_core::storage::mcp::load(data_dir),
+            agent_core::storage::mcp::load(data_dir)
+                .with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
         HookManager::new(external_hooks),

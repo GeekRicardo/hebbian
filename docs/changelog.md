@@ -5172,3 +5172,54 @@
 **留尾巴**：无
 
 **关联**：`bab2471`
+
+### 2026-05-28 — 修复 AutoMode classifier 的 gpt-5.5 / opus4.7 模型判定
+
+**Why**：AutoMode 的 LLM judge / Bash prefix classifier 依赖当前模型命中白名单。实际使用时上游模型 id 常见为 `claude-opus-4.7` / `claude-opus-4-7-YYYYMMDD` / `gpt-5-5`，旧实现只做精确匹配，且 Desktop chat 路径没有把 session 当前模型传入 agent-core，导致即使 UI 选了支持模型也会降级 Ask 或卡在人工审批。
+
+**改动**：
+- [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs)：`is_allowed_model` 改为先归一化大小写和版本分隔符，再匹配 opus-4.7 / gpt-5.5 家族；继续拒绝 `gpt-5.5-preview` 这类未评估预览变体；补充模型判定回归测试。
+- [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs)：补一个 AutoMode 端到端 dispatch 测试，验证真实 `claude-opus-4.7` id 会触发 judge 并自动放行。
+- [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)：Desktop send 路径把 `session.model` 传给 `SessionConfig.model_id`，并加回归测试覆盖 AutoMode judge 能看到当前模型。
+- [docs/架构.md](架构.md)：同步 AutoMode 白名单规则，从 exact match 更新为真实上游 id 归一化匹配。
+
+**影响范围**：agent-core AutoMode / dispatcher、Desktop chat 路径、架构文档。协议和持久化格式不变；CLI / hebweb 之前已传 model_id，本次不改。
+
+**验证**：
+- `cargo test -p agent-core automode::tests::allowed_model --lib` 通过。
+- `cargo test -p agent-core dispatch::tests::automode_allows_real_opus_model_id_without_human_resolution --lib` 通过。
+- `cargo test -p hebbian chat::tests::desktop_send_passes_session_model_to_automode_judge` 通过（仅 notch.rs 既有 warning）。
+
+**留尾巴**：无
+
+### 2026-05-28 — 修复 stdio MCP server 子进程 cwd 错误导致 codegraph 等工具找不到项目
+
+**Why**：stdio MCP server（如 codegraph）在启动时会从 cwd 向上搜索标记目录（`.codegraph/`）来定位项目。之前 `with_stdio_session` spawn 子进程时没有设置 cwd，子进程继承的是 surface 进程（Desktop / heb daemon / hebweb）的工作目录，而不是当前 session 的 workdir，导致 codegraph 报 "No CodeGraph project is loaded for this session"。同工作区子目录场景也受益：只要 session.workdir 在项目树内，子进程向上找父目录即可命中 `.codegraph/`。
+
+**改动**：
+- [crates/agent-core/src/mcp/config.rs](../crates/agent-core/src/mcp/config.rs)：`McpServerConfig` 新增 `#[serde(skip)] pub cwd: Option<PathBuf>`；`McpConfig` 新增 `with_cwd(PathBuf) -> Self` 方法，一次性给所有 server 注入 cwd（落盘配置不含此字段，反序列化后为 None）。
+- [crates/agent-core/src/mcp/client.rs](../crates/agent-core/src/mcp/client.rs)：`with_stdio_session` 在 spawn 前若 `server.cwd` 有值则调用 `cmd.current_dir(cwd)`。
+- [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)：两处 `default_tools_with_mcp` 调用改为 `mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf())`。
+- [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)：同上。
+- [apps/web-server/src/session.rs](../apps/web-server/src/session.rs)：同上。
+- [docs/架构.md](架构.md)：§4.4.9 stdio 条目补注"子进程 cwd = session.workdir"。
+
+**影响范围**：agent-core mcp 模块、三个 surface 的 session 起跑路径。协议、持久化格式、HTTP/SSE transport 不变。
+
+**验证**：`cargo check --workspace` 通过；`cargo test -p agent-core --lib mcp` 10 个测试全过。
+
+**留尾巴**：`discover_tool_reports`（设置页工具发现）走 `core_client::discover_mcp_tools`，此时没有 session workdir 上下文，cwd 仍为 None——设置页的工具发现不受 workdir 影响，行为不变。若未来需要设置页也能按项目发现，需另行设计。
+
+### 2026-05-28 — P4：BackgroundShells 升级为 BgTaskRegistry + Task.run_in_background 后台模式
+
+- **Why**：路线图 P4（架构 §4.4.11.7 / §4.12）：subagent 支持后台并发——父 agent 调 `Task(run_in_background=true)` 立即拿到 task_id 继续推进，子 NestedRun 在后台跑完后通过 WakeupScheduler 发 BgTaskFinished 通知父模型。同时把 `BackgroundShells` 一般化为 `BgTaskRegistry`，统一管理 Bash shell 与 subagent 两类后台任务。
+- **改动**:
+  - [crates/agent-core/src/tools/background.rs](../crates/agent-core/src/tools/background.rs)：`BackgroundShells` 重命名为 `BgTaskRegistry`；新增 `BgSubagentTask` 结构体（`task_id` / `started_at` / `done` / `success` AtomicBool）；`Inner` 加 `subagents: HashMap<String, Arc<BgSubagentTask>>`；新增 `register_subagent` / `get_subagent` 方法。
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs)：`session_shells` 类型跟随重命名；`scan_bg()` 按 `subagent-` 前缀路由——subagent 任务走 `BgSubagentTask.is_done()`，Bash shell 走原有 `BackgroundShell.state().is_terminal()`。
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs)：`SubagentRunner.ctx` 从 `&'a SubagentCtx` 改为 `Arc<SubagentCtx>`（去掉生命周期参数，支持 `tokio::spawn` 跨 await 持有）；新增 `spawn_background` 方法（生成 `subagent-{id}` task_id → `registry_for_session` 注册 → `arm_bg_task` → `tokio::spawn` 真正的 NestedRun → 立即返回 task_id）；原 execute 内联逻辑提取为 `run_nested_inner`，前台 / 后台共用。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs)：`ctx.as_ref()` → `ctx.clone()`（配合 Arc 化）；测试构造器跟随重命名。
+  - [crates/agent-core/src/tools/bash.rs](../crates/agent-core/src/tools/bash.rs) / [bash_output.rs](../crates/agent-core/src/tools/bash_output.rs) / [kill_shell.rs](../crates/agent-core/src/tools/kill_shell.rs) / [mod.rs](../crates/agent-core/src/tools/mod.rs)：跟随 `BgTaskRegistry` 重命名；`BashOutput` / `KillShell` 加 `subagent-` 前缀拒绝检查（后台 subagent 完成靠通知，不走这两个工具）。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) / [apps/web-server/src/session.rs](../apps/web-server/src/session.rs)：跟随重命名。
+- **影响范围**：agent-core 全部工具层 + wakeup + subagent runner；三个 surface 的 session 起跑路径。协议、持久化格式不变；`registry_for_session` 公开签名不变（返回类型改名但 API 一致）。
+- **验证**：`cargo check --workspace` 通过；`cargo test -p agent-core --lib` 373 通过（1 个预存失败 `output_capped_with_offset_limit_hint` 与本次无关——`read.rs` 的 `MAX_OUTPUT_BYTES` 工作区改动导致截断阈值测试失效，待单独修复）。
+- **留尾巴**：P3.1c（子 session 事件双写到子 session.jsonl）、P5（同步 API）、P6（设置 UI）、P7（MessageBubble Task 嵌套渲染）、P8（端到端验证）待续。后台 subagent 的 WakeupScheduler 注册需要 parent_session_id，单测路径（ctx.parent_session_id=None）会返回错误——这是预期行为，不影响生产路径。

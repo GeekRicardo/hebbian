@@ -1,7 +1,8 @@
 //! [`SubagentRunner`]：跑一次嵌套 agent_loop（NestedRun，架构 §4.4.11）。
 //!
-//! 当前范围（P3.1a）：`isolated` / `inherit` 模式 + 前台同步（父等子完成）+ 子 session
-//! 落盘到 `sessions/<parent_sid>/subagents/<child_sid>/`。`run_in_background=true` 留到 P4。
+//! 当前范围（P3.1a / P4）：`isolated` / `inherit` 模式 + 前台同步 + 后台异步
+//! （`run_in_background=true`）+ 子 session 落盘到
+//! `sessions/<parent_sid>/subagents/<child_sid>/`。
 
 use std::sync::Arc;
 
@@ -20,8 +21,8 @@ use crate::workspace::Workspace;
 use super::ctx::SubagentCtx;
 
 /// 跑一次 NestedRun。
-pub struct SubagentRunner<'a> {
-    pub ctx: &'a SubagentCtx,
+pub struct SubagentRunner {
+    pub ctx: Arc<SubagentCtx>,
     /// 父 ToolRegistry——按 subagent.tools 过滤后给子用。
     pub parent_registry: Arc<ToolRegistry>,
     pub parent_sink: EventSink,
@@ -42,7 +43,7 @@ pub struct SubagentRunner<'a> {
     pub parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>,
 }
 
-impl<'a> SubagentRunner<'a> {
+impl SubagentRunner {
     /// 执行一次 Task 调用。返回子的终态文本（最后一条 assistant 输出）。
     pub async fn execute(&self, input: TaskInput) -> Result<String, ModelError> {
         // 1. 找到 subagent 定义
@@ -63,12 +64,12 @@ impl<'a> SubagentRunner<'a> {
             }
         };
 
-        // 2. 模式分流（P2 仅支持 isolated；其它分支留 TODO 错误防止静默走错）
+        // 2. 后台模式（架构 §4.4.11.7）
         if input.run_in_background {
-            return Err(ModelError::Other(
-                "Task.run_in_background=true 尚未实施（P4 phase）".to_string(),
-            ));
+            return self.spawn_background(input, def).await;
         }
+
+        // 3. 前台同步模式
         let initial_transcript = match input.mode {
             TaskMode::Isolated => build_isolated_transcript(&def, &input.prompt),
             TaskMode::Inherit => build_inherit_transcript(
@@ -79,22 +80,102 @@ impl<'a> SubagentRunner<'a> {
                     .map(Vec::as_slice),
             ),
         };
+        self.run_nested_inner(def, initial_transcript).await
+    }
 
-        // 3. 构造子 ToolRegistry（按 subagent.tools 白名单过滤 + 永远剔除 Task 自身）
+    /// 后台模式：生成 task_id → 注册 BgSubagentTask → arm WakeupScheduler →
+    /// tokio::spawn 真正的 NestedRun → 立即返回 task_id 给父。
+    async fn spawn_background(
+        &self,
+        input: TaskInput,
+        def: SubagentDefinition,
+    ) -> Result<String, ModelError> {
+        let parent_session_id = match self.ctx.parent_session_id.as_deref() {
+            Some(s) => s.to_string(),
+            None => {
+                return Err(ModelError::Other(
+                    "Task run_in_background=true 需要 session_id（单测路径不支持）".to_string(),
+                ));
+            }
+        };
+
+        let task_id = format!(
+            "subagent-{}",
+            crate::storage::sessions_dir::new_session_id()
+        );
+        let registry =
+            crate::tools::background::registry_for_session(&parent_session_id);
+        let bg_task = registry.register_subagent(task_id.clone());
+
+        crate::wakeup::WakeupScheduler::global().arm_bg_task(
+            parent_session_id.clone(),
+            self.parent_run_id.to_string(),
+            task_id.clone(),
+            Some(self.parent_task_call_id.clone()),
+        );
+
+        // 克隆所有 Arc/Clone 字段供 spawn 使用
+        let ctx = self.ctx.clone();
+        let parent_registry = self.parent_registry.clone();
+        let parent_sink = self.parent_sink.clone();
+        let parent_workspace = self.parent_workspace.clone();
+        let parent_hitl = self.parent_hitl.clone();
+        let parent_cancel = self.parent_cancel.clone();
+        let parent_edits_worktree = self.parent_edits_worktree.clone();
+        let parent_run_id = self.parent_run_id.clone();
+        let parent_model_id = self.parent_model_id.clone();
+        let parent_task_call_id = self.parent_task_call_id.clone();
+        let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
+
+        tokio::spawn(async move {
+            let runner = SubagentRunner {
+                ctx,
+                parent_registry,
+                parent_sink,
+                parent_workspace,
+                parent_hitl,
+                parent_cancel,
+                parent_edits_worktree,
+                parent_run_id,
+                parent_model_id,
+                parent_task_call_id,
+                parent_transcript_snapshot: parent_transcript_snapshot.clone(),
+            };
+            let initial_transcript = match input.mode {
+                TaskMode::Isolated => build_isolated_transcript(&def, &input.prompt),
+                TaskMode::Inherit => build_inherit_transcript(
+                    &def,
+                    &input.prompt,
+                    parent_transcript_snapshot.as_deref().map(Vec::as_slice),
+                ),
+            };
+            let success = runner.run_nested_inner(def, initial_transcript).await.is_ok();
+            bg_task.finish(success);
+        });
+
+        Ok(format!("task_id={task_id}"))
+    }
+
+    /// 实际跑一次 NestedRun（前台 / 后台 spawn 内部共用）。
+    async fn run_nested_inner(
+        &self,
+        def: SubagentDefinition,
+        initial_transcript: Transcript,
+    ) -> Result<String, ModelError> {
+        // 构造子 ToolRegistry（按 subagent.tools 白名单过滤 + 永远剔除 Task 自身）
         let child_registry = self.build_child_registry(&def);
 
-        // 4. 子 RunState（独立 RunId / 独立 seq）+ EventSink 装饰器
+        // 子 RunState（独立 RunId / 独立 seq）+ EventSink 装饰器
         let child_run_id = RunId::new();
         let child_state = Arc::new(RunState::new(child_run_id.clone()));
         let child_sink = self.wrap_sink_with_decorator();
 
-        // 4.1 子 session id 与落盘目录（架构 §4.4.11.2）
+        // 子 session id 与落盘目录（架构 §4.4.11.2）
         let child_session_id = prepare_child_session(
             self.ctx.parent_session_id.as_deref(),
             self.ctx.data_dir.as_deref(),
         );
 
-        // 5. 跑 agent_loop
         let mut transcript = initial_transcript;
         let agent = AgentRef::new(format!("subagent:{}", def.name));
         let enabled_tools: Vec<String> = def
@@ -123,7 +204,6 @@ impl<'a> SubagentRunner<'a> {
             pending_inputs: None,
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,
-            // 子默认 EditAutomatically，避免再弹 RunMode 选择（架构 §4.4.11 决策）
             run_mode: crate::run_mode::RunMode::EditAutomatically,
             model_id,
             judge_client: Some(self.ctx.client.clone()),
@@ -135,8 +215,6 @@ impl<'a> SubagentRunner<'a> {
             edits_worktree: self.parent_edits_worktree.clone(),
             max_tool_iterations: Some(max_iter),
             system_rules: None,
-            // 子不允许再调 Task（多层嵌套已被 child_registry 剔除 Task 工具阻断），
-            // 但保险起见 subagent_ctx 也传 None——即便模型硬调 Task 也会拿到"不可用"错误。
             subagent_ctx: None,
         };
 

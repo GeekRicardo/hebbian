@@ -21,7 +21,7 @@ use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
-use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};
+use super::background::{BgTaskRegistry, ShellState, READ_CHUNK_BYTES};
 use super::{Tool, ToolCtx};
 use crate::workspace::Workspace;
 
@@ -31,8 +31,8 @@ const MAX_OUTPUT_BYTES: usize = 30_000;
 
 pub struct BashTool {
     workspace: Arc<Workspace>,
-    shells: BackgroundShells,
-    /// 当前 session 的 bg 日志目录（架构 §4.12.3）。`None` 时 BackgroundShells
+    shells: BgTaskRegistry,
+    /// 当前 session 的 bg 日志目录（架构 §4.12.3）。`None` 时 BgTaskRegistry
     /// 回落到 tail-only。CLI 单跑 / 单测一般传 None；desktop chat.rs 传
     /// `~/.hebbian/sessions/<sid>/bg`。
     bg_log_dir: Option<PathBuf>,
@@ -42,7 +42,7 @@ pub struct BashTool {
 impl BashTool {
     pub fn new(
         workspace: Arc<Workspace>,
-        shells: BackgroundShells,
+        shells: BgTaskRegistry,
         bg_log_dir: Option<PathBuf>,
         shell: Option<String>,
     ) -> Self {
@@ -333,7 +333,7 @@ mod tests {
     }
 
     fn tool(path: &std::path::Path) -> BashTool {
-        BashTool::new(workspace_at(path), BackgroundShells::new(), None, None)
+        BashTool::new(workspace_at(path), BgTaskRegistry::new(), None, None)
     }
 
     #[tokio::test]
@@ -377,7 +377,7 @@ mod tests {
         let shell = profile.display().to_string();
         let bash = BashTool::new(
             workspace_at(tmp.path()),
-            BackgroundShells::new(),
+            BgTaskRegistry::new(),
             None,
             Some(shell),
         );
@@ -402,7 +402,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_transitions_to_background() {
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let out = t
             .execute(json!({"command": "sleep 5", "timeout_secs": 1}))
@@ -427,7 +427,7 @@ mod tests {
     #[tokio::test]
     async fn foreground_exit_unregisters_from_registry() {
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let out = t.execute(json!({"command": "echo hello"})).await.unwrap();
         assert!(out.contains("hello"));
@@ -443,7 +443,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_background_keeps_in_registry() {
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let _ = t
             .execute(json!({"command": "sleep 30", "run_in_background": true}))
@@ -462,7 +462,7 @@ mod tests {
         use crate::tools::kill_shell::KillShellTool;
 
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let bash_out = BashOutputTool::new(shells.clone());
         let kill = KillShellTool::new(shells.clone());
@@ -494,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn run_in_background_returns_immediately() {
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let t = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let started = std::time::Instant::now();
         let out = t
@@ -527,7 +527,7 @@ mod tests {
         }
 
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let bash = BashTool::new(workspace_at(tmp.path()), shells.clone(), None, None);
         let progress = Arc::new(CaptureProgress {
             chunks: Mutex::new(Vec::new()),
@@ -577,7 +577,7 @@ mod tests {
         }
 
         let tmp = tempfile::tempdir().unwrap();
-        let shells = BackgroundShells::new();
+        let shells = BgTaskRegistry::new();
         let bash = BashTool::new(workspace_at(tmp.path()), shells, None, None);
         let progress = Arc::new(CaptureProgress(Mutex::new(Vec::new())));
         let ctx = crate::tools::ToolCtx {

@@ -18,7 +18,7 @@ use chrono::Utc;
 use tokio::sync::mpsc;
 
 use crate::storage::run_checkpoint::RunPhase;
-use crate::tools::background::BackgroundShells;
+use crate::tools::background::BgTaskRegistry;
 
 /// PhaseChannel：dispatcher 与 agent_loop 之间共享的"当前 ToolStep 跑完后要不要挂起"
 /// 标志位。ScheduleWakeup 工具执行时写入；agent_loop 在 ToolStep
@@ -119,9 +119,9 @@ struct SchedulerInner {
     crons: Vec<Cron>,
     bg_watches: Vec<BgWatch>,
     handler: Option<ResumeHandler>,
-    /// session-scoped BackgroundShells 引用（架构 §4.12.2 修订）。BgFinishHook
+    /// session-scoped BgTaskRegistry 引用（架构 §4.12.2 修订）。BgFinishHook
     /// 用 BgWatch.session_id 反查，找不到说明该 session 已被销毁——直接当 done。
-    session_shells: std::collections::HashMap<String, BackgroundShells>,
+    session_shells: std::collections::HashMap<String, BgTaskRegistry>,
 }
 
 pub struct WakeupScheduler {
@@ -219,22 +219,41 @@ impl WakeupScheduler {
         };
         let mut still: Vec<BgWatch> = Vec::new();
         for w in watches {
-            // 按 session 路由：找到该 session 的 BackgroundShells，再按 task_id 查。
-            // 找不到 shells（session 已销毁）或找不到 task（被 GC）→ 当 done 兜底。
-            let shells_for_session = session_shells.get(&w.session_id);
-            let (done, exit_code, duration_ms) = match shells_for_session {
-                Some(shells) => match shells.get(&w.task_id) {
-                    Some(s) => {
-                        let terminal = s.state().is_terminal();
-                        let code = match s.state() {
-                            crate::tools::background::ShellState::Exited { code } => code,
-                            _ => None,
-                        };
-                        let dur = s.started_at.elapsed().as_millis() as u64;
-                        (terminal, code, dur)
+            // 按 session 路由：找到该 session 的 BgTaskRegistry，再按 task_id 查。
+            // 找不到 registry（session 已销毁）或找不到 task（被 GC）→ 当 done 兜底。
+            let registry = session_shells.get(&w.session_id);
+            let (done, exit_code, duration_ms) = match registry {
+                Some(reg) => {
+                    if w.task_id.starts_with("subagent-") {
+                        // 后台 subagent 任务：按 BgSubagentTask 检查终态
+                        match reg.get_subagent(&w.task_id) {
+                            Some(t) => {
+                                let done = t.is_done();
+                                let code = if done {
+                                    Some(if t.is_success() { 0 } else { 1 })
+                                } else {
+                                    None
+                                };
+                                (done, code, t.elapsed_ms())
+                            }
+                            None => (true, None, 0),
+                        }
+                    } else {
+                        // Bash 后台 shell：按 BackgroundShell 检查终态
+                        match reg.get(&w.task_id) {
+                            Some(s) => {
+                                let terminal = s.state().is_terminal();
+                                let code = match s.state() {
+                                    crate::tools::background::ShellState::Exited { code } => code,
+                                    _ => None,
+                                };
+                                let dur = s.started_at.elapsed().as_millis() as u64;
+                                (terminal, code, dur)
+                            }
+                            None => (true, None, 0),
+                        }
                     }
-                    None => (true, None, 0),
-                },
+                }
                 None => (true, None, 0),
             };
             if done {
@@ -281,10 +300,10 @@ impl WakeupScheduler {
         });
     }
 
-    /// 注册某个 session 的 BackgroundShells，BgFinishHook 用它扫该 session 的
+    /// 注册某个 session 的 BgTaskRegistry，BgFinishHook 用它扫该 session 的
     /// 后台任务终态。同一 session_id 多次注册以最后一次为准——chat() 每次调用都
     /// 重新登记没问题（同 session 拿到的是同一个 Arc 视图）。
-    pub fn register_session_shells(&self, session_id: String, shells: BackgroundShells) {
+    pub fn register_session_shells(&self, session_id: String, shells: BgTaskRegistry) {
         self.inner
             .lock()
             .unwrap()
@@ -480,7 +499,7 @@ mod tests {
         };
         // 注册一个 session 的 shells，arm task 但让它立刻 terminal——
         // 用 echo true 命令，wait_terminal 后扫描必投递 BgTaskFinished。
-        let shells = crate::tools::background::BackgroundShells::new();
+        let shells = crate::tools::background::BgTaskRegistry::new();
         scheduler.register_session_shells("sess".into(), shells.clone());
         let child = tokio::process::Command::new("bash")
             .arg("-c")

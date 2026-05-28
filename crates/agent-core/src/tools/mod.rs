@@ -111,11 +111,11 @@ pub trait Tool: Send + Sync {
 /// - 内置：Bash / BashOutput / KillShell / Read / Edit / Grep / Skill（与 ask 一起每次自动注入）
 /// - 用户可选：web_search / web_fetch（按 enabled_tools 过滤）
 ///
-/// `BashTool` / `BashOutputTool` / `KillShellTool` 共享同一个 [`background::BackgroundShells`]
+/// `BashTool` / `BashOutputTool` / `KillShellTool` 共享同一个 [`background::BgTaskRegistry`]
 /// 注册表：超时或 `run_in_background=true` 时进程转后台，其余两个工具按 task_id 增量查询 / 终止。
 ///
 /// `bg_log_dir` 为本 session 的后台输出落盘目录（架构 §4.12.3）。生产路径通常是
-/// `~/.hebbian/sessions/<sid>/bg/`；CLI 单跑 / 单测可传 `None`，BackgroundShells
+/// `~/.hebbian/sessions/<sid>/bg/`；CLI 单跑 / 单测可传 `None`，BgTaskRegistry
 /// 会回落到 tail-only。
 ///
 /// `read_state_tracker` 是 session 级 Read 状态追踪表（架构 §4.4.10）：
@@ -126,7 +126,7 @@ pub fn default_tools(
     skill_dirs: &[(skill::SkillSource, PathBuf)],
     bg_log_dir: Option<PathBuf>,
     phase: crate::wakeup::PhaseChannel,
-    shells: background::BackgroundShells,
+    shells: background::BgTaskRegistry,
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
@@ -188,7 +188,7 @@ pub async fn default_tools_with_mcp(
     skill_dirs: &[(skill::SkillSource, PathBuf)],
     bg_log_dir: Option<PathBuf>,
     phase: crate::wakeup::PhaseChannel,
-    shells: background::BackgroundShells,
+    shells: background::BgTaskRegistry,
     data_dir: Option<PathBuf>,
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,

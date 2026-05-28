@@ -1400,7 +1400,7 @@ impl ToolDispatcher {
                 };
 
                 let runner = crate::subagent::SubagentRunner {
-                    ctx: ctx.as_ref(),
+                    ctx: ctx.clone(),
                     parent_registry: registry,
                     parent_sink: sink.clone(),
                     parent_workspace: workspace,
@@ -1746,12 +1746,68 @@ mod tests {
     use crate::run_state::RunState;
     use crate::tools::bash::BashTool;
     use crate::tools::registry::ToolRegistry;
+    use async_trait::async_trait;
+    use common::AppResult;
+    use model_gateway::types::{ModelRequest, ModelResponse, ModelStreamEvent, Usage};
     use crate::workspace::Workspace;
     use model_gateway::types::ToolCall;
+    use serde_json::Value;
     use protocol::RunId;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Duration;
+
+    struct StaticAllowJudge;
+
+    #[async_trait]
+    impl model_gateway::client::ModelClient for StaticAllowJudge {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: common::CancelFlag,
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            Ok(ModelResponse::Done {
+                text: "ALLOW".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: common::CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
+
+    struct DestructiveNoopTool;
+
+    #[async_trait]
+    impl crate::tools::Tool for DestructiveNoopTool {
+        fn name(&self) -> &str {
+            "Bash"
+        }
+
+        fn description(&self) -> &str {
+            "test destructive tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            Ok("executed".to_string())
+        }
+    }
 
     /// 端到端复现 desktop 路径：dispatch 一个 Bash destructive 调用 → emit 收到
     /// PermissionRequested → 模拟 surface 通过 hitl gate resolve → waiter 唤醒 → 命令执行。
@@ -1764,7 +1820,7 @@ mod tests {
         let workspace = Workspace::new(tmp.path(), Vec::new());
         let registry = Arc::new(ToolRegistry::new(vec![Box::new(BashTool::new(
             workspace.clone(),
-            crate::tools::background::BackgroundShells::new(),
+            crate::tools::background::BgTaskRegistry::new(),
             None,
             None,
         ))
@@ -1825,6 +1881,63 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn automode_allows_real_opus_model_id_without_human_resolution() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![Box::new(DestructiveNoopTool)
+            as Box<dyn crate::tools::Tool>]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AutoMode,
+            model_id: Some("claude-opus-4.7".to_string()),
+            judge_client: Some(Arc::new(StaticAllowJudge)),
+            force_automode: false,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+        };
+
+        let call = ToolCall {
+            id: "call_automode".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "touch automode-ok" }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("AutoMode should resolve approval without a human response")
+            .expect("dispatch should succeed");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "executed");
+
+        let mut saw_allow = false;
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionAutoJudged { decision, .. } = event.payload {
+                saw_allow = decision == "allow";
+            }
+        }
+        assert!(saw_allow, "AutoMode judge should allow the supported model");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn remember_first_compound_bash_auto_resolves_matching_pending_call() {
         use protocol::{EventPayload, PermissionKind, PermissionScope};
 
@@ -1832,7 +1945,7 @@ mod tests {
         let workspace = Workspace::new(tmp.path(), Vec::new());
         let registry = Arc::new(ToolRegistry::new(vec![Box::new(BashTool::new(
             workspace.clone(),
-            crate::tools::background::BackgroundShells::new(),
+            crate::tools::background::BgTaskRegistry::new(),
             None,
             None,
         ))
