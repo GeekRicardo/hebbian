@@ -358,7 +358,7 @@ export function Sidebar() {
             active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
           )}
         >
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {(running || unread) && (
               <span
                 className={cn("h-2 w-2 shrink-0 rounded-full bg-primary", running && "animate-breathe")}
@@ -385,49 +385,9 @@ export function Sidebar() {
                 {renderSearchText(s.title, `${s.id}-title`)}
               </span>
             )}
-            {!renamingId && (
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                {active && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRegenerateTitle(s.id);
-                    }}
-                    disabled={regenerating}
-                    className="p-1 rounded hover:bg-background text-muted-foreground disabled:opacity-50"
-                    title="用模型重新生成标题"
-                  >
-                    <Sparkles className={cn("w-3.5 h-3.5", regenerating && "animate-pulse text-primary")} />
-                  </button>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRenamingId(s.id);
-                    setRenameText(s.title);
-                  }}
-                  className="p-1 rounded hover:bg-background text-muted-foreground"
-                  title="重命名"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`删除对话 "${s.title}"？`)) {
-                      deleteSession(s.id).catch((err) => toast.error(err.message || String(err)));
-                    }
-                  }}
-                  className="p-1 rounded hover:bg-background text-muted-foreground hover:text-destructive"
-                  title="删除"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
           </div>
-          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
-            <span className="truncate">{s.model}</span>
+          <div className="flex items-center gap-1 mt-0.5 text-[11px] text-muted-foreground">
+            <span className="truncate flex-1">{s.model}</span>
             {s.source === "cli" && (
               <span
                 className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-primary/10 text-primary border border-primary/20 shrink-0"
@@ -437,7 +397,47 @@ export function Sidebar() {
                 CLI
               </span>
             )}
-            <span className="ml-auto shrink-0">{formatTime(s.updated_at)}</span>
+            {!renamingId && (
+              <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                {active && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRegenerateTitle(s.id);
+                    }}
+                    disabled={regenerating}
+                    className="p-0.5 rounded hover:bg-background text-muted-foreground disabled:opacity-50"
+                    title="用模型重新生成标题"
+                  >
+                    <Sparkles className={cn("w-3 h-3", regenerating && "animate-pulse text-primary")} />
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRenamingId(s.id);
+                    setRenameText(s.title);
+                  }}
+                  className="p-0.5 rounded hover:bg-background text-muted-foreground"
+                  title="重命名"
+                >
+                  <Edit3 className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`删除对话 "${s.title}"？`)) {
+                      deleteSession(s.id).catch((err) => toast.error(err.message || String(err)));
+                    }
+                  }}
+                  className="p-0.5 rounded hover:bg-background text-muted-foreground hover:text-destructive"
+                  title="删除"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+            <span className="shrink-0">{formatTime(s.updated_at)}</span>
           </div>
           {snippet && (
             <div className="text-[11px] text-muted-foreground/80 mt-1 line-clamp-2">
