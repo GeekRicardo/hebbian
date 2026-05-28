@@ -139,6 +139,12 @@ interface ToolCallItem {
    * 后由 result 取代显示。
    */
   liveOutput?: string | null;
+  /**
+   * Task 工具的嵌套子事件（架构 §4.4.11.8 / P7）。
+   * 子 agent 事件经 store 路由后存在 StreamingAssistantPart.nested_parts，
+   * 这里透传给渲染层，在 Task 卡片内嵌套显示子工具调用 / 子文本 / 子推理。
+   */
+  nestedParts?: StreamingAssistantPart[];
 }
 
 type AssistantRenderPart =
@@ -182,6 +188,7 @@ function normalizeStreamingToolPart(
     status: part.status,
     artifactPath: part.artifact_path,
     liveOutput: part.live_output,
+    nestedParts: part.nested_parts,
   };
 }
 
@@ -1343,6 +1350,76 @@ function ToolCallDetail({
   return <DefaultToolDetail call={call} />;
 }
 
+// ─── 嵌套子 agent 渲染（架构 §4.4.11.8 / P7）────────────────────────────────
+
+function buildNestedRenderParts(parts: StreamingAssistantPart[]): AssistantRenderPart[] {
+  const out: AssistantRenderPart[] = [];
+  const pendingTools: ToolCallItem[] = [];
+  parts.forEach((part, index) => {
+    if (part.type === "text") {
+      pushToolGroup(out, pendingTools);
+      out.push({ type: "text", key: `nested-text-${index}`, text: part.text });
+    } else if (part.type === "reasoning") {
+      pushToolGroup(out, pendingTools);
+      out.push({ type: "reasoning", key: `nested-reasoning-${index}`, text: part.text, streaming: false });
+    } else {
+      pendingTools.push(normalizeStreamingToolPart(part, index));
+    }
+  });
+  pushToolGroup(out, pendingTools);
+  return out;
+}
+
+function NestedTaskContent({
+  nestedParts,
+  appSettings,
+}: {
+  nestedParts: StreamingAssistantPart[];
+  appSettings?: AppSettings;
+}) {
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const onToggle = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const renderParts = buildNestedRenderParts(nestedParts);
+  if (renderParts.length === 0) return null;
+
+  return (
+    <div className="ml-3 border-l-2 border-primary/20 pl-3 py-1 space-y-1">
+      {renderParts.map((part) => {
+        if (part.type === "text") {
+          return (
+            <p key={part.key} className="text-[13px] text-muted-foreground whitespace-pre-wrap">
+              {part.text}
+            </p>
+          );
+        }
+        if (part.type === "reasoning") {
+          return <ReasoningBlock key={part.key} text={part.text} streaming={part.streaming} />;
+        }
+        if (part.type === "tool_group") {
+          return (
+            <ToolCallTimeline
+              key={part.key}
+              calls={part.calls}
+              expandedKeys={expandedKeys}
+              onToggle={onToggle}
+              appSettings={appSettings}
+            />
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
 function ToolCallTimeline({
   calls,
   expandedKeys,
@@ -1508,6 +1585,16 @@ function ToolCallTimeline({
               {active && (
                 <>
                   <ToolCallDetail call={call} appSettings={appSettings} />
+                  {call.name === "Task" &&
+                    call.nestedParts &&
+                    call.nestedParts.length > 0 && (
+                      <div className="border-t border-border">
+                        <NestedTaskContent
+                          nestedParts={call.nestedParts}
+                          appSettings={appSettings}
+                        />
+                      </div>
+                    )}
                   {call.artifactPath && (
                     <div className="border-t border-border p-2">
                       <ArtifactBadge path={call.artifactPath} />

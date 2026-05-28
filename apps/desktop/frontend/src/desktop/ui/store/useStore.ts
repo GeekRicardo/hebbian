@@ -380,6 +380,13 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
 }
 
 function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
+  // 子 agent 事件：路由到对应 Task tool call 的 nested_parts（架构 §4.4.11.8）
+  if (e.subagent_call_id) {
+    return {
+      ...slot,
+      streamingParts: applyNestedEvent(slot.streamingParts, e.subagent_call_id, e),
+    };
+  }
   if (e.type === "text_delta") {
     if (!e.text) return slot;
     return {
@@ -776,6 +783,38 @@ function applyToolOutputDelta(
     live_output: (call.live_output ?? "") + event.chunk,
   };
   return next;
+}
+
+/**
+ * 子 agent 事件路由（架构 §4.4.11.8 / P7）：把带 `subagent_call_id` 的事件
+ * 追加到对应 Task tool call 的 `nested_parts` 里，而不是顶层 streamingParts。
+ * 这样 Task 卡片能在展开时渲染子工具调用 / 子文本 / 子推理。
+ */
+function applyNestedEvent(
+  parts: StreamingAssistantPart[],
+  callId: string,
+  event: EngineEvent
+): StreamingAssistantPart[] {
+  return parts.map((p) => {
+    if (p.type !== "tool_call" || p.id !== callId) return p;
+    const nested = p.nested_parts ?? [];
+    let newNested = nested;
+    if (event.type === "text_delta" && event.text) {
+      newNested = applyTextDelta(nested, event.text);
+    } else if (event.type === "reasoning") {
+      newNested = applyReasoningDelta(nested, event.text);
+    } else if (event.type === "tool_call_delta") {
+      newNested = applyToolCallDelta(nested, event);
+    } else if (event.type === "tool_start") {
+      newNested = applyToolStart(nested, event);
+    } else if (event.type === "tool_done") {
+      newNested = applyToolDone(nested, event);
+    } else if (event.type === "tool_output_delta") {
+      newNested = applyToolOutputDelta(nested, event);
+    }
+    if (newNested === nested) return p;
+    return { ...p, nested_parts: newNested };
+  });
 }
 
 interface AppState {

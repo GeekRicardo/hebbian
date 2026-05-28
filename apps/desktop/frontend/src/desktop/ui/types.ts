@@ -216,6 +216,12 @@ export type StreamingAssistantPart =
        * 这个字段可保留供折叠展示，亦可清空。
        */
       live_output?: string;
+      /**
+       * Task 工具的嵌套子事件（架构 §4.4.11.8 / P7）。
+       * 带 `subagent_call_id == 本 call.id` 的子事件路由到这里，
+       * 渲染层在 Task 卡片内嵌套显示子工具调用 / 子文本 / 子推理。
+       */
+      nested_parts?: StreamingAssistantPart[];
     };
 
 /**

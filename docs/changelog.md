@@ -5243,3 +5243,14 @@
 - **影响范围**：Desktop 前端设置弹窗；后端 Tauri 命令已在 P5 就绪，本次只改前端。
 - **验证**：`pnpm exec tsc --noEmit` 通过。
 - **留尾巴**：项目级 enabled override 在 SubagentsPane 里已按 workdir 路由（有 workdir 时用 Project scope），但 AppSettingsDialog 的 workdir 来自 `draft.conversation.workdir`，全局设置里通常为空——项目级 toggle 需要从 SessionSettingsDialog 入口触发（P6 范围内未做）。
+
+### 2026-05-28 — P7：MessageBubble Task 卡片嵌套子 agent 事件渲染
+
+- **Why**：路线图 P7（架构 §4.4.11.8）：Task 工具调用卡片展开时，在卡片内嵌套显示子 agent 的工具调用 / 文本 / 推理，让用户能实时看到子 agent 的工作进度，而不是等子 agent 完成后才看到结果。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts)：`StreamingAssistantPart.tool_call` 加 `nested_parts?: StreamingAssistantPart[]` 字段。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts)：新增 `applyNestedEvent` 函数（把带 `subagent_call_id` 的事件路由到对应 Task tool call 的 `nested_parts`）；`applyEventToSlot` 开头加 `subagent_call_id` 分支。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：`ToolCallItem` 加 `nestedParts?: StreamingAssistantPart[]`；`normalizeStreamingToolPart` 透传 `nested_parts`；新增 `buildNestedRenderParts` + `NestedTaskContent` 组件（左侧蓝色竖线缩进 + 子工具 timeline + 子文本 + 子推理）；`ToolCallTimeline` 在 Task 卡片展开时渲染 `NestedTaskContent`。
+- **影响范围**：Desktop 前端 store + MessageBubble；不改后端协议（subagent_call_id 字段 P3.1d 已就绪）。
+- **验证**：`pnpm exec tsc --noEmit` 通过。
+- **留尾巴**：P8 端到端验证待续；后台 Task 卡片徽章（运行中 / 已完成）未做（架构 §4.4.11.11 P7 描述中提到，但实现复杂度高，留后续）。
