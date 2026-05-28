@@ -22,7 +22,7 @@ use crate::{
     system_prompt::compose_system_prompt,
     tools::{
         ask_only_definitions, hitl::HitlGate, hosted_tool_definitions, registry::ToolRegistry,
-        BUILTIN_TOOL_NAMES,
+        BUILTIN_TOOL_NAMES, CONDITIONAL_TOOL_NAMES,
     },
     workspace::Workspace,
 };
@@ -390,10 +390,12 @@ pub async fn run_loop(
         });
 
         // 内置工具每轮都自动注入：ask + Bash/Read/Write/Grep/Skill。
-        // 用户可选工具按 enabled_tools 过滤。
+        // 用户可选工具按 enabled_tools 过滤。条件注入工具（如 Task）一律加进白名单，
+        // registry 没注册的会被自然忽略，让 default_tools 的条件注入决策真正生效。
         let mut tool_defs = ask_only_definitions();
         let mut all_filter: Vec<String> =
             BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
+        all_filter.extend(CONDITIONAL_TOOL_NAMES.iter().map(|s| s.to_string()));
         all_filter.extend(enabled_tools.iter().cloned());
         tool_defs.extend(registry.definitions(&all_filter));
         tool_defs.extend(registry.mcp_definitions());

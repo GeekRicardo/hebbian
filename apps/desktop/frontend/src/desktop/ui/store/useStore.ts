@@ -381,10 +381,11 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
 
 function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   // 子 agent 事件：路由到对应 Task tool call 的 nested_parts（架构 §4.4.11.8）
-  if (e.subagent_call_id) {
+  const nestedCallId = "subagent_call_id" in e ? e.subagent_call_id : undefined;
+  if (nestedCallId) {
     return {
       ...slot,
-      streamingParts: applyNestedEvent(slot.streamingParts, e.subagent_call_id, e),
+      streamingParts: applyNestedEvent(slot.streamingParts, nestedCallId, e),
     };
   }
   if (e.type === "text_delta") {

@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { isTauri } from "@/desktop/bridge/transport";
 import { openUrl as openExternalUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";

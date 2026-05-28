@@ -5254,3 +5254,19 @@
 - **影响范围**：Desktop 前端 store + MessageBubble；不改后端协议（subagent_call_id 字段 P3.1d 已就绪）。
 - **验证**：`pnpm exec tsc --noEmit` 通过。
 - **留尾巴**：P8 端到端验证待续；后台 Task 卡片徽章（运行中 / 已完成）未做（架构 §4.4.11.11 P7 描述中提到，但实现复杂度高，留后续）。
+
+### 2026-05-28 — P8：修复 Task 工具被 dispatch 工具白名单过滤掉的 bug
+
+- **Why**：跑端到端 P8 验证时发现，`~/.hebbian/subagents/echo-agent.md` 已存在、`default_tools` 也按条件注入逻辑把 `Task` 注册进了 registry，但 `model_io.jsonl` 显示模型收到的 tools 列表里**没有 Task**。模型直接回「我没有 Task 工具」，整条子 agent 链路根本没启动。
+- **根因**：[crates/agent-core/src/agent_loop.rs:394](../crates/agent-core/src/agent_loop.rs#L394) 和 [apps/desktop/src/chat.rs:1442](../apps/desktop/src/chat.rs#L1442) 都用 `BUILTIN_TOOL_NAMES + enabled_tools` 当白名单调 `registry.definitions(filter)`。`BUILTIN_TOOL_NAMES` 刻意没列 `"Task"`（因为 Task 是条件注入），但 dispatch 这一层把"条件注入"和"用户开关"混淆了——白名单里没有的名字一律被过滤，于是 Task 即便注册进 registry 也发不到模型。**这是 P3.1d 引入条件注入时遗漏的 dispatch 层缺口**。
+- **改动**:
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)：新增 `CONDITIONAL_TOOL_NAMES = &["Task"]` 常量，与 `BUILTIN_TOOL_NAMES` 区分语义——前者「default_tools 条件注入、registry 没注册时自动消失」，后者「每次必有」。`is_builtin_tool` 把它也算作内置（用于工具菜单可见性判断）。新增 3 条回归测试：`conditional_tools_pass_through_dispatch_filter`（核心 A/B 翻转：filter 里没有 Task → registry.definitions 把 Task 滤掉；有了就放行）、`conditional_tool_names_includes_task`、`task_absent_when_no_subagent_definition`。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)：`all_filter` 里加上 `CONDITIONAL_TOOL_NAMES`；registry 没注册的名字会被 `definitions` 自然忽略，所以多列没副作用。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)：同步改另一份对称的 dispatch filter（compaction 回放路径）。
+- **影响范围**：agent_core dispatch 层 + Desktop chat 翻译层；不动协议、不动 storage、不动 UI。模型上行的 tools 列表多了一项 Task（仅当存在启用的 subagent 定义时）。
+- **验证**：
+  - 阶段 A 复现：`heb new --provider=mimo --workdir /tmp/p8-test6` + 输入「请用 Task 工具启动 echo-agent」→ `model_io.jsonl` 第一轮 tools 列表 12 个工具，**无 Task**；模型回复「当前环境中没有 Task 工具」。
+  - 阶段 B 验证：同一脚本重跑（workdir `/tmp/p8-test7`）→ tools 列表 13 个，**包含 Task**；模型调用 `Task(subagent_type=echo-agent, prompt=hello)`，事件流出现 `tool_start` + 子 agent 的 reasoning/text_delta/text_done 全部带 `subagent_call_id` 路由到父 tool call；两个 `run_finished` 都健康。
+  - `cargo test -p agent-core --lib`：377 通过 / 1 失败（pre-existing read.rs MAX_OUTPUT_BYTES，不属于本次任务）。
+  - `pnpm exec tsc --noEmit`：通过（顺手补 P7 收尾的两处类型问题：MessageBubble 缺 `useCallback` import、useStore `applyEventToSlot` 在 EngineEvent union 上访问 `subagent_call_id` 没做 narrowing）。
+- **留尾巴**：MCP server `codegraph` 在 daemon 启动时报 `No such file or directory` 警告（与 Task 无关，user 环境的 MCP 配置指向不存在的路径，不影响主路径）；用户 hook 脚本 `~/.hebbian/hooks/verify-*.sh` 同样不存在但不影响。这两条不是本次任务范围。

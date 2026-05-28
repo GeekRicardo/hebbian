@@ -225,8 +225,16 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "TodoWrite",
 ];
 
+/// 条件注入工具名：`default_tools` 仅在前置条件满足时把这些工具注册进 registry
+/// （例如 Task 仅在存在启用的 subagent 定义时注入）。dispatch 层把它们一律加进
+/// 工具白名单——registry 没有的名字会被 [`registry::ToolRegistry::definitions`]
+/// 自然忽略，所以这里多列不会带来副作用，但少列会让条件注入的工具发不到模型。
+pub const CONDITIONAL_TOOL_NAMES: &[&str] = &["Task"];
+
 pub fn is_builtin_tool(name: &str) -> bool {
-    name == ASK_TOOL_NAME || BUILTIN_TOOL_NAMES.contains(&name)
+    name == ASK_TOOL_NAME
+        || BUILTIN_TOOL_NAMES.contains(&name)
+        || CONDITIONAL_TOOL_NAMES.contains(&name)
 }
 
 /// 由 agent_loop 直接处理、不需要 Tool trait 实现的"虚拟工具"。
@@ -337,4 +345,93 @@ pub fn tool_manifest_with_mcp(config: &crate::mcp::config::McpConfig) -> Vec<Too
     let mut tools = tool_manifest();
     tools.extend(mcp::manifest(config));
     tools
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::registry::ToolRegistry;
+    use tempfile::TempDir;
+
+    fn make_registry_with_subagent(tmp: &TempDir) -> ToolRegistry {
+        let data_dir = tmp.path().to_path_buf();
+        let subagents_dir = data_dir.join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join("echo.md"),
+            "---\ndescription: \"test echo\"\n---\necho body",
+        )
+        .unwrap();
+
+        let workspace = crate::workspace::Workspace::new(tmp.path().to_path_buf(), vec![]);
+        let phase: crate::wakeup::PhaseChannel = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let shells = background::BgTaskRegistry::new();
+        let tools = default_tools(
+            workspace,
+            &[],
+            None,
+            phase,
+            shells,
+            Some(data_dir),
+            None,
+            None,
+            None,
+        );
+        ToolRegistry::new(tools)
+    }
+
+    #[test]
+    fn conditional_tools_pass_through_dispatch_filter() {
+        // 回归：dispatch 用 BUILTIN_TOOL_NAMES 当白名单时，没把条件注入工具放进去，
+        // 导致 default_tools 已注册的 Task 被 registry.definitions 过滤掉，
+        // 模型从未看到 Task。修复后必须保证 BUILTIN+CONDITIONAL 一起喂给 filter。
+        let tmp = TempDir::new().unwrap();
+        let registry = make_registry_with_subagent(&tmp);
+
+        let mut filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
+        filter.extend(CONDITIONAL_TOOL_NAMES.iter().map(|s| s.to_string()));
+
+        let names: Vec<String> = registry
+            .definitions(&filter)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+
+        assert!(
+            names.contains(&"Task".to_string()),
+            "Task 必须出现在 dispatch filter 后的工具定义里，实际：{names:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_tool_names_includes_task() {
+        // Task 走条件注入：必须在 CONDITIONAL_TOOL_NAMES 里，否则 dispatch 永远过滤掉它。
+        assert!(CONDITIONAL_TOOL_NAMES.contains(&"Task"));
+        assert!(!BUILTIN_TOOL_NAMES.contains(&"Task"));
+    }
+
+    #[test]
+    fn task_absent_when_no_subagent_definition() {
+        // 没有 subagent 定义时，default_tools 不应注册 Task（条件注入语义）。
+        let tmp = TempDir::new().unwrap();
+        let workspace = crate::workspace::Workspace::new(tmp.path().to_path_buf(), vec![]);
+        let phase: crate::wakeup::PhaseChannel = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let shells = background::BgTaskRegistry::new();
+        let tools = default_tools(
+            workspace,
+            &[],
+            None,
+            phase,
+            shells,
+            Some(tmp.path().to_path_buf()),
+            None,
+            None,
+            None,
+        );
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(
+            !names.contains(&"Task"),
+            "无 subagent 定义时不应注册 Task：{names:?}"
+        );
+    }
 }
