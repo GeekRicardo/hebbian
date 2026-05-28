@@ -2052,7 +2052,7 @@ export const MessageBubble = memo(function MessageBubble({
         </div>
         {!isUser && streaming && (
           <LoopingWebm
-            src={animations.assistantThinking}
+            src={animations.sendInterrupt}
             className="mt-2 h-8 w-8 rounded-full"
           />
         )}

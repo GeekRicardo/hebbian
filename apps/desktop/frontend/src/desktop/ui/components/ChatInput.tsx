@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import {
@@ -626,6 +627,16 @@ export function ChatInput({
     }
   }, [height, manual]);
 
+  // 窗口被快捷键唤起到前台时，后端会 emit 此事件，自动聚焦到 chat 输入框。
+  useEffect(() => {
+    const unlisten = listen("hebbian://focus-chat-input", () => {
+      textareaRef.current?.focus();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // streaming 时仍允许输入（Enter 入队 / Shift+Enter 立即入队队首），
   // 只有外部显式 disabled（如未配置 provider）时才禁用。
   const inputDisabled = !!disabled;
@@ -943,7 +954,7 @@ export function ChatInput({
                       <Plus className="w-4 h-4" />
                     ) : isStreaming ? (
                       <LoopingWebm
-                        src={animations.sendInterrupt}
+                        src={animations.assistantThinking}
                         className="h-7 w-7 rounded"
                       />
                     ) : sending ? (
