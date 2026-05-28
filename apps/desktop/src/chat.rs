@@ -253,6 +253,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             Some(args.session_id.clone()),
             Some(read_state_tracker),
             settings.general.shell.clone(),
+            settings.general.edit_backend,
             agent_core::storage::mcp::load(data_dir)
                 .with_cwd(workspace.workdir().to_path_buf()),
         )
@@ -1434,6 +1435,7 @@ pub async fn build_preview_payload(
             None,
             None,
             settings.general.shell.clone(),
+            settings.general.edit_backend,
             agent_core::storage::mcp::load(data_dir)
                 .with_cwd(workspace.workdir().to_path_buf()),
         )

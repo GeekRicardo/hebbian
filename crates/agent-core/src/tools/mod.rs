@@ -133,6 +133,7 @@ pub fn default_tools(
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
     shell: Option<String>,
+    edit_backend: crate::storage::settings::EditBackend,
 ) -> Vec<Box<dyn Tool>> {
     let mut skills = skill::load_skills(skill_dirs);
     // disabled 的 skill 不暴露给模型（架构 §6.1.3 用户级 UX）
@@ -163,19 +164,43 @@ pub fn default_tools(
         Box::new(bash_output::BashOutputTool::new(shells.clone())),
         Box::new(kill_shell::KillShellTool::new(shells.clone())),
         Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
-        Box::new(read::ReadTool::new(
-            data_dir,
-            session_id,
-            read_state_tracker.clone(),
-        )),
-        Box::new(edit::EditTool::new(workspace.clone(), read_state_tracker)),
-        Box::new(grep::GrepTool::new(workspace)),
+    ];
+
+    // Read 与 Edit 必须配套切换：hashline patch 里的行号/hash 基于 hashline Read 的输出
+    use crate::storage::settings::EditBackend;
+    match edit_backend {
+        EditBackend::StringReplace => {
+            tools.push(Box::new(read::ReadTool::new(
+                data_dir,
+                session_id,
+                read_state_tracker.clone(),
+            )));
+            tools.push(Box::new(edit::EditTool::new(
+                workspace.clone(),
+                read_state_tracker,
+            )));
+        }
+        EditBackend::Hashline => {
+            tools.push(Box::new(read_hashline::ReadHashlineTool::new(
+                data_dir,
+                session_id,
+                read_state_tracker.clone(),
+            )));
+            tools.push(Box::new(edit_hashline::EditHashlineTool::new(
+                workspace.clone(),
+                read_state_tracker,
+            )));
+        }
+    }
+
+    tools.extend([
+        Box::new(grep::GrepTool::new(workspace)) as Box<dyn Tool>,
         Box::new(skill::SkillTool::new(skills)),
         Box::new(todo_write::TodoWriteTool),
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
         Box::new(exit_plan_mode::ExitPlanModeTool),
-    ];
+    ]);
 
     // Task 工具仅在加载到至少一个启用的 subagent 定义时注入（架构 §13 决策）：
     // 没有定义时把工具暴露给模型只会污染上下文（模型调用必返回"找不到 subagent"错误）。
@@ -195,6 +220,7 @@ pub async fn default_tools_with_mcp(
     session_id: Option<String>,
     read_state_tracker: Option<Arc<ReadStateTracker>>,
     shell: Option<String>,
+    edit_backend: crate::storage::settings::EditBackend,
     mcp_config: crate::mcp::config::McpConfig,
 ) -> Vec<Box<dyn Tool>> {
     let mut tools = default_tools(
@@ -207,6 +233,7 @@ pub async fn default_tools_with_mcp(
         session_id,
         read_state_tracker,
         shell,
+        edit_backend,
     );
     tools.extend(mcp::discover_tools(&mcp_config).await);
     tools
@@ -378,6 +405,7 @@ mod tests {
             None,
             None,
             None,
+            crate::storage::settings::EditBackend::default(),
         );
         ToolRegistry::new(tools)
     }
@@ -429,6 +457,7 @@ mod tests {
             None,
             None,
             None,
+            crate::storage::settings::EditBackend::default(),
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(
