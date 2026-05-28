@@ -638,8 +638,10 @@ function RequestDetail({
 }) {
   const [showCarried, setShowCarried] = useState(false);
   const [systemOpen, setSystemOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [systemZoomed, setSystemZoomed] = useZoom();
 
+  const tools = entry.request?.tools ?? [];
   const newCount = (entry.request?.messages?.length ?? 0) - carriedOverCount;
 
   return (
@@ -679,6 +681,20 @@ function RequestDetail({
             </ZoomedModal>
           )}
         </>
+      ) : null}
+
+      {tools.length > 0 ? (
+        <CollapsibleBlock
+          open={toolsOpen}
+          onToggle={() => setToolsOpen((v) => !v)}
+          label="tool schema"
+          sublabel={`${tools.length} 个工具`}
+          rightExtras={<CopyButton payload={tools} label="复制" />}
+        >
+          <div className="px-3 py-2 bg-muted/30 max-h-[400px] overflow-auto rounded">
+            <PrettyJson value={tools} />
+          </div>
+        </CollapsibleBlock>
       ) : null}
 
       {/* messages */}
