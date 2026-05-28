@@ -80,7 +80,7 @@ impl SubagentRunner {
                     .map(Vec::as_slice),
             ),
         };
-        self.run_nested_inner(def, initial_transcript).await
+        self.run_nested_inner(def, initial_transcript, /*background*/ false).await
     }
 
     /// 后台模式：生成 task_id → 注册 BgSubagentTask → arm WakeupScheduler →
@@ -149,7 +149,13 @@ impl SubagentRunner {
                     parent_transcript_snapshot.as_deref().map(Vec::as_slice),
                 ),
             };
-            let success = runner.run_nested_inner(def, initial_transcript).await.is_ok();
+            // 后台模式：父 run 已 finish，父 sink 的 bounded channel 短时间就会满，
+            // 子事件大量丢失并刷 WARN（架构 §4.4.11.7）。子 run 的真实输出还会
+            // 经 BgTaskFinished wakeup 让父读到，且 model_io.jsonl 仍记录子模型 I/O。
+            let success = runner
+                .run_nested_inner(def, initial_transcript, /*background*/ true)
+                .await
+                .is_ok();
             bg_task.finish(success);
         });
 
@@ -157,10 +163,15 @@ impl SubagentRunner {
     }
 
     /// 实际跑一次 NestedRun（前台 / 后台 spawn 内部共用）。
+    ///
+    /// `background = true`：父 run 已 finish，子事件不再发回父 sink（父 channel 早已不再
+    /// 消费，发了也是 WARN 然后丢），改走 noop sink 静音——子模型 IO 仍由 model_io_dump 落盘，
+    /// 子 run 结束后通过 BgTaskFinished wakeup 唤起新父 run（架构 §4.4.11.7）。
     async fn run_nested_inner(
         &self,
         def: SubagentDefinition,
         initial_transcript: Transcript,
+        background: bool,
     ) -> Result<String, ModelError> {
         // 构造子 ToolRegistry（按 subagent.tools 白名单过滤 + 永远剔除 Task 自身）
         let child_registry = self.build_child_registry(&def);
@@ -168,13 +179,31 @@ impl SubagentRunner {
         // 子 RunState（独立 RunId / 独立 seq）+ EventSink 装饰器
         let child_run_id = RunId::new();
         let child_state = Arc::new(RunState::new(child_run_id.clone()));
-        let child_sink = self.wrap_sink_with_decorator();
+        let child_sink = if background {
+            // 后台：noop sink，避免往已死的父 channel 灌事件
+            Arc::new(|_event: protocol::Event| {}) as EventSink
+        } else {
+            self.wrap_sink_with_decorator()
+        };
 
         // 子 session id 与落盘目录（架构 §4.4.11.2）
         let child_session_id = prepare_child_session(
             self.ctx.parent_session_id.as_deref(),
             self.ctx.data_dir.as_deref(),
         );
+
+        // 子 model_io.jsonl 落盘（架构 §4.4.11.2）：与父子目录对称，给调试 / 审计用。
+        // 没这个落盘子 NestedRun 完全无痕迹，看不到「子模型实际收/发了什么」。
+        // 默认 on（与 surface 行为一致），HEBBIAN_DUMP_MODEL_IO=0 时关。
+        let model_io_dump = match (
+            self.ctx.data_dir.as_deref(),
+            child_session_id.as_deref(),
+        ) {
+            (Some(dd), Some(sid)) => {
+                crate::model_io_dump::open_for_session_if_enabled(dd, sid).await
+            }
+            _ => None,
+        };
 
         let mut transcript = initial_transcript;
         let agent = AgentRef::new(format!("subagent:{}", def.name));
@@ -200,7 +229,7 @@ impl SubagentRunner {
             state: child_state,
             agent,
             parent: Some(self.parent_run_id.clone()),
-            model_io_dump: None,
+            model_io_dump,
             pending_inputs: None,
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,

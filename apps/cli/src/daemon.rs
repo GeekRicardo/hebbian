@@ -60,6 +60,16 @@ pub struct DaemonArgs {
 
 // ─── 共享状态 ───────────────────────────────────────────────────────────────
 
+/// daemon 输入 channel 的载荷。
+///
+/// - `User`：用户通过 ipc 发来的一条文本，run_turn 需要先把它 append 到 session.jsonl 再开 run。
+/// - `Resume`：wakeup handler 触发——`<wakeup>` user message **已经**被 handler append 过，
+///   这里只需要开新 run 让模型读到它。否则会重复 append。
+enum TurnInput {
+    User(String),
+    Resume,
+}
+
 struct DaemonState {
     session_id: String,
     data_dir: PathBuf,
@@ -81,7 +91,7 @@ struct DaemonState {
     run_mode: Mutex<RunMode>,
 
     // 新 turn 输入通道
-    input_tx: mpsc::UnboundedSender<String>,
+    input_tx: mpsc::UnboundedSender<TurnInput>,
 
     permission_store: Option<Arc<PermissionStore>>,
 }
@@ -516,7 +526,7 @@ impl ModelClient for NamedModelClient {
 // ─── run_turn ──────────────────────────────────────────────────────────────
 
 /// 一次完整的用户输入 → agent run → assistant 持久化流程
-async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
+async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
     let data_dir = &state.data_dir;
     let session_id = &state.session_id;
 
@@ -525,19 +535,25 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
     // 折叠成 Assistant + Interrupted marker 落进 jsonl，再读最终视图。
     let prior = sessions::load_with_partial_recovery(data_dir, session_id)?;
 
-    // 持久化 user message
-    let user_msg = Message {
-        id: sessions::new_id(),
-        role: Role::User,
-        content: user_text.clone(),
-        attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: Utc::now().timestamp_millis(),
-        meta: None,
+    // 用户输入需要先 append 一条 user message；wakeup resume 路径上 message
+    // 已被 wakeup handler 即写即落，跳过避免重复。
+    match &input {
+        TurnInput::User(user_text) => {
+            let user_msg = Message {
+                id: sessions::new_id(),
+                role: Role::User,
+                content: user_text.clone(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: Utc::now().timestamp_millis(),
+                meta: None,
                 subagent_call_id: None,
             };
-    sessions::append_message(data_dir, session_id, user_msg)?;
+            sessions::append_message(data_dir, session_id, user_msg)?;
+        }
+        TurnInput::Resume => {}
+    }
 
     // 构建 model client
     let providers_file = providers::load(data_dir)?;
@@ -677,7 +693,10 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
             edits_worktree: Some(edits_worktree),
         },
     );
-    core_session.append_user(user_text, Vec::new());
+    if let TurnInput::User(user_text) = &input {
+        core_session.append_user(user_text.clone(), Vec::new());
+    }
+    // Resume 路径上 wakeup user message 已在 jsonl 里，prior 已包含；不再 in-memory 重复 append。
 
     // 运行时控制点
     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -753,7 +772,7 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 }
             } else {
                 // 发给输入 channel，启动新 run
-                if state.input_tx.send(text).is_ok() {
+                if state.input_tx.send(TurnInput::User(text)).is_ok() {
                     IpcResponse::ok()
                 } else {
                     IpcResponse::err("daemon 输入通道已关闭")
@@ -954,7 +973,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     let listener = UnixListener::bind(&sock_path)?;
 
     // ── 输入通道 ──
-    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<String>();
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<TurnInput>();
 
     let state = Arc::new(DaemonState {
         session_id: session_id.clone(),
@@ -1012,15 +1031,29 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
                 tracing::warn!(error = %e, "wakeup: append_message failed");
                 return;
             }
-            // 2) 推 in-memory 队列：active run 期间 agent_loop 在 ModelStep 之前 drain；
-            //    无 active run 时静默——消息已落盘，下次 input 启 run 时 rebuild 看见。
-            if let Some(slot) = handler_state.pending_inputs.lock().unwrap().as_ref() {
-                slot.lock()
-                    .unwrap()
-                    .push(common::runtime::PendingUserInput {
-                        content: wakeup_xml,
-                        attachments: Vec::new(),
-                    });
+            // 2) 路由：active run 期间 push 到 PendingInputs，agent_loop 在 ModelStep
+            //    之前 drain；无 active run 时投 input_tx::Resume 触发新 run——
+            //    message 已落盘，run_turn 跳过 append，让模型读到 wakeup 并响应。
+            //    没这条 Resume，后台 Task(run_in_background=true) 等的 BgTaskFinished
+            //    通知只会静默落盘，模型再也不被唤起。
+            let active_inject = handler_state
+                .pending_inputs
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|slot| {
+                    slot.lock()
+                        .unwrap()
+                        .push(common::runtime::PendingUserInput {
+                            content: wakeup_xml.clone(),
+                            attachments: Vec::new(),
+                        });
+                })
+                .is_some();
+            if !active_inject {
+                if let Err(e) = handler_state.input_tx.send(TurnInput::Resume) {
+                    tracing::warn!(error = %e, "wakeup: input_tx send Resume failed");
+                }
             }
         }));
     }
@@ -1043,8 +1076,8 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     });
 
     // ── 主循环：依次处理每条输入 ──
-    while let Some(text) = input_rx.recv().await {
-        if let Err(e) = run_turn(state.clone(), text).await {
+    while let Some(input) = input_rx.recv().await {
+        if let Err(e) = run_turn(state.clone(), input).await {
             state.emit(&DaemonEvent::Error {
                 message: e.to_string(),
             });

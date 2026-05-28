@@ -5333,3 +5333,27 @@
   - **多文件 patch 中途失败不回滚**：hashline 后端首版接受这个风险——一个 patch 含 N 个 file section 时，前 K 个写成功、第 K+1 个失败，前 K 个不会回滚；模型靠错误信息自纠
   - **未做的迁移**：现有会话 transcript 里的历史 Read/Edit 工具结果保持原格式（不重新渲染），切换后端只影响后续工具调用——这是刻意的，避免压缩缓存失效
   - 前端 select 文案是「精确替换 / 行号 patch」给用户视角，不暴露 `string-replace` / `hashline` 内部枚举值
+
+### 2026-05-28 — 修复后台 Task 三连 bug：wakeup 不唤起 + 子 transcript 不落盘 + 父 channel 洪爆
+
+- **Why**：上一条 changelog 留尾巴里点名的 T3 三个真实缺陷，逐项修：
+  - **Bug3**：`Task(run_in_background=true)` 完成后 `BgTaskFinished` 事件投递了、wakeup XML 也成功 append 到 session.jsonl，**但没有自动 spawn 新 run** —— 模型再也不会被唤起读到通知，后台模式在用户视角下完全静默（功能性可用性零）。
+  - **Bug2**：子 NestedRun 的 transcript / model IO 完全无痕迹——agent_loop 不持有 Recorder（session.jsonl 由 surface 层观察事件流写），`SubagentRunner` 又在 LoopParams 里硬编 `model_io_dump: None`，子 session 目录建了但里面所有 jsonl 都是空的，无法审计 / 调试。
+  - **Bug1**：后台子 agent 在 `tokio::spawn` 里持有父 sink 的 clone，父 run finish 后 surface 那侧不再 drain，bounded(1024) channel 短时间就满，刷大量 `run event channel closed while sending critical event` WARN，子流式事件大量丢失。
+- **根因**:
+  - Bug3：daemon 的 wakeup `resume_handler` 当时设计是「append jsonl + 推 PendingInputs(active run 时)」——后者隐含「无 active run 时静默等下次 input」。这对 Bash 后台 task 成立（父 run 通常同步等），对 Task 后台模式不成立（核心 use case 就是父先 finish，等子 task notification）。
+  - Bug2：子 LoopParams 完全没接 model_io_dump，调用方 [`subagent/runner.rs:203`](../crates/agent-core/src/subagent/runner.rs#L203) 硬编 None。
+  - Bug1：前台子 agent 走 wrap_sink_with_decorator 把子事件路由到父 sink 让 UI 看到嵌套进度——这语义对前台对，但后台父 sink 已死。
+- **改动**:
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)：把 `input_tx` 从 `mpsc<String>` 改成 `mpsc<TurnInput>`，`TurnInput::User(text)` / `TurnInput::Resume` 二值——前者走 ipc 用户输入路径（run_turn 负责 append message），后者由 wakeup handler 投递（message 已被 handler 即写即落，run_turn 跳过 append 避免重复）。wakeup handler 无 active inject 时投 `TurnInput::Resume` 触发新 run；有 active inject 时维持旧行为只推 PendingInputs。
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs)：`run_nested_inner` 加 `background: bool` 参数；前台路径维持 wrap_sink_with_decorator（UI 显示嵌套进度），后台路径用 noop sink 静音子事件，避免往已死的父 channel 灌东西。同时拿到 `child_session_id` 后调 `model_io_dump::open_for_session_if_enabled(data_dir, child_sid)` 注入子 LoopParams，子模型 I/O 落到 `<data_dir>/sessions/<parent_sid>/subagents/<child_sid>/model_io.jsonl`。
+- **影响范围**：CLI daemon（input channel 协议从 String 变 TurnInput enum，ipc 公共接口不变）+ agent-core SubagentRunner（私有方法签名加参数）。前台 Task 行为不变；后台 Task 由完全静默变成端到端闭环。
+- **验证（同一复现脚本，heb CLI + auto-mode + echo-agent）**:
+  - **阶段 A 复现**：`Task(run_in_background=true)` 后等 30s，事件流只看到「task_id 已返回」，没有任何后续 run；session.jsonl 4 行（最后一条是模型回复「等待系统通知」），永远没有 wakeup 通知；子目录所有 jsonl 都是 0 行；`channel closed` WARN >10 条。
+  - **阶段 B 验证**：同一脚本重跑，事件流出现两次 `run_started`：第一次跑完父说「已启动等待通知」，约 5 秒后**第二次 run 自动起来**，模型读到 wakeup 后回复「后台子 agent 已完成，exit code 0，耗时约 4.7 秒」；session.jsonl 4 条（user prompt → wakeup user(meta=bg_task_finished) → assistant 回复）；子 model_io.jsonl 1 条（子模型实际请求/响应）；`channel closed` WARN **0 条**。
+  - `cargo test -p agent-core --lib`：413 通过 / 1 失败（pre-existing read.rs MAX_OUTPUT_BYTES，与本次任务无关）。
+- **留尾巴**:
+  - **子 session.jsonl 仍然空**：本次只补了 model_io.jsonl（够调试用），session.jsonl 是 surface 概念，需要让 SubagentRunner 也走 Recorder 路径或聚合事件流转 Message。目前不影响 UI / 功能。
+  - **前台 Task 模式仍踩 channel race**：理论上前台子 agent 跑得很快 + 父 sink 健康，没踩到；如果未来子 agent 长跑 + UI 卡住消费就会暴露，到时再补统一的"sink 是否可写"判定。
+  - 父 run 1 的 assistant 响应「子 agent 已启动等待通知」未落盘到 session.jsonl（model_io 有记录、事件流也发了）——疑似 partial sidecar 没 fold，与本次 task 解耦的旁支问题，留单独 issue。
+
