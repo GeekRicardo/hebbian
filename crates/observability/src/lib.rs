@@ -75,7 +75,7 @@ pub fn init(default_filter: &str) {
             tracing_subscriber::fmt::layer()
                 .with_target(true)
                 .with_writer(non_blocking)
-                .with_ansi(false),
+                .with_ansi(true),
         )
         .with(BroadcastLayer)
         .try_init();

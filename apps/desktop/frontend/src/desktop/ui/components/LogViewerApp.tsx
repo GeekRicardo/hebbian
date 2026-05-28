@@ -14,6 +14,15 @@ const LEVEL_ANSI: Record<string, string> = {
   TRACE: "\x1b[90m",
 };
 
+function colorizeLogLine(line: string): string {
+  return line.replace(/\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/, (level) => `${LEVEL_ANSI[level]}${level}\x1b[0m`);
+}
+
+function formatLiveLogLine(line: { ts: string; level: string; target: string; message: string }): string {
+  const color = LEVEL_ANSI[line.level] ?? "\x1b[0m";
+  return `${line.ts} ${color}[${line.level}]\x1b[0m \x1b[2m${line.target}\x1b[0m ${line.message}`;
+}
+
 /** Strip ANSI escape sequences for plain-text search. */
 function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
@@ -181,8 +190,9 @@ export default function LogViewerApp() {
         const text = await invoke<string>("read_log_file");
         if (active && text.trim()) {
           const lines = text.split("\n");
-          rawLinesRef.current.push(...lines);
-          term.write(text);
+          const formattedLines = lines.map(colorizeLogLine);
+          rawLinesRef.current.push(...formattedLines);
+          term.write(formattedLines.join("\r\n"));
           term.scrollToBottom();
         }
       } catch {}
@@ -194,8 +204,7 @@ export default function LogViewerApp() {
       }>();
       channel.onmessage = (line) => {
         if (!active) return;
-        const c = LEVEL_ANSI[line.level] ?? "\x1b[0m";
-        const formatted = `${line.ts} ${c}[${line.level}]\x1b[0m \x1b[2m${line.target}\x1b[0m ${line.message}`;
+        const formatted = formatLiveLogLine(line);
         rawLinesRef.current.push(formatted);
         term.write(formatted + "\r\n");
         term.scrollToBottom();
