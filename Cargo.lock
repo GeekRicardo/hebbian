@@ -15,6 +15,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "crc32fast",
  "dirs 5.0.1",
  "fs2",
  "futures-util",
@@ -2680,6 +2681,7 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]

@@ -54,24 +54,39 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                 .header("anthropic-version", "2023-06-01")
                 .header(
                     "anthropic-beta",
-                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14",
+                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
                 )
-                .header("user-agent", "claude-cli/2.1.22 (external, cli)")
+                .header("user-agent", "claude-cli/2.1.150 (external, cli)")
                 .header("x-app", "cli")
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-stainless-lang", "js")
-                .header("x-stainless-package-version", "0.70.0")
-                .header("x-stainless-os", "Linux")
+                .header("x-stainless-package-version", "0.94.0")
+                .header("x-stainless-os", "MacOS")
                 .header("x-stainless-arch", "arm64")
                 .header("x-stainless-runtime", "node")
-                .header("x-stainless-runtime-version", "v24.13.0")
+                .header("x-stainless-runtime-version", "v24.3.0")
                 .header("x-stainless-retry-count", "0")
-                .header("x-stainless-timeout", "600");
+                .header("x-stainless-timeout", "3000");
         }
         (ProviderKind::Anthropic, _) => {
             req = req
                 .header("x-api-key", &provider.api_key)
-                .header("anthropic-version", "2023-06-01");
+                .header("anthropic-version", "2023-06-01")
+                .header(
+                    "anthropic-beta",
+                    "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
+                )
+                .header("user-agent", "claude-cli/2.1.150 (external, cli)")
+                .header("x-app", "cli")
+                .header("anthropic-dangerous-direct-browser-access", "true")
+                .header("x-stainless-lang", "js")
+                .header("x-stainless-package-version", "0.94.0")
+                .header("x-stainless-os", "MacOS")
+                .header("x-stainless-arch", "arm64")
+                .header("x-stainless-runtime", "node")
+                .header("x-stainless-runtime-version", "v24.3.0")
+                .header("x-stainless-retry-count", "0")
+                .header("x-stainless-timeout", "3000");
         }
         (ProviderKind::Gemini, AuthMode::OauthGeminiCli) => {
             req = req

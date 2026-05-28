@@ -64,6 +64,12 @@ pub struct Provider {
     /// 配合 `title_gen_enabled` 的具体模型 id（必须在 `models` 列表里）。
     #[serde(default)]
     pub title_gen_model: Option<String>,
+    /// 是否在请求体里注入 Claude Code 客户端特征（banner / billing header /
+    /// metadata.user_id / context_management），让请求伪装成 Claude Code CLI 流量。
+    /// 默认 false。与 auth_mode 独立——OAuth 模式自动注入，此开关让 API Key
+    /// 模式也能注入。
+    #[serde(default)]
+    pub claude_code_compat: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

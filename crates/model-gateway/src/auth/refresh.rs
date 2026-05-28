@@ -130,6 +130,7 @@ mod tests {
             default_model: None,
             title_gen_enabled: false,
             title_gen_model: None,
+            claude_code_compat: false,
         }
     }
 

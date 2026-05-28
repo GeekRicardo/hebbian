@@ -11,6 +11,9 @@ use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 
 /// Claude Code OAuth token 必须看到这一行 system 才会被服务端识别为合法 CLI 流量。
 const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_CODE_AGENT_DESC: &str =
+    "\nYou are an interactive agent that helps users with software engineering tasks.";
+const CLAUDE_CODE_BILLING_PREFIX: &str = "x-anthropic-billing-header: cc_version=2.1.150.474; cc_entrypoint=cli; cch=bb1ee;";
 
 // DeepSeek v4 走 Anthropic Messages 端点时的 thinking 预算下限（与 protocols/openai.rs
 // 同源；server 拒掉「thinking 启用 & max_tokens 不足」的请求）。
@@ -148,6 +151,12 @@ pub fn build_body(
         "stream": stream,
     });
 
+    // Claude Code 兼容模式：代理只接受 adaptive thinking，不接受 enabled + budget_tokens
+    if claude_code_oauth {
+        thinking_block = Some(json!({ "type": "adaptive" }));
+        output_config = Some(json!({ "effort": "high" }));
+    }
+
     if let Some(t) = thinking_block {
         body["thinking"] = t;
     }
@@ -167,6 +176,26 @@ pub fn build_body(
     body["system"] = build_system(req.system.as_deref(), claude_code_oauth);
     if body["system"].is_null() {
         body.as_object_mut().unwrap().remove("system");
+    }
+
+    // Claude Code 客户端特征：metadata.user_id + context_management
+    if claude_code_oauth {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        "hebbian".hash(&mut h);
+        let device_id = format!("{:016x}", h.finish());
+        let session_id = uuid::Uuid::new_v4();
+        body["metadata"] = json!({
+            "user_id": serde_json::to_string(&serde_json::json!({
+                "device_id": device_id,
+                "account_uuid": "",
+                "session_id": session_id.to_string()
+            })).unwrap()
+        });
+        body["context_management"] = json!({
+            "edits": [{ "type": "clear_thinking_20251015", "keep": "all" }]
+        });
     }
 
     if !req.tools.is_empty() {
@@ -256,13 +285,25 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
         return user_system.map(|s| json!(s)).unwrap_or(Value::Null);
     }
 
+    let billing = json!({ "type": "text", "text": CLAUDE_CODE_BILLING_PREFIX });
     let banner = json!({ "type": "text", "text": CLAUDE_CODE_BANNER });
     match user_system {
-        None => json!([banner]),
-        Some(s) if s == CLAUDE_CODE_BANNER => json!([banner]),
+        Some(s) if s == CLAUDE_CODE_BANNER => {
+            json!([
+                billing,
+                banner,
+                { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
+            ])
+        }
         Some(s) => json!([
+            billing,
             banner,
-            { "type": "text", "text": format!("{CLAUDE_CODE_BANNER}\n\n{s}") }
+            { "type": "text", "text": format!("{CLAUDE_CODE_AGENT_DESC}\n\n{s}") }
+        ]),
+        None => json!([
+            billing,
+            banner,
+            { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
         ]),
     }
 }
@@ -642,11 +683,12 @@ mod tests {
         let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        assert_eq!(system.len(), 2);
-        assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system.len(), 3);
+        assert_eq!(system[0]["text"], CLAUDE_CODE_BILLING_PREFIX);
+        assert_eq!(system[1]["text"], CLAUDE_CODE_BANNER);
         assert_eq!(
-            system[1]["text"],
-            format!("{CLAUDE_CODE_BANNER}\n\nBe terse.")
+            system[2]["text"],
+            format!("{CLAUDE_CODE_AGENT_DESC}\n\nBe terse.")
         );
     }
 
@@ -664,8 +706,10 @@ mod tests {
         let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        assert_eq!(system.len(), 1);
-        assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system.len(), 3);
+        assert_eq!(system[0]["text"], CLAUDE_CODE_BILLING_PREFIX);
+        assert_eq!(system[1]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system[2]["text"], CLAUDE_CODE_AGENT_DESC);
     }
 
     #[test]

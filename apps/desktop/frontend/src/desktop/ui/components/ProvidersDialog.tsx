@@ -189,6 +189,7 @@ export function ProvidersDialog() {
       default_model: null,
       title_gen_enabled: false,
       title_gen_model: null,
+      claude_code_compat: false,
       ...overrides,
     };
   }
@@ -878,6 +879,62 @@ export function ProvidersDialog() {
                       </Select>
                     )}
                   </div>
+
+                  {current.kind === "anthropic" && (
+                    <div className="space-y-1.5">
+                      <label className="inline-flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={current.claude_code_compat === true}
+                          onChange={(e) =>
+                            updateCurrent({ claude_code_compat: e.target.checked })
+                          }
+                        />
+                        <span>Claude Code 兼容模式</span>
+                        <span className="text-[11px] text-muted-foreground">
+                          注入 Claude Code 客户端特征，用于兼容需要身份校验的代理
+                        </span>
+                      </label>
+                      {current.claude_code_compat && (
+                        <div className="rounded-md border border-border bg-accent/30 p-3 text-[11px] font-mono space-y-0.5 text-muted-foreground max-h-48 overflow-y-auto">
+                          <div className="text-foreground font-medium text-xs mb-1.5 font-sans">
+                            注入的 HTTP Header
+                          </div>
+                          {[
+                            ["user-agent", "claude-cli/2.1.150 (external, cli)"],
+                            ["x-app", "cli"],
+                            ["anthropic-version", "2023-06-01"],
+                            ["anthropic-dangerous-direct-browser-access", "true"],
+                            ["anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,…"],
+                            ["x-stainless-lang", "js"],
+                            ["x-stainless-os", "MacOS"],
+                            ["x-stainless-arch", "arm64"],
+                            ["x-stainless-runtime", "node"],
+                          ].map(([k, v]) => (
+                            <div key={k} className="flex gap-2">
+                              <span className="text-foreground shrink-0">{k}:</span>
+                              <span className="truncate">{v}</span>
+                            </div>
+                          ))}
+                          <div className="text-foreground font-medium text-xs mt-2 mb-1.5 font-sans">
+                            注入的请求体字段
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="text-foreground shrink-0">system:</span>
+                            <span>[billing-header, Claude Code banner, agent desc]</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="text-foreground shrink-0">metadata.user_id:</span>
+                            <span>{"{device_id, session_id}"}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="text-foreground shrink-0">context_management:</span>
+                            <span>{"{edits: [clear_thinking]}"}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="pt-2 flex items-center justify-between border-t border-border">
                     <label className="inline-flex items-center gap-2 text-sm">

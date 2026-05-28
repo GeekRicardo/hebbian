@@ -112,7 +112,7 @@ impl AnthropicClient {
     }
 
     fn is_claude_code_oauth(&self) -> bool {
-        matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode)
+        matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode) || self.provider.claude_code_compat
     }
 }
 
