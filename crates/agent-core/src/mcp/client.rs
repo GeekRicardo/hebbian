@@ -188,6 +188,9 @@ where
     for (k, v) in &server.env {
         cmd.env(k, v);
     }
+    if let Some(path) = crate::shell_env::resolve_shell_path(None).await {
+        cmd.env("PATH", path);
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| AppError::msg(format!("MCP server {} 启动失败：{e}", server.name)))?;

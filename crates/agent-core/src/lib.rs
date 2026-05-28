@@ -18,6 +18,7 @@ pub mod run_mode;
 pub mod run_state;
 pub mod session;
 pub mod session_titler;
+pub mod shell_env;
 pub mod storage;
 pub mod subagent;
 pub mod system_prompt;

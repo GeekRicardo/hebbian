@@ -11,7 +11,6 @@
 //!
 //! [`safe_commands`]: super::safe_commands
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -19,17 +18,16 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{AppError, AppResult};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::process::Command;
 
-use super::background::{BackgroundShells, READ_CHUNK_BYTES, ShellState};
+use super::background::{BackgroundShells, ShellState, READ_CHUNK_BYTES};
 use super::{Tool, ToolCtx};
 use crate::workspace::Workspace;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_TIMEOUT_SECS: u64 = 600;
 const MAX_OUTPUT_BYTES: usize = 30_000;
-const SHELL_PATH_TIMEOUT_SECS: u64 = 10;
 
 pub struct BashTool {
     workspace: Arc<Workspace>,
@@ -130,7 +128,7 @@ impl Tool for BashTool {
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .current_dir(&cwd);
-        if let Some(path) = resolve_shell_path(self.shell.as_deref()).await {
+        if let Some(path) = crate::shell_env::resolve_shell_path(self.shell.as_deref()).await {
             cmd.env("PATH", path);
         }
 
@@ -155,7 +153,7 @@ impl Tool for BashTool {
         if background {
             // 自动 arm 通知（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed will notify"）：
             // task 进入终态时 WakeupScheduler 投递 BgTaskFinished 事件，surface 据此
-            // 把 task-notification 注入下一轮 user message——不要求模型显式调 WaitForTask。
+            // 把 task-notification 注入下一轮 user message。
             arm_auto_notification(&ctx, &shell.task_id);
             // 极简一行：task_id 是模型下一步唯一需要的信息。
             // BashOutput / KillShell 的用法 / 自动通知机制都在工具描述里讲一次就够，
@@ -325,43 +323,6 @@ fn truncate_bytes(s: &str, limit: usize) -> String {
     format!("{}\n…[已截断，共 {} 字节]", &s[..end], s.len())
 }
 
-async fn resolve_shell_path(shell: Option<&str>) -> Option<OsString> {
-    let shell = shell
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| std::env::var("SHELL").ok())?;
-    let marker = format!("HEBBIAN_PATH_{}", uuid::Uuid::new_v4().simple());
-    let script = format!(
-        "printf '{marker}'; command printenv PATH; printf '{marker}'",
-        marker = marker
-    );
-    let output = tokio::time::timeout(
-        Duration::from_secs(SHELL_PATH_TIMEOUT_SECS),
-        Command::new(&shell)
-            .arg("-lic")
-            .arg(&script)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let (_, rest) = stdout.split_once(&marker)?;
-    let (path, _) = rest.split_once(&marker)?;
-    let path = path.trim();
-    if path.contains(':') || !path.is_empty() {
-        Some(OsString::from(path))
-    } else {
-        None
-    }
-}
 
 #[cfg(test)]
 mod tests {
