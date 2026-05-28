@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -29,6 +30,10 @@ pub struct McpServerConfig {
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub disabled: bool,
+    /// stdio 子进程的工作目录。由 surface 在拿到 enabled_servers 后注入，
+    /// 通常是当前 session 的 workdir；落盘配置不带这个字段。
+    #[serde(skip)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]
@@ -118,6 +123,15 @@ impl McpConfig {
             .filter(|server| !server.disabled)
             .cloned()
             .collect()
+    }
+
+    /// 给所有 server（含 disabled，便于设置页一并展示）注入 stdio 子进程的工作目录。
+    /// surface 在每次 session 起跑时调用一次：HTTP/SSE server 也带上无害——transport 决定是否真用。
+    pub fn with_cwd(mut self, cwd: PathBuf) -> Self {
+        for server in self.mcp_servers.values_mut() {
+            server.cwd = Some(cwd.clone());
+        }
+        self
     }
 }
 

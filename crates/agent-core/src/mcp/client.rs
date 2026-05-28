@@ -185,6 +185,13 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // stdio MCP server 默认继承 surface 进程的 cwd（Desktop / heb / hebweb 启动目录），
+    // 这对依赖 cwd 定位项目的 server（codegraph 找 .codegraph/、filesystem 处理相对路径等）
+    // 是错的。surface 在拿到 enabled_servers 后会把当前 session 的 workdir 注入到
+    // McpServerConfig.cwd，这里透传给子进程。
+    if let Some(cwd) = &server.cwd {
+        cmd.current_dir(cwd);
+    }
     for (k, v) in &server.env {
         cmd.env(k, v);
     }
