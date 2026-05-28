@@ -24,7 +24,7 @@ use crate::read_state::ReadStateTracker;
 
 const DEFAULT_LIMIT: usize = 2_000;
 const MAX_LINE_LENGTH: usize = 2_000;
-const MAX_OUTPUT_BYTES: usize = 6_000;
+const MAX_OUTPUT_BYTES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
 pub struct ReadTool {

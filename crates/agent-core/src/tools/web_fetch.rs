@@ -128,7 +128,7 @@ fn normalize_fetch_url(url: &str) -> AppResult<NormalizedFetchUrl> {
         scheme => {
             return Err(AppError::msg(format!(
                 "web_fetch: 不支持的 URL 协议 {scheme}"
-            )))
+            )));
         }
     }
 
