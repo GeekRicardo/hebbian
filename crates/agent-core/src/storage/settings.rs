@@ -38,6 +38,11 @@ pub struct GeneralSettings {
     /// `~/.hebbian/logs/dispatch-YYYY-MM-DD.log`，按天 rotate，保留 30 天。
     #[serde(default)]
     pub log_enabled: bool,
+    /// Edit 工具后端选择。`StringReplace`（默认）= 现有 old_string/new_string 精确替换；
+    /// `Hashline` = oh-my-pi 风格的 ¶path#HASH + 行号 patch 格式（实验性）。
+    /// Read 与 Edit 强耦合，两者一起切换。
+    #[serde(default)]
+    pub edit_backend: EditBackend,
 }
 
 impl Default for GeneralSettings {
@@ -47,8 +52,20 @@ impl Default for GeneralSettings {
             show_grep_search_path: default_show_grep_search_path(),
             shell: default_shell(),
             log_enabled: false,
+            edit_backend: EditBackend::default(),
         }
     }
+}
+
+/// Edit 工具后端。Read 工具会跟随同一选项切换格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditBackend {
+    /// 现有实现：old_string / new_string 精确字符串替换。
+    #[default]
+    StringReplace,
+    /// Hashline 实验后端：¶path#HASH 文件头 + 1-based 行号 patch。
+    Hashline,
 }
 
 fn default_show_grep_search_path() -> bool {
@@ -285,6 +302,35 @@ mod tests {
             s.conversation.global_rules,
             vec![home.join(".claude/CLAUDE.md")]
         );
+    }
+
+    #[test]
+    fn edit_backend_defaults_to_string_replace() {
+        let settings = Settings::default();
+        assert_eq!(settings.general.edit_backend, EditBackend::StringReplace);
+    }
+
+    #[test]
+    fn edit_backend_round_trip_json() {
+        let json = r#"{"general":{"edit_backend":"hashline"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.general.edit_backend, EditBackend::Hashline);
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(
+            out.contains(r#""edit_backend":"hashline""#),
+            "serialize must use kebab-case: {}",
+            out,
+        );
+    }
+
+    /// 旧 settings.json 没有 edit_backend 字段时必须自动用默认值，
+    /// 不能因为新加字段就让老用户的设置炸掉。
+    #[test]
+    fn edit_backend_missing_uses_default() {
+        let json = r#"{"general":{"launch_at_login":true}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.general.edit_backend, EditBackend::StringReplace);
+        assert!(s.general.launch_at_login);
     }
 
     #[test]
