@@ -36,8 +36,6 @@ import {
   Minimize2,
   ClipboardCheck,
   Paperclip,
-  BellRing,
-  AlarmClock,
 } from "lucide-react";
 import type {
   EditEntry,
@@ -777,103 +775,6 @@ function ArtifactBadge({ path }: { path: string }) {
   );
 }
 
-/** 架构 §4.12.5：wakeup XML 解析结果。`kind` 决定渲染哪个变体。 */
-interface WakeupInfo {
-  kind: "bg_task_finished" | "cron_fired" | "manual" | string;
-  attrs: Record<string, string>;
-  body: string;
-}
-
-/**
- * 识别由 surface 自动注入的 wakeup user message。要求：
- * - trim 后以 `<wakeup ` 开头
- * - 包含 `</wakeup>` 结尾
- *
- * 解析 `<wakeup key="val" ...>BODY</wakeup>` 形态——`wakeup_xml()` 在 Rust 端
- * 不会写嵌套 XML，所以一次正则解析即可。失败时返回 null（按普通 user 消息渲染）。
- */
-function parseWakeupMessage(content: string): WakeupInfo | null {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith("<wakeup")) return null;
-  const endIdx = trimmed.lastIndexOf("</wakeup>");
-  if (endIdx < 0) return null;
-  const openEnd = trimmed.indexOf(">");
-  if (openEnd < 0 || openEnd > endIdx) return null;
-  const headStr = trimmed.slice("<wakeup".length, openEnd).trim();
-  const body = trimmed.slice(openEnd + 1, endIdx).trim();
-  const attrs: Record<string, string> = {};
-  const attrRe = /(\w+)="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = attrRe.exec(headStr)) !== null) {
-    attrs[m[1]] = m[2];
-  }
-  const kind = attrs.kind ?? "manual";
-  return { kind, attrs, body };
-}
-
-function WakeupNotice({ content, info }: { content: string; info: WakeupInfo }) {
-  const [expanded, setExpanded] = useState(false);
-  const { kind, attrs, body } = info;
-  const Icon = kind === "cron_fired" ? AlarmClock : BellRing;
-  const headline = (() => {
-    if (kind === "bg_task_finished") {
-      const exit = attrs.exit_code != null ? `exit ${attrs.exit_code}` : "结束";
-      const ms = attrs.duration_ms ? `（${Math.round(Number(attrs.duration_ms) / 1000)}s）` : "";
-      return `后台任务 ${attrs.task_id ?? "?"} 完成 · ${exit}${ms}`;
-    }
-    if (kind === "cron_fired") {
-      return `定时唤醒：${attrs.original_reason ?? "(无说明)"}`;
-    }
-    return "Run 已唤醒";
-  })();
-  const truncatedBody = body.length > 240 && !expanded ? body.slice(0, 240) + "…" : body;
-  async function copyAll() {
-    try {
-      await navigator.clipboard.writeText(content);
-      toast.success("已复制 wakeup 原文");
-    } catch {
-      toast.error("复制失败");
-    }
-  }
-  return (
-    <div className="flex justify-center px-6 py-2">
-      <div className="w-full max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px]">
-        <div className="flex items-start gap-2">
-          <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium text-amber-700 dark:text-amber-300">{headline}</div>
-            {body && (
-              <div className="mt-1 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/80">
-                {truncatedBody}
-              </div>
-            )}
-          </div>
-          <div className="shrink-0 flex items-center gap-1">
-            {body.length > 240 && (
-              <button
-                type="button"
-                onClick={() => setExpanded((e) => !e)}
-                className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
-                title={expanded ? "收起" : "展开"}
-              >
-                {expanded ? "收起" : "展开"}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={copyAll}
-              className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-amber-500/10 hover:text-foreground"
-              title="复制 wakeup 原文"
-            >
-              复制
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function WriteHeader({ call, label = "write" }: { call: ToolCallItem; label?: string }) {
   const args = callArgs(call);
   const path = argString(args, "file_path") || "file";
@@ -1545,7 +1446,7 @@ function ToolCallTimeline({
                   type="button"
                   onClick={() => onToggle(call.key)}
                   className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(40px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
                     active && "border-b border-border bg-muted/30"
                   )}
                 >
@@ -1571,8 +1472,11 @@ function ToolCallTimeline({
                         <span className="whitespace-nowrap text-[12px] font-semibold">
                           Read
                         </span>
-                        <span className="min-w-0 truncate font-mono text-[12px] text-foreground">
-                          {displayWithRange}
+                        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
+                          <span className="shrink-0">读取文件</span>
+                          <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
+                            {displayWithRange}
+                          </code>
                         </span>
                       </>
                     );
@@ -1933,13 +1837,6 @@ export const MessageBubble = memo(function MessageBubble({
 
   const isUser = message.role === "user";
 
-  // 架构 §4.12.5：wakeup XML 是 surface 自动注入的 user message，UI 要把它
-  // 单独渲染为系统通知样式，避免和用户真实发言混淆。
-  const wakeup = isUser ? parseWakeupMessage(message.content) : null;
-  if (wakeup) {
-    return <WakeupNotice content={message.content} info={wakeup} />;
-  }
-
   const assistantParts = buildAssistantRenderParts(
     message,
     streamingParts,
@@ -2137,12 +2034,6 @@ export const MessageBubble = memo(function MessageBubble({
           )}
           title={!isUser && prompt ? prompt.name : undefined}
         />
-        {!isUser && streaming && (
-          <LoopingWebm
-            src={animations.assistantThinking}
-            className="h-8 w-8 rounded-full"
-          />
-        )}
       </div>
       <div className={cn("flex-1 min-w-0", canToggleRawText && "pr-8")}>
         <div className="flex items-center gap-2 mb-1.5 text-xs">
@@ -2159,6 +2050,12 @@ export const MessageBubble = memo(function MessageBubble({
         <div className="markdown text-[14px] leading-relaxed break-words">
           {body}
         </div>
+        {!isUser && streaming && (
+          <LoopingWebm
+            src={animations.assistantThinking}
+            className="mt-2 h-8 w-8 rounded-full"
+          />
+        )}
         <AttachmentPreviewStrip
           attachments={message.attachments}
           variant={isUser ? "compact" : "gallery"}

@@ -17,6 +17,7 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
+import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
 import type { MessageAttachment } from "@/desktop/ui/types";
 
 export function ChatView() {
@@ -103,6 +104,10 @@ export function ChatView() {
     () => rawMessages.filter((m) => m.role === "user").map((m) => m.content),
     [rawMessages]
   );
+  const isNewConversationLayout = shouldUseNewConversationInputLayout({
+    userMessageCount: userMessageHistory.length,
+    isStreaming,
+  });
 
   // 计算每条消息的匹配区间（只对非 marker 生效）
   const matchesPerMessage = useMemo(() => {
@@ -525,7 +530,7 @@ export function ChatView() {
         className="absolute inset-0 overflow-y-auto"
         onScroll={handleScroll}
       >
-        {messages.length === 0 && !isStreaming && (
+        {isNewConversationLayout && (
           <div className="px-6 py-10 text-center text-sm text-muted-foreground">
             发送第一条消息开始对话
           </div>
@@ -560,7 +565,7 @@ export function ChatView() {
             runningTimelineRenderItems(
               liveTimeline,
               assistantInsertPos,
-              streamingText.length > 0 || streamingParts.length > 0
+              isStreaming
             ).map((renderItem) => {
               if (renderItem.kind === "streaming") {
                 return (
@@ -652,7 +657,7 @@ export function ChatView() {
           flex-1 的 messages 区跟着压缩，消息和输入框各占各的空间。 */}
       <div
         className={`relative mx-auto transition-all duration-300 ease-out ${
-          messages.length === 0 && !isStreaming
+          isNewConversationLayout
             ? "w-3/4 mb-[44vh]"
             : isStreaming
             ? "w-full mb-0"

@@ -1,4 +1,8 @@
-import { filterMessagesDuplicatedInLiveTimeline, runningTimelineRenderItems } from "./liveTimelineOrder";
+import {
+  filterMessagesDuplicatedInLiveTimeline,
+  insertInjectedMessageBeforeNextAssistant,
+  runningTimelineRenderItems,
+} from "./liveTimelineOrder.ts";
 
 type Item = { id: string };
 
@@ -13,6 +17,18 @@ function expectOrder(name: string, actual: string[], expected: string[]) {
     throw new Error(`${name}: expected ${e}, got ${a}`);
   }
 }
+
+expectOrder(
+  "shows assistant placeholder before model text arrives",
+  labels(runningTimelineRenderItems([], 0, true)),
+  ["streaming"]
+);
+
+expectOrder(
+  "keeps assistant bubble under avatar while waiting before injected user",
+  labels(runningTimelineRenderItems([{ id: "user-1" }], 0, true)),
+  ["streaming", "user-1"]
+);
 
 expectOrder(
   "puts injected user after current streaming bubble",
@@ -45,4 +61,58 @@ expectOrder(
     [{ id: "injected-user" }]
   ).map((m) => m.id),
   ["initial-user"]
+);
+
+const splitWithStreaming = insertInjectedMessageBeforeNextAssistant<Item, string>(
+  {
+    liveTimeline: [{ id: "older-user" }],
+    assistantInsertPos: 0,
+    streamingText: "current assistant",
+    streamingParts: ["current assistant"],
+  },
+  { id: "notification" },
+  {
+    makeFrozenAssistant: ({ insertPos }) => ({ id: `assistant-${insertPos}` }),
+  }
+);
+
+expectOrder(
+  "system notification splits current assistant before the next assistant output",
+  labels(
+    runningTimelineRenderItems(
+      splitWithStreaming.liveTimeline,
+      splitWithStreaming.assistantInsertPos,
+      true
+    )
+  ),
+  ["assistant-0", "older-user", "notification", "streaming"]
+);
+
+if (splitWithStreaming.streamingText !== "") {
+  throw new Error("system notification split should clear current streaming text");
+}
+
+const splitWithoutStreaming = insertInjectedMessageBeforeNextAssistant<Item>(
+  {
+    liveTimeline: [{ id: "older-user" }],
+    assistantInsertPos: 0,
+    streamingText: "",
+    streamingParts: [],
+  },
+  { id: "notification" },
+  {
+    makeFrozenAssistant: ({ insertPos }) => ({ id: `assistant-${insertPos}` }),
+  }
+);
+
+expectOrder(
+  "system notification can appear before an empty assistant placeholder",
+  labels(
+    runningTimelineRenderItems(
+      splitWithoutStreaming.liveTimeline,
+      splitWithoutStreaming.assistantInsertPos,
+      true
+    )
+  ),
+  ["older-user", "notification", "streaming"]
 );
