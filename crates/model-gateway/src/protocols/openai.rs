@@ -871,17 +871,26 @@ fn parse_tool_calls(tool_calls: &Value) -> Vec<ToolCall> {
 
 fn parse_usage(v: &Value) -> Usage {
     let usage = &v["usage"];
-    // OpenAI Chat Completions：`prompt_tokens_details.cached_tokens` 是命中缓存读出的部分；
-    // 已经计入 `prompt_tokens`，所以不用再加。
-    // DeepSeek（OpenAI 兼容路径）：用 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，
-    // 这两个字段加起来 = `prompt_tokens`，hit 部分对应缓存命中。
+    // Chat Completions 路径：不同 proxy 返回格式不统一。
+    // - 标准 OpenAI：prompt_tokens / completion_tokens；cache 在 prompt_tokens_details.cached_tokens
+    // - DeepSeek：cache 在 prompt_cache_hit_tokens（与 prompt_tokens 平级）
+    // - Responses API 风格 proxy：input_tokens / output_tokens；cache 在 input_tokens_details.cached_tokens
+    let input = usage["prompt_tokens"]
+        .as_u64()
+        .or_else(|| usage["input_tokens"].as_u64())
+        .unwrap_or(0);
+    let output = usage["completion_tokens"]
+        .as_u64()
+        .or_else(|| usage["output_tokens"].as_u64())
+        .unwrap_or(0);
     let cached = usage["prompt_tokens_details"]["cached_tokens"]
         .as_u64()
+        .or_else(|| usage["input_tokens_details"]["cached_tokens"].as_u64())
         .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
         .unwrap_or(0);
     Usage {
-        input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0),
-        output_tokens: usage["completion_tokens"].as_u64().unwrap_or(0),
+        input_tokens: input,
+        output_tokens: output,
         cache_read_tokens: cached,
         cache_creation_tokens: 0,
     }
@@ -889,12 +898,22 @@ fn parse_usage(v: &Value) -> Usage {
 
 fn parse_responses_usage(v: &Value) -> Usage {
     let usage = &v["usage"];
+    let input = usage["input_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_tokens"].as_u64())
+        .unwrap_or(0);
+    let output = usage["output_tokens"]
+        .as_u64()
+        .or_else(|| usage["completion_tokens"].as_u64())
+        .unwrap_or(0);
     let cached = usage["input_tokens_details"]["cached_tokens"]
         .as_u64()
+        .or_else(|| usage["prompt_tokens_details"]["cached_tokens"].as_u64())
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
         .unwrap_or(0);
     Usage {
-        input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
-        output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
+        input_tokens: input,
+        output_tokens: output,
         cache_read_tokens: cached,
         cache_creation_tokens: 0,
     }

@@ -5057,6 +5057,19 @@
 - **验证**:
   - 未运行 `graphify update .`，符合本次规则变更要求。
 
+### 2026-05-28 — 移除 WaitForTask 并修正 active Notification 插队顺序
+
+- **Why**: 后台 Bash `run_in_background=true` 已经会自动 arm completion notification；模型再调用 WaitForTask 会把同一个 task 再 arm 一次，导致重复 wakeup / 重复 agent run。另一个前端问题是 active run 中 notification 已经 inject 成功但没有立即进入 live timeline，视觉上会先出现后续 assistant 头像/输出，再补出 notification，顺序突兀。
+- **改动**:
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): 不再注册 `WaitForTask`，也从内置工具名列表移除。
+  - [crates/agent-core/src/tools/wait_for_task.rs](../crates/agent-core/src/tools/wait_for_task.rs): 删除工具实现文件。
+  - [crates/agent-core/src/tools/task.rs](../crates/agent-core/src/tools/task.rs): `run_in_background` 描述改为等待系统 `BgTaskFinished` notification，不再提示模型调用 WaitForTask。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): active wakeup `injectUserMessage` 成功后立即把返回的已落盘 message 放入 live timeline；system notification 会把后续 streaming assistant 的插入点移到 notification 之后，避免先出现新 assistant 再补出 notification。普通用户手动插队仍保持原来的“跟在当前 assistant 后”顺序。
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts)、[liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 新增纯函数和回归测试，固定 notification 在下一段 assistant 输出前显示，同时不清空当前 streaming 内容，避免后续 `text_done` / tool delta 重复或丢失。
+  - [docs/架构.md](架构.md)、[CLAUDE.md](../CLAUDE.md) 及相关源码注释：同步移除 WaitForTask 作为 active 设计路径；后台任务完成统一走自动 notification。
+- **影响范围**: agent-core 工具列表、Task 工具 schema/描述、Desktop active wakeup live timeline 展示；不改变 `session.jsonl` 持久化格式，不新增 protocol 事件。旧 `RunPhase::AwaitingBackgroundTask` 保留用于兼容旧 checkpoint / 内部状态枚举。
+- **留尾巴**: 仍需用 Desktop 真实 provider 跑一次 `sleep 5 background=true` 端到端复现，确认 UI 顺序与 model request 数量都符合预期。
+
 ### 2026-05-28 — Subagent P3.1b 阶段：父 transcript 不再被子 NestedRun 事件串入
 
 - **Why**: P2 阶段子事件经装饰器重写 run_id 后转发到父 sink，三个 surface observer 把这些子事件累积进父 parts/tool_calls，**写到父 session.jsonl**。`transcript::from_session` 重建父 transcript 时认不出子事件，会把子的 assistant text / tool_call / tool_result 全当成父的 turn 内容塞进去——resume 后父 transcript 串入子内容，模型 IO 出错。本期把这条"子事件污染父 transcript"的路径完全切断。
@@ -5088,3 +5101,27 @@
   - P5：同步 API（listSubagents / saveSubagent / setEnabled / loadSubagentRun）
   - P6 / P7：设置 UI + MessageBubble 嵌套渲染（嵌套渲染只能在 P6 之后跑端到端）
   - P8：桌面 dev 端到端验证
+
+---
+
+### 2026-05-28 修复 OpenAI 兼容 proxy 的 cache / input_tokens 解析
+
+**一句话**：`parse_usage` / `parse_responses_usage` 加 `input_tokens` / `completion_tokens` fallback，修复 freemodel / sub2api 等 OpenAI 兼容 proxy 返回 Responses API 风格 usage 字段时 token_stats 为 0 的问题。
+
+**Why**：用户通过 freemodel（kind=openai）使用 gpt-5.5 时，输入框下方的 cache 指示器始终为空。排查发现 `session.jsonl` 的 `token_stats` 里 `input_tokens` 和 `cache_read_tokens` 都是 0，但 `model_io.jsonl` 中 `input_tokens` 有值。
+
+**根因**：`parse_usage`（Chat Completions 路径）只读 `prompt_tokens` / `completion_tokens`；freemodel 等 proxy 转发 Responses API 的 usage 格式时，用的是 `input_tokens` / `output_tokens` 字段名，导致 `prompt_tokens` 为 `None` → `unwrap_or(0)` → 0。cache 同理：只查 `prompt_tokens_details.cached_tokens`，没 fallback 到 `input_tokens_details.cached_tokens`。
+
+**改动**：
+- `crates/model-gateway/src/protocols/openai.rs`：
+  - `parse_usage`：input 先试 `prompt_tokens`，fallback `input_tokens`；output 先试 `completion_tokens`，fallback `output_tokens`；cached 三级 fallback（`prompt_tokens_details` → `input_tokens_details` → `prompt_cache_hit_tokens`）
+  - `parse_responses_usage`：对称地加 `prompt_tokens` / `completion_tokens` fallback，防 Responses API 路径的 proxy 返回 Chat Completions 格式
+
+**影响范围**：model-gateway crate，仅 OpenAI 协议解析层。对标准 OpenAI / DeepSeek 行为零影响（优先路径不变），只新增了 fallback 分支。
+
+**验证**：
+- `cargo check -p model-gateway` 通过
+- `cargo test -p model-gateway --lib` **96/96 通过**
+- `cargo test -p agent-core --lib` **372/372 通过**
+
+**留尾巴**：无
