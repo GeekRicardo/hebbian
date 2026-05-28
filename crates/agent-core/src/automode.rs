@@ -20,6 +20,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::warn;
 
+use common::reasoning::normalize_model_id;
 use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
@@ -38,11 +39,15 @@ pub const AUTOMODE_ALLOWED_MODELS: &[&str] = &["opus-4-7", "opus4.7", "gpt-5.5"]
 
 /// 判定一个 model id 是否允许启用 AutoMode 判官。
 ///
-/// 匹配规则：**精确相等**。`claude-opus-4-7-20260416` / `gpt-5.5-preview` 这类带前缀
-/// 或日期/版本后缀的变体**一律不允许**——AutoMode 在它们上面降级为 Ask，等待 model id
-/// 上游规范化（或上层显式把 selection 翻成白名单里的简洁字符串）后才生效。
+/// 匹配规则：先做大小写和版本分隔符归一化，再匹配稳定家族 token。允许
+/// `claude-opus-4.7` / `claude-opus-4-7-20260416` 和 `gpt-5-5` 这类真实上游 id；
+/// 但不接受 `gpt-5.5-preview` 这种预览后缀，避免把未评估变体放进自动审批路径。
 pub fn is_allowed_model(model_id: &str) -> bool {
-    AUTOMODE_ALLOWED_MODELS.contains(&model_id)
+    let normalized = normalize_model_id(model_id);
+    if normalized.starts_with("gpt-5-5") {
+        return !normalized.contains("preview");
+    }
+    normalized.contains("opus-4-7") || normalized.contains("opus4-7")
 }
 
 /// AutoMode 的判官决策。
@@ -434,14 +439,22 @@ mod tests {
     }
 
     #[test]
-    fn allowed_model_is_exact_match_only() {
-        // 白名单内三个 id 精确命中
+    fn allowed_model_accepts_real_supported_ids() {
+        // 白名单内简洁 id 命中
         assert!(is_allowed_model("opus-4-7"));
         assert!(is_allowed_model("opus4.7"));
         assert!(is_allowed_model("gpt-5.5"));
-        // 带前缀 / 后缀变体都拒绝（架构 §4.4.4：不允许后缀变体）
-        assert!(!is_allowed_model("claude-opus-4-7"));
-        assert!(!is_allowed_model("claude-opus-4-7-20260416"));
+        // 真实上游 / 网关 id 也命中
+        assert!(is_allowed_model("claude-opus-4.7"));
+        assert!(is_allowed_model("claude-opus-4-7"));
+        assert!(is_allowed_model("claude-opus-4-7-20260416"));
+        assert!(is_allowed_model("gpt-5-5"));
+        assert!(is_allowed_model("GPT-5.5"));
+    }
+
+    #[test]
+    fn allowed_model_rejects_unsupported_variants() {
+        // 预览后缀拒绝（未评估变体不进自动审批）
         assert!(!is_allowed_model("gpt-5.5-preview"));
         // 其它模型也拒绝
         assert!(!is_allowed_model("claude-sonnet-4-6"));
