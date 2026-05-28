@@ -147,6 +147,12 @@ fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow> {
         .context("main window not found")
 }
 
+/// 从最小化 / 隐藏状态恢复到前台。
+///
+/// macOS 上 `window.set_focus()` 调用 `NSWindow.makeKeyWindow()`，
+/// 但当另一个 app 是前台应用时不足以把整个进程拉到前台。
+/// `app.show()` 在 macOS 上直接调用 `[NSApp activateIgnoringOtherApps:YES]`，
+/// 是进程内原生实现，必须在 set_focus() 之前调用。
 fn show_main_window(app: &AppHandle) -> Result<()> {
     let window = main_window(app)?;
 
@@ -155,7 +161,15 @@ fn show_main_window(app: &AppHandle) -> Result<()> {
 
     window.unminimize()?;
     window.show()?;
+
+    // 先把整个 app 激活到前台，再设置 key window。
+    // 顺序不能反：set_focus() 需要 app 已经是前台才能稳定生效。
+    app.show()?;
     window.set_focus()?;
+
+    // 通知前端把焦点切到 chat 输入框
+    let _ = window.emit("hebbian://focus-chat-input", ());
+
     Ok(())
 }
 

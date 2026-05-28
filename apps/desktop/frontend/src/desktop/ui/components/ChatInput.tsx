@@ -829,7 +829,7 @@ export function ChatInput({
             }
             rows={1}
             style={manual ? { height } : undefined}
-            className="w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
+            className="chat-input-textarea w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
           />
 
           {/* 底部工具条：左 = + 菜单 / `//` 命令 / 模型选择，右 = 发送。

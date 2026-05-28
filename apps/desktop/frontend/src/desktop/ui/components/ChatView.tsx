@@ -188,6 +188,36 @@ export function ChatView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [findOpen, currentSession]);
 
+  // 前台窗口 + 焦点不在输入类元素时，Enter 把焦点切到 chat 输入框，
+  // 用户可以直接打字。审批/提问弹窗打开时不干预（避免抢走弹窗 textarea 的 Enter）。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      // 弹窗打开时不干预
+      const state = useStore.getState();
+      if (state.pendingApproval || state.pendingQuestion) return;
+      // 焦点已在输入类元素上时不干预（textarea / input / contentEditable / select）
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLInputElement &&
+          (!el.type || el.type === "text" || el.type === "search")) ||
+        (el instanceof HTMLElement && el.isContentEditable) ||
+        el instanceof HTMLSelectElement
+      )
+        return;
+      // FindBar 打开时不干预（搜索框已获焦或即将获焦）
+      if (findOpen) return;
+      // 找到 chat 输入框并聚焦
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".chat-input-textarea",
+      );
+      textarea?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [findOpen]);
+
   // 跳转到当前 active 的高亮元素
   useLayoutEffect(() => {
     if (!findOpen || totalMatches === 0) return;
