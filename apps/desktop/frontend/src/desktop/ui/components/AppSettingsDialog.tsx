@@ -31,6 +31,8 @@ import type {
   McpServerConfig,
   McpToolReport,
   McpTransport,
+  SubagentDefinition,
+  SubagentScope,
 } from "@/desktop/ui/types";
 import { api } from "@/desktop/bridge/tauri";
 import { init as initGhostty, Terminal, FitAddon } from "ghostty-web";
@@ -42,12 +44,13 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "agents" | "permissions" | "skills" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "models" | "agents" | "permissions" | "skills" | "mcp" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "general", label: "通用", icon: SettingsIcon },
   { key: "conversation", label: "对话设置", icon: FolderOpen },
-  { key: "agents", label: "Agent 配置", icon: Bot },
+  { key: "models", label: "模型", icon: Bot },
+  { key: "agents", label: "Agents", icon: Bot },
   { key: "permissions", label: "权限", icon: Shield },
   { key: "skills", label: "Skills", icon: Sparkles },
   { key: "mcp", label: "MCP", icon: Plug },
@@ -167,12 +170,15 @@ export function AppSettingsDialog() {
                   availableTools={availableTools}
                 />
               )}
-              {tab === "agents" && (
-                <AgentsPane
+              {tab === "models" && (
+                <ModelsPane
                   draft={draft}
                   setDraft={setDraft}
                   prompts={promptsFile.prompts}
                 />
+              )}
+              {tab === "agents" && (
+                <SubagentsPane workdir={draft.conversation.workdir ?? null} />
               )}
               {tab === "permissions" && <PermissionsPane />}
               {tab === "skills" && (
@@ -923,7 +929,7 @@ function splitArgs(text: string): string[] {
 }
 
 
-function AgentsPane({
+function ModelsPane({
   draft,
   setDraft,
   prompts,
@@ -951,6 +957,217 @@ function AgentsPane({
           ))}
         </Select>
       </FieldRow>
+    </div>
+  );
+}
+
+// ─── Subagents 面板（P6）────────────────────────────────────────────────────
+
+const SUBAGENT_TEMPLATE = `---
+description: "描述这个 agent 的用途"
+---
+你是一个专注于...的助手。
+`;
+
+function buildSubagentContent(def: SubagentDefinition): string {
+  let fm = `---\ndescription: "${def.description}"`;
+  if (def.tools && def.tools.length > 0) {
+    fm += `\ntools: [${def.tools.join(", ")}]`;
+  }
+  if (def.model) fm += `\nmodel: ${def.model}`;
+  if (def.max_iterations != null) fm += `\nmax_iterations: ${def.max_iterations}`;
+  fm += `\n---\n${def.system_prompt}`;
+  return fm;
+}
+
+function SubagentsPane({ workdir }: { workdir: string | null }) {
+  const [subagents, setSubagents] = useState<SubagentDefinition[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newContent, setNewContent] = useState(SUBAGENT_TEMPLATE);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const defs = await invoke<SubagentDefinition[]>("list_subagents", {
+        workdir: workdir ?? null,
+      });
+      setSubagents(defs);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [workdir]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const toggleEnabled = async (def: SubagentDefinition) => {
+    const scope: SubagentScope = workdir ? { Project: workdir } : "Global";
+    try {
+      await invoke("set_subagent_enabled", {
+        name: def.name,
+        scope,
+        enabled: !def.enabled,
+      });
+      await load();
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const startEdit = (def: SubagentDefinition) => {
+    setEditing(def.name);
+    setEditContent(buildSubagentContent(def));
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      await invoke("save_subagent", { name: editing, content: editContent });
+      setEditing(null);
+      await load();
+      toast.success("已保存");
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    try {
+      await invoke("delete_subagent", { name, workdir: workdir ?? null });
+      if (editing === name) setEditing(null);
+      await load();
+      toast.success("已删除");
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const saveNew = async () => {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      toast.error("请填写 agent 名称");
+      return;
+    }
+    setSaving(true);
+    try {
+      await invoke("save_subagent", { name: trimmed, content: newContent });
+      setCreating(false);
+      setNewName("");
+      setNewContent(SUBAGENT_TEMPLATE);
+      await load();
+      toast.success("已创建");
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          定义可被 Task 工具调用的子 agent，每个 agent 有独立的 system prompt 和工具集。
+        </p>
+        <Button size="sm" onClick={() => { setCreating(true); setEditing(null); }}>
+          新建
+        </Button>
+      </div>
+
+      {creating && (
+        <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
+          <Input
+            placeholder="agent 名称（如 code-reviewer）"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <textarea
+            className="w-full h-48 text-xs font-mono border rounded p-2 bg-background resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+            value={newContent}
+            onChange={(e) => setNewContent(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={saveNew} disabled={saving}>
+              {saving ? "保存中…" : "保存"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => { setCreating(false); setNewName(""); setNewContent(SUBAGENT_TEMPLATE); }}
+            >
+              取消
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
+
+      {subagents.map((def) => (
+        <div key={def.name} className="border rounded-lg p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={def.enabled}
+              onChange={() => toggleEnabled(def)}
+              className="h-4 w-4 cursor-pointer"
+            />
+            <span className="font-medium text-sm">{def.name}</span>
+            <span className="text-xs text-muted-foreground flex-1 truncate">{def.description}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => editing === def.name ? setEditing(null) : startEdit(def)}
+            >
+              {editing === def.name ? "收起" : "编辑"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-destructive hover:text-destructive"
+              onClick={() => handleDelete(def.name)}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
+
+          {editing === def.name && (
+            <div className="space-y-2 pt-1">
+              <textarea
+                className="w-full h-48 text-xs font-mono border rounded p-2 bg-background resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveEdit} disabled={saving}>
+                  {saving ? "保存中…" : "保存"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {!loading && subagents.length === 0 && !creating && (
+        <p className="text-sm text-muted-foreground text-center py-6">
+          还没有 agent 定义。点击「新建」创建第一个。
+        </p>
+      )}
     </div>
   );
 }

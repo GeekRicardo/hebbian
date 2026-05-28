@@ -24,6 +24,8 @@ export interface Provider {
   title_gen_enabled?: boolean;
   /** 配合 title_gen_enabled 的具体模型 id（必须出现在 `models` 列表中）。 */
   title_gen_model?: string | null;
+  /** 注入 Claude Code 客户端特征（banner / billing header / metadata / context_management）。 */
+  claude_code_compat?: boolean;
 }
 
 export interface ProvidersFile {
@@ -862,3 +864,18 @@ export interface EditsWorktreeStatus {
   enabled: boolean;
   entry_count: number;
 }
+
+/** Subagent 定义（对应 Rust SubagentDefinition，架构 §4.4.11.4）。 */
+export interface SubagentDefinition {
+  name: string;
+  description: string;
+  tools?: string[] | null;
+  model?: string | null;
+  max_iterations?: number | null;
+  system_prompt: string;
+  /** 合并两层 enabled 状态后的结果。 */
+  enabled: boolean;
+}
+
+/** Subagent 启用 scope（对应 Rust SubagentScope）。 */
+export type SubagentScope = "Global" | { Project: string };

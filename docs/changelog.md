@@ -5233,3 +5233,13 @@
 - **影响范围**：agent-core core_client trait（additive，不破坏现有实现）；Desktop surface 新增 6 个 Tauri 命令。CLI / hebweb 暂未暴露（P5 范围仅 Desktop）。
 - **验证**：`cargo check --workspace` 通过；`cargo test -p agent-core --lib` 373 通过。
 - **留尾巴**：CLI daemon / hebweb 的 subagent API 暴露留后续；P6 设置 UI 待续。
+
+### 2026-05-28 — P6：设置 UI — agents tab 改名 models + 新建 Agents tab（subagent CRUD）
+
+- **Why**：路线图 P6（架构 §4.4.11.11）：把 subagent 管理暴露到设置 UI，用户可以新建 / 编辑 / 删除 / 启用禁用 subagent 定义，无需手动编辑 `~/.hebbian/subagents/` 目录。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts)：新增 `SubagentDefinition` interface 和 `SubagentScope` type。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx)：`agents` tab 改名为 `models`（label "模型"）；`AgentsPane` 改名为 `ModelsPane`；新增 `agents` tab（label "Agents"）渲染 `SubagentsPane`；新增 `SubagentsPane` 组件（列表 + 启用 toggle + 内联编辑器 + 新建 + 删除）。
+- **影响范围**：Desktop 前端设置弹窗；后端 Tauri 命令已在 P5 就绪，本次只改前端。
+- **验证**：`pnpm exec tsc --noEmit` 通过。
+- **留尾巴**：项目级 enabled override 在 SubagentsPane 里已按 workdir 路由（有 workdir 时用 Project scope），但 AppSettingsDialog 的 workdir 来自 `draft.conversation.workdir`，全局设置里通常为空——项目级 toggle 需要从 SessionSettingsDialog 入口触发（P6 范围内未做）。
