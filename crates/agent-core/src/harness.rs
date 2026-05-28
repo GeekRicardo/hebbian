@@ -76,9 +76,8 @@ pub struct RunParams {
     pub data_dir: Option<std::path::PathBuf>,
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。配合 `data_dir` 用于工件落盘路径。
     pub session_id: Option<String>,
-    /// 挂起请求通道（架构 §4.12.4）。Surface 与本 Run 关联的工具
-    /// （WaitForTask / ScheduleWakeup）共享同一个 channel，由 `default_tools`
-    /// 构造时塞进 BashTool 旁边的两个挂起工具。`None` 表示当前会话禁用挂起。
+    /// 挂起请求通道（架构 §4.12.4）。Surface 与本 Run 关联的挂起工具共享同一个
+    /// channel，由 `default_tools` 构造时传给 ScheduleWakeup。`None` 表示当前会话禁用挂起。
     pub phase: Option<crate::wakeup::PhaseChannel>,
     /// 从挂起态恢复时携带：agent_loop 用它初始化计数器 + emit `RunResumed`
     /// 而不是 `RunStarted`（架构 §4.12.6）。
@@ -657,7 +656,7 @@ fn is_critical_event(payload: &EventPayload) -> bool {
 mod tests {
     //! `RunHandle::drive` 在 Suspended 路径的回归测试。
     //!
-    //! 复现历史 bug（架构 §4.12.5）：模型调 `WaitForTask` / `ScheduleWakeup` 后，
+    //! 复现历史 bug（架构 §4.12.5）：模型调挂起工具后，
     //! agent_loop emit `RunSuspended` → emit `TurnFinished(EndTurn)` → 退出（不 emit
     //! `RunFinished`），event channel 在 task drop 后关闭。旧版 `drive` 拿到 `recv()
     //! → None` 直接判 `TurnSummary::failed("事件流意外关闭")`，三个 surface 都把它

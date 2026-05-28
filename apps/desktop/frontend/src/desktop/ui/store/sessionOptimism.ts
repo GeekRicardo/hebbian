@@ -1,8 +1,9 @@
-import type { MessageAttachment, Session } from "../types";
+import type { MessageAttachment, MessageMeta, Session } from "../types";
 
 interface OptimisticUserMessageOptions {
   id: string;
   now: number;
+  meta?: MessageMeta | null;
 }
 
 export function appendOptimisticUserMessage(
@@ -22,6 +23,7 @@ export function appendOptimisticUserMessage(
         content,
         attachments,
         created_at: options.now,
+        meta: options.meta ?? null,
       },
     ],
   };

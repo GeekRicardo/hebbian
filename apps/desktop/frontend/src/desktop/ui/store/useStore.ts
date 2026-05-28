@@ -30,6 +30,7 @@ import type {
 } from "@/desktop/ui/types";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
+import { appendInjectedMessageAfterCurrentAssistant } from "@/desktop/ui/components/liveTimelineOrder";
 
 const LAST_PROMPT_ID_KEY = "lastPromptId";
 const LAST_PROVIDER_ID_KEY = "lastProviderId";
@@ -685,6 +686,61 @@ function activeRequestForSession(state: AppState, sessionId: string): string | n
   return state.sessionStreams[sessionId]?.requestId ?? null;
 }
 
+function waitForRequestRelease(
+  get: () => AppState,
+  sessionId: string,
+  requestId: string
+): Promise<void> {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      const active = get().sessionStreams[sessionId]?.requestId;
+      if (active !== requestId || Date.now() - startedAt > 10_000) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, 16);
+    };
+    tick();
+  });
+}
+
+function appendUserInjectedMessage(
+  slot: SessionStream,
+  message: Message
+): SessionStream {
+  return {
+    ...slot,
+    liveTimeline: [...slot.liveTimeline, { kind: "user_injected", message }],
+  };
+}
+
+function insertSystemNotificationBeforeNextAssistant(
+  slot: SessionStream,
+  message: Message
+): SessionStream {
+  const next = appendInjectedMessageAfterCurrentAssistant<
+    LiveTimelineItem,
+    StreamingAssistantPart
+  >(
+    {
+      liveTimeline: slot.liveTimeline,
+      assistantInsertPos: slot.assistantInsertPos,
+      streamingText: slot.streamingText,
+      streamingParts: slot.streamingParts,
+    },
+    { kind: "user_injected", message }
+  );
+
+  return {
+    ...slot,
+    liveTimeline: next.liveTimeline,
+    assistantInsertPos: next.assistantInsertPos,
+    streamingText: next.streamingText,
+    streamingParts: next.streamingParts,
+  };
+}
+
 function applyToolDone(
   parts: StreamingAssistantPart[],
   event: Extract<EngineEvent, { type: "tool_done" }>
@@ -936,7 +992,8 @@ interface AppState {
   sendUserMessage: (
     content: string,
     attachments?: MessageAttachment[],
-    meta?: MessageMeta | null
+    meta?: MessageMeta | null,
+    options?: { skipOptimisticUser?: boolean }
   ) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
@@ -1293,9 +1350,9 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
   async triggerWakeupResume(sessionId, wakeupXml, meta) {
-    // 三分支决策（架构 §4.12.5 修订 / 借鉴 CC 2.1 "completed 自动通知"）。
+    // 三分支决策（架构 §4.12.5 修订）。
     // meta = `{type:"system_notification", kind, task_id?, tool_use_id?}` 由后端 emit
-    // wakeup-fired 时附带，三条路径都把它透传到后端落盘——view 据此渲染系统通知条。
+    // wakeup-fired 时附带，三条路径都把它透传到后端落盘。
     //   active run（slot.requestId 在）→ 走 inject_user_message 即写即落 + 推 PendingInputs，
     //     agent_loop 在下一个 boundary drain，**不开新 run**
     //   idle 前台 → 开新 run / resume checkpoint（走 sendUserMessage，meta 透传）
@@ -1307,8 +1364,29 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (isForeground && activeRequestId) {
       try {
-        await api.injectUserMessage(sessionId, activeRequestId, wakeupXml, [], meta);
-        return;
+        const result = await api.injectUserMessage(
+          sessionId,
+          activeRequestId,
+          wakeupXml,
+          [],
+          meta
+        );
+        set((state) => {
+          const slot = state.sessionStreams[sessionId];
+          if (!slot) return state;
+          const updated =
+            result.message.meta?.type === "system_notification"
+              ? insertSystemNotificationBeforeNextAssistant(slot, result.message)
+              : appendUserInjectedMessage(slot, result.message);
+          const isForeground = state.currentSession?.id === sessionId;
+          return {
+            ...state,
+            sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
+            ...(isForeground ? mirrorFromSlot(updated) : {}),
+          };
+        });
+        if (result.injected) return;
+        await waitForRequestRelease(get, sessionId, activeRequestId);
       } catch (e) {
         // active run 已结束的边界 race → 回落到开新 run 路径（仍带 meta）
         console.warn(
@@ -1320,7 +1398,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (isForeground) {
       // 前台 idle：复用 sendUserMessage，把 meta 透传给后端 send_message 命令
-      await get().sendUserMessage(wakeupXml, [], meta);
+      await get().sendUserMessage(wakeupXml, [], meta, { skipOptimisticUser: true });
       return;
     }
     // 非前台：暂存（含 meta），切回时由 openSession 调 triggerWakeupResume 消费
@@ -1387,7 +1465,7 @@ export const useStore = create<AppState>((set, get) => ({
     // 先把队列项移除，避免 agent_loop drain 完后又被 drainNext 重复发送。
     get().removeQueuedInput(target.id);
     try {
-      const persisted = await api.injectUserMessage(
+      const result = await api.injectUserMessage(
         sessionId,
         requestId,
         target.content,
@@ -1401,13 +1479,7 @@ export const useStore = create<AppState>((set, get) => ({
       set((state) => {
         const slot = state.sessionStreams[sessionId];
         if (!slot) return state;
-        const updated: SessionStream = {
-          ...slot,
-          liveTimeline: [
-            ...slot.liveTimeline,
-            { kind: "user_injected", message: persisted },
-          ],
-        };
+        const updated = appendUserInjectedMessage(slot, result.message);
         const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
@@ -1813,7 +1885,7 @@ export const useStore = create<AppState>((set, get) => ({
     await get().refreshSessions();
   },
 
-  async sendUserMessage(content, attachments = [], meta = null) {
+  async sendUserMessage(content, attachments = [], meta = null, options = {}) {
     const cur = get().currentSession;
     if (!cur) return;
 
@@ -1903,7 +1975,7 @@ export const useStore = create<AppState>((set, get) => ({
         const isForeground = state.currentSession?.id === sessionId;
         return {
           ...state,
-          ...(isForeground
+          ...(isForeground && !options.skipOptimisticUser
             ? {
                 currentSession: appendOptimisticUserMessage(
                   baseSession,
@@ -1912,6 +1984,7 @@ export const useStore = create<AppState>((set, get) => ({
                   {
                     id: `pending-user-${requestId}`,
                     now: Date.now(),
+                    meta,
                   }
                 ),
               }

@@ -85,8 +85,9 @@ fn render_description(subagents: &[SubagentDefinition]) -> String {
          Use for self-contained tasks where context is captured fully in `prompt`.\n\
          - `inherit`: the subagent starts from a snapshot of the parent conversation plus the `prompt`. \
          Use when the sub-task continues the current discussion (e.g. \"write tests for the implementation we just designed\").\n\n\
-         `run_in_background=true` returns immediately with a task_id; use WaitForTask(task_id) to fetch the final result, \
-         or wait for the BgTaskFinished wakeup notification. Use when you want to do other work in parallel.\n\n",
+         `run_in_background=true` returns immediately with a task_id; the system will send a BgTaskFinished \
+         wakeup notification when it completes. Use this when you want to do other work in parallel, \
+         or finish the current turn and wait for the notification.\n\n",
     );
     if subagents.is_empty() {
         s.push_str("No subagents are currently available; this tool should not be invoked.");
@@ -135,7 +136,7 @@ impl Tool for TaskTool {
                 "run_in_background": {
                     "type": "boolean",
                     "default": false,
-                    "description": "If true, return immediately with a task_id; the subagent runs in the background. Use WaitForTask(task_id) to fetch the result or wait for the BgTaskFinished wakeup."
+                    "description": "If true, return immediately with a task_id; the subagent runs in the background and the system sends a BgTaskFinished wakeup when it completes."
                 }
             }
         })

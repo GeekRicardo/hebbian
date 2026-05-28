@@ -118,8 +118,8 @@ pub struct LoopParams<'a> {
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。与 `data_dir` 拼成
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`。
     pub session_id: Option<String>,
-    /// 工具与 agent_loop 之间共享的"挂起请求"槽（架构 §4.12.4）。WaitForTask /
-    /// ScheduleWakeup 调用时把 `RunPhase` 写进来；agent_loop 在每次 ToolStep 完成后
+    /// 工具与 agent_loop 之间共享的"挂起请求"槽（架构 §4.12.4）。ScheduleWakeup
+    /// 调用时把 `RunPhase` 写进来；agent_loop 在每次 ToolStep 完成后
     /// 取出处理：emit RunSuspended → 落 RunCheckpoint → 注册到 WakeupScheduler → return。
     pub phase: Option<crate::wakeup::PhaseChannel>,
     /// 从挂起态恢复时由 Harness 注入：agent_loop 据此恢复计数器并 emit
@@ -741,7 +741,7 @@ pub async fn run_loop(
                 );
 
                 // 架构 §4.12.5：ToolStep 跑完后检查 phase channel。模型本 ToolStep
-                // 调过 WaitForTask / ScheduleWakeup 时，phase 已被工具写入；这里：
+                // 调过挂起工具时，phase 已被工具写入；这里：
                 // 1. emit RunSuspended（surface 据此渲染 BackgroundTaskPanel 占位）
                 // 2. 落 RunCheckpoint
                 // 3. 在 WakeupScheduler 上 arm 对应 wakeup（bg-task / cron）
@@ -796,9 +796,8 @@ pub async fn run_loop(
                         let run_id_for_arm = state.run_id.to_string();
                         match ph {
                             RunPhase::AwaitingBackgroundTask { task_id, .. } => {
-                                // WaitForTask 路径不带 tool_use_id（模型显式等的是 task_id 而非
-                                // tool_call id，且当前 RunPhase schema 也没存 tool_use_id）。
-                                // BashTool 自动 arm 路径才带（架构 §4.12.5 修订）。
+                                // 兼容旧 checkpoint：老版本可通过显式后台任务挂起进入这里。
+                                // 新版本后台任务只走自动 arm 路径；ScheduleWakeup 仍用 phase。
                                 scheduler.arm_bg_task(sid_for_arm, run_id_for_arm, task_id, None);
                             }
                             RunPhase::AwaitingCron {

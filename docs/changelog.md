@@ -5064,8 +5064,8 @@
   - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs): 不再注册 `WaitForTask`，也从内置工具名列表移除。
   - [crates/agent-core/src/tools/wait_for_task.rs](../crates/agent-core/src/tools/wait_for_task.rs): 删除工具实现文件。
   - [crates/agent-core/src/tools/task.rs](../crates/agent-core/src/tools/task.rs): `run_in_background` 描述改为等待系统 `BgTaskFinished` notification，不再提示模型调用 WaitForTask。
-  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): active wakeup `injectUserMessage` 成功后立即把返回的已落盘 message 放入 live timeline；system notification 会把后续 streaming assistant 的插入点移到 notification 之后，避免先出现新 assistant 再补出 notification。普通用户手动插队仍保持原来的“跟在当前 assistant 后”顺序。
-  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts)、[liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 新增纯函数和回归测试，固定 notification 在下一段 assistant 输出前显示，同时不清空当前 streaming 内容，避免后续 `text_done` / tool delta 重复或丢失。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): active wakeup `injectUserMessage` 成功后立即把返回的已落盘 message 放入 live timeline；system notification 保持在当前正在 streaming 的 assistant/tool 气泡下面，等当前 turn 完成后由 `turn_finished` 冻结逻辑稳定到上一轮输出下面，避免运行中先跳到上方、完成后又跳回下方。
+  - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts)、[liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 新增纯函数和回归测试，固定 notification 在当前 streaming assistant/tool 下面显示，同时不清空当前 streaming 内容，避免后续 `text_done` / tool delta 重复或丢失。
   - [docs/架构.md](架构.md)、[CLAUDE.md](../CLAUDE.md) 及相关源码注释：同步移除 WaitForTask 作为 active 设计路径；后台任务完成统一走自动 notification。
 - **影响范围**: agent-core 工具列表、Task 工具 schema/描述、Desktop active wakeup live timeline 展示；不改变 `session.jsonl` 持久化格式，不新增 protocol 事件。旧 `RunPhase::AwaitingBackgroundTask` 保留用于兼容旧 checkpoint / 内部状态枚举。
 - **留尾巴**: 仍需用 Desktop 真实 provider 跑一次 `sleep 5 background=true` 端到端复现，确认 UI 顺序与 model request 数量都符合预期。
@@ -5125,3 +5125,50 @@
 - `cargo test -p agent-core --lib` **372/372 通过**
 
 **留尾巴**：无
+
+### 2026-05-28 — Subagent P3.1d 阶段：subagent_call_id 透传 surface 出口协议 + 前端类型同步
+
+**Why**：code review 发现的阻塞性问题——`protocol::Event.subagent_call_id` 只在 agent-core 内部协议层存在，但三 surface 的出口事件枚举（`DaemonEvent` / `EngineEvent`）和前端 `types.ts` 完全没有引入该字段，导致子事件到达前端后跟父事件无法区分，嵌套渲染基础不存在。changelog 自陈的"已塞进 Event 顶层"只是 agent-core 到 surface observer 这半段管道有；从 surface 边界往外的整条出口管道空载。本期接通这条管道，让 P7 前置依赖真正就位。
+
+**改动**：
+- [apps/cli/src/ipc.rs](../apps/cli/src/ipc.rs)：`DaemonEvent` 6 个用户可见 variant（`TextDelta` / `TextDone` / `Reasoning` / `ToolStart` / `ToolOutputDelta` / `ToolDone`）加 `subagent_call_id: Option<String>`（`serde skip_serializing_if + default`——JSON 输出不带字段时 CLI 脚本不受影响）
+- [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs)：`translate_event` 签名从 `&EventPayload` 改为 `&AgentEvent`（第一步就能拿到 `subagent_call_id`），提取后在 6 个 variant 透传；`on_event` 两处调用同步更新
+- [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs)：Desktop `EngineEvent` 7 个用户可见 variant 加字段（多出 `ToolCallDelta` 是 Desktop 独有）
+- [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs)：`agent_event_to_engine_event` 提取 `event.subagent_call_id` 在 7 个 variant 透传
+- [apps/web-server/src/events.rs](../apps/web-server/src/events.rs)：hebweb `EngineEvent` 7 个用户可见 variant 加字段 + `translate` 函数透传
+- [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts)：`Message` 接口加 `subagent_call_id?: string | null`；`EngineEvent` 联合类型 7 个 variant 加 `subagent_call_id?: string | null`
+
+**影响范围**：3 surface Rust 代码 + 前端 TS 类型。所有字段 additive 且 serde `skip_serializing_if = Option::is_none`，JSON 输出向下兼容。CLI 脚本（DaemonEvent）和前端（EngineEvent）在不带字段时不受影响。
+
+**验证**：
+- `cargo check --workspace --tests` 通过（仅 notch.rs 既有 warning）
+- `cargo test -p agent-core --lib` **372/372 通过**
+- `npx tsc --noEmit`（apps/desktop）通过
+- CLI DaemonEvent JSON 无 `subagent_call_id` 字段时老脚本不受影响
+
+**关键设计决策**：
+- **只加用户可见 7 个 variant，不加全量**：`PermissionRequested` / `RunSuspended` / `StepStarted` 等非内容事件不承载子嵌套渲染语义，加了也白加，还让 JSON 膨胀。子嵌套渲染只需要前端能把**子的内容事件**（text / reasoning / tool）挂到父 Task 卡片下
+- **CLI 的 `translate_event` 从 `&EventPayload` 改签为 `&AgentEvent`**：之前桌面和 hebweb 都已接收完整 `&AgentEvent`，CLI 是唯一只传 payload 的；改签后三者对齐。风险：`translate_event` 是 CLI 自己的私有函数（非 public API），改签对外无影响
+- **前端用 `? optional` 而非 `required`**：老事件和父事件里这个字段是 `undefined`，只有子 NestedRun 的事件才有值。`? optional` 让现有的事件消费代码不用改——只有 P7 嵌套渲染的新代码才会读它
+
+**留尾巴**：
+- **子事件目前仍只从 surface observer emit（UI 通道）**：P3.1b 的 observer early return + 本次的字段透传让前端**能看到**子事件并区分来源。但子事件**在磁盘上仍无落盘**（不写父 jsonl、也不写子 jsonl）。子 jsonl 落盘留 P3.1c
+- P4：BgTaskRegistry 重构 + `run_in_background=true`
+- P5~P8：同步 API / 设置 UI / 嵌套渲染 / 端到端验证
+
+**关联**：`ec08c92`
+
+### 2026-05-28 — CLAUDE.md 新增 Git commit / 提交规则
+
+**Why**：用户明确要求——"即使涉及的文件有其他更改也提交，在 msg 里说明还有什么更改即可"。把这条规则固化到 CLAUDE.md 让后续 agent 会话遵守。
+
+**改动**：
+- [CLAUDE.md](../CLAUDE.md)：末尾新增 "Git commit / 提交规则" 段——禁止 `git stash`（只用 commit）；一次提交 = 一次完整改动 + Note 标注；commit 前必须 build / test 通过；commit message 不带 AI 署名；附示例
+
+**影响范围**：仅规则文档和流程约束；不改变代码、协议或运行时行为。
+
+**验证**：无代码改动，无需验证。
+
+**留尾巴**：无
+
+**关联**：`bab2471`

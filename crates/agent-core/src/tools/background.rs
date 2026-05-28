@@ -271,7 +271,7 @@ pub struct ReadOutput {
 
 /// session-scoped 注册表（架构 §4.12.2 修订）。每个 session 持有自己一份，
 /// 跨会话不可见。Clone 等价于持 Arc——同一 session 内的 BashTool /
-/// BashOutputTool / KillShellTool / WaitForTaskTool 共享同一份；跨 chat() 调用
+/// BashOutputTool / KillShellTool 共享同一份；跨 chat() 调用
 /// 通过 [`registry_for_session`] 拿同一把（按 session_id 路由）。
 #[derive(Clone, Default)]
 pub struct BackgroundShells {

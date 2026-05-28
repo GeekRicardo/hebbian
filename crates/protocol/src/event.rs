@@ -48,7 +48,7 @@ pub enum EventPayload {
     },
     RunCancelled,
 
-    /// Run 进入挂起态（架构 §4.12）。模型调 `WaitForTask` / `ScheduleWakeup` 后
+    /// Run 进入挂起态（架构 §4.12）。模型调挂起工具后
     /// 当前 ToolStep 完成、agent_loop 落 RunCheckpoint 并退出 task 时 emit。
     /// surface 看到这条不要清 slot——稍后会有 `RunResumed`。
     RunSuspended {
@@ -294,7 +294,7 @@ pub enum LogLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuspendReason {
-    /// 等 BackgroundShell task 完成（`WaitForTask` 工具触发）。
+    /// 等 BackgroundShell task 完成（兼容旧 checkpoint）。
     BackgroundTask,
     /// 等定时唤醒（`ScheduleWakeup` 工具触发）。
     Cron,

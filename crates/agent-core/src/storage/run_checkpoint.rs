@@ -1,6 +1,6 @@
 //! Run 挂起态 checkpoint 落盘（架构 §4.12.3）。
 //!
-//! 当模型调 `WaitForTask` / `ScheduleWakeup` 后，本 Run 的 ToolStep 结束 →
+//! 当模型调 `ScheduleWakeup` 后，本 Run 的 ToolStep 结束 →
 //! agent_loop 发现 phase ≠ Ready → 把运行时态序列化到
 //! `~/.hebbian/sessions/<sid>/run_checkpoint.json` → 函数 return。WakeupScheduler
 //! 后来要 resume 时从这里读回。

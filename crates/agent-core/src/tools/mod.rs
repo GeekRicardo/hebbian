@@ -17,7 +17,6 @@ pub mod shell_parse;
 pub mod skill;
 pub mod task;
 pub mod todo_write;
-pub mod wait_for_task;
 pub mod web_fetch;
 pub mod web_search;
 
@@ -161,10 +160,6 @@ pub fn default_tools(
         )),
         Box::new(bash_output::BashOutputTool::new(shells.clone())),
         Box::new(kill_shell::KillShellTool::new(shells.clone())),
-        Box::new(wait_for_task::WaitForTaskTool::new(
-            shells.clone(),
-            phase.clone(),
-        )),
         Box::new(schedule_wakeup::ScheduleWakeupTool::new(phase)),
         Box::new(read::ReadTool::new(
             data_dir,
@@ -222,7 +217,6 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Bash",
     "BashOutput",
     "KillShell",
-    "WaitForTask",
     "ScheduleWakeup",
     "Read",
     "Edit",

@@ -85,7 +85,7 @@ pub struct SessionConfig {
     /// 数据目录路径。给定后 microcompact 把被压缩的原始 tool result 落盘到
     /// `<data_dir>/sessions/<sid>/tool_results/<call_id>.txt`（架构 §4.7 / Step 9）。
     pub data_dir: Option<PathBuf>,
-    /// 挂起请求通道（架构 §4.12.4）。`WaitForTask` / `ScheduleWakeup` 写它，
+    /// 挂起请求通道（架构 §4.12.4）。`ScheduleWakeup` 写它，
     /// agent_loop 在 ToolStep 后读它决定是否进入 Suspended。必须与本 session 的
     /// `default_tools` 拿到的 phase channel 是同一份（否则模型挂起请求永远到不了
     /// agent_loop）。
@@ -501,7 +501,7 @@ impl Session {
     /// 从挂起态恢复 Run（架构 §4.12.6）：调用方先把 `<wakeup>` user message
     /// 追加到 transcript，再调本函数；agent_loop 入口会 emit `RunResumed { cause }`
     /// 并从 checkpoint 计数器起步。`phase` 参数 = 同一份挂起通道，让 resume 后
-    /// 模型可以再次调 WaitForTask / ScheduleWakeup 形成多次挂起。
+    /// 模型可以再次调 ScheduleWakeup 形成多次挂起。
     pub fn resume_with(
         &self,
         cancel: CancelFlag,

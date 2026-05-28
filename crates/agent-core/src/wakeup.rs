@@ -21,7 +21,7 @@ use crate::storage::run_checkpoint::RunPhase;
 use crate::tools::background::BackgroundShells;
 
 /// PhaseChannel：dispatcher 与 agent_loop 之间共享的"当前 ToolStep 跑完后要不要挂起"
-/// 标志位。WaitForTask / ScheduleWakeup 工具执行时写入；agent_loop 在 ToolStep
+/// 标志位。ScheduleWakeup 工具执行时写入；agent_loop 在 ToolStep
 /// 完成后取出并处理（架构 §4.12.4）。
 pub type PhaseChannel = Arc<Mutex<Option<RunPhase>>>;
 
@@ -264,8 +264,8 @@ impl WakeupScheduler {
     }
 
     /// 在 bg_watches 表里登记一条；BgFinishHook 发现 task 进入终态时投递事件。
-    /// `tool_use_id`：触发该 task 的 tool_call.id（CC 同款，用于 task-notification 反查上下文）。
-    /// 老调用方（WaitForTask 等）传 None；BashTool 自动 arm 时传 Some(call_id)。
+    /// `tool_use_id`：触发该 task 的 tool_call.id，用于 task notification 反查上下文。
+    /// 兼容旧调用方可传 None；BashTool / Task 自动 arm 时传 Some(call_id)。
     pub fn arm_bg_task(
         &self,
         session_id: String,

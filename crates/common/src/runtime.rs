@@ -32,6 +32,7 @@ pub struct RuntimeHandle {
     pub cancel: CancelFlag,
     pub pending_inputs: PendingInputs,
     pub consumed_pending_inputs: ConsumedPendingInputs,
+    pub accepting_pending_inputs: Arc<AtomicBool>,
 }
 
 static REGISTRY: std::sync::OnceLock<Mutex<HashMap<String, RuntimeHandle>>> =
@@ -51,6 +52,7 @@ pub fn register_for_session(request_id: String, session_id: Option<String>) -> R
         cancel: Arc::new(AtomicBool::new(false)),
         pending_inputs: Arc::new(Mutex::new(Vec::new())),
         consumed_pending_inputs: Arc::new(Mutex::new(Vec::new())),
+        accepting_pending_inputs: Arc::new(AtomicBool::new(true)),
     };
     registry()
         .lock()
@@ -95,10 +97,27 @@ pub fn has_active_run_for_session(request_id: &str, session_id: &str) -> bool {
 /// 返回 `false` 表示 request_id 已经不存在（run 结束 / 还没注册）。
 pub fn inject_pending_input(request_id: &str, input: PendingUserInput) -> bool {
     if let Some(handle) = registry().lock().unwrap().get(request_id) {
+        if !handle.accepting_pending_inputs.load(Ordering::SeqCst) {
+            return false;
+        }
         handle.pending_inputs.lock().unwrap().push(input);
         return true;
     }
     false
+}
+
+pub fn close_pending_inputs(request_id: &str) -> bool {
+    if let Some(handle) = registry().lock().unwrap().get(request_id) {
+        close_pending_inputs_handle(handle);
+        return true;
+    }
+    false
+}
+
+pub fn close_pending_inputs_handle(handle: &RuntimeHandle) {
+    handle
+        .accepting_pending_inputs
+        .store(false, Ordering::SeqCst);
 }
 
 pub fn unregister(request_id: &str) {

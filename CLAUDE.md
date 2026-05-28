@@ -332,9 +332,9 @@ git add a.rs b.rs                   # 不 add c.rs
 git commit -m "$(cat <<'EOF'
 重构 X：从 BackgroundShells 抽 BgTaskRegistry 通用接口
 
-- Why: 让 Bash 与 Subagent 共享后台 task_id 命名空间，WaitForTask 按前缀路由
+- Why: 让 Bash 与 Subagent 共享后台 task_id 命名空间，统一走完成 notification
 - 影响范围: agent-core 内部接口
-- 留尾巴: WaitForTask subagent 前缀分支留 P4.1
+- 留尾巴: subagent 完成结果读取入口留 P4.1
 
 Note: 当前工作区另含 c.rs 的别处改动（XX 模块的 UI 调整），不在本次提交范围内。
 EOF

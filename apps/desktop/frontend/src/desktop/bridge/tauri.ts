@@ -41,6 +41,11 @@ import type {
   WorkspaceProjectInput,
 } from "@/desktop/ui/types";
 
+export interface InjectUserMessageResult {
+  message: Message;
+  injected: boolean;
+}
+
 export const api = {
   // providers
   getProviders: () => invoke<ProvidersFile>("get_providers"),
@@ -195,7 +200,7 @@ export const api = {
     attachments: MessageAttachment[],
     meta?: MessageMeta | null
   ) =>
-    invoke<Message>("inject_user_message", {
+    invoke<InjectUserMessageResult>("inject_user_message", {
       sessionId,
       requestId,
       content,
