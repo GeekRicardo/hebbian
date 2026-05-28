@@ -105,6 +105,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       ...settings.general,
       show_grep_search_path: settings.general.show_grep_search_path ?? true,
       shell: settings.general.shell ?? null,
+      edit_backend: settings.general.edit_backend ?? "string-replace",
     },
   };
 }
@@ -873,6 +874,8 @@ interface AppState {
   runningSessions: Set<string>;
   /** 后台跑完但用户尚未查看的会话 id 集合，用于 Sidebar 静态点。 */
   unreadFinishedSessions: Set<string>;
+  /** agent loop 异常退出（模型请求失败等）时记录的会话 id，用于输入框上方 suggestion。发新消息时自动清空。*/
+  lastRunError: { sessionId: string } | null;
 
   // UI
   providerDialogOpen: boolean;
@@ -1153,6 +1156,7 @@ export const useStore = create<AppState>((set, get) => ({
   planComments: {},
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
+  lastRunError: null,
   providerDialogOpen: false,
   settingsOpen: false,
   promptsDialogOpen: false,
@@ -2031,6 +2035,7 @@ export const useStore = create<AppState>((set, get) => ({
             : {}),
           sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
           runningSessions: new Set(state.runningSessions).add(sessionId),
+          lastRunError: null,
           ...(isForeground ? mirrorFromSlot(initialSlot) : {}),
         };
       });
@@ -2168,7 +2173,10 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
         // 后台失败不向 UI 抛错（用户视野不在这里，吐 toast 也无意义）
-        if (stillForeground) throw err;
+        if (stillForeground) {
+          set({ lastRunError: { sessionId } });
+          throw err;
+        }
       } finally {
         drainNext();
       }

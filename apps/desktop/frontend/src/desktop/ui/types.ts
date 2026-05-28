@@ -387,6 +387,7 @@ export interface AppSettings {
     show_grep_search_path: boolean;
     shell?: string | null;
     log_enabled: boolean;
+    edit_backend: "string-replace" | "hashline";
   };
   conversation: {
     workdir?: string | null;

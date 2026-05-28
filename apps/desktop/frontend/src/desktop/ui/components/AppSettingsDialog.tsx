@@ -616,6 +616,28 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
           className="h-4 w-4 rounded"
         />
       </FieldRow>
+
+      <FieldRow
+        label="文件编辑方式"
+        description="切换 Edit 工具的实现。「精确替换」适合小块精确改动；「行号 patch」在大文件局部改动时更省 token，下一次对话生效"
+      >
+        <select
+          value={draft.general.edit_backend ?? "string-replace"}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              general: {
+                ...draft.general,
+                edit_backend: e.target.value as "string-replace" | "hashline",
+              },
+            })
+          }
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="string-replace">精确替换（默认）</option>
+          <option value="hashline">行号 patch（实验）</option>
+        </select>
+      </FieldRow>
     </div>
   );
 }
