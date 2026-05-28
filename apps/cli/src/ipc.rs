@@ -121,28 +121,41 @@ pub enum DaemonEvent {
     },
     TextDelta {
         text: String,
+        /// 子 NestedRun 事件来源标识（架构 §4.4.11.8）。`Some` 时前端按此字段嵌套渲染到父 Task 卡片内。
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     TextDone {
         full_text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     Reasoning {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     ToolStart {
         id: String,
         name: String,
         input: Value,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待时按 chunk 推过来；
     /// 自动化脚本可以 tail 这个看命令实时进度，不必等 ToolDone。
     ToolOutputDelta {
         id: String,
         chunk: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     ToolDone {
         id: String,
         result: String,
         duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        subagent_call_id: Option<String>,
     },
     PermissionRequested {
         request_id: String,

@@ -16,24 +16,35 @@ use serde_json::Value;
 pub enum EngineEvent {
     TextDelta {
         text: String,
+        /// 子 NestedRun 事件来源标识（架构 §4.4.11.8）。前端按此字段嵌套渲染到父 Task 卡片内部。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     TextDone {
         full_text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     Reasoning {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolCallDelta {
         index: usize,
         id: Option<String>,
         name: Option<String>,
         arguments_delta: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolStart {
         index: usize,
         id: String,
         name: String,
         input: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolDone {
         index: usize,
@@ -42,12 +53,16 @@ pub enum EngineEvent {
         duration_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台 stdout/stderr 按 chunk 推过来。
     ToolOutputDelta {
         index: usize,
         id: String,
         chunk: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     RunSuspended {
         reason: String,
@@ -123,12 +138,20 @@ pub struct QuestionOptionDto {
 /// AgentEvent → EngineEvent。仅翻译浏览器 surface 需要的事件，其余返回 None。
 pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
     use EventPayload::*;
+    let subagent = event.subagent_call_id.clone();
     Some(match &event.payload {
-        TextDelta { text } => EngineEvent::TextDelta { text: text.clone() },
+        TextDelta { text } => EngineEvent::TextDelta {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        },
         TextDone { full_text } => EngineEvent::TextDone {
             full_text: full_text.clone(),
+            subagent_call_id: subagent.clone(),
         },
-        Reasoning { text } => EngineEvent::Reasoning { text: text.clone() },
+        Reasoning { text } => EngineEvent::Reasoning {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        },
         ToolCallDelta {
             index,
             id,
@@ -139,6 +162,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             id: id.clone(),
             name: name.clone(),
             arguments_delta: arguments_delta.clone(),
+            subagent_call_id: subagent.clone(),
         },
         ToolCallStarted {
             index,
@@ -150,6 +174,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             id: call_id.clone(),
             name: name.clone(),
             input: input.clone(),
+            subagent_call_id: subagent.clone(),
         },
         ToolCallFinished {
             index,
@@ -164,6 +189,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             result: result.clone(),
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
+            subagent_call_id: subagent.clone(),
         },
         ToolCallOutputDelta {
             index,
@@ -173,6 +199,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             index: *index,
             id: call_id.clone(),
             chunk: chunk.clone(),
+            subagent_call_id: subagent.clone(),
         },
         RunFailed { error } => EngineEvent::Error {
             message: error.message.clone(),

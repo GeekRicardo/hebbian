@@ -14,26 +14,37 @@ use serde_json::Value;
 pub enum EngineEvent {
     TextDelta {
         text: String,
+        /// 子 NestedRun 事件来源标识（架构 §4.4.11.8）。前端按此字段嵌套渲染到父 Task 卡片内部。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     TextDone {
         full_text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     /// 模型的思维链 / 推理过程增量（DeepSeek `reasoning_content`、
     /// Anthropic `thinking_delta` 等）。前端通常以折叠块单独渲染。
     Reasoning {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolCallDelta {
         index: usize,
         id: Option<String>,
         name: Option<String>,
         arguments_delta: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolStart {
         index: usize,
         id: String,
         name: String,
         input: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     ToolDone {
         index: usize,
@@ -44,6 +55,8 @@ pub enum EngineEvent {
         /// MessageBubble 渲染「📎 完整输出」可点链接。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     /// 工具执行中的流式输出片段（架构 §4.4.1）。Bash 前台等待期间的
     /// stdout/stderr 增量按 chunk 推过来；前端把 chunk 追加到对应工具卡片的
@@ -52,6 +65,8 @@ pub enum EngineEvent {
         index: usize,
         id: String,
         chunk: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_call_id: Option<String>,
     },
     /// Run 进入挂起态（架构 §4.12）。surface 据此渲染 BackgroundTaskPanel 占位。
     RunSuspended {

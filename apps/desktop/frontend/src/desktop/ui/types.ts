@@ -151,6 +151,8 @@ export interface Message {
   parts?: MessagePart[];
   created_at: number;
   meta?: MessageMeta | null;
+  /** 子 NestedRun 事件来源标识（架构 §4.4.11.8）。`存在` 时前端按此字段嵌套渲染到父 Task 卡片内部。 */
+  subagent_call_id?: string | null;
 }
 
 export interface MessageToolCall {
@@ -457,17 +459,18 @@ export interface SearchHit extends SessionMeta {
  * 4. 本文件 EngineEvent 类型 + useStore.ts applyEventToSlot 处理函数
  */
 export type EngineEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "text_done"; full_text: string }
-  | { type: "reasoning"; text: string }
+  | { type: "text_delta"; text: string; subagent_call_id?: string | null }
+  | { type: "text_done"; full_text: string; subagent_call_id?: string | null }
+  | { type: "reasoning"; text: string; subagent_call_id?: string | null }
   | {
       type: "tool_call_delta";
       index: number;
       id?: string | null;
       name?: string | null;
       arguments_delta?: string | null;
+      subagent_call_id?: string | null;
     }
-  | { type: "tool_start"; index: number; id: string; name: string; input: unknown }
+  | { type: "tool_start"; index: number; id: string; name: string; input: unknown; subagent_call_id?: string | null }
   | {
       type: "tool_done";
       index: number;
@@ -476,6 +479,7 @@ export type EngineEvent =
       duration_ms: number;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
+      subagent_call_id?: string | null;
     }
   | {
       /**
@@ -487,6 +491,7 @@ export type EngineEvent =
       index: number;
       id: string;
       chunk: string;
+      subagent_call_id?: string | null;
     }
   | {
       /** 架构 §4.12：Run 进入挂起态。 */

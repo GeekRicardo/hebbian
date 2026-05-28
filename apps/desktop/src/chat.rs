@@ -232,7 +232,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         data_dir,
         &args.session_id,
     ));
-    // 架构 §4.12.4：phase channel 让 WaitForTask/ScheduleWakeup 把"挂起请求"递给 agent_loop。
+    // 架构 §4.12.4：phase channel 让挂起工具把"挂起请求"递给 agent_loop。
     let phase = agent_core::wakeup::new_phase_channel();
     // 架构 §4.12.2 修订：BackgroundShells 是 session-scoped，跨 chat() 调用通过
     // `registry_for_session` 拿同一份；不同 session 完全隔离。
@@ -1671,12 +1671,20 @@ fn preview_push_assistant(out: &mut Vec<serde_json::Value>, m: &Message) {
 
 fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
     use agent_core::types::AgentEventPayload::*;
+    let subagent = event.subagent_call_id.clone();
     match &event.payload {
-        TextDelta { text } => Some(EngineEvent::TextDelta { text: text.clone() }),
+        TextDelta { text } => Some(EngineEvent::TextDelta {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        }),
         TextDone { full_text } => Some(EngineEvent::TextDone {
             full_text: full_text.clone(),
+            subagent_call_id: subagent.clone(),
         }),
-        Reasoning { text } => Some(EngineEvent::Reasoning { text: text.clone() }),
+        Reasoning { text } => Some(EngineEvent::Reasoning {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        }),
         ToolCallDelta {
             index,
             id,
@@ -1687,6 +1695,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             id: id.clone(),
             name: name.clone(),
             arguments_delta: arguments_delta.clone(),
+            subagent_call_id: subagent.clone(),
         }),
         ToolCallStarted {
             index,
@@ -1698,6 +1707,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             id: call_id.clone(),
             name: name.clone(),
             input: input.clone(),
+            subagent_call_id: subagent.clone(),
         }),
         ToolCallFinished {
             index,
@@ -1712,6 +1722,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             result: result.clone(),
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
+            subagent_call_id: subagent.clone(),
         }),
         ToolCallOutputDelta {
             index,
@@ -1721,6 +1732,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             index: *index,
             id: call_id.clone(),
             chunk: chunk.clone(),
+            subagent_call_id: subagent.clone(),
         }),
         RunFailed { error } => Some(EngineEvent::Error {
             message: error.message.clone(),

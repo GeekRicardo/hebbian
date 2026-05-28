@@ -247,13 +247,13 @@ impl TurnObserver for DaemonObserver {
         // （架构 §4.4.11.8）。父 transcript / 父 jsonl 不被串入子内容；子事件落到子 session.jsonl
         // 由 P3.1c 单独接上。
         if event.subagent_call_id.is_some() {
-            if let Some(ev) = translate_event(&event.payload) {
+            if let Some(ev) = translate_event(event) {
                 self.state.emit(&ev);
             }
             return;
         }
         self.turn.handle_event(&event.payload);
-        if let Some(ev) = translate_event(&event.payload) {
+        if let Some(ev) = translate_event(event) {
             self.state.emit(&ev);
         }
     }
@@ -291,8 +291,9 @@ impl TurnObserver for DaemonObserver {
     }
 }
 
-fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
-    match payload {
+fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
+    let subagent = event.subagent_call_id.clone();
+    match &event.payload {
         EventPayload::RunStarted { .. } => Some(DaemonEvent::RunStarted),
         EventPayload::RunFinished {
             total_input_tokens,
@@ -316,11 +317,18 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
         EventPayload::RunResumed { cause } => Some(DaemonEvent::RunResumed {
             cause: format!("{cause:?}"),
         }),
-        EventPayload::TextDelta { text } => Some(DaemonEvent::TextDelta { text: text.clone() }),
+        EventPayload::TextDelta { text } => Some(DaemonEvent::TextDelta {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        }),
         EventPayload::TextDone { full_text } => Some(DaemonEvent::TextDone {
             full_text: full_text.clone(),
+            subagent_call_id: subagent.clone(),
         }),
-        EventPayload::Reasoning { text } => Some(DaemonEvent::Reasoning { text: text.clone() }),
+        EventPayload::Reasoning { text } => Some(DaemonEvent::Reasoning {
+            text: text.clone(),
+            subagent_call_id: subagent.clone(),
+        }),
         EventPayload::ToolCallStarted {
             call_id,
             name,
@@ -330,11 +338,13 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
             id: call_id.clone(),
             name: name.clone(),
             input: input.clone(),
+            subagent_call_id: subagent.clone(),
         }),
         EventPayload::ToolCallOutputDelta { call_id, chunk, .. } => {
             Some(DaemonEvent::ToolOutputDelta {
                 id: call_id.clone(),
                 chunk: chunk.clone(),
+                subagent_call_id: subagent.clone(),
             })
         }
         EventPayload::ToolCallFinished {
@@ -346,6 +356,7 @@ fn translate_event(payload: &EventPayload) -> Option<DaemonEvent> {
             id: call_id.clone(),
             result: result.chars().take(500).collect(),
             duration_ms: *duration_ms,
+            subagent_call_id: subagent.clone(),
         }),
         EventPayload::PermissionRequested {
             request_id,
