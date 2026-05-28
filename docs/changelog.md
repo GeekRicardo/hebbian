@@ -5271,6 +5271,17 @@
   - `pnpm exec tsc --noEmit`：通过（顺手补 P7 收尾的两处类型问题：MessageBubble 缺 `useCallback` import、useStore `applyEventToSlot` 在 EngineEvent union 上访问 `subagent_call_id` 没做 narrowing）。
 - **留尾巴**：MCP server `codegraph` 在 daemon 启动时报 `No such file or directory` 警告（与 Task 无关，user 环境的 MCP 配置指向不存在的路径，不影响主路径）；用户 hook 脚本 `~/.hebbian/hooks/verify-*.sh` 同样不存在但不影响。这两条不是本次任务范围。
 
+### 2026-05-28 — 新增：agent loop 异常退出时输入框上方显示 Continue suggestion chip
+
+- **Why**：模型请求失败（网络超时、provider 500 等）时 agent loop 异常退出，用户只看到一个 toast 错误，不知道该怎么继续——常见动作就是发一句「continue」让 agent 重试。加一个 suggestion chip 降低摩擦，同时建立了 UI 基础供后续「下一步建议」复用。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts)：`AppState` 加 `lastRunError: { sessionId: string } | null`；`sendUserMessage` catch 路径（前台、非中断）写入；新消息发出时（`set` 初始槽那一步）清空。
+  - [apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx](../apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx)：新建组件，接受 `suggestions: Suggestion[]` + `onSelect`，渲染 chip 行；suggestions 为空时不占位。以后所有场景的 suggestion 都走这个组件。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx)：从 store 取 `lastRunError`，在 `<ChatInput>` 上方插入 `<InputSuggestions>`；当 `lastRunError.sessionId === currentSession.id` 时注入 `{ label: "Continue", value: "continue" }` chip；点击相当于用户自己发了「continue」。
+- **影响范围**：Desktop 前端 store + ChatView；不改后端协议、不改 agent_core。
+- **验证**：`pnpm exec tsc --noEmit` 零报错。
+- **留尾巴**：后续可在 agent loop 正常退出时（比如 plan mode ExitPlan、特定工具完成）从后端推送 next-step suggestions，走同一个 InputSuggestions 组件渲染。
+
 ### 2026-05-28 — 修复 subagent 工具集 MCP 工具名重复导致 HTTP 400 + subagent 功能矩阵实测
 
 - **Why**：P8 收尾跑 subagent 全功能矩阵测试时（heb CLI surface），调用一个 `tools` 未限定（`def.tools=None`）的 subagent 立刻 `HTTP 400: tools contains duplicate names: Mcp__codegraph__codegraph_explore`，子 agent 根本没跑起来。
@@ -5288,3 +5299,37 @@
 - **留尾巴（T3 后台 Task 发现的真实 bug，未修）**：`Task(run_in_background=true)` 同步返回 `task_id=subagent-xxx` 正确、后台子 agent 也起来调了 Bash，**但**：(1) 父 run finish 后 event sink 关闭，后台子 agent 仍在跑 → 大量 `run event channel closed while sending critical event` WARN，子事件丢失；(2) 子 session 目录建了但 transcript（session.jsonl / model_io.jsonl）**未落盘**；(3) 没观测到 `BgTaskFinished` wakeup 唤醒父 run。后台路径（架构 §4.4.11.7）的事件 sink 生命周期 + 落盘 + wakeup 通知三处都需要返工，建议下个 P 单独处理。前台同步路径（T1/T2/T4/T5/T6）功能完整。
 - **测试 fixture**：`~/.hebbian/subagents/` 下留了 `echo-agent.md`（用户原有）+ `coder.md` / `looper.md`（本次测试造，可删）。
 
+
+### 2026-05-28 — 新增：Hashline edit 后端（实验性，settings 切换）
+
+- **Why**：
+  - oh-my-pi 用 hashline 解决了大文件局部改动 token 浪费 + 防 stale 编辑两件事
+  - Hebbian 现有 `Edit` 用 `old_string`/`new_string` 在大文件改一小块时仍要传完整 old_string，浪费 token
+  - 引入 hashline 后能 A/B 实测在 Claude 等模型上的格式遵从度与正确率，再决定是否长期保留
+  - 用户原话：「做一版跟 hashline 一样的实现，然后把他替换原来 Edit 的实现，然后要能很方便的替换回来 我试试效果怎样」
+- **设计要点**：
+  - **Read+Edit 强耦合，配套切换**：hashline patch 里的行号/hash 基于 hashline Read 输出，不能跨格式混用；dispatch 注册时按 `settings.general.edit_backend` 二选一注册
+  - **算法层纯函数**：`edits/hashline/{format,parser,apply}.rs` 不持有状态、不直接 fs::write，与 IO 解耦便于单测；工具壳层做读追踪与落盘
+  - **hash 选择 CRC-32 低 12 bit (3 hex)**：给模型做 stale 防御的"我看到的还是这一版吗"，冲突 1/4096 会话内足够；ReadStateTracker 内部仍用完整 CRC-32 + mtime 做严格判定，互不依赖。没引入 SHA-256 是因为 agent-core 现状没依赖 `sha2`，而 `crc32fast` 已在 Cargo.lock 里（dep tree 已有），加一行声明即可
+  - **首版砍掉的功能**：流式恢复（tool call 是一次性 payload）、move `*A,B` 语法、创建/删除文件（hashline 后端遇到时模型需切回 string-replace 或用户手动操作）
+  - **prompt.md 当 description**：用 `include_str!` 内嵌教学文档进 `EditHashlineTool::description()`；写成英文与 Claude 模型对齐
+- **改动列表**：
+  - `crates/agent-core/Cargo.toml`：加 `crc32fast = "1"` 依赖（Cargo.lock 已有）
+  - `crates/agent-core/src/storage/settings.rs`：`GeneralSettings` 加 `edit_backend: EditBackend` 字段（enum `StringReplace` / `Hashline`，默认 `StringReplace`，`#[serde(default)]` 兼容旧 settings.json）
+  - `crates/agent-core/src/edits/hashline/mod.rs` + `format.rs` / `parser.rs` / `apply.rs` / `prompt.md`：新模块，纯函数算法层 + 教学文档
+  - `crates/agent-core/src/tools/read_hashline.rs`：复制 `read.rs` 改格式化为 hashline 头 + N:line（先复制再抽象，50 行重复 < 引入 trait 抽象的耦合成本）
+  - `crates/agent-core/src/tools/edit_hashline.rs`：JSON schema 只接受 `patch: string`；走 parser → 对每段 section 做 tracker 前置检查 → apply → 落盘 → record 新 hash
+  - `crates/agent-core/src/tools/mod.rs`：`default_tools` / `default_tools_with_mcp` 加 `edit_backend` 参数，按值 match 注册 Read+Edit 对
+  - `apps/desktop/src/chat.rs` / `apps/cli/src/daemon.rs` / `apps/web-server/src/session.rs`：三处 caller 传 `settings.general.edit_backend`
+  - `apps/desktop/frontend/src/desktop/ui/types.ts` + `store/useStore.ts` + `components/AppSettingsDialog.tsx`：前端 General 面板加 select（精确替换 / 行号 patch），改后下一次对话生效
+  - `crates/agent-core/tests/hashline_roundtrip.rs`：新增 4 个集成测试（Read→Edit roundtrip、keep_range、EOF append、stale hash 拒绝）
+  - `docs/架构.md` §4.4.12 + §13 决策表追加一行
+- **借鉴细节**：参考了 oh-my-pi `packages/hashline/src/` 的 `prefixes.ts`（行号前缀自动剥离）、`format.ts`（hash + render 设计）、`parser.ts`（结构）、`apply.ts`（hunk 应用）、`prompt.md`（教学文档结构）。简化掉：流式恢复（Hebbian tool call 是一次性 payload）、move 语法 `*A,B`、创建/删除文件、HashlineFilesystem 这一层（Hebbian 工具层直接调用 std::fs，不引入新的 Filesystem 抽象）
+- **测试**：35 个单元测试 + 4 个集成测试全 PASS（format 6 / parser 9 / apply 9 / read_hashline 4 / edit_hashline 5 / settings 3 + integration 4）
+- **影响范围**：agent-core 新增模块；3 个 surface 的 caller 同步加参数；前端 General 面板加 1 个 select。默认值 `StringReplace` 不影响现有行为，旧 settings.json 通过 `#[serde(default)]` 兼容
+- **留尾巴**：
+  - **A/B 试用待定**：实际跑下来效果如何（Claude 在 hashline 格式上的格式遵从度、stale hash 自纠能力、对模型 token 实际节省）需要试用后再决定是否长期保留；试用后若决定保留，prompt.md 与 description 还可进一步精修
+  - **创建新文件未支持**：模型遇到时需要切回 string-replace 或用户手动操作。是否扩展 hashline 语法（如 `¶path#NEW`）让 hashline 后端也能 create，待试用后定
+  - **多文件 patch 中途失败不回滚**：hashline 后端首版接受这个风险——一个 patch 含 N 个 file section 时，前 K 个写成功、第 K+1 个失败，前 K 个不会回滚；模型靠错误信息自纠
+  - **未做的迁移**：现有会话 transcript 里的历史 Read/Edit 工具结果保持原格式（不重新渲染），切换后端只影响后续工具调用——这是刻意的，避免压缩缓存失效
+  - 前端 select 文案是「精确替换 / 行号 patch」给用户视角，不暴露 `string-replace` / `hashline` 内部枚举值
