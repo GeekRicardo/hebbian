@@ -5270,3 +5270,21 @@
   - `cargo test -p agent-core --lib`：377 通过 / 1 失败（pre-existing read.rs MAX_OUTPUT_BYTES，不属于本次任务）。
   - `pnpm exec tsc --noEmit`：通过（顺手补 P7 收尾的两处类型问题：MessageBubble 缺 `useCallback` import、useStore `applyEventToSlot` 在 EngineEvent union 上访问 `subagent_call_id` 没做 narrowing）。
 - **留尾巴**：MCP server `codegraph` 在 daemon 启动时报 `No such file or directory` 警告（与 Task 无关，user 环境的 MCP 配置指向不存在的路径，不影响主路径）；用户 hook 脚本 `~/.hebbian/hooks/verify-*.sh` 同样不存在但不影响。这两条不是本次任务范围。
+
+### 2026-05-28 — 修复 subagent 工具集 MCP 工具名重复导致 HTTP 400 + subagent 功能矩阵实测
+
+- **Why**：P8 收尾跑 subagent 全功能矩阵测试时（heb CLI surface），调用一个 `tools` 未限定（`def.tools=None`）的 subagent 立刻 `HTTP 400: tools contains duplicate names: Mcp__codegraph__codegraph_explore`，子 agent 根本没跑起来。
+- **根因**：`ToolRegistry::definitions(filter)` 和 `mcp_definitions()` 设计上应互斥（前者非 MCP、后者 MCP），agent_loop / chat.rs 永远成对调用。但 `definitions` 没排除 `Mcp__` 前缀工具。主会话不踩雷是因为主 loop 的 `all_filter` 永不含 MCP 名；subagent 在 `def.tools=None` 时拿 `child_registry.tool_names()`（**含 MCP 名**）当 fallback 白名单 → `definitions` 吐一次 MCP 工具 + `mcp_definitions` 又吐一次 → 上行重名 400。
+- **改动**:
+  - [crates/agent-core/src/tools/registry.rs](../crates/agent-core/src/tools/registry.rs)：`definitions` 加 `!t.name().starts_with("Mcp__")` 过滤，让它与 `mcp_definitions` 真正互斥——单点根除所有重复来源（fallback、显式白名单含 MCP 名、未来新来源）。新增回归测试 `definitions_excludes_mcp_tools`（filter 含 MCP 名时 definitions+mcp_definitions 合并必须无重名）。
+- **影响范围**：agent_core registry 一个方法。主 loop + chat.rs 行为不变（它们 filter 从不含 MCP 名，过滤前后结果一致）；修复 subagent fallback 路径。
+- **验证（subagent 功能矩阵，heb CLI + mimo provider，auto-mode）**：
+  - **T1 同步 echo**（不调工具）：✓ 子 agent 返回字符串，事件带 `subagent_call_id` 路由到父 Task 卡片。
+  - **T2 同步 + 子调 Bash**：✓ 子 agent 真执行 `echo hello-from-subagent` 返回 `hello-from-subagent\n`，父接到结果。（附带发现：workdir 不存在时 Bash spawn 报 `No such file or directory`，是 workdir 缺失不是 subagent bug。）
+  - **T4 未知 subagent_type**：✓ 同步返回友好错误「未找到 subagent `nonexistent-agent`（可用：coder, echo-agent, looper）」，duration_ms=0，父 run 继续。
+  - **T5 max_iterations=2 死循环 subagent**：✓ 修复 MCP 400 后子 agent 正常调 ScheduleWakeup，第 3 轮被拦：「Task 执行失败: 已达到最大工具调用轮数 2」。（注：子 loop `phase=None`，子 agent 的 ScheduleWakeup 不会真挂起，max_iter 兜底——符合"子 agent 无挂起能力"设计。）
+  - **T6 父 cancel 传播**：✓ 子 agent 跑起来（7 个子事件）后 `heb stop`，子事件数冻结在 7（没偷跑），父 Task tool_done 返回「Task 执行失败: 已取消」，cancel 经共享 `parent_cancel` flag 正确传播。
+  - `cargo test -p agent-core --lib`：395 通过 / 1 失败（pre-existing read.rs MAX_OUTPUT_BYTES，与本任务无关）。`tsc --noEmit` 零报错。
+- **留尾巴（T3 后台 Task 发现的真实 bug，未修）**：`Task(run_in_background=true)` 同步返回 `task_id=subagent-xxx` 正确、后台子 agent 也起来调了 Bash，**但**：(1) 父 run finish 后 event sink 关闭，后台子 agent 仍在跑 → 大量 `run event channel closed while sending critical event` WARN，子事件丢失；(2) 子 session 目录建了但 transcript（session.jsonl / model_io.jsonl）**未落盘**；(3) 没观测到 `BgTaskFinished` wakeup 唤醒父 run。后台路径（架构 §4.4.11.7）的事件 sink 生命周期 + 落盘 + wakeup 通知三处都需要返工，建议下个 P 单独处理。前台同步路径（T1/T2/T4/T5/T6）功能完整。
+- **测试 fixture**：`~/.hebbian/subagents/` 下留了 `echo-agent.md`（用户原有）+ `coder.md` / `looper.md`（本次测试造，可删）。
+
