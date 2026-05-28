@@ -57,6 +57,12 @@ impl Transcript {
 
         let start = boundary.map(|i| i + 1).unwrap_or(0);
         for msg in &messages[start..] {
+            // Subagent 子 NestedRun 的消息已经在子 session.jsonl 自成一份（架构 §4.4.11.8），
+            // 父 transcript 重建时跳过——父只关心 Task 工具调用的 ToolResult（子终态文本），
+            // 那一条 ToolResult 由父侧 dispatcher 在 spawn_task 完成时写入父 Message。
+            if msg.subagent_call_id.is_some() {
+                continue;
+            }
             match msg.role {
                 Role::User => t.entries.push(TranscriptEntry::User(UserEntry {
                     text: msg.content.clone(),
@@ -258,6 +264,71 @@ mod tests {
             parts,
             created_at: 0,
             meta: None,
+            subagent_call_id: None,
+        }
+    }
+
+    #[test]
+    fn from_session_skips_messages_tagged_with_subagent_call_id() {
+        let parent_user = Message {
+            id: "u1".to_string(),
+            role: Role::User,
+            content: "parent question".to_string(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: None,
+        };
+        let child_user = Message {
+            id: "u2".to_string(),
+            role: Role::User,
+            content: "child internal user msg".to_string(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: Some("task-call-1".to_string()),
+        };
+        let child_assistant = Message {
+            id: "a1".to_string(),
+            role: Role::Assistant,
+            content: "child reply".to_string(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: Some("task-call-1".to_string()),
+        };
+        let parent_assistant = Message {
+            id: "a2".to_string(),
+            role: Role::Assistant,
+            content: "parent reply".to_string(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: None,
+        };
+
+        let t = Transcript::from_session(
+            None,
+            &[parent_user, child_user, child_assistant, parent_assistant],
+        );
+
+        // 子事件被过滤：只剩 parent user + parent assistant
+        assert_eq!(t.entries.len(), 2);
+        match &t.entries[0] {
+            TranscriptEntry::User(u) => assert_eq!(u.text, "parent question"),
+            other => panic!("expected parent User first, got {other:?}"),
+        }
+        match &t.entries[1] {
+            TranscriptEntry::Assistant(a) => assert_eq!(a.text, "parent reply"),
+            other => panic!("expected parent Assistant second, got {other:?}"),
         }
     }
 

@@ -19,6 +19,7 @@ pub mod run_state;
 pub mod session;
 pub mod session_titler;
 pub mod storage;
+pub mod subagent;
 pub mod system_prompt;
 pub mod tools;
 pub mod turn_context;

@@ -220,7 +220,8 @@ impl TurnData {
             parts: self.parts,
             created_at: Utc::now().timestamp_millis(),
             meta: None,
-        })
+                subagent_call_id: None,
+            })
     }
 }
 
@@ -234,6 +235,14 @@ struct WebObserver {
 #[async_trait]
 impl TurnObserver for WebObserver {
     fn on_event(&mut self, event: &AgentEvent) {
+        // 子 subagent NestedRun 事件不进父 turn 聚合（架构 §4.4.11.8），仅推到 WS 让前端
+        // 按 subagent_call_id 嵌套渲染。子事件落到子 session.jsonl 由 P3.1c 单独接上。
+        if event.subagent_call_id.is_some() {
+            if let Some(ev) = translate_event(event) {
+                self.runtime.emit_engine_event(ev);
+            }
+            return;
+        }
         self.turn.handle_event(&event.payload);
         if let Some(ev) = translate_event(event) {
             self.runtime.emit_engine_event(ev);
@@ -346,7 +355,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         parts: Vec::new(),
         created_at: Utc::now().timestamp_millis(),
         meta: None,
-    };
+                subagent_call_id: None,
+            };
     sessions::append_message(data_dir, session_id, user_msg)?;
 
     // model client
@@ -489,6 +499,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         cancel_flag,
         Some(pending_inputs),
         Some(consumed_inputs.clone()),
+        None,
     );
 
     let mut observer = WebObserver {
@@ -538,7 +549,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
                         parts: Vec::new(),
                         created_at: Utc::now().timestamp_millis(),
                         meta: None,
-                    },
+                subagent_call_id: None,
+            },
                 )?;
             }
         }

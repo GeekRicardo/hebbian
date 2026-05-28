@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use observability::attr;
@@ -97,6 +100,8 @@ pub struct LoopParams<'a> {
     pub pending_inputs: Option<PendingInputs>,
     /// 已被 drain 的 pending input 副本。surface 用它在 run 结束后按正确顺序落盘。
     pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
+    /// run 到达 terminal/suspended 后关闭，让 surface 侧的 late inject 能回落到新 run。
+    pub pending_inputs_accepting: Option<Arc<AtomicBool>>,
     /// 运行模式（架构 §4.4.3）。默认 `AskBeforeEdits`。
     pub run_mode: crate::run_mode::RunMode,
     /// 当前模型 id（AutoMode judge 用作模型限定）。
@@ -128,6 +133,10 @@ pub struct LoopParams<'a> {
     pub max_tool_iterations: Option<u32>,
     /// 规则文件渲染后的 `<system-reminder>` 块，追加到 system prompt 末尾。
     pub system_rules: Option<String>,
+    /// Subagent / NestedRun 上下文（架构 §4.4.11）。`Some` → ToolDispatcher 可以
+    /// 路由 `Task` 工具到 [`crate::subagent::SubagentRunner`]；`None` → Task 调用
+    /// 落到兜底错误（CLI 单跑 / 单测路径）。
+    pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -156,6 +165,12 @@ fn drain_pending_inputs(
         transcript.push_user(input.content, input.attachments);
     }
     drained_len
+}
+
+fn set_pending_inputs_accepting(flag: Option<&Arc<AtomicBool>>, accepting: bool) {
+    if let Some(flag) = flag {
+        flag.store(accepting, Ordering::SeqCst);
+    }
 }
 
 #[tracing::instrument(
@@ -191,6 +206,7 @@ pub async fn run_loop(
         model_io_dump,
         pending_inputs,
         consumed_pending_inputs,
+        pending_inputs_accepting,
         run_mode,
         model_id,
         judge_client,
@@ -202,6 +218,7 @@ pub async fn run_loop(
         edits_worktree,
         max_tool_iterations,
         system_rules,
+        subagent_ctx,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -549,6 +566,7 @@ pub async fn run_loop(
                 transcript.push_assistant_with_reasoning(text.clone(), reasoning, Vec::new());
                 let mut all_attachments = output_attachments;
                 all_attachments.extend(attachments);
+                set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), false);
                 if drain_pending_inputs(
                     pending_inputs.as_ref(),
                     consumed_pending_inputs.as_ref(),
@@ -557,6 +575,7 @@ pub async fn run_loop(
                 {
                     // 用户在本 turn 内插了新消息——turn 实质未"自然结束"，
                     // 不跑 Stop hook，直接续跑（与原逻辑一致）。
+                    set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), true);
                     output_attachments = all_attachments;
                     continue;
                 }
@@ -589,6 +608,7 @@ pub async fn run_loop(
                                 "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<hook-feedback source=\"Stop\">\n{trimmed}\n</hook-feedback>",
                             );
                             transcript.push_user(wrapped, Vec::new());
+                            set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), true);
                             output_attachments = all_attachments;
                             continue;
                         }
@@ -628,6 +648,20 @@ pub async fn run_loop(
                     emit(EventPayload::TextDelta { text: text.clone() });
                 }
                 output_attachments.extend(attachments);
+
+                // inherit 模式（架构 §4.4.11.3）需要"父当前 transcript 副本"。
+                // 在 push 触发 turn 之前抓快照——子看到的形态截止上一 turn 结束，不含
+                // 触发它的 assistant tool_call（避免子 transcript 出现无对应 ToolResult 的 self-reference）。
+                // 同 ToolStep 内的 parallel Task 共享同一份 Arc，看到一致形态。
+                let parent_transcript_snapshot = if calls
+                    .iter()
+                    .any(|c| c.name == crate::tools::task::TASK_TOOL_NAME)
+                {
+                    Some(Arc::new(transcript.entries.clone()))
+                } else {
+                    None
+                };
+
                 transcript.push_assistant_with_reasoning(text, reasoning, calls.clone());
 
                 if let Some(max) = max_tool_iterations {
@@ -662,6 +696,8 @@ pub async fn run_loop(
                     data_dir_for_artifacts: data_dir.clone(),
                     permission_store: hitl.permission_store().cloned(),
                     edits_worktree: edits_worktree.clone(),
+                    subagent_ctx: subagent_ctx.clone(),
+                    parent_transcript_snapshot,
                 };
 
                 let tools_span = tracing::info_span!(
@@ -796,6 +832,7 @@ pub async fn run_loop(
     };
 
     let duration_ms = run_start.elapsed().as_millis() as u64;
+    set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), false);
     run_span.record("hebbian.run.iterations", iteration);
     match &result {
         Ok(_) => {
@@ -1039,6 +1076,7 @@ mod tests {
                 model_io_dump: None,
                 pending_inputs: None,
                 consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
                 run_mode: crate::run_mode::RunMode::AskBeforeEdits,
                 model_id: None,
                 judge_client: None,
@@ -1050,6 +1088,8 @@ mod tests {
                 edits_worktree: None,
                 max_tool_iterations: None,
                 system_rules: None,
+
+                subagent_ctx: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1097,6 +1137,7 @@ mod tests {
                 model_io_dump: None,
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
+                pending_inputs_accepting: None,
                 run_mode: crate::run_mode::RunMode::AskBeforeEdits,
                 model_id: None,
                 judge_client: None,
@@ -1108,6 +1149,8 @@ mod tests {
                 edits_worktree: None,
                 max_tool_iterations: None,
                 system_rules: None,
+
+                subagent_ctx: None,
             },
             Arc::new(|_| {}),
         )
@@ -1167,6 +1210,7 @@ mod tests {
                 model_io_dump: None,
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
+                pending_inputs_accepting: None,
                 run_mode: crate::run_mode::RunMode::AskBeforeEdits,
                 model_id: None,
                 judge_client: None,
@@ -1178,6 +1222,8 @@ mod tests {
                 edits_worktree: None,
                 max_tool_iterations: None,
                 system_rules: None,
+
+                subagent_ctx: None,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -1290,6 +1336,7 @@ mod tests {
                 model_io_dump: None,
                 pending_inputs: None,
                 consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
                 run_mode: crate::run_mode::RunMode::AskBeforeEdits,
                 model_id: None,
                 judge_client: None,
@@ -1301,6 +1348,8 @@ mod tests {
                 edits_worktree: None,
                 max_tool_iterations: Some(2),
                 system_rules: None,
+
+                subagent_ctx: None,
             },
             Arc::new(|_| {}),
         )

@@ -32,6 +32,7 @@ pub mod sessions_dir;
 pub mod settings;
 pub mod skill_collections;
 pub mod skills;
+pub mod subagents;
 pub mod tool_results;
 
 use std::path::{Path, PathBuf};

@@ -14,6 +14,12 @@ pub struct Event {
     pub seq: u64,
     /// Unix epoch milliseconds
     pub at_ms: i64,
+    /// 子 NestedRun（subagent）触发的事件携带此字段（架构 §4.4.11.8）：
+    /// 值 = 触发子 NestedRun 的父 Task 工具调用 `call_id`。顶层事件保持 `None`。
+    /// surface 端按这个字段把子事件挂到对应父 Task 卡片内部嵌套区域；并发场景下
+    /// 多个 NestedRun 用不同 call_id 自然分桶。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_call_id: Option<String>,
     pub payload: EventPayload,
 }
 
@@ -323,6 +329,23 @@ impl Event {
             run_id,
             seq,
             at_ms: chrono::Utc::now().timestamp_millis(),
+            subagent_call_id: None,
+            payload,
+        }
+    }
+
+    /// 同 `now`，但把事件标记为某个父 Task 调用的子 NestedRun 产生（架构 §4.4.11.8）。
+    pub fn now_subagent(
+        run_id: RunId,
+        seq: u64,
+        parent_task_call_id: impl Into<String>,
+        payload: EventPayload,
+    ) -> Self {
+        Self {
+            run_id,
+            seq,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+            subagent_call_id: Some(parent_task_call_id.into()),
             payload,
         }
     }

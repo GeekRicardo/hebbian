@@ -24,7 +24,7 @@ use agent_core::{
 use async_trait::async_trait;
 use common::{
     attachments::MessageAttachment,
-    runtime::{ConsumedPendingInputs, PendingInputs},
+    runtime::{ConsumedPendingInputs, PendingInputs, PendingUserInput},
     CancelFlag,
 };
 use model_gateway::{self, config::Provider};
@@ -55,6 +55,8 @@ pub struct SendArgs {
     pub pending_inputs: Option<PendingInputs>,
     /// agent_loop 已消费的 pending input。Desktop 用它在 run 结束后按正确顺序落盘。
     pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
+    /// agent_loop 结束后关闭；late inject 看到 false 后回落到下一轮 run。
+    pub pending_inputs_accepting: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// app 级 HITL 桥接。用 Tauri 的 `app.state::<Arc<HitlState>>()`
     /// 取出来塞进来。测试场景传 `None`。
     pub hitl: Option<Arc<HitlState>>,
@@ -74,6 +76,20 @@ fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
     // 否则 send_message 会与 lib.rs::data_dir 写盘路径错位，create_session 写到
     // ~/.hebbian/sessions/<sid>/ 但 send_message 去 Tauri bundle 目录读，立刻 not found。
     Ok(agent_core::storage::default_data_dir())
+}
+
+fn matches_injected_user_message(
+    msg: &Message,
+    content: &str,
+    attachments: &[MessageAttachment],
+    meta: &Option<MessageMeta>,
+) -> bool {
+    msg.role == Role::User
+        && msg.content == content
+        && msg.attachments == attachments
+        && msg.tool_calls.is_empty()
+        && msg.parts.is_empty()
+        && &msg.meta == meta
 }
 
 pub async fn send_and_save(
@@ -123,17 +139,46 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     // 内部的 sessions::load 是纯读路径（避免 turn 进行中误把活跃 partial 当成中断）。
     let prior_session = sessions::load_with_partial_recovery(data_dir, &args.session_id)?;
 
-    let user_msg = Message {
-        id: sessions::new_id(),
-        role: Role::User,
-        content: args.user_content.clone(),
-        attachments: args.attachments.clone(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: args.user_meta.clone(),
+    let is_system_notification = args
+        .user_meta
+        .as_ref()
+        .is_some_and(MessageMeta::is_system_notification);
+    let already_persisted_notification = is_system_notification
+        && prior_session.messages.iter().any(|msg| {
+            matches_injected_user_message(
+                msg,
+                &args.user_content,
+                &args.attachments,
+                &args.user_meta,
+            )
+        });
+    let mut initial_messages = prior_session.messages.clone();
+    if already_persisted_notification {
+        initial_messages.retain(|msg| {
+            !matches_injected_user_message(
+                msg,
+                &args.user_content,
+                &args.attachments,
+                &args.user_meta,
+            )
+        });
+    }
+    let session = if already_persisted_notification {
+        prior_session.clone()
+    } else {
+        let user_msg = Message {
+            id: sessions::new_id(),
+            role: Role::User,
+            content: args.user_content.clone(),
+            attachments: args.attachments.clone(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+            meta: args.user_meta.clone(),
+                subagent_call_id: None,
+            };
+        sessions::append_message(data_dir, &args.session_id, user_msg)?
     };
-    let session = sessions::append_message(data_dir, &args.session_id, user_msg)?;
 
     let provider = model_gateway::config::get(data_dir, &session.provider_id)?;
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
@@ -265,7 +310,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             enabled_tools: effective_enabled_tools,
             initial_transcript: Transcript::from_session(
                 session.system_prompt.clone(),
-                &prior_session.messages,
+                &initial_messages,
             ),
             recorder: None,
             model_io_dump,
@@ -281,7 +326,16 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             edits_worktree: Some(edits_worktree),
         },
     );
-    core_session.append_user(args.user_content.clone(), args.attachments);
+    if is_system_notification {
+        if let Some(pending) = args.pending_inputs.as_ref() {
+            pending.lock().unwrap().push(PendingUserInput {
+                content: args.user_content.clone(),
+                attachments: args.attachments.clone(),
+            });
+        }
+    } else {
+        core_session.append_user(args.user_content.clone(), args.attachments);
+    }
 
     // 架构 §4.12.6：用户发新消息时若本 session 有挂起态 checkpoint，走 resume
     // 路径（载入 RunResumeState、清调度器登记、emit RunResumed{UserMessageArrived}）。
@@ -312,6 +366,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             args.cancel_flag.clone(),
             args.pending_inputs.clone(),
             args.consumed_pending_inputs.clone(),
+            args.pending_inputs_accepting.clone(),
             Some(phase.clone()),
             rs,
         ),
@@ -319,6 +374,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             args.cancel_flag.clone(),
             args.pending_inputs.clone(),
             args.consumed_pending_inputs.clone(),
+            args.pending_inputs_accepting.clone(),
         ),
     };
     let hitl = handle.hitl().clone();
@@ -336,6 +392,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         consumed_pending_seen_before_run,
     );
     let summary = handle.drive(&mut observer).await;
+    if let Some(request_id) = args.request_id.as_deref() {
+        common::runtime::close_pending_inputs(request_id);
+    }
     if let Some(state) = &args.hitl {
         state.forget(&hitl);
     }
@@ -490,6 +549,7 @@ fn assistant_message_from_recorded_parts(
         parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
+        subagent_call_id: None,
     }
 }
 
@@ -625,6 +685,18 @@ impl<'a> DesktopObserver<'a> {
 #[async_trait]
 impl<'a> TurnObserver for DesktopObserver<'a> {
     fn on_event(&mut self, event: &AgentEvent) {
+        // 子 Subagent NestedRun 的事件（架构 §4.4.11.8）：装饰器已把 event.run_id 重写
+        // 为父 RunId，但带 subagent_call_id 标识。父 observer 把这种事件**只**转发到 UI
+        // （前端按 subagent_call_id 嵌套渲染到父 Task 卡片内部），**不**累积到父 parts /
+        // tool_calls / partial sidecar——避免子内容串入父 transcript / 父 jsonl。
+        // 子 session.jsonl 独立落盘由 P3.1c 接上；本期 P3.1b 阶段先保住"父 transcript 不串入"。
+        if event.subagent_call_id.is_some() {
+            if let Some(ev) = agent_event_to_engine_event(event) {
+                (self.emit)(ev);
+            }
+            return;
+        }
+
         if let EventPayload::TextDelta { text } = &event.payload {
             self.partial_output.push_str(text);
             self.segment_partial_output.push_str(text);
@@ -762,7 +834,8 @@ fn persist_interrupted_assistant_output(
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: Some(MessageMeta::Interrupted),
-    });
+                subagent_call_id: None,
+            });
     sessions::save(data_dir, session)
 }
 
@@ -807,7 +880,8 @@ fn assistant_message_from_partial(
         parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
-    })
+                subagent_call_id: None,
+            })
 }
 
 fn failed_assistant_message(
@@ -840,6 +914,7 @@ fn failed_assistant_message(
         parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
+        subagent_call_id: None,
     }
 }
 
@@ -1229,7 +1304,8 @@ pub async fn compact_session(
             before_tokens: result.before_tokens,
             after_tokens: result.after_tokens,
         }),
-    };
+                subagent_call_id: None,
+            };
     sessions::append_message(data_dir, session_id, marker)?;
 
     Ok(ContextUsageDto {
@@ -2486,6 +2562,55 @@ mod tests {
         }
     }
 
+    struct IdleWakeupClient;
+
+    #[async_trait]
+    impl ModelClient for IdleWakeupClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            let saw_wakeup = req.entries.iter().any(|entry| {
+                matches!(
+                    entry,
+                    model_gateway::types::TranscriptEntry::User(user)
+                        if user.text.contains("<wakeup kind=\"bg_task_finished\"")
+                )
+            });
+            assert!(
+                saw_wakeup,
+                "idle wakeup send path must include the notification in the model request"
+            );
+            on_event(ModelStreamEvent::TextDelta {
+                text: "收到后台完成通知".to_string(),
+            });
+            Ok(ModelResponse::Done {
+                text: "收到后台完成通知".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
     #[test]
     fn persist_interrupted_output_appends_partial_assistant_then_marker() {
         let data_dir = temp_data_dir();
@@ -2631,6 +2756,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
                     consumed_pending_inputs: None,
+                    pending_inputs_accepting: None,
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
@@ -2695,6 +2821,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: None,
                     consumed_pending_inputs: None,
+                    pending_inputs_accepting: None,
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
@@ -2762,6 +2889,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: Some(pending_inputs),
                     consumed_pending_inputs: Some(consumed_pending_inputs),
+                    pending_inputs_accepting: None,
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
@@ -2833,6 +2961,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: Some(pending_inputs),
                     consumed_pending_inputs: Some(consumed_pending_inputs),
+                    pending_inputs_accepting: None,
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
@@ -2901,6 +3030,7 @@ mod tests {
                     cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     pending_inputs: Some(pending_inputs),
                     consumed_pending_inputs: Some(consumed_pending_inputs),
+                    pending_inputs_accepting: None,
                     hitl: None,
                     permission_store: None,
                     force_automode: false,
@@ -2932,6 +3062,202 @@ mod tests {
                     (Role::Assistant, "通知后工具通知后结束".to_string()),
                 ]
             );
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn idle_system_notification_starts_model_request_with_wakeup() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::User,
+                    content: "启动后台任务".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                subagent_call_id: None,
+            },
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::Assistant,
+                    content: "已启动后台任务：`bash_001`。".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                subagent_call_id: None,
+            },
+            )
+            .unwrap();
+
+            let wakeup_xml = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n\n<wakeup kind=\"bg_task_finished\" task_id=\"bash_001\" tool_use_id=\"call_bg\" exit_code=\"0\" duration_ms=\"5281\">\n后台任务已完成。\n</wakeup>";
+            let assistant = send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    session_id: session.id.clone(),
+                    user_content: wakeup_xml.to_string(),
+                    user_meta: Some(MessageMeta::SystemNotification {
+                        kind: "bg_task_finished".to_string(),
+                        task_id: Some("bash_001".to_string()),
+                        tool_use_id: Some("call_bg".to_string()),
+                    }),
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: Vec::new(),
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+                    consumed_pending_inputs: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+                    pending_inputs_accepting: None,
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                    request_id: None,
+                },
+                |_| {},
+                |_provider, _model, _reasoning| {
+                    Ok(Arc::new(IdleWakeupClient) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(assistant.content, "收到后台完成通知");
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            let last = saved.messages.last().expect("assistant reply persisted");
+            assert_eq!(last.role, Role::Assistant);
+            assert_eq!(last.content, "收到后台完成通知");
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn pre_persisted_system_notification_is_not_appended_twice_on_resume_run() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            let wakeup_xml = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n\n<wakeup kind=\"bg_task_finished\" task_id=\"bash_001\" tool_use_id=\"call_bg\" exit_code=\"0\" duration_ms=\"5281\">\n后台任务已完成。\n</wakeup>";
+            let wakeup_meta = MessageMeta::SystemNotification {
+                kind: "bg_task_finished".to_string(),
+                task_id: Some("bash_001".to_string()),
+                tool_use_id: Some("call_bg".to_string()),
+            };
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::User,
+                    content: "启动后台任务".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                subagent_call_id: None,
+            },
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::User,
+                    content: wakeup_xml.to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: Some(wakeup_meta.clone()),
+                subagent_call_id: None,
+            },
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::Assistant,
+                    content: "已启动后台任务：`bash_001`。".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                subagent_call_id: None,
+            },
+            )
+            .unwrap();
+
+            let assistant = send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    session_id: session.id.clone(),
+                    user_content: wakeup_xml.to_string(),
+                    user_meta: Some(wakeup_meta),
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: Vec::new(),
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+                    consumed_pending_inputs: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+                    pending_inputs_accepting: None,
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                    request_id: None,
+                },
+                |_| {},
+                |_provider, _model, _reasoning| {
+                    Ok(Arc::new(IdleWakeupClient) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(assistant.content, "收到后台完成通知");
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            let notification_count = saved
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.role == Role::User && m.content == wakeup_xml && m.is_system_notification()
+                })
+                .count();
+            assert_eq!(notification_count, 1);
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });

@@ -121,7 +121,8 @@ pub async fn compact_session(
             before_tokens: result.before_tokens,
             after_tokens: result.after_tokens,
         }),
-    };
+                subagent_call_id: None,
+            };
     sessions::append_message(data_dir, session_id, marker).map_err(|e| anyhow!("{e}"))?;
 
     Ok(ContextUsageDto {

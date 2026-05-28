@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use async_trait::async_trait;
 use protocol::{
@@ -63,6 +63,8 @@ pub struct RunParams {
     pub pending_inputs: Option<PendingInputs>,
     /// 已被 agent_loop drain 的 pending input 副本。surface 可在 run 结束后按顺序落盘。
     pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
+    /// run 结束前为 true；terminal/suspended 后由 agent_loop 置 false。
+    pub pending_inputs_accepting: Option<Arc<AtomicBool>>,
     /// 运行模式（架构 §4.4.3）。默认 [`crate::run_mode::RunMode::AskBeforeEdits`]。
     pub run_mode: crate::run_mode::RunMode,
     /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用作模型限定。
@@ -88,6 +90,10 @@ pub struct RunParams {
     /// 规则文件渲染后的 `<system-reminder>` 块，追加到 system prompt 末尾。
     /// 由 Session 在 spawn_run 前解析，注入 system 段保证每轮都可见。
     pub system_rules: Option<String>,
+    /// Subagent / NestedRun 上下文（架构 §4.4.11）。`Some` 让 ToolDispatcher 把
+    /// `Task` 工具路由到 [`crate::subagent::SubagentRunner`]。Session 在 spawn_run
+    /// 前按当前 workspace 加载可用 subagent 定义构造；CLI 单跑 / 单测填 None。
+    pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
 }
 
 /// Core 对外门面。
@@ -229,6 +235,7 @@ impl Harness {
             model_io_dump,
             pending_inputs,
             consumed_pending_inputs,
+            pending_inputs_accepting,
             run_mode,
             model_id,
             force_automode,
@@ -239,6 +246,7 @@ impl Harness {
             edits_worktree,
             max_tool_iterations,
             system_rules,
+            subagent_ctx,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -263,6 +271,7 @@ impl Harness {
                 model_io_dump,
                 pending_inputs,
                 consumed_pending_inputs,
+                pending_inputs_accepting,
                 run_mode,
                 model_id,
                 judge_client: Some(judge_client),
@@ -274,6 +283,7 @@ impl Harness {
                 edits_worktree,
                 max_tool_iterations,
                 system_rules,
+                subagent_ctx,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

@@ -303,12 +303,42 @@ surface 端复现不了但单元层能复现（如纯函数行为）：写一个
 
 ---
 
-## graphify
+## Git commit / 提交规则
 
-This project has a graphify knowledge graph at graphify-out/.
+### 不允许 `git stash`
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
-- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
+绝对不允许 `git stash` / `git stash pop` / `git stash drop` 等任何 stash 操作。理由：stash 是隐式状态，丢失后无法恢复；且 stash + pop 在中途出错时会让工作区进入半改半失的脏状态，比"直接 commit 半成品"更糟。
+
+需要切换 / 暂存工作时，**只用 commit**，必要时再 `reset --soft HEAD~` 取回（commit 留在 reflog 里跑不掉）。
+
+### 一次提交 = 一次完整改动
+
+`git add <我本次涉及的文件> && git commit`。规则：
+
+1. **只 add 本次任务实际改的文件**——不要 `git add -A` / `git add .`，避免把别人在跑的改动混进来
+2. **即使涉及的文件里有别人/其他任务的未完成更改也照常 commit**——不 stash、不假装看不见——把当前任务该改的那部分作为一次 commit，**在 commit message 末尾用一段 "Note:" 说明剩余 staged/unstaged 的内容是什么**，让历史可追溯
+3. **commit message 用 HEREDOC** 保证多行格式；正文中文，遵循项目既有风格（动词开头 + Why + 影响范围 + 留尾巴的简化版本，无需重复 changelog 全文）
+4. **commit 之前必须 build / test 通过**——本次涉及的 surface 至少跑过 `cargo check` 和相关测试。如果是 agent_core 改动，跑 `cargo test -p agent-core --lib`；如果改 CLI，跑 `heb new` 起一个 session 基础链路通过；如果改 desktop / hebweb，跑 dev 模式 + tsc
+
+### commit message 不带 AI 署名
+
+不加 `Co-Authored-By: Claude ...`，不加 `🤖 Generated with Claude Code`，不加任何机器生成痕迹。PR description 同理。
+
+### 示例
+
+```bash
+# 假设本次任务改了 a.rs / b.rs，但工作区里 c.rs 是别人的未完成改动
+git add a.rs b.rs                   # 不 add c.rs
+git commit -m "$(cat <<'EOF'
+重构 X：从 BackgroundShells 抽 BgTaskRegistry 通用接口
+
+- Why: 让 Bash 与 Subagent 共享后台 task_id 命名空间，WaitForTask 按前缀路由
+- 影响范围: agent-core 内部接口
+- 留尾巴: WaitForTask subagent 前缀分支留 P4.1
+
+Note: 当前工作区另含 c.rs 的别处改动（XX 模块的 UI 调整），不在本次提交范围内。
+EOF
+)"
+```
+
+---

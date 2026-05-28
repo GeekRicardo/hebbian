@@ -221,7 +221,8 @@ impl TurnData {
             parts: self.parts,
             created_at: Utc::now().timestamp_millis(),
             meta: None,
-        })
+                subagent_call_id: None,
+            })
     }
 }
 
@@ -242,6 +243,15 @@ impl DaemonObserver {
 #[async_trait]
 impl TurnObserver for DaemonObserver {
     fn on_event(&mut self, event: &AgentEvent) {
+        // 子 subagent NestedRun 事件不进父 turn 聚合，仅转发到 daemon stdout 让 UI 嵌套渲染
+        // （架构 §4.4.11.8）。父 transcript / 父 jsonl 不被串入子内容；子事件落到子 session.jsonl
+        // 由 P3.1c 单独接上。
+        if event.subagent_call_id.is_some() {
+            if let Some(ev) = translate_event(&event.payload) {
+                self.state.emit(&ev);
+            }
+            return;
+        }
         self.turn.handle_event(&event.payload);
         if let Some(ev) = translate_event(&event.payload) {
             self.state.emit(&ev);
@@ -514,7 +524,8 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
         parts: Vec::new(),
         created_at: Utc::now().timestamp_millis(),
         meta: None,
-    };
+                subagent_call_id: None,
+            };
     sessions::append_message(data_dir, session_id, user_msg)?;
 
     // 构建 model client
@@ -665,6 +676,7 @@ async fn run_turn(state: Arc<DaemonState>, user_text: String) -> Result<()> {
         cancel_flag,
         Some(pending_inputs),
         Some(consumed_inputs.clone()),
+        None,
     );
 
     let mut observer = DaemonObserver::new(state.clone());
@@ -976,6 +988,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
                 parts: Vec::new(),
                 created_at: chrono::Utc::now().timestamp_millis(),
                 meta: Some(meta),
+                subagent_call_id: None,
             };
             // 1) 即写即落 jsonl（崩溃 / cancel 都不丢）
             if let Err(e) = sessions::append_message(

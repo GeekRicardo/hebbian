@@ -49,7 +49,7 @@ pub enum Role {
     Marker,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageMeta {
     Switch {
@@ -147,6 +147,13 @@ pub struct Message {
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<MessageMeta>,
+    /// 这条消息源自某次 Task subagent 子 NestedRun（架构 §4.4.11.8）。
+    /// 值 = 父侧 Task 工具调用的 call_id。`transcript::from_session` 重建父
+    /// transcript 时跳过 `Some(_)` 的 Message——子事件已经在子 session.jsonl 自成一份，
+    /// 父只需要 Task 工具调用的 ToolResult（子终态文本）即可。
+    /// 老 jsonl 没这个字段，serde default 给 None，不破坏向下兼容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_call_id: Option<String>,
 }
 
 impl Message {
@@ -1093,6 +1100,7 @@ pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> App
                     parts: Vec::new(),
                     created_at: now(),
                     meta: Some(MessageMeta::Interrupted),
+                    subagent_call_id: None,
                 }),
             )?;
             appended += 1;
@@ -1176,6 +1184,7 @@ fn partial_to_interrupted_message(
         parts,
         created_at: now(),
         meta: None,
+        subagent_call_id: None,
     })
 }
 
@@ -1402,6 +1411,7 @@ pub fn insert_switch_marker(data_dir: &Path, id: &str, meta: MessageMeta) -> App
             parts: Vec::new(),
             created_at: now(),
             meta: Some(meta),
+            subagent_call_id: None,
         },
     )
 }
@@ -1779,6 +1789,7 @@ mod tests {
                 parts: Vec::new(),
                 created_at: now(),
                 meta: None,
+                subagent_call_id: None,
             },
         )
         .expect("append message")
@@ -1940,6 +1951,7 @@ mod tests {
                 task_id: Some("bash_003".into()),
                 tool_use_id: Some("call_xyz".into()),
             }),
+            subagent_call_id: None,
         };
         assert!(
             wakeup.is_system_notification(),
@@ -1981,6 +1993,7 @@ mod tests {
             parts: Vec::new(),
             created_at: 0,
             meta: None,
+            subagent_call_id: None,
         };
         assert!(
             !plain.is_system_notification(),
@@ -2043,6 +2056,7 @@ mod tests {
             parts: Vec::new(),
             created_at: now(),
             meta: None,
+            subagent_call_id: None,
         };
         append_message(&dir, &s.id, msg.clone()).unwrap();
         let loaded = load(&dir, &s.id).unwrap();
@@ -2104,6 +2118,7 @@ mod tests {
                 parts: Vec::new(),
                 created_at: now_ts,
                 meta: None,
+                subagent_call_id: None,
             }],
             workdir: None,
             allowed_paths: None,
@@ -2163,6 +2178,7 @@ mod tests {
             parts: Vec::new(),
             created_at: now(),
             meta: None,
+            subagent_call_id: None,
         };
         append_message(&dir, &s.id, m2.clone()).unwrap();
         let m3 = Message {
@@ -2174,6 +2190,7 @@ mod tests {
             parts: Vec::new(),
             created_at: now(),
             meta: None,
+            subagent_call_id: None,
         };
         append_message(&dir, &s.id, m3).unwrap();
 

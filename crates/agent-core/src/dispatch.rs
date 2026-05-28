@@ -86,7 +86,7 @@ fn approval_decision_label(d: &ApprovalDecision) -> &'static str {
 }
 
 use common::{runtime as cancellation, CancelFlag};
-use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult};
+use model_gateway::types::{ModelError, ToolArtifact, ToolCall, ToolResult, TranscriptEntry};
 
 const MAX_TOOL_RESULT_INLINE: usize = 6_000;
 /// 落 artifact 路径时给模型看的头部预览字节上限。
@@ -141,6 +141,13 @@ pub struct ToolDispatcher {
     pub permission_store: Option<Arc<PermissionStore>>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
     pub edits_worktree: Option<Arc<EditsWorktree>>,
+    /// Subagent / NestedRun 上下文（架构 §4.4.11）。`None` 表示当前进程不支持
+    /// subagent 调度（单测路径 / 没有可用 subagent 定义时），spawn_task 直接拒绝。
+    pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
+    /// 父 Transcript 在「本轮 assistant tool_calls push 之前」的 entries 快照（架构 §4.4.11.3 inherit）。
+    /// 仅当本轮 `calls` 含 `Task` 工具时由 agent_loop 抓取；否则 `None` 跳过克隆。
+    /// `Arc` 共享给同 ToolStep 内所有 Task（parallel 启动看到同一形态）。
+    pub parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>,
 }
 
 impl ToolDispatcher {
@@ -171,6 +178,8 @@ impl ToolDispatcher {
                 self.spawn_todo_write(call.clone(), call_index, dispatch_index)
             } else if call.name == EXIT_PLAN_MODE_TOOL_NAME {
                 self.spawn_exit_plan_mode(call.clone(), call_index, dispatch_index)
+            } else if call.name == crate::tools::task::TASK_TOOL_NAME {
+                self.spawn_task(call.clone(), call_index, dispatch_index)
             } else {
                 self.spawn_tool(call.clone(), call_index, dispatch_index)
             };
@@ -1296,6 +1305,123 @@ impl ToolDispatcher {
         )
     }
 
+    /// Task short-circuit（架构 §4.4.11）：把子 NestedRun 委托给 [`SubagentRunner`]。
+    /// 流程：
+    /// 1. 解析 input
+    /// 2. 取 `subagent_ctx`（缺失 → 返回错误）
+    /// 3. 构造 [`SubagentRunner`]（共享父 client / hitl / workspace / edits-worktree /
+    ///    cancel；过滤父 ToolRegistry 后给子用；EventSink 装饰器填 `subagent_call_id`）
+    /// 4. 跑一次 isolated 同步 NestedRun（P2 范围；inherit / background 留 P3 / P4）
+    /// 5. 把子终态文本回灌父 transcript 作为 ToolResult
+    fn spawn_task(
+        &self,
+        call: ToolCall,
+        call_index: usize,
+        dispatch_index: usize,
+    ) -> BoxFuture<'static, Result<(usize, ToolResult), ModelError>> {
+        let state = self.state.clone();
+        let sink = self.sink.clone();
+        let subagent_ctx = self.subagent_ctx.clone();
+        let registry = self.registry.clone();
+        let workspace = self.workspace.clone();
+        let hitl = self.hitl.clone();
+        let cancel = self.cancel.clone();
+        let edits_worktree = self.edits_worktree.clone();
+        let parent_model_id = self.model_id.clone();
+        let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
+
+        let tool_span = tracing::info_span!(
+            "tool.call",
+            otel.name = "tool.Task",
+            otel.kind = "internal",
+            hebbian.tool.name = crate::tools::task::TASK_TOOL_NAME,
+            hebbian.tool.call_id = %call.id,
+            hebbian.tool.class = "subagent",
+            hebbian.tool.outcome = Empty,
+        );
+
+        Box::pin(
+            async move {
+                let start = Instant::now();
+                sink(state.event(EventPayload::ToolCallStarted {
+                    index: dispatch_index,
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                }));
+
+                let finish_with = |content: String, ok: bool| -> (usize, ToolResult) {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    record_tool_outcome(
+                        if ok {
+                            attr::outcome::OK
+                        } else {
+                            attr::outcome::FAILED
+                        },
+                        &call.name,
+                        0.0,
+                        false,
+                        content.len(),
+                    );
+                    sink(state.event(EventPayload::ToolCallFinished {
+                        index: dispatch_index,
+                        call_id: call.id.clone(),
+                        result: content.clone(),
+                        duration_ms,
+                        truncated: false,
+                        artifact_path: None,
+                    }));
+                    (
+                        call_index,
+                        ToolResult {
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                            content,
+                            artifact: None,
+                        },
+                    )
+                };
+
+                let parsed = match crate::tools::task::parse_input(call.input.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Ok(finish_with(format!("Task 入参解析失败: {e}"), false));
+                    }
+                };
+
+                let ctx = match subagent_ctx.as_ref() {
+                    Some(c) => c.clone(),
+                    None => {
+                        return Ok(finish_with(
+                            "Task 工具不可用：当前会话未注入 subagent 上下文".to_string(),
+                            false,
+                        ));
+                    }
+                };
+
+                let runner = crate::subagent::SubagentRunner {
+                    ctx: ctx.as_ref(),
+                    parent_registry: registry,
+                    parent_sink: sink.clone(),
+                    parent_workspace: workspace,
+                    parent_hitl: hitl,
+                    parent_cancel: cancel,
+                    parent_edits_worktree: edits_worktree,
+                    parent_run_id: state.run_id.clone(),
+                    parent_model_id: parent_model_id.clone(),
+                    parent_task_call_id: call.id.clone(),
+                    parent_transcript_snapshot,
+                };
+
+                match runner.execute(parsed).await {
+                    Ok(text) => Ok(finish_with(text, true)),
+                    Err(e) => Ok(finish_with(format!("Task 执行失败: {e}"), false)),
+                }
+            }
+            .instrument(tool_span),
+        )
+    }
+
     /// 申请越界路径访问审批：开 pending + emit `PermissionRequested { kind: PathAccess }`。
     fn request_path_approval(&self, tool_name: &str, paths: Vec<PathBuf>) -> PathApproval {
         // 路径越界不在工具维度，AllowAndRemember 在外层把路径加进 workspace.allowed_paths，
@@ -1640,6 +1766,7 @@ mod tests {
             workspace.clone(),
             crate::tools::background::BackgroundShells::new(),
             None,
+            None,
         ))
             as Box<dyn crate::tools::Tool>]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
@@ -1664,6 +1791,9 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
         };
 
         let call = ToolCall {
@@ -1704,6 +1834,7 @@ mod tests {
             workspace.clone(),
             crate::tools::background::BackgroundShells::new(),
             None,
+            None,
         ))
             as Box<dyn crate::tools::Tool>]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
@@ -1728,6 +1859,9 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
         };
 
         let calls = vec![
@@ -1839,6 +1973,9 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
+
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
         };
 
         let call = ToolCall {
@@ -1951,6 +2088,9 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
+
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
         };
 
         let call = ToolCall {

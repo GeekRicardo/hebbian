@@ -764,6 +764,7 @@ async fn send_message(
             cancel_flag: runtime.cancel.clone(),
             pending_inputs: Some(runtime.pending_inputs.clone()),
             consumed_pending_inputs: Some(runtime.consumed_pending_inputs.clone()),
+            pending_inputs_accepting: Some(runtime.accepting_pending_inputs.clone()),
             hitl: Some(hitl.inner().clone()),
             permission_store: permission_store.inner().clone(),
             force_automode: force_automode_enabled,
@@ -774,6 +775,12 @@ async fn send_message(
     .await;
     cancellation::unregister(&request_id);
     result
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct InjectUserMessageResult {
+    message: agent_core::storage::sessions::Message,
+    injected: bool,
 }
 
 #[tauri::command]
@@ -799,7 +806,7 @@ fn inject_user_message(
     content: String,
     attachments: Vec<common::attachments::MessageAttachment>,
     meta: Option<agent_core::storage::sessions::MessageMeta>,
-) -> AppResult<agent_core::storage::sessions::Message> {
+) -> AppResult<InjectUserMessageResult> {
     use agent_core::storage::sessions::{self, Message, Role};
     let dd = data_dir(&app)?;
 
@@ -812,6 +819,7 @@ fn inject_user_message(
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
         meta,
+        subagent_call_id: None,
     };
 
     // 1) 即写即落：jsonl 优先，cancel / 崩溃 / run 已结束都不丢
@@ -830,7 +838,10 @@ fn inject_user_message(
         tracing::debug!(session_id, request_id, "inject: run 不活跃，仅落盘不入队");
     }
 
-    Ok(user_msg)
+    Ok(InjectUserMessageResult {
+        message: user_msg,
+        injected,
+    })
 }
 
 #[tauri::command]

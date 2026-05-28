@@ -406,7 +406,7 @@ impl Session {
         cancel: CancelFlag,
         pending_inputs: Option<common::runtime::PendingInputs>,
     ) -> RunHandle {
-        self.run_with_runtime_inputs(cancel, pending_inputs, None)
+        self.run_with_runtime_inputs(cancel, pending_inputs, None, None)
     }
 
     fn resolve_system_rules(&self) -> Option<String> {
@@ -417,7 +417,36 @@ impl Session {
             self.workspace.initial_allowed_paths(),
         );
         let block = crate::rules::format_injection(&files);
-        if block.is_empty() { None } else { Some(block) }
+        if block.is_empty() {
+            None
+        } else {
+            Some(block)
+        }
+    }
+
+    /// 构造一次 spawn_run 用的 [`crate::subagent::SubagentCtx`] 快照（架构 §4.4.11）。
+    /// 没有可用 subagent（数据目录未设 / 列表为空）时返回 None——ToolDispatcher 拿到
+    /// None 时 Task 工具走兜底错误，但实际上 default_tools 条件注入会让 Task 工具根本
+    /// 没被注册，模型连选择项都看不到，所以"None + 模型硬调 Task"路径理论上不可达。
+    fn build_subagent_ctx_snapshot(&self) -> Option<Arc<crate::subagent::SubagentCtx>> {
+        let data_dir = self.data_dir.as_ref()?;
+        let subagents: Vec<_> =
+            crate::storage::subagents::load_for_workdir(data_dir, Some(self.workspace.workdir()))
+                .into_iter()
+                .filter(|d| d.enabled)
+                .collect();
+        if subagents.is_empty() {
+            return None;
+        }
+        Some(Arc::new(crate::subagent::SubagentCtx {
+            client: self.client.clone(),
+            hooks: self.hooks.clone(),
+            compaction_policy: self.definition.compaction_policy.clone(),
+            data_dir: Some(data_dir.clone()),
+            parent_session_id: self.session_id.clone(),
+            stream: true,
+            subagents: Arc::new(subagents),
+        }))
     }
 
     /// Desktop surface 需要在 run 结束后把已消费的 PendingInputs 按正确顺序落盘。
@@ -426,6 +455,7 @@ impl Session {
         cancel: CancelFlag,
         pending_inputs: Option<common::runtime::PendingInputs>,
         consumed_pending_inputs: Option<common::runtime::ConsumedPendingInputs>,
+        pending_inputs_accepting: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> RunHandle {
         let mut gate = HitlGate::new(self.definition.permission_policy.clone());
         if let (Some(store), Some(sid)) = (&self.permission_store, &self.session_id) {
@@ -452,6 +482,7 @@ impl Session {
                 model_io_dump: self.model_io_dump.clone(),
                 pending_inputs,
                 consumed_pending_inputs,
+                pending_inputs_accepting,
                 run_mode: self.run_mode,
                 model_id: self.model_id.clone(),
                 force_automode: self.force_automode,
@@ -462,6 +493,7 @@ impl Session {
                 edits_worktree: self.edits_worktree.clone(),
                 max_tool_iterations: None,
                 system_rules: self.resolve_system_rules(),
+                subagent_ctx: self.build_subagent_ctx_snapshot(),
             },
         )
     }
@@ -477,7 +509,7 @@ impl Session {
         phase: Option<crate::wakeup::PhaseChannel>,
         resume_from: crate::agent_loop::RunResumeState,
     ) -> RunHandle {
-        self.resume_with_runtime_inputs(cancel, pending_inputs, None, phase, resume_from)
+        self.resume_with_runtime_inputs(cancel, pending_inputs, None, None, phase, resume_from)
     }
 
     pub fn resume_with_runtime_inputs(
@@ -485,6 +517,7 @@ impl Session {
         cancel: CancelFlag,
         pending_inputs: Option<common::runtime::PendingInputs>,
         consumed_pending_inputs: Option<common::runtime::ConsumedPendingInputs>,
+        pending_inputs_accepting: Option<Arc<std::sync::atomic::AtomicBool>>,
         phase: Option<crate::wakeup::PhaseChannel>,
         resume_from: crate::agent_loop::RunResumeState,
     ) -> RunHandle {
@@ -513,6 +546,7 @@ impl Session {
                 model_io_dump: self.model_io_dump.clone(),
                 pending_inputs,
                 consumed_pending_inputs,
+                pending_inputs_accepting,
                 run_mode: self.run_mode,
                 model_id: self.model_id.clone(),
                 force_automode: self.force_automode,
@@ -523,6 +557,7 @@ impl Session {
                 edits_worktree: self.edits_worktree.clone(),
                 max_tool_iterations: None,
                 system_rules: self.resolve_system_rules(),
+                subagent_ctx: self.build_subagent_ctx_snapshot(),
             },
         )
     }

@@ -4835,11 +4835,12 @@
 
 ### 2026-05-27 — 修复运行中 assistant 占位与动图位置
 
-- **Why**: 用户发送消息后，agent 已经开始运行但首段模型输出到达前没有 assistant 头像；运行中动图还会跟着模型输出内容尾部显示，而不是固定在 agent 头像下方，导致聊天流视觉锚点不稳定。
+- **Why**: 用户发送消息后，agent 已经开始运行但首段模型输出到达前没有 assistant 头像；运行中动图需要跟随模型输出内容尾部显示，方便长输出时从尾部判断 agent 是否仍在工作。
 - **改动**:
   - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 运行中的 assistant 占位从「已有 streaming 文本/部件」改为跟随 `isStreaming`，确保用户消息发送后立刻出现 agent 头像。
   - [apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts) / [liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 补充并命名运行中占位排序语义，覆盖首段输出前与用户插入消息场景。
-  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 确认运行中动图挂在 assistant 头像列下，避免随正文内容流动。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 确认运行中动图挂在 assistant 正文尾部下一行，随输出尾部移动。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs): 新增布局回归脚本，约束动图位于正文容器之后，而不是头像列内。
 - **影响范围**: desktop/hebweb 前端渲染；不改协议、不改 agent-core，不破坏兼容。
 - **留尾巴**: 无
 
@@ -4938,3 +4939,152 @@
   - `cargo test -p hebbian pending_inputs_` 通过。
   - `cargo test -p agent-core pending_input` 通过。
 - **留尾巴**: 未跑 `pnpm tauri dev` 人工验证 Desktop UI；本次用 Desktop send_message 层单测覆盖落盘分段根因。
+
+### 2026-05-28 — 新增 Model I/O 里 tool schema 的单独查看区
+
+- **Why**: 用户希望在 Model I/O 详情里，紧跟 system prompt 看到本次真正传给模型的 tool schema，便于排查工具协议、参数 schema 和模型调用行为。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx): 在 system prompt 下方新增可折叠的 tool schema 区块，展示 `request.tools` 并支持复制。
+- **影响范围**: desktop 前端 Model I/O 查看器；只改展示层，不改变 model_io.jsonl 格式、agent-core 协议或模型请求内容。
+- **留尾巴**: 无。
+
+### 2026-05-28 — Subagent P3 阶段：落地 Task mode=inherit（继承父 transcript 的子 NestedRun）
+
+- **Why**: 架构 §4.4.11.3 预定义了 inherit 模式（子继承父 transcript 副本 + 追加 prompt），P2 阶段先打通 isolated 主路径时把 inherit 暂留 TODO 错误。本期把 inherit 真正接上，让父 agent 能让 subagent "延续当前讨论"做后续工作（例如父刚和用户讨论了实现，子接着写测试），而不是让 prompt 自己重述上下文。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs)：
+    - `ToolDispatcher` 加字段 `parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>`——同 ToolStep 内所有 Task 共享同一份 Arc，并发启动看到同一形态
+    - `spawn_task` 把 snapshot clone 给 `SubagentRunner`（runner 字段同名）
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)：
+    - 在 push 触发 turn **之前**条件抓取 snapshot——仅当 `calls` 含 `Task` 工具时 `Arc::new(transcript.entries.clone())`，否则 `None` 跳过克隆，避免常规工具调用承担多余拷贝成本
+    - 构造 dispatcher 时透传该 snapshot
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs)：
+    - `SubagentRunner` 加字段 `parent_transcript_snapshot`
+    - 把原 `build_isolated_transcript` / 新 `build_inherit_transcript` 提为模块级关联函数（不取 self），方便纯函数式单测
+    - `execute` 不再让 inherit 分支返 TODO 错误；改为按模式分流到对应构造函数
+    - 新增 4 个单测：isolated 形状 / inherit 保留父 entries 再追加 user prompt / inherit + snapshot=None 降级 / inherit 深拷贝无 aliasing
+  - 5 处 `ToolDispatcher` 测试构造点：批量补 `parent_transcript_snapshot: None`
+- **影响范围**: agent-core 内部协议在 `ToolDispatcher` / `SubagentRunner` 加一个 additive 字段；不动 protocol crate / model-gateway / surface；不破坏向下兼容。
+- **验证**:
+  - `cargo check -p agent-core --tests` 通过
+  - `cargo test -p agent-core --lib` **369/369 通过**（含 4 个新单测）
+  - `cargo check --workspace` 通过（仅 hebweb 已存在的 `input_tx` dead_code warning，与本次无关）
+- **关键设计落实**:
+  - **snapshot 时机选择「push 之前抓」**：架构.md §4.4.11.3 只说"父当前 transcript 副本"未限定时点，本期选最稳的"截止上 turn 末尾"。理由：
+    1. 并发多个 Task（parallel tool use）看到同一份形态——不会因为启动早晚看到不同的 in-flight assistant turn
+    2. 子的 transcript 不会出现「assistant 调用了 Task 但无对应 ToolResult」的 self-reference——这种形态在 anthropic / openai body 转换时会触发协议校验失败
+    3. 「触发 turn 的语境」（assistant 文字 + 调用理由）让 `prompt` 参数自己补，是可接受的折中
+  - **system 不继承父**：inherit 仅指 transcript 历史，不包括 system prompt。父子角色任务不同（父是主 agent，子是某专精角色），强行套父 system 会串改子的人格定位。子 system 用 `def.system_prompt`（与 isolated 模式一致）
+  - **snapshot=None 降级为 isolated 形态**：实际 agent_loop 在 calls 含 Task 时一定会抓快照，None 仅作为防御性兜底（避免硬错把整组 parallel Task 拖崩）
+  - **关联函数而非 `&self` 方法**：`build_inherit_transcript(def, prompt, snapshot)` 不依赖 runner 运行时字段，便于纯函数式单测——不需要构造一堆 `Arc<HitlGate>` / `Arc<Workspace>` 等只为测 transcript 形状
+  - **「cache 重打点」无需特殊处理**：anthropic / openai protocol 在每次请求 body 构造时自动套 `cache_control`——子用全新 transcript，provider 会按子形态重新打点，子层面不需要再做任何 cache 管理
+- **关键取舍**:
+  - **`Option<Arc<...>>` vs `Arc<...>`（默认空 Vec）**：用 `Option` 跳过非 Task 工具调用时的 transcript clone 成本。多轮对话下 entries 可能积累上百条，无谓 clone 每 ToolStep 都吃成本，不能忽略
+  - **本期范围收紧**：原本 P3 还包括"子 session.jsonl 落盘到 `sessions/<parent_sid>/subagents/<child_sid>/`"，本次拆出去到 P3.1 单独跟进——落盘涉及 SessionRecorder 路径定制 + Session 资源生命周期，改动面跟 inherit 模式正交，混在一起会让本条 changelog 抽象层太混
+- **留尾巴**:
+  - P3.1：子 session.jsonl 落盘到 `sessions/<parent_sid>/subagents/<child_sid>/`——目前子 LoopParams.session_id 仍是 None，子 transcript 不写盘；后续给 Session 加一条子 recorder 注入路径
+  - P4：`run_in_background=true` + BackgroundShells → BgTaskRegistry 命名重构 + WaitForTask 前缀路由
+  - P5：同步 API（listSubagents / saveSubagent / setEnabled / loadSubagentRun）
+  - P6 / P7：设置 UI tab + MessageBubble 嵌套渲染
+  - P8：桌面 dev 手动验证 inherit 端到端（重点验：子是否真的看到父历史 + cache 命中是否正常）
+  - **尚未端到端验证**：本期改动覆盖单元层（4 个新单测保证 transcript 形状正确），但 inherit 模式在桌面 dev 跑一次"父讨论需求→Task(inherit, '写测试')→子继续讨论"的链路尚未做。需要等 P5 同步 API + 一个示例 subagent 定义文件落地后才能跑完整端到端
+
+### 2026-05-28 — 修复后台 wakeup 已落盘但没有启动下一轮 agent_loop
+
+- **Why**: 用户给出 session `202605271720-c8239ed7`：Bash `run_in_background=true` 的 `sleep 5` 完成后，Desktop 把 `[SYSTEM NOTIFICATION - NOT USER INPUT]...<wakeup ...>` 写进了 `session.jsonl`，但没有新的模型请求。根因是前端看到 `sessionStreams[sessionId].requestId` 仍在就走 `inject_user_message`，而 backend 旧实现即使当前 run 已经过了最后一次 pending drain 也返回成功；通知只落盘不入队，前端误以为当前 loop 会消费它。
+- **改动**:
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs)、[crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)、[crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs)、[crates/agent-core/src/session.rs](../crates/agent-core/src/session.rs): 给运行时 pending 队列增加 `accepting_pending_inputs` 标志；agent_loop 到 terminal/suspended 后关闭它，late inject 返回 `false`。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `inject_user_message` 返回 `{ message, injected }`，继续保持“先落盘”语义，但把“是否真的进入当前 run pending 队列”暴露给前端。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): idle / fallback 的 system notification 通过 `send_message` 启动新 run 时，把通知塞进本轮 pending input，确保第一轮模型请求能看到；若同一 notification 已由 late inject 先写进 jsonl，则复用已落盘消息、不重复 append，并从历史 transcript 临时去掉旧位置，避免模型看到两次。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts)、[apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts)、[apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts](../apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts): wakeup active 分支只有 `injected=true` 才停；`injected=false` 等旧 request slot 释放后回落到 `sendUserMessage` 新 run，并跳过重复 optimistic user 气泡。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): wakeup parser 支持固定 `[SYSTEM NOTIFICATION - NOT USER INPUT]` 头部后面的 `<wakeup>` 块，避免系统通知被渲染成普通用户大气泡。
+  - [docs/架构.md](架构.md): 补充 §4.12.6 active wakeup 的 `{message, injected}` 语义和 fallback 去重策略。
+- **影响范围**: Desktop wakeup/resume 路径、agent-core/common 运行时 pending 控制点、前端 Tauri bridge 类型；不改变 `session.jsonl` 持久化格式，不新增 protocol `EventPayload` variant。`inject_user_message` 的 Tauri 返回 shape 有 additive 行为变化，已同步前端唯一调用方。
+- **验证**:
+  - `cargo test -p hebbian system_notification` 通过（覆盖 idle wakeup 触发模型请求、已落盘 notification fallback 不重复写）。
+  - `cargo test -p agent-core pending_input` 通过。
+  - `cargo test -p hebbian pending_inputs_` 通过。
+  - `cargo test -p hebbian pending_input_does_not_split_every_followup_model_request` 通过。
+  - `cargo check -p hebbian --tests` 通过（仅 notch.rs 既有 warning）。
+  - `cargo check -p agent-core --tests` 通过。
+  - `cargo test -p agent-core --lib` 369/369 通过。
+  - `cargo check --workspace` 通过（仅 hebweb `input_tx` dead_code 与 notch.rs 既有 warning）。
+  - `pnpm --dir apps/desktop exec tsc --noEmit` 通过。
+- **留尾巴**: 未跑 `pnpm tauri dev` 人工复现 Desktop 全链路；新增 `wakeupMessage.test.ts` 已被 TS 类型检查覆盖，但当前项目未安装 `tsx`，无法直接作为脚本执行。后续若加前端测试 runner，可把该纯函数测试纳入常规命令。
+
+### 2026-05-28 — Subagent P3.1a 阶段：子 NestedRun 落盘到 `sessions/<parent>/subagents/<child>/`
+
+- **Why**: 架构 §4.4.11.2 已定子 `session_id = "<parent>/subagents/<ulid>"` 的形态——这样 list_sessions 一级扫描天然忽略子（不污染会话列表），子工件目录（tool_results / bg / partial / compactions / plans）按嵌套布局聚拢在父目录树下。P2 阶段子 LoopParams.session_id 是 None，子完全不落盘；本期把这一段补齐。
+- **改动**:
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs)：
+    - 新增模块级 fn `prepare_child_session(parent_session_id, data_dir) -> Option<String>`——计算 `{parent}/subagents/{child}` + 调 `sessions_dir::ensure_session_dirs` 创建子目录骨架。父 session_id 或 data_dir 缺失时返回 None（CLI 单跑 / 单测路径），ensure 失败时降级为 None 让子 run 仍能跑（只是不持久化）
+    - `SubagentRunner::execute` 调用上面的辅助函数生成 child_session_id，填进 `LoopParams.session_id`
+  - 单测：2 个新单测——`prepare_child_session_creates_expected_nested_layout` 验证 `<parent>/subagents/<child>/{tool_results,compactions,plans,partial,bg}` 全部建出；`prepare_child_session_returns_none_when_inputs_missing` 验证 None 降级路径
+- **影响范围**: 仅 agent-core 内部。`session_dir(data_dir, id)` 内部 `data_dir.join("sessions").join(id)` 在 id 含 `/` 时按目录分隔符自然展开，不需要改 storage 层。surface（chat.rs / daemon / hebweb）写 session.jsonl 时也按 child_session_id 走 sessions_dir 路径函数，**不需要**额外改动——这是 P3.1a 范围内"路径机制"全部能在 agent-core 内闭环的关键。
+- **验证**:
+  - `cargo test -p agent-core --lib` **371/371 通过**（含 2 个新单测）
+  - `cargo check --workspace` 通过
+- **关键设计决策**:
+  - **session_id 含 `/` 用作复合路径**：架构.md 1121 行已定。Path::join 在 Unix-like 系统会自然展开，list_sessions 的一级目录扫描天然把子 session 排除在外（顶层只看到 `<parent>` 这个名字本身的目录）。tradeoff：session_id 不再是纯 ULID 形态，URL / JSON 序列化场景如果直接拿来当 path component 会出现 `/`——本期内子 session_id 仅用作 agent-core 内部 LoopParams.session_id + Path.join，不暴露到 protocol / surface 字符串字段，所以不踩雷
+  - **目录骨架完整创建**：子也跑 agent_loop，可能调 Bash 后台 → bg/、可能 microcompact → compactions/、可能 ExitPlanMode → plans/、可能 partial sidecar → partial/。统一调 `ensure_session_dirs` 一次建齐，子工件落地不会因为目录不存在失败
+  - **ensure_session_dirs 失败降级为 None**：磁盘满 / 权限错时，让子仍能跑（拿子终态文本作 ToolResult），只是这次子 transcript 不持久化。父侧拿到的子 result 不受影响——比硬错把整组 parallel Task 拖崩更好
+- **关键取舍**:
+  - **没在本期改 surface**：surface 层（chat.rs / daemon.rs / web-server/session.rs）写 session.jsonl 时都是按事件携带的 session_id（或者 surface 自己持有的 session_id）调 sessions_dir 路径函数，所以子事件如果落进父 sink，会按父 sink 持有的 session_id 写到父 jsonl——这就是 P3.1b 要解决的"父 transcript 被子事件污染"。本期 P3.1a 只解决了"路径机制"，**让子有自己的 session 目录可写**，但**当前并没有任何东西真的往子 jsonl 写入**——子事件仍在装饰器重写后转发到父 sink，写到父 jsonl。完整闭环要等 P3.1b 落地
+- **留尾巴**:
+  - P3.1b：让子事件实际写到子 session.jsonl + 不污染父 transcript（路径有了，落盘还没接通）。两种落地路径备选：(a) Message 加 subagent_call_id + 3 个 surface 写 Message 时同步 + `transcript::from_session` 跳过；(b) SubagentRunner 装饰器双写（子事件原版走子 jsonl 落盘 + 重写副本走父 UI 通道不进父 jsonl）。倾向 (a) ——改面集中、改动机械化
+  - P4：BgTaskRegistry 重构 + `run_in_background=true` + WaitForTask 前缀路由
+  - P5：同步 API（listSubagents / saveSubagent / setEnabled / loadSubagentRun）
+  - P6 / P7：设置 UI + MessageBubble 嵌套渲染
+  - P8：桌面 dev 端到端验证
+
+### 2026-05-28 — 撤回 wakeup 专用通知卡片，恢复普通 user message 渲染
+
+- **Why**: 用户反馈后台任务 Notification 被渲染成独立的特殊通知框，偏离原本“按 user message / 插队消息逻辑展示”的期望。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 删除 `parseWakeupMessage` / `WakeupNotice` 特殊分支，wakeup XML 不再转成 amber 通知卡片，继续走普通 user message 渲染。
+  - [apps/desktop/frontend/src/desktop/ui/components/wakeupMessage.test.ts](../apps/desktop/frontend/src/desktop/ui/components/wakeupMessage.test.ts): 删除只覆盖该特殊卡片解析逻辑的测试文件。
+  - [docs/架构.md](架构.md): 明确 `MessageMeta::SystemNotification` 用于结构化语义和去重，不再驱动特殊视觉卡片；view 层按普通 user message / 插队消息路径渲染。
+- **影响范围**: 仅 desktop 前端显示和架构说明；不改变 wakeup 注入、落盘、agent_loop、scheduler 或 model transcript。
+- **留尾巴**: 后台完成重复触发的问题仍需在 WakeupScheduler 去重修复；本条只撤回未经确认的特殊渲染。
+- **未做 heb cli 端到端验证的说明**：理论上能用 heb new + 一个真实可用 provider + 一个示例 subagent 定义文件触发 Task → 看 `~/.hebbian/sessions/<parent>/subagents/<child>/` 是否被创建。但这需要 P5 同步 API 把 subagent 定义文件创建链路打通 + 真实 model provider，**这一套到 P5 落地后再跑端到端更合适**。本期 `prepare_child_session_creates_expected_nested_layout` 单测已经覆盖"嵌套 session_id → 完整目录骨架建出"这条机制路径，SubagentRunner.execute 调用接线已成立（cargo check 通过），P5 之后能直接验
+
+### 2026-05-28 — 移除 graphify 工作流规则
+
+- **Why**: 用户明确要求不要再更新 graphify，并去掉相关规则。
+- **改动**:
+  - [CLAUDE.md](../CLAUDE.md): 删除 `graphify` active workflow 段落，不再要求阅读 `graphify-out/`、使用 `graphify query/path/explain`，也不再要求修改代码后运行 `graphify update .`。
+- **影响范围**: 仅规则文档和流程约束；不改变代码、协议或运行时行为。`docs/changelog.md` 中既有 graphify 提及保留为历史记录，不再代表当前 active rule。
+- **验证**:
+  - 未运行 `graphify update .`，符合本次规则变更要求。
+
+### 2026-05-28 — Subagent P3.1b 阶段：父 transcript 不再被子 NestedRun 事件串入
+
+- **Why**: P2 阶段子事件经装饰器重写 run_id 后转发到父 sink，三个 surface observer 把这些子事件累积进父 parts/tool_calls，**写到父 session.jsonl**。`transcript::from_session` 重建父 transcript 时认不出子事件，会把子的 assistant text / tool_call / tool_result 全当成父的 turn 内容塞进去——resume 后父 transcript 串入子内容，模型 IO 出错。本期把这条"子事件污染父 transcript"的路径完全切断。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs)：`Message` struct 加 `subagent_call_id: Option<String>` 字段（`#[serde(default, skip_serializing_if = "Option::is_none")]`——老 jsonl 缺字段时 default=None，向下兼容）。语义：这条消息来自某次 Task 子 NestedRun，值=父 Task 工具调用的 call_id
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs)：`from_session` 在遍历 messages 时跳过 `subagent_call_id.is_some()` 的条目——父 transcript 重建只看父自己的消息；子 transcript 由子 session.jsonl 独立承载（P3.1c 接上）。新增单测 `from_session_skips_messages_tagged_with_subagent_call_id` 验证过滤生效
+  - 3 个 surface observer 入口加同一段防护：事件 `subagent_call_id.is_some()` 时**只**转发到 UI 通道（前端按 subagent_call_id 嵌套渲染到父 Task 卡片内部），**不**累积到父 parts / tool_calls / partial sidecar / handle_event：
+    - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) `DesktopObserver::on_event`
+    - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) `DaemonObserver::on_event`
+    - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) `WebObserver::on_event`
+  - **Message struct literal 批量补字段**：sessions.rs / chat.rs / lib.rs / daemon.rs / chat_helpers.rs / web-server/session.rs / transcript.rs 内所有 `Message {...}` literal 用 Python 脚本一次性补 `subagent_call_id: None,`；2 处用 `..plain.clone()` 的 struct update 不需要补；少量边角情况手动修补（脚本误把 fn 收尾 `}` 当 struct 边界、模块前缀 `sessions::Message {` 被 lookbehind 排除）
+- **影响范围**: agent-core / desktop / hebweb / hebcli。Message 字段是 additive + serde default，session.jsonl 向下兼容（老文件没字段视为 None=父事件，与历史行为一致）。protocol crate Event 上的 `subagent_call_id` 字段在 P1 阶段已加，不动。
+- **验证**:
+  - `cargo check --workspace --tests` 通过（仅 hebweb `input_tx` dead_code、notch.rs 既有 warning 与本次无关）
+  - `cargo test -p agent-core --lib` **372/372 通过**（含 1 个新 from_session filter 单测）
+  - `cargo test --workspace --no-fail-fast --exclude model-gateway` 全量通过（agent-core 372 + hebbian 22 + 其余小 crate 全部 ok，**零回归**）
+  - `model-gateway --test thinking_integration` 的 2 个 e2e 测试 FAIL，但是因为真实 provider 网络抖动 / API key 失效——与本期改动无关（这些测试读 `~/.hebbian/providers.json` 调真实 provider，本期未触碰 model-gateway）
+- **关键设计决策**:
+  - **Message 加独立字段 vs 复用 MessageMeta enum**：选独立字段。MessageMeta 现有 variant（SystemNotification / Interrupted / ReasoningSwitch / CompactBoundary）都是"消息级语义标记"——是不是 wakeup、是不是中断点、是不是压缩边界。subagent_call_id 是"事件来源标识"，语义不同，塞进 MessageMeta 会让 enum 越来越杂。独立字段更对位
+  - **observer 跳过子事件累积 = 父 jsonl 不写子内容**：所有 surface observer 在 `subagent_call_id.is_some()` 时 early return（仅 emit UI），不调 `self.turn.handle_event` / `record_assistant_part_event` / `record_tool_event` / partial_writer。这条防御线在 surface 边界统一拦截，**比让 storage 写盘前 filter 更早**，也避免在 chat.rs / daemon / hebweb 各自的 message assembler 里再贴一层判断
+  - **UI 通道仍转发**：子事件经装饰器后已带 `subagent_call_id`，前端按这个 ID 把事件挂到父 Task 卡片内部嵌套区。如果 observer 完全黑掉子事件，前端就看不到 subagent 进度——破坏架构 §4.4.11.8 的嵌套渲染体验。所以"不写盘 + 仍 emit UI"是最小代价的隔离
+  - **本期未触碰子 session.jsonl 落盘**：observer 跳过子事件之后，子事件**目前**事实上被 surface 丢弃（既不写父 jsonl，也没人写子 jsonl）。这意味着这次跑完 subagent，子 transcript 在 disk 上**没有**——但子终态文本作为父 Task 工具调用的 ToolResult 已经回灌父 transcript / 父 jsonl，父能正常 resume / replay。子的中间事件流暂时只在 UI 上活过，是 P3.1c 单独接上"子事件写到子 session.jsonl"的留尾巴
+- **关键取舍**:
+  - **批量 sed/python 改 Message struct literal vs 逐个 Edit**：Message literal 在生产 + 测试代码里散落 ~30 处。手工 Edit 误差大 + 麻烦。用 Python 脚本基于括号配对解析定位每个 struct literal 字面量，跳过含 `..` 的 update form，统一插入字段。脚本翻车 2 处（一处误把 fn 收尾 `}` 当 struct 边界，一处遗漏模块前缀路径），手动修补即可。这种规模的机械化改动用脚本更稳
+  - **保留 protocol::Event::subagent_call_id 公共字段**：P1 阶段已把字段加在 Event struct 外层而非 EventPayload enum variant 内（enum 不支持公共字段）。本期 surface observer 直接读 `event.subagent_call_id`，跟 P1 决策一致
+- **留尾巴**:
+  - **P3.1c**：子事件实际落到子 session.jsonl（路径已在 P3.1a 建好）。两种实现路径：(a) SubagentRunner 装饰器**双写**——子事件原版（含子 RunId）写到 `<child_session>/session.jsonl`，重写副本（带 subagent_call_id）转发到父 sink 仅 UI 用；(b) 在装饰器外再插一个"子事件 jsonl 落盘 sink"。倾向 (a)，更聚拢
+  - P4：BgTaskRegistry 重构 + Task.run_in_background + WaitForTask 前缀路由
+  - P5：同步 API（listSubagents / saveSubagent / setEnabled / loadSubagentRun）
+  - P6 / P7：设置 UI + MessageBubble 嵌套渲染（嵌套渲染只能在 P6 之后跑端到端）
+  - P8：桌面 dev 端到端验证

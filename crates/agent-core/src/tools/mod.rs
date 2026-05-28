@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use model_gateway::types::{IMAGE_GENERATION_TOOL_NAME, ToolDefinition};
+use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
 use serde_json::Value;
 
 use common::{AppResult, CancelFlag};
