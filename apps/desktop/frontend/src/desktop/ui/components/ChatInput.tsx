@@ -87,6 +87,7 @@ export function ChatInput({
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
   const enqueueInput = useStore((s) => s.enqueueInput);
   const flushQueuedItem = useStore((s) => s.flushQueuedItem);
+  const currentInputQueue = useStore((s) => s.currentInputQueue);
   const composerDraft = useStore((s) => s.composerDraft);
   const clearComposerDraft = useStore((s) => s.clearComposerDraft);
   const tokenStats = useStore(
@@ -346,15 +347,22 @@ export function ChatInput({
     setHistoryState({ index: null });
   }
 
-  /** Shift+Enter：入队首 + 立即引导（走 PendingInputs，当前 model 调用完成后插队）。 */
+  /**
+   * Shift+Enter / Cmd+Enter：入队首 + 立即引导。
+   * 输入框有内容时先入队首再 flush；输入框为空但队列非空时直接 flush 队首——
+   * 这样消息发出去后按快捷键仍然有效。
+   */
   async function enqueueHeadAndFlush() {
     const v = value.trim();
-    if (!v && attachments.length === 0) return;
+    const hasDraft = v || attachments.length > 0;
+    if (!hasDraft && currentInputQueue.length === 0) return;
     setDrawerOpen(false);
-    enqueueInput(v, attachments, "head");
-    setValue("");
-    setAttachments([]);
-    setHistoryState({ index: null });
+    if (hasDraft) {
+      enqueueInput(v, attachments, "head");
+      setValue("");
+      setAttachments([]);
+      setHistoryState({ index: null });
+    }
     try {
       await flushQueuedItem();
     } catch (e: any) {
@@ -554,13 +562,13 @@ export function ChatInput({
       }
     }
 
-    // streaming 中 Shift+Enter = 入队首 + 立即引导（走 PendingInputs，
-    // 当前 model_call+tool_call 完成后插队）；非 streaming 时保持浏览器
-    // 默认换行行为。
+    // Shift+Enter / Cmd+Enter = 入队首 + 立即引导（走 PendingInputs，
+    // 当前 model_call+tool_call 完成后插队）。
+    // 触发条件：streaming 中，或输入框为空但队列里已有待发消息。
     if (
-      isStreaming &&
+      (isStreaming || currentInputQueue.length > 0) &&
       e.key === "Enter" &&
-      e.shiftKey &&
+      (e.shiftKey || e.metaKey) &&
       !compositionRef.current.isComposing &&
       !e.nativeEvent.isComposing &&
       e.nativeEvent.keyCode !== 229

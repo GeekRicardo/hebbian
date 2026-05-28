@@ -4,6 +4,7 @@ import { Sparkles, ChevronDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
+import { InputSuggestions } from "./InputSuggestions";
 import { InputQueuePanel } from "./InputQueuePanel";
 import {
   filterMessagesDuplicatedInLiveTimeline,
@@ -47,6 +48,7 @@ export function ChatView() {
     updateCurrentConfig,
     debugEnabled,
     appSettings,
+    lastRunError,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -701,6 +703,14 @@ export function ChatView() {
           <UserQuestionPopup />
         </div>
         <InputQueuePanel />
+        <InputSuggestions
+          suggestions={
+            lastRunError?.sessionId === currentSession?.id
+              ? [{ label: "Continue", value: "continue" }]
+              : []
+          }
+          onSelect={(value) => handleSend(value, [])}
+        />
         <ChatInput
           onSend={handleSend}
           onCancel={handleCancel}
