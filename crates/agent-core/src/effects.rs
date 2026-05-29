@@ -186,6 +186,10 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
 
         "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
 
+        // 记忆工具只动 hebbian 内部记忆库（~/.hebbian/.../memory/），不碰用户工作区文件——
+        // 免审批。否则 agent 每记一条 / 每读一条都弹审批，体验灾难（架构 §4.14）。
+        "ReadMemory" | "WriteMemory" => Effects::read_only(),
+
         name if name.starts_with("Mcp__") => {
             let server = input
                 .get("_server_transport")
@@ -410,6 +414,13 @@ mod tests {
     fn read_extracts_file_path_but_is_readonly() {
         let e = analyze_effects("Read", &json!({"file_path": "/etc/hosts"}));
         assert!(matches!(e.class, EffectClass::ReadOnly));
+
+        // 记忆工具免审批：只动内部记忆库（架构 §4.14）
+        for t in ["ReadMemory", "WriteMemory"] {
+            let e = analyze_effects(t, &json!({}));
+            assert!(matches!(e.class, EffectClass::ReadOnly), "{t} 应免审批");
+            assert!(e.paths.is_empty(), "{t} 不应带路径触发 PathAccess");
+        }
         assert_eq!(e.paths, vec![PathBuf::from("/etc/hosts")]);
     }
 

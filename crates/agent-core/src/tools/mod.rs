@@ -12,6 +12,7 @@ pub mod mcp;
 pub use mcp::McpToolReport;
 pub mod read;
 pub mod read_hashline;
+pub mod read_memory;
 pub mod registry;
 pub mod safe_commands;
 pub mod schedule_wakeup;
@@ -21,6 +22,7 @@ pub mod task;
 pub mod todo_write;
 pub mod web_fetch;
 pub mod web_search;
+pub mod write_memory;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -154,6 +156,12 @@ pub fn default_tools(
         })
         .unwrap_or_default();
 
+    // 记忆工具上下文（架构 §4.14）：data_dir 下面会被 Read 工具 move 走，先 clone；
+    // project_workdir 仅在 workdir 是具体项目（非 home / 非根）时为 Some——决定
+    // WriteMemory 能否写 project 作用域。
+    let mem_data_dir = data_dir.clone();
+    let project_workdir = memory_project_workdir(workspace.workdir());
+
     let mut tools: Vec<Box<dyn Tool>> = vec![
         Box::new(bash::BashTool::new(
             workspace.clone(),
@@ -200,6 +208,11 @@ pub fn default_tools(
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
         Box::new(exit_plan_mode::ExitPlanModeTool),
+        Box::new(read_memory::ReadMemoryTool::new(
+            mem_data_dir.clone(),
+            project_workdir.clone(),
+        )),
+        Box::new(write_memory::WriteMemoryTool::new(mem_data_dir, project_workdir)),
     ]);
 
     // Task 工具仅在加载到至少一个启用的 subagent 定义时注入（架构 §13 决策）：
@@ -252,7 +265,27 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Grep",
     "Skill",
     "TodoWrite",
+    "ReadMemory",
+    "WriteMemory",
 ];
+
+/// 记忆工具名（架构 §4.14）。subagent 过滤据此剔除——本期 subagent 不给记忆能力。
+pub const MEMORY_TOOL_NAMES: &[&str] = &[
+    read_memory::READ_MEMORY_TOOL_NAME,
+    write_memory::WRITE_MEMORY_TOOL_NAME,
+];
+
+/// 当前对话绑定的项目 workdir：workdir 是具体项目目录时返回 `Some`，是 home / 文件系统根
+/// （即「没在某个项目里」）时返回 `None`。记忆工具与注入据此决定 project 作用域可用性。
+pub fn memory_project_workdir(workdir: &std::path::Path) -> Option<PathBuf> {
+    let is_home = dirs::home_dir().as_deref() == Some(workdir);
+    let is_root = workdir.parent().is_none();
+    if is_home || is_root {
+        None
+    } else {
+        Some(workdir.to_path_buf())
+    }
+}
 
 /// 条件注入工具名：`default_tools` 仅在前置条件满足时把这些工具注册进 registry
 /// （例如 Task 仅在存在启用的 subagent 定义时注入）。dispatch 层把它们一律加进

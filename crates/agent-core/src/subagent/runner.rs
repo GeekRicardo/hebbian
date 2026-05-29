@@ -259,6 +259,9 @@ impl SubagentRunner {
             if name == crate::tools::task::TASK_TOOL_NAME {
                 continue; // 永远剔除 Task 防止多层嵌套
             }
+            if crate::tools::MEMORY_TOOL_NAMES.contains(&name) {
+                continue; // 本期 subagent 不给记忆能力（架构 §4.14）
+            }
             if let Some(allow) = allowed {
                 if !allow.iter().any(|n| n == name) {
                     continue;
