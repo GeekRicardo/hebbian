@@ -65,7 +65,8 @@ fn lookup_by_model_name(m: &str) -> Option<usize> {
     }
     // Claude 家族
     if m.contains("claude") || m.contains("mythos") {
-        if m.contains("opus-4-7")
+        if m.contains("opus-4-8")
+            || m.contains("opus-4-7")
             || m.contains("opus-4-6")
             || m.contains("sonnet-4-6")
             || m.contains("mythos")
@@ -73,6 +74,11 @@ fn lookup_by_model_name(m: &str) -> Option<usize> {
             return Some(1_000_000);
         }
         return Some(200_000);
+    }
+    // 小米 MiMo v2+：1M 上下文。其 /v1/models 不返回 context_length 字段，
+    // discovery 拉不到，只能在此预设兜底。
+    if m.starts_with("mimo-v2") {
+        return Some(1_000_000);
     }
     // OpenAI GPT 家族
     if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-")
@@ -111,6 +117,10 @@ mod tests {
 
     #[test]
     fn anthropic_1m_models() {
+        assert_eq!(
+            context_window_for(ProviderKind::Anthropic, "claude-opus-4-8"),
+            1_000_000
+        );
         assert_eq!(
             context_window_for(ProviderKind::Anthropic, "claude-opus-4-7-20260416"),
             1_000_000
@@ -268,6 +278,20 @@ mod tests {
         assert_eq!(
             context_window_for(ProviderKind::Deepseek, "deepseek-v3.2"),
             163_840
+        );
+    }
+
+    /// MiMo v2+ 是 1M 上下文，但其 /v1/models 不返回 context_length，
+    /// 只能靠模型名预设兜底（openai-kind 默认 128k 不对）。
+    #[test]
+    fn mimo_v2_is_1m() {
+        assert_eq!(
+            context_window_for(ProviderKind::Openai, "mimo-v2.5-pro"),
+            1_000_000
+        );
+        assert_eq!(
+            context_window_for(ProviderKind::Openai, "mimo-v2.5"),
+            1_000_000
         );
     }
 

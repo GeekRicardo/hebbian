@@ -151,10 +151,19 @@ pub fn build_body(
         "stream": stream,
     });
 
-    // Claude Code 兼容模式：代理只接受 adaptive thinking，不接受 enabled + budget_tokens
+    // Claude Code 兼容模式：代理只接受 adaptive thinking，不接受 enabled + budget_tokens。
+    // effort 取用户选的思考强度（按模型量程：4.7/4.8 可达 xhigh，4.6 最高 high），
+    // 不再写死 high——否则思考强度选择对所有走 CC 兼容 / OAuth 的 provider 完全失效。
+    // reasoning 未设时用 ReasoningEffort 默认（Extra → 4.8 走 xhigh），符合「默认想清楚」。
     if claude_code_oauth {
+        let effort = req
+            .reasoning
+            .as_ref()
+            .map(|c| c.effective_effort())
+            .unwrap_or_default()
+            .anthropic_adaptive_effort_for_model(&req.model);
         thinking_block = Some(json!({ "type": "adaptive" }));
-        output_config = Some(json!({ "effort": "high" }));
+        output_config = Some(json!({ "effort": effort }));
     }
 
     if let Some(t) = thinking_block {
@@ -787,6 +796,38 @@ mod tests {
             body["thinking"].get("display").is_none(),
             "sonnet-4.5 must NOT have thinking.display (that's Opus47 marker), body={body}"
         );
+    }
+
+    /// Claude Code 兼容 / OAuth 模式：output_config.effort 必须跟随用户思考强度
+    /// 并按模型量程取值，不能写死 high。回归历史 bug：sub2api 等 CC 兼容 provider
+    /// 上「思考强度」选择完全失效（永远 high）。
+    #[test]
+    fn cc_compat_effort_follows_user_and_model_scale() {
+        let build = |model: &str, effort: Option<ReasoningEffort>| {
+            let req = ModelRequest {
+                model: model.into(),
+                system: None,
+                entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+                tools: vec![],
+                max_tokens: 8192,
+                reasoning: effort.map(|e| common::ReasoningConfig {
+                    enabled: Some(true),
+                    effort: Some(e),
+                    long_context: None,
+                }),
+            };
+            build_body(&req, false, true).unwrap()
+        };
+
+        // 4.8：Extra → xhigh，Low → low
+        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Extra))["output_config"]["effort"], "xhigh");
+        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Low))["output_config"]["effort"], "low");
+        // 4.6：Extra 钳到 high
+        assert_eq!(build("claude-opus-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"], "high");
+        // reasoning 未设时用默认 Extra → 4.8 走 xhigh
+        assert_eq!(build("claude-opus-4-8", None)["output_config"]["effort"], "xhigh");
+        // thinking 始终 adaptive
+        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Medium))["thinking"]["type"], "adaptive");
     }
 
     // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────

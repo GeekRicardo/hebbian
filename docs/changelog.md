@@ -5425,3 +5425,22 @@
   - §13「内置工具数量=13」那行是 memory 之前的旧值，本次未臆改总数；工具清单真相源以 `BUILTIN_TOOL_NAMES` 为准（已含 ReadMemory/WriteMemory）。
 
 Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件里还夹着一处与记忆无关的"浮动 user 消息条"WIP——它原本编译不过（删了 stickToBottomRef/titleLoading 声明却仍引用 + never 类型），经用户同意做了最小修复（恢复声明 + 修 ternary/never）让前端 tsc 通过，但该功能本身仍是半成品，归其原作者继续。（dispatch 派发并发限流已由 commit 8f33e8a 单独提交，不在本条范围。）
+
+### 2026-05-30 — 修复 Anthropic claude-opus-4-8 参数识别 + CC 兼容写死思考强度 + MiMo 上下文窗口
+
+- **Why**: 用户报「provider 各参数仍有问题：上下文、思考强度，尤其 anthropic claude-opus 4-6/4-7/4-8」。实测 sub2api-freemodel（kind=anthropic，`claude_code_compat=true`，base_url localhost:17785，上游转真 Anthropic）复现出三类根因：
+  1. **opus-4-8 全程漏识别**：它是 4-7 之后的新旗舰，但所有按版本号匹配的 helper 都还停在 4-7。`anthropic_thinking_mode("claude-opus-4-8")` 落到 `contains("claude-opus-4")` 兜底→`LegacyEnabled`（错，应与 4-7 同 adaptive schema）；`context_window_for`→200k（错，应 1M）；`anthropic_long_context_uses_beta`→true（错，4.8 原生 1M 不该暴露开关 / 发 beta header）。
+  2. **CC 兼容模式把 effort 写死 `high`**：`build_body` 的 `claude_code_oauth` 分支无条件 `output_config.effort="high"`，覆盖掉按用户思考强度算出的值。后果：所有走 OAuth / `claude_code_compat` 的 provider（sub2api 等）上「思考强度」选择完全失效，永远 high，顶档也到不了 xhigh。RUST_LOG 抓 wire body 实测：opus-4-8 默认会话发出 `output_config={"effort":"high"}`。
+  3. **MiMo 上下文窗口取不到**：用户希望「不预设、从返回数据取」。实测 `https://token-plan-cn.xiaomimimo.com/v1/models` 与 freemodel 的 /v1/models 都**不返回** `context_length` 字段，discovery 拿不到→openai-kind 兜底 128k（MiMo v2+ 实为 1M）。结论：这两家 API 无法动态取，只能预设兜底。
+- **改动**:
+  - `crates/common/src/reasoning.rs`: `anthropic_thinking_mode` / `anthropic_long_context_uses_beta` 把 `opus-4-8` 并入 4-7 那组（adaptive summarized schema + 原生 1M）；新增 `ReasoningEffort::anthropic_adaptive_effort_for_model`——按模型量程把思考强度翻成 adaptive `output_config.effort`（4.7/4.8 可达 xhigh，4.6 及以下封顶 high）。补 4-8 / helper 单测。
+  - `crates/model-gateway/src/protocols/anthropic.rs`: `build_body` 的 CC 兼容分支改为用 `anthropic_adaptive_effort_for_model(user_effort)` 取 effort，不再写死 high；reasoning 未设时用默认 Extra（4.8→xhigh，符合「默认想清楚」）。新增 `cc_compat_effort_follows_user_and_model_scale` 回归测试。
+  - `crates/model-gateway/src/context_window.rs`: opus-4-8→1M；新增 `mimo-v2*`→1M 预设兜底（注明 API 不返回 context_length）。补 opus-4-8 / mimo 单测。
+  - `apps/desktop/src/chat.rs`: 修一处**既有**测试构造 `Provider` 漏 `claude_code_compat` 字段导致 `cargo check --tests` 编译不过（与本次无关的潜伏 break，顺手补全）。
+- **影响范围**: model-gateway（协议体 build_body / context_window 实现细节）+ common（reasoning 家族判定 + 新 helper）。无新协议字段、无对外 API 变化，故不动架构.md（§4.11 实现细节）。行为变化：所有 OAuth / claude_code_compat provider 在 4.7/4.8 上的默认思考强度由 high 提升到 xhigh（更贴合项目 ReasoningEffort 默认 Extra）；legacy 模型经 CC 兼容仍为 high，无回归。
+- **验证**: 阶段 A 用 heb CLI + RUST_LOG 抓 wire body 复现 opus-4-8 发出 `effort="high"`；阶段 B 同路径重跑得 `effort="xhigh"`，且 opus-4-7→xhigh / opus-4-6→high 均正常回复不 400。另用完整 CC 特征 curl 实测 sub2api 对 opus-4-8 接受 high/xhigh/low、opus-4-6 接受 high/xhigh 均不报错。单测 `cargo test -p model-gateway --lib`（98 passed）/ `hebbian-common`（reasoning 全绿）。
+- **留尾巴**:
+  - 「按版本号 `contains` 散点匹配」的模式仍在（每出新模型要改 reasoning.rs + context_window.rs 多处），本次只补 4-8 未做集中化重构；下次再出 4-9/5-0 仍需手动跟进。
+  - `crates/agent-core/src/automode.rs` 的 `AUTOMODE_ALLOWED_MODELS` 仅含 opus-4-7 / gpt-5.5，未加 opus-4-8——AutoMode judge 暂不对 4-8 生效（本次聚焦参数，未扩 AutoMode 白名单）。
+  - `crates/model-gateway/tests/thinking_integration.rs` 内有一份 test-local 的家族判定副本（line 48 起），未同步 4-8；其 target 列表不含 4-8 故不影响，但属 drift 隐患。
+  - MiMo TTS / omni 等非 chat 型号也会被 `mimo-v2*` 命中返回 1M，但它们不会作为会话模型使用，无实际影响。

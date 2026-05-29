@@ -2165,6 +2165,7 @@ mod tests {
                     default_model: Some("gpt-test".to_string()),
                     title_gen_enabled: false,
                     title_gen_model: None,
+                    claude_code_compat: false,
                 }],
                 default_provider_id: Some("openai".to_string()),
             },

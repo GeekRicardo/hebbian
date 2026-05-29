@@ -64,6 +64,17 @@ impl ReasoningEffort {
         }
     }
 
+    /// 用于 Anthropic adaptive `output_config.effort`，按模型量程选 effort 字符串。
+    /// Opus 4.7 / 4.8 支持到 `xhigh`；4.6 最高 `high`；其余（legacy / 未知）走 4.6 量程。
+    /// 走 Claude Code 兼容 / OAuth 路径时用它把用户的思考强度翻成 effort，
+    /// 而不是写死一档。
+    pub fn anthropic_adaptive_effort_for_model(self, model: &str) -> &'static str {
+        match anthropic_thinking_mode(model) {
+            Some(AnthropicThinkingMode::Opus47Adaptive) => self.anthropic_adaptive47_effort(),
+            _ => self.anthropic_adaptive46_effort(),
+        }
+    }
+
     /// 用于 DeepSeek `reasoning_effort`（OpenAI compat 路径，api.deepseek.com）。
     /// DeepSeek 的 effort 命名空间只有 `high` / `max` 两档，所以我们把 Low/Medium/High
     /// 全钳到 `high`，Extra 升到 `max`。
@@ -142,7 +153,7 @@ impl ReasoningConfig {
 ///
 /// | 模式 | 适用模型 | 请求体 |
 /// |------|---------|--------|
-/// | `Opus47Adaptive` | `claude-opus-4-7*` | `thinking:{type:"adaptive",display:"summarized"}` + `output_config:{effort: low\|medium\|high\|xhigh}`，并且**禁止**带 `temperature/top_p/top_k`。 |
+/// | `Opus47Adaptive` | `claude-opus-4-7*` / `claude-opus-4-8*` | `thinking:{type:"adaptive",display:"summarized"}` + `output_config:{effort: low\|medium\|high\|xhigh}`，并且**禁止**带 `temperature/top_p/top_k`。 |
 /// | `Adaptive46` | `claude-opus-4-6*` / `claude-sonnet-4-6*` | `thinking:{type:"adaptive",effort: low\|medium\|high}`（无 xhigh）。 |
 /// | `LegacyEnabled` | `claude-3-7-*` / `claude-opus-4*`（不含 4.6/4.7）/ `claude-sonnet-4*`（不含 4.6）/ `claude-haiku-4*` | `thinking:{type:"enabled",budget_tokens:N}`，`budget_tokens >= 1024 && budget_tokens < max_tokens`。 |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,7 +177,8 @@ pub fn normalize_model_id(model: &str) -> String {
 /// `None` = 不支持 thinking（如 claude-3-5、claude-3-haiku）。
 pub fn anthropic_thinking_mode(model: &str) -> Option<AnthropicThinkingMode> {
     let m = normalize_model_id(model);
-    if m.contains("opus-4-7") {
+    // 4.7 与 4.8 共用同一 adaptive schema（summarized display + output_config.effort，含 xhigh）。
+    if m.contains("opus-4-7") || m.contains("opus-4-8") {
         return Some(AnthropicThinkingMode::Opus47Adaptive);
     }
     if m.contains("opus-4-6") || m.contains("sonnet-4-6") {
@@ -195,7 +207,12 @@ pub fn anthropic_supports_thinking(model: &str) -> bool {
 /// - Haiku 4.5 / 3.7 等：无 1M 支持，UI 不暴露这个开关。
 pub fn anthropic_long_context_uses_beta(model: &str) -> bool {
     let m = normalize_model_id(model);
-    if m.contains("opus-4-7") || m.contains("opus-4-6") || m.contains("sonnet-4-6") {
+    // 4.6 / 4.7 / 4.8 默认就是 1M，无需 beta header（带了也无效）。
+    if m.contains("opus-4-8")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-6")
+        || m.contains("sonnet-4-6")
+    {
         return false;
     }
     // 仅 Sonnet 4 系列 + Opus 4.x 老型号支持 1M（通过 beta header）
@@ -254,6 +271,15 @@ mod tests {
             anthropic_thinking_mode("claude-opus-4-7-20260101"),
             Some(Opus47Adaptive)
         );
+        // 4.8 与 4.7 同 schema
+        assert_eq!(
+            anthropic_thinking_mode("claude-opus-4-8"),
+            Some(Opus47Adaptive)
+        );
+        assert_eq!(
+            anthropic_thinking_mode("claude-opus-4.8"),
+            Some(Opus47Adaptive)
+        );
         assert_eq!(anthropic_thinking_mode("claude-opus-4-6"), Some(Adaptive46));
         assert_eq!(
             anthropic_thinking_mode("claude-sonnet-4-6"),
@@ -301,6 +327,7 @@ mod tests {
 
     #[test]
     fn long_context_toggle_only_for_legacy_4_family() {
+        assert!(!anthropic_exposes_long_context_toggle("claude-opus-4-8"));
         assert!(!anthropic_exposes_long_context_toggle("claude-opus-4-7"));
         assert!(!anthropic_exposes_long_context_toggle("claude-opus-4-6"));
         assert!(!anthropic_exposes_long_context_toggle("claude-sonnet-4-6"));
@@ -349,6 +376,29 @@ mod tests {
         assert_eq!(
             ReasoningEffort::Medium.openai_effort_for_model("gpt-5.4"),
             "medium"
+        );
+    }
+
+    #[test]
+    fn adaptive_effort_scale_by_model() {
+        // 4.7 / 4.8 可达 xhigh
+        assert_eq!(
+            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-8"),
+            "xhigh"
+        );
+        assert_eq!(
+            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-7"),
+            "xhigh"
+        );
+        // 4.6 最高 high（Extra 钳到 high）
+        assert_eq!(
+            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-6"),
+            "high"
+        );
+        // 低档原样透传
+        assert_eq!(
+            ReasoningEffort::Low.anthropic_adaptive_effort_for_model("claude-opus-4-8"),
+            "low"
         );
     }
 
