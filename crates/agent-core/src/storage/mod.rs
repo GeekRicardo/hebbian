@@ -19,6 +19,7 @@
 pub mod compactions;
 pub mod lock;
 pub mod mcp;
+pub mod memory;
 pub mod model_io;
 pub mod oauth;
 pub mod permissions;
