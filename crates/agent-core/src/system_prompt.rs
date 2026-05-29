@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::storage::memory::MemoryL0;
 use crate::workspace::Workspace;
 
 /// Hebbian 的基础系统提示词。
@@ -53,6 +54,9 @@ pub struct EnvironmentSnapshot {
     /// PermissionStore 的 paths 白名单（架构 §6.1.2）：global + project paths 合并后的
     /// 扩展可访问目录。与 `allowed_paths`（workspace 自带）独立渲染，标签 `<extra_path>`。
     pub extra_paths: Vec<PathBuf>,
+    /// 记忆 L0 清单（架构 §4.14）：global + 当前 project 的一句话摘要，渲染成
+    /// `<memory-index>` 块让模型初筛，要详情再 `ReadMemory(id)`。仅首条 user message 注入。
+    pub memory_index: Vec<MemoryL0>,
 }
 
 /// `<background_tasks>` 渲染所需的最小信息。
@@ -77,6 +81,7 @@ impl EnvironmentSnapshot {
             run_mode: None,
             background_tasks: Vec::new(),
             extra_paths: Vec::new(),
+            memory_index: Vec::new(),
         }
     }
 
@@ -105,9 +110,24 @@ impl EnvironmentSnapshot {
         self
     }
 
-    /// 渲染成 `<environment>` XML 块，末尾保留空行便于和正文分隔。
+    /// builder-style：注入记忆 L0 清单（架构 §4.14）。
+    pub fn with_memory_index(mut self, index: Vec<MemoryL0>) -> Self {
+        self.memory_index = index;
+        self
+    }
+
+    /// 渲染 `<memory-index>`（若有）+ `<environment>` XML 块，末尾保留空行便于和正文分隔。
     pub fn render(&self) -> String {
-        let mut s = render_environment_xml(
+        let mut s = String::new();
+        if !self.memory_index.is_empty() {
+            s.push_str("<memory-index>\n");
+            s.push_str("可能与当前任务相关的记忆，要详情用 ReadMemory(id) 读取：\n");
+            for m in &self.memory_index {
+                s.push_str(&format!("  - [{}] {}\n", m.id, m.summary));
+            }
+            s.push_str("</memory-index>\n\n");
+        }
+        s.push_str(&render_environment_xml(
             &self.workdir,
             &self.allowed_paths,
             &self.extra_paths,
@@ -115,7 +135,7 @@ impl EnvironmentSnapshot {
             self.shell.as_deref(),
             &self.date,
             self.run_mode,
-        );
+        ));
         if !self.background_tasks.is_empty() {
             s.push_str("<background_tasks>\n");
             for t in &self.background_tasks {
@@ -291,6 +311,7 @@ mod tests {
             run_mode: None,
             background_tasks: Vec::new(),
             extra_paths: Vec::new(),
+            memory_index: Vec::new(),
         };
         let out = prepend_environment("hello".into(), &snap);
         assert!(out.starts_with("<environment>"));
@@ -308,6 +329,7 @@ mod tests {
             run_mode: None,
             background_tasks: Vec::new(),
             extra_paths: Vec::new(),
+            memory_index: Vec::new(),
         };
         snap = snap.with_extra_paths(vec![
             PathBuf::from("/tmp/a"), // 跟 allowed_paths 重复
@@ -315,5 +337,44 @@ mod tests {
             PathBuf::from("/etc"), // 自我重复
         ]);
         assert_eq!(snap.extra_paths, vec![PathBuf::from("/etc")]);
+    }
+
+    #[test]
+    fn memory_index_renders_before_environment() {
+        let snap = EnvironmentSnapshot {
+            workdir: PathBuf::from("/tmp"),
+            allowed_paths: Vec::new(),
+            platform: "darwin",
+            shell: None,
+            date: "2026-05-10".into(),
+            run_mode: None,
+            background_tasks: Vec::new(),
+            extra_paths: Vec::new(),
+            memory_index: vec![
+                MemoryL0 {
+                    id: "global/lang".into(),
+                    summary: "用户要求始终用中文".into(),
+                    category: "preferences".into(),
+                },
+                MemoryL0 {
+                    id: "proj/architecture".into(),
+                    summary: "agent-core 是大脑".into(),
+                    category: "architecture".into(),
+                },
+            ],
+        };
+        let out = snap.render();
+        let mem_pos = out.find("<memory-index>").expect("应渲染 memory-index");
+        let env_pos = out.find("<environment>").expect("应渲染 environment");
+        assert!(mem_pos < env_pos, "memory-index 应在 environment 之前");
+        assert!(out.contains("[global/lang] 用户要求始终用中文"));
+        assert!(out.contains("[proj/architecture] agent-core 是大脑"));
+    }
+
+    #[test]
+    fn empty_memory_index_omits_block() {
+        let snap = EnvironmentSnapshot::from_workspace(&Workspace::new(PathBuf::from("/tmp"), vec![]));
+        let out = snap.render();
+        assert!(!out.contains("<memory-index>"), "空清单不应渲染块");
     }
 }

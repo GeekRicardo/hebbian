@@ -265,10 +265,19 @@ impl Session {
                 .as_ref()
                 .map(|s| s.effective_paths(Some(self.workspace.workdir())))
                 .unwrap_or_default();
+
+            // 架构 §4.14：首条 user message 注入记忆 L0 清单——global + 当前项目（若绑定）。
+            // data_dir 缺失（CLI 单跑 / 单测）时跳过；scan 失败 warn 不阻塞主路径。
+            let memory_index = match self.data_dir.as_deref() {
+                Some(dd) => collect_memory_index(dd, self.workspace.workdir()),
+                None => Vec::new(),
+            };
+
             let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace)
                 .with_run_mode(self.run_mode)
                 .with_background_tasks(bg_summaries.clone())
-                .with_extra_paths(extra_paths);
+                .with_extra_paths(extra_paths)
+                .with_memory_index(memory_index);
             final_text = prepend_environment(final_text, &snapshot);
         } else if !bg_summaries.is_empty() {
             // 非首条 user message：单独前置 `<background_tasks>` 块
@@ -577,6 +586,33 @@ fn prepend_workspace_update(text: String, pending: &[PathBuf]) -> String {
     s.push_str("</workspace-update>\n\n");
     s.push_str(&text);
     s
+}
+
+/// 拼出首条 user message 的 `<memory-index>` 注入清单：global 在前，当前项目（若是
+/// 真实项目目录而非 home / 根）在后。任何一边读失败仅 warn 不阻塞主路径——记忆系统
+/// 是增强、不能拖垮对话。
+fn collect_memory_index(
+    data_dir: &std::path::Path,
+    workdir: &std::path::Path,
+) -> Vec<crate::storage::memory::MemoryL0> {
+    use crate::storage::memory::{list_l0, MemoryScope};
+
+    let mut out = match list_l0(data_dir, None, MemoryScope::Global) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "list global memories failed; 跳过 memory-index global");
+            Vec::new()
+        }
+    };
+    if let Some(project_wd) = crate::tools::memory_project_workdir(workdir) {
+        match list_l0(data_dir, Some(&project_wd), MemoryScope::Project) {
+            Ok(mut v) => out.append(&mut v),
+            Err(e) => {
+                tracing::warn!(error = %e, "list project memories failed; 跳过 memory-index project");
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
