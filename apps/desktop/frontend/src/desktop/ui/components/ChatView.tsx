@@ -207,24 +207,22 @@ export function ChatView() {
       const expectedTop = containerRect.top + PINNED_BAR_TOP_PX;
       const aligned = Math.abs(rect.top - expectedTop) <= ALIGN_TOLERANCE_PX;
       
-      // 如果已有 pinned 且对齐被打破，清除浮动条
-      if (pinnedUserMessageId && !aligned) {
-        setPinnedUserMessageId(null);
-        setIsAligned(false);
-      } else if (!pinnedUserMessageId) {
-        // 首次出现浮动条
-        setPinnedUserMessageId(msgId);
-        setIsAligned(false);
-      } else if (pinnedUserMessageId === msgId) {
-        // 更新对齐状态
+      setPinnedUserMessageId(prev => {
+        // 如果消息 ID 变了，更新并标记为未对齐
+        if (prev !== msgId) {
+          setIsAligned(false);
+          return msgId;
+        }
+        // 消息 ID 相同，更新对齐状态
         setIsAligned(aligned);
-      }
+        return prev;
+      });
     } else {
       // 没有滚出的 user 消息，清除浮动条
       setPinnedUserMessageId(null);
       setIsAligned(false);
     }
-  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX, ALIGN_TOLERANCE_PX]);
+  }, [PINNED_BAR_TOP_PX, ALIGN_TOLERANCE_PX]);
   // 点击浮动条跳转到该 user 消息
   const scrollToPinnedMessage = useCallback(() => {
     if (!pinnedUserMessageId || !scrollRef.current) return;
