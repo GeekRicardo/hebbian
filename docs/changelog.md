@@ -5375,3 +5375,13 @@
   - 审批弹窗去全局是 UI 行为，后端 PermissionStore 的 Global scope 仍保留（设置页 / heb CLI 可写）。
   - read.rs 截断测试 pre-existing 失败，待 read 上限 6KB→100KB 那次改动的 owner 跟进。
 
+
+### 2026-05-29 — 派发器普通工具并发加 8 上限（join_all → buffer_unordered）
+
+- **Why**: 同一批 tool_call 此前用 `join_all` 无上限并发，模型一次返回大量 tool_call（含多 Task 扇出）时会把 tokio worker / 文件句柄打满。需要一个并发上限，同时确认"同一文件 Edit 串行"这条诉求其实已由现有机制满足。
+- **改动**:
+  - `crates/agent-core/src/dispatch.rs`: `drain_tool_tasks` 从 `join_all` 改为 `stream::iter(...).buffer_unordered(MAX_PARALLEL_TOOLS=8)`；保留"先收齐全部结果再抛首个错误"的语义（单工具报错不 cancel 同批其他在跑工具，与原 join_all 一致）。新增常量 `MAX_PARALLEL_TOOLS = 8`。模块头注释同步。
+  - `docs/架构.md` §4.13.4: 把"dispatch 用 join_all"的描述更新为 buffer_unordered，并补一段"派发并发上限"说明。
+- **同一文件 Edit 串行（无需新代码）**: 该诉求已由 §4.13.4 的两层锁（per-path async Mutex + fd-lock）保证——`_edit_lock` 在 dispatch.rs 拿到后持有到 `execute_streaming` + `snapshot_after` 结束，同 path Edit 天然顺次串行；不同文件不阻塞。本次未在派发器重复实现，避免双重串行与浪费并发槽。
+- **影响范围**: 仅 agent-core 内部派发逻辑，不动协议 / 事件 / 工具签名。行为变化：同 step 同时前台跑的 Task / 普通工具从"无上限"变为"最多 8 个并发"，超出排队；Bash/PowerShell 全串行行为不变（更严格，本身就 ≤8，未动）。无兼容破坏。
+- **留尾巴**: 8 是常量，未做成可配置；若极端 batch 内 >8 个同文件 Edit 会占满并发槽串行通过（罕见，不影响正确性）。

@@ -6,9 +6,11 @@
 //! - 提问通路（`ask` 工具）→ emit `UserQuestionRequested` + await
 //! - 工具执行（含超时输出截断）+ emit `ToolCallStarted` / `ToolCallFinished`
 //!
-//! 并发策略：普通工具保持批量并发；Bash/PowerShell 按顺序派发，确保用户对
-//! 第一条命令选择 AllowAndRemember 后，同一批后续 shell 命令能先命中记忆规则，
-//! 不会因为 pending 预创建而重复弹审批。
+//! 并发策略：普通工具批量并发，但同一批最多 [`MAX_PARALLEL_TOOLS`] 个 future
+//! 同时在跑（避免一次返回上百个 tool_call 时 worker / 句柄被打满）；同一文件的
+//! Edit 由 edits-worktree 的 per-path 锁（架构 §4.13.4）天然串行，无需派发器额外处理。
+//! Bash/PowerShell 按顺序派发，确保用户对第一条命令选择 AllowAndRemember 后，
+//! 同一批后续 shell 命令能先命中记忆规则，不会因为 pending 预创建而重复弹审批。
 //!
 //! [`agent_loop`]: super::agent_loop
 
@@ -16,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::future::{join_all, BoxFuture};
+use futures_util::future::BoxFuture;
+use futures_util::stream::{self, StreamExt};
 use observability::attr;
 use protocol::{
     ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, RiskLevel,
@@ -1458,6 +1461,10 @@ impl ToolDispatcher {
     }
 }
 
+/// 同一批普通工具的最大并发度。超出的 future 在前面有空位时才开始 poll，
+/// 避免模型一次返回大量 tool_call 时把 tokio worker / 文件句柄打满。
+const MAX_PARALLEL_TOOLS: usize = 8;
+
 async fn drain_tool_tasks(
     tasks: &mut Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>>,
     results: &mut Vec<(usize, ToolResult)>,
@@ -1465,10 +1472,23 @@ async fn drain_tool_tasks(
     if tasks.is_empty() {
         return Ok(());
     }
-    for outcome in join_all(std::mem::take(tasks)).await {
-        results.push(outcome?);
+    // buffer_unordered 同时最多 poll MAX_PARALLEL_TOOLS 个 future；完成顺序不定，
+    // 但 run_calls 末尾按 call_index 排序，对外仍是稳定顺序。
+    // 先收集全部结果再抛首个错误：与原 join_all 语义一致——单个工具报错不会
+    // cancel 同批其他在跑的工具（它们大多已把失败折叠成 Ok(ToolResult)）。
+    let mut stream = stream::iter(std::mem::take(tasks)).buffer_unordered(MAX_PARALLEL_TOOLS);
+    let mut first_err = None;
+    while let Some(outcome) = stream.next().await {
+        match outcome {
+            Ok(result) => results.push(result),
+            Err(e) if first_err.is_none() => first_err = Some(e),
+            Err(_) => {}
+        }
     }
-    Ok(())
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths +
