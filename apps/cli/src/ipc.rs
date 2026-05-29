@@ -201,6 +201,17 @@ pub enum DaemonEvent {
         session_id: String,
         title: String,
     },
+    /// 一个 Run 跑完后，agent_core 后台记忆抽取写入了若干条记忆（架构 §4.14）。
+    /// 自动化脚本可监听这条核对落盘结果；记忆已由 agent_core 写盘，客户端无需回写。
+    MemoryExtracted {
+        session_id: String,
+        items: Vec<protocol::MemoryWriteItem>,
+    },
+    /// 后台记忆抽取的 fallback 模型链全部失败（架构 §4.14）。游标未推进，下个 Run 补抽。
+    MemoryExtractionFailed {
+        session_id: String,
+        reason: String,
+    },
     Error {
         message: String,
     },

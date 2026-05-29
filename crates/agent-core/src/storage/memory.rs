@@ -236,6 +236,34 @@ pub fn append_log(
     lock::append_jsonl(&path, &line)
 }
 
+// ── 抽取游标（架构 §4.14）────────────────────────────────────────────────────
+//
+// 「上一次成功抽取覆盖到的 message id」。后台抽取成功 → 推进；失败 → 不动，下次从同一
+// 游标起重抽（自动补抽失败那段）。独立小文件存在 session 目录下，不污染 §4.9.1 meta.json
+// 的最小字段集——游标是记忆系统的派生状态，丢了大不了多抽一轮（去重兜底），不进 jsonl
+// 的强一致体系。
+
+fn cursor_path(data_dir: &Path, session_id: &str) -> PathBuf {
+    super::sessions_dir::session_dir(data_dir, session_id).join("memory_cursor")
+}
+
+/// 读抽取游标；不存在（从未抽过）返回 `None`。
+pub fn read_cursor(data_dir: &Path, session_id: &str) -> Option<String> {
+    let bytes = lock::read_locked(&cursor_path(data_dir, session_id)).ok()?;
+    let s = String::from_utf8_lossy(&bytes).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// 推进抽取游标到 `message_id`。
+pub fn write_cursor(data_dir: &Path, session_id: &str, message_id: &str) -> AppResult<()> {
+    let _ = super::sessions_dir::ensure_session_dirs(data_dir, session_id);
+    lock::write_atomic(&cursor_path(data_dir, session_id), message_id.as_bytes())
+}
+
 // ── frontmatter 序列化 / 解析（手写极简） ────────────────────────────────────
 
 struct MemoryRecord {
@@ -465,5 +493,18 @@ mod tests {
             parse_id("proj/architecture"),
             Some((MemoryScope::Project, "architecture".to_string()))
         );
+    }
+
+    #[test]
+    fn cursor_roundtrip_and_default_none() {
+        let dd = tmp_dir();
+        // 从未抽过 → None
+        assert!(read_cursor(&dd, "sess-1").is_none());
+        // 写入后读回
+        write_cursor(&dd, "sess-1", "msg-42").unwrap();
+        assert_eq!(read_cursor(&dd, "sess-1").as_deref(), Some("msg-42"));
+        // 推进覆盖
+        write_cursor(&dd, "sess-1", "msg-99").unwrap();
+        assert_eq!(read_cursor(&dd, "sess-1").as_deref(), Some("msg-99"));
     }
 }

@@ -646,7 +646,30 @@ export type EngineEvent =
       type: "plan_comment_added";
       plan_id: string;
       comment: PlanComment;
+    }
+  | {
+      /** 一个 Run 跑完后，后台记忆抽取写入了若干条记忆（架构 §4.14）。
+       *  前端在该会话末尾渲染一行「本轮写入 N 条记忆」摘要，可展开看明细。 */
+      type: "memory_extracted";
+      session_id: string;
+      items: MemoryWriteItem[];
+    }
+  | {
+      /** 后台记忆抽取的 fallback 模型链全部失败（架构 §4.14）。前端弹 toast 提示。 */
+      type: "memory_extraction_failed";
+      session_id: string;
+      reason: string;
     };
+
+/** 后台记忆抽取写入的单条记忆（架构 §4.14）。随 memory_extracted 事件下发。 */
+export interface MemoryWriteItem {
+  /** 记忆 id，形如 `proj/architecture` / `global/lang-pref`。 */
+  id: string;
+  /** 一句话摘要，展开区每行显示这个。 */
+  summary: string;
+  /** 作用域标签："project" | "global"，据此显示徽章颜色。 */
+  scope: string;
+}
 
 /** TodoWrite 工具维护的单项 todo。三态 checkbox。 */
 export interface TodoItem {

@@ -1995,6 +1995,16 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             plan_id: plan_id.clone(),
             comment: comment.clone().into(),
         }),
+        MemoryExtracted { session_id, items } => Some(EngineEvent::MemoryExtracted {
+            session_id: session_id.clone(),
+            items: items.clone(),
+        }),
+        MemoryExtractionFailed { session_id, reason } => {
+            Some(EngineEvent::MemoryExtractionFailed {
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+            })
+        }
         _ => None,
     }
 }

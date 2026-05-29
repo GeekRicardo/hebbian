@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown } from "lucide-react";
+import { Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
+import { MemoryWriteSummary } from "./MemoryWriteSummary";
 import { ChatInput } from "./ChatInput";
 import { InputSuggestions } from "./InputSuggestions";
 import { InputQueuePanel } from "./InputQueuePanel";
@@ -49,6 +50,7 @@ export function ChatView() {
     debugEnabled,
     appSettings,
     lastRunError,
+    sessionMemoryWrites,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,6 +62,13 @@ export function ChatView() {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
+
+  // ==== 浮动 user 消息条：当 user 消息滚出视口上方时浮动显示 ====
+  const [pinnedUserMessageId, setPinnedUserMessageId] = useState<string | null>(null);
+  const [isAligned, setIsAligned] = useState(false);
+  const PINNED_BAR_TOP_PX = 16; // 浮动条距离滚动容器顶部的固定位置
+  const ALIGN_TOLERANCE_PX = 5; // 对齐容差
+  
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -169,9 +178,90 @@ export function ChatView() {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    
+    // 贴底检测
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
-  }, []);
+    
+    // 浮动条逻辑：找到滚出视口上方的最后一条 user 消息
+    const userMessages = el.querySelectorAll('[data-message-role="user"]');
+    let lastScrolledOutUser: Element | null = null;
+    
+    for (const msg of userMessages) {
+      const rect = msg.getBoundingClientRect();
+      const containerRect = el.getBoundingClientRect();
+      // 消息顶部在容器顶部上方 = 滚出视口
+      if (rect.top < containerRect.top) {
+        lastScrolledOutUser = msg;
+      } else {
+        break; // 后面的消息都在视口内，不用继续
+      }
+    }
+    
+    if (lastScrolledOutUser) {
+      const msgId = lastScrolledOutUser.getAttribute('data-message-id');
+      
+      // 检查是否对齐到浮动条位置
+      const rect = lastScrolledOutUser.getBoundingClientRect();
+      const containerRect = el.getBoundingClientRect();
+      const expectedTop = containerRect.top + PINNED_BAR_TOP_PX;
+      const aligned = Math.abs(rect.top - expectedTop) <= ALIGN_TOLERANCE_PX;
+      
+      // 如果已有 pinned 且对齐被打破，清除浮动条
+      if (pinnedUserMessageId && !aligned) {
+        setPinnedUserMessageId(null);
+        setIsAligned(false);
+      } else if (!pinnedUserMessageId) {
+        // 首次出现浮动条
+        setPinnedUserMessageId(msgId);
+        setIsAligned(false);
+      } else if (pinnedUserMessageId === msgId) {
+        // 更新对齐状态
+        setIsAligned(aligned);
+      }
+    } else {
+      // 没有滚出的 user 消息，清除浮动条
+      setPinnedUserMessageId(null);
+      setIsAligned(false);
+    }
+  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX, ALIGN_TOLERANCE_PX]);
+  // 点击浮动条跳转到该 user 消息
+  const scrollToPinnedMessage = useCallback(() => {
+    if (!pinnedUserMessageId || !scrollRef.current) return;
+    const el = scrollRef.current;
+    const target = el.querySelector(`[data-message-id="${pinnedUserMessageId}"]`);
+    if (!target) return;
+    
+    const containerRect = el.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const offsetTop = targetRect.top - containerRect.top + el.scrollTop - PINNED_BAR_TOP_PX;
+    
+    el.scrollTo({ top: offsetTop, behavior: 'smooth' });
+  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX]);
+  
+  // 点击上箭头：跳转到上一个 user 消息
+  const scrollToPreviousUserMessage = useCallback(() => {
+    if (!pinnedUserMessageId || !scrollRef.current) return;
+    const el = scrollRef.current;
+    const userMessages = Array.from(el.querySelectorAll('[data-message-role="user"]'));
+    const currentIndex = userMessages.findIndex(
+      msg => msg.getAttribute('data-message-id') === pinnedUserMessageId
+    );
+    
+    if (currentIndex > 0) {
+      const prevMsg = userMessages[currentIndex - 1];
+      const prevId = prevMsg.getAttribute('data-message-id');
+      if (!prevId) return;
+      
+      const containerRect = el.getBoundingClientRect();
+      const targetRect = prevMsg.getBoundingClientRect();
+      const offsetTop = targetRect.top - containerRect.top + el.scrollTop - PINNED_BAR_TOP_PX;
+      
+      el.scrollTo({ top: offsetTop, behavior: 'smooth' });
+      setPinnedUserMessageId(prevId);
+      setIsAligned(true);
+    }
+  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX]);
 
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
@@ -666,6 +756,47 @@ export function ChatView() {
                 {n.reason ? <span className="opacity-70">：{n.reason}</span> : null}
               </div>
             ))}
+
+          {/* 本轮后台记忆抽取写入的记忆（架构 §4.14）：会话末尾一行低调摘要，可展开。
+              run 结束后异步到达，故不依赖 isStreaming。 */}
+          {currentSession && sessionMemoryWrites[currentSession.id]?.length ? (
+            <MemoryWriteSummary items={sessionMemoryWrites[currentSession.id]} />
+          ) : null}
+
+        {/* 浮动 user 消息条：当 user 消息滚出视口上方时显示 */}
+        {pinnedUserMessageId && (() => {
+          const pinnedMsg = messages.find(m => m.id === pinnedUserMessageId);
+          if (!pinnedMsg || pinnedMsg.role !== 'user') return null;
+          
+          const userText = typeof pinnedMsg.content === 'string'
+            ? pinnedMsg.content
+            : (Array.isArray(pinnedMsg.content)
+              ? (pinnedMsg.content as any[]).find((c: any) => c.type === 'text')?.text || ''
+              : '');
+          return (
+            <div
+              className="absolute left-4 right-4 z-50 flex items-center gap-2 rounded-lg border bg-background/95 px-4 py-2 shadow-lg backdrop-blur-sm"
+              style={{ top: `${PINNED_BAR_TOP_PX}px` }}
+            >
+              <button
+                onClick={scrollToPinnedMessage}
+                className="flex-1 cursor-pointer truncate text-left text-sm text-foreground hover:text-primary"
+                title="点击跳转到此消息"
+              >
+                {userText}
+              </button>
+              {isAligned && (
+                <button
+                  onClick={scrollToPreviousUserMessage}
+                  className="flex-shrink-0 rounded p-1 hover:bg-accent"
+                  title="跳转到上一条消息"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          );
+        })()}
         </div>
       </div>
         {/* 放大预览 portal 锚点：只覆盖 chat 区域（不含 header / input / sidebar）。

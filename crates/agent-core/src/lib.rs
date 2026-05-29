@@ -9,6 +9,7 @@ pub mod effects;
 pub mod harness;
 pub mod hooks;
 pub mod mcp;
+pub mod memory_extract;
 pub mod model_io_dump;
 pub mod permissions;
 pub mod read_state;

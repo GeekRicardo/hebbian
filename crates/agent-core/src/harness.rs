@@ -179,13 +179,25 @@ impl Harness {
         let title_session_id = params.session_id.clone();
         let title_state = state.clone();
         let title_sink = core_sink.clone();
+        // 记忆抽取挂钩（架构 §4.14）：本 Run 的 agent_loop 跑完（RunFinished）后异步 spawn
+        // 一个 task 调 memory_extract::extract_for_session。一个 Run = 用户语义的「一个 turn
+        // 结束」，故用 RunFinished 而非 TurnFinished（后者一个 Run 内会出现多次）。
+        // 成功 emit MemoryExtracted（surface 渲染「本轮写入 N 条」），fallback 链全失败
+        // emit MemoryExtractionFailed（surface 弹 toast）；游标由抽取内部按成败推进 / 保留。
+        let mem_data_dir = params.data_dir.clone();
+        let mem_session_id = params.session_id.clone();
+        let mem_state = state.clone();
+        let mem_sink = core_sink.clone();
         let sink: EventSink = Arc::new(move |event: Event| {
-            let trigger_now = matches!(event.payload, EventPayload::TurnFinished { .. })
+            let trigger_title = matches!(event.payload, EventPayload::TurnFinished { .. })
                 && title_data_dir.is_some()
                 && title_session_id.is_some()
                 && !title_triggered.swap(true, std::sync::atomic::Ordering::SeqCst);
+            let trigger_memory = matches!(event.payload, EventPayload::RunFinished { .. })
+                && mem_data_dir.is_some()
+                && mem_session_id.is_some();
             core_sink(event);
-            if trigger_now {
+            if trigger_title {
                 let dd = title_data_dir.clone().unwrap();
                 let sid = title_session_id.clone().unwrap();
                 let task_state = title_state.clone();
@@ -200,6 +212,15 @@ impl Harness {
                         });
                         task_sink(ev);
                     }
+                });
+            }
+            if trigger_memory {
+                let dd = mem_data_dir.clone().unwrap();
+                let sid = mem_session_id.clone().unwrap();
+                let task_state = mem_state.clone();
+                let task_sink = mem_sink.clone();
+                tokio::spawn(async move {
+                    emit_memory_extraction(&dd, &sid, &task_state, &task_sink).await;
                 });
             }
         });
@@ -649,7 +670,51 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::ContextCompacted { .. }
             | EventPayload::TextDone { .. }
             | EventPayload::SessionTitleChanged { .. }
+            | EventPayload::MemoryExtracted { .. }
+            | EventPayload::MemoryExtractionFailed { .. }
     )
+}
+
+/// 后台记忆抽取（架构 §4.14）：跑一次抽取并把结果 emit 回 run sink。
+/// 成功（含写 0 条）→ MemoryExtracted；fallback 链耗尽 → MemoryExtractionFailed
+/// （游标已由抽取内部保留，下个 Run 补抽）；无需抽取 / 其他错误 → 静默。
+async fn emit_memory_extraction(
+    data_dir: &std::path::Path,
+    session_id: &str,
+    state: &Arc<crate::run_state::RunState>,
+    sink: &EventSink,
+) {
+    use crate::memory_extract::{self, ExtractError};
+    match memory_extract::extract_for_session(data_dir, session_id).await {
+        Ok(Some(result)) => {
+            let items = result
+                .written
+                .into_iter()
+                .map(|w| protocol::MemoryWriteItem {
+                    id: w.id,
+                    summary: w.summary,
+                    scope: match w.scope {
+                        crate::storage::memory::MemoryScope::Project => "project".to_string(),
+                        crate::storage::memory::MemoryScope::Global => "global".to_string(),
+                    },
+                })
+                .collect();
+            sink(state.event(EventPayload::MemoryExtracted {
+                session_id: session_id.to_string(),
+                items,
+            }));
+        }
+        Ok(None) => {}
+        Err(ExtractError::AllModelsFailed(reason)) => {
+            sink(state.event(EventPayload::MemoryExtractionFailed {
+                session_id: session_id.to_string(),
+                reason,
+            }));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "记忆抽取失败（非模型链原因）");
+        }
+    }
 }
 
 #[cfg(test)]

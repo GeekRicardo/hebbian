@@ -5385,3 +5385,33 @@
 - **同一文件 Edit 串行（无需新代码）**: 该诉求已由 §4.13.4 的两层锁（per-path async Mutex + fd-lock）保证——`_edit_lock` 在 dispatch.rs 拿到后持有到 `execute_streaming` + `snapshot_after` 结束，同 path Edit 天然顺次串行；不同文件不阻塞。本次未在派发器重复实现，避免双重串行与浪费并发槽。
 - **影响范围**: 仅 agent-core 内部派发逻辑，不动协议 / 事件 / 工具签名。行为变化：同 step 同时前台跑的 Task / 普通工具从"无上限"变为"最多 8 个并发"，超出排队；Bash/PowerShell 全串行行为不变（更严格，本身就 ≤8，未动）。无兼容破坏。
 - **留尾巴**: 8 是常量，未做成可配置；若极端 batch 内 >8 个同文件 Edit 会占满并发槽串行通过（罕见，不影响正确性）。
+
+### 2026-05-29 — 记忆系统第5/6/7批：后台抽取闭环 + 会话内渲染 + 架构.md §4.14 收口
+
+- **Why**: 记忆系统前 4 批（storage 地基 / ReadMemory·WriteMemory 工具 / `<memory-index>` 注入 / 设置 Tab）已提交，但缺了"会话结束自动抽取并跨会话沉淀"这一闭环——也就是用户最初的痛点：同一项目每次新对话都要重新探索。本次补齐后台抽取 + surface 渲染 + 文档，记忆系统成型。承接 `docs/记忆系统实现计划.md`。
+- **改动**:
+  - `crates/agent-core/src/memory_extract.rs`（已存在，本次补失败审计）: `extract_for_session` 在 fallback 链全耗尽时也往 `.memory_log.jsonl` 写一条 `outcome=failed`——此前只 `tracing::warn` + emit 事件，审计文件缺失败痕迹。
+  - `apps/desktop/src/engine/mod.rs` + `chat.rs`: 新增 `EngineEvent::MemoryExtracted / MemoryExtractionFailed` + 翻译臂（复用 `protocol::MemoryWriteItem`）。
+  - `apps/cli/src/ipc.rs` + `daemon.rs`: 新增 `DaemonEvent::MemoryExtracted / MemoryExtractionFailed` + 翻译臂（NDJSON 可观测）。
+  - `apps/desktop/frontend/.../types.ts`: 新增两个事件类型 + `MemoryWriteItem` 接口。
+  - `apps/desktop/frontend/.../store/useStore.ts`: 新增 `sessionMemoryWrites` 顶层 state（session 级，run 开始清空）+ `dropKey` helper；事件回调里 `memory_extracted` 存 items（非空才存）、`memory_extraction_failed` 弹 sonner toast。
+  - `apps/desktop/frontend/.../components/MemoryWriteSummary.tsx`（新）: 会话末尾"本轮写入 N 条记忆 ▼"低调摘要行，展开 ≤5 条高度 + 区域内滚动，项目/全局徽章。
+  - `apps/desktop/frontend/.../components/MessageBubble.tsx`: ReadMemory/WriteMemory 专门渲染（BookOpen/NotebookPen 图标 + "读取记忆 <id>" / "记下 <summary>" 标签），走 ToolIcon + callSummary + defaultActionLabel 三处特判，不另造组件。
+  - `apps/desktop/frontend/.../components/AppSettingsDialog.tsx`: 修第4批 MemoryPane 的 tsc 错误——`Provider` 未导入 + `testProviderModel` 用错（它成功 resolve、失败 reject，无 `.success/.error` 字段）。
+  - `docs/架构.md`: 新增 §4.14 长期记忆系统主章节（两作用域 / L0L1L2 / 注入 / 后台抽取 / fallback / 补抽 / 事件可靠性分层 / surface 渲染 / 设置）；第 1096 行旧"暂不做 memory"结论改指向 §4.14；§6.1 目录布局补 `memory/` + `projects/<enc>/memory/` + session 的 `memory_cursor`；§9.3 SEMI 段补 `<memory-index>` 块；§13 追加 5 条决策记录。
+- **与计划的偏差（落地修正，已写入架构.md §13）**:
+  - 抽取触发点用 `RunFinished` 而非计划的 `TurnFinished`——一个 Run = 用户语义"一个 turn"，TurnFinished 在工具循环内会多次触发导致重复抽取。
+  - 补抽游标存独立 `memory_cursor` 小文件而非 meta.json——游标是派生状态，丢了靠去重补抽兜底，不进 jsonl 强一致体系。
+  - 事件改带 `session_id`（非计划的 `turn_id`）：配合 RunFinished 时机，前端把摘要行渲染在会话末尾（本轮结束处）。
+- **验证（heb CLI A/B + hebweb/Playwright）**:
+  - 后端：`heb new --data-dir /tmp/heb-mem-test --provider <deepseek> --workdir /tmp/repro` 发含事实的消息→模型主动 WriteMemory 落盘 global+project md（frontmatter 正确）+ 游标推进 + `memory_extracted` 进 NDJSON；新 session 首条 user message 含 `<memory-index>`（global+proj 两条 L0），system 仅含静态机制说明、不含记忆数据（§0.9 满足）；抽取链配 bogus provider→`memory_extraction_failed` 事件 + 游标停在原值不前进 + `.memory_log.jsonl` 写 failed。
+  - 前端：tsc 通过；hebweb 打开历史 session 见 WriteMemory 卡片渲染为"📝 WriteMemory 记下 <summary>"+ 展开 INPUT/OUTPUT；经 `window.__hebStore` 注入 6 条合成 items 验证摘要行"本轮写入 6 条记忆"展开后 5 条可见 + 第 6 条滚动 + 项目/全局徽章配色。
+  - 单测：`cargo test -p agent-core --lib memory` 17 项全过（含 cursor / 注入 / 解析）。
+- **影响范围**: agent-core（memory_extract 失败审计）/ protocol（前 4 批已加，本次仅消费）/ desktop（engine+chat+前端）/ cli（ipc+daemon）/ docs。新增事件均 additive，旧客户端忽略未知 event，无兼容破坏。
+- **留尾巴**:
+  - 事件交付是 best-effort，受 `RunHandle::drive` 5s trailing window 约束（与 session_titler 同款）；抽取模型慢或重试满 5 次时摘要行/toast 可能丢——但记忆已落盘、设置页可见，不影响正确性。后续若要强保证需让 drive 等在途抽取或走独立 session 事件总线。
+  - subagent 仍不注入记忆 / 不给 ReadMemory·WriteMemory（按计划本期搁置）。
+  - 便宜抽取模型（实测 deepseek-v4-flash）较保守，常对边界事实返回 `[]`；摘要行的非空展示靠模型判断，必要时可在 §4.14 prompt 上调。
+  - §13「内置工具数量=13」那行是 memory 之前的旧值，本次未臆改总数；工具清单真相源以 `BUILTIN_TOOL_NAMES` 为准（已含 ReadMemory/WriteMemory）。
+
+Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件里还夹着一处与记忆无关的"浮动 user 消息条"WIP——它原本编译不过（删了 stickToBottomRef/titleLoading 声明却仍引用 + never 类型），经用户同意做了最小修复（恢复声明 + 修 ternary/never）让前端 tsc 通过，但该功能本身仍是半成品，归其原作者继续。（dispatch 派发并发限流已由 commit 8f33e8a 单独提交，不在本条范围。）

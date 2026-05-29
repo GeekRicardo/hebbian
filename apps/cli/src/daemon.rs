@@ -464,6 +464,18 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 title: title.clone(),
             })
         }
+        EventPayload::MemoryExtracted { session_id, items } => {
+            Some(DaemonEvent::MemoryExtracted {
+                session_id: session_id.clone(),
+                items: items.clone(),
+            })
+        }
+        EventPayload::MemoryExtractionFailed { session_id, reason } => {
+            Some(DaemonEvent::MemoryExtractionFailed {
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+            })
+        }
         _ => None,
     }
 }

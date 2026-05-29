@@ -32,6 +32,7 @@ import type {
   McpServerConfig,
   McpToolReport,
   McpTransport,
+  Provider,
   SubagentDefinition,
   SubagentScope,
 } from "@/desktop/ui/types";
@@ -714,8 +715,8 @@ function MemoryPane({
     try {
       const p = providers.find((x) => x.id === providerId);
       if (!p) throw new Error("provider 不存在");
-      const result = await api.testProviderModel(p, model);
-      if (!result.success) throw new Error(result.error || "连通失败");
+      // 连通失败时 testProviderModel 直接 reject，落到下面 catch；resolve 即视为成功。
+      await api.testProviderModel(p, model);
       onChange({
         ...settings,
         memory: {

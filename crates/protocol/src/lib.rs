@@ -7,6 +7,7 @@ pub mod context;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod memory;
 pub mod permission;
 pub mod submission;
 pub mod todo;
@@ -17,6 +18,7 @@ pub use event::{
     EditAction, Event, EventPayload, ResumeCause, RiskLevel, StepKind, StopReason, SuspendReason,
 };
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
+pub use memory::MemoryWriteItem;
 pub use permission::{
     ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,
 };

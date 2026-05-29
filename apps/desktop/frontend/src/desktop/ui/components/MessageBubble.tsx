@@ -36,6 +36,8 @@ import {
   Minimize2,
   ClipboardCheck,
   Paperclip,
+  BookOpen,
+  NotebookPen,
 } from "lucide-react";
 import type {
   EditEntry,
@@ -518,6 +520,12 @@ function callSummary(call: ToolCallItem): string {
     const file = argString(args, "file_path");
     return file ? basename(file) : name === "Edit" ? "编辑文件" : "写入文件";
   }
+  if (name === "ReadMemory") {
+    return argString(args, "id") || "读取记忆";
+  }
+  if (name === "WriteMemory") {
+    return argString(args, "summary") || argString(args, "key") || "记下一条";
+  }
   if (name === "Grep") {
     return argString(args, "pattern") || "搜索代码";
   }
@@ -565,6 +573,8 @@ function defaultActionLabel(name: string): string {
   if (name === "BashOutput") return "读取后台命令输出";
   if (name === "KillShell") return "停止后台命令";
   if (name === "Read") return "读取文件";
+  if (name === "ReadMemory") return "读取记忆";
+  if (name === "WriteMemory") return "记下";
   if (name === "Write") return "写入文件";
   if (name === "Edit") return "编辑文件";
   if (name === "Grep") return "搜索代码";
@@ -629,6 +639,8 @@ function ToolIcon({ name }: { name?: string | null }) {
   if (name === "BashOutput") return <SquareTerminal className={cls} />;
   if (name === "KillShell") return <CircleStop className={cls} />;
   if (name === "Read") return <ScrollText className={cls} />;
+  if (name === "ReadMemory") return <BookOpen className={cls} />;
+  if (name === "WriteMemory") return <NotebookPen className={cls} />;
   if (name === "Write" || name === "Edit") return <Edit3 className={cls} />;
   if (name === "Grep" || name === "Glob") return <Search className={cls} />;
   if (name === "Skill") return <Sparkles className={cls} />;
@@ -2057,6 +2069,8 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div
+      data-message-role={message.role}
+      data-message-id={message.id}
       title={archived ? "已被压缩，模型不再读取此消息（点击右上角圆环可再次压缩）" : undefined}
       className={cn(
         "group relative flex gap-3 px-6 py-4",

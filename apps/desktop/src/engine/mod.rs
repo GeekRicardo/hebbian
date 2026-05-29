@@ -217,6 +217,17 @@ pub enum EngineEvent {
         plan_id: String,
         comment: PlanCommentDto,
     },
+    /// 一个 Run 跑完后，后台记忆抽取写入了若干条记忆（架构 §4.14）。
+    /// 前端在该会话末尾渲染一行「本轮写入 N 条记忆」摘要，可展开看明细。
+    MemoryExtracted {
+        session_id: String,
+        items: Vec<protocol::MemoryWriteItem>,
+    },
+    /// 后台记忆抽取的 fallback 模型链全部失败（架构 §4.14）。前端弹 toast 提示。
+    MemoryExtractionFailed {
+        session_id: String,
+        reason: String,
+    },
     Error {
         message: String,
     },

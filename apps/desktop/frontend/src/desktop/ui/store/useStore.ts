@@ -9,6 +9,7 @@ import type {
   Message,
   MessageAttachment,
   MessageMeta,
+  MemoryWriteItem,
   PendingApproval,
   PendingQuestion,
   PlanComment,
@@ -28,6 +29,7 @@ import type {
   WorkspaceProject,
   WorkspaceProjectInput,
 } from "@/desktop/ui/types";
+import { toast } from "sonner";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
 import { appendInjectedMessageAfterCurrentAssistant } from "@/desktop/ui/components/liveTimelineOrder";
@@ -247,6 +249,13 @@ function removeFromSet<T>(s: Set<T>, item: T): Set<T> {
   const next = new Set(s);
   next.delete(item);
   return next;
+}
+
+/** 从 record 删一个 key，返回新对象（key 不存在则原样返回）。 */
+function dropKey<V>(rec: Record<string, V>, key: string): Record<string, V> {
+  if (!(key in rec)) return rec;
+  const { [key]: _drop, ...rest } = rec;
+  return rest;
 }
 
 /**
@@ -870,6 +879,14 @@ interface AppState {
    */
   sessionEditSnapshots: Record<string, EditEntry[]>;
 
+  /**
+   * 架构 §4.14：每个 session「最近一个 Run 后台抽取写入的记忆」。
+   * - 由 `memory_extracted` 事件维护，下一个 Run 开始时清空（只展示「本轮」）。
+   * - **session-scoped**：run 结束 slot 删除时不跟着清掉，故单列在顶层而非 slot 内。
+   * - 空数组 / 不存在 = 不渲染摘要行。
+   */
+  sessionMemoryWrites: Record<string, MemoryWriteItem[]>;
+
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
   /** 后台跑完但用户尚未查看的会话 id 集合，用于 Sidebar 静态点。 */
@@ -1223,6 +1240,7 @@ export const useStore = create<AppState>((set, get) => ({
   contextUsage: null,
   compacting: false,
   sessionEditSnapshots: {},
+  sessionMemoryWrites: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -2036,6 +2054,8 @@ export const useStore = create<AppState>((set, get) => ({
           sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
           runningSessions: new Set(state.runningSessions).add(sessionId),
           lastRunError: null,
+          // 新 Run 开始 → 清掉上一轮的「本轮写入 N 条记忆」摘要（只展示当前轮）。
+          sessionMemoryWrites: dropKey(state.sessionMemoryWrites, sessionId),
           ...(isForeground ? mirrorFromSlot(initialSlot) : {}),
         };
       });
@@ -2060,6 +2080,23 @@ export const useStore = create<AppState>((set, get) => ({
                   : state
               );
               void get().refreshSessions();
+              return;
+            }
+            // 记忆抽取事件（架构 §4.14）：session 级，不进 slot——抽取在 RunFinished
+            // 之后异步到达，那时 slot 可能已被清掉，故跟标题一样独立处理。
+            if (e.type === "memory_extracted") {
+              if (e.items.length > 0) {
+                set((state) => ({
+                  sessionMemoryWrites: {
+                    ...state.sessionMemoryWrites,
+                    [e.session_id]: e.items,
+                  },
+                }));
+              }
+              return;
+            }
+            if (e.type === "memory_extraction_failed") {
+              toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
               return;
             }
             // Edit 快照事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留

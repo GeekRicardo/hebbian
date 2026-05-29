@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::error::ErrorReport;
 use crate::ids::{AgentRef, PermissionRequestId, RunId, TurnId};
+use crate::memory::MemoryWriteItem;
 use crate::permission::{ApprovalDecision, PermissionKind};
 use crate::todo::{PlanComment, TodoItem};
 
@@ -191,6 +192,20 @@ pub enum EventPayload {
     SessionTitleChanged {
         session_id: String,
         title: String,
+    },
+
+    /// 一个 Run 跑完后，后台记忆抽取写入了若干条记忆（架构 §4.14）。
+    /// surface 端在该 Run 末尾渲染一行「本轮写入 N 条记忆」摘要，可展开看明细。
+    /// 携带 `session_id` 与标题事件同理——记忆属 session 级长期状态。
+    MemoryExtracted {
+        session_id: String,
+        items: Vec<MemoryWriteItem>,
+    },
+    /// 后台记忆抽取的 fallback 模型链全部失败（架构 §4.14）。
+    /// surface 端弹一个 toast 提示「记忆提取失败了」；游标不推进，下个 Run 会补抽。
+    MemoryExtractionFailed {
+        session_id: String,
+        reason: String,
     },
 
     // —— Todo / Plan（架构 §4.4.5 / §4.4.6） ——
