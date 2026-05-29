@@ -490,6 +490,48 @@ impl HitlGate {
         None
     }
 
+    /// 返回本次调用中「会写 + 可记忆 + **尚未被任何 allow 规则/记忆覆盖**」的段
+    /// fingerprint（去重保序）。用于审批弹窗的记忆勾选区——只读段、不可记忆段（rm…）、
+    /// 以及**之前已审批/已记住的段**（如记过的 `cd`）都不出现，用户只对本次真正
+    /// 新增、需要决定是否记忆的会写段做勾选（架构 §4.4.2.3）。
+    pub fn unapproved_memorable_writable_segments(
+        &self,
+        tool_name: &str,
+        effects: &Effects,
+    ) -> Vec<String> {
+        let learned = self.learned.lock().unwrap();
+        let sid = self.session_id.as_deref();
+        let wd = self.workdir.as_deref();
+        let mut out: Vec<String> = Vec::new();
+        for seg in &effects.segments {
+            if seg.is_readonly || seg.unmemorable {
+                continue;
+            }
+            // 本会话 learned 已记？（工具名级 or 命令前缀级）
+            let learned_hit = learned.auto_approved_tools.iter().any(|n| n == tool_name)
+                || learned
+                    .auto_approved_patterns
+                    .iter()
+                    .any(|(t, p)| t == tool_name && fingerprint_matches(&seg.fingerprint, p));
+            // PermissionStore（session / project / global）已记？按单段查。
+            let store_hit = self.permission_store.as_ref().is_some_and(|store| {
+                matches!(
+                    store
+                        .find_for_segments_diagnostic(sid, wd, tool_name, std::slice::from_ref(seg))
+                        .map(|m| m.effect),
+                    Some(RuleEffect::Allow)
+                )
+            });
+            if learned_hit || store_hit {
+                continue;
+            }
+            if !out.contains(&seg.fingerprint) {
+                out.push(seg.fingerprint.clone());
+            }
+        }
+        out
+    }
+
     /// 显式开一张审批 pending（路径越界、长 run 续跑等无法用 `check` 表达的场景）。
     /// 跳过策略，调用方直接拿 `(id, waiter)` 自行 emit 事件并 await。
     ///
@@ -1661,5 +1703,34 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（架构 §4.4.2.3）：审批弹窗的记忆勾选区只列「本次新增」的会写段——
+    /// 已记住的段（如之前记过的 cd）、只读段、不可记忆段都不出现。
+    #[test]
+    fn unapproved_segments_excludes_remembered_readonly_and_unmemorable() {
+        let gate = HitlGate::default();
+        // 先记住 cd（session 前缀级）
+        let (id, _w) = gate.open_approval(Some("Bash"), Some("cd x"));
+        gate.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("cd".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+
+        // cd x && touch a.txt && grep foo bar && rm -rf z
+        //   cd       → 已记，排除
+        //   touch    → 会写新增，保留
+        //   grep     → 只读，排除
+        //   rm       → 不可记忆，排除
+        let eff = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cd x && touch a.txt && grep foo bar && rm -rf z"}),
+        );
+        let segs = gate.unapproved_memorable_writable_segments("Bash", &eff);
+        assert_eq!(segs, vec!["touch a.txt"], "勾选区只应剩本次新增的 touch 段");
     }
 }

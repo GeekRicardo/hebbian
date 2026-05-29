@@ -5375,6 +5375,16 @@
   - 审批弹窗去全局是 UI 行为，后端 PermissionStore 的 Global scope 仍保留（设置页 / heb CLI 可写）。
   - read.rs 截断测试 pre-existing 失败，待 read 上限 6KB→100KB 那次改动的 owner 跟进。
 
+### 2026-05-29 — 审批弹窗记忆勾选区只列「本次新增」会写段（排除已记住的段）
+
+- **Why**: 上一条改动后用户反馈——`cd xxx && <编辑命令>` 弹审批时，勾选区仍把已经记住的 `cd` 列出来。已审批过的段不该再出现在勾选框，用户只该对本次真正新增、还没记过的会写段做记忆决策。
+- **改动**:
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): 新增 `unapproved_memorable_writable_segments()`——返回「会写 + 可记忆 + 尚未被 learned/PermissionStore 任一 allow 覆盖」的段；只读段、不可记忆段、已记住的段全部排除
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 构造 `PermissionRequested.command_segments` 改调上述方法（替换原来仅按 `!is_readonly && !unmemorable` 过滤、不排除已记段的逻辑）
+- **影响范围**: agent-core(hitl/dispatch)。协议类型未变；前端 PermissionApprovalPopup 无需改（基于 `command_segments` 渲染，内容收窄后自动正确）。
+- **验证**: `cargo test -p agent-core --lib` 440 通过（唯一 1 失败仍是 pre-existing read.rs，无关）；新增回归 `hitl::unapproved_segments_excludes_remembered_readonly_and_unmemorable`；heb mimo 真实验证——先记住 `cd`，再 `cd /tmp/hpt && touch new.txt` 弹审批时 `command_segments=["touch new.txt"]`（`cd` 已排除）。
+- **留尾巴**: 无。
+
 
 ### 2026-05-29 — 派发器普通工具并发加 8 上限（join_all → buffer_unordered）
 

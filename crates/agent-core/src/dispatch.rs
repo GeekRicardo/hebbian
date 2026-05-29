@@ -372,15 +372,13 @@ impl ToolDispatcher {
                     fingerprint = fingerprint.as_deref().unwrap_or(""),
                     "tool_call needs human approval"
                 );
-                // 只把「会写且可记忆」的段交给 UI 做记忆勾选：只读段无需记忆、
-                // 不可记忆段（rm/dd…）禁止记忆，都不出现在勾选区（架构 §4.4.2）。
-                // 完整命令仍在 BashArgsPreview 里可见，用户照样看得到 rm。
-                let command_segments: Vec<String> = effects
-                    .segments
-                    .iter()
-                    .filter(|s| !s.is_readonly && !s.unmemorable)
-                    .map(|s| s.fingerprint.clone())
-                    .collect();
+                // UI 记忆勾选区只列「会写 + 可记忆 + 尚未审批过」的段：只读段、不可
+                // 记忆段（rm…）、以及之前已记住的段（如记过的 cd）都不出现，用户只对
+                // 本次真正新增的会写段决定是否记忆（架构 §4.4.2.3）。完整命令仍在
+                // BashArgsPreview 里可见。
+                let command_segments = self
+                    .hitl
+                    .unapproved_memorable_writable_segments(&call.name, &effects);
                 self.emit(EventPayload::PermissionRequested {
                     request_id: request_id.clone(),
                     kind: PermissionKind::ToolCall {
