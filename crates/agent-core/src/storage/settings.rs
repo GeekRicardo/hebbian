@@ -21,6 +21,9 @@ pub struct Settings {
     /// agent 配置：预设 prompt 列表（与现有 prompts 文件并存）
     #[serde(default)]
     pub agents: AgentDefaults,
+    /// 长期记忆系统配置（架构 §4.14）。
+    #[serde(default)]
+    pub memory: MemorySettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +130,26 @@ pub struct AgentDefaults {
     /// 默认选中的 prompt id（指向 prompts 模块管理的预设）
     #[serde(default)]
     pub default_prompt_id: Option<String>,
+}
+
+/// 长期记忆系统设置（架构 §4.14）。后台抽取按 `models` 顺序 fallback——
+/// 每个模型最多重试 5 次，全链耗尽 → 整轮失败（游标不前进，下次补抽）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemorySettings {
+    /// 总开关。关闭时既不注入 <memory-index> 也不跑后台抽取（手动 ReadMemory /
+    /// WriteMemory 不受影响——是工具能力，不是后台行为）。
+    #[serde(default)]
+    pub enabled: bool,
+    /// 抽取模型 fallback 链；空 = 没配，等同 `enabled=false` 的抽取行为。
+    #[serde(default)]
+    pub models: Vec<MemoryModelRef>,
+}
+
+/// 一个 fallback 链节点：复用现有 provider，绑定具体 model id。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryModelRef {
+    pub provider_id: String,
+    pub model: String,
 }
 
 fn path(data_dir: &Path) -> PathBuf {

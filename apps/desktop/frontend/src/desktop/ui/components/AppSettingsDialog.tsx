@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { invoke, listen } from "@/desktop/bridge/transport";
 import {
   Bot,
+  Brain,
   ChevronRight,
   FolderOpen,
   Maximize2,
@@ -44,13 +45,14 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "models" | "agents" | "permissions" | "skills" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "models" | "agents" | "memory" | "permissions" | "skills" | "mcp" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "general", label: "通用", icon: SettingsIcon },
   { key: "conversation", label: "对话设置", icon: FolderOpen },
   { key: "models", label: "模型", icon: Bot },
   { key: "agents", label: "Agents", icon: Bot },
+  { key: "memory", label: "记忆", icon: Brain },
   { key: "permissions", label: "权限", icon: Shield },
   { key: "skills", label: "Skills", icon: Sparkles },
   { key: "mcp", label: "MCP", icon: Plug },
@@ -179,6 +181,13 @@ export function AppSettingsDialog() {
               )}
               {tab === "agents" && (
                 <SubagentsPane workdir={draft.conversation.workdir ?? null} />
+              )}
+              {tab === "memory" && (
+                <MemoryPane
+                  settings={draft}
+                  onChange={setDraft}
+                  workdir={draft.conversation.workdir ?? null}
+                />
               )}
               {tab === "permissions" && <PermissionsPane />}
               {tab === "skills" && (
@@ -678,6 +687,197 @@ function ConversationPane({
           onChange={(next) => updateConv({ enabled_tools: next ?? [] })}
         />
       </div>
+    </div>
+  );
+}
+
+// ─── 长期记忆配置（架构 §4.14）──────────────────────────────────────
+function MemoryPane({
+  settings,
+  onChange,
+  workdir,
+}: {
+  settings: AppSettings;
+  onChange: (s: AppSettings) => void;
+  workdir: string | null;
+}) {
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [testing, setTesting] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getProviders().then((f) => setProviders(f.providers));
+  }, []);
+
+  const addModel = async (providerId: string, model: string) => {
+    // 实测连通
+    setTesting(`${providerId}/${model}`);
+    try {
+      const p = providers.find((x) => x.id === providerId);
+      if (!p) throw new Error("provider 不存在");
+      const result = await api.testProviderModel(p, model);
+      if (!result.success) throw new Error(result.error || "连通失败");
+      onChange({
+        ...settings,
+        memory: {
+          ...settings.memory,
+          models: [...settings.memory.models, { provider_id: providerId, model }],
+        },
+      });
+      toast.success("已添加");
+    } catch (e) {
+      toast.error(`实测失败: ${e}`);
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const removeModel = (idx: number) => {
+    onChange({
+      ...settings,
+      memory: {
+        ...settings.memory,
+        models: settings.memory.models.filter((_, i) => i !== idx),
+      },
+    });
+  };
+
+  const moveModel = (idx: number, dir: "up" | "down") => {
+    const arr = [...settings.memory.models];
+    const target = dir === "up" ? idx - 1 : idx + 1;
+    if (target < 0 || target >= arr.length) return;
+    [arr[idx], arr[target]] = [arr[target], arr[idx]];
+    onChange({ ...settings, memory: { ...settings.memory, models: arr } });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* 总开关 */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-medium">启用长期记忆</div>
+          <div className="text-sm text-muted-foreground">
+            关闭后不注入记忆清单、不跑后台抽取（手动 ReadMemory/WriteMemory 不受影响）
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          checked={settings.memory.enabled}
+          onChange={(e) =>
+            onChange({
+              ...settings,
+              memory: { ...settings.memory, enabled: e.target.checked },
+            })
+          }
+          className="h-4 w-4"
+        />
+      </div>
+
+      {/* 抽取模型 fallback 链 */}
+      <div>
+        <div className="font-medium mb-2">抽取模型（按序 fallback）</div>
+        <div className="text-sm text-muted-foreground mb-3">
+          后台抽取按顺序尝试，每个模型最多重试 5 次。添加时会实测连通性。
+        </div>
+        <div className="space-y-2">
+          {settings.memory.models.map((m, i) => (
+            <div key={i} className="flex items-center gap-2 p-2 border rounded">
+              <span className="flex-1 text-sm">
+                {m.provider_id} / {m.model}
+              </span>
+              <button
+                type="button"
+                onClick={() => moveModel(i, "up")}
+                disabled={i === 0}
+                className="text-xs px-2 py-1 disabled:opacity-30"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                onClick={() => moveModel(i, "down")}
+                disabled={i === settings.memory.models.length - 1}
+                className="text-xs px-2 py-1 disabled:opacity-30"
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                onClick={() => removeModel(i)}
+                className="text-xs px-2 py-1 text-red-600"
+              >
+                删除
+              </button>
+            </div>
+          ))}
+          {settings.memory.models.length === 0 && (
+            <div className="text-sm text-muted-foreground">
+              未配置模型 = 不跑后台抽取（等同关闭）
+            </div>
+          )}
+        </div>
+        <div className="mt-3 flex gap-2">
+          <select
+            id="mem-provider"
+            className="flex-1 px-2 py-1 border rounded text-sm"
+            defaultValue=""
+          >
+            <option value="" disabled>
+              选择 provider
+            </option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id}
+              </option>
+            ))}
+          </select>
+          <input
+            id="mem-model"
+            type="text"
+            placeholder="model id"
+            className="flex-1 px-2 py-1 border rounded text-sm"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const pSel = document.getElementById("mem-provider") as HTMLSelectElement;
+              const mInput = document.getElementById("mem-model") as HTMLInputElement;
+              const pid = pSel.value;
+              const mid = mInput.value.trim();
+              if (!pid || !mid) {
+                toast.error("请选择 provider 并填写 model");
+                return;
+              }
+              addModel(pid, mid);
+              mInput.value = "";
+            }}
+            disabled={!!testing}
+            className="px-3 py-1 bg-blue-600 text-white rounded text-sm disabled:opacity-50"
+          >
+            {testing ? "实测中..." : "添加"}
+          </button>
+        </div>
+      </div>
+
+      {/* 全局记忆列表 */}
+      <div>
+        <div className="font-medium mb-2">全局记忆</div>
+        <div className="text-sm text-muted-foreground">
+          （列表展示 + 删除功能待第 4 批后续完善）
+        </div>
+      </div>
+
+      {/* 项目记忆列表（当前对话绑定项目时显示） */}
+      {workdir && (
+        <div>
+          <div className="font-medium mb-2">项目记忆</div>
+          <div className="text-sm text-muted-foreground">
+            当前项目: {workdir}
+          </div>
+          <div className="text-sm text-muted-foreground mt-1">
+            （列表展示 + 删除功能待第 4 批后续完善）
+          </div>
+        </div>
+      )}
     </div>
   );
 }

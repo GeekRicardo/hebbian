@@ -399,6 +399,10 @@ export interface AppSettings {
   agents: {
     default_prompt_id?: string | null;
   };
+  memory: {
+    enabled: boolean;
+    models: Array<{ provider_id: string; model: string }>;
+  };
 }
 
 export type McpTransport = "stdio" | "streamable_http" | "sse";
