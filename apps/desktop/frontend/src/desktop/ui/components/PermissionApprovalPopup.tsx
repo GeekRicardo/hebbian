@@ -108,58 +108,44 @@ export function PermissionApprovalPopup() {
   // ⚠️ hook 必须在组件顶层、所有提前 return 之前调用——把 useMemo 放在 `if (!pending)`
   // 之后会让 hook 调用次数随 pending 变化，React 抛"Rendered more hooks than during
   // the previous render"，弹窗会被 unmount，用户根本看不到按钮 → 看起来"卡住等返回"。
-  const bashPrefixes = useMemo(
-    () =>
-      pending && pending.toolName === "Bash"
-        ? parseBashPrefixes(pending.fingerprint)
-        : null,
-    [pending?.toolName, pending?.fingerprint]
-  );
-  // Bash compound 命令的全部段 root 列表（架构 §4.4.2）。
-  // 例：`cd /tmp && touch foo` → ["cd", "touch"]，去重保序。
-  // segmentRoots.length >= 2 时弹窗展示"整条命令一次性允许"按钮，
-  // 一次写入多条规则避免段级判定"全段 allow"条件单点放行不够。
-  const segmentRoots = useMemo(() => {
-    if (!pending || pending.toolName !== "Bash") return [] as string[];
-    const segs = pending.commandSegments ?? [];
-    const roots: string[] = [];
-    for (const fp of segs) {
-      const parsed = parseBashPrefixes(fp);
-      if (parsed && !roots.includes(parsed.root)) {
-        roots.push(parsed.root);
-      }
-    }
-    return roots;
-  }, [pending?.toolName, pending?.commandSegments]);
-
   // 记忆选项 list：用户在 popup 里勾选要记的 pattern。
-  // - Bash：sub（如可拆二级子命令）/ 各段 root（含 compound）；默认全选段 root
-  // - Edit / Write：从 input.file_path 切出「精确文件 / 父目录」两档路径前缀
-  //   后端 build_rule 对非 Bash 工具把 pattern 当 path_prefix（FilePath matcher），
-  //   下次同前缀的路径自动放行；这是用户的"审批路径"心理模型
+  // - Bash：后端已把 command_segments 过滤成「会写且可记忆」段（只读命令、rm 等
+  //   不可记忆命令都不在内）。逐段切前缀——dispatcher（git/cargo/kubectl…）默认勾
+  //   「精确子命令」（git commit），root（git *）作为放宽档默认不勾；unitary
+  //   命令（touch/cp…）没有子命令，默认勾 root。这样既"审过不再审"又保住子命令粒度。
+  // - Edit / Write：从 input.file_path 切「精确文件 / 父目录」两档路径前缀
   // - 其它工具：仅一档「工具 X」（pattern=null = Any matcher）兜底
   const memoryOptions: MemoryOption[] = useMemo(() => {
     if (!pending) return [];
     const opts: MemoryOption[] = [];
-    if (pending.toolName === "Bash" && bashPrefixes) {
-      if (bashPrefixes.sub && bashPrefixes.sub !== bashPrefixes.root) {
-        opts.push({
-          key: `sub:${bashPrefixes.sub}`,
-          pattern: bashPrefixes.sub,
-          label: bashPrefixes.sub,
-          hint: "精确二级子命令",
-          defaultChecked: false,
-        });
-      }
-      const roots = segmentRoots.length > 0 ? segmentRoots : [bashPrefixes.root];
-      for (const r of roots) {
-        opts.push({
-          key: `root:${r}`,
-          pattern: r,
-          label: `${r} *`,
-          hint: roots.length >= 2 ? "compound 段" : "该根命令的所有子命令",
-          defaultChecked: true,
-        });
+    if (pending.toolName === "Bash") {
+      const segs = pending.commandSegments ?? [];
+      const seenSub = new Set<string>();
+      const seenRoot = new Set<string>();
+      for (const fp of segs) {
+        const parsed = parseBashPrefixes(fp);
+        if (!parsed) continue;
+        const hasSub = !!parsed.sub && parsed.sub !== parsed.root;
+        if (hasSub && !seenSub.has(parsed.sub!)) {
+          seenSub.add(parsed.sub!);
+          opts.push({
+            key: `sub:${parsed.sub}`,
+            pattern: parsed.sub!,
+            label: parsed.sub!,
+            hint: "精确子命令（推荐）",
+            defaultChecked: true,
+          });
+        }
+        if (!seenRoot.has(parsed.root)) {
+          seenRoot.add(parsed.root);
+          opts.push({
+            key: `root:${parsed.root}`,
+            pattern: parsed.root,
+            label: `${parsed.root} *`,
+            hint: hasSub ? "该命令的所有子命令（更宽）" : "该命令的所有用法",
+            defaultChecked: !hasSub,
+          });
+        }
       }
     } else if (
       (pending.toolName === "Edit" || pending.toolName === "Write") &&
@@ -186,7 +172,7 @@ export function PermissionApprovalPopup() {
           defaultChecked: true,
         });
       }
-    } else if (pending.toolName !== "Bash") {
+    } else {
       opts.push({
         key: `tool:${pending.toolName}`,
         pattern: null,
@@ -196,7 +182,7 @@ export function PermissionApprovalPopup() {
       });
     }
     return opts;
-  }, [pending?.toolName, pending?.input, bashPrefixes, segmentRoots]);
+  }, [pending?.toolName, pending?.input, pending?.commandSegments]);
 
   if (!pending) return null;
 
@@ -729,7 +715,7 @@ function MemoryRecallPanel({
   disabled?: boolean;
   onApply: (
     picked: MemoryOption[],
-    scope: "session" | "project" | "global",
+    scope: "session" | "project",
   ) => void;
   /** hover label 时回调 pattern（leave 时回调 null）—— 让外层 Bash 预览高亮对应段 */
   onHoverPattern?: (pattern: string | null) => void;
@@ -757,14 +743,14 @@ function MemoryRecallPanel({
   const toggle = (key: string) =>
     setChecked((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  const apply = (scope: "session" | "project" | "global") => {
+  const apply = (scope: "session" | "project") => {
     const picked = options.filter((o) => checked[o.key]);
     if (picked.length === 0) return;
     onApply(picked, scope);
   };
 
   const scopeBtn = (
-    scope: "session" | "project" | "global",
+    scope: "session" | "project",
     text: string,
     icon: ReactNode,
     hint: string,
@@ -867,12 +853,6 @@ function MemoryRecallPanel({
           "本项目",
           <FolderTree className="w-3.5 h-3.5" />,
           "写到 ~/.hebbian/permissions.json，限当前 workdir",
-        )}
-        {scopeBtn(
-          "global",
-          "全局",
-          <Globe className="w-3.5 h-3.5" />,
-          "写到 ~/.hebbian/permissions.json，所有对话生效",
         )}
       </div>
     </div>

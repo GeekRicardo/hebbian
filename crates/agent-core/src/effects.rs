@@ -52,6 +52,12 @@ pub struct SegmentEffect {
     pub env_prefix: Vec<String>,
     /// 段内识别到的写文件目标（重定向 / tee / sed -i / python open(...,'w')）。
     pub write_targets: Vec<String>,
+    /// 该段是否只读（[`safe_commands::is_safe`]）。只读段**免审批、免记忆**：
+    /// 段级权限匹配只要求"会写段"全部命中 allow，只读段直接跳过（架构 §4.4.2）。
+    pub is_readonly: bool,
+    /// 该段是否"不可记忆"（[`safe_commands::is_never_remember`]，如 `rm` / `dd`）。
+    /// 命中时整条审批强制 refuse_remember，且该段永远不被记忆放行——每次确认（架构 §4.4.2.3）。
+    pub unmemorable: bool,
 }
 
 /// 单次工具调用解析出来的 effects。
@@ -264,6 +270,8 @@ fn analyze_shell(input: &Value) -> Effects {
                     fingerprint,
                     env_prefix: cmd.env_prefix.clone(),
                     write_targets: cmd.write_targets.clone(),
+                    is_readonly: safe_commands::is_safe(cmd),
+                    unmemorable: safe_commands::is_never_remember(cmd),
                 });
             }
             for k in &p.dangerous_kinds {
@@ -530,5 +538,29 @@ mod tests {
         assert_eq!(e.command_fingerprint.as_deref(), Some("python3"));
         assert_eq!(e.segments.len(), 1);
         assert!(e.dangerous_kinds.is_empty());
+    }
+
+    #[test]
+    fn segments_carry_readonly_flags() {
+        // cd 会写（不在只读白名单），grep / tail / wc 只读
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "cd src && grep -rn foo bar | tail -5 | wc -l"}),
+        );
+        assert_eq!(e.segments.len(), 4);
+        assert_eq!(e.segments[0].fingerprint, "cd src");
+        assert!(!e.segments[0].is_readonly, "cd 应判会写");
+        assert!(e.segments[1].is_readonly, "grep 应判只读");
+        assert!(e.segments[2].is_readonly, "tail 应判只读");
+        assert!(e.segments[3].is_readonly, "wc 应判只读");
+        assert!(e.segments.iter().all(|s| !s.unmemorable));
+    }
+
+    #[test]
+    fn rm_segment_is_writable_and_unmemorable() {
+        let e = analyze_effects("Bash", &json!({"command": "rm -rf ./build"}));
+        assert_eq!(e.segments.len(), 1);
+        assert!(!e.segments[0].is_readonly);
+        assert!(e.segments[0].unmemorable, "rm 应标记不可记忆");
     }
 }

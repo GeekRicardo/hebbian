@@ -5357,3 +5357,21 @@
   - **前台 Task 模式仍踩 channel race**：理论上前台子 agent 跑得很快 + 父 sink 健康，没踩到；如果未来子 agent 长跑 + UI 卡住消费就会暴露，到时再补统一的"sink 是否可写"判定。
   - 父 run 1 的 assistant 响应「子 agent 已启动等待通知」未落盘到 session.jsonl（model_io 有记录、事件流也发了）——疑似 partial sidecar 没 fold，与本次 task 解耦的旁支问题，留单独 issue。
 
+### 2026-05-29 — 审批模式段级化：只读段免审批/免记忆 + rm 等不可记忆命令每次确认
+
+- **Why**: 用户反馈复杂命令频繁重复审批——"之前审批过的命令，下次即使出现在复合命令里也还要审"。根因有二：① 段级判定要求「全段命中 allow」，而 `cd && grep | tail | wc` 里 `tail`/`wc` 是只读命令却没有 allow 规则，导致整条永远未决；② 只读白名单覆盖面不够，很多无害命令仍走审批。用户要求：审过的命令下次不审、只读命令（ls/wc/tail/echo 不分子命令、git/kubectl 区分子命令）自动放行、`rm` 等危险命令永不记忆每次确认、`cd` 可记忆、审批弹窗去掉全局档。AutoMode 本轮不动（保持纯静态、0 延迟）。
+- **改动**:
+  - [crates/agent-core/src/tools/safe_commands.rs](../crates/agent-core/src/tools/safe_commands.rs): 扩 `SAFE_ROOTS`（dirname/realpath/jq/diff/dig/lsof/journalctl 等）+ `SAFE_SUBCOMMANDS`（git cat-file/show-ref、kubectl top/explain、docker stats、helm/systemctl/terraform 只读子命令）；新增 `NEVER_REMEMBER_ROOTS` + `is_never_remember()`（rm/rmdir/dd/shred/truncate/fdisk/gdisk/parted/wipefs/mkfs*）
+  - [crates/agent-core/src/effects.rs](../crates/agent-core/src/effects.rs): `SegmentEffect` 加 `is_readonly` / `unmemorable` 两个段级标记，`analyze_shell` 逐段填充
+  - [crates/agent-core/src/permissions/mod.rs](../crates/agent-core/src/permissions/mod.rs): `find_for_segments` 签名改收 `&[SegmentEffect]`；段级 allow 匹配从"全段命中"改为"全**会写**段命中"（只读段 filter 掉免匹配），deny 仍检查所有段
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): `check_without_policy` 新增「不可记忆命令」分支（任一会写段 unmemorable → `needs_approval_no_remember`）；learned 段级匹配 `continue` 跳过只读段
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 构造 `PermissionRequested.command_segments` 时过滤成「会写且可记忆」段（`!is_readonly && !unmemorable`）
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): `memoryOptions` 改为逐 `command_segments` 段切前缀（dispatcher 默认勾精确子命令、unitary 默认勾 root）；移除 `bashPrefixes`/`segmentRoots` 旧 useMemo；`MemoryRecallPanel` 去掉全局档（只留本对话 / 本项目）
+  - [docs/架构.md](架构.md): §4.4.2 segment 产出加 is_readonly/unmemorable，check_permission 段级语义改"全会写段 allow"；新增 §4.4.2.3「只读判定与不可记忆命令」
+- **影响范围**: agent-core（effects / permissions / hitl / dispatch）+ desktop 前端弹窗。**协议类型未变**（`command_segments: Vec<String>` 不动，仅收窄语义为"会写可记忆段"，向后兼容；旧 CLI 脚本无感）。`find_for_segments` 是 crate 内部接口，唯一调用点 hitl 已同步。
+- **验证**: `cargo test -p agent-core --lib` 421 通过 / 1 失败（pre-existing read.rs MAX_OUTPUT_BYTES 截断断言，与本次无关，未碰 read.rs）；新增回归测试 `effects::segments_carry_readonly_flags` / `rm_segment_is_writable_and_unmemorable`、`safe_commands::{new_readonly_roots_are_safe, new_readonly_subcommands_are_safe, never_remember_*}`、`hitl::{writable_segment_remembered_then_readonly_tail_change_no_reapproval, rm_is_never_remembered_always_reapproves}`；`tsc --noEmit` 通过。heb CLI 临时目录端到端验证各 scope（一次 / 本对话 / 本项目 / 全局）。
+- **留尾巴**:
+  - fingerprint 仍把路径塞进 unitary 命令指纹（`touch /tmp/a` → "touch /tmp/a"），靠用户记 root 档（`touch`）兜底匹配后续，未单独剥路径（P1 未做，当前不影响"审过不再审"）。
+  - 审批弹窗去全局是 UI 行为，后端 PermissionStore 的 Global scope 仍保留（设置页 / heb CLI 可写）。
+  - read.rs 截断测试 pre-existing 失败，待 read 上限 6KB→100KB 那次改动的 owner 跟进。
+

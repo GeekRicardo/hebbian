@@ -315,6 +315,20 @@ impl HitlGate {
             return Some(PermissionDecision::Approved);
         }
 
+        // 4b) 不可记忆命令（rm/dd/mkfs/...，架构 §4.4.2.3）：任一会写段命中即强制
+        //     审批且禁止记忆。即使复合命令其余段已记忆，含 rm 的整条每次都确认。
+        if let Some(seg) = effects.segments.iter().find(|s| s.unmemorable) {
+            info!(
+                tool = %tool_name,
+                segment = %seg.fingerprint,
+                matched = false,
+                level = "never_remember",
+                result = "waiting_for_approval",
+                "permission.match: unmemorable command → waiting for approval (no remember)"
+            );
+            return Some(self.needs_approval_no_remember(tool_name, fingerprint, effects));
+        }
+
         // 5) 用户累计的"允许并记住"——Bash/PowerShell 走段级匹配，其它工具退回工具名级。
         {
             let learned = self.learned.lock().unwrap();
@@ -323,6 +337,10 @@ impl HitlGate {
             if has_segments {
                 let mut all_seg_allowed = true;
                 for seg in &effects.segments {
+                    // 只读段免匹配（架构 §4.4.2）：只要求会写段全部命中记忆。
+                    if seg.is_readonly {
+                        continue;
+                    }
                     let seg_matched = learned.auto_approved_patterns.iter().any(|(t, prefix)| {
                         t == tool_name && fingerprint_matches(&seg.fingerprint, prefix)
                     });
@@ -409,16 +427,12 @@ impl HitlGate {
             let sid = self.session_id.as_deref();
             let wd = self.workdir.as_deref();
             let store_hit = if has_segments {
-                let seg_pairs: Vec<(String, Vec<String>)> = effects
-                    .segments
-                    .iter()
-                    .map(|s| (s.fingerprint.clone(), s.write_targets.clone()))
-                    .collect();
-                let r = store.find_for_segments_diagnostic(sid, wd, tool_name, &seg_pairs);
+                let r =
+                    store.find_for_segments_diagnostic(sid, wd, tool_name, &effects.segments);
                 info!(
                     tool = %tool_name,
                     result = ?r.as_ref().map(|r| format!("{:?}", r)),
-                    segments = ?seg_pairs.iter().map(|(f,_)| f).collect::<Vec<_>>(),
+                    segments = ?effects.segments.iter().map(|s| &s.fingerprint).collect::<Vec<_>>(),
                     "permission.match: PermissionStore.find_for_segments"
                 );
                 r
@@ -1435,5 +1449,217 @@ mod tests {
             ),
             PermissionDecision::NeedsApproval { .. }
         ));
+    }
+
+    /// 回归（架构 §4.4.2）：复合命令记忆「会写段」后，第二次只换只读尾部命令
+    /// （grep/head/tail/sort/wc 等）不应再审批——只读段免匹配。这是"审过又审"的根因之一。
+    #[test]
+    fn writable_segment_remembered_then_readonly_tail_change_no_reapproval() {
+        let gate = HitlGate::default();
+        let first = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cd src && grep -rn foo bar | tail -5 | wc -l"}),
+        );
+        let id = match gate.check("Bash", &first) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected first approval, got {other:?}"),
+        };
+        gate.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("cd".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        // 第二次换只读尾部 head/sort，会写段仍只有已记忆的 cd → 不再审批
+        let second = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cd src && grep -rn baz qux | head -3 | sort"}),
+        );
+        assert!(matches!(
+            gate.check("Bash", &second),
+            PermissionDecision::Approved
+        ));
+    }
+
+    /// 回归（架构 §4.4.2.3）：rm 永不可记忆——即便用户点 AllowAndRemember，下次同类
+    /// rm 仍审批；复合命令中含 rm 段也整条每次确认（其余会写段已记忆也不放行）。
+    #[test]
+    fn rm_is_never_remembered_always_reapproves() {
+        let gate = HitlGate::default();
+        let first =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "rm -rf ./build"}));
+        let id = match gate.check("Bash", &first) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected approval, got {other:?}"),
+        };
+        gate.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("rm".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        // 另一个 rm 仍审批
+        let second =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "rm -rf ./dist"}));
+        assert!(matches!(
+            gate.check("Bash", &second),
+            PermissionDecision::NeedsApproval { .. }
+        ));
+
+        // 复合命令：cargo build 先记住
+        let build =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build"}));
+        let bid = match gate.check("Bash", &build) {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected approval, got {other:?}"),
+        };
+        gate.resolve(
+            &bid,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("cargo build".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        // cargo build 已记，但整条含 rm 段 → 仍审批
+        let compound = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "cargo build && rm -rf target"}),
+        );
+        assert!(matches!(
+            gate.check("Bash", &compound),
+            PermissionDecision::NeedsApproval { .. }
+        ));
+    }
+
+    /// 端到端 4-scope 审批矩阵（架构 §4.4.2 / §4.5.3）：真实 PermissionStore 落盘到
+    /// 临时目录 + 真实 HitlGate + 真实 analyze_effects，覆盖「一次 / 当前对话 / 当前
+    /// 项目 / 全局」四档的放行与隔离边界。
+    #[test]
+    fn four_scope_approval_matrix_end_to_end() {
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-scope-matrix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(PermissionStore::open(&dir).unwrap());
+        let proj_a = PathBuf::from("/tmp/projA");
+        let proj_b = PathBuf::from("/tmp/projB");
+
+        let eff = |cmd: &str| {
+            crate::effects::analyze_effects("Bash", &serde_json::json!({ "command": cmd }))
+        };
+        let need_id = |d: PermissionDecision| match d {
+            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
+            other => panic!("expected NeedsApproval, got {other:?}"),
+        };
+        let gate = |sid: &str, wd: &PathBuf| {
+            HitlGate::new(PermissionPolicy::default()).with_store(
+                store.clone(),
+                sid,
+                Some(wd.clone()),
+            )
+        };
+
+        // ── 一次（once）：放行但不记忆 ──
+        let gate_a = gate("sess-A", &proj_a);
+        let id = need_id(gate_a.check("Bash", &eff("git commit -m x")));
+        gate_a.resolve(&id, ApprovalDecision::AllowOnce);
+        assert!(
+            matches!(
+                gate_a.check("Bash", &eff("git commit -m y")),
+                PermissionDecision::NeedsApproval { .. }
+            ),
+            "once 不该记忆，第二次仍审批"
+        );
+
+        // ── 当前对话（session）：本会话放行、不跨会话 ──
+        let id = need_id(gate_a.check("Bash", &eff("git commit -m y")));
+        gate_a.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: Some("git commit".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        assert!(
+            matches!(
+                gate_a.check("Bash", &eff("git commit -m z")),
+                PermissionDecision::Approved
+            ),
+            "session 内同前缀应放行"
+        );
+        let gate_b = gate("sess-B", &proj_a);
+        assert!(
+            matches!(
+                gate_b.check("Bash", &eff("git commit -m w")),
+                PermissionDecision::NeedsApproval { .. }
+            ),
+            "session 规则不跨会话"
+        );
+
+        // ── 当前项目（project）：落盘 + 同项目跨会话放行 + 跨项目隔离 ──
+        let id = need_id(gate_a.check("Bash", &eff("cargo build")));
+        gate_a.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Project,
+                pattern: Some("cargo build".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        assert!(
+            store
+                .list(PermissionScope::Project, None, Some(&proj_a), RuleEffect::Allow)
+                .contains(&"Bash(cargo build)".to_string()),
+            "project 规则应落盘到 permissions.json"
+        );
+        let gate_b2 = gate("sess-B2", &proj_a);
+        assert!(
+            matches!(
+                gate_b2.check("Bash", &eff("cargo build --release")),
+                PermissionDecision::Approved
+            ),
+            "同项目跨会话应放行"
+        );
+        let gate_c = gate("sess-C", &proj_b);
+        assert!(
+            matches!(
+                gate_c.check("Bash", &eff("cargo build")),
+                PermissionDecision::NeedsApproval { .. }
+            ),
+            "project 规则不跨项目"
+        );
+
+        // ── 全局（global）：任意项目 / 会话放行 ──
+        let id = need_id(gate_c.check("Bash", &eff("npm install")));
+        gate_c.resolve(
+            &id,
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Global,
+                pattern: Some("npm install".into()),
+                extra_patterns: Vec::new(),
+            },
+        );
+        assert!(
+            matches!(
+                gate_c.check("Bash", &eff("npm install --save-dev foo")),
+                PermissionDecision::Approved
+            ),
+            "global 在本项目放行"
+        );
+        let gate_d = gate("sess-D", &proj_a);
+        assert!(
+            matches!(
+                gate_d.check("Bash", &eff("npm install")),
+                PermissionDecision::Approved
+            ),
+            "global 跨项目放行"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

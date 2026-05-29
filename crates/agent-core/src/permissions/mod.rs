@@ -460,19 +460,24 @@ impl PermissionStore {
         session_id: Option<&str>,
         workdir: Option<&Path>,
         tool_name: &str,
-        segments: &[(String, Vec<String>)],
+        segments: &[crate::effects::SegmentEffect],
     ) -> Option<RuleEffect> {
         self.find_for_segments_diagnostic(session_id, workdir, tool_name, segments)
             .map(|m| m.effect)
     }
 
     /// 同 [`Self::find_for_segments`]，但保留第一条命中规则的诊断信息。
+    ///
+    /// 段级语义（架构 §4.4.2）：
+    /// - 任一段（含只读段）命中 deny → 整体 Deny（尊重用户显式 `Bash(cat)` 这类 deny）
+    /// - **只读段免匹配**：只要求所有「会写段」命中 allow，整体才 Allow
+    /// - 没有会写段（全只读）→ 返回 None，交由 ReadOnly 短路放行
     pub fn find_for_segments_diagnostic(
         &self,
         session_id: Option<&str>,
         workdir: Option<&Path>,
         tool_name: &str,
-        segments: &[(String, Vec<String>)],
+        segments: &[crate::effects::SegmentEffect],
     ) -> Option<PermissionMatch> {
         if segments.is_empty() {
             return None;
@@ -516,10 +521,10 @@ impl PermissionStore {
             deny.extend(g.deny.iter().cloned().map(|p| (PermissionScope::Global, p)));
         }
 
-        // 阶段 1：任一段命中 deny → Deny
-        for (fp, write_targets) in segments {
+        // 阶段 1：任一段（含只读段）命中 deny → Deny
+        for seg in segments {
             for (scope, r) in &deny {
-                if segment_hits(r, tool_name, fp, write_targets) {
+                if segment_hits(r, tool_name, &seg.fingerprint, &seg.write_targets) {
                     return Some(PermissionMatch {
                         effect: RuleEffect::Deny,
                         scope: *scope,
@@ -527,7 +532,7 @@ impl PermissionStore {
                     });
                 }
                 // 跨工具：FilePath deny 兜底 Bash 写文件目标
-                for t in write_targets {
+                for t in &seg.write_targets {
                     if r.matches_path(t) {
                         return Some(PermissionMatch {
                             effect: RuleEffect::Deny,
@@ -539,24 +544,28 @@ impl PermissionStore {
             }
         }
 
-        // 阶段 2：全部段命中 allow → Allow
+        // 阶段 2：全部「会写段」命中 allow → Allow（只读段免匹配）。
+        // 没有会写段时 first_allow 仍为 None → 返回 None，交给 ReadOnly 短路。
         let mut first_allow: Option<PermissionMatch> = None;
-        let all_allow = segments.iter().all(|(fp, write_targets)| {
-            let matched = allow
-                .iter()
-                .find(|(_, r)| segment_hits(r, tool_name, fp, write_targets));
-            if let Some((scope, r)) = matched {
-                first_allow.get_or_insert_with(|| PermissionMatch {
-                    effect: RuleEffect::Allow,
-                    scope: *scope,
-                    pattern: r.raw.clone(),
-                });
-                true
-            } else {
-                false
-            }
-        });
-        if all_allow {
+        let all_writable_allowed = segments
+            .iter()
+            .filter(|seg| !seg.is_readonly)
+            .all(|seg| {
+                let matched = allow
+                    .iter()
+                    .find(|(_, r)| segment_hits(r, tool_name, &seg.fingerprint, &seg.write_targets));
+                if let Some((scope, r)) = matched {
+                    first_allow.get_or_insert_with(|| PermissionMatch {
+                        effect: RuleEffect::Allow,
+                        scope: *scope,
+                        pattern: r.raw.clone(),
+                    });
+                    true
+                } else {
+                    false
+                }
+            });
+        if all_writable_allowed {
             return first_allow;
         }
         None

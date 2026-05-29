@@ -369,9 +369,13 @@ impl ToolDispatcher {
                     fingerprint = fingerprint.as_deref().unwrap_or(""),
                     "tool_call needs human approval"
                 );
+                // 只把「会写且可记忆」的段交给 UI 做记忆勾选：只读段无需记忆、
+                // 不可记忆段（rm/dd…）禁止记忆，都不出现在勾选区（架构 §4.4.2）。
+                // 完整命令仍在 BashArgsPreview 里可见，用户照样看得到 rm。
                 let command_segments: Vec<String> = effects
                     .segments
                     .iter()
+                    .filter(|s| !s.is_readonly && !s.unmemorable)
                     .map(|s| s.fingerprint.clone())
                     .collect();
                 self.emit(EventPayload::PermissionRequested {
@@ -2037,10 +2041,9 @@ mod tests {
         drop(dispatcher);
         let requests = surface.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0],
-            vec!["cd crates", "cd agent-core", "grep dispatch", "cat"]
-        );
+        // command_segments 只含「会写可记忆」段：grep / cat 是只读段，已被过滤
+        // （架构 §4.4.2）——UI 记忆勾选区不该出现它们。
+        assert_eq!(requests[0], vec!["cd crates", "cd agent-core"]);
     }
 
     /// 回归测试：spawn_todo_write short-circuit 真的把 todos 落盘到 jsonl 的
