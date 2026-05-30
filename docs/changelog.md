@@ -5496,3 +5496,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 纯前端展示（思考强度档位文案 + 上下文窗口徽章 / 进度环分母）。请求构造仍以后端为准，不涉协议。
 - **验证**: hebweb + Playwright 真实 UI——打开 opus-4-8 会话，思考强度 pill 下拉可见文本为「低 low / 中 medium / 高 high / 极高 xhigh」（修前是「低 1024 tok …」），模型列表 opus-4-8 带「1M」徽章。tsc 通过。
 - **留尾巴**: 这套「Rust 与 TS 两份家族判定表」天然易漂移，每出新模型要改两边；本次只补 4-8，未做单一真相源收敛。legacy 模型（sonnet-4-5 等）下拉仍显示 budget tok——那是这些模型真实的 wire 取值，属正确（非本次问题）。
+
+### 2026-05-30 — 记忆系统统一动作日志：[Memory:动作] 分类前缀 + target="memory"
+
+- **Why**: 用户要求给记忆的任意动作（查 / 写 / 抽取 / 游标 / 注入）都打日志，且带分类标识便于按动作一键 grep——形如 `[Memory:Write]` / `[Memory:Read]` / `[Memory:Extract]`，既能单看某类也能 `[Memory:` 捞全部。此前记忆动作零日志，出问题只能靠 model_io.jsonl + .memory_log.jsonl 拼。
+- **改动**:
+  - `crates/agent-core/src/storage/memory.rs`: 新增 `mem_log!`(info) / `mem_warn!`(warn) 两个宏（`pub(crate) use`），首参为动作分类（`Write`/`Read`/`Query`/`Cursor`/`Extract`/`Inject`），输出 `[Memory:<分类>] <msg>` 且挂 `target = "memory"`。storage 收口落日志——`write`→Write / `read`→Read / `list_l0`→Query（含目录不存在分支）/ `write_cursor`→Cursor。
+  - `crates/agent-core/src/memory_extract.rs`: Extract 生命周期日志——开始(新消息数+游标) / 跳过(无新消息) / 完成(写入条数+命中模型) / 失败；原有 4 处 `tracing::warn!` 统一改 `mem_warn!`（按 Write / Extract 分类）。
+  - `crates/agent-core/src/session.rs`: `collect_memory_index` 注入末尾打 `[Memory:Inject] memory-index：N 条`，两处 list 失败改 `mem_warn!("Query", ...)`。
+  - `apps/cli/src/main.rs` / `apps/desktop/src/lib.rs`: observability 默认 filter 追加 `memory=info`，让记忆动作日志在默认级别下始终可见又不抬高全局噪声（hebweb 已是全局 info，无需改）。RUST_LOG 显式设置时仍以其为准。
+- **影响范围**: agent-core 三个文件 + 两个 surface 的日志默认级别。纯可观测性，不动协议 / 落盘格式 / 行为。工具 ReadMemory/WriteMemory 走 storage 收口天然覆盖，未单独加日志避免双打。
+- **验证**: heb CLI 跑一条触发 WriteMemory + ReadMemory 的消息，`grep '\[Memory:' heb.log` 看到完整链路：`[Memory:Query] global/proj 0 条` → `[Memory:Inject] 0 条` → `[Memory:Write] proj/package-manager` → `[Memory:Read] proj/package-manager` → `[Memory:Extract] 开始` → `[Memory:Query] proj 1 条` → `[Memory:Write]`(upsert) → `[Memory:Cursor] 推进` → `[Memory:Extract] 完成 写入 1 条`。cargo check --workspace + memory 单测 17 过。
+- **留尾巴**: 日志落 `~/.hebbian/logs/hebbian.log.<date>`（observability 用 home_dir，不随 --data-dir 走，多 surface 共写同一文件）；WriteMemory 工具的 project→global 降级原因未单独记（storage 只记最终 scope），需要时再补工具级日志。

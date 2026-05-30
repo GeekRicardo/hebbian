@@ -20,7 +20,7 @@ use common::{CancelFlag, ReasoningConfig};
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 use serde::Deserialize;
 
-use crate::storage::memory::{self, MemoryL0, MemoryScope};
+use crate::storage::memory::{self, mem_log, mem_warn, MemoryL0, MemoryScope};
 use crate::storage::sessions::{self, Role, Session};
 use crate::storage::settings;
 use crate::tools::memory_project_workdir;
@@ -78,9 +78,15 @@ pub async fn extract_for_session(
     let cursor = memory::read_cursor(data_dir, session_id);
     let new_messages = messages_after_cursor(&session, cursor.as_deref());
     if new_messages.is_empty() {
+        mem_log!("Extract", "跳过：游标之后无新消息 session={session_id}");
         return Ok(None);
     }
     let last_msg_id = new_messages.last().map(|m| m.id.clone());
+    mem_log!(
+        "Extract",
+        "开始 session={session_id} 新消息 {} 条 游标={cursor:?}",
+        new_messages.len()
+    );
 
     let project_workdir = session
         .workdir
@@ -99,6 +105,7 @@ pub async fn extract_for_session(
     let raw = match run_fallback_chain(data_dir, &app_settings.memory.models, &prompt).await {
         Ok(raw) => raw,
         Err(e) => {
+            mem_warn!("Extract", "失败 session={session_id}：{e}");
             log_outcome(data_dir, project_workdir.as_deref(), "failed", None, &e.to_string());
             return Err(e);
         }
@@ -110,10 +117,16 @@ pub async fn extract_for_session(
     // 成功（哪怕 0 条）→ 推进游标。
     if let Some(mid) = last_msg_id {
         if let Err(e) = memory::write_cursor(data_dir, session_id, &mid) {
-            tracing::warn!(error = %e, "推进记忆抽取游标失败");
+            mem_warn!("Cursor", "推进失败 session={session_id}：{e}");
         }
     }
 
+    mem_log!(
+        "Extract",
+        "完成 session={session_id} 写入 {} 条 模型={}",
+        written.len(),
+        raw.model
+    );
     log_outcome(
         data_dir,
         project_workdir.as_deref(),
@@ -193,7 +206,7 @@ fn persist_candidates(
                 summary: l0.summary,
                 scope,
             }),
-            Err(e) => tracing::warn!(error = %e, key = %c.key, "写入候选记忆失败"),
+            Err(e) => mem_warn!("Write", "候选写入失败 key={}：{e}", c.key),
         }
     }
     written
@@ -242,7 +255,12 @@ async fn run_fallback_chain(
                 }
                 Err(e) => {
                     last_err = format!("{}/{} 第{attempt}次: {e}", m.provider_id, m.model);
-                    tracing::warn!(provider = %m.provider_id, model = %m.model, attempt, error = %e, "记忆抽取模型调用失败");
+                    mem_warn!(
+                        "Extract",
+                        "模型调用失败 {}/{} 第{attempt}次：{e}",
+                        m.provider_id,
+                        m.model
+                    );
                 }
             }
         }
@@ -330,7 +348,7 @@ fn parse_candidates(raw: &str) -> Vec<Candidate> {
             .filter(|c| !c.key.trim().is_empty() && !c.summary.trim().is_empty())
             .collect(),
         Err(e) => {
-            tracing::warn!(error = %e, "解析候选记忆 JSON 失败");
+            mem_warn!("Extract", "候选 JSON 解析失败：{e}");
             Vec::new()
         }
     }

@@ -595,12 +595,12 @@ fn collect_memory_index(
     data_dir: &std::path::Path,
     workdir: &std::path::Path,
 ) -> Vec<crate::storage::memory::MemoryL0> {
-    use crate::storage::memory::{list_l0, MemoryScope};
+    use crate::storage::memory::{list_l0, mem_log, mem_warn, MemoryScope};
 
     let mut out = match list_l0(data_dir, None, MemoryScope::Global) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(error = %e, "list global memories failed; 跳过 memory-index global");
+            mem_warn!("Query", "列出全局记忆失败，跳过 memory-index 全局段：{e}");
             Vec::new()
         }
     };
@@ -608,10 +608,11 @@ fn collect_memory_index(
         match list_l0(data_dir, Some(&project_wd), MemoryScope::Project) {
             Ok(mut v) => out.append(&mut v),
             Err(e) => {
-                tracing::warn!(error = %e, "list project memories failed; 跳过 memory-index project");
+                mem_warn!("Query", "列出项目记忆失败，跳过 memory-index 项目段：{e}");
             }
         }
     }
+    mem_log!("Inject", "memory-index：{} 条", out.len());
     out
 }
 

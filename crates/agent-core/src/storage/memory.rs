@@ -20,6 +20,22 @@ use common::{AppError, AppResult};
 
 use super::{lock, projects};
 
+/// 记忆系统统一日志（架构 §4.14）：所有记忆动作都过这两个宏，第一个参数是动作分类
+/// （`Write` / `Read` / `Query` / `Cursor` / `Extract` / `Inject`），输出形如
+/// `[Memory:Write] ...`。这样既能 `grep '[Memory:Write]'` 单看某类，也能 `grep '[Memory:'`
+/// 捞全部；同时挂 `target = "memory"`，支持 `RUST_LOG=memory=debug` 单独给记忆模块调级。
+macro_rules! mem_log {
+    ($cat:expr, $($arg:tt)*) => {
+        ::tracing::info!(target: "memory", "[Memory:{}] {}", $cat, format_args!($($arg)*))
+    };
+}
+macro_rules! mem_warn {
+    ($cat:expr, $($arg:tt)*) => {
+        ::tracing::warn!(target: "memory", "[Memory:{}] {}", $cat, format_args!($($arg)*))
+    };
+}
+pub(crate) use {mem_log, mem_warn};
+
 /// 记忆作用域。`prefix()` 是 id 里的可读前缀，也是注入清单中 `[proj/xxx]` 的来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -161,6 +177,7 @@ pub fn write(
         body: body.trim().to_string(),
     };
     lock::write_atomic(&path, render_md(&rec).as_bytes())?;
+    mem_log!("Write", "{id} category={category}");
 
     Ok(MemoryL0 {
         id,
@@ -179,7 +196,10 @@ pub fn list_l0(
     let root = memory_root(data_dir, workdir, scope)?;
     let entries = match std::fs::read_dir(&root) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            mem_log!("Query", "{} 作用域 0 条（尚无记忆目录）", scope.prefix());
+            return Ok(Vec::new());
+        }
         Err(e) => return Err(e.into()),
     };
 
@@ -200,6 +220,7 @@ pub fn list_l0(
         }
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
+    mem_log!("Query", "{} 作用域 {} 条", scope.prefix(), out.len());
     Ok(out)
 }
 
@@ -211,6 +232,7 @@ pub fn read(
     level: MemoryLevel,
 ) -> AppResult<String> {
     let (scope, slug) = parse_id(id).ok_or_else(|| AppError::msg(format!("非法记忆 id：{id}")))?;
+    mem_log!("Read", "{id} level={level:?}");
     let root = memory_root(data_dir, workdir, scope)?;
     let path = record_path(&root, &slug);
     let bytes = lock::read_locked(&path)
@@ -261,7 +283,9 @@ pub fn read_cursor(data_dir: &Path, session_id: &str) -> Option<String> {
 /// 推进抽取游标到 `message_id`。
 pub fn write_cursor(data_dir: &Path, session_id: &str, message_id: &str) -> AppResult<()> {
     let _ = super::sessions_dir::ensure_session_dirs(data_dir, session_id);
-    lock::write_atomic(&cursor_path(data_dir, session_id), message_id.as_bytes())
+    lock::write_atomic(&cursor_path(data_dir, session_id), message_id.as_bytes())?;
+    mem_log!("Cursor", "session={session_id} 推进 -> {message_id}");
+    Ok(())
 }
 
 // ── frontmatter 序列化 / 解析（手写极简） ────────────────────────────────────

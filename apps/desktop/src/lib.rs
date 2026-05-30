@@ -2324,7 +2324,9 @@ pub fn run() {
     // workspace 根的 .env；release 包从可执行文件所在目录向上找，需要时再加 from_path 兜底。
     let _ = dotenvy::dotenv();
 
-    observability::init("agent_core=debug,model_gateway=info,warn");
+    // memory=info：记忆系统动作日志（target="memory"，带 [Memory] 前缀）默认放行到 info，
+    // 让「查/写/抽取/注入」始终可见且可一键 grep。
+    observability::init("agent_core=debug,model_gateway=info,memory=info,warn");
 
     // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
