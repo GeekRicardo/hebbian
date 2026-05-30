@@ -5468,3 +5468,21 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **留尾巴**:
   - glm-5 / minimax-m2.1 / minimax-m2.5 / qwen3-coder-next / kiro `auto` 仍落 anthropic kind 兜底 200k——属保守低估（安全：宁可早压缩，不会超长 400），但未必精确。这些网关 /v1/models 不返回 context_length，无法动态取；精确值缺可靠来源，未臆改。
   - effort：非官方 exotic 模型（glm/minimax/qwen/mimo、经 openai 协议跑的 claude、经 anthropic 协议跑的 gpt-5.5）当前不发 reasoning 字段，走模型默认。这是 fail-safe 选择（未知契约下发参数怕 400），但意味着思考强度对这些组合不可调——是否要逐网关接通需另开任务 + 实测。
+
+### 2026-05-30 — 重构日志查看器：终端渲染 → DOM 日志面板（搜索/等级过滤/虚拟滚动）
+
+- **Why**: 用户反馈设置页日志「字体太小、不好看，要像成熟的看日志工具，独立窗口要能搜索」。根因是设置页 LogPane 与独立窗口都把日志塞进 ghostty-web 终端——终端无法在已渲染内容里做原地搜索/按等级过滤，独立窗口原有的搜索只能「清屏→重写过滤行」，实时流一进来就把过滤视图冲乱，体验很差。
+- **改动**:
+  - 新增 `LogConsole.tsx`：DOM 日志控制台，两个 surface 共用。能力——行号 + 时间戳列 + 按等级配色的徽章 + 行首色条；常驻搜索框（⌘F 聚焦、回车/Shift+回车跳上下匹配、命中行高亮、n/total 计数、Aa 区分大小写）；ERROR/WARN/INFO/DEBUG/TRACE 等级过滤芯片（带各级条数）；自动滚到底开关 + 清空；body 里 `key=` 字段名压暗。自实现定长行虚拟滚动（不引第三方库），400+ 行时 DOM 只挂 ~40 行。历史文件按行剥 ANSI 后解析出 ts/level/body，无等级的续行继承上一行等级（过滤时续行跟主行一起显隐）；实时流直接用结构化 LogLine 构 Row。
+  - `LogViewerApp.tsx`：删掉 ghostty 终端 + 那套清屏式 SearchBar，改为标题栏 + 置顶开关 + `<LogConsole fontSize=13.5>`。
+  - `AppSettingsDialog.tsx`：LogPane 删掉终端初始化与 ghostty import，改挂 `<LogConsole>`；清空按钮移进 LogConsole 工具栏。
+- **影响范围**: 纯前端渲染层。日志数据来源（`read_log_file` / `subscribe_log_stream` bridge）与后端、协议、storage 全不变；不动架构.md。ghostty-web 依赖仍在 package.json（其它地方未用，本次未摘除，避免顺手扩面）。
+- **设计取舍**: 选 DOM 重写而非「保留终端只调字号」——终端搜索本质是 hack（旧实现已证明），等级过滤这类成熟特性在终端里做不了；DOM 列表里搜索高亮/过滤/跳转是原生能力。代价是放弃 tracing 的原始 ANSI 配色回放，改为按等级语义统一配色（徽章 + 行首色条 + 压暗字段名），这反而更像专门的日志工具。
+- **验证**:
+  - 解析逻辑：node 脚本喂真实 `~/.hebbian/logs/hebbian.log.<today>`，ts/level/body 提取正确，续行无误判。
+  - 渲染：hebweb `?log-viewer` 路由（只挂 LogViewerApp，绕开工作区里别人 WIP 的 ChatView）+ Playwright，注入 WebSocket mock 回放 400 条多等级带 ANSI 历史 + 实时流。实测：组件挂载无崩、虚拟滚动 DOM 仅 ~39 行、等级徽章配色正确、搜索 `tooluse_12`→11 匹配且跳转高亮、关 INFO 后可见行零 INFO。
+  - 修了一个过程中发现的边界 bug：过滤/清空让内容变短且未粘底时，scrollTop 停旧高位导致视口空白——LogConsole 行数变化的 layout effect 里夹紧 scrollTop 到新 max，Playwright 实测从底部关 INFO 后 scrollTop 被夹到 2465=maxScroll、视口仍满。
+  - `vite build` 通过；`tsc --noEmit` 本次三个文件零错误（ChatView 的报错是工作区里别人未完成改动，不在本次范围）。
+- **留尾巴**:
+  - 未在 `pnpm tauri dev` 真机端到端跑过（hebweb 后端不实现日志命令，数据靠 mock）；Tauri 下的实时流落地建议本人开 dev 再眼检一遍。
+  - ghostty-web 依赖已无引用点，可在后续清理任务里从 package.json 摘除。

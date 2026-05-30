@@ -37,7 +37,7 @@ import type {
   SubagentScope,
 } from "@/desktop/ui/types";
 import { api } from "@/desktop/bridge/tauri";
-import { init as initGhostty, Terminal, FitAddon } from "ghostty-web";
+import LogConsole from "@/desktop/ui/components/LogConsole";
 import {
   indexMcpToolReports,
   inferMcpTransport,
@@ -1395,93 +1395,13 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
   );
 }
 
-// ─── 日志面板（ghostty-web 终端渲染）────────────────────────────────
-const LEVEL_ANSI: Record<string, string> = {
-  ERROR: "\x1b[31m",
-  WARN:  "\x1b[33m",
-  INFO:  "\x1b[32m",
-  DEBUG: "\x1b[34m",
-  TRACE: "\x1b[90m",
-};
-
-// WASM 只初始化一次；第一次打开日志面板时触发
-let _wasmReady: Promise<void> | null = null;
-function ensureWasm() {
-  if (!_wasmReady) _wasmReady = initGhostty();
-  return _wasmReady;
-}
-
+// ─── 日志面板（DOM 日志控制台，搜索/等级过滤/虚拟滚动在 LogConsole 内）──
 function LogPane({ draft, setDraft }: PaneProps) {
   const setLogEnabled = useStore((s) => s.setLogEnabled);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
 
   const logEnabled = draft.general.log_enabled;
   const todayStr = new Date().toISOString().slice(0, 10);
   const logPath = `~/.hebbian/logs/hebbian.log.${todayStr}`;
-
-  useEffect(() => {
-    let active = true;
-    let cancelStream: (() => void) | null = null;
-
-    ensureWasm().then(async () => {
-      if (!active || !containerRef.current) return;
-
-      const term = new Terminal({
-        fontSize: 11,
-        fontFamily: "ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace",
-        theme: {
-          background: "#0a0a0a",
-          foreground: "#cccccc",
-          black: "#1e1e1e",   brightBlack: "#808080",
-          red: "#f44747",     brightRed: "#f44747",
-          green: "#6a9955",   brightGreen: "#b5cea8",
-          yellow: "#dcdcaa",  brightYellow: "#dcdcaa",
-          blue: "#569cd6",    brightBlue: "#9cdcfe",
-          magenta: "#c586c0", brightMagenta: "#c586c0",
-          cyan: "#4ec9b0",    brightCyan: "#4ec9b0",
-          white: "#d4d4d4",   brightWhite: "#ffffff",
-        },
-        scrollback: 50000,
-        disableStdin: true,
-        convertEol: true,
-      });
-
-      const fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(containerRef.current);
-      fit.fit();
-      fit.observeResize();
-      termRef.current = term;
-
-      // 加载今天的历史日志文件（含 ANSI 颜色，终端直接渲染）
-      try {
-        const text = await api.readLogFile();
-        if (active && text.trim()) {
-          term.write(text);
-          term.scrollToBottom();
-        }
-      } catch {}
-
-      // 订阅实时 tracing 广播，按 level 附加 ANSI 颜色
-      cancelStream = api.subscribeLogStream((line) => {
-        if (!active) return;
-        const c = LEVEL_ANSI[line.level] ?? "\x1b[0m";
-        term.write(
-          `${line.ts} ${c}[${line.level}]\x1b[0m \x1b[2m${line.target}\x1b[0m ${line.message}\r\n`
-        );
-        term.scrollToBottom();
-      });
-    }).catch(() => {});
-
-    return () => {
-      active = false;
-      cancelStream?.();
-      termRef.current?.dispose();
-      termRef.current = null;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function handleToggle(checked: boolean) {
     setDraft({ ...draft, general: { ...draft.general, log_enabled: checked } });
@@ -1501,27 +1421,20 @@ function LogPane({ draft, setDraft }: PaneProps) {
           实时日志
           <span className="text-xs text-muted-foreground font-mono">{logPath}</span>
         </label>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => termRef.current?.clear()}
-            className="text-xs text-muted-foreground hover:text-foreground underline"
-          >
-            清空
-          </button>
-          <button
-            type="button"
-            onClick={() => api.openLogViewerWindow()}
-            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-            title="在独立窗口中查看"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => api.openLogViewerWindow()}
+          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          title="在独立窗口中查看"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
       </div>
 
-      {/* ghostty-web 终端挂载点；flex-1 撑满剩余高度 */}
-      <div ref={containerRef} className="flex-1 rounded-lg overflow-hidden" />
+      {/* flex-1 撑满剩余高度 */}
+      <div className="min-h-0 flex-1">
+        <LogConsole />
+      </div>
     </div>
   );
 }
