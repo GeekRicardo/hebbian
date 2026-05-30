@@ -5458,3 +5458,13 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **留尾巴**:
   - 非 CC（API Key 直连官方 Anthropic）路径的 Opus47Adaptive 仍走 `enabled+budget_tokens+display:summarized` + `complete_then_emit` 回退，未改；本次实测的是 adaptive+summarized 的 stream 行为，没回归测官方直连的 enabled+budget stream 是否也发 thinking_delta，故保守不动那条路。
   - sub2api 上游池化偶发不发 thinking_delta，hebbian 侧无法兜底（拿不到就是拿不到），属代理质量问题。
+
+### 2026-05-30 — 修复 kiro 的 deepseek-3.2 上下文窗口被高估成 1M
+
+- **Why**: 盘点非官方 provider 的基础参数时发现：kiro 网关把 DeepSeek-V3.2 写成缺 v 的 `deepseek-3.2`，归一化为 `deepseek-3-2`，而 `lookup_by_model_name` 只匹配 `v3-2`，于是掉到 deepseek 分支末尾兜底 1M。后果是把一个 163,840 窗口的模型当 1M 用——这是**危险方向**的错（高估导致永不触发压缩、上下文超长后服务端直接 400），不同于 glm/minimax/qwen 那种保守低估（安全）。
+- **改动**:
+  - `crates/model-gateway/src/context_window.rs`: deepseek v3.2 匹配补 `-3-2` 变体（`v3-2` || `-3-2` 都→163,840）+ 单测。
+- **影响范围**: 仅 context_window 查表，影响压缩触发点与输入框环形进度条分母。无协议变化。
+- **留尾巴**:
+  - glm-5 / minimax-m2.1 / minimax-m2.5 / qwen3-coder-next / kiro `auto` 仍落 anthropic kind 兜底 200k——属保守低估（安全：宁可早压缩，不会超长 400），但未必精确。这些网关 /v1/models 不返回 context_length，无法动态取；精确值缺可靠来源，未臆改。
+  - effort：非官方 exotic 模型（glm/minimax/qwen/mimo、经 openai 协议跑的 claude、经 anthropic 协议跑的 gpt-5.5）当前不发 reasoning 字段，走模型默认。这是 fail-safe 选择（未知契约下发参数怕 400），但意味着思考强度对这些组合不可调——是否要逐网关接通需另开任务 + 实测。

@@ -49,7 +49,10 @@ fn lookup_by_model_name(m: &str) -> Option<usize> {
         if m.contains("v4") {
             return Some(1_000_000);
         }
-        if m.contains("v3-2") {
+        // v3.2 在不同网关里写成 `deepseek-v3.2` 或缺 v 的 `deepseek-3.2`（kiro），
+        // 归一化后分别是 `v3-2` / `-3-2`，两种都要命中——否则缺 v 的会掉到末尾
+        // 兜底 1M，把 164k 的模型当 1M 用、超长不压缩直接 400。
+        if m.contains("v3-2") || m.contains("-3-2") {
             return Some(163_840);
         }
         if m.contains("r1") {
@@ -157,6 +160,11 @@ mod tests {
     fn deepseek_legacy_models() {
         assert_eq!(
             context_window_for(ProviderKind::Deepseek, "deepseek-v3.2"),
+            163_840
+        );
+        // kiro 把 v3.2 写成缺 v 的 deepseek-3.2，同样要识别成 164k（不能掉 1M 兜底）
+        assert_eq!(
+            context_window_for(ProviderKind::Anthropic, "deepseek-3.2"),
             163_840
         );
         assert_eq!(
