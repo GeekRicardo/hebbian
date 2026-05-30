@@ -7,7 +7,7 @@ import { normalizeModelId } from "@/desktop/ui/lib/contextWindow";
 // ── Anthropic：thinking 模式分三档（与 Rust AnthropicThinkingMode 对齐） ──
 
 export type AnthropicThinkingMode =
-  | "opus_47_adaptive" // claude-opus-4-7：thinking adaptive + output_config.effort（含 xhigh）
+  | "opus_47_adaptive" // claude-opus-4-7 / 4-8：thinking adaptive + output_config.effort（含 xhigh）
   | "adaptive_46" // claude-opus-4-6 / claude-sonnet-4-6：thinking adaptive + effort（无 xhigh）
   | "legacy_enabled"; // 3-7 / opus-4{,-1,-5} / sonnet-4{,-5} / haiku-4-5：thinking enabled + budget_tokens
 
@@ -15,7 +15,8 @@ export function anthropicThinkingMode(
   model: string
 ): AnthropicThinkingMode | null {
   const m = normalizeModelId(model);
-  if (m.includes("opus-4-7")) return "opus_47_adaptive";
+  // 4.7 与 4.8 共用同一 adaptive schema（含 xhigh），UI 档位走 low/medium/high/xhigh
+  if (m.includes("opus-4-7") || m.includes("opus-4-8")) return "opus_47_adaptive";
   if (m.includes("opus-4-6") || m.includes("sonnet-4-6")) return "adaptive_46";
   if (
     m.includes("claude-3-7") ||
@@ -40,7 +41,9 @@ export function anthropicSupportsThinking(model: string): boolean {
  */
 export function anthropicExposesLongContextToggle(model: string): boolean {
   const m = normalizeModelId(model);
+  // 4.6 / 4.7 / 4.8 默认就是 1M，不暴露开关
   if (
+    m.includes("opus-4-8") ||
     m.includes("opus-4-7") ||
     m.includes("opus-4-6") ||
     m.includes("sonnet-4-6")

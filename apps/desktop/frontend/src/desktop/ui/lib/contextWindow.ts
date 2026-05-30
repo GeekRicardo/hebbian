@@ -29,7 +29,9 @@ function lookupByModelName(m: string): number | null {
   // DeepSeek 家族（与 openhanako known-models.json deepseek 分区对齐）
   if (m.includes("deepseek")) {
     if (m.includes("v4")) return 1_000_000;
-    if (m.includes("v3-2")) return 163_840;
+    // v3.2 在网关里写成 `deepseek-v3.2` 或缺 v 的 `deepseek-3.2`（kiro），归一化
+    // 后是 `v3-2` / `-3-2`，两种都要命中，否则缺 v 的会掉到末尾兜底 1M。
+    if (m.includes("v3-2") || m.includes("-3-2")) return 163_840;
     if (m.includes("r1")) return 65_536;
     if (m.includes("coder")) return 128_000;
     if (m.endsWith("deepseek-chat") || m.endsWith("deepseek-reasoner")) {
@@ -40,6 +42,7 @@ function lookupByModelName(m: string): number | null {
   // Claude 家族
   if (m.includes("claude") || m.includes("mythos")) {
     if (
+      m.includes("opus-4-8") ||
       m.includes("opus-4-7") ||
       m.includes("opus-4-6") ||
       m.includes("sonnet-4-6") ||
@@ -49,6 +52,8 @@ function lookupByModelName(m: string): number | null {
     }
     return 200_000;
   }
+  // 小米 MiMo v2+：1M 上下文。/v1/models 不返回 context_length，只能预设兜底。
+  if (m.startsWith("mimo-v2")) return 1_000_000;
   // OpenAI GPT 家族
   if (
     m.startsWith("gpt-") ||

@@ -5486,3 +5486,13 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **留尾巴**:
   - 未在 `pnpm tauri dev` 真机端到端跑过（hebweb 后端不实现日志命令，数据靠 mock）；Tauri 下的实时流落地建议本人开 dev 再眼检一遍。
   - ghostty-web 依赖已无引用点，可在后续清理任务里从 package.json 摘除。
+
+### 2026-05-30 — 同步前端 reasoning/contextWindow：opus-4-8 思考强度档位显示修正
+
+- **Why**: 用户报 UI 上 claude-opus-4-8 的思考强度下拉显示成「低 1024tok / 中 4096tok / 高 16384tok / 极高 32000tok」，而不是 4.7 那样的 low/medium/high/xhigh。根因：前两条改了 Rust 侧家族判定却**漏同步前端**（reasoning.ts / contextWindow.ts 文件头明确写了「两侧同步」，我违反了）。前端 `anthropicThinkingMode` 只认 opus-4-7，opus-4-8 掉到 `legacy_enabled` 分支 → `effortDisplay` 走 budget_tokens 显示成「N tok」；同理 contextWindow 把 opus-4-8 当 200k、deepseek-3.2 当 1M、mimo 无表项。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts`: `anthropicThinkingMode` opus-4-8 并入 `opus_47_adaptive`（→ low/medium/high/xhigh）；`anthropicExposesLongContextToggle` opus-4-8 归入「默认 1M 不暴露开关」组。
+  - `apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts`: opus-4-8→1M；deepseek v3.2 补 `-3-2` 变体→163,840；新增 `mimo-v2*`→1M。三处与 Rust 侧 context_window.rs 对齐。
+- **影响范围**: 纯前端展示（思考强度档位文案 + 上下文窗口徽章 / 进度环分母）。请求构造仍以后端为准，不涉协议。
+- **验证**: hebweb + Playwright 真实 UI——打开 opus-4-8 会话，思考强度 pill 下拉可见文本为「低 low / 中 medium / 高 high / 极高 xhigh」（修前是「低 1024 tok …」），模型列表 opus-4-8 带「1M」徽章。tsc 通过。
+- **留尾巴**: 这套「Rust 与 TS 两份家族判定表」天然易漂移，每出新模型要改两边；本次只补 4-8，未做单一真相源收敛。legacy 模型（sonnet-4-5 等）下拉仍显示 budget tok——那是这些模型真实的 wire 取值，属正确（非本次问题）。
