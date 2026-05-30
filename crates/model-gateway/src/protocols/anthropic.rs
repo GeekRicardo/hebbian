@@ -162,7 +162,18 @@ pub fn build_body(
             .map(|c| c.effective_effort())
             .unwrap_or_default()
             .anthropic_adaptive_effort_for_model(&req.model);
-        thinking_block = Some(json!({ "type": "adaptive" }));
+        // 4.7/4.8 的 adaptive 默认 display=omitted：思考会计费但既不进响应也不发
+        // stream thinking_delta，UI 端推理一片空白。必须显式 summarized 才外显推理摘要
+        // （实测加 summarized 后 stream 正常发 thinking_delta）。4.6 及以下 adaptive
+        // 默认即外显，不额外加 display。
+        let mut thinking = json!({ "type": "adaptive" });
+        if matches!(
+            anthropic_thinking_mode(&req.model),
+            Some(AnthropicThinkingMode::Opus47Adaptive)
+        ) {
+            thinking["display"] = json!("summarized");
+        }
+        thinking_block = Some(thinking);
         output_config = Some(json!({ "effort": effort }));
     }
 
@@ -828,6 +839,14 @@ mod tests {
         assert_eq!(build("claude-opus-4-8", None)["output_config"]["effort"], "xhigh");
         // thinking 始终 adaptive
         assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Medium))["thinking"]["type"], "adaptive");
+
+        // 4.7/4.8 必须带 display:summarized 才外显思考；4.6 不带（adaptive 默认即外显）
+        let b48 = build("claude-opus-4-8", None);
+        assert_eq!(b48["thinking"]["display"], "summarized", "4.8 必须 summarized: {b48}");
+        let b47 = build("claude-opus-4-7", None);
+        assert_eq!(b47["thinking"]["display"], "summarized", "4.7 必须 summarized: {b47}");
+        let b46 = build("claude-opus-4-6", None);
+        assert!(b46["thinking"].get("display").is_none(), "4.6 不该带 display: {b46}");
     }
 
     // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────

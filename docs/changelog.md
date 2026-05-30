@@ -5444,3 +5444,17 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `crates/agent-core/src/automode.rs` 的 `AUTOMODE_ALLOWED_MODELS` 仅含 opus-4-7 / gpt-5.5，未加 opus-4-8——AutoMode judge 暂不对 4-8 生效（本次聚焦参数，未扩 AutoMode 白名单）。
   - `crates/model-gateway/tests/thinking_integration.rs` 内有一份 test-local 的家族判定副本（line 48 起），未同步 4-8；其 target 列表不含 4-8 故不影响，但属 drift 隐患。
   - MiMo TTS / omni 等非 chat 型号也会被 `mimo-v2*` 命中返回 1M，但它们不会作为会话模型使用，无实际影响。
+
+### 2026-05-30 — CC 兼容模式给 opus-4-7/4-8 补 display:summarized，让思考过程外显
+
+- **Why**: 续上条。实测 sub2api-freemodel（claude_code_compat）发现：effort 已能调节推理深度（output_tokens 随 low/high/xhigh 单调升 551→628→992），但 opus-4-7/4-8 在 `thinking:{type:"adaptive"}`（无 display）下思考被计费却**完全不外显**——响应里 thinking 块为空、stream 不发 thinking_delta，UI 推理区一片空白。对比 opus-4-6 的 adaptive 默认就外显（实测单次 thinking 2066 字符）。根因：4.7/4.8 的 adaptive 默认 `display=omitted`，必须显式 `summarized` 才返回推理摘要。
+- **改动**:
+  - `crates/model-gateway/src/protocols/anthropic.rs`: `build_body` 的 CC 兼容分支按模型给 adaptive 形态——`Opus47Adaptive`（4.7/4.8）补 `display:"summarized"`，4.6 及以下保持裸 adaptive（默认即外显，不画蛇添足）。扩 `cc_compat_effort_follows_user_and_model_scale` 断言 4.7/4.8 有 display、4.6 无。
+- **影响范围**: 仅 build_body 实现细节，无新协议字段。受益：所有 claude_code_compat / OAuth provider 上 opus-4-7/4-8 的思考摘要现在能在 UI 流式显示。
+- **验证**:
+  - 推翻旧注释「Opus 4.7 stream 即使 display:summarized 也不发 thinking_delta」——实测 4.8 adaptive+summarized 的 stream 正常发 28~94 个 thinking_delta，故无需 complete_then_emit 回退，stream 路径直接拿得到。
+  - 端到端：heb CLI 经 sub2api-freemodel 跑 opus-4-8 过河谜题，wire body 实发 `thinking={"display":"summarized","type":"adaptive"} output_config={"effort":"xhigh"}`，model_io 的 response.reasoning 落地真实中文推理摘要（thinking_deltas_seen=94，reasoning 336 字符）。
+  - 排查到一处代理侧偶发：sub2api 池化转发，同一请求偶尔路由到不发 thinking_delta 的上游（thinking_deltas_seen=0），多跑即恢复——属上游不稳，非 hebbian 解析问题（trace 确认 hebbian 收到 thinking_delta 就一定捕获）。
+- **留尾巴**:
+  - 非 CC（API Key 直连官方 Anthropic）路径的 Opus47Adaptive 仍走 `enabled+budget_tokens+display:summarized` + `complete_then_emit` 回退，未改；本次实测的是 adaptive+summarized 的 stream 行为，没回归测官方直连的 enabled+budget stream 是否也发 thinking_delta，故保守不动那条路。
+  - sub2api 上游池化偶发不发 thinking_delta，hebbian 侧无法兜底（拿不到就是拿不到），属代理质量问题。
