@@ -476,6 +476,22 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 reason: reason.clone(),
             })
         }
+        EventPayload::Notice {
+            level,
+            message,
+            dedup_key,
+        } => Some(DaemonEvent::Notice {
+            level: match level {
+                protocol::LogLevel::Trace | protocol::LogLevel::Debug | protocol::LogLevel::Info => {
+                    "info"
+                }
+                protocol::LogLevel::Warn => "warn",
+                protocol::LogLevel::Error => "error",
+            }
+            .to_string(),
+            message: message.clone(),
+            dedup_key: dedup_key.clone(),
+        }),
         _ => None,
     }
 }

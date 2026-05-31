@@ -212,6 +212,14 @@ pub enum DaemonEvent {
         session_id: String,
         reason: String,
     },
+    /// 轻量通知（架构 §4.4.4）。例：AutoMode 模型不在白名单 → 转手动审批提示。
+    /// Desktop 渲染成 toast；CLI 脚本可监听核对降级行为。
+    Notice {
+        level: String,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dedup_key: Option<String>,
+    },
     Error {
         message: String,
     },

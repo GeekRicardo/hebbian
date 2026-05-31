@@ -126,6 +126,15 @@ pub enum EngineEvent {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         reason: Option<String>,
     },
+    /// 给用户的一次性轻量通知（前端渲染成 toast）。例：AutoMode 模型不在白名单时
+    /// 提示「已转手动审批」。`dedup_key` 非空时前端按它去重避免刷屏。
+    Notice {
+        /// "info" / "warn" / "error"
+        level: String,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        dedup_key: Option<String>,
+    },
     /// Step 粒度起始（架构 §4.2）。step_kind = `"model"` 表示一次模型调用，
     /// `"tool"` 表示一批 tool_call。前端可用 metrics / 进度条。
     StepStarted {

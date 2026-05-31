@@ -388,6 +388,8 @@ export interface AppSettings {
     shell?: string | null;
     log_enabled: boolean;
     edit_backend: "string-replace" | "hashline";
+    /** 允许启用自动模式判官的模型 id 列表（架构 §4.4.4）。 */
+    automode_models: string[];
   };
   conversation: {
     workdir?: string | null;
@@ -558,6 +560,14 @@ export type EngineEvent =
       tool_name: string;
       decision: "allow" | "deny" | "ask";
       reason?: string;
+    }
+  | {
+      // 一次性轻量通知（架构 §4.4.4）。前端渲染成 toast，不进 transcript。
+      // dedup_key 非空时按它去重，避免同类提示刷屏。
+      type: "notice";
+      level: "info" | "warn" | "error";
+      message: string;
+      dedup_key?: string;
     }
   | {
       // Step 边界（架构 §4.2）。step_kind = model 是模型调用；tool 是工具批次。

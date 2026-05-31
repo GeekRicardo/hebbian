@@ -1867,6 +1867,22 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             decision: decision.clone(),
             reason: reason.clone(),
         }),
+        Notice {
+            level,
+            message,
+            dedup_key,
+        } => Some(EngineEvent::Notice {
+            level: match level {
+                protocol::LogLevel::Trace | protocol::LogLevel::Debug | protocol::LogLevel::Info => {
+                    "info"
+                }
+                protocol::LogLevel::Warn => "warn",
+                protocol::LogLevel::Error => "error",
+            }
+            .to_string(),
+            message: message.clone(),
+            dedup_key: dedup_key.clone(),
+        }),
         StepStarted {
             step_kind,
             step_index,

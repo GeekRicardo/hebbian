@@ -2099,6 +2099,19 @@ export const useStore = create<AppState>((set, get) => ({
               toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
               return;
             }
+            // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。dedup_key 走 sonner 的
+            // id 去重——同一模型的「不支持自动模式」提示连刷时只显示一个。
+            // position 单独设 bottom-right（输入框上方右侧），不动全局 top-center。
+            if (e.type === "notice") {
+              const opts = {
+                position: "bottom-right" as const,
+                ...(e.dedup_key ? { id: e.dedup_key } : {}),
+              };
+              if (e.level === "error") toast.error(e.message, opts);
+              else if (e.level === "warn") toast.warning(e.message, opts);
+              else toast(e.message, opts);
+              return;
+            }
             // Edit 快照事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
             if (e.type === "edit_snapshot_created" || e.type === "edit_reverted") {
               set((state) => {
