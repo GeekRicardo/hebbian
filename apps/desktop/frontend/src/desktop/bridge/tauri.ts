@@ -16,6 +16,7 @@ import type {
   MessageMeta,
   McpConfig,
   McpToolReport,
+  MemoryL0,
   PlanComment,
   PlanMeta,
   Prompt,
@@ -59,6 +60,12 @@ export const api = {
     invoke<FetchedModel[]>("fetch_provider_models", { provider }),
   testProviderModel: (provider: Provider, model: string) =>
     invoke<ProviderModelTestResult>("test_provider_model", { provider, model }),
+
+  // 记忆查看（架构 §4.14）
+  listMemories: (workdir: string | null) =>
+    invoke<MemoryL0[]>("list_memories", { workdir }),
+  readMemory: (id: string, workdir: string | null) =>
+    invoke<string>("read_memory", { id, workdir }),
 
   // prompts
   listPrompts: () => invoke<PromptsFile>("list_prompts"),

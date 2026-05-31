@@ -302,6 +302,8 @@ async fn dispatch_invoke(
         "list_prompts" => cmd_list_prompts(state).await.map(Some),
         "list_projects" => cmd_list_projects(state).await.map(Some),
         "get_settings" => cmd_get_settings(state).await.map(Some),
+        "list_memories" => cmd_list_memories(state, args).await.map(Some),
+        "read_memory" => cmd_read_memory(state, args).await.map(Some),
         // providers 写
         "save_providers" => cmd_save_providers(state, args).await.map(|_| None),
         "upsert_provider" => cmd_upsert_provider(state, args).await.map(Some),
@@ -682,6 +684,45 @@ async fn cmd_list_projects(state: &ServerState) -> Result<Value> {
 async fn cmd_get_settings(state: &ServerState) -> Result<Value> {
     let s = settings_store::load(&state.data_dir);
     Ok(serde_json::to_value(s)?)
+}
+
+/// 记忆查看（架构 §4.14）：列 L0 清单（全局 + 可选项目）。与 desktop list_memories 对称。
+async fn cmd_list_memories(state: &ServerState, args: Value) -> Result<Value> {
+    use agent_core::storage::memory::{list_l0, MemoryScope};
+    let workdir = args
+        .get("workdir")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+    let mut out = list_l0(&state.data_dir, None, MemoryScope::Global)?;
+    if let Some(proj) = workdir
+        .as_deref()
+        .and_then(agent_core::tools::memory_project_workdir)
+    {
+        out.extend(list_l0(&state.data_dir, Some(&proj), MemoryScope::Project)?);
+    }
+    Ok(serde_json::to_value(out)?)
+}
+
+/// 记忆查看：读一条全文。与 desktop read_memory 对称。
+async fn cmd_read_memory(state: &ServerState, args: Value) -> Result<Value> {
+    use agent_core::storage::memory::{read, MemoryLevel};
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `id`"))?;
+    let workdir = args
+        .get("workdir")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+    let wd = if id.starts_with("proj/") {
+        workdir
+            .as_deref()
+            .and_then(agent_core::tools::memory_project_workdir)
+    } else {
+        None
+    };
+    let body = read(&state.data_dir, wd.as_deref(), id, MemoryLevel::Full)?;
+    Ok(Value::String(body))
 }
 
 // ─── 写命令 ─────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import type {
   McpServerConfig,
   McpToolReport,
   McpTransport,
+  MemoryL0,
   Provider,
   SubagentDefinition,
   SubagentScope,
@@ -748,10 +749,63 @@ function MemoryPane({
 }) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [testing, setTesting] = useState<string | null>(null);
+  // 已沉淀记忆（架构 §4.14）：列出 L0，点开按需读全文。
+  const [memories, setMemories] = useState<MemoryL0[]>([]);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api.getProviders().then((f) => setProviders(f.providers));
   }, []);
+
+  useEffect(() => {
+    api.listMemories(workdir).then(setMemories).catch(() => setMemories([]));
+  }, [workdir]);
+
+  const toggleMemory = async (id: string) => {
+    if (openId === id) {
+      setOpenId(null);
+      return;
+    }
+    setOpenId(id);
+    if (detail[id] === undefined) {
+      try {
+        const body = await api.readMemory(id, workdir);
+        setDetail((d) => ({ ...d, [id]: body }));
+      } catch (e) {
+        setDetail((d) => ({ ...d, [id]: `读取失败：${e}` }));
+      }
+    }
+  };
+
+  const globalMems = memories.filter((m) => m.id.startsWith("global/"));
+  const projectMems = memories.filter((m) => m.id.startsWith("proj/"));
+
+  const renderMemoryRow = (m: MemoryL0) => (
+    <div key={m.id} className="rounded border">
+      <button
+        type="button"
+        onClick={() => toggleMemory(m.id)}
+        className="flex w-full items-start gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent/40"
+      >
+        <span className="mt-0.5 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {m.category || "其他"}
+        </span>
+        <span className="min-w-0 flex-1">{m.summary}</span>
+        <ChevronRight
+          className={cn(
+            "mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            openId === m.id && "rotate-90"
+          )}
+        />
+      </button>
+      {openId === m.id && (
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap border-t bg-muted/30 px-2 py-1.5 text-xs text-foreground/90">
+          {detail[m.id] ?? "加载中…"}
+        </pre>
+      )}
+    </div>
+  );
 
   const addModel = async (providerId: string, model: string) => {
     // 实测连通
@@ -905,22 +959,26 @@ function MemoryPane({
 
       {/* 全局记忆列表 */}
       <div>
-        <div className="font-medium mb-2">全局记忆</div>
-        <div className="text-sm text-muted-foreground">
-          （列表展示 + 删除功能待第 4 批后续完善）
-        </div>
+        <div className="font-medium mb-2">全局记忆（{globalMems.length}）</div>
+        {globalMems.length === 0 ? (
+          <div className="text-sm text-muted-foreground">还没有沉淀任何全局记忆</div>
+        ) : (
+          <div className="space-y-1.5">{globalMems.map(renderMemoryRow)}</div>
+        )}
       </div>
 
       {/* 项目记忆列表（当前对话绑定项目时显示） */}
       {workdir && (
         <div>
-          <div className="font-medium mb-2">项目记忆</div>
-          <div className="text-sm text-muted-foreground">
-            当前项目: {workdir}
-          </div>
-          <div className="text-sm text-muted-foreground mt-1">
-            （列表展示 + 删除功能待第 4 批后续完善）
-          </div>
+          <div className="font-medium mb-2">项目记忆（{projectMems.length}）</div>
+          <div className="text-sm text-muted-foreground mb-2">当前项目：{workdir}</div>
+          {projectMems.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              这个项目还没有沉淀记忆——聊几轮后台会自动记，或让我用 WriteMemory 记
+            </div>
+          ) : (
+            <div className="space-y-1.5">{projectMems.map(renderMemoryRow)}</div>
+          )}
         </div>
       )}
     </div>

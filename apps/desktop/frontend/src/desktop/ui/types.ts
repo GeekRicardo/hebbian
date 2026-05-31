@@ -681,6 +681,13 @@ export interface MemoryWriteItem {
   scope: string;
 }
 
+/** 一条记忆的 L0（注入初筛 + 设置页清单用，架构 §4.14）。id 前缀 global/ 或 proj/ 即作用域。 */
+export interface MemoryL0 {
+  id: string;
+  summary: string;
+  category: string;
+}
+
 /** TodoWrite 工具维护的单项 todo。三态 checkbox。 */
 export interface TodoItem {
   id: string;

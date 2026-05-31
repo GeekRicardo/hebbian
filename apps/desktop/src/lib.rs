@@ -1473,6 +1473,44 @@ fn list_subagents(
     Ok(core(&app)?.list_subagents(workdir.as_deref()))
 }
 
+// ─── 记忆查看 API（架构 §4.14）────────────────────────────────────────────────
+// 设置页「记忆」Tab 用：列出已沉淀的记忆 L0 + 按需读全文。读取经 storage::memory
+// （与工具 / 后台抽取同一套路径），UI 不碰内部目录。
+
+/// 列出记忆 L0 清单：全局恒列；给了 workdir 且非 home/根时追加该项目记忆。
+/// 每条 L0 的 id 前缀（`global/` 或 `proj/`）即作用域标识。
+#[tauri::command]
+fn list_memories(
+    app: AppHandle,
+    workdir: Option<PathBuf>,
+) -> AppResult<Vec<agent_core::storage::memory::MemoryL0>> {
+    use agent_core::storage::memory::{list_l0, MemoryScope};
+    let dd = data_dir(&app)?;
+    let mut out = list_l0(&dd, None, MemoryScope::Global)?;
+    if let Some(proj) = workdir
+        .as_deref()
+        .and_then(agent_core::tools::memory_project_workdir)
+    {
+        out.extend(list_l0(&dd, Some(&proj), MemoryScope::Project)?);
+    }
+    Ok(out)
+}
+
+/// 读一条记忆全文（L2）。`proj/` 前缀的 id 需要 workdir 定位项目目录；`global/` 不需要。
+#[tauri::command]
+fn read_memory(app: AppHandle, id: String, workdir: Option<PathBuf>) -> AppResult<String> {
+    use agent_core::storage::memory::{read, MemoryLevel};
+    let dd = data_dir(&app)?;
+    let wd = if id.starts_with("proj/") {
+        workdir
+            .as_deref()
+            .and_then(agent_core::tools::memory_project_workdir)
+    } else {
+        None
+    };
+    read(&dd, wd.as_deref(), &id, MemoryLevel::Full)
+}
+
 #[tauri::command]
 fn get_subagent(
     app: AppHandle,
@@ -2357,7 +2395,7 @@ pub fn run() {
         .manage(core_client)
         .manage(notch::create_notch_state())
         .setup(|app| {
-            notch::initialize_notch(app.handle())?;
+            notch::initialize_notch(app.handle());
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，
@@ -2477,6 +2515,8 @@ pub fn run() {
             list_subagents,
             get_subagent,
             save_subagent,
+            list_memories,
+            read_memory,
             delete_subagent,
             set_subagent_enabled,
             load_subagent_run,

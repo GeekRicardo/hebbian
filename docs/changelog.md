@@ -5520,3 +5520,39 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 纯日志（消息文本 + target + 字段），不动控制流 / 协议 / 行为。`target="permission"` 让 `RUST_LOG=permission=debug` 可单独调级。
 - **验证**: cargo check + test 441 通过（1 pre-existing read 失败无关）；heb mimo 真实跑 `cd /tmp/x && touch a.txt && ls | head`——stderr 完整可见 Extract（cd/touch=WRITE、ls/head=ro）→ Match 逐段未命中 → Approval opened → 批准 project → Resolve 落 `Bash(touch)` level=project。
 - **留尾巴**: 无。
+
+### 2026-05-31 — 修复右上角通知弹窗从未生效 + 前台也弹 + 侧边栏会话光晕
+
+- **Why**: 之前写的「hebbian 在后台时右上角无边框窗口提示审批/完成」一直没生效。根因是 Tauri state 类型不匹配：状态用 `NotchSharedState` 注册，但 `emit_notification` / `flush` 却按 `Arc<Mutex<NotchState>>` 取 state，`try_state` 拿不到直接静默丢弃，弹窗从未真正触发。用户要求先改成前台也弹（便于观察/调试），并在前台时让左侧会话列表显示状态光晕。
+- **改动**:
+  - [notch.rs](../apps/desktop/src/notch.rs): `flush` / `emit_notification` 的 state 取用改回 `NotchSharedState`（修根因）；删掉前台抑制——移除从未被 emit 的死 `listen("notification")` listener、移除主窗口 focus 时隐藏+清空队列的逻辑，以及随之无用的 `AtomicBool` 前台标记。`initialize_notch` 简化为只建窗口、签名由 `Result` 改 unit。
+  - [lib.rs](../apps/desktop/src/lib.rs): `initialize_notch` 调用点去掉 `?`。
+  - [index.css](../apps/desktop/frontend/src/index.css): 新增 `.glow-pending`（闪烁黄色光晕，1.2s 循环）与 `.glow-finished`（常亮绿色光晕）。
+  - [Sidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx): 会话条目从 `sessionStreams[id]` 派生待审批状态（slot 持有 `pendingApproval`/`pendingQuestion`，run 结束 slot 删除即自然清除），待审批→`glow-pending`，完成未读（复用 `unreadFinishedSessions`）→`glow-finished`。未新增 store 字段。
+- **影响范围**: 仅 Desktop surface（notch native 窗口 + 前端样式）。不动协议 / agent-core / 其他 surface。行为变化：通知现在前台后台都会弹（pending 持续显示需手动关，info 3s 自动消失）。
+- **验证**: `cargo check -p hebbian` 通过（仅 2 个 pre-existing warning）；`tsc --noEmit` 通过。notch native 窗口与侧边栏光晕的视觉效果需 `pnpm tauri dev` 实跑确认（Tauri 原生窗口无法在 heb/单测层复现）。
+- **留尾巴**: pending 通知在审批被解决后不会自动消失（payload 未带 request_id，无法精确 dismiss），需用户点 ✕ 或点卡片关闭；如需「解决即自动撤销 notch」可后续给 payload 加 request_id 并在 permission_resolved 时定向 dismiss。
+
+### 2026-05-31 — notch 通知补「审批解决即自动撤销」+ 修中文乱码
+
+- **Why**: 上一条留的尾巴——pending 通知在审批/提问被解决后不会自动消失，得用户手动点 ✕。同时实跑发现 notch 卡片里的中文（工具名、提问内容）显示成乱码。
+- **改动**:
+  - [notch.rs](../apps/desktop/src/notch.rs):
+    - `NotificationPayload` 加 `request_id: Option<String>`（pending 类携带 HITL 请求 id）；`NotchState` 加 `active_request_id`，在 `flush` / `dismiss_current` 激活通知时同步。
+    - `emit_notification` 为审批/提问 payload 填 `request_id`；新增 `PermissionResolved` / `UserQuestionAnswered` 两个 arm → 调 `resolve_notification` 定向撤销（从队列剔除同 id 条目；若正在显示就 `dismiss_current` 推进/隐藏）。
+    - 修乱码根因：注入前端的 eval 由 `JSON.parse(atob(b64))` 改为 `JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64),c=>c.charCodeAt(0))))`。`atob` 只还原 Latin-1 字节串、不解 UTF-8 多字节，故中文乱码；按字节重建后用 TextDecoder 解 UTF-8。
+- **影响范围**: 仅 Desktop surface（notch native 窗口）。不动协议 / agent-core / 其他 surface。`request_id` 用 `skip_serializing_if` + `default`，对前端是 additive。
+- **验证**: `cargo check -p hebbian` 通过（仅 2 个 pre-existing warning）。自动撤销 + 中文显示需 `pnpm tauri dev` 实跑确认。
+- **留尾巴**: 无。
+
+### 2026-05-31 — 设置「记忆」Tab 可查看已沉淀记忆（列表 + 点开读全文）
+
+- **Why**: 用户要在设置里能看到记忆系统沉淀了什么。此前「记忆」Tab 的全局/项目记忆区是占位符（"待第 4 批后续完善"），只能配模型，看不了记忆。
+- **改动**:
+  - 后端新增两个只读命令，读取经 `storage::memory`（与工具 / 后台抽取同路径，UI 不碰内部目录）：
+    - `apps/desktop/src/lib.rs`: `list_memories(workdir)`（全局恒列 + 给了非 home/根 workdir 时追加该项目记忆，id 前缀即作用域）/ `read_memory(id, workdir)`（读 L2 全文，proj/ 前缀按 workdir 定位）；注册进 generate_handler。
+    - `apps/web-server/src/server.rs`: dispatch_invoke 加 `list_memories` / `read_memory` 两分支 + 对称 helper（hebweb 与 desktop 同源）。
+  - 前端：`types.ts` 加 `MemoryL0` 类型；`bridge/tauri.ts` 加 `listMemories` / `readMemory`；`AppSettingsDialog.tsx` 的 MemoryPane 用真实列表替换占位——全局/项目分两段，每条显示 category 徽章 + summary，点开懒加载 `read_memory` 展示全文（## 概览 / ## 详情），≤60vh 滚动。
+- **影响范围**: desktop + hebweb 各加 2 个只读命令 + 前端 1 个 Pane。纯查看，不改落盘 / 不删除 / 不动协议。
+- **验证**: hebweb + Playwright——播一条全局记忆 + 设 conversation.workdir=/tmp/repro5，开「设置 → 记忆」看到「全局记忆（1）preferences · 用户偏好用中文交流…」「项目记忆（1）/tmp/repro5 · ci · 本项目 CI 跑在 GitHub Actions」，点开全局条目展开出 ## 概览 / ## 详情 全文。cargo check（desktop + hebweb）+ tsc 通过。
+- **留尾巴**: 只读不可删（storage::memory 无 delete，删除是后续）；列表在打开 Tab 时拉一次，新写的记忆需重开 Tab 刷新。
