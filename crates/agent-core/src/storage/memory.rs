@@ -177,7 +177,12 @@ pub fn write(
         body: body.trim().to_string(),
     };
     lock::write_atomic(&path, render_md(&rec).as_bytes())?;
-    mem_log!("Write", "{id} category={category}");
+    // L0 预览（id + category + summary）+ 落盘绝对路径，便于直接定位刚写的文件。
+    mem_log!(
+        "Write",
+        "{id} category={category} L0={summary:?} → {}",
+        path.display()
+    );
 
     Ok(MemoryL0 {
         id,
