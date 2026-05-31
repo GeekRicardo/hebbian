@@ -46,6 +46,20 @@ pub struct GeneralSettings {
     /// Read 与 Edit 强耦合，两者一起切换。
     #[serde(default)]
     pub edit_backend: EditBackend,
+    /// 允许启用 AutoMode 判官的模型 id 列表（架构 §4.4.4）。用户在设置里多选；
+    /// 内置默认 claude-opus-4-7 / claude-opus-4-8 / gpt-5.5。判定时归一化匹配
+    /// （见 `automode::is_allowed_model`），所以带日期后缀的真实 id 也能命中。
+    #[serde(default = "default_automode_models")]
+    pub automode_models: Vec<String>,
+}
+
+/// AutoMode 判官默认白名单。用户未配置时用这个；设置 UI 也以此为初始勾选。
+pub fn default_automode_models() -> Vec<String> {
+    vec![
+        "claude-opus-4-7".to_string(),
+        "claude-opus-4-8".to_string(),
+        "gpt-5.5".to_string(),
+    ]
 }
 
 impl Default for GeneralSettings {
@@ -56,6 +70,7 @@ impl Default for GeneralSettings {
             shell: default_shell(),
             log_enabled: false,
             edit_backend: EditBackend::default(),
+            automode_models: default_automode_models(),
         }
     }
 }

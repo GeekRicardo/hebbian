@@ -165,6 +165,16 @@ pub enum EventPayload {
         reason: Option<String>,
     },
 
+    /// 给用户的一次性轻量通知（surface 端渲染成 toast，不进 transcript / 不落审计）。
+    /// 例：AutoMode 模型不在白名单时提示「当前模型不支持自动模式，已转普通审批」。
+    /// `dedup_key` 非空时 surface 应按它去重（同 key 的 toast 只显示一个，避免刷屏）。
+    Notice {
+        level: LogLevel,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dedup_key: Option<String>,
+    },
+
     // —— 人机协作：agent 主动提问 ——
     UserQuestionRequested {
         request_id: PermissionRequestId,

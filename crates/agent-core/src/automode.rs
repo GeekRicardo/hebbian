@@ -1,7 +1,8 @@
 //! AutoMode：在 destructive 工具调用前调一次轻量 LLM 决定是否放行。
 //!
 //! 架构 §4.4.4。流程：
-//! 1. 仅当 `current_model_id` 命中 [`AUTOMODE_ALLOWED_MODELS`] 时启用（其他模型直接降级 Ask）
+//! 1. 仅当 `current_model_id` 命中用户配置的 AutoMode 白名单时启用——dispatcher 先判，
+//!    不支持的模型不调判官，改成 toast 提示 + 降级普通审批（架构 §4.4.4）
 //! 2. 构造 judge prompt：[`AUTOMODE_JUDGE_SYSTEM`] + 调用上下文 + hebbian 已识别的
 //!    `effects.segments` / `write_targets` / `paths` / `dangerous_kinds`。判官**不重复**
 //!    解析 shell，只在静态分析结果上做语境判定。
@@ -30,24 +31,19 @@ use crate::tools::{bash_prefix, shell_parse};
 /// AutoMode 的判官 system prompt（编译进二进制，跨会话稳定）。
 pub const AUTOMODE_JUDGE_SYSTEM: &str = include_str!("../prompts/automode_judge.md");
 
-/// AutoMode 允许启用判官的模型 id 白名单（架构 §4.4.4 / §13）。
+/// 判定 model id 是否在 AutoMode 白名单内。`allowed` 来自
+/// [`crate::storage::settings`]`::Settings.general.automode_models`（用户在设置里多选，
+/// 内置默认见 [`crate::storage::settings::default_automode_models`]）。
 ///
-/// 选型依据：列出的模型都能稳定 follow 严格输出格式 + 段级 reason 推理。
-/// 扩白名单前需评估：模型是否能稳定首行返回 `ALLOW` / `DENY:` / `ASK:`、
-/// 能否按 `effects.segments` 逐段拆 reason；二者缺一即 fail-closed 兜底为 Ask。
-pub const AUTOMODE_ALLOWED_MODELS: &[&str] = &["opus-4-7", "opus4.7", "gpt-5.5"];
-
-/// 判定一个 model id 是否允许启用 AutoMode 判官。
-///
-/// 匹配规则：先做大小写和版本分隔符归一化，再匹配稳定家族 token。允许
-/// `claude-opus-4.7` / `claude-opus-4-7-20260416` 和 `gpt-5-5` 这类真实上游 id；
-/// 但不接受 `gpt-5.5-preview` 这种预览后缀，避免把未评估变体放进自动审批路径。
-pub fn is_allowed_model(model_id: &str) -> bool {
+/// 双方都归一化（大小写 + 版本分隔符）后匹配：归一化相等，或 model 归一化以某条目
+/// 归一化为前缀（兼容带日期后缀的真实 id，如 `claude-opus-4-7-20260416` 命中
+/// `claude-opus-4-7`）。空白名单 → 全部不允许。模型质量由配置者负责。
+pub fn is_allowed_model(model_id: &str, allowed: &[String]) -> bool {
     let normalized = normalize_model_id(model_id);
-    if normalized.starts_with("gpt-5-5") {
-        return !normalized.contains("preview");
-    }
-    normalized.contains("opus-4-7") || normalized.contains("opus4-7")
+    allowed.iter().any(|a| {
+        let na = normalize_model_id(a);
+        !na.is_empty() && (normalized == na || normalized.starts_with(na.as_str()))
+    })
 }
 
 /// AutoMode 的判官决策。
@@ -89,8 +85,8 @@ impl AutoModeDecision {
 
 /// 调一次模型作为 AutoMode 判官。
 ///
-/// `judge_client` 通常等于会话的主 client（同 model id 才符合白名单）。本函数会先校验
-/// `current_model_id`，不在 [`AUTOMODE_ALLOWED_MODELS`] 命中时直接返回 `Ask`，不发请求。
+/// `judge_client` 通常等于会话的主 client。白名单判断已由 dispatcher 在调用前完成
+/// （见 [`is_allowed_model`]），本函数假定模型已获准启用判官，不再重复校验。
 ///
 /// `effects` 必须传 hebbian 已分析好的结果——判官 prompt 依赖 `segments` / `paths` /
 /// `dangerous_kinds` 做段级拆解，**不能**让判官自己重新解析 shell。
@@ -102,13 +98,6 @@ pub async fn judge_auto_mode(
     effects: &Effects,
     recent_transcript: &[TranscriptEntry],
 ) -> AutoModeDecision {
-    if !is_allowed_model(current_model_id) {
-        return AutoModeDecision::Ask(format!(
-            "AutoMode 仅在 {:?} 启用；当前模型 {current_model_id} 不支持自动判断",
-            AUTOMODE_ALLOWED_MODELS
-        ));
-    }
-
     let prompt = format_judge_prompt(tool_name, tool_input, effects, recent_transcript);
 
     let request = ModelRequest {
@@ -153,7 +142,8 @@ pub async fn classify_bash_prefixes_for_automode(
     let mut enriched = effects.clone();
     let mut command_injection_detected = false;
 
-    if !matches!(tool_name, "Bash" | "PowerShell") || !is_allowed_model(current_model_id) {
+    // 白名单已由 dispatcher 在调用前确认，这里只判工具类型（非 Bash/PowerShell 不 classify）。
+    if !matches!(tool_name, "Bash" | "PowerShell") {
         return BashPrefixClassifierOutcome {
             effects: enriched,
             command_injection_detected,
@@ -440,26 +430,30 @@ mod tests {
 
     #[test]
     fn allowed_model_accepts_real_supported_ids() {
-        // 白名单内简洁 id 命中
-        assert!(is_allowed_model("opus-4-7"));
-        assert!(is_allowed_model("opus4.7"));
-        assert!(is_allowed_model("gpt-5.5"));
-        // 真实上游 / 网关 id 也命中
-        assert!(is_allowed_model("claude-opus-4.7"));
-        assert!(is_allowed_model("claude-opus-4-7"));
-        assert!(is_allowed_model("claude-opus-4-7-20260416"));
-        assert!(is_allowed_model("gpt-5-5"));
-        assert!(is_allowed_model("GPT-5.5"));
+        let allowed = crate::storage::settings::default_automode_models();
+        // 内置默认（claude-opus-4-7 / 4-8 / gpt-5.5）+ 真实上游 / 网关 id 归一化命中
+        assert!(is_allowed_model("claude-opus-4-7", &allowed));
+        assert!(is_allowed_model("claude-opus-4.7", &allowed)); // 分隔符归一
+        assert!(is_allowed_model("claude-opus-4-7-20260416", &allowed)); // 日期后缀前缀匹配
+        assert!(is_allowed_model("claude-opus-4-8", &allowed));
+        assert!(is_allowed_model("gpt-5.5", &allowed));
+        assert!(is_allowed_model("gpt-5-5", &allowed));
+        assert!(is_allowed_model("GPT-5.5", &allowed)); // 大小写归一
     }
 
     #[test]
-    fn allowed_model_rejects_unsupported_variants() {
-        // 预览后缀拒绝（未评估变体不进自动审批）
-        assert!(!is_allowed_model("gpt-5.5-preview"));
-        // 其它模型也拒绝
-        assert!(!is_allowed_model("claude-sonnet-4-6"));
-        assert!(!is_allowed_model("gpt-5.4"));
-        assert!(!is_allowed_model("gpt-4o"));
+    fn allowed_model_rejects_unsupported_and_empty_list() {
+        let allowed = crate::storage::settings::default_automode_models();
+        assert!(!is_allowed_model("claude-sonnet-4-6", &allowed));
+        assert!(!is_allowed_model("gpt-5.4", &allowed));
+        assert!(!is_allowed_model("gpt-4o", &allowed));
+        // 空白名单 → 全部不允许
+        assert!(!is_allowed_model("claude-opus-4-7", &[]));
+        // 用户没把某模型加进白名单 → 不允许（即使是强模型）
+        assert!(!is_allowed_model(
+            "claude-opus-4-8",
+            &["claude-opus-4-7".to_string()]
+        ));
     }
 
     #[test]

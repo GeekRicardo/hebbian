@@ -261,7 +261,7 @@ impl ToolDispatcher {
                     path = %p.display(),
                     matched = true,
                     level = "workspace",
-                    "path scope: workspace allowed path matched"
+                    "[Permission:Path] workspace allowed path matched"
                 );
                 continue;
             }
@@ -279,7 +279,7 @@ impl ToolDispatcher {
                     path = %p.display(),
                     matched = true,
                     level = "session_artifact",
-                    "path scope: session artifact path allowed"
+                    "[Permission:Path] session artifact path allowed"
                 );
                 continue;
             }
@@ -303,7 +303,7 @@ impl ToolDispatcher {
                     matched = true,
                     level,
                     pattern = %hit.pattern,
-                    "path scope: PermissionStore path rule matched"
+                    "[Permission:Path] PermissionStore path rule matched"
                 );
                 continue;
             }
@@ -313,7 +313,7 @@ impl ToolDispatcher {
                 path = %p.display(),
                 matched = false,
                 result = "waiting_for_approval",
-                "path scope: no allowed path matched"
+                "[Permission:Path] no allowed path matched"
             );
             out_of_scope.push(p.clone());
         }
@@ -323,7 +323,7 @@ impl ToolDispatcher {
                 tool = %call.name,
                 call_id = %call.id,
                 total = effects.paths.len(),
-                "path scope: all paths in bounds"
+                "[Permission:Path] all paths in bounds"
             );
             None
         } else {
@@ -337,7 +337,7 @@ impl ToolDispatcher {
                 out_of_scope = out_str.join(", "),
                 total = effects.paths.len(),
                 result = "waiting_for_approval",
-                "path scope: some paths out of bounds, waiting for approval"
+                "[Permission:Path] some paths out of bounds, waiting for approval"
             );
             Some(self.request_path_approval(&call.name, out_of_scope))
         };
@@ -351,7 +351,7 @@ impl ToolDispatcher {
                     call_id = %call.id,
                     class = class_label,
                     fingerprint = fingerprint.as_deref().unwrap_or(""),
-                    "tool_call approved (auto)"
+                    "[Permission:ToolCall] approved (auto)"
                 );
             }
             PermissionDecision::Denied { reason } => {
@@ -360,7 +360,7 @@ impl ToolDispatcher {
                     call_id = %call.id,
                     class = class_label,
                     %reason,
-                    "tool_call denied by policy"
+                    "[Permission:ToolCall] denied by policy"
                 );
             }
             PermissionDecision::NeedsApproval { request_id, .. } => {
@@ -370,7 +370,7 @@ impl ToolDispatcher {
                     class = class_label,
                     request_id = %request_id,
                     fingerprint = fingerprint.as_deref().unwrap_or(""),
-                    "tool_call needs human approval"
+                    "[Permission:ToolCall] needs human approval"
                 );
                 // UI 记忆勾选区只列「会写 + 可记忆 + 尚未审批过」的段：只读段、不可
                 // 记忆段（rm…）、以及之前已记住的段（如记过的 cd）都不出现，用户只对
@@ -478,8 +478,31 @@ impl ToolDispatcher {
                 // Ask 则保持原流程让用户决策（PermissionRequested 已 emit）。
                 if run_mode == crate::run_mode::RunMode::AutoMode {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
-                        if let Some(judge) = judge_client.as_ref() {
-                            let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
+                        let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
+                        // 运行时读用户配置的 AutoMode 白名单（设置里改了即时生效，免重启）。
+                        let automode_models = data_dir_for_artifacts
+                            .as_deref()
+                            .map(|d| crate::storage::settings::load(d).general.automode_models)
+                            .unwrap_or_else(crate::storage::settings::default_automode_models);
+                        if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
+                            // 模型不在白名单：不调判官，emit 一条 toast 提示并降级到普通审批
+                            // （PermissionRequested 已 emit，保留人工决策）。dedup_key 让前端
+                            // 对同一模型的多次提示只显示一个 toast，避免刷屏。
+                            sink(state.event(protocol::EventPayload::Notice {
+                                level: protocol::LogLevel::Warn,
+                                message: format!(
+                                    "当前模型「{model_id_str}」不在自动模式名单里，本次已转手动审批。可在「设置 → 自动模式」里把它加进去。"
+                                ),
+                                dedup_key: Some(format!("automode-unsupported:{model_id_str}")),
+                            }));
+                            info!(
+                                target: "permission",
+                                tool = %call_name_for_judge,
+                                model = model_id_str,
+                                allowlist = ?automode_models,
+                                "[AutoMode] 模型不在白名单 → 弹 toast + 降级手动审批，不调判官"
+                            );
+                        } else if let Some(judge) = judge_client.as_ref() {
                             // judge 必须看到 hebbian 静态分析的全量 effects（segments /
                             // write_targets / dangerous_kinds），不重复解析 shell。
                             let prefix_outcome =
@@ -510,12 +533,18 @@ impl ToolDispatcher {
                                 raw_decision
                             };
                             info!(
+                                target: "permission",
                                 tool = %call_name_for_judge,
                                 call_id = %call.id,
+                                model = model_id_str,
                                 raw = raw_label,
                                 final = decision.as_label(),
                                 force_automode = force_automode,
-                                "AutoMode: judge decision"
+                                reason = decision.reason().unwrap_or(""),
+                                "[AutoMode] LLM 判官结果：{} → {}（{}）",
+                                raw_label,
+                                decision.as_label(),
+                                decision.reason().unwrap_or("无理由")
                             );
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
                                 tool_name: call_name_for_judge.clone(),
@@ -632,7 +661,7 @@ impl ToolDispatcher {
                     tool = %call.name,
                     call_id = %call.id,
                     input = %effective_input,
-                    "tool_call executing"
+                    "[Permission:ToolCall] executing"
                 );
                 sink(state.event(EventPayload::ToolCallStarted {
                     index: dispatch_index,
@@ -810,7 +839,7 @@ impl ToolDispatcher {
                     duration_ms,
                     truncated,
                     bytes = content.len(),
-                    "tool_call finished"
+                    "[Permission:ToolCall] finished"
                 );
 
                 let artifact_path_str = artifact.as_ref().map(|a| a.path.display().to_string());
@@ -1957,6 +1986,86 @@ mod tests {
             }
         }
         assert!(saw_allow, "AutoMode judge should allow the supported model");
+    }
+
+    /// AutoMode 下模型不在白名单（data_dir=None → 默认白名单 opus-4-7/4-8/gpt-5.5，
+    /// 这里用 sonnet-4-6 故意落空）：dispatcher 应 emit Notice(warn) 提示转手动审批，
+    /// 且**不调判官**（无 PermissionAutoJudged），保留 NeedsApproval 走人工。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn automode_unsupported_model_emits_notice_and_falls_back_to_manual() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![Box::new(DestructiveNoopTool)
+            as Box<dyn crate::tools::Tool>]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let hitl_for_resolve = hitl.clone();
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: crate::run_mode::RunMode::AutoMode,
+            model_id: Some("claude-sonnet-4-6".to_string()), // 不在默认白名单
+            // judge 给 StaticAllowJudge：若错误地调用了它，命令会被自动放行——
+            // 用它来反证"不该调判官"（断言看到的是 NeedsApproval 而非 auto allow）。
+            judge_client: Some(Arc::new(StaticAllowJudge)),
+            force_automode: false,
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+        };
+
+        let call = ToolCall {
+            id: "call_unsupported".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "touch fallback-ok" }),
+        };
+
+        // 后台 surface：收到 NeedsApproval 就 deny（验证确实走了人工审批闸口）。
+        let surface = tokio::spawn(async move {
+            let mut saw_notice = false;
+            let mut saw_auto_judged = false;
+            while let Some(event) = rx.recv().await {
+                match &event.payload {
+                    EventPayload::Notice { level, dedup_key, .. } => {
+                        saw_notice = matches!(level, protocol::LogLevel::Warn)
+                            && dedup_key.as_deref() == Some("automode-unsupported:claude-sonnet-4-6");
+                    }
+                    EventPayload::PermissionAutoJudged { .. } => saw_auto_judged = true,
+                    EventPayload::PermissionRequested { request_id, .. } => {
+                        hitl_for_resolve.resolve(request_id, ApprovalDecision::Deny);
+                    }
+                    _ => {}
+                }
+            }
+            (saw_notice, saw_auto_judged)
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("dispatch should complete")
+            .expect("dispatch should succeed");
+        // 人工审批被 deny → 工具不执行
+        assert_eq!(result.len(), 1);
+        assert_ne!(result[0].content, "executed", "应走人工审批且被拒，不该自动执行");
+
+        drop(dispatcher);
+        let (saw_notice, saw_auto_judged) = surface.await.unwrap();
+        assert!(saw_notice, "应 emit Notice(warn, dedup_key) 提示转手动审批");
+        assert!(!saw_auto_judged, "不在白名单的模型不该调判官（无 PermissionAutoJudged）");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

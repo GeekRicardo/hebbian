@@ -5508,3 +5508,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: agent-core 三个文件 + 两个 surface 的日志默认级别。纯可观测性，不动协议 / 落盘格式 / 行为。工具 ReadMemory/WriteMemory 走 storage 收口天然覆盖，未单独加日志避免双打。
 - **验证**: heb CLI 跑一条触发 WriteMemory + ReadMemory 的消息，`grep '\[Memory:' heb.log` 看到完整链路：`[Memory:Query] global/proj 0 条` → `[Memory:Inject] 0 条` → `[Memory:Write] proj/package-manager` → `[Memory:Read] proj/package-manager` → `[Memory:Extract] 开始` → `[Memory:Query] proj 1 条` → `[Memory:Write]`(upsert) → `[Memory:Cursor] 推进` → `[Memory:Extract] 完成 写入 1 条`。cargo check --workspace + memory 单测 17 过。
 - **留尾巴**: 日志落 `~/.hebbian/logs/hebbian.log.<date>`（observability 用 home_dir，不随 --data-dir 走，多 surface 共写同一文件）；WriteMemory 工具的 project→global 降级原因未单独记（storage 只记最终 scope），需要时再补工具级日志。
+
+### 2026-05-31 — 权限链路结构化日志（[Permission:*] / [AutoMode]，可一键 grep）
+
+- **Why**: 调试权限审批时日志前缀散乱（`permission.match:` / `shell_parse:` / `AutoMode:`），看不清「解析出哪些段 / 哪些只读免审 / 匹配命中谁 / 用户审批写到什么范围 / 判官判了什么」的完整链路。统一成带 `[Permission:阶段]` / `[AutoMode]` 前缀 + `target="permission"` 的结构化日志。
+- **改动**:
+  - [effects.rs](../crates/agent-core/src/effects.rs): shell 解析日志改 `[Permission:Bash:Extract]`，逐段输出 `fp{ro|WRITE}[w:目标][no-mem]` + `writable_segments`（哪些段会写需审批）
+  - [tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): `permission.match/approval/remember` → `[Permission:Match]` / `[Permission:Approval]` / `[Permission:Resolve]`，全部 33 条 info! 加 `target: "permission"`；Resolve 日志含 scope + 落盘 pattern（写到什么范围）
+  - [dispatch.rs](../crates/agent-core/src/dispatch.rs): `path scope:` → `[Permission:Path]`，`tool_call X` → `[Permission:ToolCall]`，`AutoMode:` → `[AutoMode]`；判官结果日志补 model + reason（LLM 判了什么、为什么）+ 不支持模型降级日志补 allowlist
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 默认 filter 加 `permission=info`，让权限链路日志在 heb 默认就可见、可一键 grep（同 memory=info）
+- **影响范围**: 纯日志（消息文本 + target + 字段），不动控制流 / 协议 / 行为。`target="permission"` 让 `RUST_LOG=permission=debug` 可单独调级。
+- **验证**: cargo check + test 441 通过（1 pre-existing read 失败无关）；heb mimo 真实跑 `cd /tmp/x && touch a.txt && ls | head`——stderr 完整可见 Extract（cd/touch=WRITE、ls/head=ro）→ Match 逐段未命中 → Approval opened → 批准 project → Resolve 落 `Bash(touch)` level=project。
+- **留尾巴**: 无。

@@ -715,7 +715,7 @@ function MemoryRecallPanel({
   disabled?: boolean;
   onApply: (
     picked: MemoryOption[],
-    scope: "session" | "project",
+    scope: "session" | "project" | "global",
   ) => void;
   /** hover label 时回调 pattern（leave 时回调 null）—— 让外层 Bash 预览高亮对应段 */
   onHoverPattern?: (pattern: string | null) => void;
@@ -743,14 +743,14 @@ function MemoryRecallPanel({
   const toggle = (key: string) =>
     setChecked((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  const apply = (scope: "session" | "project") => {
+  const apply = (scope: "session" | "project" | "global") => {
     const picked = options.filter((o) => checked[o.key]);
     if (picked.length === 0) return;
     onApply(picked, scope);
   };
 
   const scopeBtn = (
-    scope: "session" | "project",
+    scope: "session" | "project" | "global",
     text: string,
     icon: ReactNode,
     hint: string,
@@ -852,7 +852,13 @@ function MemoryRecallPanel({
           "project",
           "本项目",
           <FolderTree className="w-3.5 h-3.5" />,
-          "写到 ~/.hebbian/permissions.json，限当前 workdir",
+          "当前项目的所有对话都自动放行",
+        )}
+        {scopeBtn(
+          "global",
+          "全局",
+          <Globe className="w-3.5 h-3.5" />,
+          "所有项目、所有对话都自动放行",
         )}
       </div>
     </div>

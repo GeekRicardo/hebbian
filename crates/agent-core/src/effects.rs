@@ -297,44 +297,50 @@ fn analyze_shell(input: &Value) -> Effects {
         first_fingerprint = Some(raw.to_string());
     }
 
-    // —— shell 解析日志 ——
+    // —— [Permission:Bash:Extract] 解析日志：逐段展示 fingerprint + 分类标记，
+    //    并标出「哪些段会写、需走审批」。每段格式 `fp{ro|WRITE}[w:目标][!danger]`。——
     {
         let seg_list: Vec<String> = segments
             .iter()
             .map(|s| {
-                if s.write_targets.is_empty() {
-                    s.fingerprint.clone()
-                } else {
-                    format!("{}[w:{}]", s.fingerprint, s.write_targets.join(","))
+                let mut tag = String::new();
+                tag.push_str(if s.is_readonly { "{ro}" } else { "{WRITE}" });
+                if !s.write_targets.is_empty() {
+                    tag.push_str(&format!("[w:{}]", s.write_targets.join(",")));
                 }
+                if s.unmemorable {
+                    tag.push_str("[no-mem]");
+                }
+                format!("{}{}", s.fingerprint, tag)
             })
+            .collect();
+        // 会写段 = 真正会触发审批的段（只读段免审）
+        let writable: Vec<&str> = segments
+            .iter()
+            .filter(|s| !s.is_readonly)
+            .map(|s| s.fingerprint.as_str())
             .collect();
         let dangerous_list: Vec<&str> = dangerous_kinds.iter().map(|s| s.as_str()).collect();
         if classify_readonly {
-            let safe_rules: Vec<String> = if let Ok(p) = &parsed {
-                p.commands
-                    .iter()
-                    .filter(|c| safe_commands::is_safe(c))
-                    .map(|c| c.fingerprint())
-                    .collect()
-            } else {
-                Vec::new()
-            };
             info!(
+                target: "permission",
                 segments = seg_list.join(" | "),
-                safe_rules = safe_rules.join(", "),
-                "shell_parse: ReadOnly (all commands in safe list)"
+                "[Permission:Bash:Extract] 全段只读 → 自动放行，无需审批"
             );
         } else if dangerous_kinds.is_empty() {
             info!(
+                target: "permission",
                 segments = seg_list.join(" | "),
-                "shell_parse: Destructive (not in safe list or has write targets)"
+                writable_segments = writable.join(", "),
+                "[Permission:Bash:Extract] 含会写段 → 这些段需审批（只读段免审）"
             );
         } else {
             info!(
+                target: "permission",
                 segments = seg_list.join(" | "),
+                writable_segments = writable.join(", "),
                 dangerous_kinds = ?dangerous_list,
-                "shell_parse: Destructive + dangerous patterns"
+                "[Permission:Bash:Extract] 含危险复合模式 → 强制审批且不可记忆"
             );
         }
     }

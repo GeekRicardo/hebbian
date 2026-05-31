@@ -141,9 +141,11 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // memory=info：记忆系统动作日志（target="memory"，带 [Memory] 前缀）默认放行到 info，
-    // 让「查/写/抽取/注入」始终可见且可一键 grep，又不抬高全局噪声。RUST_LOG 设置时以其为准。
-    observability::init("warn,memory=info");
+    // memory=info / permission=info：记忆系统（target="memory"，[Memory] 前缀）与权限链路
+    // （target="permission"，[Permission:*] / [AutoMode] 前缀）的动作日志默认放行到 info，
+    // 让「解析/匹配/审批/记忆/判官」始终可见且可一键 grep，又不抬高全局噪声。
+    // RUST_LOG 设置时以其为准。
+    observability::init("warn,memory=info,permission=info");
     let cli = Cli::parse();
 
     match cli.command {
