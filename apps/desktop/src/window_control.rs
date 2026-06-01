@@ -61,8 +61,6 @@ pub enum MainWindowAction {
 #[derive(Debug, Default)]
 struct HotkeyPressGate {
     is_pressed: bool,
-    /// Pressed 时判断需要 Show 但尚未执行（等 Released 后执行，避免修饰键释放抢焦点）
-    pending_show: bool,
 }
 
 fn toggle_hotkey() -> HotKey {
@@ -77,52 +75,24 @@ pub fn toggle_action(is_visible: bool, is_minimized: bool, is_focused: bool) -> 
     }
 }
 
-/// 判断快捷键事件是否应触发窗口 toggle，以及是否需要延迟执行。
+/// 判断快捷键事件是否应触发窗口 toggle。
 ///
-/// macOS 上全局快捷键释放修饰键时，系统会把焦点还给之前的前台 app。
-/// 所以 Show 操作不能在 Pressed 时执行，必须延迟到 Released 后，
-/// 此时修饰键已释放完毕，不会再被系统抢焦点。
-/// Hide 操作没有这个问题，Pressed 时立刻执行。
-enum ToggleDecision {
-    /// 立刻执行（Hide 场景）
-    ExecuteNow,
-    /// 延迟到 Released 后执行（Show 场景）
-    DeferShow,
-    /// 不执行
-    Ignore,
-}
-
-fn decide_hotkey_toggle(
-    gate: &mut HotkeyPressGate,
-    event_id: u32,
-    hotkey_id: u32,
-    state: HotKeyState,
-    action: MainWindowAction,
-) -> ToggleDecision {
+/// 只在首次 Pressed 时触发，防止长按重复触发。
+/// Released 不触发——macOS 修饰键释放焦点问题由 show_main_window
+/// 内部的 dispatch_after 延迟激活解决。
+fn should_toggle_hotkey_event(gate: &mut HotkeyPressGate, event_id: u32, hotkey_id: u32, state: HotKeyState) -> bool {
     if event_id != hotkey_id {
-        return ToggleDecision::Ignore;
+        return false;
     }
-
     match state {
         HotKeyState::Pressed if !gate.is_pressed => {
             gate.is_pressed = true;
-            match action {
-                MainWindowAction::Hide => ToggleDecision::ExecuteNow,
-                MainWindowAction::Show => {
-                    gate.pending_show = true;
-                    ToggleDecision::DeferShow
-                }
-            }
+            true
         }
-        HotKeyState::Pressed => ToggleDecision::Ignore,
+        HotKeyState::Pressed => false,
         HotKeyState::Released => {
             gate.is_pressed = false;
-            if gate.pending_show {
-                gate.pending_show = false;
-                ToggleDecision::ExecuteNow
-            } else {
-                ToggleDecision::Ignore
-            }
+            false
         }
     }
 }
@@ -184,10 +154,10 @@ fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow> {
 
 /// 从最小化 / 隐藏状态恢复到前台。
 ///
-/// macOS 上 `window.set_focus()` 调用 `NSWindow.makeKeyWindow()`，
-/// 但当另一个 app 是前台应用时不足以把整个进程拉到前台。
-/// `app.show()` 在 macOS 上直接调用 `[NSApp activateIgnoringOtherApps:YES]`，
-/// 是进程内原生实现，必须在 set_focus() 之前调用。
+/// macOS 全局快捷键释放修饰键时，系统会把焦点还给之前的前台 app。
+/// 即使在 Released 事件回调里执行激活，macOS 仍可能在回调之后处理修饰键释放
+/// 并抢回焦点。解法：立即激活一次（窗口尽快出现），然后 dispatch_after 延迟
+/// 150ms 再激活一次，确保在修饰键释放事件被完全消化后重新抢占焦点。
 fn show_main_window(app: &AppHandle) -> Result<()> {
     let window = main_window(app)?;
 
@@ -196,14 +166,16 @@ fn show_main_window(app: &AppHandle) -> Result<()> {
 
     window.unminimize()?;
     window.show()?;
-
-    // 先把整个 app 激活到前台，再设置 key window。
-    // 顺序不能反：set_focus() 需要 app 已经是前台才能稳定生效。
     app.show()?;
     window.set_focus()?;
 
     // 通知前端把焦点切到 chat 输入框
     let _ = window.emit("hebbian://focus-chat-input", ());
+
+    // macOS：延迟再次激活，确保修饰键释放后焦点不会被抢走。
+    // dispatch_after_f 本身会 dispatch 到主线程，无需再包 run_on_main_thread���
+    #[cfg(target_os = "macos")]
+    activate_macos_app_delayed(app, std::time::Duration::from_millis(150));
 
     Ok(())
 }
@@ -218,6 +190,45 @@ fn hide_main_window(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// macOS：延迟后激活 app 到前台并设置窗口焦点。
+///
+/// 使用 `dispatch_after` 在主线程 RunLoop 上延迟执行，
+/// 确保在 macOS 修饰键释放事件被完全处理后再激活。
+#[cfg(target_os = "macos")]
+fn activate_macos_app_delayed(app: &AppHandle, delay: std::time::Duration) {
+    let app_ptr = app as *const AppHandle as *mut std::ffi::c_void;
+    let delay_nanos = (delay.as_secs_f64() * 1_000_000_000.0) as i64;
+
+    unsafe {
+        let when = dispatch_time(std::ptr::null(), delay_nanos);
+        let queue = dispatch_get_main_queue();
+        dispatch_after_f(when, queue, app_ptr, dispatch_after_activate);
+    }
+}
+
+/// dispatch_after_f 的回调：激活 app 并聚焦窗口。
+///
+/// Safety: context 必须是有效的 *const AppHandle 转换而来。
+#[cfg(target_os = "macos")]
+extern "C" fn dispatch_after_activate(ctx: *mut std::ffi::c_void) {
+    let app = unsafe { &*(ctx as *const AppHandle) };
+    let _ = app.show();
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn dispatch_time(when: *const std::ffi::c_void, nsec: i64) -> *const std::ffi::c_void;
+    fn dispatch_get_main_queue() -> *const std::ffi::c_void;
+    fn dispatch_after_f(
+        when: *const std::ffi::c_void,
+        queue: *const std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+}
 #[cfg(target_os = "macos")]
 fn create_tray(app: &AppHandle) -> Result<()> {
     let toggle_item = MenuItem::with_id(
@@ -363,17 +374,11 @@ fn register_global_shortcut(app: &AppHandle) -> Result<()> {
     let press_gate = Arc::new(Mutex::new(HotkeyPressGate::default()));
     let handler_press_gate = Arc::clone(&press_gate);
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        // 需要在锁内同时判断 action，所以把窗口状态查询也放进锁里
-        let decision = handler_press_gate
+        if handler_press_gate
             .lock()
-            .ok()
-            .and_then(|mut gate| {
-                let action = toggle_action_for_app(&app_handle);
-                Some(decide_hotkey_toggle(&mut gate, event.id, hotkey_id, event.state, action))
-            })
-            .unwrap_or(ToggleDecision::Ignore);
-
-        if matches!(decision, ToggleDecision::ExecuteNow) {
+            .map(|mut gate| should_toggle_hotkey_event(&mut gate, event.id, hotkey_id, event.state))
+            .unwrap_or(false)
+        {
             let toggle_handle = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
                 if let Err(err) = toggle_main_window(&toggle_handle) {
@@ -441,71 +446,31 @@ mod tests {
     }
 
     #[test]
-    fn hide_action_executes_immediately_on_pressed() {
+    fn pressed_triggers_toggle() {
         let mut gate = HotkeyPressGate::default();
-
-        // Hide：Pressed 时立刻执行
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Hide),
-            ToggleDecision::ExecuteNow
-        ));
-        // Released 后不应再触发
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Hide),
-            ToggleDecision::Ignore
-        ));
+        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
     }
 
     #[test]
-    fn show_action_defers_to_released() {
+    fn released_does_not_trigger() {
         let mut gate = HotkeyPressGate::default();
-
-        // Show：Pressed 时只标记 pending
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
-            ToggleDecision::DeferShow
-        ));
-        // Released 时才执行
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Show),
-            ToggleDecision::ExecuteNow
-        ));
+        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Released));
     }
 
     #[test]
     fn mismatched_event_id_is_ignored() {
         let mut gate = HotkeyPressGate::default();
-
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 7, HotKeyState::Pressed, MainWindowAction::Show),
-            ToggleDecision::Ignore
-        ));
+        assert!(!should_toggle_hotkey_event(&mut gate, 42, 7, HotKeyState::Pressed));
     }
 
     #[test]
     fn repeated_pressed_does_not_double_trigger() {
         let mut gate = HotkeyPressGate::default();
-
-        // 第一次 Pressed：DeferShow
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
-            ToggleDecision::DeferShow
-        ));
-        // 重复 Pressed：Ignore
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
-            ToggleDecision::Ignore
-        ));
-        // Released：ExecuteNow
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Show),
-            ToggleDecision::ExecuteNow
-        ));
-        // 下一次 Pressed：新的 cycle
-        assert!(matches!(
-            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Hide),
-            ToggleDecision::ExecuteNow
-        ));
+        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
+        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
+        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Released));
+        // 新 cycle
+        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
     }
 
     #[cfg(target_os = "macos")]

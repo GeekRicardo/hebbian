@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, ChevronUp, Share } from "lucide-react";
+import { Sparkles, ChevronDown, Share } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
@@ -63,19 +63,18 @@ export function ChatView() {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
-  const [exportClaudeOpen, setExportClaudeOpen] = useState(false);
-
-  // ==== 浮动 user 消息：当某条 user 消息滚出视口上方时，在 chat 区最顶端
-  //      浮一个它的截断副本。点击副本 → 滚到该消息、进入"对齐模式"（不再显示
-  //      浮动副本，只在真实气泡右侧显示上箭头）。点箭头 → 跳上一条、仍保持对齐
-  //      模式。用户一手动滚动 → 退出对齐模式、箭头消失；再向上滚、有消息滚出 →
-  //      浮动副本重新出现。
+  // ==== 浮动 user 消息（sticky header）：当某条 user 消息顶边滚到浮动区下边缘之上时，
+  //      在 chat 区最顶端浮一个它的截断副本。点击副本 → 平滑滚回该消息（顶边对齐
+  //      浮动区下边缘），同时临时抑制浮动显示；用户继续往上滚、上一条 assistant 的
+  //      下边缘越过浮动区下边缘后，抑制解除、浮动条改显示上一条 user 消息。
   const [pinnedUserId, setPinnedUserId] = useState<string | null>(null);
-  // 是否处于"对齐模式"（用户已点击跳转、真实气泡对齐到顶端、右侧显示箭头）
-  const [inAlignedMode, setInAlignedMode] = useState(false);
-  // 真实气泡是否正好贴在 chat 区顶端（几何检测）
-  const [pinnedAligned, setPinnedAligned] = useState(false);
+  // 点击浮动副本后临时抑制浮动显示：程序滚动期间和刚滚到位时不显示浮动条，
+  // 用户继续往上滚、上一条 assistant 下边缘越过浮动区下边缘后解除抑制。
+  const suppressedRef = useRef(false);
+  // 浮动副本最大高度（截断 ~2 行），也是几何判定的基准。
+  const PINNED_HEIGHT_PX = 72;
   const PINNED_ALIGN_TOLERANCE_PX = 4;
+
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -104,6 +103,7 @@ export function ChatView() {
   const [findQuery, setFindQuery] = useState("");
   const [findRegex, setFindRegex] = useState(false);
   const [findCase, setFindCase] = useState(false);
+  const [exportClaudeOpen, setExportClaudeOpen] = useState(false);
 
   const isStreaming = !!streamingMessageId;
   const rawMessages = currentSession?.messages ?? [];
@@ -163,9 +163,11 @@ export function ChatView() {
     setActive(0);
   }, [currentSession?.id, setActive]);
 
-  // 切对话时强制贴回底部 + 重置 stick 标志
+  // 切对话时强制贴回底部 + 重置浮动状态
   useEffect(() => {
     stickToBottomRef.current = true;
+    suppressedRef.current = false;
+    setPinnedUserId(null);
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [currentSession?.id]);
@@ -180,93 +182,80 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
 
-  // 监听用户滚动：离底超过阈值就关掉自动滚，回到底部再打开。
+  // 监听滚动：贴底检测 + 浮动副本几何判定 + 抑制解除
   const BOTTOM_SLACK_PX = 80;
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    
+
     // 贴底检测
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
-    
-    // 浮动条逻辑：找到滚出视口上方的最后一条 user 消息
-    const userMessages = el.querySelectorAll('[data-message-role="user"]');
-    let lastScrolledOutUser: Element | null = null;
-    
-    for (const msg of userMessages) {
-      const rect = msg.getBoundingClientRect();
-      const containerRect = el.getBoundingClientRect();
-      // 消息顶部在容器顶部上方 = 滚出视口
-      if (rect.top < containerRect.top) {
-        lastScrolledOutUser = msg;
+
+    // 浮动副本几何：浮动区下边缘 = 容器顶端 + 浮动区高度
+    const containerTop = el.getBoundingClientRect().top;
+    const pinnedBottom = containerTop + PINNED_HEIGHT_PX;
+
+    // 找到顶边已滚到浮动区下边缘之上的最后一条 user 消息
+    const userBubbles = el.querySelectorAll<HTMLElement>('[data-message-role="user"]');
+    let pinned: HTMLElement | null = null;
+    for (const b of userBubbles) {
+      const r = b.getBoundingClientRect();
+      if (r.top < pinnedBottom - PINNED_ALIGN_TOLERANCE_PX) {
+        pinned = b;
       } else {
-        break; // 后面的消息都在视口内，不用继续
+        break;
       }
     }
-    
-    if (lastScrolledOutUser) {
-      const msgId = lastScrolledOutUser.getAttribute('data-message-id');
-      
-      // 检查是否对齐到浮动条位置
-      const rect = lastScrolledOutUser.getBoundingClientRect();
-      const containerRect = el.getBoundingClientRect();
-      const expectedTop = containerRect.top + PINNED_BAR_TOP_PX;
-      const aligned = Math.abs(rect.top - expectedTop) <= ALIGN_TOLERANCE_PX;
-      
-      setPinnedUserMessageId(prev => {
-        // 如果消息 ID 变了，更新并标记为未对齐
-        if (prev !== msgId) {
-          setIsAligned(false);
-          return msgId;
+
+    if (!pinned) {
+      setPinnedUserId(null);
+      suppressedRef.current = false;
+      return;
+    }
+    const id = pinned.getAttribute("data-message-id");
+
+    // 抑制解除：pinned 消息之上有一条 assistant，其下边缘已越过浮动区下边缘
+    // → 用户继续往上滚了，该显示上一条 section header 了
+    if (suppressedRef.current && pinnedUserId) {
+      const currentEl = el.querySelector<HTMLElement>(`[data-message-id="${pinnedUserId}"]`);
+      if (currentEl) {
+        // 找当前 pinned 消息前面紧邻的 assistant 气泡
+        let prev = currentEl.previousElementSibling;
+        // 跳过非 assistant 的元素（如 marker），最多找 2 个 sibling
+        let tries = 0;
+        while (prev && prev.getAttribute("data-message-role") !== "assistant" && tries < 2) {
+          prev = prev.previousElementSibling;
+          tries++;
         }
-        // 消息 ID 相同，更新对齐状态
-        setIsAligned(aligned);
-        return prev;
-      });
-    } else {
-      // 没有滚出的 user 消息，清除浮动条
-      setPinnedUserMessageId(null);
-      setIsAligned(false);
+        if (prev && prev.getAttribute("data-message-role") === "assistant") {
+          const prevBottom = prev.getBoundingClientRect().bottom;
+          if (prevBottom > pinnedBottom + PINNED_ALIGN_TOLERANCE_PX) {
+            suppressedRef.current = false;
+          }
+        }
+      }
     }
-  }, [PINNED_BAR_TOP_PX, ALIGN_TOLERANCE_PX]);
-  // 点击浮动条跳转到该 user 消息
+
+    setPinnedUserId(id);
+  }, [pinnedUserId]);
+
+  // 点击浮动副本：平滑滚回该消息，顶边对齐浮动区下边缘，同时抑制浮动显示
   const scrollToPinnedMessage = useCallback(() => {
-    if (!pinnedUserMessageId || !scrollRef.current) return;
+    if (!pinnedUserId) return;
     const el = scrollRef.current;
-    const target = el.querySelector(`[data-message-id="${pinnedUserMessageId}"]`);
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(`[data-message-id="${pinnedUserId}"]`);
     if (!target) return;
-    
-    const containerRect = el.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const offsetTop = targetRect.top - containerRect.top + el.scrollTop - PINNED_BAR_TOP_PX;
-    
-    el.scrollTo({ top: offsetTop, behavior: 'smooth' });
-  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX]);
-  
-  // 点击上箭头：跳转到上一个 user 消息
-  const scrollToPreviousUserMessage = useCallback(() => {
-    if (!pinnedUserMessageId || !scrollRef.current) return;
-    const el = scrollRef.current;
-    const userMessages = Array.from(el.querySelectorAll('[data-message-role="user"]'));
-    const currentIndex = userMessages.findIndex(
-      msg => msg.getAttribute('data-message-id') === pinnedUserMessageId
-    );
-    
-    if (currentIndex > 0) {
-      const prevMsg = userMessages[currentIndex - 1];
-      const prevId = prevMsg.getAttribute('data-message-id');
-      if (!prevId) return;
-      
-      const containerRect = el.getBoundingClientRect();
-      const targetRect = prevMsg.getBoundingClientRect();
-      const offsetTop = targetRect.top - containerRect.top + el.scrollTop - PINNED_BAR_TOP_PX;
-      
-      el.scrollTo({ top: offsetTop, behavior: 'smooth' });
-      setPinnedUserMessageId(prevId);
-      setIsAligned(true);
-    }
-  }, [pinnedUserMessageId, PINNED_BAR_TOP_PX]);
+    // 滚动目标：让消息顶边对齐浮动区下边缘（即容器顶端 + PINNED_HEIGHT_PX）
+    const top =
+      target.getBoundingClientRect().top -
+      el.getBoundingClientRect().top +
+      el.scrollTop -
+      PINNED_HEIGHT_PX;
+    suppressedRef.current = true;
+    el.scrollTo({ top, behavior: "smooth" });
+  }, [pinnedUserId]);
 
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
@@ -787,62 +776,60 @@ export function ChatView() {
             <MemoryWriteSummary items={sessionMemoryWrites[currentSession.id]} />
           ) : null}
 
-        {/* 浮动 user 消息条：当 user 消息滚出视口上方时显示 */}
-        {pinnedUserMessageId && (() => {
-          const pinnedMsg = messages.find(m => m.id === pinnedUserMessageId);
-          if (!pinnedMsg || pinnedMsg.role !== 'user') return null;
-          
-          const userText = typeof pinnedMsg.content === 'string'
-            ? pinnedMsg.content
-            : (Array.isArray(pinnedMsg.content)
-              ? (pinnedMsg.content as any[]).find((c: any) => c.type === 'text')?.text || ''
-              : '');
-          return (
-            <div
-              className="absolute left-4 right-4 z-50 flex items-center gap-2 rounded-lg border bg-background/95 px-4 py-2 shadow-lg backdrop-blur-sm"
-              style={{ top: `${PINNED_BAR_TOP_PX}px` }}
-            >
-              <button
-                onClick={scrollToPinnedMessage}
-                className="flex-1 cursor-pointer truncate text-left text-sm text-foreground hover:text-primary"
-                title="点击跳转到此消息"
-              >
-                {userText}
-              </button>
-              {isAligned && (
-                <button
-                  onClick={scrollToPreviousUserMessage}
-                  className="flex-shrink-0 rounded p-1 hover:bg-accent"
-                  title="跳转到上一条消息"
-                >
-                  <ChevronUp className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          );
-        })()}
         </div>
       </div>
-        {/* 放大预览 portal 锚点：只覆盖 chat 区域（不含 header / input / sidebar）。
-            内层放大内容用 `absolute inset-3` 撑满锚点 + 12px padding。 */}
-        <div
-          id="chat-fullscreen-anchor"
-          className="pointer-events-none absolute inset-0 z-[60]"
-        />
-      </div>
 
-      {/* ChatInput 包裹层的"三态"：
-          - 全新对话（无任何消息且未在跑）→ 整块上移到 chat 区中部 + 宽度收 1/4（视觉对齐
-            "新对话居中"模板，输入框比正式会话短一截，强调"还没开始"）。
-          - 跑步态（streaming）→ translate-y-0 全宽贴底（"动画式下沉"，幅度=漂浮高度+24px）。
-          - 跑完 / 历史会话静默态 → 上抬 24px 全宽（让卡片跟窗口底脱开一点"飘"的观感）。
-          translateY 不改 flex 流分配，所以 messages 区高度始终是 flex-1，第一条消息
-          一发出来就自然填满，输入框跟着下沉到底——transition-all 让 transform 和 width
-          一起平滑过渡。 */}
-      {/* 用 margin-bottom 而不是 translateY：translateY 只视觉位移，messages 区高度
-          不变，上浮后会把最后一条消息盖住；margin-bottom 算进 flex 主轴尺寸，会让
-          flex-1 的 messages 区跟着压缩，消息和输入框各占各的空间。 */}
+      {/* 浮动 user 消息副本（sticky header）：某条 user 消息顶边滚到浮动区下边缘之上时，
+          在 chat 区最顶端浮一个截断副本。点击 → 平滑滚回该消息位置（临时抑制浮动显示），
+          用户继续往上滚、上一条 assistant 下边缘越过浮动区下边缘后，抑制解除、浮动条
+          改显示上一条 user 消息。放在滚动容器外、relative flex-1 容器内，absolute 固定
+          在视口顶端不随内容滚。 */}
+      {pinnedUserId && !suppressedRef.current && (() => {
+        const msg = messages.find((m) => m.id === pinnedUserId);
+        if (!msg || msg.role !== "user") return null;
+        return (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-50">
+            <div className="relative bg-background/95 shadow-md backdrop-blur-sm">
+              <button
+                type="button"
+                onClick={scrollToPinnedMessage}
+                title="点击回到此消息"
+                className="pointer-events-auto block w-full cursor-pointer text-left"
+              >
+                <div className="overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]"
+                     style={{ maxHeight: PINNED_HEIGHT_PX }}>
+                  <MessageBubble
+                    message={msg}
+                    prompt={activePrompt}
+                    userAvatar={userAvatar}
+                    appSettings={appSettings ?? undefined}
+                  />
+                </div>
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+      {/* 放大预览 portal 锚点：只覆盖 chat 区域（不含 header / input / sidebar）。
+          内层放大内容用 `absolute inset-3` 撑满锚点 + 12px padding。 */}
       <div
+        id="chat-fullscreen-anchor"
+        className="pointer-events-none absolute inset-0 z-[60]"
+      />
+    </div>
+
+    {/* ChatInput 包裹层的"三态"：
+        - 全新对话（无任何消息且未在跑）→ 整块上移到 chat 区中部 + 宽度收 1/4（视觉对齐
+          "新对话居中"模板，输入框比正式会话短一截，强调"还没开始"）。
+        - 跑步态（streaming）→ translate-y-0 全宽贴底（"动画式下沉"，幅度=漂浮高度+24px）。
+        - 跑完 / 历史会话静默态 → 上抬 24px 全宽（让卡片跟窗口底脱开一点"飘"的观感）。
+        translateY 不改 flex 流分配，所以 messages 区高度始终是 flex-1，第一条消息
+        一发出来就自然填满，输入框跟着下沉到底——transition-all 让 transform 和 width
+        一起平滑过渡。 */}
+    {/* 用 margin-bottom 而不是 translateY：translateY 只视觉位移，messages 区高度
+        不变，上浮后会把最后一条消息盖住；margin-bottom 算进 flex 主轴尺寸，会让
+        flex-1 的 messages 区跟着压缩，消息和输入框各占各的空间。 */}
+    <div
         className={`relative mx-auto transition-all duration-300 ease-out ${
           isNewConversationLayout
             ? "w-3/4 mb-[44vh]"
