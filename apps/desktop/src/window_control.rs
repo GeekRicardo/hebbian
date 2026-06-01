@@ -61,9 +61,11 @@ pub enum MainWindowAction {
 #[derive(Debug, Default)]
 struct HotkeyPressGate {
     is_pressed: bool,
+    /// Pressed 时判断需要 Show 但尚未执行（等 Released 后执行，避免修饰键释放抢焦点）
+    pending_show: bool,
 }
 
-pub fn global_toggle_hotkey() -> HotKey {
+fn toggle_hotkey() -> HotKey {
     HotKey::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::KeyJ)
 }
 
@@ -75,29 +77,55 @@ pub fn toggle_action(is_visible: bool, is_minimized: bool, is_focused: bool) -> 
     }
 }
 
-fn should_toggle_hotkey_event(
+/// 判断快捷键事件是否应触发窗口 toggle，以及是否需要延迟执行。
+///
+/// macOS 上全局快捷键释放修饰键时，系统会把焦点还给之前的前台 app。
+/// 所以 Show 操作不能在 Pressed 时执行，必须延迟到 Released 后，
+/// 此时修饰键已释放完毕，不会再被系统抢焦点。
+/// Hide 操作没有这个问题，Pressed 时立刻执行。
+enum ToggleDecision {
+    /// 立刻执行（Hide 场景）
+    ExecuteNow,
+    /// 延迟到 Released 后执行（Show 场景）
+    DeferShow,
+    /// 不执行
+    Ignore,
+}
+
+fn decide_hotkey_toggle(
     gate: &mut HotkeyPressGate,
     event_id: u32,
     hotkey_id: u32,
     state: HotKeyState,
-) -> bool {
+    action: MainWindowAction,
+) -> ToggleDecision {
     if event_id != hotkey_id {
-        return false;
+        return ToggleDecision::Ignore;
     }
 
     match state {
         HotKeyState::Pressed if !gate.is_pressed => {
             gate.is_pressed = true;
-            true
+            match action {
+                MainWindowAction::Hide => ToggleDecision::ExecuteNow,
+                MainWindowAction::Show => {
+                    gate.pending_show = true;
+                    ToggleDecision::DeferShow
+                }
+            }
         }
-        HotKeyState::Pressed => false,
+        HotKeyState::Pressed => ToggleDecision::Ignore,
         HotKeyState::Released => {
             gate.is_pressed = false;
-            false
+            if gate.pending_show {
+                gate.pending_show = false;
+                ToggleDecision::ExecuteNow
+            } else {
+                ToggleDecision::Ignore
+            }
         }
     }
 }
-
 pub fn initialize(app: &AppHandle) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -130,16 +158,23 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
 }
 
 fn toggle_main_window(app: &AppHandle) -> Result<()> {
-    let window = main_window(app)?;
-    let is_visible = window.is_visible()?;
-    let is_minimized = window.is_minimized()?;
-    let is_focused = is_visible && !is_minimized && window.is_focused()?;
-    let action = toggle_action(is_visible, is_minimized, is_focused);
-
+    let action = toggle_action_for_app(app);
     match action {
         MainWindowAction::Show => show_main_window(app),
         MainWindowAction::Hide => hide_main_window(app),
     }
+}
+
+/// 根据窗口当前可见/聚焦状态判断应该 Show 还是 Hide。
+fn toggle_action_for_app(app: &AppHandle) -> MainWindowAction {
+    let window = match main_window(app) {
+        Ok(w) => w,
+        Err(_) => return MainWindowAction::Show,
+    };
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_minimized = window.is_minimized().unwrap_or(false);
+    let is_focused = is_visible && !is_minimized && window.is_focused().unwrap_or(false);
+    toggle_action(is_visible, is_minimized, is_focused)
 }
 
 fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow> {
@@ -318,7 +353,7 @@ fn handle_tray_menu_event(app: &AppHandle, event_id: &str) {
 #[cfg(target_os = "macos")]
 fn register_global_shortcut(app: &AppHandle) -> Result<()> {
     let manager = GlobalHotKeyManager::new().context("failed to create global hotkey manager")?;
-    let hotkey = global_toggle_hotkey();
+    let hotkey = toggle_hotkey();
     manager
         .register(hotkey)
         .with_context(|| format!("failed to register {}", hotkey.into_string()))?;
@@ -328,13 +363,17 @@ fn register_global_shortcut(app: &AppHandle) -> Result<()> {
     let press_gate = Arc::new(Mutex::new(HotkeyPressGate::default()));
     let handler_press_gate = Arc::clone(&press_gate);
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        let should_toggle = handler_press_gate
+        // 需要在锁内同时判断 action，所以把窗口状态查询也放进锁里
+        let decision = handler_press_gate
             .lock()
-            .map(|mut gate| should_toggle_hotkey_event(&mut gate, event.id, hotkey_id, event.state))
-            .unwrap_or(false);
+            .ok()
+            .and_then(|mut gate| {
+                let action = toggle_action_for_app(&app_handle);
+                Some(decide_hotkey_toggle(&mut gate, event.id, hotkey_id, event.state, action))
+            })
+            .unwrap_or(ToggleDecision::Ignore);
 
-        if should_toggle {
-            let app_handle = app_handle.clone();
+        if matches!(decision, ToggleDecision::ExecuteNow) {
             let toggle_handle = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
                 if let Err(err) = toggle_main_window(&toggle_handle) {
@@ -374,7 +413,7 @@ mod tests {
 
     #[test]
     fn cmd_ctrl_j_is_the_toggle_shortcut() {
-        let hotkey = global_toggle_hotkey();
+        let hotkey = toggle_hotkey();
 
         assert_eq!(hotkey.key, Code::KeyJ);
         assert!(hotkey.mods.contains(Modifiers::SUPER));
@@ -402,56 +441,70 @@ mod tests {
     }
 
     #[test]
-    fn only_matching_pressed_event_toggles() {
+    fn hide_action_executes_immediately_on_pressed() {
         let mut gate = HotkeyPressGate::default();
 
-        assert!(should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Pressed
+        // Hide：Pressed 时立刻执行
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Hide),
+            ToggleDecision::ExecuteNow
         ));
-        assert!(!should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            7,
-            HotKeyState::Pressed
-        ));
-        assert!(!should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Released
+        // Released 后不应再触发
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Hide),
+            ToggleDecision::Ignore
         ));
     }
 
     #[test]
-    fn repeated_pressed_event_before_release_toggles_once() {
+    fn show_action_defers_to_released() {
         let mut gate = HotkeyPressGate::default();
 
-        assert!(should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Pressed
+        // Show：Pressed 时只标记 pending
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
+            ToggleDecision::DeferShow
         ));
-        assert!(!should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Pressed
+        // Released 时才执行
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Show),
+            ToggleDecision::ExecuteNow
         ));
-        assert!(!should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Released
+    }
+
+    #[test]
+    fn mismatched_event_id_is_ignored() {
+        let mut gate = HotkeyPressGate::default();
+
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 7, HotKeyState::Pressed, MainWindowAction::Show),
+            ToggleDecision::Ignore
         ));
-        assert!(should_toggle_hotkey_event(
-            &mut gate,
-            42,
-            42,
-            HotKeyState::Pressed
+    }
+
+    #[test]
+    fn repeated_pressed_does_not_double_trigger() {
+        let mut gate = HotkeyPressGate::default();
+
+        // 第一次 Pressed：DeferShow
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
+            ToggleDecision::DeferShow
+        ));
+        // 重复 Pressed：Ignore
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Show),
+            ToggleDecision::Ignore
+        ));
+        // Released：ExecuteNow
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Released, MainWindowAction::Show),
+            ToggleDecision::ExecuteNow
+        ));
+        // 下一次 Pressed：新的 cycle
+        assert!(matches!(
+            decide_hotkey_toggle(&mut gate, 42, 42, HotKeyState::Pressed, MainWindowAction::Hide),
+            ToggleDecision::ExecuteNow
         ));
     }
 
