@@ -99,11 +99,16 @@ pub async fn send_and_save(
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
     let app_for_notch = app.clone();
-    send_and_save_in_data_dir(&dd, args, move |event| {
+    let result = send_and_save_in_data_dir(&dd, args, move |event| {
         emit_notification(&app_for_notch, &event);
         let _ = on_event.send(event);
     })
-    .await
+    .await;
+    // 整轮 run 真正结束才弹一次「回答完成」（多回合只弹一次；取消 / 失败不弹）。
+    if result.is_ok() {
+        crate::notch::emit_run_finished(app);
+    }
+    result
 }
 
 pub async fn send_and_save_in_data_dir(

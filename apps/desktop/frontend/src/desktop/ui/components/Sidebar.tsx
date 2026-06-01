@@ -354,13 +354,17 @@ export function Sidebar() {
     const snippet = (s as any).snippet as string | undefined;
     const running = runningSessions.has(s.id) && !active;
     const unread = !active && !running && unreadFinishedSessions.has(s.id);
+    // 待审批：slot 本身持有悬挂的审批 / 提问（run 结束 slot 被删，自然清除）。
+    const slot = sessionStreams[s.id];
+    const pendingApproval = !!(slot?.pendingApproval || slot?.pendingQuestion);
     return (
       <li key={s.id}>
         <div
           onClick={() => openSession(s.id)}
           className={cn(
             "group px-3 py-2 rounded-md cursor-pointer transition-colors",
-            active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+            active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+            pendingApproval ? "glow-pending" : unread && "glow-finished"
           )}
         >
           <div className="flex items-center gap-2 min-w-0">

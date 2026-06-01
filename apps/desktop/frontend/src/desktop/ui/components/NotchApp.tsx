@@ -35,7 +35,7 @@ export default function NotchApp() {
       onDismiss={() => {
         invoke("notify_dismiss");
       }}
-      onClick={() => {
+      onOpen={() => {
         invoke("notify_click");
       }}
     />
