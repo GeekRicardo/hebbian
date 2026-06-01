@@ -404,6 +404,105 @@ fn delete_session(app: AppHandle, id: String) -> AppResult<()> {
     core(&app)?.delete_session(&id).map_err(map_core_err)
 }
 
+/// 把字符串包成单引号 shell 字面量，含空格 / 特殊字符也安全。
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ClaudeResumeDto {
+    session_uuid: String,
+    resume_command: String,
+    path: String,
+}
+
+/// 把一段对话导出成一个 Claude 会话文件，返回可直接 `claude --resume <uuid>` 的命令。
+/// 转换在 agent-core 完成（无副作用）；写文件落在用户 claude 目录，故由本层负责。
+#[tauri::command]
+fn export_session_to_claude(
+    app: AppHandle,
+    session_id: String,
+    include_thinking: bool,
+) -> AppResult<ClaudeResumeDto> {
+    let data_dir = data_dir(&app)?;
+    let home = dirs::home_dir().ok_or_else(|| AppError::msg("找不到用户主目录"))?;
+    let export = agent_core::storage::export_claude::build_claude_resume(
+        &data_dir,
+        &session_id,
+        include_thinking,
+        &home,
+    )?;
+    let dir = home.join(".claude").join("projects").join(&export.dir_name);
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::msg(format!("创建目录失败：{e}")))?;
+    let path = dir.join(format!("{}.jsonl", export.session_uuid));
+    std::fs::write(&path, export.lines.join("\n"))
+        .map_err(|e| AppError::msg(format!("写入失败：{e}")))?;
+    // 恢复方按当前目录定位会话文件，故命令先 cd 到原 cwd 再 resume——否则换个目录就找不到。
+    let resume_command = format!(
+        "cd {} && claude --resume {}",
+        shell_quote(&export.cwd),
+        export.session_uuid
+    );
+    Ok(ClaudeResumeDto {
+        resume_command,
+        session_uuid: export.session_uuid,
+        path: path.to_string_lossy().into_owned(),
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ClaudeSessionDto {
+    path: String,
+    uuid: String,
+    title: String,
+    cwd: String,
+    message_count: usize,
+    modified_ms: i64,
+}
+
+/// 列出用户 claude 目录下所有可导入会话（按目录分组交给前端，这里给扁平列表带 cwd）。
+#[tauri::command]
+fn list_claude_sessions() -> AppResult<Vec<ClaudeSessionDto>> {
+    let home = dirs::home_dir().ok_or_else(|| AppError::msg("找不到用户主目录"))?;
+    let dir = home.join(".claude").join("projects");
+    let list = agent_core::storage::import_claude::list_importable(&dir)?;
+    Ok(list
+        .into_iter()
+        .map(|i| ClaudeSessionDto {
+            path: i.path.to_string_lossy().into_owned(),
+            uuid: i.uuid,
+            title: i.title,
+            cwd: i.cwd,
+            message_count: i.message_count,
+            modified_ms: i.modified_ms,
+        })
+        .collect())
+}
+
+/// 导入一个 Claude 会话文件，重建成本侧 session（source="claude"，workdir 取原 cwd）。
+#[tauri::command]
+fn import_claude_session(app: AppHandle, path: String) -> AppResult<Session> {
+    let data_dir = data_dir(&app)?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| AppError::msg(format!("读取失败：{e}")))?;
+    let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content)?;
+    // provider_id 留空：导入的对话没有本侧 provider，用户继续聊前在会话设置里选。
+    let mut session = sessions::create_with_workspace(
+        &data_dir,
+        String::new(),
+        parsed.model,
+        None,
+        None,
+        "claude".into(),
+        None,
+        parsed.workdir,
+        Vec::new(),
+    )?;
+    session.title = parsed.title;
+    session.messages = parsed.messages;
+    sessions::save(&data_dir, session)
+}
+
 #[tauri::command]
 fn fork_session(
     app: AppHandle,
@@ -2466,6 +2565,9 @@ pub fn run() {
             import_project_file,
             rename_session,
             delete_session,
+            export_session_to_claude,
+            list_claude_sessions,
+            import_claude_session,
             fork_session,
             truncate_after,
             truncate_inclusive,

@@ -17,6 +17,8 @@
 //! `agent-core`，其路径 helper 仍保留在 [`common::storage`]。
 
 pub mod compactions;
+pub mod export_claude;
+pub mod import_claude;
 pub mod lock;
 pub mod mcp;
 pub mod memory;

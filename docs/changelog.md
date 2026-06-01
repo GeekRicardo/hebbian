@@ -5556,3 +5556,48 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: desktop + hebweb 各加 2 个只读命令 + 前端 1 个 Pane。纯查看，不改落盘 / 不删除 / 不动协议。
 - **验证**: hebweb + Playwright——播一条全局记忆 + 设 conversation.workdir=/tmp/repro5，开「设置 → 记忆」看到「全局记忆（1）preferences · 用户偏好用中文交流…」「项目记忆（1）/tmp/repro5 · ci · 本项目 CI 跑在 GitHub Actions」，点开全局条目展开出 ## 概览 / ## 详情 全文。cargo check（desktop + hebweb）+ tsc 通过。
 - **留尾巴**: 只读不可删（storage::memory 无 delete，删除是后续）；列表在打开 Tab 时拉一次，新写的记忆需重开 Tab 刷新。
+
+### 2026-06-01 — 新增「导出到 Claude」：对话右上角一键导出，`claude --resume` 接着聊
+
+- **Why**: 用户希望把 hebbian 里某段对话搬到终端的 Claude Code 里继续，且上下文照旧——尤其是 hebbian 这边遇到 provider 限流 / 模型不可用时，能无缝换到 claude 继续。
+- **改动**:
+  - `crates/agent-core/src/storage/export_claude.rs`（新）: 纯转换函数 `build_claude_resume` + `convert_messages`。把 hebbian transcript 转成 Claude 会话的逐行链式 jsonl（`parentUuid → uuid` 串链）。核心难点：hebbian 把 tool result 内联在 assistant 调用里，claude 格式要求 assistant 发 `tool_use` + 紧跟一条 user 发 `tool_result`——转换负责拆开配对，否则恢复后首个请求因 tool_use 缺配对被 API 拒。`include_thinking` 开关控制是否带思维链（带上时无 claude 端 signature，续聊首条可能被签名校验拒，默认关）。4 条单测覆盖：链连续性 / tool_use↔tool_result 配对 / thinking 开关 / claude 项目目录编码。
+  - `apps/desktop/src/lib.rs`: 新增 `export_session_to_claude(sessionId, includeThinking)` 命令 + `ClaudeResumeDto`。转换走 agent-core，落盘到 `~/.claude/projects/<dir>/<uuid>.jsonl`（dir = cwd 非字母数字全转 `-`）。返回的恢复命令带 `cd <cwd> &&` 前缀——claude 按当前目录的 projects 子目录定位会话文件，不 cd 到原 cwd 换个目录就「Failed to resume」。注册进 generate_handler。
+  - 空 workdir 兜底：`build_claude_resume` 加 `fallback_cwd` 参数（surface 注入用户 home）。源对话无 workdir 时 cwd 会编码成空目录名，claude 直接「Failed to resume」——实测踩到（一个无 workdir 的短会话导出后恢复失败），fallback 到 home 后恢复正常。
+  - `apps/desktop/frontend/.../bridge/tauri.ts`: bridge 加 `exportSessionToClaude` + `ClaudeResumeResult` 类型。
+  - `apps/desktop/frontend/.../components/ExportClaudeDialog.tsx`（新）: 导出弹窗——思维链开关 + 导出按钮 + 结果展示 resume 命令 + 复制按钮。
+  - `apps/desktop/frontend/.../components/ChatView.tsx`: header 右侧加 Share 图标按钮（仅已开始的对话显示）+ 弹窗挂载。
+  - `docs/架构.md`: §3.2 同步 API 列表加 `exportSessionToClaude`；§13 决策记录追加一条（为何用独立命令而非复用 `exportSession(format)` 的 Bytes 语义）。
+- **影响范围**: agent-core 加一个无副作用纯模块（storage::export_claude）；desktop 加 1 个命令 + 1 个前端弹窗 + header 1 个按钮。纯 additive，不动协议 / 不改落盘格式 / 不破坏兼容。仅 Desktop surface 接了 UI（hebweb / CLI 未接，但 agent-core 转换函数三 surface 可复用）。
+- **验证**: `cargo test -p agent-core --lib export_claude` 4 测通过；`cargo check --workspace` + `tsc --noEmit` 通过。真机端到端：用真实 session 跑转换落盘 → jq 校验全行合法 JSON + parentUuid 链连续 + tool_use↔tool_result 配对 344/344 → `claude --resume <uuid>` 实测成功触发 `SessionStart:resume` hook（claude 认这是可恢复的历史会话，走 resume 路径而非新建）。对照组：空 cwd 的导出文件 claude 直接「Failed to resume」连 hook 都不触发——据此定位并修了空 workdir fallback。
+- **留尾巴**: thinking signature 跨端无效是已知约束（默认关 thinking 规避）；hebweb / CLI 未接导出 UI；导出是「快照」——导出后 hebbian 这边继续聊不会同步到已导出的 claude 文件；恢复后续聊的实际推理输出未在本次验证里跑完（provider 侧首 token 慢/限流，与转换无关，resume 加载已确认）。
+
+### 2026-06-01 — 新增「从 Claude 导入」：侧边栏一键把 Claude 对话搬进来，列表显示 claude 徽章
+
+- **Why**: 与「导出到 Claude」对称的反向需求——用户在终端 Claude Code 里聊过的对话，想搬进 hebbian 接着用（看历史 / 换模型继续 / 沉淀记忆）。
+- **改动**:
+  - `crates/agent-core/src/storage/import_claude.rs`（新）: 反向解析。`list_importable` 扫 `~/.claude/projects/*/*.jsonl` 轻量提取概要（标题/cwd/消息数/mtime）；`parse_claude_jsonl` 完整重建消息序列。核心对称难点：Claude 把 `tool_use`(assistant) 与 `tool_result`(紧跟 user) 分两行，本侧内联——按 `tool_use_id` 把 result 回填进 assistant 的 `tool_calls[].result` 和 `parts` 的 ToolCall 块，tool_result 行不产生独立消息。标题取 `custom-title` 行，无则首条 user 文本按字符截断（不切碎中文）。3 条单测：消息重建+result 内联 / 标题 fallback / 标题按字符截断。
+  - `apps/desktop/src/lib.rs`: 新增 `list_claude_sessions()` + `import_claude_session(path)` 命令。导入走既有 `create_with_workspace(source="claude") + save`，workdir 取原 cwd，provider_id 留空（继续聊前在会话设置选）。注册进 generate_handler。
+  - `apps/desktop/frontend/.../bridge/tauri.ts`: bridge 加 `listClaudeSessions` / `importClaudeSession` + `ClaudeSessionInfo` 类型。
+  - `apps/desktop/frontend/.../components/ImportClaudeDialog.tsx`（新）: 导入弹窗，扫描列表**按原项目目录分组** + 搜索 + 点选导入。
+  - `apps/desktop/frontend/.../components/Sidebar.tsx`: 「新建对话」下方加「从 Claude 导入」入口；导入成功 `refreshSessions + openSession`；会话列表项 `source==="claude"` 显示 amber 色 Claude 徽章（与 `source==="cli"` 同机制）。
+  - `docs/架构.md`: §3.2 同步 API 加两个命令；§13 决策记录追加一条（导入复用 source 字段 + 工具调用回填 + 标题来源）。
+- **影响范围**: agent-core 加一个无副作用纯模块（storage::import_claude，落盘复用既有 sessions API）；desktop 加 2 命令 + 1 弹窗 + 侧边栏入口/徽章。纯 additive，不动协议 / 不改落盘格式 / 不破坏兼容。
+- **验证**: 3 条单测通过；`cargo check -p hebbian` + `tsc` 通过。真机端到端：用真实 Claude 会话（272 个 tool_use / 269 个 tool_result）跑 parse→落盘→`sessions::load` 回读——title「记忆系统设计」（取自 custom-title）、workdir=原 cwd、source="claude"、478 条消息、272 个 tool_call 全重建、269 个 result 全回填（差 3 个是源文件本就中断无结果的 tool_use）。扫描发现 277 个可导入会话。
+- **留尾巴**: 导入是「快照」——之后 Claude 那边继续聊不会同步进来；provider_id 空，导入的对话首次继续聊前需在会话设置选 provider/model；thinking 块导入为 Reasoning part（仅展示，不参与本侧续聊的签名校验）。
+
+### 2026-05-31 — notch 重做：Dynamic Island 风格 + 内联审批 + 不抢焦点 + 完成提示按 run 去抖
+
+- **Why**: 用户反馈旧 notch 卡片丑、弹出抢主窗口焦点、每个模型回合都弹「回答完成」（噪音）、且只能点开不能直接审批。定了 4 条策略：仅后台弹（前台靠侧边栏光晕，但调试期先都弹）、完成提示整轮 run 才弹一次、tool_call 审批可在卡片上「允许本次/拒绝」、其余跳主窗口。
+- **改动**:
+  - [notch.rs](../apps/desktop/src/notch.rs):
+    - 新增 `NOTCH_ALWAYS_POP` 策略开关 + `should_suppress` + 主窗口 focus 追踪（`NotchState.main_focused`）。当前置 `true`（调试：前台也弹）；置 `false` 即生产形态「仅后台弹」。
+    - 窗口加 `.focusable(false)`——show() 不再抢主窗口键盘焦点，鼠标点击按钮仍可用。
+    - `NotificationPayload` 加 `perm_kind`（tool_call/path_access/plan），供前端判断能否内联放行。
+    - 删掉 `TurnFinished` 通知；新增 `emit_run_finished`，由 chat.rs 在整轮 run 成功返回后调用——多回合只弹一次，取消/失败不弹。抽 `enqueue` 复用入队逻辑。
+  - [chat.rs](../apps/desktop/src/chat.rs): `send_and_save` 捕获 run 结果，`Ok` 时调 `emit_run_finished`。
+  - [NotificationCard.tsx](../apps/desktop/frontend/src/desktop/ui/components/NotificationCard.tsx): 重写为 Dynamic Island 风格（深黑玻璃、圆角 24、状态色 chip）。tool_call 审批渲染「允许本次（绿）/拒绝/打开」，内联调 `approve_permission(request_id, allow_once|deny, scope=session)`；path_access/plan/提问只给「打开处理」跳主窗口。ResizeObserver 把卡片真实高度回传 `notify_resize` 贴合窗口。去掉旧的拖拽/折叠（简化）。
+  - [NotchApp.tsx](../apps/desktop/frontend/src/desktop/ui/components/NotchApp.tsx): `onClick` → `onOpen`。
+- **影响范围**: 仅 Desktop surface（notch native 窗口 + 前端）。不动协议/agent-core/其他 surface。`perm_kind` additive。完成提示语义从「每回合」改为「每 run」。
+- **验证**: `cargo check -p hebbian` + `tsc --noEmit` 通过。视觉 + 内联审批点击 + 不抢焦点需 `pnpm tauri dev` 实跑确认（`focusable(false)` 下按钮可点是 macOS 行为，须真机验证）。
+- **留尾巴**: ① 调试完需把 `NOTCH_ALWAYS_POP` 改回 `false` 才是约定的「仅后台弹」。② `emit_run_finished` 只覆盖 `send_message` 主路径；若将来有别的 run 入口（wakeup 直发等）要补。③ 内联审批仅 tool_call；path_access/plan 仍走主窗口（设计如此）。

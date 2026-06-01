@@ -21,6 +21,7 @@ import {
   Terminal,
   Plus,
   Upload,
+  Download,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +29,7 @@ import { toast } from "sonner";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { PathHint } from "@/desktop/ui/components/PathHint";
+import { ImportClaudeDialog } from "@/desktop/ui/components/ImportClaudeDialog";
 import { DirPicker, PathListField } from "@/desktop/ui/components/workspaceFields";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn, formatTime, pathLeaf } from "@/desktop/ui/lib/utils";
@@ -93,6 +95,7 @@ export function Sidebar() {
     runSearch,
     clearSearch,
     openSession,
+    refreshSessions,
     deleteSession,
     renameSession,
     regenerateTitle,
@@ -104,12 +107,14 @@ export function Sidebar() {
     theme,
     runningSessions,
     unreadFinishedSessions,
+    sessionStreams,
   } = useStore();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [importClaudeOpen, setImportClaudeOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [query, setQuery] = useState(searchQuery);
   const debounceRef = useRef<number | null>(null);
@@ -397,6 +402,15 @@ export function Sidebar() {
                 CLI
               </span>
             )}
+            {s.source === "claude" && (
+              <span
+                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-amber-500/10 text-amber-600 border border-amber-500/20 shrink-0"
+                title="从 Claude 导入"
+              >
+                <Download className="w-2.5 h-2.5" />
+                Claude
+              </span>
+            )}
             {!renamingId && (
               <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 {active && (
@@ -525,7 +539,23 @@ export function Sidebar() {
             N
           </span>
         </Button>
+        <button
+          onClick={() => setImportClaudeOpen(true)}
+          className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground no-drag"
+        >
+          <Download className="w-3.5 h-3.5" />
+          从 Claude 导入
+        </button>
       </div>
+
+      <ImportClaudeDialog
+        open={importClaudeOpen}
+        onOpenChange={setImportClaudeOpen}
+        onImported={async (id) => {
+          await refreshSessions();
+          await openSession(id);
+        }}
+      />
 
       {projectSidebarMode === "projects" && (
         <div className="px-3 pb-2 no-drag">

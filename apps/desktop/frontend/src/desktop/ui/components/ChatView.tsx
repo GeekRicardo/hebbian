@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { Sparkles, ChevronDown, ChevronUp, Share } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
@@ -15,6 +15,7 @@ import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { runModeLabel } from "./RunModeChip";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
+import { ExportClaudeDialog } from "./ExportClaudeDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
@@ -62,13 +63,19 @@ export function ChatView() {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
+  const [exportClaudeOpen, setExportClaudeOpen] = useState(false);
 
-  // ==== 浮动 user 消息条：当 user 消息滚出视口上方时浮动显示 ====
-  const [pinnedUserMessageId, setPinnedUserMessageId] = useState<string | null>(null);
-  const [isAligned, setIsAligned] = useState(false);
-  const PINNED_BAR_TOP_PX = 16; // 浮动条距离滚动容器顶部的固定位置
-  const ALIGN_TOLERANCE_PX = 5; // 对齐容差
-  
+  // ==== 浮动 user 消息：当某条 user 消息滚出视口上方时，在 chat 区最顶端
+  //      浮一个它的截断副本。点击副本 → 滚到该消息、进入"对齐模式"（不再显示
+  //      浮动副本，只在真实气泡右侧显示上箭头）。点箭头 → 跳上一条、仍保持对齐
+  //      模式。用户一手动滚动 → 退出对齐模式、箭头消失；再向上滚、有消息滚出 →
+  //      浮动副本重新出现。
+  const [pinnedUserId, setPinnedUserId] = useState<string | null>(null);
+  // 是否处于"对齐模式"（用户已点击跳转、真实气泡对齐到顶端、右侧显示箭头）
+  const [inAlignedMode, setInAlignedMode] = useState(false);
+  // 真实气泡是否正好贴在 chat 区顶端（几何检测）
+  const [pinnedAligned, setPinnedAligned] = useState(false);
+  const PINNED_ALIGN_TOLERANCE_PX = 4;
 
   // ==== 压缩分隔条：摘要展开 / 历史对话展开 两套独立状态 ====
   // - expandedSummaries：分隔条主体点击后展开摘要正文，用来评估压缩质量
@@ -604,6 +611,17 @@ export function ChatView() {
             ) : null /* session 已锁定 prompt 后不再显示其名字——位置让给 header 右侧的 debug session id（debug off 时整行空） */}
           </div>
         </div>
+        {/* 把这段对话导出成一个 Claude 会话，终端里 `claude --resume` 接着聊 */}
+        {currentSession?.id && hasSessionStarted(currentSession) ? (
+          <button
+            onClick={() => setExportClaudeOpen(true)}
+            className="ml-auto shrink-0 p-1.5 rounded hover:bg-accent text-muted-foreground no-drag"
+            title="导出到 Claude（终端里继续这段对话）"
+          >
+            <Share className="w-4 h-4" />
+          </button>
+        ) : null}
+
         {/* debug 开启时在 header 右侧显示当前对话的 session 文件夹 id
             （~/.hebbian/sessions/<id>），方便对照 jsonl */}
         {debugEnabled && currentSession?.id ? (
@@ -615,6 +633,14 @@ export function ChatView() {
           </span>
         ) : null}
       </header>
+
+      {currentSession?.id ? (
+        <ExportClaudeDialog
+          open={exportClaudeOpen}
+          onOpenChange={setExportClaudeOpen}
+          sessionId={currentSession.id}
+        />
+      ) : null}
 
       <FindBar
         open={findOpen}

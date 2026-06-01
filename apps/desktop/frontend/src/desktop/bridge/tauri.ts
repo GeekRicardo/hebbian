@@ -101,6 +101,15 @@ export const api = {
   renameSession: (id: string, title: string) =>
     invoke<Session>("rename_session", { id, title }),
   deleteSession: (id: string) => invoke<void>("delete_session", { id }),
+  exportSessionToClaude: (sessionId: string, includeThinking: boolean) =>
+    invoke<ClaudeResumeResult>("export_session_to_claude", {
+      sessionId,
+      includeThinking,
+    }),
+  listClaudeSessions: () =>
+    invoke<ClaudeSessionInfo[]>("list_claude_sessions"),
+  importClaudeSession: (path: string) =>
+    invoke<Session>("import_claude_session", { path }),
   forkSession: (sessionId: string, upToMessageId: string) =>
     invoke<Session>("fork_session", {
       sessionId,
@@ -563,6 +572,23 @@ export const api = {
       body,
     }),
 };
+
+/** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */
+export interface ClaudeResumeResult {
+  session_uuid: string;
+  resume_command: string;
+  path: string;
+}
+
+/** 一个可从 Claude 导入的会话概要（扫描 ~/.claude/projects 得到）。 */
+export interface ClaudeSessionInfo {
+  path: string;
+  uuid: string;
+  title: string;
+  cwd: string;
+  message_count: number;
+  modified_ms: number;
+}
 
 export interface DeepseekLoginInput {
   email?: string | null;
