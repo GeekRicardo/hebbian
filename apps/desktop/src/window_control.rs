@@ -153,31 +153,24 @@ fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow> {
 }
 
 /// 从最小化 / 隐藏状态恢复到前台。
-///
-/// macOS 全局快捷键释放修饰键时，系统会把焦点还给之前的前台 app。
-/// 即使在 Released 事件回调里执行激活，macOS 仍可能在回调之后处理修饰键释放
-/// 并抢回焦点。解法：立即激活一次（窗口尽快出现），然后 dispatch_after 延迟
-/// 150ms 再激活一次，确保在修饰键释放事件被完全消化后重新抢占焦点。
 fn show_main_window(app: &AppHandle) -> Result<()> {
-    let window = main_window(app)?;
-
     #[cfg(target_os = "macos")]
-    apply_macos_tray_policy(app, true)?;
+    {
+        apply_macos_tray_policy(app, true)?;
+        show_macos_main_window_after_shortcut_release(app);
+        return Ok(());
+    }
 
-    window.unminimize()?;
-    window.show()?;
-    app.show()?;
-    window.set_focus()?;
-
-    // 通知前端把焦点切到 chat 输入框
-    let _ = window.emit("hebbian://focus-chat-input", ());
-
-    // macOS：延迟再次激活，确保修饰键释放后焦点不会被抢走。
-    // dispatch_after_f 本身会 dispatch 到主线程，无需再包 run_on_main_thread���
-    #[cfg(target_os = "macos")]
-    activate_macos_app_delayed(app, std::time::Duration::from_millis(150));
-
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+        let window = main_window(app)?;
+        window.unminimize()?;
+        window.show()?;
+        app.show()?;
+        window.set_focus()?;
+        let _ = window.emit("hebbian://focus-chat-input", ());
+        Ok(())
+    }
 }
 
 fn hide_main_window(app: &AppHandle) -> Result<()> {
@@ -190,46 +183,26 @@ fn hide_main_window(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// macOS：延迟后激活 app 到前台并设置窗口焦点。
-///
-/// 使用 `dispatch_after` 在主线程 RunLoop 上延迟执行，
-/// 确保在 macOS 修饰键释放事件被完全处理后再激活。
 #[cfg(target_os = "macos")]
-fn activate_macos_app_delayed(app: &AppHandle, delay: std::time::Duration) {
-    let app_ptr = app as *const AppHandle as *mut std::ffi::c_void;
-    let delay_nanos = (delay.as_secs_f64() * 1_000_000_000.0) as i64;
-
-    unsafe {
-        let when = dispatch_time(std::ptr::null(), delay_nanos);
-        let queue = dispatch_get_main_queue();
-        dispatch_after_f(when, queue, app_ptr, dispatch_after_activate);
-    }
+fn show_macos_main_window_after_shortcut_release(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("hebbian-show-after-hotkey".to_string())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let app_for_schedule = app.clone();
+            let app_for_focus = app.clone();
+            let _ = app_for_schedule.run_on_main_thread(move || {
+                if let Some(window) = app_for_focus.get_webview_window(MAIN_WINDOW_LABEL) {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = app_for_focus.show();
+                    let _ = window.set_focus();
+                    let _ = window.emit("hebbian://focus-chat-input", ());
+                }
+            });
+        });
 }
-
-/// dispatch_after_f 的回调：激活 app 并聚焦窗口。
-///
-/// Safety: context 必须是有效的 *const AppHandle 转换而来。
-#[cfg(target_os = "macos")]
-extern "C" fn dispatch_after_activate(ctx: *mut std::ffi::c_void) {
-    let app = unsafe { &*(ctx as *const AppHandle) };
-    let _ = app.show();
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let _ = window.set_focus();
-    }
-}
-
-#[cfg(target_os = "macos")]
-extern "C" {
-    fn dispatch_time(when: *const std::ffi::c_void, nsec: i64) -> *const std::ffi::c_void;
-    fn dispatch_get_main_queue() -> *const std::ffi::c_void;
-    fn dispatch_after_f(
-        when: *const std::ffi::c_void,
-        queue: *const std::ffi::c_void,
-        context: *mut std::ffi::c_void,
-        work: extern "C" fn(*mut std::ffi::c_void),
-    );
-}
-#[cfg(target_os = "macos")]
 fn create_tray(app: &AppHandle) -> Result<()> {
     let toggle_item = MenuItem::with_id(
         app,
