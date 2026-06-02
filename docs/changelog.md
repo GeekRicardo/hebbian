@@ -5674,3 +5674,12 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): token 统计持久化改为 append-only 元数据更新。
 - **影响范围**: agent-core storage / desktop / hebweb / CLI；不改协议字段，不破坏老 session 读取；避免普通元数据保存触碰 `session.jsonl` 消息历史。
 - **留尾巴**: 已被覆盖的旧 session 历史不能从当前 `session.jsonl` 自动恢复，只能依赖现有 `model_io.jsonl` 做人工追溯。
+
+### 2026-06-03 — 修复关闭日志窗口会中断正在运行的 agent run（误报「用户中断」）
+
+- **Why**: 用户关闭独立的日志查看器窗口时，正在跑的 run 被取消、UI 显示「用户中断」。根因是 `handle_close_with_pending_hitl` 在任何窗口 `CloseRequested` 时都无差别执行 `cancellation::cancel_all()` + `hitl_state.cancel_all_pending()`，缺少窗口 label 守卫——而旁边的 `window_control::handle_window_event` 本就用 `label() != MAIN_WINDOW_LABEL` 过滤过，唯独这条合作式 HITL 清理路径漏了。
+- **改动**:
+  - [apps/desktop/src/window_control.rs](../apps/desktop/src/window_control.rs): `MAIN_WINDOW_LABEL` 改为 `pub`，供其它模块复用同一常量而非另造字符串。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `handle_close_with_pending_hitl` 入口加守卫，非主窗口（日志查看器等）关闭直接 early-return，不触碰任何 run / HITL 状态。
+- **影响范围**: 仅 desktop crate；不改协议、不动 CLI / hebweb（它们没有日志查看器窗口）。
+- **留尾巴**: 无。

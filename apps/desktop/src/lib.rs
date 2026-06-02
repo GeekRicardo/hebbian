@@ -2398,6 +2398,10 @@ fn set_log_viewer_always_on_top(app: AppHandle, always_on_top: bool) -> AppResul
 ///
 /// 用户硬关 / 强制退出还是会丢，这只是合作式的「正常关窗」路径。
 fn handle_close_with_pending_hitl(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    // 仅主窗口关闭才触发合作式中断；日志查看器等辅助窗口关闭不应取消正在跑的 run。
+    if window.label() != window_control::MAIN_WINDOW_LABEL {
+        return;
+    }
     let app = window.app_handle().clone();
     let hitl_state: Arc<HitlState> = match app.try_state::<Arc<HitlState>>() {
         Some(s) => s.inner().clone(),

@@ -13,7 +13,7 @@ use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::ActivationPolicy;
 use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent};
 
-const MAIN_WINDOW_LABEL: &str = "main";
+pub const MAIN_WINDOW_LABEL: &str = "main";
 
 #[cfg(target_os = "macos")]
 const TRAY_ID: &str = "hebbian-status";
@@ -80,7 +80,12 @@ pub fn toggle_action(is_visible: bool, is_minimized: bool, is_focused: bool) -> 
 /// 只在首次 Pressed 时触发，防止长按重复触发。
 /// Released 不触发——macOS 修饰键释放焦点问题由 show_main_window
 /// 内部的 dispatch_after 延迟激活解决。
-fn should_toggle_hotkey_event(gate: &mut HotkeyPressGate, event_id: u32, hotkey_id: u32, state: HotKeyState) -> bool {
+fn should_toggle_hotkey_event(
+    gate: &mut HotkeyPressGate,
+    event_id: u32,
+    hotkey_id: u32,
+    state: HotKeyState,
+) -> bool {
     if event_id != hotkey_id {
         return false;
     }
@@ -421,29 +426,64 @@ mod tests {
     #[test]
     fn pressed_triggers_toggle() {
         let mut gate = HotkeyPressGate::default();
-        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
+        assert!(should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Pressed
+        ));
     }
 
     #[test]
     fn released_does_not_trigger() {
         let mut gate = HotkeyPressGate::default();
-        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Released));
+        assert!(!should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Released
+        ));
     }
 
     #[test]
     fn mismatched_event_id_is_ignored() {
         let mut gate = HotkeyPressGate::default();
-        assert!(!should_toggle_hotkey_event(&mut gate, 42, 7, HotKeyState::Pressed));
+        assert!(!should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            7,
+            HotKeyState::Pressed
+        ));
     }
 
     #[test]
     fn repeated_pressed_does_not_double_trigger() {
         let mut gate = HotkeyPressGate::default();
-        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
-        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
-        assert!(!should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Released));
+        assert!(should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Pressed
+        ));
+        assert!(!should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Pressed
+        ));
+        assert!(!should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Released
+        ));
         // 新 cycle
-        assert!(should_toggle_hotkey_event(&mut gate, 42, 42, HotKeyState::Pressed));
+        assert!(should_toggle_hotkey_event(
+            &mut gate,
+            42,
+            42,
+            HotKeyState::Pressed
+        ));
     }
 
     #[cfg(target_os = "macos")]
