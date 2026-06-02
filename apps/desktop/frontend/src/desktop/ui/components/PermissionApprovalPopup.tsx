@@ -32,6 +32,34 @@ import {
   lineOfOldString,
   useOriginalFileText,
 } from "@/desktop/ui/lib/useDiffBaseLine";
+import type { ApprovalSegmentStatus } from "@/desktop/ui/types";
+
+/** 段级白名单状态的展示样式（架构 §4.4.2.3）。 */
+const SEG_META: Record<
+  ApprovalSegmentStatus,
+  { label: string; badge: string; text: string }
+> = {
+  readonly: {
+    label: "只读",
+    badge: "bg-muted text-muted-foreground",
+    text: "text-muted-foreground/70",
+  },
+  whitelisted: {
+    label: "✓ 已允许",
+    badge: "bg-green-500/15 text-green-600 dark:text-green-500",
+    text: "text-muted-foreground line-through decoration-green-600/40",
+  },
+  unmemorable: {
+    label: "危险·不可记",
+    badge: "bg-destructive/15 text-destructive",
+    text: "text-destructive",
+  },
+  needs_approval: {
+    label: "待批",
+    badge: "bg-amber-500/15 text-amber-600 dark:text-amber-500",
+    text: "",
+  },
+};
 
 /**
  * 把 BashTool 推送的命令指纹切成"前缀按钮"。
@@ -323,11 +351,49 @@ export function PermissionApprovalPopup() {
           </div>
         )}
 
+        {/* 段级白名单状态：复合命令拆段后逐段展示——已白名单段 ✓ 划掉（本次无需处理）、
+            待批段正常、rm 等不可记段红色（每次必审、不可勾选）、只读段灰显。
+            让用户一眼看清「为什么这条还要批」「哪几段其实已经放行了」（架构 §4.4.2.3）。 */}
+        {!isPathAccess && !feedbackOpen && (pending.segments?.length ?? 0) > 0 && (
+          <div className="px-3 py-2 border-t border-border/60 space-y-1">
+            {pending.segments!.map((seg, i) => {
+              const meta = SEG_META[seg.status];
+              return (
+                <div key={i} className="flex items-center gap-2 text-[12px]">
+                  <span
+                    className={cn(
+                      "shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium",
+                      meta.badge
+                    )}
+                  >
+                    {meta.label}
+                  </span>
+                  <code className={cn("font-mono truncate", meta.text)}>
+                    {seg.fingerprint}
+                  </code>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 危险复合模式：任何作用域都记不住，明确告诉用户别白点（架构 §4.4.2.2）。 */}
+        {!isPathAccess && !feedbackOpen && pending.refuseRemember && (
+          <div className="px-3 py-2 border-t border-border/60 text-[12px] text-amber-600 dark:text-amber-500 flex items-start gap-1.5">
+            <MessageSquareWarning className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>此命令含危险复合模式，出于安全每次都需确认，无法加入白名单。</span>
+          </div>
+        )}
+
         {/* 二级区：「记忆 pattern 多选 list + scope 按钮」（架构 §4.4.2 段级判定）。
             Bash 列出 sub / root / compound 各段 root；其它工具只暴露工具名级。
             用户勾选要记的 pattern（默认全选）→ 点 scope 按钮一次性写多条规则。
-            路径审批走主按钮区的 4 档，不进二级区。 */}
-        {!isPathAccess && !feedbackOpen && memoryOptions.length > 0 && (
+            路径审批走主按钮区的 4 档，不进二级区。
+            refuse_remember（危险复合）时隐藏——点了也写不进去，别让按钮骗人。 */}
+        {!isPathAccess &&
+          !feedbackOpen &&
+          !pending.refuseRemember &&
+          memoryOptions.length > 0 && (
           <MemoryRecallPanel
             options={memoryOptions}
             disabled={submitting}

@@ -89,6 +89,13 @@ pub enum EngineEvent {
         /// 前端据此渲染"多选 list + scope 按钮"——每段一行 checkbox。
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         command_segments: Vec<String>,
+        /// 完整段级状态（只读 / 已白名单 / 不可记忆 / 待审批），弹窗逐段展示
+        /// （架构 §4.4.2.3）。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        segments: Vec<protocol::ApprovalSegment>,
+        /// 危险复合模式：任何作用域都不可记住，弹窗隐藏记忆区（架构 §4.4.2.2）。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        refuse_remember: bool,
     },
     PermissionResolved {
         request_id: String,
@@ -223,13 +230,23 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             risk,
         } => {
             use protocol::PermissionKind::*;
-            let (kind_str, tool_name, tool_input, paths, fingerprint, command_segments) = match kind
-            {
+            let (
+                kind_str,
+                tool_name,
+                tool_input,
+                paths,
+                fingerprint,
+                command_segments,
+                segments,
+                refuse_remember,
+            ) = match kind {
                 ToolCall {
                     tool_name,
                     input,
                     fingerprint,
                     command_segments,
+                    segments,
+                    refuse_remember,
                 } => (
                     "tool_call",
                     tool_name.clone(),
@@ -237,6 +254,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                     Vec::<String>::new(),
                     fingerprint.clone(),
                     command_segments.clone(),
+                    segments.clone(),
+                    *refuse_remember,
                 ),
                 PathAccess { tool_name, paths } => (
                     "path_access",
@@ -245,6 +264,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                     paths.clone(),
                     None,
                     Vec::new(),
+                    Vec::new(),
+                    false,
                 ),
                 Plan { .. } => (
                     "plan",
@@ -253,6 +274,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                     Vec::new(),
                     None,
                     Vec::new(),
+                    Vec::new(),
+                    false,
                 ),
                 ContinueLongRun { .. } => (
                     "continue_long_run",
@@ -261,6 +284,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                     Vec::new(),
                     None,
                     Vec::new(),
+                    Vec::new(),
+                    false,
                 ),
             };
             EngineEvent::PermissionRequested {
@@ -273,6 +298,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 paths,
                 fingerprint,
                 command_segments,
+                segments,
+                refuse_remember,
             }
         }
         PermissionResolved {

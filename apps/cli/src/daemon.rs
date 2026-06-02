@@ -380,6 +380,7 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                     input,
                     fingerprint,
                     command_segments,
+                    ..
                 } => (
                     tool_name.clone(),
                     "tool_call".to_string(),

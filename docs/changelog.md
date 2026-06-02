@@ -5601,3 +5601,65 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 仅 Desktop surface（notch native 窗口 + 前端）。不动协议/agent-core/其他 surface。`perm_kind` additive。完成提示语义从「每回合」改为「每 run」。
 - **验证**: `cargo check -p hebbian` + `tsc --noEmit` 通过。视觉 + 内联审批点击 + 不抢焦点需 `pnpm tauri dev` 实跑确认（`focusable(false)` 下按钮可点是 macOS 行为，须真机验证）。
 - **留尾巴**: ① 调试完需把 `NOTCH_ALWAYS_POP` 改回 `false` 才是约定的「仅后台弹」。② `emit_run_finished` 只覆盖 `send_message` 主路径；若将来有别的 run 入口（wakeup 直发等）要补。③ 内联审批仅 tool_call；path_access/plan 仍走主窗口（设计如此）。
+
+### 2026-06-02 — 新增权限审批探针 example（agent-core/examples/permission_probe.rs）
+
+- **Why**: 用户反馈 Bash 权限审批「不符合预期」，但缺一个能脱离完整 run、直接喂命令看判定的工具。需要直接调用真实审批链路（`analyze_effects` → `HitlGate::check`）+ 真实 `~/.hebbian/permissions.json` + 默认 policy，逐条暴露「哪些自动放行 / 哪些审批 / 哪些拒绝、为什么」。
+- **改动**:
+  - `crates/agent-core/examples/permission_probe.rs`: 新增探针二进制，三种输入源——① 批量基线（预置命令 + 预期，打表对照 ✓/✗）；② 交互 REPL（手输命令，需审批时就地交互：勾选要记忆的会写段 + 选 once/session/project/global 作用域）；③ 既有 session（`sessions::load` 抽出全部 Bash 调用从上到下逐条审批）。探针**只判定不执行命令**。诊断列用 `find_for_segments_diagnostic` 标注命中了哪层哪条规则。
+- **影响范围**: 纯 additive，仅新增一个 example，只调用 agent-core / protocol 既有 pub API（`analyze_effects`、`HitlGate`、`PermissionStore`、`sessions::load`、`PermissionPolicy`）。不动协议 / 不改对外 API / 不改 surface 行为。架构.md §4.6 权限规则无需变更。
+- **首跑发现（真实配置下与直觉预期不符的点，待用户决定是否调整）**: ① 用户全局规则 `Bash(mkdir)` / `Bash(curl)` 让这两类命令直接自动放行；② `python3 script.py` / `node app.js` 因 safe_commands 把 python3/node 列入只读 SAFE_ROOTS 而被判只读自动放行——执行任意脚本却免审批，可能是审批「不符合预期」的根因之一。
+- **验证**: `cargo build -p agent-core --example permission_probe` 通过；`batch` 模式打表正常；`repl` 模式 `touch a.txt` 审批选 session 记住 `touch` 前缀后，`touch b.txt` 复判自动放行（«Bash(touch)» session 规则命中）；`session <id>` 模式成功抽出 50 条 Bash 调用逐条判定。
+- **留尾巴**: ① 探针交互审批选 project/global 会真的写 `~/.hebbian/permissions.json`（与桌面端同源，已在落盘前显式打印路径+pattern 提示），session 作用域仅内存态；② 基线预期是「用户直觉」非「当前设计」，python3/node/mkdir/curl 的 ✗ 是有意暴露的待办，需用户拍板是否收紧 SAFE_ROOTS 或清理全局规则；③ 探针固定用 `PermissionPolicy::default()`，未覆盖 RunMode（bypass / accept-edits）对审批的影响——如需测模式可后续加 `--mode` 参数。
+- **关联**: docs/架构.md §4.4.2（effects 段级判定）/ §4.6（权限规则）
+
+### 2026-06-02 — 权限探针扩展：目录审批 + 终端配色 + 复选框写白名单 + 历史回放分析
+
+- **Why**: 续上一条探针。用户追加三项诉求：① 把目录/路径审批也纳入（不只 Bash）；② 终端输出加配色；③ 审批时像桌面端那样把解析出的命令前缀/目录列成复选框，勾选后写入某作用域白名单；④ 能否从历史 session 解析「我当时的审批选择」，若能则加选项用历史选择回放最近 10 个 session，自动总结审批系统有什么问题。
+- **能恢复到什么程度（关键调研结论）**: `PermissionResolved` 事件只在启用 Recorder 时落盘，历史 session 目录里没有 events 文件 → AllowOnce/记住/作用域 这类细粒度选择**不可恢复**。但每个 tool_call 的 `result` 字段是可靠 ground-truth：被拒结果以 `"工具调用被拒绝:"` 开头，其余有结果=实际执行了（=当时放行），无结果=取消/中断。于是「这条命令历史上放行还是被拒」可恢复，足够做对比分析。
+- **改动**（仅 `crates/agent-core/examples/permission_probe.rs`）:
+  - 目录审批：探针挂 `Workspace`，复刻 dispatch 两道闸——`workspace.allows` 越界检查（+ `store.allows_path` 兜底）与 `HitlGate::check` 工具审批合并成 `Judgement`；基线用例加入 Read/Edit/Grep 的工作区内 vs 系统目录（越界）。
+  - 配色：绿=放行/黄=审批/红=拒绝，`NO_COLOR` 或非 tty 自动关闭。
+  - 复选框写白名单：`toggle_select` 把候选（Bash 命令前缀 / 路径工具的「目录」「仅文件」两档）列成 `[x]/[ ]`，逐项切换，选作用域后 `store.add` 落规则（与桌面端「记住」同源）。
+  - `history [N]` 模式：取最近 N 个 session（默认 10），把每个 tool_call 的历史放行/拒绝当作用户选择，逐条过当前权限系统并统计；模拟「记住(session)」覆盖以算真实打扰次数；输出四类问题——脚本解释器被自动放行 / 写操作被规则静默放行 / 高频「每次都同意」命令 / 现在会拒但历史执行过（回归）。
+- **影响范围**: 纯 additive example，只调 agent-core/protocol 既有 pub API（新增用到 `Workspace`、`store.add`、`store.allows_path`、`store.find_for_segments_diagnostic`、`sessions::load`）。不动协议/对外 API/surface 行为。架构.md 无需变更。
+- **首跑发现（最近 10 session、822 次工具调用）**: 自动放行 715、会打扰 97（历史同意 74 / 拒 4 / 未知 19）、回归 0。问题：①node/perl 脚本因 SAFE_ROOTS 被自动放行；② 全局规则在静默放行会写命令——`Bash(cat)` 命中 `cat x > y` 这类带重定向的写、`Bash(curl)` 放行网络出站、`Bash(cd)` 覆盖 103 次复合命令；③ Edit 被「每次都点同意」39 次（always_ask 且无项目级记忆 → 重复打扰最严重）。
+- **留尾巴**: ① `history` 统计把 Read/Grep 等只读调用也计入 auto 分母，auto 占比偏高属正常；② 历史「记住」覆盖按目录粒度模拟，Edit 跨多目录时省不掉多少 → 印证「Edit 应支持项目级记忆 / accept-edits」；③ 待用户拍板：是否把解释器移出 SAFE_ROOTS、是否收敛 `Bash(cat)`/`Bash(curl)` 这类过宽全局规则。
+- **关联**: docs/架构.md §4.4.2 / §4.6
+
+### 2026-06-02 — 权限探针再扩展：复现「记住不生效」+ 段级白名单状态可视化 + turn 内重复检测
+
+- **Why**: 用户报「点了当前对话/项目/全局允许，下一次还弹审批」。需要确定性复现根因，并把复合命令的审批 UX 规范用探针验证：复合拆段后逐段查白名单、已在白名单的不再问、每次审批前重读最新白名单、不可记命令(rm)红色禁选标危险。
+- **复现结论（permission_probe repro，直接打真实 HitlGate+PermissionStore）**:
+  - **session 作用域不落盘**：只存内存 `store.session_views`，同进程内有效，重开对话/重启即丢——与架构 §4.5.3 文档「写到 session.jsonl 重开仍生效」不符。（用户确认此项可接受，不优先）
+  - **危险复合命令（cd-git-compound 等）+ 不可记忆命令（rm/dd）**：`refuse_remember=true` 让 resolve 静默丢弃 AllowAndRemember，**任何作用域点了都不写规则 → 每次必弹**。这是「项目/全局也弹」的元凶。且 `PermissionRequested` 未透传 refuse_remember，前端照常显示作用域按钮 = 按钮骗人。
+- **改动**（仅 `crates/agent-core/examples/permission_probe.rs`）:
+  - `repro` 模式：模拟桌面端「每次 run 新建 gate、共享 store」拓扑，对 session/project/global × 普通/复合/危险/rm 命令矩阵验证「记住」是否跨 run、跨重开生效。
+  - 段级白名单状态可视化：`segment_statuses` 每次实时查 store（global/project 按 mtime 刷新、session 内存实时），把每段标成 只读·免审 / ✓已在白名单«pattern» / ⛔危险·不可记住(红、禁选) / ●待审批；审批弹窗里已白名单段跳过、rm 段红色不可勾选，勾选区只列「会写且未白名单」段。
+  - history 模式加 ⑤「同一 turn 内重复审批」检测 + session_artifact 越界旁路（消除 Read 自身产物的假阳性）。
+- **影响范围**: 纯 additive example，只调既有 pub API。未改协议/对外 API/surface。架构.md 无需变更。
+- **要在真实桌面端落地的话（待拍板，涉及 §3 协议 + 前端，未动）**: ① `PermissionRequested.ToolCall` 增加完整段级状态（含 unmemorable / already-whitelisted），让 `PermissionApprovalPopup.tsx` 把 rm 段渲成红色禁选、已白名单段渲成 ✓ 跳过；② 逻辑层（逐段查、部分覆盖只问差集、实时重读）现有后端已具备，主要是把状态透传出来做可视化。
+- **留尾巴**: session 作用域落盘（兑现 §4.5.3）用户暂不要求，留作后续；危险复合是否放宽判定倾向保留安全设计、只改 UI 透明度。
+- **关联**: docs/架构.md §4.4.2 / §4.4.2.2 / §4.4.2.3 / §4.5.3 / §4.6
+
+### 2026-06-01 — 修「好的老大」每轮重复：base system prompt 加持久规则引导
+
+- **Why**: 用户在 `~/.claude/CLAUDE.md` 写了「每次回复必须以好的老大开头」，hebbian 每轮都字面执行这条指令——而 Claude Code 只在首轮确认，后续默默遵从。同一份 CLAUDE.md、同一个模型、行为差异巨大。
+- **改动**:
+  - `crates/agent-core/prompts/base_system.md`: 沟通节新增一条规则——"用户规则（CLAUDE.md 等注入的行为约束）是持久偏好，在首次回复时确认即可，后续默默遵从——不要每轮都重复执行格式指令"。这是对模型行为的引导修正，让模型理解「规则是约束不是每轮都要表演的仪式」。
+- **根因分析**: rules 本身已在 system prompt 里（`agent_loop.rs:422 compose_system_prompt + system_rules 拼接`），注入位置与 Claude Code 一致。差异来自 base system prompt 里缺少"持久约束不要机械重复"的引导。Claude Code 是否在 base prompt 里有类似文本无法确认（编译在闭源二进制里），但 hebbian 缺少这条引导是事实——加了之后模型行为符合预期。
+- **影响范围**: 仅改一行 prompt 文本，不影响代码逻辑/协议/落盘。**注意**：改 base system prompt 会使旧会话的 prompt cache 失效（§9.3 约束），这是预期行为。
+- **验证**: `cargo test -p agent-core --lib system_prompt` 9 测通过；`cargo check -p hebbian` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-02 — 审批弹窗接上「逐段白名单状态 + 危险复合不可记」前端（含补完 hebweb 消费端）
+
+- **Why**: 用户痛点——复合命令点了「会话/项目/全局允许」下次还弹。根因两类：① session 作用域不落盘（重开丢，用户接受）；② `cd X && git …` 危险复合 + 含 `rm` 的复合命令，旧逻辑整条 refuse_remember，连良性段都记不住，且弹窗照样显示作用域按钮（点了没用=骗人）。后端已在工作区 WIP 改成「rm 段只标红不毒化良性段、危险复合整条不可记」并加回归测试，但前端/hebweb 未接。
+- **改动**:
+  - `apps/web-server/src/events.rs`: `PermissionKind::ToolCall` 解构补 `segments` / `refuse_remember` 并透传到 `EngineEvent::PermissionRequested`（WIP 漏改的消费端，原本 workspace 编译失败）。
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`: 新增 `ApprovalSegment` / `ApprovalSegmentStatus`，事件与 `PendingApproval` 加 `segments` / `refuseRemember`。
+  - `.../store/useStore.ts`: 映射 `segments` / `refuseRemember` 进 pending。
+  - `.../components/PermissionApprovalPopup.tsx`: 逐段渲染白名单状态——已白名单 ✓ 划掉、待批正常、rm 红色禁选标「危险·不可记」、只读灰显；`refuseRemember` 时隐藏记忆/作用域区并提示「含危险复合，每次必审，无法加入白名单」。
+- **影响范围**: 协议（已 WIP 定义）+ desktop 前端 + hebweb。两 surface 对称（同一份 React）。不破坏兼容：新字段 serde default，老事件 segments 空 → 弹窗退回旧渲染。
+- **验证**: `cargo check --workspace` ✓；`cargo test -p agent-core --lib hitl` 18/18 ✓（含 `rm_compound_always_reapproves_but_benign_segment_is_remembered`）；`tsc && vite build` ✓。**未做**：live UI 点击截图（需真实模型触发一次含 rm 的复合命令审批），建议后续用 hebweb + Playwright 实跑确认渲染。
+- **留尾巴**: ① session 作用域仍不落盘（用户明确说可接受，暂不修）；② 失败的 `tools::read::output_capped_with_offset_limit_hint` 与本次无关，pre-existing；③ 探针 example `permission_probe` 为本次新增调试工具，与产品代码独立。

@@ -21,7 +21,8 @@ pub use event::{
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
 pub use memory::MemoryWriteItem;
 pub use permission::{
-    ApprovalDecision, PermissionKind, PermissionScope, QuestionOption, UserAnswer,
+    ApprovalDecision, ApprovalSegment, ApprovalSegmentStatus, PermissionKind, PermissionScope,
+    QuestionOption, UserAnswer,
 };
 pub use submission::{Op, Submission, UserInput};
 pub use todo::{PlanComment, TodoItem, TodoStatus};

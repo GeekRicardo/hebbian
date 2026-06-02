@@ -543,6 +543,16 @@ export type EngineEvent =
        */
       command_segments?: string[];
       /**
+       * 完整段级状态（含只读 / 已白名单 / 不可记忆 / 待审批），弹窗逐段展示：
+       * 已白名单段标 ✓、rm 段红色禁选（架构 §4.4.2.3）。
+       */
+      segments?: ApprovalSegment[];
+      /**
+       * 整条命令任何作用域都不可记住（危险复合模式，架构 §4.4.2.2）。
+       * 为 true 时弹窗隐藏记忆/作用域区，只留「允许此次 / 拒绝」。
+       */
+      refuse_remember?: boolean;
+      /**
        * Plan 审批专属（架构 §4.4.5），仅 kind="plan" 时填。前端据此在
        * PermissionApprovalPopup 渲染完整 plan markdown + 三按钮
        * （通过 / 编辑后通过 / 重新规划带反馈）。
@@ -725,6 +735,19 @@ export interface PlanMeta {
   is_active: boolean;
 }
 
+/** 复合命令里单段相对白名单的状态（架构 §4.4.2.3）。 */
+export type ApprovalSegmentStatus =
+  | "readonly" // 只读：免审批、免记忆（灰显）
+  | "whitelisted" // 已命中 allow 规则：本次无需处理（✓）
+  | "unmemorable" // rm/dd 等：红色、不可勾选、每次必审
+  | "needs_approval"; // 会写且未进白名单：本次可勾选记忆
+
+/** 一段命令 + 它的白名单状态。审批弹窗逐段渲染。 */
+export interface ApprovalSegment {
+  fingerprint: string;
+  status: ApprovalSegmentStatus;
+}
+
 /** 一次待审批请求（HITL） */
 export interface PendingApproval {
   requestId: string;
@@ -739,6 +762,10 @@ export interface PendingApproval {
   fingerprint?: string | null;
   /** Bash 多段命令的所有段 fingerprint，compound 时由 UI 展开每段独立按钮 */
   commandSegments?: string[];
+  /** 完整段级状态（只读 / 已白名单 / 不可记忆 / 待审批），逐段展示用 */
+  segments?: ApprovalSegment[];
+  /** 危险复合模式：任何作用域都不可记住，弹窗隐藏记忆区只留允许此次/拒绝 */
+  refuseRemember?: boolean;
   /** Plan 审批专用（架构 §4.4.5）：plan markdown + 元信息，仅 kind="plan" 时填 */
   plan?: PlanPermissionDto | null;
 }

@@ -459,6 +459,8 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       kind: e.kind ?? "tool_call",
       fingerprint: e.fingerprint ?? null,
       commandSegments: e.command_segments ?? [],
+      segments: e.segments ?? [],
+      refuseRemember: e.refuse_remember ?? false,
       plan: e.plan ?? null,
     };
     if (slot.pendingApproval) {

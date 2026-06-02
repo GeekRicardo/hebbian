@@ -379,6 +379,10 @@ impl ToolDispatcher {
                 let command_segments = self
                     .hitl
                     .unapproved_memorable_writable_segments(&call.name, &effects);
+                // 完整段级状态（已白名单 / 待审 / rm 红禁选 / 只读）+ 整条是否禁记忆
+                // （危险复合）。让弹窗逐段如实展示，rm 这类只标红不毒化良性段（架构 §4.4.2.3）。
+                let segments = self.hitl.approval_segments(&call.name, &effects);
+                let refuse_remember = effects.has_dangerous_pattern();
                 self.emit(EventPayload::PermissionRequested {
                     request_id: request_id.clone(),
                     kind: PermissionKind::ToolCall {
@@ -386,6 +390,8 @@ impl ToolDispatcher {
                         input: call.input.clone(),
                         fingerprint: fingerprint.clone(),
                         command_segments,
+                        segments,
+                        refuse_remember,
                     },
                     summary: format!("工具 {} 请求执行", call.name),
                     risk: RiskLevel::Medium,

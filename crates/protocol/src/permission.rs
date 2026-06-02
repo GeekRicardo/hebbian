@@ -51,6 +51,28 @@ pub enum PermissionScope {
     Global,
 }
 
+/// 复合命令里单段相对白名单的状态（审批弹窗据此决定该段怎么展示）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSegmentStatus {
+    /// 只读段：免审批、免记忆（灰显）。
+    Readonly,
+    /// 已命中某条 allow 规则：本次无需再处理（✓ 跳过）。
+    Whitelisted,
+    /// 不可记忆命令（rm/dd/…）：红色、不可勾选、每次必须确认（架构 §4.4.2.3）。
+    Unmemorable,
+    /// 会写且尚未进白名单：本次要决定是否加入（可勾选）。
+    NeedsApproval,
+}
+
+/// 一段命令 + 它的白名单状态。审批弹窗逐段渲染，让用户看清「哪些已放行、哪些待批、
+/// 哪些（rm）永远要确认」（架构 §4.4.2 / §4.4.2.3）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalSegment {
+    pub fingerprint: String,
+    pub status: ApprovalSegmentStatus,
+}
+
 /// 审批请求的类别（用于 UI 渲染分类）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -65,13 +87,19 @@ pub enum PermissionKind {
         /// **历史字段**：等于 `command_segments[0]`，保留只为向前兼容（架构 §4.4.2）。
         #[serde(default)]
         fingerprint: Option<String>,
-        /// Bash / PowerShell 的所有段 fingerprint。compound 命令
-        /// `cd /tmp && touch foo` → `["cd /tmp", "touch foo"]`。
-        /// UI 据此展示「每段独立 allow / 一次性 allow 整条」按钮，避免段级
-        /// 判定（架构 §4.4.2）需要"全段都允许"时用户却只允许了第一段的体感落差。
-        /// 非 Bash 工具为空 vec。
+        /// Bash / PowerShell 里「会写 + 可记忆 + 尚未进白名单」的段 fingerprint——
+        /// 即弹窗里可勾选记忆的那些。非 Bash 工具为空 vec（架构 §4.4.2）。
         #[serde(default)]
         command_segments: Vec<String>,
+        /// 完整段级状态（含只读 / 已白名单 / 不可记忆 / 待审批），供弹窗逐段展示：
+        /// 已白名单段标 ✓ 跳过、rm 段红色禁选。空 = 非 Bash 或老事件（架构 §4.4.2.3）。
+        #[serde(default)]
+        segments: Vec<ApprovalSegment>,
+        /// 整条命令出于安全原因**任何作用域都不可记住**（危险复合模式，如 `cd X && git …`，
+        /// 架构 §4.4.2.2）。为 true 时弹窗应隐藏作用域/记忆区，只留「允许一次 / 拒绝」。
+        /// 注意：仅含 rm 这类不可记忆段**不**置 true——那只让 rm 段不可记，良性段仍可记。
+        #[serde(default)]
+        refuse_remember: bool,
     },
     /// workspace 越界路径访问审批（Bash/Read/Write/Grep）
     PathAccess {

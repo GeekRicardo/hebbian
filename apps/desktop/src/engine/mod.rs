@@ -106,6 +106,14 @@ pub enum EngineEvent {
         /// UI 据此展示每段独立 allow 按钮 + 「整条都允许」按钮。
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         command_segments: Vec<String>,
+        /// 完整段级状态（含只读 / 已白名单 / 不可记忆 / 待审批），弹窗逐段展示：
+        /// 已白名单段标 ✓ 跳过、rm 段红色禁选（架构 §4.4.2.3）。
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        segments: Vec<protocol::ApprovalSegment>,
+        /// 整条命令任何作用域都不可记住（危险复合模式，架构 §4.4.2.2）。
+        /// 为 true 时弹窗隐藏作用域/记忆区，只留「允许一次 / 拒绝」。
+        #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+        refuse_remember: bool,
         /// Plan 审批专属：plan markdown + 元信息，仅 kind="plan" 时填（架构 §4.4.5）。
         /// 前端用它在 PermissionApprovalPopup 里渲染完整 plan 预览 + 三按钮
         /// （通过 / 编辑后通过 / 重新规划带反馈）。

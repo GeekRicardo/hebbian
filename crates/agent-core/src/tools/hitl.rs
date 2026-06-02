@@ -22,7 +22,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use protocol::{ApprovalDecision, PermissionRequestId, PermissionScope, UserAnswer};
+use protocol::{
+    ApprovalDecision, ApprovalSegment, ApprovalSegmentStatus, PermissionRequestId, PermissionScope,
+    UserAnswer,
+};
 use tokio::sync::oneshot;
 use tracing::info;
 
@@ -325,8 +328,11 @@ impl HitlGate {
             return Some(PermissionDecision::Approved);
         }
 
-        // 4b) 不可记忆命令（rm/dd/mkfs/...，架构 §4.4.2.3）：任一会写段命中即强制
-        //     审批且禁止记忆。即使复合命令其余段已记忆，含 rm 的整条每次都确认。
+        // 4b) 不可记忆命令（rm/dd/mkfs/...，架构 §4.4.2.3）：任一会写段命中即强制审批。
+        //     rm 段自身永远拿不到 allow 规则（弹窗不让勾、step 4b 又先于 store 检查短路），
+        //     所以含 rm 的整条**每次都确认**。但**允许记忆同条里的良性段**（如
+        //     `pnpm install && rm …` 里的 pnpm）——只是这条命令本身仍每次弹，记下的
+        //     pnpm 惠及以后不含 rm 的命令。故走可记忆的 needs_approval（不再毒化整条）。
         if let Some(seg) = effects.segments.iter().find(|s| s.unmemorable) {
             info!(
                 target: "permission",
@@ -335,9 +341,9 @@ impl HitlGate {
                 matched = false,
                 level = "never_remember",
                 result = "waiting_for_approval",
-                "[Permission:Match] unmemorable command → waiting for approval (no remember)"
+                "[Permission:Match] unmemorable segment → waiting for approval (benign segments still memorable)"
             );
-            return Some(self.needs_approval_no_remember(tool_name, fingerprint, effects));
+            return Some(self.needs_approval(tool_name, fingerprint, effects));
         }
 
         // 5) 用户累计的"允许并记住"——Bash/PowerShell 走段级匹配，其它工具退回工具名级。
@@ -553,6 +559,54 @@ impl HitlGate {
             }
         }
         out
+    }
+
+    /// 复合命令逐段的白名单状态（架构 §4.4.2.3）。供审批弹窗逐段展示：已白名单段标
+    /// ✓ 跳过、rm 段红色禁选、待审段可勾选。**每次调用都实时查 learned + store**（store
+    /// 内部按 mtime 刷新 global/project、session 内存实时），所以上一次审批刚写的规则这次立刻可见。
+    pub fn approval_segments(&self, tool_name: &str, effects: &Effects) -> Vec<ApprovalSegment> {
+        let learned = self.learned.lock().unwrap();
+        let sid = self.session_id.as_deref();
+        let wd = self.workdir.as_deref();
+        effects
+            .segments
+            .iter()
+            .map(|seg| {
+                let status = if seg.is_readonly {
+                    ApprovalSegmentStatus::Readonly
+                } else if seg.unmemorable {
+                    ApprovalSegmentStatus::Unmemorable
+                } else {
+                    let learned_hit = learned.auto_approved_tools.iter().any(|n| n == tool_name)
+                        || learned
+                            .auto_approved_patterns
+                            .iter()
+                            .any(|(t, p)| t == tool_name && fingerprint_matches(&seg.fingerprint, p));
+                    let store_hit = self.permission_store.as_ref().is_some_and(|store| {
+                        matches!(
+                            store
+                                .find_for_segments_diagnostic(
+                                    sid,
+                                    wd,
+                                    tool_name,
+                                    std::slice::from_ref(seg),
+                                )
+                                .map(|m| m.effect),
+                            Some(RuleEffect::Allow)
+                        )
+                    });
+                    if learned_hit || store_hit {
+                        ApprovalSegmentStatus::Whitelisted
+                    } else {
+                        ApprovalSegmentStatus::NeedsApproval
+                    }
+                };
+                ApprovalSegment {
+                    fingerprint: seg.fingerprint.clone(),
+                    status,
+                }
+            })
+            .collect()
     }
 
     /// 显式开一张审批 pending（路径越界、长 run 续跑等无法用 `check` 表达的场景）。
@@ -1558,13 +1612,17 @@ mod tests {
         ));
     }
 
-    /// 回归（架构 §4.4.2.3）：rm 永不可记忆——即便用户点 AllowAndRemember，下次同类
-    /// rm 仍审批；复合命令中含 rm 段也整条每次确认（其余会写段已记忆也不放行）。
+    /// 回归（架构 §4.4.2.3，2026-06-02 修订）：含 rm 的命令**每次必审**（rm 段自身永不
+    /// 放行），但**同条里的良性段可以被记住**——记下的良性前缀惠及以后不含 rm 的命令。
     #[test]
-    fn rm_is_never_remembered_always_reapproves() {
+    fn rm_compound_always_reapproves_but_benign_segment_is_remembered() {
         let gate = HitlGate::default();
-        let first =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "rm -rf ./build"}));
+
+        // 含 rm 的复合命令：批准并记住良性段 pnpm（UI 不会让勾 rm，故只发 pnpm）。
+        let first = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "pnpm install && rm -rf node_modules"}),
+        );
         let id = match gate.check("Bash", &first) {
             PermissionDecision::NeedsApproval { request_id, .. } => request_id,
             other => panic!("expected approval, got {other:?}"),
@@ -1573,42 +1631,41 @@ mod tests {
             &id,
             ApprovalDecision::AllowAndRemember {
                 scope: PermissionScope::Session,
-                pattern: Some("rm".into()),
+                pattern: Some("pnpm".into()),
                 extra_patterns: Vec::new(),
             },
         );
-        // 另一个 rm 仍审批
-        let second =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "rm -rf ./dist"}));
-        assert!(matches!(
-            gate.check("Bash", &second),
-            PermissionDecision::NeedsApproval { .. }
-        ));
 
-        // 复合命令：cargo build 先记住
-        let build =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build"}));
-        let bid = match gate.check("Bash", &build) {
-            PermissionDecision::NeedsApproval { request_id, .. } => request_id,
-            other => panic!("expected approval, got {other:?}"),
-        };
-        gate.resolve(
-            &bid,
-            ApprovalDecision::AllowAndRemember {
-                scope: PermissionScope::Session,
-                pattern: Some("cargo build".into()),
-                extra_patterns: Vec::new(),
-            },
+        // 良性段 pnpm 已记 → 不含 rm 的命令直接放行。
+        let benign =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "pnpm install"}));
+        assert!(
+            matches!(gate.check("Bash", &benign), PermissionDecision::Approved),
+            "记住的良性段应让不含 rm 的命令免审"
         );
-        // cargo build 已记，但整条含 rm 段 → 仍审批
-        let compound = crate::effects::analyze_effects(
+
+        // 但同样含 rm 的命令（哪怕 pnpm 已记）仍每次必审——rm 段永不放行。
+        let still_rm = crate::effects::analyze_effects(
             "Bash",
-            &serde_json::json!({"command": "cargo build && rm -rf target"}),
+            &serde_json::json!({"command": "pnpm install && rm -rf dist"}),
         );
-        assert!(matches!(
-            gate.check("Bash", &compound),
-            PermissionDecision::NeedsApproval { .. }
-        ));
+        assert!(
+            matches!(
+                gate.check("Bash", &still_rm),
+                PermissionDecision::NeedsApproval { .. }
+            ),
+            "含 rm 的命令必须每次审批"
+        );
+
+        // approval_segments 把 rm 段标 Unmemorable、已记的 pnpm 标 Whitelisted。
+        let segs = gate.approval_segments("Bash", &still_rm);
+        let by = |fp_prefix: &str| {
+            segs.iter()
+                .find(|s| s.fingerprint.starts_with(fp_prefix))
+                .map(|s| s.status)
+        };
+        assert_eq!(by("rm"), Some(ApprovalSegmentStatus::Unmemorable));
+        assert_eq!(by("pnpm"), Some(ApprovalSegmentStatus::Whitelisted));
     }
 
     /// 端到端 4-scope 审批矩阵（架构 §4.4.2 / §4.5.3）：真实 PermissionStore 落盘到
