@@ -12,12 +12,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 
 use agent_core::{
-    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
     context::transcript::Transcript,
     definition::AgentDefinition,
     edits::EditsWorktree,
@@ -31,8 +30,9 @@ use agent_core::{
     },
     tools::{background, skill::default_skill_dirs},
     workspace::Workspace,
+    Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use common::runtime::{PendingInputs, PendingUserInput};
@@ -220,8 +220,8 @@ impl TurnData {
             parts: self.parts,
             created_at: Utc::now().timestamp_millis(),
             meta: None,
-                subagent_call_id: None,
-            })
+            subagent_call_id: None,
+        })
     }
 }
 
@@ -355,8 +355,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         parts: Vec::new(),
         created_at: Utc::now().timestamp_millis(),
         meta: None,
-                subagent_call_id: None,
-            };
+        subagent_call_id: None,
+    };
     sessions::append_message(data_dir, session_id, user_msg)?;
 
     // model client
@@ -436,8 +436,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             Some(read_state_tracker),
             settings.general.shell.clone(),
             settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir)
-                .with_cwd(workspace.workdir().to_path_buf()),
+            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
         HookManager::new(external_hooks),
@@ -514,18 +513,19 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
 
     // 累加 token stats
     if let Some(usage) = summary.usage {
-        if let Ok(mut sess) = sessions::load(data_dir, session_id) {
+        let delta = TokenStats {
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_tokens: usage.cache_read,
+            cache_creation_tokens: usage.cache_creation,
+            run_count: 1,
+        };
+        let _ = sessions::update_meta(data_dir, session_id, |sess| {
             let mut stats = sess.token_stats.unwrap_or_default();
-            stats.accumulate(TokenStats {
-                input_tokens: usage.input,
-                output_tokens: usage.output,
-                cache_read_tokens: usage.cache_read,
-                cache_creation_tokens: usage.cache_creation,
-                run_count: 1,
-            });
+            stats.accumulate(delta);
             sess.token_stats = Some(stats);
-            let _ = sessions::save(data_dir, sess);
-        }
+            Ok(())
+        });
     }
 
     let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
@@ -551,8 +551,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
                         parts: Vec::new(),
                         created_at: Utc::now().timestamp_millis(),
                         meta: None,
-                subagent_call_id: None,
-            },
+                        subagent_call_id: None,
+                    },
                 )?;
             }
         }

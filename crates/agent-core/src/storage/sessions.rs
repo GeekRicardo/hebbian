@@ -247,6 +247,10 @@ pub struct Session {
     /// PlanMode 时找不到 pre_plan_mode 则回落到 `AskBeforeEdits`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_plan_mode: Option<RunMode>,
+    /// 上一个 Run 非正常结束（截断 / 拒答 / 拦截 / 请求失败 / 轮数超限）留下的续作入口
+    /// （架构 §4.3）。`None` = 上一轮正常完成。重启可恢复，前端据此渲染 ContinueBar。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_continue: Option<PendingContinue>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -281,6 +285,36 @@ impl TokenStats {
 
 fn default_stream() -> bool {
     true
+}
+
+/// 一次「非正常结束」留下的续作入口（架构 §4.3 / §7.3）。落在 session 状态里，
+/// 重启后 ContinueBar 仍可见。正常完成的下一个 Run 会清空它。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingContinue {
+    /// 触发时刻（Unix epoch ms）。
+    pub at: i64,
+    /// 为什么中断——决定 `AutoByReason` 策略下点 continue 走续写还是重发。
+    pub kind: ContinueKind,
+    /// 给用户看的一句话（toast 与 ContinueBar 共用）。
+    pub message: String,
+}
+
+/// 中断原因分类（架构 §4.11.4 的 [`FinishReason`] + run 级失败的并集）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinueKind {
+    /// 被 token 上限截断——`AutoByReason` 默认续写。
+    Truncated,
+    /// 模型拒答。
+    Refused,
+    /// 被内容安全策略拦截。
+    Filtered,
+    /// 模型请求失败（HTTP/网络/JSON）——`AutoByReason` 默认重发。
+    NetworkError,
+    /// 工具调用轮数超限。
+    MaxIterations,
+    /// 其它未归类。
+    Other,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -397,6 +431,9 @@ pub struct RolloutMeta {
     /// 进入 PlanMode 之前的 RunMode；ExitPlanMode 审批通过后切回去用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_plan_mode: Option<RunMode>,
+    /// 上一个 Run 非正常结束留下的续作入口（架构 §4.3）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_continue: Option<PendingContinue>,
 }
 
 /// 可变字段补丁。每个 `Some(_)` 字段都会按 last-wins 覆盖到最终 [`Session`]。
@@ -460,6 +497,13 @@ pub struct MetaUpdate {
     /// 显式清空 `pre_plan_mode`（ExitPlanMode 审批通过、切回非 PlanMode 后调用）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_pre_plan_mode: bool,
+    /// 上一个 Run 非正常结束留下的续作入口（架构 §4.3）。
+    /// `None` = 本次更新不动；要清空走 [`clear_pending_continue`]。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_continue: Option<PendingContinue>,
+    /// 显式清空 `pending_continue`（下一个 Run 正常完成 / 用户点了 continue 后调用）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_pending_continue: bool,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -730,6 +774,7 @@ fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -
         todos: s.todos.clone(),
         active_plan: s.active_plan.clone(),
         pre_plan_mode: s.pre_plan_mode,
+        pending_continue: s.pending_continue.clone(),
     }
 }
 
@@ -757,6 +802,7 @@ fn apply_meta(s: &mut Session, m: RolloutMeta) {
     s.todos = m.todos;
     s.active_plan = m.active_plan;
     s.pre_plan_mode = m.pre_plan_mode;
+    s.pending_continue = m.pending_continue;
     s.created_at = m.created_at;
 }
 
@@ -831,6 +877,12 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     if let Some(v) = u.pre_plan_mode {
         s.pre_plan_mode = Some(v);
     }
+    if u.clear_pending_continue {
+        s.pending_continue = None;
+    }
+    if let Some(v) = u.pending_continue {
+        s.pending_continue = Some(v);
+    }
 }
 
 /// 把 jsonl 文件折叠回一个完整 [`Session`]。
@@ -887,6 +939,7 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
         todos: Vec::new(),
         active_plan: None,
         pre_plan_mode: None,
+        pending_continue: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -1249,7 +1302,7 @@ fn load_from_path(path: &Path) -> AppResult<Session> {
     }
 }
 
-/// 全量写入（compaction）。会清掉过去所有 MetaUpdate 行的痕迹。
+/// 全量写入（compaction / fork）。会清掉过去所有 MetaUpdate 行的痕迹。
 pub fn save(data_dir: &Path, mut s: Session) -> AppResult<Session> {
     s.updated_at = now();
     let target = jsonl_path_for(data_dir, &s.id, s.created_at)?;
@@ -1257,6 +1310,49 @@ pub fn save(data_dir: &Path, mut s: Session) -> AppResult<Session> {
     write_jsonl_full(&target, &s, source)?;
     archive_legacy_json(data_dir, &s.id);
     Ok(s)
+}
+
+/// 只追加会话元数据更新，不触碰已经落盘的消息历史。
+pub fn update_meta(
+    data_dir: &Path,
+    id: &str,
+    f: impl FnOnce(&mut Session) -> AppResult<()>,
+) -> AppResult<Session> {
+    let mut session = load(data_dir, id)?;
+    f(&mut session)?;
+    let at = now();
+    session.updated_at = at;
+    let path = ensure_jsonl(data_dir, id)?;
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at,
+            title: Some(session.title.clone()),
+            provider_id: Some(session.provider_id.clone()),
+            model: Some(session.model.clone()),
+            system_prompt: session.system_prompt.clone(),
+            prompt_id: session.prompt_id.clone(),
+            stream: Some(session.stream),
+            workdir: session.workdir.clone(),
+            allowed_paths: session.allowed_paths.clone(),
+            runtime_allowed_paths: Some(session.runtime_allowed_paths.clone()),
+            pending_runtime_allowed_paths: Some(session.pending_runtime_allowed_paths.clone()),
+            enabled_tools: session.enabled_tools.clone(),
+            skill_dirs: session.skill_dirs.clone(),
+            reasoning: session.reasoning.clone(),
+            token_stats: session.token_stats,
+            project_id: session.project_id.clone(),
+            run_mode: Some(session.run_mode),
+            global_rules: session.global_rules.clone(),
+            rules_files: session.rules_files.clone(),
+            todos: Some(session.todos.clone()),
+            active_plan: session.active_plan.clone(),
+            pre_plan_mode: session.pre_plan_mode,
+            pending_continue: session.pending_continue.clone(),
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
 }
 
 pub fn delete(data_dir: &Path, id: &str) -> AppResult<()> {
@@ -1342,6 +1438,7 @@ pub fn create_with_source(
         todos: Vec::new(),
         active_plan: None,
         pre_plan_mode: None,
+        pending_continue: None,
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1463,6 +1560,7 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         todos: src.todos.clone(),
         active_plan: src.active_plan.clone(),
         pre_plan_mode: src.pre_plan_mode,
+        pending_continue: src.pending_continue.clone(),
         created_at: now_ts,
         updated_at: now_ts,
     };
@@ -1577,6 +1675,27 @@ pub fn set_pre_plan_mode(data_dir: &Path, id: &str, mode: Option<RunMode>) -> Ap
             at: now(),
             pre_plan_mode: set,
             clear_pre_plan_mode: clear,
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// 写入 / 清空「续作入口」（架构 §4.3）。`Some(_)` = 上一个 Run 非正常结束；
+/// `None` = 正常完成或用户已点 continue，清空它。沿用 append-only MetaUpdate 模式。
+pub fn set_pending_continue(
+    data_dir: &Path,
+    id: &str,
+    pending: Option<PendingContinue>,
+) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    let clear = pending.is_none();
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            pending_continue: pending,
+            clear_pending_continue: clear,
             ..Default::default()
         }),
     )?;
@@ -1830,6 +1949,62 @@ mod tests {
         assert_eq!(after_save.todos[0].status, TodoStatus::Completed);
     }
 
+    #[test]
+    fn update_meta_does_not_rewrite_message_history() {
+        let dir = temp_data_dir("meta-update-history");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        for idx in 0..3 {
+            append_message(
+                &dir,
+                &s.id,
+                Message {
+                    id: new_id(),
+                    role: Role::User,
+                    content: format!("message {idx}"),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: now(),
+                    meta: None,
+                    subagent_call_id: None,
+                },
+            )
+            .unwrap();
+        }
+
+        update_meta(&dir, &s.id, |session| {
+            session.token_stats = Some(TokenStats {
+                input_tokens: 100,
+                run_count: 1,
+                ..Default::default()
+            });
+            session.runtime_allowed_paths = vec![PathBuf::from("/tmp/runtime")];
+            session.pending_runtime_allowed_paths = vec![PathBuf::from("/tmp/pending")];
+            Ok(())
+        })
+        .unwrap();
+
+        let loaded = load(&dir, &s.id).unwrap();
+        assert_eq!(loaded.messages.len(), 3);
+        assert_eq!(loaded.messages[0].content, "message 0");
+        assert_eq!(loaded.token_stats.unwrap().input_tokens, 100);
+        assert_eq!(
+            loaded.runtime_allowed_paths,
+            vec![PathBuf::from("/tmp/runtime")]
+        );
+        assert_eq!(
+            loaded.pending_runtime_allowed_paths,
+            vec![PathBuf::from("/tmp/pending")]
+        );
+
+        let path = crate::storage::sessions_dir::session_jsonl_path(&dir, &s.id);
+        let content = std::fs::read_to_string(&path).unwrap();
+        let message_lines = content
+            .lines()
+            .filter(|line| line.contains("\"type\":\"message\""))
+            .count();
+        assert_eq!(message_lines, 3, "update_meta 不能重写或截断 message 行");
+    }
     #[test]
     fn set_todos_persists_and_load_restores() {
         use protocol::todo::{TodoItem, TodoStatus};
@@ -2136,6 +2311,7 @@ mod tests {
             todos: Vec::new(),
             active_plan: None,
             pre_plan_mode: None,
+            pending_continue: None,
             created_at: now_ts,
             updated_at: now_ts,
         };

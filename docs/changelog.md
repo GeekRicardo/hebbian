@@ -5663,3 +5663,14 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 协议（已 WIP 定义）+ desktop 前端 + hebweb。两 surface 对称（同一份 React）。不破坏兼容：新字段 serde default，老事件 segments 空 → 弹窗退回旧渲染。
 - **验证**: `cargo check --workspace` ✓；`cargo test -p agent-core --lib hitl` 18/18 ✓（含 `rm_compound_always_reapproves_but_benign_segment_is_remembered`）；`tsc && vite build` ✓。**未做**：live UI 点击截图（需真实模型触发一次含 rm 的复合命令审批），建议后续用 hebweb + Playwright 实跑确认渲染。
 - **留尾巴**: ① session 作用域仍不落盘（用户明确说可接受，暂不修）；② 失败的 `tools::read::output_capped_with_offset_limit_hint` 与本次无关，pre-existing；③ 探针 example `permission_probe` 为本次新增调试工具，与产品代码独立。
+
+### 2026-06-02 — 修复会话元数据更新误重写消息历史
+
+- **Why**: 排查 `202605281104-36a19f88` 发现后续模型请求上下文从 260+ 条突然降到十几条，`session.jsonl` 只剩尾部消息；token 统计、运行时允许路径、路径审批这类元数据更新不应全量重写消息历史。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): 新增 `update_meta`，通过追加 `MetaUpdate` 更新会话元数据，并补充回归测试确保不截断 message 行。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): run 结束保存 token 统计和运行时 allowed paths 改为 append-only 元数据更新。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): 当前会话路径审批持久化改为 append-only 元数据更新。
+  - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): token 统计持久化改为 append-only 元数据更新。
+- **影响范围**: agent-core storage / desktop / hebweb / CLI；不改协议字段，不破坏老 session 读取；避免普通元数据保存触碰 `session.jsonl` 消息历史。
+- **留尾巴**: 已被覆盖的旧 session 历史不能从当前 `session.jsonl` 自动恢复，只能依赖现有 `model_io.jsonl` 做人工追溯。

@@ -1929,15 +1929,16 @@ fn approve_path_access(
             let session_id = session_id.clone().ok_or_else(|| {
                 AppError::msg("approve_path_access: this_session 需要 session_id")
             })?;
-            let mut s = sessions::load(&dd, &session_id)?;
-            let mut existing = s.allowed_paths.unwrap_or_default();
-            for p in &paths {
-                if !existing.iter().any(|path| path == p) {
-                    existing.push(p.clone());
+            sessions::update_meta(&dd, &session_id, |s| {
+                let mut existing = s.allowed_paths.take().unwrap_or_default();
+                for p in &paths {
+                    if !existing.iter().any(|path| path == p) {
+                        existing.push(p.clone());
+                    }
                 }
-            }
-            s.allowed_paths = Some(existing);
-            sessions::save(&dd, s)?;
+                s.allowed_paths = Some(existing);
+                Ok(())
+            })?;
         }
         "global" => {
             let mut settings = settings_store::load(&dd);

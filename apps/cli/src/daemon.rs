@@ -231,8 +231,8 @@ impl TurnData {
             parts: self.parts,
             created_at: Utc::now().timestamp_millis(),
             meta: None,
-                subagent_call_id: None,
-            })
+            subagent_call_id: None,
+        })
     }
 }
 
@@ -465,12 +465,10 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 title: title.clone(),
             })
         }
-        EventPayload::MemoryExtracted { session_id, items } => {
-            Some(DaemonEvent::MemoryExtracted {
-                session_id: session_id.clone(),
-                items: items.clone(),
-            })
-        }
+        EventPayload::MemoryExtracted { session_id, items } => Some(DaemonEvent::MemoryExtracted {
+            session_id: session_id.clone(),
+            items: items.clone(),
+        }),
         EventPayload::MemoryExtractionFailed { session_id, reason } => {
             Some(DaemonEvent::MemoryExtractionFailed {
                 session_id: session_id.clone(),
@@ -483,9 +481,9 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             dedup_key,
         } => Some(DaemonEvent::Notice {
             level: match level {
-                protocol::LogLevel::Trace | protocol::LogLevel::Debug | protocol::LogLevel::Info => {
-                    "info"
-                }
+                protocol::LogLevel::Trace
+                | protocol::LogLevel::Debug
+                | protocol::LogLevel::Info => "info",
                 protocol::LogLevel::Warn => "warn",
                 protocol::LogLevel::Error => "error",
             }
@@ -666,8 +664,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
             Some(read_state_tracker),
             settings.general.shell.clone(),
             settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir)
-                .with_cwd(workspace.workdir().to_path_buf()),
+            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
         HookManager::new(external_hooks),
@@ -747,18 +744,19 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
 
     // 把这轮 token 用量累加进 session.json（失败不传染）
     if let Some(usage) = summary.usage {
-        if let Ok(mut sess) = sessions::load(data_dir, session_id) {
+        let delta = TokenStats {
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_tokens: usage.cache_read,
+            cache_creation_tokens: usage.cache_creation,
+            run_count: 1,
+        };
+        let _ = sessions::update_meta(data_dir, session_id, |sess| {
             let mut stats = sess.token_stats.unwrap_or_default();
-            stats.accumulate(TokenStats {
-                input_tokens: usage.input,
-                output_tokens: usage.output,
-                cache_read_tokens: usage.cache_read,
-                cache_creation_tokens: usage.cache_creation,
-                run_count: 1,
-            });
+            stats.accumulate(delta);
             sess.token_stats = Some(stats);
-            let _ = sessions::save(data_dir, sess);
-        }
+            Ok(())
+        });
     }
 
     // 架构 §4.12.5 修订：插队 user message（含 wakeup notification）已经在 wakeup
@@ -815,7 +813,12 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 IpcResponse::err("无活跃 run，无法注入")
             }
         }
-        IpcCommand::Allow { request_id, scope, pattern, extra_patterns } => {
+        IpcCommand::Allow {
+            request_id,
+            scope,
+            pattern,
+            extra_patterns,
+        } => {
             let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
             match tx {
                 None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
@@ -853,7 +856,10 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 }
             }
         }
-        IpcCommand::DenyWithFeedback { request_id, feedback } => {
+        IpcCommand::DenyWithFeedback {
+            request_id,
+            feedback,
+        } => {
             let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
             match tx {
                 None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
@@ -863,7 +869,11 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 }
             }
         }
-        IpcCommand::Answer { request_id, kind, value } => {
+        IpcCommand::Answer {
+            request_id,
+            kind,
+            value,
+        } => {
             let tx = state.pending_questions.lock().unwrap().remove(&request_id);
             match tx {
                 None => IpcResponse::err(format!("未找到 request_id: {request_id}")),

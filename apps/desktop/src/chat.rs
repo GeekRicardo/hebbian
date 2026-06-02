@@ -180,8 +180,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             parts: Vec::new(),
             created_at: chrono::Utc::now().timestamp_millis(),
             meta: args.user_meta.clone(),
-                subagent_call_id: None,
-            };
+            subagent_call_id: None,
+        };
         sessions::append_message(data_dir, &args.session_id, user_msg)?
     };
 
@@ -259,8 +259,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             Some(read_state_tracker),
             settings.general.shell.clone(),
             settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir)
-                .with_cwd(workspace.workdir().to_path_buf()),
+            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
         HookManager::new(external_hooks),
@@ -841,8 +840,8 @@ fn persist_interrupted_assistant_output(
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: Some(MessageMeta::Interrupted),
-                subagent_call_id: None,
-            });
+        subagent_call_id: None,
+    });
     sessions::save(data_dir, session)
 }
 
@@ -887,8 +886,8 @@ fn assistant_message_from_partial(
         parts: assistant_parts,
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
-                subagent_call_id: None,
-            })
+        subagent_call_id: None,
+    })
 }
 
 fn failed_assistant_message(
@@ -1229,24 +1228,22 @@ fn persist_workspace_runtime_dirs(
     session_id: &str,
     workspace: &agent_core::workspace::Workspace,
 ) {
-    let Ok(mut session) = sessions::load(data_dir, session_id) else {
-        return;
-    };
-    session.runtime_allowed_paths = workspace.runtime_announced_snapshot();
-    session.pending_runtime_allowed_paths = workspace.runtime_pending_snapshot();
-    let _ = sessions::save(data_dir, session);
+    let _ = sessions::update_meta(data_dir, session_id, |session| {
+        session.runtime_allowed_paths = workspace.runtime_announced_snapshot();
+        session.pending_runtime_allowed_paths = workspace.runtime_pending_snapshot();
+        Ok(())
+    });
 }
 
 /// 把这一轮 run 的 token delta 累加进 session.json 的 token_stats 字段。
 /// 失败不传染（拿不到 session 文件 / 序列化失败也不能影响主请求结果）。
 fn accumulate_session_tokens(data_dir: &Path, session_id: &str, delta: TokenStats) {
-    let Ok(mut session) = sessions::load(data_dir, session_id) else {
-        return;
-    };
-    let mut stats = session.token_stats.unwrap_or_default();
-    stats.accumulate(delta);
-    session.token_stats = Some(stats);
-    let _ = sessions::save(data_dir, session);
+    let _ = sessions::update_meta(data_dir, session_id, |session| {
+        let mut stats = session.token_stats.unwrap_or_default();
+        stats.accumulate(delta);
+        session.token_stats = Some(stats);
+        Ok(())
+    });
 }
 
 /// 计算指定 session 的上下文用量。优先从 /v1/models 获取模型的 context_length，
@@ -1311,8 +1308,8 @@ pub async fn compact_session(
             before_tokens: result.before_tokens,
             after_tokens: result.after_tokens,
         }),
-                subagent_call_id: None,
-            };
+        subagent_call_id: None,
+    };
     sessions::append_message(data_dir, session_id, marker)?;
 
     Ok(ContextUsageDto {
@@ -1441,8 +1438,7 @@ pub async fn build_preview_payload(
             None,
             settings.general.shell.clone(),
             settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir)
-                .with_cwd(workspace.workdir().to_path_buf()),
+            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
         )
         .await,
     );
@@ -1899,9 +1895,9 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             dedup_key,
         } => Some(EngineEvent::Notice {
             level: match level {
-                protocol::LogLevel::Trace | protocol::LogLevel::Debug | protocol::LogLevel::Info => {
-                    "info"
-                }
+                protocol::LogLevel::Trace
+                | protocol::LogLevel::Debug
+                | protocol::LogLevel::Info => "info",
                 protocol::LogLevel::Warn => "warn",
                 protocol::LogLevel::Error => "error",
             }
@@ -2284,6 +2280,7 @@ mod tests {
                         text: "后说".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "后说".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2320,6 +2317,7 @@ mod tests {
             self.saw_auto_judge
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: "ALLOW".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
@@ -2355,6 +2353,7 @@ mod tests {
                     })
                 }
                 1 => Ok(ModelResponse::Done {
+                    finish: model_gateway::types::FinishReason::Stop,
                     text: "done".to_string(),
                     reasoning: String::new(),
                     attachments: Vec::new(),
@@ -2443,6 +2442,7 @@ mod tests {
                         text: "结束".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "结束".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2523,6 +2523,7 @@ mod tests {
                         text: "后续回答".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "后续回答".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2576,6 +2577,7 @@ mod tests {
                             attachments: Vec::new(),
                         });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "第一段".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2598,6 +2600,7 @@ mod tests {
                         text: "第二段".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "第二段".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2694,6 +2697,7 @@ mod tests {
                         text: "通知后结束".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "通知后结束".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
@@ -2746,6 +2750,7 @@ mod tests {
                 text: "收到后台完成通知".to_string(),
             });
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: "收到后台完成通知".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
@@ -3319,8 +3324,8 @@ mod tests {
                     parts: Vec::new(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
-                subagent_call_id: None,
-            },
+                    subagent_call_id: None,
+                },
             )
             .unwrap();
             sessions::append_message(
@@ -3335,8 +3340,8 @@ mod tests {
                     parts: Vec::new(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
-                subagent_call_id: None,
-            },
+                    subagent_call_id: None,
+                },
             )
             .unwrap();
 
@@ -3412,8 +3417,8 @@ mod tests {
                     parts: Vec::new(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
-                subagent_call_id: None,
-            },
+                    subagent_call_id: None,
+                },
             )
             .unwrap();
             sessions::append_message(
@@ -3428,8 +3433,8 @@ mod tests {
                     parts: Vec::new(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: Some(wakeup_meta.clone()),
-                subagent_call_id: None,
-            },
+                    subagent_call_id: None,
+                },
             )
             .unwrap();
             sessions::append_message(
@@ -3444,8 +3449,8 @@ mod tests {
                     parts: Vec::new(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
-                subagent_call_id: None,
-            },
+                    subagent_call_id: None,
+                },
             )
             .unwrap();
 
