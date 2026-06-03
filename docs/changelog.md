@@ -5683,3 +5683,62 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `handle_close_with_pending_hitl` 入口加守卫，非主窗口（日志查看器等）关闭直接 early-return，不触碰任何 run / HITL 状态。
 - **影响范围**: 仅 desktop crate；不改协议、不动 CLI / hebweb（它们没有日志查看器窗口）。
 - **留尾巴**: 无。
+
+### 2026-06-03 — 新增：模型请求非正常退出归一 + toast 提示 + 可持久化 Continue 入口
+
+- **Why**: 此前各 provider 把「非工具调用结束」无差别塌缩成正常 `Done`——OpenAI 只看 tool_calls 是否为空、Anthropic 只看 `stop_reason=="tool_use"`，`length`/`max_tokens`/`refusal`/`content_filter` 全被静默吞掉，用户看不到「回答被截断 / 被拒答 / 被拦截 / 请求失败」。用户要求：把模型请求非正常退出都用 toast 标出来，并在输入框上方给一个重启后仍可见的「继续」入口。
+- **改动**:
+  - 架构.md：§13 追加 4 条决策、§4.11.4 新增 `FinishReason` 归一映射表。
+  - [crates/model-gateway/src/types.rs](../crates/model-gateway/src/types.rs)：新增 `FinishReason`（Stop/Length/Refusal/ContentFilter/Other），`ModelResponse::Done` 加 `finish` 字段。
+  - [crates/model-gateway/src/protocols/{openai,anthropic,gemini}.rs](../crates/model-gateway/src/protocols/)：各加 `map_*_finish` 把原始 `finish_reason`/`stop_reason`/`finishReason` 归一；流式帧补 `finish_reason` 解析；附单测固化映射。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)：`continue_for_outcome` 把 run 收尾态归一成「续作入口」；非正常结束 emit `Notice`（toast，dedup_key 带 kind）+ 落 `pending_continue`；正常完成清空。
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs)：`Session`/`RolloutMeta`/`MetaUpdate` 加 `pending_continue`，新增 `set_pending_continue` / `continue_kind_str` / `PendingContinue` / `ContinueKind`。
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs)：`GeneralSettings.continue_strategy`（`ResumeLoop` 默认 / `SendContinue` / `Manual`）。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs) + [lib.rs](../apps/desktop/src/lib.rs)：`SendArgs.continue_run` + `send_message` 命令加 `continue_run` 参；为真时**不追加任何 user 消息**、用当前 transcript 原样再起一次 agent_loop（失败请求天然重发、截断让模型接着写），并先清 `pending_continue`。
+  - 前端：新增 `useToastStore` + `ToastRegion`（输入框上方右侧、右→左滑入、新消息往上挤、hover 不关）+ `ContinueBar`（读 `pending_continue`，按策略走自动续跑/发「继续」/聚焦输入框）；notice 到达时当场把 `pending_continue` 同步进内存态让 ContinueBar 立即出现；设置加策略下拉框；移除旧的 `lastRunError` 临时 Continue 建议。
+- **影响范围**: model-gateway（新增 enum + Done 字段，所有构造点已补）、agent-core storage（`pending_continue` 加 `#[serde(default)]`，老 jsonl 向后兼容）、desktop chat/lib + 前端。CLI / hebweb 暂未接 `continue_run` 通路（见留尾巴）。
+- **留尾巴**:
+  - **未完成验证**：本条交付时本地 Bash 分类器（opus-4-8）短时不可用，`agent-core` + `model-gateway` 已 `cargo check` 通过并跑过新单测；但 **desktop crate 的 `cargo check` 与前端 `tsc` 尚未跑通验证**，需恢复后补 `cargo check -p hebbian-desktop` + `pnpm tsc --noEmit` + `pnpm tauri dev` 手测一次完整事件流。
+  - CLI daemon / hebweb 的 `continue_run` 续跑通路未接（desktop 已接）；两 surface 对称性待补。
+  - 截断续写当 transcript 末尾是 assistant 时再起 loop 会产生连续两条 assistant 气泡，依赖 provider prefill 语义，复杂 provider 下的合并未专门处理。
+  - DeepSeek / Gemini 流式路径的 `finish` 暂为 `Stop`（未捕获流式 finish_reason），截断在这两条流式路径下不会 surface。
+
+### 2026-06-03 — 修复：流式 SSE 内的 error 帧被静默吞掉导致 run 不停、Continue 不出
+
+- **Why**: 上一条交付后实测发现：上游 `upstream_error` / `overloaded` 这类错误，Anthropic 用 **HTTP 200 + SSE `event: error` 帧**下发（OpenAI 兼容路径则是 `data: {"error":...}`，HTTP 仍 200）。两边的流式解析器都不认 error 帧 → 当未知事件忽略 → 流"正常"结束 → 返回 `Done{finish:Stop}` → `agent_loop` 误判为成功的空回合：既不停、不报错、也不写 `pending_continue`，于是 toast / ContinueBar 都不出现（用户报的「显示 400 了但 agent_loop 没停、continue 没出来」根因）。
+- **改动**:
+  - [crates/model-gateway/src/providers/anthropic.rs](../crates/model-gateway/src/providers/anthropic.rs)：流式循环里 `current_event_type == "error"` 时直接 `return Err(ModelError::Other)`，把流内错误转成正常的 run 失败路径。
+  - [crates/model-gateway/src/providers/openai.rs](../crates/model-gateway/src/providers/openai.rs)：流式 `data:` 帧若 JSON 顶层有非空 `error` 字段，同样 `return Err`。
+  - 配合既有 `continue_for_outcome`：现在这类错误会走 `Err(e)` → `RunFailed` + `Notice` toast + 落 `network_error` 的 `pending_continue`，ContinueBar 正常出现、点「继续」原样重发。
+  - 同时上一条「未完成验证」留尾巴已补：`cargo check --workspace` 与前端 `tsc --noEmit` 现已跑通。
+- **影响范围**: 仅 model-gateway 两个 provider 的流式错误路径；不改协议、不动其它 provider 的成功路径。
+- **留尾巴**: SSE error 转 Err 目前靠代码路径推断 + 编译验证，尚未用 heb CLI 构造真实上游 error 流做 A/B 复现（需可控故障 provider）；DeepSeek 自定义流式路径未加同款 error 拦截（与上一条 finish=Stop 留尾巴同源）。
+
+### 2026-06-03 — 修复：导出到 Claude 会话后 `claude --resume` 报 "Failed to resume"
+
+- **Why**: `export_claude::build_claude_resume` 生成的 jsonl 缺两样东西，导致 Claude Code 直接拒绝恢复：
+  1. 缺 `{"type":"last-prompt","leafUuid":"...","sessionId":"..."}` 行——Claude Code 的 `--resume` 实现靠这行定位对话链末端，没有就直接报 Failed to resume。
+  2. assistant message 只有 `{role, content}`，缺少 Anthropic API 响应体必须的 `type:"message"`, `stop_reason`, `model`, `id`, `usage` 字段——续聊时首条请求发给 API 可能因格式不完整被拒。
+- **改动**:
+  - [crates/agent-core/src/storage/export_claude.rs](../crates/agent-core/src/storage/export_claude.rs)：
+    - `convert_messages` 末尾追加 `last-prompt` 行，`leafUuid` 指向最后一条消息的 uuid
+    - assistant 消息补充 `type:"message"`, `stop_reason:"end_turn"`, `model:""`, `id:"msg_<uuid>"`, `usage:{0,0}` 字段
+    - 更新 `parent_chain_is_contiguous` 测试：过滤元数据行后验证链，新增 `last-prompt` 指向断言
+- **影响范围**: 仅 agent-core storage 层，不改协议、不改 surface。
+- **留尾巴**: 无。
+
+### 2026-06-03 — 新增 hebisland 独立通知器设计文档与视觉样式稿
+
+- **Why**: 用户希望把 Desktop 进程内现有后台审批通知独立成单独二进制，既能被 Hebbian 调用，也能通过 CLI 直接调用；同时支持自定义图标、主题、描述、多条无边框通知堆叠，并参考 CodeIsland 作为审批选择入口
+- **改动**:
+  - [docs/hebisland.md](hebisland.md): 设计 `hebisland` 的职责边界、Tauri 多窗口方案、Unix socket 双向协议、审批回传路径、右上/右下堆叠规则、迁移路径与验收标准
+  - [docs/hebisland-design.html](hebisland-design.html): 增加可直接打开的 HTML 视觉样式示例，展示玻璃态通知卡片、审批按钮与右上/右下两种堆叠方向
+- **影响范围**: 仅文档与视觉示例；暂不改 runtime、协议、Desktop notch、CLI 或 hebweb。后续实现前需要同步更新 `docs/架构.md` 的 HITL / surface companion / socket 落盘位置 / 决策表
+- **留尾巴**: 未开始实现；后续需要写实施计划，并在正式新增 `apps/island` 前补架构文档与对应测试策略
+
+### 2026-06-03 — 新建对话时若处于项目 tab 则预显示项目 tag
+
+- **Why**: 用户在项目 tab 选中某项目后点新建对话，input 框上没有项目 tag，体感上不知道这条对话会属于哪个项目；但 `newSession` 其实已经会继承 `selectedProjectId`，只是 ChatInput 的 `activeProject` 推导没有跟上
+- **改动**: `ChatInput.tsx:111-115` — `activeProject` 从纯依赖 `currentSession.project_id` 改为三元链：已有对话绑定项目时取其项目；新建对话（`project_id` 为空）且侧栏在项目模式且选中了项目时，fallback 到 `selectedProjectId` 对应的项目；其余情况为 null
+- **影响范围**: 仅 `ChatInput.tsx` 前端展示逻辑，不涉及 `newSession` 业务逻辑、协议、store
+- **留尾巴**: 无

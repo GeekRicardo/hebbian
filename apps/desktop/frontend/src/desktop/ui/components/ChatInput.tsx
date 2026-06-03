@@ -100,13 +100,19 @@ export function ChatInput({
   const setPendingAllowedPaths = useStore((s) => s.setPendingAllowedPaths);
   const currentSession = useStore((s) => s.currentSession);
   const projects = useStore((s) => s.projects);
+  const projectSidebarMode = useStore((s) => s.projectSidebarMode);
+  const selectedProjectId = useStore((s) => s.selectedProjectId);
 
   // activeWorkdir 用 pending 即可：openSession 会同步 pending 值。
   const activeWorkdir = pendingWorkdir;
   const activeAllowedPaths = pendingAllowedPaths;
+  // 已有对话优先取其绑定的项目；新建对话（project_id 为空）时，
+  // 若侧栏在项目模式且选中了项目，则预显示该项目 tag——与 newSession 继承行为对齐。
   const activeProject = currentSession?.project_id
-    ? projects.find((project) => project.id === currentSession.project_id) ?? null
-    : null;
+    ? (projects.find((p) => p.id === currentSession.project_id) ?? null)
+    : projectSidebarMode === "projects" && selectedProjectId
+      ? (projects.find((p) => p.id === selectedProjectId) ?? null)
+      : null;
 
   // 输入框文本 (value) 与附件 (attachments) 故意不绑定 currentSession：
   // 这是用户当前的"草稿"，跨对话保留，切到老对话也不会被清空（老对话已发送的消息
