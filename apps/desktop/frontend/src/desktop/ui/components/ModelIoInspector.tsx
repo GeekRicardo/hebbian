@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   memo,
   useCallback,
@@ -31,6 +32,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "@/desktop/bridge/tauri";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn } from "@/desktop/ui/lib/utils";
+import { useStore } from "@/desktop/ui/store/useStore";
 import { FindBar, findMatches } from "./FindBar";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
 
@@ -106,6 +108,38 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // ─── 压缩分割栏：从 session transcript 中提取 compact_boundary 时间戳 ───
+  const currentSession = useStore((s) => s.currentSession);
+  const compactBoundaryTimestamps = useMemo(() => {
+    if (!currentSession?.messages) return [];
+    return currentSession.messages
+      .filter(
+        (m) => m.role === "marker" && m.meta?.type === "compact_boundary"
+      )
+      .map((m) => m.created_at)
+      .sort((a, b) => a - b);
+  }, [currentSession?.messages]);
+
+  // 计算每个 compact_boundary 在 entries 列表中的分割位置：
+  // 找到最后一个 ts < boundary 的 entry index
+  const dividerAfterIndices = useMemo(() => {
+    if (compactBoundaryTimestamps.length === 0) return new Set<number>();
+    const result = new Set<number>();
+    for (const boundaryTs of compactBoundaryTimestamps) {
+      let lastIdx = -1;
+      for (let i = 0; i < entries.length; i++) {
+        const entryMs = new Date(entries[i].ts).getTime();
+        if (entryMs < boundaryTs) {
+          lastIdx = i;
+        } else {
+          break;
+        }
+      }
+      if (lastIdx >= 0) result.add(lastIdx);
+    }
+    return result;
+  }, [entries, compactBoundaryTimestamps]);
   // ─── Cmd+F 全局搜索状态 ─────────────────────────────────────────────────
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -420,14 +454,24 @@ export const ModelIoInspector = memo(function ModelIoInspector({
               {sidebarOpen && (
                 <ol ref={listRef} className="h-full overflow-y-auto">
                   {entries.map((e, idx) => (
-                    <RequestRow
-                      key={`${e.run_id}-${e.turn}-${idx}`}
-                      entry={e}
-                      index={idx}
-                      active={idx === selected}
-                      matchCount={perEntryMatchCount[idx] ?? 0}
-                      onClick={() => setSelected(idx)}
-                    />
+                    <Fragment key={`${e.run_id}-${e.turn}-${idx}`}>
+                      <RequestRow
+                        entry={e}
+                        index={idx}
+                        active={idx === selected}
+                        matchCount={perEntryMatchCount[idx] ?? 0}
+                        onClick={() => setSelected(idx)}
+                      />
+                      {dividerAfterIndices.has(idx) && (
+                        <li className="flex items-center gap-2 px-2 py-1.5 my-1">
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap select-none">
+                            上下文压缩
+                          </span>
+                          <div className="flex-1 h-px bg-border" />
+                        </li>
+                      )}
+                    </Fragment>
                   ))}
                 </ol>
               )}

@@ -180,7 +180,9 @@ export const api = {
     enabledTools: string[],
     requestId: string,
     onEvent: (e: EngineEvent) => void,
-    meta?: MessageMeta | null
+    meta?: MessageMeta | null,
+    // 「继续」入口（架构 §4.3）：true = 不追加 user 消息，原样再起一次 agent_loop。
+    continueRun?: boolean
   ) => {
     const channel = new Channel<EngineEvent>();
     channel.onmessage = onEvent;
@@ -192,6 +194,7 @@ export const api = {
       enabledTools,
       requestId,
       meta: meta ?? null,
+      continueRun: continueRun ?? false,
       onEvent: channel,
     });
   },

@@ -667,6 +667,32 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
       </FieldRow>
 
       <FieldRow
+        label="回答中断后点「继续」的方式"
+        description="模型回答被截断、被拒、或请求失败时，输入框上方会出现「继续」。「自动续跑」最省心：直接接着上次跑，失败就重发、截断就接着写；也可改成先发一条「继续」消息，或只把光标移到输入框让你自己改写"
+      >
+        <select
+          value={draft.general.continue_strategy ?? "resume_loop"}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              general: {
+                ...draft.general,
+                continue_strategy: e.target.value as
+                  | "resume_loop"
+                  | "send_continue"
+                  | "manual",
+              },
+            })
+          }
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="resume_loop">自动续跑（默认）</option>
+          <option value="send_continue">发一条「继续」消息</option>
+          <option value="manual">手动续（聚焦输入框）</option>
+        </select>
+      </FieldRow>
+
+      <FieldRow
         label="自动模式可用的模型"
         description="勾选的模型在「自动模式」下会自己判断命令安不安全、替你放行；没勾的模型切到自动模式时会提示并转成手动审批。判断质量取决于模型能力，建议用较强的模型"
       >
