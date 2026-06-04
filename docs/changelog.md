@@ -5742,3 +5742,43 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **改动**: `ChatInput.tsx:111-115` — `activeProject` 从纯依赖 `currentSession.project_id` 改为三元链：已有对话绑定项目时取其项目；新建对话（`project_id` 为空）且侧栏在项目模式且选中了项目时，fallback 到 `selectedProjectId` 对应的项目；其余情况为 null
 - **影响范围**: 仅 `ChatInput.tsx` 前端展示逻辑，不涉及 `newSession` 业务逻辑、协议、store
 - **留尾巴**: 无
+
+### 2026-06-03 — 新增：模型调用失败的用户可见自动重试 + 前端内联进度
+
+- **Why**: 上一条把非正常退出做成 toast + Continue 后，用户反馈流内错误（如 `upstream stream disconnected: unexpected EOF`）时 agent_loop「没中断」、转圈几十秒、toast 反复刷屏。排查发现 `agent_loop.rs` 里 `MAX_MODEL_RETRIES`/`model_retry_delay`/`backoff_or_cancel` 三个重试函数**只定义、从未被调用**（另一任务半接的死代码）。用户明确：重试要保留，但**前端要有进度输出**，不是默默转圈 + toast 刷屏。
+- **改动**:
+  - [crates/protocol/src/event.rs](../crates/protocol/src/event.rs)：新增 `EventPayload::ModelRetry { attempt, max, delay_ms, reason }`。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs)：把模型调用（stream/complete）包成内层重试循环——可重试错误（流内 error / overloaded / 网络断 / 5xx / 429）退避后重试，每次 emit `ModelRetry`；耗尽 `MAX_MODEL_RETRIES`(5, 1/2/4/8/16s) 或遇不可重试错误（Cancelled/Suspended/Json）才把 Err 交下游 → `RunFailed` + `pending_continue`（Continue 兜底）。新增 `is_retryable_model_error`。流式回调提取成一次定义、各 attempt 复用。
+  - [apps/desktop/src/engine/mod.rs](../apps/desktop/src/engine/mod.rs) + [chat.rs](../apps/desktop/src/chat.rs)：`EngineEvent::ModelRetry` + 翻译。
+  - 前端：`EngineEvent` 加 `model_retry`；`SessionStream.modelRetry` + `applyEventToSlot` 处理（**清掉失败 attempt 已 emit 的流式 partial**，避免和重试输出叠加；有新 `text_delta` 流出即清进度）；ChatView 在输入框上方内联渲染「⟳ 模型出错，重试中 N/5…」。
+- **影响范围**: protocol（新 event，additive）、agent-core agent_loop、desktop engine/chat、前端 store/ChatView/types。
+- **留尾巴**:
+  - **未完成验证**：本条 protocol crate `cargo check` 通过、前端 `tsc` 通过、agent-core 报错里 0 个本次新符号；但工作区另一任务的 `reasoning_signature`（给 `AssistantEntry` 加字段）此刻把 agent-core/desktop/cli **全部 build 卡住**（27 个构造点已补 18 个），导致无法整体编译 + 无法 heb 真机复现。待该任务落地后补 `cargo check --workspace` + `pnpm tauri dev` 跑一次流内错误复现（mock_provider 已加 `HEBBIAN_MOCK_STREAM_ERROR` 开关备用，复现后应删除该调试开关）。
+  - CLI daemon / hebweb 未接 `ModelRetry` 翻译与 `continue_run`，两 surface 对称性待补。
+
+### 2026-06-04 — 重构上下文压缩策略：微压缩按大小触发 + 自动压缩阈值改 75%
+
+- **Why**: 两个问题同时修：(1) 微压缩（L0）靠累积数量触发（12 条），导致小输出全被压、大输出未被管；(2) L2 自动压缩阈值写死 80k token（与模型实际窗口完全脱钩）。研究 CC 2.1.152 和 Codex 的上下文管理策略后对齐：单条结果超 10k token 才 shadow，不超则永久保留；自动压缩阈值改为模型实际上下文窗口的 75%（架构 §4.1.3 原定 70%，调整为 75%）。
+- **改动**:
+  - `docs/架构.md §4.1.3 / §4.7.2 / §4.7.3`：微压缩从「数量触发 + 按龄淘汰」改为「大小触发 + 即时 shadow」；structural budget_factor 0.7 → 0.75
+  - `crates/agent-core/src/context/microcompact.rs`：重写。`MicrocompactPolicy` 从 `{trigger_threshold, keep_recent}` 改为 `{max_tokens_per_result: 10_000}`；算法从按数量积累改为按单条 token 大小判断；单测 6 个全新
+  - `apps/desktop/src/chat.rs` / `apps/cli/src/daemon.rs` / `apps/web-server/src/session.rs`：`context_window * 0.7` → `* 0.75`
+- **影响范围**: agent-core context 层（不破坏协议 / session 格式）；三个 surface 的 CompactionPolicy 注入
+- **留尾巴**: L2 compact_structural 触发后仍然丢前文（无摘要），长期应改为 LLM 摘要（L3 自动触发），见 docs/cc-compaction-research.md §四 的设计方向
+
+---
+
+## 2026-06-04 — 删除 Desktop 内嵌 island/notch，接入独立 hebisland
+
+- **Why**: Desktop 内嵌了两套通知系统（island 全屏透明窗口 + notch 串行窗口），与独立 `hebisland` 二进制三路并行。全屏透明 `always_on_top` 窗口在 macOS 上导致主窗口事件循环卡死（全屏合成器开销 + 高频 `setIgnoreCursorEvents` 跨进程调用 + `focusable:false` 组合）。`docs/hebisland.md` 的原始设计是「独立二进制 + Unix socket 通信」，实际实现偏离了设计。
+- **改了什么**:
+  - **删除** `apps/desktop/src/island.rs`：全屏透明多卡片岛（Desktop 内嵌版）
+  - **删除** `apps/desktop/src/notch.rs`：旧串行通知系统
+  - **删除** `apps/desktop/frontend/src/desktop/ui/components/IslandApp.tsx` / `IslandCard.tsx` / `NotchApp.tsx` / `NotificationCard.tsx`
+  - **删除** `main.tsx` 中 `/?island=1` 和 `/?notch=1` 路由分支
+  - **新增** `apps/desktop/src/hebisland_client.rs`：hebisland socket 客户端（Unix socket 持久连接 → 推送通知 → 接收 action 回传 → 调 `hitl::resolve_hitl_from_island` 落地审批）
+  - **修改** `apps/desktop/src/lib.rs`：删除 `mod island/notch` + 旧 Tauri 命令注册；在 `setup()` 中初始化 `HebislandClient` 并存入 Tauri 状态
+  - **修改** `apps/desktop/src/chat.rs`：`send_and_save` 的通知路径从 `notch::emit_notification` + `island::emit_notification` 双路调用改为单一 `push_engine_event_to_island(&HebislandClient, &event)`
+  - `apps/desktop/src/hitl.rs`：`resolve_hitl_from_island` 保留，由 `hebisland_client` reader 线程调用
+- **影响范围**: `apps/desktop/src/` 内部重构；不破坏 `agent_core`、协议、存储格式。Desktop 通知现在依赖独立 `hebisland daemon`（~/.hebbian/island.sock）；daemon 未运行时通知静默跳过。
+- **留尾巴**: `hitl.rs` 的 `resolve_hitl_from_island` 函数名仍带 "island" 字样（语义已变为 hebisland action handler），后续可重命名。hebisland daemon 的自动拉起逻辑未实现（Phase 2）。`apps/island/` 的独立前端（IslandApp/IslandCard）和 `apps/desktop` 的已被删掉的 IslandApp/IslandCard 之间有大量重复——后续考虑统一前端构建输出，避免维护两份 Vite 项目。
