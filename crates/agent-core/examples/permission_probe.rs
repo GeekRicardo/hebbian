@@ -251,13 +251,11 @@ impl Probe {
                     continue;
                 }
             }
-            let allowed_by_rule = self
-                .store
-                .allows_path(
-                    Some(PROBE_SESSION_ID),
-                    self.workdir.as_deref(),
-                    &p.to_string_lossy(),
-                );
+            let allowed_by_rule = self.store.allows_path(
+                Some(PROBE_SESSION_ID),
+                self.workdir.as_deref(),
+                &p.to_string_lossy(),
+            );
             if !allowed_by_rule {
                 out.push(p.clone());
             }
@@ -305,10 +303,7 @@ impl Probe {
             "{}",
             bold("== 批量基线（真实 ~/.hebbian/permissions.json + 默认 policy）==")
         );
-        println!(
-            "    workdir = {}",
-            self.workspace.workdir().display()
-        );
+        println!("    workdir = {}", self.workspace.workdir().display());
         let cases = self.baseline_cases();
         println!(
             "{:<3} {:<46} {:<10} {:<8} {:<8} {}",
@@ -333,7 +328,14 @@ impl Probe {
             );
         }
         let summary = format!("\n小结：{} 条，{} 条与预期不符。", cases.len(), mismatch);
-        println!("{}", if mismatch == 0 { green(&summary) } else { yellow(&summary) });
+        println!(
+            "{}",
+            if mismatch == 0 {
+                green(&summary)
+            } else {
+                yellow(&summary)
+            }
+        );
         mismatch
     }
 
@@ -347,19 +349,69 @@ impl Probe {
         let mut v: Vec<(String, String, Value, Expect)> = vec![
             // ── Bash 只读 → 自动放行 ──
             ("ls -la".into(), "Bash".into(), bash("ls -la"), Expect::Auto),
-            ("cat README.md".into(), "Bash".into(), bash("cat README.md"), Expect::Auto),
-            ("grep -R foo src".into(), "Bash".into(), bash("grep -R foo src"), Expect::Auto),
-            ("git status -uno".into(), "Bash".into(), bash("git status -uno"), Expect::Auto),
+            (
+                "cat README.md".into(),
+                "Bash".into(),
+                bash("cat README.md"),
+                Expect::Auto,
+            ),
+            (
+                "grep -R foo src".into(),
+                "Bash".into(),
+                bash("grep -R foo src"),
+                Expect::Auto,
+            ),
+            (
+                "git status -uno".into(),
+                "Bash".into(),
+                bash("git status -uno"),
+                Expect::Auto,
+            ),
             // ── Bash 会写 → 审批 ──
-            ("touch newfile.txt".into(), "Bash".into(), bash("touch newfile.txt"), Expect::Ask),
-            ("echo data > out.txt".into(), "Bash".into(), bash("echo data > out.txt"), Expect::Ask),
-            ("git push origin main".into(), "Bash".into(), bash("git push origin main"), Expect::Ask),
-            ("npm install".into(), "Bash".into(), bash("npm install"), Expect::Ask),
+            (
+                "touch newfile.txt".into(),
+                "Bash".into(),
+                bash("touch newfile.txt"),
+                Expect::Ask,
+            ),
+            (
+                "echo data > out.txt".into(),
+                "Bash".into(),
+                bash("echo data > out.txt"),
+                Expect::Ask,
+            ),
+            (
+                "git push origin main".into(),
+                "Bash".into(),
+                bash("git push origin main"),
+                Expect::Ask,
+            ),
+            (
+                "npm install".into(),
+                "Bash".into(),
+                bash("npm install"),
+                Expect::Ask,
+            ),
             // 脚本解释器：白名单判只读 → 实际自动放行，但用户多半希望审批
-            ("python3 script.py".into(), "Bash".into(), bash("python3 script.py"), Expect::Ask),
+            (
+                "python3 script.py".into(),
+                "Bash".into(),
+                bash("python3 script.py"),
+                Expect::Ask,
+            ),
             // 不可记忆 / 危险复合
-            ("rm -rf build".into(), "Bash".into(), bash("rm -rf build"), Expect::Ask),
-            ("cd /tmp && git commit -am x".into(), "Bash".into(), bash("cd /tmp && git commit -am x"), Expect::Ask),
+            (
+                "rm -rf build".into(),
+                "Bash".into(),
+                bash("rm -rf build"),
+                Expect::Ask,
+            ),
+            (
+                "cd /tmp && git commit -am x".into(),
+                "Bash".into(),
+                bash("cd /tmp && git commit -am x"),
+                Expect::Ask,
+            ),
         ];
         // ── 路径 / 目录审批 ──
         v.push((
@@ -513,10 +565,20 @@ impl Probe {
         for (fp, status) in self.segment_statuses(&j.effects) {
             match status {
                 SegStatus::Whitelisted(pat) => {
-                    println!("    {} {:<30} {}", green("✓"), fp, dim(&format!("已在白名单 «{pat}»，跳过")))
+                    println!(
+                        "    {} {:<30} {}",
+                        green("✓"),
+                        fp,
+                        dim(&format!("已在白名单 «{pat}»，跳过"))
+                    )
                 }
                 SegStatus::Unmemorable => {
-                    println!("    {} {:<30} {}", red("⛔"), fp, red("危险·不可记住，每次必审，不能勾选"))
+                    println!(
+                        "    {} {:<30} {}",
+                        red("⛔"),
+                        fp,
+                        red("危险·不可记住，每次必审，不能勾选")
+                    )
                 }
                 _ => {}
             }
@@ -561,7 +623,12 @@ impl Probe {
                 RuleEffect::Allow,
                 pat.clone(),
             ) {
-                Ok(()) => println!("    {} [{}] «{}»", green("+ 已加入白名单"), scope_label(scope), pat),
+                Ok(()) => println!(
+                    "    {} [{}] «{}»",
+                    green("+ 已加入白名单"),
+                    scope_label(scope),
+                    pat
+                ),
                 Err(e) => println!("    {} {} ({e})", red("写入失败"), pat),
             }
         }
@@ -643,7 +710,10 @@ impl Probe {
             "s" => Some(PermissionScope::Session),
             "p" => {
                 if self.workdir.is_none() {
-                    println!("    {}", red("当前没有 workdir，项目作用域不可用 → 改用会话"));
+                    println!(
+                        "    {}",
+                        red("当前没有 workdir，项目作用域不可用 → 改用会话")
+                    );
                     Some(PermissionScope::Session)
                 } else {
                     Some(PermissionScope::Project)
@@ -701,7 +771,12 @@ impl Probe {
             if line.trim().is_empty() {
                 break;
             }
-            self.judge_interactive("Bash", &json!({ "command": line.trim() }), line.trim(), stdin);
+            self.judge_interactive(
+                "Bash",
+                &json!({ "command": line.trim() }),
+                line.trim(),
+                stdin,
+            );
         }
         println!("bye.");
     }
@@ -726,8 +801,18 @@ fn toggle_select(items: &[Candidate], stdin: &mut impl BufRead) -> Vec<usize> {
     loop {
         println!("    {}", dim("勾选要加入白名单的条目："));
         for (i, c) in items.iter().enumerate() {
-            let mark = if sel[i] { green("[x]") } else { "[ ]".to_string() };
-            println!("      {} {} {}  {}", mark, i + 1, c.label, dim(&format!("→ {}", c.pattern)));
+            let mark = if sel[i] {
+                green("[x]")
+            } else {
+                "[ ]".to_string()
+            };
+            println!(
+                "      {} {} {}  {}",
+                mark,
+                i + 1,
+                c.label,
+                dim(&format!("→ {}", c.pattern))
+            );
         }
         print!(
             "    {} > ",
@@ -739,7 +824,10 @@ fn toggle_select(items: &[Candidate], stdin: &mut impl BufRead) -> Vec<usize> {
             "a" => sel.iter_mut().for_each(|b| *b = true),
             "n" => sel.iter_mut().for_each(|b| *b = false),
             list => {
-                for n in list.split_whitespace().filter_map(|t| t.parse::<usize>().ok()) {
+                for n in list
+                    .split_whitespace()
+                    .filter_map(|t| t.parse::<usize>().ok())
+                {
                     if n >= 1 && n <= sel.len() {
                         sel[n - 1] = !sel[n - 1];
                     }
@@ -785,7 +873,16 @@ fn read_line_opt(stdin: &mut impl BufRead) -> Option<String> {
 
 /// 脚本解释器命令根：被 safe_commands 当只读自动放行，但跑脚本是有副作用的。
 const INTERPRETERS: &[&str] = &[
-    "python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "Rscript", "osascript",
+    "python",
+    "python3",
+    "node",
+    "ruby",
+    "perl",
+    "php",
+    "deno",
+    "bun",
+    "Rscript",
+    "osascript",
 ];
 
 /// 从 tool_call 的 result 反推历史结局：被拒结果是 `"工具调用被拒绝: …"`，
@@ -885,7 +982,13 @@ fn list_recent_sessions(data_dir: &PathBuf, n: usize) -> Vec<String> {
     ids.sort();
     ids.reverse();
     ids.into_iter()
-        .filter(|id| data_dir.join("sessions").join(id).join("session.jsonl").exists())
+        .filter(|id| {
+            data_dir
+                .join("sessions")
+                .join(id)
+                .join("session.jsonl")
+                .exists()
+        })
         .take(n)
         .collect()
 }
@@ -951,9 +1054,7 @@ fn analyze_session(data_dir: &PathBuf, id: &str) -> Option<(String, Stats)> {
                 Outcome::Deny => {
                     if hist == Hist::Approved {
                         stats.regression += 1;
-                        stats
-                            .regressions
-                            .push(call_title(&tc.name, &tc.input));
+                        stats.regressions.push(call_title(&tc.name, &tc.input));
                     } else {
                         stats.deny_ok += 1;
                     }
@@ -988,7 +1089,12 @@ fn analyze_session(data_dir: &PathBuf, id: &str) -> Option<(String, Stats)> {
 fn friction_key(tool: &str, j: &Judgement) -> String {
     if tool == "Bash" {
         if let Some(seg) = j.effects.segments.iter().find(|s| !s.is_readonly) {
-            return seg.fingerprint.split_whitespace().next().unwrap_or(tool).to_string();
+            return seg
+                .fingerprint
+                .split_whitespace()
+                .next()
+                .unwrap_or(tool)
+                .to_string();
         }
     }
     tool.to_string()
@@ -1038,18 +1144,36 @@ fn run_history(n: usize) {
         total.prompt_denied,
         total.prompt_unknown,
     );
-    println!("  「记住」可省的重复审批 {}", green(&total.saved_by_remember.to_string()));
+    println!(
+        "  「记住」可省的重复审批 {}",
+        green(&total.saved_by_remember.to_string())
+    );
     println!(
         "  {} {}",
         bold("同一 turn 内重复审批（allow once 不粘）"),
         red(&total.turn_repeats.to_string())
     );
-    println!("  历史执行但现在会拒（回归）{}", red(&total.regression.to_string()));
+    println!(
+        "  历史执行但现在会拒（回归）{}",
+        red(&total.regression.to_string())
+    );
 
-    print_problem("① 脚本解释器被自动放行（跑脚本却免审批，风险）", &total.interpreter_auto);
-    print_problem("② 写操作被规则静默放行（这些规则在放行会写命令）", &total.write_auto_rule);
-    print_problem("③ 高频「每次都点同意」命令（建议加入白名单）", &total.friction_approved);
-    print_problem("⑤ 同一 turn 内被重复审批的命令（前一步刚批、下一步又弹）", &total.turn_repeat_cmds);
+    print_problem(
+        "① 脚本解释器被自动放行（跑脚本却免审批，风险）",
+        &total.interpreter_auto,
+    );
+    print_problem(
+        "② 写操作被规则静默放行（这些规则在放行会写命令）",
+        &total.write_auto_rule,
+    );
+    print_problem(
+        "③ 高频「每次都点同意」命令（建议加入白名单）",
+        &total.friction_approved,
+    );
+    print_problem(
+        "⑤ 同一 turn 内被重复审批的命令（前一步刚批、下一步又弹）",
+        &total.turn_repeat_cmds,
+    );
     if !total.regressions.is_empty() {
         println!("\n{}", yellow("④ 历史执行过、现在会被拒的命令（回归点）"));
         for r in total.regressions.iter().take(15) {
@@ -1131,11 +1255,19 @@ fn run_repro() {
             let ok = matches!(r2, PermissionDecision::Approved);
             println!(
                 "  {} {:<38} 记忆[{}] → run#2: {}",
-                if ok { green("✓") } else { red("✗ 又弹了") },
+                if ok {
+                    green("✓")
+                } else {
+                    red("✗ 又弹了")
+                },
                 cmd,
                 pattern.clone().unwrap_or_else(|| "<空>".into())
                     + &extras.iter().map(|e| format!(",{e}")).collect::<String>(),
-                if ok { green("自动放行") } else { red("需审批") },
+                if ok {
+                    green("自动放行")
+                } else {
+                    red("需审批")
+                },
             );
 
             // 额外：模拟「重开对话 / 重启 app」——从磁盘重开 store，看规则还在不在。
@@ -1150,7 +1282,11 @@ fn run_repro() {
             println!(
                 "       {} 重开 store(模拟重启/重开对话) → {}",
                 if ok3 { green("✓") } else { red("✗") },
-                if ok3 { green("仍放行") } else { red("又弹了") },
+                if ok3 {
+                    green("仍放行")
+                } else {
+                    red("又弹了")
+                },
             );
         }
     }

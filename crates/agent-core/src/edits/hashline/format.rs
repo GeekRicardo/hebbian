@@ -57,7 +57,7 @@ pub fn render_with_line_numbers_with_path(path: &str, content: &str, hash: &str)
 
 #[cfg(test)]
 mod tests {
- use super::*;
+    use super::*;
 
     #[test]
     fn hash3_is_three_uppercase_hex() {
@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[test]
- fn hash3_empty_content() {
+    fn hash3_empty_content() {
         let h = hash3("");
         assert_eq!(h.len(), 3);
     }
@@ -80,19 +80,19 @@ mod tests {
 
     #[test]
     fn render_with_line_numbers_format() {
-     let out = render_with_line_numbers("alpha\nbeta\n", "ABC");
+        let out = render_with_line_numbers("alpha\nbeta\n", "ABC");
         assert_eq!(out, "¶#ABC\n1:alpha\n2:beta\n");
-}
+    }
 
     #[test]
     fn render_handles_no_trailing_newline() {
-     let out = render_with_line_numbers("only", "ABC");
+        let out = render_with_line_numbers("only", "ABC");
         assert_eq!(out, "¶#ABC\n1:only\n");
     }
 
     #[test]
     fn render_with_path() {
-    let out = render_with_line_numbers_with_path("src/foo.rs", "x\n", "F00");
-  assert_eq!(out, "¶src/foo.rs#F00\n1:x\n");
+        let out = render_with_line_numbers_with_path("src/foo.rs", "x\n", "F00");
+        assert_eq!(out, "¶src/foo.rs#F00\n1:x\n");
     }
 }

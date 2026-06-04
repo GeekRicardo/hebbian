@@ -118,7 +118,17 @@ fn convert_messages(
                 }
                 push(
                     "assistant",
-                    json!({ "role": "assistant", "content": blocks }),
+                    json!({
+                        "id": format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "",
+                        "content": blocks,
+                        "stop_reason": "end_turn",
+                        "stop_sequence": null,
+                        "stop_details": null,
+                        "usage": { "input_tokens": 0, "output_tokens": 0 }
+                    }),
                     msg.created_at,
                 );
                 if !tool_results.is_empty() {
@@ -136,6 +146,16 @@ fn convert_messages(
                 }
             }
         }
+    }
+
+    // claude --resume 读取最后一个 last-prompt 行的 leafUuid 定位对话末端，
+    // 没有这行会直接报 "Failed to resume"。
+    if let Some(leaf_uuid) = lines.last().and_then(|l| l["uuid"].as_str()).map(String::from) {
+        lines.push(json!({
+            "type": "last-prompt",
+            "leafUuid": leaf_uuid,
+            "sessionId": session_uuid,
+        }));
     }
 
     lines
@@ -156,8 +176,12 @@ fn assistant_blocks(msg: &Message, include_thinking: bool) -> (Vec<Value>, Vec<(
             match part {
                 MessagePart::Reasoning { text } => {
                     if include_thinking && !text.trim().is_empty() {
-                        thinking
-                            .push(json!({ "type": "thinking", "thinking": text, "signature": "" }));
+                        // thinking block 需要 API 颁发的 signature，本侧未存储无法伪造；
+                        // 包成 thinking 标签的 text block，续聊时上下文仍可见，且不触发签名校验。
+                        thinking.push(json!({
+                            "type": "text",
+                            "text": format!("<thinking>\n{text}\n</thinking>")
+                        }));
                     }
                 }
                 MessagePart::Text { text } => {
@@ -166,9 +190,15 @@ fn assistant_blocks(msg: &Message, include_thinking: bool) -> (Vec<Value>, Vec<(
                     }
                 }
                 MessagePart::ToolCall {
-                    id, name, input, result, ..
+                    id,
+                    name,
+                    input,
+                    result,
+                    ..
                 } => {
-                    body.push(json!({ "type": "tool_use", "id": id, "name": name, "input": input }));
+                    body.push(
+                        json!({ "type": "tool_use", "id": id, "name": name, "input": input }),
+                    );
                     tool_results.push((id.clone(), tool_result_text(result)));
                 }
             }
@@ -178,7 +208,9 @@ fn assistant_blocks(msg: &Message, include_thinking: bool) -> (Vec<Value>, Vec<(
             body.push(json!({ "type": "text", "text": msg.content }));
         }
         for tc in &msg.tool_calls {
-            body.push(json!({ "type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input }));
+            body.push(
+                json!({ "type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input }),
+            );
             tool_results.push((tc.id.clone(), tool_result_text(&tc.result)));
         }
     }
@@ -238,8 +270,12 @@ mod tests {
                 Role::Assistant,
                 "先读文件",
                 vec![
-                    MessagePart::Reasoning { text: "我应该先 Read".into() },
-                    MessagePart::Text { text: "先读文件".into() },
+                    MessagePart::Reasoning {
+                        text: "我应该先 Read".into(),
+                    },
+                    MessagePart::Text {
+                        text: "先读文件".into(),
+                    },
                     MessagePart::ToolCall {
                         id: "toolu_1".into(),
                         name: "Read".into(),
@@ -260,12 +296,22 @@ mod tests {
     #[test]
     fn parent_chain_is_contiguous() {
         let lines = convert(true);
-        assert_eq!(lines.first().unwrap()["parentUuid"], Value::Null);
-        for w in lines.windows(2) {
+        // 过滤掉 last-prompt 等元数据行，只验证 user/assistant 的链式结构
+        let msg_lines: Vec<&Value> = lines
+            .iter()
+            .filter(|l| matches!(l["type"].as_str(), Some("user") | Some("assistant")))
+            .collect();
+        assert_eq!(msg_lines.first().unwrap()["parentUuid"], Value::Null);
+        for w in msg_lines.windows(2) {
             assert_eq!(w[1]["parentUuid"], w[0]["uuid"], "链断裂");
         }
-        // marker 被跳过：user + assistant + tool_result = 3 行。
-        assert_eq!(lines.len(), 3);
+        // marker 被跳过：user + assistant + tool_result = 3 行，另有 1 行 last-prompt
+        assert_eq!(msg_lines.len(), 3);
+        assert_eq!(lines.len(), 4);
+
+        // last-prompt 指向最后一条消息
+        let last_prompt = lines.iter().rev().find(|l| l["type"] == "last-prompt").unwrap();
+        assert_eq!(last_prompt["leafUuid"], msg_lines.last().unwrap()["uuid"]);
     }
 
     #[test]
@@ -277,7 +323,9 @@ mod tests {
             for b in l["message"]["content"].as_array().into_iter().flatten() {
                 match b["type"].as_str() {
                     Some("tool_use") => uses.push(b["id"].as_str().unwrap().to_string()),
-                    Some("tool_result") => results.push(b["tool_use_id"].as_str().unwrap().to_string()),
+                    Some("tool_result") => {
+                        results.push(b["tool_use_id"].as_str().unwrap().to_string())
+                    }
                     _ => {}
                 }
             }
@@ -288,17 +336,21 @@ mod tests {
 
     #[test]
     fn thinking_toggle_controls_thinking_block() {
-        let has_thinking = |include: bool| {
+        // thinking 内容以 <thinking> text block 形式导出（非 thinking 类型块，避免 API signature 校验）
+        let has_thinking_text = |include: bool| {
             convert(include).iter().any(|l| {
                 l["message"]["content"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .any(|b| b["type"] == "thinking")
+                    .any(|b| {
+                        b["type"] == "text"
+                            && b["text"].as_str().unwrap_or("").contains("<thinking>")
+                    })
             })
         };
-        assert!(has_thinking(true), "开启时应有 thinking 块");
-        assert!(!has_thinking(false), "关闭时不应有 thinking 块");
+        assert!(has_thinking_text(true), "开启时应有 thinking 内容");
+        assert!(!has_thinking_text(false), "关闭时不应有 thinking 内容");
     }
 
     #[test]

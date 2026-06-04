@@ -99,7 +99,9 @@ pub struct ParsedShell {
 /// 整行级危险复合模式（架构 §4.4.2.2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DangerousKind {
-    /// `cd <path> && git ...`：可触发 target 目录的不可信 `.git/hooks`。
+    /// `cd <path> && git <写/触发-hooks 子命令>`：cd 进目标目录后跑会写或会触发
+    /// 仓库 hooks 的 git（commit/push/checkout/merge…），可被目标目录不可信的
+    /// `.git/hooks` / `.git/config` 劫持。只读 git（status/log/diff…）不在此列。
     CdGitCompound,
     /// 写入 `.git/hooks/**` / `.git/config` / `HEAD` / `objects/...` / `refs/...`。
     WriteGitMeta(String),
@@ -1379,7 +1381,11 @@ pub fn detect_dangerous_patterns(commands: &[ParsedCommand]) -> Vec<DangerousKin
         for cmd in commands {
             if cmd.root == "cd" {
                 seen_cd = true;
-            } else if seen_cd && cmd.root == "git" {
+            } else if seen_cd && cmd.root == "git" && !super::safe_commands::is_safe(cmd) {
+                // 只读 git（status/log/diff/show…）不写文件、不触发 commit/push/checkout
+                // 这类会跑仓库 hooks 的操作，cd 进去看一眼无害——不再误判危险。只有
+                // 会写 / 会触发 hooks 的 git 子命令在 cd 后才真有「目标目录 .git/hooks
+                // 被劫持」风险，留它继续往后扫以命中后面的 `git push` 等。
                 kinds.push(DangerousKind::CdGitCompound);
                 break;
             }
@@ -1662,8 +1668,31 @@ mod tests {
 
     #[test]
     fn dangerous_cd_git_compound() {
-        let r = cmd("cd /tmp/evil && git status");
-        assert!(r.dangerous_kinds.contains(&DangerousKind::CdGitCompound));
+        // 写 / 触发 hooks 的 git 子命令在 cd 后才危险
+        for c in [
+            "cd /tmp/evil && git commit -am x",
+            "cd /tmp/evil && git push origin main",
+        ] {
+            assert!(
+                cmd(c)
+                    .dangerous_kinds
+                    .contains(&DangerousKind::CdGitCompound),
+                "{c} 应判危险"
+            );
+        }
+        // 只读 git（status/log/diff）不再误判
+        for c in [
+            "cd /tmp/evil && git status --short",
+            "cd /Users/x/repo && git log --oneline -8",
+            "cd a && git diff HEAD~1",
+        ] {
+            assert!(
+                !cmd(c)
+                    .dangerous_kinds
+                    .contains(&DangerousKind::CdGitCompound),
+                "{c} 不应判危险（只读 git）"
+            );
+        }
     }
 
     #[test]

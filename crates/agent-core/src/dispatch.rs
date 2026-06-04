@@ -569,13 +569,17 @@ impl ToolDispatcher {
                                 &[],
                             )
                             .await;
-                            // force_automode 子开关：把 Ask 折叠成 Deny + reason 头部
-                            // 加 force-automode: 前缀。让"放手跑"模式不被 ASK 打断。
+                            // AutoMode 判官始终做二元决策（架构 §4.4.4）：ASK 折叠为
+                            // Deny，让 agent 自行换路子或汇报，前端不弹审批框。
+                            // force_automode 在 AutoMode 下不再有额外作用；
+                            // 仅保留 reason 前缀标识来源。
                             let raw_label = raw_decision.as_label();
-                            let decision = if force_automode {
-                                raw_decision.collapse_ask_to_deny()
-                            } else {
-                                raw_decision
+                            let decision = match raw_decision {
+                                crate::automode::AutoModeDecision::Ask(reason) => {
+                                    let prefix = if force_automode { "force-automode: " } else { "" };
+                                    crate::automode::AutoModeDecision::Deny(format!("{prefix}{reason}"))
+                                }
+                                other => other,
                             };
                             info!(
                                 target: "permission",

@@ -55,7 +55,7 @@ const SAFE_ROOTS: &[&str] = &[
     "comm",
     "diff",
     "cmp",
-    "jq", // 默认输出 stdout，无原地写（jq 没有 -i）
+    "jq",  // 默认输出 stdout，无原地写（jq 没有 -i）
     "tee", // tee 严格说会写文件，但它没参数时只 stdout——简单起见排除
     // grep 系列
     "grep",
@@ -383,7 +383,13 @@ mod tests {
 
     #[test]
     fn new_readonly_roots_are_safe() {
-        for cmd in ["jq . a.json", "dirname /a/b", "dig example.com", "diff a b", "comm a b"] {
+        for cmd in [
+            "jq . a.json",
+            "dirname /a/b",
+            "dig example.com",
+            "diff a b",
+            "comm a b",
+        ] {
             assert!(is_safe(&first(cmd)), "{cmd} 应判只读");
         }
     }
@@ -403,7 +409,12 @@ mod tests {
 
     #[test]
     fn never_remember_matches_destructive_roots() {
-        for cmd in ["rm -rf x", "dd if=/dev/zero of=x", "mkfs.ext4 /dev/sda1", "shred x"] {
+        for cmd in [
+            "rm -rf x",
+            "dd if=/dev/zero of=x",
+            "mkfs.ext4 /dev/sda1",
+            "shred x",
+        ] {
             assert!(is_never_remember(&first(cmd)), "{cmd} 应判不可记忆");
         }
     }

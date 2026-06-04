@@ -23,8 +23,8 @@ use common::{AppError, AppResult};
 
 use crate::workspace::Workspace;
 
-pub mod metadata;
 pub mod hashline;
+pub mod metadata;
 
 use metadata::{load_metadata, save_metadata, worktree_dir, EditEntry};
 

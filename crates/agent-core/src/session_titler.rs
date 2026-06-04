@@ -211,10 +211,12 @@ mod tests {
         ) -> Result<ModelResponse, ModelError> {
             *self.last_req.lock().unwrap() = Some(req);
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: self.reply.clone(),
                 reasoning: String::new(),
                 attachments: vec![],
                 usage: Usage::default(),
+                reasoning_signature: String::new(),
             })
         }
         async fn stream(

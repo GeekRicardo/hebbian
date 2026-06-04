@@ -65,10 +65,7 @@ fn apply_hunk(
         return Ok(());
     }
 
-    if h.start_line == 0
-        || h.end_line < h.start_line
-        || h.end_line > lines.len()
-    {
+    if h.start_line == 0 || h.end_line < h.start_line || h.end_line > lines.len() {
         return Err(ApplyError::OutOfRange(format!(
             "lines {}..={} (file has {} lines)",
             h.start_line,
@@ -78,15 +75,12 @@ fn apply_hunk(
     }
 
     let start = h.start_line - 1; // 转 0-based
-    let end = h.end_line;         // exclusive
+    let end = h.end_line; // exclusive
     lines.splice(start..end, expanded);
     Ok(())
 }
 
-fn expand_body(
-    body: &[HunkLine],
-    original_lines: &[&str],
-) -> Result<Vec<String>, ApplyError> {
+fn expand_body(body: &[HunkLine], original_lines: &[&str]) -> Result<Vec<String>, ApplyError> {
     let mut out = Vec::with_capacity(body.len());
     for hl in body {
         match hl {
@@ -123,7 +117,11 @@ fn split_lines(content: &str) -> Vec<&str> {
 
 fn join_lines(lines: &[String], trailing_newline: bool) -> String {
     if lines.is_empty() {
-        return if trailing_newline { "\n".to_string() } else { String::new() };
+        return if trailing_newline {
+            "\n".to_string()
+        } else {
+            String::new()
+        };
     }
     let mut out = lines.join("\n");
     if trailing_newline {

@@ -80,7 +80,8 @@ impl SubagentRunner {
                     .map(Vec::as_slice),
             ),
         };
-        self.run_nested_inner(def, initial_transcript, /*background*/ false).await
+        self.run_nested_inner(def, initial_transcript, /*background*/ false)
+            .await
     }
 
     /// 后台模式：生成 task_id → 注册 BgSubagentTask → arm WakeupScheduler →
@@ -103,8 +104,7 @@ impl SubagentRunner {
             "subagent-{}",
             crate::storage::sessions_dir::new_session_id()
         );
-        let registry =
-            crate::tools::background::registry_for_session(&parent_session_id);
+        let registry = crate::tools::background::registry_for_session(&parent_session_id);
         let bg_task = registry.register_subagent(task_id.clone());
 
         crate::wakeup::WakeupScheduler::global().arm_bg_task(
@@ -195,10 +195,7 @@ impl SubagentRunner {
         // 子 model_io.jsonl 落盘（架构 §4.4.11.2）：与父子目录对称，给调试 / 审计用。
         // 没这个落盘子 NestedRun 完全无痕迹，看不到「子模型实际收/发了什么」。
         // 默认 on（与 surface 行为一致），HEBBIAN_DUMP_MODEL_IO=0 时关。
-        let model_io_dump = match (
-            self.ctx.data_dir.as_deref(),
-            child_session_id.as_deref(),
-        ) {
+        let model_io_dump = match (self.ctx.data_dir.as_deref(), child_session_id.as_deref()) {
             (Some(dd), Some(sid)) => {
                 crate::model_io_dump::open_for_session_if_enabled(dd, sid).await
             }
@@ -389,6 +386,7 @@ mod tests {
             TranscriptEntry::Assistant(AssistantEntry {
                 text: "plan: do A then B".to_string(),
                 reasoning: String::new(),
+                reasoning_signature: String::new(),
                 tool_calls: vec![ToolCall {
                     id: "tc-1".to_string(),
                     name: "Read".to_string(),

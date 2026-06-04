@@ -80,7 +80,10 @@ fn scan_one(path: &Path) -> Option<ClaudeSessionInfo> {
         };
         match v.get("type").and_then(Value::as_str) {
             Some("custom-title") => {
-                custom_title = v.get("customTitle").and_then(Value::as_str).map(String::from);
+                custom_title = v
+                    .get("customTitle")
+                    .and_then(Value::as_str)
+                    .map(String::from);
             }
             Some("user") | Some("assistant") => {
                 count += 1;
@@ -116,7 +119,9 @@ fn scan_one(path: &Path) -> Option<ClaudeSessionInfo> {
     Some(ClaudeSessionInfo {
         path: path.to_path_buf(),
         uuid,
-        title: custom_title.or(first_user_title).unwrap_or_else(|| "（无标题）".into()),
+        title: custom_title
+            .or(first_user_title)
+            .unwrap_or_else(|| "（无标题）".into()),
         cwd,
         message_count: count,
         modified_ms,
@@ -155,7 +160,10 @@ pub fn parse_claude_jsonl(content: &str) -> AppResult<ParsedClaudeSession> {
 
         match typ {
             "custom-title" => {
-                custom_title = v.get("customTitle").and_then(Value::as_str).map(String::from);
+                custom_title = v
+                    .get("customTitle")
+                    .and_then(Value::as_str)
+                    .map(String::from);
             }
             "user" => {
                 // 先看是不是工具结果回传：是则回填到 owner，不产生独立消息。
@@ -208,9 +216,15 @@ pub fn parse_claude_jsonl(content: &str) -> AppResult<ParsedClaudeSession> {
 
     let workdir = (!cwd.trim().is_empty()).then(|| PathBuf::from(&cwd));
     Ok(ParsedClaudeSession {
-        title: custom_title.or(first_user_title).unwrap_or_else(|| "（导入）".into()),
+        title: custom_title
+            .or(first_user_title)
+            .unwrap_or_else(|| "（导入）".into()),
         workdir,
-        model: if model.is_empty() { "claude".into() } else { model },
+        model: if model.is_empty() {
+            "claude".into()
+        } else {
+            model
+        },
         messages,
     })
 }
@@ -244,7 +258,9 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                 Some("thinking") => {
                     if let Some(t) = b.get("thinking").and_then(Value::as_str) {
                         if !t.trim().is_empty() {
-                            parts.push(MessagePart::Reasoning { text: t.to_string() });
+                            parts.push(MessagePart::Reasoning {
+                                text: t.to_string(),
+                            });
                         }
                     }
                 }
@@ -252,13 +268,23 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                     if let Some(t) = b.get("text").and_then(Value::as_str) {
                         if !t.trim().is_empty() {
                             text_parts.push(t.to_string());
-                            parts.push(MessagePart::Text { text: t.to_string() });
+                            parts.push(MessagePart::Text {
+                                text: t.to_string(),
+                            });
                         }
                     }
                 }
                 Some("tool_use") => {
-                    let id = b.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let name = b.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+                    let id = b
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let name = b
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
                     let input = b.get("input").cloned().unwrap_or(Value::Null);
                     parts.push(MessagePart::ToolCall {
                         id: id.clone(),
@@ -294,7 +320,10 @@ fn fill_result(msg: &mut Message, id: &str, text: String) {
         tc.result = Some(text.clone());
     }
     for part in &mut msg.parts {
-        if let MessagePart::ToolCall { id: pid, result, .. } = part {
+        if let MessagePart::ToolCall {
+            id: pid, result, ..
+        } = part
+        {
             if pid == id {
                 *result = Some(text);
                 break;
@@ -332,7 +361,9 @@ fn plain_message(role: Role, content: String, ts: i64) -> Message {
 
 /// ISO8601（`2026-05-29T08:04:06.795Z`）→ 毫秒。
 fn parse_iso_millis(s: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp_millis())
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.timestamp_millis())
 }
 
 /// 按字符（非字节）截断标题，避免切碎多字节中文。

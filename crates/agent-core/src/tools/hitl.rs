@@ -451,8 +451,7 @@ impl HitlGate {
             let sid = self.session_id.as_deref();
             let wd = self.workdir.as_deref();
             let store_hit = if has_segments {
-                let r =
-                    store.find_for_segments_diagnostic(sid, wd, tool_name, &effects.segments);
+                let r = store.find_for_segments_diagnostic(sid, wd, tool_name, &effects.segments);
                 info!(
                     target: "permission",
                     tool = %tool_name,
@@ -578,10 +577,9 @@ impl HitlGate {
                     ApprovalSegmentStatus::Unmemorable
                 } else {
                     let learned_hit = learned.auto_approved_tools.iter().any(|n| n == tool_name)
-                        || learned
-                            .auto_approved_patterns
-                            .iter()
-                            .any(|(t, p)| t == tool_name && fingerprint_matches(&seg.fingerprint, p));
+                        || learned.auto_approved_patterns.iter().any(|(t, p)| {
+                            t == tool_name && fingerprint_matches(&seg.fingerprint, p)
+                        });
                     let store_hit = self.permission_store.as_ref().is_some_and(|store| {
                         matches!(
                             store
@@ -1637,8 +1635,10 @@ mod tests {
         );
 
         // 良性段 pnpm 已记 → 不含 rm 的命令直接放行。
-        let benign =
-            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "pnpm install"}));
+        let benign = crate::effects::analyze_effects(
+            "Bash",
+            &serde_json::json!({"command": "pnpm install"}),
+        );
         assert!(
             matches!(gate.check("Bash", &benign), PermissionDecision::Approved),
             "记住的良性段应让不含 rm 的命令免审"
@@ -1745,7 +1745,12 @@ mod tests {
         );
         assert!(
             store
-                .list(PermissionScope::Project, None, Some(&proj_a), RuleEffect::Allow)
+                .list(
+                    PermissionScope::Project,
+                    None,
+                    Some(&proj_a),
+                    RuleEffect::Allow
+                )
                 .contains(&"Bash(cargo build)".to_string()),
             "project 规则应落盘到 permissions.json"
         );

@@ -117,8 +117,14 @@ fn other_tools_remain_identical_across_backends() {
     for name in ["Bash", "Grep", "TodoWrite", "WebSearch"] {
         let (_, sr_desc, sr_schema) = find(&sr, name);
         let (_, hl_desc, hl_schema) = find(&hl, name);
-        assert_eq!(sr_desc, hl_desc, "{name} description 不应被 edit_backend 影响");
-        assert_eq!(sr_schema, hl_schema, "{name} schema 不应被 edit_backend 影响");
+        assert_eq!(
+            sr_desc, hl_desc,
+            "{name} description 不应被 edit_backend 影响"
+        );
+        assert_eq!(
+            sr_schema, hl_schema,
+            "{name} schema 不应被 edit_backend 影响"
+        );
     }
 }
 

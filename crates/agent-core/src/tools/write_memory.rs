@@ -88,10 +88,7 @@ impl Tool for WriteMemoryTool {
         // scope 解析 + project 降级：未绑定项目时 project → global。
         let (scope, note) = match requested {
             "project" if self.project_workdir.is_some() => (MemoryScope::Project, ""),
-            "project" => (
-                MemoryScope::Global,
-                "（当前对话未绑定项目，已改记到全局）",
-            ),
+            "project" => (MemoryScope::Global, "（当前对话未绑定项目，已改记到全局）"),
             _ => (MemoryScope::Global, ""),
         };
         let workdir = match scope {

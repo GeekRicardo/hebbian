@@ -212,7 +212,10 @@ pub fn default_tools(
             mem_data_dir.clone(),
             project_workdir.clone(),
         )),
-        Box::new(write_memory::WriteMemoryTool::new(mem_data_dir, project_workdir)),
+        Box::new(write_memory::WriteMemoryTool::new(
+            mem_data_dir,
+            project_workdir,
+        )),
     ]);
 
     // Task 工具仅在加载到至少一个启用的 subagent 定义时注入（架构 §13 决策）：

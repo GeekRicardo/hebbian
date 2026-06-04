@@ -62,17 +62,16 @@ async fn read_then_edit_roundtrip() {
 
     // 2) Edit：替换第 4-6 行
     mark_read(&tracker, &file).await;
-    let patch = format!("¶{}#{h1}\n4 6\n+L4-new\n+L5-new\n+L6-new\n", file.to_string_lossy());
-    edit_tool
-        .execute(json!({ "patch": patch }))
-        .await
-        .unwrap();
+    let patch = format!(
+        "¶{}#{h1}\n4 6\n+L4-new\n+L5-new\n+L6-new\n",
+        file.to_string_lossy()
+    );
+    edit_tool.execute(json!({ "patch": patch })).await.unwrap();
 
     let after = std::fs::read_to_string(&file).unwrap();
     let expected: String = [
-        "line 1", "line 2", "line 3",
-        "L4-new", "L5-new", "L6-new",
-        "line 7", "line 8", "line 9", "line 10",
+        "line 1", "line 2", "line 3", "L4-new", "L5-new", "L6-new", "line 7", "line 8", "line 9",
+        "line 10",
     ]
     .iter()
     .map(|s| format!("{s}\n"))

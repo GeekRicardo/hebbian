@@ -51,6 +51,24 @@ pub struct GeneralSettings {
     /// （见 `automode::is_allowed_model`），所以带日期后缀的真实 id 也能命中。
     #[serde(default = "default_automode_models")]
     pub automode_models: Vec<String>,
+    /// Run 非正常结束后，ContinueBar 上点 continue 的恢复方式（架构 §7.3）。
+    #[serde(default)]
+    pub continue_strategy: ContinueStrategy,
+}
+
+/// 点「继续」的恢复方式（架构 §7.3）。这是一个 UI 行为偏好——后端只存储，
+/// 由 surface 据此决定点击行为；不影响 agent_loop 本身。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinueStrategy {
+    /// 默认：直接用当前 transcript 原样再起一次 agent_loop，不追加任何隐式消息。
+    /// 失败请求→天然重发；截断→模型接着写。
+    #[default]
+    ResumeLoop,
+    /// 主动发一条 user「继续」消息再跑（明确推一把）。
+    SendContinue,
+    /// 不自动跑，只把光标聚焦输入框，让用户改 prompt 再发。
+    Manual,
 }
 
 /// AutoMode 判官默认白名单。用户未配置时用这个；设置 UI 也以此为初始勾选。
@@ -71,6 +89,7 @@ impl Default for GeneralSettings {
             log_enabled: false,
             edit_backend: EditBackend::default(),
             automode_models: default_automode_models(),
+            continue_strategy: ContinueStrategy::default(),
         }
     }
 }

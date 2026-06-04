@@ -373,7 +373,8 @@ mod tests {
 
     #[test]
     fn empty_memory_index_omits_block() {
-        let snap = EnvironmentSnapshot::from_workspace(&Workspace::new(PathBuf::from("/tmp"), vec![]));
+        let snap =
+            EnvironmentSnapshot::from_workspace(&Workspace::new(PathBuf::from("/tmp"), vec![]));
         let out = snap.render();
         assert!(!out.contains("<memory-index>"), "空清单不应渲染块");
     }

@@ -547,24 +547,21 @@ impl PermissionStore {
         // 阶段 2：全部「会写段」命中 allow → Allow（只读段免匹配）。
         // 没有会写段时 first_allow 仍为 None → 返回 None，交给 ReadOnly 短路。
         let mut first_allow: Option<PermissionMatch> = None;
-        let all_writable_allowed = segments
-            .iter()
-            .filter(|seg| !seg.is_readonly)
-            .all(|seg| {
-                let matched = allow
-                    .iter()
-                    .find(|(_, r)| segment_hits(r, tool_name, &seg.fingerprint, &seg.write_targets));
-                if let Some((scope, r)) = matched {
-                    first_allow.get_or_insert_with(|| PermissionMatch {
-                        effect: RuleEffect::Allow,
-                        scope: *scope,
-                        pattern: r.raw.clone(),
-                    });
-                    true
-                } else {
-                    false
-                }
-            });
+        let all_writable_allowed = segments.iter().filter(|seg| !seg.is_readonly).all(|seg| {
+            let matched = allow
+                .iter()
+                .find(|(_, r)| segment_hits(r, tool_name, &seg.fingerprint, &seg.write_targets));
+            if let Some((scope, r)) = matched {
+                first_allow.get_or_insert_with(|| PermissionMatch {
+                    effect: RuleEffect::Allow,
+                    scope: *scope,
+                    pattern: r.raw.clone(),
+                });
+                true
+            } else {
+                false
+            }
+        });
         if all_writable_allowed {
             return first_allow;
         }

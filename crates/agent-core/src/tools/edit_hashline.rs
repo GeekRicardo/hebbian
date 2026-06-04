@@ -82,9 +82,9 @@ impl Tool for EditHashlineTool {
                 )));
             }
 
-            let meta = fs::metadata(&file_path)
-                .await
-                .map_err(|e| AppError::msg(format!("Edit: 读取元数据失败 {}: {e}", section.path)))?;
+            let meta = fs::metadata(&file_path).await.map_err(|e| {
+                AppError::msg(format!("Edit: 读取元数据失败 {}: {e}", section.path))
+            })?;
 
             let current_mtime_ms = meta
                 .modified()
@@ -223,7 +223,10 @@ mod tests {
         let patch = format!("¶{}#000\n1 1\n+y\n", p.to_string_lossy());
         let err = tool.execute(json!({ "patch": patch })).await.unwrap_err();
         let s = err.to_string().to_lowercase();
-        assert!(s.contains("stale") || s.contains("hash"), "stale hash 必须报错: {err}");
+        assert!(
+            s.contains("stale") || s.contains("hash"),
+            "stale hash 必须报错: {err}"
+        );
     }
 
     #[tokio::test]

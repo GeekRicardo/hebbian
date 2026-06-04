@@ -317,6 +317,19 @@ pub enum ContinueKind {
     Other,
 }
 
+/// [`ContinueKind`] 的稳定小写串，用于事件 dedup_key 传递给 surface（与前端
+/// `ContinueKind` 字面量一致）。
+pub fn continue_kind_str(kind: ContinueKind) -> &'static str {
+    match kind {
+        ContinueKind::Truncated => "truncated",
+        ContinueKind::Refused => "refused",
+        ContinueKind::Filtered => "filtered",
+        ContinueKind::NetworkError => "network_error",
+        ContinueKind::MaxIterations => "max_iterations",
+        ContinueKind::Other => "other",
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: String,

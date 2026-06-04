@@ -256,10 +256,7 @@ pub trait CoreClient: Send + Sync {
     // === 同步 API：Subagents（架构 §4.4.11.5 / P5）===
 
     /// 列出所有 subagent 定义，合并两层 enabled 状态。`workdir=None` 时只查全局层。
-    fn list_subagents(
-        &self,
-        workdir: Option<&Path>,
-    ) -> Vec<subagents_store::SubagentDefinition>;
+    fn list_subagents(&self, workdir: Option<&Path>) -> Vec<subagents_store::SubagentDefinition>;
     /// 读单个 subagent 的完整定义（已解析）。
     fn get_subagent(&self, name: &str) -> Result<subagents_store::SubagentDefinition, CoreError>;
     /// 写 subagent 定义文件（frontmatter + body 原始内容）。写前校验 frontmatter 合法性。

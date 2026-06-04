@@ -323,7 +323,6 @@ fn truncate_bytes(s: &str, limit: usize) -> String {
     format!("{}\n…[已截断，共 {} 字节]", &s[..end], s.len())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

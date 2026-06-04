@@ -381,10 +381,12 @@ mod tests {
             _cancel: CancelFlag,
         ) -> Result<ModelResponse, ModelError> {
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: self.output.to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
+                reasoning_signature: String::new(),
             })
         }
 

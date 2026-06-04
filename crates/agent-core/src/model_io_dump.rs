@@ -203,12 +203,15 @@ pub fn response_to_json(resp: &Result<ModelResponse, ModelError>) -> Value {
             reasoning,
             attachments,
             usage,
+            finish,
+            reasoning_signature: _,
         }) => json!({
             "type": "Done",
             "text": text,
             "reasoning": reasoning,
             "attachments": attachments.iter().map(attachment_meta).collect::<Vec<_>>(),
             "usage": usage,
+            "finish": format!("{finish:?}"),
         }),
         Ok(ModelResponse::ToolCalls {
             text,
@@ -216,6 +219,7 @@ pub fn response_to_json(resp: &Result<ModelResponse, ModelError>) -> Value {
             calls,
             attachments,
             usage,
+            reasoning_signature: _,
         }) => json!({
             "type": "ToolCalls",
             "text": text,
@@ -242,6 +246,7 @@ fn transcript_entry_to_json(entry: &TranscriptEntry) -> Value {
             text,
             reasoning,
             tool_calls,
+            ..
         }) => json!({
             "role": "assistant",
             "content": text,
@@ -315,6 +320,7 @@ mod tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: "hi".into(),
                     reasoning: "deliberation".into(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "t1".into(),
                         name: "Read".into(),
@@ -357,8 +363,10 @@ mod tests {
     #[test]
     fn response_done_serializes_with_usage() {
         let resp = Ok(ModelResponse::Done {
+            finish: model_gateway::types::FinishReason::Stop,
             text: "done".into(),
             reasoning: "thought".into(),
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage: Usage {
                 input_tokens: 100,
@@ -379,6 +387,7 @@ mod tests {
         let resp = Ok(ModelResponse::ToolCalls {
             text: String::new(),
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             calls: vec![ToolCall {
                 id: "id-1".into(),
                 name: "Bash".into(),

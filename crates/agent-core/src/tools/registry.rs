@@ -131,8 +131,7 @@ mod tests {
         );
 
         // definitions + mcp_definitions 合并后无重名
-        let mut combined: Vec<String> =
-            defs.into_iter().map(|d| d.name).collect();
+        let mut combined: Vec<String> = defs.into_iter().map(|d| d.name).collect();
         combined.extend(reg.mcp_definitions().into_iter().map(|d| d.name));
         let mut sorted = combined.clone();
         sorted.sort();

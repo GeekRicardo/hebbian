@@ -489,9 +489,19 @@ mod tests {
 
     #[test]
     fn bash_cd_git_compound_flagged() {
-        let e = analyze_effects("Bash", &json!({"command": "cd /tmp/evil && git status"}));
+        // 写 / 触发 hooks 的 git 子命令在 cd 后才危险
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "cd /tmp/evil && git commit -am x"}),
+        );
         assert!(e.has_dangerous_pattern());
         assert!(e.dangerous_kinds.iter().any(|k| k == "cd-git-compound"));
+        // 只读 git（status/log）不再误判为危险复合
+        let ro = analyze_effects(
+            "Bash",
+            &json!({"command": "cd /tmp/evil && git status --short"}),
+        );
+        assert!(!ro.dangerous_kinds.iter().any(|k| k == "cd-git-compound"));
     }
 
     #[test]

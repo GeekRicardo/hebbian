@@ -109,17 +109,12 @@ impl MemoryLogEntry {
 // ── 路径定位 ───────────────────────────────────────────────────────────────
 
 /// 某作用域的 memory 根目录。`Project` 必须给 workdir，否则报错（降级由调用方决定）。
-fn memory_root(
-    data_dir: &Path,
-    workdir: Option<&Path>,
-    scope: MemoryScope,
-) -> AppResult<PathBuf> {
+fn memory_root(data_dir: &Path, workdir: Option<&Path>, scope: MemoryScope) -> AppResult<PathBuf> {
     match scope {
         MemoryScope::Global => Ok(data_dir.join("memory")),
         MemoryScope::Project => {
-            let wd = workdir.ok_or_else(|| {
-                AppError::msg("project 记忆需要 workdir，但当前对话未绑定项目")
-            })?;
+            let wd = workdir
+                .ok_or_else(|| AppError::msg("project 记忆需要 workdir，但当前对话未绑定项目"))?;
             Ok(projects::project_dir(data_dir, wd).join("memory"))
         }
     }
@@ -240,8 +235,7 @@ pub fn read(
     mem_log!("Read", "{id} level={level:?}");
     let root = memory_root(data_dir, workdir, scope)?;
     let path = record_path(&root, &slug);
-    let bytes = lock::read_locked(&path)
-        .map_err(|_| AppError::msg(format!("记忆不存在：{id}")))?;
+    let bytes = lock::read_locked(&path).map_err(|_| AppError::msg(format!("记忆不存在：{id}")))?;
     let text = String::from_utf8_lossy(&bytes);
     let rec = parse_md(&text).ok_or_else(|| AppError::msg(format!("记忆解析失败：{id}")))?;
     match level {
@@ -452,7 +446,16 @@ mod tests {
     #[test]
     fn read_overview_falls_back_to_full_when_no_overview() {
         let dd = tmp_dir();
-        write(&dd, None, MemoryScope::Global, "k", "c", "s", "只有正文没有概览段").unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "k",
+            "c",
+            "s",
+            "只有正文没有概览段",
+        )
+        .unwrap();
         let ov = read(&dd, None, "global/k", MemoryLevel::Overview).unwrap();
         assert!(ov.contains("只有正文"));
     }
@@ -495,7 +498,16 @@ mod tests {
     #[test]
     fn summary_newlines_flattened() {
         let dd = tmp_dir();
-        write(&dd, None, MemoryScope::Global, "k", "c", "a\nb\n  c", "body").unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "k",
+            "c",
+            "a\nb\n  c",
+            "body",
+        )
+        .unwrap();
         let l0 = list_l0(&dd, None, MemoryScope::Global).unwrap();
         assert_eq!(l0[0].summary, "a b c", "summary 换行应压成空格");
     }

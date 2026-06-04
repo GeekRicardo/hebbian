@@ -88,10 +88,7 @@ pub async fn extract_for_session(
         new_messages.len()
     );
 
-    let project_workdir = session
-        .workdir
-        .as_deref()
-        .and_then(memory_project_workdir);
+    let project_workdir = session.workdir.as_deref().and_then(memory_project_workdir);
 
     // 现有 L0 清单（global + project）作为去重上下文喂给模型。
     let existing = collect_existing_l0(data_dir, project_workdir.as_deref());
@@ -106,7 +103,13 @@ pub async fn extract_for_session(
         Ok(raw) => raw,
         Err(e) => {
             mem_warn!("Extract", "失败 session={session_id}：{e}");
-            log_outcome(data_dir, project_workdir.as_deref(), "failed", None, &e.to_string());
+            log_outcome(
+                data_dir,
+                project_workdir.as_deref(),
+                "failed",
+                None,
+                &e.to_string(),
+            );
             return Err(e);
         }
     };
@@ -199,7 +202,13 @@ fn persist_candidates(
             (MemoryScope::Global, None)
         };
         match memory::write(
-            data_dir, workdir, scope, &c.key, &c.category, &c.summary, &c.content,
+            data_dir,
+            workdir,
+            scope,
+            &c.key,
+            &c.category,
+            &c.summary,
+            &c.content,
         ) {
             Ok(l0) => written.push(MemoryWrite {
                 id: l0.id,
@@ -409,4 +418,3 @@ mod tests {
         assert!(p.contains("一律用 scope=\"global\""));
     }
 }
-
