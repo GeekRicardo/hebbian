@@ -95,6 +95,7 @@ pub fn build_prompt(req: &ModelRequest, tools: &[ToolDefinition]) -> String {
                 text,
                 reasoning,
                 tool_calls,
+                ..
             }) => {
                 out.push_str("### Assistant\n");
                 if !reasoning.is_empty() {

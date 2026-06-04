@@ -45,6 +45,9 @@ pub struct AssistantEntry {
     /// chat.deepseek.com `<think>` block 等），下一轮重发时回填给模型。
     /// 不参与 UI 显示——UI 走 `MessagePart::Reasoning`。
     pub reasoning: String,
+    /// Anthropic thinking block 的签名（API 颁发，回填时必须原样带回，否则 400）。
+    /// 非 Anthropic provider 为空字符串。
+    pub reasoning_signature: String,
     pub tool_calls: Vec<ToolCall>,
 }
 
@@ -94,6 +97,11 @@ pub enum ModelStreamEvent {
     ReasoningDelta {
         text: String,
     },
+    /// Anthropic thinking block 的签名（流式路径下 `signature_delta` 帧，一次性整体到达）。
+    /// 其他 provider 不发此事件。
+    ReasoningSignature {
+        signature: String,
+    },
     ToolCallDelta(ToolCallStreamDelta),
 }
 
@@ -121,6 +129,24 @@ pub struct ModelRequest {
     pub reasoning: Option<ReasoningConfig>,
 }
 
+/// 模型「非工具调用结束」的归一原因（架构 §4.11.4）。各 provider 把原始
+/// `finish_reason`/`stop_reason` 映射到这里，让 `agent_loop` 用统一口径判断
+/// 是否正常退出。`ToolUse` 不在此枚举——由 [`ModelResponse::ToolCalls`] 变体表达。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FinishReason {
+    /// 正常完成。唯一静默项；其余都会被 surface 成 toast + continue 入口。
+    #[default]
+    Stop,
+    /// 被 max_tokens 截断，回答不完整——可续写。
+    Length,
+    /// 模型主动拒答。
+    Refusal,
+    /// 被内容安全策略拦截。
+    ContentFilter,
+    /// 未识别的原始结束值，原文透传给 UI 兜底。
+    Other(String),
+}
+
 /// 模型完成响应
 #[derive(Debug, Clone)]
 pub enum ModelResponse {
@@ -129,12 +155,18 @@ pub enum ModelResponse {
         /// 这一轮累计的思维链。对接 transcript 时会回填，让下一轮模型看到。
         #[doc(hidden)]
         reasoning: String,
+        /// Anthropic thinking block 的签名（非流式路径从响应体读取）。其他 provider 为空。
+        reasoning_signature: String,
         attachments: Vec<MessageAttachment>,
         usage: Usage,
+        /// 归一后的结束原因（架构 §4.11.4）。非 `Stop` 时 `agent_loop` toast + 写 pending_continue。
+        finish: FinishReason,
     },
     ToolCalls {
         text: String,
         reasoning: String,
+        /// Anthropic thinking block 的签名（非流式路径从响应体读取）。其他 provider 为空。
+        reasoning_signature: String,
         calls: Vec<ToolCall>,
         attachments: Vec<MessageAttachment>,
         usage: Usage,

@@ -2,9 +2,19 @@
 use serde_json::{json, Value};
 
 use crate::types::{
-    AssistantEntry, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
-    TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
+    AssistantEntry, FinishReason, ModelRequest, ModelResponse, ToolCall, ToolDefinition,
+    ToolResult, TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
+
+/// 把 Gemini 的 `candidates[0].finishReason` 归一成 [`FinishReason`]（架构 §4.11.4）。
+pub fn map_gemini_finish(finish: &str) -> FinishReason {
+    match finish {
+        "STOP" | "" => FinishReason::Stop,
+        "MAX_TOKENS" => FinishReason::Length,
+        "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => FinishReason::ContentFilter,
+        other => FinishReason::Other(other.to_string()),
+    }
+}
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -118,6 +128,7 @@ pub fn tool_defs(tools: &[ToolDefinition]) -> Vec<Value> {
 pub fn parse_response(v: &Value) -> ModelResponse {
     let parts = &v["candidates"][0]["content"]["parts"];
     let usage = parse_usage(v);
+    let finish = map_gemini_finish(v["candidates"][0]["finishReason"].as_str().unwrap_or(""));
 
     if let Some(arr) = parts.as_array() {
         let has_fn_call = arr.iter().any(|p| p.get("functionCall").is_some());
@@ -136,6 +147,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
             return ModelResponse::ToolCalls {
                 text: String::new(),
                 reasoning: String::new(),
+                reasoning_signature: String::new(),
                 calls,
                 attachments: Vec::new(),
                 usage,
@@ -149,15 +161,19 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         ModelResponse::Done {
             text,
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage,
+            finish,
         }
     } else {
         ModelResponse::Done {
             text: String::new(),
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage,
+            finish,
         }
     }
 }
@@ -205,6 +221,18 @@ mod tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
     use common::attachments::MessageAttachment;
+
+    #[test]
+    fn gemini_finish_maps_all_variants() {
+        assert_eq!(map_gemini_finish("STOP"), FinishReason::Stop);
+        assert_eq!(map_gemini_finish("MAX_TOKENS"), FinishReason::Length);
+        assert_eq!(map_gemini_finish("SAFETY"), FinishReason::ContentFilter);
+        assert_eq!(map_gemini_finish("RECITATION"), FinishReason::ContentFilter);
+        assert_eq!(
+            map_gemini_finish("MALFORMED_FUNCTION_CALL"),
+            FinishReason::Other("MALFORMED_FUNCTION_CALL".to_string())
+        );
+    }
 
     #[test]
     fn user_attachments_become_gemini_parts() {

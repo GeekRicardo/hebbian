@@ -112,7 +112,8 @@ impl AnthropicClient {
     }
 
     fn is_claude_code_oauth(&self) -> bool {
-        matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode) || self.provider.claude_code_compat
+        matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode)
+            || self.provider.claude_code_compat
     }
 }
 
@@ -222,6 +223,7 @@ impl ModelClient for AnthropicClient {
         let mut buf = String::new();
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
+        let mut full_signature = String::new();
         let mut current_event_type = String::new();
         let mut thinking_deltas_seen: u64 = 0;
 
@@ -260,6 +262,12 @@ impl ModelClient for AnthropicClient {
                         if data.is_empty() {
                             continue;
                         }
+                        // SSE `event: error` 帧（上游 overloaded / upstream_error 等）：HTTP 已是
+                        // 200，错误只在流里。不拦就会被当未知事件忽略 → 流"正常"结束 → agent_loop
+                        // 误判为成功（空回合），既不停也不弹续作。这里转成 Err 让上层正常收尾。
+                        if current_event_type == "error" {
+                            return Err(ModelError::Other(format!("模型流式返回错误：{data}")));
+                        }
                         let Some(parsed) = proto::parse_stream_event(&current_event_type, data)
                         else {
                             tracing::trace!(
@@ -283,6 +291,10 @@ impl ModelClient for AnthropicClient {
                                 thinking_deltas_seen += 1;
                                 full_reasoning.push_str(&delta);
                                 on_event(ModelStreamEvent::ReasoningDelta { text: delta });
+                            }
+                            proto::AnthropicStreamEvent::Signature { signature, .. } => {
+                                full_signature = signature.clone();
+                                on_event(ModelStreamEvent::ReasoningSignature { signature });
                             }
                             proto::AnthropicStreamEvent::ToolUseStart { index, id, name } => {
                                 tracing::info!(
@@ -366,6 +378,7 @@ impl ModelClient for AnthropicClient {
             return Ok(ModelResponse::ToolCalls {
                 text: full_text,
                 reasoning: full_reasoning,
+                reasoning_signature: full_signature,
                 calls,
                 attachments: Vec::new(),
                 usage,
@@ -373,8 +386,10 @@ impl ModelClient for AnthropicClient {
         }
 
         Ok(ModelResponse::Done {
+            finish: proto::map_anthropic_finish(stop_reason.as_deref().unwrap_or("")),
             text: full_text,
             reasoning: full_reasoning,
+            reasoning_signature: full_signature,
             attachments: Vec::new(),
             usage,
         })

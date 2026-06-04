@@ -2,9 +2,20 @@
 use serde_json::{json, Value};
 
 use crate::types::{
-    AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
-    TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
+    AssistantEntry, FinishReason, ModelError, ModelRequest, ModelResponse, ToolCall,
+    ToolDefinition, ToolResult, TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
+
+/// 把 Anthropic 的 `stop_reason` 归一成 [`FinishReason`]（架构 §4.11.4）。
+/// `tool_use` 由调用方前置分支拦掉，不会走到这里。
+pub fn map_anthropic_finish(stop_reason: &str) -> FinishReason {
+    match stop_reason {
+        "end_turn" | "stop_sequence" | "" => FinishReason::Stop,
+        "max_tokens" => FinishReason::Length,
+        "refusal" => FinishReason::Refusal,
+        other => FinishReason::Other(other.to_string()),
+    }
+}
 use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
@@ -13,7 +24,8 @@ use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 const CLAUDE_CODE_AGENT_DESC: &str =
     "\nYou are an interactive agent that helps users with software engineering tasks.";
-const CLAUDE_CODE_BILLING_PREFIX: &str = "x-anthropic-billing-header: cc_version=2.1.150.474; cc_entrypoint=cli; cch=bb1ee;";
+const CLAUDE_CODE_BILLING_PREFIX: &str =
+    "x-anthropic-billing-header: cc_version=2.1.150.474; cc_entrypoint=cli; cch=bb1ee;";
 
 // DeepSeek v4 走 Anthropic Messages 端点时的 thinking 预算下限（与 protocols/openai.rs
 // 同源；server 拒掉「thinking 启用 & max_tokens 不足」的请求）。
@@ -334,19 +346,26 @@ fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> 
         TranscriptEntry::Assistant(AssistantEntry {
             text,
             reasoning,
+            reasoning_signature,
             tool_calls,
         }) => {
             if tool_calls.is_empty() {
                 Some(json!({"role": "assistant", "content": text}))
             } else {
                 let mut content: Vec<Value> = Vec::new();
-                // DeepSeek v4 Anthropic 端点要求 tool_use 多轮里带回上一轮 thinking。
-                // 仅 dialect_deepseek 时注入，避免影响 Anthropic 原生路径
-                //（Anthropic 自家 thinking 回填另有 signature 字段要求，单独处理）。
                 if inject_deepseek_thinking && !reasoning.trim().is_empty() {
+                    // DeepSeek v4 Anthropic 端点要求 tool_use 多轮里带回上一轮 thinking（无 signature）。
                     content.push(json!({
                         "type": "thinking",
                         "thinking": reasoning,
+                    }));
+                } else if !reasoning.trim().is_empty() && !reasoning_signature.is_empty() {
+                    // Anthropic 原生路径：thinking block 必须带上 API 颁发的 signature，否则 400。
+                    // signature 为空时不回填（比发空 signature 更安全；模型已从 text 段看到结论）。
+                    content.push(json!({
+                        "type": "thinking",
+                        "thinking": reasoning,
+                        "signature": reasoning_signature,
                     }));
                 }
                 if !text.is_empty() {
@@ -472,6 +491,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
     // 之前漏了 thinking block，开了 extended thinking 拿不到推理文本。
     let mut text = String::new();
     let mut reasoning = String::new();
+    let mut reasoning_signature = String::new();
     let mut calls = Vec::new();
     if let Some(arr) = v["content"].as_array() {
         for block in arr {
@@ -484,6 +504,9 @@ pub fn parse_response(v: &Value) -> ModelResponse {
                         reasoning.push_str(s);
                     } else if let Some(s) = block["summary"].as_str() {
                         reasoning.push_str(s);
+                    }
+                    if let Some(sig) = block["signature"].as_str() {
+                        reasoning_signature = sig.to_string();
                     }
                 }
                 Some("tool_use") => {
@@ -510,6 +533,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         ModelResponse::ToolCalls {
             text,
             reasoning,
+            reasoning_signature,
             calls,
             attachments: Vec::new(),
             usage,
@@ -518,8 +542,10 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         ModelResponse::Done {
             text,
             reasoning,
+            reasoning_signature,
             attachments: Vec::new(),
             usage,
+            finish: map_anthropic_finish(stop_reason),
         }
     }
 }
@@ -542,6 +568,11 @@ pub enum AnthropicStreamEvent {
     Thinking {
         index: usize,
         delta: String,
+    },
+    /// thinking block 的签名，`signature_delta` 帧携带，一次性整体到达（不是增量）。
+    Signature {
+        index: usize,
+        signature: String,
     },
     ToolUseStart {
         index: usize,
@@ -600,7 +631,12 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
                         partial_json: s.to_string(),
                     }
                 }),
-                // signature_delta 等暂时不上抛
+                Some("signature_delta") => v["delta"]["signature"].as_str().map(|s| {
+                    AnthropicStreamEvent::Signature {
+                        index,
+                        signature: s.to_string(),
+                    }
+                }),
                 _ => None,
             }
         }
@@ -642,6 +678,18 @@ mod tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
     use common::attachments::MessageAttachment;
+
+    #[test]
+    fn anthropic_finish_maps_all_variants() {
+        assert_eq!(map_anthropic_finish("end_turn"), FinishReason::Stop);
+        assert_eq!(map_anthropic_finish("stop_sequence"), FinishReason::Stop);
+        assert_eq!(map_anthropic_finish("max_tokens"), FinishReason::Length);
+        assert_eq!(map_anthropic_finish("refusal"), FinishReason::Refusal);
+        assert_eq!(
+            map_anthropic_finish("pause_turn"),
+            FinishReason::Other("pause_turn".to_string())
+        );
+    }
 
     #[test]
     fn user_attachments_become_claude_content_blocks() {
@@ -831,22 +879,46 @@ mod tests {
         };
 
         // 4.8：Extra → xhigh，Low → low
-        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Extra))["output_config"]["effort"], "xhigh");
-        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Low))["output_config"]["effort"], "low");
+        assert_eq!(
+            build("claude-opus-4-8", Some(ReasoningEffort::Extra))["output_config"]["effort"],
+            "xhigh"
+        );
+        assert_eq!(
+            build("claude-opus-4-8", Some(ReasoningEffort::Low))["output_config"]["effort"],
+            "low"
+        );
         // 4.6：Extra 钳到 high
-        assert_eq!(build("claude-opus-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"], "high");
+        assert_eq!(
+            build("claude-opus-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"],
+            "high"
+        );
         // reasoning 未设时用默认 Extra → 4.8 走 xhigh
-        assert_eq!(build("claude-opus-4-8", None)["output_config"]["effort"], "xhigh");
+        assert_eq!(
+            build("claude-opus-4-8", None)["output_config"]["effort"],
+            "xhigh"
+        );
         // thinking 始终 adaptive
-        assert_eq!(build("claude-opus-4-8", Some(ReasoningEffort::Medium))["thinking"]["type"], "adaptive");
+        assert_eq!(
+            build("claude-opus-4-8", Some(ReasoningEffort::Medium))["thinking"]["type"],
+            "adaptive"
+        );
 
         // 4.7/4.8 必须带 display:summarized 才外显思考；4.6 不带（adaptive 默认即外显）
         let b48 = build("claude-opus-4-8", None);
-        assert_eq!(b48["thinking"]["display"], "summarized", "4.8 必须 summarized: {b48}");
+        assert_eq!(
+            b48["thinking"]["display"], "summarized",
+            "4.8 必须 summarized: {b48}"
+        );
         let b47 = build("claude-opus-4-7", None);
-        assert_eq!(b47["thinking"]["display"], "summarized", "4.7 必须 summarized: {b47}");
+        assert_eq!(
+            b47["thinking"]["display"], "summarized",
+            "4.7 必须 summarized: {b47}"
+        );
         let b46 = build("claude-opus-4-6", None);
-        assert!(b46["thinking"].get("display").is_none(), "4.6 不该带 display: {b46}");
+        assert!(
+            b46["thinking"].get("display").is_none(),
+            "4.6 不该带 display: {b46}"
+        );
     }
 
     // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────

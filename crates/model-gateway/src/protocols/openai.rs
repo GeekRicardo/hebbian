@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use crate::types::{
-    AssistantEntry, ModelError, ModelRequest, ModelResponse, ToolCall, ToolDefinition, ToolResult,
-    TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
+    AssistantEntry, FinishReason, ModelError, ModelRequest, ModelResponse, ToolCall,
+    ToolDefinition, ToolResult, TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
 use common::attachments::MessageAttachment;
 use common::reasoning::openai_supports_reasoning;
@@ -30,6 +30,7 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Result<Value, ModelError>
                 text,
                 reasoning,
                 tool_calls,
+                ..
             }) => {
                 let mut msg = if tool_calls.is_empty() {
                     json!({"role": "assistant", "content": text})
@@ -465,6 +466,17 @@ fn responses_user_content(user: &UserEntry) -> Vec<Value> {
 
 // ── 响应解析 ──────────────────────────────────────────────────────────────────
 
+/// 把 OpenAI Chat Completions 的 `finish_reason` 归一成 [`FinishReason`]（架构 §4.11.4）。
+/// `tool_calls` 由调用方在前置分支拦掉，不会走到这里。
+pub fn map_openai_finish(finish: &str) -> FinishReason {
+    match finish {
+        "stop" | "" => FinishReason::Stop,
+        "length" => FinishReason::Length,
+        "content_filter" => FinishReason::ContentFilter,
+        other => FinishReason::Other(other.to_string()),
+    }
+}
+
 pub fn parse_response(v: &Value) -> ModelResponse {
     let msg = &v["choices"][0]["message"];
     let finish = v["choices"][0]["finish_reason"].as_str().unwrap_or("");
@@ -484,6 +496,7 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         ModelResponse::ToolCalls {
             text,
             reasoning,
+            reasoning_signature: String::new(),
             calls,
             attachments: Vec::new(),
             usage,
@@ -493,8 +506,10 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         ModelResponse::Done {
             text,
             reasoning,
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage,
+            finish: map_openai_finish(finish),
         }
     }
 }
@@ -504,6 +519,7 @@ pub fn parse_responses_response(v: &Value) -> ModelResponse {
     let mut text = String::new();
     let mut calls = Vec::new();
     let mut attachments = Vec::new();
+    let mut saw_refusal = false;
 
     if let Some(output) = v["output"].as_array() {
         for item in output {
@@ -516,6 +532,7 @@ pub fn parse_responses_response(v: &Value) -> ModelResponse {
                                     text.push_str(block["text"].as_str().unwrap_or(""));
                                 }
                                 "refusal" => {
+                                    saw_refusal = true;
                                     text.push_str(block["refusal"].as_str().unwrap_or(""));
                                 }
                                 "output_image" => {
@@ -551,16 +568,27 @@ pub fn parse_responses_response(v: &Value) -> ModelResponse {
     }
 
     if calls.is_empty() {
+        // Responses API 的结束原因：incomplete_details.reason 优先，其次 refusal block。
+        let finish = match v["incomplete_details"]["reason"].as_str() {
+            Some("max_output_tokens") => FinishReason::Length,
+            Some("content_filter") => FinishReason::ContentFilter,
+            Some(other) => FinishReason::Other(other.to_string()),
+            None if saw_refusal => FinishReason::Refusal,
+            None => FinishReason::Stop,
+        };
         ModelResponse::Done {
             text,
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             attachments,
             usage,
+            finish,
         }
     } else {
         ModelResponse::ToolCalls {
             text,
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             calls,
             attachments,
             usage,
@@ -642,6 +670,9 @@ pub struct ChatStreamFrame {
     /// 启用了 `stream_options.include_usage` 后的最后一帧：`choices` 为空、`usage`
     /// 字段填了终态计数。中间帧的 usage 通常是空，按需返回。
     pub usage: Option<Usage>,
+    /// 终态帧的 `choices[0].finish_reason`（`stop`/`length`/`content_filter`/`tool_calls`）。
+    /// 中间帧为 `null`，只有结束帧带值——用来归一成 [`FinishReason`]（架构 §4.11.4）。
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -661,11 +692,16 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
         .filter(|u| !u.is_null())
         .map(|_| parse_usage(&v));
 
-    let delta_opt = v
+    let first_choice = v
         .get("choices")
         .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("delta"));
+        .and_then(|arr| arr.first());
+    let finish_reason = first_choice
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let delta_opt = first_choice.and_then(|c| c.get("delta"));
 
     let (text_delta, reasoning_delta, tool_calls) = if let Some(delta) = delta_opt {
         let text_delta = delta["content"]
@@ -706,7 +742,11 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
         (None, None, Vec::new())
     };
 
-    if text_delta.is_none() && reasoning_delta.is_none() && tool_calls.is_empty() && usage.is_none()
+    if text_delta.is_none()
+        && reasoning_delta.is_none()
+        && tool_calls.is_empty()
+        && usage.is_none()
+        && finish_reason.is_none()
     {
         None
     } else {
@@ -715,6 +755,7 @@ pub fn parse_chat_stream_frame(data: &str) -> Option<ChatStreamFrame> {
             reasoning_delta,
             tool_calls,
             usage,
+            finish_reason,
         })
     }
 }
@@ -924,6 +965,33 @@ mod responses_tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
     use common::attachments::MessageAttachment;
+
+    #[test]
+    fn openai_finish_maps_all_variants() {
+        assert_eq!(map_openai_finish("stop"), FinishReason::Stop);
+        assert_eq!(map_openai_finish(""), FinishReason::Stop);
+        assert_eq!(map_openai_finish("length"), FinishReason::Length);
+        assert_eq!(
+            map_openai_finish("content_filter"),
+            FinishReason::ContentFilter
+        );
+        assert_eq!(
+            map_openai_finish("weird"),
+            FinishReason::Other("weird".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_response_length_finish_surfaces() {
+        // 被 token 上限截断的非流式响应必须归一成 Length，而不是被当成正常 Stop。
+        let v = serde_json::json!({
+            "choices": [{"finish_reason": "length", "message": {"content": "半句话"}}],
+        });
+        match parse_response(&v) {
+            ModelResponse::Done { finish, .. } => assert_eq!(finish, FinishReason::Length),
+            _ => panic!("expected Done"),
+        }
+    }
 
     #[test]
     fn codex_oauth_responses_body_matches_chatgpt_backend_contract() {

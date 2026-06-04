@@ -272,6 +272,7 @@ impl ModelClient for DeepseekClient {
             return Ok(ModelResponse::ToolCalls {
                 text: clean_text,
                 reasoning: full_reasoning,
+                reasoning_signature: String::new(),
                 calls: tool_calls,
                 attachments: Vec::new(),
                 usage,
@@ -279,8 +280,10 @@ impl ModelClient for DeepseekClient {
         }
 
         Ok(ModelResponse::Done {
+            finish: crate::types::FinishReason::Stop,
             text: full,
             reasoning: full_reasoning,
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage,
         })

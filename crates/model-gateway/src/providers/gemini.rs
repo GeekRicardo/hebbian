@@ -147,8 +147,10 @@ impl ModelClient for GeminiClient {
         }
 
         Ok(ModelResponse::Done {
+            finish: crate::types::FinishReason::Stop,
             text: full,
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage,
         })

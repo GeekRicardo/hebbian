@@ -140,6 +140,8 @@ impl ModelClient for OpenAiClient {
         // OpenAI Chat Completions：开了 stream_options.include_usage 后，最后一帧
         // `choices` 为空、只带 `usage`。多次出现以最新一次为准。
         let mut usage = Usage::default();
+        // 终态帧的 finish_reason，用来归一成 FinishReason（架构 §4.11.4）。
+        let mut finish_reason: Option<String> = None;
 
         while let Some(chunk) = super::next_stream_chunk_or_cancel(&mut stream, &cancel).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
@@ -159,6 +161,13 @@ impl ModelClient for OpenAiClient {
                         let data = data.trim();
                         if data == "[DONE]" || data.is_empty() {
                             continue;
+                        }
+                        // 流内错误帧（HTTP 200 但 body 里 `{"error":...}`）：不拦会被当未知帧
+                        // 忽略 → 流"正常"结束 → agent_loop 误判成功。转 Err 让上层正常收尾。
+                        if let Ok(v) = serde_json::from_str::<Value>(data) {
+                            if v.get("error").map(|e| !e.is_null()).unwrap_or(false) {
+                                return Err(ModelError::Other(format!("模型流式返回错误：{data}")));
+                            }
                         }
                         if let Some(parsed) = proto::parse_chat_stream_frame(data) {
                             if let Some(delta) = parsed.reasoning_delta {
@@ -184,6 +193,9 @@ impl ModelClient for OpenAiClient {
                             if let Some(u) = parsed.usage {
                                 usage = u;
                             }
+                            if parsed.finish_reason.is_some() {
+                                finish_reason = parsed.finish_reason;
+                            }
                         }
                     }
                 }
@@ -193,8 +205,10 @@ impl ModelClient for OpenAiClient {
         let calls = finish_tool_calls(tool_call_parts);
         if calls.is_empty() {
             Ok(ModelResponse::Done {
+                finish: proto::map_openai_finish(finish_reason.as_deref().unwrap_or("")),
                 text: full,
                 reasoning: full_reasoning,
+                reasoning_signature: String::new(),
                 attachments: Vec::new(),
                 usage,
             })
@@ -202,6 +216,7 @@ impl ModelClient for OpenAiClient {
             Ok(ModelResponse::ToolCalls {
                 text: full,
                 reasoning: full_reasoning,
+                reasoning_signature: String::new(),
                 calls,
                 attachments: Vec::new(),
                 usage,
@@ -492,6 +507,8 @@ impl OpenAiClient {
                 reasoning,
                 attachments,
                 usage,
+                finish,
+                ..
             } => {
                 // 流式累积的 reasoning 优先级最高
                 let final_reasoning = if !full_reasoning.is_empty() {
@@ -499,21 +516,14 @@ impl OpenAiClient {
                 } else {
                     reasoning
                 };
-                if full.is_empty() {
-                    Ok(ModelResponse::Done {
-                        text,
-                        reasoning: final_reasoning,
-                        attachments,
-                        usage,
-                    })
-                } else {
-                    Ok(ModelResponse::Done {
-                        text: full,
-                        reasoning: final_reasoning,
-                        attachments,
-                        usage,
-                    })
-                }
+                Ok(ModelResponse::Done {
+                    finish,
+                    text: if full.is_empty() { text } else { full },
+                    reasoning: final_reasoning,
+                    reasoning_signature: String::new(),
+                    attachments,
+                    usage,
+                })
             }
             other => Ok(other),
         }
