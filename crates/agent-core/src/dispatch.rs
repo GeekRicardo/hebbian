@@ -6,11 +6,12 @@
 //! - 提问通路（`ask` 工具）→ emit `UserQuestionRequested` + await
 //! - 工具执行（含超时输出截断）+ emit `ToolCallStarted` / `ToolCallFinished`
 //!
-//! 并发策略：普通工具批量并发，但同一批最多 [`MAX_PARALLEL_TOOLS`] 个 future
-//! 同时在跑（避免一次返回上百个 tool_call 时 worker / 句柄被打满）；同一文件的
-//! Edit 由 edits-worktree 的 per-path 锁（架构 §4.13.4）天然串行，无需派发器额外处理。
-//! Bash/PowerShell 按顺序派发，确保用户对第一条命令选择 AllowAndRemember 后，
-//! 同一批后续 shell 命令能先命中记忆规则，不会因为 pending 预创建而重复弹审批。
+//! 并发策略（架构 §4.4.3）：只读 / 并发安全工具立即进后台并发池（同批最多
+//! [`MAX_PARALLEL_TOOLS`] 个同时 poll，避免一次上百个 tool_call 打满 worker / 句柄）；
+//! 会写 shell（Bash/PowerShell）走独立串行链，shell 之间严格按 call 顺序（共享 cwd
+//! 不并发 + 审批记忆顺序）。两条链 join 同时驱动——**会写 shell 卡在审批时，只读池
+//! 照常并发执行**，不再"一个审批卡住整批冻住"。同一文件的 Edit 由 edits-worktree 的
+//! per-path 锁（架构 §4.13.4）天然串行，无需派发器额外处理。
 //!
 //! [`agent_loop`]: super::agent_loop
 
@@ -161,9 +162,14 @@ impl ToolDispatcher {
         calls: &[ToolCall],
         dispatch_offset: usize,
     ) -> Result<Vec<ToolResult>, ModelError> {
-        let mut tasks: Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>> =
+        // 分流（架构 §4.4.3）：只读 / 并发安全工具立刻 spawn 进后台并发池；会写
+        // shell（Bash/PowerShell）收集索引走串行链。两者用 join 同时驱动——会写
+        // shell 卡在审批时，只读池照常并发执行，不再"一个审批卡住整批冻住"。
+        // shell 串行链顺序 spawn（而非一次性预创建 pending）保证：用户对上一条选
+        // AllowAndRemember 后，同批后续 shell 先命中记忆规则，不重复弹审批。
+        let mut concurrent: Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>> =
             Vec::with_capacity(calls.len());
-        let mut results = Vec::with_capacity(calls.len());
+        let mut shell_indices: Vec<usize> = Vec::new();
 
         for (call_index, call) in calls.iter().enumerate() {
             if cancellation::is_cancelled(&self.cancel) {
@@ -171,9 +177,9 @@ impl ToolDispatcher {
                 break;
             }
             let dispatch_index = dispatch_offset + call_index;
-            let serial_shell = matches!(call.name.as_str(), "Bash" | "PowerShell");
-            if serial_shell {
-                drain_tool_tasks(&mut tasks, &mut results).await?;
+            if matches!(call.name.as_str(), "Bash" | "PowerShell") {
+                shell_indices.push(call_index);
+                continue;
             }
             let task = if call.name == ASK_TOOL_NAME {
                 self.spawn_ask(call.clone(), call_index, dispatch_index)
@@ -186,14 +192,47 @@ impl ToolDispatcher {
             } else {
                 self.spawn_tool(call.clone(), call_index, dispatch_index)
             };
-            if serial_shell {
-                results.push(task.await?);
-            } else {
-                tasks.push(task);
-            }
+            concurrent.push(task);
         }
 
-        drain_tool_tasks(&mut tasks, &mut results).await?;
+        // 会写 shell 串行链：顺序 spawn + await，shell 之间严格按 call 顺序（共享 cwd
+        // 不并发 + 审批记忆顺序）。审批 await 期间让出，下面的并发池继续推进。
+        let shell_chain = async {
+            let mut out: Vec<(usize, ToolResult)> = Vec::new();
+            for &call_index in &shell_indices {
+                if cancellation::is_cancelled(&self.cancel) {
+                    self.hitl.cancel_all_pending();
+                    break;
+                }
+                let dispatch_index = dispatch_offset + call_index;
+                let task = self.spawn_tool(calls[call_index].clone(), call_index, dispatch_index);
+                out.push(task.await?);
+            }
+            Ok::<Vec<(usize, ToolResult)>, ModelError>(out)
+        };
+
+        // 并发池：最多 MAX_PARALLEL_TOOLS 个同时 poll；单个工具报错不 cancel 同批其他。
+        let concurrent_drain = async {
+            let mut out: Vec<(usize, ToolResult)> = Vec::new();
+            let mut stream = stream::iter(concurrent).buffer_unordered(MAX_PARALLEL_TOOLS);
+            let mut first_err: Option<ModelError> = None;
+            while let Some(outcome) = stream.next().await {
+                match outcome {
+                    Ok(result) => out.push(result),
+                    Err(e) if first_err.is_none() => first_err = Some(e),
+                    Err(_) => {}
+                }
+            }
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(out),
+            }
+        };
+
+        let (shell_out, concurrent_out) =
+            futures_util::future::join(shell_chain, concurrent_drain).await;
+        let mut results = shell_out?;
+        results.extend(concurrent_out?);
         results.sort_by_key(|(index, _)| *index);
         Ok(results.into_iter().map(|(_, r)| r).collect())
     }
@@ -1498,32 +1537,6 @@ impl ToolDispatcher {
 /// 避免模型一次返回大量 tool_call 时把 tokio worker / 文件句柄打满。
 const MAX_PARALLEL_TOOLS: usize = 8;
 
-async fn drain_tool_tasks(
-    tasks: &mut Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>>,
-    results: &mut Vec<(usize, ToolResult)>,
-) -> Result<(), ModelError> {
-    if tasks.is_empty() {
-        return Ok(());
-    }
-    // buffer_unordered 同时最多 poll MAX_PARALLEL_TOOLS 个 future；完成顺序不定，
-    // 但 run_calls 末尾按 call_index 排序，对外仍是稳定顺序。
-    // 先收集全部结果再抛首个错误：与原 join_all 语义一致——单个工具报错不会
-    // cancel 同批其他在跑的工具（它们大多已把失败折叠成 Ok(ToolResult)）。
-    let mut stream = stream::iter(std::mem::take(tasks)).buffer_unordered(MAX_PARALLEL_TOOLS);
-    let mut first_err = None;
-    while let Some(outcome) = stream.next().await {
-        match outcome {
-            Ok(result) => results.push(result),
-            Err(e) if first_err.is_none() => first_err = Some(e),
-            Err(_) => {}
-        }
-    }
-    match first_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
-}
-
 /// 等路径审批结果；批准则按 scope 累加到 workspace.allowed_paths +
 /// 持久化到 PermissionStore（让其他 session 也能共享）。
 async fn await_path_decision(
@@ -1803,13 +1816,13 @@ mod tests {
     use crate::run_state::RunState;
     use crate::tools::bash::BashTool;
     use crate::tools::registry::ToolRegistry;
+    use crate::workspace::Workspace;
     use async_trait::async_trait;
     use common::AppResult;
-    use model_gateway::types::{ModelRequest, ModelResponse, ModelStreamEvent, Usage};
-    use crate::workspace::Workspace;
     use model_gateway::types::ToolCall;
-    use serde_json::Value;
+    use model_gateway::types::{ModelRequest, ModelResponse, ModelStreamEvent, Usage};
     use protocol::RunId;
+    use serde_json::Value;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1828,10 +1841,12 @@ mod tests {
             _cancel: common::CancelFlag,
         ) -> Result<ModelResponse, model_gateway::types::ModelError> {
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: "ALLOW".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
+                reasoning_signature: String::new(),
             })
         }
 
@@ -1943,8 +1958,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path(), Vec::new());
-        let registry = Arc::new(ToolRegistry::new(vec![Box::new(DestructiveNoopTool)
-            as Box<dyn crate::tools::Tool>]));
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
+        ]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
@@ -2003,8 +2019,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path(), Vec::new());
-        let registry = Arc::new(ToolRegistry::new(vec![Box::new(DestructiveNoopTool)
-            as Box<dyn crate::tools::Tool>]));
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
+        ]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
@@ -2046,9 +2063,12 @@ mod tests {
             let mut saw_auto_judged = false;
             while let Some(event) = rx.recv().await {
                 match &event.payload {
-                    EventPayload::Notice { level, dedup_key, .. } => {
+                    EventPayload::Notice {
+                        level, dedup_key, ..
+                    } => {
                         saw_notice = matches!(level, protocol::LogLevel::Warn)
-                            && dedup_key.as_deref() == Some("automode-unsupported:claude-sonnet-4-6");
+                            && dedup_key.as_deref()
+                                == Some("automode-unsupported:claude-sonnet-4-6");
                     }
                     EventPayload::PermissionAutoJudged { .. } => saw_auto_judged = true,
                     EventPayload::PermissionRequested { request_id, .. } => {
@@ -2066,12 +2086,18 @@ mod tests {
             .expect("dispatch should succeed");
         // 人工审批被 deny → 工具不执行
         assert_eq!(result.len(), 1);
-        assert_ne!(result[0].content, "executed", "应走人工审批且被拒，不该自动执行");
+        assert_ne!(
+            result[0].content, "executed",
+            "应走人工审批且被拒，不该自动执行"
+        );
 
         drop(dispatcher);
         let (saw_notice, saw_auto_judged) = surface.await.unwrap();
         assert!(saw_notice, "应 emit Notice(warn, dedup_key) 提示转手动审批");
-        assert!(!saw_auto_judged, "不在白名单的模型不该调判官（无 PermissionAutoJudged）");
+        assert!(
+            !saw_auto_judged,
+            "不在白名单的模型不该调判官（无 PermissionAutoJudged）"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
