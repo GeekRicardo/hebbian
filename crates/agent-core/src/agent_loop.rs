@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Instant;
 
 use observability::attr;
-use protocol::{AgentRef, ErrorReport, Event, EventPayload, RunId, StopReason};
+use protocol::{AgentRef, ErrorReport, Event, EventPayload, LogLevel, RunId, StopReason};
 use tracing::{debug, field::Empty, info, Instrument};
 
 use crate::{
@@ -32,13 +32,88 @@ use common::{
 };
 use model_gateway::{
     client::ModelClient,
-    types::{AssistantOutput, ModelError, ModelRequest, ModelResponse, ModelStreamEvent},
+    types::{
+        AssistantOutput, FinishReason, ModelError, ModelRequest, ModelResponse, ModelStreamEvent,
+    },
 };
 use protocol::ResumeCause;
 
 /// Stop hook 在一个 Run 内最多注入多少次 reminder（架构 §4.8.3）。超过即放弃注入正常出 turn。
 /// 防 cargo check 永远修不好把 loop 跑爆。
 const MAX_STOP_INJECTIONS: u32 = 3;
+
+/// 单次 ModelStep 非正常退出后的自动重试上限（架构 §4.3）。指数退避，每次 emit toast。
+/// 与 model-gateway 的 `retry_request`（包初始 HTTP 发送的快速瞬时重试）正交：这一层
+/// 是「整轮模型调用」的用户可见重试，覆盖 SSE 流内 error / 上游 overloaded 等场景。
+const MAX_MODEL_RETRIES: u32 = 5;
+
+/// 第 `attempt`（从 1 起）次重试前的退避时长：1s / 2s / 4s / 8s / 16s 封顶。
+fn model_retry_delay(attempt: u32) -> std::time::Duration {
+    let secs = 1u64 << attempt.saturating_sub(1).min(4);
+    std::time::Duration::from_secs(secs)
+}
+
+/// 可取消的退避：每 200ms 检查一次 cancel。返回 `false` 表示中途被取消（应立即放弃重试）。
+async fn backoff_or_cancel(delay: std::time::Duration, cancel: &CancelFlag) -> bool {
+    let step = std::time::Duration::from_millis(200);
+    let mut slept = std::time::Duration::ZERO;
+    while slept < delay {
+        if cancellation::is_cancelled(cancel) {
+            return false;
+        }
+        let chunk = step.min(delay - slept);
+        tokio::time::sleep(chunk).await;
+        slept += chunk;
+    }
+    !cancellation::is_cancelled(cancel)
+}
+
+/// 这个模型错误值不值得自动重试（架构 §4.3）。取消 / 挂起不是错误；JSON 解析失败
+/// 重试也修不好；其余（流内 error、上游 overloaded、网络断、5xx/429）属瞬时，可重试。
+fn is_retryable_model_error(e: &ModelError) -> bool {
+    match e {
+        ModelError::Cancelled | ModelError::Suspended => false,
+        ModelError::Json(_) => false,
+        ModelError::Http { status, .. } => *status == 429 || *status >= 500,
+        ModelError::Request(_) | ModelError::Other(_) => true,
+    }
+}
+
+/// 把 run 收尾态归一成「续作入口」（架构 §4.3）。`None` = 正常完成：不弹 toast、
+/// 清空残留 pending_continue。返回 `Some((kind, 给用户看的一句话))` 时 surface 弹
+/// toast 并落 pending_continue，让输入框上方的 ContinueBar 重启后仍可见。
+fn continue_for_outcome(
+    result: &Result<AssistantOutput, ModelError>,
+    last_finish: &FinishReason,
+) -> Option<(crate::storage::sessions::ContinueKind, String)> {
+    use crate::storage::sessions::ContinueKind;
+    match result {
+        Ok(_) => match last_finish {
+            FinishReason::Stop => None,
+            FinishReason::Length => Some((
+                ContinueKind::Truncated,
+                "回答被长度上限截断了，点「继续」让模型接着写".to_string(),
+            )),
+            FinishReason::Refusal => {
+                Some((ContinueKind::Refused, "模型这次拒绝了回答".to_string()))
+            }
+            FinishReason::ContentFilter => Some((
+                ContinueKind::Filtered,
+                "这次内容被安全策略拦了下来".to_string(),
+            )),
+            FinishReason::Other(s) => Some((
+                ContinueKind::Other,
+                format!("模型异常结束（{s}），点「继续」再试一次"),
+            )),
+        },
+        // 用户主动取消 / 挂起等唤醒——不算异常，不留续作入口。
+        Err(ModelError::Cancelled) | Err(ModelError::Suspended) => None,
+        Err(e) => Some((
+            ContinueKind::NetworkError,
+            format!("这次请求没成功（{e}），点「继续」重试"),
+        )),
+    }
+}
 
 /// Run 从挂起态恢复时携带的初始状态（架构 §4.12.6）。Harness 在 spawn_run 时
 /// 把它放进 [`LoopParams`]——agent_loop 入口据此恢复计数器，并 emit
@@ -273,6 +348,9 @@ pub async fn run_loop(
     // Stop hook 已经在本 Run 注入了几次（架构 §4.8.3 防死循环），上限
     // `MAX_STOP_INJECTIONS` 后即使脚本继续 inject 也忽略，turn 正常出。
     let mut stop_hook_injections: u32 = 0;
+    // 最后一个 ModelStep 的归一结束原因（架构 §4.11.4）。run 正常收尾后据此判断
+    // 是否要在 surface 弹 toast + 写 pending_continue（架构 §4.3）。
+    let mut last_finish = FinishReason::Stop;
 
     let result: Result<AssistantOutput, ModelError> = loop {
         if cancellation::is_cancelled(&cancel) {
@@ -465,36 +543,54 @@ pub async fn run_loop(
             step_kind: protocol::StepKind::Model,
             step_index: model_step_index,
         });
-        let response_result = if used_stream_path {
-            client
-                .stream(
-                    req,
-                    cancel.clone(),
-                    &move |stream_event: ModelStreamEvent| {
-                        let payload = match stream_event {
-                            ModelStreamEvent::TextDelta { text } => {
-                                EventPayload::TextDelta { text }
-                            }
-                            ModelStreamEvent::ReasoningDelta { text } => {
-                                EventPayload::Reasoning { text }
-                            }
-                            ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
-                                index: stream_tool_call_offset + delta.index,
-                                id: delta.id,
-                                name: delta.name,
-                                arguments_delta: delta.arguments_delta,
-                            },
-                        };
-                        on_event_for_stream(state_for_stream.event(payload));
-                    },
-                )
-                .instrument(model_span.clone())
-                .await
-        } else {
-            client
-                .complete(req, cancel.clone())
-                .instrument(model_span.clone())
-                .await
+        // 流式回调定义一次，重试各 attempt 复用（架构 §4.3）。
+        let stream_cb = move |stream_event: ModelStreamEvent| {
+            let payload = match stream_event {
+                ModelStreamEvent::TextDelta { text } => EventPayload::TextDelta { text },
+                ModelStreamEvent::ReasoningDelta { text } => EventPayload::Reasoning { text },
+                ModelStreamEvent::ReasoningSignature { .. } => return,
+                ModelStreamEvent::ToolCallDelta(delta) => EventPayload::ToolCallDelta {
+                    index: stream_tool_call_offset + delta.index,
+                    id: delta.id,
+                    name: delta.name,
+                    arguments_delta: delta.arguments_delta,
+                },
+            };
+            on_event_for_stream(state_for_stream.event(payload));
+        };
+        // 模型调用 + 用户可见自动重试（架构 §4.3）：可重试错误退避后重试，每次 emit
+        // ModelRetry 让 surface 内联显示进度（并清掉上次残留的流式 partial）；耗尽
+        // MAX_MODEL_RETRIES 才把 Err 交给下游收尾（→ RunFailed + pending_continue）。
+        let mut retry_attempt = 0u32;
+        let response_result = loop {
+            let r = if used_stream_path {
+                client
+                    .stream(req.clone(), cancel.clone(), &stream_cb)
+                    .instrument(model_span.clone())
+                    .await
+            } else {
+                client
+                    .complete(req.clone(), cancel.clone())
+                    .instrument(model_span.clone())
+                    .await
+            };
+            match &r {
+                Err(e) if retry_attempt < MAX_MODEL_RETRIES && is_retryable_model_error(e) => {
+                    retry_attempt += 1;
+                    let delay = model_retry_delay(retry_attempt);
+                    emit(EventPayload::ModelRetry {
+                        attempt: retry_attempt,
+                        max: MAX_MODEL_RETRIES,
+                        delay_ms: delay.as_millis() as u64,
+                        reason: e.to_string(),
+                    });
+                    if !backoff_or_cancel(delay, &cancel).await {
+                        break Err(ModelError::Cancelled);
+                    }
+                    continue;
+                }
+                _ => break r,
+            }
         };
 
         let call_duration_ms = call_start.elapsed().as_millis() as u64;
@@ -534,7 +630,10 @@ pub async fn run_loop(
                 reasoning,
                 attachments,
                 usage,
+                finish,
+                reasoning_signature: _,
             } => {
+                last_finish = finish;
                 info!(
                     duration_ms = call_duration_ms,
                     input_tokens = usage.input_tokens,
@@ -627,6 +726,7 @@ pub async fn run_loop(
                 calls,
                 attachments,
                 usage,
+                reasoning_signature: _,
             } => {
                 info!(
                     duration_ms = call_duration_ms,
@@ -862,6 +962,40 @@ pub async fn run_loop(
             });
         }
     }
+
+    // 架构 §4.3：非正常结束 → 弹 toast + 落 pending_continue；正常完成 → 清空残留。
+    // 挂起态不在此处理（Run 未结束，稍后会复活）。
+    if !matches!(result, Err(ModelError::Suspended)) {
+        let pending = continue_for_outcome(&result, &last_finish);
+        if let Some((kind, ref message)) = pending {
+            // kind 编进 dedup_key：surface 据此当场把 pending_continue 同步进内存态
+            // （让 ContinueBar 立刻出现），无需等磁盘重载。`{kind:?}` 是 snake_case 之外的
+            // 形态，前端按枚举值小写匹配即可。
+            emit(EventPayload::Notice {
+                level: LogLevel::Warn,
+                message: message.clone(),
+                dedup_key: Some(format!(
+                    "pending-continue-{}-{}",
+                    crate::storage::sessions::continue_kind_str(kind),
+                    state.run_id
+                )),
+            });
+        }
+        if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+            let to_write =
+                pending.map(
+                    |(kind, message)| crate::storage::sessions::PendingContinue {
+                        at: chrono::Utc::now().timestamp_millis(),
+                        kind,
+                        message,
+                    },
+                );
+            if let Err(e) = crate::storage::sessions::set_pending_continue(dd, sid, to_write) {
+                tracing::warn!(error = %e, "persist pending_continue failed");
+            }
+        }
+    }
+
     result
 }
 
@@ -876,6 +1010,23 @@ mod tests {
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     };
+
+    #[test]
+    fn continue_outcome_normal_stop_is_silent() {
+        use crate::storage::sessions::ContinueKind;
+        let ok: Result<AssistantOutput, ModelError> = Ok(AssistantOutput::default());
+        assert!(continue_for_outcome(&ok, &FinishReason::Stop).is_none());
+        // 截断 → 续写
+        let (kind, _) = continue_for_outcome(&ok, &FinishReason::Length).unwrap();
+        assert_eq!(kind, ContinueKind::Truncated);
+        // 取消 / 挂起不留续作
+        let cancelled: Result<AssistantOutput, ModelError> = Err(ModelError::Cancelled);
+        assert!(continue_for_outcome(&cancelled, &FinishReason::Stop).is_none());
+        // 网络失败 → 重试
+        let failed: Result<AssistantOutput, ModelError> = Err(ModelError::Other("boom".into()));
+        let (kind, _) = continue_for_outcome(&failed, &FinishReason::Stop).unwrap();
+        assert_eq!(kind, ContinueKind::NetworkError);
+    }
 
     struct FailingModelClient;
 
@@ -945,10 +1096,12 @@ mod tests {
                             attachments: Vec::new(),
                         });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "第一段".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
+                        reasoning_signature: String::new(),
                     })
                 }
                 1 => {
@@ -966,10 +1119,12 @@ mod tests {
                         text: "引导后的回答".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "引导后的回答".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
+                        reasoning_signature: String::new(),
                     })
                 }
                 _ => unreachable!("unexpected extra model call"),
@@ -1020,6 +1175,7 @@ mod tests {
                         }],
                         attachments: Vec::new(),
                         usage: Usage::default(),
+                        reasoning_signature: String::new(),
                     })
                 }
                 1 => {
@@ -1037,10 +1193,12 @@ mod tests {
                         text: "已按引导继续".to_string(),
                     });
                     Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
                         text: "已按引导继续".to_string(),
                         reasoning: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
+                        reasoning_signature: String::new(),
                     })
                 }
                 _ => unreachable!("unexpected extra model call"),
@@ -1305,6 +1463,7 @@ mod tests {
                     }],
                     attachments: Vec::new(),
                     usage: Usage::default(),
+                    reasoning_signature: String::new(),
                 })
             }
         }

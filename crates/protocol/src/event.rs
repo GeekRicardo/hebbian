@@ -89,6 +89,20 @@ pub enum EventPayload {
         step_index: u32,
     },
 
+    /// 一次 ModelStep 非正常退出后的自动重试（架构 §4.3）。在退避等待前 emit，
+    /// surface 端在当前 turn 区内联渲染「重试中 attempt/max」进度（更新而非刷屏）。
+    /// 重试全部耗尽后才走 `RunFailed` + `pending_continue`（Continue 兜底）。
+    ModelRetry {
+        /// 第几次重试（从 1 起）。
+        attempt: u32,
+        /// 上限（= `MAX_MODEL_RETRIES`）。
+        max: u32,
+        /// 本次退避等待时长（毫秒）。
+        delay_ms: u64,
+        /// 触发重试的错误摘要（给用户看的一句话）。
+        reason: String,
+    },
+
     /// 运行模式切换（架构 §10.2）。actor 收到 [`Op::SwitchRunMode`] 后 emit。
     RunModeChanged {
         from: String,
@@ -104,6 +118,11 @@ pub enum EventPayload {
     },
     Reasoning {
         text: String,
+    },
+    /// Anthropic thinking block 的签名（流式 `signature_delta` 一次性整体到达）。
+    /// surface 端拿到后更新内存里最后一个 Reasoning part 的 signature，落盘时随消息持久化。
+    ReasoningSignature {
+        signature: String,
     },
 
     // —— 工具 ——

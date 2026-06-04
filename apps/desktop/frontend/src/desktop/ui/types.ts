@@ -316,6 +316,27 @@ export interface Session {
   active_plan?: string | null;
   /** 进入 PlanMode 之前的 RunMode；ExitPlanMode 审批通过后据此切回去（架构 §4.4.5）。 */
   pre_plan_mode?: string | null;
+  /** 上一个 Run 非正常结束留下的续作入口（架构 §4.3）。null = 上一轮正常完成。落盘可恢复。 */
+  pending_continue?: PendingContinue | null;
+}
+
+/** 中断原因分类（架构 §4.11.4）。决定 AutoByReason 策略下点 continue 走续写还是重发。 */
+export type ContinueKind =
+  | "truncated"
+  | "refused"
+  | "filtered"
+  | "network_error"
+  | "max_iterations"
+  | "other";
+
+/** 一次非正常结束留下的续作入口（架构 §4.3）。 */
+export interface PendingContinue {
+  /** 触发时刻（Unix epoch ms）。 */
+  at: number;
+  /** 为什么中断。 */
+  kind: ContinueKind;
+  /** 给用户看的一句话（toast 与 ContinueBar 共用）。 */
+  message: string;
 }
 
 /** 规则文件来源（决定默认开关状态） */
@@ -390,6 +411,8 @@ export interface AppSettings {
     edit_backend: "string-replace" | "hashline";
     /** 允许启用自动模式判官的模型 id 列表（架构 §4.4.4）。 */
     automode_models: string[];
+    /** Run 非正常结束后点「继续」的恢复方式（架构 §7.3）。 */
+    continue_strategy?: "resume_loop" | "send_continue" | "manual";
   };
   conversation: {
     workdir?: string | null;
@@ -589,6 +612,15 @@ export type EngineEvent =
       type: "step_finished";
       step_kind: "model" | "tool";
       step_index: number;
+    }
+  | {
+      // 模型调用失败后的自动重试进度（架构 §4.3）。前端在当前 turn 区内联渲染
+      // 「重试中 attempt/max」并清掉上次残留的流式 partial；不弹 toast、不刷屏。
+      type: "model_retry";
+      attempt: number;
+      max: number;
+      delay_ms: number;
+      reason: string;
     }
   | {
       // 运行模式切换（架构 §10.2）。

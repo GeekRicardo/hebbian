@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, Share } from "lucide-react";
+import { Sparkles, ChevronDown, Share, RotateCw } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
 import { ChatInput } from "./ChatInput";
-import { InputSuggestions } from "./InputSuggestions";
 import { InputQueuePanel } from "./InputQueuePanel";
+import { ToastRegion } from "./ToastRegion";
+import { ContinueBar } from "./ContinueBar";
 import {
   filterMessagesDuplicatedInLiveTimeline,
   runningTimelineRenderItems,
@@ -50,7 +51,7 @@ export function ChatView() {
     updateCurrentConfig,
     debugEnabled,
     appSettings,
-    lastRunError,
+    modelRetry,
     sessionMemoryWrites,
   } = useStore();
 
@@ -838,20 +839,31 @@ export function ChatView() {
             : "w-full mb-[46px]"
         }`}
       >
+        <div className="absolute inset-x-0 bottom-full pointer-events-none z-30">
+          <ToastRegion />
+        </div>
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-20">
           <PermissionApprovalPopup />
         </div>
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-10">
           <UserQuestionPopup />
         </div>
+        {modelRetry && (
+          <div className="flex items-center gap-1.5 px-3 pb-1 text-xs text-amber-700 dark:text-amber-300">
+            <RotateCw className="h-3 w-3 animate-spin" />
+            <span>
+              模型出错，重试中 {modelRetry.attempt}/{modelRetry.max}…
+            </span>
+          </div>
+        )}
         <InputQueuePanel />
-        <InputSuggestions
-          suggestions={
-            lastRunError?.sessionId === currentSession?.id
-              ? [{ label: "Continue", value: "continue" }]
-              : []
+        <ContinueBar
+          onSend={(text) => handleSend(text, [])}
+          onFocusInput={() =>
+            document
+              .querySelector<HTMLTextAreaElement>(".chat-input-textarea")
+              ?.focus()
           }
-          onSelect={(value) => handleSend(value, [])}
         />
         <ChatInput
           onSend={handleSend}

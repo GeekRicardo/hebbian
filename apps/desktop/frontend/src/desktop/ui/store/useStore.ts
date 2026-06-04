@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ApprovalDecisionPayload,
   ContextUsage,
+  ContinueKind,
   EditEntry,
   EngineEvent,
   LogEntry,
@@ -30,6 +31,7 @@ import type {
   WorkspaceProjectInput,
 } from "@/desktop/ui/types";
 import { toast } from "sonner";
+import { useToastStore } from "@/desktop/ui/store/useToastStore";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
 import { appendInjectedMessageAfterCurrentAssistant } from "@/desktop/ui/components/liveTimelineOrder";
@@ -108,6 +110,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       show_grep_search_path: settings.general.show_grep_search_path ?? true,
       shell: settings.general.shell ?? null,
       edit_backend: settings.general.edit_backend ?? "string-replace",
+      continue_strategy: settings.general.continue_strategy ?? "resume_loop",
     },
   };
 }
@@ -329,6 +332,8 @@ type SessionStream = {
   activePlan: { plan_id: string; plan_path: string; markdown: string; summary: string } | null;
   /** Plan id → 该 plan 的评论列表。前端在 plan tab / 审批 popup 渲染。 */
   planComments: Record<string, PlanComment[]>;
+  /** 模型调用失败后的自动重试进度（架构 §4.3）。`null` = 当前没在重试。 */
+  modelRetry: { attempt: number; max: number; reason: string } | null;
 };
 
 export type SuspendedInfo = {
@@ -365,6 +370,7 @@ const EMPTY_MIRROR = {
   todos: [] as TodoItem[],
   activePlan: null as SessionStream["activePlan"],
   planComments: {} as Record<string, PlanComment[]>,
+  modelRetry: null as SessionStream["modelRetry"],
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -386,6 +392,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     todos: slot.todos,
     activePlan: slot.activePlan,
     planComments: slot.planComments,
+    modelRetry: slot.modelRetry,
   };
 }
 
@@ -398,10 +405,22 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       streamingParts: applyNestedEvent(slot.streamingParts, nestedCallId, e),
     };
   }
+  if (e.type === "model_retry") {
+    // 重试：丢掉上次失败 attempt 已 emit 的 partial（避免和重试输出叠加），
+    // 存一份进度供 turn 区内联渲染「重试中 N/max」。
+    return {
+      ...slot,
+      streamingText: "",
+      streamingParts: [],
+      modelRetry: { attempt: e.attempt, max: e.max, reason: e.reason },
+    };
+  }
   if (e.type === "text_delta") {
     if (!e.text) return slot;
     return {
       ...slot,
+      // 有新内容流出 → 重试成功，清掉进度指示。
+      modelRetry: null,
       streamingText: slot.streamingText + e.text,
       streamingParts: applyTextDelta(slot.streamingParts, e.text),
     };
@@ -649,6 +668,7 @@ function patchSessionSlot(
         todos: [],
         activePlan: null,
         planComments: {},
+        modelRetry: null,
       } satisfies SessionStream);
     const next = patch(base);
     const isCurrent = state.currentSession?.id === sessionId;
@@ -852,6 +872,8 @@ interface AppState {
   streamingMessageId: string | null;
   streamingText: string;
   streamingParts: StreamingAssistantPart[];
+  /** 模型调用失败后的自动重试进度（架构 §4.3）。镜像自当前 slot。 */
+  modelRetry: { attempt: number; max: number; reason: string } | null;
   /**
    * Run 内时间线（架构 §4.2 + §4.12.5）：已完成 turn 快照 + streaming 期间
    * 插队的 user message，按真实顺序。ChatView 据此把"插队 → 下个 turn 输出"
@@ -1055,7 +1077,7 @@ interface AppState {
     content: string,
     attachments?: MessageAttachment[],
     meta?: MessageMeta | null,
-    options?: { skipOptimisticUser?: boolean }
+    options?: { skipOptimisticUser?: boolean; continueRun?: boolean }
   ) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
@@ -1164,6 +1186,7 @@ export const useStore = create<AppState>((set, get) => ({
   streamingMessageId: null,
   streamingText: "",
   streamingParts: [],
+  modelRetry: null,
   liveTimeline: [],
   assistantInsertPos: 0,
   activeRequestId: null,
@@ -2034,6 +2057,7 @@ export const useStore = create<AppState>((set, get) => ({
             ? activePlanFromPath(priorSession.active_plan)
             : null),
         planComments: priorSlot?.planComments ?? {},
+        modelRetry: null,
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
@@ -2101,10 +2125,40 @@ export const useStore = create<AppState>((set, get) => ({
               toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
               return;
             }
-            // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。dedup_key 走 sonner 的
-            // id 去重——同一模型的「不支持自动模式」提示连刷时只显示一个。
-            // position 单独设 bottom-right（输入框上方右侧），不动全局 top-center。
+            // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。
             if (e.type === "notice") {
+              // 模型异常退出（架构 §4.3）走输入框上方的自定义 toast 区——右→左滑入、
+              // 新消息往上挤、hover 不关；其余通知仍走 sonner 角落。
+              if (e.dedup_key?.startsWith("pending-continue-")) {
+                useToastStore.getState().push({
+                  level: e.level,
+                  message: e.message,
+                  dedupKey: e.dedup_key,
+                });
+                // 当场把续作入口同步进内存态，让 ContinueBar 立刻出现——不必等磁盘重载。
+                // 落盘那份由 agent_loop 写，保证重启后仍可见。
+                const KINDS: ContinueKind[] = [
+                  "truncated",
+                  "refused",
+                  "filtered",
+                  "network_error",
+                  "max_iterations",
+                  "other",
+                ];
+                const rest = e.dedup_key.slice("pending-continue-".length);
+                const kind = KINDS.find((k) => rest.startsWith(`${k}-`)) ?? "other";
+                set((state) =>
+                  state.currentSession?.id === sessionId
+                    ? {
+                        currentSession: {
+                          ...state.currentSession,
+                          pending_continue: { at: Date.now(), kind, message: e.message },
+                        },
+                      }
+                    : state
+                );
+                return;
+              }
               const opts = {
                 position: "bottom-right" as const,
                 ...(e.dedup_key ? { id: e.dedup_key } : {}),
@@ -2140,6 +2194,7 @@ export const useStore = create<AppState>((set, get) => ({
             });
           },
           meta,
+          options.continueRun,
         );
         const stillForeground = get().currentSession?.id === sessionId;
         if (stillForeground) {

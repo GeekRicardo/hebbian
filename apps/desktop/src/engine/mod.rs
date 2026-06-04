@@ -153,6 +153,14 @@ pub enum EngineEvent {
         step_kind: String,
         step_index: u32,
     },
+    /// 一次模型调用失败后的自动重试进度（架构 §4.3）。前端在当前 turn 区内联渲染
+    /// 「重试中 attempt/max」并清掉上次残留的流式 partial；不弹 toast、不刷屏。
+    ModelRetry {
+        attempt: u32,
+        max: u32,
+        delay_ms: u64,
+        reason: String,
+    },
     /// Turn 边界——一次"模型请求 + 可选 tool_call 批"结束（架构 §3 / §4.2）。
     /// surface 用它把 streaming bubble 冻结成"已完成 turn 快照"；下一个 Turn 的输出
     /// 起一个新的 streaming bubble，从而保证 streaming 中的插队 user message 总是

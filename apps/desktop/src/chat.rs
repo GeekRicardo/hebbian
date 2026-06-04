@@ -1,7 +1,7 @@
 use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
+use crate::hebisland_client::HebislandClient;
 use crate::hitl::HitlState;
-use crate::notch::emit_notification;
 use agent_core::storage::{
     sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
@@ -36,7 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{ipc::Channel, AppHandle};
+use tauri::{ipc::Channel, AppHandle, Manager};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -68,6 +68,10 @@ pub struct SendArgs {
     /// 状态由 `ForceAutomodeState` 进程级持有；测试场景传 `false`。
     pub force_automode: bool,
     pub request_id: Option<String>,
+    /// 「继续」入口（架构 §4.3 / §7.3）：true = 不追加任何 user 消息，直接用当前
+    /// transcript 原样再起一次 agent_loop。失败请求天然重发、截断让模型接着写。
+    /// `user_content` 此时应为空。
+    pub continue_run: bool,
 }
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -98,15 +102,25 @@ pub async fn send_and_save(
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
-    let app_for_notch = app.clone();
+    let app_for_client = app.clone();
     let result = send_and_save_in_data_dir(&dd, args, move |event| {
-        emit_notification(&app_for_notch, &event);
+        if let Some(client) = app_for_client.try_state::<HebislandClient>() {
+            push_engine_event_to_island(&client, &event);
+        }
         let _ = on_event.send(event);
     })
     .await;
     // 整轮 run 真正结束才弹一次「回答完成」（多回合只弹一次；取消 / 失败不弹）。
     if result.is_ok() {
-        crate::notch::emit_run_finished(app);
+        if let Some(client) = app.try_state::<HebislandClient>() {
+            client.push(
+                format!("done-{}", chrono::Utc::now().timestamp_millis()),
+                "info",
+                "回答完成",
+                "Agent 已完成本次回答",
+                None,
+            );
+        }
     }
     result
 }
@@ -168,7 +182,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             )
         });
     }
-    let session = if already_persisted_notification {
+    // 「继续」入口（架构 §4.3）：不追加任何 user 消息，用当前 transcript 原样再跑。
+    // 先把续作入口清掉——这一轮要么正常完成（agent_loop 收尾也会清），要么再次
+    // 异常并由 agent_loop 重新写入新的 pending_continue。
+    if args.continue_run && !already_persisted_notification {
+        sessions::set_pending_continue(data_dir, &args.session_id, None)?;
+    }
+    let session = if already_persisted_notification || args.continue_run {
         prior_session.clone()
     } else {
         let user_msg = Message {
@@ -191,6 +211,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
     let model = session.model.clone();
     let reasoning = session.reasoning.clone();
+    let provider_kind = provider.kind;
 
     let client = build_client(provider, model.clone(), reasoning)?;
 
@@ -264,7 +285,11 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .await,
         HookManager::new(external_hooks),
     ));
-    let definition = AgentDefinition::default();
+    // 按实际模型上下文窗口动态设定压缩预算（架构 §4.1.3：占 context_window 70% 触发）。
+    let mut definition = AgentDefinition::default();
+    let ctx_window =
+        model_gateway::context_window::context_window_for(provider_kind, &model);
+    definition.compaction_policy.token_budget = (ctx_window as f64 * 0.75) as usize;
 
     // 优先级：args（前端 send_message 显式传） > session.enabled_tools（非空） > 全局 settings
     // 注意：旧版本把 session.enabled_tools = Some([]) 当作"明确不启用工具"——实践中
@@ -1340,6 +1365,7 @@ pub async fn send_once(
             Role::Assistant => Some(TranscriptEntry::Assistant(AssistantEntry {
                 text: m.content.clone(),
                 reasoning: String::new(),
+                reasoning_signature: String::new(),
                 tool_calls: Vec::new(),
             })),
             _ => None,
@@ -1924,6 +1950,17 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 protocol::StepKind::Tool => "tool".to_string(),
             },
             step_index: *step_index,
+        }),
+        ModelRetry {
+            attempt,
+            max,
+            delay_ms,
+            reason,
+        } => Some(EngineEvent::ModelRetry {
+            attempt: *attempt,
+            max: *max,
+            delay_ms: *delay_ms,
+            reason: reason.clone(),
         }),
         RunModeChanged { from, to } => Some(EngineEvent::RunModeChanged {
             from: from.clone(),
@@ -2895,6 +2932,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id,
                     user_content: "run tools".to_string(),
                     user_meta: None,
@@ -2960,6 +2998,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id,
                     user_content: "run tools".to_string(),
                     user_meta: None,
@@ -3033,6 +3072,7 @@ mod tests {
                 send_and_save_in_data_dir_with_client_factory(
                     &data_dir,
                     SendArgs {
+                        continue_run: false,
                         session_id: session.id.clone(),
                         user_content: "run command".to_string(),
                         user_meta: None,
@@ -3112,6 +3152,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id.clone(),
                     user_content: "第一条".to_string(),
                     user_meta: None,
@@ -3184,6 +3225,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id.clone(),
                     user_content: "第一条".to_string(),
                     user_meta: None,
@@ -3253,6 +3295,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id.clone(),
                     user_content: "第一条".to_string(),
                     user_meta: None,
@@ -3349,6 +3392,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id.clone(),
                     user_content: wakeup_xml.to_string(),
                     user_meta: Some(MessageMeta::SystemNotification {
@@ -3457,6 +3501,7 @@ mod tests {
             let assistant = send_and_save_in_data_dir_with_client_factory(
                 &data_dir,
                 SendArgs {
+                    continue_run: false,
                     session_id: session.id.clone(),
                     user_content: wakeup_xml.to_string(),
                     user_meta: Some(wakeup_meta),
@@ -3493,5 +3538,47 @@ mod tests {
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });
+    }
+}
+
+// ── hebisland 通知桥接 ──
+
+/// 将 agent_core EngineEvent 翻译为 hebisland 推送/撤销通知。
+fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
+    match event {
+        EngineEvent::PermissionRequested {
+            request_id,
+            tool_name,
+            input,
+            ..
+        } => {
+            let summary: String = input.to_string().chars().take(80).collect();
+            client.push(
+                format!("perm-{request_id}"),
+                "approval",
+                "需要你的审批",
+                &format!("{tool_name} {summary}"),
+                None,
+            );
+        }
+        EngineEvent::UserQuestionRequested {
+            request_id,
+            question,
+            ..
+        } => {
+            client.push(
+                format!("question-{request_id}"),
+                "question",
+                "需要你的回答",
+                question,
+                None,
+            );
+        }
+        EngineEvent::PermissionResolved { request_id, .. }
+        | EngineEvent::UserQuestionAnswered { request_id, .. } => {
+            client.dismiss(&format!("perm-{request_id}"));
+            client.dismiss(&format!("question-{request_id}"));
+        }
+        _ => {}
     }
 }
