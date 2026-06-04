@@ -119,6 +119,7 @@ pub async fn compact_with_llm(
         TranscriptEntry::Assistant(AssistantEntry {
             text: "已收到前情概要，将基于此继续。".to_string(),
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             tool_calls: Vec::new(),
         }),
     ];
@@ -154,10 +155,12 @@ mod tests {
             _cancel: CancelFlag,
         ) -> Result<ModelResponse, ModelError> {
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: "摘要正文".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
+                reasoning_signature: String::new(),
             })
         }
 
@@ -189,10 +192,12 @@ mod tests {
         ) -> Result<ModelResponse, ModelError> {
             *self.captured.lock().unwrap() = Some(req.entries);
             Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
                 text: "摘要正文".to_string(),
                 reasoning: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
+                reasoning_signature: String::new(),
             })
         }
 
@@ -217,6 +222,7 @@ mod tests {
                 text: "回复".into(),
                 reasoning: String::new(),
                 tool_calls: Vec::new(),
+                reasoning_signature: String::new(),
             }),
             TranscriptEntry::User(UserEntry::text("用户主动 /compact")),
         ];
@@ -255,6 +261,7 @@ mod tests {
                 text: "结尾是 assistant".into(),
                 reasoning: String::new(),
                 tool_calls: Vec::new(),
+                reasoning_signature: String::new(),
             }),
         ];
 

@@ -593,6 +593,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
         .await
         .map_err(|e| anyhow!("OAuth token 刷新失败: {e}"))?;
+    let provider_kind = provider.kind;
     let inner = model_gateway::build_client(provider)
         .map_err(|e| anyhow!("构建 model client 失败: {e}"))?;
     let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(
@@ -697,7 +698,15 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
     let mut core_session = CoreSession::new(
         harness,
         SessionConfig {
-            definition: AgentDefinition::default(),
+            definition: {
+                let mut d = AgentDefinition::default();
+                let ctx_window = model_gateway::context_window::context_window_for(
+                    provider_kind,
+                    &state.model,
+                );
+                d.compaction_policy.token_budget = (ctx_window as f64 * 0.75) as usize;
+                d
+            },
             workspace: workspace.clone(),
             client,
             enabled_tools,

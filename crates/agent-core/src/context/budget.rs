@@ -49,6 +49,7 @@ fn entry_tokens(entry: &TranscriptEntry) -> usize {
             text,
             reasoning,
             tool_calls,
+            ..
         }) => {
             let mut n = estimate_tokens(text) + estimate_tokens(reasoning) + 4;
             for c in tool_calls {

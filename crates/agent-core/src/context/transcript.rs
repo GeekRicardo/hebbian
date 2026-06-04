@@ -49,6 +49,7 @@ impl Transcript {
                     t.entries.push(TranscriptEntry::Assistant(AssistantEntry {
                         text: "已收到前情概要，将基于此继续。".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         tool_calls: Vec::new(),
                     }));
                 }
@@ -96,6 +97,7 @@ impl Transcript {
             .push(TranscriptEntry::Assistant(AssistantEntry {
                 text,
                 reasoning,
+                reasoning_signature: String::new(),
                 tool_calls,
             }));
     }
@@ -146,6 +148,7 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
             text: msg.content.clone(),
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             tool_calls: tool_calls.clone(),
         }));
     }
@@ -226,6 +229,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
             text,
             reasoning,
+            reasoning_signature: String::new(),
             tool_calls: Vec::new(),
         }));
     }
@@ -241,6 +245,7 @@ fn flush_assistant_turn(
     entries.push(TranscriptEntry::Assistant(AssistantEntry {
         text: std::mem::take(text),
         reasoning: std::mem::take(reasoning),
+        reasoning_signature: String::new(),
         tool_calls: std::mem::take(tool_calls),
     }));
     if !tool_results.is_empty() {
