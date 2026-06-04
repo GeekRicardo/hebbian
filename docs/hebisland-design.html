@@ -1,0 +1,1170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>hebisland 通知样式示例</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #000;
+      --text: #f8fafc;
+      --muted: rgba(255, 255, 255, 0.55);
+      --line: rgba(255, 255, 255, 0.10);
+      --card: #000;
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+      --radius: 16px;
+      --gap: 10px;
+      --green: rgb(77, 217, 102);
+      --green-bg: rgb(41, 97, 46);
+      --green-border: rgb(71, 158, 82);
+      --red: rgb(255, 102, 102);
+      --red-bg: rgb(115, 31, 31);
+      --red-border: rgb(179, 64, 64);
+      --blue: rgb(71, 122, 209);
+      --blue-bg: rgb(36, 71, 133);
+      --blue-border: rgb(71, 122, 209);
+      --amber: rgb(255, 179, 71);
+      --cyan: rgb(102, 179, 255);
+      --purple: rgb(204, 153, 255);
+      --gray-bg: rgb(64, 64, 64);
+      --gray-border: rgba(255, 255, 255, 0.28);
+      --snap-distance: 48px;
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+      background: #111;
+    }
+
+    /* ── 左侧说明 ── */
+
+    .desktop-hint {
+      position: absolute;
+      left: 36px;
+      top: 36px;
+      max-width: 480px;
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .desktop-hint h1 {
+      margin-bottom: 10px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--green);
+    }
+
+    .desktop-hint p {
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 12px;
+    }
+
+    /* ── 卡片基底 ── */
+
+    .toast {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 420px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      cursor: grab;
+      user-select: none;
+      transition: width 0.3s, height 0.3s, border-radius 0.3s, padding 0.3s, opacity 0.3s;
+    }
+
+    .toast:active { cursor: grabbing; }
+
+    /* 贴合 / 折叠展开动画 */
+    .toast.snapping {
+      transition: left 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  top 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  width 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  height 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  border-radius 0.35s,
+                  padding 0.35s,
+                  opacity 0.3s;
+    }
+
+    /* ── 折叠态（向右收缩） ── */
+
+    .toast.folded {
+      width: 48px !important;
+      height: 48px;
+      padding: 0;
+      border-radius: 18px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .toast.folded .toast-body { display: none; }
+    .toast.folded .fold-icon { display: flex; }
+
+    .fold-icon {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* ── 审批 / 问答卡片边框呼吸闪烁 ── */
+
+    @keyframes border-pulse {
+      0%, 100% { border-color: var(--pulse-color, var(--line)); }
+      50%      { border-color: var(--pulse-peak, rgba(255,255,255,0.35)); }
+    }
+
+    .toast.warning {
+      --pulse-color: rgba(255, 160, 50, 0.25);
+      --pulse-peak: rgba(255, 160, 50, 0.7);
+      animation: border-pulse 2s ease-in-out infinite;
+    }
+
+    .toast.question {
+      --pulse-color: rgba(100, 180, 255, 0.25);
+      --pulse-peak: rgba(100, 180, 255, 0.7);
+      animation: border-pulse 2s ease-in-out infinite;
+    }
+
+    /* ── 窗口控制按钮（右上角） ── */
+
+    .window-controls {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      display: flex;
+      gap: 4px;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .toast:hover .window-controls { opacity: 1; }
+    .toast.folded .window-controls { display: none; }
+
+    .wc-btn {
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 10px;
+      font-family: inherit;
+      cursor: default;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .wc-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .wc-btn.close:hover {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    /* ── 顶部行：图标 + 标题 + 来源 ── */
+
+    .topline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      padding-right: 50px;
+    }
+
+    .tool-icon {
+      flex: none;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    .source {
+      flex: none;
+      padding: 2px 6px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.04);
+      font-size: 9px;
+      font-weight: 600;
+    }
+
+    .queue-badge {
+      flex: none;
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    /* ── 描述 ── */
+
+    .description {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      margin-top: 6px;
+      color: rgba(255, 255, 255, 0.65);
+      line-height: 1.5;
+      font-size: 10px;
+    }
+
+    /* ── 分隔线（虚线） ── */
+
+    .separator {
+      margin: 8px 0;
+      border: none;
+      border-top: 1px dashed rgba(255, 255, 255, 0.12);
+    }
+
+    /* ── 工具详情区 ── */
+
+    .tool-detail {
+      padding: 8px 10px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .tool-detail .cmd-line {
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+    }
+
+    .tool-detail .cmd-prefix {
+      flex: none;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .tool-detail .cmd-text {
+      color: rgba(255, 255, 255, 0.85);
+      word-break: break-all;
+    }
+
+    .tool-detail .cmd-desc {
+      margin-top: 3px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 9.5px;
+    }
+
+    .tool-detail .file-path {
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 9px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      direction: rtl;
+      text-align: left;
+    }
+
+    .tool-detail .diff-line {
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+    }
+
+    .tool-detail .diff-minus {
+      flex: none;
+      font-weight: 700;
+      color: var(--red);
+    }
+
+    .tool-detail .diff-minus-text {
+      color: rgba(255, 102, 102, 0.7);
+    }
+
+    .tool-detail .diff-plus {
+      flex: none;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .tool-detail .diff-plus-text {
+      color: rgba(77, 217, 102, 0.7);
+    }
+
+    .tool-detail .grep-prefix {
+      flex: none;
+      font-weight: 700;
+      color: var(--purple);
+    }
+
+    .tool-detail .grep-text {
+      color: rgba(204, 153, 255, 0.8);
+    }
+
+    /* ── 子命令勾选区 ── */
+
+    .subcmd-section {
+      margin-top: 8px;
+    }
+
+    .subcmd-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      font-size: 9px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.45);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .subcmd-header::after {
+      content: "";
+      flex: 1;
+      border-top: 1px dashed rgba(255, 255, 255, 0.08);
+    }
+
+    .subcmd-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .subcmd-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.02);
+      cursor: default;
+      transition: background 0.1s;
+    }
+
+    .subcmd-row:hover { background: rgba(255, 255, 255, 0.06); }
+
+    .subcmd-check {
+      flex: none;
+      width: 14px;
+      height: 14px;
+      margin-top: 1px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 3px;
+      display: grid;
+      place-items: center;
+      font-size: 9px;
+      color: transparent;
+      transition: all 0.1s;
+    }
+
+    .subcmd-row.checked .subcmd-check {
+      border-color: var(--green-border);
+      background: var(--green-bg);
+      color: var(--green);
+    }
+
+    .subcmd-row:hover .subcmd-check {
+      border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .subcmd-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .subcmd-tool {
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .subcmd-tool .tool-name {
+      color: var(--amber);
+    }
+
+    .subcmd-detail {
+      margin-top: 2px;
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.45);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .subcmd-detail .sc-prefix {
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .subcmd-detail .sc-file {
+      color: rgba(255, 255, 255, 0.35);
+    }
+
+    /* ── 按钮行 ── */
+
+    .actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .btn {
+      flex: 1;
+      border: 1px solid;
+      border-radius: 4px;
+      padding: 7px 0;
+      font: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: default;
+      text-align: center;
+      transition: filter 0.1s;
+    }
+
+    .btn:hover { filter: brightness(1.25); }
+
+    .btn-deny {
+      color: rgba(255, 255, 255, 0.95);
+      background: var(--red-bg);
+      border-color: var(--red-border);
+    }
+
+    .btn-dismiss {
+      color: rgba(255, 255, 255, 0.95);
+      background: var(--gray-bg);
+      border-color: var(--gray-border);
+    }
+
+    .btn-allow {
+      color: rgba(255, 255, 255, 0.95);
+      background: var(--green-bg);
+      border-color: var(--green-border);
+    }
+
+    .btn-always {
+      color: rgba(255, 255, 255, 0.95);
+      background: var(--blue-bg);
+      border-color: var(--blue-border);
+    }
+
+    /* ── 问答卡片 ── */
+
+    .question-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-right: 50px;
+    }
+
+    .question-mark {
+      flex: none;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--cyan);
+    }
+
+    .question-text {
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.9);
+      line-height: 1.45;
+    }
+
+    .option-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      cursor: default;
+      transition: background 0.1s;
+    }
+
+    .option-row:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .option-row:hover .option-arrow { visibility: visible; }
+    .option-row:hover .option-label { color: white; font-weight: 600; }
+
+    .option-arrow {
+      flex: none;
+      width: 10px;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--cyan);
+      visibility: hidden;
+    }
+
+    .option-index {
+      flex: none;
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(102, 179, 255, 0.6);
+    }
+
+    .option-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .option-label {
+      font-size: 10.5px;
+      color: rgba(255, 255, 255, 0.75);
+      transition: color 0.1s;
+    }
+
+    .option-desc {
+      margin-top: 2px;
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    .text-input {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .text-input .prompt {
+      flex: none;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    .text-input .placeholder {
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 10.5px;
+    }
+
+    .free-input {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font: inherit;
+      font-size: 10.5px;
+      caret-color: var(--green);
+    }
+
+    .free-input::placeholder {
+      color: rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-skip {
+      color: rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(255, 255, 255, 0.10);
+    }
+
+    .btn-submit {
+      color: rgba(255, 255, 255, 0.95);
+      background: var(--green-bg);
+      border-color: var(--green-border);
+    }
+
+    /* ── 紧凑模式 ── */
+
+    .compact .description { -webkit-line-clamp: 1; }
+    .compact .tool-detail,
+    .compact .actions,
+    .compact .subcmd-section,
+    .compact .separator { display: none; }
+    .compact {
+      opacity: 0.88;
+    }
+
+    /* ── 主题配色 ── */
+
+    .toast.success .topline .tool-icon { color: var(--green); }
+    .toast.success .topline .title { color: var(--green); }
+    .toast.success .fold-icon { color: var(--green); }
+
+    .toast.warning .topline .tool-icon { color: var(--amber); }
+    .toast.warning .topline .title { color: var(--amber); }
+    .toast.warning .fold-icon { color: var(--amber); }
+
+    .toast.info .topline .tool-icon { color: var(--cyan); }
+    .toast.info .topline .title { color: var(--cyan); }
+    .toast.info .fold-icon { color: var(--cyan); }
+
+    .toast.danger .topline .tool-icon { color: var(--red); }
+    .toast.danger .topline .title { color: var(--red); }
+    .toast.danger .fold-icon { color: var(--red); }
+
+    .toast.question .topline .tool-icon { color: var(--cyan); }
+    .toast.question .topline .title { color: rgba(255, 255, 255, 0.9); }
+    .toast.question .fold-icon { color: var(--cyan); }
+
+    /* ── 自动消失动画 ── */
+
+    @keyframes dismiss-bounce-right {
+      0%   { transform: translateX(0); opacity: 1; }
+      15%  { transform: translateX(-20px); opacity: 1; }
+      50%  { transform: translateX(60px); opacity: 0.8; }
+      100% { transform: translateX(120px) scale(0.5); opacity: 0; }
+    }
+
+    .toast.dismissing {
+      animation: dismiss-bounce-right 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      pointer-events: none;
+    }
+
+    /* ── 区域标注（仅样式稿用） ── */
+
+    .zone-label {
+      position: absolute;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.04);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <section class="desktop-hint">
+    <h1>hebisland</h1>
+    <p>
+      独立通知与审批岛。每条消息都是一个无边框窗口。<br><br>
+      ▸ 普通消息 5s 后自动向右弹出消失（hover 暂停计时）<br>
+      ▸ 审批 / 问答必须用户点按钮才消失<br>
+      ▸ 折叠 ⌄ 向右缩成 48×48 方块，点击展开<br>
+      ▸ 关闭 × 立即移除<br>
+      ▸ 自由拖拽 + 靠近原位自动贴合<br><br>
+      <span style="color:rgba(255,255,255,0.35)">真实场景：审批同步自 hebbian HITL hook，<br>
+      用户在 hebbian 里审批了，island 自动消失。</span>
+    </p>
+  </section>
+
+  <span class="zone-label" style="right:24px; top:24px">TOP-RIGHT</span>
+  <span class="zone-label" style="right:24px; bottom:24px">BOTTOM-RIGHT</span>
+
+  <!-- ═══════════════════════════════════════════════════ -->
+  <!--  所有卡片用绝对定位，JS 管理堆叠与拖拽                 -->
+  <!-- ═══════════════════════════════════════════════════ -->
+
+  <!-- ① 紧凑：成功通知 -->
+  <article class="toast success compact" data-zone="top-right" data-order="0">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">✓</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">✓</span>
+        <span class="title">检查完成</span>
+        <span class="source">heb</span>
+      </div>
+      <p class="description">cargo check --workspace 已通过。</p>
+    </div>
+  </article>
+
+  <!-- ② 紧凑：信息通知 -->
+  <article class="toast info compact" data-zone="top-right" data-order="1">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">✦</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">✦</span>
+        <span class="title">任务继续</span>
+        <span class="source">desktop</span>
+      </div>
+      <p class="description">后台任务完成，准备处理结果。</p>
+    </div>
+  </article>
+
+  <!-- ③ 审批卡片：Bash（带子命令勾选） -->
+  <article class="toast warning" data-zone="top-right" data-order="2">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">!</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">!</span>
+        <span class="title">Bash</span>
+        <span class="queue-badge">1/3</span>
+        <span class="source">approval</span>
+      </div>
+      <hr class="separator">
+      <div class="tool-detail">
+        <div class="cmd-line">
+          <span class="cmd-prefix">$</span>
+          <span class="cmd-text">cargo test -p agent-core --lib</span>
+        </div>
+        <div class="cmd-desc">运行 agent-core 单元测试</div>
+      </div>
+      <div class="subcmd-section">
+        <div class="subcmd-header">待审批队列</div>
+        <div class="subcmd-list">
+          <div class="subcmd-row checked">
+            <div class="subcmd-check">✓</div>
+            <div class="subcmd-body">
+              <div class="subcmd-tool"><span class="tool-name">Bash</span></div>
+              <div class="subcmd-detail"><span class="sc-prefix">$</span> cargo test -p agent-core --lib</div>
+            </div>
+          </div>
+          <div class="subcmd-row checked">
+            <div class="subcmd-check">✓</div>
+            <div class="subcmd-body">
+              <div class="subcmd-tool"><span class="tool-name">Edit</span></div>
+              <div class="subcmd-detail"><span class="sc-file">crates/agent-core/src/tools/hitl.rs</span></div>
+            </div>
+          </div>
+          <div class="subcmd-row">
+            <div class="subcmd-check">✓</div>
+            <div class="subcmd-body">
+              <div class="subcmd-tool"><span class="tool-name">Bash</span></div>
+              <div class="subcmd-detail"><span class="sc-prefix">$</span> cargo check --workspace</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-deny">拒绝</button>
+        <button class="btn btn-allow">一次</button>
+        <button class="btn btn-allow">对话</button>
+        <button class="btn btn-allow">项目</button>
+        <button class="btn btn-always">全局</button>
+      </div>
+    </div>
+  </article>
+
+  <!-- ④ 紧凑：错误通知 -->
+  <article class="toast danger compact" data-zone="bottom-right" data-order="0">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">!</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">!</span>
+        <span class="title">请求被截断</span>
+        <span class="source">model</span>
+      </div>
+      <p class="description">模型因输出长度限制提前停止。</p>
+    </div>
+  </article>
+
+  <!-- ⑤ 审批卡片：Edit（带 diff） -->
+  <article class="toast warning" data-zone="bottom-right" data-order="1">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">!</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">!</span>
+        <span class="title">Edit</span>
+        <span style="font-size:10px;font-weight:500;color:rgba(255,255,255,0.5)">notch.rs</span>
+        <span class="source">approval</span>
+      </div>
+      <hr class="separator">
+      <div class="tool-detail">
+        <div class="file-path">apps/desktop/src/notch.rs</div>
+        <div class="diff-line" style="margin-top:4px">
+          <span class="diff-minus">−</span>
+          <span class="diff-minus-text">fn old_notification_handler()</span>
+        </div>
+        <div class="diff-line">
+          <span class="diff-plus">+</span>
+          <span class="diff-plus-text">fn island_notification_bridge()</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-deny">拒绝</button>
+        <button class="btn btn-allow">一次</button>
+        <button class="btn btn-allow">对话</button>
+        <button class="btn btn-allow">项目</button>
+        <button class="btn btn-always">全局</button>
+      </div>
+    </div>
+  </article>
+
+  <!-- ⑥ 问答卡片 -->
+  <article class="toast question" data-zone="bottom-right" data-order="2">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">?</div>
+    <div class="toast-body">
+      <div class="question-header">
+        <span class="question-mark">?</span>
+        <span class="question-text">通知窗口放在屏幕哪个角？</span>
+        <span class="queue-badge">1/1</span>
+      </div>
+      <div class="option-list">
+        <div class="option-row">
+          <span class="option-arrow">▸</span>
+          <span class="option-index">1.</span>
+          <div class="option-content">
+            <div class="option-label">右上角</div>
+            <div class="option-desc">经典 macOS 通知位置</div>
+          </div>
+        </div>
+        <div class="option-row">
+          <span class="option-arrow">▸</span>
+          <span class="option-index">2.</span>
+          <div class="option-content">
+            <div class="option-label">右下角</div>
+            <div class="option-desc">Windows 风格</div>
+          </div>
+        </div>
+      </div>
+      <div class="text-input">
+        <span class="prompt">&gt;</span>
+        <input type="text" class="free-input" placeholder="自由输入…" />
+      </div>
+      <div class="actions">
+        <button class="btn btn-skip">跳过</button>
+        <button class="btn btn-submit">提交</button>
+      </div>
+    </div>
+  </article>
+
+  <!-- ⑦ 紧凑：成功通知 -->
+  <article class="toast success compact" data-zone="bottom-right" data-order="3">
+    <div class="window-controls">
+      <button class="wc-btn fold" title="折叠">⌄</button>
+      <button class="wc-btn close" title="关闭">×</button>
+    </div>
+    <div class="fold-icon">✓</div>
+    <div class="toast-body">
+      <div class="topline">
+        <span class="tool-icon">✓</span>
+        <span class="title">文档已保存</span>
+        <span class="source">cli</span>
+      </div>
+      <p class="description">hebisland 设计稿已写入 docs。</p>
+    </div>
+  </article>
+
+  <script>
+    // ════════════════════════════════════════════
+    //  布局引擎：堆叠定位 + 拖拽 + 贴合 + 折叠
+    // ════════════════════════════════════════════
+
+    const MARGIN = 24;
+    const GAP = 10;
+    const SNAP_DISTANCE = 48;
+    const FOLDED_SIZE = 48;
+    const CARD_WIDTH = 420;
+
+    // 测量一张卡片展开时的真实高度（不管当前是否折叠）
+    function measureExpandedHeight(card) {
+      if (!card.classList.contains('folded')) return card.offsetHeight;
+      card.classList.remove('folded');
+      const h = card.offsetHeight;
+      card.classList.add('folded');
+      return h;
+    }
+
+    function layoutAll() {
+      const zones = { 'top-right': [], 'bottom-right': [] };
+      document.querySelectorAll('.toast:not(.removed)').forEach(el => {
+        const zone = el.dataset.zone;
+        if (zones[zone]) zones[zone].push(el);
+      });
+
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+
+      for (const [zone, cards] of Object.entries(zones)) {
+        cards.sort((a, b) => +a.dataset.order - +b.dataset.order);
+
+        if (zone === 'top-right') {
+          // 从顶部向下堆叠；折叠贴右上角，展开向左下展开
+          let y = MARGIN;
+          for (const card of cards) {
+            const expandedH = measureExpandedHeight(card);
+            const isFolded = card.classList.contains('folded');
+            const slotH = isFolded ? FOLDED_SIZE : expandedH;
+
+            const x = isFolded
+              ? W - MARGIN - FOLDED_SIZE
+              : W - MARGIN - CARD_WIDTH;
+
+            // 顶对齐：折叠方块顶边 = 行槽顶边
+            const cy = y;
+
+            card._homeX = x;
+            card._homeY = cy;
+            card._expandedH = expandedH;
+
+            if (card !== dragTarget) {
+              card.style.left = x + 'px';
+              card.style.top = cy + 'px';
+            }
+
+            y += slotH + GAP;
+          }
+        } else {
+          // 从底部向上堆叠；折叠贴右下角，展开向左上展开
+          let y = H - MARGIN;
+          for (const card of cards) {
+            const expandedH = measureExpandedHeight(card);
+            const isFolded = card.classList.contains('folded');
+            const slotH = isFolded ? FOLDED_SIZE : expandedH;
+
+            y -= slotH;
+
+            const x = isFolded
+              ? W - MARGIN - FOLDED_SIZE
+              : W - MARGIN - CARD_WIDTH;
+
+            // 底对齐自然成立：slotH = 卡片可视高度，y 就是卡片顶边
+            const cy = y;
+
+            card._homeX = x;
+            card._homeY = cy;
+            card._expandedH = expandedH;
+
+            if (card !== dragTarget) {
+              card.style.left = x + 'px';
+              card.style.top = cy + 'px';
+            }
+
+            y -= GAP;
+          }
+        }
+      }
+    }
+
+    // ── 拖拽（区分拖拽 vs 纯点击） ──
+
+    let dragTarget = null;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let wasDragged = false;       // 本次 mousedown→mouseup 是否产生了真实位移
+    const DRAG_THRESHOLD = 5;     // 移动超过 5px 才算拖拽
+
+    document.addEventListener('mousedown', e => {
+      const card = e.target.closest('.toast');
+      if (!card) return;
+      if (e.target.closest('.wc-btn, .btn, .subcmd-row, .option-row, .free-input')) return;
+
+      dragTarget = card;
+      wasDragged = false;
+      card.classList.remove('snapping');
+      const rect = card.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      card.style.zIndex = 100;
+      card.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragTarget) return;
+      const movedX = Math.abs(e.clientX - dragStartX);
+      const movedY = Math.abs(e.clientY - dragStartY);
+      if (movedX > DRAG_THRESHOLD || movedY > DRAG_THRESHOLD) {
+        wasDragged = true;
+      }
+      dragTarget.style.left = (e.clientX - dragOffsetX) + 'px';
+      dragTarget.style.top = (e.clientY - dragOffsetY) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragTarget) return;
+      const card = dragTarget;
+      card.style.cursor = '';
+      card.style.zIndex = '';
+
+      // 吸附到 home 位置（折叠的 home 就是折叠位置，不会展开）
+      const cx = parseFloat(card.style.left);
+      const cy = parseFloat(card.style.top);
+      const dx = Math.abs(cx - card._homeX);
+      const dy = Math.abs(cy - card._homeY);
+
+      if (dx < SNAP_DISTANCE && dy < SNAP_DISTANCE) {
+        card.classList.add('snapping');
+        card.style.left = card._homeX + 'px';
+        card.style.top = card._homeY + 'px';
+        card.addEventListener('transitionend', () => card.classList.remove('snapping'), { once: true });
+      }
+
+      dragTarget = null;
+      // wasDragged 保留到 click 事件里检查，click 处理完后再重置
+    });
+
+    // ── 折叠（按钮折叠，单击方块展开 → 向左展开） ──
+
+    document.addEventListener('click', e => {
+      // 如果刚刚是拖拽，吃掉这次 click，不做任何展开/折叠
+      if (wasDragged) {
+        wasDragged = false;
+        return;
+      }
+      wasDragged = false;
+
+      const foldBtn = e.target.closest('.wc-btn.fold');
+      if (foldBtn) {
+        const card = foldBtn.closest('.toast');
+        card.classList.add('snapping');
+        card.classList.add('folded');
+        requestAnimationFrame(() => {
+          layoutAll();
+          card.addEventListener('transitionend', () => card.classList.remove('snapping'), { once: true });
+        });
+        return;
+      }
+
+      // 折叠态单击展开（向左展开：右边缘不动，left 向左移）
+      // 只有纯点击（非拖拽）才展开
+      const card = e.target.closest('.toast.folded');
+      if (card) {
+        card.classList.add('snapping');
+        card.classList.remove('folded');
+        requestAnimationFrame(() => {
+          layoutAll();
+          card.addEventListener('transitionend', () => card.classList.remove('snapping'), { once: true });
+        });
+        return;
+      }
+    });
+
+    // ── 关闭 ──
+
+    document.addEventListener('click', e => {
+      const closeBtn = e.target.closest('.wc-btn.close');
+      if (!closeBtn) return;
+      const card = closeBtn.closest('.toast');
+      dismissCard(card);
+    });
+
+    // ── 子命令勾选 ──
+
+    document.addEventListener('click', e => {
+      const row = e.target.closest('.subcmd-row');
+      if (!row) return;
+      row.classList.toggle('checked');
+    });
+
+    // ── 自动消失（普通消息 5s 后向右弹出消失） ──
+    // 审批（.warning）和问答（.question）不会自动消失
+
+    const AUTO_DISMISS_MS = 5000;
+
+    function isInteractive(card) {
+      return card.classList.contains('warning') || card.classList.contains('question');
+    }
+
+    function dismissCard(card) {
+      if (card.classList.contains('removed') || card.classList.contains('dismissing')) return;
+      card.classList.add('dismissing');
+      card.addEventListener('animationend', () => {
+        card.classList.add('removed');
+        card.style.display = 'none';
+        layoutAll();
+      }, { once: true });
+    }
+
+    function scheduleAutoDismiss() {
+      document.querySelectorAll('.toast:not(.removed)').forEach(card => {
+        if (isInteractive(card)) return;
+        if (card._dismissScheduled) return;
+        card._dismissScheduled = true;
+
+        let remaining = AUTO_DISMISS_MS;
+        let startTime = Date.now();
+        let timer = setTimeout(() => dismissCard(card), remaining);
+
+        card.addEventListener('mouseenter', () => {
+          clearTimeout(timer);
+          remaining -= (Date.now() - startTime);
+          if (remaining < 500) remaining = 500;
+        });
+
+        card.addEventListener('mouseleave', () => {
+          startTime = Date.now();
+          timer = setTimeout(() => dismissCard(card), remaining);
+        });
+      });
+    }
+
+    // ── 审批 / 问答按钮点击后消失 ──
+
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('.btn');
+      if (!btn) return;
+      const card = btn.closest('.toast');
+      if (!card || !isInteractive(card)) return;
+      dismissCard(card);
+    });
+
+    // ── 初始布局 ──
+
+    window.addEventListener('load', () => {
+      layoutAll();
+      scheduleAutoDismiss();
+    });
+    window.addEventListener('resize', layoutAll);
+  </script>
+</body>
+</html>

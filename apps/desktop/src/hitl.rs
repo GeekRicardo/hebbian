@@ -123,3 +123,29 @@ impl HitlState {
         !self.pending.lock().unwrap().is_empty()
     }
 }
+
+/// Island 浮层快捷审批入口：只支持 AllowOnce / Deny。
+pub fn resolve_hitl_from_island(
+    app: &tauri::AppHandle,
+    request_id: &str,
+    decision_str: &str,
+) {
+    use std::sync::Arc;
+    use tauri::Manager;
+
+    let Some(state) = app.try_state::<Arc<HitlState>>() else {
+        tracing::warn!("island_approve: HitlState not available");
+        return;
+    };
+    let decision = match decision_str {
+        "allow" => protocol::ApprovalDecision::AllowOnce,
+        "deny" => protocol::ApprovalDecision::Deny,
+        other => {
+            tracing::warn!(decision = other, "island_approve: unknown decision");
+            return;
+        }
+    };
+    if let Err(e) = state.resolve_approval(request_id, decision) {
+        tracing::warn!(error = %e, "island_approve: failed to resolve");
+    }
+}

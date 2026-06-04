@@ -2,8 +2,8 @@ pub mod chat;
 mod engine;
 mod error;
 mod force_automode;
+mod hebisland_client;
 mod hitl;
-mod notch;
 mod window_control;
 
 pub use engine::EngineEvent;
@@ -847,6 +847,7 @@ async fn send_message(
     enabled_tools: Vec<String>,
     request_id: String,
     meta: Option<agent_core::storage::sessions::MessageMeta>,
+    continue_run: Option<bool>,
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let runtime = cancellation::register_for_session(request_id.clone(), Some(session_id.clone()));
@@ -854,6 +855,7 @@ async fn send_message(
     let result = chat::send_and_save(
         &app,
         chat::SendArgs {
+            continue_run: continue_run.unwrap_or(false),
             session_id,
             user_content: content,
             attachments,
@@ -2497,9 +2499,9 @@ pub fn run() {
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(permission_store)
         .manage(core_client)
-        .manage(notch::create_notch_state())
         .setup(|app| {
-            notch::initialize_notch(app.handle());
+            // hebisland socket client 初始化（独立 Tauri 二进制，不持有 agent_core）
+            app.handle().manage(hebisland_client::init_hebisland_client(app.handle().clone()));
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，
@@ -2661,10 +2663,6 @@ pub fn run() {
             deepseek_login,
             subscribe_log_stream,
             read_log_file,
-            notch::notify_dismiss,
-            notch::notify_click,
-            notch::notify_set_position,
-            notch::notify_resize,
             open_log_viewer_window,
             set_log_viewer_always_on_top,
         ])
