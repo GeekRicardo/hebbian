@@ -34,6 +34,7 @@ use crate::{
     agent_loop::EventSink,
     edits::{metadata::EditEntry, EditsWorktree},
     effects::{analyze_effects, EffectClass},
+    model_io_dump::{self, DumpEntry, ModelIoDump},
     permissions::PermissionStore,
     run_state::RunState,
     storage::{plan_comments, plans, sessions as session_store},
@@ -122,7 +123,8 @@ pub struct ToolDispatcher {
     pub sink: EventSink,
     pub cancel: CancelFlag,
     /// 运行模式（架构 §4.4.3）。AutoMode 时在 NeedsApproval 路径上调一次 judge。
-    pub run_mode: crate::run_mode::RunMode,
+    /// 共享引用：agent_loop / harness 各持一份，SwitchRunMode 实时更新。
+    pub run_mode: Arc<std::sync::Mutex<crate::run_mode::RunMode>>,
     /// 当前会话使用的模型 id（AutoMode judge 限定模型用，命中
     /// [`crate::automode::AUTOMODE_ALLOWED_MODELS`] 才发请求）。
     pub model_id: Option<String>,
@@ -152,6 +154,8 @@ pub struct ToolDispatcher {
     /// 仅当本轮 `calls` 含 `Task` 工具时由 agent_loop 抓取；否则 `None` 跳过克隆。
     /// `Arc` 共享给同 ToolStep 内所有 Task（parallel 启动看到同一形态）。
     pub parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>,
+    /// 模型 IO dump 句柄。AutoMode 判官请求记入 model_io.jsonl（`kind: "judge"`）。
+    pub model_io_dump: Option<ModelIoDump>,
 }
 
 impl ToolDispatcher {
@@ -442,7 +446,7 @@ impl ToolDispatcher {
         let sink = self.sink.clone();
         let cancel = self.cancel.clone();
         let workspace = self.workspace.clone();
-        let run_mode = self.run_mode;
+        let run_mode = self.run_mode.clone();
         let judge_client = self.judge_client.clone();
         let model_id_for_judge = self.model_id.clone();
         let force_automode = self.force_automode;
@@ -455,6 +459,7 @@ impl ToolDispatcher {
         let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
         let permission_store = self.permission_store.clone();
         let edits_worktree_for_snapshot = self.edits_worktree.clone();
+        let model_io_dump_for_judge = self.model_io_dump.clone();
 
         let tool_span_name = format!("tool.{}", call.name);
         let tool_span = tracing::info_span!(
@@ -498,7 +503,9 @@ impl ToolDispatcher {
 
                 // EditAutomatically 短路（架构 §4.4.3）：文件编辑类（Edit/Write）NeedsApproval
                 // 直接 AllowOnce 短路；命令类（Bash/PowerShell）仍走原审批路径。
-                if run_mode == crate::run_mode::RunMode::EditAutomatically {
+                // 实时读取：用户在 agent_loop 运行中切 mode 时下一轮 dispatch 立即生效。
+                let current_run_mode = *run_mode.lock().unwrap();
+                if current_run_mode == crate::run_mode::RunMode::EditAutomatically {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let is_edit = matches!(call_name_for_judge.as_str(), "Edit" | "edit");
                         if is_edit {
@@ -518,10 +525,9 @@ impl ToolDispatcher {
                 }
 
                 // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
-                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask。Allow/Deny 主动
-                // resolve waiter，让 await_permission_decision 立即按 judge 结果返回；
-                // Ask 则保持原流程让用户决策（PermissionRequested 已 emit）。
-                if run_mode == crate::run_mode::RunMode::AutoMode {
+                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask。判官始终做二元决策：
+                // ASK 折叠为 Deny，Allow/Deny 主动 resolve waiter，前端不弹审批框。
+                if current_run_mode == crate::run_mode::RunMode::AutoMode {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
                         // 运行时读用户配置的 AutoMode 白名单（设置里改了即时生效，免重启）。
@@ -550,6 +556,7 @@ impl ToolDispatcher {
                         } else if let Some(judge) = judge_client.as_ref() {
                             // judge 必须看到 hebbian 静态分析的全量 effects（segments /
                             // write_targets / dangerous_kinds），不重复解析 shell。
+                            let judge_start = Instant::now();
                             let prefix_outcome =
                                 crate::automode::classify_bash_prefixes_for_automode(
                                     judge,
@@ -569,6 +576,7 @@ impl ToolDispatcher {
                                 &[],
                             )
                             .await;
+                            let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
                             // AutoMode 判官始终做二元决策（架构 §4.4.4）：ASK 折叠为
                             // Deny，让 agent 自行换路子或汇报，前端不弹审批框。
                             // force_automode 在 AutoMode 下不再有额外作用；
@@ -600,6 +608,26 @@ impl ToolDispatcher {
                                 decision: decision.as_label().to_string(),
                                 reason: decision.reason().map(str::to_string),
                             }));
+                            // 判官请求记入 model_io.jsonl（kind="judge"），前端蓝色标签渲染。
+                            if let Some(dump) = model_io_dump_for_judge.as_ref() {
+                                dump.record(DumpEntry {
+                                    ts: model_io_dump::iso_now(),
+                                    run_id: state.run_id.to_string(),
+                                    turn: 0,
+                                    model: model_id_str.to_string(),
+                                    request: serde_json::json!({
+                                        "tool": call_name_for_judge,
+                                        "input": call_input_for_judge,
+                                    }),
+                                    response: serde_json::json!({
+                                        "raw": raw_label,
+                                        "final": decision.as_label(),
+                                        "reason": decision.reason(),
+                                    }),
+                                    duration_ms: judge_duration_ms,
+                                    kind: "judge".to_string(),
+                                });
+                            }
                             match decision {
                                 crate::automode::AutoModeDecision::Allow => {
                                     hitl_for_future
@@ -1914,7 +1942,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -1926,6 +1954,7 @@ mod tests {
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let call = ToolCall {
@@ -1978,7 +2007,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AutoMode,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
             model_id: Some("claude-opus-4.7".to_string()),
             judge_client: Some(Arc::new(StaticAllowJudge)),
             force_automode: false,
@@ -1989,6 +2018,7 @@ mod tests {
             edits_worktree: None,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let call = ToolCall {
@@ -2040,7 +2070,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AutoMode,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
             model_id: Some("claude-sonnet-4-6".to_string()), // 不在默认白名单
             // judge 给 StaticAllowJudge：若错误地调用了它，命令会被自动放行——
             // 用它来反证"不该调判官"（断言看到的是 NeedsApproval 而非 auto allow）。
@@ -2053,6 +2083,7 @@ mod tests {
             edits_worktree: None,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let call = ToolCall {
@@ -2130,7 +2161,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2142,6 +2173,7 @@ mod tests {
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let calls = vec![
@@ -2242,7 +2274,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2255,6 +2287,7 @@ mod tests {
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let call = ToolCall {
@@ -2358,7 +2391,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2370,6 +2403,7 @@ mod tests {
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
+            model_io_dump: None,
         };
 
         let call = ToolCall {

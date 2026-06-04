@@ -57,6 +57,8 @@ interface ModelIoEntry {
   request: ModelIoRequest;
   response: ModelIoResponse;
   duration_ms: number;
+  /** "main" = 主模型调用，"judge" = AutoMode 判官调用。老 jsonl 无此字段默认 "main"。 */
+  kind?: string;
 }
 
 interface ModelIoRequest {
@@ -625,6 +627,11 @@ function RequestRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium">#{index + 1}</span>
+          {entry.kind === "judge" && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
+              judge
+            </span>
+          )}
           {matchCount > 0 ? (
             <span
               className="text-[10px] px-1 py-0.5 rounded bg-yellow-400/30 text-yellow-700 dark:text-yellow-300 tabular-nums"
@@ -684,6 +691,49 @@ function RequestDetail({
   const [systemOpen, setSystemOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [systemZoomed, setSystemZoomed] = useZoom();
+
+  // AutoMode 判官请求：简化渲染（tool + input + decision）
+  if (entry.kind === "judge") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const req = entry.request as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resp = entry.response as any;
+    return (
+      <div className="p-4 space-y-3" data-testid="model-io-detail">
+        <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px]">
+              AutoMode 判官
+            </span>
+            <span>请求 #{index + 1} · {entry.model} · {entry.duration_ms}ms</span>
+          </div>
+        </div>
+        <CollapsibleBlock
+          open={true}
+          onToggle={() => {}}
+          label={`工具: ${req.tool ?? "?"}`}
+        >
+          <pre className="px-3 py-2 text-[11px] whitespace-pre-wrap break-words bg-muted/30 max-h-[400px] overflow-auto rounded font-mono">
+            {JSON.stringify(req.input, null, 2)}
+          </pre>
+        </CollapsibleBlock>
+        <CollapsibleBlock
+          open={true}
+          onToggle={() => {}}
+          label={`判官决策: ${resp.final ?? "?"}`}
+        >
+          <div className="px-3 py-2 text-[11px] space-y-1">
+            {resp.raw && resp.raw !== resp.final && (
+              <div>原始: <span className="font-medium">{String(resp.raw)}</span></div>
+            )}
+            {resp.reason && (
+              <div className="mt-1 text-muted-foreground whitespace-pre-wrap">{String(resp.reason)}</div>
+            )}
+          </div>
+        </CollapsibleBlock>
+      </div>
+    );
+  }
 
   const tools = entry.request?.tools ?? [];
   const newCount = (entry.request?.messages?.length ?? 0) - carriedOverCount;

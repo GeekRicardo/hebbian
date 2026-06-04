@@ -256,7 +256,7 @@ impl Harness {
             pending_inputs,
             consumed_pending_inputs,
             pending_inputs_accepting,
-            run_mode,
+            run_mode: _,
             model_id,
             force_automode,
             data_dir,
@@ -292,7 +292,7 @@ impl Harness {
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,
-                run_mode,
+                run_mode: run_mode_shared.clone(),
                 model_id,
                 judge_client: Some(judge_client),
                 force_automode,
@@ -619,9 +619,8 @@ async fn run_actor_loop(
                     tracing::warn!(%new_mode, "actor: SwitchRunMode 无法解析 RunMode 字符串");
                     continue;
                 };
-                // 本期：actor 仅更新共享 mode + emit 事件，不强行替换 dispatcher
-                // 已捕获的 run_mode 值（架构 §13 留尾巴：运行时真切要把 ToolDispatcher.run_mode
-                // 改为 Arc<Mutex<RunMode>> 才能下一轮 dispatch 立刻拿到新值）。
+                // actor 更新共享 mode + emit 事件。ToolDispatcher 每次 tool call
+                // 通过 Arc<Mutex<RunMode>> 读最新值，下一轮 dispatch 立刻生效。
                 let prev = {
                     let mut guard = entry.run_mode.lock().unwrap();
                     let prev = *guard;

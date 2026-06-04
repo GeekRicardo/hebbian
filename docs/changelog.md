@@ -5782,3 +5782,52 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/src/hitl.rs`：`resolve_hitl_from_island` 保留，由 `hebisland_client` reader 线程调用
 - **影响范围**: `apps/desktop/src/` 内部重构；不破坏 `agent_core`、协议、存储格式。Desktop 通知现在依赖独立 `hebisland daemon`（~/.hebbian/island.sock）；daemon 未运行时通知静默跳过。
 - **留尾巴**: `hitl.rs` 的 `resolve_hitl_from_island` 函数名仍带 "island" 字样（语义已变为 hebisland action handler），后续可重命名。hebisland daemon 的自动拉起逻辑未实现（Phase 2）。`apps/island/` 的独立前端（IslandApp/IslandCard）和 `apps/desktop` 的已被删掉的 IslandApp/IslandCard 之间有大量重复——后续考虑统一前端构建输出，避免维护两份 Vite 项目。
+
+---
+
+## 2026-06-04 — AutoMode 下不再弹审批框，判官始终做二元决策
+
+- **Why**: AutoMode 下判官返回 ASK 时，前端弹出审批框但用户点击后审批回复失败（PermissionRequested 在判官运行前已 emit，ASK 留下悬空 waiter）。用户意图是 AutoMode 让 LLM 自行判断，不需要人工介入。
+- **改了什么**:
+  - `crates/agent-core/src/dispatch.rs`：AutoMode 下判官返回 ASK 时始终折叠为 Deny（原仅 `force_automode=true` 时折叠），`force_automode` 仅影响 reason 前缀
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`：`permission_requested` 事件处理增加 AutoMode 守卫——RunMode 为 AutoMode 时跳过 `pendingApproval` 创建，审批弹窗不渲染
+- **影响范围**: agent-core dispatch 逻辑 + desktop 前端 store；不破坏协议/存储格式
+- **留尾巴**: 无
+
+---
+
+## 2026-06-04 — 重写 hebisland 设计文档与实现规格
+
+- **Why**: hebisland-spec.md 描述的仍是已删除的 Desktop 内嵌全屏透明窗口方案（全屏单窗口 + ?island=1 路由），与实际实现（独立 Tauri 多窗口 + Unix socket）脱节。hebisland.md 缺 `durationMs` / `actions` / `--wait` 等独立通知场景所需能力。
+- **改了什么**:
+  - `docs/hebisland-spec.md`：完全重写。删除全屏透明窗口 / zone 布局 / 折叠拖拽 / CustomEvent + eval / 鼠标穿透等过时内容；替换为独立二进制 + socket 协议（NotificationCard 加 `durationMs`/`actions` 字段）+ CLI --wait + 窗口堆叠 + 前后端组件映射 + 测试验收
+  - `docs/hebisland.md`：更新 socket 协议（加 durationMs/actions）、CLI 用法（加 --wait）、action 回传语义（支持自定义按钮名）、迁移状态（Desktop 接入标记为已完成）
+- **影响范围**: 纯文档更新，不动代码
+- **留尾巴**: 前端 IslandCard 的 `durationMs`/`actions` 参数化尚未实现（当前硬编码 info 3s / approval 常驻）。`main.rs` 的 `--wait` 模式尚未实现。下一步按 spec §2.4–2.6 改前端 + 后端 protocol，再加 `notify --wait`
+
+---
+
+## 2026-06-04 — AutoMode 判官请求记入 model_io.jsonl + 前端蓝色标签
+
+- **Why**: 判官请求不可见，调试时无法区分哪些是主模型调用、哪些是判官调用。
+- **改了什么**:
+  - `crates/agent-core/src/model_io_dump.rs`：`DumpEntry` 新增 `kind` 字段（`"main"` / `"judge"`），`serde(default="main")` 向前兼容老 jsonl
+  - `crates/agent-core/src/dispatch.rs`：`ToolDispatcher` 新增 `model_io_dump` 字段；AutoMode judge 调用后记录 `DumpEntry { kind: "judge", ... }`，request 携带 tool + input，response 携带 raw/final/reason
+  - `crates/agent-core/src/agent_loop.rs`：dispatcher 构造传入 `model_io_dump`
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`：`ModelIoEntry` 接口加 `kind?` 字段；左侧时间线 judge 条目渲染蓝色标签；右侧详情 judge 条目用简化视图（tool + input + decision）
+- **影响范围**: agent-core model_io_dump / dispatch 层 + desktop 前端 ModelIoInspector；向前兼容（老 jsonl 无 kind 字段默认 main）
+- **留尾巴**: 无
+
+---
+
+## 2026-06-04 — RunMode 实时读取：用户切 mode 后下一轮 dispatch 立即生效
+
+- **Why**: 架构 §13 留尾巴——`SwitchRunMode` 更新了共享 `Arc<Mutex<RunMode>>` 但 `ToolDispatcher` 用的是 run 启动时捕获的副本值，运行中切 mode 不生效。
+- **改了什么**:
+  - `crates/agent-core/src/dispatch.rs`：`ToolDispatcher.run_mode` 从 `RunMode` 改为 `Arc<Mutex<RunMode>>`；`spawn_tool` 内每次 tool call 实时 lock 读取最新 mode
+  - `crates/agent-core/src/agent_loop.rs`：`LoopParams.run_mode` 同步改为 `Arc<Mutex<RunMode>>`
+  - `crates/agent-core/src/harness.rs`：`LoopParams` 构造传入已有的 `run_mode_shared`；更新 §13 留尾巴注释
+  - `crates/agent-core/src/subagent/runner.rs`：子 agent 的 `run_mode` 同步包装
+  - 所有相关测试 dispatcher 构造同步更新
+- **影响范围**: agent-core dispatch / agent_loop / harness / subagent 内部接口；不破坏协议 / 存储格式 / surface API
+- **留尾巴**: 无（§13 留尾巴已关闭）

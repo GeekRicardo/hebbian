@@ -99,6 +99,14 @@ pub struct DumpEntry {
     pub response: Value,
     /// 调用耗时（毫秒）。
     pub duration_ms: u64,
+    /// 条目来源：`"main"` = 主模型调用，`"judge"` = AutoMode 判官调用。
+    /// 前端按此字段渲染不同颜色标签。老 jsonl 无此字段时反序列化为 `"main"`。
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+fn default_kind() -> String {
+    "main".to_string()
 }
 
 enum DumpCmd {
@@ -467,6 +475,7 @@ mod tests {
             request: json!({"x": 1}),
             response: json!({"type": "Done"}),
             duration_ms: 12,
+            kind: "main".to_string(),
         };
         dump.record(entry.clone());
         dump.record(DumpEntry { turn: 2, ..entry });
