@@ -64,10 +64,18 @@ impl ModelClient for MockClient {
             });
             full.push_str(chunk);
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            // 调试用：先 emit 一段 partial，再模拟「流式中途返回错误」（架构 §4.3 复现）。
+            if std::env::var("HEBBIAN_MOCK_STREAM_ERROR").is_ok() {
+                return Err(ModelError::Other(
+                    "模型流式返回错误：{\"error\":{\"message\":\"upstream stream disconnected: unexpected EOF\",\"type\":\"stream_read_error\"},\"type\":\"error\"}".into(),
+                ));
+            }
         }
         Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
             text: full,
             reasoning: String::new(),
+            reasoning_signature: String::new(),
             attachments: Vec::new(),
             usage: Usage {
                 input_tokens: 8,
