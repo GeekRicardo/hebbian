@@ -1916,6 +1916,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hebisland"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs 6.0.0",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
