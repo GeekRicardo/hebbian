@@ -1,0 +1,196 @@
+/* Hebisland — 通知卡片样式 */
+
+:root {
+  --accent: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.1);
+  --success: #22c55e;
+  --text: #1a1a1a;
+  --text-secondary: #666;
+  --text-muted: #999;
+  --surface: rgba(255, 255, 255, 0.85);
+  --surface-solid: rgba(255, 255, 255, 0.98);
+  --border: rgba(0, 0, 0, 0.08);
+  --card-radius: 20px;
+  --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --card-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 卡片容器 */
+
+.island-card {
+  --glyph-size: 36px;
+  position: fixed;
+  z-index: 9999;
+  background: var(--surface);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+  padding: 10px 14px;
+  width: 320px;
+  cursor: pointer;
+  animation: island-card-mount 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.1);
+  transform-origin: top right;
+  user-select: none;
+}
+
+.island-card.expanded {
+  cursor: default;
+}
+
+.island-card.leaving {
+  animation: island-card-leave 0.25s cubic-bezier(0.55, 0.085, 0.68, 0.53) forwards;
+}
+
+.island-card:hover {
+  box-shadow: var(--card-shadow-hover);
+}
+
+@keyframes island-card-mount {
+  0% { opacity: 0; transform: translateY(-12px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes island-card-leave {
+  0% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.9) translateY(-8px); }
+}
+
+/* 紧凑态 */
+
+.island-card-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+}
+
+.glyph {
+  width: var(--glyph-size);
+  height: var(--glyph-size);
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.glyph.info { background: var(--accent-soft); }
+.glyph.approval { background: var(--danger-soft); }
+.glyph.question { background: var(--accent-soft); }
+
+.glyph-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.9;
+}
+
+.compact-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 展开态 */
+
+.island-card-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.island-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.island-card-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.island-card-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* 审批按钮 */
+
+.island-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.island-card-actions button {
+  flex: 1;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.island-card-actions button:active {
+  transform: scale(0.96);
+}
+
+.btn-allow {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-allow:hover { background: #2563eb; }
+
+.btn-deny {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.btn-deny:hover { background: rgba(239, 68, 68, 0.18); }
+
+.btn-open {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-secondary);
+}
+
+.btn-open:hover { background: rgba(0, 0, 0, 0.1); }
+
+/* 展开/折叠过渡 */
+
+.expand-enter { opacity: 0; max-height: 0; }
+.expand-enter-active {
+  opacity: 1;
+  max-height: 200px;
+  transition: opacity 0.2s ease, max-height 0.25s ease;
+}
+.expand-exit { opacity: 1; max-height: 200px; }
+.expand-exit-active {
+  opacity: 0;
+  max-height: 0;
+  transition: opacity 0.15s ease, max-height 0.2s ease;
+}
