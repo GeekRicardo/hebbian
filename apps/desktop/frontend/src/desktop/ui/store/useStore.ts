@@ -468,6 +468,9 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, suspended: null };
   }
   if (e.type === "permission_requested") {
+    // AutoMode 下判官已做二元决策（Allow/Deny），PermissionRequested 总是立即
+    // 被 PermissionResolved 消解——不弹审批框，避免闪现 + 点击后审批失败。
+    if (slot.currentRunMode === "AutoMode") return slot;
     const approval: PendingApproval = {
       requestId: e.request_id,
       toolName: e.tool_name,
