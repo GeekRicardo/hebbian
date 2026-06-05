@@ -96,6 +96,7 @@ struct CardView: View {
     let onFold: () -> Void
     let onHoverEnter: () -> Void
     let onHoverExit: () -> Void
+    let onBackgroundTap: () -> Void
     let theme: CardTheme
 
     @State private var isHovering = false
@@ -109,6 +110,7 @@ struct CardView: View {
          onFold: @escaping () -> Void = {},
          onHoverEnter: @escaping () -> Void = {},
          onHoverExit: @escaping () -> Void = {},
+         onBackgroundTap: @escaping () -> Void = {},
          theme: CardTheme? = nil) {
         self.card = card
         self.onResult = onResult
@@ -116,6 +118,7 @@ struct CardView: View {
         self.onFold = onFold
         self.onHoverEnter = onHoverEnter
         self.onHoverExit = onHoverExit
+        self.onBackgroundTap = onBackgroundTap
         self.theme = theme ?? CardTheme(cardType: card.cardType)
         // 子命令默认勾选状态
         let defaults = Set((card.subcommands ?? []).enumerated().compactMap {
@@ -160,6 +163,11 @@ struct CardView: View {
             .padding(.top, 8)
             .padding(.trailing, 10)
             .opacity(isHovering ? 1 : 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // 点击非交互区域（背景、标题、描述等）→ 唤醒 hebbian 主窗口
+            onBackgroundTap()
         }
         .onHover { hovering in
             isHovering = hovering

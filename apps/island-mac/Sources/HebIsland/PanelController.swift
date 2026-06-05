@@ -16,6 +16,9 @@ final class PanelController: NSObject {
 
     var onResult: ((ActionResult) -> Void)?
     var onDismiss: (() -> Void)?
+    /// Called when the user taps a non-interactive area of the card (background, title, description, etc.).
+    /// Should activate the hebbian main window.
+    var onBackgroundTap: (() -> Void)?
     /// Called (synchronously, on main) after fold/expand toggles so NotificationManager
     /// can re-stack everyone in one pass — fold/expand never positions itself.
     var onRelayout: (() -> Void)?
@@ -101,7 +104,8 @@ final class PanelController: NSObject {
             onClose: { [weak self] in self?.handleClose() },
             onFold: { [weak self] in self?.toggleFold() },
             onHoverEnter: { [weak self] in self?.hoverEnter() },
-            onHoverExit: { [weak self] in self?.hoverExit() }
+            onHoverExit: { [weak self] in self?.hoverExit() },
+            onBackgroundTap: { [weak self] in self?.onBackgroundTap?() }
         )
     }
 

@@ -87,6 +87,12 @@ final class NotificationManager {
             self?._relayoutOnMain()
         }
 
+        // Tap on non-interactive area (background, title, description) -> activate hebbian main window.
+        // Interactive elements (buttons, options, inputs) have their own handlers and won't trigger this.
+        controller.onBackgroundTap = { [weak self] in
+            self?.activateHebbian()
+        }
+
         controllers.append(controller)
         _relayoutOnMain()
 
@@ -138,6 +144,27 @@ final class NotificationManager {
                 controller.applyFrame(targetFrame)
             }
             yOffset += size.height + gap
+        }
+    }
+
+    /// Activate the Hebbian desktop app (bring to foreground).
+    /// Tries bundle ID first, then falls back to process name matching.
+    private func activateHebbian() {
+        // Desktop bundle ID from tauri.conf.json
+        let bundleId = "dev.ricardo.hebbian"
+
+        // Try bundle ID first
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+            app.activate(options: [])
+            return
+        }
+
+        // Fallback: find by process name (works in dev mode)
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: "") {
+            if let name = app.localizedName, name.lowercased().contains("hebbian") {
+                app.activate(options: [])
+                return
+            }
         }
     }
 }
