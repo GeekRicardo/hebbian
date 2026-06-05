@@ -38,6 +38,7 @@ import {
   Paperclip,
   BookOpen,
   NotebookPen,
+  Square,
 } from "lucide-react";
 import type {
   EditEntry,
@@ -90,6 +91,8 @@ interface Props {
   prompt?: Prompt;
   appSettings?: AppSettings;
   userAvatar?: string;
+  /** 当前 session id，用于后台任务 kill 操作 */
+  sessionId?: string;
   onFork?: (id: string) => void;
   /**
    * 重新生成。对 assistant 消息：以前一条 user 消息为锚重跑。
@@ -1220,37 +1223,139 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
 function ToolCallDetail({
   call,
   appSettings,
+  sessionId,
 }: {
   call: ToolCallItem;
   appSettings?: AppSettings;
+  sessionId?: string;
 }) {
   const name = call.name || "工具调用";
   const result = call.result || "等待返回…";
   const title = `${name} · ${callSummary(call)}`;
+
+  // 提取 Bash 后台任务的 task_id（从 result 文本匹配，适用于真后台任务）
+  const taskIdFromResult = result?.match(/\[([a-z0-9-]+)\]\s+(?:background|后台)/i)?.[1];
+
+  // 对于前台 Bash，需要从注册表匹配 task_id
+  const cmd = name === "Bash" || name === "PowerShell" ? argString(callArgs(call), "command") : "";
+  const [matchedTaskId, setMatchedTaskId] = useState<string | null>(null);
+  const [bgTaskState, setBgTaskState] = useState<string | null>(null);
+  const [killedLocally, setKilledLocally] = useState(false);
+
+  // 前台 Bash 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
+  useEffect(() => {
+    // 仅对运行中的前台 Bash 生效（真后台从 result 已能提取 task_id）
+    if (!sessionId || killedLocally || taskIdFromResult || name !== "Bash" || call.status === "done" || !cmd) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const report = await api.listBackgroundTasks(sessionId);
+        if (cancelled) return;
+        // 按 command 精确匹配找前台运行中的任务
+        const match = report.shells.find(
+          (s) => s.command === cmd && s.state === "running" && !s.is_background
+        );
+        if (match) {
+          setMatchedTaskId(match.task_id);
+          setBgTaskState(match.state);
+        }
+      } catch {
+        // 静默失败
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId, killedLocally, taskIdFromResult, name, call.status, cmd]);
+
+  // 真后台任务：轮询状态
+  useEffect(() => {
+    if (!taskIdFromResult || !sessionId || killedLocally) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const output = await api.readBackgroundTaskOutput(sessionId, taskIdFromResult, 0);
+        if (!cancelled) {
+          setBgTaskState(output.state);
+        }
+      } catch {
+        // 静默失败
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [taskIdFromResult, sessionId, killedLocally]);
+
+  // 最终用于 kill 的 task_id
+  const effectiveTaskId = taskIdFromResult || matchedTaskId;
+
+  // Kill 处理函数
+  const handleKill = async () => {
+    if (!effectiveTaskId || !sessionId) return;
+    try {
+      await api.killBackgroundTask(sessionId, effectiveTaskId);
+      setKilledLocally(true);
+      setBgTaskState("killed");
+      toast.success(`已终止任务 ${effectiveTaskId}`);
+    } catch (err) {
+      toast.error(`终止失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const isBgTaskRunning = bgTaskState === "running";
+  const isRunning = call.status === "running";
+  const canKill = effectiveTaskId && sessionId && !killedLocally && (isBgTaskRunning || (isRunning && !call.result));
+
   if (
     name === "Bash" ||
     name === "PowerShell" ||
     name === "BashOutput" ||
     name === "KillShell"
   ) {
-    const cmd =
-      name === "Bash" || name === "PowerShell"
-        ? argString(callArgs(call), "command")
-        : "";
     // status=running 且收到过 ToolOutputDelta：实时控制台展示，命令仍在跑。
     // status=done 后 result 已是聚合后的完整文本，覆盖掉 liveOutput。
-    const running = call.status === "running";
     const live = call.liveOutput ?? "";
-    const stream = running ? (live || "等待输出…") : result;
+    let stream = isRunning ? (live || "等待输出…") : result;
+
+    // 如果用户本地 kill 了，追加提示
+    if (killedLocally) {
+      stream = stream + "\n\n[用户已结束进程]";
+    }
+
     const body = cmd
-      ? `$ ${cmd}\n\n${stream}${running && live ? "\n▍" : ""}`
+      ? `$ ${cmd}\n\n${stream}${isRunning && live && !killedLocally ? "\n▍" : ""}`
       : stream;
+
     return (
       <div className="relative">
         <ExpandButton title={title}>
           <ToolPre dark>{body}</ToolPre>
         </ExpandButton>
         <ToolPre dark>{body}</ToolPre>
+        {/* Kill 按钮：仅当有 taskId 且任务正在运行时显示 */}
+        {canKill && (
+          <button
+            onClick={handleKill}
+            className="absolute top-2 right-2 flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs text-red-500 hover:bg-red-500/20 transition-colors"
+            title="终止任务"
+          >
+            <Square className="w-3 h-3 fill-current" />
+            终止
+          </button>
+        )}
       </div>
     );
   }
@@ -1385,9 +1490,11 @@ function buildNestedRenderParts(parts: StreamingAssistantPart[]): AssistantRende
 function NestedTaskContent({
   nestedParts,
   appSettings,
+  sessionId,
 }: {
   nestedParts: StreamingAssistantPart[];
   appSettings?: AppSettings;
+  sessionId?: string;
 }) {
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const onToggle = useCallback((key: string) => {
@@ -1423,6 +1530,7 @@ function NestedTaskContent({
               expandedKeys={expandedKeys}
               onToggle={onToggle}
               appSettings={appSettings}
+              sessionId={sessionId}
             />
           );
         }
@@ -1437,11 +1545,13 @@ function ToolCallTimeline({
   expandedKeys,
   onToggle,
   appSettings,
+  sessionId,
 }: {
   calls: ToolCallItem[];
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
   appSettings?: AppSettings;
+  sessionId?: string;
 }) {
   // Read 工具显示路径用：在 workdir 内显示相对路径、在 allowed_paths 之一内显示
   // `<basename>/...`、否则显示完整绝对路径。沿用当前 session 的实际 workdir / allowed_paths。
@@ -1596,7 +1706,7 @@ function ToolCallTimeline({
               )}
               {active && (
                 <>
-                  <ToolCallDetail call={call} appSettings={appSettings} />
+                  <ToolCallDetail call={call} appSettings={appSettings} sessionId={sessionId} />
                   {call.name === "Task" &&
                     call.nestedParts &&
                     call.nestedParts.length > 0 && (
@@ -1604,6 +1714,7 @@ function ToolCallTimeline({
                         <NestedTaskContent
                           nestedParts={call.nestedParts}
                           appSettings={appSettings}
+                          sessionId={sessionId}
                         />
                       </div>
                     )}
@@ -1695,12 +1806,14 @@ function AssistantParts({
   expandedKeys,
   onToggle,
   appSettings,
+  sessionId,
 }: {
   parts: AssistantRenderPart[];
   streaming?: boolean;
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
   appSettings?: AppSettings;
+  sessionId?: string;
 }) {
   if (parts.length === 0) {
     return streaming ? <span>▍</span> : null;
@@ -1737,6 +1850,7 @@ function AssistantParts({
             expandedKeys={expandedKeys}
             onToggle={onToggle}
             appSettings={appSettings}
+            sessionId={sessionId}
           />
         );
       })}
@@ -1749,6 +1863,7 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   prompt,
   userAvatar,
+  sessionId,
   onFork,
   onRegenerate,
   onEdit,
@@ -2063,6 +2178,7 @@ export const MessageBubble = memo(function MessageBubble({
           })
         }
         appSettings={appSettings}
+        sessionId={sessionId}
       />
     );
   }

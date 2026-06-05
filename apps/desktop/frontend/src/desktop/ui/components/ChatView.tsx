@@ -64,14 +64,18 @@ export function ChatView() {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
-  // ==== 浮动 user 消息（sticky header）：当某条 user 消息顶边滚到浮动区下边缘之上时，
-  //      在 chat 区最顶端浮一个它的截断副本。点击副本 → 平滑滚回该消息（顶边对齐
-  //      浮动区下边缘），同时临时抑制浮动显示；用户继续往上滚、上一条 assistant 的
-  //      下边缘越过浮动区下边缘后，抑制解除、浮动条改显示上一条 user 消息。
+  // ==== 浮动 user 消息（sticky header）====
+  // 当某条 user 消息顶部滚出 chat 视口上方时，在 chat 顶部浮动它的截断副本。
+  // 点击浮动条 → 滚动到该 user 消息真实位置，让真实顶边与浮动区下边缘重合，
+  // 视觉上"浮动的"替换为"真实的"。随后设置锚定：锚定消息 id + 死区下边界。
+  // 死区规则：往下滚时，仅当锚定消息的 top 离开浮动区并再超出 PINNED_HEIGHT
+  // 后才允许上一条 user 浮动 —— 避免浮动条刚消失又立刻出现遮挡内容。
   const [pinnedUserId, setPinnedUserId] = useState<string | null>(null);
-  // 点击浮动副本后临时抑制浮动显示：程序滚动期间和刚滚到位时不显示浮动条，
-  // 用户继续往上滚、上一条 assistant 下边缘越过浮动区下边缘后解除抑制。
-  const suppressedRef = useRef(false);
+  // 锚定信息：点击浮动条后锁定当前消息 id。
+  // 死区判断直接用 anchorBottom 与 containerTop - PINNED_HEIGHT_PX 比较，
+  // 不需要额外存储偏移量。
+  // 用 ref 不走 state，避免与 pinnedUserId 的 setState 形成循环。
+  const anchorRef = useRef<{ userId: string } | null>(null);
   // 浮动副本最大高度（截断 ~2 行），也是几何判定的基准。
   const PINNED_HEIGHT_PX = 72;
   const PINNED_ALIGN_TOLERANCE_PX = 4;
@@ -167,7 +171,7 @@ export function ChatView() {
   // 切对话时强制贴回底部 + 重置浮动状态
   useEffect(() => {
     stickToBottomRef.current = true;
-    suppressedRef.current = false;
+    anchorRef.current = null;
     setPinnedUserId(null);
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -183,7 +187,7 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
 
-  // 监听滚动：贴底检测 + 浮动副本几何判定 + 抑制解除
+  // 监听滚动：贴底检测 + 浮动副本几何判定 + 死区保护
   const BOTTOM_SLACK_PX = 80;
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -193,12 +197,18 @@ export function ChatView() {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
 
-    // 浮动副本几何：浮动区下边缘 = 容器顶端 + 浮动区高度
+    // 浮动区下边缘 = 容器顶端 + 浮动区高度
     const containerTop = el.getBoundingClientRect().top;
     const pinnedBottom = containerTop + PINNED_HEIGHT_PX;
 
-    // 找到顶边已滚到浮动区下边缘之上的最后一条 user 消息
     const userBubbles = el.querySelectorAll<HTMLElement>('[data-message-role="user"]');
+    if (userBubbles.length === 0) {
+      setPinnedUserId(null);
+      anchorRef.current = null;
+      return;
+    }
+
+    // 找「最靠近浮动区、顶部已被遮挡」的 user 消息（最后一条 top < pinnedBottom 的）
     let pinned: HTMLElement | null = null;
     for (const b of userBubbles) {
       const r = b.getBoundingClientRect();
@@ -211,52 +221,101 @@ export function ChatView() {
 
     if (!pinned) {
       setPinnedUserId(null);
-      suppressedRef.current = false;
+      anchorRef.current = null;
       return;
     }
     const id = pinned.getAttribute("data-message-id");
+    if (!id) return;
 
-    // 抑制解除：pinned 消息之上有一条 assistant，其下边缘已越过浮动区下边缘
-    // → 用户继续往上滚了，该显示上一条 section header 了
-    if (suppressedRef.current && pinnedUserId) {
-      const currentEl = el.querySelector<HTMLElement>(`[data-message-id="${pinnedUserId}"]`);
-      if (currentEl) {
-        // 找当前 pinned 消息前面紧邻的 assistant 气泡
-        let prev = currentEl.previousElementSibling;
-        // 跳过非 assistant 的元素（如 marker），最多找 2 个 sibling
-        let tries = 0;
-        while (prev && prev.getAttribute("data-message-role") !== "assistant" && tries < 2) {
-          prev = prev.previousElementSibling;
-          tries++;
-        }
-        if (prev && prev.getAttribute("data-message-role") === "assistant") {
-          const prevBottom = prev.getBoundingClientRect().bottom;
-          if (prevBottom > pinnedBottom + PINNED_ALIGN_TOLERANCE_PX) {
-            suppressedRef.current = false;
+    // 死区检查：锚定消息还在死区内 → 阻止 anchor 本身及其之前的所有 user 消息浮动。
+    // 死区条件：anchorBottom > containerTop - PINNED_HEIGHT_PX
+    // 即 anchor 底部还没滚到「浮动区上方一个浮动区高度」的位置。
+    // 目的：点击浮动条跳到真实位置后，用户往下滚时，必须等 anchor 完全滚出视口
+    // 且再间隔一个浮动区高度，才允许上一条 message 浮动出来。
+    const anchor0 = anchorRef.current;
+    if (anchor0) {
+      const anchor = anchor0;
+      const anchorEl = el.querySelector<HTMLElement>(`[data-message-id="${anchor.userId}"]`);
+      if (anchorEl) {
+        const anchorRect = anchorEl.getBoundingClientRect();
+        const anchorBottom = anchorRect.top + anchorRect.height;
+        const deadzoneReleaseLine = containerTop - PINNED_HEIGHT_PX;
+        if (anchorBottom > deadzoneReleaseLine) {
+          // 死区内：阻止 anchor 本身及之前的消息被浮动
+          let pinnedIsAnchorOrBefore = false;
+          for (const b of userBubbles) {
+            if (b === pinned) { pinnedIsAnchorOrBefore = true; break; }
+            if (b.getAttribute("data-message-id") === anchor.userId) { pinnedIsAnchorOrBefore = true; break; }
           }
+          if (pinnedIsAnchorOrBefore) {
+            setPinnedUserId(null);
+            return;
+          }
+          // pinned 在 anchor 之后（更新的消息）→ 正常浮动，不受死区保护
+        } else {
+          // 锚定消息已完全滚出死区 → 解除锚定
+          anchorRef.current = null;
         }
+      } else {
+        anchorRef.current = null;
       }
     }
 
     setPinnedUserId(id);
-  }, [pinnedUserId]);
+  }, []);
 
-  // 点击浮动副本：平滑滚回该消息，顶边对齐浮动区下边缘，同时抑制浮动显示
+  // 点击浮动条：滚动到该 user 消息真实位置，让真实顶边 = 浮动区下边缘。
+  // 同时设置锚定 = 该消息 + 死区（容器顶部往下 2 倍浮动区高度）。
   const scrollToPinnedMessage = useCallback(() => {
     if (!pinnedUserId) return;
     const el = scrollRef.current;
     if (!el) return;
     const target = el.querySelector<HTMLElement>(`[data-message-id="${pinnedUserId}"]`);
     if (!target) return;
-    // 滚动目标：让消息顶边对齐浮动区下边缘（即容器顶端 + PINNED_HEIGHT_PX）
-    const top =
-      target.getBoundingClientRect().top -
-      el.getBoundingClientRect().top +
-      el.scrollTop -
-      PINNED_HEIGHT_PX;
-    suppressedRef.current = true;
-    el.scrollTo({ top, behavior: "smooth" });
+
+    // 目标滚动位置：让真实消息的 top 对齐到浮动区下边缘（PINNED_HEIGHT_PX）
+    const top = target.offsetTop - PINNED_HEIGHT_PX;
+
+    // 锚定当前消息，死区判断用 anchorBottom
+    anchorRef.current = { userId: pinnedUserId };
+
+    setPinnedUserId(null);
+    el.scrollTo({ top, behavior: "instant" });
   }, [pinnedUserId]);
+
+  // 获取当前 pinned 消息之前的上一条 user message id
+  const getPrevUserMessageId = useCallback((currentId: string): string | null => {
+    let found = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (found && messages[i].role === "user") {
+        return messages[i].id;
+      }
+      if (messages[i].id === currentId) {
+        found = true;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // 上箭头：跳到上一条 user 消息，重置锚定到新目标
+  const scrollToPrevUserMessage = useCallback(() => {
+    if (!pinnedUserId) return;
+    const prevId = getPrevUserMessageId(pinnedUserId);
+    if (!prevId) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(`[data-message-id="${prevId}"]`);
+    if (!target) return;
+
+    // 目标滚动位置：让真实消息的 top 对齐到浮动区下边缘（PINNED_HEIGHT_PX）
+    const top = target.offsetTop - PINNED_HEIGHT_PX;
+
+    // 锚定新消息，死区判断用 anchorBottom
+    anchorRef.current = { userId: prevId };
+
+    setPinnedUserId(null);
+    el.scrollTo({ top, behavior: "instant" });
+  }, [pinnedUserId, getPrevUserMessageId]);
 
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
@@ -675,6 +734,7 @@ export function ChatView() {
           messages={messages}
           prompt={activePrompt}
           userAvatar={userAvatar}
+          sessionId={currentSession?.id}
           isStreaming={isStreaming}
           lastUserMsgId={lastUserMsgId}
           lastUserHasAssistantAfter={lastUserHasAssistantAfter}
@@ -710,6 +770,7 @@ export function ChatView() {
                     streaming
                     prompt={activePrompt}
                     userAvatar={userAvatar}
+                    sessionId={currentSession?.id}
                     appSettings={appSettings ?? undefined}
                     streamingParts={streamingParts}
                     message={{
@@ -727,6 +788,7 @@ export function ChatView() {
                   key={item.id}
                   prompt={activePrompt}
                   userAvatar={userAvatar}
+                  sessionId={currentSession?.id}
                   appSettings={appSettings ?? undefined}
                   streamingParts={item.parts}
                   message={{
@@ -742,6 +804,7 @@ export function ChatView() {
                   message={item.message}
                   prompt={activePrompt}
                   userAvatar={userAvatar}
+                  sessionId={currentSession?.id}
                   appSettings={appSettings ?? undefined}
                 />
               );
@@ -780,22 +843,22 @@ export function ChatView() {
         </div>
       </div>
 
-      {/* 浮动 user 消息副本（sticky header）：某条 user 消息顶边滚到浮动区下边缘之上时，
-          在 chat 区最顶端浮一个截断副本。点击 → 平滑滚回该消息位置（临时抑制浮动显示），
-          用户继续往上滚、上一条 assistant 下边缘越过浮动区下边缘后，抑制解除、浮动条
-          改显示上一条 user 消息。放在滚动容器外、relative flex-1 容器内，absolute 固定
-          在视口顶端不随内容滚。 */}
-      {pinnedUserId && !suppressedRef.current && (() => {
+      {/* 浮动 user 消息副本（sticky header）：某条 user 消息顶边滚出视口上方时，
+          在 chat 区顶端浮一个截断副本。点击浮动条主体 → 滚动到真实消息位置对齐浮动区，
+          浮动消失。右侧上箭头 → 跳转到上一条 user 消息。手动滚动破坏锚定后箭头跟随
+          浮动条一起消失。 */}
+      {pinnedUserId && (() => {
         const msg = messages.find((m) => m.id === pinnedUserId);
         if (!msg || msg.role !== "user") return null;
+        const prevId = getPrevUserMessageId(pinnedUserId);
         return (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-50">
-            <div className="relative bg-background/95 shadow-md backdrop-blur-sm">
+            <div className="relative bg-background/95 shadow-md backdrop-blur-sm flex items-stretch">
               <button
                 type="button"
                 onClick={scrollToPinnedMessage}
                 title="点击回到此消息"
-                className="pointer-events-auto block w-full cursor-pointer text-left"
+                className="pointer-events-auto block flex-1 cursor-pointer text-left min-w-0"
               >
                 <div className="overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]"
                      style={{ maxHeight: PINNED_HEIGHT_PX }}>
@@ -803,10 +866,21 @@ export function ChatView() {
                     message={msg}
                     prompt={activePrompt}
                     userAvatar={userAvatar}
+                    sessionId={currentSession?.id}
                     appSettings={appSettings ?? undefined}
                   />
                 </div>
               </button>
+              {prevId && (
+                <button
+                  type="button"
+                  onClick={scrollToPrevUserMessage}
+                  title="跳转到上一条用户消息"
+                  className="pointer-events-auto flex items-center justify-center w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <ChevronDown className="h-4 w-4 rotate-180" />
+                </button>
+              )}
             </div>
           </div>
         );

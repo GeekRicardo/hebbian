@@ -5986,3 +5986,12 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`: judge 标签从蓝色（`bg-blue-500/15 text-blue-600`）改成橙色（`bg-orange-500/15 text-orange-600`）
 - **影响范围**: agent-core 内部结构体字段新增（向后兼容）；前端 judge 标签颜色变更。
 - **留尾巴**: 无
+
+### 2026-06-05 — 修复 compact_structural 在最后几条没有 User 时返回空 entries 的 bug
+
+- **Why**: 用户反馈某个对话进行到后期，模型突然丢失所有上下文（turn=49 时 request messages=0）。排查发现 session `202606050440-6068522f` 的 turn=48 有 97 条 messages，最后 24 条全是 assistant+tool 交替（没有 User）。`compact_structural` 从 `start=73` 开始找 User，找不到就推到 97，`skip(97)` 返回空 entries，导致下一轮 transcript 被清空。
+- **改动**:
+  - `crates/agent-core/src/context/compaction.rs`：修复 `compact_structural` 的 fallback 逻辑——如果从 `initial_start` 开始找不到 User，从后往前找最近的 User，保证保留的片段以 User 开头且不为空
+  - 新增回归测试 `structural_compaction_does_not_return_empty_when_no_trailing_user`
+- **影响范围**: agent-core context 层，所有 surface 共享
+- **留尾巴**: 该 bug 之前未被发现是因为大多数对话在 compact 触发时末尾都有 User 消息；长对话中大量 tool call 密集场景容易触发此 bug

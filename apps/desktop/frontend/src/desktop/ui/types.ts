@@ -876,6 +876,8 @@ export interface BackgroundTaskInfo {
   cwd: string;
   elapsed_secs: number;
   log_path: string | null;
+  /** 是否真后台（`run_in_background=true` 或前台超时转后台）。false = 前台运行中。 */
+  is_background: boolean;
 }
 
 export interface PendingCron {

@@ -240,6 +240,9 @@ function deriveBackgroundTasks(
 ): TaskItem[] {
   const shellsByTaskId = new Map<string, BackgroundTaskInfo>();
   for (const s of report?.shells ?? []) {
+    // BackgroundTaskPanel 只展示真后台任务（is_background=true）。
+    // 前台运行中的 Bash 由 Bash 工具卡片的 kill 按钮处理，不在此面板显示。
+    if (!s.is_background) continue;
     shellsByTaskId.set(s.task_id, s);
   }
   const consumed = new Set<string>();
@@ -276,6 +279,8 @@ function deriveBackgroundTasks(
   }
   // 2. 注册表有但 messages 还没记到的（task 刚启动 / tool_result 还没回来 / 上次会话残留）
   for (const s of report?.shells ?? []) {
+    // 同样只展示真后台
+    if (!s.is_background) continue;
     if (consumed.has(s.task_id)) continue;
     items.push({
       task_id: s.task_id,

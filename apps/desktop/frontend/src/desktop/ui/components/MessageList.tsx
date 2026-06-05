@@ -84,6 +84,7 @@ export interface MessageListProps {
   messages: Message[];
   prompt?: Prompt;
   userAvatar?: string;
+  sessionId?: string;
   isStreaming: boolean;
   lastUserMsgId: string | null;
   lastUserHasAssistantAfter: boolean;
@@ -106,6 +107,7 @@ export const MessageList = memo(function MessageList({
   messages,
   prompt,
   userAvatar,
+  sessionId,
   isStreaming,
   lastUserMsgId,
   lastUserHasAssistantAfter,
@@ -170,6 +172,7 @@ export const MessageList = memo(function MessageList({
             message={m}
             prompt={prompt}
             userAvatar={userAvatar}
+            sessionId={sessionId}
             onFork={onFork}
             onRegenerate={onRegenerateProp}
             onEdit={onEditProp}

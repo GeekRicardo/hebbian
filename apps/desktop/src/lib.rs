@@ -1665,6 +1665,9 @@ struct BackgroundTaskInfo {
     cwd: String,
     elapsed_secs: u64,
     log_path: Option<String>,
+    /// 是否真后台（`run_in_background=true` 或前台超时转后台）。
+    /// `false` = 前台运行中的 Bash（正常 exit 后会被 unregister，不会出现在列表里）。
+    is_background: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1741,13 +1744,14 @@ async fn kill_background_task(session_id: String, task_id: String) -> AppResult<
 fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<SessionBackgroundReport> {
     let dd = data_dir(&app)?;
     let shells_registry = agent_core::tools::background::registry_for_session(&session_id);
-    // 只暴露真后台任务（is_background=true）：用户显式 run_in_background=true
-    // 或前台超时转后台的。前台正常 exit 的命令已经被 BashTool 直接 unregister，
-    // 这里就算注册表里万一还残留 is_background=false 的条目（罕见 race），surface 也不要展示。
+    // 返回所有注册表里的 shell（含前台运行中的）。
+    // 前台正常 exit 的命令已被 BashTool 直接 unregister，不会出现在列表里；
+    // 只有还在跑的（前台等待中 / 真后台）才会被列出。
+    // 前端用 `is_background` 字段区分：BackgroundTaskPanel 只展示真后台，
+    // Bash 工具卡片的 kill 按钮需要匹配前台运行中的任务。
     let shells: Vec<BackgroundTaskInfo> = shells_registry
         .list()
         .into_iter()
-        .filter(|s| s.is_background())
         .map(|s| BackgroundTaskInfo {
             task_id: s.task_id.clone(),
             state: s.state().label().to_string(),
@@ -1755,6 +1759,7 @@ fn list_background_tasks(app: AppHandle, session_id: String) -> AppResult<Sessio
             cwd: s.cwd.clone(),
             elapsed_secs: s.started_at.elapsed().as_secs(),
             log_path: s.log_path().map(|p| p.display().to_string()),
+            is_background: s.is_background(),
         })
         .collect();
     let pending_crons =
