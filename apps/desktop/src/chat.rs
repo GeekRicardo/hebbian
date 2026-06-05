@@ -2,6 +2,7 @@ use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hebisland_client::HebislandClient;
 use crate::hitl::HitlState;
+use tauri::Manager;
 use agent_core::storage::{
     sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
@@ -36,7 +37,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tauri::{ipc::Channel, AppHandle, Manager};
+use tauri::{ipc::Channel, AppHandle};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -102,9 +103,9 @@ pub async fn send_and_save(
     on_event: Channel<EngineEvent>,
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
-    let app_for_client = app.clone();
+    let app_for_island = app.clone();
     let result = send_and_save_in_data_dir(&dd, args, move |event| {
-        if let Some(client) = app_for_client.try_state::<HebislandClient>() {
+        if let Some(client) = app_for_island.try_state::<HebislandClient>() {
             push_engine_event_to_island(&client, &event);
         }
         let _ = on_event.send(event);
@@ -2154,6 +2155,64 @@ impl ModelClient for ModelWithName {
     }
 }
 
+// ── hebisland 通知桥接 ──
+
+/// 将 agent_core EngineEvent 翻译为 hebisland 推送/撤销通知。
+fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
+    match event {
+        EngineEvent::PermissionRequested {
+            request_id,
+            tool_name,
+            input,
+            ..
+        } => {
+            let summary: String = input.to_string().chars().take(80).collect();
+            // TODO: 推送子命令勾选列表（需要 EngineEvent 携带 subcommands 数据）
+            client.push(
+                format!("perm-{request_id}"),
+                "approval",
+                "需要你的审批",
+                &format!("{tool_name} {summary}"),
+                None,
+                None,
+            );
+        }
+        EngineEvent::UserQuestionRequested {
+            request_id,
+            question,
+            options,
+            multi,
+        } => {
+            // 构建 options JSON
+            let options_json: Vec<String> = options.iter().map(|opt| {
+                format!(r#"{{"label":"{}","desc":"{}"}}"#,
+                    opt.label.replace('"', r#"\""#),
+                    opt.description.replace('"', r#"\""#)
+                )
+            }).collect();
+            let extra = if options_json.is_empty() {
+                format!(r#","multiSelect":{}"#, multi)
+            } else {
+                format!(r#","options":[{}],"multiSelect":{}"#, options_json.join(","), multi)
+            };
+            client.push(
+                format!("question-{request_id}"),
+                "question",
+                "需要你的回答",
+                question,
+                None,
+                Some(&extra),
+            );
+        }
+        EngineEvent::PermissionResolved { request_id, .. }
+        | EngineEvent::UserQuestionAnswered { request_id, .. } => {
+            client.dismiss(&format!("perm-{request_id}"));
+            client.dismiss(&format!("question-{request_id}"));
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3539,63 +3598,5 @@ mod tests {
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });
-    }
-}
-
-// ── hebisland 通知桥接 ──
-
-/// 将 agent_core EngineEvent 翻译为 hebisland 推送/撤销通知。
-fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
-    match event {
-        EngineEvent::PermissionRequested {
-            request_id,
-            tool_name,
-            input,
-            ..
-        } => {
-            let summary: String = input.to_string().chars().take(80).collect();
-            // TODO: 推送子命令勾选列表（需要 EngineEvent 携带 subcommands 数据）
-            client.push(
-                format!("perm-{request_id}"),
-                "approval",
-                "需要你的审批",
-                &format!("{tool_name} {summary}"),
-                None,
-                None,
-            );
-        }
-        EngineEvent::UserQuestionRequested {
-            request_id,
-            question,
-            options,
-            multi,
-        } => {
-            // 构建 options JSON
-            let options_json: Vec<String> = options.iter().map(|opt| {
-                format!(r#"{{"label":"{}","desc":"{}"}}"#, 
-                    opt.label.replace('"', r#"""#),
-                    opt.description.replace('"', r#"""#)
-                )
-            }).collect();
-            let extra = if options_json.is_empty() {
-                format!(r#","multiSelect":{}"#, multi)
-            } else {
-                format!(r#","options":[{}],"multiSelect":{}"#, options_json.join(","), multi)
-            };
-            client.push(
-                format!("question-{request_id}"),
-                "question",
-                "需要你的回答",
-                question,
-                None,
-                Some(&extra),
-            );
-        }
-        EngineEvent::PermissionResolved { request_id, .. }
-        | EngineEvent::UserQuestionAnswered { request_id, .. } => {
-            client.dismiss(&format!("perm-{request_id}"));
-            client.dismiss(&format!("question-{request_id}"));
-        }
-        _ => {}
     }
 }
