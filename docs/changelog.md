@@ -5932,3 +5932,57 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **SocketServer**：`writeAction` 接受完整 `ActionResult`，回传带 `selected`/`input`/`checked`
 - **影响范围**: `apps/island-mac/` 内部；协议向后兼容（Desktop 不发新字段时 native 走默认）；Desktop 端 `hebisland_client.rs` 需后续适配新 action 值（`allow_conversation/project/global`、`skip/submit`）
 - **留尾巴**: Desktop 端 `hitl::resolve_hitl_from_island` 目前只认 `allow/deny`，新增的 `allow_conversation/project/global` 需 Desktop 配合实现不同粒度的审批持久化；多屏焦点跟随、M8 联调仍未实测。
+
+---
+
+### 2026-06-05 — Bash 工具卡片增加后台任务 kill 按钮
+
+- **Why**: 用户需要在对话流中直接终止仍在运行的 Bash 后台任务，而不是切换到侧边栏的 BackgroundTaskPanel。即使 agent_loop 已停止，只要 bash 进程还在跑，用户就能手动 kill。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 
+    - `ToolCallDetail` 增加 `sessionId` prop
+    - 对 Bash/PowerShell 工具，从 result 提取 task_id，轮询 `readBackgroundTaskOutput` 获取任务状态
+    - 当任务正在运行时，在卡片右上角显示红色「终止」按钮
+    - 点击按钮调用 `killBackgroundTask` API，成功后在输出末尾追加 `[用户已结束进程]`
+    - `MessageBubble` / `AssistantParts` / `ToolCallTimeline` / `NestedTaskContent` 均增加 `sessionId` prop 透传
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx`:
+    - `MessageListProps` 增加 `sessionId?: string`
+    - 透传给每个 `MessageBubble`
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`:
+    - 传 `currentSession?.id` 给 `MessageList` 和所有直接渲染的 `MessageBubble`
+- **影响范围**: 仅前端 UI 层；不碰 agent-core / 协议 / 后端逻辑。复用已有 `killBackgroundTask` 与 `readBackgroundTaskOutput` API。
+- **留尾巴**: 无
+
+---
+
+### 2026-06-05 — Bash 工具卡片支持终止前台运行中的命令
+
+- **Why**: 上一版只支持 kill 后台任务（`run_in_background=true` 或超时转后台）。前台 Bash 在运行时同样需要让用户能手动终止，尤其是 agent_loop 已停止但 bash 进程还在跑的场景。
+- **改动**:
+  - `apps/desktop/src/lib.rs`:
+    - `BackgroundTaskInfo` 增加 `is_background: bool` 字段
+    - `list_background_tasks` 移除 `filter(|s| s.is_background())`，返回所有注册表里的 shell（含前台运行中的）
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`:
+    - `BackgroundTaskInfo` 增加 `is_background` 字段
+  - `apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx`:
+    - `deriveBackgroundTasks` 过滤 `is_background=false` 的条目，BackgroundTaskPanel 只展示真后台
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`:
+    - `ToolCallDetail` 重构 kill 逻辑：
+      - 真后台：从 result 文本提取 task_id（原有逻辑）
+      - 前台 Bash：轮询 `listBackgroundTasks` 按 command 精确匹配找 task_id
+      - 两种情况都能显示 kill 按钮并终止
+- **影响范围**: 仅前端 UI 层 + desktop Tauri command；不碰 agent-core 协议。`kill_background_task` 本身不过滤 `is_background`，无需改动。
+- **留尾巴**: 无
+
+---
+
+### 2026-06-05 — 修复 AutoMode judge 日志未写入 model_io.jsonl + 标签改橙色
+
+- **Why**: AutoMode 判官调用本应记入 `model_io.jsonl`（`kind: "judge"`），前端用蓝色标签渲染。但 `DumpEntry` 结构体缺少 `kind` 字段、`ToolDispatcher` 缺少 `model_io_dump` 字段、`run_mode` 类型不匹配，导致 agent-core 编译失败，judge 日志从未落盘。同时用户反馈 judge 标签用橙色比蓝色更醒目。
+- **改动**:
+  - `crates/agent-core/src/model_io_dump.rs`: `DumpEntry` 增加 `kind: String` 字段（`#[serde(default)]` 向后兼容老数据），默认值 `"normal"`
+  - `crates/agent-core/src/agent_loop.rs`: `ToolDispatcher` 构造时传入 `model_io_dump.clone()`；`run_mode` 包装成 `Arc<Mutex<RunMode>>`；常规模型调用 `DumpEntry` 补 `kind: "normal"`
+  - `crates/agent-core/src/harness.rs`: `LoopParams` 构造时从 `run_mode_shared` 解包出 `RunMode` 值（`lock().unwrap().clone()`）
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx`: judge 标签从蓝色（`bg-blue-500/15 text-blue-600`）改成橙色（`bg-orange-500/15 text-orange-600`）
+- **影响范围**: agent-core 内部结构体字段新增（向后兼容）；前端 judge 标签颜色变更。
+- **留尾巴**: 无

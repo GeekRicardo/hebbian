@@ -628,7 +628,7 @@ function RequestRow({
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium">#{index + 1}</span>
           {entry.kind === "judge" && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
+            <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
               judge
             </span>
           )}
@@ -702,7 +702,7 @@ function RequestDetail({
       <div className="p-4 space-y-3" data-testid="model-io-detail">
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px]">
+            <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px]">
               AutoMode 判官
             </span>
             <span>请求 #{index + 1} · {entry.model} · {entry.duration_ms}ms</span>

@@ -292,7 +292,7 @@ impl Harness {
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,
-                run_mode: run_mode_shared.clone(),
+                run_mode: run_mode_shared.lock().unwrap().clone(),
                 model_id,
                 judge_client: Some(judge_client),
                 force_automode,
