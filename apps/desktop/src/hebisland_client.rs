@@ -8,9 +8,10 @@
 //   {"type":"dismiss","id":"..."}
 //
 // 回传方向（hebisland → Desktop）：
-//   {"msg_id":"...","action":"allow|deny|open|dismiss"}
+//   {"msg_id":"...","action":"...","selected":[...],"input":"...","checked":[...]}
 //
-// 回传收到后直接调 `hitl::resolve_hitl_from_island` 落地审批决定。
+// 回传收到后调 `hitl::resolve_hitl_from_island` 落地审批决定，
+// 或 `hitl::answer_question_from_island` 落地问答回答。
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -33,7 +34,9 @@ pub struct HebislandClient {
 
 impl HebislandClient {
     /// 推送一条通知。id 同时用作 msg_id（回传时映射回 request_id）。
-    /// card_type: "approval" | "info" | "question"
+    /// card_type: "approval" | "info" | "question" | "success"
+    /// extra_fields: 可选的额外 card 字段（options / multiSelect / subcommands），
+    ///   格式如 r#","options":[{"label":"A"},{"label":"B"}],"multiSelect":false"#
     pub fn push(
         &self,
         id: String,
@@ -41,13 +44,15 @@ impl HebislandClient {
         title: &str,
         body: &str,
         session_id: Option<&str>,
+        extra_fields: Option<&str>,
     ) {
         let sid = match session_id {
             Some(s) => format!(r#","sessionId":"{}""#, s),
             None => String::new(),
         };
+        let extra = extra_fields.unwrap_or("");
         let json = format!(
-            r#"{{"type":"show","id":"{id}","card":{{"id":"{id}","cardType":"{card_type}","title":"{title}","body":"{body}"{sid}}}}}"#
+            r#"{{"type":"show","id":"{id}","card":{{"id":"{id}","cardType":"{card_type}","title":"{title}","body":"{body}"{sid}{extra}}}}}"#
         );
         let _ = self.tx.send(ClientMsg::Show { json });
     }
@@ -82,7 +87,6 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("hebisland daemon 未运行 ({e})，通知将不弹出");
-            // drain channel silently
             for _ in rx {}
             return;
         }
@@ -90,7 +94,6 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
 
     tracing::info!("hebisland socket 已连接: {}", sock_path.display());
 
-    // 克隆 reader 端
     let reader_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
@@ -110,23 +113,40 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
                         let msg_id = v["msg_id"].as_str().unwrap_or("");
                         let action = v["action"].as_str().unwrap_or("");
                         tracing::info!(msg_id, action, "hebisland action 回传");
-                        match action {
-                            "allow" | "deny" => {
-                                // msg_id 格式为 "perm-{request_id}"，取出 request_id
-                                let request_id =
-                                    msg_id.strip_prefix("perm-").unwrap_or(msg_id);
+
+                        // 提取可选的 selected / input / checked
+                        let selected = v["selected"].as_array().map(|arr| {
+                            arr.iter().filter_map(|x| x.as_i64().map(|n| n as usize)).collect::<Vec<_>>()
+                        });
+                        let input = v["input"].as_str().map(|s| s.to_string());
+                        let checked = v["checked"].as_array().map(|arr| {
+                            arr.iter().filter_map(|x| x.as_i64().map(|n| n as usize)).collect::<Vec<_>>()
+                        });
+
+                        // msg_id 格式为 "perm-{request_id}" 或 "question-{request_id}"
+                        let (prefix, request_id) = if let Some(rid) = msg_id.strip_prefix("perm-") {
+                            ("perm", rid)
+                        } else if let Some(rid) = msg_id.strip_prefix("question-") {
+                            ("question", rid)
+                        } else {
+                            ("unknown", msg_id)
+                        };
+
+                        match prefix {
+                            "perm" => {
                                 crate::hitl::resolve_hitl_from_island(
-                                    &reader_app,
-                                    request_id,
-                                    action,
+                                    &reader_app, request_id, action,
+                                    checked.as_deref(),
                                 );
                             }
-                            "dismiss" | "open" => {
-                                // open/dismiss 不需要落地 HITL；用户手动关闭卡片或
-                                // 点击打开主窗口，这里不发任何动作。
+                            "question" => {
+                                crate::hitl::answer_question_from_island(
+                                    &reader_app, request_id, action,
+                                    selected.as_deref(), input.as_deref(),
+                                );
                             }
                             _ => {
-                                tracing::warn!(action, "未知 action");
+                                tracing::warn!(msg_id, action, "未知 msg_id 前缀");
                             }
                         }
                     }
@@ -145,7 +165,6 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
             ClientMsg::Show { json } => (json.as_str(), "show"),
             ClientMsg::Dismiss { json } => (json.as_str(), "dismiss"),
         };
-        // 每次写前先检查，socket 断了就退出
         let mut buf = json.as_bytes().to_vec();
         buf.push(b'\n');
         if stream.write_all(&buf).is_err() {

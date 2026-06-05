@@ -119,6 +119,7 @@ pub async fn send_and_save(
                 "回答完成",
                 "Agent 已完成本次回答",
                 None,
+                None,
             );
         }
     }
@@ -3553,25 +3554,41 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             ..
         } => {
             let summary: String = input.to_string().chars().take(80).collect();
+            // TODO: 推送子命令勾选列表（需要 EngineEvent 携带 subcommands 数据）
             client.push(
                 format!("perm-{request_id}"),
                 "approval",
                 "需要你的审批",
                 &format!("{tool_name} {summary}"),
                 None,
+                None,
             );
         }
         EngineEvent::UserQuestionRequested {
             request_id,
             question,
-            ..
+            options,
+            multi,
         } => {
+            // 构建 options JSON
+            let options_json: Vec<String> = options.iter().map(|opt| {
+                format!(r#"{{"label":"{}","desc":"{}"}}"#, 
+                    opt.label.replace('"', r#"""#),
+                    opt.description.replace('"', r#"""#)
+                )
+            }).collect();
+            let extra = if options_json.is_empty() {
+                format!(r#","multiSelect":{}"#, multi)
+            } else {
+                format!(r#","options":[{}],"multiSelect":{}"#, options_json.join(","), multi)
+            };
             client.push(
                 format!("question-{request_id}"),
                 "question",
                 "需要你的回答",
                 question,
                 None,
+                Some(&extra),
             );
         }
         EngineEvent::PermissionResolved { request_id, .. }

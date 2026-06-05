@@ -124,11 +124,13 @@ impl HitlState {
     }
 }
 
-/// Island 浮层快捷审批入口：只支持 AllowOnce / Deny。
+/// Island 浮层快捷审批入口：支持 AllowOnce / Deny / AllowAndRemember。
+/// `checked` 是用户在子命令列表中勾选的索引（空 = 全部勾选）。
 pub fn resolve_hitl_from_island(
     app: &tauri::AppHandle,
     request_id: &str,
     decision_str: &str,
+    checked: Option<&[usize]>,
 ) {
     use std::sync::Arc;
     use tauri::Manager;
@@ -140,6 +142,21 @@ pub fn resolve_hitl_from_island(
     let decision = match decision_str {
         "allow" => protocol::ApprovalDecision::AllowOnce,
         "deny" => protocol::ApprovalDecision::Deny,
+        "allow_conversation" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Session,
+            pattern: None,
+            extra_patterns: vec![],
+        },
+        "allow_project" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Project,
+            pattern: None,
+            extra_patterns: vec![],
+        },
+        "allow_global" => protocol::ApprovalDecision::AllowAndRemember {
+            scope: protocol::PermissionScope::Global,
+            pattern: None,
+            extra_patterns: vec![],
+        },
         other => {
             tracing::warn!(decision = other, "island_approve: unknown decision");
             return;
@@ -147,5 +164,50 @@ pub fn resolve_hitl_from_island(
     };
     if let Err(e) = state.resolve_approval(request_id, decision) {
         tracing::warn!(error = %e, "island_approve: failed to resolve");
+    }
+}
+
+/// Island 问答回答入口：支持 Selected / SelectedMulti / Custom / Cancelled。
+/// `selected` 是用户选中的选项索引，`input` 是自由输入文本。
+pub fn answer_question_from_island(
+    app: &tauri::AppHandle,
+    request_id: &str,
+    action: &str,
+    selected: Option<&[usize]>,
+    input: Option<&str>,
+) {
+    use std::sync::Arc;
+    use tauri::Manager;
+
+    let Some(state) = app.try_state::<Arc<HitlState>>() else {
+        tracing::warn!("island_answer: HitlState not available");
+        return;
+    };
+    let answer = match action {
+        "skip" => protocol::UserAnswer::Cancelled,
+        "submit" => {
+            // 优先用自由输入，其次用选中项
+            if let Some(text) = input {
+                protocol::UserAnswer::Custom { text: text.to_string() }
+            } else if let Some(indices) = selected {
+                if indices.len() == 1 {
+                    // 单选：用索引占位，实际 label 由后端从 options 里取
+                    protocol::UserAnswer::Selected { label: format!("option_{}", indices[0]) }
+                } else {
+                    protocol::UserAnswer::SelectedMulti {
+                        labels: indices.iter().map(|i| format!("option_{i}")).collect(),
+                    }
+                }
+            } else {
+                protocol::UserAnswer::Cancelled
+            }
+        }
+        other => {
+            tracing::warn!(action = other, "island_answer: unknown action");
+            return;
+        }
+    };
+    if let Err(e) = state.answer_question(request_id, answer) {
+        tracing::warn!(error = %e, "island_answer: failed to answer");
     }
 }
