@@ -161,6 +161,12 @@ pub enum EngineEvent {
         delay_ms: u64,
         reason: String,
     },
+    /// 自动结构化压缩触发（L2）。前端在输入框上方显示一行提示，告知用户上下文已被
+    /// 截断，保留了最近若干轮（before_tokens → after_tokens）。
+    ContextCompacted {
+        before_tokens: usize,
+        after_tokens: usize,
+    },
     /// Turn 边界——一次"模型请求 + 可选 tool_call 批"结束（架构 §3 / §4.2）。
     /// surface 用它把 streaming bubble 冻结成"已完成 turn 快照"；下一个 Turn 的输出
     /// 起一个新的 streaming bubble，从而保证 streaming 中的插队 user message 总是

@@ -19,6 +19,8 @@ export interface Provider {
   account_id?: string | null;
   extra_headers: Record<string, string>;
   models: string[];
+  /** 从 provider /models 端点拉取的全量模型 ID 缓存（用于 UI 展示）。 */
+  fetched_models?: string[] | null;
   default_model?: string | null;
   /** 是否把这个 provider 用作「标题生成模型」。整份配置最多一个 provider 应该勾上。 */
   title_gen_enabled?: boolean;
@@ -47,6 +49,40 @@ export interface ProviderPreset {
 export interface FetchedModel {
   id: string;
   owned_by?: string | null;
+}
+
+// ---------- models.dev catalog（模型元数据目录，§storage/models_catalog.rs 前端对应） ----------
+
+export interface CatalogModalities {
+  input: string[];
+  output: string[];
+}
+
+export interface CatalogLimits {
+  context?: number;
+  input?: number;
+  output?: number;
+}
+
+export interface CatalogEntry {
+  id: string;
+  name?: string;
+  family?: string;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  attachment?: boolean;
+  modalities?: CatalogModalities;
+  limit?: CatalogLimits;
+  knowledge?: string;
+  release_date?: string;
+  last_updated?: string;
+}
+
+/** `~/.hebbian/models_catalog.json` 的磁盘缓存结构（含 TTL 与 ETag）。 */
+export interface CatalogCache {
+  etag: string | null;
+  last_fetched_at_ms: number;
+  entries: Record<string, CatalogEntry>;
 }
 
 export interface ProviderModelTestResult {
@@ -621,6 +657,12 @@ export type EngineEvent =
       max: number;
       delay_ms: number;
       reason: string;
+    }
+  | {
+      // 自动结构化压缩触发（L2）。前端在输入框上方显示一行提示。
+      type: "context_compacted";
+      before_tokens: number;
+      after_tokens: number;
     }
   | {
       // 运行模式切换（架构 §10.2）。

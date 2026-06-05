@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type {
   AppSettings,
   ApprovalDecisionPayload,
+  CatalogCache,
+  CatalogEntry,
   ContextUsage,
   ContinueKind,
   EditEntry,
@@ -334,6 +336,8 @@ type SessionStream = {
   planComments: Record<string, PlanComment[]>;
   /** 模型调用失败后的自动重试进度（架构 §4.3）。`null` = 当前没在重试。 */
   modelRetry: { attempt: number; max: number; reason: string } | null;
+  /** 自动压缩触发提示（L2）。`null` = 无提示。before/after_tokens 仅供显示。 */
+  contextCompacted: { before_tokens: number; after_tokens: number } | null;
 };
 
 export type SuspendedInfo = {
@@ -371,6 +375,7 @@ const EMPTY_MIRROR = {
   activePlan: null as SessionStream["activePlan"],
   planComments: {} as Record<string, PlanComment[]>,
   modelRetry: null as SessionStream["modelRetry"],
+  contextCompacted: null as SessionStream["contextCompacted"],
 };
 
 function mirrorFromSlot(slot: SessionStream | undefined) {
@@ -393,6 +398,7 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
     activePlan: slot.activePlan,
     planComments: slot.planComments,
     modelRetry: slot.modelRetry,
+    contextCompacted: slot.contextCompacted,
   };
 }
 
@@ -415,11 +421,17 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       modelRetry: { attempt: e.attempt, max: e.max, reason: e.reason },
     };
   }
+  if (e.type === "context_compacted") {
+    return {
+      ...slot,
+      contextCompacted: { before_tokens: e.before_tokens, after_tokens: e.after_tokens },
+    };
+  }
   if (e.type === "text_delta") {
     if (!e.text) return slot;
     return {
       ...slot,
-      // 有新内容流出 → 重试成功，清掉进度指示。
+      // 有新内容流出 → 重试成功，清掉重试进度指示；压缩提示保持到 run 结束。
       modelRetry: null,
       streamingText: slot.streamingText + e.text,
       streamingParts: applyTextDelta(slot.streamingParts, e.text),
@@ -672,6 +684,7 @@ function patchSessionSlot(
         activePlan: null,
         planComments: {},
         modelRetry: null,
+  contextCompacted: null,
       } satisfies SessionStream);
     const next = patch(base);
     const isCurrent = state.currentSession?.id === sessionId;
@@ -856,6 +869,12 @@ function applyNestedEvent(
 interface AppState {
   // providers
   providersFile: ProvidersFile;
+  /**
+   * models.dev 模型元数据目录（context/output 大小、模态、reasoning 支持等）。
+   * 内置兜底 + 启动时联网 24h TTL 刷新；供 ModelsPane / ModelPickerButton 渲染用。
+   */
+  modelsCatalog: CatalogCache | null;
+  modelsCatalogRefreshing: boolean;
   // prompts
   promptsFile: PromptsFile;
   prompts: Prompt[];
@@ -877,6 +896,8 @@ interface AppState {
   streamingParts: StreamingAssistantPart[];
   /** 模型调用失败后的自动重试进度（架构 §4.3）。镜像自当前 slot。 */
   modelRetry: { attempt: number; max: number; reason: string } | null;
+  /** 自动压缩触发提示（L2）。镜像自当前 slot。`null` = 无提示。 */
+  contextCompacted: { before_tokens: number; after_tokens: number } | null;
   /**
    * Run 内时间线（架构 §4.2 + §4.12.5）：已完成 turn 快照 + streaming 期间
    * 插队的 user message，按真实顺序。ChatView 据此把"插队 → 下个 turn 输出"
@@ -922,9 +943,13 @@ interface AppState {
   lastRunError: { sessionId: string } | null;
 
   // UI
-  providerDialogOpen: boolean;
   settingsOpen: boolean;
   promptsDialogOpen: boolean;
+  /**
+   * 应用级设置打开时默认显示的 tab。外部调 `openAppSettingsAt(tab)` 时设置；
+   * AppSettingsDialog 打开时消费后清空（回到 null = 默认 tab）。
+   */
+  pendingAppSettingsTab: string | null;
 
   // search
   searchQuery: string;
@@ -1043,6 +1068,7 @@ interface AppState {
   refreshProviders: () => Promise<void>;
   saveProviders: (file: ProvidersFile) => Promise<void>;
   upsertProvider: (p: Provider) => Promise<void>;
+  refreshModelsCatalog: () => Promise<void>;
   refreshPrompts: () => Promise<void>;
   upsertPrompt: (p: Prompt) => Promise<void>;
   deletePrompt: (id: string) => Promise<void>;
@@ -1105,12 +1131,13 @@ interface AppState {
   /** 仅更新当前 session 的推理配置；传 null 重置为「沿用模型默认」。 */
   setReasoning: (reasoning: ReasoningConfig | null) => Promise<void>;
 
-  setProviderDialogOpen: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
   setPromptsDialogOpen: (v: boolean) => void;
-  /** 应用级设置窗口（通用 / 对话 / agent 三个 tab） */
+  /** 应用级设置窗口（通用 / 对话 / 供应商 / agent 等多个 tab） */
   appSettingsOpen: boolean;
   setAppSettingsOpen: (v: boolean) => void;
+  openAppSettingsAt: (tab: string) => void;
+  setPendingAppSettingsTab: (tab: string | null) => void;
   appSettings: AppSettings | null;
   refreshAppSettings: () => Promise<void>;
   saveAppSettings: (settings: AppSettings) => Promise<void>;
@@ -1176,6 +1203,8 @@ const LOG_CAPACITY = 5000;
 
 export const useStore = create<AppState>((set, get) => ({
   providersFile: { providers: [], default_provider_id: null },
+  modelsCatalog: null,
+  modelsCatalogRefreshing: false,
   promptsFile: { prompts: [], default_prompt_id: null },
   prompts: [],
   pendingPromptId: readStoredValue(LAST_PROMPT_ID_KEY),
@@ -1190,6 +1219,7 @@ export const useStore = create<AppState>((set, get) => ({
   streamingText: "",
   streamingParts: [],
   modelRetry: null,
+  contextCompacted: null,
   liveTimeline: [],
   assistantInsertPos: 0,
   activeRequestId: null,
@@ -1202,8 +1232,8 @@ export const useStore = create<AppState>((set, get) => ({
   runningSessions: new Set<string>(),
   unreadFinishedSessions: new Set<string>(),
   lastRunError: null,
-  providerDialogOpen: false,
   settingsOpen: false,
+  pendingAppSettingsTab: null,
   promptsDialogOpen: false,
   searchQuery: "",
   searchResults: null,
@@ -1674,6 +1704,7 @@ export const useStore = create<AppState>((set, get) => ({
       get().refreshPrompts(),
       get().refreshSessions(),
       get().refreshProjects(),
+      get().refreshModelsCatalog(),
       // 加载工具清单（失败不影响主流程）
       api.listTools().then((tools) => set({ availableTools: tools })).catch(() => {}),
     ]);
@@ -1708,6 +1739,24 @@ export const useStore = create<AppState>((set, get) => ({
   async upsertProvider(p) {
     await api.upsertProvider(p);
     await get().refreshProviders();
+  },
+
+  async refreshModelsCatalog() {
+    // 1) 立即显示当前磁盘缓存（或兜底）。
+    const cache = await api.getModelsCatalog();
+    set({ modelsCatalog: cache });
+    if (get().modelsCatalogRefreshing) return; // 已在刷新中
+    set({ modelsCatalogRefreshing: true });
+    try {
+      await api.refreshModelsCatalog();
+      const updated = await api.getModelsCatalog();
+      set({ modelsCatalog: updated });
+    } catch (e) {
+      // 联网失败不阻塞，旧缓存仍可用；只在调试时留痕。
+      console.warn("[models_catalog] refresh failed", e);
+    } finally {
+      set({ modelsCatalogRefreshing: false });
+    }
   },
 
   async refreshPrompts() {
@@ -2061,6 +2110,7 @@ export const useStore = create<AppState>((set, get) => ({
             : null),
         planComments: priorSlot?.planComments ?? {},
         modelRetry: null,
+  contextCompacted: null,
       };
       set((state) => {
         const isForeground = state.currentSession?.id === sessionId;
@@ -2392,8 +2442,8 @@ export const useStore = create<AppState>((set, get) => ({
     await get().refreshSessions();
   },
 
-  setProviderDialogOpen(v) {
-    set({ providerDialogOpen: v });
+  openAppSettingsAt(tab) {
+    set({ pendingAppSettingsTab: tab, appSettingsOpen: true });
   },
   setSettingsOpen(v) {
     set({ settingsOpen: v });
@@ -2405,6 +2455,9 @@ export const useStore = create<AppState>((set, get) => ({
   appSettingsOpen: false,
   setAppSettingsOpen(v) {
     set({ appSettingsOpen: v });
+  },
+  setPendingAppSettingsTab(tab) {
+    set({ pendingAppSettingsTab: tab });
   },
   appSettings: null,
   async refreshAppSettings() {

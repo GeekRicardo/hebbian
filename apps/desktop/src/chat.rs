@@ -1964,6 +1964,13 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             delay_ms: *delay_ms,
             reason: reason.clone(),
         }),
+        ContextCompacted {
+            before_tokens,
+            after_tokens,
+        } => Some(EngineEvent::ContextCompacted {
+            before_tokens: *before_tokens,
+            after_tokens: *after_tokens,
+        }),
         RunModeChanged { from, to } => Some(EngineEvent::RunModeChanged {
             from: from.clone(),
             to: to.clone(),

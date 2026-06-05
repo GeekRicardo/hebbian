@@ -6086,3 +6086,16 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **改动**: `crates/agent-core/src/context/compaction.rs:compact_structural` — 找 User entry 失败时退回 raw_start（不要求以 User 开头），保留最后 N 条而非空。加回归测试 `compact_structural_no_user_in_window_does_not_empty_transcript`（pass）。顺带修 `agent_loop.rs:ToolDispatcher` 构造两处遗留编译错误（`run_mode` 类型包装 + 补 `model_io_dump` 字段）；`dispatch.rs:DumpEntry` 删除无效 `kind` 字段。
 - **影响范围**: agent-core context 层；ToolDispatcher 构造（不改行为，仅补字段）
 - **留尾巴**: compact_structural 仍然丢前文（无摘要）——见上条 changelog 的留尾巴
+
+### 2026-06-06 — 自动压缩触发时前端显示提示
+
+- **Why**: 自动 L2 压缩（compact_structural）触发时没有任何 UI 反馈，用户不知道为什么上下文突然少了。
+- **改动**:
+  - `protocol::EventPayload::ContextCompacted` 已有，现在接通前端链路
+  - `engine/mod.rs`：新增 `EngineEvent::ContextCompacted { before_tokens, after_tokens }`
+  - `chat.rs agent_event_to_engine_event`：翻译 `ContextCompacted` → `EngineEvent::ContextCompacted`
+  - `types.ts`：新增 `{ type: "context_compacted"; before_tokens; after_tokens }` 事件类型
+  - `useStore.ts`：SessionStream + 全局 mirror 加 `contextCompacted` 状态；`applyEventToSlot` 处理 `context_compacted` 事件；run 结束、切换 session 时清空
+  - `ChatView.tsx`：在输入框上方与 modelRetry 同位置渲染一行蓝色提示「上下文已自动压缩（Xk → Yk token）」
+- **影响范围**: protocol/engine/desktop/frontend，无协议破坏性变更（additive）
+- **留尾巴**: contextCompacted 提示目前不随 run 结束主动清除（只在下次 run 开始时被新初始化覆盖）；如需 run_finished 时清掉可在 applyEventToSlot run_finished 分支加 contextCompacted: null

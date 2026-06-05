@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, Share, RotateCw } from "lucide-react";
+import { Sparkles, ChevronDown, Share, RotateCw, Scissors } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
@@ -44,7 +44,7 @@ export function ChatView() {
     regenerateFromUser,
     editAndRerun,
     regenerateTitle,
-    setProviderDialogOpen,
+    openAppSettingsAt,
     newSession,
     pendingPromptId,
     setPendingPromptId,
@@ -52,6 +52,7 @@ export function ChatView() {
     debugEnabled,
     appSettings,
     modelRetry,
+    contextCompacted,
     sessionMemoryWrites,
   } = useStore();
 
@@ -67,15 +68,20 @@ export function ChatView() {
   // ==== 浮动 user 消息（sticky header）====
   // 当某条 user 消息顶部滚出 chat 视口上方时，在 chat 顶部浮动它的截断副本。
   // 点击浮动条 → 滚动到该 user 消息真实位置，让真实顶边与浮动区下边缘重合，
-  // 视觉上"浮动的"替换为"真实的"。随后设置锚定：锚定消息 id + 死区下边界。
-  // 死区规则：往下滚时，仅当锚定消息的 top 离开浮动区并再超出 PINNED_HEIGHT
-  // 后才允许上一条 user 浮动 —— 避免浮动条刚消失又立刻出现遮挡内容。
+  // 视觉上"浮动的"替换为"真实的"。随后设置锚定。
+  // 死区规则（仅向下滚动生效）：锚定消息的 top 还在浮动区下方 → 阻止上一条浮动，
+  // 等 anchor 的 top 滚出浮动区下边缘才解除。向上滚动时跳过死区，让上一条自然浮动。
   const [pinnedUserId, setPinnedUserId] = useState<string | null>(null);
   // 锚定信息：点击浮动条后锁定当前消息 id。
   // 死区判断直接用 anchorBottom 与 containerTop - PINNED_HEIGHT_PX 比较，
   // 不需要额外存储偏移量。
   // 用 ref 不走 state，避免与 pinnedUserId 的 setState 形成循环。
   const anchorRef = useRef<{ userId: string } | null>(null);
+  // 追踪滚动方向：死区只在向下滚动时生效，向上滚动跳过死区让上一条自然浮动。
+  const lastScrollTopRef = useRef(0);
+  // 程序化滚动标志：scrollToPinnedMessage / scrollToPrevUserMessage 触发 scrollTo 时
+  // handleScroll 会跟着触发，此时不应清除 anchor。
+  const isProgrammaticScrollRef = useRef(false);
   // 浮动副本最大高度（截断 ~2 行），也是几何判定的基准。
   const PINNED_HEIGHT_PX = 72;
   const PINNED_ALIGN_TOLERANCE_PX = 4;
@@ -193,9 +199,24 @@ export function ChatView() {
     const el = scrollRef.current;
     if (!el) return;
 
+    // 程序化滚动（点击浮动条 / 上箭头触发的 scrollTo）跳过方向判定和死区，
+    // 只更新 lastScrollTopRef 供下一次用户滚动使用。
+    if (isProgrammaticScrollRef.current) {
+      lastScrollTopRef.current = el.scrollTop;
+      isProgrammaticScrollRef.current = false;
+      // 贴底检测仍然需要
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+      return;
+    }
+
     // 贴底检测
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+
+    // 滚动方向：死区只在向下滚动时生效，向上滚动跳过死区。
+    const scrollingDown = el.scrollTop > lastScrollTopRef.current;
+    lastScrollTopRef.current = el.scrollTop;
 
     // 浮动区下边缘 = 容器顶端 + 浮动区高度
     const containerTop = el.getBoundingClientRect().top;
@@ -227,21 +248,18 @@ export function ChatView() {
     const id = pinned.getAttribute("data-message-id");
     if (!id) return;
 
-    // 死区检查：锚定消息还在死区内 → 阻止 anchor 本身及其之前的所有 user 消息浮动。
-    // 死区条件：anchorBottom > containerTop - PINNED_HEIGHT_PX
-    // 即 anchor 底部还没滚到「浮动区上方一个浮动区高度」的位置。
-    // 目的：点击浮动条跳到真实位置后，用户往下滚时，必须等 anchor 完全滚出视口
-    // 且再间隔一个浮动区高度，才允许上一条 message 浮动出来。
+    // 死区检查：仅在向下滚动时生效。
+    // 向上滚动时跳过死区，让上一条消息自然浮动。
+    // 向下滚动时：锚定消息的 top 还在浮动区下边缘之上 → 阻止 anchor 及其之前的消息浮动，
+    // 等 anchor 完全滚出浮动区（top > pinnedBottom）才解除锚定。
     const anchor0 = anchorRef.current;
-    if (anchor0) {
+    if (anchor0 && scrollingDown) {
       const anchor = anchor0;
       const anchorEl = el.querySelector<HTMLElement>(`[data-message-id="${anchor.userId}"]`);
       if (anchorEl) {
         const anchorRect = anchorEl.getBoundingClientRect();
-        const anchorBottom = anchorRect.top + anchorRect.height;
-        const deadzoneReleaseLine = containerTop - PINNED_HEIGHT_PX;
-        if (anchorBottom > deadzoneReleaseLine) {
-          // 死区内：阻止 anchor 本身及之前的消息被浮动
+        if (anchorRect.top < pinnedBottom) {
+          // anchor 的 top 还在浮动区下方 → 死区内，阻止 anchor 及之前的消息浮动
           let pinnedIsAnchorOrBefore = false;
           for (const b of userBubbles) {
             if (b === pinned) { pinnedIsAnchorOrBefore = true; break; }
@@ -253,7 +271,18 @@ export function ChatView() {
           }
           // pinned 在 anchor 之后（更新的消息）→ 正常浮动，不受死区保护
         } else {
-          // 锚定消息已完全滚出死区 → 解除锚定
+          // anchor 的 top 已滚出浮动区 → 解除锚定
+          anchorRef.current = null;
+        }
+      } else {
+        anchorRef.current = null;
+      }
+    } else if (anchor0 && !scrollingDown) {
+      // 向上滚动：anchor 的 top 已在可见区域内 → 解除锚定
+      const anchorEl = el.querySelector<HTMLElement>(`[data-message-id="${anchor0.userId}"]`);
+      if (anchorEl) {
+        const anchorRect = anchorEl.getBoundingClientRect();
+        if (anchorRect.top >= pinnedBottom) {
           anchorRef.current = null;
         }
       } else {
@@ -280,6 +309,7 @@ export function ChatView() {
     anchorRef.current = { userId: pinnedUserId };
 
     setPinnedUserId(null);
+    isProgrammaticScrollRef.current = true;
     el.scrollTo({ top, behavior: "instant" });
   }, [pinnedUserId]);
 
@@ -314,6 +344,7 @@ export function ChatView() {
     anchorRef.current = { userId: prevId };
 
     setPinnedUserId(null);
+    isProgrammaticScrollRef.current = true;
     el.scrollTo({ top, behavior: "instant" });
   }, [pinnedUserId, getPrevUserMessageId]);
 
@@ -556,7 +587,7 @@ export function ChatView() {
           >
             新建对话
           </Button>
-          <Button variant="outline" onClick={() => setProviderDialogOpen(true)}>
+          <Button variant="outline" onClick={() => openAppSettingsAt("providers")}>
             供应商配置
           </Button>
         </div>
@@ -927,6 +958,14 @@ export function ChatView() {
             <RotateCw className="h-3 w-3 animate-spin" />
             <span>
               模型出错，重试中 {modelRetry.attempt}/{modelRetry.max}…
+            </span>
+          </div>
+        )}
+        {contextCompacted && (
+          <div className="flex items-center gap-1.5 px-3 pb-1 text-xs text-blue-600 dark:text-blue-400">
+            <Scissors className="h-3 w-3" />
+            <span>
+              上下文已自动压缩（{Math.round(contextCompacted.before_tokens / 1000)}k → {Math.round(contextCompacted.after_tokens / 1000)}k token）
             </span>
           </div>
         )}
