@@ -608,7 +608,6 @@ pub async fn run_loop(
                 request: model_io_dump::request_to_json(&req, client.provider_id()),
                 response: model_io_dump::response_to_json(&response_result),
                 duration_ms: call_duration_ms,
-                kind: "normal".to_string(),
             });
         }
 

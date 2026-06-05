@@ -5995,3 +5995,94 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - 新增回归测试 `structural_compaction_does_not_return_empty_when_no_trailing_user`
 - **影响范围**: agent-core context 层，所有 surface 共享
 - **留尾巴**: 该 bug 之前未被发现是因为大多数对话在 compact 触发时末尾都有 User 消息；长对话中大量 tool call 密集场景容易触发此 bug
+
+### 2026-06-05 — 重构设置：供应商管理整合进设置 tab + 模型卡片网格 + models.dev 元数据集成
+
+- **Why**: 用户要求"把 provider 放到设置里面去，有一个专门的选项卡"，并要求模型列表从 textarea 改成卡片网格显示，拉取 models.dev 元数据展示 context window / 输出大小 / 模态徽章。当前 provider 配置是独立 dialog（Sidebar/ChatView 两个入口），设置里的"模型"tab 几乎为空，UI 不统一且模型信息单一。
+- **改动**:
+  - **Phase 1 — Rust 端 models.dev catalog 缓存**
+    - `crates/agent-core/src/storage/models_catalog.rs`：新增模块。`CatalogEntry` / `CatalogModalities` / `CatalogLimits` / `CatalogCache` 数据结构；`read_catalog(data_dir)` 返回磁盘缓存或内置兜底；`refresh_catalog(data_dir)` 联网拉取（24h TTL + ETag，304 不覆盖）
+    - `crates/agent-core/src/storage/models_catalog_fallback.json`：182 个模型 114KB 静态兜底（`include_str!` 编译进二进制），离线也能有完整目录
+    - `apps/desktop/src/lib.rs`：新增 `get_models_catalog` / `refresh_models_catalog` 两个 Tauri 命令
+  - **Phase 2 — 前端类型 + store**
+    - `types.ts`：新增 `CatalogEntry` / `CatalogCache` / `CatalogModalities` / `CatalogLimits` 类型
+    - `bridge/tauri.ts`：新增 `getModelsCatalog()` / `refreshModelsCatalog()` API
+    - `useStore.ts`：新增 `modelsCatalog` / `modelsCatalogRefreshing` 状态；`refreshModelsCatalog()` 方法（先显示缓存再后台刷新）；`init()` 时并行拉取；删除 `providerDialogOpen` / `setProviderDialogOpen`；新增 `pendingAppSettingsTab` / `openAppSettingsAt()` / `setPendingAppSettingsTab()` 让外部可以指定打开设置时定位到某个 tab
+  - **Phase 3 — 设置 tab 整合**
+    - `ProvidersDialog.tsx` → `ProvidersPane.tsx`：重命名并删除 Dialog 外壳（去掉 `<Dialog>` 包裹），改成 `<ProvidersPane active={boolean}>`，保留内部保存按钮；保留内部子 tab（已配置 / 内置预设）
+    - `App.tsx`：删除 `<ProvidersDialog />` 挂载
+    - `Sidebar.tsx` / `ChatView.tsx`：把 `setProviderDialogOpen(true)` 改成 `openAppSettingsAt("providers")`
+    - `AppSettingsDialog.tsx`：TabKey 增加 `"providers"`，TABS 数组增加「供应商」tab（Server 图标）；消费 `pendingAppSettingsTab` 切换到对应 tab
+  - **Phase 4 — 模型卡片网格**
+    - `ModelCard.tsx`：新组件。单张模型卡片，显示模型名、context/output 大小、模态徽章（文本/图片/音频/视频/PDF）、能力徽章（推理/工具）、选中角标
+    - `FamilyGroup.tsx`：新组件。按 family 分组展示模型卡片网格（响应式 1/2/3 列）
+    - `ProvidersPane.tsx`：用卡片网格替换旧的 `<Textarea>` + chip 列表；新增 `groupModelsByFamily()` 辅助函数，优先用 models.dev 的 family，否则按模型 ID 前缀推断（GPT/Claude Opus/Claude Sonnet/Gemini Pro/DeepSeek Reasoner 等）
+  - **Phase 5 — ModelPickerButton 视觉优化**
+    - `ModelPickerButton.tsx`：每个模型行增加模态徽章（🖼️ image / 🎵 audio / 📄 pdf / 🎥 video 图标）+ reasoning 徽章（🧠 紫色图标），紧凑版只显示图标不显示文字
+- **影响范围**:
+  - **Rust 端**：agent-core 新增 `storage::models_catalog` 模块；desktop 新增 2 个 Tauri 命令。向后兼容（磁盘缓存文件不存在时 fallback 到内置 JSON）
+  - **前端**：`ProvidersDialog` 独立 dialog 删除，所有入口改为打开设置 dialog 的 providers tab；模型列表 UI 完全重做（textarea → 卡片网格）；ModelPickerButton 增加元数据徽章
+  - **协议 / 存储**：无破坏性变更。新增 `~/.hebbian/models_catalog.json` 缓存文件（自动管理）
+- **留尾巴**:
+  - models.dev catalog 的 `last_fetched_at_ms` 推进逻辑：304 时更新，但失败时不更新——下次启动会重试，这是预期行为
+  - `ModelCard` 的模态徽章目前只显示输入模态（image/audio/video/pdf），输出模态（text/image）未展示（卡片空间有限，后续可按需展开详情）
+  - `family` 推断的 fallback 逻辑较简单（按 ID 前缀），models.dev 覆盖不到的模型都归到「其他」分组
+
+### 2026-06-05 — 设置页 UI 调整：加宽 + 模型卡片单列 + 手动编辑 context/output + 去 Sidebar 供应商图标
+
+- **Why**: 用户反馈：(1) 设置页太窄，需要再宽 25%；(2) 模型卡片一行一个更清晰（而不是多列网格）；(3) 模型卡片要限定高度内滚动；(4) models.dev 匹配不上的默认 200K 并允许手动修改；(5) 主窗体左下角的供应商图标多余（已整合到设置 tab 里）
+- **改动**:
+  - `ui/dialog.tsx`：新增 `2xl` size（`max-w-[1040px]`，原 `lg` 820px 的 1.27 倍 ≈ +25%）
+  - `AppSettingsDialog.tsx`：`size="lg"` → `size="2xl"`
+  - `ModelCard.tsx`：重写成单行布局（勾选框 + 模型名 + 徽章 + context/output 输入框）。context/output 输入框 stopPropagation 防止点输入框时触发卡片选中。优先级：用户 override > models.dev > 默认 200K/64K。手动修改过的输入框边框高亮 `border-primary/50`
+  - `FamilyGroup.tsx`：从 grid 改成单列 `space-y-1` 列表，透传 `overrides` + `onUpdateOverride`
+  - `ProvidersPane.tsx`：新增 `modelMetaOverrides` state；模型列表容器加 `max-h-[420px] overflow-y-auto`
+  - `Sidebar.tsx`：删除 Server 图标按钮（供应商配置入口）；删除 `Server` import + `openAppSettingsAt` destructure
+- **影响范围**: 纯 UI 调整。`DialogProps.size` 增加 `"2xl"` variant（向后兼容），其余改动都是前端组件层
+- **留尾巴**: 手动修改的 context/output 不持久化，只在当前 ProvidersPane 挂载期间有效（切走再切回来会丢失）。如需持久化需扩 providers.json 的 schema
+
+## 2026-06-05 — Provider 模型列表缓存与 models.dev 前缀匹配
+
+### 改动内容
+- **后端 Provider 结构体**：添加 `fetched_models: Option<Vec<String>>` 字段，用于缓存从 `/models` 端点拉取的模型 ID 列表
+- **后端 config.rs**：添加 `update_fetched_models` 函数，实现合并逻辑（新模型追加，已存在保留）
+- **后端 lib.rs**：`fetch_provider_models` 命令在拉取成功后自动调用 `update_fetched_models` 持久化缓存
+- **前端 types.ts**：Provider 接口添加 `fetched_models?: string[] | null` 字段
+- **前端 ModelsPane.tsx**：模型列表显示逻辑改为优先使用 state，如果没有则使用 `provider.fetched_models` 缓存
+- **前端 groupModelsByFamily**：构建不带前缀的 catalog 映射，支持匹配去掉前缀的模型 ID（如 "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"）
+- **前端 FamilyGroup**：添加 `catalogLookup` 函数，支持精确匹配和带前缀的变体匹配
+
+### 解决的问题
+1. 用户关闭再打开供应商设置时，无需重新拉取即可看到之前的模型列表
+2. 多次点击"拉取模型列表"时，新模型会追加到缓存，已存在的模型保留
+3. models.dev 的模型 ID 格式为 "provider/model-name"，而前端拿到的 model.id 可能没有前缀，现在能正确匹配
+
+### 实现细节
+- 缓存文件：`~/.hebbian/providers.json` 中的 `fetched_models` 字段
+- 合并策略：拉取时遍历新模型 ID，如果不在缓存中则追加，最后排序
+- 前缀匹配：在 `groupModelsByFamily` 和 `FamilyGroup` 中都构建了 `catalogWithoutPrefix` 映射，优先精确匹配，其次尝试带前缀的变体
+
+## 2026-06-05 — Provider 复制功能
+
+### 改动内容
+- **前端 ProvidersPane.tsx**：在左侧供应商列表的每一项上添加复制按钮（Copy 图标）
+- 点击复制按钮会：
+  - 克隆当前供应商的所有配置
+  - 生成新的 ID（nanoid）
+  - 名称自动追加 " (副本)" 后缀
+  - 清空敏感信息（api_key、refresh_token、account_id 等）
+  - 保留模型列表、base_url、kind 等非敏感配置
+  - 自动选中新创建的供应商
+  - 显示 toast 提示"已复制 {name}"
+- 使用 `e.stopPropagation()` 防止点击复制按钮时触发选中当前供应商
+
+### 解决的问题
+- 用户可以快速复制已有的供应商配置，修改名称和 API Key 后即可使用
+- 适合有多个相同类型供应商的场景（如多个 OpenAI 账号）
+
+### 2026-06-04 — 修复 compact_structural 在无 User entry 窗口时清空 transcript
+
+- **Why**: session 202606050440-6068522f 暴露：对话只有一条初始 user 消息 + 大量 tool call 时，transcript entries=[user, asst, tool, asst, tool, ...×50]。触发 compact_structural 后，raw_start=73，[73..97] 全是 asst+tool（无 User），旧逻辑 `while start < total` 走到 start=97=total，`skip(total)` = 空 transcript，模型完全失忆——model_io.jsonl 里 turn=49 的请求 messages=0 条。
+- **改动**: `crates/agent-core/src/context/compaction.rs:compact_structural` — 找 User entry 失败时退回 raw_start（不要求以 User 开头），保留最后 N 条而非空。加回归测试 `compact_structural_no_user_in_window_does_not_empty_transcript`（pass）。顺带修 `agent_loop.rs:ToolDispatcher` 构造两处遗留编译错误（`run_mode` 类型包装 + 补 `model_io_dump` 字段）；`dispatch.rs:DumpEntry` 删除无效 `kind` 字段。
+- **影响范围**: agent-core context 层；ToolDispatcher 构造（不改行为，仅补字段）
+- **留尾巴**: compact_structural 仍然丢前文（无摘要）——见上条 changelog 的留尾巴

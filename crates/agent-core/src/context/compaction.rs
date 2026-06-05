@@ -41,15 +41,21 @@ pub fn compact_structural(
 
     let keep = policy.keep_recent_turns * 3;
     let total = entries.len();
-    let start = if total > keep { total - keep } else { 0 };
+    let raw_start = if total > keep { total - keep } else { 0 };
 
-    let mut start = start;
-    while start < total {
-        if matches!(entries[start], TranscriptEntry::User(_)) {
-            break;
+    // 从 raw_start 向后找第一个 User entry 作为起始点，保证 transcript 以 User 开头。
+    // 若 [raw_start..total] 内没有 User（全是 asst/tool_result），则不强制对齐 User，
+    // 直接用 raw_start——否则 skip(total) 会产生空 transcript，模型完全失忆。
+    let start = {
+        let mut s = raw_start;
+        while s < total {
+            if matches!(entries[s], TranscriptEntry::User(_)) {
+                break;
+            }
+            s += 1;
         }
-        start += 1;
-    }
+        if s >= total { raw_start } else { s }
+    };
 
     let compacted: Vec<TranscriptEntry> = entries.into_iter().skip(start).collect();
     let after_tokens = budget::estimate_transcript_tokens(system, &compacted);
@@ -288,5 +294,51 @@ mod tests {
         assert!(matches!(result.entries[0], TranscriptEntry::User(_)));
         assert!(matches!(result.entries[1], TranscriptEntry::Assistant(_)));
         assert_eq!(result.summary, "摘要正文");
+    }
+
+    /// 回归：transcript 里只有一条 User（第 0 条），后面全是 assistant+tool_result 对。
+    /// 旧逻辑在「找 User 起点」时走到 total，skip(total) = 空 transcript，模型完全失忆。
+    /// 修复后：找不到 User 时退回 raw_start，至少保留最后 N 条。
+    #[test]
+    fn compact_structural_no_user_in_window_does_not_empty_transcript() {
+        use model_gateway::types::{AssistantEntry, ToolResult, UserEntry};
+        // 构造 1 user + 50 assistant+tool 对 = 101 条
+        // keep_recent_turns * 3 = 8 * 3 = 24；raw_start = 101 - 24 = 77
+        // entries[77..101] 全是 assistant/tool_result，找不到 User
+        let mut entries = vec![TranscriptEntry::User(UserEntry::text("initial user"))];
+        for _ in 0..50 {
+            entries.push(TranscriptEntry::Assistant(AssistantEntry {
+                text: "doing work".to_string(),
+                reasoning: String::new(),
+                reasoning_signature: String::new(),
+                tool_calls: vec![model_gateway::types::ToolCall {
+                    id: "c1".to_string(),
+                    name: "Bash".to_string(),
+                    input: serde_json::json!({"command": "ls"}),
+                }],
+            }));
+            entries.push(TranscriptEntry::ToolResults(vec![ToolResult {
+                call_id: "c1".to_string(),
+                name: "Bash".to_string(),
+                content: "file1.rs\nfile2.rs".to_string(),
+                artifact: None,
+            }]));
+        }
+        assert_eq!(entries.len(), 101);
+
+        let policy = crate::definition::CompactionPolicy {
+            token_budget: 1, // 强制触发
+            keep_recent_turns: 8,
+            strategy: crate::definition::CompactionStrategy::Structural,
+        };
+        let result = compact_structural(None, entries, &policy);
+
+        // 修复前：空 transcript；修复后：非空（保留 raw_start 到末尾）
+        assert!(
+            !result.entries.is_empty(),
+            "compact_structural 不应返回空 transcript"
+        );
+        // 应该保留最后 24 条（raw_start = 77）
+        assert_eq!(result.entries.len(), 24);
     }
 }
