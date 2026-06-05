@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/master.swiftdeps"
+  },
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift": {
+    "dependencies": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.d",
+    "object": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.swift.o",
+    "swiftmodule": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.dia"
+  }
+}

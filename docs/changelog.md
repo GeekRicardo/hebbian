@@ -5831,3 +5831,104 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - 所有相关测试 dispatcher 构造同步更新
 - **影响范围**: agent-core dispatch / agent_loop / harness / subagent 内部接口；不破坏协议 / 存储格式 / surface API
 - **留尾巴**: 无（§13 留尾巴已关闭）
+
+---
+
+## 2026-06-04 — hebisland 放弃 Tauri，改 macOS native（Swift），删旧实现 + 重写规格
+
+- **Why**: 用户验收旧 Tauri 版 hebisland，发现「CLI 独立运行跑不起来 / 不能还原设计稿样式」。逐层复现定位到**架构性死路**：旧方案为每条通知在 socket 后台线程动态 `build()` 一个无边框 webview 窗口，而 macOS 的 `WKWebView` 必须在主线程创建并加载——从后台线程造窗，窗口框出现但 webview 内容永不 attach，表现为透明空窗 / 白屏，连注入脚本都不执行。即便 `run_on_main_thread` 把创建搬回主线程，仍要绕 query 传参 / 透明显示 / 嵌入资源协议一连串坑。用户决策：放弃 Tauri 路线，参考 CodeIsland 用 native（NSPanel + SwiftUI），重写文档后交 codex 实现。
+- **复现/定位记录**（阶段 A）:
+  - `transparent=false` 实验：屏幕出现白框 → 窗口能创建能定位，排除坐标问题。
+  - URL 带 `?id=` 后连白框里注入脚本都不显示 → `WebviewUrl::App` 把 `index.html?id=x` 当资源路径找不到 → 404 白屏。
+  - 改窗口 label 传 id + 主线程创建后仍是透明空窗 → 确认后台线程 webview 不 attach 是根因，非单点 bug。
+- **借鉴**: CodeIsland（`other/CodeIsland`，纯 Swift 刘海面板）的 native 做法——`NSPanel([.borderless,.nonactivatingPanel])` + level 高于菜单栏 + `clear`/`isOpaque=false` 透明 + `collectionBehavior` 跨 Space；`NSWorkspace.frontmostApplication` + `CGWindowListCopyWindowInfo`(layer==0) 判定焦点窗口所在屏做 screen-hop；`NWListener`+`NWEndpoint.unix` socket + umask/chmod 安全。
+- **改动**:
+  - 删除 `apps/island/`（旧 Tauri crate + React 前端）；`Cargo.toml` workspace 移除 `apps/island` 注册。
+  - 重写 `docs/hebisland-spec.md` 为 macOS native（Swift）实现规格：新增 §0 路线变更原因、native 项目结构、NSPanel 窗口规格、焦点屏幕跟随、暗色卡片视觉、硬协议契约（兼容现有 Desktop 客户端）、M1–M8 里程碑。
+  - 更新 `docs/hebisland.md`：决策表技术栈改 native、二进制位置改 `apps/island-mac/`、迁移状态改写（旧 Tauri 废弃 + native 路线）。
+- **协议契约（native 端必须对齐，否则 Desktop 断）**: socket `~/.hebbian/island.sock` 长连接双工；`{"type":"show","id","card"}` / `{"type":"dismiss","id"}`；回传 `{"msg_id","action"}` 写回同一连接，**action 值必须英文 `allow`/`deny`/`open`/`dismiss`**（按钮可显示中文）；`msg_id` 形如 `perm-<request_id>` 原样回传。
+- **用户新增需求**: 通知弹出后，焦点切到另一块屏幕的窗口时，已有通知整体 hop 到新焦点屏（不是跟鼠标，是跟焦点窗口所在屏）。
+- **影响范围**: 删除 `apps/island` crate（workspace 少一个 member）；`docs/hebisland-spec.md` / `docs/hebisland.md` 重写；`apps/desktop/src/hebisland_client.rs` 保留不动（走 socket 不依赖旧 crate）。`docs/hebisland-design.html` 暗色视觉原型保留作为 native 卡片视觉锚。
+- **留尾巴**: native 代码尚未实现，交 codex 按 spec §12 的 M1–M8 完成。`apps/island-mac/` 目录待创建。Desktop 当前不发 `durationMs`/`actions`，native 端按可选处理。架构.md 的 §7.5 / §4.5 等 hebisland companion 章节待 native 落地后正式补登（旧 hebisland.md 已记此 TODO）。
+
+### 2026-06-04 — 新建 apps/island-mac native Swift 实现（hebisland daemon + notify CLI）
+
+- **Why**: 按 hebisland-spec.md §12 的 M1–M8 里程碑，从零实现 macOS native 通知岛，替代已废弃的 Tauri 方案。
+- **改动**:
+  - `apps/island-mac/Package.swift`: Swift 5.9 可执行 target，macOS 14+。
+  - `apps/island-mac/Sources/HebIsland/main.swift`: CLI 分发 daemon / notify（--msg / --wait / --timeout）。
+  - `apps/island-mac/Sources/HebIsland/AppDelegate.swift`: LSUIElement / .accessory 菜单栏 agent，启动 socket + 屏幕跟随。
+  - `apps/island-mac/Sources/HebIsland/Protocol.swift`: IncomingMessage / NotificationCard / ActionMessage Codable 类型；durationMs/actions 缺省语义；default 按钮映射（拒绝→deny, 允许→allow, 打开→open）。
+  - `apps/island-mac/Sources/HebIsland/SocketServer.swift`: NWListener Unix domain socket (~/.hebbian/island.sock)，unlink + umask 0o077 + chmod 0o700 安全绑 socket，多连接逐行 JSON，msgId→connection 映射，action 回传同一连接。
+  - `apps/island-mac/Sources/HebIsland/NotifyClient.swift`: NWConnection 客户端，支持 fire-and-forget 和 --wait 阻塞读回传。
+  - `apps/island-mac/Sources/HebIsland/CardView.swift`: SwiftUI 暗色卡片 (420px, SF Mono, 纯黑底)，info/approval/question 三主题 (cyan/amber/cyan)，审批/问答边框 pulse 呼吸动画，按钮配色 (绿=允许/红=拒绝/灰=打开)，hover 事件。
+  - `apps/island-mac/Sources/HebIsland/PanelController.swift`: HebIslandPanel (canBecomeKey=true 首次点击即生效)，NSPanel borderless+nonactivatingPanel，level 高于菜单栏，canJoinAllSpaces+fullScreenAuxiliary，fadeIn 入场、slideRight 退场动画，auto-dismiss timer + hover pause/resume。
+  - `apps/island-mac/Sources/HebIsland/NotificationManager.swift`: 通知生命周期管理，右上角堆叠 (margin 20px, gap 10px)，重复 id update 不创建新窗口，info 最多 5 条折叠最旧，重排带动画。
+  - `apps/island-mac/Sources/HebIsland/ScreenResolver.swift`: NSWorkspace.frontmostApplication + CGWindowListCopyWindowInfo(layer==0) 判定焦点窗口所在屏，didActivateApplicationNotification + didChangeScreenParametersNotification + 500ms 轮询触发 screen hop 回调。
+  - `apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift`: JSON 编解码、缺省 durationMs/actions、默认按钮映射、自定义 actions、ActionMessage snake_case encoding。
+- **协议兼容**: 严格对齐 Desktop 客户端 (hebisland_client.rs) 的 socket 契约 —— 路径、行协议、msg_id snake_case、action 英文枚举值 (allow/deny/open/dismiss)、按钮可显示中文但回传英文。
+- **影响范围**: 新建 apps/island-mac/（独立 Swift Package，不依赖 Rust workspace）。Desktop 端 apps/desktop/src/hebisland_client.rs 零改动。
+- **留尾巴**: 
+  - swift build 因沙箱限制未能真编译（manifest 需写 ~/.cache/clang/ModuleCache），Package.swift 结构合法但待用户在外执行 `cd apps/island-mac && swift build` 验证。
+  - 面板可见性真验证 (daemon 起进程 + notify 推 approval 确认卡片出现在屏幕右上角) 需脱离沙箱后手动验收。
+  - 边框 pulse 呼吸动画使用 withAnimation(.repeatForever) 依赖 SwiftUI 动画系统，可能与 NSHostingView 混用时行为有差异，待真机验证。
+  - 自定义 actions 按钮回传按钮名本身（非英文枚举），Desktop 不使用该路径，由 CLI --wait 调用方自约语义。
+  - 架构.md §7.5 hebisland companion 拓扑图待 native 实现稳定后正式补登。
+
+### 2026-06-04 — 增量实现卡片折叠/展开、拖拽与吸附
+
+- **Why**: 按 hebisland-spec.md §6.3 / §6.4 + design.html 行为在 native 端补齐两交互能力。折叠让用户收起不重要卡片用 48x48 方块占位；拖拽+吸附让用户自由挪卡、松手靠拢堆叠时自动归位。
+- **改动**:
+  - `apps/island-mac/Sources/HebIsland/CardView.swift`: CardTheme 新增 `foldIcon` / `foldIconColor`（info=✦, approval=!, question=?）；CardView 新增 `onFold` 回调、hover 显示折叠 ⌄ + 关闭 ✕ 窗口控制按钮（对齐 design.html .window-controls）；新增 `FoldedCardView`（48x48, cornerRadius 18, 主题色单字符图标）。
+  - `apps/island-mac/Sources/HebIsland/PanelController.swift`: 新增折叠/展开逻辑（`fold()`/`expand()`/`toggleFold()`），动画保持 maxX/maxY 不动（右顶边缘固定、向左收/展），约 0.35s cubic-bezier(0.34,1.56,0.64,1)；`HebIslandPanel` 新增 `sendEvent` 重写处理拖拽（DRAG_THRESHOLD=5 区分点击 vs 拖拽，拖中 `setFrameOrigin` 移动窗口）、松手 snap（距 home 锚点 dx<48 且 dy<48 → 动画吸附回 home）、拖拽后 `wasDragged` 标记吃掉随后 click（不误触 fold/expand/action 按钮）；记录 `expandedSize` 供展开复原；`onRelayout` 回调在折叠/展开动画结束后通知 NotificationManager 重排堆叠。
+  - `apps/island-mac/Sources/HebIsland/NotificationManager.swift`: `_relayoutOnMain` 新增折叠卡判定——折叠卡按 48×48 占位、右对齐（`maxX - margin - 48`），展开卡按现有逻辑；每次重排记录 `homeOrigin` 到对应 PanelController（拖拽 snap 锚点）；新卡创建时设置 `onRelayout` 回调。
+- **影响范围**: apps/island-mac/ 内部三文件；不碰 socket 协议 / Protocol.swift / DaemonProbe / 按钮 action 回传 / 屏幕跟随；不引入第三方依赖。
+- **留尾巴**: swift build 因沙箱限制未真编译验证，代码逻辑已对齐 design.html 行为常量（FOLDED_SIZE=48 / SNAP_DISTANCE=48 / DRAG_THRESHOLD=5 / CARD_WIDTH=420），待用户在外执行 `cd apps/island-mac && swift build` 验证。
+
+---
+
+## 2026-06-05 — hebisland native 编译/运行验证 + auto-spawn/单例 + 折叠拖拽一连串 bug 修复
+
+- **Why**: 上面两条（codex 实现 M1–M7 与折叠拖拽）都留了「swift build 因沙箱未真编译」的尾巴。本轮在沙箱外真编译/真运行验证，修掉 codex 盲写出的一连串 bug，并补上「daemon 自动拉起/单例复用」能力。**关闭上述两条的全部留尾巴**。
+- **编译/运行验证（沙箱外）**:
+  - `swift build` 通过、`swift test` 11 个单测全过。
+  - 真起 daemon + notify 推送，逐一人工验证：三种卡片可见、暗色样式对齐 design.html、按钮 action 英文回传（`{"msg_id":"perm-w2","action":"allow"}`）、折叠/展开、拖拽吸附。
+- **改动**:
+  - `main.swift`: 补 `import AppKit`（codex 漏了，导致 `NSApplication`/`NSApplicationMain` 找不到，唯一的编译错）；`runDaemon` 开头加 daemon 单例检测（已有活 daemon 则 `exit(0)` 复用，不 unlink 抢占）。
+  - 新增 `DaemonProbe.swift`: `isDaemonAlive`（POSIX connect 探测）+ `ensureDaemonRunning`（探测不通 → `Process` 启动自身 daemon 子进程并切断 stdio → 轮询等 socket ready）。
+  - `NotifyClient.swift`: send 前调 `ensureDaemonRunning`——没 daemon 自动拉起、有就复用。
+  - `PanelController.swift`: **重构折叠/展开为「只切状态+内容，位置尺寸交给 relayout 一步到位」**，消除「先往右下展开再滑回左上」的两步跳；fold/expand 用瞬间 setFrame + 短淡入（缩放动画在 NSHostingView 上会让固定宽内容溢出+抖动）；`toggleFold` 补 `suppressDragClick`（折叠态拖动不再误展开）；`animateSnap` 从 `animator().setFrameOrigin`（NSWindow animator 不代理此方法 → 吸附无动画）改为 `animator().setFrame`（修好拖拽吸附）；leftMouseUp 先 `onDragEnd`(snap) 再 `super.sendEvent`，避免 suppressDragClick 提前清掉 wasDragged 导致 snap 判不到拖拽；hosting 加 `masksToBounds` 裁剪防溢出。
+  - `NotificationManager.swift`: `_relayoutOnMain` 改用 `controller.targetSize` 统一定位+尺寸（折叠 48×48 / 展开 420×内容高）一步 setFrame；`onRelayout` 改同步调用避免折叠后异步重排闪帧。
+  - `CardView.swift`: 边框 pulse 呼吸动画改为**静态彩色边框**（approval 琥珀 / question 青）——`withAnimation repeatForever` 在 NSHostingView 里触发持续 re-layout，内容左右往复，得不偿失；删除 `pulseValue`。
+- **关键经验**（native 踩坑，写这里防 rot）:
+  - NSWindow 的 `animator()` 只代理 `setFrame`，不代理 `setFrameOrigin` —— 后者无动画。
+  - `NSHostingView.sizingOptions = []` 会让 `fittingSize` 失效（读成 0 → 窗口高度 0 不可见），不能用它来抑制动画 re-layout。
+  - 从 socket 后台线程动态建窗必须切主线程做 UI（旧 Tauri 白屏的同源问题）。
+- **影响范围**: 仅 `apps/island-mac/` 内部；socket 协议 / Protocol / Desktop 客户端零改动。
+- **留尾巴**: 边框呼吸动画暂用静态色替代，若要 design.html 的呼吸效果需用 CALayer 绕过 SwiftUI/NSHostingView 单独实现（优先级低）；多屏焦点跟随、与 Desktop 全链路联调（M8）尚未实测；「手动起 daemon 后立即 notify」存在罕见单例竞态（连续 notify 因 auto-spawn 内部轮询不受影响）。
+
+---
+
+## 2026-06-05 — hebisland 协议扩展：审批子命令勾选 + 问答选项/输入 + 多卡直接点按钮 + 彩色图标 + success 类型
+
+- **Why**: design.html 里的完整形态（审批 5 粒度按钮 + 子命令勾选列表、问答单选/多选/文本输入、success 完成类型、彩色黄脸图标）之前被简化成 3 按钮 + 纯按钮，用户要求 100% 对齐 design.html。同时用户反馈「多个审批条之间要先点一下激活才能点元素」——nonactivating panel 的 first-mouse 被吞。
+- **协议扩展**（`Protocol.swift`）:
+  - `NotificationCard` 新增可选字段：`options`（问答选项列表）、`multiSelect`（多选标志）、`subcommands`（审批子命令勾选列表）
+  - 新增 `CardOption` / `CardSubcommand` Codable 类型
+  - `ActionMessage` 新增可选字段：`selected`（问答选中项索引）、`input`（自由输入文本）、`checked`（审批勾选子命令索引）
+  - 新增 `success` cardType（5s 自动消失，无按钮，亮绿主题色）
+  - 审批默认按钮从 3 个扩为 5 个：`拒绝/一次/对话/项目/全局`（`deny/allow/allow_conversation/allow_project/allow_global`）
+  - 问答默认按钮改为 `跳过/提交`（`skip/submit`）
+- **视觉实现**（`CardView.swift`）:
+  - 审批子命令勾选列表：「待审批队列」标题 + 每行方框 + 工具名(琥珀色) + 详情(灰)，点击切换勾选
+  - 问答选项列表：单选圆点 / 多选方框 + 标签 + 描述，点击选中
+  - 问答自由输入框：`>` 提示符 + `TextField`
+  - 彩色图标：微笑(info) / 傲娇(approval+question) / 调皮(success) PNG 资源，22px topline + 30px 折叠方块
+  - 所有折叠态都做边框呼吸（用 titleColor，不再依赖 pulseBaseColor）
+  - 控制按钮放大到 26px，贴右上角两个边（top:8, right:10）
+- **多卡直接点按钮修复**（`PanelController.swift`）:
+  - 新增 `FirstMouseHostingView`（`NSHostingView` 子类，`acceptsFirstMouse` 返回 true）——首次点击直达 SwiftUI 内容，不被 nonactivating panel 吞掉用于激活
+  - 回调从 `onAction(String)` 升级为 `onResult(ActionResult)`，承载问答选择/输入/勾选
+- **SocketServer**：`writeAction` 接受完整 `ActionResult`，回传带 `selected`/`input`/`checked`
+- **影响范围**: `apps/island-mac/` 内部；协议向后兼容（Desktop 不发新字段时 native 走默认）；Desktop 端 `hebisland_client.rs` 需后续适配新 action 值（`allow_conversation/project/global`、`skip/submit`）
+- **留尾巴**: Desktop 端 `hitl::resolve_hitl_from_island` 目前只认 `allow/deny`，新增的 `allow_conversation/project/global` 需 Desktop 配合实现不同粒度的审批持久化；多屏焦点跟随、M8 联调仍未实测。

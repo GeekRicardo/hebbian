@@ -1,0 +1,88 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "HebIsland-arm64-apple-macosx26.0-debug.module": ["<HebIsland-arm64-apple-macosx26.0-debug.module>"]
+  "HebIslandPackageTests-arm64-apple-macosx26.0-debug.module": ["<HebIslandPackageTests-arm64-apple-macosx26.0-debug.module>"]
+  "HebIslandTests-arm64-apple-macosx26.0-debug.module": ["<HebIslandTests-arm64-apple-macosx26.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<HebIsland-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<HebIsland-arm64-apple-macosx26.0-debug.module>","<HebIslandTests-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/sources"]
+    description: "Write auxiliary file /Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/sources"
+
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources"]
+    description: "Write auxiliary file /Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources"
+
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/sources"]
+    description: "Write auxiliary file /Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/sources"
+
+  "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<HebIsland-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule"]
+    outputs: ["<HebIsland-arm64-apple-macosx26.0-debug.module>"]
+
+  "<HebIslandPackageTests-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandPackageTests.swiftmodule"]
+    outputs: ["<HebIslandPackageTests-arm64-apple-macosx26.0-debug.module>"]
+
+  "<HebIslandTests-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule"]
+    outputs: ["<HebIslandTests-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.HebIsland-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/sources"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule"]
+    description: "Compiling Swift Module 'HebIsland' (9 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","HebIsland","-emit-dependencies","-emit-module","-emit-module-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule","-output-file-map","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/output-file-map.json","-incremental","@/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIsland.build/sources","-I","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","HebIsland_main","-swift-version","5","-Xfrontend","-experimental-lazy-typecheck","-Xfrontend","-experimental-skip-all-function-bodies","-Xfrontend","-experimental-allow-module-with-compiler-errors","-Xfrontend","-empty-abi-descriptor","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","island_mac"]
+
+  "C.HebIslandPackageTests-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandPackageTests.swiftmodule"]
+    description: "Compiling Swift Module 'HebIslandPackageTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","HebIslandPackageTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandPackageTests.swiftmodule","-output-file-map","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/output-file-map.json","-parse-as-library","-incremental","@/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources","-I","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandPackageTests.build/include/HebIslandPackageTests-Swift.h","-Xfrontend","-experimental-lazy-typecheck","-Xfrontend","-experimental-skip-all-function-bodies","-Xfrontend","-experimental-allow-module-with-compiler-errors","-Xfrontend","-empty-abi-descriptor","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","island_mac"]
+
+  "C.HebIslandTests-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/sources"]
+    outputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule"]
+    description: "Compiling Swift Module 'HebIslandTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","HebIslandTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule","-output-file-map","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/output-file-map.json","-parse-as-library","-incremental","@/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/HebIslandTests.build/sources","-I","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/index-build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-swift-version","5","-Xfrontend","-experimental-lazy-typecheck","-Xfrontend","-experimental-skip-all-function-bodies","-Xfrontend","-experimental-allow-module-with-compiler-errors","-Xfrontend","-empty-abi-descriptor","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","island_mac"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Package.swift","/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

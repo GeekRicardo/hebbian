@@ -17,7 +17,7 @@
 | 决策 | 结论 | 原因 |
 |---|---|---|
 | 二进制命名 | `hebisland` | 呼应 CodeIsland 的「岛」隐喻，同时与 `heb` / `hebweb` 同系列 |
-| 技术栈 | Tauri 多窗口 | 复用现有 React 通知卡片、窗口能力成熟、与 Desktop 技术栈一致 |
+| 技术栈 | macOS native（Swift + AppKit/SwiftUI） | Tauri 多窗口在 macOS 后台线程创建 webview 不可靠（白屏 / 透明空窗），改用 `NSPanel` 直接渲染 SwiftUI；详见 [hebisland-spec.md §0](hebisland-spec.md) |
 | 通信方式 | Unix socket 双向 | 支持 CLI 单次推送，也支持审批决定回传；与 `heb` CLI 现有 IPC 方向一致 |
 | 审批落点 | 决定回传，hebbian 落地 | `hebisland` 不碰 `agent_core`，避免职责重叠和状态分叉 |
 | 多通知形态 | 每条通知一个无边框窗口 | 支持独立生命周期、独立动画、独立点击与审批 |
@@ -107,16 +107,20 @@
 ## 二进制与 CLI
 
 ```bash
-# 启动常驻通知器
+# 启动常驻通知守护进程
 hebisland daemon
 
-# 单次推送通知；通过 Unix socket 发送到 daemon
-hebisland notify --msg '{"type":"show","id":"test-1","card":{"id":"test-1","cardType":"approval","title":"需要审批","body":"Bash 想执行 cargo check"}}'
+# fire-and-forget 推送（不等待回传）
+hebisland notify --msg '<json>'
+
+# 推送并等待用户操作回传（阻塞直到收到 action 或超时）
+hebisland notify --msg '<json>' --wait
+hebisland notify --msg '<json>' --wait --timeout 30
 ```
 
-实现位置：`apps/island/`（独立 Tauri crate）。
-二进制入口：`apps/island/src/main.rs`。
-前端：`apps/island/frontend/`（React + Vite）。
+实现位置：`apps/island-mac/`（独立 Swift Package）。
+二进制入口：`Sources/HebIsland/main.swift`。
+UI：SwiftUI 卡片（`CardView.swift`）经 `NSHostingView` 装进 `NSPanel`。
 
 ## Socket 协议
 
@@ -146,43 +150,47 @@ hebisland notify --msg '{"type":"show","id":"test-1","card":{"id":"test-1","card
 {"type":"dismiss","id":"n_01","reason":"timeout"}
 ```
 
-### 实际消息格式（Phase 1）
+### 实际消息格式
 
-```json
-{"type":"show","id":"msg-001","card":{"id":"msg-001","cardType":"approval","title":"工具审批","body":"Bash 想执行 rm -rf /tmp/test","sessionId":"abc"}}
+```jsonc
+// 调用方 → island
+{"type":"show","id":"msg-001","card":{
+  "id":"msg-001",
+  "cardType":"approval",
+  "title":"工具审批",
+  "body":"Bash 想执行 rm -rf /tmp/test",
+  "sessionId":"abc",
+  "durationMs":0,            // 可选。0=常驻；>0=自动消失毫秒；省略=按 cardType 默认
+  "actions":["拒绝","允许"]   // 可选。自定义按钮；省略=按 cardType 默认按钮
+}}
 {"type":"dismiss","id":"msg-001"}
+
+// island → 调用方 (action 回传，仅限保持连接的调用方)
+{"msg_id":"msg-001","action":"允许"}
 ```
 
-Action 回传（从 island → surface，通过同一 socket 长连接）：
+### durationMs 与 actions
 
-```json
-{"msg_id":"msg-001","action":"allow"}
-```
+调用方可以通过 `durationMs` 精确控制消失时间（默认 info=5s, approval/question=0即常驻）。
+通过 `actions` 自定义按钮列表，按钮名即是回传的 action 值。
 
-字段约定：
+- `hebisland notify --msg '...'`：fire-and-forget，写完即断开。
+- `hebisland notify --msg '...' --wait`：保持连接，等首个 action 回传后打印 JSON 并退出。
 
-| 字段 | 说明 |
-|---|---|
-| `id` | 通知实例 ID，由发起方生成；用于更新、关闭、回传动作 |
-| `cardType` | `info` / `approval` / `question` |
-| `sessionId` | 可选；审批类通知必带 |
-| `title` | 通知标题 |
-| `body` | 通知正文 |
+详见 `docs/hebisland-spec.md` §2。
 
 ### Action 回传
 
 ```json
-{"msg_id":"msg-001","action":"allow"}
+{"msg_id":"msg-001","action":"允许"}
 ```
 
-`action` 值：`allow` / `deny` / `open` / `dismiss`
+`action` 值：
+- 用户自定义 `actions` 数组中的按钮名（如 `"知道了"` / `"允许"` / `"拒绝"`）
+- 卡片默认按钮：`"allow"` / `"deny"` / `"open"` / `"dismiss"`
+- info 卡片超时自动消失：`"dismiss"`
 
-发起 surface 收到后：
-
-- `allow` → 转成 `ApprovalDecision::AllowOnce`
-- `deny` → 转成 `ApprovalDecision::Deny`
-- `open` → 打开主界面聚焦到该会话
-- `dismiss` → 关闭通知窗口
+发起 surface 收到后按需转为自己领域的动作（如 `allow` → `ApprovalDecision::AllowOnce`）。
 
 ### Dismiss
 
@@ -324,32 +332,25 @@ Bash 需要你的允许
 
 不在通知卡片里展示完整 JSON input。完整内容仍在 Hebbian 主 UI / CLI 事件流里看。
 
-## 与现有 island.rs 的迁移路径
+## 迁移状态
 
-### 阶段 1：独立可用 ✅ 已完成
+### 旧 Tauri 实现（已废弃，2026-06-04 删除）
 
-- `apps/island` 独立 Tauri crate 已创建。
-- `hebisland daemon` / `hebisland notify --msg <json>` 已实现。
-- 多窗口堆叠、右上角排列、action 回传路由已实现。
-- 前端 IslandApp + IslandCard 已适配单窗口模式。
-- 不接入 Hebbian 审批主路径。
+- 旧 `apps/island`（Tauri 多窗口 + React）已删除，workspace 注册一并移除。
+- 旧阶段 1（独立可用）/ 阶段 2（Desktop 接入）的 Rust + React 代码作废。
+- 废弃原因：macOS 上从 socket 后台线程动态创建 webview 通知窗口，窗口框出现但内容永不加载（透明空窗 / 白屏），是架构性死路。详见 [hebisland-spec.md §0](hebisland-spec.md)。
+- **保留不动**：`apps/desktop/src/hebisland_client.rs`（socket 客户端 + `hitl::resolve_hitl_from_island`）。它走 socket 协议、不依赖旧 crate，native 端按 [hebisland-spec.md §4](hebisland-spec.md) 对齐协议即可继续工作。
 
-### 阶段 2：Desktop 接入（待实现）
+### native 实现路线（进行中）
 
-- Desktop 的 `island.rs` 改为 socket client，发送 `show`/`dismiss` 到 `hebisland` daemon。
-- 如果 socket 不存在或连接失败，fallback 到现有嵌入式 island。
-- 用户在 `hebisland` 点按钮后，Desktop 收到 action 并调用现有 `approve_permission` 路径。
+- 新建 `apps/island-mac/`（Swift Package），实现见 [hebisland-spec.md](hebisland-spec.md)。
+- 里程碑 M1–M8 见 [hebisland-spec.md §12](hebisland-spec.md)。
+- 协议、socket 路径、action 回传值与旧实现保持兼容，Desktop 端零改动。
 
-### 阶段 3：heb CLI / hebweb 接入（待实现）
+### 后续（native 可用后）
 
-- heb daemon 在 `permission_requested` 事件出现时发给 `hebisland`。
-- hebweb server 同样接入 notification bridge。
-- 三个 surface 的审批通知统一。
-
-### 阶段 4：收敛旧实现（待实现）
-
-- 确认稳定后，Desktop 内嵌 `island.rs` + IslandApp/IslandCard 删除。
-- 视觉组件统一到 `apps/island/frontend/`。
+- 阶段 3：heb CLI / hebweb 在 `permission_requested` 事件出现时也发给 `hebisland`，三 surface 审批通知统一。
+- 阶段 4：协议扩展支持 design.html 的进阶卡片（工具命令详情 / diff / 子命令勾选 / 问答选项 / 文本输入）。
 
 ## 错误处理
 

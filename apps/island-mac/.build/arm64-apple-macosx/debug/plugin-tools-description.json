@@ -1,0 +1,955 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.xctest/Contents/MacOS/HebIslandPackageTests",
+      "packagePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac",
+      "productName" : "HebIslandPackageTests"
+    }
+  ],
+  "copyCommands" : {
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-approval.png" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Resources/icon-approval.png"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-approval.png"
+        }
+      ]
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-info.png" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Resources/icon-info.png"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-info.png"
+        }
+      ]
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-question.png" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Resources/icon-question.png"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-question.png"
+        }
+      ]
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-success.png" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Resources/icon-success.png"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland_HebIsland.bundle/icon-success.png"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.HebIsland-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/sources",
+      "importPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/DaemonProbe.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<HebIsland-arm64-apple-macosx26.0-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "HebIsland",
+      "moduleOutputPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule",
+      "objects" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/AppDelegate.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/CardView.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DaemonProbe.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotificationManager.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotifyClient.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/PanelController.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/Protocol.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/ScreenResolver.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/SocketServer.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/main.swift.o",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+        "-module-cache-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "HebIsland_main",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "island_mac"
+      ],
+      "outputFileMapPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/CardView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DaemonProbe.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotificationManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotifyClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/PanelController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/Protocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/ScreenResolver.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/SocketServer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIsland.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.HebIslandPackageTests-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources",
+      "importPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "HebIslandPackageTests",
+      "moduleOutputPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIslandPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/include/HebIslandPackageTests-Swift.h",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "island_mac"
+      ],
+      "outputFileMapPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIslandPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.HebIslandTests-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/sources",
+      "importPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/hebisland"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "HebIslandTests",
+      "moduleOutputPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule",
+      "objects" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/ProtocolTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "island_mac"
+      ],
+      "outputFileMapPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/ProtocolTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules/HebIslandTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift"
+      ],
+      "tempsPath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "HebIsland" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "HebIsland",
+      "-package-name",
+      "island_mac",
+      "-c",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+      "-module-cache-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "HebIsland_main",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "island_mac",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "HebIslandPackageTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "HebIslandPackageTests",
+      "-package-name",
+      "island_mac",
+      "-c",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/include/HebIslandPackageTests-Swift.h",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "island_mac",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "HebIslandTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "HebIslandTests",
+      "-package-name",
+      "island_mac",
+      "-c",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "-I",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "island_mac",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "HebIsland" : [
+
+    ],
+    "HebIslandPackageTests" : [
+      "HebIslandTests",
+      "HebIsland"
+    ],
+    "HebIslandTests" : [
+      "HebIsland"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/CardView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/DaemonProbe.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotificationManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/NotifyClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/PanelController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/Protocol.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/ScreenResolver.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/SocketServer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Sources/HebIsland/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/sources"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/sources"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/CardView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DaemonProbe.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotificationManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotifyClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/PanelController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/Protocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/ScreenResolver.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/SocketServer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/ProtocolTests.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIslandTests.build/sources"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/hebisland-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/hebisland-entitlement.plist"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/hebisland.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/CardView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/DaemonProbe.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotificationManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/NotifyClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/PanelController.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/Protocol.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/ScreenResolver.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/SocketServer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/HebIsland.build/resource_bundle_accessor.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/hebisland.product/Objects.LinkFileList"
+    },
+    "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/ricardo/code/ricardo/rust/hebbian/apps/island-mac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}
