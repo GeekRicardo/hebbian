@@ -230,7 +230,7 @@ impl SubagentRunner {
             pending_inputs: None,
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::EditAutomatically)),
+            run_mode: crate::run_mode::RunMode::EditAutomatically,
             model_id,
             judge_client: Some(self.ctx.client.clone()),
             force_automode: false,
