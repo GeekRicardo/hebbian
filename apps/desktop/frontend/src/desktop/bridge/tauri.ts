@@ -122,6 +122,8 @@ export const api = {
     invoke<Session>("truncate_after", { id, messageId }),
   truncateInclusive: (id: string, messageId: string) =>
     invoke<Session>("truncate_inclusive", { id, messageId }),
+  undoCompaction: (id: string, markerId: string) =>
+    invoke<Session>("undo_compaction", { id, markerId }),
   searchSessions: (query: string, caseSensitive: boolean, regex: boolean) =>
     invoke<SearchHit[]>("search_sessions", { query, caseSensitive, regex }),
 

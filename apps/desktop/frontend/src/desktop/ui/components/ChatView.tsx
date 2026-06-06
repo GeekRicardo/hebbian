@@ -53,6 +53,7 @@ export function ChatView() {
     appSettings,
     modelRetry,
     contextCompacted,
+    undoCompaction,
     sessionMemoryWrites,
   } = useStore();
 
@@ -440,7 +441,16 @@ export function ChatView() {
       prevEnd = b;
     }
 
-    return { lastIdx, ownerByIndex, archivedCounts };
+    // boundary 之后无非 marker 消息 = 可撤销（刚压缩完、还没产生新对话）
+    const undoableIds = new Set<string>();
+    for (const b of indices) {
+      const hasContentAfter = messages
+        .slice(b + 1)
+        .some((m) => m.role !== "marker");
+      if (!hasContentAfter) undoableIds.add(messages[b].id);
+    }
+
+    return { lastIdx, ownerByIndex, archivedCounts, undoableIds };
   }, [messages]);
 
   // 最近一条 user 消息：允许「编辑后重跑」；
@@ -542,6 +552,12 @@ export function ChatView() {
   const handleToggleHistory = useCallback(
     (id: string) => toggleInSet(setExpandedHistories, id),
     []
+  );
+  const handleUndoCompaction = useCallback(
+    (markerId: string) => {
+      undoCompaction(markerId);
+    },
+    [undoCompaction]
   );
 
   /**
@@ -781,6 +797,8 @@ export function ChatView() {
           onEdit={handleEditUser}
           onToggleSummary={handleToggleSummary}
           onToggleHistory={handleToggleHistory}
+          onUndoCompaction={handleUndoCompaction}
+          undoableCompactionIds={boundaryInfo.undoableIds}
         />
         <div>
           {/* Run 内时间线：已完成 turn 快照 + streaming 期间的插队 user message，

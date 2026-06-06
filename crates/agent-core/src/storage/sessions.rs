@@ -1731,6 +1731,36 @@ pub fn truncate_inclusive(data_dir: &Path, id: &str, message_id: &str) -> AppRes
     save(data_dir, s)
 }
 
+/// 撤销一次压缩：删掉指定的 [`MessageMeta::CompactBoundary`] marker，让 transcript
+/// 回到压缩前的完整历史（用户可换模型重新压缩）。
+///
+/// **仅允许撤销"最后一条压缩 marker"**——即该 marker 之后不能有任何非 marker 消息
+/// （刚压缩完、还没产生新对话）。压缩后又聊过的不允许撤销，避免上下文错乱。
+/// 校验失败返回 Err；message_id 不是 CompactBoundary 也返回 Err。
+pub fn undo_compaction(data_dir: &Path, id: &str, marker_id: &str) -> AppResult<Session> {
+    let mut s = load(data_dir, id)?;
+    let idx = s
+        .messages
+        .iter()
+        .position(|m| m.id == marker_id)
+        .ok_or_else(|| AppError::msg(format!("找不到消息 {marker_id}")))?;
+    if !matches!(
+        s.messages[idx].meta,
+        Some(MessageMeta::CompactBoundary { .. })
+    ) {
+        return Err(AppError::msg("该消息不是压缩标记，无法撤销"));
+    }
+    // marker 之后若已有新的非 marker 消息（用户已继续对话），不允许撤销。
+    let has_following_content = s.messages[idx + 1..]
+        .iter()
+        .any(|m| !matches!(m.role, Role::Marker));
+    if has_following_content {
+        return Err(AppError::msg("压缩后已有新对话，无法撤销"));
+    }
+    s.messages.remove(idx);
+    save(data_dir, s)
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 搜索
 // ════════════════════════════════════════════════════════════════════════════

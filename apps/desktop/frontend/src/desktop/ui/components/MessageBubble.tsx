@@ -20,6 +20,7 @@ import {
   Loader2,
   Brain,
   Pencil,
+  Undo2,
   X,
   Terminal,
   SquareTerminal,
@@ -125,6 +126,10 @@ interface Props {
   onToggleHistory?: (messageId: string) => void;
   /** 仅 compact_boundary：该 boundary 折叠了多少条原始历史消息 */
   archivedCount?: number;
+  /** 仅 compact_boundary：是否可撤销（这条 marker 是最后一条消息，压缩后还没产生新对话）。 */
+  canUndoCompaction?: boolean;
+  /** 仅 compact_boundary：点击「撤销压缩」。参数为本 boundary 消息 id。 */
+  onUndoCompaction?: (messageId: string) => void;
 }
 
 interface ToolCallItem {
@@ -1875,6 +1880,8 @@ export const MessageBubble = memo(function MessageBubble({
   historyExpanded,
   onToggleHistory,
   archivedCount,
+  canUndoCompaction,
+  onUndoCompaction,
   appSettings,
 }: Props) {
   const [copied, setCopied] = useState(false);
@@ -2036,6 +2043,19 @@ export const MessageBubble = memo(function MessageBubble({
                 <ChevronRight className="w-3 h-3" />
               )}
               <span>历史对话 · {count}</span>
+            </button>
+          )}
+          {canUndoCompaction && (
+            <button
+              type="button"
+              onClick={
+                onUndoCompaction ? () => onUndoCompaction(message.id) : undefined
+              }
+              title="撤销这次压缩，回到压缩前（可换模型重新压缩）"
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-1 transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+            >
+              <Undo2 className="w-3 h-3" />
+              <span>撤销压缩</span>
             </button>
           )}
           <div className="flex-1 h-px bg-border" />

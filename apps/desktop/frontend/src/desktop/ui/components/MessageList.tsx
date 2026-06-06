@@ -101,6 +101,9 @@ export interface MessageListProps {
   onEdit: (id: string, nextContent: string) => Promise<void> | void;
   onToggleSummary: (id: string) => void;
   onToggleHistory: (id: string) => void;
+  onUndoCompaction?: (markerId: string) => void;
+  /** compact_boundary marker ID set：可撤销的压缩标记（之后无非 marker 消息）。 */
+  undoableCompactionIds?: Set<string>;
 }
 
 export const MessageList = memo(function MessageList({
@@ -123,6 +126,8 @@ export const MessageList = memo(function MessageList({
   onEdit,
   onToggleSummary,
   onToggleHistory,
+  onUndoCompaction,
+  undoableCompactionIds,
 }: MessageListProps) {
   /**
    * 把 messages 转成 (m, i, baseMatchIdx) 元组：每条消息在「全局命中数组」里
@@ -182,6 +187,8 @@ export const MessageList = memo(function MessageList({
             historyExpanded={isBoundary && expandedHistories.has(m.id)}
             onToggleHistory={isBoundary ? onToggleHistory : undefined}
             archivedCount={isBoundary ? boundaryArchivedCounts[m.id] : undefined}
+            canUndoCompaction={isBoundary && undoableCompactionIds?.has(m.id)}
+            onUndoCompaction={isBoundary ? onUndoCompaction : undefined}
             find={
               find
                 ? {

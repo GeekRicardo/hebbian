@@ -1118,6 +1118,8 @@ interface AppState {
     content: string,
     attachments?: MessageAttachment[]
   ) => Promise<void>;
+  /** 撤销一次压缩：删掉指定 CompactBoundary marker，回到压缩前（仅压缩后无新对话时可用）。 */
+  undoCompaction: (markerId: string) => Promise<void>;
   updateCurrentConfig: (patch: {
     provider_id?: string;
     model?: string;
@@ -2410,6 +2412,15 @@ export const useStore = create<AppState>((set, get) => ({
     const refreshed = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
     set({ currentSession: refreshed });
     await get().sendUserMessage(content, attachments ?? target.attachments ?? []);
+  },
+
+  async undoCompaction(markerId) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const refreshed = await api.undoCompaction(cur.id, markerId);
+    set({ currentSession: refreshed });
+    // 撤销后上下文用量会变（回到压缩前），刷新环形进度条。
+    await get().refreshContextUsage();
   },
 
   async updateCurrentConfig(patch) {

@@ -543,6 +543,12 @@ fn truncate_inclusive(app: AppHandle, id: String, message_id: String) -> AppResu
     sessions::truncate_inclusive(&data_dir(&app)?, &id, &message_id)
 }
 
+/// 撤销一次压缩：删掉指定的 CompactBoundary marker，回到压缩前状态（仅当压缩后无新对话）。
+#[tauri::command]
+fn undo_compaction(app: AppHandle, id: String, marker_id: String) -> AppResult<Session> {
+    sessions::undo_compaction(&data_dir(&app)?, &id, &marker_id)
+}
+
 #[tauri::command]
 fn search_sessions(
     app: AppHandle,
@@ -2606,6 +2612,7 @@ pub fn run() {
             fork_session,
             truncate_after,
             truncate_inclusive,
+            undo_compaction,
             search_sessions,
             update_session_config,
             switch_provider_model,
