@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useI18n } from "../contexts/I18nContext";
 
-export type MobileTab = "graph" | "info" | "files";
+export type MobileTab = "graph" | "info" | "files" | "chat";
 
 interface Props {
   activeTab: MobileTab;
@@ -32,9 +32,18 @@ const tabIcons: Record<MobileTab, ReactNode> = {
       />
     </svg>
   ),
+  chat: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-4.5A8 8 0 1 1 21 12z"
+      />
+    </svg>
+  ),
 };
 
-const tabOrder: MobileTab[] = ["graph", "info", "files"];
+const tabOrder: MobileTab[] = ["graph", "info", "files", "chat"];
 
 export default function MobileBottomNav({ activeTab, onTabChange }: Props) {
   const { t } = useI18n();
@@ -42,6 +51,7 @@ export default function MobileBottomNav({ activeTab, onTabChange }: Props) {
     graph: t.mobile.graph,
     info: t.mobile.info,
     files: t.mobile.files,
+    chat: "Chat",
   };
 
   return (

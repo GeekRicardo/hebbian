@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Highlight, themes } from "prism-react-renderer";
+import type { GraphNode, KnowledgeGraph, GraphEdge } from "@understand-anything/core/types";
 import { useDashboardStore } from "../store";
 import { useI18n } from "../contexts/I18nContext";
 
@@ -8,6 +9,38 @@ interface CodeViewerProps {
   presentation?: "sidebar" | "modal";
   onClose?: () => void;
   onExpand?: () => void;
+}
+
+// ---- symbol index: name → 定义节点（函数/类/模块/概念）, cached per graph ----
+const DEFINITION_TYPES = new Set(["function", "class", "module", "concept"]);
+const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const symbolIndexCache = new WeakMap<KnowledgeGraph, Map<string, GraphNode[]>>();
+
+function getSymbolIndex(graph: KnowledgeGraph): Map<string, GraphNode[]> {
+  const cached = symbolIndexCache.get(graph);
+  if (cached) return cached;
+  const map = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (!DEFINITION_TYPES.has(n.type)) continue;
+    if (!IDENTIFIER_RE.test(n.name)) continue;
+    let arr = map.get(n.name);
+    if (!arr) {
+      arr = [];
+      map.set(n.name, arr);
+    }
+    arr.push(n);
+  }
+  symbolIndexCache.set(graph, map);
+  return map;
+}
+
+interface SymbolPopup {
+  name: string;
+  defs: GraphNode[];
+  refs: { edge: GraphEdge; from: GraphNode }[];
+  x: number;
+  y: number;
+  view: "menu" | "defs" | "refs";
 }
 
 interface SourceFile {
@@ -67,7 +100,10 @@ export default function CodeViewer({
   const viewMode = useDashboardStore((s) => s.viewMode);
   const codeViewerNodeId = useDashboardStore((s) => s.codeViewerNodeId);
   const closeCodeViewer = useDashboardStore((s) => s.closeCodeViewer);
+  const openCodeViewer = useDashboardStore((s) => s.openCodeViewer);
+  const navigateToNodeInLayer = useDashboardStore((s) => s.navigateToNodeInLayer);
   const sourceContent = useDashboardStore((s) => s.sourceContent);
+
   const activeGraph = viewMode === "domain" && domainGraph ? domainGraph : graph;
   // Files tab always builds its tree from the structural graph, so a node ID opened from
   // there may not exist in the active (domain) graph — fall back to the structural graph.
@@ -75,6 +111,64 @@ export default function CodeViewer({
     activeGraph?.nodes.find((n) => n.id === codeViewerNodeId) ??
     graph?.nodes.find((n) => n.id === codeViewerNodeId) ??
     null;
+
+  // ---- symbol popup (jump-to-definition / find-references) ----
+  const [popup, setPopup] = useState<SymbolPopup | null>(null);
+
+  const symbolIndex = useMemo(
+    () => (graph ? getSymbolIndex(graph) : new Map<string, GraphNode[]>()),
+    [graph],
+  );
+
+  const handleSymbolClick = useCallback(
+    (name: string, e: React.MouseEvent) => {
+      if (!graph) return;
+      const allDefs = symbolIndex.get(name) ?? [];
+      if (allDefs.length === 0) return;
+      // 同名符号可能跨语言重复（TS 的 Message vs Rust 的 Message）。
+      // 优先保留与当前文件同扩展名的定义，避免把无关语言的定义/引用混进来。
+      const curExt = node?.filePath?.split(".").pop()?.toLowerCase();
+      let defs = allDefs;
+      if (curExt) {
+        const sameExt = allDefs.filter(
+          (d) => d.filePath?.split(".").pop()?.toLowerCase() === curExt,
+        );
+        if (sameExt.length > 0) defs = sameExt;
+      }
+      const defIds = new Set(defs.map((d) => d.id));
+      // 引用 = 指向定义节点的入边；排除 contains / exports（结构性自身关系，非使用引用）
+      const refs: { edge: GraphEdge; from: GraphNode }[] = [];
+      for (const edge of graph.edges) {
+        if (!defIds.has(edge.target)) continue;
+        if (edge.type === "contains" || edge.type === "exports") continue;
+        if (defIds.has(edge.source)) continue; // 跳过定义节点之间的互链
+        const from = graph.nodes.find((n) => n.id === edge.source);
+        if (from) refs.push({ edge, from });
+      }
+      setPopup({ name, defs, refs, x: e.clientX, y: e.clientY, view: "menu" });
+    },
+    [graph, symbolIndex, node?.filePath],
+  );
+
+  const jumpToNode = useCallback(
+    (nodeId: string) => {
+      navigateToNodeInLayer(nodeId);
+      openCodeViewer(nodeId);
+      setPopup(null);
+    },
+    [navigateToNodeInLayer, openCodeViewer],
+  );
+
+  // 关闭 popup：Escape / 点击别处
+  useEffect(() => {
+    if (!popup) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPopup(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [popup]);
+
   const [state, setState] = useState<SourceState>({
     status: "idle",
     source: null,
@@ -272,9 +366,28 @@ export default function CodeViewer({
                           {lineNumber}
                         </span>
                         <span className="pl-3 pr-6 whitespace-pre">
-                          {line.map((token, key) => (
-                            <span key={key} {...getTokenProps({ token })} />
-                          ))}
+                          {line.map((token, key) => {
+                            const props = getTokenProps({ token });
+                            const trimmed = token.content.trim();
+                            const isSymbol =
+                              trimmed.length >= 2 &&
+                              IDENTIFIER_RE.test(trimmed) &&
+                              symbolIndex.has(trimmed);
+                            if (isSymbol) {
+                              return (
+                                <span
+                                  key={key}
+                                  {...props}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSymbolClick(trimmed, e);
+                                  }}
+                                  className={`${props.className ?? ""} cursor-pointer rounded-sm underline decoration-dotted decoration-accent/40 underline-offset-2 hover:decoration-accent hover:bg-accent/10`}
+                                />
+                              );
+                            }
+                            return <span key={key} {...props} />;
+                          })}
                         </span>
                       </div>
                     );
@@ -285,6 +398,116 @@ export default function CodeViewer({
           </>
         )}
       </div>
+
+      {/* 符号点击弹窗：跳转定义 / 查找引用 */}
+      {popup && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setPopup(null)} />
+          <div
+            className="fixed z-50 w-64 max-h-[60vh] overflow-auto rounded-lg border border-border-medium bg-elevated shadow-2xl text-sm"
+            style={{
+              left: Math.min(popup.x, window.innerWidth - 268),
+              top: Math.min(popup.y, window.innerHeight - 200),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 py-2 border-b border-border-subtle flex items-center justify-between sticky top-0 bg-elevated">
+              <span className="font-mono text-accent truncate">{popup.name}</span>
+              <button
+                type="button"
+                onClick={() => setPopup(null)}
+                className="text-text-muted hover:text-text-primary shrink-0 ml-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {popup.view === "menu" && (
+              <div className="p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (popup.defs.length === 1) jumpToNode(popup.defs[0].id);
+                    else setPopup({ ...popup, view: "defs" });
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-left text-text-secondary hover:bg-surface active:bg-surface transition-colors"
+                >
+                  <svg className="w-4 h-4 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                  </svg>
+                  跳转定义
+                  {popup.defs.length > 1 && (
+                    <span className="ml-auto text-[10px] text-text-muted">{popup.defs.length}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={popup.refs.length === 0}
+                  onClick={() => setPopup({ ...popup, view: "refs" })}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-left text-text-secondary hover:bg-surface active:bg-surface transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  查找引用
+                  <span className="ml-auto text-[10px] text-text-muted">{popup.refs.length}</span>
+                </button>
+              </div>
+            )}
+
+            {popup.view === "defs" && (
+              <div className="py-1">
+                {popup.defs.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => jumpToNode(d.id)}
+                    className="w-full px-3 py-2 text-left hover:bg-surface active:bg-surface transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] uppercase text-text-muted">{d.type}</span>
+                      <span className="text-text-secondary font-mono text-xs truncate">{d.name}</span>
+                    </div>
+                    {d.filePath && (
+                      <div className="text-[10px] text-text-muted font-mono truncate mt-0.5">
+                        {d.filePath}{d.lineRange ? `:${d.lineRange[0]}` : ""}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {popup.view === "refs" && (
+              <div className="py-1">
+                {popup.refs.length === 0 && (
+                  <div className="px-3 py-3 text-xs text-text-muted">没有找到引用</div>
+                )}
+                {popup.refs.map(({ edge, from }, i) => (
+                  <button
+                    key={`${from.id}-${i}`}
+                    type="button"
+                    onClick={() => jumpToNode(from.id)}
+                    className="w-full px-3 py-2 text-left hover:bg-surface active:bg-surface transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] uppercase text-accent/70">{edge.type}</span>
+                      <span className="text-text-secondary font-mono text-xs truncate">{from.name}</span>
+                    </div>
+                    {from.filePath && (
+                      <div className="text-[10px] text-text-muted font-mono truncate mt-0.5">
+                        {from.filePath}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

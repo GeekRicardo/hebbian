@@ -18,6 +18,7 @@ const CodeViewer = lazy(() => import("./CodeViewer"));
 const LearnPanel = lazy(() => import("./LearnPanel"));
 const PathFinderModal = lazy(() => import("./PathFinderModal"));
 const KeyboardShortcutsHelp = lazy(() => import("./KeyboardShortcutsHelp"));
+const ChatPanel = lazy(() => import("./ChatPanel"));
 
 interface Props {
   accessToken: string;
@@ -177,6 +178,17 @@ export default function MobileLayout({
           aria-hidden={activeTab !== "files"}
         >
           <FileExplorer />
+        </div>
+
+        <div
+          className={`absolute inset-0 bg-surface ${
+            activeTab === "chat" ? "" : "invisible pointer-events-none"
+          }`}
+          aria-hidden={activeTab !== "chat"}
+        >
+          <Suspense fallback={<div className="p-4 text-sm text-text-muted">加载聊天……</div>}>
+            <ChatPanel />
+          </Suspense>
         </div>
       </div>
 

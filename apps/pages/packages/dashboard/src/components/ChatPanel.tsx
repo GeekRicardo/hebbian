@@ -1,6 +1,37 @@
 import { useState, useRef, useEffect, useCallback, type FC } from "react";
 import ReactMarkdown from "react-markdown";
+import type { GraphNode, KnowledgeGraph } from "@understand-anything/core/types";
 import { useDashboardStore } from "../store";
+
+// ---- file-path → node index (cached per graph object) ----
+interface PathIndex {
+  fileByPath: Map<string, string>; // filePath → file-node id
+  nodesByPath: Map<string, GraphNode[]>; // filePath → all nodes on that file
+}
+const pathIndexCache = new WeakMap<KnowledgeGraph, PathIndex>();
+function getPathIndex(graph: KnowledgeGraph): PathIndex {
+  const cached = pathIndexCache.get(graph);
+  if (cached) return cached;
+  const fileByPath = new Map<string, string>();
+  const nodesByPath = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (!n.filePath) continue;
+    let arr = nodesByPath.get(n.filePath);
+    if (!arr) {
+      arr = [];
+      nodesByPath.set(n.filePath, arr);
+    }
+    arr.push(n);
+    if (n.type === "file" && !fileByPath.has(n.filePath)) fileByPath.set(n.filePath, n.id);
+  }
+  // 没有 file 类型节点的路径，退回该路径下第一个节点
+  for (const [p, arr] of nodesByPath) {
+    if (!fileByPath.has(p)) fileByPath.set(p, arr[0].id);
+  }
+  const idx = { fileByPath, nodesByPath };
+  pathIndexCache.set(graph, idx);
+  return idx;
+}
 
 // ---- localStorage keys ----
 const LS_API_KEY = "ua-chat-apikey";
@@ -131,9 +162,12 @@ function buildChatContext(query: string): string {
       }
     }
 
-    // -- nodeId reference guide --
+    // -- reference guide --
     parts.push(
-      "### 引用格式\n回答中引用代码组件时加 `[@节点ID]`（如下方列出的节点ID），系统会渲染为可点击按钮，点击后在图谱定位并打开源码。",
+      "### 引用格式（让用户能点击跳转）\n" +
+        "1. 引用图谱节点：用 `[@节点ID]`（见下方列表），渲染为按钮，点击在图谱定位并打开源码。\n" +
+        "2. 引用文件/代码位置：在行内代码里直接写文件路径，可带行号，如 `apps/cli/src/main.rs` 或 `apps/cli/src/main.rs:42`；带行号会定位到对应函数/类并高亮。\n" +
+        "尽量多用这两种格式，方便用户点击查看源码。",
     );
     parts.push(
       relevantNodes
@@ -179,6 +213,66 @@ const MarkdownLink: FC<{ href?: string; children?: React.ReactNode }> = ({
   );
 };
 
+// ---- inline code: 若是图谱里存在的文件路径（可带 :行号）则可点击跳转 ----
+const CodeRef: FC<{ className?: string; children?: React.ReactNode }> = ({
+  className,
+  children,
+}) => {
+  const graph = useDashboardStore((s) => s.graph);
+  const navigateToNodeInLayer = useDashboardStore((s) => s.navigateToNodeInLayer);
+  const openCodeViewer = useDashboardStore((s) => s.openCodeViewer);
+
+  const text = String(children ?? "");
+  // 代码块（带语言 class 或多行）保持原样高亮，不当路径处理
+  const isBlock = /language-/.test(className ?? "") || text.includes("\n");
+
+  if (!isBlock && graph) {
+    const candidate = text.trim();
+    // 形如 path/to/file.ext 或 path/to/file.ext:42，无空格
+    const m = candidate.match(/^([\w./@-]+\.[\w]+)(?::(\d+))?$/);
+    if (m) {
+      const path = m[1];
+      const line = m[2] ? parseInt(m[2], 10) : null;
+      const idx = getPathIndex(graph);
+      if (idx.fileByPath.has(path)) {
+        const handleJump = () => {
+          let targetId = idx.fileByPath.get(path)!;
+          // 带行号时，定位到包含该行的函数/类节点（带高亮）
+          if (line != null) {
+            const within = idx.nodesByPath
+              .get(path)
+              ?.find(
+                (n) =>
+                  n.type !== "file" &&
+                  n.lineRange &&
+                  line >= n.lineRange[0] &&
+                  line <= n.lineRange[1],
+              );
+            if (within) targetId = within.id;
+          }
+          navigateToNodeInLayer(targetId);
+          openCodeViewer(targetId);
+        };
+        return (
+          <button
+            type="button"
+            onClick={handleJump}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 active:bg-accent/30 transition-colors text-xs font-mono cursor-pointer align-baseline"
+            title={`打开 ${candidate}`}
+          >
+            <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+            {children}
+          </button>
+        );
+      }
+    }
+  }
+
+  return <code className={className}>{children}</code>;
+};
+
 // ---- conversation list sidebar ----
 function ConversationList({
   convos,
@@ -202,7 +296,7 @@ function ConversationList({
         <button
           type="button"
           onClick={onNew}
-          className="text-accent hover:text-accent/80 transition-colors"
+          className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-accent hover:bg-accent/10 active:scale-95 transition-all"
           title="新建对话"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -214,8 +308,8 @@ function ConversationList({
         {convos.map((c) => (
           <div
             key={c.id}
-            className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-border-subtle/50 transition-colors ${
-              c.id === activeId ? "bg-accent/10" : "hover:bg-elevated"
+            className={`group flex items-center gap-2 pl-3 pr-1.5 py-2.5 cursor-pointer border-b border-border-subtle/50 transition-colors ${
+              c.id === activeId ? "bg-accent/10" : "hover:bg-elevated active:bg-elevated"
             }`}
             onClick={() => onSelect(c.id)}
           >
@@ -227,20 +321,21 @@ function ConversationList({
                 {c.messages.length} 条消息
               </div>
             </div>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (convos.length <= 1) return;
-                onDelete(c.id);
-              }}
-              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-400 transition-all"
-              title="删除对话"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
+            {convos.length > 1 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(c.id);
+                }}
+                className="shrink-0 min-w-[34px] min-h-[34px] flex items-center justify-center rounded-lg text-text-muted/60 hover:text-red-400 hover:bg-red-400/10 active:scale-95 transition-all md:opacity-0 md:group-hover:opacity-100"
+                title="删除对话"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -502,21 +597,27 @@ export default function ChatPanel() {
   const canSend = input.trim().length > 0 && !sending && apiKey.length > 0;
 
   return (
-    <div className="h-full flex bg-surface">
-      {/* Conversation list drawer */}
+    <div className="h-full relative flex bg-surface">
+      {/* Conversation list — overlay so it never squeezes the chat on narrow screens */}
       {showConvoList && (
-        <div className="w-[220px] shrink-0 border-r border-border-subtle">
-          <ConversationList
-            convos={convos}
-            activeId={activeConvoId ?? ""}
-            onSelect={(id) => {
-              setActiveConvoId(id);
-              setShowConvoList(false);
-            }}
-            onNew={handleNewConvo}
-            onDelete={handleDeleteConvo}
+        <>
+          <div
+            className="absolute inset-0 z-20 bg-black/40"
+            onClick={() => setShowConvoList(false)}
           />
-        </div>
+          <div className="absolute inset-y-0 left-0 z-30 w-[240px] max-w-[80%] border-r border-border-subtle shadow-2xl animate-slide-in-left">
+            <ConversationList
+              convos={convos}
+              activeId={activeConvoId ?? ""}
+              onSelect={(id) => {
+                setActiveConvoId(id);
+                setShowConvoList(false);
+              }}
+              onNew={handleNewConvo}
+              onDelete={handleDeleteConvo}
+            />
+          </div>
+        </>
       )}
 
       {/* Main chat area */}
@@ -592,7 +693,7 @@ export default function ChatPanel() {
               >
                 {msg.role === "assistant" ? (
                   <div className="prose prose-sm prose-invert max-w-none break-words [&_pre]:bg-root [&_pre]:border [&_pre]:border-border-subtle [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-auto [&_pre]:text-xs [&_code]:text-accent [&_code]:font-mono [&_p]:mb-2 [&_ul]:mb-2 [&_ol]:mb-2 [&_li]:mb-0.5">
-                    <ReactMarkdown components={{ a: MarkdownLink }}>
+                    <ReactMarkdown components={{ a: MarkdownLink, code: CodeRef }}>
                       {msg.content}
                     </ReactMarkdown>
                   </div>
@@ -627,10 +728,10 @@ export default function ChatPanel() {
             <button
               type="button"
               onClick={() => setShowConvoList((v) => !v)}
-              className={`p-2 rounded-lg transition-colors ${
+              className={`shrink-0 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors active:scale-95 ${
                 showConvoList
                   ? "bg-accent/15 text-accent"
-                  : "text-text-muted hover:text-text-primary hover:bg-elevated"
+                  : "text-text-muted hover:text-text-primary hover:bg-elevated active:bg-elevated"
               }`}
               title="对话列表"
             >
@@ -653,8 +754,8 @@ export default function ChatPanel() {
             <button
               type="button"
               onClick={() => setShowSettings((v) => !v)}
-              className={`p-2 rounded-lg transition-colors ${
-                showSettings ? "bg-accent/15 text-accent" : "text-text-muted hover:text-text-primary hover:bg-elevated"
+              className={`shrink-0 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors active:scale-95 ${
+                showSettings ? "bg-accent/15 text-accent" : "text-text-muted hover:text-text-primary hover:bg-elevated active:bg-elevated"
               }`}
               title="API 设置"
             >
@@ -668,7 +769,7 @@ export default function ChatPanel() {
               type="button"
               onClick={handleSend}
               disabled={!canSend}
-              className="p-2 rounded-lg bg-accent text-white hover:bg-accent/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="shrink-0 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg bg-accent text-white hover:bg-accent/80 active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
