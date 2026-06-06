@@ -2,6 +2,7 @@ import { invoke, Channel } from "./transport";
 import type {
   AppSettings,
   AuthUrlResult,
+  CatalogCache,
   CodexTokenInfo,
   ContextUsage,
   DeviceCodeInfo,
@@ -60,6 +61,8 @@ export const api = {
     invoke<FetchedModel[]>("fetch_provider_models", { provider }),
   testProviderModel: (provider: Provider, model: string) =>
     invoke<ProviderModelTestResult>("test_provider_model", { provider, model }),
+  getModelsCatalog: () => invoke<CatalogCache>("get_models_catalog"),
+  refreshModelsCatalog: () => invoke<boolean>("refresh_models_catalog"),
 
   // 记忆查看（架构 §4.14）
   listMemories: (workdir: string | null) =>

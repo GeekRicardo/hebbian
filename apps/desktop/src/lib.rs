@@ -196,10 +196,16 @@ fn list_provider_presets(app: AppHandle) -> AppResult<Vec<ProviderPreset>> {
 
 #[tauri::command]
 async fn fetch_provider_models(app: AppHandle, provider: Provider) -> AppResult<Vec<FetchedModel>> {
-    core(&app)?
-        .fetch_provider_models(provider)
+    let result = core(&app)?
+        .fetch_provider_models(provider.clone())
         .await
-        .map_err(map_core_err)
+        .map_err(map_core_err)?;
+
+    // 更新缓存（合并：新模型追加，已存在保留）
+    let model_ids: Vec<String> = result.iter().map(|m| m.id.clone()).collect();
+    let _ = providers::update_fetched_models(&data_dir(&app)?, &provider.id, model_ids);
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -212,6 +218,21 @@ async fn test_provider_model(
         .test_provider(provider, model)
         .await
         .map_err(map_core_err)
+}
+
+// ========== models.dev catalog（模型元数据目录） ==========
+
+#[tauri::command]
+fn get_models_catalog(app: AppHandle) -> AppResult<agent_core::storage::models_catalog::CatalogCache> {
+    let dir = data_dir(&app)?;
+    Ok(agent_core::storage::models_catalog::read_catalog(&dir))
+}
+
+#[tauri::command]
+async fn refresh_models_catalog(app: AppHandle) -> AppResult<bool> {
+    let dir = data_dir(&app)?;
+    let updated = agent_core::storage::models_catalog::refresh_catalog(&dir).await;
+    Ok(updated)
 }
 
 // ========== Prompts ==========
@@ -2563,6 +2584,8 @@ pub fn run() {
             list_provider_presets,
             fetch_provider_models,
             test_provider_model,
+            get_models_catalog,
+            refresh_models_catalog,
             list_prompts,
             upsert_prompt,
             delete_prompt,

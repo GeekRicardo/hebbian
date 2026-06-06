@@ -71,6 +71,12 @@ export interface CatalogEntry {
   reasoning?: boolean;
   tool_call?: boolean;
   attachment?: boolean;
+  /** 支持的 effort 级别列表（如 ["low", "medium", "high", "extra"]），null 表示不限制 */
+  effort?: string[] | null;
+  /** 推理配置的类型（如 "thinking"、"reasoning_effort"），null 表示无 */
+  reasoning_effort?: string | null;
+  /** 是否支持 thinking（与 reasoning_effort 互斥），null 表示不限制 */
+  thinking?: boolean | null;
   modalities?: CatalogModalities;
   limit?: CatalogLimits;
   knowledge?: string;

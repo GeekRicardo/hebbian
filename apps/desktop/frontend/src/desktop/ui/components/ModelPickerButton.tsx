@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
+import { ChevronDown, Brain, Image, FileText, Music, Video } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
 import {
@@ -11,12 +11,13 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import {
   DEFAULT_REASONING,
   REASONING_EFFORT_LABEL,
-  REASONING_EFFORT_ORDER,
   effortDisplay,
+  getModelEffortOptions,
   modelExposesLongContextToggle,
   modelSupportsReasoning,
 } from "@/desktop/ui/lib/reasoning";
 import type {
+  CatalogEntry,
   Provider,
   ReasoningConfig,
   ReasoningEffort,
@@ -65,11 +66,13 @@ function ReasoningControls({
   providerKind,
   model,
   reasoning,
+  catalogEntry,
   onChange,
 }: {
   providerKind: string;
   model: string;
   reasoning: ReasoningConfig;
+  catalogEntry?: CatalogEntry;
   onChange: (next: ReasoningConfig) => void;
 }) {
   const enabled = reasoning.enabled ?? true;
@@ -77,6 +80,8 @@ function ReasoningControls({
   const longContext = reasoning.long_context ?? false;
   const showLongContext = modelExposesLongContextToggle(providerKind, model);
   const showReasoning = modelSupportsReasoning(providerKind, model);
+  const effortOptions = getModelEffortOptions(providerKind, model, catalogEntry);
+
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -92,37 +97,39 @@ function ReasoningControls({
               ariaLabel="启用 thinking"
             />
           </div>
-          <div className="flex items-center justify-between gap-2 text-[11px]">
-            <span
-              className="text-muted-foreground shrink-0"
-              title={`实际发送：${effortDisplay(providerKind, model, effort)}`}
-            >
-              思考强度
-            </span>
-            <div className="inline-flex rounded-md border border-border overflow-hidden">
-              {REASONING_EFFORT_ORDER.map((level) => {
-                const active = effort === level;
-                return (
-                  <button
-                    key={level}
-                    type="button"
-                    disabled={!enabled}
-                    onClick={() => onChange({ ...reasoning, effort: level })}
-                    title={`实际发送：${effortDisplay(providerKind, model, level)}`}
-                    className={cn(
-                      "px-2 py-0.5 text-[10px] transition-colors",
-                      active
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-background hover:bg-accent",
-                      !enabled && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    {REASONING_EFFORT_LABEL[level]}
-                  </button>
-                );
-              })}
+          {effortOptions.length > 0 && (
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span
+                className="text-muted-foreground shrink-0"
+                title={`实际发送：${effortDisplay(providerKind, model, effort)}`}
+              >
+                思考强度
+              </span>
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                {effortOptions.map((level) => {
+                  const active = effort === level;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      disabled={!enabled}
+                      onClick={() => onChange({ ...reasoning, effort: level })}
+                      title={`实际发送：${effortDisplay(providerKind, model, level)}`}
+                      className={cn(
+                        "px-2 py-0.5 text-[10px] transition-colors",
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-background hover:bg-accent",
+                        !enabled && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      {REASONING_EFFORT_LABEL[level]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
       {showLongContext && (
@@ -153,12 +160,29 @@ export function ModelPickerButton() {
   const providersFile = useStore((s) => s.providersFile);
   const switchProviderModel = useStore((s) => s.switchProviderModel);
   const setReasoning = useStore((s) => s.setReasoning);
+  const modelsCatalog = useStore((s) => s.modelsCatalog);
 
   const [open, setOpen] = useState(false);
   // 默认展开当前对话所用的 provider；用户可手动展开/折叠其他。
   const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(
     () => new Set(currentSession ? [currentSession.provider_id] : [])
   );
+
+  // 构建不带前缀的 catalog 映射（如 "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"）
+  const catalogWithoutPrefix = useMemo(() => {
+    const map: Record<string, any> = {};
+    if (modelsCatalog?.entries) {
+      for (const [key, value] of Object.entries(modelsCatalog.entries)) {
+        map[key] = value;
+        const slashIdx = key.indexOf("/");
+        if (slashIdx > 0) {
+          const withoutPrefix = key.substring(slashIdx + 1);
+          map[withoutPrefix] = value;
+        }
+      }
+    }
+    return map;
+  }, [modelsCatalog]);
 
   // 切换会话时，重置展开集合到新的当前 provider
   useEffect(() => {
@@ -283,26 +307,63 @@ export function ModelPickerButton() {
                       const ctx = formatContextWindow(
                         contextWindowFor(p.kind, m)
                       );
+                      // 查找 models.dev 元数据（支持带前缀和不带前缀）
+                      const catalogKey = `${p.kind}/${m}`;
+                      const entry = catalogWithoutPrefix[m] || catalogWithoutPrefix[catalogKey];
+                      const inputModalities = entry?.modalities?.input || [];
+                      const hasReasoning = entry?.reasoning;
+                      const outputLimit = entry?.limit?.output;
+                      const outputFormatted = outputLimit
+                        ? formatContextWindow(outputLimit)
+                        : null;
+
                       return (
                         <div key={`${p.id}-${m}`}>
                           <button
                             onClick={() => handleSwitch(p.id, m)}
-                            title={`${p.name} · ${m}（上下文 ${ctx}）`}
+                            title={`${p.name} · ${m}（上下文 ${ctx}${outputFormatted ? `，输出 ${outputFormatted}` : ""}）`}
                             className={cn(
                               "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between gap-2",
                               act && "bg-primary/10 text-primary"
                             )}
                           >
-                            <span className="truncate flex-1 min-w-0">{m}</span>
-                            <span className="text-[10px] text-muted-foreground shrink-0">
-                              {ctx}
-                            </span>
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="truncate flex-1 min-w-0">{m}</span>
+                              {/* 模态徽章：紧凑版，只显示图标 */}
+                              {inputModalities.length > 0 && (
+                                <span className="flex items-center gap-0.5 shrink-0">
+                                  {inputModalities.includes("image") && (
+                                    <Image className="w-3 h-3 text-green-600" />
+                                  )}
+                                  {inputModalities.includes("audio") && (
+                                    <Music className="w-3 h-3 text-orange-600" />
+                                  )}
+                                  {inputModalities.includes("video") && (
+                                    <Video className="w-3 h-3 text-pink-600" />
+                                  )}
+                                  {inputModalities.includes("pdf") && (
+                                    <FileText className="w-3 h-3 text-red-600" />
+                                  )}
+                                </span>
+                              )}
+                              {/* Reasoning 徽章 */}
+                              {hasReasoning && (
+                                <Brain className="w-3 h-3 text-purple-600 shrink-0" />
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+                              <span>{ctx}</span>
+                              {outputFormatted && (
+                                <span className="text-muted-foreground/60">/ {outputFormatted}</span>
+                              )}
+                            </div>
                             {act && <span className="text-xs">✓</span>}
                           </button>
                           {showControls && (
                             <ReasoningControls
                               providerKind={p.kind}
                               model={m}
+                              catalogEntry={entry}
                               reasoning={
                                 currentSession.reasoning ?? DEFAULT_REASONING
                               }

@@ -6,7 +6,6 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   Settings,
-  Server,
   SlidersHorizontal,
   Moon,
   Sun,
@@ -99,7 +98,6 @@ export function Sidebar() {
     deleteSession,
     renameSession,
     regenerateTitle,
-    setProviderDialogOpen,
     setAppSettingsOpen,
     setSettingsOpen,
     newSession,
@@ -786,16 +784,8 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setProviderDialogOpen(true)}
-          title="供应商配置"
-        >
-          <Server className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
           onClick={() => setAppSettingsOpen(true)}
-          title="设置（通用 / 对话 / Agent）"
+          title="设置"
         >
           <Settings className="w-4 h-4" />
         </Button>

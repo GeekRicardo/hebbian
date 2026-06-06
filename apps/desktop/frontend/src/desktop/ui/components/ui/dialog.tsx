@@ -9,7 +9,7 @@ interface DialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "sm" | "md" | "lg" | "xl" | "2xl";
 }
 
 const sizeCls = {
@@ -17,6 +17,7 @@ const sizeCls = {
   md: "max-w-md",
   lg: "max-w-[820px]",
   xl: "max-w-[1120px]",
+  "2xl": "max-w-[1040px]",
 };
 
 export function Dialog({

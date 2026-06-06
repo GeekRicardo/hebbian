@@ -10,6 +10,7 @@ import {
   Plug,
   RefreshCw,
   ScrollText,
+  Server,
   Settings as SettingsIcon,
   Shield,
   Sparkles,
@@ -24,6 +25,7 @@ import {
   ToolToggleList,
 } from "@/desktop/ui/components/workspaceFields";
 import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
+import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import type {
@@ -47,12 +49,13 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "models" | "agents" | "memory" | "permissions" | "skills" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "mcp" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "general", label: "通用", icon: SettingsIcon },
   { key: "conversation", label: "对话设置", icon: FolderOpen },
   { key: "models", label: "模型", icon: Bot },
+  { key: "providers", label: "供应商", icon: Server },
   { key: "agents", label: "Agents", icon: Bot },
   { key: "memory", label: "记忆", icon: Brain },
   { key: "permissions", label: "权限", icon: Shield },
@@ -74,6 +77,8 @@ export function AppSettingsDialog() {
     saveAppSettings,
     availableTools,
     promptsFile,
+    pendingAppSettingsTab,
+    setPendingAppSettingsTab,
   } = useStore();
 
   const [tab, setTab] = useState<TabKey>("conversation");
@@ -94,6 +99,14 @@ export function AppSettingsDialog() {
       unlistenPromise.then((u) => u()).catch(() => {});
     };
   }, [setAppSettingsOpen]);
+
+  // 处理 pendingAppSettingsTab：dialog 打开时如果有指定 tab，切换到该 tab 并清空
+  useEffect(() => {
+    if (appSettingsOpen && pendingAppSettingsTab) {
+      setTab(pendingAppSettingsTab as TabKey);
+      setPendingAppSettingsTab(null);
+    }
+  }, [appSettingsOpen, pendingAppSettingsTab, setPendingAppSettingsTab]);
 
   useEffect(() => {
     if (appSettingsOpen && appSettings) {
@@ -123,7 +136,7 @@ export function AppSettingsDialog() {
       onOpenChange={setAppSettingsOpen}
       title="设置"
       description="应用级偏好。新对话会继承「对话设置」，当前对话可在右上角单独覆盖。"
-      size="lg"
+      size="2xl"
       footer={
         <>
           <Button
@@ -180,6 +193,9 @@ export function AppSettingsDialog() {
                   setDraft={setDraft}
                   prompts={promptsFile.prompts}
                 />
+              )}
+              {tab === "providers" && (
+                <ProvidersPane active={tab === "providers"} />
               )}
               {tab === "agents" && (
                 <SubagentsPane workdir={draft.conversation.workdir ?? null} />

@@ -55,6 +55,11 @@ pub struct Provider {
     pub extra_headers: BTreeMap<String, String>,
     #[serde(default)]
     pub models: Vec<String>,
+    /// 从 provider `/models` 端点拉取的全量模型 ID 列表（缓存）。
+    /// 用于在 UI 关闭再打开时，无需重新拉取即可展示模型列表。
+    /// 拉取时按 ID 合并：新模型追加，已存在的保留。
+    #[serde(default)]
+    pub fetched_models: Option<Vec<String>>,
     #[serde(default)]
     pub default_model: Option<String>,
     /// 是否把这个 provider 用作「标题生成模型」。整个配置最多一个 provider 应该勾上；
@@ -107,6 +112,26 @@ pub fn upsert(data_dir: &Path, provider: Provider) -> AppResult<Provider> {
     }
     save(data_dir, &file)?;
     Ok(provider)
+}
+
+/// 更新指定 provider 的 fetched_models 缓存（合并：新模型追加，已存在保留）
+pub fn update_fetched_models(
+    data_dir: &Path,
+    provider_id: &str,
+    new_model_ids: Vec<String>,
+) -> AppResult<()> {
+    let mut file = load(data_dir)?;
+    if let Some(provider) = file.providers.iter_mut().find(|p| p.id == provider_id) {
+        let mut cached = provider.fetched_models.clone().unwrap_or_default();
+        for id in new_model_ids {
+            if !cached.iter().any(|m| *m == id) {
+                cached.push(id);
+            }
+        }
+        cached.sort();
+        provider.fetched_models = Some(cached);
+    }
+    save(data_dir, &file)
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -5,7 +5,6 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { Sidebar } from "@/desktop/ui/components/Sidebar";
 import { ChatView } from "@/desktop/ui/components/ChatView";
 import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
-import { ProvidersDialog } from "@/desktop/ui/components/ProvidersDialog";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
 import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
@@ -89,7 +88,6 @@ export default function App() {
       <Sidebar />
       <ChatView />
       <RightSidebar />
-      <ProvidersDialog />
       <SessionSettingsDialog />
       <PromptsDialog />
       <AppSettingsDialog />

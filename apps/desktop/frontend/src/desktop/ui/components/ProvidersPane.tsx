@@ -14,17 +14,20 @@ import {
   Package,
   Loader2,
   ExternalLink,
+  Save,
+  Copy,
 } from "lucide-react";
 import { nanoid } from "nanoid";
-import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Input, Label, SecretInput, Select, Textarea } from "@/desktop/ui/components/ui/input";
 import { OAuthDialog } from "./OAuthDialog";
 import { DeepseekLoginDialog } from "./DeepseekLoginDialog";
+import { FamilyGroup } from "./FamilyGroup";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import type {
   AuthMode,
+  CatalogEntry,
   FetchedModel,
   Provider,
   ProviderKind,
@@ -115,12 +118,17 @@ function parseHeadersText(text: string) {
   return headers;
 }
 
-export function ProvidersDialog() {
+/**
+ * 供应商管理 pane（嵌入设置弹窗的「供应商」tab）。
+ *
+ * `active` 表示当前 tab 是否可见；从不可见切换到可见时会重新同步 draft（丢弃未保存改动）。
+ * 保存走 pane 内部按钮（providers.json 与 AppSettings 是两份独立的存储）。
+ */
+export function ProvidersPane({ active }: { active: boolean }) {
   const {
-    providerDialogOpen,
-    setProviderDialogOpen,
     providersFile,
     saveProviders,
+    modelsCatalog,
   } = useStore();
 
   const [draft, setDraft] = useState(providersFile);
@@ -143,9 +151,13 @@ export function ProvidersDialog() {
     ok: boolean;
     message: string;
   } | null>(null);
+  /** 用户手动 override 的 context/output（按 model id 索引）。优先于 models.dev + fallback 200K */
+  const [modelMetaOverrides, setModelMetaOverrides] = useState<
+    Record<string, { context?: string; output?: string }>
+  >({});
 
   useEffect(() => {
-    if (providerDialogOpen) {
+    if (active) {
       setDraft(providersFile);
       setSelectedId(providersFile.providers[0]?.id ?? null);
       setModelsText(modelsToText(providersFile.providers[0]?.models ?? []));
@@ -155,7 +167,7 @@ export function ProvidersDialog() {
       setTab("providers");
       api.listProviderPresets().then(setPresets).catch(() => {});
     }
-  }, [providerDialogOpen, providersFile]);
+  }, [active, providersFile]);
 
   const current = draft.providers.find((p) => p.id === selectedId);
 
@@ -228,6 +240,27 @@ export function ProvidersDialog() {
     setTab("providers");
   }
 
+  function copyProvider(source: Provider) {
+    // 复制供应商，生成新 ID 并修改名称
+    const newProvider: Provider = {
+      ...source,
+      id: nanoid(),
+      name: `${source.name} (副本)`,
+      // 清空敏感信息
+      api_key: "",
+      refresh_token: null,
+      token_expires_at: null,
+      account_id: null,
+    };
+    setDraft({ ...draft, providers: [...draft.providers, newProvider] });
+    setSelectedId(newProvider.id);
+    setModelsText(modelsToText(newProvider.models));
+    setHeadersText(headersToText(newProvider.extra_headers));
+    setModelTest(null);
+    setTab("providers");
+    toast.success(`已复制 ${source.name}`);
+  }
+
   function addFromPreset(preset: ProviderPreset) {
     const p = blankProvider(preset.kind, {
       id: nanoid(),
@@ -265,8 +298,7 @@ export function ProvidersDialog() {
   async function handleSave() {
     try {
       await saveProviders(draft);
-      toast.success("已保存");
-      setProviderDialogOpen(false);
+      toast.success("已保存供应商配置");
     } catch (e: any) {
       toast.error(e.message || String(e));
     }
@@ -476,22 +508,7 @@ export function ProvidersDialog() {
 
   return (
     <>
-      <Dialog
-        open={providerDialogOpen}
-        onOpenChange={setProviderDialogOpen}
-        title="供应商配置"
-        description="支持 OpenAI / Anthropic / Gemini 三种协议，可手填或 OAuth 登录"
-        size="xl"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setProviderDialogOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={handleSave}>保存</Button>
-          </>
-        }
-      >
-        <div className="flex items-center gap-2 mb-3 border-b border-border -mt-1 pb-3">
+      <div className="flex items-center gap-2 mb-3 border-b border-border -mt-1 pb-3">
           <button
             onClick={() => setTab("providers")}
             className={cn(
@@ -542,7 +559,7 @@ export function ProvidersDialog() {
                     onPointerMove={(e) => updateProviderDrag(e.clientX, e.clientY)}
                     onClick={() => selectProvider(p)}
                     className={cn(
-                      "px-2 py-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition-colors",
+                      "group px-2 py-2 rounded-md cursor-pointer flex items-center justify-between gap-2 transition-colors",
                       selectedId === p.id
                         ? "bg-accent text-accent-foreground"
                         : "hover:bg-accent/50",
@@ -569,6 +586,16 @@ export function ProvidersDialog() {
                         )}
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyProvider(p);
+                      }}
+                      className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="复制供应商"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
                     {draft.default_provider_id === p.id && (
                       <Check className="w-3.5 h-3.5 text-primary" />
                     )}
@@ -743,7 +770,7 @@ export function ProvidersDialog() {
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <Label className="inline-flex items-center gap-1">
-                        <Boxes className="w-3 h-3" /> 模型（每行一个）
+                        <Boxes className="w-3 h-3" /> 模型列表
                       </Label>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -774,17 +801,6 @@ export function ProvidersDialog() {
                         </button>
                       </div>
                     </div>
-                    <Textarea
-                      rows={4}
-                      value={modelsText}
-                      spellCheck={false}
-                      autoCorrect="off"
-                      onChange={(e) => {
-                        const text = e.target.value;
-                        setModelsText(text);
-                        updateCurrent({ models: parseModelsText(text) });
-                      }}
-                    />
                     {modelTest &&
                       modelTest.providerId === current.id &&
                       modelTest.model === modelForTest && (
@@ -800,33 +816,43 @@ export function ProvidersDialog() {
                           {modelTest.model} · {modelTest.message}
                         </div>
                       )}
-                    {fetchedModels && (
-                      <div className="rounded-md border border-border bg-accent/30 p-2 max-h-40 overflow-y-auto">
-                        <div className="text-[11px] text-muted-foreground mb-1">
-                          点击加入 / 移除（已选 {current.models.length}）
+                    {(fetchedModels && fetchedModels.length > 0) || (current.fetched_models && current.fetched_models.length > 0) ? (
+                      <div className="pt-2">
+                        <div className="text-xs text-muted-foreground mb-2">
+                          点击卡片选中模型（已选 {current.models.length}）。context / output 可手动修改，留空走 models.dev 或默认 200K/64K
+                          {fetchedModels && ` · 共 ${fetchedModels.length} 个模型`}
+                          {!fetchedModels && current.fetched_models && ` · 显示缓存 · 共 ${current.fetched_models.length} 个模型`}
                         </div>
-                        <div className="flex flex-wrap gap-1">
-                          {fetchedModels.map((m) => {
-                            const picked = current.models.includes(m.id);
-                            return (
-                              <button
-                                key={m.id}
-                                type="button"
-                                onClick={() => toggleFetchedModel(m.id)}
-                                className={cn(
-                                  "text-xs px-2 py-1 rounded-md border transition-colors",
-                                  picked
-                                    ? "border-primary bg-primary/10 text-primary"
-                                    : "border-border hover:bg-accent"
-                                )}
-                              >
-                                {m.id}
-                              </button>
-                            );
-                          })}
+                        <div className="max-h-[420px] overflow-y-auto space-y-4 pr-1 -mr-1">
+                          {groupModelsByFamily(
+                            fetchedModels || current.fetched_models!.map(id => ({ id, owned_by: null })),
+                            modelsCatalog?.entries || null
+                          ).map(
+                            ({ family, models }) => (
+                              <FamilyGroup
+                                key={family}
+                                family={family}
+                                models={models}
+                                selectedModels={current.models}
+                                onToggleModel={toggleFetchedModel}
+                                catalog={modelsCatalog?.entries || null}
+                                overrides={modelMetaOverrides}
+                                onUpdateOverride={(modelId, patch) =>
+                                  setModelMetaOverrides((prev) => ({
+                                    ...prev,
+                                    [modelId]: { ...prev[modelId], ...patch },
+                                  }))
+                                }
+                              />
+                            )
+                          )}
                         </div>
                       </div>
-                    )}
+                    ) : fetchedModels ? (
+                      <div className="text-xs text-muted-foreground py-4 text-center">
+                        未拉取到任何模型
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="space-y-1.5">
@@ -957,7 +983,13 @@ export function ProvidersDialog() {
             </div>
           </div>
         )}
-      </Dialog>
+
+      <div className="flex justify-end gap-2 pt-3 mt-3 border-t border-border">
+        <Button onClick={handleSave}>
+          <Save className="w-3.5 h-3.5" />
+          保存供应商配置
+        </Button>
+      </div>
 
       <OAuthDialog
         open={oauthOpen}
@@ -1123,4 +1155,69 @@ function AuthChip({
       )}
     </div>
   );
+}
+
+/**
+ * 按 family 分组模型列表。
+ * 如果 models.dev catalog 中没有该模型的 family 信息，则根据模型 ID 前缀推断。
+ */
+function groupModelsByFamily(
+  models: FetchedModel[],
+  catalog: Record<string, CatalogEntry> | null
+): { family: string; models: FetchedModel[] }[] {
+  const groups = new Map<string, FetchedModel[]>();
+
+  // 构建不带前缀的 catalog 映射（如 "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"）
+  const catalogWithoutPrefix: Record<string, CatalogEntry> = {};
+  if (catalog) {
+    for (const [key, value] of Object.entries(catalog)) {
+      catalogWithoutPrefix[key] = value;
+      const slashIdx = key.indexOf("/");
+      if (slashIdx > 0) {
+        const withoutPrefix = key.substring(slashIdx + 1);
+        catalogWithoutPrefix[withoutPrefix] = value;
+      }
+    }
+  }
+
+  for (const model of models) {
+    const entry = catalogWithoutPrefix?.[model.id] || catalog?.[model.id];
+    let family = entry?.family;
+
+    // 如果 catalog 中没有 family，根据模型 ID 前缀推断（去掉可能的 provider 前缀）
+    if (!family) {
+      const id = model.id.toLowerCase();
+      const idWithoutPrefix = id.includes("/") ? id.split("/").pop() || id : id;
+
+      if (idWithoutPrefix.startsWith("gpt-") || idWithoutPrefix.startsWith("o1") || idWithoutPrefix.startsWith("o3")) {
+        family = "GPT";
+      } else if (idWithoutPrefix.startsWith("claude-")) {
+        if (idWithoutPrefix.includes("opus")) family = "Claude Opus";
+        else if (idWithoutPrefix.includes("sonnet")) family = "Claude Sonnet";
+        else if (idWithoutPrefix.includes("haiku")) family = "Claude Haiku";
+        else family = "Claude";
+      } else if (idWithoutPrefix.startsWith("gemini-")) {
+        if (idWithoutPrefix.includes("pro")) family = "Gemini Pro";
+        else if (idWithoutPrefix.includes("flash")) family = "Gemini Flash";
+        else family = "Gemini";
+      } else if (idWithoutPrefix.startsWith("deepseek-")) {
+        if (idWithoutPrefix.includes("r1") || idWithoutPrefix.includes("reasoner")) family = "DeepSeek Reasoner";
+        else family = "DeepSeek";
+      } else if (idWithoutPrefix.startsWith("qwen-")) {
+        family = "Qwen";
+      } else {
+        family = "其他";
+      }
+    }
+
+    if (!groups.has(family)) {
+      groups.set(family, []);
+    }
+    groups.get(family)!.push(model);
+  }
+
+  // 按 family 名称排序
+  return Array.from(groups.entries())
+    .map(([family, models]) => ({ family, models }))
+    .sort((a, b) => a.family.localeCompare(b.family));
 }

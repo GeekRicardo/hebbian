@@ -1,8 +1,57 @@
 // 与 platform/src/reasoning.rs 的检测逻辑保持一致。
 // 任意一边新增模型家族时，记得两侧同步。
 
-import type { ReasoningConfig, ReasoningEffort } from "@/desktop/ui/types";
+import type { CatalogEntry, ReasoningConfig, ReasoningEffort } from "@/desktop/ui/types";
 import { normalizeModelId } from "@/desktop/ui/lib/contextWindow";
+
+/**
+ * 从 models.dev catalog 配置中提取模型的 reasoning/effort 能力。
+ *
+ * 返回 null 表示该模型不支持 reasoning（或 catalog 没提供相关信息）。
+ * 返回非 null 时，effort 字段表示支持的 effort 级别列表。
+ */
+export function getModelReasoningConfig(
+  entry: CatalogEntry | undefined
+): { effort: ReasoningEffort[] } | null {
+  if (!entry?.reasoning) return null;
+
+  // models.dev 返回了 effort 列表（如 ["low", "medium", "high", "extra"]）
+  if (entry.effort && entry.effort.length > 0) {
+    return {
+      effort: entry.effort.filter((e): e is ReasoningEffort =>
+        ["low", "medium", "high", "extra"].includes(e)
+      ),
+    };
+  }
+
+  // models.dev 只标记了 reasoning=true 但没给 effort 列表，用默认的 4 档
+  return { effort: ["low", "medium", "high", "extra"] };
+}
+
+/**
+ * 获取模型支持的 effort 选项列表。
+ *
+ * 优先从 models.dev catalog 读取，fallback 到硬编码逻辑。
+ */
+export function getModelEffortOptions(
+  providerKind: string,
+  model: string,
+  entry: CatalogEntry | undefined
+): ReasoningEffort[] {
+  // 1. 优先用 models.dev catalog
+  const catalogConfig = getModelReasoningConfig(entry);
+  if (catalogConfig) {
+    return catalogConfig.effort;
+  }
+
+  // 2. Fallback: 根据 provider kind 和模型名判断
+  if (!modelSupportsReasoning(providerKind, model)) {
+    return [];
+  }
+
+  // 默认 4 档
+  return ["low", "medium", "high", "extra"];
+}
 
 // ── Anthropic：thinking 模式分三档（与 Rust AnthropicThinkingMode 对齐） ──
 

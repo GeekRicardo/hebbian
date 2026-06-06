@@ -6099,3 +6099,14 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `ChatView.tsx`：在输入框上方与 modelRetry 同位置渲染一行蓝色提示「上下文已自动压缩（Xk → Yk token）」
 - **影响范围**: protocol/engine/desktop/frontend，无协议破坏性变更（additive）
 - **留尾巴**: contextCompacted 提示目前不随 run 结束主动清除（只在下次 run 开始时被新初始化覆盖）；如需 run_finished 时清掉可在 applyEventToSlot run_finished 分支加 contextCompacted: null
+
+### 2026-06-05 — models.dev 集成：effort 配置动态化
+
+- **Why**: 用户要求"思考强度 models.dev 里有吗 effort 有的话也不自己写死了 用它返回的"。之前 effort 选项（low/medium/high/extra）是硬编码的，如果模型不支持某些档位（如只有 low/medium/high），UI 仍然显示全部 4 档。现在优先使用 models.dev 返回的 effort 配置，fallback 到硬编码。
+- **改动**:
+  - `types.ts`: `CatalogEntry` 新增 `effort: string[] | null`、`reasoning_effort: string | null`、`thinking: boolean | null` 字段
+  - `storage/models_catalog.rs`: `CatalogEntry` 新增同样的 3 个字段，serde 反序列化时自动填充
+  - `reasoning.ts`: 新增 `getModelReasoningConfig(entry)` 和 `getModelEffortOptions(providerKind, model, entry)` 函数，优先从 catalog 读取 effort 配置
+  - `ModelPickerButton.tsx`: `ReasoningControls` 组件接收 `catalogEntry` 参数，动态渲染该模型支持的 effort 选项列表
+- **影响范围**: 纯 additive，不影响现有逻辑。如果 models.dev 返回 `effort: ["low", "medium", "high"]`（无 extra），UI 只显示 3 档；如果返回 null，fallback 到硬编码 4 档
+- **留尾巴**: models.dev 当前 effort 字段全部是 null（预留字段），实际效果暂时等同于硬编码。等 models.dev 填充数据后自动生效

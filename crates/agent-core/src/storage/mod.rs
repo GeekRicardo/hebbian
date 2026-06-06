@@ -23,6 +23,7 @@ pub mod lock;
 pub mod mcp;
 pub mod memory;
 pub mod model_io;
+pub mod models_catalog;
 pub mod oauth;
 pub mod permissions;
 pub mod plan_comments;
