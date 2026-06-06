@@ -99,14 +99,9 @@ pub struct DumpEntry {
     pub response: Value,
     /// 调用耗时（毫秒）。
     pub duration_ms: u64,
-    /// 记录类型：`"normal"`（常规模型调用）或 `"judge"`（AutoMode 判官调用）。
-    /// 前端据此渲染不同颜色的标签（蓝色 = judge）。
-    #[serde(default = "default_kind")]
+    /// 调用类别：`"main"` 主模型调用 / `"judge"` AutoMode 判官 / `"compaction"` 自动压缩摘要。
+    /// 前端 ModelIoInspector 据此渲染区分标签。
     pub kind: String,
-}
-
-fn default_kind() -> String {
-    "normal".to_string()
 }
 
 enum DumpCmd {
@@ -475,7 +470,7 @@ mod tests {
             request: json!({"x": 1}),
             response: json!({"type": "Done"}),
             duration_ms: 12,
-            kind: "normal".to_string(),
+            kind: "main".into(),
         };
         dump.record(entry.clone());
         dump.record(DumpEntry { turn: 2, ..entry });

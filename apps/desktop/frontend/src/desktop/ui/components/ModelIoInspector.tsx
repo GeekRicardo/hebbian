@@ -57,7 +57,7 @@ interface ModelIoEntry {
   request: ModelIoRequest;
   response: ModelIoResponse;
   duration_ms: number;
-  /** "main" = 主模型调用，"judge" = AutoMode 判官调用。老 jsonl 无此字段默认 "main"。 */
+  /** "main" 主模型调用 / "judge" AutoMode 判官 / "compaction" 自动压缩摘要。老 jsonl 无此字段。 */
   kind?: string;
 }
 
@@ -630,6 +630,11 @@ function RequestRow({
           {entry.kind === "judge" && (
             <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
               judge
+            </span>
+          )}
+          {entry.kind === "compaction" && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
+              压缩
             </span>
           )}
           {matchCount > 0 ? (

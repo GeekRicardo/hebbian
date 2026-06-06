@@ -10,7 +10,7 @@ use tracing::{debug, field::Empty, info, Instrument};
 
 use crate::{
     context::{
-        compaction::{compact_structural, needs_compaction},
+        compaction::{compact_with_llm, needs_compaction},
         microcompact::{microcompact, MicrocompactPolicy},
         transcript::Transcript,
     },
@@ -429,28 +429,109 @@ pub async fn run_loop(
                 hebbian.compaction.after_tokens = Empty,
             );
             let _enter = compaction_span.enter();
-            let compaction_result = compact_structural(
+
+            // L2 自动压缩：与手动 /compact 同一个 compact_with_llm 函数——调一次 LLM
+            // 把整段历史浓缩成接力摘要。绝不用纯结构化裁剪（会把长对话砍到几十 token）。
+            let compact_start = Instant::now();
+            let compact_req_snapshot = model_io_dump.as_ref().map(|_| ModelRequest {
+                model: String::new(),
+                system: transcript.system.clone(),
+                entries: transcript.entries.clone(),
+                tools: Vec::new(),
+                max_tokens: 4096,
+                reasoning: None,
+            });
+            let compaction_outcome = compact_with_llm(
+                client,
                 transcript.system.as_deref(),
                 transcript.entries.clone(),
-                compaction_policy,
-            );
-            let before_tokens = compaction_result.before_tokens;
-            let after_tokens = compaction_result.after_tokens;
-            compaction_span.record(attr::COMPACTION_BEFORE_TOKENS, before_tokens);
-            compaction_span.record(attr::COMPACTION_AFTER_TOKENS, after_tokens);
-            info!(before_tokens, after_tokens, "context compacted");
-            transcript.entries = compaction_result.entries;
-            drop(_enter);
-            emit(EventPayload::ContextCompacted {
-                before_tokens,
-                after_tokens,
-            });
-            hooks
-                .trigger(&HookPoint::OnCompaction {
-                    before_tokens,
-                    after_tokens,
-                })
-                .await;
+                None,
+            )
+            .await;
+            let compact_duration_ms = compact_start.elapsed().as_millis() as u64;
+
+            match compaction_outcome {
+                Ok(compaction_result) => {
+                    let before_tokens = compaction_result.before_tokens;
+                    let after_tokens = compaction_result.after_tokens;
+                    let summary = compaction_result.summary.clone();
+                    compaction_span.record(attr::COMPACTION_BEFORE_TOKENS, before_tokens);
+                    compaction_span.record(attr::COMPACTION_AFTER_TOKENS, after_tokens);
+                    info!(before_tokens, after_tokens, "context compacted (llm summary)");
+                    transcript.entries = compaction_result.entries;
+                    drop(_enter);
+
+                    // 这次压缩 LLM 请求记进 model_io.jsonl（kind="compaction"），
+                    // 让 ModelIoInspector 能看到压缩时真实发出的请求 + 返回的摘要。
+                    if let (Some(dump), Some(req)) =
+                        (model_io_dump.as_ref(), compact_req_snapshot)
+                    {
+                        dump.record(DumpEntry {
+                            ts: model_io_dump::iso_now(),
+                            run_id: state.run_id.to_string(),
+                            turn: state.current_turn(),
+                            model: client.provider_id().to_string(),
+                            request: model_io_dump::request_to_json(&req, client.provider_id()),
+                            response: serde_json::json!({
+                                "type": "Done",
+                                "text": summary,
+                                "before_tokens": before_tokens,
+                                "after_tokens": after_tokens,
+                            }),
+                            duration_ms: compact_duration_ms,
+                            kind: "compaction".to_string(),
+                        });
+                    }
+
+                    // 写 compact_boundary marker 到 session.jsonl，前端渲染压缩分隔线 +
+                    // 可展开的摘要（与手动 /compact 落的 marker 同形态）。
+                    if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
+                        use crate::storage::sessions::{
+                            self as sess_store, Message, MessageMeta, Role,
+                        };
+                        let marker = Message {
+                            id: sess_store::new_id(),
+                            role: Role::Marker,
+                            content: summary.clone(),
+                            attachments: Vec::new(),
+                            tool_calls: Vec::new(),
+                            parts: Vec::new(),
+                            created_at: chrono::Utc::now().timestamp_millis(),
+                            meta: Some(MessageMeta::CompactBoundary {
+                                summary,
+                                before_tokens,
+                                after_tokens,
+                            }),
+                            subagent_call_id: None,
+                        };
+                        if let Err(e) = sess_store::append_message(dd, sid, marker) {
+                            tracing::warn!(error = %e, "L2 压缩：写 compact_boundary marker 失败，忽略");
+                        }
+                    }
+
+                    emit(EventPayload::ContextCompacted {
+                        before_tokens,
+                        after_tokens,
+                    });
+                    hooks
+                        .trigger(&HookPoint::OnCompaction {
+                            before_tokens,
+                            after_tokens,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    // LLM 压缩失败（供应商不可用 / 网络断 / 返回空摘要等）：
+                    // 绝不丢上下文——保留原 transcript 继续这一轮，下一轮再试。
+                    drop(_enter);
+                    tracing::warn!(error = %e, "L2 自动压缩失败，保留原上下文继续");
+                    emit(EventPayload::Notice {
+                        level: LogLevel::Warn,
+                        message: format!("上下文自动压缩失败（{e}），本轮保留原文继续"),
+                        dedup_key: Some("auto_compaction_failed".to_string()),
+                    });
+                }
+            }
         }
 
         let turn_index = state.next_turn();
@@ -608,6 +689,7 @@ pub async fn run_loop(
                 request: model_io_dump::request_to_json(&req, client.provider_id()),
                 response: model_io_dump::response_to_json(&response_result),
                 duration_ms: call_duration_ms,
+                kind: "main".to_string(),
             });
         }
 

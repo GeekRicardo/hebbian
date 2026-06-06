@@ -625,6 +625,7 @@ impl ToolDispatcher {
                                         "reason": decision.reason(),
                                     }),
                                     duration_ms: judge_duration_ms,
+                                    kind: "judge".to_string(),
                                 });
                             }
                             match decision {

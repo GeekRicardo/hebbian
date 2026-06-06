@@ -6110,3 +6110,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `ModelPickerButton.tsx`: `ReasoningControls` 组件接收 `catalogEntry` 参数，动态渲染该模型支持的 effort 选项列表
 - **影响范围**: 纯 additive，不影响现有逻辑。如果 models.dev 返回 `effort: ["low", "medium", "high"]`（无 extra），UI 只显示 3 档；如果返回 null，fallback 到硬编码 4 档
 - **留尾巴**: models.dev 当前 effort 字段全部是 null（预留字段），实际效果暂时等同于硬编码。等 models.dev 填充数据后自动生效
+
+### 2026-06-06 — 自动压缩改为 LLM 摘要（与手动 /compact 同函数），压缩请求记进 model_io
+
+- **Why**: 自动压缩之前走 `compact_structural`（纯结构化裁剪「保留最近 N 轮」），在工具密集长对话里把 97k 砍到 32 token，等于丢光上下文；且不调 LLM，model_io 里只有一条分割线看不到压缩请求。用户要求自动压缩与手动 /compact 走同一个 LLM 摘要函数，并在 model_io 里能看到压缩时的真实请求详情。
+- **架构变更**（§4.7.1 / §4.1.3）: L2 从「结构化裁剪」改为「LLM 摘要（自动）」，与 L3「LLM 摘要（手动）」共用 `compact_with_llm`，唯一区别是触发方式（budget 超阈值 vs 用户点击）。取消纯结构化裁剪路径。LLM 调用失败时保留原文继续，绝不砍光上下文。
+- **改动**:
+  - `agent_loop.rs`: `needs_compaction` 触发后调 `compact_with_llm`（原 `compact_structural`）。成功→替换 transcript + 写 CompactBoundary marker（带真实 summary）+ 记一条 `kind="compaction"` 的 DumpEntry（request 是完整 transcript，response.text 是摘要）；失败→emit Notice 警告 + 保留原文继续。
+  - `model_io_dump.rs`: `DumpEntry` 加回 `kind: String` 字段（main/judge/compaction）。
+  - `dispatch.rs`: judge 的 DumpEntry 标 `kind="judge"`；`agent_loop.rs` 主调用标 `kind="main"`。
+  - `ModelIoInspector.tsx`: entry 列表加蓝色「压缩」标签（kind==="compaction"）。
+- **影响范围**: agent-core agent_loop / model_io_dump / dispatch；desktop 前端 ModelIoInspector；session.jsonl 多 CompactBoundary marker（向后兼容）。
+- **留尾巴**: 压缩用主 client + 主模型（贵模型也用它压缩），未来可考虑配独立的便宜压缩模型；compact_structural 函数保留（仅自己的回归测试用），未来如需 fallback 可复用。
