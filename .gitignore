@@ -4,6 +4,12 @@ node_modules/
 # Build outputs
 dist/
 target/
+apps/pages/packages/dashboard/dist/
+apps/pages/packages/dashboard/dist-ghpages/
+apps/pages/packages/dashboard/public/knowledge-graph.json
+apps/pages/packages/dashboard/public/source-content.json
+apps/pages/packages/dashboard/public/meta.json
+apps/pages/packages/core/dist/
 
 # macOS
 .DS_Store
@@ -27,7 +33,7 @@ apps/desktop/gen/
 .vscode/settings.json
 
 graphify-out/
-.understand-anything/
+# .understand-anything/ — 需要提交到仓库供 GitHub Pages 构建知识图谱
 .claude/
 .cursor/
 .codemap/

@@ -1,0 +1,54 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".understand-anything/knowledge-graph.json"
+      - "apps/pages/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/pages/pnpm-lock.yaml
+
+      - name: 安装依赖
+        working-directory: apps/pages
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 Core 包
+        working-directory: apps/pages
+        run: pnpm --filter @understand-anything/core build
+
+      - name: 打包图谱 + 源码
+        run: node apps/pages/packages/dashboard/scripts/bundle-graph.mjs .
+
+      - name: 构建 Dashboard (GitHub Pages)
+        working-directory: apps/pages
+        run: pnpm --filter @understand-anything/dashboard exec vite build --config vite.config.ghpages.ts
+
+      - name: 部署到 GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: apps/pages/packages/dashboard/dist-ghpages
+          force_orphan: true

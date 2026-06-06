@@ -1,0 +1,12 @@
+{
+  "name": "hebbian-pages",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm --filter @understand-anything/core build && node packages/dashboard/scripts/bundle-graph.mjs && pnpm --filter @understand-anything/dashboard dev",
+    "build": "pnpm --filter @understand-anything/core build && pnpm --filter @understand-anything/dashboard build",
+    "build:ghpages": "node packages/dashboard/scripts/bundle-graph.mjs && pnpm --filter @understand-anything/core build && pnpm --filter @understand-anything/dashboard build:ghpages",
+    "preview": "pnpm --filter @understand-anything/dashboard preview",
+    "bundle-graph": "node packages/dashboard/scripts/bundle-graph.mjs"
+  }
+}

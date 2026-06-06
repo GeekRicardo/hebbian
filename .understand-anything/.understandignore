@@ -1,0 +1,34 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, obj/, target/, *.lock, *.min.js, etc.
+
+# --- From .gitignore ---
+.DS_Store
+Cargo.lock.bak
+apps/desktop/gen/
+.env
+.env.local
+.env.*.local
+graphify-out/
+.claude/
+.cursor/
+.codemap/
+.omx/
+scripts/.venv/
+image/
+
+# --- Hebbian-specific exclusions ---
+# AI/agent transient state, snapshots, generated docs that aren't source of truth
+.understand-anything/
+docs/随记.md
+docs/todos.md
+docs/hebbian-harness-detailed-design.md
+
+# Build / lock / generated assets
+*.lock
+Cargo.lock
+
+# Test snapshots and large generated fixtures
+*.snap

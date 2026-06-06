@@ -1,0 +1,23 @@
+{
+  "name": "@understand-anything/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./search": { "types": "./dist/search.d.ts", "default": "./dist/search.js" },
+    "./types": { "types": "./dist/types.d.ts", "default": "./dist/types.js" },
+    "./schema": { "types": "./dist/schema.d.ts", "default": "./dist/schema.js" }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "fuse.js": "^7.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
