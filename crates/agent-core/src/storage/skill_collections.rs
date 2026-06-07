@@ -31,6 +31,8 @@ pub enum CollectionSource {
     },
     /// 来自用户本地目录（Tauri dialog 选的目录或拖拽进来的目录）
     Dir { src_dir: PathBuf },
+    /// 来自插件系统安装（§6.1.4）
+    Plugin { plugin_name: String },
     /// **虚拟集合**：用户手放的 / 老导入的 Global skill 没有 sidecar 记录时，
     /// `list_skill_collections` 会为每个孤儿 skill 合成一条 Local 集合（label = skill
     /// 目录名 = `~/.hebbian/skills/<name>/` 的 name；path = 该目录绝对路径）。
@@ -53,6 +55,7 @@ impl CollectionSource {
                 }
             }
             CollectionSource::Dir { src_dir } => src_dir.display().to_string(),
+            CollectionSource::Plugin { plugin_name } => plugin_name.clone(),
             CollectionSource::Local { path } => path.display().to_string(),
         }
     }
@@ -190,6 +193,16 @@ pub fn record_import(
         skills,
     };
     append(data_dir, collection)
+}
+
+/// 按 plugin name 删除所有 Collection 记录（插件卸载时调用）。
+/// **不删 skill 物理目录**——调用方（plugins::plugin_uninstall）自行清理。
+pub fn remove_by_plugin(data_dir: &Path, plugin_name: &str) -> AppResult<()> {
+    let mut file = load(data_dir);
+    file.collections.retain(|c| {
+        !matches!(&c.source, CollectionSource::Plugin { plugin_name: pn } if pn == plugin_name)
+    });
+    save(data_dir, &file)
 }
 
 #[cfg(test)]

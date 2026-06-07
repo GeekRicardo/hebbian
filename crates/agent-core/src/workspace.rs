@@ -47,23 +47,33 @@ impl Workspace {
     /// 从持久化恢复：把上次落盘的 announced + pending 一并塞回来。
     /// 三个集合之间相互去重——pending 中已存在于 initial / announced 的项会被剔除，
     /// announced 中已存在于 initial 的项也会被剔除，避免重复通知 / 重复 allows() 检查。
+    ///
+    /// 相对路径基于 workdir 解析为绝对路径，保证 `allows()` 的 canonicalize 不受
+    /// 进程 CWD 影响（Desktop CWD = `/`，CLI CWD 不定）。
     pub fn with_runtime_state(
         workdir: impl Into<PathBuf>,
         initial_allowed_paths: Vec<PathBuf>,
         runtime_announced: Vec<PathBuf>,
         runtime_pending: Vec<PathBuf>,
     ) -> Arc<Self> {
-        let initial = dedup(initial_allowed_paths);
-        let announced: Vec<PathBuf> = dedup(runtime_announced)
+        let workdir: PathBuf = workdir.into();
+        let resolve = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
+            paths
+                .into_iter()
+                .map(|p| if p.is_relative() { workdir.join(&p) } else { p })
+                .collect()
+        };
+        let initial = dedup(resolve(initial_allowed_paths));
+        let announced: Vec<PathBuf> = dedup(resolve(runtime_announced))
             .into_iter()
             .filter(|p| !initial.contains(p))
             .collect();
-        let pending: Vec<PathBuf> = dedup(runtime_pending)
+        let pending: Vec<PathBuf> = dedup(resolve(runtime_pending))
             .into_iter()
             .filter(|p| !initial.contains(p) && !announced.contains(p))
             .collect();
         Arc::new(Self {
-            workdir: workdir.into(),
+            workdir,
             initial_allowed_paths: initial,
             runtime_announced: RwLock::new(announced),
             runtime_pending: Mutex::new(pending),
@@ -309,5 +319,32 @@ mod tests {
         );
         ws.add_allowed_path(already.path());
         assert!(ws.runtime_pending_snapshot().is_empty());
+    }
+
+    #[test]
+    fn relative_allowed_paths_resolved_against_workdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path().join("project");
+        let sibling = tmp.path().join("sibling");
+        let nested = workdir.join("sub");
+        std::fs::create_dir_all(&workdir).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let ws = Workspace::new(
+            &workdir,
+            vec![
+                PathBuf::from("../sibling"),      // 相对路径
+                PathBuf::from("sub"),              // 相对路径
+                sibling.clone(),                   // 绝对路径，不该被改
+            ],
+        );
+
+        // 相对路径 "../sibling" 应被解析为 workdir/../sibling
+        assert!(ws.allows(&sibling.join("file.txt")));
+        // 相对路径 "sub" 应被解析为 workdir/sub
+        assert!(ws.allows(&nested.join("deep/file.txt")));
+        // 绝对路径原封不动
+        assert!(ws.allows(&sibling.join("another.txt")));
     }
 }

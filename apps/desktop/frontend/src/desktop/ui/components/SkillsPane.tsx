@@ -38,6 +38,9 @@ function formatSource(s: SkillCollection["source"]): string {
   if (s.kind === "local") {
     return s.path;
   }
+  if (s.kind === "plugin") {
+    return `plugin: ${s.plugin_name}`;
+  }
   return s.src_dir;
 }
 

@@ -28,6 +28,7 @@ pub mod oauth;
 pub mod permissions;
 pub mod plan_comments;
 pub mod plans;
+pub mod plugins;
 pub mod projects;
 pub mod prompts;
 pub mod run_checkpoint;

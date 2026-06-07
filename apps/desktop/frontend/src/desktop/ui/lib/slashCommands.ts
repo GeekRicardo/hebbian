@@ -73,6 +73,12 @@ export const builtinSlashCommands: SlashCommandMeta[] = [
     desc: "自动模式下遇到不确定操作直接拒绝",
     kind: "builtin",
   },
+  {
+    name: "plugin",
+    args: "<subcommand>",
+    desc: "插件管理：install / uninstall / list / marketplace",
+    kind: "builtin",
+  },
 ];
 
 const builtinRegistry: Record<string, BuiltinHandler> = {
@@ -93,6 +99,10 @@ const builtinRegistry: Record<string, BuiltinHandler> = {
         ? "已开启「自动拒绝」：不确定的操作不再询问，直接拒绝"
         : "已关闭「自动拒绝」"
     );
+  },
+
+  plugin: async (args, ctx) => {
+    await handlePluginCommand(args, ctx);
   },
 };
 
@@ -117,6 +127,120 @@ function parseBoolArg(raw: string | undefined, current: boolean): boolean {
     default:
       throw new Error(`无法识别的参数：${raw}（期望 on / off / toggle / status）`);
   }
+}
+
+/**
+ * `//plugin` 命令族 handler（架构 §6.1.4）。
+ *
+ * 子命令：
+ * - `marketplace add <owner/repo>`
+ * - `marketplace list`
+ * - `marketplace remove <name>`
+ * - `install <name> [@marketplace]`
+ * - `uninstall <name>`
+ * - `list`
+ */
+async function handlePluginCommand(args: string[], ctx: SlashContext): Promise<void> {
+  if (args.length === 0) {
+    throw new Error(
+      "用法：//plugin <子命令>\n" +
+      "  marketplace add <owner/repo>  — 添加插件市场\n" +
+      "  marketplace list              — 列出已添加的市场\n" +
+      "  marketplace remove <name>     — 删除市场\n" +
+      "  install <name>                — 安装插件\n" +
+      "  uninstall <name>              — 卸载插件\n" +
+      "  list                          — 列出已安装插件"
+    );
+  }
+
+  const sub = args[0].toLowerCase();
+
+  if (sub === "marketplace" || sub === "market") {
+    const action = args[1]?.toLowerCase();
+    if (action === "add") {
+      const source = args[2];
+      if (!source) throw new Error("缺少来源：//plugin marketplace add <owner/repo>");
+      const name = await api.pluginMarketplaceAdd(source);
+      ctx.toast.success(`已添加 marketplace：${name}`);
+    } else if (action === "list") {
+      const list = await api.pluginMarketplaceList();
+      if (list.length === 0) {
+        ctx.toast.info?.("还没有添加任何 marketplace") ??
+          ctx.toast.success("还没有添加任何 marketplace");
+      } else {
+        const lines = list.map(([n, s]) => `  ${n} — ${s}`).join("\n");
+        ctx.toast.success(`已添加的 marketplace：\n${lines}`);
+      }
+    } else if (action === "remove" || action === "rm") {
+      const name = args[2];
+      if (!name) throw new Error("缺少名字：//plugin marketplace remove <name>");
+      await api.pluginMarketplaceRemove(name);
+      ctx.toast.success(`已删除 marketplace：${name}`);
+    } else {
+      throw new Error(
+        "未知 marketplace 操作：" + (action ?? "(空)") +
+        "（支持 add / list / remove）"
+      );
+    }
+    return;
+  }
+
+  if (sub === "install") {
+    const raw = args[1];
+    if (!raw) throw new Error("缺少插件名：//plugin install <name>");
+    // 支持 name@marketplace 格式
+    let name: string;
+    let marketplace: string | null = null;
+    const atIdx = raw.indexOf("@");
+    if (atIdx > 0) {
+      name = raw.slice(0, atIdx);
+      marketplace = raw.slice(atIdx + 1);
+    } else {
+      name = raw;
+    }
+    const result = await api.pluginInstall(name, marketplace);
+    const parts: string[] = [];
+    if (result.skills_count > 0) parts.push(`${result.skills_count} skills`);
+    if (result.agents_count > 0) parts.push(`${result.agents_count} agents`);
+    if (result.has_hooks) parts.push("hooks");
+    if (result.mcp_servers_count > 0) parts.push(`${result.mcp_servers_count} MCP servers`);
+    const summary = parts.length > 0 ? `（${parts.join("、")}）` : "";
+    ctx.toast.success(`已安装插件：${result.display_name ?? result.name}${summary}`);
+    return;
+  }
+
+  if (sub === "uninstall") {
+    const name = args[1];
+    if (!name) throw new Error("缺少插件名：//plugin uninstall <name>");
+    await api.pluginUninstall(name);
+    ctx.toast.success(`已卸载插件：${name}`);
+    return;
+  }
+
+  if (sub === "list") {
+    const list = await api.pluginList();
+    if (list.length === 0) {
+      ctx.toast.info?.("还没有安装任何插件") ??
+        ctx.toast.success("还没有安装任何插件");
+    } else {
+      const lines = list.map((p) => {
+        const label = p.display_name ?? p.name;
+        const ver = p.version ? ` v${p.version}` : "";
+        return `  ${label}${ver}`;
+      }).join("\n");
+      ctx.toast.success(`已安装插件：\n${lines}`);
+    }
+    return;
+  }
+
+  if (sub === "update") {
+    // TODO: plugin update
+    throw new Error("//plugin update 暂未实现");
+  }
+
+  throw new Error(
+    `未知子命令：${sub}（支持 marketplace / install / uninstall / list）`
+  );
 }
 
 /** Skill 公开名：frontmatter alias 优先（与目录名不同时），回退目录名。 */

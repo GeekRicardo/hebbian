@@ -6,7 +6,9 @@ import {
   Brain,
   ChevronRight,
   FolderOpen,
+  GitBranch,
   Maximize2,
+  Package,
   Plug,
   RefreshCw,
   ScrollText,
@@ -25,6 +27,8 @@ import {
   ToolToggleList,
 } from "@/desktop/ui/components/workspaceFields";
 import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
+import { PluginsPane } from "@/desktop/ui/components/PluginsPane";
+import { HooksPane } from "@/desktop/ui/components/HooksPane";
 import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -49,7 +53,7 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "general", label: "通用", icon: SettingsIcon },
@@ -60,6 +64,8 @@ const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
   { key: "memory", label: "记忆", icon: Brain },
   { key: "permissions", label: "权限", icon: Shield },
   { key: "skills", label: "Skills", icon: Sparkles },
+  { key: "plugins", label: "插件", icon: Package },
+  { key: "hooks", label: "Hooks", icon: GitBranch },
   { key: "mcp", label: "MCP", icon: Plug },
   { key: "logs", label: "日志", icon: ScrollText },
 ];
@@ -211,6 +217,8 @@ export function AppSettingsDialog() {
               {tab === "skills" && (
                 <SkillsPane workdir={draft.conversation.workdir ?? null} scope="global" />
               )}
+              {tab === "plugins" && <PluginsPane />}
+              {tab === "hooks" && <HooksPane />}
               {tab === "mcp" && <McpPane />}
             </div>
           )}

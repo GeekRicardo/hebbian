@@ -289,6 +289,27 @@ pub trait CoreClient: Send + Sync {
     fn save_mcp_config(&self, config: crate::mcp::config::McpConfig) -> Result<(), CoreError>;
     async fn discover_mcp_tools(&self) -> Vec<crate::tools::McpToolReport>;
 
+    // === 同步 API：Plugins（§6.1.4）===
+
+    fn plugin_marketplace_add(&self, source: &str) -> Result<String, CoreError>;
+    fn plugin_marketplace_list(&self) -> Vec<(String, String)>;
+    fn plugin_marketplace_list_plugins(
+        &self,
+        name: &str,
+    ) -> Result<Vec<crate::storage::plugins::CatalogEntry>, CoreError>;
+    fn plugin_marketplace_remove(&self, name: &str) -> Result<(), CoreError>;
+    fn plugin_install(&self, name: &str, marketplace: Option<&str>)
+        -> Result<crate::storage::plugins::PluginListItem, CoreError>;
+    fn plugin_uninstall(&self, name: &str) -> Result<(), CoreError>;
+    fn plugin_list(&self) -> Vec<crate::storage::plugins::PluginListItem>;
+
+    // === 同步 API：Hooks（§4.8）===
+
+    /// 读取全局 hooks.json 原文（设置页 JSON 编辑器用）。文件不存在返回空对象 `{}`。
+    fn get_hooks_raw(&self) -> String;
+    /// 保存全局 hooks.json（从 JSON 编辑器提交）。校验 JSON 格式合法。
+    fn save_hooks_raw(&self, raw: &str) -> Result<(), CoreError>;
+
     // === 数据目录访问 ===
 
     /// 暴露 `~/.hebbian/` 路径——Desktop 仍需要它构造 Workspace / model_io_dump 等。
@@ -919,6 +940,77 @@ impl CoreClient for LocalCoreClient {
     async fn discover_mcp_tools(&self) -> Vec<crate::tools::McpToolReport> {
         let config = mcp_store::load(&self.data_dir);
         tools::mcp::discover_tool_reports(&config).await
+    }
+
+    fn plugin_marketplace_add(&self, source: &str) -> Result<String, CoreError> {
+        let entry =
+            crate::storage::plugins::marketplace_add(&self.data_dir, source).map_err(CoreError::from)?;
+        Ok(entry.name)
+    }
+
+    fn plugin_marketplace_list(&self) -> Vec<(String, String)> {
+        crate::storage::plugins::marketplace_list(&self.data_dir)
+    }
+
+    fn plugin_marketplace_list_plugins(
+        &self,
+        name: &str,
+    ) -> Result<Vec<crate::storage::plugins::CatalogEntry>, CoreError> {
+        crate::storage::plugins::marketplace_list_plugins(&self.data_dir, name)
+            .map_err(CoreError::from)
+    }
+
+    fn plugin_marketplace_remove(&self, name: &str) -> Result<(), CoreError> {
+        crate::storage::plugins::marketplace_remove(&self.data_dir, name).map_err(CoreError::from)
+    }
+
+    fn plugin_install(
+        &self,
+        name: &str,
+        marketplace: Option<&str>,
+    ) -> Result<crate::storage::plugins::PluginListItem, CoreError> {
+        let installed = crate::storage::plugins::plugin_install(&self.data_dir, name, marketplace)
+            .map_err(CoreError::from)?;
+        Ok(crate::storage::plugins::PluginListItem {
+            name: installed.name,
+            display_name: installed.display_name,
+            version: installed.version,
+            description: installed.description,
+            marketplace: installed.marketplace,
+            skills_count: installed.components.skills.len(),
+            agents_count: installed.components.agents.len(),
+            has_hooks: installed.components.hooks_merged,
+            mcp_servers_count: installed.components.mcp_servers.len(),
+        })
+    }
+
+    fn plugin_uninstall(&self, name: &str) -> Result<(), CoreError> {
+        crate::storage::plugins::plugin_uninstall(&self.data_dir, name).map_err(CoreError::from)
+    }
+
+    fn plugin_list(&self) -> Vec<crate::storage::plugins::PluginListItem> {
+        crate::storage::plugins::plugin_list(&self.data_dir)
+    }
+
+    fn get_hooks_raw(&self) -> String {
+        let path = self.data_dir.join("hooks.json");
+        std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    fn save_hooks_raw(&self, raw: &str) -> Result<(), CoreError> {
+        // 校验 JSON 合法性
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| {
+                CoreError::Storage(common::AppError::msg(format!("JSON 格式错误：{e}")))
+            })?;
+        // 格式化后写回
+        let pretty = serde_json::to_string_pretty(&value).map_err(|e| {
+            CoreError::Storage(common::AppError::msg(format!("JSON 序列化失败：{e}")))
+        })?;
+        std::fs::write(self.data_dir.join("hooks.json"), pretty).map_err(|e| {
+            CoreError::Storage(common::AppError::msg(format!("写入 hooks.json 失败：{e}")))
+        })?;
+        Ok(())
     }
 
     fn data_dir(&self) -> &Path {
