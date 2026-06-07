@@ -155,9 +155,11 @@ export function ChatInput({
   const slashSuggestions = useMemo(() => {
     const trimmed = value.trimStart();
     if (!trimmed.startsWith("//")) return [];
-    const query = trimmed.slice(2).split(/\s/)[0].toLowerCase();
-    if (!query && trimmed === "//") return slashCatalog;
-    if (!query) return [];
+    const afterSlash = trimmed.slice(2);
+    // 已有空格 = 用户正在输入参数，联想关闭
+    if (/\s/.test(afterSlash)) return [];
+    const query = afterSlash.toLowerCase();
+    if (!query) return slashCatalog;
     return slashCatalog.filter(
       (c) =>
         c.name.toLowerCase().includes(query) ||
@@ -1043,8 +1045,10 @@ export function ChatInput({
                   }}
                   onMouseEnter={() => setSlashActiveIdx(i)}
                   className={cn(
-                    "w-full flex items-center justify-between gap-3 px-3 py-1.5 text-sm text-left",
-                    i === slashActiveIdx ? "bg-accent" : "hover:bg-accent/50",
+                    "w-full flex items-center justify-between gap-3 px-3 py-1.5 text-sm text-left border-l-2 transition-colors",
+                    i === slashActiveIdx
+                      ? "bg-primary/10 border-l-primary"
+                      : "hover:bg-accent/50 border-l-transparent",
                   )}
                 >
                   <div className="flex flex-col min-w-0 flex-1">
