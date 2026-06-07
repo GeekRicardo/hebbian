@@ -5,6 +5,15 @@
 //!
 //! 容错策略：jsonl 中坏行（解析失败）只记 warn 并跳过，不让一个孤行毁了整次读取——
 //! dump 是 best-effort 写入，可能因进程被 SIGKILL 留半截行；调试器要照常打开。
+//!
+//! ## 增量 messages 存储
+//!
+//! 写盘侧对 `kind == "main"` 的 entry 做前缀去重：
+//! - `messages_carried: N` — 前 N 条与上一条 main entry 相同
+//! - `messages_new: [...]` — 第 N+1 条起的新增 messages
+//!
+//! 读取侧顺序扫描时维护 `accumulated_messages` 累积数组，遇到增量格式时
+//! 取前 N 条 + 拼接 new 即可重建完整 messages。兼容老格式（有 `messages` 字段的）。
 
 use std::path::Path;
 
@@ -12,27 +21,69 @@ use serde_json::Value;
 
 use crate::model_io_dump::default_path;
 
-/// 读 session 的所有 model_io 条目。
-/// 文件不存在返回空 vec（默认开启后大部分新 session 都会有，但旧 session
-/// 或刚创建未跑过 turn 的 session 没有）。
+/// 从增量格式重建完整 messages 数组，同时更新累积状态。
 ///
-/// 每条 entry 是 `DumpEntry` 序列化后的 JSON 对象。给前端用 `Vec<Value>` 已经够——
-/// 不强行把它套回 Rust struct 让 surface 自己挑字段渲染（避免在 storage 层
-/// 维护一个跟 `DumpEntry` 重复的 DTO）。
+/// 兼容三种格式：
+/// 1. 增量格式：`{messages_carried: N, messages_new: [...]}`
+/// 2. 老格式：`{messages: [...]}`
+/// 3. 非 main（judge/compaction）：无 messages 相关字段，不更新累积状态
+fn rebuild_messages(request: &mut Value, accumulated: &mut Vec<Value>) {
+    let obj = match request.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+
+    if let Some(carried_val) = obj.remove("messages_carried") {
+        let carried = carried_val.as_u64().unwrap_or(0) as usize;
+        let new_msgs = obj
+            .remove("messages_new")
+            .and_then(|v| match v {
+                Value::Array(a) => Some(a),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // 从累积状态取前 carried 条 + 拼接 new
+        let mut full: Vec<Value> = accumulated.iter().take(carried).cloned().collect();
+        full.extend(new_msgs);
+
+        *accumulated = full.clone();
+        obj.insert("messages".to_string(), Value::Array(full));
+    } else if let Some(messages) = obj.get("messages").and_then(|m| m.as_array()) {
+        // 老格式或无去重的条目——直接用 messages 更新累积状态
+        *accumulated = messages.clone();
+    }
+    // judge/compaction 没有 messages 字段，不动累积状态
+}
+
+/// 读 session 的所有 model_io 条目（完整重建 messages）。
+///
+/// ⚠️ 大 session 下会把所有 entry 全部驻留在内存中，仅 CLI 使用。
+/// 前端应走 `read_session_summaries` + `read_session_entry` 两级加载。
 pub fn read_session(data_dir: &Path, session_id: &str) -> std::io::Result<Vec<Value>> {
+    use std::io::BufRead;
+
     let path = default_path(data_dir, session_id);
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path)?;
+    let file = std::fs::File::open(&path)?;
+    let reader = std::io::BufReader::new(file);
     let mut out = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
+    let mut accumulated: Vec<Value> = Vec::new();
+    for (idx, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         match serde_json::from_str::<Value>(trimmed) {
-            Ok(v) => out.push(v),
+            Ok(mut v) => {
+                if let Some(req) = v.get_mut("request") {
+                    rebuild_messages(req, &mut accumulated);
+                }
+                out.push(v);
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -70,12 +121,26 @@ pub fn read_session_summaries(data_dir: &Path, session_id: &str) -> std::io::Res
         match serde_json::from_str::<Value>(trimmed) {
             Ok(v) => {
                 let resp = v.get("response");
-                let msg_count = v
-                    .get("request")
-                    .and_then(|r| r.get("messages"))
-                    .and_then(|m| m.as_array())
-                    .map(|a| a.len() as u64)
-                    .unwrap_or(0);
+                let req = v.get("request");
+
+                // 计算 message_count：兼容增量格式和老格式
+                let msg_count = if let Some(carried) =
+                    req.and_then(|r| r.get("messages_carried")).and_then(|c| c.as_u64())
+                {
+                    let new_len = req
+                        .and_then(|r| r.get("messages_new"))
+                        .and_then(|m| m.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    (carried as usize + new_len) as u64
+                } else if let Some(msgs) =
+                    req.and_then(|r| r.get("messages")).and_then(|m| m.as_array())
+                {
+                    msgs.len() as u64
+                } else {
+                    0
+                };
+
                 out.push(serde_json::json!({
                     "ts": v.get("ts").cloned(),
                     "run_id": v.get("run_id").cloned(),
@@ -103,8 +168,11 @@ pub fn read_session_summaries(data_dir: &Path, session_id: &str) -> std::io::Res
     Ok(out)
 }
 
-/// 按索引返回单条完整 entry。只解析目标行的 JSON，跳过的行仅做行读取不做解析。
-/// 索引对应 `read_session` / `read_session_summaries` 返回的数组下标（跳过空行/坏行后的有效序号）。
+/// 按索引返回单条完整 entry（增量 messages 已重建）。
+///
+/// 顺序扫描至目标行，沿途累积 messages 状态以支持增量重建。
+/// 未到目标行的行只解析 request 中的 messages 相关字段来维护累积状态，
+/// 不保留完整 Value——峰值内存 ≈ 累积 messages 数组大小。
 pub fn read_session_entry(
     data_dir: &Path,
     session_id: &str,
@@ -118,6 +186,7 @@ pub fn read_session_entry(
     }
     let file = std::fs::File::open(&path)?;
     let reader = std::io::BufReader::new(file);
+    let mut accumulated: Vec<Value> = Vec::new();
     let mut valid_idx = 0usize;
     for (line_no, line_result) in reader.lines().enumerate() {
         let line = line_result?;
@@ -126,8 +195,14 @@ pub fn read_session_entry(
             continue;
         }
         if valid_idx == index {
+            // 目标行：完整解析 + 重建 messages
             return match serde_json::from_str::<Value>(trimmed) {
-                Ok(v) => Ok(Some(v)),
+                Ok(mut v) => {
+                    if let Some(req) = v.get_mut("request") {
+                        rebuild_messages(req, &mut accumulated);
+                    }
+                    Ok(Some(v))
+                }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -138,6 +213,12 @@ pub fn read_session_entry(
                     Ok(None)
                 }
             };
+        }
+        // 非目标行：只更新累积状态
+        if let Ok(mut v) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(req) = v.get_mut("request") {
+                rebuild_messages(req, &mut accumulated);
+            }
         }
         valid_idx += 1;
     }
@@ -172,5 +253,115 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0]["turn"], 1);
         assert_eq!(entries[2]["turn"], 3);
+    }
+
+    #[test]
+    fn incremental_messages_rebuild() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = default_path(tmp.path(), "sid2");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // 第一条：全量 messages（老格式或第一次写入）
+        let entry1 = json!({
+            "ts": "2026-01-01T00:00:00Z",
+            "run_id": "r1",
+            "turn": 0,
+            "model": "m1",
+            "kind": "main",
+            "duration_ms": 100,
+            "request": {
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "hi"}
+                ]
+            },
+            "response": {"type": "Done"}
+        });
+        // 第二条：增量格式，carried=2，new=[新消息]
+        let entry2 = json!({
+            "ts": "2026-01-01T00:01:00Z",
+            "run_id": "r1",
+            "turn": 1,
+            "model": "m1",
+            "kind": "main",
+            "duration_ms": 200,
+            "request": {
+                "messages_carried": 2,
+                "messages_new": [
+                    {"role": "user", "content": "how are you"},
+                    {"role": "assistant", "content": "good"}
+                ]
+            },
+            "response": {"type": "Done"}
+        });
+        // 第三条：judge（不影响累积状态）
+        let entry3 = json!({
+            "ts": "2026-01-01T00:01:30Z",
+            "run_id": "r1",
+            "turn": 0,
+            "model": "m1",
+            "kind": "judge",
+            "duration_ms": 50,
+            "request": {"tool": "Bash", "input": {"cmd": "ls"}},
+            "response": {"raw": "allow", "final": "allow"}
+        });
+        // 第四条：基于第二条的增量
+        let entry4 = json!({
+            "ts": "2026-01-01T00:02:00Z",
+            "run_id": "r1",
+            "turn": 2,
+            "model": "m1",
+            "kind": "main",
+            "duration_ms": 300,
+            "request": {
+                "messages_carried": 4,
+                "messages_new": [
+                    {"role": "user", "content": "bye"}
+                ]
+            },
+            "response": {"type": "Done"}
+        });
+
+        let body = format!(
+            "{}\n{}\n{}\n{}\n",
+            serde_json::to_string(&entry1).unwrap(),
+            serde_json::to_string(&entry2).unwrap(),
+            serde_json::to_string(&entry3).unwrap(),
+            serde_json::to_string(&entry4).unwrap(),
+        );
+        std::fs::write(&path, body).unwrap();
+
+        // read_session 全量读
+        let entries = read_session(tmp.path(), "sid2").unwrap();
+        assert_eq!(entries.len(), 4);
+        // 第一条：原样
+        let msgs0 = entries[0]["request"]["messages"].as_array().unwrap();
+        assert_eq!(msgs0.len(), 2);
+        assert_eq!(msgs0[0]["content"], "hello");
+        // 第二条：重建完整 4 条
+        let msgs1 = entries[1]["request"]["messages"].as_array().unwrap();
+        assert_eq!(msgs1.len(), 4);
+        assert_eq!(msgs1[0]["content"], "hello");
+        assert_eq!(msgs1[2]["content"], "how are you");
+        // 第三条 judge：没有 messages
+        assert!(entries[2]["request"]["messages"].is_null() || entries[2]["request"].get("messages").is_none());
+        // 第四条：重建完整 5 条
+        let msgs3 = entries[3]["request"]["messages"].as_array().unwrap();
+        assert_eq!(msgs3.len(), 5);
+        assert_eq!(msgs3[4]["content"], "bye");
+
+        // read_session_entry 单条读
+        let single = read_session_entry(tmp.path(), "sid2", 3).unwrap().unwrap();
+        let single_msgs = single["request"]["messages"].as_array().unwrap();
+        assert_eq!(single_msgs.len(), 5);
+        assert_eq!(single_msgs[0]["content"], "hello");
+        assert_eq!(single_msgs[4]["content"], "bye");
+
+        // read_session_summaries message_count
+        let summaries = read_session_summaries(tmp.path(), "sid2").unwrap();
+        assert_eq!(summaries[0]["message_count"], 2);
+        assert_eq!(summaries[1]["message_count"], 4);
+        assert_eq!(summaries[2]["message_count"], 0); // judge
+        assert_eq!(summaries[3]["message_count"], 5);
     }
 }

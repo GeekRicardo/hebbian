@@ -132,22 +132,32 @@ impl ModelIoDump {
         let (tx, mut rx) = mpsc::channel::<DumpCmd>(1024);
         let writer_path = path.clone();
         tokio::spawn(async move {
+            // 上一条 main entry 的 messages 数组——用于前缀去重。
+            // judge / compaction 不参与（它们的 request 结构不同）。
+            let mut prev_main_messages: Vec<Value> = Vec::new();
+
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    DumpCmd::Write(entry) => match serde_json::to_string(&entry) {
-                        Ok(line) => {
-                            if let Err(e) = file.write_all(line.as_bytes()).await {
-                                warn!(error = %e, path = %writer_path.display(), "model_io_dump write");
-                                continue;
+                    DumpCmd::Write(mut entry) => {
+                        // 对 main entry 做 messages 前缀去重
+                        if entry.kind == "main" {
+                            Self::dedup_messages(&mut entry.request, &mut prev_main_messages);
+                        }
+                        match serde_json::to_string(&entry) {
+                            Ok(line) => {
+                                if let Err(e) = file.write_all(line.as_bytes()).await {
+                                    warn!(error = %e, path = %writer_path.display(), "model_io_dump write");
+                                    continue;
+                                }
+                                if let Err(e) = file.write_all(b"\n").await {
+                                    warn!(error = %e, path = %writer_path.display(), "model_io_dump newline");
+                                }
                             }
-                            if let Err(e) = file.write_all(b"\n").await {
-                                warn!(error = %e, path = %writer_path.display(), "model_io_dump newline");
+                            Err(e) => {
+                                warn!(error = %e, "model_io_dump serialize");
                             }
                         }
-                        Err(e) => {
-                            warn!(error = %e, "model_io_dump serialize");
-                        }
-                    },
+                    }
                     DumpCmd::Flush(reply) => {
                         let _ = reply.send(file.flush().await);
                     }
@@ -179,6 +189,39 @@ impl ModelIoDump {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// 对 main entry 的 `request.messages` 做前缀去重：
+    /// 与上一条 main entry 的 messages 比较，相同前缀替换为
+    /// `{"messages_carried": N, "messages_new": [新增部分]}`。
+    ///
+    /// 读取侧顺序扫描时累积 messages 即可重建完整数组。
+    fn dedup_messages(request: &mut Value, prev: &mut Vec<Value>) {
+        let messages = match request.get("messages").and_then(|m| m.as_array()) {
+            Some(arr) => arr.clone(),
+            None => {
+                *prev = Vec::new();
+                return;
+            }
+        };
+
+        let mut carried = 0usize;
+        let max = std::cmp::min(prev.len(), messages.len());
+        while carried < max && prev[carried] == messages[carried] {
+            carried += 1;
+        }
+
+        let new_msgs: Vec<Value> = messages[carried..].to_vec();
+
+        // 更新 prev 为当前完整 messages
+        *prev = messages;
+
+        // 替换 request 中的 messages 字段
+        if let Some(obj) = request.as_object_mut() {
+            obj.remove("messages");
+            obj.insert("messages_carried".to_string(), Value::from(carried as u64));
+            obj.insert("messages_new".to_string(), Value::Array(new_msgs));
+        }
     }
 }
 
@@ -484,5 +527,30 @@ mod tests {
         assert_eq!(parsed["turn"], 1);
         let parsed2: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed2["turn"], 2);
+    }
+
+    #[test]
+    fn dedup_messages_replaces_shared_prefix() {
+        let mut prev = Vec::new();
+        let m1 = json!({"role": "user", "content": "hello"});
+        let m2 = json!({"role": "assistant", "content": "hi"});
+        let m3 = json!({"role": "user", "content": "bye"});
+
+        // 第一次：无前缀，所有 messages 都是 new
+        let mut req1 = json!({"messages": [m1.clone(), m2.clone()], "system": "sys"});
+        ModelIoDump::dedup_messages(&mut req1, &mut prev);
+        assert_eq!(prev.len(), 2);
+        assert_eq!(req1["messages_carried"], 0);
+        assert_eq!(req1["messages_new"].as_array().unwrap().len(), 2);
+        assert!(req1.get("messages").is_none());
+
+        // 第二次：前 2 条相同，新增 1 条
+        let mut req2 = json!({"messages": [m1.clone(), m2.clone(), m3.clone()]});
+        ModelIoDump::dedup_messages(&mut req2, &mut prev);
+        assert_eq!(prev.len(), 3);
+        assert_eq!(req2["messages_carried"], 2);
+        let new_msgs = req2["messages_new"].as_array().unwrap();
+        assert_eq!(new_msgs.len(), 1);
+        assert_eq!(new_msgs[0]["content"], "bye");
     }
 }

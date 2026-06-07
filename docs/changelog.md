@@ -6236,6 +6236,20 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 纯前端，不改后端、不改协议。
 - **留尾巴**: ErrorBoundary 的自动恢复（立即 `setState(false)` 重试渲染）对持续性渲染错误会陷入 catch → retry → catch 循环，但 React 18 自带 `componentDidCatch` 频率限制（连续崩溃 > 阈值会停止重试），实际不会死循环。
 
+### 2026-06-07 — model_io.jsonl 增量 messages 存储
+
+- **Why**: model_io.jsonl 每条 entry 的 `request.messages` 包含完整历史消息数组——随对话轮次累积，相邻两条 entry 的 messages 有 95%+ 的前缀重复。实测 228 条记录文件 121MB，其中 messages 占 93.3MB，增量去重后仅 2.8MB（节省 96.9%）。
+- **设计**:
+  - 写盘侧（writer actor）对 `kind == "main"` 的 entry 做前缀去重：比较当前 messages 与上一条 main entry 的 messages，相同前缀部分替换为 `{"messages_carried": N, "messages_new": [新增部分]}`。`judge` / `compaction` 不参与（它们的 request 结构不同）。
+  - 读取侧顺序扫描时维护 `accumulated_messages` 累积数组，遇到增量格式取前 N 条 + 拼接 new 即可重建完整 messages——不需要递归引用指针。
+  - 向后兼容：老格式（有 `messages` 字段的）正常读取；进程重启后第一条 main entry 全量写入（`prev_main_messages` 重新从空开始），后续增量。
+- **改动**:
+  - `crates/agent-core/src/model_io_dump.rs`：writer actor 增加 `prev_main_messages` 状态 + `dedup_messages()` 方法。
+  - `crates/agent-core/src/storage/model_io.rs`：新增 `rebuild_messages()` 辅助函数，`read_session` / `read_session_entry` / `read_session_summaries` 全部兼容增量格式。
+  - 新增 3 个单测：writer 去重验证 + reader 重建验证（含 judge 穿插场景 + summaries message_count 验证）。
+- **影响范围**: agent-core 内部（model_io_dump writer + storage reader）。不改协议、不改前端（前端拿到的仍是完整重建后的 entry）。
+- **留尾巴**: 已有的老 jsonl 文件不做迁移——reader 兼容两种格式，老文件正常读取不受影响。新写入的 entry 自动用增量格式。
+
 ### 2026-06-07 — 修复 RunMode 在 agent_loop 运行期间切换不生效
 
 - **Why**: 用户在前端 RunMode chip 切换模式（如从 AskBeforeEdits 切到 AutoMode）时，正在运行的 agent_loop 里的权限检查仍使用旧值，下一次工具调用不会走 AutoMode 判官。根因是 Harness 虽然已有 `Arc<Mutex<RunMode>>` 共享机制和 `Op::SwitchRunMode` actor 路径，但传给 `LoopParams` 时把值 clone 了出来——`agent_loop` 拿到的是裸 `RunMode` 值，每次构造 `ToolDispatcher` 又从栈变量新建 Arc，跟 Harness 的共享 Arc 完全是两个实例。Desktop 的 `set_run_mode` Tauri 命令也只写了 jsonl 落盘，没有更新运行中的 Arc。
