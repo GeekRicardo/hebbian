@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `18/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-18.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"crates/agent-core/prompts/base_system.md":[],"crates/agent-core/src/agent_loop.rs":[],"crates/agent-core/src/automode.rs":[],"crates/agent-core/src/context/budget.rs":[],"crates/agent-core/src/context/compaction.rs":[],"crates/agent-core/src/context/microcompact.rs":[],"crates/agent-core/src/context/mod.rs":[],"crates/agent-core/src/context/transcript.rs":[],"crates/agent-core/src/core_client/http.rs":[],"crates/agent-core/src/core_client/mod.rs":[],"crates/agent-core/src/definition.rs":[],"crates/agent-core/src/dispatch.rs":[],"crates/agent-core/src/edits/hashline/apply.rs":[],"crates/agent-core/src/edits/hashline/format.rs":[],"crates/agent-core/src/edits/hashline/mod.rs":[],"crates/agent-core/src/edits/hashline/parser.rs":[],"crates/agent-core/src/edits/hashline/prompt.md":[],"crates/agent-core/src/edits/metadata.rs":[],"crates/agent-core/src/edits/mod.rs":[],"crates/agent-core/src/effects.rs":[],"crates/agent-core/src/harness.rs":[],"crates/agent-core/src/hooks/external.rs":[],"crates/agent-core/src/hooks/mod.rs":[],"crates/agent-core/src/hooks/types.rs":[],"crates/agent-core/src/lib.rs":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `crates/agent-core/prompts/base_system.md` (107 lines, language: `markdown`, fileCategory: `docs`)
+2. `crates/agent-core/src/agent_loop.rs` (1611 lines, language: `rust`, fileCategory: `code`)
+3. `crates/agent-core/src/automode.rs` (530 lines, language: `rust`, fileCategory: `code`)
+4. `crates/agent-core/src/context/budget.rs` (65 lines, language: `rust`, fileCategory: `code`)
+5. `crates/agent-core/src/context/compaction.rs` (344 lines, language: `rust`, fileCategory: `code`)
+6. `crates/agent-core/src/context/microcompact.rs` (203 lines, language: `rust`, fileCategory: `code`)
+7. `crates/agent-core/src/context/mod.rs` (4 lines, language: `rust`, fileCategory: `code`)
+8. `crates/agent-core/src/context/transcript.rs` (395 lines, language: `rust`, fileCategory: `code`)
+9. `crates/agent-core/src/core_client/http.rs` (31 lines, language: `rust`, fileCategory: `code`)
+10. `crates/agent-core/src/core_client/mod.rs` (1148 lines, language: `rust`, fileCategory: `code`)
+11. `crates/agent-core/src/definition.rs` (100 lines, language: `rust`, fileCategory: `code`)
+12. `crates/agent-core/src/dispatch.rs` (2498 lines, language: `rust`, fileCategory: `code`)
+13. `crates/agent-core/src/edits/hashline/apply.rs` (224 lines, language: `rust`, fileCategory: `code`)
+14. `crates/agent-core/src/edits/hashline/format.rs` (98 lines, language: `rust`, fileCategory: `code`)
+15. `crates/agent-core/src/edits/hashline/mod.rs` (3 lines, language: `rust`, fileCategory: `code`)
+16. `crates/agent-core/src/edits/hashline/parser.rs` (278 lines, language: `rust`, fileCategory: `code`)
+17. `crates/agent-core/src/edits/hashline/prompt.md` (88 lines, language: `markdown`, fileCategory: `docs`)
+18. `crates/agent-core/src/edits/metadata.rs` (133 lines, language: `rust`, fileCategory: `code`)
+19. `crates/agent-core/src/edits/mod.rs` (720 lines, language: `rust`, fileCategory: `code`)
+20. `crates/agent-core/src/effects.rs` (593 lines, language: `rust`, fileCategory: `code`)
+21. `crates/agent-core/src/harness.rs` (1088 lines, language: `rust`, fileCategory: `code`)
+22. `crates/agent-core/src/hooks/external.rs` (713 lines, language: `rust`, fileCategory: `code`)
+23. `crates/agent-core/src/hooks/mod.rs` (48 lines, language: `rust`, fileCategory: `code`)
+24. `crates/agent-core/src/hooks/types.rs` (166 lines, language: `rust`, fileCategory: `code`)
+25. `crates/agent-core/src/lib.rs` (45 lines, language: `rust`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

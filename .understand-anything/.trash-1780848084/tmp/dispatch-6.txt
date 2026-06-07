@@ -1,0 +1,34 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `6/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-6.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"docs/cc-compaction-research.md":[],"docs/cc-source-research.md":[],"docs/changelog.md":[],"docs/claude-code-后台执行机制.md":[],"docs/compaction.md":[],"docs/heb-cli-debug.md":[],"docs/hebisland-design.html":[],"docs/hebisland-spec.md":[],"docs/hebisland.md":[],"docs/shadow-tuner.html":[],"docs/权限沙箱-调研.md":[],"docs/架构.md":[],"docs/记忆系统实现计划.md":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `docs/cc-compaction-research.md` (270 lines, language: `markdown`, fileCategory: `docs`)
+2. `docs/cc-source-research.md` (62 lines, language: `markdown`, fileCategory: `docs`)
+3. `docs/changelog.md` (6265 lines, language: `markdown`, fileCategory: `docs`)
+4. `docs/claude-code-后台执行机制.md` (775 lines, language: `markdown`, fileCategory: `docs`)
+5. `docs/compaction.md` (251 lines, language: `markdown`, fileCategory: `docs`)
+6. `docs/heb-cli-debug.md` (678 lines, language: `markdown`, fileCategory: `docs`)
+7. `docs/hebisland-design.html` (1170 lines, language: `html`, fileCategory: `markup`)
+8. `docs/hebisland-spec.md` (414 lines, language: `markdown`, fileCategory: `docs`)
+9. `docs/hebisland.md` (417 lines, language: `markdown`, fileCategory: `docs`)
+10. `docs/shadow-tuner.html` (318 lines, language: `html`, fileCategory: `markup`)
+11. `docs/权限沙箱-调研.md` (1244 lines, language: `markdown`, fileCategory: `docs`)
+12. `docs/架构.md` (3960 lines, language: `markdown`, fileCategory: `docs`)
+13. `docs/记忆系统实现计划.md` (225 lines, language: `markdown`, fileCategory: `docs`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

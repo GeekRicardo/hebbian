@@ -1,0 +1,118 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 4,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "apps/pages/packages/dashboard/index.html",
+      "language": "html",
+      "fileCategory": "markup",
+      "totalLines": 19,
+      "nonEmptyLines": 19,
+      "metrics": {}
+    },
+    {
+      "path": "apps/pages/packages/dashboard/package.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 46,
+      "nonEmptyLines": 46,
+      "sections": [
+        {
+          "heading": "name",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "private",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "version",
+          "level": 1,
+          "line": 4
+        },
+        {
+          "heading": "type",
+          "level": 1,
+          "line": 5
+        },
+        {
+          "heading": "scripts",
+          "level": 1,
+          "line": 6
+        },
+        {
+          "heading": "dependencies",
+          "level": 1,
+          "line": 17
+        },
+        {
+          "heading": "devDependencies",
+          "level": 1,
+          "line": 34
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.app.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 24,
+      "nonEmptyLines": 22,
+      "sections": [
+        {
+          "heading": "compilerOptions",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "include",
+          "level": 1,
+          "line": 23
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 4,
+      "nonEmptyLines": 4,
+      "sections": [
+        {
+          "heading": "files",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "references",
+          "level": 1,
+          "line": 3
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `13/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-13.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/desktop/icons/icon.icns":[],"apps/desktop/icons/tray-frame-01.rgba":[],"apps/desktop/icons/tray-frame-02.rgba":[],"apps/desktop/icons/tray-frame-03.rgba":[],"apps/desktop/icons/tray-frame-04.rgba":[],"apps/desktop/icons/tray-frame-05.rgba":[],"apps/desktop/icons/tray-frame-06.rgba":[],"apps/desktop/icons/tray-frame-07.rgba":[],"apps/desktop/icons/tray-frame-08.rgba":[],"apps/desktop/icons/tray-frame-09.rgba":[],"apps/desktop/postcss.config.cjs":[],"apps/desktop/src/chat.rs":[],"apps/desktop/src/engine/context.rs":[],"apps/desktop/src/engine/mod.rs":[],"apps/desktop/src/engine/types.rs":[],"apps/desktop/src/error.rs":[],"apps/desktop/src/force_automode.rs":[],"apps/desktop/src/hebisland_client.rs":[],"apps/desktop/src/hitl.rs":[],"apps/desktop/src/lib.rs":[],"apps/desktop/src/main.rs":[],"apps/desktop/src/window_control.rs":[],"apps/desktop/tailwind.config.cjs":[],"apps/desktop/vite.config.ts":[],"apps/island-mac/Package.swift":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/desktop/icons/icon.icns` (990 lines, language: `icns`, fileCategory: `code`)
+2. `apps/desktop/icons/tray-frame-01.rgba` (6 lines, language: `rgba`, fileCategory: `code`)
+3. `apps/desktop/icons/tray-frame-02.rgba` (8 lines, language: `rgba`, fileCategory: `code`)
+4. `apps/desktop/icons/tray-frame-03.rgba` (11 lines, language: `rgba`, fileCategory: `code`)
+5. `apps/desktop/icons/tray-frame-04.rgba` (13 lines, language: `rgba`, fileCategory: `code`)
+6. `apps/desktop/icons/tray-frame-05.rgba` (15 lines, language: `rgba`, fileCategory: `code`)
+7. `apps/desktop/icons/tray-frame-06.rgba` (7 lines, language: `rgba`, fileCategory: `code`)
+8. `apps/desktop/icons/tray-frame-07.rgba` (11 lines, language: `rgba`, fileCategory: `code`)
+9. `apps/desktop/icons/tray-frame-08.rgba` (8 lines, language: `rgba`, fileCategory: `code`)
+10. `apps/desktop/icons/tray-frame-09.rgba` (7 lines, language: `rgba`, fileCategory: `code`)
+11. `apps/desktop/postcss.config.cjs` (6 lines, language: `javascript`, fileCategory: `code`)
+12. `apps/desktop/src/chat.rs` (3615 lines, language: `rust`, fileCategory: `code`)
+13. `apps/desktop/src/engine/context.rs` (193 lines, language: `rust`, fileCategory: `code`)
+14. `apps/desktop/src/engine/mod.rs` (327 lines, language: `rust`, fileCategory: `code`)
+15. `apps/desktop/src/engine/types.rs` (79 lines, language: `rust`, fileCategory: `code`)
+16. `apps/desktop/src/error.rs` (1 lines, language: `rust`, fileCategory: `code`)
+17. `apps/desktop/src/force_automode.rs` (37 lines, language: `rust`, fileCategory: `code`)
+18. `apps/desktop/src/hebisland_client.rs` (175 lines, language: `rust`, fileCategory: `code`)
+19. `apps/desktop/src/hitl.rs` (213 lines, language: `rust`, fileCategory: `code`)
+20. `apps/desktop/src/lib.rs` (2795 lines, language: `rust`, fileCategory: `code`)
+21. `apps/desktop/src/main.rs` (5 lines, language: `rust`, fileCategory: `code`)
+22. `apps/desktop/src/window_control.rs` (507 lines, language: `rust`, fileCategory: `code`)
+23. `apps/desktop/tailwind.config.cjs` (68 lines, language: `javascript`, fileCategory: `code`)
+24. `apps/desktop/vite.config.ts` (60 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/island-mac/Package.swift` (24 lines, language: `swift`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

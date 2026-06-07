@@ -1,0 +1,125 @@
+[
+  {
+    "order": 1,
+    "title": "项目概览",
+    "description": "从 README 和 Cargo workspace 配置开始，了解 Hebbian 的整体架构：一个本地优先的 AI agent 框架，包含 Desktop、CLI 和 Web Server 三个 surface。",
+    "nodeIds": [
+      "document:README.md",
+      "config:Cargo.toml",
+      "document:CLAUDE.md"
+    ]
+  },
+  {
+    "order": 2,
+    "title": "协议与类型基础",
+    "description": "理解跨所有 surface 共享的协议层：消息提交、上下文、权限、事件和 ID 生成。这是整个系统的通信基础。",
+    "nodeIds": [
+      "file:crates/protocol/src/lib.rs",
+      "file:crates/protocol/src/submission.rs",
+      "file:crates/protocol/src/context.rs",
+      "file:crates/protocol/src/event.rs",
+      "file:crates/protocol/src/permission.rs"
+    ]
+  },
+  {
+    "order": 3,
+    "title": "Agent 核心引擎",
+    "description": "深入核心 agent 循环：从用户消息到模型调用、工具执行、权限审批的完整流程。理解 dispatch、hooks 和上下文压缩。",
+    "nodeIds": [
+      "file:crates/agent-core/src/agent_loop.rs",
+      "file:crates/agent-core/src/dispatch.rs",
+      "file:crates/agent-core/src/harness.rs",
+      "file:crates/agent-core/src/effects.rs",
+      "file:crates/agent-core/src/lib.rs"
+    ]
+  },
+  {
+    "order": 4,
+    "title": "工具系统与 MCP",
+    "description": "浏览内置工具的定义层和 MCP 外部工具集成。了解工具如何通过 definition 注册并通过 harness 调度。",
+    "nodeIds": [
+      "file:crates/agent-core/src/definition.rs",
+      "file:crates/agent-core/src/automode.rs",
+      "file:crates/agent-core/src/run_mode.rs",
+      "file:crates/agent-core/src/rules.rs"
+    ]
+  },
+  {
+    "order": 5,
+    "title": "模型网关",
+    "description": "了解多供应商模型适配：通过 providers 和 protocols 模块支持 OpenAI/Anthropic/Gemini 的统一接口。",
+    "nodeIds": [
+      "file:crates/model-gateway/src/lib.rs",
+      "file:crates/model-gateway/src/client.rs",
+      "file:crates/model-gateway/src/config.rs",
+      "file:crates/model-gateway/src/types.rs",
+      "file:crates/model-gateway/src/context_window.rs"
+    ]
+  },
+  {
+    "order": 6,
+    "title": "Desktop 应用入口",
+    "description": "Tauri 2 桌面应用的启动流程：Rust 后端初始化、前端 React 挂载、Tauri bridge 通信。",
+    "nodeIds": [
+      "file:apps/desktop/src/main.rs",
+      "file:apps/desktop/src/lib.rs",
+      "file:apps/desktop/frontend/src/App.tsx",
+      "file:apps/desktop/frontend/src/desktop/bridge/tauri.ts"
+    ]
+  },
+  {
+    "order": 7,
+    "title": "Desktop UI 核心组件",
+    "description": "聊天界面的核心组件：消息气泡、输入框、权限审批弹窗。这些构成了用户交互的主界面。",
+    "nodeIds": [
+      "file:apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx",
+      "file:apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx"
+    ]
+  },
+  {
+    "order": 8,
+    "title": "状态管理",
+    "description": "前端状态管理使用 Zustand store：chatStore 管理消息流、conversationStore 管理会话列表。",
+    "nodeIds": []
+  },
+  {
+    "order": 9,
+    "title": "CLI 命令行界面",
+    "description": "Rust CLI 客户端：支持交互式 REPL、单次查询和 JSON 多轮上下文模式。包含 TUI 终端界面。",
+    "nodeIds": [
+      "file:apps/cli/src/main.rs",
+      "file:apps/cli/src/daemon.rs",
+      "file:apps/cli/src/render.rs",
+      "file:apps/cli/src/session.rs",
+      "file:apps/cli/src/tui/app.rs"
+    ]
+  },
+  {
+    "order": 10,
+    "title": "HebIsland 灵动岛",
+    "description": "macOS 原生 Swift 悬浮窗应用，通过 IPC 与 Hebbian daemon 通信。",
+    "nodeIds": [
+      "file:apps/island-mac/Sources/HebIsland/CardView.swift"
+    ]
+  },
+  {
+    "order": 11,
+    "title": "知识图谱 Dashboard",
+    "description": "understand-anything 可视化仪表盘：使用 ReactFlow 渲染代码知识图谱，支持搜索、过滤和引导游览。",
+    "nodeIds": [
+      "file:apps/pages/packages/dashboard/src/App.tsx",
+      "file:apps/pages/packages/dashboard/src/store.ts"
+    ]
+  },
+  {
+    "order": 12,
+    "title": "存储与持久化",
+    "description": "数据持久化层：SQLite 存储对话、权限、计划和记忆，支持自动迁移和跨 surface 共享。",
+    "nodeIds": [
+      "file:crates/agent-core/src/storage/mod.rs",
+      "file:crates/agent-core/src/storage/permissions.rs",
+      "file:crates/agent-core/src/storage/memory.rs"
+    ]
+  }
+]

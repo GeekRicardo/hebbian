@@ -1,0 +1,38 @@
+{
+  "batchIndex": 2,
+  "totalBatches": 23,
+  "fileCount": 4,
+  "files": [
+    {
+      "path": ".env.example",
+      "sizeLines": 41,
+      "language": "config",
+      "fileCategory": "config"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sizeLines": 344,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Cargo.toml",
+      "sizeLines": 12,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "README.md",
+      "sizeLines": 336,
+      "language": "markdown",
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    ".env.example": [],
+    "CLAUDE.md": [],
+    "Cargo.toml": [],
+    "README.md": []
+  },
+  "neighborMap": {}
+}

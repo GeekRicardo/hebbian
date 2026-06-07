@@ -1,0 +1,185 @@
+{
+  "batchIndex": 22,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "crates/common/Cargo.toml",
+      "sizeLines": 10,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/common/src/attachments.rs",
+      "sizeLines": 51,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/error.rs",
+      "sizeLines": 27,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/lib.rs",
+      "sizeLines": 14,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/reasoning.rs",
+      "sizeLines": 433,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/runtime.rs",
+      "sizeLines": 129,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/storage/mod.rs",
+      "sizeLines": 39,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/Cargo.toml",
+      "sizeLines": 29,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "sizeLines": 394,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek.rs",
+      "sizeLines": 149,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/mod.rs",
+      "sizeLines": 1122,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/refresh.rs",
+      "sizeLines": 167,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/client.rs",
+      "sizeLines": 29,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/config.rs",
+      "sizeLines": 361,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/context_window.rs",
+      "sizeLines": 318,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/discovery/mod.rs",
+      "sizeLines": 202,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/health.rs",
+      "sizeLines": 69,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/instrument.rs",
+      "sizeLines": 74,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/lib.rs",
+      "sizeLines": 38,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/anthropic.rs",
+      "sizeLines": 1089,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/deepseek.rs",
+      "sizeLines": 1613,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/gemini.rs",
+      "sizeLines": 275,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/mod.rs",
+      "sizeLines": 4,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/openai.rs",
+      "sizeLines": 1649,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/anthropic.rs",
+      "sizeLines": 407,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/common/Cargo.toml": [],
+    "crates/common/src/attachments.rs": [],
+    "crates/common/src/error.rs": [],
+    "crates/common/src/lib.rs": [],
+    "crates/common/src/reasoning.rs": [],
+    "crates/common/src/runtime.rs": [],
+    "crates/common/src/storage/mod.rs": [],
+    "crates/model-gateway/Cargo.toml": [],
+    "crates/model-gateway/src/auth/deepseek_pow.rs": [],
+    "crates/model-gateway/src/auth/deepseek.rs": [],
+    "crates/model-gateway/src/auth/mod.rs": [],
+    "crates/model-gateway/src/auth/refresh.rs": [],
+    "crates/model-gateway/src/client.rs": [],
+    "crates/model-gateway/src/config.rs": [],
+    "crates/model-gateway/src/context_window.rs": [],
+    "crates/model-gateway/src/discovery/mod.rs": [],
+    "crates/model-gateway/src/health.rs": [],
+    "crates/model-gateway/src/instrument.rs": [],
+    "crates/model-gateway/src/lib.rs": [],
+    "crates/model-gateway/src/protocols/anthropic.rs": [],
+    "crates/model-gateway/src/protocols/deepseek.rs": [],
+    "crates/model-gateway/src/protocols/gemini.rs": [],
+    "crates/model-gateway/src/protocols/mod.rs": [],
+    "crates/model-gateway/src/protocols/openai.rs": [],
+    "crates/model-gateway/src/providers/anthropic.rs": []
+  },
+  "neighborMap": {}
+}

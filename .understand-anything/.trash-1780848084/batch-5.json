@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "file:apps/pages/packages/dashboard/index.html",
+      "type": "file",
+      "name": "index.html",
+      "filePath": "apps/pages/packages/dashboard/index.html",
+      "summary": "\"Understand Anything\" 仪表盘的 HTML 入口页面，加载 Google Fonts（DM Serif Display、Inter、JetBrains Mono）并挂载 React 根节点，通过 ESM 引入 main.tsx 启动应用。",
+      "tags": ["入口点", "markup", "react", "仪表盘"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/pages/packages/dashboard/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "apps/pages/packages/dashboard/package.json",
+      "summary": "Dashboard 包的 npm 配置，声明了 React 19、@xyflow/react、graphology、zustand 等核心依赖，使用 Vite 构建并支持多种构建模式（dev、demo、GitHub Pages 静态部署）。",
+      "tags": ["配置", "依赖管理", "构建系统", "vite", "monorepo"],
+      "complexity": "moderate",
+      "languageNotes": "依赖 workspace:* 引用 @understand-anything/core，说明这是 monorepo 内部包间的依赖关系。"
+    },
+    {
+      "id": "config:apps/pages/packages/dashboard/tsconfig.app.json",
+      "type": "config",
+      "name": "tsconfig.app.json",
+      "filePath": "apps/pages/packages/dashboard/tsconfig.app.json",
+      "summary": "Dashboard 应用的 TypeScript 编译配置，启用 strict 模式和 react-jsx 转换，目标 ES2020，使用 bundler 模块解析策略，仅编译 src/ 目录。",
+      "tags": ["配置", "typescript", "strict模式", "编译器选项"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/pages/packages/dashboard/tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "apps/pages/packages/dashboard/tsconfig.json",
+      "summary": "Dashboard 包的 TypeScript 项目根配置，通过 references 指向 tsconfig.app.json，采用 project references 模式实现增量编译。",
+      "tags": ["配置", "typescript", "项目引用", "增量编译"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "config:apps/pages/packages/dashboard/tsconfig.json",
+      "target": "config:apps/pages/packages/dashboard/tsconfig.app.json",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ]
+}

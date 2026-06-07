@@ -1,0 +1,23 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian`
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `2/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-2.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{".env.example":[],"CLAUDE.md":[],"Cargo.toml":[],"README.md":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch:
+1. `.env.example` (41 lines, language: `config`, fileCategory: `config`)
+2. `CLAUDE.md` (344 lines, language: `markdown`, fileCategory: `docs`)
+3. `Cargo.toml` (12 lines, language: `toml`, fileCategory: `config`)
+4. `README.md` (336 lines, language: `markdown`, fileCategory: `docs`)

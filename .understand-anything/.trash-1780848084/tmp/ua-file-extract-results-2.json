@@ -1,0 +1,284 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 4,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": ".env.example",
+      "language": "config",
+      "fileCategory": "config",
+      "totalLines": 41,
+      "nonEmptyLines": 35,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "CLAUDE.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 344,
+      "nonEmptyLines": 240,
+      "sections": [
+        {
+          "heading": "Hebbian — Agent 协作准则",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "唯一设计准则",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "⚠️ 任何修改前必做",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "步骤 1：定位架构.md 中的对应章节",
+          "level": 3,
+          "line": 17
+        },
+        {
+          "heading": "步骤 2：做设计影响评估",
+          "level": 3,
+          "line": 38
+        },
+        {
+          "heading": "步骤 3：实施",
+          "level": 3,
+          "line": 70
+        },
+        {
+          "heading": "步骤 3.1：UI 文案纪律（给用户看的字必须是人话）",
+          "level": 3,
+          "line": 93
+        },
+        {
+          "heading": "步骤 4：验证",
+          "level": 3,
+          "line": 122
+        },
+        {
+          "heading": "步骤 5：追加 changelog",
+          "level": 3,
+          "line": 139
+        },
+        {
+          "heading": "与用户讨论的规则",
+          "level": 2,
+          "line": 155
+        },
+        {
+          "heading": "开发命令",
+          "level": 2,
+          "line": 173
+        },
+        {
+          "heading": "⚠️ 修 bug 必经流程：先复现 → 修 → 再复现验证",
+          "level": 2,
+          "line": 200
+        },
+        {
+          "heading": "阶段 A：先复现",
+          "level": 3,
+          "line": 211
+        },
+        {
+          "heading": "A.1 选 surface",
+          "level": 4,
+          "line": 213
+        },
+        {
+          "heading": "A.2 读 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)",
+          "level": 4,
+          "line": 223
+        },
+        {
+          "heading": "A.3 跑复现脚本，确认看到 bug 现象",
+          "level": 4,
+          "line": 227
+        },
+        {
+          "heading": "阶段 B：修完后再验证",
+          "level": 3,
+          "line": 246
+        },
+        {
+          "heading": "B.1 用同一份复现脚本重跑",
+          "level": 4,
+          "line": 248
+        },
+        {
+          "heading": "B.2 能固化成回归测试就固化",
+          "level": 4,
+          "line": 254
+        },
+        {
+          "heading": "B.3 交付给用户时报告 = 修了什么 + 怎么验的",
+          "level": 4,
+          "line": 260
+        },
+        {
+          "heading": "现有 `heb` 命令不够用时：允许新增",
+          "level": 2,
+          "line": 270
+        },
+        {
+          "heading": "实现完后必须同步更新",
+          "level": 3,
+          "line": 294
+        },
+        {
+          "heading": "Git commit / 提交规则",
+          "level": 2,
+          "line": 306
+        },
+        {
+          "heading": "不允许 `git stash`",
+          "level": 3,
+          "line": 308
+        },
+        {
+          "heading": "一次提交 = 一次完整改动",
+          "level": 3,
+          "line": 314
+        },
+        {
+          "heading": "commit message 不带 AI 署名",
+          "level": 3,
+          "line": 323
+        },
+        {
+          "heading": "示例",
+          "level": 3,
+          "line": 327
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 27
+      }
+    },
+    {
+      "path": "Cargo.toml",
+      "language": "toml",
+      "fileCategory": "config",
+      "totalLines": 12,
+      "nonEmptyLines": 12,
+      "sections": [
+        {
+          "heading": "workspace",
+          "level": 1,
+          "line": 1
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 336,
+      "nonEmptyLines": 276,
+      "sections": [
+        {
+          "heading": "Hebbian",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "快速开始",
+          "level": 2,
+          "line": 14
+        },
+        {
+          "heading": "环境依赖",
+          "level": 3,
+          "line": 16
+        },
+        {
+          "heading": "Desktop 模式",
+          "level": 3,
+          "line": 25
+        },
+        {
+          "heading": "CLI / TUI 模式",
+          "level": 3,
+          "line": 34
+        },
+        {
+          "heading": "单项检查",
+          "level": 3,
+          "line": 64
+        },
+        {
+          "heading": "功能",
+          "level": 2,
+          "line": 74
+        },
+        {
+          "heading": "架构",
+          "level": 2,
+          "line": 92
+        },
+        {
+          "heading": "目录结构",
+          "level": 2,
+          "line": 127
+        },
+        {
+          "heading": "协议（事件流）",
+          "level": 2,
+          "line": 223
+        },
+        {
+          "heading": "工具系统",
+          "level": 2,
+          "line": 262
+        },
+        {
+          "heading": "数据存储",
+          "level": 2,
+          "line": 274
+        },
+        {
+          "heading": "使用 Desktop",
+          "level": 2,
+          "line": 297
+        },
+        {
+          "heading": "当前进度（M1）",
+          "level": 2,
+          "line": 308
+        },
+        {
+          "heading": "License",
+          "level": 2,
+          "line": 330
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 15
+      }
+    }
+  ]
+}

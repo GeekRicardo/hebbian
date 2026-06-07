@@ -1,0 +1,185 @@
+{
+  "batchIndex": 16,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "sizeLines": 180,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "sizeLines": 79,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "sizeLines": 253,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "sizeLines": 43,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "sizeLines": 21,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "sizeLines": 71,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/index.css",
+      "sizeLines": 276,
+      "language": "css",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/en.ts",
+      "sizeLines": 271,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "sizeLines": 31,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ja.ts",
+      "sizeLines": 271,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ko.ts",
+      "sizeLines": 271,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "sizeLines": 271,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh.ts",
+      "sizeLines": 271,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/main.tsx",
+      "sizeLines": 10,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/store.ts",
+      "sizeLines": 791,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/index.ts",
+      "sizeLines": 5,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "sizeLines": 183,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "sizeLines": 65,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "sizeLines": 106,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "sizeLines": 36,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "sizeLines": 131,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "sizeLines": 79,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "sizeLines": 106,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "sizeLines": 196,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "sizeLines": 118,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/pages/packages/dashboard/src/components/ThemePicker.tsx": [],
+    "apps/pages/packages/dashboard/src/components/TokenGate.tsx": [],
+    "apps/pages/packages/dashboard/src/components/WarningBanner.tsx": [],
+    "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx": [],
+    "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts": [],
+    "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts": [],
+    "apps/pages/packages/dashboard/src/index.css": [],
+    "apps/pages/packages/dashboard/src/locales/en.ts": [],
+    "apps/pages/packages/dashboard/src/locales/index.ts": [],
+    "apps/pages/packages/dashboard/src/locales/ja.ts": [],
+    "apps/pages/packages/dashboard/src/locales/ko.ts": [],
+    "apps/pages/packages/dashboard/src/locales/zh-TW.ts": [],
+    "apps/pages/packages/dashboard/src/locales/zh.ts": [],
+    "apps/pages/packages/dashboard/src/main.tsx": [],
+    "apps/pages/packages/dashboard/src/store.ts": [],
+    "apps/pages/packages/dashboard/src/themes/index.ts": [],
+    "apps/pages/packages/dashboard/src/themes/presets.ts": [],
+    "apps/pages/packages/dashboard/src/themes/theme-engine.ts": [],
+    "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx": [],
+    "apps/pages/packages/dashboard/src/themes/types.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts": []
+  },
+  "neighborMap": {}
+}

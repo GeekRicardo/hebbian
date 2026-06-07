@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "Hebbian 本地环境变量模板，涵盖日志级别（RUST_LOG）、OTLP 追踪导出（Langfuse / 本地 collector）、模型 IO 调试落盘等运行时配置项。由 dotenvy 在 Desktop 启动时加载。",
+      "tags": ["配置模板", "环境变量", "observability", "infrastructure"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "AI agent 协作准则文档，规定以 docs/架构.md 为唯一设计锚点的 5 步修改流程（定位章节→影响评估→实施→验证→changelog），并包含 bug 复现验证纪律、UI 文案规范、CLI 命令扩展指南和 Git 提交规则。",
+      "tags": ["文档", "开发规范", "协作流程", "entry-point"],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "Cargo.toml",
+      "summary": "Rust workspace 根配置，定义 8 个 workspace member：3 个 app（desktop、cli、web-server）和 5 个 crate（agent-core、model-gateway、observability、common、protocol），使用 resolver v2。",
+      "tags": ["workspace", "构建系统", "configuration", "rust"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目主文档，介绍 Hebbian 的定位（轻量本地优先 AI agent 框架）、快速开始（Desktop / CLI 两种 surface）、功能列表、架构图、目录结构、协议事件流设计、工具系统分类、数据存储布局及 M1 里程碑进度。",
+      "tags": ["文档", "entry-point", "overview", "架构说明"],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:CLAUDE.md",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:Cargo.toml",
+      "target": "config:.env.example",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

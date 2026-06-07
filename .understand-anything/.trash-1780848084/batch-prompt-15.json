@@ -1,0 +1,185 @@
+{
+  "batchIndex": 15,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "sizeLines": 190,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "sizeLines": 66,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "sizeLines": 66,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "sizeLines": 279,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "sizeLines": 279,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "sizeLines": 214,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "sizeLines": 219,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "sizeLines": 52,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "sizeLines": 1581,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "sizeLines": 105,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "sizeLines": 292,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "sizeLines": 104,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "sizeLines": 72,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "sizeLines": 230,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "sizeLines": 81,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "sizeLines": 266,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "sizeLines": 245,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "sizeLines": 539,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "sizeLines": 124,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "sizeLines": 311,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "sizeLines": 46,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "sizeLines": 64,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "sizeLines": 222,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "sizeLines": 191,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "sizeLines": 53,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/pages/packages/dashboard/src/components/CustomNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/DiffToggle.tsx": [],
+    "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ExportMenu.tsx": [],
+    "apps/pages/packages/dashboard/src/components/FileExplorer.tsx": [],
+    "apps/pages/packages/dashboard/src/components/FilterPanel.tsx": [],
+    "apps/pages/packages/dashboard/src/components/FlowNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/GraphView.tsx": [],
+    "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx": [],
+    "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx": [],
+    "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/LayerLegend.tsx": [],
+    "apps/pages/packages/dashboard/src/components/LearnPanel.tsx": [],
+    "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx": [],
+    "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx": [],
+    "apps/pages/packages/dashboard/src/components/MobileLayout.tsx": [],
+    "apps/pages/packages/dashboard/src/components/NodeInfo.tsx": [],
+    "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx": [],
+    "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx": [],
+    "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx": [],
+    "apps/pages/packages/dashboard/src/components/PortalNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx": [],
+    "apps/pages/packages/dashboard/src/components/SearchBar.tsx": [],
+    "apps/pages/packages/dashboard/src/components/StepNode.tsx": []
+  },
+  "neighborMap": {}
+}

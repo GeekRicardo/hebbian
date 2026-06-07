@@ -1,0 +1,19 @@
+{
+  "projectRoot": "/Users/ricardo/code/ricardo/rust/hebbian",
+  "batchFiles": [
+    {"path": "docs/cc-compaction-research.md", "language": "markdown", "sizeLines": 270, "fileCategory": "docs"},
+    {"path": "docs/cc-source-research.md", "language": "markdown", "sizeLines": 62, "fileCategory": "docs"},
+    {"path": "docs/changelog.md", "language": "markdown", "sizeLines": 6265, "fileCategory": "docs"},
+    {"path": "docs/claude-code-后台执行机制.md", "language": "markdown", "sizeLines": 775, "fileCategory": "docs"},
+    {"path": "docs/compaction.md", "language": "markdown", "sizeLines": 251, "fileCategory": "docs"},
+    {"path": "docs/heb-cli-debug.md", "language": "markdown", "sizeLines": 678, "fileCategory": "docs"},
+    {"path": "docs/hebisland-design.html", "language": "html", "sizeLines": 1170, "fileCategory": "markup"},
+    {"path": "docs/hebisland-spec.md", "language": "markdown", "sizeLines": 414, "fileCategory": "docs"},
+    {"path": "docs/hebisland.md", "language": "markdown", "sizeLines": 417, "fileCategory": "docs"},
+    {"path": "docs/shadow-tuner.html", "language": "html", "sizeLines": 318, "fileCategory": "markup"},
+    {"path": "docs/权限沙箱-调研.md", "language": "markdown", "sizeLines": 1244, "fileCategory": "docs"},
+    {"path": "docs/架构.md", "language": "markdown", "sizeLines": 3960, "fileCategory": "docs"},
+    {"path": "docs/记忆系统实现计划.md", "language": "markdown", "sizeLines": 225, "fileCategory": "docs"}
+  ],
+  "batchImportData": {"docs/cc-compaction-research.md":[],"docs/cc-source-research.md":[],"docs/changelog.md":[],"docs/claude-code-后台执行机制.md":[],"docs/compaction.md":[],"docs/heb-cli-debug.md":[],"docs/hebisland-design.html":[],"docs/hebisland-spec.md":[],"docs/hebisland.md":[],"docs/shadow-tuner.html":[],"docs/权限沙箱-调研.md":[],"docs/架构.md":[],"docs/记忆系统实现计划.md":[]}
+}

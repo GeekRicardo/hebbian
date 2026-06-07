@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {
+      "id": "pipeline:.github/workflows/deploy-pages.yml",
+      "type": "pipeline",
+      "name": "deploy-pages.yml",
+      "filePath": ".github/workflows/deploy-pages.yml",
+      "summary": "GitHub Actions CI/CD 工作流，在 main 分支推送时自动构建 Understand-Anything Dashboard 并部署到 GitHub Pages。触发路径包括知识图谱数据、apps/pages 目录及工作流自身。",
+      "tags": ["ci-cd", "部署", "github-pages", "自动化构建"],
+      "complexity": "moderate",
+      "languageNotes": "使用 concurrency 组避免并行部署冲突，force_orphan 保持 gh-pages 分支干净无历史。"
+    }
+  ],
+  "edges": []
+}

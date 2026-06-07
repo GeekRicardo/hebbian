@@ -1,0 +1,185 @@
+{
+  "batchIndex": 17,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+      "sizeLines": 20,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "sizeLines": 156,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "sizeLines": 208,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "sizeLines": 244,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "sizeLines": 88,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "sizeLines": 39,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "sizeLines": 266,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "sizeLines": 47,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "sizeLines": 47,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/vite-env.d.ts",
+      "sizeLines": 1,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.demo.ts",
+      "sizeLines": 49,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ghpages.ts",
+      "sizeLines": 31,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.static.ts",
+      "sizeLines": 12,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ts",
+      "sizeLines": 362,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/Cargo.toml",
+      "sizeLines": 42,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/web-server/src/chat_helpers.rs",
+      "sizeLines": 136,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/events.rs",
+      "sizeLines": 371,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/main.rs",
+      "sizeLines": 114,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/protocol.rs",
+      "sizeLines": 74,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/server.rs",
+      "sizeLines": 1761,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/session.rs",
+      "sizeLines": 583,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/Cargo.toml",
+      "sizeLines": 37,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/agent-core/examples/permission_probe.rs",
+      "sizeLines": 1376,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/examples/scan_skill_dir.rs",
+      "sizeLines": 74,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/prompts/automode_judge.md",
+      "sizeLines": 159,
+      "language": "markdown",
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/containers.ts": [],
+    "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts": [],
+    "apps/pages/packages/dashboard/src/utils/elk-layout.ts": [],
+    "apps/pages/packages/dashboard/src/utils/filters.ts": [],
+    "apps/pages/packages/dashboard/src/utils/layerStats.ts": [],
+    "apps/pages/packages/dashboard/src/utils/layout.ts": [],
+    "apps/pages/packages/dashboard/src/utils/layout.worker.ts": [],
+    "apps/pages/packages/dashboard/src/utils/louvain.ts": [],
+    "apps/pages/packages/dashboard/src/vite-env.d.ts": [],
+    "apps/pages/packages/dashboard/vite.config.demo.ts": [],
+    "apps/pages/packages/dashboard/vite.config.ghpages.ts": [],
+    "apps/pages/packages/dashboard/vite.config.static.ts": [],
+    "apps/pages/packages/dashboard/vite.config.ts": [],
+    "apps/web-server/Cargo.toml": [],
+    "apps/web-server/src/chat_helpers.rs": [],
+    "apps/web-server/src/events.rs": [],
+    "apps/web-server/src/main.rs": [],
+    "apps/web-server/src/protocol.rs": [],
+    "apps/web-server/src/server.rs": [],
+    "apps/web-server/src/session.rs": [],
+    "crates/agent-core/Cargo.toml": [],
+    "crates/agent-core/examples/permission_probe.rs": [],
+    "crates/agent-core/examples/scan_skill_dir.rs": [],
+    "crates/agent-core/prompts/automode_judge.md": []
+  },
+  "neighborMap": {}
+}

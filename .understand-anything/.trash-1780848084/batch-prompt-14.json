@@ -1,0 +1,185 @@
+{
+  "batchIndex": 14,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "sizeLines": 63,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "sizeLines": 446,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "sizeLines": 62,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/main.swift",
+      "sizeLines": 82,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "sizeLines": 170,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "sizeLines": 112,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "sizeLines": 336,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "sizeLines": 111,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "sizeLines": 116,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "sizeLines": 180,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "sizeLines": 103,
+      "language": "swift",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/package.json",
+      "sizeLines": 23,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/core/src/index.ts",
+      "sizeLines": 14,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/schema.ts",
+      "sizeLines": 663,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/search.ts",
+      "sizeLines": 65,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/types.ts",
+      "sizeLines": 202,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/tsconfig.json",
+      "sizeLines": 20,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+      "sizeLines": 99,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+      "sizeLines": 80,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+      "sizeLines": 119,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/App.tsx",
+      "sizeLines": 715,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "sizeLines": 40,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "sizeLines": 783,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "sizeLines": 513,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "sizeLines": 101,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/island-mac/Sources/HebIsland/AppDelegate.swift": [],
+    "apps/island-mac/Sources/HebIsland/CardView.swift": [],
+    "apps/island-mac/Sources/HebIsland/DaemonProbe.swift": [],
+    "apps/island-mac/Sources/HebIsland/main.swift": [],
+    "apps/island-mac/Sources/HebIsland/NotificationManager.swift": [],
+    "apps/island-mac/Sources/HebIsland/NotifyClient.swift": [],
+    "apps/island-mac/Sources/HebIsland/PanelController.swift": [],
+    "apps/island-mac/Sources/HebIsland/Protocol.swift": [],
+    "apps/island-mac/Sources/HebIsland/ScreenResolver.swift": [],
+    "apps/island-mac/Sources/HebIsland/SocketServer.swift": [],
+    "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift": [],
+    "apps/pages/packages/core/package.json": [],
+    "apps/pages/packages/core/src/index.ts": [],
+    "apps/pages/packages/core/src/schema.ts": [],
+    "apps/pages/packages/core/src/search.ts": [],
+    "apps/pages/packages/core/src/types.ts": [],
+    "apps/pages/packages/core/tsconfig.json": [],
+    "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs": [],
+    "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs": [],
+    "apps/pages/packages/dashboard/scripts/bundle-graph.mjs": [],
+    "apps/pages/packages/dashboard/src/App.tsx": [],
+    "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ChatPanel.tsx": [],
+    "apps/pages/packages/dashboard/src/components/CodeViewer.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ContainerNode.tsx": []
+  },
+  "neighborMap": {}
+}

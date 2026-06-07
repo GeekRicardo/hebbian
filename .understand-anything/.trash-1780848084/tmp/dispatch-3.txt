@@ -1,0 +1,26 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `3/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-3.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/desktop/Cargo.toml":[],"apps/desktop/package.json":[],"apps/desktop/tauri.conf.json":[],"apps/desktop/tsconfig.json":[],"apps/desktop/tsconfig.node.json":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/desktop/Cargo.toml` (37 lines, language: `toml`, fileCategory: `config`)
+2. `apps/desktop/package.json` (39 lines, language: `json`, fileCategory: `config`)
+3. `apps/desktop/tauri.conf.json` (45 lines, language: `json`, fileCategory: `config`)
+4. `apps/desktop/tsconfig.json` (23 lines, language: `json`, fileCategory: `config`)
+5. `apps/desktop/tsconfig.node.json` (11 lines, language: `json`, fileCategory: `config`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

@@ -1,0 +1,101 @@
+{
+  "batchIndex": 6,
+  "totalBatches": 23,
+  "fileCount": 13,
+  "files": [
+    {
+      "path": "docs/cc-compaction-research.md",
+      "sizeLines": 270,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/cc-source-research.md",
+      "sizeLines": 62,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/changelog.md",
+      "sizeLines": 6265,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/claude-code-后台执行机制.md",
+      "sizeLines": 775,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/compaction.md",
+      "sizeLines": 251,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/heb-cli-debug.md",
+      "sizeLines": 678,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/hebisland-design.html",
+      "sizeLines": 1170,
+      "language": "html",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/hebisland-spec.md",
+      "sizeLines": 414,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/hebisland.md",
+      "sizeLines": 417,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/shadow-tuner.html",
+      "sizeLines": 318,
+      "language": "html",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/权限沙箱-调研.md",
+      "sizeLines": 1244,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/架构.md",
+      "sizeLines": 3960,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/记忆系统实现计划.md",
+      "sizeLines": 225,
+      "language": "markdown",
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "docs/cc-compaction-research.md": [],
+    "docs/cc-source-research.md": [],
+    "docs/changelog.md": [],
+    "docs/claude-code-后台执行机制.md": [],
+    "docs/compaction.md": [],
+    "docs/heb-cli-debug.md": [],
+    "docs/hebisland-design.html": [],
+    "docs/hebisland-spec.md": [],
+    "docs/hebisland.md": [],
+    "docs/shadow-tuner.html": [],
+    "docs/权限沙箱-调研.md": [],
+    "docs/架构.md": [],
+    "docs/记忆系统实现计划.md": []
+  },
+  "neighborMap": {}
+}

@@ -1,0 +1,2972 @@
+{
+  "batchFiles": [
+    {
+      "path": "crates/common/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 10,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/common/src/attachments.rs",
+      "language": "rust",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/error.rs",
+      "language": "rust",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/reasoning.rs",
+      "language": "rust",
+      "sizeLines": 433,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/runtime.rs",
+      "language": "rust",
+      "sizeLines": 129,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/storage/mod.rs",
+      "language": "rust",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 29,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "language": "rust",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek.rs",
+      "language": "rust",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/mod.rs",
+      "language": "rust",
+      "sizeLines": 1122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/refresh.rs",
+      "language": "rust",
+      "sizeLines": 167,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/client.rs",
+      "language": "rust",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/config.rs",
+      "language": "rust",
+      "sizeLines": 361,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/context_window.rs",
+      "language": "rust",
+      "sizeLines": 318,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/discovery/mod.rs",
+      "language": "rust",
+      "sizeLines": 202,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/health.rs",
+      "language": "rust",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/instrument.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/anthropic.rs",
+      "language": "rust",
+      "sizeLines": 1089,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/deepseek.rs",
+      "language": "rust",
+      "sizeLines": 1613,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/gemini.rs",
+      "language": "rust",
+      "sizeLines": 275,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/mod.rs",
+      "language": "rust",
+      "sizeLines": 4,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/openai.rs",
+      "language": "rust",
+      "sizeLines": 1649,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/anthropic.rs",
+      "language": "rust",
+      "sizeLines": 407,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "config:crates/common/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "crates/common/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "common"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/common/src/attachments.rs",
+      "type": "file",
+      "name": "attachments.rs",
+      "filePath": "crates/common/src/attachments.rs",
+      "summary": "模块 attachments",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/common/src/attachments.rs:MessageAttachment",
+      "type": "class",
+      "name": "MessageAttachment",
+      "filePath": "crates/common/src/attachments.rs",
+      "summary": "MessageAttachment 定义于 attachments.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/attachments.rs:as_text_block",
+      "type": "function",
+      "name": "as_text_block",
+      "filePath": "crates/common/src/attachments.rs",
+      "summary": "as_text_block 定义于 attachments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/attachments.rs:image_data_url",
+      "type": "function",
+      "name": "image_data_url",
+      "filePath": "crates/common/src/attachments.rs",
+      "summary": "image_data_url 定义于 attachments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/common/src/error.rs",
+      "type": "file",
+      "name": "error.rs",
+      "filePath": "crates/common/src/error.rs",
+      "summary": "模块 error",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:crates/common/src/error.rs:AppError",
+      "type": "class",
+      "name": "AppError",
+      "filePath": "crates/common/src/error.rs",
+      "summary": "AppError 定义于 error.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/error.rs:msg",
+      "type": "function",
+      "name": "msg",
+      "filePath": "crates/common/src/error.rs",
+      "summary": "msg 定义于 error.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/common/src/lib.rs",
+      "type": "file",
+      "name": "lib.rs",
+      "filePath": "crates/common/src/lib.rs",
+      "summary": "模块 lib",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/common/src/reasoning.rs",
+      "type": "file",
+      "name": "reasoning.rs",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "模型推理 / thinking 配置。",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/common/src/reasoning.rs:ReasoningEffort",
+      "type": "class",
+      "name": "ReasoningEffort",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "ReasoningEffort 定义于 reasoning.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_legacy_budget_tokens",
+      "type": "function",
+      "name": "anthropic_legacy_budget_tokens",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_legacy_budget_tokens 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_adaptive46_effort",
+      "type": "function",
+      "name": "anthropic_adaptive46_effort",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_adaptive46_effort 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_adaptive47_effort",
+      "type": "function",
+      "name": "anthropic_adaptive47_effort",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_adaptive47_effort 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_adaptive_effort_for_model",
+      "type": "function",
+      "name": "anthropic_adaptive_effort_for_model",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_adaptive_effort_for_model 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:deepseek_effort",
+      "type": "function",
+      "name": "deepseek_effort",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "deepseek_effort 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:openai_effort_for_model",
+      "type": "function",
+      "name": "openai_effort_for_model",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "openai_effort_for_model 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/common/src/reasoning.rs:ReasoningConfig",
+      "type": "class",
+      "name": "ReasoningConfig",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "ReasoningConfig 定义于 reasoning.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:is_enabled",
+      "type": "function",
+      "name": "is_enabled",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "is_enabled 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:effective_effort",
+      "type": "function",
+      "name": "effective_effort",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "effective_effort 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:wants_long_context",
+      "type": "function",
+      "name": "wants_long_context",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "wants_long_context 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/common/src/reasoning.rs:AnthropicThinkingMode",
+      "type": "class",
+      "name": "AnthropicThinkingMode",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "AnthropicThinkingMode 定义于 reasoning.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:normalize_model_id",
+      "type": "function",
+      "name": "normalize_model_id",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "normalize_model_id 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_thinking_mode",
+      "type": "function",
+      "name": "anthropic_thinking_mode",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_thinking_mode 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_supports_thinking",
+      "type": "function",
+      "name": "anthropic_supports_thinking",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_supports_thinking 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_long_context_uses_beta",
+      "type": "function",
+      "name": "anthropic_long_context_uses_beta",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_long_context_uses_beta 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:anthropic_exposes_long_context_toggle",
+      "type": "function",
+      "name": "anthropic_exposes_long_context_toggle",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "anthropic_exposes_long_context_toggle 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:openai_skips_reasoning",
+      "type": "function",
+      "name": "openai_skips_reasoning",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "openai_skips_reasoning 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:openai_supports_xhigh",
+      "type": "function",
+      "name": "openai_supports_xhigh",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "openai_supports_xhigh 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/reasoning.rs:openai_supports_reasoning",
+      "type": "function",
+      "name": "openai_supports_reasoning",
+      "filePath": "crates/common/src/reasoning.rs",
+      "summary": "openai_supports_reasoning 定义于 reasoning.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/common/src/runtime.rs",
+      "type": "file",
+      "name": "runtime.rs",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "运行时注入的 user message。streaming 中前端\"立即发送\"会推一条进",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/common/src/runtime.rs:PendingUserInput",
+      "type": "class",
+      "name": "PendingUserInput",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "PendingUserInput 定义于 runtime.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/common/src/runtime.rs:RuntimeHandle",
+      "type": "class",
+      "name": "RuntimeHandle",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "RuntimeHandle 定义于 runtime.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:register",
+      "type": "function",
+      "name": "register",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "register 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:register_for_session",
+      "type": "function",
+      "name": "register_for_session",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "register_for_session 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:cancel",
+      "type": "function",
+      "name": "cancel",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "cancel 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:cancel_all",
+      "type": "function",
+      "name": "cancel_all",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "cancel_all 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:has_active_runs",
+      "type": "function",
+      "name": "has_active_runs",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "has_active_runs 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:has_active_run_for_session",
+      "type": "function",
+      "name": "has_active_run_for_session",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "has_active_run_for_session 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:inject_pending_input",
+      "type": "function",
+      "name": "inject_pending_input",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "inject_pending_input 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:close_pending_inputs",
+      "type": "function",
+      "name": "close_pending_inputs",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "close_pending_inputs 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:close_pending_inputs_handle",
+      "type": "function",
+      "name": "close_pending_inputs_handle",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "close_pending_inputs_handle 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:unregister",
+      "type": "function",
+      "name": "unregister",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "unregister 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/runtime.rs:is_cancelled",
+      "type": "function",
+      "name": "is_cancelled",
+      "filePath": "crates/common/src/runtime.rs",
+      "summary": "is_cancelled 定义于 runtime.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/common/src/storage/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "crates/common/src/storage/mod.rs",
+      "summary": "通用 JSON 读写 helper + 仅供 model-gateway 使用的 `providers.json` 路径。",
+      "tags": [
+        "code",
+        "rust",
+        "common"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:crates/common/src/storage/mod.rs:providers_path",
+      "type": "function",
+      "name": "providers_path",
+      "filePath": "crates/common/src/storage/mod.rs",
+      "summary": "providers_path 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/storage/mod.rs:read_json",
+      "type": "function",
+      "name": "read_json",
+      "filePath": "crates/common/src/storage/mod.rs",
+      "summary": "read_json 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/storage/mod.rs:read_json_required",
+      "type": "function",
+      "name": "read_json_required",
+      "filePath": "crates/common/src/storage/mod.rs",
+      "summary": "read_json_required 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/common/src/storage/mod.rs:write_json",
+      "type": "function",
+      "name": "write_json",
+      "filePath": "crates/common/src/storage/mod.rs",
+      "summary": "write_json 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:crates/model-gateway/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "crates/model-gateway/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "model-gateway"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/model-gateway/src/auth/deepseek_pow.rs",
+      "type": "file",
+      "name": "deepseek_pow.rs",
+      "filePath": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "summary": "DeepSeekHashV1 + PoW solver。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/deepseek_pow.rs:solve_pow",
+      "type": "function",
+      "name": "solve_pow",
+      "filePath": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "summary": "solve_pow 定义于 deepseek_pow.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/deepseek_pow.rs:DeepseekChallenge",
+      "type": "class",
+      "name": "DeepseekChallenge",
+      "filePath": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "summary": "DeepseekChallenge 定义于 deepseek_pow.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/deepseek_pow.rs:deepseek_hash_v1",
+      "type": "function",
+      "name": "deepseek_hash_v1",
+      "filePath": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "summary": "deepseek_hash_v1 定义于 deepseek_pow.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/deepseek_pow.rs:solve_and_build_header",
+      "type": "function",
+      "name": "solve_and_build_header",
+      "filePath": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "summary": "solve_and_build_header 定义于 deepseek_pow.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/auth/deepseek.rs",
+      "type": "file",
+      "name": "deepseek.rs",
+      "filePath": "crates/model-gateway/src/auth/deepseek.rs",
+      "summary": "DeepSeek 账号登录（chat.deepseek.com 入口）。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/deepseek.rs:DeepseekLoginInput",
+      "type": "class",
+      "name": "DeepseekLoginInput",
+      "filePath": "crates/model-gateway/src/auth/deepseek.rs",
+      "summary": "DeepseekLoginInput 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/deepseek.rs:DeepseekLoginToken",
+      "type": "class",
+      "name": "DeepseekLoginToken",
+      "filePath": "crates/model-gateway/src/auth/deepseek.rs",
+      "summary": "DeepseekLoginToken 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/deepseek.rs:deepseek_login",
+      "type": "function",
+      "name": "deepseek_login",
+      "filePath": "crates/model-gateway/src/auth/deepseek.rs",
+      "summary": "deepseek_login 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/auth/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "Gemini 刷新需要",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/mod.rs:AuthUrlResult",
+      "type": "class",
+      "name": "AuthUrlResult",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "AuthUrlResult 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/mod.rs:ImportedToken",
+      "type": "class",
+      "name": "ImportedToken",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "ImportedToken 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_start",
+      "type": "function",
+      "name": "claude_oauth_start",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "claude_oauth_start 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_exchange",
+      "type": "function",
+      "name": "claude_oauth_exchange",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "claude_oauth_exchange 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_refresh",
+      "type": "function",
+      "name": "claude_oauth_refresh",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "claude_oauth_refresh 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:gemini_oauth_start",
+      "type": "function",
+      "name": "gemini_oauth_start",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "gemini_oauth_start 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:gemini_oauth_exchange",
+      "type": "function",
+      "name": "gemini_oauth_exchange",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "gemini_oauth_exchange 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:gemini_refresh",
+      "type": "function",
+      "name": "gemini_refresh",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "gemini_refresh 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:openai_oauth_start",
+      "type": "function",
+      "name": "openai_oauth_start",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "openai_oauth_start 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:openai_oauth_exchange",
+      "type": "function",
+      "name": "openai_oauth_exchange",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "openai_oauth_exchange 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/mod.rs:DeviceCodeInfo",
+      "type": "class",
+      "name": "DeviceCodeInfo",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "DeviceCodeInfo 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/auth/mod.rs:CodexTokenInfo",
+      "type": "class",
+      "name": "CodexTokenInfo",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "CodexTokenInfo 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:codex_start",
+      "type": "function",
+      "name": "codex_start",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "codex_start 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:codex_poll",
+      "type": "function",
+      "name": "codex_poll",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "codex_poll 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:codex_refresh",
+      "type": "function",
+      "name": "codex_refresh",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "codex_refresh 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:claude_code_import",
+      "type": "function",
+      "name": "claude_code_import",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "claude_code_import 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/mod.rs:gemini_cli_import",
+      "type": "function",
+      "name": "gemini_cli_import",
+      "filePath": "crates/model-gateway/src/auth/mod.rs",
+      "summary": "gemini_cli_import 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/auth/refresh.rs",
+      "type": "file",
+      "name": "refresh.rs",
+      "filePath": "crates/model-gateway/src/auth/refresh.rs",
+      "summary": "Provider OAuth token 自动刷新。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/auth/refresh.rs:ensure_fresh_provider_token",
+      "type": "function",
+      "name": "ensure_fresh_provider_token",
+      "filePath": "crates/model-gateway/src/auth/refresh.rs",
+      "summary": "ensure_fresh_provider_token 定义于 refresh.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/client.rs",
+      "type": "file",
+      "name": "client.rs",
+      "filePath": "crates/model-gateway/src/client.rs",
+      "summary": "模块 client",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:crates/model-gateway/src/client.rs:ModelClient",
+      "type": "class",
+      "name": "ModelClient",
+      "filePath": "crates/model-gateway/src/client.rs",
+      "summary": "ModelClient 定义于 client.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/config.rs",
+      "type": "file",
+      "name": "config.rs",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "DeepSeek `chat.deepseek.com` 网页端协议（PoW + 路径式 SSE），",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/model-gateway/src/config.rs:ProviderKind",
+      "type": "class",
+      "name": "ProviderKind",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "ProviderKind 定义于 config.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/config.rs:AuthMode",
+      "type": "class",
+      "name": "AuthMode",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "AuthMode 定义于 config.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/config.rs:Provider",
+      "type": "class",
+      "name": "Provider",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "Provider 定义于 config.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/config.rs:ProvidersFile",
+      "type": "class",
+      "name": "ProvidersFile",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "ProvidersFile 定义于 config.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "load 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "save 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:get",
+      "type": "function",
+      "name": "get",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "get 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:upsert",
+      "type": "function",
+      "name": "upsert",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "upsert 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:update_fetched_models",
+      "type": "function",
+      "name": "update_fetched_models",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "update_fetched_models 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/config.rs:ProviderPreset",
+      "type": "class",
+      "name": "ProviderPreset",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "ProviderPreset 定义于 config.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/config.rs:list_presets",
+      "type": "function",
+      "name": "list_presets",
+      "filePath": "crates/model-gateway/src/config.rs",
+      "summary": "list_presets 定义于 config.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/context_window.rs",
+      "type": "file",
+      "name": "context_window.rs",
+      "filePath": "crates/model-gateway/src/context_window.rs",
+      "summary": "各家主力模型的 context window 兜底查表。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/model-gateway/src/context_window.rs:resolve_context_window",
+      "type": "function",
+      "name": "resolve_context_window",
+      "filePath": "crates/model-gateway/src/context_window.rs",
+      "summary": "resolve_context_window 定义于 context_window.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/context_window.rs:context_window_for",
+      "type": "function",
+      "name": "context_window_for",
+      "filePath": "crates/model-gateway/src/context_window.rs",
+      "summary": "context_window_for 定义于 context_window.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/discovery/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "crates/model-gateway/src/discovery/mod.rs",
+      "summary": "模型上下文窗口大小（从 /v1/models 响应中提取，不一定所有 provider 都返回）。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/discovery/mod.rs:FetchedModel",
+      "type": "class",
+      "name": "FetchedModel",
+      "filePath": "crates/model-gateway/src/discovery/mod.rs",
+      "summary": "FetchedModel 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/discovery/mod.rs:fetch",
+      "type": "function",
+      "name": "fetch",
+      "filePath": "crates/model-gateway/src/discovery/mod.rs",
+      "summary": "fetch 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/discovery/mod.rs:fetch_context_length",
+      "type": "function",
+      "name": "fetch_context_length",
+      "filePath": "crates/model-gateway/src/discovery/mod.rs",
+      "summary": "fetch_context_length 定义于 mod.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/health.rs",
+      "type": "file",
+      "name": "health.rs",
+      "filePath": "crates/model-gateway/src/health.rs",
+      "summary": "模块 health",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/health.rs:ProviderModelTestResult",
+      "type": "class",
+      "name": "ProviderModelTestResult",
+      "filePath": "crates/model-gateway/src/health.rs",
+      "summary": "ProviderModelTestResult 定义于 health.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/health.rs:build_probe_request",
+      "type": "function",
+      "name": "build_probe_request",
+      "filePath": "crates/model-gateway/src/health.rs",
+      "summary": "build_probe_request 定义于 health.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/health.rs:test_provider_model",
+      "type": "function",
+      "name": "test_provider_model",
+      "filePath": "crates/model-gateway/src/health.rs",
+      "summary": "test_provider_model 定义于 health.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/instrument.rs",
+      "type": "file",
+      "name": "instrument.rs",
+      "filePath": "crates/model-gateway/src/instrument.rs",
+      "summary": "`ModelClient` 的可观测性装饰器。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/instrument.rs:InstrumentedClient",
+      "type": "class",
+      "name": "InstrumentedClient",
+      "filePath": "crates/model-gateway/src/instrument.rs",
+      "summary": "InstrumentedClient 定义于 instrument.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/instrument.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/model-gateway/src/instrument.rs",
+      "summary": "new 定义于 instrument.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/lib.rs",
+      "type": "file",
+      "name": "lib.rs",
+      "filePath": "crates/model-gateway/src/lib.rs",
+      "summary": "模块 lib",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:crates/model-gateway/src/lib.rs:build_client",
+      "type": "function",
+      "name": "build_client",
+      "filePath": "crates/model-gateway/src/lib.rs",
+      "summary": "build_client 定义于 lib.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "type": "file",
+      "name": "anthropic.rs",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "Anthropic Claude API 格式转换",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/anthropic.rs:map_anthropic_finish",
+      "type": "function",
+      "name": "map_anthropic_finish",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "map_anthropic_finish 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/anthropic.rs:build_body",
+      "type": "function",
+      "name": "build_body",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "build_body 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/anthropic.rs:tool_defs",
+      "type": "function",
+      "name": "tool_defs",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "tool_defs 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/anthropic.rs:parse_response",
+      "type": "function",
+      "name": "parse_response",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "parse_response 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/anthropic.rs:AnthropicStreamEvent",
+      "type": "class",
+      "name": "AnthropicStreamEvent",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "AnthropicStreamEvent 定义于 anthropic.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/anthropic.rs:parse_stream_event",
+      "type": "function",
+      "name": "parse_stream_event",
+      "filePath": "crates/model-gateway/src/protocols/anthropic.rs",
+      "summary": "parse_stream_event 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "type": "file",
+      "name": "deepseek.rs",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "DeepSeek `chat.deepseek.com` web 协议适配。",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:model_type_for",
+      "type": "function",
+      "name": "model_type_for",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "model_type_for 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:search_enabled_for",
+      "type": "function",
+      "name": "search_enabled_for",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "search_enabled_for 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:thinking_enabled_for",
+      "type": "function",
+      "name": "thinking_enabled_for",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "thinking_enabled_for 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:build_prompt",
+      "type": "function",
+      "name": "build_prompt",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "build_prompt 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:build_completion_body",
+      "type": "function",
+      "name": "build_completion_body",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "build_completion_body 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekChunkPart",
+      "type": "class",
+      "name": "DeepseekChunkPart",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "DeepseekChunkPart 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekChunkResult",
+      "type": "class",
+      "name": "DeepseekChunkResult",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "DeepseekChunkResult 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekStreamState",
+      "type": "class",
+      "name": "DeepseekStreamState",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "DeepseekStreamState 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/deepseek.rs:Kind",
+      "type": "class",
+      "name": "Kind",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "Kind 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:parse_sse_line",
+      "type": "function",
+      "name": "parse_sse_line",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "parse_sse_line 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/deepseek.rs:ToolCallSieve",
+      "type": "class",
+      "name": "ToolCallSieve",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "ToolCallSieve 定义于 deepseek.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "new 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:push",
+      "type": "function",
+      "name": "push",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "push 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:finalize",
+      "type": "function",
+      "name": "finalize",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "finalize 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/deepseek.rs:extract_tool_calls",
+      "type": "function",
+      "name": "extract_tool_calls",
+      "filePath": "crates/model-gateway/src/protocols/deepseek.rs",
+      "summary": "extract_tool_calls 定义于 deepseek.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "type": "file",
+      "name": "gemini.rs",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "Google Gemini API 格式转换",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:map_gemini_finish",
+      "type": "function",
+      "name": "map_gemini_finish",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "map_gemini_finish 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:build_body",
+      "type": "function",
+      "name": "build_body",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "build_body 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:tool_defs",
+      "type": "function",
+      "name": "tool_defs",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "tool_defs 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:parse_response",
+      "type": "function",
+      "name": "parse_response",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "parse_response 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:parse_stream_delta",
+      "type": "function",
+      "name": "parse_stream_delta",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "parse_stream_delta 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/gemini.rs:parse_stream_usage",
+      "type": "function",
+      "name": "parse_stream_usage",
+      "filePath": "crates/model-gateway/src/protocols/gemini.rs",
+      "summary": "parse_stream_usage 定义于 gemini.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/protocols/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "crates/model-gateway/src/protocols/mod.rs",
+      "summary": "模块 mod",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/model-gateway/src/protocols/openai.rs",
+      "type": "file",
+      "name": "openai.rs",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "OpenAI / OpenAI-compatible API 格式转换",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:build_body",
+      "type": "function",
+      "name": "build_body",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "build_body 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:build_responses_body",
+      "type": "function",
+      "name": "build_responses_body",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "build_responses_body 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:tool_defs",
+      "type": "function",
+      "name": "tool_defs",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "tool_defs 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:responses_tool_defs",
+      "type": "function",
+      "name": "responses_tool_defs",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "responses_tool_defs 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:map_openai_finish",
+      "type": "function",
+      "name": "map_openai_finish",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "map_openai_finish 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:parse_response",
+      "type": "function",
+      "name": "parse_response",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "parse_response 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:parse_responses_response",
+      "type": "function",
+      "name": "parse_responses_response",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "parse_responses_response 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/openai.rs:ChatStreamFrame",
+      "type": "class",
+      "name": "ChatStreamFrame",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "ChatStreamFrame 定义于 openai.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/openai.rs:ChatStreamToolCallDelta",
+      "type": "class",
+      "name": "ChatStreamToolCallDelta",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "ChatStreamToolCallDelta 定义于 openai.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:parse_chat_stream_frame",
+      "type": "function",
+      "name": "parse_chat_stream_frame",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "parse_chat_stream_frame 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/model-gateway/src/protocols/openai.rs:ResponsesSseEvent",
+      "type": "class",
+      "name": "ResponsesSseEvent",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "ResponsesSseEvent 定义于 openai.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/protocols/openai.rs:parse_responses_sse_event",
+      "type": "function",
+      "name": "parse_responses_sse_event",
+      "filePath": "crates/model-gateway/src/protocols/openai.rs",
+      "summary": "parse_responses_sse_event 定义于 openai.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/model-gateway/src/providers/anthropic.rs",
+      "type": "file",
+      "name": "anthropic.rs",
+      "filePath": "crates/model-gateway/src/providers/anthropic.rs",
+      "summary": "给 Anthropic 请求按需附加 beta 特性头。当前只处理 1M context（其余 beta",
+      "tags": [
+        "code",
+        "rust",
+        "model-gateway"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/model-gateway/src/providers/anthropic.rs:AnthropicClient",
+      "type": "class",
+      "name": "AnthropicClient",
+      "filePath": "crates/model-gateway/src/providers/anthropic.rs",
+      "summary": "AnthropicClient 定义于 anthropic.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/model-gateway/src/providers/anthropic.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/model-gateway/src/providers/anthropic.rs",
+      "summary": "new 定义于 anthropic.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:crates/common/src/attachments.rs",
+      "target": "class:crates/common/src/attachments.rs:MessageAttachment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/attachments.rs",
+      "target": "function:crates/common/src/attachments.rs:as_text_block",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/attachments.rs",
+      "target": "function:crates/common/src/attachments.rs:image_data_url",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/error.rs",
+      "target": "class:crates/common/src/error.rs:AppError",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/error.rs",
+      "target": "function:crates/common/src/error.rs:msg",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "class:crates/common/src/reasoning.rs:ReasoningEffort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_legacy_budget_tokens",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_adaptive46_effort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_adaptive47_effort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_adaptive_effort_for_model",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:deepseek_effort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:openai_effort_for_model",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "class:crates/common/src/reasoning.rs:ReasoningConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:is_enabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:effective_effort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:wants_long_context",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "class:crates/common/src/reasoning.rs:AnthropicThinkingMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:normalize_model_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_thinking_mode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_supports_thinking",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_long_context_uses_beta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:anthropic_exposes_long_context_toggle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:openai_skips_reasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:openai_supports_xhigh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/reasoning.rs",
+      "target": "function:crates/common/src/reasoning.rs:openai_supports_reasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "class:crates/common/src/runtime.rs:PendingUserInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "class:crates/common/src/runtime.rs:RuntimeHandle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:register",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:register_for_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:cancel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:cancel_all",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:has_active_runs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:has_active_run_for_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:inject_pending_input",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:close_pending_inputs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:close_pending_inputs_handle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:unregister",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/runtime.rs",
+      "target": "function:crates/common/src/runtime.rs:is_cancelled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/storage/mod.rs",
+      "target": "function:crates/common/src/storage/mod.rs:providers_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/storage/mod.rs",
+      "target": "function:crates/common/src/storage/mod.rs:read_json",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/storage/mod.rs",
+      "target": "function:crates/common/src/storage/mod.rs:read_json_required",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/common/src/storage/mod.rs",
+      "target": "function:crates/common/src/storage/mod.rs:write_json",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek_pow.rs",
+      "target": "function:crates/model-gateway/src/auth/deepseek_pow.rs:solve_pow",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek_pow.rs",
+      "target": "class:crates/model-gateway/src/auth/deepseek_pow.rs:DeepseekChallenge",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek_pow.rs",
+      "target": "function:crates/model-gateway/src/auth/deepseek_pow.rs:deepseek_hash_v1",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek_pow.rs",
+      "target": "function:crates/model-gateway/src/auth/deepseek_pow.rs:solve_and_build_header",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek.rs",
+      "target": "class:crates/model-gateway/src/auth/deepseek.rs:DeepseekLoginInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek.rs",
+      "target": "class:crates/model-gateway/src/auth/deepseek.rs:DeepseekLoginToken",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/deepseek.rs",
+      "target": "function:crates/model-gateway/src/auth/deepseek.rs:deepseek_login",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "class:crates/model-gateway/src/auth/mod.rs:AuthUrlResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "class:crates/model-gateway/src/auth/mod.rs:ImportedToken",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_exchange",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:claude_oauth_refresh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:gemini_oauth_start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:gemini_oauth_exchange",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:gemini_refresh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:openai_oauth_start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:openai_oauth_exchange",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "class:crates/model-gateway/src/auth/mod.rs:DeviceCodeInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "class:crates/model-gateway/src/auth/mod.rs:CodexTokenInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:codex_start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:codex_poll",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:codex_refresh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:claude_code_import",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/mod.rs",
+      "target": "function:crates/model-gateway/src/auth/mod.rs:gemini_cli_import",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/auth/refresh.rs",
+      "target": "function:crates/model-gateway/src/auth/refresh.rs:ensure_fresh_provider_token",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/client.rs",
+      "target": "class:crates/model-gateway/src/client.rs:ModelClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "class:crates/model-gateway/src/config.rs:ProviderKind",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "class:crates/model-gateway/src/config.rs:AuthMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "class:crates/model-gateway/src/config.rs:Provider",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "class:crates/model-gateway/src/config.rs:ProvidersFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:get",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:upsert",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:update_fetched_models",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "class:crates/model-gateway/src/config.rs:ProviderPreset",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/config.rs",
+      "target": "function:crates/model-gateway/src/config.rs:list_presets",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/context_window.rs",
+      "target": "function:crates/model-gateway/src/context_window.rs:resolve_context_window",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/context_window.rs",
+      "target": "function:crates/model-gateway/src/context_window.rs:context_window_for",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/discovery/mod.rs",
+      "target": "class:crates/model-gateway/src/discovery/mod.rs:FetchedModel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/discovery/mod.rs",
+      "target": "function:crates/model-gateway/src/discovery/mod.rs:fetch",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/discovery/mod.rs",
+      "target": "function:crates/model-gateway/src/discovery/mod.rs:fetch_context_length",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/health.rs",
+      "target": "class:crates/model-gateway/src/health.rs:ProviderModelTestResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/health.rs",
+      "target": "function:crates/model-gateway/src/health.rs:build_probe_request",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/health.rs",
+      "target": "function:crates/model-gateway/src/health.rs:test_provider_model",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/instrument.rs",
+      "target": "class:crates/model-gateway/src/instrument.rs:InstrumentedClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/instrument.rs",
+      "target": "function:crates/model-gateway/src/instrument.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/lib.rs",
+      "target": "function:crates/model-gateway/src/lib.rs:build_client",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "function:crates/model-gateway/src/protocols/anthropic.rs:map_anthropic_finish",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "function:crates/model-gateway/src/protocols/anthropic.rs:build_body",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "function:crates/model-gateway/src/protocols/anthropic.rs:tool_defs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "function:crates/model-gateway/src/protocols/anthropic.rs:parse_response",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "class:crates/model-gateway/src/protocols/anthropic.rs:AnthropicStreamEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/anthropic.rs",
+      "target": "function:crates/model-gateway/src/protocols/anthropic.rs:parse_stream_event",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:model_type_for",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:search_enabled_for",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:thinking_enabled_for",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:build_prompt",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:build_completion_body",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekChunkPart",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekChunkResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "class:crates/model-gateway/src/protocols/deepseek.rs:DeepseekStreamState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "class:crates/model-gateway/src/protocols/deepseek.rs:Kind",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:parse_sse_line",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "class:crates/model-gateway/src/protocols/deepseek.rs:ToolCallSieve",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:push",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:finalize",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/deepseek.rs",
+      "target": "function:crates/model-gateway/src/protocols/deepseek.rs:extract_tool_calls",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:map_gemini_finish",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:build_body",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:tool_defs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:parse_response",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:parse_stream_delta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/gemini.rs",
+      "target": "function:crates/model-gateway/src/protocols/gemini.rs:parse_stream_usage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:build_body",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:build_responses_body",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:tool_defs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:responses_tool_defs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:map_openai_finish",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:parse_response",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:parse_responses_response",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "class:crates/model-gateway/src/protocols/openai.rs:ChatStreamFrame",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "class:crates/model-gateway/src/protocols/openai.rs:ChatStreamToolCallDelta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:parse_chat_stream_frame",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "class:crates/model-gateway/src/protocols/openai.rs:ResponsesSseEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/protocols/openai.rs",
+      "target": "function:crates/model-gateway/src/protocols/openai.rs:parse_responses_sse_event",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/providers/anthropic.rs",
+      "target": "class:crates/model-gateway/src/providers/anthropic.rs:AnthropicClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/model-gateway/src/providers/anthropic.rs",
+      "target": "function:crates/model-gateway/src/providers/anthropic.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

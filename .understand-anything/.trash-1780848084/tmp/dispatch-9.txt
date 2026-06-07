@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `9/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-9.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm":[],"apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm":[],"apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm":[],"apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm":[],"apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm":[],"apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm":[],"apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm":[],"apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm":[],"apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm":[],"apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm":[],"apps/desktop/frontend/src/buildInfo.ts":[],"apps/desktop/frontend/src/desktop/bridge/tauri.ts":[],"apps/desktop/frontend/src/desktop/bridge/transport.ts":[],"apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts":[],"apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts":[],"apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts":[],"apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm` (384 lines, language: `webm`, fileCategory: `code`)
+2. `apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm` (269 lines, language: `webm`, fileCategory: `code`)
+3. `apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm` (417 lines, language: `webm`, fileCategory: `code`)
+4. `apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm` (412 lines, language: `webm`, fileCategory: `code`)
+5. `apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm` (291 lines, language: `webm`, fileCategory: `code`)
+6. `apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm` (294 lines, language: `webm`, fileCategory: `code`)
+7. `apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm` (198 lines, language: `webm`, fileCategory: `code`)
+8. `apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm` (1535 lines, language: `webm`, fileCategory: `code`)
+9. `apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm` (1282 lines, language: `webm`, fileCategory: `code`)
+10. `apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm` (1522 lines, language: `webm`, fileCategory: `code`)
+11. `apps/desktop/frontend/src/buildInfo.ts` (9 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/desktop/frontend/src/desktop/bridge/tauri.ts` (640 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/desktop/frontend/src/desktop/bridge/transport.ts` (242 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx` (1592 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx` (217 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx` (151 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx` (492 lines, language: `typescript`, fileCategory: `code`)
+18. `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx` (1390 lines, language: `typescript`, fileCategory: `code`)
+19. `apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts` (63 lines, language: `typescript`, fileCategory: `code`)
+20. `apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts` (34 lines, language: `typescript`, fileCategory: `code`)
+21. `apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts` (34 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx` (1009 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx` (58 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx` (105 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx` (56 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

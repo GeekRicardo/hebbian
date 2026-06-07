@@ -1,0 +1,185 @@
+{
+  "batchIndex": 19,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "crates/agent-core/src/mcp/client.rs",
+      "sizeLines": 701,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/mcp/config.rs",
+      "sizeLines": 252,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/mcp/mod.rs",
+      "sizeLines": 2,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/memory_extract.rs",
+      "sizeLines": 420,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/model_io_dump.rs",
+      "sizeLines": 556,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/permissions/mod.rs",
+      "sizeLines": 1400,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/read_state.rs",
+      "sizeLines": 100,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/recorder.rs",
+      "sizeLines": 101,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/rules.rs",
+      "sizeLines": 392,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/run_mode.rs",
+      "sizeLines": 109,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/run_state.rs",
+      "sizeLines": 39,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/session_titler.rs",
+      "sizeLines": 277,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/session.rs",
+      "sizeLines": 638,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/shell_env.rs",
+      "sizeLines": 47,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/compactions.rs",
+      "sizeLines": 30,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/export_claude.rs",
+      "sizeLines": 361,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/import_claude.rs",
+      "sizeLines": 428,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/lock.rs",
+      "sizeLines": 139,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/mcp.rs",
+      "sizeLines": 68,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/memory.rs",
+      "sizeLines": 551,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/mod.rs",
+      "sizeLines": 111,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/model_io.rs",
+      "sizeLines": 367,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/models_catalog_fallback.json",
+      "sizeLines": 0,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/agent-core/src/storage/models_catalog.rs",
+      "sizeLines": 300,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/oauth.rs",
+      "sizeLines": 17,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/agent-core/src/mcp/client.rs": [],
+    "crates/agent-core/src/mcp/config.rs": [],
+    "crates/agent-core/src/mcp/mod.rs": [],
+    "crates/agent-core/src/memory_extract.rs": [],
+    "crates/agent-core/src/model_io_dump.rs": [],
+    "crates/agent-core/src/permissions/mod.rs": [],
+    "crates/agent-core/src/read_state.rs": [],
+    "crates/agent-core/src/recorder.rs": [],
+    "crates/agent-core/src/rules.rs": [],
+    "crates/agent-core/src/run_mode.rs": [],
+    "crates/agent-core/src/run_state.rs": [],
+    "crates/agent-core/src/session_titler.rs": [],
+    "crates/agent-core/src/session.rs": [],
+    "crates/agent-core/src/shell_env.rs": [],
+    "crates/agent-core/src/storage/compactions.rs": [],
+    "crates/agent-core/src/storage/export_claude.rs": [],
+    "crates/agent-core/src/storage/import_claude.rs": [],
+    "crates/agent-core/src/storage/lock.rs": [],
+    "crates/agent-core/src/storage/mcp.rs": [],
+    "crates/agent-core/src/storage/memory.rs": [],
+    "crates/agent-core/src/storage/mod.rs": [],
+    "crates/agent-core/src/storage/model_io.rs": [],
+    "crates/agent-core/src/storage/models_catalog_fallback.json": [],
+    "crates/agent-core/src/storage/models_catalog.rs": [],
+    "crates/agent-core/src/storage/oauth.rs": []
+  },
+  "neighborMap": {}
+}

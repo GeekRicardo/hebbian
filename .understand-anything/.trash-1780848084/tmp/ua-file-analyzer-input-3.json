@@ -1,0 +1,17 @@
+{
+  "projectRoot": "/Users/ricardo/code/ricardo/rust/hebbian",
+  "batchFiles": [
+    {"path": "apps/desktop/Cargo.toml", "language": "toml", "sizeLines": 37, "fileCategory": "config"},
+    {"path": "apps/desktop/package.json", "language": "json", "sizeLines": 39, "fileCategory": "config"},
+    {"path": "apps/desktop/tauri.conf.json", "language": "json", "sizeLines": 45, "fileCategory": "config"},
+    {"path": "apps/desktop/tsconfig.json", "language": "json", "sizeLines": 23, "fileCategory": "config"},
+    {"path": "apps/desktop/tsconfig.node.json", "language": "json", "sizeLines": 11, "fileCategory": "config"}
+  ],
+  "batchImportData": {
+    "apps/desktop/Cargo.toml": [],
+    "apps/desktop/package.json": [],
+    "apps/desktop/tauri.conf.json": [],
+    "apps/desktop/tsconfig.json": [],
+    "apps/desktop/tsconfig.node.json": []
+  }
+}

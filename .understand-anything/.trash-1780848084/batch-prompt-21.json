@@ -1,0 +1,185 @@
+{
+  "batchIndex": 21,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "crates/agent-core/src/tools/grep.rs",
+      "sizeLines": 488,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/hitl.rs",
+      "sizeLines": 1831,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/kill_shell.rs",
+      "sizeLines": 94,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/mcp.rs",
+      "sizeLines": 158,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/mod.rs",
+      "sizeLines": 504,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read_hashline.rs",
+      "sizeLines": 314,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read_memory.rs",
+      "sizeLines": 77,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read.rs",
+      "sizeLines": 346,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/registry.rs",
+      "sizeLines": 145,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/safe_commands.rs",
+      "sizeLines": 428,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/schedule_wakeup.rs",
+      "sizeLines": 83,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/shell_parse.rs",
+      "sizeLines": 1788,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/skill.rs",
+      "sizeLines": 425,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/task.rs",
+      "sizeLines": 242,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/todo_write.rs",
+      "sizeLines": 211,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/web_fetch.rs",
+      "sizeLines": 679,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/web_search.rs",
+      "sizeLines": 531,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/write_memory.rs",
+      "sizeLines": 108,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/turn_context.rs",
+      "sizeLines": 38,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/types.rs",
+      "sizeLines": 11,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/vision_bridge.rs",
+      "sizeLines": 476,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/wakeup.rs",
+      "sizeLines": 535,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/workspace.rs",
+      "sizeLines": 350,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/tests/edit_backend_switch.rs",
+      "sizeLines": 162,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/tests/hashline_roundtrip.rs",
+      "sizeLines": 177,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/agent-core/src/tools/grep.rs": [],
+    "crates/agent-core/src/tools/hitl.rs": [],
+    "crates/agent-core/src/tools/kill_shell.rs": [],
+    "crates/agent-core/src/tools/mcp.rs": [],
+    "crates/agent-core/src/tools/mod.rs": [],
+    "crates/agent-core/src/tools/read_hashline.rs": [],
+    "crates/agent-core/src/tools/read_memory.rs": [],
+    "crates/agent-core/src/tools/read.rs": [],
+    "crates/agent-core/src/tools/registry.rs": [],
+    "crates/agent-core/src/tools/safe_commands.rs": [],
+    "crates/agent-core/src/tools/schedule_wakeup.rs": [],
+    "crates/agent-core/src/tools/shell_parse.rs": [],
+    "crates/agent-core/src/tools/skill.rs": [],
+    "crates/agent-core/src/tools/task.rs": [],
+    "crates/agent-core/src/tools/todo_write.rs": [],
+    "crates/agent-core/src/tools/web_fetch.rs": [],
+    "crates/agent-core/src/tools/web_search.rs": [],
+    "crates/agent-core/src/tools/write_memory.rs": [],
+    "crates/agent-core/src/turn_context.rs": [],
+    "crates/agent-core/src/types.rs": [],
+    "crates/agent-core/src/vision_bridge.rs": [],
+    "crates/agent-core/src/wakeup.rs": [],
+    "crates/agent-core/src/workspace.rs": [],
+    "crates/agent-core/tests/edit_backend_switch.rs": [],
+    "crates/agent-core/tests/hashline_roundtrip.rs": []
+  },
+  "neighborMap": {}
+}

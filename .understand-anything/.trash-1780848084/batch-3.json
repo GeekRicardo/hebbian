@@ -1,0 +1,102 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/desktop/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 37,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "language": "json",
+      "sizeLines": 39,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tauri.conf.json",
+      "language": "json",
+      "sizeLines": 45,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.json",
+      "language": "json",
+      "sizeLines": 23,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.node.json",
+      "language": "json",
+      "sizeLines": 11,
+      "fileCategory": "config"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "config:apps/desktop/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "apps/desktop/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/desktop/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "apps/desktop/package.json",
+      "summary": "模块 package",
+      "tags": [
+        "config",
+        "json",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/desktop/tauri.conf.json",
+      "type": "config",
+      "name": "tauri.conf.json",
+      "filePath": "apps/desktop/tauri.conf.json",
+      "summary": "模块 tauri.conf",
+      "tags": [
+        "config",
+        "json",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/desktop/tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "apps/desktop/tsconfig.json",
+      "summary": "模块 tsconfig",
+      "tags": [
+        "config",
+        "json",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/desktop/tsconfig.node.json",
+      "type": "config",
+      "name": "tsconfig.node.json",
+      "filePath": "apps/desktop/tsconfig.node.json",
+      "summary": "模块 tsconfig.node",
+      "tags": [
+        "config",
+        "json",
+        "desktop"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": []
+}

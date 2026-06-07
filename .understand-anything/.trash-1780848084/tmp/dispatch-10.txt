@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `10/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-10.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts":[],"apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts":[],"apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs":[],"apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx` (166 lines, language: `typescript`, fileCategory: `code`)
+2. `apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx` (183 lines, language: `typescript`, fileCategory: `code`)
+3. `apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx` (922 lines, language: `typescript`, fileCategory: `code`)
+4. `apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx` (265 lines, language: `typescript`, fileCategory: `code`)
+5. `apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx` (50 lines, language: `typescript`, fileCategory: `code`)
+6. `apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx` (120 lines, language: `typescript`, fileCategory: `code`)
+7. `apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx` (81 lines, language: `typescript`, fileCategory: `code`)
+8. `apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx` (223 lines, language: `typescript`, fileCategory: `code`)
+9. `apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx` (138 lines, language: `typescript`, fileCategory: `code`)
+10. `apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx` (152 lines, language: `typescript`, fileCategory: `code`)
+11. `apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx` (143 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx` (104 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx` (113 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx` (46 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts` (124 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts` (50 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx` (445 lines, language: `typescript`, fileCategory: `code`)
+18. `apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx` (46 lines, language: `typescript`, fileCategory: `code`)
+19. `apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx` (32 lines, language: `typescript`, fileCategory: `code`)
+20. `apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx` (33 lines, language: `typescript`, fileCategory: `code`)
+21. `apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx` (56 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs` (32 lines, language: `javascript`, fileCategory: `code`)
+23. `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx` (2349 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx` (211 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx` (153 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

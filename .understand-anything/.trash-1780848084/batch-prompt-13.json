@@ -1,0 +1,185 @@
+{
+  "batchIndex": 13,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/desktop/icons/icon.icns",
+      "sizeLines": 990,
+      "language": "icns",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-01.rgba",
+      "sizeLines": 6,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-02.rgba",
+      "sizeLines": 8,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-03.rgba",
+      "sizeLines": 11,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-04.rgba",
+      "sizeLines": 13,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-05.rgba",
+      "sizeLines": 15,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-06.rgba",
+      "sizeLines": 7,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-07.rgba",
+      "sizeLines": 11,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-08.rgba",
+      "sizeLines": 8,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-09.rgba",
+      "sizeLines": 7,
+      "language": "rgba",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/postcss.config.cjs",
+      "sizeLines": 6,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/chat.rs",
+      "sizeLines": 3615,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/context.rs",
+      "sizeLines": 193,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/mod.rs",
+      "sizeLines": 327,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/types.rs",
+      "sizeLines": 79,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/error.rs",
+      "sizeLines": 1,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/force_automode.rs",
+      "sizeLines": 37,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hebisland_client.rs",
+      "sizeLines": 175,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hitl.rs",
+      "sizeLines": 213,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/lib.rs",
+      "sizeLines": 2795,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/main.rs",
+      "sizeLines": 5,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/window_control.rs",
+      "sizeLines": 507,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/tailwind.config.cjs",
+      "sizeLines": 68,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/vite.config.ts",
+      "sizeLines": 60,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Package.swift",
+      "sizeLines": 24,
+      "language": "swift",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/icons/icon.icns": [],
+    "apps/desktop/icons/tray-frame-01.rgba": [],
+    "apps/desktop/icons/tray-frame-02.rgba": [],
+    "apps/desktop/icons/tray-frame-03.rgba": [],
+    "apps/desktop/icons/tray-frame-04.rgba": [],
+    "apps/desktop/icons/tray-frame-05.rgba": [],
+    "apps/desktop/icons/tray-frame-06.rgba": [],
+    "apps/desktop/icons/tray-frame-07.rgba": [],
+    "apps/desktop/icons/tray-frame-08.rgba": [],
+    "apps/desktop/icons/tray-frame-09.rgba": [],
+    "apps/desktop/postcss.config.cjs": [],
+    "apps/desktop/src/chat.rs": [],
+    "apps/desktop/src/engine/context.rs": [],
+    "apps/desktop/src/engine/mod.rs": [],
+    "apps/desktop/src/engine/types.rs": [],
+    "apps/desktop/src/error.rs": [],
+    "apps/desktop/src/force_automode.rs": [],
+    "apps/desktop/src/hebisland_client.rs": [],
+    "apps/desktop/src/hitl.rs": [],
+    "apps/desktop/src/lib.rs": [],
+    "apps/desktop/src/main.rs": [],
+    "apps/desktop/src/window_control.rs": [],
+    "apps/desktop/tailwind.config.cjs": [],
+    "apps/desktop/vite.config.ts": [],
+    "apps/island-mac/Package.swift": []
+  },
+  "neighborMap": {}
+}

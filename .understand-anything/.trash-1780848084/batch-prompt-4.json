@@ -1,0 +1,31 @@
+{
+  "batchIndex": 4,
+  "totalBatches": 23,
+  "fileCount": 3,
+  "files": [
+    {
+      "path": "apps/pages/README.md",
+      "sizeLines": 202,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "apps/pages/package.json",
+      "sizeLines": 12,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/pnpm-workspace.yaml",
+      "sizeLines": 2,
+      "language": "yaml",
+      "fileCategory": "config"
+    }
+  ],
+  "batchImportData": {
+    "apps/pages/README.md": [],
+    "apps/pages/package.json": [],
+    "apps/pages/pnpm-workspace.yaml": []
+  },
+  "neighborMap": {}
+}

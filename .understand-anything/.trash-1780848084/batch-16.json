@@ -1,0 +1,1579 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "language": "typescript",
+      "sizeLines": 180,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "language": "typescript",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "language": "typescript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "language": "typescript",
+      "sizeLines": 21,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "language": "typescript",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/index.css",
+      "language": "css",
+      "sizeLines": 276,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/en.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ja.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ko.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/main.tsx",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/store.ts",
+      "language": "typescript",
+      "sizeLines": 791,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/index.ts",
+      "language": "typescript",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "language": "typescript",
+      "sizeLines": 183,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "language": "typescript",
+      "sizeLines": 131,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "language": "typescript",
+      "sizeLines": 196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "language": "typescript",
+      "sizeLines": 118,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "type": "file",
+      "name": "ThemePicker.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "summary": "模块 ThemePicker",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/ThemePicker.tsx:ThemePicker",
+      "type": "function",
+      "name": "ThemePicker",
+      "filePath": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "summary": "ThemePicker 定义于 ThemePicker.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "type": "file",
+      "name": "TokenGate.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "summary": "模块 TokenGate",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/TokenGate.tsx:TokenGate",
+      "type": "function",
+      "name": "TokenGate",
+      "filePath": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "summary": "TokenGate 定义于 TokenGate.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "type": "file",
+      "name": "WarningBanner.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "summary": "模块 WarningBanner",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/WarningBanner.tsx:WarningBanner",
+      "type": "function",
+      "name": "WarningBanner",
+      "filePath": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "summary": "WarningBanner 定义于 WarningBanner.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "file",
+      "name": "I18nContext.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "summary": "模块 I18nContext",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx:useI18n",
+      "type": "function",
+      "name": "useI18n",
+      "filePath": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "summary": "useI18n 定义于 I18nContext.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx:I18nProvider",
+      "type": "function",
+      "name": "I18nProvider",
+      "filePath": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "summary": "I18nProvider 定义于 I18nContext.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "type": "file",
+      "name": "useIsMobile.ts",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "summary": "模块 useIsMobile",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/hooks/useIsMobile.ts:useIsMobile",
+      "type": "function",
+      "name": "useIsMobile",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "summary": "useIsMobile 定义于 useIsMobile.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "type": "file",
+      "name": "useKeyboardShortcuts.ts",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "summary": "模块 useKeyboardShortcuts",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:KeyboardShortcut",
+      "type": "class",
+      "name": "KeyboardShortcut",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "summary": "KeyboardShortcut 定义于 useKeyboardShortcuts.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:useKeyboardShortcuts",
+      "type": "function",
+      "name": "useKeyboardShortcuts",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "summary": "useKeyboardShortcuts 定义于 useKeyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:formatShortcutKey",
+      "type": "function",
+      "name": "formatShortcutKey",
+      "filePath": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "summary": "formatShortcutKey 定义于 useKeyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/index.css",
+      "type": "file",
+      "name": "index.css",
+      "filePath": "apps/pages/packages/dashboard/src/index.css",
+      "summary": "模块 index",
+      "tags": [
+        "markup",
+        "css",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/en.ts",
+      "type": "file",
+      "name": "en.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/en.ts",
+      "summary": "模块 en",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/en.ts:en",
+      "type": "function",
+      "name": "en",
+      "filePath": "apps/pages/packages/dashboard/src/locales/en.ts",
+      "summary": "en 定义于 en.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "模块 index",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/locales/index.ts:LocaleKey",
+      "type": "class",
+      "name": "LocaleKey",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "LocaleKey 定义于 index.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/locales/index.ts:Locale",
+      "type": "class",
+      "name": "Locale",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "Locale 定义于 index.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/index.ts:locales",
+      "type": "function",
+      "name": "locales",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "locales 定义于 index.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/index.ts:getLocale",
+      "type": "function",
+      "name": "getLocale",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "getLocale 定义于 index.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/index.ts:resolveLocaleKey",
+      "type": "function",
+      "name": "resolveLocaleKey",
+      "filePath": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "summary": "resolveLocaleKey 定义于 index.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/ja.ts",
+      "type": "file",
+      "name": "ja.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/ja.ts",
+      "summary": "模块 ja",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/ja.ts:ja",
+      "type": "function",
+      "name": "ja",
+      "filePath": "apps/pages/packages/dashboard/src/locales/ja.ts",
+      "summary": "ja 定义于 ja.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/ko.ts",
+      "type": "file",
+      "name": "ko.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/ko.ts",
+      "summary": "模块 ko",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/ko.ts:ko",
+      "type": "function",
+      "name": "ko",
+      "filePath": "apps/pages/packages/dashboard/src/locales/ko.ts",
+      "summary": "ko 定义于 ko.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "type": "file",
+      "name": "zh-TW.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "summary": "模块 zh-TW",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/zh-TW.ts:zhTW",
+      "type": "function",
+      "name": "zhTW",
+      "filePath": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "summary": "zhTW 定义于 zh-TW.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/locales/zh.ts",
+      "type": "file",
+      "name": "zh.ts",
+      "filePath": "apps/pages/packages/dashboard/src/locales/zh.ts",
+      "summary": "模块 zh",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/locales/zh.ts:zh",
+      "type": "function",
+      "name": "zh",
+      "filePath": "apps/pages/packages/dashboard/src/locales/zh.ts",
+      "summary": "zh 定义于 zh.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/main.tsx",
+      "type": "file",
+      "name": "main.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/main.tsx",
+      "summary": "模块 main",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "file",
+      "name": "store.ts",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "模块 store",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:Persona",
+      "type": "class",
+      "name": "Persona",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "Persona 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:NavigationLevel",
+      "type": "class",
+      "name": "NavigationLevel",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "NavigationLevel 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:NodeType",
+      "type": "class",
+      "name": "NodeType",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "NodeType 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:Complexity",
+      "type": "class",
+      "name": "Complexity",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "Complexity 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:EdgeCategory",
+      "type": "class",
+      "name": "EdgeCategory",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "EdgeCategory 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:ViewMode",
+      "type": "class",
+      "name": "ViewMode",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "ViewMode 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:DetailLevel",
+      "type": "class",
+      "name": "DetailLevel",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "DetailLevel 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:FilterState",
+      "type": "class",
+      "name": "FilterState",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "FilterState 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:ALL_NODE_TYPES",
+      "type": "function",
+      "name": "ALL_NODE_TYPES",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "ALL_NODE_TYPES 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:ALL_COMPLEXITIES",
+      "type": "function",
+      "name": "ALL_COMPLEXITIES",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "ALL_COMPLEXITIES 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:ALL_EDGE_CATEGORIES",
+      "type": "function",
+      "name": "ALL_EDGE_CATEGORIES",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "ALL_EDGE_CATEGORIES 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:EDGE_CATEGORY_MAP",
+      "type": "function",
+      "name": "EDGE_CATEGORY_MAP",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "EDGE_CATEGORY_MAP 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:DOMAIN_EDGE_TYPES",
+      "type": "function",
+      "name": "DOMAIN_EDGE_TYPES",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "DOMAIN_EDGE_TYPES 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/store.ts:NodeCategory",
+      "type": "class",
+      "name": "NodeCategory",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "NodeCategory 定义于 store.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/store.ts:useDashboardStore",
+      "type": "function",
+      "name": "useDashboardStore",
+      "filePath": "apps/pages/packages/dashboard/src/store.ts",
+      "summary": "useDashboardStore 定义于 store.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "apps/pages/packages/dashboard/src/themes/index.ts",
+      "summary": "模块 index",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "type": "file",
+      "name": "presets.ts",
+      "filePath": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "summary": "模块 presets",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/presets.ts:PRESETS",
+      "type": "function",
+      "name": "PRESETS",
+      "filePath": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "summary": "PRESETS 定义于 presets.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/presets.ts:getPreset",
+      "type": "function",
+      "name": "getPreset",
+      "filePath": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "summary": "getPreset 定义于 presets.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/presets.ts:getAccent",
+      "type": "function",
+      "name": "getAccent",
+      "filePath": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "summary": "getAccent 定义于 presets.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "type": "file",
+      "name": "theme-engine.ts",
+      "filePath": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "summary": "模块 theme-engine",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/theme-engine.ts:hexToRgb",
+      "type": "function",
+      "name": "hexToRgb",
+      "filePath": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "summary": "hexToRgb 定义于 theme-engine.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/theme-engine.ts:applyTheme",
+      "type": "function",
+      "name": "applyTheme",
+      "filePath": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "summary": "applyTheme 定义于 theme-engine.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "type": "file",
+      "name": "ThemeContext.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "summary": "模块 ThemeContext",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx:ThemeProvider",
+      "type": "function",
+      "name": "ThemeProvider",
+      "filePath": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "summary": "ThemeProvider 定义于 ThemeContext.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx:useTheme",
+      "type": "function",
+      "name": "useTheme",
+      "filePath": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "summary": "useTheme 定义于 ThemeContext.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "file",
+      "name": "types.ts",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "模块 types",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/themes/types.ts:PresetId",
+      "type": "class",
+      "name": "PresetId",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "PresetId 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/themes/types.ts:AccentSwatch",
+      "type": "class",
+      "name": "AccentSwatch",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "AccentSwatch 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/themes/types.ts:ThemePreset",
+      "type": "class",
+      "name": "ThemePreset",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "ThemePreset 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/themes/types.ts:HeadingFont",
+      "type": "class",
+      "name": "HeadingFont",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "HeadingFont 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/themes/types.ts:ThemeConfig",
+      "type": "class",
+      "name": "ThemeConfig",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "ThemeConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/themes/types.ts:DEFAULT_THEME_CONFIG",
+      "type": "function",
+      "name": "DEFAULT_THEME_CONFIG",
+      "filePath": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "summary": "DEFAULT_THEME_CONFIG 定义于 types.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "type": "file",
+      "name": "containers.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "summary": "模块 containers.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "type": "file",
+      "name": "edgeAggregation.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "summary": "模块 edgeAggregation.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "type": "file",
+      "name": "elk-layout.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "summary": "模块 elk-layout.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "type": "file",
+      "name": "filters.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "summary": "模块 filters.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "type": "file",
+      "name": "layerStats.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "summary": "模块 layerStats.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/ThemePicker.tsx:ThemePicker",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/TokenGate.tsx:TokenGate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/WarningBanner.tsx:WarningBanner",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx:useI18n",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx:I18nProvider",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/locales",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "target": "function:apps/pages/packages/dashboard/src/hooks/useIsMobile.ts:useIsMobile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "target": "class:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:KeyboardShortcut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "target": "function:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:useKeyboardShortcuts",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "target": "function:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts:formatShortcutKey",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/en.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/en.ts:en",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "class:apps/pages/packages/dashboard/src/locales/index.ts:LocaleKey",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "class:apps/pages/packages/dashboard/src/locales/index.ts:Locale",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/index.ts:locales",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/index.ts:getLocale",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/index.ts:resolveLocaleKey",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/locales/en.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/locales/zh.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/locales/ja.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/locales/ko.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/ja.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/ja.ts:ja",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/ko.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/ko.ts:ko",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/zh-TW.ts:zhTW",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/locales/zh.ts",
+      "target": "function:apps/pages/packages/dashboard/src/locales/zh.ts:zh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/main.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:Persona",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:NavigationLevel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:NodeType",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:Complexity",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:EdgeCategory",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:ViewMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:DetailLevel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:FilterState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:ALL_NODE_TYPES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:ALL_COMPLEXITIES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:ALL_EDGE_CATEGORIES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:EDGE_CATEGORY_MAP",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:DOMAIN_EDGE_TYPES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "class:apps/pages/packages/dashboard/src/store.ts:NodeCategory",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/store.ts",
+      "target": "function:apps/pages/packages/dashboard/src/store.ts:useDashboardStore",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/presets.ts:PRESETS",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/presets.ts:getPreset",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/presets.ts:getAccent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/theme-engine.ts:hexToRgb",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/theme-engine.ts:applyTheme",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "target": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx:ThemeProvider",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx:useTheme",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/presets.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "class:apps/pages/packages/dashboard/src/themes/types.ts:PresetId",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "class:apps/pages/packages/dashboard/src/themes/types.ts:AccentSwatch",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "class:apps/pages/packages/dashboard/src/themes/types.ts:ThemePreset",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "class:apps/pages/packages/dashboard/src/themes/types.ts:HeadingFont",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "class:apps/pages/packages/dashboard/src/themes/types.ts:ThemeConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/themes/types.ts",
+      "target": "function:apps/pages/packages/dashboard/src/themes/types.ts:DEFAULT_THEME_CONFIG",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    }
+  ]
+}

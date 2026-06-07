@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `15/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-15.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/pages/packages/dashboard/src/components/CustomNode.tsx":[],"apps/pages/packages/dashboard/src/components/DiffToggle.tsx":[],"apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx":[],"apps/pages/packages/dashboard/src/components/DomainGraphView.tsx":[],"apps/pages/packages/dashboard/src/components/ExportMenu.tsx":[],"apps/pages/packages/dashboard/src/components/FileExplorer.tsx":[],"apps/pages/packages/dashboard/src/components/FilterPanel.tsx":[],"apps/pages/packages/dashboard/src/components/FlowNode.tsx":[],"apps/pages/packages/dashboard/src/components/GraphView.tsx":[],"apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx":[],"apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx":[],"apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx":[],"apps/pages/packages/dashboard/src/components/LayerLegend.tsx":[],"apps/pages/packages/dashboard/src/components/LearnPanel.tsx":[],"apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx":[],"apps/pages/packages/dashboard/src/components/MobileDrawer.tsx":[],"apps/pages/packages/dashboard/src/components/MobileLayout.tsx":[],"apps/pages/packages/dashboard/src/components/NodeInfo.tsx":[],"apps/pages/packages/dashboard/src/components/NodeTooltip.tsx":[],"apps/pages/packages/dashboard/src/components/PathFinderModal.tsx":[],"apps/pages/packages/dashboard/src/components/PersonaSelector.tsx":[],"apps/pages/packages/dashboard/src/components/PortalNode.tsx":[],"apps/pages/packages/dashboard/src/components/ProjectOverview.tsx":[],"apps/pages/packages/dashboard/src/components/SearchBar.tsx":[],"apps/pages/packages/dashboard/src/components/StepNode.tsx":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/pages/packages/dashboard/src/components/CustomNode.tsx` (190 lines, language: `typescript`, fileCategory: `code`)
+2. `apps/pages/packages/dashboard/src/components/DiffToggle.tsx` (66 lines, language: `typescript`, fileCategory: `code`)
+3. `apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx` (66 lines, language: `typescript`, fileCategory: `code`)
+4. `apps/pages/packages/dashboard/src/components/DomainGraphView.tsx` (279 lines, language: `typescript`, fileCategory: `code`)
+5. `apps/pages/packages/dashboard/src/components/ExportMenu.tsx` (279 lines, language: `typescript`, fileCategory: `code`)
+6. `apps/pages/packages/dashboard/src/components/FileExplorer.tsx` (214 lines, language: `typescript`, fileCategory: `code`)
+7. `apps/pages/packages/dashboard/src/components/FilterPanel.tsx` (219 lines, language: `typescript`, fileCategory: `code`)
+8. `apps/pages/packages/dashboard/src/components/FlowNode.tsx` (52 lines, language: `typescript`, fileCategory: `code`)
+9. `apps/pages/packages/dashboard/src/components/GraphView.tsx` (1581 lines, language: `typescript`, fileCategory: `code`)
+10. `apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx` (105 lines, language: `typescript`, fileCategory: `code`)
+11. `apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx` (292 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx` (104 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/pages/packages/dashboard/src/components/LayerLegend.tsx` (72 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/pages/packages/dashboard/src/components/LearnPanel.tsx` (230 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx` (81 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/pages/packages/dashboard/src/components/MobileDrawer.tsx` (266 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/pages/packages/dashboard/src/components/MobileLayout.tsx` (245 lines, language: `typescript`, fileCategory: `code`)
+18. `apps/pages/packages/dashboard/src/components/NodeInfo.tsx` (539 lines, language: `typescript`, fileCategory: `code`)
+19. `apps/pages/packages/dashboard/src/components/NodeTooltip.tsx` (124 lines, language: `typescript`, fileCategory: `code`)
+20. `apps/pages/packages/dashboard/src/components/PathFinderModal.tsx` (311 lines, language: `typescript`, fileCategory: `code`)
+21. `apps/pages/packages/dashboard/src/components/PersonaSelector.tsx` (46 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/pages/packages/dashboard/src/components/PortalNode.tsx` (64 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/pages/packages/dashboard/src/components/ProjectOverview.tsx` (222 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/pages/packages/dashboard/src/components/SearchBar.tsx` (191 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/pages/packages/dashboard/src/components/StepNode.tsx` (53 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

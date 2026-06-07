@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `22/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-22.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"crates/common/Cargo.toml":[],"crates/common/src/attachments.rs":[],"crates/common/src/error.rs":[],"crates/common/src/lib.rs":[],"crates/common/src/reasoning.rs":[],"crates/common/src/runtime.rs":[],"crates/common/src/storage/mod.rs":[],"crates/model-gateway/Cargo.toml":[],"crates/model-gateway/src/auth/deepseek_pow.rs":[],"crates/model-gateway/src/auth/deepseek.rs":[],"crates/model-gateway/src/auth/mod.rs":[],"crates/model-gateway/src/auth/refresh.rs":[],"crates/model-gateway/src/client.rs":[],"crates/model-gateway/src/config.rs":[],"crates/model-gateway/src/context_window.rs":[],"crates/model-gateway/src/discovery/mod.rs":[],"crates/model-gateway/src/health.rs":[],"crates/model-gateway/src/instrument.rs":[],"crates/model-gateway/src/lib.rs":[],"crates/model-gateway/src/protocols/anthropic.rs":[],"crates/model-gateway/src/protocols/deepseek.rs":[],"crates/model-gateway/src/protocols/gemini.rs":[],"crates/model-gateway/src/protocols/mod.rs":[],"crates/model-gateway/src/protocols/openai.rs":[],"crates/model-gateway/src/providers/anthropic.rs":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `crates/common/Cargo.toml` (10 lines, language: `toml`, fileCategory: `config`)
+2. `crates/common/src/attachments.rs` (51 lines, language: `rust`, fileCategory: `code`)
+3. `crates/common/src/error.rs` (27 lines, language: `rust`, fileCategory: `code`)
+4. `crates/common/src/lib.rs` (14 lines, language: `rust`, fileCategory: `code`)
+5. `crates/common/src/reasoning.rs` (433 lines, language: `rust`, fileCategory: `code`)
+6. `crates/common/src/runtime.rs` (129 lines, language: `rust`, fileCategory: `code`)
+7. `crates/common/src/storage/mod.rs` (39 lines, language: `rust`, fileCategory: `code`)
+8. `crates/model-gateway/Cargo.toml` (29 lines, language: `toml`, fileCategory: `config`)
+9. `crates/model-gateway/src/auth/deepseek_pow.rs` (394 lines, language: `rust`, fileCategory: `code`)
+10. `crates/model-gateway/src/auth/deepseek.rs` (149 lines, language: `rust`, fileCategory: `code`)
+11. `crates/model-gateway/src/auth/mod.rs` (1122 lines, language: `rust`, fileCategory: `code`)
+12. `crates/model-gateway/src/auth/refresh.rs` (167 lines, language: `rust`, fileCategory: `code`)
+13. `crates/model-gateway/src/client.rs` (29 lines, language: `rust`, fileCategory: `code`)
+14. `crates/model-gateway/src/config.rs` (361 lines, language: `rust`, fileCategory: `code`)
+15. `crates/model-gateway/src/context_window.rs` (318 lines, language: `rust`, fileCategory: `code`)
+16. `crates/model-gateway/src/discovery/mod.rs` (202 lines, language: `rust`, fileCategory: `code`)
+17. `crates/model-gateway/src/health.rs` (69 lines, language: `rust`, fileCategory: `code`)
+18. `crates/model-gateway/src/instrument.rs` (74 lines, language: `rust`, fileCategory: `code`)
+19. `crates/model-gateway/src/lib.rs` (38 lines, language: `rust`, fileCategory: `code`)
+20. `crates/model-gateway/src/protocols/anthropic.rs` (1089 lines, language: `rust`, fileCategory: `code`)
+21. `crates/model-gateway/src/protocols/deepseek.rs` (1613 lines, language: `rust`, fileCategory: `code`)
+22. `crates/model-gateway/src/protocols/gemini.rs` (275 lines, language: `rust`, fileCategory: `code`)
+23. `crates/model-gateway/src/protocols/mod.rs` (4 lines, language: `rust`, fileCategory: `code`)
+24. `crates/model-gateway/src/protocols/openai.rs` (1649 lines, language: `rust`, fileCategory: `code`)
+25. `crates/model-gateway/src/providers/anthropic.rs` (407 lines, language: `rust`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

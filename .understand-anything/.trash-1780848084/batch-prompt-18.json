@@ -1,0 +1,185 @@
+{
+  "batchIndex": 18,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "crates/agent-core/prompts/base_system.md",
+      "sizeLines": 107,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/src/agent_loop.rs",
+      "sizeLines": 1611,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/automode.rs",
+      "sizeLines": 530,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/budget.rs",
+      "sizeLines": 65,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/compaction.rs",
+      "sizeLines": 344,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/microcompact.rs",
+      "sizeLines": 203,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/mod.rs",
+      "sizeLines": 4,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/transcript.rs",
+      "sizeLines": 395,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/core_client/http.rs",
+      "sizeLines": 31,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/core_client/mod.rs",
+      "sizeLines": 1148,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/definition.rs",
+      "sizeLines": 100,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/dispatch.rs",
+      "sizeLines": 2498,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/apply.rs",
+      "sizeLines": 224,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/format.rs",
+      "sizeLines": 98,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/mod.rs",
+      "sizeLines": 3,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/parser.rs",
+      "sizeLines": 278,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/prompt.md",
+      "sizeLines": 88,
+      "language": "markdown",
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/src/edits/metadata.rs",
+      "sizeLines": 133,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/mod.rs",
+      "sizeLines": 720,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/effects.rs",
+      "sizeLines": 593,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/harness.rs",
+      "sizeLines": 1088,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/external.rs",
+      "sizeLines": 713,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/mod.rs",
+      "sizeLines": 48,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/types.rs",
+      "sizeLines": 166,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/lib.rs",
+      "sizeLines": 45,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/agent-core/prompts/base_system.md": [],
+    "crates/agent-core/src/agent_loop.rs": [],
+    "crates/agent-core/src/automode.rs": [],
+    "crates/agent-core/src/context/budget.rs": [],
+    "crates/agent-core/src/context/compaction.rs": [],
+    "crates/agent-core/src/context/microcompact.rs": [],
+    "crates/agent-core/src/context/mod.rs": [],
+    "crates/agent-core/src/context/transcript.rs": [],
+    "crates/agent-core/src/core_client/http.rs": [],
+    "crates/agent-core/src/core_client/mod.rs": [],
+    "crates/agent-core/src/definition.rs": [],
+    "crates/agent-core/src/dispatch.rs": [],
+    "crates/agent-core/src/edits/hashline/apply.rs": [],
+    "crates/agent-core/src/edits/hashline/format.rs": [],
+    "crates/agent-core/src/edits/hashline/mod.rs": [],
+    "crates/agent-core/src/edits/hashline/parser.rs": [],
+    "crates/agent-core/src/edits/hashline/prompt.md": [],
+    "crates/agent-core/src/edits/metadata.rs": [],
+    "crates/agent-core/src/edits/mod.rs": [],
+    "crates/agent-core/src/effects.rs": [],
+    "crates/agent-core/src/harness.rs": [],
+    "crates/agent-core/src/hooks/external.rs": [],
+    "crates/agent-core/src/hooks/mod.rs": [],
+    "crates/agent-core/src/hooks/types.rs": [],
+    "crates/agent-core/src/lib.rs": []
+  },
+  "neighborMap": {}
+}

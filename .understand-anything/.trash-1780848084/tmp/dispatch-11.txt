@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `11/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-11.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts":[],"apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts":[],"apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx":[],"apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx` (2109 lines, language: `typescript`, fileCategory: `code`)
+2. `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx` (394 lines, language: `typescript`, fileCategory: `code`)
+3. `apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx` (327 lines, language: `typescript`, fileCategory: `code`)
+4. `apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx` (25 lines, language: `typescript`, fileCategory: `code`)
+5. `apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx` (1210 lines, language: `typescript`, fileCategory: `code`)
+6. `apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx` (379 lines, language: `typescript`, fileCategory: `code`)
+7. `apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx` (363 lines, language: `typescript`, fileCategory: `code`)
+8. `apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx` (282 lines, language: `typescript`, fileCategory: `code`)
+9. `apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx` (1281 lines, language: `typescript`, fileCategory: `code`)
+10. `apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx` (116 lines, language: `typescript`, fileCategory: `code`)
+11. `apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx` (432 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx` (149 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx` (589 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx` (815 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx` (1020 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx` (153 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx` (90 lines, language: `typescript`, fileCategory: `code`)
+18. `apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts` (42 lines, language: `typescript`, fileCategory: `code`)
+19. `apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts` (24 lines, language: `typescript`, fileCategory: `code`)
+20. `apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx` (274 lines, language: `typescript`, fileCategory: `code`)
+21. `apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx` (126 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx` (46 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx` (79 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx` (96 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx` (267 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

@@ -1,0 +1,45 @@
+{
+  "batchIndex": 3,
+  "totalBatches": 23,
+  "fileCount": 5,
+  "files": [
+    {
+      "path": "apps/desktop/Cargo.toml",
+      "sizeLines": 37,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "sizeLines": 39,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tauri.conf.json",
+      "sizeLines": 45,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.json",
+      "sizeLines": 23,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.node.json",
+      "sizeLines": 11,
+      "language": "json",
+      "fileCategory": "config"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/Cargo.toml": [],
+    "apps/desktop/package.json": [],
+    "apps/desktop/tauri.conf.json": [],
+    "apps/desktop/tsconfig.json": [],
+    "apps/desktop/tsconfig.node.json": []
+  },
+  "neighborMap": {}
+}

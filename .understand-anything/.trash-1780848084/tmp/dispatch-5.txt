@@ -1,0 +1,23 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian`
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `5/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-5.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/pages/packages/dashboard/index.html":[],"apps/pages/packages/dashboard/package.json":[],"apps/pages/packages/dashboard/tsconfig.app.json":[],"apps/pages/packages/dashboard/tsconfig.json":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch:
+1. `apps/pages/packages/dashboard/index.html` (19 lines, language: `html`, fileCategory: `markup`)
+2. `apps/pages/packages/dashboard/package.json` (46 lines, language: `json`, fileCategory: `config`)
+3. `apps/pages/packages/dashboard/tsconfig.app.json` (24 lines, language: `json`, fileCategory: `config`)
+4. `apps/pages/packages/dashboard/tsconfig.json` (4 lines, language: `json`, fileCategory: `config`)

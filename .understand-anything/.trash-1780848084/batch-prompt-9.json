@@ -1,0 +1,185 @@
+{
+  "batchIndex": 9,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm",
+      "sizeLines": 384,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm",
+      "sizeLines": 269,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm",
+      "sizeLines": 417,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm",
+      "sizeLines": 412,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm",
+      "sizeLines": 291,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm",
+      "sizeLines": 294,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm",
+      "sizeLines": 198,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm",
+      "sizeLines": 1535,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm",
+      "sizeLines": 1282,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm",
+      "sizeLines": 1522,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/buildInfo.ts",
+      "sizeLines": 9,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/bridge/tauri.ts",
+      "sizeLines": 640,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/bridge/transport.ts",
+      "sizeLines": 242,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx",
+      "sizeLines": 1592,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx",
+      "sizeLines": 217,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx",
+      "sizeLines": 151,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx",
+      "sizeLines": 492,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx",
+      "sizeLines": 1390,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts",
+      "sizeLines": 63,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts",
+      "sizeLines": 34,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts",
+      "sizeLines": 34,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx",
+      "sizeLines": 1009,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx",
+      "sizeLines": 58,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx",
+      "sizeLines": 105,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx",
+      "sizeLines": 56,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm": [],
+    "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm": [],
+    "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm": [],
+    "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm": [],
+    "apps/desktop/frontend/src/buildInfo.ts": [],
+    "apps/desktop/frontend/src/desktop/bridge/tauri.ts": [],
+    "apps/desktop/frontend/src/desktop/bridge/transport.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx": []
+  },
+  "neighborMap": {}
+}

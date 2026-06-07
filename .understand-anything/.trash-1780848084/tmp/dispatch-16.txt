@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `16/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-16.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/pages/packages/dashboard/src/components/ThemePicker.tsx":[],"apps/pages/packages/dashboard/src/components/TokenGate.tsx":[],"apps/pages/packages/dashboard/src/components/WarningBanner.tsx":[],"apps/pages/packages/dashboard/src/contexts/I18nContext.tsx":[],"apps/pages/packages/dashboard/src/hooks/useIsMobile.ts":[],"apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts":[],"apps/pages/packages/dashboard/src/index.css":[],"apps/pages/packages/dashboard/src/locales/en.ts":[],"apps/pages/packages/dashboard/src/locales/index.ts":[],"apps/pages/packages/dashboard/src/locales/ja.ts":[],"apps/pages/packages/dashboard/src/locales/ko.ts":[],"apps/pages/packages/dashboard/src/locales/zh-TW.ts":[],"apps/pages/packages/dashboard/src/locales/zh.ts":[],"apps/pages/packages/dashboard/src/main.tsx":[],"apps/pages/packages/dashboard/src/store.ts":[],"apps/pages/packages/dashboard/src/themes/index.ts":[],"apps/pages/packages/dashboard/src/themes/presets.ts":[],"apps/pages/packages/dashboard/src/themes/theme-engine.ts":[],"apps/pages/packages/dashboard/src/themes/ThemeContext.tsx":[],"apps/pages/packages/dashboard/src/themes/types.ts":[],"apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts":[],"apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts":[],"apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts":[],"apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts":[],"apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/pages/packages/dashboard/src/components/ThemePicker.tsx` (180 lines, language: `typescript`, fileCategory: `code`)
+2. `apps/pages/packages/dashboard/src/components/TokenGate.tsx` (79 lines, language: `typescript`, fileCategory: `code`)
+3. `apps/pages/packages/dashboard/src/components/WarningBanner.tsx` (253 lines, language: `typescript`, fileCategory: `code`)
+4. `apps/pages/packages/dashboard/src/contexts/I18nContext.tsx` (43 lines, language: `typescript`, fileCategory: `code`)
+5. `apps/pages/packages/dashboard/src/hooks/useIsMobile.ts` (21 lines, language: `typescript`, fileCategory: `code`)
+6. `apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts` (71 lines, language: `typescript`, fileCategory: `code`)
+7. `apps/pages/packages/dashboard/src/index.css` (276 lines, language: `css`, fileCategory: `markup`)
+8. `apps/pages/packages/dashboard/src/locales/en.ts` (271 lines, language: `typescript`, fileCategory: `code`)
+9. `apps/pages/packages/dashboard/src/locales/index.ts` (31 lines, language: `typescript`, fileCategory: `code`)
+10. `apps/pages/packages/dashboard/src/locales/ja.ts` (271 lines, language: `typescript`, fileCategory: `code`)
+11. `apps/pages/packages/dashboard/src/locales/ko.ts` (271 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/pages/packages/dashboard/src/locales/zh-TW.ts` (271 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/pages/packages/dashboard/src/locales/zh.ts` (271 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/pages/packages/dashboard/src/main.tsx` (10 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/pages/packages/dashboard/src/store.ts` (791 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/pages/packages/dashboard/src/themes/index.ts` (5 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/pages/packages/dashboard/src/themes/presets.ts` (183 lines, language: `typescript`, fileCategory: `code`)
+18. `apps/pages/packages/dashboard/src/themes/theme-engine.ts` (65 lines, language: `typescript`, fileCategory: `code`)
+19. `apps/pages/packages/dashboard/src/themes/ThemeContext.tsx` (106 lines, language: `typescript`, fileCategory: `code`)
+20. `apps/pages/packages/dashboard/src/themes/types.ts` (36 lines, language: `typescript`, fileCategory: `code`)
+21. `apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts` (131 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts` (79 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts` (106 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts` (196 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts` (118 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

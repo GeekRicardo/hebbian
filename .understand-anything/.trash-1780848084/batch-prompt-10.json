@@ -1,0 +1,185 @@
+{
+  "batchIndex": 10,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "sizeLines": 166,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "sizeLines": 183,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "sizeLines": 922,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "sizeLines": 265,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "sizeLines": 50,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "sizeLines": 120,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "sizeLines": 81,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "sizeLines": 223,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "sizeLines": 138,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "sizeLines": 152,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "sizeLines": 143,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "sizeLines": 104,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "sizeLines": 113,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "sizeLines": 46,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "sizeLines": 124,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "sizeLines": 50,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "sizeLines": 445,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "sizeLines": 46,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "sizeLines": 32,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "sizeLines": 33,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "sizeLines": 56,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+      "sizeLines": 32,
+      "language": "javascript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "sizeLines": 2349,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "sizeLines": 211,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "sizeLines": 153,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx": []
+  },
+  "neighborMap": {}
+}

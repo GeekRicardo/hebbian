@@ -1,0 +1,7 @@
+{
+  "projectRoot": "/Users/ricardo/code/ricardo/rust/hebbian",
+  "batchFiles": [
+    {"path": ".github/workflows/deploy-pages.yml", "language": "yaml", "sizeLines": 54, "fileCategory": "infra"}
+  ],
+  "batchImportData": {".github/workflows/deploy-pages.yml": []}
+}

@@ -1,0 +1,185 @@
+{
+  "batchIndex": 8,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/cli/Cargo.toml",
+      "sizeLines": 25,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/cli/src/client.rs",
+      "sizeLines": 109,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/daemon.rs",
+      "sizeLines": 1178,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/ipc.rs",
+      "sizeLines": 232,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/main.rs",
+      "sizeLines": 253,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/mock_provider.rs",
+      "sizeLines": 88,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/render.rs",
+      "sizeLines": 392,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/session.rs",
+      "sizeLines": 602,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/app.rs",
+      "sizeLines": 585,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/chat_view.rs",
+      "sizeLines": 196,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/input_box.rs",
+      "sizeLines": 60,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/mod.rs",
+      "sizeLines": 5,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/permission_popup.rs",
+      "sizeLines": 107,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/question_popup.rs",
+      "sizeLines": 138,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/status_bar.rs",
+      "sizeLines": 40,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/mod.rs",
+      "sizeLines": 11,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/observer.rs",
+      "sizeLines": 9,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/theme.rs",
+      "sizeLines": 60,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/build.rs",
+      "sizeLines": 3,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/capabilities/default.json",
+      "sizeLines": 14,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/frontend/index.html",
+      "sizeLines": 12,
+      "language": "html",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/App.tsx",
+      "sizeLines": 124,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations.ts",
+      "sizeLines": 11,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+      "sizeLines": 220,
+      "language": "webm",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+      "sizeLines": 374,
+      "language": "webm",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/cli/Cargo.toml": [],
+    "apps/cli/src/client.rs": [],
+    "apps/cli/src/daemon.rs": [],
+    "apps/cli/src/ipc.rs": [],
+    "apps/cli/src/main.rs": [],
+    "apps/cli/src/mock_provider.rs": [],
+    "apps/cli/src/render.rs": [],
+    "apps/cli/src/session.rs": [],
+    "apps/cli/src/tui/app.rs": [],
+    "apps/cli/src/tui/components/chat_view.rs": [],
+    "apps/cli/src/tui/components/input_box.rs": [],
+    "apps/cli/src/tui/components/mod.rs": [],
+    "apps/cli/src/tui/components/permission_popup.rs": [],
+    "apps/cli/src/tui/components/question_popup.rs": [],
+    "apps/cli/src/tui/components/status_bar.rs": [],
+    "apps/cli/src/tui/mod.rs": [],
+    "apps/cli/src/tui/observer.rs": [],
+    "apps/cli/src/tui/theme.rs": [],
+    "apps/desktop/build.rs": [],
+    "apps/desktop/capabilities/default.json": [],
+    "apps/desktop/frontend/index.html": [],
+    "apps/desktop/frontend/src/App.tsx": [],
+    "apps/desktop/frontend/src/assets/animations.ts": [],
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm": []
+  },
+  "neighborMap": {}
+}

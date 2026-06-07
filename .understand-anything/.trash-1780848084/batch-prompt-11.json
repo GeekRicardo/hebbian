@@ -1,0 +1,185 @@
+{
+  "batchIndex": 11,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "sizeLines": 2109,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "sizeLines": 394,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "sizeLines": 327,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "sizeLines": 25,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "sizeLines": 1210,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "sizeLines": 379,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "sizeLines": 363,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "sizeLines": 282,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "sizeLines": 1281,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "sizeLines": 116,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "sizeLines": 432,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "sizeLines": 149,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "sizeLines": 589,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "sizeLines": 815,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "sizeLines": 1020,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "sizeLines": 153,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "sizeLines": 90,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "sizeLines": 42,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "sizeLines": 24,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "sizeLines": 274,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "sizeLines": 126,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "sizeLines": 46,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "sizeLines": 79,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "sizeLines": 96,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "sizeLines": 267,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx": []
+  },
+  "neighborMap": {}
+}

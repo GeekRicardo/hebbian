@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `17/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-17.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts":[],"apps/pages/packages/dashboard/src/utils/containers.ts":[],"apps/pages/packages/dashboard/src/utils/edgeAggregation.ts":[],"apps/pages/packages/dashboard/src/utils/elk-layout.ts":[],"apps/pages/packages/dashboard/src/utils/filters.ts":[],"apps/pages/packages/dashboard/src/utils/layerStats.ts":[],"apps/pages/packages/dashboard/src/utils/layout.ts":[],"apps/pages/packages/dashboard/src/utils/layout.worker.ts":[],"apps/pages/packages/dashboard/src/utils/louvain.ts":[],"apps/pages/packages/dashboard/src/vite-env.d.ts":[],"apps/pages/packages/dashboard/vite.config.demo.ts":[],"apps/pages/packages/dashboard/vite.config.ghpages.ts":[],"apps/pages/packages/dashboard/vite.config.static.ts":[],"apps/pages/packages/dashboard/vite.config.ts":[],"apps/web-server/Cargo.toml":[],"apps/web-server/src/chat_helpers.rs":[],"apps/web-server/src/events.rs":[],"apps/web-server/src/main.rs":[],"apps/web-server/src/protocol.rs":[],"apps/web-server/src/server.rs":[],"apps/web-server/src/session.rs":[],"crates/agent-core/Cargo.toml":[],"crates/agent-core/examples/permission_probe.rs":[],"crates/agent-core/examples/scan_skill_dir.rs":[],"crates/agent-core/prompts/automode_judge.md":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts` (20 lines, language: `typescript`, fileCategory: `code`)
+2. `apps/pages/packages/dashboard/src/utils/containers.ts` (156 lines, language: `typescript`, fileCategory: `code`)
+3. `apps/pages/packages/dashboard/src/utils/edgeAggregation.ts` (208 lines, language: `typescript`, fileCategory: `code`)
+4. `apps/pages/packages/dashboard/src/utils/elk-layout.ts` (244 lines, language: `typescript`, fileCategory: `code`)
+5. `apps/pages/packages/dashboard/src/utils/filters.ts` (88 lines, language: `typescript`, fileCategory: `code`)
+6. `apps/pages/packages/dashboard/src/utils/layerStats.ts` (39 lines, language: `typescript`, fileCategory: `code`)
+7. `apps/pages/packages/dashboard/src/utils/layout.ts` (266 lines, language: `typescript`, fileCategory: `code`)
+8. `apps/pages/packages/dashboard/src/utils/layout.worker.ts` (47 lines, language: `typescript`, fileCategory: `code`)
+9. `apps/pages/packages/dashboard/src/utils/louvain.ts` (47 lines, language: `typescript`, fileCategory: `code`)
+10. `apps/pages/packages/dashboard/src/vite-env.d.ts` (1 lines, language: `typescript`, fileCategory: `code`)
+11. `apps/pages/packages/dashboard/vite.config.demo.ts` (49 lines, language: `typescript`, fileCategory: `code`)
+12. `apps/pages/packages/dashboard/vite.config.ghpages.ts` (31 lines, language: `typescript`, fileCategory: `code`)
+13. `apps/pages/packages/dashboard/vite.config.static.ts` (12 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/pages/packages/dashboard/vite.config.ts` (362 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/web-server/Cargo.toml` (42 lines, language: `toml`, fileCategory: `config`)
+16. `apps/web-server/src/chat_helpers.rs` (136 lines, language: `rust`, fileCategory: `code`)
+17. `apps/web-server/src/events.rs` (371 lines, language: `rust`, fileCategory: `code`)
+18. `apps/web-server/src/main.rs` (114 lines, language: `rust`, fileCategory: `code`)
+19. `apps/web-server/src/protocol.rs` (74 lines, language: `rust`, fileCategory: `code`)
+20. `apps/web-server/src/server.rs` (1761 lines, language: `rust`, fileCategory: `code`)
+21. `apps/web-server/src/session.rs` (583 lines, language: `rust`, fileCategory: `code`)
+22. `crates/agent-core/Cargo.toml` (37 lines, language: `toml`, fileCategory: `config`)
+23. `crates/agent-core/examples/permission_probe.rs` (1376 lines, language: `rust`, fileCategory: `code`)
+24. `crates/agent-core/examples/scan_skill_dir.rs` (74 lines, language: `rust`, fileCategory: `code`)
+25. `crates/agent-core/prompts/automode_judge.md` (159 lines, language: `markdown`, fileCategory: `docs`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

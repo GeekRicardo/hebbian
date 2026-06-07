@@ -1,0 +1,185 @@
+{
+  "batchIndex": 12,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "sizeLines": 445,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "sizeLines": 106,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "sizeLines": 44,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "sizeLines": 149,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "sizeLines": 100,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "sizeLines": 35,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "sizeLines": 17,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "sizeLines": 97,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "sizeLines": 39,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "sizeLines": 103,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "sizeLines": 35,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "sizeLines": 217,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "sizeLines": 250,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "sizeLines": 97,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "sizeLines": 350,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "sizeLines": 77,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "sizeLines": 51,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "sizeLines": 6,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "sizeLines": 30,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "sizeLines": 2657,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "sizeLines": 36,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "sizeLines": 1060,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/index.css",
+      "sizeLines": 253,
+      "language": "css",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/main.tsx",
+      "sizeLines": 27,
+      "language": "typescript",
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/vite-env.d.ts",
+      "sizeLines": 1,
+      "language": "typescript",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/utils.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/store/useStore.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/types.ts": [],
+    "apps/desktop/frontend/src/index.css": [],
+    "apps/desktop/frontend/src/main.tsx": [],
+    "apps/desktop/frontend/src/vite-env.d.ts": []
+  },
+  "neighborMap": {}
+}

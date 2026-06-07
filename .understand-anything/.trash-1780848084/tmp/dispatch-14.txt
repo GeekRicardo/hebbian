@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `14/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-14.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/island-mac/Sources/HebIsland/AppDelegate.swift":[],"apps/island-mac/Sources/HebIsland/CardView.swift":[],"apps/island-mac/Sources/HebIsland/DaemonProbe.swift":[],"apps/island-mac/Sources/HebIsland/main.swift":[],"apps/island-mac/Sources/HebIsland/NotificationManager.swift":[],"apps/island-mac/Sources/HebIsland/NotifyClient.swift":[],"apps/island-mac/Sources/HebIsland/PanelController.swift":[],"apps/island-mac/Sources/HebIsland/Protocol.swift":[],"apps/island-mac/Sources/HebIsland/ScreenResolver.swift":[],"apps/island-mac/Sources/HebIsland/SocketServer.swift":[],"apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift":[],"apps/pages/packages/core/package.json":[],"apps/pages/packages/core/src/index.ts":[],"apps/pages/packages/core/src/schema.ts":[],"apps/pages/packages/core/src/search.ts":[],"apps/pages/packages/core/src/types.ts":[],"apps/pages/packages/core/tsconfig.json":[],"apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs":[],"apps/pages/packages/dashboard/scripts/benchmark-layout.mjs":[],"apps/pages/packages/dashboard/scripts/bundle-graph.mjs":[],"apps/pages/packages/dashboard/src/App.tsx":[],"apps/pages/packages/dashboard/src/components/Breadcrumb.tsx":[],"apps/pages/packages/dashboard/src/components/ChatPanel.tsx":[],"apps/pages/packages/dashboard/src/components/CodeViewer.tsx":[],"apps/pages/packages/dashboard/src/components/ContainerNode.tsx":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/island-mac/Sources/HebIsland/AppDelegate.swift` (63 lines, language: `swift`, fileCategory: `code`)
+2. `apps/island-mac/Sources/HebIsland/CardView.swift` (446 lines, language: `swift`, fileCategory: `code`)
+3. `apps/island-mac/Sources/HebIsland/DaemonProbe.swift` (62 lines, language: `swift`, fileCategory: `code`)
+4. `apps/island-mac/Sources/HebIsland/main.swift` (82 lines, language: `swift`, fileCategory: `code`)
+5. `apps/island-mac/Sources/HebIsland/NotificationManager.swift` (170 lines, language: `swift`, fileCategory: `code`)
+6. `apps/island-mac/Sources/HebIsland/NotifyClient.swift` (112 lines, language: `swift`, fileCategory: `code`)
+7. `apps/island-mac/Sources/HebIsland/PanelController.swift` (336 lines, language: `swift`, fileCategory: `code`)
+8. `apps/island-mac/Sources/HebIsland/Protocol.swift` (111 lines, language: `swift`, fileCategory: `code`)
+9. `apps/island-mac/Sources/HebIsland/ScreenResolver.swift` (116 lines, language: `swift`, fileCategory: `code`)
+10. `apps/island-mac/Sources/HebIsland/SocketServer.swift` (180 lines, language: `swift`, fileCategory: `code`)
+11. `apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift` (103 lines, language: `swift`, fileCategory: `code`)
+12. `apps/pages/packages/core/package.json` (23 lines, language: `json`, fileCategory: `config`)
+13. `apps/pages/packages/core/src/index.ts` (14 lines, language: `typescript`, fileCategory: `code`)
+14. `apps/pages/packages/core/src/schema.ts` (663 lines, language: `typescript`, fileCategory: `code`)
+15. `apps/pages/packages/core/src/search.ts` (65 lines, language: `typescript`, fileCategory: `code`)
+16. `apps/pages/packages/core/src/types.ts` (202 lines, language: `typescript`, fileCategory: `code`)
+17. `apps/pages/packages/core/tsconfig.json` (20 lines, language: `json`, fileCategory: `config`)
+18. `apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs` (99 lines, language: `javascript`, fileCategory: `code`)
+19. `apps/pages/packages/dashboard/scripts/benchmark-layout.mjs` (80 lines, language: `javascript`, fileCategory: `code`)
+20. `apps/pages/packages/dashboard/scripts/bundle-graph.mjs` (119 lines, language: `javascript`, fileCategory: `code`)
+21. `apps/pages/packages/dashboard/src/App.tsx` (715 lines, language: `typescript`, fileCategory: `code`)
+22. `apps/pages/packages/dashboard/src/components/Breadcrumb.tsx` (40 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/pages/packages/dashboard/src/components/ChatPanel.tsx` (783 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/pages/packages/dashboard/src/components/CodeViewer.tsx` (513 lines, language: `typescript`, fileCategory: `code`)
+25. `apps/pages/packages/dashboard/src/components/ContainerNode.tsx` (101 lines, language: `typescript`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

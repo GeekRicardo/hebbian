@@ -1,0 +1,1877 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/cli/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 25,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/cli/src/client.rs",
+      "language": "rust",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/daemon.rs",
+      "language": "rust",
+      "sizeLines": 1178,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/ipc.rs",
+      "language": "rust",
+      "sizeLines": 232,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/main.rs",
+      "language": "rust",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/mock_provider.rs",
+      "language": "rust",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/render.rs",
+      "language": "rust",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/session.rs",
+      "language": "rust",
+      "sizeLines": 602,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/app.rs",
+      "language": "rust",
+      "sizeLines": 585,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/chat_view.rs",
+      "language": "rust",
+      "sizeLines": 196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/input_box.rs",
+      "language": "rust",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/mod.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/permission_popup.rs",
+      "language": "rust",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/question_popup.rs",
+      "language": "rust",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/status_bar.rs",
+      "language": "rust",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/mod.rs",
+      "language": "rust",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/observer.rs",
+      "language": "rust",
+      "sizeLines": 9,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/theme.rs",
+      "language": "rust",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/build.rs",
+      "language": "rust",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/capabilities/default.json",
+      "language": "json",
+      "sizeLines": 14,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/frontend/index.html",
+      "language": "html",
+      "sizeLines": 12,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/App.tsx",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations.ts",
+      "language": "typescript",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+      "language": "webm",
+      "sizeLines": 220,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+      "language": "webm",
+      "sizeLines": 374,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "config:apps/cli/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "apps/cli/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/cli/src/client.rs",
+      "type": "file",
+      "name": "client.rs",
+      "filePath": "apps/cli/src/client.rs",
+      "summary": "IPC 客户端：向 daemon 的 Unix socket 发送一条命令并打印响应。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/client.rs:sockets_dir",
+      "type": "function",
+      "name": "sockets_dir",
+      "filePath": "apps/cli/src/client.rs",
+      "summary": "sockets_dir 定义于 client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/client.rs:socket_path",
+      "type": "function",
+      "name": "socket_path",
+      "filePath": "apps/cli/src/client.rs",
+      "summary": "socket_path 定义于 client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/client.rs:list_sessions",
+      "type": "function",
+      "name": "list_sessions",
+      "filePath": "apps/cli/src/client.rs",
+      "summary": "list_sessions 定义于 client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/client.rs:send_command",
+      "type": "function",
+      "name": "send_command",
+      "filePath": "apps/cli/src/client.rs",
+      "summary": "send_command 定义于 client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/daemon.rs",
+      "type": "file",
+      "name": "daemon.rs",
+      "filePath": "apps/cli/src/daemon.rs",
+      "summary": "Daemon 主体：启动后持守一个 Unix socket，接受 IPC 命令，同时驱动 agent_core。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/cli/src/daemon.rs:DaemonArgs",
+      "type": "class",
+      "name": "DaemonArgs",
+      "filePath": "apps/cli/src/daemon.rs",
+      "summary": "DaemonArgs 定义于 daemon.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/daemon.rs:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "apps/cli/src/daemon.rs",
+      "summary": "run 定义于 daemon.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/ipc.rs",
+      "type": "file",
+      "name": "ipc.rs",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "IPC 协议：daemon ↔ client 通过 Unix socket 交互。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/ipc.rs:IpcCommand",
+      "type": "class",
+      "name": "IpcCommand",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "IpcCommand 定义于 ipc.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/ipc.rs:IpcResponse",
+      "type": "class",
+      "name": "IpcResponse",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "IpcResponse 定义于 ipc.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/ipc.rs:ok",
+      "type": "function",
+      "name": "ok",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "ok 定义于 ipc.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/ipc.rs:err",
+      "type": "function",
+      "name": "err",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "err 定义于 ipc.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/ipc.rs:with_data",
+      "type": "function",
+      "name": "with_data",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "with_data 定义于 ipc.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/ipc.rs:DaemonEvent",
+      "type": "class",
+      "name": "DaemonEvent",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "DaemonEvent 定义于 ipc.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/ipc.rs:QuestionOptionDto",
+      "type": "class",
+      "name": "QuestionOptionDto",
+      "filePath": "apps/cli/src/ipc.rs",
+      "summary": "QuestionOptionDto 定义于 ipc.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/main.rs",
+      "type": "file",
+      "name": "main.rs",
+      "filePath": "apps/cli/src/main.rs",
+      "summary": "heb — Hebbian agent CLI surface（daemon 模式）",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/mock_provider.rs",
+      "type": "file",
+      "name": "mock_provider.rs",
+      "filePath": "apps/cli/src/mock_provider.rs",
+      "summary": "用于无网络环境快速验证的 mock provider。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/mock_provider.rs:MockClient",
+      "type": "class",
+      "name": "MockClient",
+      "filePath": "apps/cli/src/mock_provider.rs",
+      "summary": "MockClient 定义于 mock_provider.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/mock_provider.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "apps/cli/src/mock_provider.rs",
+      "summary": "new 定义于 mock_provider.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/render.rs",
+      "type": "file",
+      "name": "render.rs",
+      "filePath": "apps/cli/src/render.rs",
+      "summary": "把 `protocol::Event` 流渲染成有色彩的终端输出。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/cli/src/render.rs:TurnRenderer",
+      "type": "class",
+      "name": "TurnRenderer",
+      "filePath": "apps/cli/src/render.rs",
+      "summary": "TurnRenderer 定义于 render.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/render.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "apps/cli/src/render.rs",
+      "summary": "new 定义于 render.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/render.rs:on_event",
+      "type": "function",
+      "name": "on_event",
+      "filePath": "apps/cli/src/render.rs",
+      "summary": "on_event 定义于 render.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/render.rs:take_final_text",
+      "type": "function",
+      "name": "take_final_text",
+      "filePath": "apps/cli/src/render.rs",
+      "summary": "take_final_text 定义于 render.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/session.rs",
+      "type": "file",
+      "name": "session.rs",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "终端 surface：每条 user message 一个 turn，复用 [`agent_core::Session`]。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/cli/src/session.rs:SessionPersist",
+      "type": "class",
+      "name": "SessionPersist",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "SessionPersist 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/session.rs:CliSession",
+      "type": "class",
+      "name": "CliSession",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "CliSession 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/session.rs:PersistRef",
+      "type": "class",
+      "name": "PersistRef",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "PersistRef 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/session.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "new 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/session.rs:run_single",
+      "type": "function",
+      "name": "run_single",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "run_single 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/session.rs:run_with_history",
+      "type": "function",
+      "name": "run_with_history",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "run_with_history 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/session.rs:into_tui_parts",
+      "type": "function",
+      "name": "into_tui_parts",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "into_tui_parts 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/session.rs:run_loop",
+      "type": "function",
+      "name": "run_loop",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "run_loop 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/session.rs:ConvoInput",
+      "type": "class",
+      "name": "ConvoInput",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "ConvoInput 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/session.rs:ConvoMessage",
+      "type": "class",
+      "name": "ConvoMessage",
+      "filePath": "apps/cli/src/session.rs",
+      "summary": "ConvoMessage 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/app.rs",
+      "type": "file",
+      "name": "app.rs",
+      "filePath": "apps/cli/src/tui/app.rs",
+      "summary": "TUI 主应用（架构 §8）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/cli/src/tui/app.rs:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "apps/cli/src/tui/app.rs",
+      "summary": "run 定义于 app.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/chat_view.rs",
+      "type": "file",
+      "name": "chat_view.rs",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "聊天滚动视图（架构 §8.4 草图）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/chat_view.rs:ChatBlock",
+      "type": "class",
+      "name": "ChatBlock",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "ChatBlock 定义于 chat_view.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/chat_view.rs:ToolStatus",
+      "type": "class",
+      "name": "ToolStatus",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "ToolStatus 定义于 chat_view.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/chat_view.rs:AutoDecision",
+      "type": "class",
+      "name": "AutoDecision",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "AutoDecision 定义于 chat_view.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/chat_view.rs:ChatView",
+      "type": "class",
+      "name": "ChatView",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "ChatView 定义于 chat_view.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:push",
+      "type": "function",
+      "name": "push",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "push 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:blocks_mut",
+      "type": "function",
+      "name": "blocks_mut",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "blocks_mut 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:last_mut",
+      "type": "function",
+      "name": "last_mut",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "last_mut 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:scroll_up",
+      "type": "function",
+      "name": "scroll_up",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "scroll_up 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:scroll_down",
+      "type": "function",
+      "name": "scroll_down",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "scroll_down 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:follow_bottom",
+      "type": "function",
+      "name": "follow_bottom",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "follow_bottom 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/chat_view.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "apps/cli/src/tui/components/chat_view.rs",
+      "summary": "render 定义于 chat_view.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/input_box.rs",
+      "type": "file",
+      "name": "input_box.rs",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "多行输入框。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/input_box.rs:InputBox",
+      "type": "class",
+      "name": "InputBox",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "InputBox 定义于 input_box.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:buffer",
+      "type": "function",
+      "name": "buffer",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "buffer 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:push_char",
+      "type": "function",
+      "name": "push_char",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "push_char 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:pop_char",
+      "type": "function",
+      "name": "pop_char",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "pop_char 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:clear",
+      "type": "function",
+      "name": "clear",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "clear 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:take",
+      "type": "function",
+      "name": "take",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "take 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/input_box.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "apps/cli/src/tui/components/input_box.rs",
+      "summary": "render 定义于 input_box.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "apps/cli/src/tui/components/mod.rs",
+      "summary": "模块 mod",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/permission_popup.rs",
+      "type": "file",
+      "name": "permission_popup.rs",
+      "filePath": "apps/cli/src/tui/components/permission_popup.rs",
+      "summary": "审批弹窗（HITL）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/permission_popup.rs:PermissionPopupState",
+      "type": "class",
+      "name": "PermissionPopupState",
+      "filePath": "apps/cli/src/tui/components/permission_popup.rs",
+      "summary": "PermissionPopupState 定义于 permission_popup.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/permission_popup.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "apps/cli/src/tui/components/permission_popup.rs",
+      "summary": "render 定义于 permission_popup.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/permission_popup.rs:decision_for_key",
+      "type": "function",
+      "name": "decision_for_key",
+      "filePath": "apps/cli/src/tui/components/permission_popup.rs",
+      "summary": "decision_for_key 定义于 permission_popup.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/question_popup.rs",
+      "type": "file",
+      "name": "question_popup.rs",
+      "filePath": "apps/cli/src/tui/components/question_popup.rs",
+      "summary": "Ask 工具的提问弹窗：题目 + 选项 + 自由输入。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/question_popup.rs:QuestionPopupState",
+      "type": "class",
+      "name": "QuestionPopupState",
+      "filePath": "apps/cli/src/tui/components/question_popup.rs",
+      "summary": "QuestionPopupState 定义于 question_popup.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/question_popup.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "apps/cli/src/tui/components/question_popup.rs",
+      "summary": "render 定义于 question_popup.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/question_popup.rs:option_index_for_key",
+      "type": "function",
+      "name": "option_index_for_key",
+      "filePath": "apps/cli/src/tui/components/question_popup.rs",
+      "summary": "option_index_for_key 定义于 question_popup.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/question_popup.rs:build_answer",
+      "type": "function",
+      "name": "build_answer",
+      "filePath": "apps/cli/src/tui/components/question_popup.rs",
+      "summary": "build_answer 定义于 question_popup.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/components/status_bar.rs",
+      "type": "file",
+      "name": "status_bar.rs",
+      "filePath": "apps/cli/src/tui/components/status_bar.rs",
+      "summary": "底部状态栏：provider·model / token usage / RunMode / step counter。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/cli/src/tui/components/status_bar.rs:StatusBarState",
+      "type": "class",
+      "name": "StatusBarState",
+      "filePath": "apps/cli/src/tui/components/status_bar.rs",
+      "summary": "StatusBarState 定义于 status_bar.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/components/status_bar.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "apps/cli/src/tui/components/status_bar.rs",
+      "summary": "render 定义于 status_bar.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "apps/cli/src/tui/mod.rs",
+      "summary": "全屏 TUI（架构 §8）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/cli/src/tui/observer.rs",
+      "type": "file",
+      "name": "observer.rs",
+      "filePath": "apps/cli/src/tui/observer.rs",
+      "summary": "TuiObserver：保留接口对称（与 CliObserver 并行实现）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/cli/src/tui/observer.rs:TuiObserver",
+      "type": "class",
+      "name": "TuiObserver",
+      "filePath": "apps/cli/src/tui/observer.rs",
+      "summary": "TuiObserver 定义于 observer.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/cli/src/tui/theme.rs",
+      "type": "file",
+      "name": "theme.rs",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "TUI 配色与样式（架构 §8.2）。",
+      "tags": [
+        "code",
+        "rust",
+        "cli"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:user_prefix",
+      "type": "function",
+      "name": "user_prefix",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "user_prefix 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:assistant_text",
+      "type": "function",
+      "name": "assistant_text",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "assistant_text 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:reasoning_text",
+      "type": "function",
+      "name": "reasoning_text",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "reasoning_text 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:tool_call",
+      "type": "function",
+      "name": "tool_call",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "tool_call 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:tool_failure",
+      "type": "function",
+      "name": "tool_failure",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "tool_failure 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:auto_judged_allow",
+      "type": "function",
+      "name": "auto_judged_allow",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "auto_judged_allow 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:auto_judged_deny",
+      "type": "function",
+      "name": "auto_judged_deny",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "auto_judged_deny 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:auto_judged_route",
+      "type": "function",
+      "name": "auto_judged_route",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "auto_judged_route 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:status_bar",
+      "type": "function",
+      "name": "status_bar",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "status_bar 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:popup_border",
+      "type": "function",
+      "name": "popup_border",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "popup_border 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:popup_title",
+      "type": "function",
+      "name": "popup_title",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "popup_title 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/cli/src/tui/theme.rs:hint",
+      "type": "function",
+      "name": "hint",
+      "filePath": "apps/cli/src/tui/theme.rs",
+      "summary": "hint 定义于 theme.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/build.rs",
+      "type": "file",
+      "name": "build.rs",
+      "filePath": "apps/desktop/build.rs",
+      "summary": "模块 build",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/desktop/capabilities/default.json",
+      "type": "config",
+      "name": "default.json",
+      "filePath": "apps/desktop/capabilities/default.json",
+      "summary": "模块 default",
+      "tags": [
+        "config",
+        "json",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/index.html",
+      "type": "file",
+      "name": "index.html",
+      "filePath": "apps/desktop/frontend/index.html",
+      "summary": "模块 index",
+      "tags": [
+        "markup",
+        "html",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/App.tsx",
+      "type": "file",
+      "name": "App.tsx",
+      "filePath": "apps/desktop/frontend/src/App.tsx",
+      "summary": "模块 App",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/App.tsx:App",
+      "type": "function",
+      "name": "App",
+      "filePath": "apps/desktop/frontend/src/App.tsx",
+      "summary": "App 定义于 App.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "type": "file",
+      "name": "animations.ts",
+      "filePath": "apps/desktop/frontend/src/assets/animations.ts",
+      "summary": "模块 animations",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/assets/animations.ts:animations",
+      "type": "function",
+      "name": "animations",
+      "filePath": "apps/desktop/frontend/src/assets/animations.ts",
+      "summary": "animations 定义于 animations.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+      "type": "file",
+      "name": "10826353_20260424041044.webm",
+      "filePath": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "webm"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+      "type": "file",
+      "name": "10826353_20260424041053.webm",
+      "filePath": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "webm"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/cli/src/client.rs",
+      "target": "function:apps/cli/src/client.rs:sockets_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/client.rs",
+      "target": "function:apps/cli/src/client.rs:socket_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/client.rs",
+      "target": "function:apps/cli/src/client.rs:list_sessions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/client.rs",
+      "target": "function:apps/cli/src/client.rs:send_command",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/daemon.rs",
+      "target": "class:apps/cli/src/daemon.rs:DaemonArgs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/daemon.rs",
+      "target": "function:apps/cli/src/daemon.rs:run",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "class:apps/cli/src/ipc.rs:IpcCommand",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "class:apps/cli/src/ipc.rs:IpcResponse",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "function:apps/cli/src/ipc.rs:ok",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "function:apps/cli/src/ipc.rs:err",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "function:apps/cli/src/ipc.rs:with_data",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "class:apps/cli/src/ipc.rs:DaemonEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/ipc.rs",
+      "target": "class:apps/cli/src/ipc.rs:QuestionOptionDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/mock_provider.rs",
+      "target": "class:apps/cli/src/mock_provider.rs:MockClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/mock_provider.rs",
+      "target": "function:apps/cli/src/mock_provider.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/render.rs",
+      "target": "class:apps/cli/src/render.rs:TurnRenderer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/render.rs",
+      "target": "function:apps/cli/src/render.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/render.rs",
+      "target": "function:apps/cli/src/render.rs:on_event",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/render.rs",
+      "target": "function:apps/cli/src/render.rs:take_final_text",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "class:apps/cli/src/session.rs:SessionPersist",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "class:apps/cli/src/session.rs:CliSession",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "class:apps/cli/src/session.rs:PersistRef",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "function:apps/cli/src/session.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "function:apps/cli/src/session.rs:run_single",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "function:apps/cli/src/session.rs:run_with_history",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "function:apps/cli/src/session.rs:into_tui_parts",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "function:apps/cli/src/session.rs:run_loop",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "class:apps/cli/src/session.rs:ConvoInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/session.rs",
+      "target": "class:apps/cli/src/session.rs:ConvoMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/app.rs",
+      "target": "function:apps/cli/src/tui/app.rs:run",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "class:apps/cli/src/tui/components/chat_view.rs:ChatBlock",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "class:apps/cli/src/tui/components/chat_view.rs:ToolStatus",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "class:apps/cli/src/tui/components/chat_view.rs:AutoDecision",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "class:apps/cli/src/tui/components/chat_view.rs:ChatView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:push",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:blocks_mut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:last_mut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:scroll_up",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:scroll_down",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:follow_bottom",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/chat_view.rs",
+      "target": "function:apps/cli/src/tui/components/chat_view.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "class:apps/cli/src/tui/components/input_box.rs:InputBox",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:buffer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:push_char",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:pop_char",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:clear",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:take",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/input_box.rs",
+      "target": "function:apps/cli/src/tui/components/input_box.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/permission_popup.rs",
+      "target": "class:apps/cli/src/tui/components/permission_popup.rs:PermissionPopupState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/permission_popup.rs",
+      "target": "function:apps/cli/src/tui/components/permission_popup.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/permission_popup.rs",
+      "target": "function:apps/cli/src/tui/components/permission_popup.rs:decision_for_key",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/question_popup.rs",
+      "target": "class:apps/cli/src/tui/components/question_popup.rs:QuestionPopupState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/question_popup.rs",
+      "target": "function:apps/cli/src/tui/components/question_popup.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/question_popup.rs",
+      "target": "function:apps/cli/src/tui/components/question_popup.rs:option_index_for_key",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/question_popup.rs",
+      "target": "function:apps/cli/src/tui/components/question_popup.rs:build_answer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/status_bar.rs",
+      "target": "class:apps/cli/src/tui/components/status_bar.rs:StatusBarState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/components/status_bar.rs",
+      "target": "function:apps/cli/src/tui/components/status_bar.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/observer.rs",
+      "target": "class:apps/cli/src/tui/observer.rs:TuiObserver",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:user_prefix",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:assistant_text",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:reasoning_text",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:tool_call",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:tool_failure",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:auto_judged_allow",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:auto_judged_deny",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:auto_judged_route",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:status_bar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:popup_border",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:popup_title",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/cli/src/tui/theme.rs",
+      "target": "function:apps/cli/src/tui/theme.rs:hint",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/App.tsx",
+      "target": "function:apps/desktop/frontend/src/App.tsx:App",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "target": "function:apps/desktop/frontend/src/assets/animations.ts:animations",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "target": "file:apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.png",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "target": "file:apps/desktop/frontend/src/assets/animations/assistant-thinking-static.png",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "target": "file:apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.png",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/assets/animations.ts",
+      "target": "file:apps/desktop/frontend/src/assets/animations/brand-mark-alpha.png",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    }
+  ]
+}

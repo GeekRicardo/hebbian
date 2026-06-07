@@ -1,0 +1,1394 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 166,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 183,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 922,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 265,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "language": "typescript",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 120,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "language": "typescript",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "language": "typescript",
+      "sizeLines": 223,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "language": "typescript",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "language": "typescript",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 143,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "language": "typescript",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "language": "typescript",
+      "sizeLines": 445,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "language": "typescript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "language": "typescript",
+      "sizeLines": 33,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "language": "typescript",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+      "language": "javascript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "language": "typescript",
+      "sizeLines": 2349,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "language": "typescript",
+      "sizeLines": 211,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "language": "typescript",
+      "sizeLines": 153,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "type": "file",
+      "name": "ConversationRefPopup.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "summary": "模块 ConversationRefPopup",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx:ConversationRefPopup",
+      "type": "function",
+      "name": "ConversationRefPopup",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "summary": "ConversationRefPopup 定义于 ConversationRefPopup.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "type": "file",
+      "name": "DeepseekLoginDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "summary": "模块 DeepseekLoginDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx:DeepseekLoginDialog",
+      "type": "function",
+      "name": "DeepseekLoginDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "summary": "DeepseekLoginDialog 定义于 DeepseekLoginDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "type": "file",
+      "name": "DiffPanel.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "summary": "模块 DiffPanel",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:FullscreenPortal",
+      "type": "function",
+      "name": "FullscreenPortal",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "summary": "FullscreenPortal 定义于 DiffPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffMode",
+      "type": "class",
+      "name": "DiffMode",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "summary": "DiffMode 定义于 DiffPanel.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffViewer",
+      "type": "function",
+      "name": "DiffViewer",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "summary": "DiffViewer 定义于 DiffPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffPanel",
+      "type": "function",
+      "name": "DiffPanel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "summary": "DiffPanel 定义于 DiffPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "type": "file",
+      "name": "EditTreePanel.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "summary": "模块 EditTreePanel",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx:EditTreePanel",
+      "type": "function",
+      "name": "EditTreePanel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "summary": "EditTreePanel 定义于 EditTreePanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx:EditTreeTab",
+      "type": "function",
+      "name": "EditTreeTab",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "summary": "EditTreeTab 定义于 EditTreePanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "type": "file",
+      "name": "ErrorBoundary.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "summary": "模块 ErrorBoundary",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx:ErrorBoundary",
+      "type": "class",
+      "name": "ErrorBoundary",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "summary": "ErrorBoundary 定义于 ErrorBoundary.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "type": "file",
+      "name": "ExportClaudeDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "summary": "模块 ExportClaudeDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx:ExportClaudeDialog",
+      "type": "function",
+      "name": "ExportClaudeDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "summary": "ExportClaudeDialog 定义于 ExportClaudeDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "type": "file",
+      "name": "FamilyGroup.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "summary": "模块 FamilyGroup",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx:ModelItem",
+      "type": "class",
+      "name": "ModelItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "summary": "ModelItem 定义于 FamilyGroup.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx:FamilyGroup",
+      "type": "function",
+      "name": "FamilyGroup",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "summary": "FamilyGroup 定义于 FamilyGroup.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "type": "file",
+      "name": "FindBar.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "模块 FindBar",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:FindState",
+      "type": "class",
+      "name": "FindState",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "FindState 定义于 FindBar.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:FindBar",
+      "type": "function",
+      "name": "FindBar",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "FindBar 定义于 FindBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:findMatches",
+      "type": "function",
+      "name": "findMatches",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "findMatches 定义于 FindBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:highlight",
+      "type": "function",
+      "name": "highlight",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "highlight 定义于 FindBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:useMessageMatches",
+      "type": "function",
+      "name": "useMessageMatches",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "useMessageMatches 定义于 FindBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:useFindController",
+      "type": "function",
+      "name": "useFindController",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "summary": "useFindController 定义于 FindBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "type": "file",
+      "name": "HooksPane.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "summary": "模块 HooksPane",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx:HooksPane",
+      "type": "function",
+      "name": "HooksPane",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "summary": "HooksPane 定义于 HooksPane.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "type": "file",
+      "name": "HoverHint.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "summary": "模块 HoverHint",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx:HoverHint",
+      "type": "function",
+      "name": "HoverHint",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "summary": "HoverHint 定义于 HoverHint.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "type": "file",
+      "name": "ImportClaudeDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "summary": "模块 ImportClaudeDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx:ImportClaudeDialog",
+      "type": "function",
+      "name": "ImportClaudeDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "summary": "ImportClaudeDialog 定义于 ImportClaudeDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "type": "file",
+      "name": "InputDrawer.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "summary": "模块 InputDrawer",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx:DrawerToggle",
+      "type": "function",
+      "name": "DrawerToggle",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "summary": "DrawerToggle 定义于 InputDrawer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx:InputDrawer",
+      "type": "function",
+      "name": "InputDrawer",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "summary": "InputDrawer 定义于 InputDrawer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "type": "file",
+      "name": "InputQueuePanel.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "summary": "模块 InputQueuePanel",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx:InputQueuePanel",
+      "type": "function",
+      "name": "InputQueuePanel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "summary": "InputQueuePanel 定义于 InputQueuePanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "type": "file",
+      "name": "InputSuggestions.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "summary": "模块 InputSuggestions",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx:Suggestion",
+      "type": "class",
+      "name": "Suggestion",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "summary": "Suggestion 定义于 InputSuggestions.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx:InputSuggestions",
+      "type": "function",
+      "name": "InputSuggestions",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "summary": "InputSuggestions 定义于 InputSuggestions.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "type": "file",
+      "name": "liveTimelineOrder.test.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "summary": "模块 liveTimelineOrder.test",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "type": "file",
+      "name": "liveTimelineOrder.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "模块 liveTimelineOrder",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:RunningTimelineRenderItem",
+      "type": "class",
+      "name": "RunningTimelineRenderItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "RunningTimelineRenderItem 定义于 liveTimelineOrder.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:TimelineSplitState",
+      "type": "class",
+      "name": "TimelineSplitState",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "TimelineSplitState 定义于 liveTimelineOrder.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:filterMessagesDuplicatedInLiveTimeline",
+      "type": "function",
+      "name": "filterMessagesDuplicatedInLiveTimeline",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "filterMessagesDuplicatedInLiveTimeline 定义于 liveTimelineOrder.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:runningTimelineRenderItems",
+      "type": "function",
+      "name": "runningTimelineRenderItems",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "runningTimelineRenderItems 定义于 liveTimelineOrder.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:appendInjectedMessageAfterCurrentAssistant",
+      "type": "function",
+      "name": "appendInjectedMessageAfterCurrentAssistant",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "summary": "appendInjectedMessageAfterCurrentAssistant 定义于 liveTimelineOrder.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "type": "file",
+      "name": "LogConsole.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "summary": "模块 LogConsole",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx:LogConsole",
+      "type": "function",
+      "name": "LogConsole",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "summary": "LogConsole 定义于 LogConsole.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "type": "file",
+      "name": "LogViewerApp.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "summary": "模块 LogViewerApp",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx:LogViewerApp",
+      "type": "function",
+      "name": "LogViewerApp",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "summary": "LogViewerApp 定义于 LogViewerApp.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "type": "file",
+      "name": "LoopingWebm.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "summary": "模块 LoopingWebm",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx:LoopingWebm",
+      "type": "function",
+      "name": "LoopingWebm",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "summary": "LoopingWebm 定义于 LoopingWebm.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "type": "file",
+      "name": "MarkdownRenderer.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "summary": "模块 MarkdownRenderer",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx:MarkdownRenderer",
+      "type": "function",
+      "name": "MarkdownRenderer",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "summary": "MarkdownRenderer 定义于 MarkdownRenderer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "type": "file",
+      "name": "MemoryWriteSummary.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "summary": "模块 MemoryWriteSummary",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx:MemoryWriteSummary",
+      "type": "function",
+      "name": "MemoryWriteSummary",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "summary": "MemoryWriteSummary 定义于 MemoryWriteSummary.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+      "type": "file",
+      "name": "MessageBubble.layout.test.mjs",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+      "summary": "模块 MessageBubble.layout.test",
+      "tags": [
+        "code",
+        "javascript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "type": "file",
+      "name": "MessageBubble.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "模块 MessageBubble",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:isTaskListTool",
+      "type": "function",
+      "name": "isTaskListTool",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "isTaskListTool 定义于 MessageBubble.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:TodoStatus",
+      "type": "class",
+      "name": "TodoStatus",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "TodoStatus 定义于 MessageBubble.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:TodoItem",
+      "type": "class",
+      "name": "TodoItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "TodoItem 定义于 MessageBubble.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:parseTodos",
+      "type": "function",
+      "name": "parseTodos",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "parseTodos 定义于 MessageBubble.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:MessageBubble",
+      "type": "function",
+      "name": "MessageBubble",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "summary": "MessageBubble 定义于 MessageBubble.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "type": "file",
+      "name": "MessageList.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "summary": "模块 MessageList",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:reorderForWakeupView",
+      "type": "function",
+      "name": "reorderForWakeupView",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "summary": "reorderForWakeupView 定义于 MessageList.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:MessageListProps",
+      "type": "class",
+      "name": "MessageListProps",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "summary": "MessageListProps 定义于 MessageList.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:MessageList",
+      "type": "function",
+      "name": "MessageList",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "summary": "MessageList 定义于 MessageList.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "type": "file",
+      "name": "ModelCard.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "summary": "模块 ModelCard",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx:ModelCard",
+      "type": "function",
+      "name": "ModelCard",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "summary": "ModelCard 定义于 ModelCard.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx:ConversationRefPopup",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx:DeepseekLoginDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:FullscreenPortal",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffViewer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx:DiffPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx:EditTreePanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx:EditTreeTab",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx:ErrorBoundary",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx:ExportClaudeDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx:ModelItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx:FamilyGroup",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:FindState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:FindBar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:findMatches",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:highlight",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:useMessageMatches",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx:useFindController",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx:HooksPane",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx:HoverHint",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx:ImportClaudeDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx:DrawerToggle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx:InputDrawer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx:InputQueuePanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx:Suggestion",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx:InputSuggestions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:RunningTimelineRenderItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:TimelineSplitState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:filterMessagesDuplicatedInLiveTimeline",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:runningTimelineRenderItems",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts:appendInjectedMessageAfterCurrentAssistant",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx:LogConsole",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx:LogViewerApp",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx:LoopingWebm",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx:MarkdownRenderer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx:MemoryWriteSummary",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:isTaskListTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:TodoStatus",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:TodoItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:parseTodos",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:MessageBubble",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:reorderForWakeupView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:MessageListProps",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx:MessageList",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx:ModelCard",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

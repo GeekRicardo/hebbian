@@ -1,0 +1,1163 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "language": "typescript",
+      "sizeLines": 2109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "language": "typescript",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "language": "typescript",
+      "sizeLines": 25,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 1210,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "language": "typescript",
+      "sizeLines": 379,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "language": "typescript",
+      "sizeLines": 363,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 282,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "language": "typescript",
+      "sizeLines": 1281,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "language": "typescript",
+      "sizeLines": 116,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 432,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 589,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 815,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "language": "typescript",
+      "sizeLines": 1020,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "language": "typescript",
+      "sizeLines": 153,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "language": "typescript",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "language": "typescript",
+      "sizeLines": 42,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "language": "typescript",
+      "sizeLines": 274,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 126,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "language": "typescript",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 267,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "type": "file",
+      "name": "ModelIoInspector.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "summary": "模块 ModelIoInspector",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx:ModelIoInspector",
+      "type": "function",
+      "name": "ModelIoInspector",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "summary": "ModelIoInspector 定义于 ModelIoInspector.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "type": "file",
+      "name": "ModelPickerButton.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "summary": "模块 ModelPickerButton",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx:ModelPickerButton",
+      "type": "function",
+      "name": "ModelPickerButton",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "summary": "ModelPickerButton 定义于 ModelPickerButton.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "type": "file",
+      "name": "OAuthDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "summary": "模块 OAuthDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx:OAuthDialog",
+      "type": "function",
+      "name": "OAuthDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "summary": "OAuthDialog 定义于 OAuthDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "type": "file",
+      "name": "PathHint.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "summary": "模块 PathHint",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx:PathHint",
+      "type": "function",
+      "name": "PathHint",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "summary": "PathHint 定义于 PathHint.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "type": "file",
+      "name": "PermissionApprovalPopup.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "summary": "模块 PermissionApprovalPopup",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx:PermissionApprovalPopup",
+      "type": "function",
+      "name": "PermissionApprovalPopup",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "summary": "PermissionApprovalPopup 定义于 PermissionApprovalPopup.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "type": "file",
+      "name": "PlanTab.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "summary": "模块 PlanTab",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx:PlanTab",
+      "type": "function",
+      "name": "PlanTab",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "summary": "PlanTab 定义于 PlanTab.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "type": "file",
+      "name": "PluginsPane.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "summary": "模块 PluginsPane",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx:PluginsPane",
+      "type": "function",
+      "name": "PluginsPane",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "summary": "PluginsPane 定义于 PluginsPane.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "type": "file",
+      "name": "PromptsDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "summary": "模块 PromptsDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx:PromptsDialog",
+      "type": "function",
+      "name": "PromptsDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "summary": "PromptsDialog 定义于 PromptsDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "type": "file",
+      "name": "ProvidersPane.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "summary": "模块 ProvidersPane",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx:ProvidersPane",
+      "type": "function",
+      "name": "ProvidersPane",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "summary": "ProvidersPane 定义于 ProvidersPane.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "type": "file",
+      "name": "ReasoningEffortPill.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "summary": "模块 ReasoningEffortPill",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx:ReasoningEffortPill",
+      "type": "function",
+      "name": "ReasoningEffortPill",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "summary": "ReasoningEffortPill 定义于 ReasoningEffortPill.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "type": "file",
+      "name": "RightSidebar.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "summary": "模块 RightSidebar",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx:RightSidebar",
+      "type": "function",
+      "name": "RightSidebar",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "summary": "RightSidebar 定义于 RightSidebar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "type": "file",
+      "name": "RunModeChip.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "summary": "模块 RunModeChip",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx:runModeLabel",
+      "type": "function",
+      "name": "runModeLabel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "summary": "runModeLabel 定义于 RunModeChip.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx:RunModeChip",
+      "type": "function",
+      "name": "RunModeChip",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "summary": "RunModeChip 定义于 RunModeChip.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "type": "file",
+      "name": "SessionSettingsDialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "summary": "模块 SessionSettingsDialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx:SessionSettingsDialog",
+      "type": "function",
+      "name": "SessionSettingsDialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "summary": "SessionSettingsDialog 定义于 SessionSettingsDialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "type": "file",
+      "name": "Sidebar.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "summary": "模块 Sidebar",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx:Sidebar",
+      "type": "function",
+      "name": "Sidebar",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "summary": "Sidebar 定义于 Sidebar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "type": "file",
+      "name": "SkillsPane.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "summary": "模块 SkillsPane",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx:SkillsPane",
+      "type": "function",
+      "name": "SkillsPane",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "summary": "SkillsPane 定义于 SkillsPane.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "type": "file",
+      "name": "SlashCommandButton.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "summary": "模块 SlashCommandButton",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx:SlashCommandButton",
+      "type": "function",
+      "name": "SlashCommandButton",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "summary": "SlashCommandButton 定义于 SlashCommandButton.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "type": "file",
+      "name": "ToastRegion.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "summary": "模块 ToastRegion",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx:ToastRegion",
+      "type": "function",
+      "name": "ToastRegion",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "summary": "ToastRegion 定义于 ToastRegion.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "type": "file",
+      "name": "todoBlocksForDisplay.test.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "summary": "模块 todoBlocksForDisplay.test",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "type": "file",
+      "name": "todoBlocksForDisplay.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "summary": "模块 todoBlocksForDisplay",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts:TodoDisplayBlock",
+      "type": "class",
+      "name": "TodoDisplayBlock",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "summary": "TodoDisplayBlock 定义于 todoBlocksForDisplay.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts:todoBlocksForDisplay",
+      "type": "function",
+      "name": "todoBlocksForDisplay",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "summary": "todoBlocksForDisplay 定义于 todoBlocksForDisplay.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "type": "file",
+      "name": "TodoTab.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "summary": "模块 TodoTab",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx:TodoTab",
+      "type": "function",
+      "name": "TodoTab",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "summary": "TodoTab 定义于 TodoTab.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "type": "file",
+      "name": "TokenStatsPanel.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "summary": "模块 TokenStatsPanel",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx:TokenStatsPanel",
+      "type": "function",
+      "name": "TokenStatsPanel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "summary": "TokenStatsPanel 定义于 TokenStatsPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "type": "file",
+      "name": "button.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "summary": "模块 button",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx:ButtonProps",
+      "type": "class",
+      "name": "ButtonProps",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "summary": "ButtonProps 定义于 button.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx:Button",
+      "type": "function",
+      "name": "Button",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "summary": "Button 定义于 button.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "type": "file",
+      "name": "dialog.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "summary": "模块 dialog",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx:Dialog",
+      "type": "function",
+      "name": "Dialog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "summary": "Dialog 定义于 dialog.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "type": "file",
+      "name": "input.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "模块 input",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Input",
+      "type": "function",
+      "name": "Input",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "Input 定义于 input.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:SecretInput",
+      "type": "function",
+      "name": "SecretInput",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "SecretInput 定义于 input.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Textarea",
+      "type": "function",
+      "name": "Textarea",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "Textarea 定义于 input.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Label",
+      "type": "function",
+      "name": "Label",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "Label 定义于 input.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Select",
+      "type": "function",
+      "name": "Select",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "summary": "Select 定义于 input.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "type": "file",
+      "name": "UserQuestionPopup.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "summary": "模块 UserQuestionPopup",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx:UserQuestionPopup",
+      "type": "function",
+      "name": "UserQuestionPopup",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "summary": "UserQuestionPopup 定义于 UserQuestionPopup.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx:ModelIoInspector",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx:ModelPickerButton",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx:OAuthDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx:PathHint",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx:PermissionApprovalPopup",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx:PlanTab",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx:PluginsPane",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx:PromptsDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx:ProvidersPane",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx:ReasoningEffortPill",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx:RightSidebar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx:runModeLabel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx:RunModeChip",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx:SessionSettingsDialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx:Sidebar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx:SkillsPane",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx:SlashCommandButton",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx:ToastRegion",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts:TodoDisplayBlock",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts:todoBlocksForDisplay",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx:TodoTab",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx:TokenStatsPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx:ButtonProps",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx:Button",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx:Dialog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Input",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:SecretInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Textarea",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Label",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx:Select",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx:UserQuestionPopup",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

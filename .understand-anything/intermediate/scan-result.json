@@ -1,0 +1,2630 @@
+{
+  "scriptCompleted": true,
+  "files": [
+    {
+      "path": ".env.example",
+      "language": "config",
+      "sizeLines": 41,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/workflows/deploy-pages.yml",
+      "language": "yaml",
+      "sizeLines": 54,
+      "fileCategory": "infra"
+    },
+    {
+      "path": "apps/cli/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 25,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/cli/src/client.rs",
+      "language": "rust",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/daemon.rs",
+      "language": "rust",
+      "sizeLines": 1178,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/ipc.rs",
+      "language": "rust",
+      "sizeLines": 232,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/main.rs",
+      "language": "rust",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/mock_provider.rs",
+      "language": "rust",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/render.rs",
+      "language": "rust",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/session.rs",
+      "language": "rust",
+      "sizeLines": 602,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/app.rs",
+      "language": "rust",
+      "sizeLines": 585,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/chat_view.rs",
+      "language": "rust",
+      "sizeLines": 196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/input_box.rs",
+      "language": "rust",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/mod.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/permission_popup.rs",
+      "language": "rust",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/question_popup.rs",
+      "language": "rust",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/components/status_bar.rs",
+      "language": "rust",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/mod.rs",
+      "language": "rust",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/observer.rs",
+      "language": "rust",
+      "sizeLines": 9,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/cli/src/tui/theme.rs",
+      "language": "rust",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/build.rs",
+      "language": "rust",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/capabilities/default.json",
+      "language": "json",
+      "sizeLines": 14,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 37,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/frontend/index.html",
+      "language": "html",
+      "sizeLines": 12,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/App.tsx",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations.ts",
+      "language": "typescript",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+      "language": "webm",
+      "sizeLines": 220,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+      "language": "webm",
+      "sizeLines": 374,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm",
+      "language": "webm",
+      "sizeLines": 384,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm",
+      "language": "webm",
+      "sizeLines": 269,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm",
+      "language": "webm",
+      "sizeLines": 417,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm",
+      "language": "webm",
+      "sizeLines": 412,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm",
+      "language": "webm",
+      "sizeLines": 291,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm",
+      "language": "webm",
+      "sizeLines": 294,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm",
+      "language": "webm",
+      "sizeLines": 198,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm",
+      "language": "webm",
+      "sizeLines": 1535,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm",
+      "language": "webm",
+      "sizeLines": 1282,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm",
+      "language": "webm",
+      "sizeLines": 1522,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/buildInfo.ts",
+      "language": "typescript",
+      "sizeLines": 9,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/bridge/tauri.ts",
+      "language": "typescript",
+      "sizeLines": 640,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/bridge/transport.ts",
+      "language": "typescript",
+      "sizeLines": 242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 1592,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx",
+      "language": "typescript",
+      "sizeLines": 217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx",
+      "language": "typescript",
+      "sizeLines": 151,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 492,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx",
+      "language": "typescript",
+      "sizeLines": 1390,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts",
+      "language": "typescript",
+      "sizeLines": 63,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts",
+      "language": "typescript",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts",
+      "language": "typescript",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx",
+      "language": "typescript",
+      "sizeLines": 1009,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx",
+      "language": "typescript",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx",
+      "language": "typescript",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 166,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 183,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 922,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 265,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "language": "typescript",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 120,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+      "language": "typescript",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+      "language": "typescript",
+      "sizeLines": 223,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+      "language": "typescript",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+      "language": "typescript",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 143,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+      "language": "typescript",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+      "language": "typescript",
+      "sizeLines": 445,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+      "language": "typescript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+      "language": "typescript",
+      "sizeLines": 33,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+      "language": "typescript",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+      "language": "javascript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+      "language": "typescript",
+      "sizeLines": 2349,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+      "language": "typescript",
+      "sizeLines": 211,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+      "language": "typescript",
+      "sizeLines": 153,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+      "language": "typescript",
+      "sizeLines": 2109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+      "language": "typescript",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+      "language": "typescript",
+      "sizeLines": 25,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 1210,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+      "language": "typescript",
+      "sizeLines": 379,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+      "language": "typescript",
+      "sizeLines": 363,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 282,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+      "language": "typescript",
+      "sizeLines": 1281,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+      "language": "typescript",
+      "sizeLines": 116,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 432,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 589,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 815,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+      "language": "typescript",
+      "sizeLines": 1020,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+      "language": "typescript",
+      "sizeLines": 153,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+      "language": "typescript",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+      "language": "typescript",
+      "sizeLines": 42,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+      "language": "typescript",
+      "sizeLines": 274,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 126,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+      "language": "typescript",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+      "language": "typescript",
+      "sizeLines": 267,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "language": "typescript",
+      "sizeLines": 445,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "language": "typescript",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "language": "typescript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "language": "typescript",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "language": "typescript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "language": "typescript",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "language": "typescript",
+      "sizeLines": 217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "language": "typescript",
+      "sizeLines": 250,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "language": "typescript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "language": "typescript",
+      "sizeLines": 350,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "language": "typescript",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "language": "typescript",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "language": "typescript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "language": "typescript",
+      "sizeLines": 2657,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "language": "typescript",
+      "sizeLines": 1060,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/index.css",
+      "language": "css",
+      "sizeLines": 253,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/main.tsx",
+      "language": "typescript",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/vite-env.d.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/icon.icns",
+      "language": "icns",
+      "sizeLines": 990,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-01.rgba",
+      "language": "rgba",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-02.rgba",
+      "language": "rgba",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-03.rgba",
+      "language": "rgba",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-04.rgba",
+      "language": "rgba",
+      "sizeLines": 13,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-05.rgba",
+      "language": "rgba",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-06.rgba",
+      "language": "rgba",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-07.rgba",
+      "language": "rgba",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-08.rgba",
+      "language": "rgba",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-09.rgba",
+      "language": "rgba",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "language": "json",
+      "sizeLines": 39,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/postcss.config.cjs",
+      "language": "javascript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/chat.rs",
+      "language": "rust",
+      "sizeLines": 3615,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/context.rs",
+      "language": "rust",
+      "sizeLines": 193,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/mod.rs",
+      "language": "rust",
+      "sizeLines": 327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/types.rs",
+      "language": "rust",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/error.rs",
+      "language": "rust",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/force_automode.rs",
+      "language": "rust",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hebisland_client.rs",
+      "language": "rust",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hitl.rs",
+      "language": "rust",
+      "sizeLines": 213,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 2795,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/main.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/window_control.rs",
+      "language": "rust",
+      "sizeLines": 507,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/tailwind.config.cjs",
+      "language": "javascript",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/tauri.conf.json",
+      "language": "json",
+      "sizeLines": 45,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.json",
+      "language": "json",
+      "sizeLines": 23,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/tsconfig.node.json",
+      "language": "json",
+      "sizeLines": 11,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/desktop/vite.config.ts",
+      "language": "typescript",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Package.swift",
+      "language": "swift",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "language": "swift",
+      "sizeLines": 63,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "language": "swift",
+      "sizeLines": 446,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "language": "swift",
+      "sizeLines": 62,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/main.swift",
+      "language": "swift",
+      "sizeLines": 82,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "language": "swift",
+      "sizeLines": 170,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "language": "swift",
+      "sizeLines": 112,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "language": "swift",
+      "sizeLines": 336,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "language": "swift",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "language": "swift",
+      "sizeLines": 116,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "language": "swift",
+      "sizeLines": 180,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "language": "swift",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/package.json",
+      "language": "json",
+      "sizeLines": 12,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/core/package.json",
+      "language": "json",
+      "sizeLines": 23,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/core/src/index.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/schema.ts",
+      "language": "typescript",
+      "sizeLines": 663,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/search.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/types.ts",
+      "language": "typescript",
+      "sizeLines": 202,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/tsconfig.json",
+      "language": "json",
+      "sizeLines": 20,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/index.html",
+      "language": "html",
+      "sizeLines": 19,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/package.json",
+      "language": "json",
+      "sizeLines": 46,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+      "language": "javascript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+      "language": "javascript",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+      "language": "javascript",
+      "sizeLines": 119,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/App.tsx",
+      "language": "typescript",
+      "sizeLines": 715,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "language": "typescript",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 783,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "language": "typescript",
+      "sizeLines": 513,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "language": "typescript",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "language": "typescript",
+      "sizeLines": 190,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 279,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "language": "typescript",
+      "sizeLines": 279,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "language": "typescript",
+      "sizeLines": 214,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 219,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "language": "typescript",
+      "sizeLines": 52,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 1581,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 292,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "language": "typescript",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 230,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "language": "typescript",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "language": "typescript",
+      "sizeLines": 266,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "language": "typescript",
+      "sizeLines": 245,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "language": "typescript",
+      "sizeLines": 539,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "language": "typescript",
+      "sizeLines": 311,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "language": "typescript",
+      "sizeLines": 64,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "language": "typescript",
+      "sizeLines": 222,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "language": "typescript",
+      "sizeLines": 191,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "language": "typescript",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "language": "typescript",
+      "sizeLines": 180,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "language": "typescript",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "language": "typescript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "language": "typescript",
+      "sizeLines": 21,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "language": "typescript",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/index.css",
+      "language": "css",
+      "sizeLines": 276,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/en.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/index.ts",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ja.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/ko.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/locales/zh.ts",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/main.tsx",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/store.ts",
+      "language": "typescript",
+      "sizeLines": 791,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/index.ts",
+      "language": "typescript",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/presets.ts",
+      "language": "typescript",
+      "sizeLines": 183,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/themes/types.ts",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+      "language": "typescript",
+      "sizeLines": 131,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+      "language": "typescript",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+      "language": "typescript",
+      "sizeLines": 196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+      "language": "typescript",
+      "sizeLines": 118,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+      "language": "typescript",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "language": "typescript",
+      "sizeLines": 156,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "language": "typescript",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "language": "typescript",
+      "sizeLines": 244,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "language": "typescript",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "language": "typescript",
+      "sizeLines": 266,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "language": "typescript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "language": "typescript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/vite-env.d.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.app.json",
+      "language": "json",
+      "sizeLines": 24,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.json",
+      "language": "json",
+      "sizeLines": 4,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.demo.ts",
+      "language": "typescript",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ghpages.ts",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.static.ts",
+      "language": "typescript",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ts",
+      "language": "typescript",
+      "sizeLines": 362,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/pnpm-workspace.yaml",
+      "language": "yaml",
+      "sizeLines": 2,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/README.md",
+      "language": "markdown",
+      "sizeLines": 202,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "apps/web-server/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 42,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/web-server/src/chat_helpers.rs",
+      "language": "rust",
+      "sizeLines": 136,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/events.rs",
+      "language": "rust",
+      "sizeLines": 371,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/main.rs",
+      "language": "rust",
+      "sizeLines": 114,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/protocol.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/server.rs",
+      "language": "rust",
+      "sizeLines": 1761,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/session.rs",
+      "language": "rust",
+      "sizeLines": 583,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Cargo.toml",
+      "language": "toml",
+      "sizeLines": 12,
+      "fileCategory": "config"
+    },
+    {
+      "path": "CLAUDE.md",
+      "language": "markdown",
+      "sizeLines": 344,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 37,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/agent-core/examples/permission_probe.rs",
+      "language": "rust",
+      "sizeLines": 1376,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/examples/scan_skill_dir.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/prompts/automode_judge.md",
+      "language": "markdown",
+      "sizeLines": 159,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/prompts/base_system.md",
+      "language": "markdown",
+      "sizeLines": 107,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/src/agent_loop.rs",
+      "language": "rust",
+      "sizeLines": 1611,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/automode.rs",
+      "language": "rust",
+      "sizeLines": 530,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/budget.rs",
+      "language": "rust",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/compaction.rs",
+      "language": "rust",
+      "sizeLines": 344,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/microcompact.rs",
+      "language": "rust",
+      "sizeLines": 203,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/mod.rs",
+      "language": "rust",
+      "sizeLines": 4,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/context/transcript.rs",
+      "language": "rust",
+      "sizeLines": 395,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/core_client/http.rs",
+      "language": "rust",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/core_client/mod.rs",
+      "language": "rust",
+      "sizeLines": 1148,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/definition.rs",
+      "language": "rust",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/dispatch.rs",
+      "language": "rust",
+      "sizeLines": 2498,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/apply.rs",
+      "language": "rust",
+      "sizeLines": 224,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/format.rs",
+      "language": "rust",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/mod.rs",
+      "language": "rust",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/parser.rs",
+      "language": "rust",
+      "sizeLines": 278,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/hashline/prompt.md",
+      "language": "markdown",
+      "sizeLines": 88,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "crates/agent-core/src/edits/metadata.rs",
+      "language": "rust",
+      "sizeLines": 133,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/edits/mod.rs",
+      "language": "rust",
+      "sizeLines": 720,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/effects.rs",
+      "language": "rust",
+      "sizeLines": 593,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/harness.rs",
+      "language": "rust",
+      "sizeLines": 1088,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/external.rs",
+      "language": "rust",
+      "sizeLines": 713,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/mod.rs",
+      "language": "rust",
+      "sizeLines": 48,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/hooks/types.rs",
+      "language": "rust",
+      "sizeLines": 166,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 45,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/mcp/client.rs",
+      "language": "rust",
+      "sizeLines": 701,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/mcp/config.rs",
+      "language": "rust",
+      "sizeLines": 252,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/mcp/mod.rs",
+      "language": "rust",
+      "sizeLines": 2,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/memory_extract.rs",
+      "language": "rust",
+      "sizeLines": 420,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/model_io_dump.rs",
+      "language": "rust",
+      "sizeLines": 556,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/permissions/mod.rs",
+      "language": "rust",
+      "sizeLines": 1400,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/read_state.rs",
+      "language": "rust",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/recorder.rs",
+      "language": "rust",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/rules.rs",
+      "language": "rust",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/run_mode.rs",
+      "language": "rust",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/run_state.rs",
+      "language": "rust",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/session_titler.rs",
+      "language": "rust",
+      "sizeLines": 277,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/session.rs",
+      "language": "rust",
+      "sizeLines": 638,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/shell_env.rs",
+      "language": "rust",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/compactions.rs",
+      "language": "rust",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/export_claude.rs",
+      "language": "rust",
+      "sizeLines": 361,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/import_claude.rs",
+      "language": "rust",
+      "sizeLines": 428,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/lock.rs",
+      "language": "rust",
+      "sizeLines": 139,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/mcp.rs",
+      "language": "rust",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/memory.rs",
+      "language": "rust",
+      "sizeLines": 551,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/mod.rs",
+      "language": "rust",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/model_io.rs",
+      "language": "rust",
+      "sizeLines": 367,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/models_catalog_fallback.json",
+      "language": "json",
+      "sizeLines": 0,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/agent-core/src/storage/models_catalog.rs",
+      "language": "rust",
+      "sizeLines": 300,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/oauth.rs",
+      "language": "rust",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/permissions.rs",
+      "language": "rust",
+      "sizeLines": 102,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plan_comments.rs",
+      "language": "rust",
+      "sizeLines": 185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plans.rs",
+      "language": "rust",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plugins.rs",
+      "language": "rust",
+      "sizeLines": 1132,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/projects.rs",
+      "language": "rust",
+      "sizeLines": 598,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/prompts.rs",
+      "language": "rust",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "language": "rust",
+      "sizeLines": 170,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions_dir.rs",
+      "language": "rust",
+      "sizeLines": 316,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions.rs",
+      "language": "rust",
+      "sizeLines": 2683,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/settings.rs",
+      "language": "rust",
+      "sizeLines": 409,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skill_collections.rs",
+      "language": "rust",
+      "sizeLines": 356,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skills.rs",
+      "language": "rust",
+      "sizeLines": 796,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/subagents.rs",
+      "language": "rust",
+      "sizeLines": 553,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/tool_results.rs",
+      "language": "rust",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/ctx.rs",
+      "language": "rust",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/mod.rs",
+      "language": "rust",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/runner.rs",
+      "language": "rust",
+      "sizeLines": 492,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/system_prompt.rs",
+      "language": "rust",
+      "sizeLines": 381,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/background.rs",
+      "language": "rust",
+      "sizeLines": 747,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_output.rs",
+      "language": "rust",
+      "sizeLines": 179,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_prefix.rs",
+      "language": "rust",
+      "sizeLines": 509,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash.rs",
+      "language": "rust",
+      "sizeLines": 596,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit_hashline.rs",
+      "language": "rust",
+      "sizeLines": 260,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit.rs",
+      "language": "rust",
+      "sizeLines": 602,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "language": "rust",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/grep.rs",
+      "language": "rust",
+      "sizeLines": 488,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/hitl.rs",
+      "language": "rust",
+      "sizeLines": 1831,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/kill_shell.rs",
+      "language": "rust",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/mcp.rs",
+      "language": "rust",
+      "sizeLines": 158,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/mod.rs",
+      "language": "rust",
+      "sizeLines": 504,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read_hashline.rs",
+      "language": "rust",
+      "sizeLines": 314,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read_memory.rs",
+      "language": "rust",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/read.rs",
+      "language": "rust",
+      "sizeLines": 346,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/registry.rs",
+      "language": "rust",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/safe_commands.rs",
+      "language": "rust",
+      "sizeLines": 428,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/schedule_wakeup.rs",
+      "language": "rust",
+      "sizeLines": 83,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/shell_parse.rs",
+      "language": "rust",
+      "sizeLines": 1788,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/skill.rs",
+      "language": "rust",
+      "sizeLines": 425,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/task.rs",
+      "language": "rust",
+      "sizeLines": 242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/todo_write.rs",
+      "language": "rust",
+      "sizeLines": 211,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/web_fetch.rs",
+      "language": "rust",
+      "sizeLines": 679,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/web_search.rs",
+      "language": "rust",
+      "sizeLines": 531,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/write_memory.rs",
+      "language": "rust",
+      "sizeLines": 108,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/turn_context.rs",
+      "language": "rust",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/types.rs",
+      "language": "rust",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/vision_bridge.rs",
+      "language": "rust",
+      "sizeLines": 476,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/wakeup.rs",
+      "language": "rust",
+      "sizeLines": 535,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/workspace.rs",
+      "language": "rust",
+      "sizeLines": 350,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/tests/edit_backend_switch.rs",
+      "language": "rust",
+      "sizeLines": 162,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/tests/hashline_roundtrip.rs",
+      "language": "rust",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 10,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/common/src/attachments.rs",
+      "language": "rust",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/error.rs",
+      "language": "rust",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/reasoning.rs",
+      "language": "rust",
+      "sizeLines": 433,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/runtime.rs",
+      "language": "rust",
+      "sizeLines": 129,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/common/src/storage/mod.rs",
+      "language": "rust",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 29,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek_pow.rs",
+      "language": "rust",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/deepseek.rs",
+      "language": "rust",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/mod.rs",
+      "language": "rust",
+      "sizeLines": 1122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/auth/refresh.rs",
+      "language": "rust",
+      "sizeLines": 167,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/client.rs",
+      "language": "rust",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/config.rs",
+      "language": "rust",
+      "sizeLines": 361,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/context_window.rs",
+      "language": "rust",
+      "sizeLines": 318,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/discovery/mod.rs",
+      "language": "rust",
+      "sizeLines": 202,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/health.rs",
+      "language": "rust",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/instrument.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/anthropic.rs",
+      "language": "rust",
+      "sizeLines": 1089,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/deepseek.rs",
+      "language": "rust",
+      "sizeLines": 1613,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/gemini.rs",
+      "language": "rust",
+      "sizeLines": 275,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/mod.rs",
+      "language": "rust",
+      "sizeLines": 4,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/protocols/openai.rs",
+      "language": "rust",
+      "sizeLines": 1649,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/anthropic.rs",
+      "language": "rust",
+      "sizeLines": 407,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/deepseek.rs",
+      "language": "rust",
+      "sizeLines": 291,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/gemini.rs",
+      "language": "rust",
+      "sizeLines": 168,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/mod.rs",
+      "language": "rust",
+      "sizeLines": 280,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/openai.rs",
+      "language": "rust",
+      "sizeLines": 1070,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/types.rs",
+      "language": "rust",
+      "sizeLines": 245,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/tests/provider_probe.rs",
+      "language": "rust",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/tests/thinking_integration.rs",
+      "language": "rust",
+      "sizeLines": 843,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/observability/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 13,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/observability/src/attr.rs",
+      "language": "rust",
+      "sizeLines": 61,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/observability/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 147,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 10,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/protocol/src/context.rs",
+      "language": "rust",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/error.rs",
+      "language": "rust",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/event.rs",
+      "language": "rust",
+      "sizeLines": 396,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/ids.rs",
+      "language": "rust",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/memory.rs",
+      "language": "rust",
+      "sizeLines": 13,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/permission.rs",
+      "language": "rust",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/submission.rs",
+      "language": "rust",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/todo.rs",
+      "language": "rust",
+      "sizeLines": 42,
+      "fileCategory": "code"
+    },
+    {
+      "path": "docs/cc-compaction-research.md",
+      "language": "markdown",
+      "sizeLines": 270,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/cc-source-research.md",
+      "language": "markdown",
+      "sizeLines": 62,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/changelog.md",
+      "language": "markdown",
+      "sizeLines": 6265,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/claude-code-后台执行机制.md",
+      "language": "markdown",
+      "sizeLines": 775,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/compaction.md",
+      "language": "markdown",
+      "sizeLines": 251,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/heb-cli-debug.md",
+      "language": "markdown",
+      "sizeLines": 678,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/hebisland-design.html",
+      "language": "html",
+      "sizeLines": 1170,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/hebisland-spec.md",
+      "language": "markdown",
+      "sizeLines": 414,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/hebisland.md",
+      "language": "markdown",
+      "sizeLines": 417,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/shadow-tuner.html",
+      "language": "html",
+      "sizeLines": 318,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "language": "markdown",
+      "sizeLines": 185,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "language": "markdown",
+      "sizeLines": 1764,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "language": "markdown",
+      "sizeLines": 810,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-06-plugin-system.md",
+      "language": "markdown",
+      "sizeLines": 179,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/权限沙箱-调研.md",
+      "language": "markdown",
+      "sizeLines": 1244,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/架构.md",
+      "language": "markdown",
+      "sizeLines": 3960,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/记忆系统实现计划.md",
+      "language": "markdown",
+      "sizeLines": 225,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "sizeLines": 336,
+      "fileCategory": "docs"
+    }
+  ],
+  "totalFiles": 429,
+  "filteredByIgnore": 5,
+  "estimatedComplexity": "large",
+  "stats": {
+    "filesScanned": 429,
+    "byCategory": {
+      "config": 23,
+      "infra": 1,
+      "code": 378,
+      "markup": 6,
+      "docs": 21
+    },
+    "byLanguage": {
+      "config": 1,
+      "yaml": 2,
+      "toml": 9,
+      "rust": 175,
+      "json": 12,
+      "html": 4,
+      "typescript": 163,
+      "webm": 12,
+      "javascript": 6,
+      "css": 2,
+      "icns": 1,
+      "rgba": 9,
+      "swift": 12,
+      "markdown": 21
+    }
+  },
+  "project": {
+    "name": "Hebbian",
+    "description": "轻量、本地优先的 AI agent 框架，含 Desktop (Tauri 2 + React 18) 和 CLI 两个 surface",
+    "languages": [
+      "rust",
+      "typescript",
+      "javascript",
+      "html",
+      "css",
+      "swift",
+      "yaml",
+      "toml",
+      "json",
+      "markdown"
+    ],
+    "frameworks": [
+      "tauri",
+      "react"
+    ],
+    "complexity": "large"
+  },
+  "importMap": {}
+}

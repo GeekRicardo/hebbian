@@ -1,0 +1,15 @@
+{
+  "projectRoot": "/Users/ricardo/code/ricardo/rust/hebbian",
+  "batchFiles": [
+    {"path": ".env.example", "language": "config", "sizeLines": 41, "fileCategory": "config"},
+    {"path": "CLAUDE.md", "language": "markdown", "sizeLines": 344, "fileCategory": "docs"},
+    {"path": "Cargo.toml", "language": "toml", "sizeLines": 12, "fileCategory": "config"},
+    {"path": "README.md", "language": "markdown", "sizeLines": 336, "fileCategory": "docs"}
+  ],
+  "batchImportData": {
+    ".env.example": [],
+    "CLAUDE.md": [],
+    "Cargo.toml": [],
+    "README.md": []
+  }
+}

@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `21/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-21.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"crates/agent-core/src/tools/grep.rs":[],"crates/agent-core/src/tools/hitl.rs":[],"crates/agent-core/src/tools/kill_shell.rs":[],"crates/agent-core/src/tools/mcp.rs":[],"crates/agent-core/src/tools/mod.rs":[],"crates/agent-core/src/tools/read_hashline.rs":[],"crates/agent-core/src/tools/read_memory.rs":[],"crates/agent-core/src/tools/read.rs":[],"crates/agent-core/src/tools/registry.rs":[],"crates/agent-core/src/tools/safe_commands.rs":[],"crates/agent-core/src/tools/schedule_wakeup.rs":[],"crates/agent-core/src/tools/shell_parse.rs":[],"crates/agent-core/src/tools/skill.rs":[],"crates/agent-core/src/tools/task.rs":[],"crates/agent-core/src/tools/todo_write.rs":[],"crates/agent-core/src/tools/web_fetch.rs":[],"crates/agent-core/src/tools/web_search.rs":[],"crates/agent-core/src/tools/write_memory.rs":[],"crates/agent-core/src/turn_context.rs":[],"crates/agent-core/src/types.rs":[],"crates/agent-core/src/vision_bridge.rs":[],"crates/agent-core/src/wakeup.rs":[],"crates/agent-core/src/workspace.rs":[],"crates/agent-core/tests/edit_backend_switch.rs":[],"crates/agent-core/tests/hashline_roundtrip.rs":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `crates/agent-core/src/tools/grep.rs` (488 lines, language: `rust`, fileCategory: `code`)
+2. `crates/agent-core/src/tools/hitl.rs` (1831 lines, language: `rust`, fileCategory: `code`)
+3. `crates/agent-core/src/tools/kill_shell.rs` (94 lines, language: `rust`, fileCategory: `code`)
+4. `crates/agent-core/src/tools/mcp.rs` (158 lines, language: `rust`, fileCategory: `code`)
+5. `crates/agent-core/src/tools/mod.rs` (504 lines, language: `rust`, fileCategory: `code`)
+6. `crates/agent-core/src/tools/read_hashline.rs` (314 lines, language: `rust`, fileCategory: `code`)
+7. `crates/agent-core/src/tools/read_memory.rs` (77 lines, language: `rust`, fileCategory: `code`)
+8. `crates/agent-core/src/tools/read.rs` (346 lines, language: `rust`, fileCategory: `code`)
+9. `crates/agent-core/src/tools/registry.rs` (145 lines, language: `rust`, fileCategory: `code`)
+10. `crates/agent-core/src/tools/safe_commands.rs` (428 lines, language: `rust`, fileCategory: `code`)
+11. `crates/agent-core/src/tools/schedule_wakeup.rs` (83 lines, language: `rust`, fileCategory: `code`)
+12. `crates/agent-core/src/tools/shell_parse.rs` (1788 lines, language: `rust`, fileCategory: `code`)
+13. `crates/agent-core/src/tools/skill.rs` (425 lines, language: `rust`, fileCategory: `code`)
+14. `crates/agent-core/src/tools/task.rs` (242 lines, language: `rust`, fileCategory: `code`)
+15. `crates/agent-core/src/tools/todo_write.rs` (211 lines, language: `rust`, fileCategory: `code`)
+16. `crates/agent-core/src/tools/web_fetch.rs` (679 lines, language: `rust`, fileCategory: `code`)
+17. `crates/agent-core/src/tools/web_search.rs` (531 lines, language: `rust`, fileCategory: `code`)
+18. `crates/agent-core/src/tools/write_memory.rs` (108 lines, language: `rust`, fileCategory: `code`)
+19. `crates/agent-core/src/turn_context.rs` (38 lines, language: `rust`, fileCategory: `code`)
+20. `crates/agent-core/src/types.rs` (11 lines, language: `rust`, fileCategory: `code`)
+21. `crates/agent-core/src/vision_bridge.rs` (476 lines, language: `rust`, fileCategory: `code`)
+22. `crates/agent-core/src/wakeup.rs` (535 lines, language: `rust`, fileCategory: `code`)
+23. `crates/agent-core/src/workspace.rs` (350 lines, language: `rust`, fileCategory: `code`)
+24. `crates/agent-core/tests/edit_backend_switch.rs` (162 lines, language: `rust`, fileCategory: `code`)
+25. `crates/agent-core/tests/hashline_roundtrip.rs` (177 lines, language: `rust`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

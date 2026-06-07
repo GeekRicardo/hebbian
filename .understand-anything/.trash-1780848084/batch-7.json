@@ -1,0 +1,211 @@
+{
+  "batchIndex": 7,
+  "nodesCount": 4,
+  "edgesCount": 16,
+  "nodes": [
+    {
+      "id": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "label": "notification-toast.md",
+      "filePath": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "fileCategory": "docs",
+      "language": "markdown",
+      "description": "桌面端右上角事件弹窗通知的实现计划。hebbian 在后台时通过 Tauri 2 无边框、置顶、透明 webview 窗口显示通知卡片。区分需等待类事件（approval/question，不自动消失）和即时类事件（turn_completed，3 秒消失）。包含 NotchManager 后端、chat.rs 事件桥接、前端 NotificationCard 组件、Vite 多入口配置等 5 个任务。",
+      "loc": 169,
+      "complexity": "medium",
+      "symbols": [
+        { "name": "目标", "symbolType": "section", "line": 3 },
+        { "name": "行为规则", "symbolType": "section", "line": 10 },
+        { "name": "技术方案", "symbolType": "section", "line": 22 },
+        { "name": "文件变更", "symbolType": "section", "line": 31 },
+        { "name": "Task 1: NotchManager 后端", "symbolType": "section", "line": 52 },
+        { "name": "Task 2: chat.rs 事件桥接", "symbolType": "section", "line": 80 },
+        { "name": "Task 3: 前端 NotchWindow + NotificationCard", "symbolType": "section", "line": 116 },
+        { "name": "Task 4: Vite 多入口 + tauri.conf 配置", "symbolType": "section", "line": 150 },
+        { "name": "Task 5: lib.rs 注册", "symbolType": "section", "line": 156 },
+        { "name": "优先级队列", "symbolType": "section", "line": 169 },
+        { "name": "NotchManager", "symbolType": "class", "line": 57 },
+        { "name": "NotchType", "symbolType": "enum", "line": 64 },
+        { "name": "NotificationCard", "symbolType": "component", "line": 121 }
+      ]
+    },
+    {
+      "id": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "label": "hashline-edit-backend.md",
+      "filePath": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "fileCategory": "docs",
+      "language": "markdown",
+      "description": "Hashline 风格文件编辑后端的完整实现计划。在 agent-core 中新建 edits/hashline 子模块（format/parser/apply 三层），实现行号锚点 + 内容指纹（SHA-256 前 3 位 hex）的 patch 格式。提供 ReadHashlineTool 和 EditHashlineTool 与现有 string-replace 后端平行共存，通过 settings.edit_backend 枚举二选一注册。包含 11 个任务覆盖全栈：settings 字段、hash3 格式工具、parser 语法解析、apply 纯函数、prompt.md 教学文本、两个 Tool 实现、dispatch 注册、前端 Settings UI、集成测试、架构文档。",
+      "loc": 1764,
+      "complexity": "high",
+      "symbols": [
+        { "name": "Task 1: settings.json 加 edit_backend 字段", "symbolType": "section", "line": 42 },
+        { "name": "EditBackend (enum)", "symbolType": "enum", "line": 82 },
+        { "name": "Task 2: hash3 与 read_state 复用", "symbolType": "section", "line": 128 },
+        { "name": "hash3", "symbolType": "function", "line": 217 },
+        { "name": "render_with_line_numbers", "symbolType": "function", "line": 227 },
+        { "name": "render_with_line_numbers_with_path", "symbolType": "function", "line": 231 },
+        { "name": "Task 3: hashline parser", "symbolType": "section", "line": 299 },
+        { "name": "ParseError", "symbolType": "enum", "line": 418 },
+        { "name": "Patch", "symbolType": "struct", "line": 430 },
+        { "name": "FileSection", "symbolType": "struct", "line": 435 },
+        { "name": "Hunk", "symbolType": "struct", "line": 442 },
+        { "name": "HunkLine", "symbolType": "enum", "line": 453 },
+        { "name": "parse_patch", "symbolType": "function", "line": 458 },
+        { "name": "Task 4: hashline apply", "symbolType": "section", "line": 627 },
+        { "name": "ApplyError", "symbolType": "enum", "line": 736 },
+        { "name": "apply_section", "symbolType": "function", "line": 749 },
+        { "name": "Task 5: prompt.md 教学文本", "symbolType": "section", "line": 883 },
+        { "name": "Task 6: ReadHashlineTool 实现", "symbolType": "section", "line": 985 },
+        { "name": "ReadHashlineTool", "symbolType": "struct", "line": 1037 },
+        { "name": "Task 7: EditHashlineTool 实现", "symbolType": "section", "line": 1099 },
+        { "name": "EditHashlineTool", "symbolType": "struct", "line": 1214 },
+        { "name": "Task 8: dispatch 二选一注册", "symbolType": "section", "line": 1338 },
+        { "name": "Task 9: 前端 Settings UI", "symbolType": "section", "line": 1443 },
+        { "name": "Task 10: 集成测试 roundtrip", "symbolType": "section", "line": 1530 },
+        { "name": "Task 11: 架构文档与 changelog", "symbolType": "section", "line": 1652 }
+      ]
+    },
+    {
+      "id": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "label": "hebisland-standalone.md",
+      "filePath": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "fileCategory": "docs",
+      "language": "markdown",
+      "description": "将 hebisland 从 desktop 嵌入模块重构为独立 Tauri 二进制（apps/island）的实现计划。通过 Unix socket IPC（~/.hebbian/island.sock）接收通知/审批消息，每条通知对应一个无边框窗口。CLI 提供 daemon（启动守护进程）和 notify（发送通知 JSON）两个子命令。后端用 Rust + tokio，前端用 React 19 单窗口单卡片模式。包含 6 个任务：crate 骨架、前端创建、socket 回传、窗口堆叠定位、清理 desktop 嵌入代码、更新文档。",
+      "loc": 271,
+      "complexity": "high",
+      "symbols": [
+        { "name": "文件结构", "symbolType": "section", "line": 15 },
+        { "name": "Task 1: 创建 crate 骨架", "symbolType": "section", "line": 40 },
+        { "name": "Cli (clap)", "symbolType": "struct", "line": 132 },
+        { "name": "Commands", "symbolType": "enum", "line": 141 },
+        { "name": "IslandState", "symbolType": "struct", "line": 202 },
+        { "name": "ActionEvent", "symbolType": "struct", "line": 208 },
+        { "name": "island_get_card", "symbolType": "function", "line": 213 },
+        { "name": "island_action", "symbolType": "function", "line": 226 },
+        { "name": "run", "symbolType": "function", "line": 234 },
+        { "name": "SocketMessage", "symbolType": "enum", "line": 272 },
+        { "name": "NotificationCard", "symbolType": "struct", "line": 282 },
+        { "name": "run_socket_listener", "symbolType": "function", "line": 305 },
+        { "name": "handle_client", "symbolType": "function", "line": 357 },
+        { "name": "spawn_notification_window", "symbolType": "function", "line": 392 },
+        { "name": "Task 2: 创建前端", "symbolType": "section", "line": 475 },
+        { "name": "IslandApp", "symbolType": "component", "line": 607 },
+        { "name": "IslandCard", "symbolType": "component", "line": 597 },
+        { "name": "Task 3: socket 回传", "symbolType": "section", "line": 687 },
+        { "name": "Task 4: 堆叠规则与窗口生命周期", "symbolType": "section", "line": 716 },
+        { "name": "Task 5: 清理 desktop 嵌入代码", "symbolType": "section", "line": 739 },
+        { "name": "Task 6: 更新文档", "symbolType": "section", "line": 769 }
+      ]
+    },
+    {
+      "id": "docs/superpowers/plans/2026-06-04-cli-improvements.md",
+      "label": "cli-improvements.md",
+      "filePath": "docs/superpowers/plans/2026-06-04-cli-improvements.md",
+      "fileCategory": "docs",
+      "language": "markdown",
+      "description": "CLI 改进实现计划文档。文件在磁盘上不存在（可能已被删除或重命名），无法解析具体内容。",
+      "loc": 0,
+      "complexity": "low",
+      "symbols": []
+    }
+  ],
+  "edges": [
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "targetId": "apps/desktop/src/notch.rs",
+      "edgeType": "specifies",
+      "label": "规划新建 NotchManager 后端模块"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "targetId": "apps/desktop/src/chat.rs",
+      "edgeType": "specifies",
+      "label": "规划事件桥接（PermissionRequested/UserQuestionRequested/TurnFinished → emit notification）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "targetId": "apps/desktop/src/lib.rs",
+      "edgeType": "specifies",
+      "label": "规划注册 NotchManager 与 notify_dismiss 命令"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "targetId": "apps/desktop/frontend/src/desktop/ui/components/NotificationCard.tsx",
+      "edgeType": "specifies",
+      "label": "规划新建通知卡片前端组件"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "targetId": "apps/desktop/vite.config.ts",
+      "edgeType": "specifies",
+      "label": "规划添加 notch 多入口"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/edits/hashline/mod.rs",
+      "edgeType": "specifies",
+      "label": "规划新建 hashline 编辑子模块（format/parser/apply）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/storage/settings.rs",
+      "edgeType": "specifies",
+      "label": "规划添加 EditBackend 枚举（StringReplace/Hashline）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/tools/edit_hashline.rs",
+      "edgeType": "specifies",
+      "label": "规划新建 EditHashlineTool（patch: string 单入参）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/tools/read_hashline.rs",
+      "edgeType": "specifies",
+      "label": "规划新建 ReadHashlineTool（¶path#hash + N:line 输出）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/dispatch.rs",
+      "edgeType": "specifies",
+      "label": "规划按 edit_backend 二选一注册 Read/Edit 工具"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "targetId": "crates/agent-core/src/read_state.rs",
+      "edgeType": "specifies",
+      "label": "规划复用 SHA-256 并暴露 short_content_fingerprint"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "targetId": "apps/island/src/main.rs",
+      "edgeType": "specifies",
+      "label": "规划新建独立二进制入口（daemon/notify 子命令）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "targetId": "apps/island/src/socket.rs",
+      "edgeType": "specifies",
+      "label": "规划 Unix socket server（~/.hebbian/island.sock）"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "targetId": "apps/desktop/src/chat.rs",
+      "edgeType": "specifies",
+      "label": "规划清理 desktop 中 island emit 调用，改为 socket client"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "targetId": "apps/desktop/frontend/src/desktop/ui/components/IslandApp.tsx",
+      "edgeType": "specifies",
+      "label": "规划从 desktop 迁移到 apps/island 后删除原文件"
+    },
+    {
+      "sourceId": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "targetId": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "edgeType": "relates",
+      "label": "hebisland 是 notification-toast 方案的后续演进（独立进程替代嵌入式 notch）"
+    }
+  ]
+}

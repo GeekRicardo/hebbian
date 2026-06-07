@@ -1,0 +1,185 @@
+{
+  "batchIndex": 20,
+  "totalBatches": 23,
+  "fileCount": 25,
+  "files": [
+    {
+      "path": "crates/agent-core/src/storage/permissions.rs",
+      "sizeLines": 102,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plan_comments.rs",
+      "sizeLines": 185,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plans.rs",
+      "sizeLines": 46,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plugins.rs",
+      "sizeLines": 1132,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/projects.rs",
+      "sizeLines": 598,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/prompts.rs",
+      "sizeLines": 208,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "sizeLines": 170,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions_dir.rs",
+      "sizeLines": 316,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions.rs",
+      "sizeLines": 2683,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/settings.rs",
+      "sizeLines": 409,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skill_collections.rs",
+      "sizeLines": 356,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skills.rs",
+      "sizeLines": 796,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/subagents.rs",
+      "sizeLines": 553,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/tool_results.rs",
+      "sizeLines": 31,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/ctx.rs",
+      "sizeLines": 40,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/mod.rs",
+      "sizeLines": 17,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/runner.rs",
+      "sizeLines": 492,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/system_prompt.rs",
+      "sizeLines": 381,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/background.rs",
+      "sizeLines": 747,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_output.rs",
+      "sizeLines": 179,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_prefix.rs",
+      "sizeLines": 509,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash.rs",
+      "sizeLines": 596,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit_hashline.rs",
+      "sizeLines": 260,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit.rs",
+      "sizeLines": 602,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "sizeLines": 87,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/agent-core/src/storage/permissions.rs": [],
+    "crates/agent-core/src/storage/plan_comments.rs": [],
+    "crates/agent-core/src/storage/plans.rs": [],
+    "crates/agent-core/src/storage/plugins.rs": [],
+    "crates/agent-core/src/storage/projects.rs": [],
+    "crates/agent-core/src/storage/prompts.rs": [],
+    "crates/agent-core/src/storage/run_checkpoint.rs": [],
+    "crates/agent-core/src/storage/sessions_dir.rs": [],
+    "crates/agent-core/src/storage/sessions.rs": [],
+    "crates/agent-core/src/storage/settings.rs": [],
+    "crates/agent-core/src/storage/skill_collections.rs": [],
+    "crates/agent-core/src/storage/skills.rs": [],
+    "crates/agent-core/src/storage/subagents.rs": [],
+    "crates/agent-core/src/storage/tool_results.rs": [],
+    "crates/agent-core/src/subagent/ctx.rs": [],
+    "crates/agent-core/src/subagent/mod.rs": [],
+    "crates/agent-core/src/subagent/runner.rs": [],
+    "crates/agent-core/src/system_prompt.rs": [],
+    "crates/agent-core/src/tools/background.rs": [],
+    "crates/agent-core/src/tools/bash_output.rs": [],
+    "crates/agent-core/src/tools/bash_prefix.rs": [],
+    "crates/agent-core/src/tools/bash.rs": [],
+    "crates/agent-core/src/tools/edit_hashline.rs": [],
+    "crates/agent-core/src/tools/edit.rs": [],
+    "crates/agent-core/src/tools/exit_plan_mode.rs": []
+  },
+  "neighborMap": {}
+}

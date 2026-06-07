@@ -1,0 +1,1404 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/desktop/icons/icon.icns",
+      "language": "icns",
+      "sizeLines": 990,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-01.rgba",
+      "language": "rgba",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-02.rgba",
+      "language": "rgba",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-03.rgba",
+      "language": "rgba",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-04.rgba",
+      "language": "rgba",
+      "sizeLines": 13,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-05.rgba",
+      "language": "rgba",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-06.rgba",
+      "language": "rgba",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-07.rgba",
+      "language": "rgba",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-08.rgba",
+      "language": "rgba",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/icons/tray-frame-09.rgba",
+      "language": "rgba",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/postcss.config.cjs",
+      "language": "javascript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/chat.rs",
+      "language": "rust",
+      "sizeLines": 3615,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/context.rs",
+      "language": "rust",
+      "sizeLines": 193,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/mod.rs",
+      "language": "rust",
+      "sizeLines": 327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/engine/types.rs",
+      "language": "rust",
+      "sizeLines": 79,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/error.rs",
+      "language": "rust",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/force_automode.rs",
+      "language": "rust",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hebisland_client.rs",
+      "language": "rust",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/hitl.rs",
+      "language": "rust",
+      "sizeLines": 213,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 2795,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/main.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/src/window_control.rs",
+      "language": "rust",
+      "sizeLines": 507,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/tailwind.config.cjs",
+      "language": "javascript",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/vite.config.ts",
+      "language": "typescript",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Package.swift",
+      "language": "swift",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/desktop/icons/icon.icns",
+      "type": "file",
+      "name": "icon.icns",
+      "filePath": "apps/desktop/icons/icon.icns",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "icns"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-01.rgba",
+      "type": "file",
+      "name": "tray-frame-01.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-01.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-02.rgba",
+      "type": "file",
+      "name": "tray-frame-02.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-02.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-03.rgba",
+      "type": "file",
+      "name": "tray-frame-03.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-03.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-04.rgba",
+      "type": "file",
+      "name": "tray-frame-04.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-04.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-05.rgba",
+      "type": "file",
+      "name": "tray-frame-05.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-05.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-06.rgba",
+      "type": "file",
+      "name": "tray-frame-06.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-06.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-07.rgba",
+      "type": "file",
+      "name": "tray-frame-07.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-07.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-08.rgba",
+      "type": "file",
+      "name": "tray-frame-08.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-08.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/icons/tray-frame-09.rgba",
+      "type": "file",
+      "name": "tray-frame-09.rgba",
+      "filePath": "apps/desktop/icons/tray-frame-09.rgba",
+      "summary": "二进制资源文件",
+      "tags": [
+        "code",
+        "rgba"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/postcss.config.cjs",
+      "type": "file",
+      "name": "postcss.config.cjs",
+      "filePath": "apps/desktop/postcss.config.cjs",
+      "summary": "模块 postcss.config",
+      "tags": [
+        "code",
+        "javascript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/src/chat.rs",
+      "type": "file",
+      "name": "chat.rs",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "给落盘的 user message 附加的 meta（架构 §4.12.5）。idle 路径下 wakeup 通过",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/src/chat.rs:SendArgs",
+      "type": "class",
+      "name": "SendArgs",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "SendArgs 定义于 chat.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:send_and_save",
+      "type": "function",
+      "name": "send_and_save",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "send_and_save 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:send_and_save_in_data_dir",
+      "type": "function",
+      "name": "send_and_save_in_data_dir",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "send_and_save_in_data_dir 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:send_and_save_in_data_dir_with_client_factory",
+      "type": "function",
+      "name": "send_and_save_in_data_dir_with_client_factory",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "send_and_save_in_data_dir_with_client_factory 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/chat.rs:ContextUsageDto",
+      "type": "class",
+      "name": "ContextUsageDto",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "ContextUsageDto 定义于 chat.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:context_usage",
+      "type": "function",
+      "name": "context_usage",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "context_usage 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:compact_session",
+      "type": "function",
+      "name": "compact_session",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "compact_session 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:send_once",
+      "type": "function",
+      "name": "send_once",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "send_once 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/chat.rs:build_preview_payload",
+      "type": "function",
+      "name": "build_preview_payload",
+      "filePath": "apps/desktop/src/chat.rs",
+      "summary": "build_preview_payload 定义于 chat.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/engine/context.rs",
+      "type": "file",
+      "name": "context.rs",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "创建一个带 User-Agent 的复用 HTTP 客户端",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:build_client",
+      "type": "function",
+      "name": "build_client",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "build_client 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:effective_messages",
+      "type": "function",
+      "name": "effective_messages",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "effective_messages 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_openai_messages",
+      "type": "function",
+      "name": "to_openai_messages",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_openai_messages 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_anthropic_messages",
+      "type": "function",
+      "name": "to_anthropic_messages",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_anthropic_messages 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_gemini_contents",
+      "type": "function",
+      "name": "to_gemini_contents",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_gemini_contents 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:apply_auth",
+      "type": "function",
+      "name": "apply_auth",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "apply_auth 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_openai_tools",
+      "type": "function",
+      "name": "to_openai_tools",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_openai_tools 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_anthropic_tools",
+      "type": "function",
+      "name": "to_anthropic_tools",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_anthropic_tools 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/engine/context.rs:to_gemini_tools",
+      "type": "function",
+      "name": "to_gemini_tools",
+      "filePath": "apps/desktop/src/engine/context.rs",
+      "summary": "to_gemini_tools 定义于 context.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/engine/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "桌面端引擎事件——通过 Tauri Channel 序列化推送给前端。",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/mod.rs:EngineEvent",
+      "type": "class",
+      "name": "EngineEvent",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "EngineEvent 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/mod.rs:PlanPermissionDto",
+      "type": "class",
+      "name": "PlanPermissionDto",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "PlanPermissionDto 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/mod.rs:TodoItemDto",
+      "type": "class",
+      "name": "TodoItemDto",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "TodoItemDto 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/mod.rs:PlanCommentDto",
+      "type": "class",
+      "name": "PlanCommentDto",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "PlanCommentDto 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/mod.rs:QuestionOptionDto",
+      "type": "class",
+      "name": "QuestionOptionDto",
+      "filePath": "apps/desktop/src/engine/mod.rs",
+      "summary": "QuestionOptionDto 定义于 mod.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/engine/types.rs",
+      "type": "file",
+      "name": "types.rs",
+      "filePath": "apps/desktop/src/engine/types.rs",
+      "summary": "引擎事件——通过 Tauri Channel 从后端流式推送到前端",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/types.rs:EngineEvent",
+      "type": "class",
+      "name": "EngineEvent",
+      "filePath": "apps/desktop/src/engine/types.rs",
+      "summary": "EngineEvent 定义于 types.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/types.rs:ToolCall",
+      "type": "class",
+      "name": "ToolCall",
+      "filePath": "apps/desktop/src/engine/types.rs",
+      "summary": "ToolCall 定义于 types.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/engine/types.rs:TurnResult",
+      "type": "class",
+      "name": "TurnResult",
+      "filePath": "apps/desktop/src/engine/types.rs",
+      "summary": "TurnResult 定义于 types.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/error.rs",
+      "type": "file",
+      "name": "error.rs",
+      "filePath": "apps/desktop/src/error.rs",
+      "summary": "模块 error",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/src/force_automode.rs",
+      "type": "file",
+      "name": "force_automode.rs",
+      "filePath": "apps/desktop/src/force_automode.rs",
+      "summary": "`//force-automode` 命令的 desktop 进程级开关（架构 §4.4.4 / §8）。",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/src/force_automode.rs:ForceAutomodeState",
+      "type": "class",
+      "name": "ForceAutomodeState",
+      "filePath": "apps/desktop/src/force_automode.rs",
+      "summary": "ForceAutomodeState 定义于 force_automode.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/force_automode.rs:is_enabled",
+      "type": "function",
+      "name": "is_enabled",
+      "filePath": "apps/desktop/src/force_automode.rs",
+      "summary": "is_enabled 定义于 force_automode.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/force_automode.rs:set",
+      "type": "function",
+      "name": "set",
+      "filePath": "apps/desktop/src/force_automode.rs",
+      "summary": "set 定义于 force_automode.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/hebisland_client.rs",
+      "type": "file",
+      "name": "hebisland_client.rs",
+      "filePath": "apps/desktop/src/hebisland_client.rs",
+      "summary": "推送一条通知到 hebisland。json 是完整序列化后的 {\"type\":\"show\",...}",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/hebisland_client.rs:HebislandClient",
+      "type": "class",
+      "name": "HebislandClient",
+      "filePath": "apps/desktop/src/hebisland_client.rs",
+      "summary": "HebislandClient 定义于 hebisland_client.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hebisland_client.rs:push",
+      "type": "function",
+      "name": "push",
+      "filePath": "apps/desktop/src/hebisland_client.rs",
+      "summary": "push 定义于 hebisland_client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hebisland_client.rs:dismiss",
+      "type": "function",
+      "name": "dismiss",
+      "filePath": "apps/desktop/src/hebisland_client.rs",
+      "summary": "dismiss 定义于 hebisland_client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hebisland_client.rs:init_hebisland_client",
+      "type": "function",
+      "name": "init_hebisland_client",
+      "filePath": "apps/desktop/src/hebisland_client.rs",
+      "summary": "init_hebisland_client 定义于 hebisland_client.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/hitl.rs",
+      "type": "file",
+      "name": "hitl.rs",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "HITL 桥接：审批 / 提问 共用一张表。",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/src/hitl.rs:HitlState",
+      "type": "class",
+      "name": "HitlState",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "HitlState 定义于 hitl.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:track_run",
+      "type": "function",
+      "name": "track_run",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "track_run 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:track",
+      "type": "function",
+      "name": "track",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "track 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:cancel_run",
+      "type": "function",
+      "name": "cancel_run",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "cancel_run 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:resolve_approval",
+      "type": "function",
+      "name": "resolve_approval",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "resolve_approval 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:answer_question",
+      "type": "function",
+      "name": "answer_question",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "answer_question 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:forget",
+      "type": "function",
+      "name": "forget",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "forget 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:cancel_all_pending",
+      "type": "function",
+      "name": "cancel_all_pending",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "cancel_all_pending 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:has_pending",
+      "type": "function",
+      "name": "has_pending",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "has_pending 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:resolve_hitl_from_island",
+      "type": "function",
+      "name": "resolve_hitl_from_island",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "resolve_hitl_from_island 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/hitl.rs:answer_question_from_island",
+      "type": "function",
+      "name": "answer_question_from_island",
+      "filePath": "apps/desktop/src/hitl.rs",
+      "summary": "answer_question_from_island 定义于 hitl.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/lib.rs",
+      "type": "file",
+      "name": "lib.rs",
+      "filePath": "apps/desktop/src/lib.rs",
+      "summary": "读 session 的 `model_io.jsonl`：返回 `Vec<DumpEntry-as-Value>`，每条对应一次模型调用。",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/src/lib.rs:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "apps/desktop/src/lib.rs",
+      "summary": "run 定义于 lib.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/src/main.rs",
+      "type": "file",
+      "name": "main.rs",
+      "filePath": "apps/desktop/src/main.rs",
+      "summary": "模块 main",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/src/window_control.rs",
+      "type": "file",
+      "name": "window_control.rs",
+      "filePath": "apps/desktop/src/window_control.rs",
+      "summary": "判断快捷键事件是否应触发窗口 toggle。",
+      "tags": [
+        "code",
+        "rust",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/src/window_control.rs:MainWindowAction",
+      "type": "class",
+      "name": "MainWindowAction",
+      "filePath": "apps/desktop/src/window_control.rs",
+      "summary": "MainWindowAction 定义于 window_control.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/window_control.rs:toggle_action",
+      "type": "function",
+      "name": "toggle_action",
+      "filePath": "apps/desktop/src/window_control.rs",
+      "summary": "toggle_action 定义于 window_control.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/window_control.rs:initialize",
+      "type": "function",
+      "name": "initialize",
+      "filePath": "apps/desktop/src/window_control.rs",
+      "summary": "initialize 定义于 window_control.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/src/window_control.rs:handle_window_event",
+      "type": "function",
+      "name": "handle_window_event",
+      "filePath": "apps/desktop/src/window_control.rs",
+      "summary": "handle_window_event 定义于 window_control.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/tailwind.config.cjs",
+      "type": "file",
+      "name": "tailwind.config.cjs",
+      "filePath": "apps/desktop/tailwind.config.cjs",
+      "summary": "模块 tailwind.config",
+      "tags": [
+        "code",
+        "javascript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/vite.config.ts",
+      "type": "file",
+      "name": "vite.config.ts",
+      "filePath": "apps/desktop/vite.config.ts",
+      "summary": "模块 vite.config",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Package.swift",
+      "type": "file",
+      "name": "Package.swift",
+      "filePath": "apps/island-mac/Package.swift",
+      "summary": "模块 Package",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "class:apps/desktop/src/chat.rs:SendArgs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:send_and_save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:send_and_save_in_data_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:send_and_save_in_data_dir_with_client_factory",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "class:apps/desktop/src/chat.rs:ContextUsageDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:context_usage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:compact_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:send_once",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/chat.rs",
+      "target": "function:apps/desktop/src/chat.rs:build_preview_payload",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:build_client",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:effective_messages",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_openai_messages",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_anthropic_messages",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_gemini_contents",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:apply_auth",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_openai_tools",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_anthropic_tools",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/context.rs",
+      "target": "function:apps/desktop/src/engine/context.rs:to_gemini_tools",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/mod.rs",
+      "target": "class:apps/desktop/src/engine/mod.rs:EngineEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/mod.rs",
+      "target": "class:apps/desktop/src/engine/mod.rs:PlanPermissionDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/mod.rs",
+      "target": "class:apps/desktop/src/engine/mod.rs:TodoItemDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/mod.rs",
+      "target": "class:apps/desktop/src/engine/mod.rs:PlanCommentDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/mod.rs",
+      "target": "class:apps/desktop/src/engine/mod.rs:QuestionOptionDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/types.rs",
+      "target": "class:apps/desktop/src/engine/types.rs:EngineEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/types.rs",
+      "target": "class:apps/desktop/src/engine/types.rs:ToolCall",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/engine/types.rs",
+      "target": "class:apps/desktop/src/engine/types.rs:TurnResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/force_automode.rs",
+      "target": "class:apps/desktop/src/force_automode.rs:ForceAutomodeState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/force_automode.rs",
+      "target": "function:apps/desktop/src/force_automode.rs:is_enabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/force_automode.rs",
+      "target": "function:apps/desktop/src/force_automode.rs:set",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hebisland_client.rs",
+      "target": "class:apps/desktop/src/hebisland_client.rs:HebislandClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hebisland_client.rs",
+      "target": "function:apps/desktop/src/hebisland_client.rs:push",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hebisland_client.rs",
+      "target": "function:apps/desktop/src/hebisland_client.rs:dismiss",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hebisland_client.rs",
+      "target": "function:apps/desktop/src/hebisland_client.rs:init_hebisland_client",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "class:apps/desktop/src/hitl.rs:HitlState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:track_run",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:track",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:cancel_run",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:resolve_approval",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:answer_question",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:forget",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:cancel_all_pending",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:has_pending",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:resolve_hitl_from_island",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/hitl.rs",
+      "target": "function:apps/desktop/src/hitl.rs:answer_question_from_island",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/lib.rs",
+      "target": "function:apps/desktop/src/lib.rs:run",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/window_control.rs",
+      "target": "class:apps/desktop/src/window_control.rs:MainWindowAction",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/window_control.rs",
+      "target": "function:apps/desktop/src/window_control.rs:toggle_action",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/window_control.rs",
+      "target": "function:apps/desktop/src/window_control.rs:initialize",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/src/window_control.rs",
+      "target": "function:apps/desktop/src/window_control.rs:handle_window_event",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

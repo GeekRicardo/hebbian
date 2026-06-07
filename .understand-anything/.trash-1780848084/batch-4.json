@@ -1,0 +1,64 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/pages/README.md",
+      "language": "markdown",
+      "sizeLines": 202,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "apps/pages/package.json",
+      "language": "json",
+      "sizeLines": 12,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/pnpm-workspace.yaml",
+      "language": "yaml",
+      "sizeLines": 2,
+      "fileCategory": "config"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "document:apps/pages/README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "apps/pages/README.md",
+      "summary": "模块 README",
+      "tags": [
+        "docs",
+        "markdown",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:apps/pages/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "apps/pages/package.json",
+      "summary": "模块 package",
+      "tags": [
+        "config",
+        "json",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:apps/pages/pnpm-workspace.yaml",
+      "type": "config",
+      "name": "pnpm-workspace.yaml",
+      "filePath": "apps/pages/pnpm-workspace.yaml",
+      "summary": "模块 pnpm-workspace",
+      "tags": [
+        "config",
+        "yaml",
+        "pages"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": []
+}

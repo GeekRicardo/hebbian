@@ -1,0 +1,207 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 5,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "apps/desktop/Cargo.toml",
+      "language": "toml",
+      "fileCategory": "config",
+      "totalLines": 37,
+      "nonEmptyLines": 33,
+      "sections": [
+        {
+          "heading": "package",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "lib",
+          "level": 1,
+          "line": 6
+        },
+        {
+          "heading": "build-dependencies",
+          "level": 1,
+          "line": 10
+        },
+        {
+          "heading": "dependencies",
+          "level": 1,
+          "line": 13
+        },
+        {
+          "heading": "features",
+          "level": 1,
+          "line": 35
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 39,
+      "nonEmptyLines": 39,
+      "sections": [
+        {
+          "heading": "name",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "private",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "version",
+          "level": 1,
+          "line": 4
+        },
+        {
+          "heading": "type",
+          "level": 1,
+          "line": 5
+        },
+        {
+          "heading": "scripts",
+          "level": 1,
+          "line": 6
+        },
+        {
+          "heading": "dependencies",
+          "level": 1,
+          "line": 12
+        },
+        {
+          "heading": "devDependencies",
+          "level": 1,
+          "line": 28
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "apps/desktop/tauri.conf.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 45,
+      "nonEmptyLines": 45,
+      "sections": [
+        {
+          "heading": "$schema",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "productName",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "version",
+          "level": 1,
+          "line": 4
+        },
+        {
+          "heading": "identifier",
+          "level": 1,
+          "line": 5
+        },
+        {
+          "heading": "build",
+          "level": 1,
+          "line": 6
+        },
+        {
+          "heading": "app",
+          "level": 1,
+          "line": 12
+        },
+        {
+          "heading": "bundle",
+          "level": 1,
+          "line": 34
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "apps/desktop/tsconfig.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 23,
+      "nonEmptyLines": 23,
+      "sections": [
+        {
+          "heading": "compilerOptions",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "include",
+          "level": 1,
+          "line": 21
+        },
+        {
+          "heading": "references",
+          "level": 1,
+          "line": 22
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 3
+      }
+    },
+    {
+      "path": "apps/desktop/tsconfig.node.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 11,
+      "nonEmptyLines": 11,
+      "sections": [
+        {
+          "heading": "compilerOptions",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "include",
+          "level": 1,
+          "line": 10
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,5461 @@
+{
+  "batchFiles": [
+    {
+      "path": "crates/agent-core/src/storage/permissions.rs",
+      "language": "rust",
+      "sizeLines": 102,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plan_comments.rs",
+      "language": "rust",
+      "sizeLines": 185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plans.rs",
+      "language": "rust",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/plugins.rs",
+      "language": "rust",
+      "sizeLines": 1132,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/projects.rs",
+      "language": "rust",
+      "sizeLines": 598,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/prompts.rs",
+      "language": "rust",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "language": "rust",
+      "sizeLines": 170,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions_dir.rs",
+      "language": "rust",
+      "sizeLines": 316,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/sessions.rs",
+      "language": "rust",
+      "sizeLines": 2683,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/settings.rs",
+      "language": "rust",
+      "sizeLines": 409,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skill_collections.rs",
+      "language": "rust",
+      "sizeLines": 356,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/skills.rs",
+      "language": "rust",
+      "sizeLines": 796,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/subagents.rs",
+      "language": "rust",
+      "sizeLines": 553,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/storage/tool_results.rs",
+      "language": "rust",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/ctx.rs",
+      "language": "rust",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/mod.rs",
+      "language": "rust",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/subagent/runner.rs",
+      "language": "rust",
+      "sizeLines": 492,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/system_prompt.rs",
+      "language": "rust",
+      "sizeLines": 381,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/background.rs",
+      "language": "rust",
+      "sizeLines": 747,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_output.rs",
+      "language": "rust",
+      "sizeLines": 179,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash_prefix.rs",
+      "language": "rust",
+      "sizeLines": 509,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/bash.rs",
+      "language": "rust",
+      "sizeLines": 596,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit_hashline.rs",
+      "language": "rust",
+      "sizeLines": 260,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/edit.rs",
+      "language": "rust",
+      "sizeLines": 602,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "language": "rust",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:crates/agent-core/src/storage/permissions.rs",
+      "type": "file",
+      "name": "permissions.rs",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "Global / Project 级权限规则持久化（架构 §4.6 / §6.1.2）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/permissions.rs:PermissionsFile",
+      "type": "class",
+      "name": "PermissionsFile",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "PermissionsFile 定义于 permissions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:global_path",
+      "type": "function",
+      "name": "global_path",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "global_path 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:project_path",
+      "type": "function",
+      "name": "project_path",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "project_path 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:project_path_by_id",
+      "type": "function",
+      "name": "project_path_by_id",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "project_path_by_id 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:global_mtime",
+      "type": "function",
+      "name": "global_mtime",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "global_mtime 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:project_mtime",
+      "type": "function",
+      "name": "project_mtime",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "project_mtime 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:load_global",
+      "type": "function",
+      "name": "load_global",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "load_global 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:load_project",
+      "type": "function",
+      "name": "load_project",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "load_project 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:save_global",
+      "type": "function",
+      "name": "save_global",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "save_global 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/permissions.rs:save_project",
+      "type": "function",
+      "name": "save_project",
+      "filePath": "crates/agent-core/src/storage/permissions.rs",
+      "summary": "save_project 定义于 permissions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/plan_comments.rs",
+      "type": "file",
+      "name": "plan_comments.rs",
+      "filePath": "crates/agent-core/src/storage/plan_comments.rs",
+      "summary": "Plan 评论流落盘（架构 §4.4.5）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plan_comments.rs:append_comment",
+      "type": "function",
+      "name": "append_comment",
+      "filePath": "crates/agent-core/src/storage/plan_comments.rs",
+      "summary": "append_comment 定义于 plan_comments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plan_comments.rs:list_comments",
+      "type": "function",
+      "name": "list_comments",
+      "filePath": "crates/agent-core/src/storage/plan_comments.rs",
+      "summary": "list_comments 定义于 plan_comments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plan_comments.rs:mark_consumed",
+      "type": "function",
+      "name": "mark_consumed",
+      "filePath": "crates/agent-core/src/storage/plan_comments.rs",
+      "summary": "mark_consumed 定义于 plan_comments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plan_comments.rs:list_unconsumed",
+      "type": "function",
+      "name": "list_unconsumed",
+      "filePath": "crates/agent-core/src/storage/plan_comments.rs",
+      "summary": "list_unconsumed 定义于 plan_comments.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/plans.rs",
+      "type": "file",
+      "name": "plans.rs",
+      "filePath": "crates/agent-core/src/storage/plans.rs",
+      "summary": "PlanMode 退出时把 plan markdown 落盘（架构 §4.4.5 / §6.1）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plans.rs:dir_for_session",
+      "type": "function",
+      "name": "dir_for_session",
+      "filePath": "crates/agent-core/src/storage/plans.rs",
+      "summary": "dir_for_session 定义于 plans.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plans.rs:save_plan",
+      "type": "function",
+      "name": "save_plan",
+      "filePath": "crates/agent-core/src/storage/plans.rs",
+      "summary": "save_plan 定义于 plans.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/plugins.rs",
+      "type": "file",
+      "name": "plugins.rs",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "插件系统持久化（架构 §6.1.4）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:PluginRegistry",
+      "type": "class",
+      "name": "PluginRegistry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "PluginRegistry 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:InstalledPlugin",
+      "type": "class",
+      "name": "InstalledPlugin",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "InstalledPlugin 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:InstalledComponents",
+      "type": "class",
+      "name": "InstalledComponents",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "InstalledComponents 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceRegistry",
+      "type": "class",
+      "name": "MarketplaceRegistry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "MarketplaceRegistry 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceEntry",
+      "type": "class",
+      "name": "MarketplaceEntry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "MarketplaceEntry 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceSource",
+      "type": "class",
+      "name": "MarketplaceSource",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "MarketplaceSource 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:clone_url",
+      "type": "function",
+      "name": "clone_url",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "clone_url 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:display",
+      "type": "function",
+      "name": "display",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "display 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:CatalogEntry",
+      "type": "class",
+      "name": "CatalogEntry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "CatalogEntry 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:CatalogPluginSource",
+      "type": "class",
+      "name": "CatalogPluginSource",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "CatalogPluginSource 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:PluginManifest",
+      "type": "class",
+      "name": "PluginManifest",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "PluginManifest 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceCatalog",
+      "type": "class",
+      "name": "MarketplaceCatalog",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "MarketplaceCatalog 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/plugins.rs:PluginListItem",
+      "type": "class",
+      "name": "PluginListItem",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "PluginListItem 定义于 plugins.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:plugin_cache_dir",
+      "type": "function",
+      "name": "plugin_cache_dir",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "plugin_cache_dir 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:load_registry",
+      "type": "function",
+      "name": "load_registry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "load_registry 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:save_registry",
+      "type": "function",
+      "name": "save_registry",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "save_registry 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:load_marketplaces",
+      "type": "function",
+      "name": "load_marketplaces",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "load_marketplaces 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:save_marketplaces",
+      "type": "function",
+      "name": "save_marketplaces",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "save_marketplaces 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:marketplace_add",
+      "type": "function",
+      "name": "marketplace_add",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "marketplace_add 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:marketplace_list_plugins",
+      "type": "function",
+      "name": "marketplace_list_plugins",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "marketplace_list_plugins 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:marketplace_remove",
+      "type": "function",
+      "name": "marketplace_remove",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "marketplace_remove 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:plugin_install",
+      "type": "function",
+      "name": "plugin_install",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "plugin_install 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:plugin_uninstall",
+      "type": "function",
+      "name": "plugin_uninstall",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "plugin_uninstall 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:plugin_list",
+      "type": "function",
+      "name": "plugin_list",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "plugin_list 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/plugins.rs:marketplace_list",
+      "type": "function",
+      "name": "marketplace_list",
+      "filePath": "crates/agent-core/src/storage/plugins.rs",
+      "summary": "marketplace_list 定义于 plugins.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/projects.rs",
+      "type": "file",
+      "name": "projects.rs",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "Workspace / project 持久化（架构 §6.1 / §6.1.1）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:projects_root",
+      "type": "function",
+      "name": "projects_root",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "projects_root 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:project_dir",
+      "type": "function",
+      "name": "project_dir",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "project_dir 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:project_dir_by_id",
+      "type": "function",
+      "name": "project_dir_by_id",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "project_dir_by_id 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:encode_workdir",
+      "type": "function",
+      "name": "encode_workdir",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "encode_workdir 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/projects.rs:WorkspaceFolder",
+      "type": "class",
+      "name": "WorkspaceFolder",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "WorkspaceFolder 定义于 projects.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProject",
+      "type": "class",
+      "name": "WorkspaceProject",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "WorkspaceProject 定义于 projects.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:workdir",
+      "type": "function",
+      "name": "workdir",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "workdir 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:allowed_paths",
+      "type": "function",
+      "name": "allowed_paths",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "allowed_paths 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProjectsFile",
+      "type": "class",
+      "name": "WorkspaceProjectsFile",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "WorkspaceProjectsFile 定义于 projects.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProjectInput",
+      "type": "class",
+      "name": "WorkspaceProjectInput",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "WorkspaceProjectInput 定义于 projects.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "load 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:list",
+      "type": "function",
+      "name": "list",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "list 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:get",
+      "type": "function",
+      "name": "get",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "get 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "save 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:delete",
+      "type": "function",
+      "name": "delete",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "delete 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:import_vscode_workspace",
+      "type": "function",
+      "name": "import_vscode_workspace",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "import_vscode_workspace 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:create",
+      "type": "function",
+      "name": "create",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "create 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/projects.rs:update",
+      "type": "function",
+      "name": "update",
+      "filePath": "crates/agent-core/src/storage/projects.rs",
+      "summary": "update 定义于 projects.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/prompts.rs",
+      "type": "file",
+      "name": "prompts.rs",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "模块 prompts",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/prompts.rs:Prompt",
+      "type": "class",
+      "name": "Prompt",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "Prompt 定义于 prompts.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/prompts.rs:PromptsFile",
+      "type": "class",
+      "name": "PromptsFile",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "PromptsFile 定义于 prompts.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/prompts.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "load 定义于 prompts.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/prompts.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "save 定义于 prompts.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/prompts.rs:upsert",
+      "type": "function",
+      "name": "upsert",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "upsert 定义于 prompts.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/prompts.rs:delete",
+      "type": "function",
+      "name": "delete",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "delete 定义于 prompts.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/prompts.rs:set_default",
+      "type": "function",
+      "name": "set_default",
+      "filePath": "crates/agent-core/src/storage/prompts.rs",
+      "summary": "set_default 定义于 prompts.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "type": "file",
+      "name": "run_checkpoint.rs",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "Run 挂起态 checkpoint 落盘（架构 §4.12.3）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/run_checkpoint.rs:RunPhase",
+      "type": "class",
+      "name": "RunPhase",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "RunPhase 定义于 run_checkpoint.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/run_checkpoint.rs:RunCheckpoint",
+      "type": "class",
+      "name": "RunCheckpoint",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "RunCheckpoint 定义于 run_checkpoint.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/run_checkpoint.rs:path",
+      "type": "function",
+      "name": "path",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "path 定义于 run_checkpoint.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/run_checkpoint.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "save 定义于 run_checkpoint.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/run_checkpoint.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "load 定义于 run_checkpoint.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/run_checkpoint.rs:delete",
+      "type": "function",
+      "name": "delete",
+      "filePath": "crates/agent-core/src/storage/run_checkpoint.rs",
+      "summary": "delete 定义于 run_checkpoint.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "type": "file",
+      "name": "sessions_dir.rs",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "Session 目录布局（架构 §4.9.1 / §6.1）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:session_dir",
+      "type": "function",
+      "name": "session_dir",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "session_dir 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:session_jsonl_path",
+      "type": "function",
+      "name": "session_jsonl_path",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "session_jsonl_path 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:meta_path",
+      "type": "function",
+      "name": "meta_path",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "meta_path 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:partial_dir",
+      "type": "function",
+      "name": "partial_dir",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "partial_dir 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:partial_path",
+      "type": "function",
+      "name": "partial_path",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "partial_path 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:bg_dir",
+      "type": "function",
+      "name": "bg_dir",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "bg_dir 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:ensure_session_dirs",
+      "type": "function",
+      "name": "ensure_session_dirs",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "ensure_session_dirs 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:new_session_id",
+      "type": "function",
+      "name": "new_session_id",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "new_session_id 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions_dir.rs:SessionDirMeta",
+      "type": "class",
+      "name": "SessionDirMeta",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "SessionDirMeta 定义于 sessions_dir.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:save_meta",
+      "type": "function",
+      "name": "save_meta",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "save_meta 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:load_meta",
+      "type": "function",
+      "name": "load_meta",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "load_meta 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions_dir.rs:PartialFragment",
+      "type": "class",
+      "name": "PartialFragment",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "PartialFragment 定义于 sessions_dir.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:append_partial",
+      "type": "function",
+      "name": "append_partial",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "append_partial 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:delete_partial",
+      "type": "function",
+      "name": "delete_partial",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "delete_partial 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions_dir.rs:RecoveredPartial",
+      "type": "class",
+      "name": "RecoveredPartial",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "RecoveredPartial 定义于 sessions_dir.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions_dir.rs:recover_interrupted_partials",
+      "type": "function",
+      "name": "recover_interrupted_partials",
+      "filePath": "crates/agent-core/src/storage/sessions_dir.rs",
+      "summary": "recover_interrupted_partials 定义于 sessions_dir.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/sessions.rs",
+      "type": "file",
+      "name": "sessions.rs",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "对话历史持久化 (rollout v1)。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:Role",
+      "type": "class",
+      "name": "Role",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "Role 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:MessageMeta",
+      "type": "class",
+      "name": "MessageMeta",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "MessageMeta 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:is_system_notification",
+      "type": "function",
+      "name": "is_system_notification",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "is_system_notification 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:MessageToolCall",
+      "type": "class",
+      "name": "MessageToolCall",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "MessageToolCall 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:MessagePart",
+      "type": "class",
+      "name": "MessagePart",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "MessagePart 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:Message",
+      "type": "class",
+      "name": "Message",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "Message 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:is_system_notification",
+      "type": "function",
+      "name": "is_system_notification",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "is_system_notification 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:Session",
+      "type": "class",
+      "name": "Session",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "Session 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:TokenStats",
+      "type": "class",
+      "name": "TokenStats",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "TokenStats 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:accumulate",
+      "type": "function",
+      "name": "accumulate",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "accumulate 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:PendingContinue",
+      "type": "class",
+      "name": "PendingContinue",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "PendingContinue 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:ContinueKind",
+      "type": "class",
+      "name": "ContinueKind",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "ContinueKind 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:continue_kind_str",
+      "type": "function",
+      "name": "continue_kind_str",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "continue_kind_str 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:SessionMeta",
+      "type": "class",
+      "name": "SessionMeta",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "SessionMeta 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:SearchHit",
+      "type": "class",
+      "name": "SearchHit",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "SearchHit 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:RolloutLine",
+      "type": "class",
+      "name": "RolloutLine",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "RolloutLine 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:RolloutMeta",
+      "type": "class",
+      "name": "RolloutMeta",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "RolloutMeta 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/sessions.rs:MetaUpdate",
+      "type": "class",
+      "name": "MetaUpdate",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "MetaUpdate 定义于 sessions.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:new_id",
+      "type": "function",
+      "name": "new_id",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "new_id 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_default_source",
+      "type": "function",
+      "name": "set_default_source",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_default_source 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:list",
+      "type": "function",
+      "name": "list",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "list 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "load 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:load_with_partial_recovery",
+      "type": "function",
+      "name": "load_with_partial_recovery",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "load_with_partial_recovery 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:recover_and_append_interrupted_partials",
+      "type": "function",
+      "name": "recover_and_append_interrupted_partials",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "recover_and_append_interrupted_partials 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:migrate_legacy_layout_if_needed",
+      "type": "function",
+      "name": "migrate_legacy_layout_if_needed",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "migrate_legacy_layout_if_needed 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "save 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:update_meta",
+      "type": "function",
+      "name": "update_meta",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "update_meta 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:delete",
+      "type": "function",
+      "name": "delete",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "delete 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:create",
+      "type": "function",
+      "name": "create",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "create 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:create_with_source",
+      "type": "function",
+      "name": "create_with_source",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "create_with_source 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:create_with_workspace",
+      "type": "function",
+      "name": "create_with_workspace",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "create_with_workspace 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:append_message",
+      "type": "function",
+      "name": "append_message",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "append_message 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:insert_switch_marker",
+      "type": "function",
+      "name": "insert_switch_marker",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "insert_switch_marker 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:insert_reasoning_switch_marker",
+      "type": "function",
+      "name": "insert_reasoning_switch_marker",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "insert_reasoning_switch_marker 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:fork",
+      "type": "function",
+      "name": "fork",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "fork 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:rename",
+      "type": "function",
+      "name": "rename",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "rename 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_run_mode",
+      "type": "function",
+      "name": "set_run_mode",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_run_mode 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_todos",
+      "type": "function",
+      "name": "set_todos",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_todos 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_active_plan",
+      "type": "function",
+      "name": "set_active_plan",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_active_plan 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_pre_plan_mode",
+      "type": "function",
+      "name": "set_pre_plan_mode",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_pre_plan_mode 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:set_pending_continue",
+      "type": "function",
+      "name": "set_pending_continue",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "set_pending_continue 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:truncate_after",
+      "type": "function",
+      "name": "truncate_after",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "truncate_after 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:truncate_inclusive",
+      "type": "function",
+      "name": "truncate_inclusive",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "truncate_inclusive 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:undo_compaction",
+      "type": "function",
+      "name": "undo_compaction",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "undo_compaction 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/sessions.rs:search",
+      "type": "function",
+      "name": "search",
+      "filePath": "crates/agent-core/src/storage/sessions.rs",
+      "summary": "search 定义于 sessions.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/settings.rs",
+      "type": "file",
+      "name": "settings.rs",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "全局设置（`settings.json`）。每个对话可以用 Session 字段覆盖部分项。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:Settings",
+      "type": "class",
+      "name": "Settings",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "Settings 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:GeneralSettings",
+      "type": "class",
+      "name": "GeneralSettings",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "GeneralSettings 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:ContinueStrategy",
+      "type": "class",
+      "name": "ContinueStrategy",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "ContinueStrategy 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/settings.rs:default_automode_models",
+      "type": "function",
+      "name": "default_automode_models",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "default_automode_models 定义于 settings.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:EditBackend",
+      "type": "class",
+      "name": "EditBackend",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "EditBackend 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/settings.rs:default_shell",
+      "type": "function",
+      "name": "default_shell",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "default_shell 定义于 settings.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:ConversationDefaults",
+      "type": "class",
+      "name": "ConversationDefaults",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "ConversationDefaults 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:AgentDefaults",
+      "type": "class",
+      "name": "AgentDefaults",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "AgentDefaults 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:MemorySettings",
+      "type": "class",
+      "name": "MemorySettings",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "MemorySettings 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/settings.rs:MemoryModelRef",
+      "type": "class",
+      "name": "MemoryModelRef",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "MemoryModelRef 定义于 settings.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/settings.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "load 定义于 settings.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/settings.rs:expand_home",
+      "type": "function",
+      "name": "expand_home",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "expand_home 定义于 settings.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/settings.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/settings.rs",
+      "summary": "save 定义于 settings.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "type": "file",
+      "name": "skill_collections.rs",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "Skill 集合（架构 §6.1.3）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skill_collections.rs:CollectionSource",
+      "type": "class",
+      "name": "CollectionSource",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "CollectionSource 定义于 skill_collections.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:display",
+      "type": "function",
+      "name": "display",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "display 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:synthetic_local_id",
+      "type": "function",
+      "name": "synthetic_local_id",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "synthetic_local_id 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:is_synthetic_local_id",
+      "type": "function",
+      "name": "is_synthetic_local_id",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "is_synthetic_local_id 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:skill_name_from_local_id",
+      "type": "function",
+      "name": "skill_name_from_local_id",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "skill_name_from_local_id 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skill_collections.rs:SkillCollection",
+      "type": "class",
+      "name": "SkillCollection",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "SkillCollection 定义于 skill_collections.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skill_collections.rs:SkillCollectionsFile",
+      "type": "class",
+      "name": "SkillCollectionsFile",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "SkillCollectionsFile 定义于 skill_collections.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:load",
+      "type": "function",
+      "name": "load",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "load 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:save",
+      "type": "function",
+      "name": "save",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "save 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:label_from_github",
+      "type": "function",
+      "name": "label_from_github",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "label_from_github 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:label_from_dir",
+      "type": "function",
+      "name": "label_from_dir",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "label_from_dir 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:append",
+      "type": "function",
+      "name": "append",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "append 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:remove",
+      "type": "function",
+      "name": "remove",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "remove 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:find_by_skill",
+      "type": "function",
+      "name": "find_by_skill",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "find_by_skill 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:record_import",
+      "type": "function",
+      "name": "record_import",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "record_import 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skill_collections.rs:remove_by_plugin",
+      "type": "function",
+      "name": "remove_by_plugin",
+      "filePath": "crates/agent-core/src/storage/skill_collections.rs",
+      "summary": "remove_by_plugin 定义于 skill_collections.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/skills.rs",
+      "type": "file",
+      "name": "skills.rs",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "Skill 资产导入（架构 §6.1.3）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skills.rs:ImportScope",
+      "type": "class",
+      "name": "ImportScope",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "ImportScope 定义于 skills.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skills.rs:ImportedSkill",
+      "type": "class",
+      "name": "ImportedSkill",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "ImportedSkill 定义于 skills.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skills.rs:DisabledSkillsFile",
+      "type": "class",
+      "name": "DisabledSkillsFile",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "DisabledSkillsFile 定义于 skills.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:disabled_path",
+      "type": "function",
+      "name": "disabled_path",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "disabled_path 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:load_disabled",
+      "type": "function",
+      "name": "load_disabled",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "load_disabled 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:save_disabled",
+      "type": "function",
+      "name": "save_disabled",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "save_disabled 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:set_skill_enabled",
+      "type": "function",
+      "name": "set_skill_enabled",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "set_skill_enabled 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:apply_disabled",
+      "type": "function",
+      "name": "apply_disabled",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "apply_disabled 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:list_claude_skills",
+      "type": "function",
+      "name": "list_claude_skills",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "list_claude_skills 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:import_from_claude",
+      "type": "function",
+      "name": "import_from_claude",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "import_from_claude 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/skills.rs:ScannedSkill",
+      "type": "class",
+      "name": "ScannedSkill",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "ScannedSkill 定义于 skills.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:scan_skill_dir",
+      "type": "function",
+      "name": "scan_skill_dir",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "scan_skill_dir 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:scan_skill_github",
+      "type": "function",
+      "name": "scan_skill_github",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "scan_skill_github 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:list_skills_in_dir",
+      "type": "function",
+      "name": "list_skills_in_dir",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "list_skills_in_dir 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:import_from_dir",
+      "type": "function",
+      "name": "import_from_dir",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "import_from_dir 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/skills.rs:import_from_github",
+      "type": "function",
+      "name": "import_from_github",
+      "filePath": "crates/agent-core/src/storage/skills.rs",
+      "summary": "import_from_github 定义于 skills.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/subagents.rs",
+      "type": "file",
+      "name": "subagents.rs",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "Subagent 配置存储（架构 §4.4.11 / §6.1）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/subagents.rs:SubagentDefinition",
+      "type": "class",
+      "name": "SubagentDefinition",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "SubagentDefinition 定义于 subagents.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/subagents.rs:GlobalSettings",
+      "type": "class",
+      "name": "GlobalSettings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "GlobalSettings 定义于 subagents.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/subagents.rs:ProjectSubagentsSection",
+      "type": "class",
+      "name": "ProjectSubagentsSection",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "ProjectSubagentsSection 定义于 subagents.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/subagents.rs:ProjectSettings",
+      "type": "class",
+      "name": "ProjectSettings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "ProjectSettings 定义于 subagents.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:global_dir",
+      "type": "function",
+      "name": "global_dir",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "global_dir 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:global_settings_path",
+      "type": "function",
+      "name": "global_settings_path",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "global_settings_path 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:project_settings_path",
+      "type": "function",
+      "name": "project_settings_path",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "project_settings_path 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:load_global_settings",
+      "type": "function",
+      "name": "load_global_settings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "load_global_settings 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:save_global_settings",
+      "type": "function",
+      "name": "save_global_settings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "save_global_settings 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:load_project_settings",
+      "type": "function",
+      "name": "load_project_settings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "load_project_settings 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:save_project_settings",
+      "type": "function",
+      "name": "save_project_settings",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "save_project_settings 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/storage/subagents.rs:EnableScope",
+      "type": "class",
+      "name": "EnableScope",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "EnableScope 定义于 subagents.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:set_enabled",
+      "type": "function",
+      "name": "set_enabled",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "set_enabled 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:clear_enabled",
+      "type": "function",
+      "name": "clear_enabled",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "clear_enabled 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:load_global_definitions",
+      "type": "function",
+      "name": "load_global_definitions",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "load_global_definitions 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:get_definition",
+      "type": "function",
+      "name": "get_definition",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "get_definition 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:save_definition",
+      "type": "function",
+      "name": "save_definition",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "save_definition 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:delete_definition",
+      "type": "function",
+      "name": "delete_definition",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "delete_definition 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/subagents.rs:load_for_workdir",
+      "type": "function",
+      "name": "load_for_workdir",
+      "filePath": "crates/agent-core/src/storage/subagents.rs",
+      "summary": "load_for_workdir 定义于 subagents.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/storage/tool_results.rs",
+      "type": "file",
+      "name": "tool_results.rs",
+      "filePath": "crates/agent-core/src/storage/tool_results.rs",
+      "summary": "工具结果落盘（架构 §4.7 / §6.1）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/tool_results.rs:dir_for_session",
+      "type": "function",
+      "name": "dir_for_session",
+      "filePath": "crates/agent-core/src/storage/tool_results.rs",
+      "summary": "dir_for_session 定义于 tool_results.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/storage/tool_results.rs:save_tool_result",
+      "type": "function",
+      "name": "save_tool_result",
+      "filePath": "crates/agent-core/src/storage/tool_results.rs",
+      "summary": "save_tool_result 定义于 tool_results.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/subagent/ctx.rs",
+      "type": "file",
+      "name": "ctx.rs",
+      "filePath": "crates/agent-core/src/subagent/ctx.rs",
+      "summary": "Subagent 运行时上下文：跑 NestedRun 需要、[`crate::dispatch::ToolDispatcher`] 自身没用的字段。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:crates/agent-core/src/subagent/ctx.rs:SubagentCtx",
+      "type": "class",
+      "name": "SubagentCtx",
+      "filePath": "crates/agent-core/src/subagent/ctx.rs",
+      "summary": "SubagentCtx 定义于 ctx.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/subagent/ctx.rs:find",
+      "type": "function",
+      "name": "find",
+      "filePath": "crates/agent-core/src/subagent/ctx.rs",
+      "summary": "find 定义于 ctx.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/subagent/mod.rs",
+      "type": "file",
+      "name": "mod.rs",
+      "filePath": "crates/agent-core/src/subagent/mod.rs",
+      "summary": "Subagent 子运行（NestedRun，架构 §4.4.11）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/agent-core/src/subagent/runner.rs",
+      "type": "file",
+      "name": "runner.rs",
+      "filePath": "crates/agent-core/src/subagent/runner.rs",
+      "summary": "[`SubagentRunner`]：跑一次嵌套 agent_loop（NestedRun，架构 §4.4.11）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/subagent/runner.rs:SubagentRunner",
+      "type": "class",
+      "name": "SubagentRunner",
+      "filePath": "crates/agent-core/src/subagent/runner.rs",
+      "summary": "SubagentRunner 定义于 runner.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/subagent/runner.rs:execute",
+      "type": "function",
+      "name": "execute",
+      "filePath": "crates/agent-core/src/subagent/runner.rs",
+      "summary": "execute 定义于 runner.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/system_prompt.rs",
+      "type": "file",
+      "name": "system_prompt.rs",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "系统提示词的唯一来源。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:compose_system_prompt",
+      "type": "function",
+      "name": "compose_system_prompt",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "compose_system_prompt 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/system_prompt.rs:EnvironmentSnapshot",
+      "type": "class",
+      "name": "EnvironmentSnapshot",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "EnvironmentSnapshot 定义于 system_prompt.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/system_prompt.rs:BackgroundTaskSummary",
+      "type": "class",
+      "name": "BackgroundTaskSummary",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "BackgroundTaskSummary 定义于 system_prompt.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:from_workspace",
+      "type": "function",
+      "name": "from_workspace",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "from_workspace 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:with_extra_paths",
+      "type": "function",
+      "name": "with_extra_paths",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "with_extra_paths 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:with_run_mode",
+      "type": "function",
+      "name": "with_run_mode",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "with_run_mode 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:with_background_tasks",
+      "type": "function",
+      "name": "with_background_tasks",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "with_background_tasks 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:with_memory_index",
+      "type": "function",
+      "name": "with_memory_index",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "with_memory_index 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:render",
+      "type": "function",
+      "name": "render",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "render 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:prepend_environment",
+      "type": "function",
+      "name": "prepend_environment",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "prepend_environment 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:prepend_background_tasks",
+      "type": "function",
+      "name": "prepend_background_tasks",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "prepend_background_tasks 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/system_prompt.rs:prepend_plan_comments",
+      "type": "function",
+      "name": "prepend_plan_comments",
+      "filePath": "crates/agent-core/src/system_prompt.rs",
+      "summary": "prepend_plan_comments 定义于 system_prompt.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/background.rs",
+      "type": "file",
+      "name": "background.rs",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "后台 shell 注册表：让 [`super::bash::BashTool`] 在命令超时（或用户显式",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/background.rs:ShellState",
+      "type": "class",
+      "name": "ShellState",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "ShellState 定义于 background.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:is_terminal",
+      "type": "function",
+      "name": "is_terminal",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "is_terminal 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:label",
+      "type": "function",
+      "name": "label",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "label 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/background.rs:BackgroundShell",
+      "type": "class",
+      "name": "BackgroundShell",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "BackgroundShell 定义于 background.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:log_path",
+      "type": "function",
+      "name": "log_path",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "log_path 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:is_background",
+      "type": "function",
+      "name": "is_background",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "is_background 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:promote_to_background",
+      "type": "function",
+      "name": "promote_to_background",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "promote_to_background 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:state",
+      "type": "function",
+      "name": "state",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "state 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:read_at",
+      "type": "function",
+      "name": "read_at",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "read_at 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:read_incremental",
+      "type": "function",
+      "name": "read_incremental",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "read_incremental 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:wait_for_change",
+      "type": "function",
+      "name": "wait_for_change",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "wait_for_change 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:wait_terminal",
+      "type": "function",
+      "name": "wait_terminal",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "wait_terminal 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/background.rs:ReadOutput",
+      "type": "class",
+      "name": "ReadOutput",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "ReadOutput 定义于 background.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/background.rs:BgSubagentTask",
+      "type": "class",
+      "name": "BgSubagentTask",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "BgSubagentTask 定义于 background.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:is_done",
+      "type": "function",
+      "name": "is_done",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "is_done 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:is_success",
+      "type": "function",
+      "name": "is_success",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "is_success 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:finish",
+      "type": "function",
+      "name": "finish",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "finish 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:elapsed_ms",
+      "type": "function",
+      "name": "elapsed_ms",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "elapsed_ms 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/background.rs:BgTaskRegistry",
+      "type": "class",
+      "name": "BgTaskRegistry",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "BgTaskRegistry 定义于 background.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:registry_for_session",
+      "type": "function",
+      "name": "registry_for_session",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "registry_for_session 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:discard_session_registry",
+      "type": "function",
+      "name": "discard_session_registry",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "discard_session_registry 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:registered_session_ids",
+      "type": "function",
+      "name": "registered_session_ids",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "registered_session_ids 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "new 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:register",
+      "type": "function",
+      "name": "register",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "register 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:unregister",
+      "type": "function",
+      "name": "unregister",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "unregister 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:get",
+      "type": "function",
+      "name": "get",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "get 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:list",
+      "type": "function",
+      "name": "list",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "list 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:kill",
+      "type": "function",
+      "name": "kill",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "kill 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:register_subagent",
+      "type": "function",
+      "name": "register_subagent",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "register_subagent 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/background.rs:get_subagent",
+      "type": "function",
+      "name": "get_subagent",
+      "filePath": "crates/agent-core/src/tools/background.rs",
+      "summary": "get_subagent 定义于 background.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/bash_output.rs",
+      "type": "file",
+      "name": "bash_output.rs",
+      "filePath": "crates/agent-core/src/tools/bash_output.rs",
+      "summary": "BashOutput 工具：按 task_id 增量取后台 shell 的输出。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/bash_output.rs:BashOutputTool",
+      "type": "class",
+      "name": "BashOutputTool",
+      "filePath": "crates/agent-core/src/tools/bash_output.rs",
+      "summary": "BashOutputTool 定义于 bash_output.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash_output.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/agent-core/src/tools/bash_output.rs",
+      "summary": "new 定义于 bash_output.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "type": "file",
+      "name": "bash_prefix.rs",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "Classifier A — Bash 命令前缀提取。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/bash_prefix.rs:BashPrefix",
+      "type": "class",
+      "name": "BashPrefix",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "BashPrefix 定义于 bash_prefix.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash_prefix.rs:as_fingerprint",
+      "type": "function",
+      "name": "as_fingerprint",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "as_fingerprint 定义于 bash_prefix.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash_prefix.rs:classify_prefix",
+      "type": "function",
+      "name": "classify_prefix",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "classify_prefix 定义于 bash_prefix.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash_prefix.rs:parse_classifier_output",
+      "type": "function",
+      "name": "parse_classifier_output",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "parse_classifier_output 定义于 bash_prefix.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash_prefix.rs:extract_prefix",
+      "type": "function",
+      "name": "extract_prefix",
+      "filePath": "crates/agent-core/src/tools/bash_prefix.rs",
+      "summary": "extract_prefix 定义于 bash_prefix.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/bash.rs",
+      "type": "file",
+      "name": "bash.rs",
+      "filePath": "crates/agent-core/src/tools/bash.rs",
+      "summary": "Bash 工具：在用户机器上跑 shell 命令。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/bash.rs:BashTool",
+      "type": "class",
+      "name": "BashTool",
+      "filePath": "crates/agent-core/src/tools/bash.rs",
+      "summary": "BashTool 定义于 bash.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/bash.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/agent-core/src/tools/bash.rs",
+      "summary": "new 定义于 bash.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/edit_hashline.rs",
+      "type": "file",
+      "name": "edit_hashline.rs",
+      "filePath": "crates/agent-core/src/tools/edit_hashline.rs",
+      "summary": "EditHashlineTool — Hashline 后端的 Edit 工具。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/edit_hashline.rs:EditHashlineTool",
+      "type": "class",
+      "name": "EditHashlineTool",
+      "filePath": "crates/agent-core/src/tools/edit_hashline.rs",
+      "summary": "EditHashlineTool 定义于 edit_hashline.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/edit_hashline.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/agent-core/src/tools/edit_hashline.rs",
+      "summary": "new 定义于 edit_hashline.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/edit.rs",
+      "type": "file",
+      "name": "edit.rs",
+      "filePath": "crates/agent-core/src/tools/edit.rs",
+      "summary": "Edit 工具（架构 §4.4.6 / §4.4.10）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/edit.rs:EditTool",
+      "type": "class",
+      "name": "EditTool",
+      "filePath": "crates/agent-core/src/tools/edit.rs",
+      "summary": "EditTool 定义于 edit.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/edit.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "crates/agent-core/src/tools/edit.rs",
+      "summary": "new 定义于 edit.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:crates/agent-core/src/tools/exit_plan_mode.rs",
+      "type": "file",
+      "name": "exit_plan_mode.rs",
+      "filePath": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "summary": "ExitPlanMode：PlanMode 下唯一退出途径（架构 §4.4.5）。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/exit_plan_mode.rs:ExitPlanInput",
+      "type": "class",
+      "name": "ExitPlanInput",
+      "filePath": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "summary": "ExitPlanInput 定义于 exit_plan_mode.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:crates/agent-core/src/tools/exit_plan_mode.rs:ExitPlanModeTool",
+      "type": "class",
+      "name": "ExitPlanModeTool",
+      "filePath": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "summary": "ExitPlanModeTool 定义于 exit_plan_mode.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/exit_plan_mode.rs:parse_input",
+      "type": "function",
+      "name": "parse_input",
+      "filePath": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "summary": "parse_input 定义于 exit_plan_mode.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:crates/agent-core/src/tools/exit_plan_mode.rs:plan_id_from_path",
+      "type": "function",
+      "name": "plan_id_from_path",
+      "filePath": "crates/agent-core/src/tools/exit_plan_mode.rs",
+      "summary": "plan_id_from_path 定义于 exit_plan_mode.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "class:crates/agent-core/src/storage/permissions.rs:PermissionsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:global_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:project_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:project_path_by_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:global_mtime",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:project_mtime",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:load_global",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:load_project",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:save_global",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/permissions.rs",
+      "target": "function:crates/agent-core/src/storage/permissions.rs:save_project",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plan_comments.rs",
+      "target": "function:crates/agent-core/src/storage/plan_comments.rs:append_comment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plan_comments.rs",
+      "target": "function:crates/agent-core/src/storage/plan_comments.rs:list_comments",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plan_comments.rs",
+      "target": "function:crates/agent-core/src/storage/plan_comments.rs:mark_consumed",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plan_comments.rs",
+      "target": "function:crates/agent-core/src/storage/plan_comments.rs:list_unconsumed",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plans.rs",
+      "target": "function:crates/agent-core/src/storage/plans.rs:dir_for_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plans.rs",
+      "target": "function:crates/agent-core/src/storage/plans.rs:save_plan",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:PluginRegistry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:InstalledPlugin",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:InstalledComponents",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceRegistry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceSource",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:clone_url",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:display",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:CatalogEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:CatalogPluginSource",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:PluginManifest",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:MarketplaceCatalog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "class:crates/agent-core/src/storage/plugins.rs:PluginListItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:plugin_cache_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:load_registry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:save_registry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:load_marketplaces",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:save_marketplaces",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:marketplace_add",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:marketplace_list_plugins",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:marketplace_remove",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:plugin_install",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:plugin_uninstall",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:plugin_list",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/plugins.rs",
+      "target": "function:crates/agent-core/src/storage/plugins.rs:marketplace_list",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:projects_root",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:project_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:project_dir_by_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:encode_workdir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "class:crates/agent-core/src/storage/projects.rs:WorkspaceFolder",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProject",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:workdir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:allowed_paths",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProjectsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "class:crates/agent-core/src/storage/projects.rs:WorkspaceProjectInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:list",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:get",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:delete",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:import_vscode_workspace",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:create",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/projects.rs",
+      "target": "function:crates/agent-core/src/storage/projects.rs:update",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "class:crates/agent-core/src/storage/prompts.rs:Prompt",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "class:crates/agent-core/src/storage/prompts.rs:PromptsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "function:crates/agent-core/src/storage/prompts.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "function:crates/agent-core/src/storage/prompts.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "function:crates/agent-core/src/storage/prompts.rs:upsert",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "function:crates/agent-core/src/storage/prompts.rs:delete",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/prompts.rs",
+      "target": "function:crates/agent-core/src/storage/prompts.rs:set_default",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "class:crates/agent-core/src/storage/run_checkpoint.rs:RunPhase",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "class:crates/agent-core/src/storage/run_checkpoint.rs:RunCheckpoint",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "function:crates/agent-core/src/storage/run_checkpoint.rs:path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "function:crates/agent-core/src/storage/run_checkpoint.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "function:crates/agent-core/src/storage/run_checkpoint.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/run_checkpoint.rs",
+      "target": "function:crates/agent-core/src/storage/run_checkpoint.rs:delete",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:session_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:session_jsonl_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:meta_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:partial_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:partial_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:bg_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:ensure_session_dirs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:new_session_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "class:crates/agent-core/src/storage/sessions_dir.rs:SessionDirMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:save_meta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:load_meta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "class:crates/agent-core/src/storage/sessions_dir.rs:PartialFragment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:append_partial",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:delete_partial",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "class:crates/agent-core/src/storage/sessions_dir.rs:RecoveredPartial",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions_dir.rs",
+      "target": "function:crates/agent-core/src/storage/sessions_dir.rs:recover_interrupted_partials",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:Role",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:MessageMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:is_system_notification",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:MessageToolCall",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:MessagePart",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:Message",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:is_system_notification",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:Session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:TokenStats",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:accumulate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:PendingContinue",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:ContinueKind",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:continue_kind_str",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:SessionMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:SearchHit",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:RolloutLine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:RolloutMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "class:crates/agent-core/src/storage/sessions.rs:MetaUpdate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:new_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_default_source",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:list",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:load_with_partial_recovery",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:recover_and_append_interrupted_partials",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:migrate_legacy_layout_if_needed",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:update_meta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:delete",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:create",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:create_with_source",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:create_with_workspace",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:append_message",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:insert_switch_marker",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:insert_reasoning_switch_marker",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:fork",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:rename",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_run_mode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_todos",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_active_plan",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_pre_plan_mode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:set_pending_continue",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:truncate_after",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:truncate_inclusive",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:undo_compaction",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/sessions.rs",
+      "target": "function:crates/agent-core/src/storage/sessions.rs:search",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:Settings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:GeneralSettings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:ContinueStrategy",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "function:crates/agent-core/src/storage/settings.rs:default_automode_models",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:EditBackend",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "function:crates/agent-core/src/storage/settings.rs:default_shell",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:ConversationDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:AgentDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:MemorySettings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "class:crates/agent-core/src/storage/settings.rs:MemoryModelRef",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "function:crates/agent-core/src/storage/settings.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "function:crates/agent-core/src/storage/settings.rs:expand_home",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/settings.rs",
+      "target": "function:crates/agent-core/src/storage/settings.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "class:crates/agent-core/src/storage/skill_collections.rs:CollectionSource",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:display",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:synthetic_local_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:is_synthetic_local_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:skill_name_from_local_id",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "class:crates/agent-core/src/storage/skill_collections.rs:SkillCollection",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "class:crates/agent-core/src/storage/skill_collections.rs:SkillCollectionsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:load",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:save",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:label_from_github",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:label_from_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:append",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:remove",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:find_by_skill",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:record_import",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skill_collections.rs",
+      "target": "function:crates/agent-core/src/storage/skill_collections.rs:remove_by_plugin",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "class:crates/agent-core/src/storage/skills.rs:ImportScope",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "class:crates/agent-core/src/storage/skills.rs:ImportedSkill",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "class:crates/agent-core/src/storage/skills.rs:DisabledSkillsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:disabled_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:load_disabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:save_disabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:set_skill_enabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:apply_disabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:list_claude_skills",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:import_from_claude",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "class:crates/agent-core/src/storage/skills.rs:ScannedSkill",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:scan_skill_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:scan_skill_github",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:list_skills_in_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:import_from_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/skills.rs",
+      "target": "function:crates/agent-core/src/storage/skills.rs:import_from_github",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "class:crates/agent-core/src/storage/subagents.rs:SubagentDefinition",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "class:crates/agent-core/src/storage/subagents.rs:GlobalSettings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "class:crates/agent-core/src/storage/subagents.rs:ProjectSubagentsSection",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "class:crates/agent-core/src/storage/subagents.rs:ProjectSettings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:global_dir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:global_settings_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:project_settings_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:load_global_settings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:save_global_settings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:load_project_settings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:save_project_settings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "class:crates/agent-core/src/storage/subagents.rs:EnableScope",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:set_enabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:clear_enabled",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:load_global_definitions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:get_definition",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:save_definition",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:delete_definition",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/subagents.rs",
+      "target": "function:crates/agent-core/src/storage/subagents.rs:load_for_workdir",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/tool_results.rs",
+      "target": "function:crates/agent-core/src/storage/tool_results.rs:dir_for_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/storage/tool_results.rs",
+      "target": "function:crates/agent-core/src/storage/tool_results.rs:save_tool_result",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/subagent/ctx.rs",
+      "target": "class:crates/agent-core/src/subagent/ctx.rs:SubagentCtx",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/subagent/ctx.rs",
+      "target": "function:crates/agent-core/src/subagent/ctx.rs:find",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/subagent/runner.rs",
+      "target": "class:crates/agent-core/src/subagent/runner.rs:SubagentRunner",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/subagent/runner.rs",
+      "target": "function:crates/agent-core/src/subagent/runner.rs:execute",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:compose_system_prompt",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "class:crates/agent-core/src/system_prompt.rs:EnvironmentSnapshot",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "class:crates/agent-core/src/system_prompt.rs:BackgroundTaskSummary",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:from_workspace",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:with_extra_paths",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:with_run_mode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:with_background_tasks",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:with_memory_index",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:render",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:prepend_environment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:prepend_background_tasks",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/system_prompt.rs",
+      "target": "function:crates/agent-core/src/system_prompt.rs:prepend_plan_comments",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "class:crates/agent-core/src/tools/background.rs:ShellState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:is_terminal",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:label",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "class:crates/agent-core/src/tools/background.rs:BackgroundShell",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:log_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:is_background",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:promote_to_background",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:state",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:read_at",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:read_incremental",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:wait_for_change",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:wait_terminal",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "class:crates/agent-core/src/tools/background.rs:ReadOutput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "class:crates/agent-core/src/tools/background.rs:BgSubagentTask",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:is_done",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:is_success",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:finish",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:elapsed_ms",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "class:crates/agent-core/src/tools/background.rs:BgTaskRegistry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:registry_for_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:discard_session_registry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:registered_session_ids",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:register",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:unregister",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:get",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:list",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:kill",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:register_subagent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/background.rs",
+      "target": "function:crates/agent-core/src/tools/background.rs:get_subagent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_output.rs",
+      "target": "class:crates/agent-core/src/tools/bash_output.rs:BashOutputTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_output.rs",
+      "target": "function:crates/agent-core/src/tools/bash_output.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "target": "class:crates/agent-core/src/tools/bash_prefix.rs:BashPrefix",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "target": "function:crates/agent-core/src/tools/bash_prefix.rs:as_fingerprint",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "target": "function:crates/agent-core/src/tools/bash_prefix.rs:classify_prefix",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "target": "function:crates/agent-core/src/tools/bash_prefix.rs:parse_classifier_output",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash_prefix.rs",
+      "target": "function:crates/agent-core/src/tools/bash_prefix.rs:extract_prefix",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash.rs",
+      "target": "class:crates/agent-core/src/tools/bash.rs:BashTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/bash.rs",
+      "target": "function:crates/agent-core/src/tools/bash.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/edit_hashline.rs",
+      "target": "class:crates/agent-core/src/tools/edit_hashline.rs:EditHashlineTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/edit_hashline.rs",
+      "target": "function:crates/agent-core/src/tools/edit_hashline.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/edit.rs",
+      "target": "class:crates/agent-core/src/tools/edit.rs:EditTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/edit.rs",
+      "target": "function:crates/agent-core/src/tools/edit.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/exit_plan_mode.rs",
+      "target": "class:crates/agent-core/src/tools/exit_plan_mode.rs:ExitPlanInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/exit_plan_mode.rs",
+      "target": "class:crates/agent-core/src/tools/exit_plan_mode.rs:ExitPlanModeTool",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/exit_plan_mode.rs",
+      "target": "function:crates/agent-core/src/tools/exit_plan_mode.rs:parse_input",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:crates/agent-core/src/tools/exit_plan_mode.rs",
+      "target": "function:crates/agent-core/src/tools/exit_plan_mode.rs:plan_id_from_path",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

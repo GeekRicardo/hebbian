@@ -1,0 +1,5163 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "louvain",
+  "totalFiles": 429,
+  "totalBatches": 23,
+  "exportsByPath": {
+    "apps/cli/src/client.rs": [
+      "sockets_dir",
+      "socket_path",
+      "list_sessions",
+      "send_command"
+    ],
+    "apps/cli/src/daemon.rs": [
+      "DaemonArgs",
+      "run"
+    ],
+    "apps/cli/src/ipc.rs": [
+      "IpcCommand",
+      "IpcResponse",
+      "ok",
+      "err",
+      "with_data",
+      "DaemonEvent",
+      "QuestionOptionDto"
+    ],
+    "apps/cli/src/main.rs": [],
+    "apps/cli/src/mock_provider.rs": [
+      "MockClient",
+      "new"
+    ],
+    "apps/cli/src/render.rs": [
+      "TurnRenderer",
+      "new",
+      "on_event",
+      "take_final_text"
+    ],
+    "apps/cli/src/session.rs": [
+      "SessionPersist",
+      "CliSession",
+      "PersistRef",
+      "new",
+      "run_single",
+      "run_with_history",
+      "into_tui_parts",
+      "run_loop",
+      "ConvoInput",
+      "ConvoMessage"
+    ],
+    "apps/cli/src/tui/app.rs": [
+      "run"
+    ],
+    "apps/cli/src/tui/components/chat_view.rs": [
+      "ChatBlock",
+      "ToolStatus",
+      "AutoDecision",
+      "ChatView",
+      "push",
+      "blocks_mut",
+      "last_mut",
+      "scroll_up",
+      "scroll_down",
+      "follow_bottom",
+      "render"
+    ],
+    "apps/cli/src/tui/components/input_box.rs": [
+      "InputBox",
+      "buffer",
+      "push_char",
+      "pop_char",
+      "clear",
+      "take",
+      "render"
+    ],
+    "apps/cli/src/tui/components/mod.rs": [],
+    "apps/cli/src/tui/components/permission_popup.rs": [
+      "PermissionPopupState",
+      "render",
+      "decision_for_key"
+    ],
+    "apps/cli/src/tui/components/question_popup.rs": [
+      "QuestionPopupState",
+      "render",
+      "option_index_for_key",
+      "build_answer"
+    ],
+    "apps/cli/src/tui/components/status_bar.rs": [
+      "StatusBarState",
+      "render"
+    ],
+    "apps/cli/src/tui/mod.rs": [],
+    "apps/cli/src/tui/observer.rs": [
+      "TuiObserver"
+    ],
+    "apps/cli/src/tui/theme.rs": [
+      "user_prefix",
+      "assistant_text",
+      "reasoning_text",
+      "tool_call",
+      "tool_failure",
+      "auto_judged_allow",
+      "auto_judged_deny",
+      "auto_judged_route",
+      "status_bar",
+      "popup_border",
+      "popup_title",
+      "hint"
+    ],
+    "apps/desktop/build.rs": [],
+    "apps/desktop/frontend/src/App.tsx": [
+      "App"
+    ],
+    "apps/desktop/frontend/src/assets/animations.ts": [
+      "animations"
+    ],
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm": [],
+    "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm": [],
+    "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm": [],
+    "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm": [],
+    "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm": [],
+    "apps/desktop/frontend/src/buildInfo.ts": [
+      "BUILD_INFO"
+    ],
+    "apps/desktop/frontend/src/desktop/bridge/tauri.ts": [
+      "api"
+    ],
+    "apps/desktop/frontend/src/desktop/bridge/transport.ts": [
+      "transportMode",
+      "isTauri",
+      "invoke",
+      "listen",
+      "Channel"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx": [
+      "AppSettingsDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx": [
+      "AttachmentPreviewStrip"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx": [
+      "AvatarPreview",
+      "AvatarField"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx": [
+      "BackgroundTaskPanel",
+      "BackgroundTaskTab"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx": [
+      "ChatInput"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts": [
+      "getHistoryDraft"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts": [
+      "COMPOSITION_END_ENTER_GRACE_MS",
+      "shouldSubmitChatInput"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx": [
+      "ChatView"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx": [
+      "CodeBlock",
+      "extractText"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx": [
+      "ContextRing"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx": [
+      "ContinueBar"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx": [
+      "ConversationRefPopup",
+      "ConversationItem"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx": [
+      "DeepseekLoginDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx": [
+      "FullscreenPortal",
+      "DiffViewer",
+      "DiffPanel"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx": [
+      "EditTreePanel",
+      "EditTreeTab"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx": [
+      "ErrorBoundary"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx": [
+      "ExportClaudeDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx": [
+      "FamilyGroup"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx": [
+      "FindBar",
+      "findMatches",
+      "highlight",
+      "useMessageMatches",
+      "useFindController"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx": [
+      "HooksPane"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx": [
+      "HoverHint"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx": [
+      "ImportClaudeDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx": [
+      "DrawerToggle",
+      "InputDrawer"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx": [
+      "InputQueuePanel"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx": [
+      "InputSuggestions"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts": [
+      "filterMessagesDuplicatedInLiveTimeline",
+      "runningTimelineRenderItems",
+      "appendInjectedMessageAfterCurrentAssistant"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx": [
+      "LogConsole"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx": [
+      "LogViewerApp"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx": [
+      "LoopingWebm"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx": [
+      "MarkdownRenderer"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx": [
+      "MemoryWriteSummary"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs": [],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx": [
+      "isTaskListTool",
+      "parseTodos",
+      "MessageBubble"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx": [
+      "reorderForWakeupView",
+      "MessageList"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx": [
+      "ModelCard"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx": [
+      "ModelIoInspector"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx": [
+      "ModelPickerButton"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx": [
+      "OAuthDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx": [
+      "PathHint"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx": [
+      "PermissionApprovalPopup"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx": [
+      "PlanTab"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx": [
+      "PluginsPane"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx": [
+      "PromptsDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx": [
+      "ProvidersPane"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx": [
+      "ReasoningEffortPill"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx": [
+      "RightSidebar"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx": [
+      "runModeLabel",
+      "RunModeChip"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx": [
+      "SessionSettingsDialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx": [
+      "Sidebar"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx": [
+      "SkillItem",
+      "SkillsPane"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx": [
+      "SlashCommandButton"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx": [
+      "ToastRegion"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts": [
+      "todoBlocksForDisplay"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx": [
+      "TodoTab"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx": [
+      "TokenStatsPanel"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx": [
+      "Button"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx": [
+      "Dialog"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx": [
+      "Input",
+      "SecretInput",
+      "Textarea",
+      "Label",
+      "Select"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx": [
+      "UserQuestionPopup"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx": [
+      "DirPicker",
+      "PathTypeIcon",
+      "PathListField",
+      "ToolToggleList"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts": [
+      "ansiToHtml"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts": [
+      "avatarImageSrc",
+      "isImageAvatar"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts": [
+      "buildModelMessages"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts": [
+      "contextWindowFor",
+      "normalizeModelId",
+      "formatContextWindow"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts": [
+      "FOCUS_TOOL_CALL_EVENT",
+      "focusToolCall"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts": [
+      "MIN_PREVIEW_ZOOM",
+      "MAX_PREVIEW_ZOOM",
+      "PREVIEW_ZOOM_STEP",
+      "nextPreviewZoom"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts": [
+      "isNewConversationShortcut",
+      "isGlobalSearchShortcut",
+      "isLocalFindShortcut",
+      "shouldSuppressBareEnterOnDocument"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts": [],
+    "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts": [
+      "inferMcpTransport",
+      "normalizeMcpConfig",
+      "toCamelMcpConfig",
+      "parseMcpJson",
+      "indexMcpToolReports",
+      "objectToStringRecord"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts": [
+      "getMessageRawText",
+      "canShowRawMessage"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts": [
+      "parsePartialEditArgs",
+      "inferDiffAction",
+      "diffSidesFromArgs"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts": [
+      "getModelReasoningConfig",
+      "getModelEffortOptions",
+      "anthropicThinkingMode",
+      "anthropicSupportsThinking",
+      "anthropicExposesLongContextToggle",
+      "openaiSkipsReasoning",
+      "openaiSupportsXhigh",
+      "openaiSupportsReasoning",
+      "deepseekSupportsReasoning",
+      "deepseekSupportsXhigh",
+      "modelSupportsReasoning",
+      "modelExposesLongContextToggle",
+      "DEFAULT_REASONING",
+      "REASONING_EFFORT_ORDER",
+      "REASONING_EFFORT_LABEL",
+      "effortDisplay"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts": [
+      "findLiteralMatches",
+      "findRegexMatches",
+      "findSearchMatches",
+      "splitHighlightedText"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts": [
+      "builtinSlashCommands",
+      "buildSlashCommandCatalog",
+      "dispatchSlashCommand"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts": [
+      "lineOfOldString",
+      "useOriginalFileText"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/lib/utils.ts": [
+      "cn",
+      "formatTime",
+      "pathLeaf",
+      "relativizeIfUnder",
+      "hasSessionStarted"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts": [
+      "shouldUseNewConversationInputLayout"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts": [
+      "appendOptimisticUserMessage"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/store/useStore.ts": [
+      "useStore"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts": [
+      "useToastStore"
+    ],
+    "apps/desktop/frontend/src/desktop/ui/types.ts": [],
+    "apps/desktop/frontend/src/main.tsx": [],
+    "apps/desktop/frontend/src/vite-env.d.ts": [],
+    "apps/desktop/icons/icon.icns": [],
+    "apps/desktop/icons/tray-frame-01.rgba": [],
+    "apps/desktop/icons/tray-frame-02.rgba": [],
+    "apps/desktop/icons/tray-frame-03.rgba": [],
+    "apps/desktop/icons/tray-frame-04.rgba": [],
+    "apps/desktop/icons/tray-frame-05.rgba": [],
+    "apps/desktop/icons/tray-frame-06.rgba": [],
+    "apps/desktop/icons/tray-frame-07.rgba": [],
+    "apps/desktop/icons/tray-frame-08.rgba": [],
+    "apps/desktop/icons/tray-frame-09.rgba": [],
+    "apps/desktop/postcss.config.cjs": [],
+    "apps/desktop/src/chat.rs": [
+      "SendArgs",
+      "send_and_save",
+      "send_and_save_in_data_dir",
+      "send_and_save_in_data_dir_with_client_factory",
+      "ContextUsageDto",
+      "context_usage",
+      "compact_session",
+      "send_once",
+      "build_preview_payload"
+    ],
+    "apps/desktop/src/engine/context.rs": [
+      "build_client",
+      "effective_messages",
+      "to_openai_messages",
+      "to_anthropic_messages",
+      "to_gemini_contents",
+      "apply_auth",
+      "to_openai_tools",
+      "to_anthropic_tools",
+      "to_gemini_tools"
+    ],
+    "apps/desktop/src/engine/mod.rs": [
+      "EngineEvent",
+      "PlanPermissionDto",
+      "TodoItemDto",
+      "PlanCommentDto",
+      "QuestionOptionDto"
+    ],
+    "apps/desktop/src/engine/types.rs": [
+      "EngineEvent",
+      "ToolCall",
+      "TurnResult"
+    ],
+    "apps/desktop/src/error.rs": [],
+    "apps/desktop/src/force_automode.rs": [
+      "ForceAutomodeState",
+      "is_enabled",
+      "set"
+    ],
+    "apps/desktop/src/hebisland_client.rs": [
+      "HebislandClient",
+      "push",
+      "dismiss",
+      "init_hebisland_client"
+    ],
+    "apps/desktop/src/hitl.rs": [
+      "HitlState",
+      "track_run",
+      "track",
+      "cancel_run",
+      "resolve_approval",
+      "answer_question",
+      "forget",
+      "cancel_all_pending",
+      "has_pending",
+      "resolve_hitl_from_island",
+      "answer_question_from_island"
+    ],
+    "apps/desktop/src/lib.rs": [
+      "run"
+    ],
+    "apps/desktop/src/main.rs": [],
+    "apps/desktop/src/window_control.rs": [
+      "MainWindowAction",
+      "toggle_action",
+      "initialize",
+      "handle_window_event"
+    ],
+    "apps/desktop/tailwind.config.cjs": [],
+    "apps/desktop/vite.config.ts": [],
+    "apps/island-mac/Package.swift": [],
+    "apps/island-mac/Sources/HebIsland/AppDelegate.swift": [],
+    "apps/island-mac/Sources/HebIsland/CardView.swift": [],
+    "apps/island-mac/Sources/HebIsland/DaemonProbe.swift": [],
+    "apps/island-mac/Sources/HebIsland/main.swift": [],
+    "apps/island-mac/Sources/HebIsland/NotificationManager.swift": [],
+    "apps/island-mac/Sources/HebIsland/NotifyClient.swift": [],
+    "apps/island-mac/Sources/HebIsland/PanelController.swift": [],
+    "apps/island-mac/Sources/HebIsland/Protocol.swift": [],
+    "apps/island-mac/Sources/HebIsland/ScreenResolver.swift": [],
+    "apps/island-mac/Sources/HebIsland/SocketServer.swift": [],
+    "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift": [],
+    "apps/pages/packages/core/src/index.ts": [
+      "KnowledgeGraphSchema",
+      "validateGraph",
+      "sanitizeGraph",
+      "autoFixGraph",
+      "COMPLEXITY_ALIASES",
+      "DIRECTION_ALIASES",
+      "ValidationResult",
+      "GraphIssue",
+      "SearchEngine",
+      "SearchResult",
+      "SearchOptions"
+    ],
+    "apps/pages/packages/core/src/schema.ts": [
+      "EdgeTypeSchema",
+      "NODE_TYPE_ALIASES",
+      "EDGE_TYPE_ALIASES",
+      "COMPLEXITY_ALIASES",
+      "DIRECTION_ALIASES",
+      "sanitizeGraph",
+      "autoFixGraph",
+      "GraphNodeSchema",
+      "GraphEdgeSchema",
+      "LayerSchema",
+      "TourStepSchema",
+      "ProjectMetaSchema",
+      "KnowledgeGraphSchema",
+      "normalizeGraph",
+      "validateGraph"
+    ],
+    "apps/pages/packages/core/src/search.ts": [
+      "SearchEngine"
+    ],
+    "apps/pages/packages/core/src/types.ts": [],
+    "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs": [],
+    "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs": [],
+    "apps/pages/packages/dashboard/scripts/bundle-graph.mjs": [],
+    "apps/pages/packages/dashboard/src/App.tsx": [],
+    "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx": [
+      "Breadcrumb"
+    ],
+    "apps/pages/packages/dashboard/src/components/ChatPanel.tsx": [
+      "ChatPanel"
+    ],
+    "apps/pages/packages/dashboard/src/components/CodeViewer.tsx": [
+      "CodeViewer"
+    ],
+    "apps/pages/packages/dashboard/src/components/ContainerNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/CustomNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/DiffToggle.tsx": [
+      "DiffToggle"
+    ],
+    "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx": [
+      "DomainGraphView"
+    ],
+    "apps/pages/packages/dashboard/src/components/ExportMenu.tsx": [
+      "ExportMenu"
+    ],
+    "apps/pages/packages/dashboard/src/components/FileExplorer.tsx": [
+      "FileExplorer"
+    ],
+    "apps/pages/packages/dashboard/src/components/FilterPanel.tsx": [
+      "FilterPanel"
+    ],
+    "apps/pages/packages/dashboard/src/components/FlowNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/GraphView.tsx": [
+      "GraphView"
+    ],
+    "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx": [
+      "KeyboardShortcutsHelp"
+    ],
+    "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx": [
+      "KnowledgeGraphView"
+    ],
+    "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/LayerLegend.tsx": [
+      "LAYER_PALETTE",
+      "getLayerColor",
+      "LayerLegend"
+    ],
+    "apps/pages/packages/dashboard/src/components/LearnPanel.tsx": [
+      "LearnPanel"
+    ],
+    "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx": [
+      "MobileBottomNav"
+    ],
+    "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx": [
+      "MobileDrawer"
+    ],
+    "apps/pages/packages/dashboard/src/components/MobileLayout.tsx": [
+      "MobileLayout"
+    ],
+    "apps/pages/packages/dashboard/src/components/NodeInfo.tsx": [
+      "NodeInfo"
+    ],
+    "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx": [
+      "NodeTooltip"
+    ],
+    "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx": [
+      "PathFinderModal"
+    ],
+    "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx": [
+      "PersonaSelector"
+    ],
+    "apps/pages/packages/dashboard/src/components/PortalNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx": [
+      "ProjectOverview"
+    ],
+    "apps/pages/packages/dashboard/src/components/SearchBar.tsx": [
+      "SearchBar"
+    ],
+    "apps/pages/packages/dashboard/src/components/StepNode.tsx": [],
+    "apps/pages/packages/dashboard/src/components/ThemePicker.tsx": [
+      "ThemePicker"
+    ],
+    "apps/pages/packages/dashboard/src/components/TokenGate.tsx": [
+      "TokenGate"
+    ],
+    "apps/pages/packages/dashboard/src/components/WarningBanner.tsx": [
+      "WarningBanner"
+    ],
+    "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx": [
+      "useI18n",
+      "I18nProvider"
+    ],
+    "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts": [
+      "useIsMobile"
+    ],
+    "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts": [
+      "useKeyboardShortcuts",
+      "formatShortcutKey"
+    ],
+    "apps/pages/packages/dashboard/src/locales/en.ts": [
+      "en"
+    ],
+    "apps/pages/packages/dashboard/src/locales/index.ts": [
+      "locales",
+      "getLocale",
+      "resolveLocaleKey",
+      "en",
+      "zh",
+      "\"zh-TW\"",
+      "ja",
+      "ko"
+    ],
+    "apps/pages/packages/dashboard/src/locales/ja.ts": [
+      "ja"
+    ],
+    "apps/pages/packages/dashboard/src/locales/ko.ts": [
+      "ko"
+    ],
+    "apps/pages/packages/dashboard/src/locales/zh-TW.ts": [
+      "zhTW"
+    ],
+    "apps/pages/packages/dashboard/src/locales/zh.ts": [
+      "zh"
+    ],
+    "apps/pages/packages/dashboard/src/main.tsx": [],
+    "apps/pages/packages/dashboard/src/store.ts": [
+      "ALL_NODE_TYPES",
+      "ALL_COMPLEXITIES",
+      "ALL_EDGE_CATEGORIES",
+      "EDGE_CATEGORY_MAP",
+      "DOMAIN_EDGE_TYPES",
+      "useDashboardStore"
+    ],
+    "apps/pages/packages/dashboard/src/themes/index.ts": [
+      "ThemeProvider",
+      "useTheme",
+      "PRESETS",
+      "getPreset",
+      "getAccent",
+      "applyTheme",
+      "HeadingFont",
+      "PresetId",
+      "ThemeConfig",
+      "ThemePreset",
+      "AccentSwatch",
+      "DEFAULT_THEME_CONFIG"
+    ],
+    "apps/pages/packages/dashboard/src/themes/presets.ts": [
+      "PRESETS",
+      "getPreset",
+      "getAccent"
+    ],
+    "apps/pages/packages/dashboard/src/themes/theme-engine.ts": [
+      "hexToRgb",
+      "applyTheme"
+    ],
+    "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx": [
+      "ThemeProvider",
+      "useTheme"
+    ],
+    "apps/pages/packages/dashboard/src/themes/types.ts": [
+      "DEFAULT_THEME_CONFIG"
+    ],
+    "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts": [],
+    "apps/pages/packages/dashboard/src/utils/containers.ts": [
+      "deriveContainers"
+    ],
+    "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts": [
+      "aggregateLayerEdges",
+      "computePortals",
+      "findCrossLayerFileNodes",
+      "aggregateContainerEdges"
+    ],
+    "apps/pages/packages/dashboard/src/utils/elk-layout.ts": [
+      "repairElkInput",
+      "applyElkLayout"
+    ],
+    "apps/pages/packages/dashboard/src/utils/filters.ts": [
+      "filterNodes",
+      "filterEdges"
+    ],
+    "apps/pages/packages/dashboard/src/utils/layerStats.ts": [
+      "computeLayerStats"
+    ],
+    "apps/pages/packages/dashboard/src/utils/layout.ts": [
+      "NODE_WIDTH",
+      "NODE_HEIGHT",
+      "LAYER_CLUSTER_WIDTH",
+      "LAYER_CLUSTER_HEIGHT",
+      "PORTAL_NODE_WIDTH",
+      "PORTAL_NODE_HEIGHT",
+      "applyDagreLayout",
+      "applyForceLayout",
+      "ELK_DEFAULT_LAYOUT_OPTIONS",
+      "nodesToElkInput",
+      "mergeElkPositions"
+    ],
+    "apps/pages/packages/dashboard/src/utils/layout.worker.ts": [],
+    "apps/pages/packages/dashboard/src/utils/louvain.ts": [
+      "detectCommunities"
+    ],
+    "apps/pages/packages/dashboard/src/vite-env.d.ts": [],
+    "apps/pages/packages/dashboard/vite.config.demo.ts": [],
+    "apps/pages/packages/dashboard/vite.config.ghpages.ts": [],
+    "apps/pages/packages/dashboard/vite.config.static.ts": [],
+    "apps/pages/packages/dashboard/vite.config.ts": [],
+    "apps/web-server/src/chat_helpers.rs": [
+      "ContextUsageDto",
+      "context_usage",
+      "compact_session"
+    ],
+    "apps/web-server/src/events.rs": [
+      "EngineEvent",
+      "QuestionOptionDto",
+      "translate"
+    ],
+    "apps/web-server/src/main.rs": [],
+    "apps/web-server/src/protocol.rs": [
+      "WsClientMessage",
+      "WsServerMessage",
+      "ok",
+      "err"
+    ],
+    "apps/web-server/src/server.rs": [
+      "ServerState",
+      "new",
+      "ensure_runtime",
+      "build_router"
+    ],
+    "apps/web-server/src/session.rs": [
+      "SessionRuntime",
+      "is_active",
+      "set_active",
+      "clear_active",
+      "inject",
+      "stop",
+      "broadcast",
+      "emit_engine_event",
+      "run_turn"
+    ],
+    "crates/agent-core/examples/permission_probe.rs": [],
+    "crates/agent-core/examples/scan_skill_dir.rs": [],
+    "crates/agent-core/src/agent_loop.rs": [
+      "RunResumeState",
+      "from_checkpoint",
+      "LoopParams",
+      "run_loop"
+    ],
+    "crates/agent-core/src/automode.rs": [
+      "is_allowed_model",
+      "AutoModeDecision",
+      "as_label",
+      "reason",
+      "collapse_ask_to_deny",
+      "judge_auto_mode",
+      "BashPrefixClassifierOutcome",
+      "classify_bash_prefixes_for_automode"
+    ],
+    "crates/agent-core/src/context/budget.rs": [
+      "estimate_tokens",
+      "estimate_transcript_tokens"
+    ],
+    "crates/agent-core/src/context/compaction.rs": [
+      "CompactionResult",
+      "compact_structural",
+      "needs_compaction",
+      "compact_with_llm"
+    ],
+    "crates/agent-core/src/context/microcompact.rs": [
+      "MicrocompactPolicy",
+      "MicrocompactReport",
+      "microcompact"
+    ],
+    "crates/agent-core/src/context/mod.rs": [],
+    "crates/agent-core/src/context/transcript.rs": [
+      "PendingToolCall",
+      "ToolCallResult",
+      "Transcript",
+      "new",
+      "from_session",
+      "push_user",
+      "push_assistant",
+      "push_assistant_with_reasoning",
+      "push_tool_results",
+      "len",
+      "is_empty"
+    ],
+    "crates/agent-core/src/core_client/http.rs": [
+      "HttpCoreClient",
+      "new",
+      "base_url"
+    ],
+    "crates/agent-core/src/core_client/mod.rs": [
+      "SubagentScope",
+      "CoreError",
+      "CoreClient",
+      "LocalCoreClient",
+      "new",
+      "harness",
+      "permission_store"
+    ],
+    "crates/agent-core/src/definition.rs": [
+      "AgentDefinition",
+      "PermissionPolicy",
+      "DefaultPermission",
+      "CompactionPolicy",
+      "CompactionStrategy"
+    ],
+    "crates/agent-core/src/dispatch.rs": [
+      "ToolDispatcher",
+      "run_calls"
+    ],
+    "crates/agent-core/src/edits/hashline/apply.rs": [
+      "ApplyError",
+      "apply_section"
+    ],
+    "crates/agent-core/src/edits/hashline/format.rs": [
+      "hash3",
+      "render_with_line_numbers",
+      "render_with_line_numbers_with_path"
+    ],
+    "crates/agent-core/src/edits/hashline/mod.rs": [],
+    "crates/agent-core/src/edits/hashline/parser.rs": [
+      "ParseError",
+      "Patch",
+      "FileSection",
+      "Hunk",
+      "HunkLine",
+      "parse_patch"
+    ],
+    "crates/agent-core/src/edits/metadata.rs": [
+      "EditEntry",
+      "EditsMetadata",
+      "worktree_dir",
+      "metadata_path",
+      "load_metadata",
+      "save_metadata",
+      "find_entry",
+      "find_entry_mut"
+    ],
+    "crates/agent-core/src/edits/mod.rs": [
+      "Snapshot",
+      "FileLockGuard",
+      "EditsWorktree",
+      "new",
+      "enabled",
+      "lock_file",
+      "snapshot_before",
+      "snapshot_after",
+      "revert",
+      "list_entries",
+      "append_entry",
+      "mark_reverted",
+      "get_file_at_sha",
+      "diff_text"
+    ],
+    "crates/agent-core/src/effects.rs": [
+      "EffectClass",
+      "SegmentEffect",
+      "Effects",
+      "has_dangerous_pattern",
+      "analyze_effects"
+    ],
+    "crates/agent-core/src/harness.rs": [
+      "RunParams",
+      "Harness",
+      "hooks",
+      "new",
+      "spawn_run",
+      "submit",
+      "RunHandle",
+      "id",
+      "recv",
+      "resolve_permission",
+      "answer_question",
+      "interrupt",
+      "hitl",
+      "drive",
+      "TurnObserver",
+      "TurnSummary",
+      "TurnOutcome",
+      "UsageTotals",
+      "HarnessError"
+    ],
+    "crates/agent-core/src/hooks/external.rs": [
+      "HookExecMode",
+      "HookMatcher",
+      "HookRule",
+      "load_hooks_config",
+      "ExternalHook",
+      "from_config"
+    ],
+    "crates/agent-core/src/hooks/mod.rs": [
+      "Hook",
+      "HookManager",
+      "new",
+      "empty",
+      "trigger",
+      "is_empty"
+    ],
+    "crates/agent-core/src/hooks/types.rs": [
+      "HookPoint",
+      "event_name",
+      "HookPatch",
+      "HookOutcome"
+    ],
+    "crates/agent-core/src/lib.rs": [],
+    "crates/agent-core/src/mcp/client.rs": [
+      "McpToolInfo",
+      "list_tools",
+      "call_tool",
+      "tool_runtime_name",
+      "split_runtime_name",
+      "server_index"
+    ],
+    "crates/agent-core/src/mcp/config.rs": [
+      "McpConfig",
+      "McpServerConfig",
+      "McpConfigError",
+      "McpTransport",
+      "transport",
+      "parse_json",
+      "enabled_servers",
+      "with_cwd"
+    ],
+    "crates/agent-core/src/mcp/mod.rs": [],
+    "crates/agent-core/src/memory_extract.rs": [
+      "ExtractionResult",
+      "MemoryWrite",
+      "extract_for_session",
+      "ExtractError"
+    ],
+    "crates/agent-core/src/model_io_dump.rs": [
+      "is_enabled",
+      "default_path",
+      "open_for_session_if_enabled",
+      "DumpEntry",
+      "ModelIoDump",
+      "open",
+      "record",
+      "flush",
+      "path",
+      "request_to_json",
+      "response_to_json",
+      "iso_now"
+    ],
+    "crates/agent-core/src/permissions/mod.rs": [
+      "RuleEffect",
+      "PermissionMatch",
+      "Permission",
+      "parse",
+      "matches",
+      "matches_path",
+      "PermissionStore",
+      "open",
+      "load_session_view",
+      "ensure_session_view",
+      "effective_paths",
+      "find",
+      "find_diagnostic",
+      "find_for_paths",
+      "find_for_paths_diagnostic",
+      "find_for_segments",
+      "find_for_segments_diagnostic",
+      "allows_path_diagnostic",
+      "allows_path",
+      "add",
+      "remove",
+      "list",
+      "list_paths",
+      "add_path",
+      "remove_path",
+      "clear"
+    ],
+    "crates/agent-core/src/read_state.rs": [
+      "ReadState",
+      "EditPrecheck",
+      "ReadStateTracker",
+      "new",
+      "record",
+      "precheck"
+    ],
+    "crates/agent-core/src/recorder.rs": [
+      "Recorder",
+      "open",
+      "write",
+      "flush",
+      "path"
+    ],
+    "crates/agent-core/src/rules.rs": [
+      "RuleFile",
+      "RuleSource",
+      "RuleFileState",
+      "RuleFileInfo",
+      "default_global_rules",
+      "discover",
+      "format_injection",
+      "resolve_injection_files"
+    ],
+    "crates/agent-core/src/run_mode.rs": [
+      "RunMode",
+      "as_str",
+      "parse",
+      "LiveRunModeRegistry",
+      "global",
+      "register",
+      "unregister",
+      "set",
+      "get"
+    ],
+    "crates/agent-core/src/run_state.rs": [
+      "RunState",
+      "new",
+      "next_seq",
+      "current_turn",
+      "next_turn",
+      "event"
+    ],
+    "crates/agent-core/src/session_titler.rs": [
+      "generate_title",
+      "generate_for_session",
+      "regenerate_session_title",
+      "fallback_from_messages"
+    ],
+    "crates/agent-core/src/session.rs": [
+      "ContextUsage",
+      "ratio",
+      "SessionConfig",
+      "Session",
+      "new",
+      "close",
+      "run_mode",
+      "set_run_mode",
+      "model_id",
+      "force_automode",
+      "set_force_automode",
+      "client_arc",
+      "recorder",
+      "append_user",
+      "commit_assistant",
+      "transcript",
+      "transcript_mut",
+      "definition",
+      "workspace",
+      "enabled_tools",
+      "set_enabled_tools",
+      "run",
+      "context_usage",
+      "compact",
+      "run_with",
+      "run_with_pending",
+      "run_with_runtime_inputs",
+      "resume_with",
+      "resume_with_runtime_inputs"
+    ],
+    "crates/agent-core/src/shell_env.rs": [
+      "resolve_shell_path"
+    ],
+    "crates/agent-core/src/storage/compactions.rs": [
+      "dir_for_session",
+      "save_compaction"
+    ],
+    "crates/agent-core/src/storage/export_claude.rs": [
+      "ClaudeResumeExport",
+      "build_claude_resume"
+    ],
+    "crates/agent-core/src/storage/import_claude.rs": [
+      "ClaudeSessionInfo",
+      "ParsedClaudeSession",
+      "list_importable",
+      "parse_claude_jsonl"
+    ],
+    "crates/agent-core/src/storage/lock.rs": [
+      "write_atomic",
+      "append_jsonl",
+      "read_locked"
+    ],
+    "crates/agent-core/src/storage/mcp.rs": [
+      "load",
+      "save"
+    ],
+    "crates/agent-core/src/storage/memory.rs": [
+      "MemoryScope",
+      "prefix",
+      "MemoryLevel",
+      "MemoryL0",
+      "MemoryLogEntry",
+      "new",
+      "make_id",
+      "parse_id",
+      "write",
+      "list_l0",
+      "read",
+      "append_log",
+      "read_cursor",
+      "write_cursor"
+    ],
+    "crates/agent-core/src/storage/mod.rs": [
+      "default_data_dir"
+    ],
+    "crates/agent-core/src/storage/model_io.rs": [
+      "read_session",
+      "read_session_summaries",
+      "read_session_entry"
+    ],
+    "crates/agent-core/src/storage/models_catalog.rs": [
+      "CatalogEntry",
+      "CatalogModalities",
+      "CatalogLimits",
+      "CatalogCache",
+      "read_catalog",
+      "is_stale",
+      "refresh_catalog"
+    ],
+    "crates/agent-core/src/storage/oauth.rs": [
+      "oauth_dir",
+      "provider_token_path"
+    ],
+    "crates/agent-core/src/storage/permissions.rs": [
+      "PermissionsFile",
+      "global_path",
+      "project_path",
+      "project_path_by_id",
+      "global_mtime",
+      "project_mtime",
+      "load_global",
+      "load_project",
+      "save_global",
+      "save_project"
+    ],
+    "crates/agent-core/src/storage/plan_comments.rs": [
+      "append_comment",
+      "list_comments",
+      "mark_consumed",
+      "list_unconsumed"
+    ],
+    "crates/agent-core/src/storage/plans.rs": [
+      "dir_for_session",
+      "save_plan"
+    ],
+    "crates/agent-core/src/storage/plugins.rs": [
+      "PluginRegistry",
+      "InstalledPlugin",
+      "InstalledComponents",
+      "MarketplaceRegistry",
+      "MarketplaceEntry",
+      "MarketplaceSource",
+      "clone_url",
+      "display",
+      "CatalogEntry",
+      "CatalogPluginSource",
+      "PluginManifest",
+      "MarketplaceCatalog",
+      "PluginListItem",
+      "plugin_cache_dir",
+      "load_registry",
+      "save_registry",
+      "load_marketplaces",
+      "save_marketplaces",
+      "marketplace_add",
+      "marketplace_list_plugins",
+      "marketplace_remove",
+      "plugin_install",
+      "plugin_uninstall",
+      "plugin_list",
+      "marketplace_list"
+    ],
+    "crates/agent-core/src/storage/projects.rs": [
+      "projects_root",
+      "project_dir",
+      "project_dir_by_id",
+      "encode_workdir",
+      "WorkspaceFolder",
+      "WorkspaceProject",
+      "workdir",
+      "allowed_paths",
+      "WorkspaceProjectsFile",
+      "WorkspaceProjectInput",
+      "load",
+      "list",
+      "get",
+      "save",
+      "delete",
+      "import_vscode_workspace",
+      "create",
+      "update"
+    ],
+    "crates/agent-core/src/storage/prompts.rs": [
+      "Prompt",
+      "PromptsFile",
+      "load",
+      "save",
+      "upsert",
+      "delete",
+      "set_default"
+    ],
+    "crates/agent-core/src/storage/run_checkpoint.rs": [
+      "RunPhase",
+      "RunCheckpoint",
+      "path",
+      "save",
+      "load",
+      "delete"
+    ],
+    "crates/agent-core/src/storage/sessions_dir.rs": [
+      "session_dir",
+      "session_jsonl_path",
+      "meta_path",
+      "partial_dir",
+      "partial_path",
+      "bg_dir",
+      "ensure_session_dirs",
+      "new_session_id",
+      "SessionDirMeta",
+      "save_meta",
+      "load_meta",
+      "PartialFragment",
+      "append_partial",
+      "delete_partial",
+      "RecoveredPartial",
+      "recover_interrupted_partials"
+    ],
+    "crates/agent-core/src/storage/sessions.rs": [
+      "Role",
+      "MessageMeta",
+      "is_system_notification",
+      "MessageToolCall",
+      "MessagePart",
+      "Message",
+      "is_system_notification",
+      "Session",
+      "TokenStats",
+      "accumulate",
+      "PendingContinue",
+      "ContinueKind",
+      "continue_kind_str",
+      "SessionMeta",
+      "SearchHit",
+      "RolloutLine",
+      "RolloutMeta",
+      "MetaUpdate",
+      "new_id",
+      "set_default_source",
+      "list",
+      "load",
+      "load_with_partial_recovery",
+      "recover_and_append_interrupted_partials",
+      "migrate_legacy_layout_if_needed",
+      "save",
+      "update_meta",
+      "delete",
+      "create",
+      "create_with_source",
+      "create_with_workspace",
+      "append_message",
+      "insert_switch_marker",
+      "insert_reasoning_switch_marker",
+      "fork",
+      "rename",
+      "set_run_mode",
+      "set_todos",
+      "set_active_plan",
+      "set_pre_plan_mode",
+      "set_pending_continue",
+      "truncate_after",
+      "truncate_inclusive",
+      "undo_compaction",
+      "search"
+    ],
+    "crates/agent-core/src/storage/settings.rs": [
+      "Settings",
+      "GeneralSettings",
+      "ContinueStrategy",
+      "default_automode_models",
+      "EditBackend",
+      "default_shell",
+      "ConversationDefaults",
+      "AgentDefaults",
+      "MemorySettings",
+      "MemoryModelRef",
+      "load",
+      "expand_home",
+      "save"
+    ],
+    "crates/agent-core/src/storage/skill_collections.rs": [
+      "CollectionSource",
+      "display",
+      "synthetic_local_id",
+      "is_synthetic_local_id",
+      "skill_name_from_local_id",
+      "SkillCollection",
+      "SkillCollectionsFile",
+      "load",
+      "save",
+      "label_from_github",
+      "label_from_dir",
+      "append",
+      "remove",
+      "find_by_skill",
+      "record_import",
+      "remove_by_plugin"
+    ],
+    "crates/agent-core/src/storage/skills.rs": [
+      "ImportScope",
+      "ImportedSkill",
+      "DisabledSkillsFile",
+      "disabled_path",
+      "load_disabled",
+      "save_disabled",
+      "set_skill_enabled",
+      "apply_disabled",
+      "list_claude_skills",
+      "import_from_claude",
+      "ScannedSkill",
+      "scan_skill_dir",
+      "scan_skill_github",
+      "list_skills_in_dir",
+      "import_from_dir",
+      "import_from_github"
+    ],
+    "crates/agent-core/src/storage/subagents.rs": [
+      "SubagentDefinition",
+      "GlobalSettings",
+      "ProjectSubagentsSection",
+      "ProjectSettings",
+      "global_dir",
+      "global_settings_path",
+      "project_settings_path",
+      "load_global_settings",
+      "save_global_settings",
+      "load_project_settings",
+      "save_project_settings",
+      "EnableScope",
+      "set_enabled",
+      "clear_enabled",
+      "load_global_definitions",
+      "get_definition",
+      "save_definition",
+      "delete_definition",
+      "load_for_workdir"
+    ],
+    "crates/agent-core/src/storage/tool_results.rs": [
+      "dir_for_session",
+      "save_tool_result"
+    ],
+    "crates/agent-core/src/subagent/ctx.rs": [
+      "SubagentCtx",
+      "find"
+    ],
+    "crates/agent-core/src/subagent/mod.rs": [],
+    "crates/agent-core/src/subagent/runner.rs": [
+      "SubagentRunner",
+      "execute"
+    ],
+    "crates/agent-core/src/system_prompt.rs": [
+      "compose_system_prompt",
+      "EnvironmentSnapshot",
+      "BackgroundTaskSummary",
+      "from_workspace",
+      "with_extra_paths",
+      "with_run_mode",
+      "with_background_tasks",
+      "with_memory_index",
+      "render",
+      "prepend_environment",
+      "prepend_background_tasks",
+      "prepend_plan_comments"
+    ],
+    "crates/agent-core/src/tools/background.rs": [
+      "ShellState",
+      "is_terminal",
+      "label",
+      "BackgroundShell",
+      "log_path",
+      "is_background",
+      "promote_to_background",
+      "state",
+      "read_at",
+      "read_incremental",
+      "wait_for_change",
+      "wait_terminal",
+      "ReadOutput",
+      "BgSubagentTask",
+      "is_done",
+      "is_success",
+      "finish",
+      "elapsed_ms",
+      "BgTaskRegistry",
+      "registry_for_session",
+      "discard_session_registry",
+      "registered_session_ids",
+      "new",
+      "register",
+      "unregister",
+      "get",
+      "list",
+      "kill",
+      "register_subagent",
+      "get_subagent"
+    ],
+    "crates/agent-core/src/tools/bash_output.rs": [
+      "BashOutputTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/bash_prefix.rs": [
+      "BashPrefix",
+      "as_fingerprint",
+      "classify_prefix",
+      "parse_classifier_output",
+      "extract_prefix"
+    ],
+    "crates/agent-core/src/tools/bash.rs": [
+      "BashTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/edit_hashline.rs": [
+      "EditHashlineTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/edit.rs": [
+      "EditTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/exit_plan_mode.rs": [
+      "ExitPlanInput",
+      "ExitPlanModeTool",
+      "parse_input",
+      "plan_id_from_path"
+    ],
+    "crates/agent-core/src/tools/grep.rs": [
+      "GrepTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/hitl.rs": [
+      "PermissionDecision",
+      "HitlGate",
+      "new",
+      "with_store",
+      "permission_store",
+      "check",
+      "unapproved_memorable_writable_segments",
+      "approval_segments",
+      "open_approval",
+      "open_approval_no_remember",
+      "open_question",
+      "is_pending",
+      "resolve",
+      "answer",
+      "cancel_all_pending"
+    ],
+    "crates/agent-core/src/tools/kill_shell.rs": [
+      "KillShellTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/mcp.rs": [
+      "McpTool",
+      "from_info",
+      "discover_tools",
+      "McpToolReport",
+      "discover_tool_reports",
+      "manifest"
+    ],
+    "crates/agent-core/src/tools/mod.rs": [
+      "ToolProgress",
+      "ToolCtx",
+      "noop",
+      "emit_chunk",
+      "Tool",
+      "default_tools",
+      "default_tools_with_mcp",
+      "memory_project_workdir",
+      "is_builtin_tool",
+      "hosted_tool_definitions",
+      "ask_only_definitions",
+      "ask_tool_definition",
+      "ToolInfo",
+      "tool_manifest",
+      "tool_manifest_with_mcp"
+    ],
+    "crates/agent-core/src/tools/read_hashline.rs": [
+      "ReadHashlineTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/read_memory.rs": [
+      "ReadMemoryTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/read.rs": [
+      "ReadTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/registry.rs": [
+      "ToolRegistry",
+      "new",
+      "from_arcs",
+      "find",
+      "iter",
+      "tool_names",
+      "definitions",
+      "mcp_definitions",
+      "is_empty"
+    ],
+    "crates/agent-core/src/tools/safe_commands.rs": [
+      "is_never_remember",
+      "is_safe"
+    ],
+    "crates/agent-core/src/tools/schedule_wakeup.rs": [
+      "ScheduleWakeupTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/shell_parse.rs": [
+      "ParsedCommand",
+      "positional",
+      "fingerprint",
+      "ParsedShell",
+      "DangerousKind",
+      "label",
+      "is_sensitive_env",
+      "ParseError",
+      "parse",
+      "strip_prefix",
+      "detect_dangerous_patterns"
+    ],
+    "crates/agent-core/src/tools/skill.rs": [
+      "Skill",
+      "display_name",
+      "matches",
+      "SkillSource",
+      "default_skill_dirs",
+      "load_skills",
+      "SkillTool",
+      "new"
+    ],
+    "crates/agent-core/src/tools/task.rs": [
+      "TaskMode",
+      "TaskInput",
+      "TaskTool",
+      "new",
+      "subagents",
+      "parse_input"
+    ],
+    "crates/agent-core/src/tools/todo_write.rs": [
+      "TodoWriteInput",
+      "TodoInputItem",
+      "TodoWriteTool",
+      "parse_input",
+      "normalize",
+      "summary"
+    ],
+    "crates/agent-core/src/tools/web_fetch.rs": [
+      "WebFetchTool"
+    ],
+    "crates/agent-core/src/tools/web_search.rs": [
+      "WebSearchTool"
+    ],
+    "crates/agent-core/src/tools/write_memory.rs": [
+      "WriteMemoryTool",
+      "new"
+    ],
+    "crates/agent-core/src/turn_context.rs": [
+      "TurnContext",
+      "new"
+    ],
+    "crates/agent-core/src/types.rs": [],
+    "crates/agent-core/src/vision_bridge.rs": [
+      "VisionBridgeClient",
+      "new",
+      "VisionConfig",
+      "build_vision_client",
+      "wrap_with_vision_client"
+    ],
+    "crates/agent-core/src/wakeup.rs": [
+      "new_phase_channel",
+      "WakeupEvent",
+      "session_id",
+      "run_id",
+      "message_meta",
+      "WakeupScheduler",
+      "global",
+      "arm_cron",
+      "arm_bg_task",
+      "register_session_shells",
+      "unregister_session_shells",
+      "set_resume_handler",
+      "discard_run",
+      "list_pending_crons",
+      "PendingCron",
+      "wakeup_xml"
+    ],
+    "crates/agent-core/src/workspace.rs": [
+      "Workspace",
+      "home_default",
+      "new",
+      "with_runtime_state",
+      "workdir",
+      "initial_allowed_paths",
+      "runtime_announced_snapshot",
+      "runtime_pending_snapshot",
+      "allowed_paths_snapshot",
+      "add_allowed_path",
+      "take_pending_announcement",
+      "allows",
+      "resolve_cwd",
+      "describe"
+    ],
+    "crates/agent-core/tests/edit_backend_switch.rs": [],
+    "crates/agent-core/tests/hashline_roundtrip.rs": [],
+    "crates/common/src/attachments.rs": [
+      "MessageAttachment",
+      "as_text_block",
+      "image_data_url"
+    ],
+    "crates/common/src/error.rs": [
+      "AppError",
+      "msg"
+    ],
+    "crates/common/src/lib.rs": [],
+    "crates/common/src/reasoning.rs": [
+      "ReasoningEffort",
+      "anthropic_legacy_budget_tokens",
+      "anthropic_adaptive46_effort",
+      "anthropic_adaptive47_effort",
+      "anthropic_adaptive_effort_for_model",
+      "deepseek_effort",
+      "openai_effort_for_model",
+      "ReasoningConfig",
+      "is_enabled",
+      "effective_effort",
+      "wants_long_context",
+      "AnthropicThinkingMode",
+      "normalize_model_id",
+      "anthropic_thinking_mode",
+      "anthropic_supports_thinking",
+      "anthropic_long_context_uses_beta",
+      "anthropic_exposes_long_context_toggle",
+      "openai_skips_reasoning",
+      "openai_supports_xhigh",
+      "openai_supports_reasoning"
+    ],
+    "crates/common/src/runtime.rs": [
+      "PendingUserInput",
+      "RuntimeHandle",
+      "register",
+      "register_for_session",
+      "cancel",
+      "cancel_all",
+      "has_active_runs",
+      "has_active_run_for_session",
+      "inject_pending_input",
+      "close_pending_inputs",
+      "close_pending_inputs_handle",
+      "unregister",
+      "is_cancelled"
+    ],
+    "crates/common/src/storage/mod.rs": [
+      "providers_path",
+      "read_json",
+      "read_json_required",
+      "write_json"
+    ],
+    "crates/model-gateway/src/auth/deepseek_pow.rs": [
+      "solve_pow",
+      "DeepseekChallenge",
+      "deepseek_hash_v1",
+      "solve_and_build_header"
+    ],
+    "crates/model-gateway/src/auth/deepseek.rs": [
+      "DeepseekLoginInput",
+      "DeepseekLoginToken",
+      "deepseek_login"
+    ],
+    "crates/model-gateway/src/auth/mod.rs": [
+      "AuthUrlResult",
+      "ImportedToken",
+      "claude_oauth_start",
+      "claude_oauth_exchange",
+      "claude_oauth_refresh",
+      "gemini_oauth_start",
+      "gemini_oauth_exchange",
+      "gemini_refresh",
+      "openai_oauth_start",
+      "openai_oauth_exchange",
+      "DeviceCodeInfo",
+      "CodexTokenInfo",
+      "codex_start",
+      "codex_poll",
+      "codex_refresh",
+      "claude_code_import",
+      "gemini_cli_import"
+    ],
+    "crates/model-gateway/src/auth/refresh.rs": [
+      "ensure_fresh_provider_token"
+    ],
+    "crates/model-gateway/src/client.rs": [
+      "ModelClient"
+    ],
+    "crates/model-gateway/src/config.rs": [
+      "ProviderKind",
+      "AuthMode",
+      "Provider",
+      "ProvidersFile",
+      "load",
+      "save",
+      "get",
+      "upsert",
+      "update_fetched_models",
+      "ProviderPreset",
+      "list_presets"
+    ],
+    "crates/model-gateway/src/context_window.rs": [
+      "resolve_context_window",
+      "context_window_for"
+    ],
+    "crates/model-gateway/src/discovery/mod.rs": [
+      "FetchedModel",
+      "fetch",
+      "fetch_context_length"
+    ],
+    "crates/model-gateway/src/health.rs": [
+      "ProviderModelTestResult",
+      "build_probe_request",
+      "test_provider_model"
+    ],
+    "crates/model-gateway/src/instrument.rs": [
+      "InstrumentedClient",
+      "new"
+    ],
+    "crates/model-gateway/src/lib.rs": [
+      "build_client"
+    ],
+    "crates/model-gateway/src/protocols/anthropic.rs": [
+      "map_anthropic_finish",
+      "build_body",
+      "tool_defs",
+      "parse_response",
+      "AnthropicStreamEvent",
+      "parse_stream_event"
+    ],
+    "crates/model-gateway/src/protocols/deepseek.rs": [
+      "model_type_for",
+      "search_enabled_for",
+      "thinking_enabled_for",
+      "build_prompt",
+      "build_completion_body",
+      "DeepseekChunkPart",
+      "DeepseekChunkResult",
+      "DeepseekStreamState",
+      "Kind",
+      "parse_sse_line",
+      "ToolCallSieve",
+      "find_fake_role_header_cut",
+      "new",
+      "push",
+      "finalize",
+      "extract_tool_calls"
+    ],
+    "crates/model-gateway/src/protocols/gemini.rs": [
+      "map_gemini_finish",
+      "build_body",
+      "tool_defs",
+      "parse_response",
+      "parse_stream_delta",
+      "parse_stream_usage"
+    ],
+    "crates/model-gateway/src/protocols/mod.rs": [],
+    "crates/model-gateway/src/protocols/openai.rs": [
+      "build_body",
+      "build_responses_body",
+      "tool_defs",
+      "responses_tool_defs",
+      "map_openai_finish",
+      "parse_response",
+      "parse_responses_response",
+      "ChatStreamFrame",
+      "ChatStreamToolCallDelta",
+      "parse_chat_stream_frame",
+      "ResponsesSseEvent",
+      "parse_responses_sse_event"
+    ],
+    "crates/model-gateway/src/providers/anthropic.rs": [
+      "AnthropicClient",
+      "new"
+    ],
+    "crates/model-gateway/src/providers/deepseek.rs": [
+      "DeepseekClient",
+      "new"
+    ],
+    "crates/model-gateway/src/providers/gemini.rs": [
+      "GeminiClient",
+      "new"
+    ],
+    "crates/model-gateway/src/providers/mod.rs": [
+      "build_http_client",
+      "apply_auth",
+      "next_stream_chunk_or_cancel",
+      "retry_request"
+    ],
+    "crates/model-gateway/src/providers/openai.rs": [
+      "OpenAiClient",
+      "new"
+    ],
+    "crates/model-gateway/src/types.rs": [
+      "has_image_generation_tool",
+      "TranscriptEntry",
+      "UserEntry",
+      "text",
+      "AssistantEntry",
+      "ToolCall",
+      "ToolResult",
+      "ToolArtifact",
+      "ToolCallStreamDelta",
+      "ModelStreamEvent",
+      "ToolDefinition",
+      "ModelRequest",
+      "FinishReason",
+      "ModelResponse",
+      "usage",
+      "AssistantOutput",
+      "Usage",
+      "total",
+      "accumulate",
+      "ModelError"
+    ],
+    "crates/model-gateway/tests/provider_probe.rs": [],
+    "crates/model-gateway/tests/thinking_integration.rs": [],
+    "crates/observability/src/attr.rs": [],
+    "crates/observability/src/lib.rs": [
+      "LogLine",
+      "log_sender",
+      "today_log_path",
+      "init"
+    ],
+    "crates/protocol/src/context.rs": [
+      "ContextPolicy",
+      "TokenBudget",
+      "TurnOverrides"
+    ],
+    "crates/protocol/src/error.rs": [
+      "ErrorReport",
+      "new",
+      "other",
+      "cancelled",
+      "ErrorKind"
+    ],
+    "crates/protocol/src/event.rs": [
+      "Event",
+      "EventPayload",
+      "EditAction",
+      "StepKind",
+      "StopReason",
+      "RiskLevel",
+      "LogLevel",
+      "SuspendReason",
+      "ResumeCause",
+      "now",
+      "now_subagent"
+    ],
+    "crates/protocol/src/ids.rs": [
+      "AgentRef",
+      "new",
+      "as_str"
+    ],
+    "crates/protocol/src/lib.rs": [],
+    "crates/protocol/src/memory.rs": [
+      "MemoryWriteItem"
+    ],
+    "crates/protocol/src/permission.rs": [
+      "ApprovalDecision",
+      "PermissionScope",
+      "ApprovalSegmentStatus",
+      "ApprovalSegment",
+      "PermissionKind",
+      "QuestionOption",
+      "UserAnswer",
+      "to_agent_text"
+    ],
+    "crates/protocol/src/submission.rs": [
+      "Submission",
+      "new",
+      "UserInput",
+      "text",
+      "Op"
+    ],
+    "crates/protocol/src/todo.rs": [
+      "TodoItem",
+      "TodoStatus",
+      "PlanComment"
+    ]
+  },
+  "batches": [
+    {
+      "batchIndex": 1,
+      "files": [
+        {
+          "path": ".github/workflows/deploy-pages.yml",
+          "language": "yaml",
+          "sizeLines": 54,
+          "fileCategory": "infra"
+        }
+      ],
+      "batchImportData": {
+        ".github/workflows/deploy-pages.yml": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 2,
+      "files": [
+        {
+          "path": ".env.example",
+          "language": "config",
+          "sizeLines": 41,
+          "fileCategory": "config"
+        },
+        {
+          "path": "CLAUDE.md",
+          "language": "markdown",
+          "sizeLines": 344,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "Cargo.toml",
+          "language": "toml",
+          "sizeLines": 12,
+          "fileCategory": "config"
+        },
+        {
+          "path": "README.md",
+          "language": "markdown",
+          "sizeLines": 336,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        ".env.example": [],
+        "CLAUDE.md": [],
+        "Cargo.toml": [],
+        "README.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 3,
+      "files": [
+        {
+          "path": "apps/desktop/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 37,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/desktop/package.json",
+          "language": "json",
+          "sizeLines": 39,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/desktop/tauri.conf.json",
+          "language": "json",
+          "sizeLines": 45,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/desktop/tsconfig.json",
+          "language": "json",
+          "sizeLines": 23,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/desktop/tsconfig.node.json",
+          "language": "json",
+          "sizeLines": 11,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/Cargo.toml": [],
+        "apps/desktop/package.json": [],
+        "apps/desktop/tauri.conf.json": [],
+        "apps/desktop/tsconfig.json": [],
+        "apps/desktop/tsconfig.node.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 4,
+      "files": [
+        {
+          "path": "apps/pages/README.md",
+          "language": "markdown",
+          "sizeLines": 202,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "apps/pages/package.json",
+          "language": "json",
+          "sizeLines": 12,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/pages/pnpm-workspace.yaml",
+          "language": "yaml",
+          "sizeLines": 2,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/pages/README.md": [],
+        "apps/pages/package.json": [],
+        "apps/pages/pnpm-workspace.yaml": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 5,
+      "files": [
+        {
+          "path": "apps/pages/packages/dashboard/index.html",
+          "language": "html",
+          "sizeLines": 19,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/package.json",
+          "language": "json",
+          "sizeLines": 46,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/tsconfig.app.json",
+          "language": "json",
+          "sizeLines": 24,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/tsconfig.json",
+          "language": "json",
+          "sizeLines": 4,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/pages/packages/dashboard/index.html": [],
+        "apps/pages/packages/dashboard/package.json": [],
+        "apps/pages/packages/dashboard/tsconfig.app.json": [],
+        "apps/pages/packages/dashboard/tsconfig.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 6,
+      "files": [
+        {
+          "path": "docs/cc-compaction-research.md",
+          "language": "markdown",
+          "sizeLines": 270,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/cc-source-research.md",
+          "language": "markdown",
+          "sizeLines": 62,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/changelog.md",
+          "language": "markdown",
+          "sizeLines": 6265,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/claude-code-后台执行机制.md",
+          "language": "markdown",
+          "sizeLines": 775,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/compaction.md",
+          "language": "markdown",
+          "sizeLines": 251,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/heb-cli-debug.md",
+          "language": "markdown",
+          "sizeLines": 678,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/hebisland-design.html",
+          "language": "html",
+          "sizeLines": 1170,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "docs/hebisland-spec.md",
+          "language": "markdown",
+          "sizeLines": 414,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/hebisland.md",
+          "language": "markdown",
+          "sizeLines": 417,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/shadow-tuner.html",
+          "language": "html",
+          "sizeLines": 318,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "docs/权限沙箱-调研.md",
+          "language": "markdown",
+          "sizeLines": 1244,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/架构.md",
+          "language": "markdown",
+          "sizeLines": 3960,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/记忆系统实现计划.md",
+          "language": "markdown",
+          "sizeLines": 225,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/cc-compaction-research.md": [],
+        "docs/cc-source-research.md": [],
+        "docs/changelog.md": [],
+        "docs/claude-code-后台执行机制.md": [],
+        "docs/compaction.md": [],
+        "docs/heb-cli-debug.md": [],
+        "docs/hebisland-design.html": [],
+        "docs/hebisland-spec.md": [],
+        "docs/hebisland.md": [],
+        "docs/shadow-tuner.html": [],
+        "docs/权限沙箱-调研.md": [],
+        "docs/架构.md": [],
+        "docs/记忆系统实现计划.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 7,
+      "files": [
+        {
+          "path": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+          "language": "markdown",
+          "sizeLines": 185,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+          "language": "markdown",
+          "sizeLines": 1764,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+          "language": "markdown",
+          "sizeLines": 810,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-06-06-plugin-system.md",
+          "language": "markdown",
+          "sizeLines": 179,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/superpowers/plans/2026-05-23-notification-toast.md": [],
+        "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md": [],
+        "docs/superpowers/plans/2026-06-02-hebisland-standalone.md": [],
+        "docs/superpowers/plans/2026-06-06-plugin-system.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 8,
+      "files": [
+        {
+          "path": "apps/cli/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 25,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/cli/src/client.rs",
+          "language": "rust",
+          "sizeLines": 109,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/daemon.rs",
+          "language": "rust",
+          "sizeLines": 1178,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/ipc.rs",
+          "language": "rust",
+          "sizeLines": 232,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/main.rs",
+          "language": "rust",
+          "sizeLines": 253,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/mock_provider.rs",
+          "language": "rust",
+          "sizeLines": 88,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/render.rs",
+          "language": "rust",
+          "sizeLines": 392,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/session.rs",
+          "language": "rust",
+          "sizeLines": 602,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/app.rs",
+          "language": "rust",
+          "sizeLines": 585,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/chat_view.rs",
+          "language": "rust",
+          "sizeLines": 196,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/input_box.rs",
+          "language": "rust",
+          "sizeLines": 60,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/mod.rs",
+          "language": "rust",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/permission_popup.rs",
+          "language": "rust",
+          "sizeLines": 107,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/question_popup.rs",
+          "language": "rust",
+          "sizeLines": 138,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/components/status_bar.rs",
+          "language": "rust",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/mod.rs",
+          "language": "rust",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/observer.rs",
+          "language": "rust",
+          "sizeLines": 9,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/cli/src/tui/theme.rs",
+          "language": "rust",
+          "sizeLines": 60,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/build.rs",
+          "language": "rust",
+          "sizeLines": 3,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/capabilities/default.json",
+          "language": "json",
+          "sizeLines": 14,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/desktop/frontend/index.html",
+          "language": "html",
+          "sizeLines": 12,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/desktop/frontend/src/App.tsx",
+          "language": "typescript",
+          "sizeLines": 124,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations.ts",
+          "language": "typescript",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm",
+          "language": "webm",
+          "sizeLines": 220,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm",
+          "language": "webm",
+          "sizeLines": 374,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/cli/Cargo.toml": [],
+        "apps/cli/src/client.rs": [],
+        "apps/cli/src/daemon.rs": [],
+        "apps/cli/src/ipc.rs": [],
+        "apps/cli/src/main.rs": [],
+        "apps/cli/src/mock_provider.rs": [],
+        "apps/cli/src/render.rs": [],
+        "apps/cli/src/session.rs": [],
+        "apps/cli/src/tui/app.rs": [],
+        "apps/cli/src/tui/components/chat_view.rs": [],
+        "apps/cli/src/tui/components/input_box.rs": [],
+        "apps/cli/src/tui/components/mod.rs": [],
+        "apps/cli/src/tui/components/permission_popup.rs": [],
+        "apps/cli/src/tui/components/question_popup.rs": [],
+        "apps/cli/src/tui/components/status_bar.rs": [],
+        "apps/cli/src/tui/mod.rs": [],
+        "apps/cli/src/tui/observer.rs": [],
+        "apps/cli/src/tui/theme.rs": [],
+        "apps/desktop/build.rs": [],
+        "apps/desktop/capabilities/default.json": [],
+        "apps/desktop/frontend/index.html": [],
+        "apps/desktop/frontend/src/App.tsx": [],
+        "apps/desktop/frontend/src/assets/animations.ts": [],
+        "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 9,
+      "files": [
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm",
+          "language": "webm",
+          "sizeLines": 384,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm",
+          "language": "webm",
+          "sizeLines": 269,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm",
+          "language": "webm",
+          "sizeLines": 417,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm",
+          "language": "webm",
+          "sizeLines": 412,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm",
+          "language": "webm",
+          "sizeLines": 291,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm",
+          "language": "webm",
+          "sizeLines": 294,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm",
+          "language": "webm",
+          "sizeLines": 198,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm",
+          "language": "webm",
+          "sizeLines": 1535,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm",
+          "language": "webm",
+          "sizeLines": 1282,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm",
+          "language": "webm",
+          "sizeLines": 1522,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/buildInfo.ts",
+          "language": "typescript",
+          "sizeLines": 9,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/bridge/tauri.ts",
+          "language": "typescript",
+          "sizeLines": 640,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/bridge/transport.ts",
+          "language": "typescript",
+          "sizeLines": 242,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 1592,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx",
+          "language": "typescript",
+          "sizeLines": 217,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx",
+          "language": "typescript",
+          "sizeLines": 151,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 492,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx",
+          "language": "typescript",
+          "sizeLines": 1390,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts",
+          "language": "typescript",
+          "sizeLines": 63,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts",
+          "language": "typescript",
+          "sizeLines": 34,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts",
+          "language": "typescript",
+          "sizeLines": 34,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx",
+          "language": "typescript",
+          "sizeLines": 1009,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx",
+          "language": "typescript",
+          "sizeLines": 58,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx",
+          "language": "typescript",
+          "sizeLines": 105,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx",
+          "language": "typescript",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/frontend/src/assets/animations/10826353_20260424041118.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826354_20260424040838.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826354_20260424040845.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826354_20260424040903.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826355_20260424040744.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826355_20260424040752.webm": [],
+        "apps/desktop/frontend/src/assets/animations/10826355_20260424040755.webm": [],
+        "apps/desktop/frontend/src/assets/animations/assistant-thinking-alpha.webm": [],
+        "apps/desktop/frontend/src/assets/animations/brand-mark-alpha.webm": [],
+        "apps/desktop/frontend/src/assets/animations/send-interrupt-alpha.webm": [],
+        "apps/desktop/frontend/src/buildInfo.ts": [],
+        "apps/desktop/frontend/src/desktop/bridge/tauri.ts": [],
+        "apps/desktop/frontend/src/desktop/bridge/transport.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/AttachmentPreviewStrip.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/chatInputHistory.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/chatInputKeyboard.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ChatView.newConversationLayout.test.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/CodeBlock.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ContextRing.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ContinueBar.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 10,
+      "files": [
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx",
+          "language": "typescript",
+          "sizeLines": 166,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 183,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 922,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx",
+          "language": "typescript",
+          "sizeLines": 265,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+          "language": "typescript",
+          "sizeLines": 50,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 120,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx",
+          "language": "typescript",
+          "sizeLines": 81,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx",
+          "language": "typescript",
+          "sizeLines": 223,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx",
+          "language": "typescript",
+          "sizeLines": 138,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx",
+          "language": "typescript",
+          "sizeLines": 152,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 143,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx",
+          "language": "typescript",
+          "sizeLines": 104,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx",
+          "language": "typescript",
+          "sizeLines": 113,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx",
+          "language": "typescript",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts",
+          "language": "typescript",
+          "sizeLines": 124,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts",
+          "language": "typescript",
+          "sizeLines": 50,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx",
+          "language": "typescript",
+          "sizeLines": 445,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+          "language": "typescript",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx",
+          "language": "typescript",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx",
+          "language": "typescript",
+          "sizeLines": 33,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx",
+          "language": "typescript",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs",
+          "language": "javascript",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx",
+          "language": "typescript",
+          "sizeLines": 2349,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx",
+          "language": "typescript",
+          "sizeLines": 211,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx",
+          "language": "typescript",
+          "sizeLines": 153,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/frontend/src/desktop/ui/components/ConversationRefPopup.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/DeepseekLoginDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ExportClaudeDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/FamilyGroup.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/FindBar.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/InputDrawer.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/InputQueuePanel.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/InputSuggestions.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/LogConsole.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/LoopingWebm.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/MemoryWriteSummary.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.layout.test.mjs": [],
+        "apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ModelCard.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 11,
+      "files": [
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx",
+          "language": "typescript",
+          "sizeLines": 2109,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx",
+          "language": "typescript",
+          "sizeLines": 394,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 327,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx",
+          "language": "typescript",
+          "sizeLines": 25,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx",
+          "language": "typescript",
+          "sizeLines": 1210,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx",
+          "language": "typescript",
+          "sizeLines": 379,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx",
+          "language": "typescript",
+          "sizeLines": 363,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 282,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx",
+          "language": "typescript",
+          "sizeLines": 1281,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx",
+          "language": "typescript",
+          "sizeLines": 116,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx",
+          "language": "typescript",
+          "sizeLines": 432,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx",
+          "language": "typescript",
+          "sizeLines": 149,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx",
+          "language": "typescript",
+          "sizeLines": 589,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx",
+          "language": "typescript",
+          "sizeLines": 815,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx",
+          "language": "typescript",
+          "sizeLines": 1020,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx",
+          "language": "typescript",
+          "sizeLines": 153,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx",
+          "language": "typescript",
+          "sizeLines": 90,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts",
+          "language": "typescript",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts",
+          "language": "typescript",
+          "sizeLines": 24,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx",
+          "language": "typescript",
+          "sizeLines": 274,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 126,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx",
+          "language": "typescript",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx",
+          "language": "typescript",
+          "sizeLines": 79,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx",
+          "language": "typescript",
+          "sizeLines": 96,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx",
+          "language": "typescript",
+          "sizeLines": 267,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/PathHint.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/SessionSettingsDialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/SlashCommandButton.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ToastRegion.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.test.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/todoBlocksForDisplay.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ui/button.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ui/dialog.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/ui/input.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 12,
+      "files": [
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+          "language": "typescript",
+          "sizeLines": 445,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+          "language": "typescript",
+          "sizeLines": 106,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+          "language": "typescript",
+          "sizeLines": 44,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+          "language": "typescript",
+          "sizeLines": 149,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+          "language": "typescript",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+          "language": "typescript",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+          "language": "typescript",
+          "sizeLines": 97,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+          "language": "typescript",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+          "language": "typescript",
+          "sizeLines": 103,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+          "language": "typescript",
+          "sizeLines": 217,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+          "language": "typescript",
+          "sizeLines": 250,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+          "language": "typescript",
+          "sizeLines": 97,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+          "language": "typescript",
+          "sizeLines": 350,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+          "language": "typescript",
+          "sizeLines": 77,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+          "language": "typescript",
+          "sizeLines": 51,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+          "language": "typescript",
+          "sizeLines": 6,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+          "language": "typescript",
+          "sizeLines": 30,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+          "language": "typescript",
+          "sizeLines": 2657,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+          "language": "typescript",
+          "sizeLines": 36,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/desktop/ui/types.ts",
+          "language": "typescript",
+          "sizeLines": 1060,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/index.css",
+          "language": "css",
+          "sizeLines": 253,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/desktop/frontend/src/main.tsx",
+          "language": "typescript",
+          "sizeLines": 27,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/frontend/src/vite-env.d.ts",
+          "language": "typescript",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/lib/utils.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/store/useStore.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts": [],
+        "apps/desktop/frontend/src/desktop/ui/types.ts": [],
+        "apps/desktop/frontend/src/index.css": [],
+        "apps/desktop/frontend/src/main.tsx": [],
+        "apps/desktop/frontend/src/vite-env.d.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 13,
+      "files": [
+        {
+          "path": "apps/desktop/icons/icon.icns",
+          "language": "icns",
+          "sizeLines": 990,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-01.rgba",
+          "language": "rgba",
+          "sizeLines": 6,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-02.rgba",
+          "language": "rgba",
+          "sizeLines": 8,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-03.rgba",
+          "language": "rgba",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-04.rgba",
+          "language": "rgba",
+          "sizeLines": 13,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-05.rgba",
+          "language": "rgba",
+          "sizeLines": 15,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-06.rgba",
+          "language": "rgba",
+          "sizeLines": 7,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-07.rgba",
+          "language": "rgba",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-08.rgba",
+          "language": "rgba",
+          "sizeLines": 8,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/icons/tray-frame-09.rgba",
+          "language": "rgba",
+          "sizeLines": 7,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/postcss.config.cjs",
+          "language": "javascript",
+          "sizeLines": 6,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/chat.rs",
+          "language": "rust",
+          "sizeLines": 3615,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/engine/context.rs",
+          "language": "rust",
+          "sizeLines": 193,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/engine/mod.rs",
+          "language": "rust",
+          "sizeLines": 327,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/engine/types.rs",
+          "language": "rust",
+          "sizeLines": 79,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/error.rs",
+          "language": "rust",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/force_automode.rs",
+          "language": "rust",
+          "sizeLines": 37,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/hebisland_client.rs",
+          "language": "rust",
+          "sizeLines": 175,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/hitl.rs",
+          "language": "rust",
+          "sizeLines": 213,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 2795,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/main.rs",
+          "language": "rust",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/src/window_control.rs",
+          "language": "rust",
+          "sizeLines": 507,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/tailwind.config.cjs",
+          "language": "javascript",
+          "sizeLines": 68,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/desktop/vite.config.ts",
+          "language": "typescript",
+          "sizeLines": 60,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Package.swift",
+          "language": "swift",
+          "sizeLines": 24,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/desktop/icons/icon.icns": [],
+        "apps/desktop/icons/tray-frame-01.rgba": [],
+        "apps/desktop/icons/tray-frame-02.rgba": [],
+        "apps/desktop/icons/tray-frame-03.rgba": [],
+        "apps/desktop/icons/tray-frame-04.rgba": [],
+        "apps/desktop/icons/tray-frame-05.rgba": [],
+        "apps/desktop/icons/tray-frame-06.rgba": [],
+        "apps/desktop/icons/tray-frame-07.rgba": [],
+        "apps/desktop/icons/tray-frame-08.rgba": [],
+        "apps/desktop/icons/tray-frame-09.rgba": [],
+        "apps/desktop/postcss.config.cjs": [],
+        "apps/desktop/src/chat.rs": [],
+        "apps/desktop/src/engine/context.rs": [],
+        "apps/desktop/src/engine/mod.rs": [],
+        "apps/desktop/src/engine/types.rs": [],
+        "apps/desktop/src/error.rs": [],
+        "apps/desktop/src/force_automode.rs": [],
+        "apps/desktop/src/hebisland_client.rs": [],
+        "apps/desktop/src/hitl.rs": [],
+        "apps/desktop/src/lib.rs": [],
+        "apps/desktop/src/main.rs": [],
+        "apps/desktop/src/window_control.rs": [],
+        "apps/desktop/tailwind.config.cjs": [],
+        "apps/desktop/vite.config.ts": [],
+        "apps/island-mac/Package.swift": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 14,
+      "files": [
+        {
+          "path": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+          "language": "swift",
+          "sizeLines": 63,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/CardView.swift",
+          "language": "swift",
+          "sizeLines": 446,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+          "language": "swift",
+          "sizeLines": 62,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/main.swift",
+          "language": "swift",
+          "sizeLines": 82,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+          "language": "swift",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+          "language": "swift",
+          "sizeLines": 112,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+          "language": "swift",
+          "sizeLines": 336,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+          "language": "swift",
+          "sizeLines": 111,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+          "language": "swift",
+          "sizeLines": 116,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+          "language": "swift",
+          "sizeLines": 180,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+          "language": "swift",
+          "sizeLines": 103,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/core/package.json",
+          "language": "json",
+          "sizeLines": 23,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/pages/packages/core/src/index.ts",
+          "language": "typescript",
+          "sizeLines": 14,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/core/src/schema.ts",
+          "language": "typescript",
+          "sizeLines": 663,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/core/src/search.ts",
+          "language": "typescript",
+          "sizeLines": 65,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/core/src/types.ts",
+          "language": "typescript",
+          "sizeLines": 202,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/core/tsconfig.json",
+          "language": "json",
+          "sizeLines": 20,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+          "language": "javascript",
+          "sizeLines": 99,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+          "language": "javascript",
+          "sizeLines": 80,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+          "language": "javascript",
+          "sizeLines": 119,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/App.tsx",
+          "language": "typescript",
+          "sizeLines": 715,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+          "language": "typescript",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 783,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+          "language": "typescript",
+          "sizeLines": 513,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+          "language": "typescript",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/island-mac/Sources/HebIsland/AppDelegate.swift": [],
+        "apps/island-mac/Sources/HebIsland/CardView.swift": [],
+        "apps/island-mac/Sources/HebIsland/DaemonProbe.swift": [],
+        "apps/island-mac/Sources/HebIsland/main.swift": [],
+        "apps/island-mac/Sources/HebIsland/NotificationManager.swift": [],
+        "apps/island-mac/Sources/HebIsland/NotifyClient.swift": [],
+        "apps/island-mac/Sources/HebIsland/PanelController.swift": [],
+        "apps/island-mac/Sources/HebIsland/Protocol.swift": [],
+        "apps/island-mac/Sources/HebIsland/ScreenResolver.swift": [],
+        "apps/island-mac/Sources/HebIsland/SocketServer.swift": [],
+        "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift": [],
+        "apps/pages/packages/core/package.json": [],
+        "apps/pages/packages/core/src/index.ts": [],
+        "apps/pages/packages/core/src/schema.ts": [],
+        "apps/pages/packages/core/src/search.ts": [],
+        "apps/pages/packages/core/src/types.ts": [],
+        "apps/pages/packages/core/tsconfig.json": [],
+        "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs": [],
+        "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs": [],
+        "apps/pages/packages/dashboard/scripts/bundle-graph.mjs": [],
+        "apps/pages/packages/dashboard/src/App.tsx": [],
+        "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx": [],
+        "apps/pages/packages/dashboard/src/components/ChatPanel.tsx": [],
+        "apps/pages/packages/dashboard/src/components/CodeViewer.tsx": [],
+        "apps/pages/packages/dashboard/src/components/ContainerNode.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 15,
+      "files": [
+        {
+          "path": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+          "language": "typescript",
+          "sizeLines": 190,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+          "language": "typescript",
+          "sizeLines": 66,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+          "language": "typescript",
+          "sizeLines": 66,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+          "language": "typescript",
+          "sizeLines": 279,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+          "language": "typescript",
+          "sizeLines": 279,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+          "language": "typescript",
+          "sizeLines": 214,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 219,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+          "language": "typescript",
+          "sizeLines": 52,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+          "language": "typescript",
+          "sizeLines": 1581,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+          "language": "typescript",
+          "sizeLines": 105,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+          "language": "typescript",
+          "sizeLines": 292,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+          "language": "typescript",
+          "sizeLines": 104,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+          "language": "typescript",
+          "sizeLines": 72,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+          "language": "typescript",
+          "sizeLines": 230,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+          "language": "typescript",
+          "sizeLines": 81,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+          "language": "typescript",
+          "sizeLines": 266,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+          "language": "typescript",
+          "sizeLines": 245,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+          "language": "typescript",
+          "sizeLines": 539,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+          "language": "typescript",
+          "sizeLines": 124,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+          "language": "typescript",
+          "sizeLines": 311,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+          "language": "typescript",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+          "language": "typescript",
+          "sizeLines": 64,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+          "language": "typescript",
+          "sizeLines": 222,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+          "language": "typescript",
+          "sizeLines": 191,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+          "language": "typescript",
+          "sizeLines": 53,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/pages/packages/dashboard/src/components/CustomNode.tsx": [],
+        "apps/pages/packages/dashboard/src/components/DiffToggle.tsx": [],
+        "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx": [],
+        "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx": [],
+        "apps/pages/packages/dashboard/src/components/ExportMenu.tsx": [],
+        "apps/pages/packages/dashboard/src/components/FileExplorer.tsx": [],
+        "apps/pages/packages/dashboard/src/components/FilterPanel.tsx": [],
+        "apps/pages/packages/dashboard/src/components/FlowNode.tsx": [],
+        "apps/pages/packages/dashboard/src/components/GraphView.tsx": [],
+        "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx": [],
+        "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx": [],
+        "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx": [],
+        "apps/pages/packages/dashboard/src/components/LayerLegend.tsx": [],
+        "apps/pages/packages/dashboard/src/components/LearnPanel.tsx": [],
+        "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx": [],
+        "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx": [],
+        "apps/pages/packages/dashboard/src/components/MobileLayout.tsx": [],
+        "apps/pages/packages/dashboard/src/components/NodeInfo.tsx": [],
+        "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx": [],
+        "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx": [],
+        "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx": [],
+        "apps/pages/packages/dashboard/src/components/PortalNode.tsx": [],
+        "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx": [],
+        "apps/pages/packages/dashboard/src/components/SearchBar.tsx": [],
+        "apps/pages/packages/dashboard/src/components/StepNode.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 16,
+      "files": [
+        {
+          "path": "apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+          "language": "typescript",
+          "sizeLines": 180,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+          "language": "typescript",
+          "sizeLines": 79,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+          "language": "typescript",
+          "sizeLines": 253,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+          "language": "typescript",
+          "sizeLines": 43,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+          "language": "typescript",
+          "sizeLines": 21,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+          "language": "typescript",
+          "sizeLines": 71,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/index.css",
+          "language": "css",
+          "sizeLines": 276,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/en.ts",
+          "language": "typescript",
+          "sizeLines": 271,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/index.ts",
+          "language": "typescript",
+          "sizeLines": 31,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/ja.ts",
+          "language": "typescript",
+          "sizeLines": 271,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/ko.ts",
+          "language": "typescript",
+          "sizeLines": 271,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/zh-TW.ts",
+          "language": "typescript",
+          "sizeLines": 271,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/locales/zh.ts",
+          "language": "typescript",
+          "sizeLines": 271,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/main.tsx",
+          "language": "typescript",
+          "sizeLines": 10,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/store.ts",
+          "language": "typescript",
+          "sizeLines": 791,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/themes/index.ts",
+          "language": "typescript",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/themes/presets.ts",
+          "language": "typescript",
+          "sizeLines": 183,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/themes/theme-engine.ts",
+          "language": "typescript",
+          "sizeLines": 65,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx",
+          "language": "typescript",
+          "sizeLines": 106,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/themes/types.ts",
+          "language": "typescript",
+          "sizeLines": 36,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts",
+          "language": "typescript",
+          "sizeLines": 131,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts",
+          "language": "typescript",
+          "sizeLines": 79,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts",
+          "language": "typescript",
+          "sizeLines": 106,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts",
+          "language": "typescript",
+          "sizeLines": 196,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts",
+          "language": "typescript",
+          "sizeLines": 118,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/pages/packages/dashboard/src/components/ThemePicker.tsx": [],
+        "apps/pages/packages/dashboard/src/components/TokenGate.tsx": [],
+        "apps/pages/packages/dashboard/src/components/WarningBanner.tsx": [],
+        "apps/pages/packages/dashboard/src/contexts/I18nContext.tsx": [],
+        "apps/pages/packages/dashboard/src/hooks/useIsMobile.ts": [],
+        "apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts": [],
+        "apps/pages/packages/dashboard/src/index.css": [],
+        "apps/pages/packages/dashboard/src/locales/en.ts": [],
+        "apps/pages/packages/dashboard/src/locales/index.ts": [],
+        "apps/pages/packages/dashboard/src/locales/ja.ts": [],
+        "apps/pages/packages/dashboard/src/locales/ko.ts": [],
+        "apps/pages/packages/dashboard/src/locales/zh-TW.ts": [],
+        "apps/pages/packages/dashboard/src/locales/zh.ts": [],
+        "apps/pages/packages/dashboard/src/main.tsx": [],
+        "apps/pages/packages/dashboard/src/store.ts": [],
+        "apps/pages/packages/dashboard/src/themes/index.ts": [],
+        "apps/pages/packages/dashboard/src/themes/presets.ts": [],
+        "apps/pages/packages/dashboard/src/themes/theme-engine.ts": [],
+        "apps/pages/packages/dashboard/src/themes/ThemeContext.tsx": [],
+        "apps/pages/packages/dashboard/src/themes/types.ts": [],
+        "apps/pages/packages/dashboard/src/utils/__tests__/containers.test.ts": [],
+        "apps/pages/packages/dashboard/src/utils/__tests__/edgeAggregation.test.ts": [],
+        "apps/pages/packages/dashboard/src/utils/__tests__/elk-layout.test.ts": [],
+        "apps/pages/packages/dashboard/src/utils/__tests__/filters.test.ts": [],
+        "apps/pages/packages/dashboard/src/utils/__tests__/layerStats.test.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 17,
+      "files": [
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+          "language": "typescript",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/containers.ts",
+          "language": "typescript",
+          "sizeLines": 156,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+          "language": "typescript",
+          "sizeLines": 208,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+          "language": "typescript",
+          "sizeLines": 244,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/filters.ts",
+          "language": "typescript",
+          "sizeLines": 88,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+          "language": "typescript",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/layout.ts",
+          "language": "typescript",
+          "sizeLines": 266,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+          "language": "typescript",
+          "sizeLines": 47,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+          "language": "typescript",
+          "sizeLines": 47,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/src/vite-env.d.ts",
+          "language": "typescript",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/vite.config.demo.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/vite.config.ghpages.ts",
+          "language": "typescript",
+          "sizeLines": 31,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/vite.config.static.ts",
+          "language": "typescript",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/pages/packages/dashboard/vite.config.ts",
+          "language": "typescript",
+          "sizeLines": 362,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 42,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/web-server/src/chat_helpers.rs",
+          "language": "rust",
+          "sizeLines": 136,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/src/events.rs",
+          "language": "rust",
+          "sizeLines": 371,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/src/main.rs",
+          "language": "rust",
+          "sizeLines": 114,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/src/protocol.rs",
+          "language": "rust",
+          "sizeLines": 74,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/src/server.rs",
+          "language": "rust",
+          "sizeLines": 1761,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web-server/src/session.rs",
+          "language": "rust",
+          "sizeLines": 583,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 37,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/agent-core/examples/permission_probe.rs",
+          "language": "rust",
+          "sizeLines": 1376,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/examples/scan_skill_dir.rs",
+          "language": "rust",
+          "sizeLines": 74,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/prompts/automode_judge.md",
+          "language": "markdown",
+          "sizeLines": 159,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts": [],
+        "apps/pages/packages/dashboard/src/utils/containers.ts": [],
+        "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts": [],
+        "apps/pages/packages/dashboard/src/utils/elk-layout.ts": [],
+        "apps/pages/packages/dashboard/src/utils/filters.ts": [],
+        "apps/pages/packages/dashboard/src/utils/layerStats.ts": [],
+        "apps/pages/packages/dashboard/src/utils/layout.ts": [],
+        "apps/pages/packages/dashboard/src/utils/layout.worker.ts": [],
+        "apps/pages/packages/dashboard/src/utils/louvain.ts": [],
+        "apps/pages/packages/dashboard/src/vite-env.d.ts": [],
+        "apps/pages/packages/dashboard/vite.config.demo.ts": [],
+        "apps/pages/packages/dashboard/vite.config.ghpages.ts": [],
+        "apps/pages/packages/dashboard/vite.config.static.ts": [],
+        "apps/pages/packages/dashboard/vite.config.ts": [],
+        "apps/web-server/Cargo.toml": [],
+        "apps/web-server/src/chat_helpers.rs": [],
+        "apps/web-server/src/events.rs": [],
+        "apps/web-server/src/main.rs": [],
+        "apps/web-server/src/protocol.rs": [],
+        "apps/web-server/src/server.rs": [],
+        "apps/web-server/src/session.rs": [],
+        "crates/agent-core/Cargo.toml": [],
+        "crates/agent-core/examples/permission_probe.rs": [],
+        "crates/agent-core/examples/scan_skill_dir.rs": [],
+        "crates/agent-core/prompts/automode_judge.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 18,
+      "files": [
+        {
+          "path": "crates/agent-core/prompts/base_system.md",
+          "language": "markdown",
+          "sizeLines": 107,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "crates/agent-core/src/agent_loop.rs",
+          "language": "rust",
+          "sizeLines": 1611,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/automode.rs",
+          "language": "rust",
+          "sizeLines": 530,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/context/budget.rs",
+          "language": "rust",
+          "sizeLines": 65,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/context/compaction.rs",
+          "language": "rust",
+          "sizeLines": 344,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/context/microcompact.rs",
+          "language": "rust",
+          "sizeLines": 203,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/context/mod.rs",
+          "language": "rust",
+          "sizeLines": 4,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/context/transcript.rs",
+          "language": "rust",
+          "sizeLines": 395,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/core_client/http.rs",
+          "language": "rust",
+          "sizeLines": 31,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/core_client/mod.rs",
+          "language": "rust",
+          "sizeLines": 1148,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/definition.rs",
+          "language": "rust",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/dispatch.rs",
+          "language": "rust",
+          "sizeLines": 2498,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/hashline/apply.rs",
+          "language": "rust",
+          "sizeLines": 224,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/hashline/format.rs",
+          "language": "rust",
+          "sizeLines": 98,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/hashline/mod.rs",
+          "language": "rust",
+          "sizeLines": 3,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/hashline/parser.rs",
+          "language": "rust",
+          "sizeLines": 278,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/hashline/prompt.md",
+          "language": "markdown",
+          "sizeLines": 88,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "crates/agent-core/src/edits/metadata.rs",
+          "language": "rust",
+          "sizeLines": 133,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/edits/mod.rs",
+          "language": "rust",
+          "sizeLines": 720,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/effects.rs",
+          "language": "rust",
+          "sizeLines": 593,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/harness.rs",
+          "language": "rust",
+          "sizeLines": 1088,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/hooks/external.rs",
+          "language": "rust",
+          "sizeLines": 713,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/hooks/mod.rs",
+          "language": "rust",
+          "sizeLines": 48,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/hooks/types.rs",
+          "language": "rust",
+          "sizeLines": 166,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/agent-core/prompts/base_system.md": [],
+        "crates/agent-core/src/agent_loop.rs": [],
+        "crates/agent-core/src/automode.rs": [],
+        "crates/agent-core/src/context/budget.rs": [],
+        "crates/agent-core/src/context/compaction.rs": [],
+        "crates/agent-core/src/context/microcompact.rs": [],
+        "crates/agent-core/src/context/mod.rs": [],
+        "crates/agent-core/src/context/transcript.rs": [],
+        "crates/agent-core/src/core_client/http.rs": [],
+        "crates/agent-core/src/core_client/mod.rs": [],
+        "crates/agent-core/src/definition.rs": [],
+        "crates/agent-core/src/dispatch.rs": [],
+        "crates/agent-core/src/edits/hashline/apply.rs": [],
+        "crates/agent-core/src/edits/hashline/format.rs": [],
+        "crates/agent-core/src/edits/hashline/mod.rs": [],
+        "crates/agent-core/src/edits/hashline/parser.rs": [],
+        "crates/agent-core/src/edits/hashline/prompt.md": [],
+        "crates/agent-core/src/edits/metadata.rs": [],
+        "crates/agent-core/src/edits/mod.rs": [],
+        "crates/agent-core/src/effects.rs": [],
+        "crates/agent-core/src/harness.rs": [],
+        "crates/agent-core/src/hooks/external.rs": [],
+        "crates/agent-core/src/hooks/mod.rs": [],
+        "crates/agent-core/src/hooks/types.rs": [],
+        "crates/agent-core/src/lib.rs": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 19,
+      "files": [
+        {
+          "path": "crates/agent-core/src/mcp/client.rs",
+          "language": "rust",
+          "sizeLines": 701,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/mcp/config.rs",
+          "language": "rust",
+          "sizeLines": 252,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/mcp/mod.rs",
+          "language": "rust",
+          "sizeLines": 2,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/memory_extract.rs",
+          "language": "rust",
+          "sizeLines": 420,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/model_io_dump.rs",
+          "language": "rust",
+          "sizeLines": 556,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/permissions/mod.rs",
+          "language": "rust",
+          "sizeLines": 1400,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/read_state.rs",
+          "language": "rust",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/recorder.rs",
+          "language": "rust",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/rules.rs",
+          "language": "rust",
+          "sizeLines": 392,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/run_mode.rs",
+          "language": "rust",
+          "sizeLines": 109,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/run_state.rs",
+          "language": "rust",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/session_titler.rs",
+          "language": "rust",
+          "sizeLines": 277,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/session.rs",
+          "language": "rust",
+          "sizeLines": 638,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/shell_env.rs",
+          "language": "rust",
+          "sizeLines": 47,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/compactions.rs",
+          "language": "rust",
+          "sizeLines": 30,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/export_claude.rs",
+          "language": "rust",
+          "sizeLines": 361,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/import_claude.rs",
+          "language": "rust",
+          "sizeLines": 428,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/lock.rs",
+          "language": "rust",
+          "sizeLines": 139,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/mcp.rs",
+          "language": "rust",
+          "sizeLines": 68,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/memory.rs",
+          "language": "rust",
+          "sizeLines": 551,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/mod.rs",
+          "language": "rust",
+          "sizeLines": 111,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/model_io.rs",
+          "language": "rust",
+          "sizeLines": 367,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/models_catalog_fallback.json",
+          "language": "json",
+          "sizeLines": 0,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/agent-core/src/storage/models_catalog.rs",
+          "language": "rust",
+          "sizeLines": 300,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/oauth.rs",
+          "language": "rust",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/agent-core/src/mcp/client.rs": [],
+        "crates/agent-core/src/mcp/config.rs": [],
+        "crates/agent-core/src/mcp/mod.rs": [],
+        "crates/agent-core/src/memory_extract.rs": [],
+        "crates/agent-core/src/model_io_dump.rs": [],
+        "crates/agent-core/src/permissions/mod.rs": [],
+        "crates/agent-core/src/read_state.rs": [],
+        "crates/agent-core/src/recorder.rs": [],
+        "crates/agent-core/src/rules.rs": [],
+        "crates/agent-core/src/run_mode.rs": [],
+        "crates/agent-core/src/run_state.rs": [],
+        "crates/agent-core/src/session_titler.rs": [],
+        "crates/agent-core/src/session.rs": [],
+        "crates/agent-core/src/shell_env.rs": [],
+        "crates/agent-core/src/storage/compactions.rs": [],
+        "crates/agent-core/src/storage/export_claude.rs": [],
+        "crates/agent-core/src/storage/import_claude.rs": [],
+        "crates/agent-core/src/storage/lock.rs": [],
+        "crates/agent-core/src/storage/mcp.rs": [],
+        "crates/agent-core/src/storage/memory.rs": [],
+        "crates/agent-core/src/storage/mod.rs": [],
+        "crates/agent-core/src/storage/model_io.rs": [],
+        "crates/agent-core/src/storage/models_catalog_fallback.json": [],
+        "crates/agent-core/src/storage/models_catalog.rs": [],
+        "crates/agent-core/src/storage/oauth.rs": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 20,
+      "files": [
+        {
+          "path": "crates/agent-core/src/storage/permissions.rs",
+          "language": "rust",
+          "sizeLines": 102,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/plan_comments.rs",
+          "language": "rust",
+          "sizeLines": 185,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/plans.rs",
+          "language": "rust",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/plugins.rs",
+          "language": "rust",
+          "sizeLines": 1132,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/projects.rs",
+          "language": "rust",
+          "sizeLines": 598,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/prompts.rs",
+          "language": "rust",
+          "sizeLines": 208,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/run_checkpoint.rs",
+          "language": "rust",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/sessions_dir.rs",
+          "language": "rust",
+          "sizeLines": 316,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/sessions.rs",
+          "language": "rust",
+          "sizeLines": 2683,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/settings.rs",
+          "language": "rust",
+          "sizeLines": 409,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/skill_collections.rs",
+          "language": "rust",
+          "sizeLines": 356,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/skills.rs",
+          "language": "rust",
+          "sizeLines": 796,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/subagents.rs",
+          "language": "rust",
+          "sizeLines": 553,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/storage/tool_results.rs",
+          "language": "rust",
+          "sizeLines": 31,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/subagent/ctx.rs",
+          "language": "rust",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/subagent/mod.rs",
+          "language": "rust",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/subagent/runner.rs",
+          "language": "rust",
+          "sizeLines": 492,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/system_prompt.rs",
+          "language": "rust",
+          "sizeLines": 381,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/background.rs",
+          "language": "rust",
+          "sizeLines": 747,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/bash_output.rs",
+          "language": "rust",
+          "sizeLines": 179,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/bash_prefix.rs",
+          "language": "rust",
+          "sizeLines": 509,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/bash.rs",
+          "language": "rust",
+          "sizeLines": 596,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/edit_hashline.rs",
+          "language": "rust",
+          "sizeLines": 260,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/edit.rs",
+          "language": "rust",
+          "sizeLines": 602,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/exit_plan_mode.rs",
+          "language": "rust",
+          "sizeLines": 87,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/agent-core/src/storage/permissions.rs": [],
+        "crates/agent-core/src/storage/plan_comments.rs": [],
+        "crates/agent-core/src/storage/plans.rs": [],
+        "crates/agent-core/src/storage/plugins.rs": [],
+        "crates/agent-core/src/storage/projects.rs": [],
+        "crates/agent-core/src/storage/prompts.rs": [],
+        "crates/agent-core/src/storage/run_checkpoint.rs": [],
+        "crates/agent-core/src/storage/sessions_dir.rs": [],
+        "crates/agent-core/src/storage/sessions.rs": [],
+        "crates/agent-core/src/storage/settings.rs": [],
+        "crates/agent-core/src/storage/skill_collections.rs": [],
+        "crates/agent-core/src/storage/skills.rs": [],
+        "crates/agent-core/src/storage/subagents.rs": [],
+        "crates/agent-core/src/storage/tool_results.rs": [],
+        "crates/agent-core/src/subagent/ctx.rs": [],
+        "crates/agent-core/src/subagent/mod.rs": [],
+        "crates/agent-core/src/subagent/runner.rs": [],
+        "crates/agent-core/src/system_prompt.rs": [],
+        "crates/agent-core/src/tools/background.rs": [],
+        "crates/agent-core/src/tools/bash_output.rs": [],
+        "crates/agent-core/src/tools/bash_prefix.rs": [],
+        "crates/agent-core/src/tools/bash.rs": [],
+        "crates/agent-core/src/tools/edit_hashline.rs": [],
+        "crates/agent-core/src/tools/edit.rs": [],
+        "crates/agent-core/src/tools/exit_plan_mode.rs": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 21,
+      "files": [
+        {
+          "path": "crates/agent-core/src/tools/grep.rs",
+          "language": "rust",
+          "sizeLines": 488,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/hitl.rs",
+          "language": "rust",
+          "sizeLines": 1831,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/kill_shell.rs",
+          "language": "rust",
+          "sizeLines": 94,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/mcp.rs",
+          "language": "rust",
+          "sizeLines": 158,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/mod.rs",
+          "language": "rust",
+          "sizeLines": 504,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/read_hashline.rs",
+          "language": "rust",
+          "sizeLines": 314,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/read_memory.rs",
+          "language": "rust",
+          "sizeLines": 77,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/read.rs",
+          "language": "rust",
+          "sizeLines": 346,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/registry.rs",
+          "language": "rust",
+          "sizeLines": 145,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/safe_commands.rs",
+          "language": "rust",
+          "sizeLines": 428,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/schedule_wakeup.rs",
+          "language": "rust",
+          "sizeLines": 83,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/shell_parse.rs",
+          "language": "rust",
+          "sizeLines": 1788,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/skill.rs",
+          "language": "rust",
+          "sizeLines": 425,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/task.rs",
+          "language": "rust",
+          "sizeLines": 242,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/todo_write.rs",
+          "language": "rust",
+          "sizeLines": 211,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/web_fetch.rs",
+          "language": "rust",
+          "sizeLines": 679,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/web_search.rs",
+          "language": "rust",
+          "sizeLines": 531,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/tools/write_memory.rs",
+          "language": "rust",
+          "sizeLines": 108,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/turn_context.rs",
+          "language": "rust",
+          "sizeLines": 38,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/types.rs",
+          "language": "rust",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/vision_bridge.rs",
+          "language": "rust",
+          "sizeLines": 476,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/wakeup.rs",
+          "language": "rust",
+          "sizeLines": 535,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/src/workspace.rs",
+          "language": "rust",
+          "sizeLines": 350,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/tests/edit_backend_switch.rs",
+          "language": "rust",
+          "sizeLines": 162,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/agent-core/tests/hashline_roundtrip.rs",
+          "language": "rust",
+          "sizeLines": 177,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/agent-core/src/tools/grep.rs": [],
+        "crates/agent-core/src/tools/hitl.rs": [],
+        "crates/agent-core/src/tools/kill_shell.rs": [],
+        "crates/agent-core/src/tools/mcp.rs": [],
+        "crates/agent-core/src/tools/mod.rs": [],
+        "crates/agent-core/src/tools/read_hashline.rs": [],
+        "crates/agent-core/src/tools/read_memory.rs": [],
+        "crates/agent-core/src/tools/read.rs": [],
+        "crates/agent-core/src/tools/registry.rs": [],
+        "crates/agent-core/src/tools/safe_commands.rs": [],
+        "crates/agent-core/src/tools/schedule_wakeup.rs": [],
+        "crates/agent-core/src/tools/shell_parse.rs": [],
+        "crates/agent-core/src/tools/skill.rs": [],
+        "crates/agent-core/src/tools/task.rs": [],
+        "crates/agent-core/src/tools/todo_write.rs": [],
+        "crates/agent-core/src/tools/web_fetch.rs": [],
+        "crates/agent-core/src/tools/web_search.rs": [],
+        "crates/agent-core/src/tools/write_memory.rs": [],
+        "crates/agent-core/src/turn_context.rs": [],
+        "crates/agent-core/src/types.rs": [],
+        "crates/agent-core/src/vision_bridge.rs": [],
+        "crates/agent-core/src/wakeup.rs": [],
+        "crates/agent-core/src/workspace.rs": [],
+        "crates/agent-core/tests/edit_backend_switch.rs": [],
+        "crates/agent-core/tests/hashline_roundtrip.rs": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 22,
+      "files": [
+        {
+          "path": "crates/common/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 10,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/common/src/attachments.rs",
+          "language": "rust",
+          "sizeLines": 51,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/common/src/error.rs",
+          "language": "rust",
+          "sizeLines": 27,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/common/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 14,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/common/src/reasoning.rs",
+          "language": "rust",
+          "sizeLines": 433,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/common/src/runtime.rs",
+          "language": "rust",
+          "sizeLines": 129,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/common/src/storage/mod.rs",
+          "language": "rust",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 29,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/model-gateway/src/auth/deepseek_pow.rs",
+          "language": "rust",
+          "sizeLines": 394,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/auth/deepseek.rs",
+          "language": "rust",
+          "sizeLines": 149,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/auth/mod.rs",
+          "language": "rust",
+          "sizeLines": 1122,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/auth/refresh.rs",
+          "language": "rust",
+          "sizeLines": 167,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/client.rs",
+          "language": "rust",
+          "sizeLines": 29,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/config.rs",
+          "language": "rust",
+          "sizeLines": 361,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/context_window.rs",
+          "language": "rust",
+          "sizeLines": 318,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/discovery/mod.rs",
+          "language": "rust",
+          "sizeLines": 202,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/health.rs",
+          "language": "rust",
+          "sizeLines": 69,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/instrument.rs",
+          "language": "rust",
+          "sizeLines": 74,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 38,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/protocols/anthropic.rs",
+          "language": "rust",
+          "sizeLines": 1089,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/protocols/deepseek.rs",
+          "language": "rust",
+          "sizeLines": 1613,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/protocols/gemini.rs",
+          "language": "rust",
+          "sizeLines": 275,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/protocols/mod.rs",
+          "language": "rust",
+          "sizeLines": 4,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/protocols/openai.rs",
+          "language": "rust",
+          "sizeLines": 1649,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/providers/anthropic.rs",
+          "language": "rust",
+          "sizeLines": 407,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/common/Cargo.toml": [],
+        "crates/common/src/attachments.rs": [],
+        "crates/common/src/error.rs": [],
+        "crates/common/src/lib.rs": [],
+        "crates/common/src/reasoning.rs": [],
+        "crates/common/src/runtime.rs": [],
+        "crates/common/src/storage/mod.rs": [],
+        "crates/model-gateway/Cargo.toml": [],
+        "crates/model-gateway/src/auth/deepseek_pow.rs": [],
+        "crates/model-gateway/src/auth/deepseek.rs": [],
+        "crates/model-gateway/src/auth/mod.rs": [],
+        "crates/model-gateway/src/auth/refresh.rs": [],
+        "crates/model-gateway/src/client.rs": [],
+        "crates/model-gateway/src/config.rs": [],
+        "crates/model-gateway/src/context_window.rs": [],
+        "crates/model-gateway/src/discovery/mod.rs": [],
+        "crates/model-gateway/src/health.rs": [],
+        "crates/model-gateway/src/instrument.rs": [],
+        "crates/model-gateway/src/lib.rs": [],
+        "crates/model-gateway/src/protocols/anthropic.rs": [],
+        "crates/model-gateway/src/protocols/deepseek.rs": [],
+        "crates/model-gateway/src/protocols/gemini.rs": [],
+        "crates/model-gateway/src/protocols/mod.rs": [],
+        "crates/model-gateway/src/protocols/openai.rs": [],
+        "crates/model-gateway/src/providers/anthropic.rs": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 23,
+      "files": [
+        {
+          "path": "crates/model-gateway/src/providers/deepseek.rs",
+          "language": "rust",
+          "sizeLines": 291,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/providers/gemini.rs",
+          "language": "rust",
+          "sizeLines": 168,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/providers/mod.rs",
+          "language": "rust",
+          "sizeLines": 280,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/providers/openai.rs",
+          "language": "rust",
+          "sizeLines": 1070,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/src/types.rs",
+          "language": "rust",
+          "sizeLines": 245,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/tests/provider_probe.rs",
+          "language": "rust",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/model-gateway/tests/thinking_integration.rs",
+          "language": "rust",
+          "sizeLines": 843,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/observability/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 13,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/observability/src/attr.rs",
+          "language": "rust",
+          "sizeLines": 61,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/observability/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 147,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/Cargo.toml",
+          "language": "toml",
+          "sizeLines": 10,
+          "fileCategory": "config"
+        },
+        {
+          "path": "crates/protocol/src/context.rs",
+          "language": "rust",
+          "sizeLines": 58,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/error.rs",
+          "language": "rust",
+          "sizeLines": 36,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/event.rs",
+          "language": "rust",
+          "sizeLines": 396,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/ids.rs",
+          "language": "rust",
+          "sizeLines": 75,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/lib.rs",
+          "language": "rust",
+          "sizeLines": 28,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/memory.rs",
+          "language": "rust",
+          "sizeLines": 13,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/permission.rs",
+          "language": "rust",
+          "sizeLines": 177,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/submission.rs",
+          "language": "rust",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        },
+        {
+          "path": "crates/protocol/src/todo.rs",
+          "language": "rust",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "crates/model-gateway/src/providers/deepseek.rs": [],
+        "crates/model-gateway/src/providers/gemini.rs": [],
+        "crates/model-gateway/src/providers/mod.rs": [],
+        "crates/model-gateway/src/providers/openai.rs": [],
+        "crates/model-gateway/src/types.rs": [],
+        "crates/model-gateway/tests/provider_probe.rs": [],
+        "crates/model-gateway/tests/thinking_integration.rs": [],
+        "crates/observability/Cargo.toml": [],
+        "crates/observability/src/attr.rs": [],
+        "crates/observability/src/lib.rs": [],
+        "crates/protocol/Cargo.toml": [],
+        "crates/protocol/src/context.rs": [],
+        "crates/protocol/src/error.rs": [],
+        "crates/protocol/src/event.rs": [],
+        "crates/protocol/src/ids.rs": [],
+        "crates/protocol/src/lib.rs": [],
+        "crates/protocol/src/memory.rs": [],
+        "crates/protocol/src/permission.rs": [],
+        "crates/protocol/src/submission.rs": [],
+        "crates/protocol/src/todo.rs": []
+      },
+      "neighborMap": {}
+    }
+  ]
+}

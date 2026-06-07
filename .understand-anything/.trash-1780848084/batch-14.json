@@ -1,0 +1,3422 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "language": "swift",
+      "sizeLines": 63,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "language": "swift",
+      "sizeLines": 446,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "language": "swift",
+      "sizeLines": 62,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/main.swift",
+      "language": "swift",
+      "sizeLines": 82,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "language": "swift",
+      "sizeLines": 170,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "language": "swift",
+      "sizeLines": 112,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "language": "swift",
+      "sizeLines": 336,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "language": "swift",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "language": "swift",
+      "sizeLines": 116,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "language": "swift",
+      "sizeLines": 180,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "language": "swift",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/package.json",
+      "language": "json",
+      "sizeLines": 23,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/core/src/index.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/schema.ts",
+      "language": "typescript",
+      "sizeLines": 663,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/search.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/src/types.ts",
+      "language": "typescript",
+      "sizeLines": 202,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/core/tsconfig.json",
+      "language": "json",
+      "sizeLines": 20,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+      "language": "javascript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+      "language": "javascript",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+      "language": "javascript",
+      "sizeLines": 119,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/App.tsx",
+      "language": "typescript",
+      "sizeLines": 715,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "language": "typescript",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 783,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "language": "typescript",
+      "sizeLines": 513,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "language": "typescript",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "type": "file",
+      "name": "AppDelegate.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "模块 AppDelegate",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/AppDelegate.swift:AppDelegate",
+      "type": "class",
+      "name": "AppDelegate",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "AppDelegate 定义于 AppDelegate.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:applicationDidFinishLaunching",
+      "type": "function",
+      "name": "applicationDidFinishLaunching",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "applicationDidFinishLaunching 定义于 AppDelegate.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:applicationWillTerminate",
+      "type": "function",
+      "name": "applicationWillTerminate",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "applicationWillTerminate 定义于 AppDelegate.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:setupStatusBar",
+      "type": "function",
+      "name": "setupStatusBar",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "setupStatusBar 定义于 AppDelegate.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:setupSocket",
+      "type": "function",
+      "name": "setupSocket",
+      "filePath": "apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "summary": "setupSocket 定义于 AppDelegate.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "type": "file",
+      "name": "CardView.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "从打包资源加载彩色图标 PNG（微笑 / 傲娇 / 调皮）。",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:themeIcon",
+      "type": "function",
+      "name": "themeIcon",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "themeIcon 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/CardView.swift:CardTheme",
+      "type": "class",
+      "name": "CardTheme",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "CardTheme 定义于 CardView.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/CardView.swift:Palette",
+      "type": "class",
+      "name": "Palette",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "Palette 定义于 CardView.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/CardView.swift:CardView",
+      "type": "class",
+      "name": "CardView",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "CardView 定义于 CardView.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:controlButton",
+      "type": "function",
+      "name": "controlButton",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "controlButton 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:subcommandList",
+      "type": "function",
+      "name": "subcommandList",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "subcommandList 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:optionRow",
+      "type": "function",
+      "name": "optionRow",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "optionRow 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:buttonBackground",
+      "type": "function",
+      "name": "buttonBackground",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "buttonBackground 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/CardView.swift:buttonBorder",
+      "type": "function",
+      "name": "buttonBorder",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "buttonBorder 定义于 CardView.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/CardView.swift:FoldedCardView",
+      "type": "class",
+      "name": "FoldedCardView",
+      "filePath": "apps/island-mac/Sources/HebIsland/CardView.swift",
+      "summary": "FoldedCardView 定义于 CardView.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "type": "file",
+      "name": "DaemonProbe.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "summary": "探测 socket 上是否已有一个活着的 hebisland daemon（能 connect 成功即视为活）。",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:isDaemonAlive",
+      "type": "function",
+      "name": "isDaemonAlive",
+      "filePath": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "summary": "isDaemonAlive 定义于 DaemonProbe.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:ensureDaemonRunning",
+      "type": "function",
+      "name": "ensureDaemonRunning",
+      "filePath": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "summary": "ensureDaemonRunning 定义于 DaemonProbe.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:currentExecutablePath",
+      "type": "function",
+      "name": "currentExecutablePath",
+      "filePath": "apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "summary": "currentExecutablePath 定义于 DaemonProbe.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/main.swift",
+      "type": "file",
+      "name": "main.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/main.swift",
+      "summary": "CLI dispatch: `hebisland daemon` | `hebisland notify --msg '<json>' [--wait] [--timeout N]`",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/main.swift:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "apps/island-mac/Sources/HebIsland/main.swift",
+      "summary": "main 定义于 main.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/main.swift:runDaemon",
+      "type": "function",
+      "name": "runDaemon",
+      "filePath": "apps/island-mac/Sources/HebIsland/main.swift",
+      "summary": "runDaemon 定义于 main.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/main.swift:runNotify",
+      "type": "function",
+      "name": "runNotify",
+      "filePath": "apps/island-mac/Sources/HebIsland/main.swift",
+      "summary": "runNotify 定义于 main.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "type": "file",
+      "name": "NotificationManager.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "Manages notification lifecycle: create/dismiss/stack/update panels.",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/NotificationManager.swift:NotificationManager",
+      "type": "class",
+      "name": "NotificationManager",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "NotificationManager 定义于 NotificationManager.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:show",
+      "type": "function",
+      "name": "show",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "show 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:dismiss",
+      "type": "function",
+      "name": "dismiss",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "dismiss 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:relayout",
+      "type": "function",
+      "name": "relayout",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "relayout 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_showOnMain",
+      "type": "function",
+      "name": "_showOnMain",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "_showOnMain 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_dismissOnMain",
+      "type": "function",
+      "name": "_dismissOnMain",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "_dismissOnMain 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_removeController",
+      "type": "function",
+      "name": "_removeController",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "_removeController 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_relayoutOnMain",
+      "type": "function",
+      "name": "_relayoutOnMain",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "_relayoutOnMain 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:activateHebbian",
+      "type": "function",
+      "name": "activateHebbian",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "summary": "activateHebbian 定义于 NotificationManager.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "type": "file",
+      "name": "NotifyClient.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "summary": "Handles the `hebisland notify` subcommand: connect to daemon socket, send JSON, optionally wait for action.",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/NotifyClient.swift:NotifyClient",
+      "type": "class",
+      "name": "NotifyClient",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "summary": "NotifyClient 定义于 NotifyClient.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotifyClient.swift:send",
+      "type": "function",
+      "name": "send",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "summary": "send 定义于 NotifyClient.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/NotifyClient.swift:receiveLine",
+      "type": "function",
+      "name": "receiveLine",
+      "filePath": "apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "summary": "receiveLine 定义于 NotifyClient.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "type": "file",
+      "name": "PanelController.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "NSHostingView 子类：首次点击（窗口未激活时）直接命中 SwiftUI 内容，",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:FirstMouseHostingView",
+      "type": "class",
+      "name": "FirstMouseHostingView",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "FirstMouseHostingView 定义于 PanelController.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:acceptsFirstMouse",
+      "type": "function",
+      "name": "acceptsFirstMouse",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "acceptsFirstMouse 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:PanelController",
+      "type": "class",
+      "name": "PanelController",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "PanelController 定义于 PanelController.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:makeCardView",
+      "type": "function",
+      "name": "makeCardView",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "makeCardView 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:makeFoldedView",
+      "type": "function",
+      "name": "makeFoldedView",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "makeFoldedView 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:show",
+      "type": "function",
+      "name": "show",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "show 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:applyFrame",
+      "type": "function",
+      "name": "applyFrame",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "applyFrame 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:dismiss",
+      "type": "function",
+      "name": "dismiss",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "dismiss 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:closePanel",
+      "type": "function",
+      "name": "closePanel",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "closePanel 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:startAutoDismiss",
+      "type": "function",
+      "name": "startAutoDismiss",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "startAutoDismiss 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:updateCard",
+      "type": "function",
+      "name": "updateCard",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "updateCard 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:scheduleTimer",
+      "type": "function",
+      "name": "scheduleTimer",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "scheduleTimer 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:hoverEnter",
+      "type": "function",
+      "name": "hoverEnter",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "hoverEnter 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:hoverExit",
+      "type": "function",
+      "name": "hoverExit",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "hoverExit 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:suppressDragClick",
+      "type": "function",
+      "name": "suppressDragClick",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "suppressDragClick 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:handleResult",
+      "type": "function",
+      "name": "handleResult",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "handleResult 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:handleClose",
+      "type": "function",
+      "name": "handleClose",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "handleClose 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:toggleFold",
+      "type": "function",
+      "name": "toggleFold",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "toggleFold 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:animateSnap",
+      "type": "function",
+      "name": "animateSnap",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "animateSnap 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:windowWillClose",
+      "type": "function",
+      "name": "windowWillClose",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "windowWillClose 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:that",
+      "type": "class",
+      "name": "that",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "that 定义于 PanelController.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:HebIslandPanel",
+      "type": "class",
+      "name": "HebIslandPanel",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "HebIslandPanel 定义于 PanelController.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:sendEvent",
+      "type": "function",
+      "name": "sendEvent",
+      "filePath": "apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "summary": "sendEvent 定义于 PanelController.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "type": "file",
+      "name": "Protocol.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "Incoming message from caller to island",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:IncomingMessage",
+      "type": "class",
+      "name": "IncomingMessage",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "IncomingMessage 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CardOption",
+      "type": "class",
+      "name": "CardOption",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "CardOption 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CardSubcommand",
+      "type": "class",
+      "name": "CardSubcommand",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "CardSubcommand 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:NotificationCard",
+      "type": "class",
+      "name": "NotificationCard",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "NotificationCard 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:ActionResult",
+      "type": "class",
+      "name": "ActionResult",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "ActionResult 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:ActionMessage",
+      "type": "class",
+      "name": "ActionMessage",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "ActionMessage 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CodingKeys",
+      "type": "class",
+      "name": "CodingKeys",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "CodingKeys 定义于 Protocol.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/Protocol.swift:toJSONLine",
+      "type": "function",
+      "name": "toJSONLine",
+      "filePath": "apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "summary": "toJSONLine 定义于 Protocol.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "type": "file",
+      "name": "ScreenResolver.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "Determines which screen the frontmost application window is on,",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:ScreenResolver",
+      "type": "class",
+      "name": "ScreenResolver",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "ScreenResolver 定义于 ScreenResolver.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:start",
+      "type": "function",
+      "name": "start",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "start 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:stop",
+      "type": "function",
+      "name": "stop",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "stop 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectNow",
+      "type": "function",
+      "name": "detectNow",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "detectNow 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:frontAppChanged",
+      "type": "function",
+      "name": "frontAppChanged",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "frontAppChanged 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:screenParamsChanged",
+      "type": "function",
+      "name": "screenParamsChanged",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "screenParamsChanged 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectAndNotify",
+      "type": "function",
+      "name": "detectAndNotify",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "detectAndNotify 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectFocusScreen",
+      "type": "function",
+      "name": "detectFocusScreen",
+      "filePath": "apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "summary": "detectFocusScreen 定义于 ScreenResolver.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "type": "file",
+      "name": "SocketServer.swift",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "Unix domain socket server: listens on ~/.hebbian/island.sock, handles line-delimited JSON protocol.",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Sources/HebIsland/SocketServer.swift:SocketServer",
+      "type": "class",
+      "name": "SocketServer",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "SocketServer 定义于 SocketServer.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:start",
+      "type": "function",
+      "name": "start",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "start 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:writeAction",
+      "type": "function",
+      "name": "writeAction",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "writeAction 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:untrack",
+      "type": "function",
+      "name": "untrack",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "untrack 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:preconditionSocketClean",
+      "type": "function",
+      "name": "preconditionSocketClean",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "preconditionSocketClean 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:fixSocketPermissions",
+      "type": "function",
+      "name": "fixSocketPermissions",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "fixSocketPermissions 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:restart",
+      "type": "function",
+      "name": "restart",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "restart 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:handleNewConnection",
+      "type": "function",
+      "name": "handleNewConnection",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "handleNewConnection 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:readLines",
+      "type": "function",
+      "name": "readLines",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "readLines 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:processLine",
+      "type": "function",
+      "name": "processLine",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "processLine 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:cleanupConnection",
+      "type": "function",
+      "name": "cleanupConnection",
+      "filePath": "apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "summary": "cleanupConnection 定义于 SocketServer.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "type": "file",
+      "name": "ProtocolTests.swift",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "模块 ProtocolTests",
+      "tags": [
+        "code",
+        "swift",
+        "island-mac"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:ProtocolTests",
+      "type": "class",
+      "name": "ProtocolTests",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "ProtocolTests 定义于 ProtocolTests.swift",
+      "tags": [
+        "class",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowApproval",
+      "type": "function",
+      "name": "testDecodeShowApproval",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testDecodeShowApproval 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowInfo",
+      "type": "function",
+      "name": "testDecodeShowInfo",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testDecodeShowInfo 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowWithDurationAndActions",
+      "type": "function",
+      "name": "testDecodeShowWithDurationAndActions",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testDecodeShowWithDurationAndActions 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeDismiss",
+      "type": "function",
+      "name": "testDecodeDismiss",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testDecodeDismiss 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testEncodeActionMessage",
+      "type": "function",
+      "name": "testEncodeActionMessage",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testEncodeActionMessage 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testInfoDefaults",
+      "type": "function",
+      "name": "testInfoDefaults",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testInfoDefaults 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testApprovalDefaults",
+      "type": "function",
+      "name": "testApprovalDefaults",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testApprovalDefaults 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testQuestionDefaults",
+      "type": "function",
+      "name": "testQuestionDefaults",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testQuestionDefaults 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testZeroDurationMeansNever",
+      "type": "function",
+      "name": "testZeroDurationMeansNever",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testZeroDurationMeansNever 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testCustomDuration",
+      "type": "function",
+      "name": "testCustomDuration",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testCustomDuration 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testCustomActionsOverrideDefaults",
+      "type": "function",
+      "name": "testCustomActionsOverrideDefaults",
+      "filePath": "apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "summary": "testCustomActionsOverrideDefaults 定义于 ProtocolTests.swift",
+      "tags": [
+        "function",
+        "swift"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:apps/pages/packages/core/package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "apps/pages/packages/core/package.json",
+      "summary": "模块 package",
+      "tags": [
+        "config",
+        "json",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/core/src/index.ts",
+      "type": "file",
+      "name": "index.ts",
+      "filePath": "apps/pages/packages/core/src/index.ts",
+      "summary": "模块 index",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/core/src/schema.ts",
+      "type": "file",
+      "name": "schema.ts",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "模块 schema",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:EdgeTypeSchema",
+      "type": "function",
+      "name": "EdgeTypeSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "EdgeTypeSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:NODE_TYPE_ALIASES",
+      "type": "function",
+      "name": "NODE_TYPE_ALIASES",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "NODE_TYPE_ALIASES 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:EDGE_TYPE_ALIASES",
+      "type": "function",
+      "name": "EDGE_TYPE_ALIASES",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "EDGE_TYPE_ALIASES 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:COMPLEXITY_ALIASES",
+      "type": "function",
+      "name": "COMPLEXITY_ALIASES",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "COMPLEXITY_ALIASES 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:DIRECTION_ALIASES",
+      "type": "function",
+      "name": "DIRECTION_ALIASES",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "DIRECTION_ALIASES 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:sanitizeGraph",
+      "type": "function",
+      "name": "sanitizeGraph",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "sanitizeGraph 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:autoFixGraph",
+      "type": "function",
+      "name": "autoFixGraph",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "autoFixGraph 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:GraphNodeSchema",
+      "type": "function",
+      "name": "GraphNodeSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "GraphNodeSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:GraphEdgeSchema",
+      "type": "function",
+      "name": "GraphEdgeSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "GraphEdgeSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:LayerSchema",
+      "type": "function",
+      "name": "LayerSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "LayerSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:TourStepSchema",
+      "type": "function",
+      "name": "TourStepSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "TourStepSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:ProjectMetaSchema",
+      "type": "function",
+      "name": "ProjectMetaSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "ProjectMetaSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:KnowledgeGraphSchema",
+      "type": "function",
+      "name": "KnowledgeGraphSchema",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "KnowledgeGraphSchema 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/schema.ts:GraphIssue",
+      "type": "class",
+      "name": "GraphIssue",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "GraphIssue 定义于 schema.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/schema.ts:ValidationResult",
+      "type": "class",
+      "name": "ValidationResult",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "ValidationResult 定义于 schema.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:normalizeGraph",
+      "type": "function",
+      "name": "normalizeGraph",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "normalizeGraph 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/core/src/schema.ts:validateGraph",
+      "type": "function",
+      "name": "validateGraph",
+      "filePath": "apps/pages/packages/core/src/schema.ts",
+      "summary": "validateGraph 定义于 schema.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/core/src/search.ts",
+      "type": "file",
+      "name": "search.ts",
+      "filePath": "apps/pages/packages/core/src/search.ts",
+      "summary": "模块 search",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/search.ts:SearchResult",
+      "type": "class",
+      "name": "SearchResult",
+      "filePath": "apps/pages/packages/core/src/search.ts",
+      "summary": "SearchResult 定义于 search.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/search.ts:SearchOptions",
+      "type": "class",
+      "name": "SearchOptions",
+      "filePath": "apps/pages/packages/core/src/search.ts",
+      "summary": "SearchOptions 定义于 search.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/search.ts:SearchEngine",
+      "type": "class",
+      "name": "SearchEngine",
+      "filePath": "apps/pages/packages/core/src/search.ts",
+      "summary": "SearchEngine 定义于 search.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/core/src/types.ts",
+      "type": "file",
+      "name": "types.ts",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "模块 types",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:NodeType",
+      "type": "class",
+      "name": "NodeType",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "NodeType 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:EdgeType",
+      "type": "class",
+      "name": "EdgeType",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "EdgeType 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:KnowledgeMeta",
+      "type": "class",
+      "name": "KnowledgeMeta",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "KnowledgeMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:DomainMeta",
+      "type": "class",
+      "name": "DomainMeta",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "DomainMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:GraphNode",
+      "type": "class",
+      "name": "GraphNode",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "GraphNode 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:GraphEdge",
+      "type": "class",
+      "name": "GraphEdge",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "GraphEdge 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:Layer",
+      "type": "class",
+      "name": "Layer",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "Layer 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:TourStep",
+      "type": "class",
+      "name": "TourStep",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "TourStep 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ProjectMeta",
+      "type": "class",
+      "name": "ProjectMeta",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ProjectMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:KnowledgeGraph",
+      "type": "class",
+      "name": "KnowledgeGraph",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "KnowledgeGraph 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ThemeConfig",
+      "type": "class",
+      "name": "ThemeConfig",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ThemeConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:AnalysisMeta",
+      "type": "class",
+      "name": "AnalysisMeta",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "AnalysisMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ProjectConfig",
+      "type": "class",
+      "name": "ProjectConfig",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ProjectConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:SectionInfo",
+      "type": "class",
+      "name": "SectionInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "SectionInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:DefinitionInfo",
+      "type": "class",
+      "name": "DefinitionInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "DefinitionInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ServiceInfo",
+      "type": "class",
+      "name": "ServiceInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ServiceInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:EndpointInfo",
+      "type": "class",
+      "name": "EndpointInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "EndpointInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:StepInfo",
+      "type": "class",
+      "name": "StepInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "StepInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ResourceInfo",
+      "type": "class",
+      "name": "ResourceInfo",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ResourceInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ReferenceResolution",
+      "type": "class",
+      "name": "ReferenceResolution",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ReferenceResolution 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:StructuralAnalysis",
+      "type": "class",
+      "name": "StructuralAnalysis",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "StructuralAnalysis 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:ImportResolution",
+      "type": "class",
+      "name": "ImportResolution",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "ImportResolution 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:CallGraphEntry",
+      "type": "class",
+      "name": "CallGraphEntry",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "CallGraphEntry 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/core/src/types.ts:AnalyzerPlugin",
+      "type": "class",
+      "name": "AnalyzerPlugin",
+      "filePath": "apps/pages/packages/core/src/types.ts",
+      "summary": "AnalyzerPlugin 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:apps/pages/packages/core/tsconfig.json",
+      "type": "config",
+      "name": "tsconfig.json",
+      "filePath": "apps/pages/packages/core/tsconfig.json",
+      "summary": "模块 tsconfig",
+      "tags": [
+        "config",
+        "json",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+      "type": "file",
+      "name": "benchmark-aggregations.mjs",
+      "filePath": "apps/pages/packages/dashboard/scripts/benchmark-aggregations.mjs",
+      "summary": "模块 benchmark-aggregations",
+      "tags": [
+        "code",
+        "javascript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+      "type": "file",
+      "name": "benchmark-layout.mjs",
+      "filePath": "apps/pages/packages/dashboard/scripts/benchmark-layout.mjs",
+      "summary": "模块 benchmark-layout",
+      "tags": [
+        "code",
+        "javascript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+      "type": "file",
+      "name": "bundle-graph.mjs",
+      "filePath": "apps/pages/packages/dashboard/scripts/bundle-graph.mjs",
+      "summary": "模块 bundle-graph",
+      "tags": [
+        "code",
+        "javascript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "type": "file",
+      "name": "App.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/App.tsx",
+      "summary": "模块 App",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "type": "file",
+      "name": "Breadcrumb.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "summary": "模块 Breadcrumb",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx:Breadcrumb",
+      "type": "function",
+      "name": "Breadcrumb",
+      "filePath": "apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "summary": "Breadcrumb 定义于 Breadcrumb.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "type": "file",
+      "name": "ChatPanel.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "summary": "模块 ChatPanel",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/ChatPanel.tsx:ChatPanel",
+      "type": "function",
+      "name": "ChatPanel",
+      "filePath": "apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "summary": "ChatPanel 定义于 ChatPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "type": "file",
+      "name": "CodeViewer.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "summary": "模块 CodeViewer",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/CodeViewer.tsx:CodeViewer",
+      "type": "function",
+      "name": "CodeViewer",
+      "filePath": "apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "summary": "CodeViewer 定义于 CodeViewer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "type": "file",
+      "name": "ContainerNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "summary": "模块 ContainerNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/ContainerNode.tsx:ContainerNodeData",
+      "type": "class",
+      "name": "ContainerNodeData",
+      "filePath": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "summary": "ContainerNodeData 定义于 ContainerNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/ContainerNode.tsx:ContainerFlowNode",
+      "type": "class",
+      "name": "ContainerFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "summary": "ContainerFlowNode 定义于 ContainerNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/AppDelegate.swift:AppDelegate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:applicationDidFinishLaunching",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:applicationWillTerminate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:setupStatusBar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/AppDelegate.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/AppDelegate.swift:setupSocket",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:themeIcon",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/CardView.swift:CardTheme",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/CardView.swift:Palette",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/CardView.swift:CardView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:controlButton",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:subcommandList",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:optionRow",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:buttonBackground",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/CardView.swift:buttonBorder",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/CardView.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/CardView.swift:FoldedCardView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:isDaemonAlive",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:ensureDaemonRunning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/DaemonProbe.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/DaemonProbe.swift:currentExecutablePath",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/main.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/main.swift:main",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/main.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/main.swift:runDaemon",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/main.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/main.swift:runNotify",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/NotificationManager.swift:NotificationManager",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:show",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:dismiss",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:relayout",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_showOnMain",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_dismissOnMain",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_removeController",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:_relayoutOnMain",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotificationManager.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotificationManager.swift:activateHebbian",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/NotifyClient.swift:NotifyClient",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotifyClient.swift:send",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/NotifyClient.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/NotifyClient.swift:receiveLine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:FirstMouseHostingView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:acceptsFirstMouse",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:PanelController",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:makeCardView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:makeFoldedView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:show",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:applyFrame",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:dismiss",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:closePanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:startAutoDismiss",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:updateCard",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:scheduleTimer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:hoverEnter",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:hoverExit",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:suppressDragClick",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:handleResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:handleClose",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:toggleFold",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:animateSnap",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:windowWillClose",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:that",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/PanelController.swift:HebIslandPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/PanelController.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/PanelController.swift:sendEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:IncomingMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CardOption",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CardSubcommand",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:NotificationCard",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:ActionResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:ActionMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/Protocol.swift:CodingKeys",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/Protocol.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/Protocol.swift:toJSONLine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:ScreenResolver",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:stop",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectNow",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:frontAppChanged",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:screenParamsChanged",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectAndNotify",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/ScreenResolver.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/ScreenResolver.swift:detectFocusScreen",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "class:apps/island-mac/Sources/HebIsland/SocketServer.swift:SocketServer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:start",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:writeAction",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:untrack",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:preconditionSocketClean",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:fixSocketPermissions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:restart",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:handleNewConnection",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:readLines",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:processLine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Sources/HebIsland/SocketServer.swift",
+      "target": "function:apps/island-mac/Sources/HebIsland/SocketServer.swift:cleanupConnection",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "class:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:ProtocolTests",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowApproval",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeShowWithDurationAndActions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testDecodeDismiss",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testEncodeActionMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testInfoDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testApprovalDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testQuestionDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testZeroDurationMeansNever",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testCustomDuration",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift",
+      "target": "function:apps/island-mac/Tests/HebIslandTests/ProtocolTests.swift:testCustomActionsOverrideDefaults",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:EdgeTypeSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:NODE_TYPE_ALIASES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:EDGE_TYPE_ALIASES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:COMPLEXITY_ALIASES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:DIRECTION_ALIASES",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:sanitizeGraph",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:autoFixGraph",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:GraphNodeSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:GraphEdgeSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:LayerSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:TourStepSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:ProjectMetaSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:KnowledgeGraphSchema",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "class:apps/pages/packages/core/src/schema.ts:GraphIssue",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "class:apps/pages/packages/core/src/schema.ts:ValidationResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:normalizeGraph",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/schema.ts",
+      "target": "function:apps/pages/packages/core/src/schema.ts:validateGraph",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/search.ts",
+      "target": "class:apps/pages/packages/core/src/search.ts:SearchResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/search.ts",
+      "target": "class:apps/pages/packages/core/src/search.ts:SearchOptions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/search.ts",
+      "target": "class:apps/pages/packages/core/src/search.ts:SearchEngine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:NodeType",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:EdgeType",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:KnowledgeMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:DomainMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:GraphNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:GraphEdge",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:Layer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:TourStep",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ProjectMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:KnowledgeGraph",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ThemeConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:AnalysisMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ProjectConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:SectionInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:DefinitionInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ServiceInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:EndpointInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:StepInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ResourceInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ReferenceResolution",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:StructuralAnalysis",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:ImportResolution",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:CallGraphEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/core/src/types.ts",
+      "target": "class:apps/pages/packages/core/src/types.ts:AnalyzerPlugin",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/TokenGate.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/hooks/useIsMobile.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/App.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx:Breadcrumb",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/ChatPanel.tsx:ChatPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ChatPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/CodeViewer.tsx:CodeViewer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CodeViewer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/ContainerNode.tsx:ContainerNodeData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/ContainerNode.tsx:ContainerFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    }
+  ]
+}

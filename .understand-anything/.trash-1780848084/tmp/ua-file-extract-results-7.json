@@ -1,0 +1,272 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [
+    "docs/superpowers/plans/2026-06-04-cli-improvements.md"
+  ],
+  "results": [
+    {
+      "path": "docs/superpowers/plans/2026-05-23-notification-toast.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 185,
+      "nonEmptyLines": 142,
+      "sections": [
+        {
+          "heading": "右上角事件弹窗提醒",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "目标",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "行为规则",
+          "level": 2,
+          "line": 10
+        },
+        {
+          "heading": "技术方案",
+          "level": 2,
+          "line": 22
+        },
+        {
+          "heading": "为什么不用其他方案",
+          "level": 3,
+          "line": 26
+        },
+        {
+          "heading": "文件变更",
+          "level": 2,
+          "line": 31
+        },
+        {
+          "heading": "新建文件",
+          "level": 3,
+          "line": 33
+        },
+        {
+          "heading": "修改文件",
+          "level": 3,
+          "line": 42
+        },
+        {
+          "heading": "任务拆解",
+          "level": 2,
+          "line": 50
+        },
+        {
+          "heading": "Task 1: NotchManager 后端（notch.rs）",
+          "level": 3,
+          "line": 52
+        },
+        {
+          "heading": "Task 2: chat.rs 事件桥接",
+          "level": 3,
+          "line": 80
+        },
+        {
+          "heading": "Task 3: 前端 NotchWindow + NotificationCard",
+          "level": 3,
+          "line": 116
+        },
+        {
+          "heading": "Task 4: Vite 多入口 + tauri.conf 配置",
+          "level": 3,
+          "line": 150
+        },
+        {
+          "heading": "Task 5: lib.rs 注册",
+          "level": 3,
+          "line": 156
+        },
+        {
+          "heading": "优先级队列（精简版）",
+          "level": 2,
+          "line": 169
+        },
+        {
+          "heading": "注意事项",
+          "level": 2,
+          "line": 179
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 16
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-28-hashline-edit-backend.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1765,
+      "nonEmptyLines": 1402,
+      "sections": [
+        {
+          "heading": "Hashline Edit Backend Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 17
+        },
+        {
+          "heading": "Task 1: settings.json 加 edit_backend 字段",
+          "level": 2,
+          "line": 42
+        },
+        {
+          "heading": "Task 2: hash3 与 read_state 复用",
+          "level": 2,
+          "line": 128
+        },
+        {
+          "heading": "Task 3: hashline parser",
+          "level": 2,
+          "line": 299
+        },
+        {
+          "heading": "Task 4: hashline apply（纯函数：patch + 当前内容 → 新内容）",
+          "level": 2,
+          "line": 627
+        },
+        {
+          "heading": "Task 5: prompt.md 教学文本",
+          "level": 2,
+          "line": 883
+        },
+        {
+          "heading": "Task 6: ReadHashlineTool 实现",
+          "level": 2,
+          "line": 985
+        },
+        {
+          "heading": "Task 7: EditHashlineTool 实现",
+          "level": 2,
+          "line": 1099
+        },
+        {
+          "heading": "Task 8: dispatch 按 settings.edit_backend 二选一注册",
+          "level": 2,
+          "line": 1338
+        },
+        {
+          "heading": "Task 9: 前端 Settings UI 加切换项",
+          "level": 2,
+          "line": 1443
+        },
+        {
+          "heading": "Task 10: 集成测试：Read → Edit roundtrip",
+          "level": 2,
+          "line": 1530
+        },
+        {
+          "heading": "Task 11: 架构文档与 changelog",
+          "level": 2,
+          "line": 1652
+        },
+        {
+          "heading": "Self-Review Checklist",
+          "level": 2,
+          "line": 1734
+        },
+        {
+          "heading": "Execution Handoff",
+          "level": 2,
+          "line": 1757
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 15
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-02-hebisland-standalone.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 810,
+      "nonEmptyLines": 669,
+      "sections": [
+        {
+          "heading": "Hebisland 独立二进制实现计划",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "文件结构",
+          "level": 2,
+          "line": 15
+        },
+        {
+          "heading": "Rust（`apps/island/src/`）",
+          "level": 3,
+          "line": 17
+        },
+        {
+          "heading": "前端（`apps/island/frontend/`）",
+          "level": 3,
+          "line": 24
+        },
+        {
+          "heading": "配置",
+          "level": 3,
+          "line": 33
+        },
+        {
+          "heading": "Task 1: 创建 crate 骨架",
+          "level": 2,
+          "line": 40
+        },
+        {
+          "heading": "Task 2: 创建前端",
+          "level": 2,
+          "line": 475
+        },
+        {
+          "heading": "Task 3: 实现完整的 socket 回传",
+          "level": 2,
+          "line": 687
+        },
+        {
+          "heading": "Task 4: 堆叠规则与窗口生命周期",
+          "level": 2,
+          "line": 716
+        },
+        {
+          "heading": "Task 5: 清理 desktop 嵌入代码",
+          "level": 2,
+          "line": 739
+        },
+        {
+          "heading": "Task 6: 更新文档",
+          "level": 2,
+          "line": 769
+        },
+        {
+          "heading": "验证清单",
+          "level": 2,
+          "line": 790
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 12
+      }
+    }
+  ]
+}

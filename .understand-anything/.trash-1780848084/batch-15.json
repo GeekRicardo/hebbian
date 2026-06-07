@@ -1,0 +1,1752 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "language": "typescript",
+      "sizeLines": 190,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 279,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "language": "typescript",
+      "sizeLines": 279,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "language": "typescript",
+      "sizeLines": 214,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 219,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "language": "typescript",
+      "sizeLines": 52,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 1581,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "language": "typescript",
+      "sizeLines": 292,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "language": "typescript",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 230,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "language": "typescript",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "language": "typescript",
+      "sizeLines": 266,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "language": "typescript",
+      "sizeLines": 245,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "language": "typescript",
+      "sizeLines": 539,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "language": "typescript",
+      "sizeLines": 311,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "language": "typescript",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "language": "typescript",
+      "sizeLines": 64,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "language": "typescript",
+      "sizeLines": 222,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "language": "typescript",
+      "sizeLines": 191,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "language": "typescript",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "file",
+      "name": "CustomNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "summary": "模块 CustomNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/CustomNode.tsx:CustomNodeData",
+      "type": "class",
+      "name": "CustomNodeData",
+      "filePath": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "summary": "CustomNodeData 定义于 CustomNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/CustomNode.tsx:CustomFlowNode",
+      "type": "class",
+      "name": "CustomFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "summary": "CustomFlowNode 定义于 CustomNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "type": "file",
+      "name": "DiffToggle.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "summary": "模块 DiffToggle",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/DiffToggle.tsx:DiffToggle",
+      "type": "function",
+      "name": "DiffToggle",
+      "filePath": "apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "summary": "DiffToggle 定义于 DiffToggle.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "type": "file",
+      "name": "DomainClusterNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "summary": "模块 DomainClusterNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx:DomainClusterData",
+      "type": "class",
+      "name": "DomainClusterData",
+      "filePath": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "summary": "DomainClusterData 定义于 DomainClusterNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx:DomainClusterFlowNode",
+      "type": "class",
+      "name": "DomainClusterFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "summary": "DomainClusterFlowNode 定义于 DomainClusterNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "type": "file",
+      "name": "DomainGraphView.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "summary": "模块 DomainGraphView",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx:DomainGraphView",
+      "type": "function",
+      "name": "DomainGraphView",
+      "filePath": "apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "summary": "DomainGraphView 定义于 DomainGraphView.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "type": "file",
+      "name": "ExportMenu.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "summary": "模块 ExportMenu",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/ExportMenu.tsx:ExportMenu",
+      "type": "function",
+      "name": "ExportMenu",
+      "filePath": "apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "summary": "ExportMenu 定义于 ExportMenu.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "type": "file",
+      "name": "FileExplorer.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "summary": "模块 FileExplorer",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/FileExplorer.tsx:FileExplorer",
+      "type": "function",
+      "name": "FileExplorer",
+      "filePath": "apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "summary": "FileExplorer 定义于 FileExplorer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "type": "file",
+      "name": "FilterPanel.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "summary": "模块 FilterPanel",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/FilterPanel.tsx:FilterPanel",
+      "type": "function",
+      "name": "FilterPanel",
+      "filePath": "apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "summary": "FilterPanel 定义于 FilterPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "type": "file",
+      "name": "FlowNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "summary": "模块 FlowNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/FlowNode.tsx:FlowNodeData",
+      "type": "class",
+      "name": "FlowNodeData",
+      "filePath": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "summary": "FlowNodeData 定义于 FlowNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/FlowNode.tsx:FlowFlowNode",
+      "type": "class",
+      "name": "FlowFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "summary": "FlowFlowNode 定义于 FlowNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "type": "file",
+      "name": "GraphView.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "summary": "模块 GraphView",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/GraphView.tsx:GraphView",
+      "type": "function",
+      "name": "GraphView",
+      "filePath": "apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "summary": "GraphView 定义于 GraphView.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "type": "file",
+      "name": "KeyboardShortcutsHelp.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "summary": "模块 KeyboardShortcutsHelp",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx:KeyboardShortcutsHelp",
+      "type": "function",
+      "name": "KeyboardShortcutsHelp",
+      "filePath": "apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "summary": "KeyboardShortcutsHelp 定义于 KeyboardShortcutsHelp.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "type": "file",
+      "name": "KnowledgeGraphView.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "summary": "模块 KnowledgeGraphView",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx:KnowledgeGraphView",
+      "type": "function",
+      "name": "KnowledgeGraphView",
+      "filePath": "apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "summary": "KnowledgeGraphView 定义于 KnowledgeGraphView.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "type": "file",
+      "name": "LayerClusterNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "summary": "模块 LayerClusterNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx:LayerClusterData",
+      "type": "class",
+      "name": "LayerClusterData",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "summary": "LayerClusterData 定义于 LayerClusterNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx:LayerClusterFlowNode",
+      "type": "class",
+      "name": "LayerClusterFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "summary": "LayerClusterFlowNode 定义于 LayerClusterNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "file",
+      "name": "LayerLegend.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "summary": "模块 LayerLegend",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:LAYER_PALETTE",
+      "type": "function",
+      "name": "LAYER_PALETTE",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "summary": "LAYER_PALETTE 定义于 LayerLegend.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:getLayerColor",
+      "type": "function",
+      "name": "getLayerColor",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "summary": "getLayerColor 定义于 LayerLegend.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:LayerLegend",
+      "type": "function",
+      "name": "LayerLegend",
+      "filePath": "apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "summary": "LayerLegend 定义于 LayerLegend.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "type": "file",
+      "name": "LearnPanel.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "summary": "模块 LearnPanel",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/LearnPanel.tsx:LearnPanel",
+      "type": "function",
+      "name": "LearnPanel",
+      "filePath": "apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "summary": "LearnPanel 定义于 LearnPanel.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "type": "file",
+      "name": "MobileBottomNav.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "summary": "模块 MobileBottomNav",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx:MobileTab",
+      "type": "class",
+      "name": "MobileTab",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "summary": "MobileTab 定义于 MobileBottomNav.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx:MobileBottomNav",
+      "type": "function",
+      "name": "MobileBottomNav",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "summary": "MobileBottomNav 定义于 MobileBottomNav.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "type": "file",
+      "name": "MobileDrawer.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "summary": "模块 MobileDrawer",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx:MobileDrawer",
+      "type": "function",
+      "name": "MobileDrawer",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "summary": "MobileDrawer 定义于 MobileDrawer.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "type": "file",
+      "name": "MobileLayout.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "summary": "模块 MobileLayout",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/MobileLayout.tsx:MobileLayout",
+      "type": "function",
+      "name": "MobileLayout",
+      "filePath": "apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "summary": "MobileLayout 定义于 MobileLayout.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "type": "file",
+      "name": "NodeInfo.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "summary": "模块 NodeInfo",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/NodeInfo.tsx:NodeInfo",
+      "type": "function",
+      "name": "NodeInfo",
+      "filePath": "apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "summary": "NodeInfo 定义于 NodeInfo.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "type": "file",
+      "name": "NodeTooltip.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "summary": "模块 NodeTooltip",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/NodeTooltip.tsx:NodeTooltip",
+      "type": "function",
+      "name": "NodeTooltip",
+      "filePath": "apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "summary": "NodeTooltip 定义于 NodeTooltip.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "type": "file",
+      "name": "PathFinderModal.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "summary": "模块 PathFinderModal",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/PathFinderModal.tsx:PathFinderModal",
+      "type": "function",
+      "name": "PathFinderModal",
+      "filePath": "apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "summary": "PathFinderModal 定义于 PathFinderModal.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "type": "file",
+      "name": "PersonaSelector.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "summary": "模块 PersonaSelector",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx:PersonaSelector",
+      "type": "function",
+      "name": "PersonaSelector",
+      "filePath": "apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "summary": "PersonaSelector 定义于 PersonaSelector.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "type": "file",
+      "name": "PortalNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "summary": "模块 PortalNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/PortalNode.tsx:PortalNodeData",
+      "type": "class",
+      "name": "PortalNodeData",
+      "filePath": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "summary": "PortalNodeData 定义于 PortalNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/PortalNode.tsx:PortalFlowNode",
+      "type": "class",
+      "name": "PortalFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "summary": "PortalFlowNode 定义于 PortalNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "type": "file",
+      "name": "ProjectOverview.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "summary": "模块 ProjectOverview",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx:ProjectOverview",
+      "type": "function",
+      "name": "ProjectOverview",
+      "filePath": "apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "summary": "ProjectOverview 定义于 ProjectOverview.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "type": "file",
+      "name": "SearchBar.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "summary": "模块 SearchBar",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/components/SearchBar.tsx:SearchBar",
+      "type": "function",
+      "name": "SearchBar",
+      "filePath": "apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "summary": "SearchBar 定义于 SearchBar.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "type": "file",
+      "name": "StepNode.tsx",
+      "filePath": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "summary": "模块 StepNode",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/StepNode.tsx:StepNodeData",
+      "type": "class",
+      "name": "StepNodeData",
+      "filePath": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "summary": "StepNodeData 定义于 StepNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/components/StepNode.tsx:StepFlowNode",
+      "type": "class",
+      "name": "StepFlowNode",
+      "filePath": "apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "summary": "StepFlowNode 定义于 StepNode.tsx",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/CustomNode.tsx:CustomNodeData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/CustomNode.tsx:CustomFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/DiffToggle.tsx:DiffToggle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx:DomainClusterData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx:DomainClusterFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx:DomainGraphView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DomainClusterNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/ExportMenu.tsx:ExportMenu",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/FileExplorer.tsx:FileExplorer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/FilterPanel.tsx:FilterPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/FlowNode.tsx:FlowNodeData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/FlowNode.tsx:FlowFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/FlowNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/GraphView.tsx:GraphView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ContainerNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/Breadcrumb.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/themes/index.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx:KeyboardShortcutsHelp",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/hooks/useKeyboardShortcuts.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KeyboardShortcutsHelp.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx:KnowledgeGraphView",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx:LayerClusterData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx:LayerClusterFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerClusterNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:LAYER_PALETTE",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:getLayerColor",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/LayerLegend.tsx:LayerLegend",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/LearnPanel.tsx:LearnPanel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/LearnPanel.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx:MobileTab",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx:MobileBottomNav",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx:MobileDrawer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DiffToggle.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FilterPanel.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ExportMenu.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ThemePicker.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/MobileLayout.tsx:MobileLayout",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/GraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/DomainGraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/KnowledgeGraphView.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/FileExplorer.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/WarningBanner.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/MobileBottomNav.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/MobileLayout.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/MobileDrawer.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/NodeInfo.tsx:NodeInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/NodeInfo.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/NodeTooltip.tsx:NodeTooltip",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/NodeTooltip.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/CustomNode.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/PathFinderModal.tsx:PathFinderModal",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PathFinderModal.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx:PersonaSelector",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PersonaSelector.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/PortalNode.tsx:PortalNodeData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/PortalNode.tsx:PortalFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/PortalNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/components/LayerLegend.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx:ProjectOverview",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/ProjectOverview.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "target": "function:apps/pages/packages/dashboard/src/components/SearchBar.tsx:SearchBar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/SearchBar.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/contexts/I18nContext.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/StepNode.tsx:StepNodeData",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "target": "class:apps/pages/packages/dashboard/src/components/StepNode.tsx:StepFlowNode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/components/StepNode.tsx",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    }
+  ]
+}

@@ -1,0 +1,1639 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+      "language": "typescript",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "language": "typescript",
+      "sizeLines": 156,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "language": "typescript",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "language": "typescript",
+      "sizeLines": 244,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "language": "typescript",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "language": "typescript",
+      "sizeLines": 266,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "language": "typescript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "language": "typescript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/src/vite-env.d.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.demo.ts",
+      "language": "typescript",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ghpages.ts",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.static.ts",
+      "language": "typescript",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/vite.config.ts",
+      "language": "typescript",
+      "sizeLines": 362,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 42,
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/web-server/src/chat_helpers.rs",
+      "language": "rust",
+      "sizeLines": 136,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/events.rs",
+      "language": "rust",
+      "sizeLines": 371,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/main.rs",
+      "language": "rust",
+      "sizeLines": 114,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/protocol.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/server.rs",
+      "language": "rust",
+      "sizeLines": 1761,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/web-server/src/session.rs",
+      "language": "rust",
+      "sizeLines": 583,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 37,
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/agent-core/examples/permission_probe.rs",
+      "language": "rust",
+      "sizeLines": 1376,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/examples/scan_skill_dir.rs",
+      "language": "rust",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/agent-core/prompts/automode_judge.md",
+      "language": "markdown",
+      "sizeLines": 159,
+      "fileCategory": "docs"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+      "type": "file",
+      "name": "smoke.test.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/__tests__/smoke.test.ts",
+      "summary": "模块 smoke.test",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "type": "file",
+      "name": "containers.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "summary": "模块 containers",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/containers.ts:DerivedContainer",
+      "type": "class",
+      "name": "DerivedContainer",
+      "filePath": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "summary": "DerivedContainer 定义于 containers.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/containers.ts:DeriveResult",
+      "type": "class",
+      "name": "DeriveResult",
+      "filePath": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "summary": "DeriveResult 定义于 containers.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/containers.ts:deriveContainers",
+      "type": "function",
+      "name": "deriveContainers",
+      "filePath": "apps/pages/packages/dashboard/src/utils/containers.ts",
+      "summary": "deriveContainers 定义于 containers.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "type": "file",
+      "name": "edgeAggregation.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "模块 edgeAggregation",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:LayerEdgeAggregation",
+      "type": "class",
+      "name": "LayerEdgeAggregation",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "LayerEdgeAggregation 定义于 edgeAggregation.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:PortalInfo",
+      "type": "class",
+      "name": "PortalInfo",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "PortalInfo 定义于 edgeAggregation.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:aggregateLayerEdges",
+      "type": "function",
+      "name": "aggregateLayerEdges",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "aggregateLayerEdges 定义于 edgeAggregation.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:computePortals",
+      "type": "function",
+      "name": "computePortals",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "computePortals 定义于 edgeAggregation.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:findCrossLayerFileNodes",
+      "type": "function",
+      "name": "findCrossLayerFileNodes",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "findCrossLayerFileNodes 定义于 edgeAggregation.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:AggregatedContainerEdge",
+      "type": "class",
+      "name": "AggregatedContainerEdge",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "AggregatedContainerEdge 定义于 edgeAggregation.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:ContainerEdgeBuckets",
+      "type": "class",
+      "name": "ContainerEdgeBuckets",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "ContainerEdgeBuckets 定义于 edgeAggregation.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:aggregateContainerEdges",
+      "type": "function",
+      "name": "aggregateContainerEdges",
+      "filePath": "apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "summary": "aggregateContainerEdges 定义于 edgeAggregation.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "file",
+      "name": "elk-layout.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "模块 elk-layout",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkChild",
+      "type": "class",
+      "name": "ElkChild",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "ElkChild 定义于 elk-layout.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkEdge",
+      "type": "class",
+      "name": "ElkEdge",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "ElkEdge 定义于 elk-layout.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkInput",
+      "type": "class",
+      "name": "ElkInput",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "ElkInput 定义于 elk-layout.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/elk-layout.ts:repairElkInput",
+      "type": "function",
+      "name": "repairElkInput",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "repairElkInput 定义于 elk-layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkLayoutOptions",
+      "type": "class",
+      "name": "ElkLayoutOptions",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "ElkLayoutOptions 定义于 elk-layout.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkLayoutResult",
+      "type": "class",
+      "name": "ElkLayoutResult",
+      "filePath": "apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "summary": "ElkLayoutResult 定义于 elk-layout.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "type": "file",
+      "name": "filters.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "summary": "模块 filters",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/filters.ts:filterNodes",
+      "type": "function",
+      "name": "filterNodes",
+      "filePath": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "summary": "filterNodes 定义于 filters.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/filters.ts:filterEdges",
+      "type": "function",
+      "name": "filterEdges",
+      "filePath": "apps/pages/packages/dashboard/src/utils/filters.ts",
+      "summary": "filterEdges 定义于 filters.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "type": "file",
+      "name": "layerStats.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "summary": "模块 layerStats",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/layerStats.ts:Complexity",
+      "type": "class",
+      "name": "Complexity",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "summary": "Complexity 定义于 layerStats.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/layerStats.ts:LayerStats",
+      "type": "class",
+      "name": "LayerStats",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "summary": "LayerStats 定义于 layerStats.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layerStats.ts:computeLayerStats",
+      "type": "function",
+      "name": "computeLayerStats",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "summary": "computeLayerStats 定义于 layerStats.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "type": "file",
+      "name": "layout.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "模块 layout",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:NODE_WIDTH",
+      "type": "function",
+      "name": "NODE_WIDTH",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "NODE_WIDTH 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:NODE_HEIGHT",
+      "type": "function",
+      "name": "NODE_HEIGHT",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "NODE_HEIGHT 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:LAYER_CLUSTER_WIDTH",
+      "type": "function",
+      "name": "LAYER_CLUSTER_WIDTH",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "LAYER_CLUSTER_WIDTH 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:LAYER_CLUSTER_HEIGHT",
+      "type": "function",
+      "name": "LAYER_CLUSTER_HEIGHT",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "LAYER_CLUSTER_HEIGHT 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:PORTAL_NODE_WIDTH",
+      "type": "function",
+      "name": "PORTAL_NODE_WIDTH",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "PORTAL_NODE_WIDTH 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:PORTAL_NODE_HEIGHT",
+      "type": "function",
+      "name": "PORTAL_NODE_HEIGHT",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "PORTAL_NODE_HEIGHT 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:applyDagreLayout",
+      "type": "function",
+      "name": "applyDagreLayout",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "applyDagreLayout 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:applyForceLayout",
+      "type": "function",
+      "name": "applyForceLayout",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "applyForceLayout 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:ELK_DEFAULT_LAYOUT_OPTIONS",
+      "type": "function",
+      "name": "ELK_DEFAULT_LAYOUT_OPTIONS",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "ELK_DEFAULT_LAYOUT_OPTIONS 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:nodesToElkInput",
+      "type": "function",
+      "name": "nodesToElkInput",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "nodesToElkInput 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/layout.ts:mergeElkPositions",
+      "type": "function",
+      "name": "mergeElkPositions",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.ts",
+      "summary": "mergeElkPositions 定义于 layout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "type": "file",
+      "name": "layout.worker.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "summary": "模块 layout.worker",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/layout.worker.ts:LayoutMessage",
+      "type": "class",
+      "name": "LayoutMessage",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "summary": "LayoutMessage 定义于 layout.worker.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/pages/packages/dashboard/src/utils/layout.worker.ts:LayoutResult",
+      "type": "class",
+      "name": "LayoutResult",
+      "filePath": "apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "summary": "LayoutResult 定义于 layout.worker.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "type": "file",
+      "name": "louvain.ts",
+      "filePath": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "summary": "模块 louvain",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/pages/packages/dashboard/src/utils/louvain.ts:detectCommunities",
+      "type": "function",
+      "name": "detectCommunities",
+      "filePath": "apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "summary": "detectCommunities 定义于 louvain.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/src/vite-env.d.ts",
+      "type": "file",
+      "name": "vite-env.d.ts",
+      "filePath": "apps/pages/packages/dashboard/src/vite-env.d.ts",
+      "summary": "<reference types=\"vite/client\" />",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/vite.config.demo.ts",
+      "type": "file",
+      "name": "vite.config.demo.ts",
+      "filePath": "apps/pages/packages/dashboard/vite.config.demo.ts",
+      "summary": "模块 vite.config.demo",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/vite.config.ghpages.ts",
+      "type": "file",
+      "name": "vite.config.ghpages.ts",
+      "filePath": "apps/pages/packages/dashboard/vite.config.ghpages.ts",
+      "summary": "模块 vite.config.ghpages",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/vite.config.static.ts",
+      "type": "file",
+      "name": "vite.config.static.ts",
+      "filePath": "apps/pages/packages/dashboard/vite.config.static.ts",
+      "summary": "模块 vite.config.static",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/pages/packages/dashboard/vite.config.ts",
+      "type": "file",
+      "name": "vite.config.ts",
+      "filePath": "apps/pages/packages/dashboard/vite.config.ts",
+      "summary": "<reference types=\"vitest\" />",
+      "tags": [
+        "code",
+        "typescript",
+        "pages"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:apps/web-server/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "apps/web-server/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "web-server"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/web-server/src/chat_helpers.rs",
+      "type": "file",
+      "name": "chat_helpers.rs",
+      "filePath": "apps/web-server/src/chat_helpers.rs",
+      "summary": "复刻 desktop `chat.rs` 中的几个非流式 helpers（context_usage / compact_session），",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/web-server/src/chat_helpers.rs:ContextUsageDto",
+      "type": "class",
+      "name": "ContextUsageDto",
+      "filePath": "apps/web-server/src/chat_helpers.rs",
+      "summary": "ContextUsageDto 定义于 chat_helpers.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/chat_helpers.rs:context_usage",
+      "type": "function",
+      "name": "context_usage",
+      "filePath": "apps/web-server/src/chat_helpers.rs",
+      "summary": "context_usage 定义于 chat_helpers.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/chat_helpers.rs:compact_session",
+      "type": "function",
+      "name": "compact_session",
+      "filePath": "apps/web-server/src/chat_helpers.rs",
+      "summary": "compact_session 定义于 chat_helpers.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/web-server/src/events.rs",
+      "type": "file",
+      "name": "events.rs",
+      "filePath": "apps/web-server/src/events.rs",
+      "summary": "前端可见的引擎事件（与 desktop `apps/desktop/src/engine/mod.rs` 字段对齐）。",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/web-server/src/events.rs:EngineEvent",
+      "type": "class",
+      "name": "EngineEvent",
+      "filePath": "apps/web-server/src/events.rs",
+      "summary": "EngineEvent 定义于 events.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/web-server/src/events.rs:QuestionOptionDto",
+      "type": "class",
+      "name": "QuestionOptionDto",
+      "filePath": "apps/web-server/src/events.rs",
+      "summary": "QuestionOptionDto 定义于 events.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/events.rs:translate",
+      "type": "function",
+      "name": "translate",
+      "filePath": "apps/web-server/src/events.rs",
+      "summary": "translate 定义于 events.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/web-server/src/main.rs",
+      "type": "file",
+      "name": "main.rs",
+      "filePath": "apps/web-server/src/main.rs",
+      "summary": "hebweb — 浏览器 surface 的 HTTP + WebSocket server。",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/web-server/src/protocol.rs",
+      "type": "file",
+      "name": "protocol.rs",
+      "filePath": "apps/web-server/src/protocol.rs",
+      "summary": "WebSocket 协议：client ↔ server 消息类型。",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/web-server/src/protocol.rs:WsClientMessage",
+      "type": "class",
+      "name": "WsClientMessage",
+      "filePath": "apps/web-server/src/protocol.rs",
+      "summary": "WsClientMessage 定义于 protocol.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/web-server/src/protocol.rs:WsServerMessage",
+      "type": "class",
+      "name": "WsServerMessage",
+      "filePath": "apps/web-server/src/protocol.rs",
+      "summary": "WsServerMessage 定义于 protocol.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/protocol.rs:ok",
+      "type": "function",
+      "name": "ok",
+      "filePath": "apps/web-server/src/protocol.rs",
+      "summary": "ok 定义于 protocol.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/protocol.rs:err",
+      "type": "function",
+      "name": "err",
+      "filePath": "apps/web-server/src/protocol.rs",
+      "summary": "err 定义于 protocol.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/web-server/src/server.rs",
+      "type": "file",
+      "name": "server.rs",
+      "filePath": "apps/web-server/src/server.rs",
+      "summary": "axum router + WebSocket 处理 + invoke 命令派发。",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/web-server/src/server.rs:ServerState",
+      "type": "class",
+      "name": "ServerState",
+      "filePath": "apps/web-server/src/server.rs",
+      "summary": "ServerState 定义于 server.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/server.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "apps/web-server/src/server.rs",
+      "summary": "new 定义于 server.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/server.rs:ensure_runtime",
+      "type": "function",
+      "name": "ensure_runtime",
+      "filePath": "apps/web-server/src/server.rs",
+      "summary": "ensure_runtime 定义于 server.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/server.rs:build_router",
+      "type": "function",
+      "name": "build_router",
+      "filePath": "apps/web-server/src/server.rs",
+      "summary": "build_router 定义于 server.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/web-server/src/session.rs",
+      "type": "file",
+      "name": "session.rs",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "多 session 运行时：每个 SessionRuntime 独立持有 HITL 通道、cancel flag、",
+      "tags": [
+        "code",
+        "rust",
+        "web-server"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/web-server/src/session.rs:SessionRuntime",
+      "type": "class",
+      "name": "SessionRuntime",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "SessionRuntime 定义于 session.rs",
+      "tags": [
+        "class",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:is_active",
+      "type": "function",
+      "name": "is_active",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "is_active 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:set_active",
+      "type": "function",
+      "name": "set_active",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "set_active 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:clear_active",
+      "type": "function",
+      "name": "clear_active",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "clear_active 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:inject",
+      "type": "function",
+      "name": "inject",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "inject 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:stop",
+      "type": "function",
+      "name": "stop",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "stop 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:broadcast",
+      "type": "function",
+      "name": "broadcast",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "broadcast 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:emit_engine_event",
+      "type": "function",
+      "name": "emit_engine_event",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "emit_engine_event 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/web-server/src/session.rs:run_turn",
+      "type": "function",
+      "name": "run_turn",
+      "filePath": "apps/web-server/src/session.rs",
+      "summary": "run_turn 定义于 session.rs",
+      "tags": [
+        "function",
+        "rust"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:crates/agent-core/Cargo.toml",
+      "type": "config",
+      "name": "Cargo.toml",
+      "filePath": "crates/agent-core/Cargo.toml",
+      "summary": "模块 Cargo",
+      "tags": [
+        "config",
+        "toml",
+        "agent-core"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:crates/agent-core/examples/permission_probe.rs",
+      "type": "file",
+      "name": "permission_probe.rs",
+      "filePath": "crates/agent-core/examples/permission_probe.rs",
+      "summary": "权限审批探针：直接驱动真实审批链路，用真实的 `~/.hebbian/permissions.json` +",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:crates/agent-core/examples/scan_skill_dir.rs",
+      "type": "file",
+      "name": "scan_skill_dir.rs",
+      "filePath": "crates/agent-core/examples/scan_skill_dir.rs",
+      "summary": "临时调试 example：扫 / 端到端导入 skill 仓库，用于验真实仓库布局。",
+      "tags": [
+        "code",
+        "rust",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:crates/agent-core/prompts/automode_judge.md",
+      "type": "document",
+      "name": "automode_judge.md",
+      "filePath": "crates/agent-core/prompts/automode_judge.md",
+      "summary": "模块 automode_judge",
+      "tags": [
+        "docs",
+        "markdown",
+        "agent-core"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/containers.ts:DerivedContainer",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/containers.ts:DeriveResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/containers.ts:deriveContainers",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/containers.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:LayerEdgeAggregation",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:PortalInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:aggregateLayerEdges",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:computePortals",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:findCrossLayerFileNodes",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:AggregatedContainerEdge",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:ContainerEdgeBuckets",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/edgeAggregation.ts:aggregateContainerEdges",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkChild",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkEdge",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/elk-layout.ts:repairElkInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkLayoutOptions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/elk-layout.ts:ElkLayoutResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/filters.ts:filterNodes",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/filters.ts:filterEdges",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/filters.ts",
+      "target": "file:apps/pages/packages/dashboard/src/store.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/layerStats.ts:Complexity",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/layerStats.ts:LayerStats",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layerStats.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layerStats.ts:computeLayerStats",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:NODE_WIDTH",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:NODE_HEIGHT",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:LAYER_CLUSTER_WIDTH",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:LAYER_CLUSTER_HEIGHT",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:PORTAL_NODE_WIDTH",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:PORTAL_NODE_HEIGHT",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:applyDagreLayout",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:applyForceLayout",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:ELK_DEFAULT_LAYOUT_OPTIONS",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:nodesToElkInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/layout.ts:mergeElkPositions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.ts",
+      "target": "file:apps/pages/packages/dashboard/src/utils/elk-layout.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/layout.worker.ts:LayoutMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/layout.worker.ts",
+      "target": "class:apps/pages/packages/dashboard/src/utils/layout.worker.ts:LayoutResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/pages/packages/dashboard/src/utils/louvain.ts",
+      "target": "function:apps/pages/packages/dashboard/src/utils/louvain.ts:detectCommunities",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/chat_helpers.rs",
+      "target": "class:apps/web-server/src/chat_helpers.rs:ContextUsageDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/chat_helpers.rs",
+      "target": "function:apps/web-server/src/chat_helpers.rs:context_usage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/chat_helpers.rs",
+      "target": "function:apps/web-server/src/chat_helpers.rs:compact_session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/events.rs",
+      "target": "class:apps/web-server/src/events.rs:EngineEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/events.rs",
+      "target": "class:apps/web-server/src/events.rs:QuestionOptionDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/events.rs",
+      "target": "function:apps/web-server/src/events.rs:translate",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/protocol.rs",
+      "target": "class:apps/web-server/src/protocol.rs:WsClientMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/protocol.rs",
+      "target": "class:apps/web-server/src/protocol.rs:WsServerMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/protocol.rs",
+      "target": "function:apps/web-server/src/protocol.rs:ok",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/protocol.rs",
+      "target": "function:apps/web-server/src/protocol.rs:err",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/server.rs",
+      "target": "class:apps/web-server/src/server.rs:ServerState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/server.rs",
+      "target": "function:apps/web-server/src/server.rs:new",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/server.rs",
+      "target": "function:apps/web-server/src/server.rs:ensure_runtime",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/server.rs",
+      "target": "function:apps/web-server/src/server.rs:build_router",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "class:apps/web-server/src/session.rs:SessionRuntime",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:is_active",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:set_active",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:clear_active",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:inject",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:stop",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:broadcast",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:emit_engine_event",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/web-server/src/session.rs",
+      "target": "function:apps/web-server/src/session.rs:run_turn",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `7/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-7.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"docs/superpowers/plans/2026-05-23-notification-toast.md":[],"docs/superpowers/plans/2026-05-28-hashline-edit-backend.md":[],"docs/superpowers/plans/2026-06-02-hebisland-standalone.md":[],"docs/superpowers/plans/2026-06-06-plugin-system.md":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `docs/superpowers/plans/2026-05-23-notification-toast.md` (185 lines, language: `markdown`, fileCategory: `docs`)
+2. `docs/superpowers/plans/2026-05-28-hashline-edit-backend.md` (1764 lines, language: `markdown`, fileCategory: `docs`)
+3. `docs/superpowers/plans/2026-06-02-hebisland-standalone.md` (810 lines, language: `markdown`, fileCategory: `docs`)
+4. `docs/superpowers/plans/2026-06-06-plugin-system.md` (179 lines, language: `markdown`, fileCategory: `docs`)
+
+> **Language directive**: Generate all textual content in **Chinese (zh)**. Keep technical terms in English when no standard translation exists.

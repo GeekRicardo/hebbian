@@ -1,0 +1,42 @@
+{
+  "issues": [
+    "Node[30] docs/superpowers/plans/2026-05-23-notification-toast.md missing type",
+    "Node[30] docs/superpowers/plans/2026-05-23-notification-toast.md missing name",
+    "Node[30] docs/superpowers/plans/2026-05-23-notification-toast.md missing summary",
+    "Node[30] docs/superpowers/plans/2026-05-23-notification-toast.md missing tags",
+    "Node[31] docs/superpowers/plans/2026-05-28-hashline-edit-backend.md missing type",
+    "Node[31] docs/superpowers/plans/2026-05-28-hashline-edit-backend.md missing name",
+    "Node[31] docs/superpowers/plans/2026-05-28-hashline-edit-backend.md missing summary",
+    "Node[31] docs/superpowers/plans/2026-05-28-hashline-edit-backend.md missing tags",
+    "Node[32] docs/superpowers/plans/2026-06-02-hebisland-standalone.md missing type",
+    "Node[32] docs/superpowers/plans/2026-06-02-hebisland-standalone.md missing name",
+    "Node[32] docs/superpowers/plans/2026-06-02-hebisland-standalone.md missing summary",
+    "Node[32] docs/superpowers/plans/2026-06-02-hebisland-standalone.md missing tags",
+    "Node[33] docs/superpowers/plans/2026-06-04-cli-improvements.md missing type",
+    "Node[33] docs/superpowers/plans/2026-06-04-cli-improvements.md missing name",
+    "Node[33] docs/superpowers/plans/2026-06-04-cli-improvements.md missing summary",
+    "Node[33] docs/superpowers/plans/2026-06-04-cli-improvements.md missing tags"
+  ],
+  "warnings": [],
+  "stats": {
+    "totalNodes": 1976,
+    "totalEdges": 1743,
+    "nodeTypes": {
+      "pipeline": 1,
+      "config": 23,
+      "document": 17,
+      "file": 384,
+      "undefined": 4,
+      "function": 1012,
+      "class": 535
+    },
+    "edgeTypes": {
+      "related": 22,
+      "depends_on": 1,
+      "documents": 1,
+      "contains": 1547,
+      "imports": 172
+    },
+    "orphanNodes": 94
+  }
+}

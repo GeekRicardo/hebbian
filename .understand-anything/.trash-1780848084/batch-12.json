@@ -1,0 +1,3470 @@
+{
+  "batchFiles": [
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "language": "typescript",
+      "sizeLines": 445,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "language": "typescript",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "language": "typescript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "language": "typescript",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "language": "typescript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "language": "typescript",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "language": "typescript",
+      "sizeLines": 217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "language": "typescript",
+      "sizeLines": 250,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "language": "typescript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "language": "typescript",
+      "sizeLines": 350,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "language": "typescript",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "language": "typescript",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "language": "typescript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "language": "typescript",
+      "sizeLines": 2657,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "language": "typescript",
+      "sizeLines": 1060,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/index.css",
+      "language": "css",
+      "sizeLines": 253,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/desktop/frontend/src/main.tsx",
+      "language": "typescript",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "apps/desktop/frontend/src/vite-env.d.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "type": "file",
+      "name": "workspaceFields.tsx",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "summary": "模块 workspaceFields",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:DirPicker",
+      "type": "function",
+      "name": "DirPicker",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "summary": "DirPicker 定义于 workspaceFields.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:PathTypeIcon",
+      "type": "function",
+      "name": "PathTypeIcon",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "summary": "PathTypeIcon 定义于 workspaceFields.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:PathListField",
+      "type": "function",
+      "name": "PathListField",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "summary": "PathListField 定义于 workspaceFields.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:ToolToggleList",
+      "type": "function",
+      "name": "ToolToggleList",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "summary": "ToolToggleList 定义于 workspaceFields.tsx",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "type": "file",
+      "name": "ansiToHtml.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "summary": "模块 ansiToHtml",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts:ansiToHtml",
+      "type": "function",
+      "name": "ansiToHtml",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "summary": "ansiToHtml 定义于 ansiToHtml.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "type": "file",
+      "name": "avatar.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "summary": "模块 avatar",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts:avatarImageSrc",
+      "type": "function",
+      "name": "avatarImageSrc",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "summary": "avatarImageSrc 定义于 avatar.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts:isImageAvatar",
+      "type": "function",
+      "name": "isImageAvatar",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "summary": "isImageAvatar 定义于 avatar.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "type": "file",
+      "name": "buildModelMessages.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "summary": "模块 buildModelMessages",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts:buildModelMessages",
+      "type": "function",
+      "name": "buildModelMessages",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "summary": "buildModelMessages 定义于 buildModelMessages.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "type": "file",
+      "name": "contextWindow.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "summary": "模块 contextWindow",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:contextWindowFor",
+      "type": "function",
+      "name": "contextWindowFor",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "summary": "contextWindowFor 定义于 contextWindow.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:normalizeModelId",
+      "type": "function",
+      "name": "normalizeModelId",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "summary": "normalizeModelId 定义于 contextWindow.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:formatContextWindow",
+      "type": "function",
+      "name": "formatContextWindow",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "summary": "formatContextWindow 定义于 contextWindow.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "type": "file",
+      "name": "focusToolCall.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "summary": "模块 focusToolCall",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts:FOCUS_TOOL_CALL_EVENT",
+      "type": "function",
+      "name": "FOCUS_TOOL_CALL_EVENT",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "summary": "FOCUS_TOOL_CALL_EVENT 定义于 focusToolCall.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts:focusToolCall",
+      "type": "function",
+      "name": "focusToolCall",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "summary": "focusToolCall 定义于 focusToolCall.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "type": "file",
+      "name": "imagePreviewZoom.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "summary": "模块 imagePreviewZoom",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:MIN_PREVIEW_ZOOM",
+      "type": "function",
+      "name": "MIN_PREVIEW_ZOOM",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "summary": "MIN_PREVIEW_ZOOM 定义于 imagePreviewZoom.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:MAX_PREVIEW_ZOOM",
+      "type": "function",
+      "name": "MAX_PREVIEW_ZOOM",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "summary": "MAX_PREVIEW_ZOOM 定义于 imagePreviewZoom.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:PREVIEW_ZOOM_STEP",
+      "type": "function",
+      "name": "PREVIEW_ZOOM_STEP",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "summary": "PREVIEW_ZOOM_STEP 定义于 imagePreviewZoom.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:nextPreviewZoom",
+      "type": "function",
+      "name": "nextPreviewZoom",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "summary": "nextPreviewZoom 定义于 imagePreviewZoom.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "type": "file",
+      "name": "keyboardShortcuts.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "模块 keyboardShortcuts",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:KeyboardShortcutEvent",
+      "type": "class",
+      "name": "KeyboardShortcutEvent",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "KeyboardShortcutEvent 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:KeyboardFocusTarget",
+      "type": "class",
+      "name": "KeyboardFocusTarget",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "KeyboardFocusTarget 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isNewConversationShortcut",
+      "type": "function",
+      "name": "isNewConversationShortcut",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "isNewConversationShortcut 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isGlobalSearchShortcut",
+      "type": "function",
+      "name": "isGlobalSearchShortcut",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "isGlobalSearchShortcut 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isLocalFindShortcut",
+      "type": "function",
+      "name": "isLocalFindShortcut",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "isLocalFindShortcut 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:shouldSuppressBareEnterOnDocument",
+      "type": "function",
+      "name": "shouldSuppressBareEnterOnDocument",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "summary": "shouldSuppressBareEnterOnDocument 定义于 keyboardShortcuts.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "type": "file",
+      "name": "mcpSettings.test.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "summary": "模块 mcpSettings.test",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "type": "file",
+      "name": "mcpSettings.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "模块 mcpSettings",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:inferMcpTransport",
+      "type": "function",
+      "name": "inferMcpTransport",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "inferMcpTransport 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:normalizeMcpConfig",
+      "type": "function",
+      "name": "normalizeMcpConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "normalizeMcpConfig 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:toCamelMcpConfig",
+      "type": "function",
+      "name": "toCamelMcpConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "toCamelMcpConfig 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:parseMcpJson",
+      "type": "function",
+      "name": "parseMcpJson",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "parseMcpJson 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:indexMcpToolReports",
+      "type": "function",
+      "name": "indexMcpToolReports",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "indexMcpToolReports 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:objectToStringRecord",
+      "type": "function",
+      "name": "objectToStringRecord",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "summary": "objectToStringRecord 定义于 mcpSettings.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "type": "file",
+      "name": "messageRawText.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "summary": "模块 messageRawText",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts:getMessageRawText",
+      "type": "function",
+      "name": "getMessageRawText",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "summary": "getMessageRawText 定义于 messageRawText.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts:canShowRawMessage",
+      "type": "function",
+      "name": "canShowRawMessage",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "summary": "canShowRawMessage 定义于 messageRawText.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "type": "file",
+      "name": "parsePartialEditArgs.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "summary": "模块 parsePartialEditArgs",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:PartialEditArgs",
+      "type": "class",
+      "name": "PartialEditArgs",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "summary": "PartialEditArgs 定义于 parsePartialEditArgs.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:parsePartialEditArgs",
+      "type": "function",
+      "name": "parsePartialEditArgs",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "summary": "parsePartialEditArgs 定义于 parsePartialEditArgs.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:inferDiffAction",
+      "type": "function",
+      "name": "inferDiffAction",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "summary": "inferDiffAction 定义于 parsePartialEditArgs.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:diffSidesFromArgs",
+      "type": "function",
+      "name": "diffSidesFromArgs",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "summary": "diffSidesFromArgs 定义于 parsePartialEditArgs.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "type": "file",
+      "name": "reasoning.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "模块 reasoning",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:getModelReasoningConfig",
+      "type": "function",
+      "name": "getModelReasoningConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "getModelReasoningConfig 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:getModelEffortOptions",
+      "type": "function",
+      "name": "getModelEffortOptions",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "getModelEffortOptions 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:AnthropicThinkingMode",
+      "type": "class",
+      "name": "AnthropicThinkingMode",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "AnthropicThinkingMode 定义于 reasoning.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicThinkingMode",
+      "type": "function",
+      "name": "anthropicThinkingMode",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "anthropicThinkingMode 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicSupportsThinking",
+      "type": "function",
+      "name": "anthropicSupportsThinking",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "anthropicSupportsThinking 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicExposesLongContextToggle",
+      "type": "function",
+      "name": "anthropicExposesLongContextToggle",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "anthropicExposesLongContextToggle 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSkipsReasoning",
+      "type": "function",
+      "name": "openaiSkipsReasoning",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "openaiSkipsReasoning 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSupportsXhigh",
+      "type": "function",
+      "name": "openaiSupportsXhigh",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "openaiSupportsXhigh 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSupportsReasoning",
+      "type": "function",
+      "name": "openaiSupportsReasoning",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "openaiSupportsReasoning 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:deepseekSupportsReasoning",
+      "type": "function",
+      "name": "deepseekSupportsReasoning",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "deepseekSupportsReasoning 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:deepseekSupportsXhigh",
+      "type": "function",
+      "name": "deepseekSupportsXhigh",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "deepseekSupportsXhigh 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:modelSupportsReasoning",
+      "type": "function",
+      "name": "modelSupportsReasoning",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "modelSupportsReasoning 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:modelExposesLongContextToggle",
+      "type": "function",
+      "name": "modelExposesLongContextToggle",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "modelExposesLongContextToggle 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:DEFAULT_REASONING",
+      "type": "function",
+      "name": "DEFAULT_REASONING",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "DEFAULT_REASONING 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:REASONING_EFFORT_ORDER",
+      "type": "function",
+      "name": "REASONING_EFFORT_ORDER",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "REASONING_EFFORT_ORDER 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:REASONING_EFFORT_LABEL",
+      "type": "function",
+      "name": "REASONING_EFFORT_LABEL",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "REASONING_EFFORT_LABEL 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:effortDisplay",
+      "type": "function",
+      "name": "effortDisplay",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "summary": "effortDisplay 定义于 reasoning.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "type": "file",
+      "name": "searchHighlight.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "模块 searchHighlight",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:MatchRange",
+      "type": "class",
+      "name": "MatchRange",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "MatchRange 定义于 searchHighlight.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:HighlightSegment",
+      "type": "class",
+      "name": "HighlightSegment",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "HighlightSegment 定义于 searchHighlight.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findLiteralMatches",
+      "type": "function",
+      "name": "findLiteralMatches",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "findLiteralMatches 定义于 searchHighlight.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findRegexMatches",
+      "type": "function",
+      "name": "findRegexMatches",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "findRegexMatches 定义于 searchHighlight.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findSearchMatches",
+      "type": "function",
+      "name": "findSearchMatches",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "findSearchMatches 定义于 searchHighlight.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:splitHighlightedText",
+      "type": "function",
+      "name": "splitHighlightedText",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "summary": "splitHighlightedText 定义于 searchHighlight.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "type": "file",
+      "name": "slashCommands.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "模块 slashCommands",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashContext",
+      "type": "class",
+      "name": "SlashContext",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "SlashContext 定义于 slashCommands.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashResult",
+      "type": "class",
+      "name": "SlashResult",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "SlashResult 定义于 slashCommands.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashCommandMeta",
+      "type": "class",
+      "name": "SlashCommandMeta",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "SlashCommandMeta 定义于 slashCommands.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:builtinSlashCommands",
+      "type": "function",
+      "name": "builtinSlashCommands",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "builtinSlashCommands 定义于 slashCommands.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:buildSlashCommandCatalog",
+      "type": "function",
+      "name": "buildSlashCommandCatalog",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "summary": "buildSlashCommandCatalog 定义于 slashCommands.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "type": "file",
+      "name": "useDiffBaseLine.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "summary": "模块 useDiffBaseLine",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts:lineOfOldString",
+      "type": "function",
+      "name": "lineOfOldString",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "summary": "lineOfOldString 定义于 useDiffBaseLine.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts:useOriginalFileText",
+      "type": "function",
+      "name": "useOriginalFileText",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "summary": "useOriginalFileText 定义于 useDiffBaseLine.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "type": "file",
+      "name": "utils.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "模块 utils",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:cn",
+      "type": "function",
+      "name": "cn",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "cn 定义于 utils.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:formatTime",
+      "type": "function",
+      "name": "formatTime",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "formatTime 定义于 utils.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:pathLeaf",
+      "type": "function",
+      "name": "pathLeaf",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "pathLeaf 定义于 utils.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:relativizeIfUnder",
+      "type": "function",
+      "name": "relativizeIfUnder",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "relativizeIfUnder 定义于 utils.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:hasSessionStarted",
+      "type": "function",
+      "name": "hasSessionStarted",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "summary": "hasSessionStarted 定义于 utils.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "type": "file",
+      "name": "newConversationLayout.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "summary": "模块 newConversationLayout",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts:shouldUseNewConversationInputLayout",
+      "type": "function",
+      "name": "shouldUseNewConversationInputLayout",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "summary": "shouldUseNewConversationInputLayout 定义于 newConversationLayout.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "type": "file",
+      "name": "sessionOptimism.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "summary": "模块 sessionOptimism",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts:appendOptimisticUserMessage",
+      "type": "function",
+      "name": "appendOptimisticUserMessage",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "summary": "appendOptimisticUserMessage 定义于 sessionOptimism.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "type": "file",
+      "name": "useStore.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "summary": "模块 useStore",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:SuspendedInfo",
+      "type": "class",
+      "name": "SuspendedInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "summary": "SuspendedInfo 定义于 useStore.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:AutoJudgedNote",
+      "type": "class",
+      "name": "AutoJudgedNote",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "summary": "AutoJudgedNote 定义于 useStore.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:useStore",
+      "type": "function",
+      "name": "useStore",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "summary": "useStore 定义于 useStore.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "type": "file",
+      "name": "useToastStore.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "summary": "模块 useToastStore",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts:ModelToast",
+      "type": "class",
+      "name": "ModelToast",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "summary": "ModelToast 定义于 useToastStore.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts:useToastStore",
+      "type": "function",
+      "name": "useToastStore",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "summary": "useToastStore 定义于 useToastStore.ts",
+      "tags": [
+        "function",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "type": "file",
+      "name": "types.ts",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "模块 types",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderKind",
+      "type": "class",
+      "name": "ProviderKind",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ProviderKind 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AuthMode",
+      "type": "class",
+      "name": "AuthMode",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "AuthMode 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Provider",
+      "type": "class",
+      "name": "Provider",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "Provider 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProvidersFile",
+      "type": "class",
+      "name": "ProvidersFile",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ProvidersFile 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderPreset",
+      "type": "class",
+      "name": "ProviderPreset",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ProviderPreset 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:FetchedModel",
+      "type": "class",
+      "name": "FetchedModel",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "FetchedModel 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogModalities",
+      "type": "class",
+      "name": "CatalogModalities",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "CatalogModalities 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogLimits",
+      "type": "class",
+      "name": "CatalogLimits",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "CatalogLimits 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogEntry",
+      "type": "class",
+      "name": "CatalogEntry",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "CatalogEntry 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogCache",
+      "type": "class",
+      "name": "CatalogCache",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "CatalogCache 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderModelTestResult",
+      "type": "class",
+      "name": "ProviderModelTestResult",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ProviderModelTestResult 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Prompt",
+      "type": "class",
+      "name": "Prompt",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "Prompt 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PromptsFile",
+      "type": "class",
+      "name": "PromptsFile",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PromptsFile 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceFolder",
+      "type": "class",
+      "name": "WorkspaceFolder",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "WorkspaceFolder 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceProject",
+      "type": "class",
+      "name": "WorkspaceProject",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "WorkspaceProject 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceProjectInput",
+      "type": "class",
+      "name": "WorkspaceProjectInput",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "WorkspaceProjectInput 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Role",
+      "type": "class",
+      "name": "Role",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "Role 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageMeta",
+      "type": "class",
+      "name": "MessageMeta",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MessageMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ContextUsage",
+      "type": "class",
+      "name": "ContextUsage",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ContextUsage 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:TokenStats",
+      "type": "class",
+      "name": "TokenStats",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "TokenStats 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Message",
+      "type": "class",
+      "name": "Message",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "Message 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageToolCall",
+      "type": "class",
+      "name": "MessageToolCall",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MessageToolCall 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ToolCallStatus",
+      "type": "class",
+      "name": "ToolCallStatus",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ToolCallStatus 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessagePart",
+      "type": "class",
+      "name": "MessagePart",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MessagePart 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:StreamingAssistantPart",
+      "type": "class",
+      "name": "StreamingAssistantPart",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "StreamingAssistantPart 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:QueuedInput",
+      "type": "class",
+      "name": "QueuedInput",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "QueuedInput 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageAttachment",
+      "type": "class",
+      "name": "MessageAttachment",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MessageAttachment 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ReasoningEffort",
+      "type": "class",
+      "name": "ReasoningEffort",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ReasoningEffort 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ReasoningConfig",
+      "type": "class",
+      "name": "ReasoningConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ReasoningConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Session",
+      "type": "class",
+      "name": "Session",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "Session 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ContinueKind",
+      "type": "class",
+      "name": "ContinueKind",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ContinueKind 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingContinue",
+      "type": "class",
+      "name": "PendingContinue",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PendingContinue 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleSource",
+      "type": "class",
+      "name": "RuleSource",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "RuleSource 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleFileInfo",
+      "type": "class",
+      "name": "RuleFileInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "RuleFileInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleFileState",
+      "type": "class",
+      "name": "RuleFileState",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "RuleFileState 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillSource",
+      "type": "class",
+      "name": "SkillSource",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SkillSource 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillItem",
+      "type": "class",
+      "name": "SkillItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SkillItem 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillCollection",
+      "type": "class",
+      "name": "SkillCollection",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SkillCollection 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PluginListItem",
+      "type": "class",
+      "name": "PluginListItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PluginListItem 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AppSettings",
+      "type": "class",
+      "name": "AppSettings",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "AppSettings 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpTransport",
+      "type": "class",
+      "name": "McpTransport",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "McpTransport 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpServerConfig",
+      "type": "class",
+      "name": "McpServerConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "McpServerConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpConfig",
+      "type": "class",
+      "name": "McpConfig",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "McpConfig 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpToolInfo",
+      "type": "class",
+      "name": "McpToolInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "McpToolInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpToolReport",
+      "type": "class",
+      "name": "McpToolReport",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "McpToolReport 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SessionMeta",
+      "type": "class",
+      "name": "SessionMeta",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SessionMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SearchHit",
+      "type": "class",
+      "name": "SearchHit",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SearchHit 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EngineEvent",
+      "type": "class",
+      "name": "EngineEvent",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "EngineEvent 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MemoryWriteItem",
+      "type": "class",
+      "name": "MemoryWriteItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MemoryWriteItem 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MemoryL0",
+      "type": "class",
+      "name": "MemoryL0",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "MemoryL0 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:TodoItem",
+      "type": "class",
+      "name": "TodoItem",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "TodoItem 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanComment",
+      "type": "class",
+      "name": "PlanComment",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PlanComment 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanPermissionDto",
+      "type": "class",
+      "name": "PlanPermissionDto",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PlanPermissionDto 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanMeta",
+      "type": "class",
+      "name": "PlanMeta",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PlanMeta 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalSegmentStatus",
+      "type": "class",
+      "name": "ApprovalSegmentStatus",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ApprovalSegmentStatus 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalSegment",
+      "type": "class",
+      "name": "ApprovalSegment",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ApprovalSegment 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingApproval",
+      "type": "class",
+      "name": "PendingApproval",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PendingApproval 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalDecisionPayload",
+      "type": "class",
+      "name": "ApprovalDecisionPayload",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ApprovalDecisionPayload 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingQuestion",
+      "type": "class",
+      "name": "PendingQuestion",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PendingQuestion 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:QuestionAnswerPayload",
+      "type": "class",
+      "name": "QuestionAnswerPayload",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "QuestionAnswerPayload 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ToolInfo",
+      "type": "class",
+      "name": "ToolInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ToolInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:LogLine",
+      "type": "class",
+      "name": "LogLine",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "LogLine 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:LogEntry",
+      "type": "class",
+      "name": "LogEntry",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "LogEntry 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:BackgroundTaskInfo",
+      "type": "class",
+      "name": "BackgroundTaskInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "BackgroundTaskInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingCron",
+      "type": "class",
+      "name": "PendingCron",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "PendingCron 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SessionBackgroundReport",
+      "type": "class",
+      "name": "SessionBackgroundReport",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SessionBackgroundReport 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:BackgroundTaskOutputDto",
+      "type": "class",
+      "name": "BackgroundTaskOutputDto",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "BackgroundTaskOutputDto 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:DeviceCodeInfo",
+      "type": "class",
+      "name": "DeviceCodeInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "DeviceCodeInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CodexTokenInfo",
+      "type": "class",
+      "name": "CodexTokenInfo",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "CodexTokenInfo 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AuthUrlResult",
+      "type": "class",
+      "name": "AuthUrlResult",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "AuthUrlResult 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ImportedToken",
+      "type": "class",
+      "name": "ImportedToken",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "ImportedToken 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditAction",
+      "type": "class",
+      "name": "EditAction",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "EditAction 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditEntry",
+      "type": "class",
+      "name": "EditEntry",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "EditEntry 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:DiffPayload",
+      "type": "class",
+      "name": "DiffPayload",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "DiffPayload 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RevertResult",
+      "type": "class",
+      "name": "RevertResult",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "RevertResult 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditsWorktreeStatus",
+      "type": "class",
+      "name": "EditsWorktreeStatus",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "EditsWorktreeStatus 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SubagentDefinition",
+      "type": "class",
+      "name": "SubagentDefinition",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SubagentDefinition 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SubagentScope",
+      "type": "class",
+      "name": "SubagentScope",
+      "filePath": "apps/desktop/frontend/src/desktop/ui/types.ts",
+      "summary": "SubagentScope 定义于 types.ts",
+      "tags": [
+        "class",
+        "typescript"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/index.css",
+      "type": "file",
+      "name": "index.css",
+      "filePath": "apps/desktop/frontend/src/index.css",
+      "summary": "模块 index",
+      "tags": [
+        "markup",
+        "css",
+        "desktop"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/main.tsx",
+      "type": "file",
+      "name": "main.tsx",
+      "filePath": "apps/desktop/frontend/src/main.tsx",
+      "summary": "模块 main",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:apps/desktop/frontend/src/vite-env.d.ts",
+      "type": "file",
+      "name": "vite-env.d.ts",
+      "filePath": "apps/desktop/frontend/src/vite-env.d.ts",
+      "summary": "<reference types=\"vite/client\" />",
+      "tags": [
+        "code",
+        "typescript",
+        "desktop"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:DirPicker",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:PathTypeIcon",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:PathListField",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/components/workspaceFields.tsx:ToolToggleList",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/ansiToHtml.ts:ansiToHtml",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts:avatarImageSrc",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/avatar.ts:isImageAvatar",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/buildModelMessages.ts:buildModelMessages",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:contextWindowFor",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:normalizeModelId",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/contextWindow.ts:formatContextWindow",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts:FOCUS_TOOL_CALL_EVENT",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/focusToolCall.ts:focusToolCall",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:MIN_PREVIEW_ZOOM",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:MAX_PREVIEW_ZOOM",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:PREVIEW_ZOOM_STEP",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/imagePreviewZoom.ts:nextPreviewZoom",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:KeyboardShortcutEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:KeyboardFocusTarget",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isNewConversationShortcut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isGlobalSearchShortcut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:isLocalFindShortcut",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts:shouldSuppressBareEnterOnDocument",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.test.ts",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:inferMcpTransport",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:normalizeMcpConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:toCamelMcpConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:parseMcpJson",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:indexMcpToolReports",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts:objectToStringRecord",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/mcpSettings.ts",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts:getMessageRawText",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/messageRawText.ts:canShowRawMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:PartialEditArgs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:parsePartialEditArgs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:inferDiffAction",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/parsePartialEditArgs.ts:diffSidesFromArgs",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:getModelReasoningConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:getModelEffortOptions",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:AnthropicThinkingMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicThinkingMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicSupportsThinking",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:anthropicExposesLongContextToggle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSkipsReasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSupportsXhigh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:openaiSupportsReasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:deepseekSupportsReasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:deepseekSupportsXhigh",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:modelSupportsReasoning",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:modelExposesLongContextToggle",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:DEFAULT_REASONING",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:REASONING_EFFORT_ORDER",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:REASONING_EFFORT_LABEL",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts:effortDisplay",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:MatchRange",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:HighlightSegment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findLiteralMatches",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findRegexMatches",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:findSearchMatches",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/searchHighlight.ts:splitHighlightedText",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashContext",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:SlashCommandMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:builtinSlashCommands",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts:buildSlashCommandCatalog",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts:lineOfOldString",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/useDiffBaseLine.ts:useOriginalFileText",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:cn",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:formatTime",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:pathLeaf",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:relativizeIfUnder",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/lib/utils.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/lib/utils.ts:hasSessionStarted",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/newConversationLayout.ts:shouldUseNewConversationInputLayout",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts:appendOptimisticUserMessage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/sessionOptimism.ts",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:SuspendedInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:AutoJudgedNote",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/useStore.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/store/useStore.ts:useStore",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts:ModelToast",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts",
+      "target": "function:apps/desktop/frontend/src/desktop/ui/store/useToastStore.ts:useToastStore",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderKind",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AuthMode",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Provider",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProvidersFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderPreset",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:FetchedModel",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogModalities",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogLimits",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CatalogCache",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ProviderModelTestResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Prompt",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PromptsFile",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceFolder",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceProject",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:WorkspaceProjectInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Role",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ContextUsage",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:TokenStats",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Message",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageToolCall",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ToolCallStatus",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessagePart",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:StreamingAssistantPart",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:QueuedInput",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MessageAttachment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ReasoningEffort",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ReasoningConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:Session",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ContinueKind",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingContinue",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleSource",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleFileInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RuleFileState",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillSource",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SkillCollection",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PluginListItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AppSettings",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpTransport",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpServerConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpConfig",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpToolInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:McpToolReport",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SessionMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SearchHit",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EngineEvent",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MemoryWriteItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:MemoryL0",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:TodoItem",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanComment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanPermissionDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PlanMeta",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalSegmentStatus",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalSegment",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingApproval",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ApprovalDecisionPayload",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingQuestion",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:QuestionAnswerPayload",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ToolInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:LogLine",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:LogEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:BackgroundTaskInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:PendingCron",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SessionBackgroundReport",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:BackgroundTaskOutputDto",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:DeviceCodeInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:CodexTokenInfo",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:AuthUrlResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:ImportedToken",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditAction",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditEntry",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:DiffPayload",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:RevertResult",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:EditsWorktreeStatus",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SubagentDefinition",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/desktop/ui/types.ts",
+      "target": "class:apps/desktop/frontend/src/desktop/ui/types.ts:SubagentScope",
+      "type": "contains",
+      "weight": 1,
+      "label": "包含"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/main.tsx",
+      "target": "file:apps/desktop/frontend/src/App.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/main.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/LogViewerApp.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    },
+    {
+      "source": "file:apps/desktop/frontend/src/main.tsx",
+      "target": "file:apps/desktop/frontend/src/desktop/ui/components/ErrorBoundary.tsx",
+      "type": "imports",
+      "weight": 0.7,
+      "label": "导入"
+    }
+  ]
+}

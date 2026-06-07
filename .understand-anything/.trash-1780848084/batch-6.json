@@ -1,0 +1,273 @@
+{
+  "nodes": [
+    {
+      "id": "document:docs/cc-compaction-research.md",
+      "type": "document",
+      "name": "cc-compaction-research.md",
+      "filePath": "docs/cc-compaction-research.md",
+      "summary": "Claude Code 与 Codex 上下文压缩机制的逆向分析对比，涵盖触发条件、压缩流程、Cache 失效处理和分区 token 预算，为 Hebbian §4.7 压缩设计提供参照与借鉴建议。",
+      "tags": ["文档", "上下文压缩", "逆向分析", "设计参考"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/cc-source-research.md",
+      "type": "document",
+      "name": "cc-source-research.md",
+      "filePath": "docs/cc-source-research.md",
+      "summary": "Claude Code VS Code 扩展的逆向研究方法论：如何从 minified extension.js 中用 grep 搜索关键字符串字面量提取压缩、缓存、tool result 等核心逻辑。",
+      "tags": ["文档", "逆向工程", "研究方法", "工具链"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/changelog.md",
+      "type": "document",
+      "name": "changelog.md",
+      "filePath": "docs/changelog.md",
+      "summary": "Hebbian 项目的只增不减修改时间线，记录每次改动的意图、权衡、影响范围与后续风险，作为 AI agent 和人类开发者的回溯依据。",
+      "tags": ["文档", "变更日志", "项目管理", "回溯线索"],
+      "complexity": "complex",
+      "languageNotes": "超 6000 行的长文档，按时间倒序追加条目，包含详细的模块影响链和「留尾巴」字段。"
+    },
+    {
+      "id": "document:docs/claude-code-后台执行机制.md",
+      "type": "document",
+      "name": "claude-code-后台执行机制.md",
+      "filePath": "docs/claude-code-后台执行机制.md",
+      "summary": "系统拆解 Claude Code 的 6 个 shell 执行工具（Bash 同步/后台、Monitor、CronCreate、ScheduleWakeup、Push）与 TaskRegistry 统一调度核，对比 Hebbian §4.12 长任务挂起设计。",
+      "tags": ["文档", "逆向分析", "后台执行", "任务调度", "设计参考"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/compaction.md",
+      "type": "document",
+      "name": "compaction.md",
+      "filePath": "docs/compaction.md",
+      "summary": "横向对比 claude-code-haha、codex、opencode 三大参考项目的上下文压缩策略（microcompact/snipCompact/autoCompact/手动 /compact），并归纳 Hebbian 四层压缩 + 工件落盘的取舍与创新点。",
+      "tags": ["文档", "上下文压缩", "横向调研", "设计对照"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/heb-cli-debug.md",
+      "type": "document",
+      "name": "heb-cli-debug.md",
+      "filePath": "docs/heb-cli-debug.md",
+      "summary": "heb CLI 与 hebweb 两套调试 surface 的完整操作手册：命令参考、NDJSON 事件流、权限审批流程、自主调试 pattern、Playwright 集成与端到端验证指南。",
+      "tags": ["文档", "CLI", "调试手册", "操作指南", "端到端测试"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:docs/hebisland-design.html",
+      "type": "file",
+      "name": "hebisland-design.html",
+      "filePath": "docs/hebisland-design.html",
+      "summary": "hebisland 通知卡片的暗色视觉原型 HTML，含无边框圆角卡片、操作按钮（允许/拒绝/自定义）、堆叠布局和拖拽交互的完整 CSS 与 JS 实现。",
+      "tags": ["视觉原型", "通知UI", "hebisland", "markup"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/hebisland-spec.md",
+      "type": "document",
+      "name": "hebisland-spec.md",
+      "filePath": "docs/hebisland-spec.md",
+      "summary": "HebIsland macOS native 实现规格：Swift + AppKit/SwiftUI 技术栈、Unix socket 通信协议、NSPanel 通知窗口管理、屏幕定位与堆叠、daemon 单例机制等完整实现锚。",
+      "tags": ["文档", "规格说明", "hebisland", "macOS-native", "Swift"],
+      "complexity": "complex"
+    },
+    {
+      "id": "document:docs/hebisland.md",
+      "type": "document",
+      "name": "hebisland.md",
+      "filePath": "docs/hebisland.md",
+      "summary": "hebisland 独立通知与审批岛的设计决策文档：定位为 UI 外设而非第四个 surface、架构影响评估（不持有 agent_core）、与现有 notch.rs 的关系以及分阶段实施路线。",
+      "tags": ["文档", "设计决策", "hebisland", "架构评估"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/shadow-tuner.html",
+      "type": "file",
+      "name": "shadow-tuner.html",
+      "filePath": "docs/shadow-tuner.html",
+      "summary": "Hebbian sidebar 卡片阴影参数调优的交互式 HTML 工具，支持亮/暗色主题切换，可实时调整阴影偏移、模糊、透明度等参数并预览效果。",
+      "tags": ["视觉原型", "调参工具", "UI设计", "markup"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/权限沙箱-调研.md",
+      "type": "document",
+      "name": "权限沙箱-调研.md",
+      "filePath": "docs/权限沙箱-调研.md",
+      "summary": "Claude Code、Codex 与 Hebbian 的权限/沙箱机制横向调研：tree-sitter AST 命令拆段、前缀剥离、危险模式黑名单、sandbox-exec/bwrap 系统沙箱、Auto Mode LLM classifier，以及 Hebbian 的改进优先级建议。",
+      "tags": ["文档", "权限沙箱", "横向调研", "安全机制", "设计参考"],
+      "complexity": "complex",
+      "languageNotes": "超 1200 行的深度调研，从 Claude Code 二进制 strings dump 中提取了完整的 SBPL profile 和 bwrap 参数。"
+    },
+    {
+      "id": "document:docs/架构.md",
+      "type": "document",
+      "name": "架构.md",
+      "filePath": "docs/架构.md",
+      "summary": "Hebbian 项目的唯一设计准则文档：12 条硬约束、三层架构（Surface/CoreClient/AgentCore）、通信契约、工具体系、HITL 审批、上下文压缩、存储布局等完整架构定义，所有代码改动以此为锚。",
+      "tags": ["文档", "架构设计", "设计准则", "entry-point"],
+      "complexity": "complex",
+      "languageNotes": "近 4000 行的核心文档，涵盖 13+ 个章节，是所有其他设计文档和调研的归宿锚点。"
+    },
+    {
+      "id": "document:docs/记忆系统实现计划.md",
+      "type": "document",
+      "name": "记忆系统实现计划.md",
+      "filePath": "docs/记忆系统实现计划.md",
+      "summary": "Hebbian 两作用域（global/project）记忆系统的完整实现计划：storage 落盘格式、ReadMemory/WriteMemory 工具、SEMI 段注入、后台抽取 fallback 链、补抽游标、前端渲染方案及分批实施顺序。",
+      "tags": ["文档", "实现计划", "记忆系统", "功能设计"],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:docs/cc-compaction-research.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/cc-compaction-research.md",
+      "target": "document:docs/compaction.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/cc-compaction-research.md",
+      "target": "document:docs/cc-source-research.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/cc-source-research.md",
+      "target": "document:docs/cc-compaction-research.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/claude-code-后台执行机制.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/claude-code-后台执行机制.md",
+      "target": "document:docs/cc-compaction-research.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/compaction.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/compaction.md",
+      "target": "document:docs/changelog.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/heb-cli-debug.md",
+      "target": "document:docs/架构.md",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/hebisland-spec.md",
+      "target": "document:docs/hebisland.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/hebisland-spec.md",
+      "target": "file:docs/hebisland-design.html",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/hebisland.md",
+      "target": "document:docs/hebisland-spec.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/hebisland.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/权限沙箱-调研.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/权限沙箱-调研.md",
+      "target": "document:docs/compaction.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/权限沙箱-调研.md",
+      "target": "document:docs/changelog.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/架构.md",
+      "target": "document:docs/changelog.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/架构.md",
+      "target": "document:docs/compaction.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/记忆系统实现计划.md",
+      "target": "document:docs/架构.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/记忆系统实现计划.md",
+      "target": "document:docs/changelog.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:docs/hebisland-design.html",
+      "target": "document:docs/hebisland-spec.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

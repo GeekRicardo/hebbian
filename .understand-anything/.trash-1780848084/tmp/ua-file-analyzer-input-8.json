@@ -1,0 +1,31 @@
+{
+  "projectRoot": "/Users/ricardo/code/ricardo/rust/hebbian",
+  "batchFiles": [
+    {"path": "apps/cli/Cargo.toml", "language": "toml", "sizeLines": 25, "fileCategory": "config"},
+    {"path": "apps/cli/src/client.rs", "language": "rust", "sizeLines": 109, "fileCategory": "code"},
+    {"path": "apps/cli/src/daemon.rs", "language": "rust", "sizeLines": 1178, "fileCategory": "code"},
+    {"path": "apps/cli/src/ipc.rs", "language": "rust", "sizeLines": 232, "fileCategory": "code"},
+    {"path": "apps/cli/src/main.rs", "language": "rust", "sizeLines": 253, "fileCategory": "code"},
+    {"path": "apps/cli/src/mock_provider.rs", "language": "rust", "sizeLines": 88, "fileCategory": "code"},
+    {"path": "apps/cli/src/render.rs", "language": "rust", "sizeLines": 392, "fileCategory": "code"},
+    {"path": "apps/cli/src/session.rs", "language": "rust", "sizeLines": 602, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/app.rs", "language": "rust", "sizeLines": 585, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/chat_view.rs", "language": "rust", "sizeLines": 196, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/input_box.rs", "language": "rust", "sizeLines": 60, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/mod.rs", "language": "rust", "sizeLines": 5, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/permission_popup.rs", "language": "rust", "sizeLines": 107, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/question_popup.rs", "language": "rust", "sizeLines": 138, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/components/status_bar.rs", "language": "rust", "sizeLines": 40, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/mod.rs", "language": "rust", "sizeLines": 11, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/observer.rs", "language": "rust", "sizeLines": 9, "fileCategory": "code"},
+    {"path": "apps/cli/src/tui/theme.rs", "language": "rust", "sizeLines": 60, "fileCategory": "code"},
+    {"path": "apps/desktop/build.rs", "language": "rust", "sizeLines": 3, "fileCategory": "code"},
+    {"path": "apps/desktop/capabilities/default.json", "language": "json", "sizeLines": 14, "fileCategory": "config"},
+    {"path": "apps/desktop/frontend/index.html", "language": "html", "sizeLines": 12, "fileCategory": "markup"},
+    {"path": "apps/desktop/frontend/src/App.tsx", "language": "typescript", "sizeLines": 124, "fileCategory": "code"},
+    {"path": "apps/desktop/frontend/src/assets/animations.ts", "language": "typescript", "sizeLines": 11, "fileCategory": "code"},
+    {"path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm", "language": "webm", "sizeLines": 220, "fileCategory": "code"},
+    {"path": "apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm", "language": "webm", "sizeLines": 374, "fileCategory": "code"}
+  ],
+  "batchImportData": {"apps/cli/Cargo.toml":[],"apps/cli/src/client.rs":[],"apps/cli/src/daemon.rs":[],"apps/cli/src/ipc.rs":[],"apps/cli/src/main.rs":[],"apps/cli/src/mock_provider.rs":[],"apps/cli/src/render.rs":[],"apps/cli/src/session.rs":[],"apps/cli/src/tui/app.rs":[],"apps/cli/src/tui/components/chat_view.rs":[],"apps/cli/src/tui/components/input_box.rs":[],"apps/cli/src/tui/components/mod.rs":[],"apps/cli/src/tui/components/permission_popup.rs":[],"apps/cli/src/tui/components/question_popup.rs":[],"apps/cli/src/tui/components/status_bar.rs":[],"apps/cli/src/tui/mod.rs":[],"apps/cli/src/tui/observer.rs":[],"apps/cli/src/tui/theme.rs":[],"apps/desktop/build.rs":[],"apps/desktop/capabilities/default.json":[],"apps/desktop/frontend/index.html":[],"apps/desktop/frontend/src/App.tsx":[],"apps/desktop/frontend/src/assets/animations.ts":[],"apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm":[],"apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm":[]}
+}

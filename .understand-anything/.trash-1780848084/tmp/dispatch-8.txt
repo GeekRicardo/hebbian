@@ -1,0 +1,46 @@
+Analyze these files and produce GraphNode and GraphEdge objects.
+Project root: `/Users/ricardo/code/ricardo/rust/hebbian`
+Project: `Hebbian` — 轻量、本地优先的 AI agent 框架
+Languages: `rust, typescript, javascript, html, css, swift, yaml, toml, json, markdown`
+Batch: `8/23`
+Skill directory (for bundled scripts): `/Users/ricardo/.hebbian/skills/understand`
+Output: write to `/Users/ricardo/code/ricardo/rust/hebbian/.understand-anything/intermediate/batch-8.json`
+
+Pre-resolved import data for this batch (use directly — do NOT re-resolve imports from source):
+```json
+{"apps/cli/Cargo.toml":[],"apps/cli/src/client.rs":[],"apps/cli/src/daemon.rs":[],"apps/cli/src/ipc.rs":[],"apps/cli/src/main.rs":[],"apps/cli/src/mock_provider.rs":[],"apps/cli/src/render.rs":[],"apps/cli/src/session.rs":[],"apps/cli/src/tui/app.rs":[],"apps/cli/src/tui/components/chat_view.rs":[],"apps/cli/src/tui/components/input_box.rs":[],"apps/cli/src/tui/components/mod.rs":[],"apps/cli/src/tui/components/permission_popup.rs":[],"apps/cli/src/tui/components/question_popup.rs":[],"apps/cli/src/tui/components/status_bar.rs":[],"apps/cli/src/tui/mod.rs":[],"apps/cli/src/tui/observer.rs":[],"apps/cli/src/tui/theme.rs":[],"apps/desktop/build.rs":[],"apps/desktop/capabilities/default.json":[],"apps/desktop/frontend/index.html":[],"apps/desktop/frontend/src/App.tsx":[],"apps/desktop/frontend/src/assets/animations.ts":[],"apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm":[],"apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm":[]}
+```
+
+Cross-batch neighbors with their exported symbols (confidence boost for cross-batch edges):
+```json
+{}
+```
+
+Files to analyze in this batch (every entry MUST be passed through to `batchFiles` with all four fields — `path`, `language`, `sizeLines`, `fileCategory`):
+1. `apps/cli/Cargo.toml` (25 lines, language: `toml`, fileCategory: `config`)
+2. `apps/cli/src/client.rs` (109 lines, language: `rust`, fileCategory: `code`)
+3. `apps/cli/src/daemon.rs` (1178 lines, language: `rust`, fileCategory: `code`)
+4. `apps/cli/src/ipc.rs` (232 lines, language: `rust`, fileCategory: `code`)
+5. `apps/cli/src/main.rs` (253 lines, language: `rust`, fileCategory: `code`)
+6. `apps/cli/src/mock_provider.rs` (88 lines, language: `rust`, fileCategory: `code`)
+7. `apps/cli/src/render.rs` (392 lines, language: `rust`, fileCategory: `code`)
+8. `apps/cli/src/session.rs` (602 lines, language: `rust`, fileCategory: `code`)
+9. `apps/cli/src/tui/app.rs` (585 lines, language: `rust`, fileCategory: `code`)
+10. `apps/cli/src/tui/components/chat_view.rs` (196 lines, language: `rust`, fileCategory: `code`)
+11. `apps/cli/src/tui/components/input_box.rs` (60 lines, language: `rust`, fileCategory: `code`)
+12. `apps/cli/src/tui/components/mod.rs` (5 lines, language: `rust`, fileCategory: `code`)
+13. `apps/cli/src/tui/components/permission_popup.rs` (107 lines, language: `rust`, fileCategory: `code`)
+14. `apps/cli/src/tui/components/question_popup.rs` (138 lines, language: `rust`, fileCategory: `code`)
+15. `apps/cli/src/tui/components/status_bar.rs` (40 lines, language: `rust`, fileCategory: `code`)
+16. `apps/cli/src/tui/mod.rs` (11 lines, language: `rust`, fileCategory: `code`)
+17. `apps/cli/src/tui/observer.rs` (9 lines, language: `rust`, fileCategory: `code`)
+18. `apps/cli/src/tui/theme.rs` (60 lines, language: `rust`, fileCategory: `code`)
+19. `apps/desktop/build.rs` (3 lines, language: `rust`, fileCategory: `code`)
+20. `apps/desktop/capabilities/default.json` (14 lines, language: `json`, fileCategory: `config`)
+21. `apps/desktop/frontend/index.html` (12 lines, language: `html`, fileCategory: `markup`)
+22. `apps/desktop/frontend/src/App.tsx` (124 lines, language: `typescript`, fileCategory: `code`)
+23. `apps/desktop/frontend/src/assets/animations.ts` (11 lines, language: `typescript`, fileCategory: `code`)
+24. `apps/desktop/frontend/src/assets/animations/10826353_20260424041044.webm` (220 lines, language: `webm`, fileCategory: `code`)
+25. `apps/desktop/frontend/src/assets/animations/10826353_20260424041053.webm` (374 lines, language: `webm`, fileCategory: `code`)
+
+> **Language directive**: Generate all textual content (summaries, descriptions, tags, titles, languageNotes, languageLesson) in **Chinese (zh)**. Maintain technical accuracy while using natural, native-level phrasing in the target language. Keep technical terms in English when no standard translation exists.

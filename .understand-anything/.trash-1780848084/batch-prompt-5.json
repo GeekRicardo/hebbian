@@ -1,0 +1,38 @@
+{
+  "batchIndex": 5,
+  "totalBatches": 23,
+  "fileCount": 4,
+  "files": [
+    {
+      "path": "apps/pages/packages/dashboard/index.html",
+      "sizeLines": 19,
+      "language": "html",
+      "fileCategory": "markup"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/package.json",
+      "sizeLines": 46,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.app.json",
+      "sizeLines": 24,
+      "language": "json",
+      "fileCategory": "config"
+    },
+    {
+      "path": "apps/pages/packages/dashboard/tsconfig.json",
+      "sizeLines": 4,
+      "language": "json",
+      "fileCategory": "config"
+    }
+  ],
+  "batchImportData": {
+    "apps/pages/packages/dashboard/index.html": [],
+    "apps/pages/packages/dashboard/package.json": [],
+    "apps/pages/packages/dashboard/tsconfig.app.json": [],
+    "apps/pages/packages/dashboard/tsconfig.json": []
+  },
+  "neighborMap": {}
+}

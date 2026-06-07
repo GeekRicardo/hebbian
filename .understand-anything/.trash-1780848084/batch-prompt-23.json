@@ -1,0 +1,150 @@
+{
+  "batchIndex": 23,
+  "totalBatches": 23,
+  "fileCount": 20,
+  "files": [
+    {
+      "path": "crates/model-gateway/src/providers/deepseek.rs",
+      "sizeLines": 291,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/gemini.rs",
+      "sizeLines": 168,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/mod.rs",
+      "sizeLines": 280,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/providers/openai.rs",
+      "sizeLines": 1070,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/src/types.rs",
+      "sizeLines": 245,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/tests/provider_probe.rs",
+      "sizeLines": 20,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/model-gateway/tests/thinking_integration.rs",
+      "sizeLines": 843,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/observability/Cargo.toml",
+      "sizeLines": 13,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/observability/src/attr.rs",
+      "sizeLines": 61,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/observability/src/lib.rs",
+      "sizeLines": 147,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/Cargo.toml",
+      "sizeLines": 10,
+      "language": "toml",
+      "fileCategory": "config"
+    },
+    {
+      "path": "crates/protocol/src/context.rs",
+      "sizeLines": 58,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/error.rs",
+      "sizeLines": 36,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/event.rs",
+      "sizeLines": 396,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/ids.rs",
+      "sizeLines": 75,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/lib.rs",
+      "sizeLines": 28,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/memory.rs",
+      "sizeLines": 13,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/permission.rs",
+      "sizeLines": 177,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/submission.rs",
+      "sizeLines": 101,
+      "language": "rust",
+      "fileCategory": "code"
+    },
+    {
+      "path": "crates/protocol/src/todo.rs",
+      "sizeLines": 42,
+      "language": "rust",
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "crates/model-gateway/src/providers/deepseek.rs": [],
+    "crates/model-gateway/src/providers/gemini.rs": [],
+    "crates/model-gateway/src/providers/mod.rs": [],
+    "crates/model-gateway/src/providers/openai.rs": [],
+    "crates/model-gateway/src/types.rs": [],
+    "crates/model-gateway/tests/provider_probe.rs": [],
+    "crates/model-gateway/tests/thinking_integration.rs": [],
+    "crates/observability/Cargo.toml": [],
+    "crates/observability/src/attr.rs": [],
+    "crates/observability/src/lib.rs": [],
+    "crates/protocol/Cargo.toml": [],
+    "crates/protocol/src/context.rs": [],
+    "crates/protocol/src/error.rs": [],
+    "crates/protocol/src/event.rs": [],
+    "crates/protocol/src/ids.rs": [],
+    "crates/protocol/src/lib.rs": [],
+    "crates/protocol/src/memory.rs": [],
+    "crates/protocol/src/permission.rs": [],
+    "crates/protocol/src/submission.rs": [],
+    "crates/protocol/src/todo.rs": []
+  },
+  "neighborMap": {}
+}
