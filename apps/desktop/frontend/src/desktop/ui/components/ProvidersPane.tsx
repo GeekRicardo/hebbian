@@ -984,6 +984,64 @@ export function ProvidersPane({ active }: { active: boolean }) {
           </div>
         )}
 
+      {/* ── 全局：视觉辅助模型 ─────────────────────────────────── */}
+      <div className="mt-4 pt-3 border-t border-border space-y-2">
+        <h4 className="text-sm font-medium">视觉辅助模型</h4>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          当聊天模型不支持图片时，自动用这里选的模型先&ldquo;看图&rdquo;，把图片转成文字描述再发给聊天模型。
+          不配则跳过（图片附件直接发给聊天模型）。
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">供应商</label>
+            <Select
+              value={draft.vision_provider_id ?? ""}
+              onChange={(e) => {
+                const pid = e.target.value || null;
+                setDraft({
+                  ...draft,
+                  vision_provider_id: pid,
+                  // 切换供应商时重置模型选择
+                  vision_model: pid
+                    ? (draft.providers.find((p) => p.id === pid)?.default_model ??
+                       draft.providers.find((p) => p.id === pid)?.models[0] ?? null)
+                    : null,
+                });
+              }}
+            >
+              <option value="">（不启用）</option>
+              {draft.providers
+                .filter((p) => p.enabled !== false)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </Select>
+          </div>
+          {draft.vision_provider_id && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">模型</label>
+              <Select
+                value={draft.vision_model ?? ""}
+                onChange={(e) =>
+                  setDraft({ ...draft, vision_model: e.target.value || null })
+                }
+              >
+                <option value="">（请选择）</option>
+                {(draft.providers.find((p) => p.id === draft.vision_provider_id)?.models ?? []).map(
+                  (m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ),
+                )}
+              </Select>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex justify-end gap-2 pt-3 mt-3 border-t border-border">
         <Button onClick={handleSave}>
           <Save className="w-3.5 h-3.5" />

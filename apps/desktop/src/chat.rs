@@ -132,13 +132,19 @@ pub async fn send_and_save_in_data_dir(
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
 ) -> AppResult<Message> {
+    // 预构建 vision client（async：需要刷新 OAuth token）。
+    // 未配置 vision provider 时为 None，闭包里跳过包装。
+    let vision_client = agent_core::vision_bridge::build_vision_client(data_dir)
+        .await
+        .map_err(|e| AppError::msg(format!("vision bridge: {e}")))?;
     send_and_save_in_data_dir_with_client_factory(
         data_dir,
         args,
         emit_event,
-        |provider, model, reasoning| {
+        move |provider, model, reasoning| {
             let client = model_gateway::build_client(provider)
                 .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
+            let client = agent_core::vision_bridge::wrap_with_vision_client(client, vision_client.clone());
             Ok(
                 Arc::new(ModelWithName::with_reasoning(client, model, reasoning))
                     as Arc<dyn ModelClient>,
