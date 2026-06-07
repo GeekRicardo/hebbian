@@ -48,7 +48,25 @@ import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
  * 数据源：后端 `~/.hebbian/sessions/<sid>/model_io.jsonl`，由 `model_io_dump`
  * 在每次模型调用结束后异步落盘。**默认开启**（环境变量 `HEBBIAN_DUMP_MODEL_IO=0`
  * 才禁用），所以新 session 通常都能直接看到数据；老 session 无数据时显示空提示。
+ *
+ * **两侧分离加载**：model_io.jsonl 可能几百 MB（每请求含全套历史 messages），
+ * 一次性拉全量会炸页面。左侧列表只拉摘要（几十 KB），选中某行才按需拉完整 entry。
  */
+interface ModelIoSummary {
+  ts: string;
+  run_id: string;
+  turn: number;
+  model: string;
+  kind?: string;
+  duration_ms: number;
+  response: {
+    type: string;
+    usage?: ModelIoUsage;
+  };
+  /** 该次请求的 messages 条数（不含 system / tools） */
+  message_count: number;
+}
+
 interface ModelIoEntry {
   ts: string;
   run_id: string;
@@ -57,7 +75,6 @@ interface ModelIoEntry {
   request: ModelIoRequest;
   response: ModelIoResponse;
   duration_ms: number;
-  /** "main" 主模型调用 / "judge" AutoMode 判官 / "compaction" 自动压缩摘要。老 jsonl 无此字段。 */
   kind?: string;
 }
 
@@ -85,13 +102,15 @@ interface ModelIoResponse {
   reasoning?: string;
   calls?: Array<{ id: string; name: string; input: unknown }>;
   attachments?: unknown[];
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_tokens: number;
-    cache_creation_tokens: number;
-  };
+  usage?: ModelIoUsage;
   error?: string;
+}
+
+interface ModelIoUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
 }
 
 interface Props {
@@ -105,11 +124,16 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   open,
   onClose,
 }: Props) {
-  const [entries, setEntries] = useState<ModelIoEntry[]>([]);
+  const [summaries, setSummaries] = useState<ModelIoSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<number>(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // 按需加载的完整 entry 缓存：key = index
+  const detailCacheRef = useRef<Map<number, ModelIoEntry>>(new Map());
+  const [currentDetail, setCurrentDetail] = useState<ModelIoEntry | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   // ─── 压缩分割栏：从 session transcript 中提取 compact_boundary 时间戳 ───
   const currentSession = useStore((s) => s.currentSession);
@@ -130,8 +154,8 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     const result = new Set<number>();
     for (const boundaryTs of compactBoundaryTimestamps) {
       let lastIdx = -1;
-      for (let i = 0; i < entries.length; i++) {
-        const entryMs = new Date(entries[i].ts).getTime();
+      for (let i = 0; i < summaries.length; i++) {
+        const entryMs = new Date(summaries[i].ts).getTime();
         if (entryMs < boundaryTs) {
           lastIdx = i;
         } else {
@@ -141,7 +165,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
       if (lastIdx >= 0) result.add(lastIdx);
     }
     return result;
-  }, [entries, compactBoundaryTimestamps]);
+  }, [summaries, compactBoundaryTimestamps]);
   // ─── Cmd+F 全局搜索状态 ─────────────────────────────────────────────────
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -167,9 +191,10 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     setLoading(true);
     setErr(null);
     try {
-      const data = (await api.listSessionModelIo(sessionId)) as ModelIoEntry[];
-      setEntries(data);
-      // 默认选最后一条（最新请求）—— 排查 bug 时常常关注最近一次
+      const data = (await api.listSessionModelIo(sessionId)) as ModelIoSummary[];
+      setSummaries(data);
+      detailCacheRef.current.clear();
+      setCurrentDetail(null);
       setSelected(data.length === 0 ? 0 : data.length - 1);
     } catch (e: unknown) {
       setErr(String(e));
@@ -183,7 +208,52 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     if (open) refresh();
   }, [open, refresh]);
 
-  const current = entries[selected];
+  // 选中行变化时按需加载完整 entry
+  useEffect(() => {
+    if (summaries.length === 0) {
+      setCurrentDetail(null);
+      return;
+    }
+    const cached = detailCacheRef.current.get(selected);
+    if (cached) {
+      setCurrentDetail(cached);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    api
+      .getSessionModelIoEntry(sessionId, selected)
+      .then((data) => {
+        if (cancelled) return;
+        const entry = data as ModelIoEntry | null;
+        if (entry) {
+          detailCacheRef.current.set(selected, entry);
+        }
+        setCurrentDetail(entry);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, selected, summaries.length]);
+
+  // 相邻 entry 预加载：选中某行时，把前一条也拉进缓存——diff 计算需要它
+  useEffect(() => {
+    if (summaries.length === 0 || selected === 0) return;
+    const prevIdx = selected - 1;
+    if (detailCacheRef.current.has(prevIdx)) return;
+    api.getSessionModelIoEntry(sessionId, prevIdx).then((data) => {
+      const entry = data as ModelIoEntry | null;
+      if (entry) detailCacheRef.current.set(prevIdx, entry);
+    }).catch(() => {/* best-effort */});
+  }, [sessionId, selected, summaries.length]);
+
+  const prevDetail = selected > 0 ? detailCacheRef.current.get(selected - 1) ?? null : null;
 
   /**
    * find context 只透传 query/regex/case，每个 PrettyStringInner（包括 PrettyJson
@@ -199,12 +269,11 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   );
 
   /**
-   * 左侧请求列表的"每条 entry 包含多少个匹配"——给 RequestRow 显示徽章，
-   * 让用户立刻看出"另外哪个请求里也有这个词"。这里**不**依赖 DOM，提前算好
-   * 即可；嵌套 JSON 用 JSON.stringify 粗略覆盖（搜 key 名 / value 都能命中）。
+   * 左侧列表的搜索匹配计数：两级加载后摘要不含文本内容，
+   * 仅对当前已缓存完整 entry 的行做匹配计数，未缓存的显示 0。
    */
   const perEntryMatchCount = useMemo<number[]>(() => {
-    if (!findOpen || !findQuery) return entries.map(() => 0);
+    if (!findOpen || !findQuery) return summaries.map(() => 0);
     const collectTexts = (entry: ModelIoEntry): string[] => {
       const out: string[] = [];
       if (entry.request?.system) out.push(entry.request.system);
@@ -222,14 +291,17 @@ export const ModelIoInspector = memo(function ModelIoInspector({
         out.push(JSON.stringify(entry.response.calls));
       return out;
     };
-    return entries.map((entry) => {
+    const cache = detailCacheRef.current;
+    return summaries.map((_, idx) => {
+      const entry = cache.get(idx);
+      if (!entry) return 0;
       let count = 0;
       for (const t of collectTexts(entry)) {
         count += findMatches(t, findQuery, findRegex, findCase).length;
       }
       return count;
     });
-  }, [entries, findOpen, findQuery, findRegex, findCase]);
+  }, [summaries, findOpen, findQuery, findRegex, findCase, currentDetail]);
 
   /**
    * 顶层 totalMatches 由 DOM 后置数 `<mark data-find-match>` 元素得到 ——
@@ -285,7 +357,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
     if (findOpen) return;
     const detail = detailRef.current;
     if (detail) detail.scrollTop = detail.scrollHeight;
-  }, [selected, entries.length, findOpen]);
+  }, [selected, summaries.length, findOpen]);
 
   /**
    * active 切换：用 DOM querySelectorAll 找第 N 个 mark，加 `data-active="true"`，
@@ -354,16 +426,15 @@ export const ModelIoInspector = memo(function ModelIoInspector({
   // 调试器关心的是用户语义意图（"这条 user / assistant / tool 在上次出现过吗"），
   // 而不是字节级一致。
   const carriedOverCount = useMemo(() => {
-    if (!current || selected === 0) return 0;
-    const prev = entries[selected - 1];
-    if (!prev) return 0;
-    const a = prev.request.messages;
-    const b = current.request.messages;
+    if (!currentDetail || selected === 0) return 0;
+    if (!prevDetail) return 0;
+    const a = prevDetail.request.messages;
+    const b = currentDetail.request.messages;
     let i = 0;
     const max = Math.min(a.length, b.length);
     while (i < max && fingerprintMessage(a[i]) === fingerprintMessage(b[i])) i++;
     return i;
-  }, [entries, selected, current]);
+  }, [currentDetail, prevDetail, selected]);
 
   if (!open) return null;
 
@@ -408,7 +479,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
             </Button>
             <h2 className="text-sm font-medium">Model I/O 调试器</h2>
             <span className="text-xs text-muted-foreground">
-              {entries.length} 次请求
+              {summaries.length} 次请求
             </span>
             {/* 当前对话的 session 目录名（~/.hebbian/sessions/<id>）—— 跟 ChatView header
                 debug 显示的 id 一致，方便在 modelio 抽屉里直接对照 jsonl 找文件 */}
@@ -442,11 +513,11 @@ export const ModelIoInspector = memo(function ModelIoInspector({
           </div>
         )}
 
-        {entries.length === 0 && !loading ? (
+        {summaries.length === 0 && !loading ? (
           <EmptyState />
         ) : (
           <div className="flex-1 min-h-0 flex">
-            {/* 左：请求列表。宽度过渡动画 —— 折叠后右侧 detail 视图自然变大 */}
+            {/* 左：请求列表 */}
             <aside
               className={cn(
                 "shrink-0 border-r border-border overflow-hidden transition-[width] duration-200 ease-out",
@@ -455,10 +526,10 @@ export const ModelIoInspector = memo(function ModelIoInspector({
             >
               {sidebarOpen && (
                 <ol ref={listRef} className="h-full overflow-y-auto">
-                  {entries.map((e, idx) => (
-                    <Fragment key={`${e.run_id}-${e.turn}-${idx}`}>
+                  {summaries.map((s, idx) => (
+                    <Fragment key={`${s.run_id}-${s.turn}-${idx}`}>
                       <RequestRow
-                        entry={e}
+                        summary={s}
                         index={idx}
                         active={idx === selected}
                         matchCount={perEntryMatchCount[idx] ?? 0}
@@ -479,9 +550,7 @@ export const ModelIoInspector = memo(function ModelIoInspector({
               )}
             </aside>
 
-            {/* 右：详情。外层 wrapper 是 relative 容器持有 FindBar / Minimap，
-                section 自己只负责滚动 —— 避免 absolute child 在 overflow:auto 容器内
-                被某些浏览器当成 in-flow 内容跟随滚动消失 */}
+            {/* 右：详情 */}
             <div className="relative flex-1 min-w-0 flex flex-col">
               <FindBar
                 open={findOpen}
@@ -522,17 +591,21 @@ export const ModelIoInspector = memo(function ModelIoInspector({
                 ref={detailRef}
                 className="flex-1 min-w-0 overflow-y-auto"
               >
-                {current ? (
+                {detailLoading ? (
+                  <div className="flex items-center justify-center h-full text-xs text-muted-foreground">
+                    加载中…
+                  </div>
+                ) : currentDetail ? (
                   <FindCtx.Provider value={findCtxValue}>
                     <RequestDetail
-                      entry={current}
+                      entry={currentDetail}
                       carriedOverCount={carriedOverCount}
                       index={selected}
                     />
                   </FindCtx.Provider>
                 ) : null}
               </section>
-              {current ? <ScrollEndsButtons containerRef={detailRef} /> : null}
+              {currentDetail ? <ScrollEndsButtons containerRef={detailRef} /> : null}
             </div>
           </div>
         )}
@@ -596,21 +669,21 @@ function EmptyState() {
 // ─── 左侧：请求行 ────────────────────────────────────────────────────────────
 
 function RequestRow({
-  entry,
+  summary,
   index,
   active,
   matchCount,
   onClick,
 }: {
-  entry: ModelIoEntry;
+  summary: ModelIoSummary;
   index: number;
   active: boolean;
   matchCount: number;
   onClick: () => void;
 }) {
-  const usage = entry.response?.usage;
-  const ok = entry.response?.type !== "Error";
-  const msgCount = entry.request?.messages?.length ?? 0;
+  const usage = summary.response?.usage;
+  const ok = summary.response?.type !== "Error";
+  const msgCount = summary.message_count ?? 0;
 
   return (
     <li
@@ -619,7 +692,6 @@ function RequestRow({
       className={cn(
         "px-3 py-2 border-b border-border cursor-pointer hover:bg-accent/40 transition-colors",
         active && "bg-accent",
-        // 搜索激活且本行有命中 —— 左边一道黄色细条，跟搜索框颜色一致
         matchCount > 0 && "border-l-2 border-l-yellow-400"
       )}
       data-testid="model-io-row"
@@ -627,12 +699,12 @@ function RequestRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium">#{index + 1}</span>
-          {entry.kind === "judge" && (
+          {summary.kind === "judge" && (
             <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
               judge
             </span>
           )}
-          {entry.kind === "compaction" && (
+          {summary.kind === "compaction" && (
             <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
               压缩
             </span>
@@ -654,11 +726,11 @@ function RequestRow({
               : "bg-destructive/20 text-destructive"
           )}
         >
-          {entry.response?.type || "?"}
+          {summary.response?.type || "?"}
         </span>
       </div>
-      <div className="mt-1 text-[11px] text-muted-foreground truncate" title={entry.ts}>
-        {formatTs(entry.ts)} · {entry.duration_ms}ms
+      <div className="mt-1 text-[11px] text-muted-foreground truncate" title={summary.ts}>
+        {formatTs(summary.ts)} · {summary.duration_ms}ms
       </div>
       <div className="mt-0.5 text-[11px] text-muted-foreground flex items-center gap-2">
         <span>{msgCount} msg</span>
@@ -673,9 +745,9 @@ function RequestRow({
       </div>
       <div
         className="mt-0.5 text-[10px] text-muted-foreground/80 truncate"
-        title={entry.model}
+        title={summary.model}
       >
-        {entry.model}
+        {summary.model}
       </div>
     </li>
   );

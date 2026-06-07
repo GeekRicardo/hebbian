@@ -46,6 +46,104 @@ pub fn read_session(data_dir: &Path, session_id: &str) -> std::io::Result<Vec<Va
     Ok(out)
 }
 
+/// 只返回每条 entry 的摘要（不含 request.messages / response 正文），
+/// 给前端侧边栏列表用。即使 jsonl 有几百 MB，摘要总量也只有几十 KB。
+///
+/// 逐行读取 + 解析 + 提取摘要 + 立刻丢弃完整 Value —— 峰值内存 ≈ 单条 entry 大小，
+/// 远低于 `read_session` 的全量驻留。
+pub fn read_session_summaries(data_dir: &Path, session_id: &str) -> std::io::Result<Vec<Value>> {
+    use std::io::BufRead;
+
+    let path = default_path(data_dir, session_id);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(&path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut out = Vec::new();
+    for (idx, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(v) => {
+                let resp = v.get("response");
+                let msg_count = v
+                    .get("request")
+                    .and_then(|r| r.get("messages"))
+                    .and_then(|m| m.as_array())
+                    .map(|a| a.len() as u64)
+                    .unwrap_or(0);
+                out.push(serde_json::json!({
+                    "ts": v.get("ts").cloned(),
+                    "run_id": v.get("run_id").cloned(),
+                    "turn": v.get("turn").cloned(),
+                    "model": v.get("model").cloned(),
+                    "kind": v.get("kind").cloned(),
+                    "duration_ms": v.get("duration_ms").cloned(),
+                    "response": {
+                        "type": resp.and_then(|r| r.get("type")).cloned(),
+                        "usage": resp.and_then(|r| r.get("usage")).cloned()
+                    },
+                    "message_count": msg_count,
+                }));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    line_idx = idx,
+                    "model_io jsonl 行解析失败，跳过"
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 按索引返回单条完整 entry。只解析目标行的 JSON，跳过的行仅做行读取不做解析。
+/// 索引对应 `read_session` / `read_session_summaries` 返回的数组下标（跳过空行/坏行后的有效序号）。
+pub fn read_session_entry(
+    data_dir: &Path,
+    session_id: &str,
+    index: usize,
+) -> std::io::Result<Option<Value>> {
+    use std::io::BufRead;
+
+    let path = default_path(data_dir, session_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = std::fs::File::open(&path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut valid_idx = 0usize;
+    for (line_no, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if valid_idx == index {
+            return match serde_json::from_str::<Value>(trimmed) {
+                Ok(v) => Ok(Some(v)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path.display(),
+                        line_idx = line_no,
+                        "model_io entry 解析失败"
+                    );
+                    Ok(None)
+                }
+            };
+        }
+        valid_idx += 1;
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

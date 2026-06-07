@@ -34,6 +34,27 @@ export default function App() {
     });
   }, [init]);
 
+  // 全局异常捕获：事件回调 + 异步代码中的未处理异常 → toast 报错
+  useEffect(() => {
+    const onError = (e: ErrorEvent) => {
+      const msg = e.message || String(e.error);
+      console.error("[global error]", e.error);
+      toast.error(`未捕获错误: ${msg}`, { duration: 12000 });
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const msg =
+        e.reason instanceof Error ? e.reason.message : String(e.reason);
+      console.error("[unhandled rejection]", e.reason);
+      toast.error(`未处理的异步错误: ${msg}`, { duration: 12000 });
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+
   // 架构 §4.12.6：后端 WakeupScheduler 触发的 wakeup-fired 全局事件 →
   // 前台 session 直接发消息；非前台暂存等用户切换时消费。
   useEffect(() => {

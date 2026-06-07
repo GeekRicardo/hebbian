@@ -20,6 +20,7 @@ import type {
   MemoryL0,
   PlanComment,
   PlanMeta,
+  PluginListItem,
   Prompt,
   PromptsFile,
   Provider,
@@ -243,13 +244,15 @@ export const api = {
     }),
 
   /**
-   * 拉 session 的 model_io.jsonl —— 每条对应一次「真实发出去的」模型请求 + 响应。
-   * 与 `previewSessionPayload` 互补：preview 是按当前 session 状态实时重建的"理论 payload"；
-   * 这边是后端真发出去过的"历史 payload"，用来排查"模型到底收到了什么、返了什么"。
-   * 每条 entry shape：`{ ts, run_id, turn, model, request, response, duration_ms }`。
+   * 拉 session 的 model_io.jsonl 摘要列表（不含 request.messages / response 正文）。
+   * 每条 shape：`{ ts, run_id, turn, model, kind, duration_ms, response: {type, usage}, message_count }`。
    */
   listSessionModelIo: (sessionId: string) =>
     invoke<unknown[]>("list_session_model_io", { sessionId }),
+
+  /** 按索引拉单条完整 model_io entry（含 request.messages + response 正文）。 */
+  getSessionModelIoEntry: (sessionId: string, index: number) =>
+    invoke<unknown | null>("get_session_model_io_entry", { sessionId, index }),
 
   /** 当前 session 的上下文用量（用于输入框旁的环形进度条） */
   getContextUsage: (sessionId: string) =>
@@ -377,6 +380,31 @@ export const api = {
   saveMcpConfig: (config: McpConfig) =>
     invoke<void>("save_mcp_config", { config }),
   discoverMcpTools: () => invoke<McpToolReport[]>("discover_mcp_tools"),
+
+  // ── plugins ──
+  pluginMarketplaceAdd: (source: string) =>
+    invoke<string>("plugin_marketplace_add", { source }),
+  pluginMarketplaceList: () =>
+    invoke<[string, string][]>("plugin_marketplace_list"),
+  pluginMarketplaceListPlugins: (name: string) =>
+    invoke<{ name: string; description?: string | null }[]>(
+      "plugin_marketplace_list_plugins",
+      { name },
+    ),
+  pluginMarketplaceRemove: (name: string) =>
+    invoke<void>("plugin_marketplace_remove", { name }),
+  pluginInstall: (name: string, marketplace?: string | null) =>
+    invoke<PluginListItem>("plugin_install", {
+      name,
+      marketplace: marketplace ?? null,
+    }),
+  pluginUninstall: (name: string) =>
+    invoke<void>("plugin_uninstall", { name }),
+  pluginList: () => invoke<PluginListItem[]>("plugin_list"),
+
+  // ── hooks ──
+  getHooksRaw: () => invoke<string>("get_hooks_raw"),
+  saveHooksRaw: (raw: string) => invoke<void>("save_hooks_raw", { raw }),
 
   /**
    * 更新对话级设置；任一字段不传 = 保持原值，传 `null` = 显式清空（回退全局默认）。

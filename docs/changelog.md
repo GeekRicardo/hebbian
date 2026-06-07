@@ -6226,6 +6226,16 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: agent-core storage（additive 函数）、Desktop Tauri commands、web-server commands、前端 ModelIoInspector + bridge。不改协议、不改 EventPayload、不改 agent_loop。
 - **留尾巴**: 搜索（Cmd+F）的 perEntryMatchCount 仅对当前已缓存的完整 entry 计数，未访问过的行显示 0——这是合理取舍，否则全量搜索又回到老问题。CLI 的 `ListModelIo` 仍走全量读取，大 session 下也会慢，后续可按需改为分页。
 
+### 2026-06-07 — 前端全局异常捕获 + toast 报错
+
+- **Why**: 前端组件渲染或异步逻辑抛异常时页面直接白屏，用户看不到任何错误信息，只能开 devtools 查 console。加全局异常兜底让错误以 toast 可见，同时尝试自动恢复渲染。
+- **改动**:
+  - 新建 `ErrorBoundary.tsx`：React class component ErrorBoundary，捕获子树 render/commit 阶段异常 → `toast.error()` 弹出错误消息 + componentStack 首行。`hasError` 时仍渲染 children + 独立 `<Toaster>`（保证 App 崩溃后 toast 仍可见），下一帧 `setState({ hasError: false })` 尝试恢复。
+  - `App.tsx`：新增 `useEffect` 挂 `window.addEventListener("error")` + `"unhandledrejection"`，捕获事件回调和异步代码中的未处理异常 → `toast.error()`。
+  - `main.tsx`：用 `<ErrorBoundary>` 包裹 `<App />` 和 `<LogViewerApp />`。
+- **影响范围**: 纯前端，不改后端、不改协议。
+- **留尾巴**: ErrorBoundary 的自动恢复（立即 `setState(false)` 重试渲染）对持续性渲染错误会陷入 catch → retry → catch 循环，但 React 18 自带 `componentDidCatch` 频率限制（连续崩溃 > 阈值会停止重试），实际不会死循环。
+
 ### 2026-06-07 — 修复 RunMode 在 agent_loop 运行期间切换不生效
 
 - **Why**: 用户在前端 RunMode chip 切换模式（如从 AskBeforeEdits 切到 AutoMode）时，正在运行的 agent_loop 里的权限检查仍使用旧值，下一次工具调用不会走 AutoMode 判官。根因是 Harness 虽然已有 `Arc<Mutex<RunMode>>` 共享机制和 `Op::SwitchRunMode` actor 路径，但传给 `LoopParams` 时把值 clone 了出来——`agent_loop` 拿到的是裸 `RunMode` 值，每次构造 `ToolDispatcher` 又从栈变量新建 Arc，跟 Harness 的共享 Arc 完全是两个实例。Desktop 的 `set_run_mode` Tauri 命令也只写了 jsonl 落盘，没有更新运行中的 Arc。
