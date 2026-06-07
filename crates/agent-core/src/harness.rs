@@ -140,6 +140,12 @@ impl Harness {
         let state = Arc::new(RunState::new(run_id.clone()));
         let run_mode_shared = Arc::new(Mutex::new(params.run_mode));
 
+        // 注册到全局 LiveRunModeRegistry，让 surface 的 set_run_mode 能即时更新运行中的 run。
+        if let Some(sid) = &params.session_id {
+            crate::run_mode::LiveRunModeRegistry::global()
+                .register(sid.clone(), run_mode_shared.clone());
+        }
+
         // 双路 sink：本 run 独享 mpsc + 可选 jsonl 持久化。
         //
         // 通道改为 bounded(1024)。sink 是同步闭包（type EventSink），不能 await，
@@ -272,6 +278,7 @@ impl Harness {
         let hitl_for_handle = hitl.clone();
         let cancel_for_handle = cancel.clone();
         let judge_client = client.clone();
+        let session_id_for_cleanup = loop_session_id.clone();
 
         tokio::spawn(async move {
             let params = LoopParams {
@@ -292,7 +299,7 @@ impl Harness {
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,
-                run_mode: run_mode_shared.lock().unwrap().clone(),
+                run_mode: run_mode_shared.clone(),
                 model_id,
                 judge_client: Some(judge_client),
                 force_automode,
@@ -309,6 +316,9 @@ impl Harness {
                 warn!(error = %e, "run failed");
             }
             runs.lock().unwrap().remove(&run_id_for_task);
+            if let Some(sid) = &session_id_for_cleanup {
+                crate::run_mode::LiveRunModeRegistry::global().unregister(sid);
+            }
         });
 
         RunHandle {

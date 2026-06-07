@@ -6122,3 +6122,120 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `ModelIoInspector.tsx`: entry 列表加蓝色「压缩」标签（kind==="compaction"）。
 - **影响范围**: agent-core agent_loop / model_io_dump / dispatch；desktop 前端 ModelIoInspector；session.jsonl 多 CompactBoundary marker（向后兼容）。
 - **留尾巴**: 压缩用主 client + 主模型（贵模型也用它压缩），未来可考虑配独立的便宜压缩模型；compact_structural 函数保留（仅自己的回归测试用），未来如需 fallback 可复用。
+
+---
+
+### 2026-06-06 新增插件系统（架构 §6.1.4）
+
+- **Why**: 用户希望直接从 Claude Code 插件生态安装插件（如 `Lum1104/Understand-Anything`），而不是手动 clone + 拷贝 SKILL.md。需要兼容 Claude Code 的 `.claude-plugin/plugin.json` manifest 和 marketplace.json catalog 格式。
+- **设计决策**: 插件系统是纯分发层，不引入新的运行时——把插件 repo 里的 skills / agents / hooks / MCP 各组件路由到 Hebbian 已有的加载路径（symlink/copy/merge），agent_core 主循环和 protocol 零改动。
+- **改动**:
+  - `crates/agent-core/src/storage/plugins.rs`（新建）：插件系统全部 IO——marketplace 添加/删除（git clone + 探测类型）、plugin 安装/卸载（clone → 解析 manifest → 提取 skills symlink / agents copy / hooks merge / MCP merge）、registry 持久化
+  - `crates/agent-core/src/storage/skill_collections.rs`：`CollectionSource` 新增 `Plugin` 变体 + `remove_by_plugin()` 函数
+  - `crates/agent-core/src/storage/mod.rs`：注册 `pub mod plugins;`
+  - `crates/agent-core/src/core_client/mod.rs`：CoreClient trait 新增 6 个 plugin 方法 + LocalCoreClient 实现
+  - `apps/desktop/src/lib.rs`：6 个 Tauri commands（plugin_marketplace_add/list/remove, plugin_install/uninstall/list）
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`：API bindings + PluginListItem import
+  - `apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts`：`//plugin` 命令族（marketplace add/list/remove, install, uninstall, list）
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`：`PluginListItem` interface + SkillCollection source 加 `plugin` kind
+  - `apps/desktop/frontend/src/desktop/ui/components/SkillsPane.tsx`：formatSource 兼容 `plugin` kind
+  - `docs/架构.md`：新增 §6.1.4 + storage 模块表追加 plugins.rs
+- **用法**:
+  - `//plugin marketplace add Lum1104/Understand-Anything` — 添加（单插件 repo 自动识别）
+  - `//plugin install understand-anything` — 安装（skills symlink 到 ~/.hebbian/skills/）
+  - `//plugin list` — 列出已安装
+  - `//plugin uninstall understand-anything` — 卸载（清理所有组件）
+  - 也支持完整 marketplace（如 `anthropics/claude-plugins-community`）的浏览和安装
+- **影响范围**: agent-core storage + core_client、desktop surface（Tauri commands + 前端命令）。不影响 agent_loop / protocol / prompt / heb CLI / hebweb。
+- **留尾巴**: `//plugin update` 未实现；不支持 LSP / monitors / themes 组件；不支持 plugin 依赖解析；不支持 user/project/local 三种安装 scope（统一装到 global）。
+
+---
+
+### 2026-06-06 插件系统 UI 面板
+
+- **Why**: 上一条只有 `//plugin` 命令入口，用户要求在设置里有可视化的插件管理面板。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/PluginsPane.tsx`（新建）：插件管理面板组件，分两段——已添加的 Marketplace（展开显示 catalog、可安装）+ 已安装的 Plugins（含组件摘要徽章、卸载按钮）
+  - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`：TABS 数组新增 `plugins` tab（icon: Package）、渲染 `<PluginsPane />`
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`：新增 `pluginMarketplaceListPlugins` API binding
+  - `apps/desktop/src/lib.rs`：新增 `plugin_marketplace_list_plugins` Tauri command
+  - `crates/agent-core/src/core_client/mod.rs`：CoreClient trait 新增 `plugin_marketplace_list_plugins` 方法 + 实现
+- **影响范围**: desktop surface 前端 + Tauri command 层。agent-core storage 不变（复用已有 `marketplace_list_plugins` 函数）。
+
+---
+
+### 2026-06-06 Hooks 设置页
+
+- **Why**: hooks.json 是重要的自定义点（§4.8），之前只能手动编辑文件。在设置里加一个 tab 让用户可视化管理。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/HooksPane.tsx`（新建）：JSON 编辑器面板，读写 `~/.hebbian/hooks.json`，底部有可用事件点位和规则字段的参考说明
+  - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`：TABS 加 `hooks` tab（icon: GitBranch）、渲染 `<HooksPane />`
+  - `apps/desktop/frontend/src/desktop/bridge/tauri.ts`：新增 `getHooksRaw` / `saveHooksRaw` API bindings
+  - `apps/desktop/src/lib.rs`：新增 `get_hooks_raw` / `save_hooks_raw` Tauri commands
+  - `crates/agent-core/src/core_client/mod.rs`：trait 新增 `get_hooks_raw` / `save_hooks_raw` + 实现（直接读写 `~/.hebbian/hooks.json`）
+- **影响范围**: desktop surface + core_client。不改 hooks 运行时加载逻辑。
+
+---
+
+### 2026-06-07 新增视觉辅助桥接（Vision Bridge）
+
+- **Why**: DeepSeek / Moonshot 等文本模型不支持图片输入，用户贴截图时模型看不到。借鉴 openhanako 的 VisionBridge 思路：配一个支持图片的辅助模型（如 GPT-4o / Gemini / deepseek-v4-vision），自动帮文本模型"看图"——把图片转成结构化文字描述再发给目标模型。
+- **设计要点**:
+  - 实现为 `ModelClient` 装饰器（`VisionBridgeClient`），包装 inner client，在 `complete`/`stream` 前拦截 Image 附件做转换。与架构 §4.11 model_adapters 装饰链思路一致。
+  - 全局配置：`providers.json` 顶层新增 `vision_provider_id` + `vision_model` 两个字段（additive，向后兼容）。
+  - 上下文感知：用最近一条用户文字作为视觉分析的情景提示，让视觉模型"带着用户的问题去看图"而不是泛泛描述。
+  - 图片描述用 `<vision-context>` XML 标签包裹注入用户消息，文本模型能明确区分。
+  - 未配置 vision provider/model 时，`wrap_with_vision_bridge` 返回原始 client，zero-cost。
+- **改动**:
+  - `crates/model-gateway/src/config.rs`：`ProvidersFile` 新增 `vision_provider_id` / `vision_model` 字段
+  - `crates/agent-core/src/vision_bridge.rs`（新建）：`VisionBridgeClient` 装饰器 + `wrap_with_vision_bridge` 工厂 + 3 个单测
+  - `crates/agent-core/src/lib.rs`：导出 `vision_bridge` 模块
+  - `apps/desktop/src/chat.rs`：构建 client 时包装 VisionBridgeClient
+  - `apps/cli/src/daemon.rs`：同上
+  - `apps/web-server/src/session.rs`：同上
+  - `apps/desktop/frontend/src/desktop/ui/types.ts`：`ProvidersFile` interface 新增两个字段
+  - `apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx`：新增"视觉辅助模型"全局配置 UI
+- **影响范围**: agent-core（新模块）、model-gateway config（additive 字段）、三个 surface 的 client 构建入口、desktop 前端设置页。不影响 protocol / EventPayload / agent_loop 主路径 / storage schema。
+- **留尾巴**: 当前不判断目标模型是否原生支持图片（`CatalogModalities.input` 含 "image"）——配了 vision bridge 就对所有 Image 附件走转换。后续可结合 models.dev 目录做智能判断：原生支持图片的模型跳过 bridge。
+
+### 2026-06-07 — 修复 allowed_paths 相对路径在 Desktop 下不生效导致子目录误弹审批
+
+- **Why**: workspace.json 里 VSCode workspace 导入的 allowed_paths 存的是相对路径（如 `../other/sub2api`、`cc-switch`），`Workspace::with_runtime_state()` 直接把它们存入 `initial_allowed_paths`。到 `allows()` 检查时 `canonicalize_lossy()` 基于进程 CWD 解析相对路径——Desktop 的 CWD 是 `/`，所以 `../other/sub2api` 被解析为 `/other/sub2api`，导致合法子目录永远匹配不上，每次都弹 PathAccess 审批。
+- **改动**:
+  - `crates/agent-core/src/workspace.rs`：`with_runtime_state()` 入口处把所有相对路径基于 workdir join 为绝对路径，再存入 initial / announced / pending。`new()` 走同一入口，自动受益。
+  - 新增回归测试 `relative_allowed_paths_resolved_against_workdir`。
+- **影响范围**: agent-core 内部。不改协议、不改 storage schema、不改前端。所有 surface（Desktop / CLI / hebweb）共享同一个 `Workspace` 构造入口，一处改全覆盖。`EnvironmentSnapshot` 渲染到 `<environment>` 的 `<allowed_path>` 现在输出绝对路径，对模型更清晰。
+- **留尾巴**: 无
+
+### 2026-06-07 — 修复 Model I/O 调试器打开大 session 时页面白屏
+
+- **Why**: `model_io.jsonl` 包含每次模型调用的完整 request（含全套历史 messages），随对话轮次累积文件可达上百 MB（实测 228 条记录 = 121MB）。`list_session_model_io` 一次性 `read_to_string` + 解析 + 通过 IPC 发给前端，前端收到上百 MB JSON 后解析 + 存入 React state + 渲染 228 行列表，直接导致页面 OOM / 无响应白屏。
+- **改动**:
+  - **两级加载**：
+    - `storage::model_io::read_session_summaries()`：逐行读取 jsonl，只提取摘要字段（ts/run_id/turn/model/kind/duration_ms/usage/message_count），每条几百字节，228 条 ≈ 几十 KB。后端用 BufReader 逐行流式处理，峰值内存 ≈ 单条 entry 大小。
+    - `storage::model_io::read_session_entry(index)`：按有效行索引返回单条完整 entry，只解析目标行。
+  - **Desktop `lib.rs`**：`list_session_model_io` 改调 `read_session_summaries`；新增 `get_session_model_io_entry` Tauri command。
+  - **web-server**：同步新增 `get_session_model_io_entry` 命令。
+  - **前端 `ModelIoInspector.tsx`**：
+    - `summaries` state 存摘要列表（`ModelIoSummary` 类型），列表展示只用摘要字段。
+    - 选中某行时通过 `getSessionModelIoEntry(sessionId, index)` 按需加载完整 entry，缓存到 `detailCacheRef`。
+    - 相邻 entry 预加载：选中某行时自动把前一条也拉进缓存（diff 计算需要前后对比）。
+    - 详情加载中显示"加载中…"状态。
+  - **前端 `bridge/tauri.ts`**：新增 `getSessionModelIoEntry` API。
+  - 原有的 `read_session()` 函数保留不动（CLI 的 `ListModelIo` 命令仍在使用）。
+- **影响范围**: agent-core storage（additive 函数）、Desktop Tauri commands、web-server commands、前端 ModelIoInspector + bridge。不改协议、不改 EventPayload、不改 agent_loop。
+- **留尾巴**: 搜索（Cmd+F）的 perEntryMatchCount 仅对当前已缓存的完整 entry 计数，未访问过的行显示 0——这是合理取舍，否则全量搜索又回到老问题。CLI 的 `ListModelIo` 仍走全量读取，大 session 下也会慢，后续可按需改为分页。
+
+### 2026-06-07 — 修复 RunMode 在 agent_loop 运行期间切换不生效
+
+- **Why**: 用户在前端 RunMode chip 切换模式（如从 AskBeforeEdits 切到 AutoMode）时，正在运行的 agent_loop 里的权限检查仍使用旧值，下一次工具调用不会走 AutoMode 判官。根因是 Harness 虽然已有 `Arc<Mutex<RunMode>>` 共享机制和 `Op::SwitchRunMode` actor 路径，但传给 `LoopParams` 时把值 clone 了出来——`agent_loop` 拿到的是裸 `RunMode` 值，每次构造 `ToolDispatcher` 又从栈变量新建 Arc，跟 Harness 的共享 Arc 完全是两个实例。Desktop 的 `set_run_mode` Tauri 命令也只写了 jsonl 落盘，没有更新运行中的 Arc。
+- **改动**:
+  - `crates/agent-core/src/run_mode.rs`：新增 `SharedRunMode` 类型别名（`Arc<Mutex<RunMode>>`）和 `LiveRunModeRegistry` 全局注册表（session_id → SharedRunMode）。Run 启动时 register，结束时 unregister。
+  - `crates/agent-core/src/agent_loop.rs`：`LoopParams.run_mode` 从 `RunMode` 改为 `SharedRunMode`。循环体内 PlanMode 过滤和 ToolDispatcher 构造都从共享 Arc 实时读取。
+  - `crates/agent-core/src/harness.rs`：`spawn_run` 把 `run_mode_shared` 直接传入 `LoopParams`（不再 `.lock().clone()`）。同时向 `LiveRunModeRegistry` register/unregister。
+  - `crates/agent-core/src/subagent/runner.rs`：构造 `LoopParams` 时用 `Arc::new(Mutex::new(...))` 包装。
+  - `apps/desktop/src/lib.rs`：`set_run_mode` 在落盘后追加 `LiveRunModeRegistry::global().set()` 更新运行中的 Arc。
+  - `apps/web-server/src/server.rs`：同上。
+  - 各处测试构造 `LoopParams` 的 `run_mode` 字段改为 `Arc::new(Mutex::new(...))`。
+- **影响范围**: agent-core 内部接口（`LoopParams.run_mode` 类型变更）、Desktop/web-server 的 set_run_mode 命令。不改协议、不改 EventPayload、不改前端、不改 storage schema。`RunParams.run_mode` 仍是值类型，调用方（chat.rs / daemon.rs / web-server session.rs）无需改。
+- **留尾巴**: `force_automode` 仍是值类型，运行期间切换不生效——但它的使用场景（CLI `--force-automode` flag）本身就是 run 启动时确定的，优先级低。如有需要后续可用同样模式共享化。

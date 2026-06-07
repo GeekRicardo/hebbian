@@ -341,8 +341,19 @@ fn create_session(
 #[tauri::command]
 fn list_session_model_io(app: AppHandle, session_id: String) -> AppResult<Vec<serde_json::Value>> {
     let dd = data_dir(&app)?;
-    agent_core::storage::model_io::read_session(&dd, &session_id)
+    agent_core::storage::model_io::read_session_summaries(&dd, &session_id)
         .map_err(|e| AppError::msg(format!("读 model_io.jsonl 失败：{e}")))
+}
+
+#[tauri::command]
+fn get_session_model_io_entry(
+    app: AppHandle,
+    session_id: String,
+    index: usize,
+) -> AppResult<Option<serde_json::Value>> {
+    let dd = data_dir(&app)?;
+    agent_core::storage::model_io::read_session_entry(&dd, &session_id, index)
+        .map_err(|e| AppError::msg(format!("读 model_io entry 失败：{e}")))
 }
 
 // ========== Workspace Projects ==========
@@ -1129,6 +1140,8 @@ fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<S
         .ok_or_else(|| AppError::msg(format!("未知的 RunMode：{mode}")))?;
     let dd = data_dir(&app)?;
     sessions::set_run_mode(&dd, &session_id, parsed)?;
+    // 同时更新运行中的 agent_loop：下一次 dispatch 立即看到新值。
+    agent_core::run_mode::LiveRunModeRegistry::global().set(&session_id, parsed);
     Ok(parsed.as_str().to_string())
 }
 
@@ -1827,6 +1840,72 @@ fn save_mcp_config(app: AppHandle, config: mcp_store::McpConfig) -> AppResult<()
 #[tauri::command]
 async fn discover_mcp_tools(app: AppHandle) -> AppResult<Vec<McpToolReport>> {
     Ok(core(&app)?.discover_mcp_tools().await)
+}
+
+// ─── Plugin 同步 API（架构 §6.1.4）─────────────────────────────────────────
+
+#[tauri::command]
+fn plugin_marketplace_add(app: AppHandle, source: String) -> AppResult<String> {
+    core(&app)?
+        .plugin_marketplace_add(&source)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn plugin_marketplace_list(app: AppHandle) -> AppResult<Vec<(String, String)>> {
+    Ok(core(&app)?.plugin_marketplace_list())
+}
+
+#[tauri::command]
+fn plugin_marketplace_list_plugins(
+    app: AppHandle,
+    name: String,
+) -> AppResult<Vec<agent_core::storage::plugins::CatalogEntry>> {
+    core(&app)?
+        .plugin_marketplace_list_plugins(&name)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn plugin_marketplace_remove(app: AppHandle, name: String) -> AppResult<()> {
+    core(&app)?
+        .plugin_marketplace_remove(&name)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn plugin_install(
+    app: AppHandle,
+    name: String,
+    marketplace: Option<String>,
+) -> AppResult<agent_core::storage::plugins::PluginListItem> {
+    core(&app)?
+        .plugin_install(&name, marketplace.as_deref())
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn plugin_uninstall(app: AppHandle, name: String) -> AppResult<()> {
+    core(&app)?
+        .plugin_uninstall(&name)
+        .map_err(map_core_err)
+}
+
+#[tauri::command]
+fn plugin_list(app: AppHandle) -> AppResult<Vec<agent_core::storage::plugins::PluginListItem>> {
+    Ok(core(&app)?.plugin_list())
+}
+
+// ─── Hooks 同步 API（架构 §4.8）──────────────────────────────────────────────
+
+#[tauri::command]
+fn get_hooks_raw(app: AppHandle) -> AppResult<String> {
+    Ok(core(&app)?.get_hooks_raw())
+}
+
+#[tauri::command]
+fn save_hooks_raw(app: AppHandle, raw: String) -> AppResult<()> {
+    core(&app)?.save_hooks_raw(&raw).map_err(map_core_err)
 }
 
 /// 更新对话级设置（workdir / allowed_paths / enabled_tools / skill_dirs）。
@@ -2619,6 +2698,7 @@ pub fn run() {
             send_message,
             preview_session_payload,
             list_session_model_io,
+            get_session_model_io_entry,
             cancel_message,
             inject_user_message,
             get_context_usage,
@@ -2672,6 +2752,15 @@ pub fn run() {
             get_mcp_config,
             save_mcp_config,
             discover_mcp_tools,
+            plugin_marketplace_add,
+            plugin_marketplace_list,
+            plugin_marketplace_list_plugins,
+            plugin_marketplace_remove,
+            plugin_install,
+            plugin_uninstall,
+            plugin_list,
+            get_hooks_raw,
+            save_hooks_raw,
             update_session_settings,
             discover_rules_files,
             discover_all_rules,

@@ -367,6 +367,7 @@ async fn dispatch_invoke(
         "kill_background_task" => cmd_kill_background_task_local(args).await.map(Some),
         "update_session_settings" => cmd_update_session_settings(state, args).await.map(Some),
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
+        "get_session_model_io_entry" => cmd_get_session_model_io_entry(state, args).await.map(Some),
         // Edits Worktree（架构 §4.13）
         "list_edits" => cmd_list_edits(state, args).await.map(Some),
         "diff_edit" => cmd_diff_edit(state, args).await.map(Some),
@@ -945,6 +946,8 @@ async fn cmd_set_run_mode(
     *runtime.run_mode.lock().unwrap() = mode;
     // 同步持久化到 session.json
     sessions_store::set_run_mode(&state.data_dir, &sid, mode).map_err(|e| anyhow!("{e}"))?;
+    // 同时更新运行中的 agent_loop
+    agent_core::run_mode::LiveRunModeRegistry::global().set(&sid, mode);
     Ok(())
 }
 
@@ -1537,9 +1540,23 @@ async fn cmd_list_session_model_io(state: &ServerState, args: Value) -> Result<V
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let entries = agent_core::storage::model_io::read_session(&state.data_dir, sid)
+    let entries = agent_core::storage::model_io::read_session_summaries(&state.data_dir, sid)
         .map_err(|e| anyhow!("读 model_io.jsonl 失败：{e}"))?;
     Ok(Value::Array(entries))
+}
+
+async fn cmd_get_session_model_io_entry(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let index = args
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("missing `index`"))? as usize;
+    let entry = agent_core::storage::model_io::read_session_entry(&state.data_dir, sid, index)
+        .map_err(|e| anyhow!("读 model_io entry 失败：{e}"))?;
+    Ok(entry.unwrap_or(Value::Null))
 }
 
 async fn cmd_update_session_settings(state: &ServerState, args: Value) -> Result<Value> {

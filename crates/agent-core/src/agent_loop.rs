@@ -177,8 +177,9 @@ pub struct LoopParams<'a> {
     pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
     /// run 到达 terminal/suspended 后关闭，让 surface 侧的 late inject 能回落到新 run。
     pub pending_inputs_accepting: Option<Arc<AtomicBool>>,
-    /// 运行模式（架构 §4.4.3）。默认 `AskBeforeEdits`。
-    pub run_mode: crate::run_mode::RunMode,
+    /// 运行模式（架构 §4.4.3）。共享引用：surface 在 run 期间切换 mode 后，
+    /// 下一次 dispatch 立即读到新值。
+    pub run_mode: crate::run_mode::SharedRunMode,
     /// 当前模型 id（AutoMode judge 用作模型限定）。
     pub model_id: Option<String>,
     /// AutoMode judge 用的 client。通常 = 主 client，便于复用 OAuth/重试链。
@@ -563,7 +564,8 @@ pub async fn run_loop(
         }
         // PlanMode 工具过滤（架构 §4.4.3 / §4.4.5）：删除会改外界的工具，强制 agent 走
         // 只读探索路径；同时注入 ExitPlanMode 工具让 agent 主动结束规划。
-        if run_mode == crate::run_mode::RunMode::PlanMode {
+        let current_run_mode = *run_mode.lock().unwrap();
+        if current_run_mode == crate::run_mode::RunMode::PlanMode {
             let mutating = ["Bash", "PowerShell", "Edit"];
             tool_defs.retain(|t| !mutating.contains(&t.name.as_str()));
             let extra = registry.definitions(&["ExitPlanMode".to_string()]);
@@ -871,7 +873,7 @@ pub async fn run_loop(
                     state: state.clone(),
                     sink: on_event.clone(),
                     cancel: cancel.clone(),
-                    run_mode: Arc::new(std::sync::Mutex::new(run_mode)),
+                    run_mode: run_mode.clone(),
                     model_id: model_id.clone(),
                     judge_client: judge_client.clone(),
                     force_automode,
@@ -958,7 +960,7 @@ pub async fn run_loop(
                                 run_id: state.run_id.to_string(),
                                 session_id: sid.to_string(),
                                 agent: agent.0.to_string(),
-                                run_mode: format!("{:?}", run_mode),
+                                run_mode: format!("{:?}", *run_mode.lock().unwrap()),
                                 model_id: model_id.clone(),
                                 iteration,
                                 model_step_index,
@@ -1319,7 +1321,7 @@ mod tests {
                 pending_inputs: None,
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
-                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
                 model_id: None,
                 judge_client: None,
                 force_automode: false,
@@ -1380,7 +1382,7 @@ mod tests {
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
-                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
                 model_id: None,
                 judge_client: None,
                 force_automode: false,
@@ -1453,7 +1455,7 @@ mod tests {
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
-                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
                 model_id: None,
                 judge_client: None,
                 force_automode: false,
@@ -1580,7 +1582,7 @@ mod tests {
                 pending_inputs: None,
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
-                run_mode: crate::run_mode::RunMode::AskBeforeEdits,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
                 model_id: None,
                 judge_client: None,
                 force_automode: false,
