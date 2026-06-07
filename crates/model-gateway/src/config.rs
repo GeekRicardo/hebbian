@@ -83,6 +83,12 @@ pub struct ProvidersFile {
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub default_provider_id: Option<String>,
+    /// 视觉辅助模型：当目标模型不支持图片输入时，用这个 provider + model
+    /// 先"看图"生成文字描述，替换掉原始图片附件。
+    #[serde(default)]
+    pub vision_provider_id: Option<String>,
+    #[serde(default)]
+    pub vision_model: Option<String>,
 }
 
 pub fn load(data_dir: &Path) -> AppResult<ProvidersFile> {

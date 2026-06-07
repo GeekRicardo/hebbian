@@ -26,6 +26,7 @@ pub mod system_prompt;
 pub mod tools;
 pub mod turn_context;
 pub mod types;
+pub mod vision_bridge;
 pub mod wakeup;
 pub mod workspace;
 
