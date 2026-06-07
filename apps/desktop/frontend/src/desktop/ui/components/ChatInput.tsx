@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   BriefcaseBusiness,
   FilePlus2,
   FolderOpen,
   Loader2,
+  MessageSquare,
   Plus,
   X,
 } from "lucide-react";
@@ -17,6 +18,10 @@ import {
 } from "@/desktop/ui/components/chatInputHistory";
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
 import { ContextRing } from "@/desktop/ui/components/ContextRing";
+import {
+  ConversationRefPopup,
+  type ConversationItem,
+} from "@/desktop/ui/components/ConversationRefPopup";
 import { DrawerToggle, InputDrawer } from "@/desktop/ui/components/InputDrawer";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
@@ -32,6 +37,7 @@ import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShor
 import {
   buildSlashCommandCatalog,
   dispatchSlashCommand,
+  type SlashCommandMeta,
 } from "@/desktop/ui/lib/slashCommands";
 import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -143,6 +149,118 @@ export function ChatInput({
     };
   }, [activeWorkdir]);
   const slashCatalog = useMemo(() => buildSlashCommandCatalog(skills), [skills]);
+
+  // ── // 命令实时联想 ──────────────────────────────────────────────────────
+  const [slashActiveIdx, setSlashActiveIdx] = useState(0);
+  const slashSuggestions = useMemo(() => {
+    const trimmed = value.trimStart();
+    if (!trimmed.startsWith("//")) return [];
+    const query = trimmed.slice(2).split(/\s/)[0].toLowerCase();
+    if (!query && trimmed === "//") return slashCatalog;
+    if (!query) return [];
+    return slashCatalog.filter(
+      (c) =>
+        c.name.toLowerCase().includes(query) ||
+        c.desc.toLowerCase().includes(query),
+    );
+  }, [value, slashCatalog]);
+
+  useEffect(() => {
+    setSlashActiveIdx(0);
+  }, [slashSuggestions.length]);
+
+  // 滚动 active item 到可视区域
+  useEffect(() => {
+    const container = slashListRef.current;
+    if (!container || slashSuggestions.length === 0) return;
+    const active = container.children[slashActiveIdx] as HTMLElement | undefined;
+    active?.scrollIntoView({ block: "nearest" });
+  }, [slashActiveIdx, slashSuggestions.length]);
+
+  const pickSlashSuggestion = useCallback(
+    (cmd: SlashCommandMeta) => {
+      const trailingSpace = cmd.args.length > 0 ? " " : "";
+      setValue(`//${cmd.name}${trailingSpace}`);
+      setHistoryState({ index: null });
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+      });
+    },
+    [],
+  );
+  const slashListRef = useRef<HTMLDivElement>(null);
+
+  // ── @ 对话引用联想 ──────────────────────────────────────────────────────
+  const [atRefOpen, setAtRefOpen] = useState(false);
+  const [atActiveIdx, setAtActiveIdx] = useState(0);
+  const atQuery = useMemo(() => {
+    if (!atRefOpen) return "";
+    // 从光标位置向前找 @，提取 @ 后的文字作为 query
+    const el = textareaRef.current;
+    if (!el) return "";
+    const before = value.slice(0, el.selectionStart);
+    const atPos = before.lastIndexOf("@");
+    if (atPos === -1) return "";
+    return before.slice(atPos + 1);
+  }, [atRefOpen, value]);
+
+  useEffect(() => {
+    setAtActiveIdx(0);
+  }, [atQuery]);
+
+  /** 从 + 菜单打开对话引用弹窗（不依赖 @ 触发）。 */
+  const [atRefFromMenu, setAtRefFromMenu] = useState(false);
+
+  const pickConversationRef = useCallback(
+    (item: ConversationItem) => {
+      const el = textareaRef.current;
+      if (atRefFromMenu) {
+        // 从加号菜单触发：直接插入路径到光标位置
+        const cursor = el ? el.selectionStart : value.length;
+        const before = value.slice(0, cursor);
+        const after = value.slice(cursor);
+        const insertion = item.path + " ";
+        setValue(before + insertion + after);
+        setAtRefFromMenu(false);
+        setAtRefOpen(false);
+        // 把路径加入 allowedPaths
+        if (!activeAllowedPaths.includes(item.path)) {
+          void setPendingAllowedPaths([...activeAllowedPaths, item.path]);
+        }
+        requestAnimationFrame(() => {
+          if (!el) return;
+          el.focus();
+          const pos = cursor + insertion.length;
+          el.setSelectionRange(pos, pos);
+        });
+        return;
+      }
+      // 从 @ 触发：替换 @ 及后续 query 为路径
+      if (!el) return;
+      const before = value.slice(0, el.selectionStart);
+      const atPos = before.lastIndexOf("@");
+      if (atPos === -1) return;
+      const pre = value.slice(0, atPos);
+      const post = value.slice(el.selectionStart);
+      const insertion = item.path + " ";
+      setValue(pre + insertion + post);
+      setAtRefOpen(false);
+      // 把路径加入 allowedPaths
+      if (!activeAllowedPaths.includes(item.path)) {
+        void setPendingAllowedPaths([...activeAllowedPaths, item.path]);
+      }
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = atPos + insertion.length;
+        el.setSelectionRange(pos, pos);
+      });
+    },
+    [value, activeAllowedPaths, setPendingAllowedPaths, atRefFromMenu],
+  );
 
   useEffect(() => {
     if (!addMenuOpen) return;
@@ -403,8 +521,28 @@ export function ChatInput({
   }
 
   function onChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setValue(e.target.value);
+    const newValue = e.target.value;
+    setValue(newValue);
     setHistoryState({ index: null });
+    // @ 触发对话引用：输入 @ 且前面是空格/行首/空 → 打开弹窗
+    const cursor = e.target.selectionStart;
+    const before = newValue.slice(0, cursor);
+    const atPos = before.lastIndexOf("@");
+    if (atPos !== -1) {
+      const charBeforeAt = atPos > 0 ? before[atPos - 1] : " ";
+      if (/[\s]/.test(charBeforeAt) || atPos === 0) {
+        const afterAt = before.slice(atPos + 1);
+        // @ 后面不能有空格（空格表示 @ 引用结束）
+        if (!afterAt.includes(" ") && !afterAt.includes("\n")) {
+          if (!atRefOpen) {
+            setAtRefOpen(true);
+            setAtRefFromMenu(false);
+          }
+          return;
+        }
+      }
+    }
+    if (atRefOpen && !atRefFromMenu) setAtRefOpen(false);
   }
 
   async function addFiles(files: FileList | File[]) {
@@ -556,6 +694,62 @@ export function ChatInput({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // ── @ 对话引用键盘导航 ──
+    if (atRefOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtActiveIdx((i) => i + 1); // 上限由 popup 控制
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtActiveIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.metaKey) {
+        e.preventDefault();
+        // 通过 ref 让 popup 拿 items 不合适；改为 dispatching 自定义事件
+        // 这里用 setTimeout 0 等 popup 里的 activeIndex 稳定后再触发 pick
+        // 我们改为在 popup 上发一个自定义 Event。
+        // 简单方案：doc 上 dispatch，popup 里 listen。
+        const event = new CustomEvent("conversation-ref-pick-active");
+        document.dispatchEvent(event);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtRefOpen(false);
+        return;
+      }
+    }
+
+    // ── // 命令联想键盘导航 ──
+    if (slashSuggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashActiveIdx((i) => Math.min(i + 1, slashSuggestions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashActiveIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey)) {
+        const picked = slashSuggestions[slashActiveIdx];
+        if (picked) {
+          e.preventDefault();
+          pickSlashSuggestion(picked);
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setValue("");
+        return;
+      }
+    }
+
     if (
       !compositionRef.current.isComposing &&
       !e.nativeEvent.isComposing &&
@@ -823,6 +1017,58 @@ export function ChatInput({
               e.currentTarget.value = "";
             }}
           />
+          {/* ── @ 对话引用 popup ── */}
+          {atRefOpen && (
+            <ConversationRefPopup
+              query={atQuery}
+              onPick={pickConversationRef}
+              onClose={() => setAtRefOpen(false)}
+              activeIndex={atActiveIdx}
+              onActiveIndexChange={setAtActiveIdx}
+            />
+          )}
+          {/* ── // 命令实时联想 popup ── */}
+          {slashSuggestions.length > 0 && (
+            <div
+              ref={slashListRef}
+              className="absolute bottom-full left-0 right-0 mb-1 max-h-[40vh] overflow-y-auto rounded-lg border border-border bg-card shadow-lg z-[100]"
+            >
+              {slashSuggestions.map((cmd, i) => (
+                <button
+                  key={`${cmd.kind}:${cmd.name}`}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickSlashSuggestion(cmd);
+                  }}
+                  onMouseEnter={() => setSlashActiveIdx(i)}
+                  className={cn(
+                    "w-full flex items-center justify-between gap-3 px-3 py-1.5 text-sm text-left",
+                    i === slashActiveIdx ? "bg-accent" : "hover:bg-accent/50",
+                  )}
+                >
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="font-mono text-foreground truncate">
+                      //{cmd.name}
+                      {cmd.args && (
+                        <span className="text-muted-foreground ml-1">{cmd.args}</span>
+                      )}
+                    </span>
+                    {cmd.desc && (
+                      <span className="text-[11px] text-muted-foreground truncate">
+                        {cmd.desc}
+                      </span>
+                    )}
+                  </div>
+                  {cmd.kind === "skill" && cmd.skillSource && (
+                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {cmd.skillSource}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={value}
@@ -904,6 +1150,19 @@ export function ChatInput({
                   >
                     <FolderOpen className="w-4 h-4 text-muted-foreground" />
                     允许访问文件夹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddMenuOpen(false);
+                      setAtRefFromMenu(true);
+                      setAtRefOpen(true);
+                      setAtActiveIdx(0);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                  >
+                    <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                    引用对话
                   </button>
                 </div>
               )}

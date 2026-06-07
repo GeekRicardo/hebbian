@@ -33,6 +33,9 @@ export interface Provider {
 export interface ProvidersFile {
   providers: Provider[];
   default_provider_id?: string | null;
+  /** 视觉辅助模型：当目标模型不支持图片输入时，用这个 provider + model 做图片转文字。 */
+  vision_provider_id?: string | null;
+  vision_model?: string | null;
 }
 
 export interface ProviderPreset {
@@ -433,6 +436,7 @@ export interface SkillCollection {
   source:
     | { kind: "github"; repo_url: string; subpath?: string | null }
     | { kind: "dir"; src_dir: string }
+    | { kind: "plugin"; plugin_name: string }
     /**
      * 虚拟集合（架构 §6.1.3.1）：用户手放 / 老导入的 skill 没有 sidecar 记录时，
      * 后端 `list_skill_collections` 为每个孤儿 skill 合成一条 Local 集合
@@ -442,6 +446,19 @@ export interface SkillCollection {
     | { kind: "local"; path: string };
   imported_at: string;
   skills: string[];
+}
+
+/** 已安装插件的展示信息（架构 §6.1.4）。 */
+export interface PluginListItem {
+  name: string;
+  display_name?: string | null;
+  version?: string | null;
+  description?: string | null;
+  marketplace?: string | null;
+  skills_count: number;
+  agents_count: number;
+  has_hooks: boolean;
+  mcp_servers_count: number;
 }
 
 export interface AppSettings {
@@ -521,6 +538,8 @@ export interface SessionMeta {
   project_id?: string | null;
   /** 对话工作目录，用于项目列表兜底匹配老会话。 */
   workdir?: string | null;
+  /** session.jsonl 的磁盘绝对路径，供 @ 引用对话。 */
+  path?: string | null;
 }
 
 export interface SearchHit extends SessionMeta {

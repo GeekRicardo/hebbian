@@ -349,6 +349,9 @@ pub struct SessionMeta {
     /// 对话工作目录，用于项目列表兜底匹配老会话。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<PathBuf>,
+    /// session.jsonl 的磁盘绝对路径，供前端 @ 引用对话时直接拿路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1102,6 +1105,7 @@ pub fn list(data_dir: &Path) -> AppResult<Vec<SessionMeta>> {
             source: session.source,
             project_id: session.project_id,
             workdir: session.workdir,
+            path: Some(file),
         });
     }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -1874,6 +1878,7 @@ pub fn search(
                 source: s.source,
                 project_id: s.project_id,
                 workdir: s.workdir,
+                path: Some(file),
             },
             snippet,
             matched_in: if title_hit { "title" } else { "content" },
