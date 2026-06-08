@@ -126,8 +126,12 @@ export function ChatInput({
 
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
-  // 二级抽屉（RunMode / Reasoning / 状态）展开态——故意不持久化，每次新进默认折叠
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // 二级抽屉（RunMode / Reasoning / 状态）展开态——跟随 run 生命周期：空闲展开，生成中折叠。
+  const [drawerOpen, setDrawerOpen] = useState(!isStreaming);
+
+  useEffect(() => {
+    setDrawerOpen(!isStreaming);
+  }, [currentSession?.id, isStreaming]);
 
   // 架构 §6.1.3 / §8：当前 workdir 下加载的三层 skills，驱动 `//<skill-name>` 命令注册表
   // 和 SlashCommandButton 的 popup 列表。workdir 变化时刷新；失败时退回空数组（仍可用

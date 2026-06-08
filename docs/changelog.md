@@ -6263,3 +6263,11 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - 各处测试构造 `LoopParams` 的 `run_mode` 字段改为 `Arc::new(Mutex::new(...))`。
 - **影响范围**: agent-core 内部接口（`LoopParams.run_mode` 类型变更）、Desktop/web-server 的 set_run_mode 命令。不改协议、不改 EventPayload、不改前端、不改 storage schema。`RunParams.run_mode` 仍是值类型，调用方（chat.rs / daemon.rs / web-server session.rs）无需改。
 - **留尾巴**: `force_automode` 仍是值类型，运行期间切换不生效——但它的使用场景（CLI `--force-automode` flag）本身就是 run 启动时确定的，优先级低。如有需要后续可用同样模式共享化。
+
+### 2026-06-08 — 调整新对话输入区黑色设置卡片随 run 状态自动开合
+
+- **Why**: 新建对话时用户需要直接看到输入框下方的运行设置；agent_loop 运行期间这张黑色设置卡片应让位给对话流，结束后再自动展开，减少手动切换。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`: 将输入区二级抽屉初始态改为空闲展开，并在 `isStreaming` / session 切换时自动同步为「运行中折叠、空闲展开」。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 展示；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
