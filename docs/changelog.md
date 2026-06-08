@@ -6282,3 +6282,50 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`: 将输入区二级抽屉初始态改为空闲展开，并在 `isStreaming` / session 切换时自动同步为「运行中折叠、空闲展开」。
 - **影响范围**: 仅 Desktop/hebweb 共享前端 UI 展示；不改 agent-core、不改协议、不改 storage。
 - **留尾巴**: 无
+
+### 2026-06-08 — 新增 DeepSeek 风格 Desktop 预览界面壳
+
+- **Why**: 用户希望参考工作区 DeepSeek-GUI 的整体配色、左侧 list / 项目布局，先做一个纯前端预览稿；为避免影响现有 Hebbian 生产 UI，预览必须放在独立目录里。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 新增独立预览 shell，复用现有 store 数据展示项目、对话、聊天区、输入区和右侧工作台。
+  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 新增 DeepSeek-GUI 风格的 preview token、整体三栏布局、左侧项目/list、聊天消息、composer 与右侧工作台样式。
+  - `apps/desktop/frontend/src/App.tsx`: 增加 `?deepseek-preview` 本地预览开关；未带该参数时仍渲染原生产 UI。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改 agent-core、不改协议、不改 storage，不破坏现有入口。
+- **留尾巴**: 这只是预览壳，未迁移完整生产组件能力（审批弹窗、复杂工具卡片、完整输入附件交互仍走旧 UI）；用户确认视觉方向后再收敛进正式样式。
+
+### 2026-06-08 — 调整 DeepSeek 预览壳左栏与输入区
+
+- **Why**: 用户反馈第一版预览左栏不应脱离原来的圆角卡片结构，项目/全部切换不需要；右侧工作区也不应被重做。需要保留原有信息架构，重点重排项目分组和输入区信息展示。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏改为单张圆角卡片；移除项目/全部切换；对话按项目归组，未归属对话进入「默认项目」；项目可折叠，每组最多展示 10 条；欢迎页展示 logo、标题和版本号；右侧恢复使用原 `RightSidebar`。
+  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 调整左栏卡片、项目折叠组、局部滚动提示、欢迎页品牌块和输入框下方信息行样式。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改生产 UI、不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 当前仍是预览壳，输入框只实现基础文本发送；完整附件/运行设置弹层后续确认视觉方向后再迁移。
+
+### 2026-06-08 — 重调 DeepSeek 预览壳配色与输入控件
+
+- **Why**: 用户提供 DeepSeek-GUI 截图后指出第一版配色相差过大，且输入框缺少内部 `+` / 命令 / 模型选择器、下方运行模式 / effort / cache / context 指示器，左侧底部也缺少分割线和设置区。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏补 Code/写作 tabs、快捷动作、底部分割线与设置区；输入框补内部 `+`、命令、模型选择器、右侧状态与发送按钮；下方补 Git / RunMode / Effort / Cache / Context 指示行。
+  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 将预览配色重调为截图式极浅冷灰侧栏、近白主画布、低对比线框控件和轻蓝雾化背景。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改生产 UI、不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 预览控件只做视觉壳，命令 / 模型 / effort 下拉还未接入真实交互；后续确认视觉后再接正式组件。
+
+### 2026-06-08 — 收敛 DeepSeek 预览为原组件浅色换肤并全屏重排设置页
+
+- **Why**: 用户明确要求不是全抄 DeepSeek-GUI，而是保留 Hebbian 原有元素和交互，只参考浅色低对比风格；同时设置页需要类似风格、重新分类，并从小弹窗改为占满整个窗口。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏 tabs 改为 code/chat；去掉「连接手机」和多余快捷入口；保留搜索；默认项目始终显示；项目 hover 显示新增对话，session hover 显示删除对话；输入区恢复使用原 `ChatInput` 组件。
+  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 给原输入区、模型选择器、右侧工作区套同一套极浅冷灰色系，避免假控件替代真实组件。
+  - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`: 设置页改为全窗口设置工作台；左侧按「基础 / Agent / 扩展 / 调试」重新分组；主体改为低对比浅色内容卡。
+- **影响范围**: Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。AppSettings 从 modal 视觉变为全窗口 overlay，但入口和保存逻辑不变。
+- **留尾巴**: 设置页内部各 pane 的表单控件仍是既有组件，后续可继续逐个 pane 做更细的低对比样式打磨。
+
+### 2026-06-08 — 修复 Continue 自动续跑注入空 user 消息
+
+- **Why**: 用户发现回答中断后点「Continue」虽然应当直接沿用上一轮 agent_loop 进度重新请求模型，但实际会在模型请求里额外塞入一条空的 user message，污染上下文且可能改变模型行为。
+- **改动**:
+  - `apps/desktop/src/chat.rs`: `continue_run` 路径继续清理 `pending_continue` 并复用当前 transcript，但不再调用 `append_user("")`；新增回归测试捕获模型请求中的 user entry，确保不会出现空 user。
+  - `docs/changelog.md`: 记录本次修复。
+- **影响范围**: Desktop send_message / hebweb 共享的 Desktop chat 后端路径；不改协议、不改前端、不改 storage schema。`send_continue` 策略仍按设置显式发送「继续」消息。
+- **留尾巴**: 无

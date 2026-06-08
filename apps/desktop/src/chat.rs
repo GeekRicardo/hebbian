@@ -372,7 +372,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 attachments: args.attachments.clone(),
             });
         }
-    } else {
+    } else if !args.continue_run {
         core_session.append_user(args.user_content.clone(), args.attachments);
     }
 
@@ -2232,7 +2232,7 @@ mod tests {
     use agent_core::storage::sessions::MessageMeta;
     use model_gateway::{
         config::{AuthMode, ProviderKind, ProvidersFile},
-        types::{ToolCall, ToolCallStreamDelta, Usage},
+        types::{ToolCall, ToolCallStreamDelta, TranscriptEntry, Usage, UserEntry},
     };
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2310,15 +2310,160 @@ mod tests {
                     account_id: None,
                     extra_headers: BTreeMap::new(),
                     models: vec!["gpt-test".to_string()],
+                    fetched_models: None,
                     default_model: Some("gpt-test".to_string()),
                     title_gen_enabled: false,
                     title_gen_model: None,
                     claude_code_compat: false,
                 }],
                 default_provider_id: Some("openai".to_string()),
+                vision_provider_id: None,
+                vision_model: None,
             },
         )
         .unwrap();
+    }
+
+    struct ContinueRunProbeClient {
+        seen_messages: Arc<Mutex<Vec<TranscriptEntry>>>,
+    }
+
+    impl ContinueRunProbeClient {
+        fn respond(&self, req: ModelRequest) -> Result<ModelResponse, ModelError> {
+            *self.seen_messages.lock().unwrap() = req.entries;
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "continued".to_string(),
+                reasoning: String::new(),
+                reasoning_signature: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ModelClient for ContinueRunProbeClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            self.respond(req)
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            self.respond(req)
+        }
+    }
+
+    #[test]
+    fn continue_run_does_not_append_empty_user_message_to_model_request() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::User,
+                    content: "上一轮问题".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                    subagent_call_id: None,
+                },
+            )
+            .unwrap();
+            sessions::append_message(
+                &data_dir,
+                &session.id,
+                Message {
+                    id: sessions::new_id(),
+                    role: Role::Assistant,
+                    content: "上一轮回答到一半".to_string(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: None,
+                    subagent_call_id: None,
+                },
+            )
+            .unwrap();
+
+            let seen_messages = Arc::new(Mutex::new(Vec::new()));
+            let seen_for_client = seen_messages.clone();
+            send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    continue_run: true,
+                    session_id: session.id.clone(),
+                    user_content: String::new(),
+                    user_meta: None,
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: Vec::new(),
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: None,
+                    consumed_pending_inputs: None,
+                    pending_inputs_accepting: None,
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                    request_id: None,
+                },
+                |_| {},
+                move |_provider, _model, _reasoning| {
+                    Ok(Arc::new(ContinueRunProbeClient {
+                        seen_messages: seen_for_client.clone(),
+                    }) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            let user_texts: Vec<String> = seen_messages
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|entry| match entry {
+                    TranscriptEntry::User(UserEntry { text, .. }) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(user_texts.len(), 1);
+            assert!(user_texts[0].contains("上一轮问题"));
+            assert!(!user_texts.iter().any(|text| text.is_empty()));
+
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            assert!(!saved
+                .messages
+                .iter()
+                .any(|msg| msg.role == Role::User && msg.content.is_empty()));
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
     }
 
     struct OrderedPartsClient {
@@ -2369,6 +2514,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![
                             ToolCall {
                                 id: "call_a".to_string(),
@@ -2393,6 +2539,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "后说".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2430,6 +2577,7 @@ mod tests {
                 finish: model_gateway::types::FinishReason::Stop,
                 text: "ALLOW".to_string(),
                 reasoning: String::new(),
+                reasoning_signature: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
             })
@@ -2453,6 +2601,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_bash".to_string(),
                             name: "Bash".to_string(),
@@ -2466,6 +2615,7 @@ mod tests {
                     finish: model_gateway::types::FinishReason::Stop,
                     text: "done".to_string(),
                     reasoning: String::new(),
+                    reasoning_signature: String::new(),
                     attachments: Vec::new(),
                     usage: Usage::default(),
                 }),
@@ -2516,6 +2666,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_first".to_string(),
                             name: "missing_first".to_string(),
@@ -2538,6 +2689,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_second".to_string(),
                             name: "missing_second".to_string(),
@@ -2555,6 +2707,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "结束".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2608,6 +2761,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_missing".to_string(),
                             name: "missing_tool".to_string(),
@@ -2636,6 +2790,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "后续回答".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2690,6 +2845,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "第一段".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2713,6 +2869,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "第二段".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2766,6 +2923,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_before".to_string(),
                             name: "missing_before".to_string(),
@@ -2793,6 +2951,7 @@ mod tests {
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         calls: vec![ToolCall {
                             id: "call_after".to_string(),
                             name: "missing_after".to_string(),
@@ -2810,6 +2969,7 @@ mod tests {
                         finish: model_gateway::types::FinishReason::Stop,
                         text: "通知后结束".to_string(),
                         reasoning: String::new(),
+                        reasoning_signature: String::new(),
                         attachments: Vec::new(),
                         usage: Usage::default(),
                     })
@@ -2863,6 +3023,7 @@ mod tests {
                 finish: model_gateway::types::FinishReason::Stop,
                 text: "收到后台完成通知".to_string(),
                 reasoning: String::new(),
+                reasoning_signature: String::new(),
                 attachments: Vec::new(),
                 usage: Usage::default(),
             })
