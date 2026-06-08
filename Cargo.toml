@@ -8,5 +8,8 @@ members = [
     "crates/observability",
     "crates/common",
     "crates/protocol",
+    "crates/channel-core",
+    "crates/channels",
+    "apps/channel-gateway",
 ]
 resolver = "2"

@@ -6264,6 +6264,17 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: agent-core 内部接口（`LoopParams.run_mode` 类型变更）、Desktop/web-server 的 set_run_mode 命令。不改协议、不改 EventPayload、不改前端、不改 storage schema。`RunParams.run_mode` 仍是值类型，调用方（chat.rs / daemon.rs / web-server session.rs）无需改。
 - **留尾巴**: `force_automode` 仍是值类型，运行期间切换不生效——但它的使用场景（CLI `--force-automode` flag）本身就是 run 启动时确定的，优先级低。如有需要后续可用同样模式共享化。
 
+### 2026-06-08 — 新增多渠道架构与微信 iLink 渠道雏形
+
+- **Why**: 用户希望参考 openclaw-weixin，把 hebbian 接到微信里；连接该微信插件的就是机主本人，应拥有整个 hebbian 权限，并能通过 `/projects`、`/threads`、`/new`、`/models`、`/providers` 等命令操作。
+- **改动**:
+  - `crates/channel-core/`: 新增渠道契约 `Channel`、规范化消息类型、owner state 持久化、斜杠命令路由。
+  - `crates/channels/`: 新增微信 iLink Bot 协议类型、HTTP client、扫码登录、context_token 持久化与 `WeChatChannel` 实现。
+  - `apps/channel-gateway/`: 新增 `heb-channel` surface，支持 `wechat-login` 与 `wechat --bot-id`，启动后长轮询微信并处理斜杠命令。
+  - `docs/架构.md`: 记录 channel-core / channels / channel-gateway 三层架构与 owner 全权限模型。
+- **影响范围**: 新增 2 个 crate + 1 个 app，更新 workspace；不改 agent-core/model-gateway/protocol 对外协议。`channel-gateway` 已能处理渠道命令，并把普通文本接入当前活跃 session 的 agent_loop，按段落 / 标点分段回发。
+- **留尾巴**: iLink 媒体上传/群聊不在首版范围；真实微信端到端需要扫码账号和可用 provider 才能手测。
+
 ### 2026-06-08 — 调整新对话输入区黑色设置卡片随 run 状态自动开合
 
 - **Why**: 新建对话时用户需要直接看到输入框下方的运行设置；agent_loop 运行期间这张黑色设置卡片应让位给对话流，结束后再自动展开，减少手动切换。
