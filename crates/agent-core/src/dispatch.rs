@@ -23,8 +23,8 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, StreamExt};
 use observability::attr;
 use protocol::{
-    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, RiskLevel,
-    UserAnswer,
+    ApprovalDecision, AskQuestion, EventPayload, PermissionKind, PermissionRequestId,
+    QuestionOption, RiskLevel, UserAnswer,
 };
 use serde::Deserialize;
 use tokio::sync::oneshot;
@@ -32,7 +32,7 @@ use tracing::{field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
-    edits::{metadata::EditEntry, EditsWorktree},
+    edits::EditsWorktree,
     effects::{analyze_effects, EffectClass},
     model_io_dump::{self, DumpEntry, ModelIoDump},
     permissions::PermissionStore,
@@ -71,6 +71,14 @@ impl ToolProgress for ToolProgressEmitter {
     }
 }
 
+fn edit_action_from_input(input: &serde_json::Value) -> protocol::EditAction {
+    if input["old_string"].as_str().is_some_and(|s| s.is_empty()) {
+        protocol::EditAction::Create
+    } else {
+        protocol::EditAction::Modify
+    }
+}
+
 fn effect_class_label(class: EffectClass) -> &'static str {
     match class {
         EffectClass::ReadOnly => "read_only",
@@ -97,14 +105,32 @@ const MAX_TOOL_RESULT_INLINE: usize = 6_000;
 /// 落 artifact 路径时给模型看的头部预览字节上限。
 const ARTIFACT_HEAD_PREVIEW_BYTES: usize = 2_000;
 
-/// `ask` 工具的输入。
+/// `ask` 工具的输入。两种形态二选一：
+///
+/// - **单题**：填 `question / options / multi`
+/// - **多题**：填 `questions`（数组），此时三个老字段被忽略
 #[derive(Debug, Deserialize)]
 struct AskInput {
-    question: String,
+    #[serde(default)]
+    question: Option<String>,
+    #[serde(default)]
     options: Vec<QuestionOption>,
-    /// 是否允许多选；缺省 false（单选）。
+    /// 是否允许多选；缺省 false（单选）。仅单题模式生效。
     #[serde(default)]
     multi: bool,
+    /// 多题模式：每道子题独立 title / description / options / multi。
+    #[serde(default)]
+    questions: Vec<AskQuestion>,
+}
+
+/// 解析后的 ask 形态。
+enum AskShape {
+    Single {
+        question: String,
+        options: Vec<QuestionOption>,
+        multi: bool,
+    },
+    Multi(Vec<AskQuestion>),
 }
 
 /// 一次越界路径审批的待解条目。
@@ -147,6 +173,9 @@ pub struct ToolDispatcher {
     pub permission_store: Option<Arc<PermissionStore>>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
     pub edits_worktree: Option<Arc<EditsWorktree>>,
+    /// Edit turn 快照所属 turn（架构 §4.13）。
+    pub current_turn_id: Option<String>,
+    pub current_turn_index: u32,
     /// Subagent / NestedRun 上下文（架构 §4.4.11）。`None` 表示当前进程不支持
     /// subagent 调度（单测路径 / 没有可用 subagent 定义时），spawn_task 直接拒绝。
     pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
@@ -459,6 +488,7 @@ impl ToolDispatcher {
         let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
         let permission_store = self.permission_store.clone();
         let edits_worktree_for_snapshot = self.edits_worktree.clone();
+        let current_turn_id_for_snapshot = self.current_turn_id.clone();
         let model_io_dump_for_judge = self.model_io_dump.clone();
 
         let tool_span_name = format!("tool.{}", call.name);
@@ -515,6 +545,7 @@ impl ToolDispatcher {
                                 "EditAutomatically: NeedsApproval → AllowOnce (file edit shortcut)"
                             );
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
+                                request_id: Some(request_id.clone()),
                                 tool_name: call_name_for_judge.clone(),
                                 decision: "allow".to_string(),
                                 reason: Some("EditAutomatically: 文件编辑自动放行".to_string()),
@@ -525,16 +556,18 @@ impl ToolDispatcher {
                 }
 
                 // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
-                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask。判官始终做二元决策：
-                // ASK 折叠为 Deny，Allow/Deny 主动 resolve waiter，前端不弹审批框。
+                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask；Allow 自动执行，
+                // Deny 按工具类型拒绝或转人工，Ask 默认保留人工审批。
                 if current_run_mode == crate::run_mode::RunMode::AutoMode {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
                         // 运行时读用户配置的 AutoMode 白名单（设置里改了即时生效，免重启）。
-                        let automode_models = data_dir_for_artifacts
+                        let automode_general = data_dir_for_artifacts
                             .as_deref()
-                            .map(|d| crate::storage::settings::load(d).general.automode_models)
-                            .unwrap_or_else(crate::storage::settings::default_automode_models);
+                            .map(|d| crate::storage::settings::load(d).general)
+                            .unwrap_or_default();
+                        let automode_models = automode_general.automode_models.clone();
+                        let judge_language = automode_general.language;
                         if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
                             // 模型不在白名单：不调判官，emit 一条 toast 提示并降级到普通审批
                             // （PermissionRequested 已 emit，保留人工决策）。dedup_key 让前端
@@ -574,18 +607,18 @@ impl ToolDispatcher {
                                 &call_input_for_judge,
                                 &judge_effects,
                                 &[],
+                                judge_language,
                             )
                             .await;
                             let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
-                            // AutoMode 判官始终做二元决策（架构 §4.4.4）：ASK 折叠为
-                            // Deny，让 agent 自行换路子或汇报，前端不弹审批框。
-                            // force_automode 在 AutoMode 下不再有额外作用；
-                            // 仅保留 reason 前缀标识来源。
+                            // force_automode 子开关：把 ASK 收紧为 Deny；普通 AutoMode
+                            // 保留 ASK 走人工审批。
                             let raw_label = raw_decision.as_label();
                             let decision = match raw_decision {
-                                crate::automode::AutoModeDecision::Ask(reason) => {
-                                    let prefix = if force_automode { "force-automode: " } else { "" };
-                                    crate::automode::AutoModeDecision::Deny(format!("{prefix}{reason}"))
+                                crate::automode::AutoModeDecision::Ask(reason) if force_automode => {
+                                    crate::automode::AutoModeDecision::Deny(format!(
+                                        "force-automode: {reason}"
+                                    ))
                                 }
                                 other => other,
                             };
@@ -604,6 +637,7 @@ impl ToolDispatcher {
                                 decision.reason().unwrap_or("无理由")
                             );
                             sink(state.event(protocol::EventPayload::PermissionAutoJudged {
+                                request_id: Some(request_id.clone()),
                                 tool_name: call_name_for_judge.clone(),
                                 decision: decision.as_label().to_string(),
                                 reason: decision.reason().map(str::to_string),
@@ -618,6 +652,7 @@ impl ToolDispatcher {
                                     request: serde_json::json!({
                                         "tool": call_name_for_judge,
                                         "input": call_input_for_judge,
+                                        "language": judge_language,
                                     }),
                                     response: serde_json::json!({
                                         "raw": raw_label,
@@ -634,10 +669,15 @@ impl ToolDispatcher {
                                         .resolve(request_id, ApprovalDecision::AllowOnce);
                                 }
                                 crate::automode::AutoModeDecision::Deny(reason) => {
-                                    hitl_for_future.resolve(
-                                        request_id,
-                                        ApprovalDecision::DenyWithFeedback { feedback: reason },
-                                    );
+                                    if matches!(call_name_for_judge.as_str(), "Bash" | "PowerShell") {
+                                        // 命令类拒绝需要用户最终确认：保留既有 PermissionRequested
+                                        // 弹窗，并把判官 reason 展示在审批框里。
+                                    } else {
+                                        hitl_for_future.resolve(
+                                            request_id,
+                                            ApprovalDecision::DenyWithFeedback { feedback: reason },
+                                        );
+                                    }
                                 }
                                 crate::automode::AutoModeDecision::Ask(_) => {
                                     // 保留人工决策
@@ -700,10 +740,8 @@ impl ToolDispatcher {
                     }
                 }
 
-                // —— Edit 工具快照：执行前拍 before（架构 §4.13.2）——
-                // 按真实文件路径加排他锁，确保 snapshot_before + execute + snapshot_after
-                // 不被其他 run 对同一文件的 Edit 打断（架构 §4.13.4）。
-                // 拿锁失败（如 30s 超时）直接跳过快照，不阻塞 Edit 本身。
+                // —— Edit 工具快照：本 turn 首次触达该文件时拍 before（架构 §4.13.2）——
+                // 按真实文件路径加排他锁，确保同 turn 内同 path 的多个 Edit 串行。
                 let _edit_lock = if call.name == "Edit" {
                     if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
                         let fp = effective_input["file_path"].as_str().map(Path::new);
@@ -718,20 +756,17 @@ impl ToolDispatcher {
                 } else {
                     None
                 };
-                let edit_before = if call.name == "Edit" {
-                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
-                        let fp = effective_input["file_path"].as_str().map(Path::new);
-                        if let Some(fp) = fp {
-                            wt.snapshot_before(&call.id, fp).await.unwrap_or(None)
-                        } else {
-                            None
+                if call.name == "Edit" {
+                    if let (Some(wt), Some(turn_id)) = (
+                        edits_worktree_for_snapshot.as_ref(),
+                        current_turn_id_for_snapshot.as_deref(),
+                    ) {
+                        if let Some(fp) = effective_input["file_path"].as_str().map(Path::new) {
+                            let action = edit_action_from_input(&effective_input);
+                            let _ = wt.ensure_turn_before(turn_id, fp, action).await;
                         }
-                    } else {
-                        None
                     }
-                } else {
-                    None
-                };
+                }
 
                 // 执行
                 info!(
@@ -776,72 +811,7 @@ impl ToolDispatcher {
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
 
-                // —— Edit 工具快照：执行后拍 after + 写 metadata + emit 事件 ——
-                if call.name == "Edit" && !exec_failed {
-                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
-                        let fp = effective_input["file_path"].as_str().map(Path::new);
-                        if let Some(fp) = fp {
-                            if let Ok(Some(after)) = wt.snapshot_after(&call.id, fp).await {
-                                let before_existed =
-                                    edit_before.as_ref().map_or(false, |b| b.file_bytes > 0);
-                                let action = if effective_input["old_string"]
-                                    .as_str()
-                                    .map_or(false, |s| s.is_empty())
-                                {
-                                    protocol::EditAction::Create
-                                } else if !before_existed {
-                                    protocol::EditAction::Create
-                                } else {
-                                    // overwrite = old_string 长度接近原文件大小
-                                    let old_len = effective_input["old_string"]
-                                        .as_str()
-                                        .map_or(0, |s| s.len() as u64);
-                                    let before_len =
-                                        edit_before.as_ref().map_or(0, |b| b.file_bytes);
-                                    if old_len >= before_len.saturating_sub(10) {
-                                        protocol::EditAction::Overwrite
-                                    } else {
-                                        protocol::EditAction::Modify
-                                    }
-                                };
-                                let snapshot_id = uuid::Uuid::new_v4().to_string();
-                                let entry = EditEntry {
-                                    snapshot_id: snapshot_id.clone(),
-                                    call_id: call.id.clone(),
-                                    tool: "Edit".into(),
-                                    real_path: fp.to_string_lossy().to_string(),
-                                    action,
-                                    before_sha: edit_before
-                                        .as_ref()
-                                        .map_or("".into(), |b| b.sha.clone()),
-                                    after_sha: after.sha.clone(),
-                                    before_bytes: edit_before.as_ref().map_or(0, |b| b.file_bytes),
-                                    after_bytes: after.file_bytes,
-                                    ts_ms: chrono::Utc::now().timestamp_millis(),
-                                    reverted: false,
-                                    reverted_at_ms: None,
-                                };
-                                let _ = wt.append_entry(entry);
-                                sink(
-                                    state.event(EventPayload::EditSnapshotCreated {
-                                        call_id: call.id.clone(),
-                                        snapshot_id,
-                                        file_path: fp.to_string_lossy().to_string(),
-                                        action,
-                                        before_sha: edit_before
-                                            .as_ref()
-                                            .map_or(String::new(), |b| b.sha.clone()),
-                                        after_sha: after.sha,
-                                        before_bytes: edit_before
-                                            .as_ref()
-                                            .map_or(0, |b| b.file_bytes),
-                                        after_bytes: after.file_bytes,
-                                    }),
-                                );
-                            }
-                        }
-                    }
-                }
+                // Turn 级 edits-worktree 在 TurnFinished 前统一拍 after；这里不写 per-Edit metadata。
 
                 // 大输出统一落 artifact（架构 §4.4.9）：超 6 KB 写盘 + 给模型「头部预览 +
                 // 工件指针」。失败路径（exec_failed）不走 materialize——错误文本通常很短，
@@ -968,8 +938,8 @@ impl ToolDispatcher {
 
         Box::pin(
             async move {
-                let (question, options, multi) = match parse_ask_input(&call.input) {
-                    Ok(parts) => parts,
+                let shape = match parse_ask_input(&call.input) {
+                    Ok(s) => s,
                     Err(err) => {
                         record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
                         return Ok(finish_ask_with_error(
@@ -991,12 +961,27 @@ impl ToolDispatcher {
                 }));
 
                 let (request_id, waiter) = hitl.open_question();
-                sink(state.event(EventPayload::UserQuestionRequested {
-                    request_id: request_id.clone(),
-                    question,
-                    options,
-                    multi,
-                }));
+                let request_event = match &shape {
+                    AskShape::Single {
+                        question,
+                        options,
+                        multi,
+                    } => EventPayload::UserQuestionRequested {
+                        request_id: request_id.clone(),
+                        question: question.clone(),
+                        options: options.clone(),
+                        multi: *multi,
+                        questions: Vec::new(),
+                    },
+                    AskShape::Multi(questions) => EventPayload::UserQuestionRequested {
+                        request_id: request_id.clone(),
+                        question: String::new(),
+                        options: Vec::new(),
+                        multi: false,
+                        questions: questions.clone(),
+                    },
+                };
+                sink(state.event(request_event));
 
                 // permission.check 子 span：记录 ask 等待时长
                 let permission_span = tracing::info_span!(
@@ -1014,6 +999,7 @@ impl ToolDispatcher {
                     UserAnswer::SelectedMulti { .. } => "selected_multi",
                     UserAnswer::Custom { .. } => "custom",
                     UserAnswer::Cancelled => "cancelled",
+                    UserAnswer::Multi { .. } => "multi",
                 };
                 permission_span.record(attr::PERMISSION_DECISION, answer_label);
 
@@ -1828,18 +1814,47 @@ fn truncate_tool_result(raw: String) -> (String, bool) {
     (format!("{}…[已截断]", &raw[..end]), true)
 }
 
-fn parse_ask_input(
-    input: &serde_json::Value,
-) -> Result<(String, Vec<QuestionOption>, bool), String> {
+fn parse_ask_input(input: &serde_json::Value) -> Result<AskShape, String> {
     let parsed: AskInput = serde_json::from_value(input.clone())
         .map_err(|e| format!("ask 工具 input 解析失败：{e}"))?;
+
+    // 多题：questions 非空时走多题分支，老顶层字段被忽略
+    if !parsed.questions.is_empty() {
+        if !(1..=5).contains(&parsed.questions.len()) {
+            return Err(format!(
+                "ask 工具 questions 长度需在 1-5 之间，实际给了 {} 个",
+                parsed.questions.len()
+            ));
+        }
+        for (i, q) in parsed.questions.iter().enumerate() {
+            if q.title.trim().is_empty() {
+                return Err(format!("ask 工具 questions[{i}].title 不能为空"));
+            }
+            if !(2..=5).contains(&q.options.len()) {
+                return Err(format!(
+                    "ask 工具 questions[{i}] 要求提供 2-5 个选项，实际给了 {} 个",
+                    q.options.len()
+                ));
+            }
+        }
+        return Ok(AskShape::Multi(parsed.questions));
+    }
+
+    // 单题
+    let question = parsed
+        .question
+        .ok_or_else(|| "ask 工具需要 question 或 questions 字段".to_string())?;
     if !(2..=5).contains(&parsed.options.len()) {
         return Err(format!(
             "ask 工具要求提供 2-5 个选项，实际给了 {} 个",
             parsed.options.len()
         ));
     }
-    Ok((parsed.question, parsed.options, parsed.multi))
+    Ok(AskShape::Single {
+        question,
+        options: parsed.options,
+        multi: parsed.multi,
+    })
 }
 
 #[cfg(test)]
@@ -1942,7 +1957,9 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
+            run_mode: Arc::new(std::sync::Mutex::new(
+                crate::run_mode::RunMode::AskBeforeEdits,
+            )),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -1951,6 +1968,8 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2016,6 +2035,8 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
@@ -2081,6 +2102,8 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
@@ -2161,7 +2184,9 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
+            run_mode: Arc::new(std::sync::Mutex::new(
+                crate::run_mode::RunMode::AskBeforeEdits,
+            )),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2170,6 +2195,8 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2274,7 +2301,9 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
+            run_mode: Arc::new(std::sync::Mutex::new(
+                crate::run_mode::RunMode::AskBeforeEdits,
+            )),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2284,6 +2313,8 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2391,7 +2422,9 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AskBeforeEdits)),
+            run_mode: Arc::new(std::sync::Mutex::new(
+                crate::run_mode::RunMode::AskBeforeEdits,
+            )),
             model_id: None,
             judge_client: None,
             force_automode: false,
@@ -2400,6 +2433,8 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
+            current_turn_id: None,
+            current_turn_index: 0,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2438,6 +2473,63 @@ mod tests {
         assert!(!truncated);
         assert_eq!(artifact_path, None);
         assert!(event_result.ends_with(&large_body));
+    }
+
+    #[test]
+    fn parse_ask_input_accepts_multi_question_shape() {
+        let shape = parse_ask_input(&serde_json::json!({
+            "questions": [
+                {
+                    "title": "选择范围",
+                    "description": "决定本次改动覆盖面",
+                    "options": [
+                        {"label": "仅核心"},
+                        {"label": "含前端", "description": "同步更新 UI"}
+                    ]
+                },
+                {
+                    "title": "是否多选",
+                    "multi": true,
+                    "options": [
+                        {"label": "A"},
+                        {"label": "B"}
+                    ]
+                }
+            ]
+        }))
+        .expect("questions shape should parse");
+
+        match shape {
+            AskShape::Multi(questions) => {
+                assert_eq!(questions.len(), 2);
+                assert_eq!(questions[0].title, "选择范围");
+                assert!(questions[1].multi);
+            }
+            AskShape::Single { .. } => panic!("expected multi-question shape"),
+        }
+    }
+
+    #[test]
+    fn parse_ask_input_accepts_legacy_single_question_shape() {
+        let shape = parse_ask_input(&serde_json::json!({
+            "question": "怎么处理？",
+            "options": [{"label": "A"}, {"label": "B"}],
+            "multi": true
+        }))
+        .expect("single shape should parse");
+
+        match shape {
+            AskShape::Single {
+                question,
+                options,
+                multi,
+            } => {
+                assert_eq!(question, "怎么处理？");
+                assert_eq!(options.len(), 2);
+                assert!(multi);
+            }
+            AskShape::Multi(_) => panic!("expected single-question shape"),
+        }
     }
 
     #[test]

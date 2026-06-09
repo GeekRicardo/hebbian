@@ -128,6 +128,7 @@ pub enum EngineEvent {
     /// AutoMode judge 自动给出决策（架构 §4.4.4）。前端可在消息流里渲染
     /// 「AutoMode 自动放行 / 拒绝 / 转人工」，作为审计证据。
     PermissionAutoJudged {
+        request_id: String,
         tool_name: String,
         /// "allow" / "deny" / "ask"
         decision: String,
@@ -189,6 +190,9 @@ pub enum EngineEvent {
         /// 是否允许多选
         #[serde(default)]
         multi: bool,
+        /// 多题模式：非空时前端按多题渲染，顶层单题字段忽略。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<AskQuestionDto>,
     },
     /// 用户已回应提问。前端关闭弹窗。
     UserQuestionAnswered {
@@ -199,26 +203,19 @@ pub enum EngineEvent {
         /// custom 时是 text，cancelled 时为空
         text: String,
     },
-    /// Edit 工具快照已创建（架构 §4.13）。前端 EditTree 用它对文件操作排序展示。
-    EditSnapshotCreated {
-        call_id: String,
-        snapshot_id: String,
-        file_path: String,
-        /// "create" / "overwrite" / "modify"
-        action: String,
-        before_sha: String,
-        after_sha: String,
-        before_bytes: u64,
-        after_bytes: u64,
+    /// 本轮 Edit 修改已提交（架构 §4.13）。前端修改文件栏按 turn 展示。
+    TurnEditsCommitted {
+        turn_id: String,
+        turn: u32,
+        files: Vec<protocol::TurnFileChange>,
     },
-    /// Edit 回退成功。
-    EditReverted {
-        snapshot_id: String,
-        file_path: String,
+    /// 本轮 Edit 回退成功。
+    TurnEditsReverted {
+        turn_id: String,
     },
-    /// Edit 回退失败。
-    EditRevertFailed {
-        snapshot_id: String,
+    /// 本轮 Edit 回退失败。
+    TurnEditsRevertFailed {
+        turn_id: String,
         file_path: String,
         error: String,
     },
@@ -324,4 +321,32 @@ impl From<protocol::todo::PlanComment> for PlanCommentDto {
 pub struct QuestionOptionDto {
     pub label: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AskQuestionDto {
+    pub title: String,
+    pub description: String,
+    pub options: Vec<QuestionOptionDto>,
+    pub multi: bool,
+}
+
+impl From<protocol::QuestionOption> for QuestionOptionDto {
+    fn from(o: protocol::QuestionOption) -> Self {
+        Self {
+            label: o.label,
+            description: o.description,
+        }
+    }
+}
+
+impl From<protocol::AskQuestion> for AskQuestionDto {
+    fn from(q: protocol::AskQuestion) -> Self {
+        Self {
+            title: q.title,
+            description: q.description,
+            options: q.options.into_iter().map(Into::into).collect(),
+            multi: q.multi,
+        }
+    }
 }

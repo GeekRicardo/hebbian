@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown, Share, RotateCw, Scissors } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
@@ -24,7 +24,13 @@ import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
 import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
 import type { MessageAttachment } from "@/desktop/ui/types";
 
-export function ChatView() {
+const PINNED_USER_MESSAGE_VISIBLE = false;
+
+interface ChatViewProps {
+  emptyState?: ReactNode;
+}
+
+export function ChatView({ emptyState }: ChatViewProps = {}) {
   const {
     currentSession,
     promptsFile,
@@ -35,7 +41,6 @@ export function ChatView() {
     streamingParts,
     liveTimeline,
     assistantInsertPos,
-    autoJudgedNotes,
     currentRunMode,
     sendUserMessage,
     cancelStreaming,
@@ -773,9 +778,11 @@ export function ChatView() {
         onScroll={handleScroll}
       >
         {isNewConversationLayout && (
-          <div className="px-6 py-10 text-center text-sm text-muted-foreground">
-            发送第一条消息开始对话
-          </div>
+          emptyState ?? (
+            <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+              发送第一条消息开始对话
+            </div>
+          )
         )}
         <MessageList
           messages={messages}
@@ -865,24 +872,6 @@ export function ChatView() {
               当前模式：{runModeLabel(currentRunMode)}
             </div>
           ) : null}
-          {/* 自动模式下，每个被判定的工具调用对应一条提示。事件流：PermissionAutoJudged。 */}
-          {isStreaming &&
-            autoJudgedNotes.map((n, idx) => (
-              <div
-                key={`auto-judge-${idx}`}
-                className="mx-auto my-1 text-xs text-muted-foreground"
-              >
-                {n.decision === "allow" ? "✓" : n.decision === "deny" ? "✗" : "?"}{" "}
-                {n.decision === "allow"
-                  ? "自动放行"
-                  : n.decision === "deny"
-                  ? "自动拒绝"
-                  : "需要询问"}{" "}
-                [{n.toolName}]
-                {n.reason ? <span className="opacity-70">：{n.reason}</span> : null}
-              </div>
-            ))}
-
           {/* 本轮后台记忆抽取写入的记忆（架构 §4.14）：会话末尾一行低调摘要，可展开。
               run 结束后异步到达，故不依赖 isStreaming。 */}
           {currentSession && sessionMemoryWrites[currentSession.id]?.length ? (
@@ -896,7 +885,7 @@ export function ChatView() {
           在 chat 区顶端浮一个截断副本。点击浮动条主体 → 滚动到真实消息位置对齐浮动区，
           浮动消失。右侧上箭头 → 跳转到上一条 user 消息。手动滚动破坏锚定后箭头跟随
           浮动条一起消失。 */}
-      {pinnedUserId && (() => {
+      {PINNED_USER_MESSAGE_VISIBLE && pinnedUserId && (() => {
         const msg = messages.find((m) => m.id === pinnedUserId);
         if (!msg || msg.role !== "user") return null;
         const prevId = getPrevUserMessageId(pinnedUserId);
@@ -954,7 +943,7 @@ export function ChatView() {
         不变，上浮后会把最后一条消息盖住；margin-bottom 算进 flex 主轴尺寸，会让
         flex-1 的 messages 区跟着压缩，消息和输入框各占各的空间。 */}
     <div
-        className={`relative mx-auto transition-all duration-300 ease-out ${
+        className={`chat-input-shell relative mx-auto transition-all duration-300 ease-out ${
           isNewConversationLayout
             ? "w-3/4 mb-[44vh]"
             : isStreaming

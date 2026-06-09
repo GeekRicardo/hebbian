@@ -380,6 +380,7 @@ impl App {
                 tool_name,
                 decision,
                 reason,
+                ..
             } => {
                 let dec = match decision.as_str() {
                     "allow" => AutoDecision::Allow,

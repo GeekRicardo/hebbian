@@ -654,6 +654,8 @@ struct DesktopObserver<'a> {
     output_attachments: Vec<MessageAttachment>,
     hitl_state: Option<Arc<HitlState>>,
     hitl: Arc<HitlGate>,
+    data_dir: PathBuf,
+    session_id: String,
     emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
     partial_writer: Option<PartialFileWriter>,
 }
@@ -683,6 +685,8 @@ impl<'a> DesktopObserver<'a> {
             output_attachments: Vec::new(),
             hitl_state,
             hitl,
+            data_dir: data_dir.to_path_buf(),
+            session_id: session_id.to_string(),
             emit,
             partial_writer,
         }
@@ -733,6 +737,25 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
                 (self.emit)(ev);
             }
             return;
+        }
+
+        match &event.payload {
+            EventPayload::PermissionAutoJudged { decision, .. } if decision == "deny" => {
+                if let Err(err) = sessions::append_event(&self.data_dir, &self.session_id, event) {
+                    tracing::warn!(%err, "failed to persist automode denial event");
+                }
+            }
+            EventPayload::PermissionResolved { decision, .. }
+                if matches!(
+                    decision,
+                    ApprovalDecision::Deny | ApprovalDecision::DenyWithFeedback { .. }
+                ) =>
+            {
+                if let Err(err) = sessions::append_event(&self.data_dir, &self.session_id, event) {
+                    tracing::warn!(%err, "failed to persist permission denial event");
+                }
+            }
+            _ => {}
         }
 
         if let EventPayload::TextDelta { text } = &event.payload {
@@ -844,6 +867,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         _question: &str,
         _options: &[QuestionOption],
         _multi: bool,
+        _questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
         if let Some(state) = &self.hitl_state {
             state.track(request_id.0.clone(), Arc::clone(&self.hitl));
@@ -1967,10 +1991,15 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             },
         }),
         PermissionAutoJudged {
+            request_id,
             tool_name,
             decision,
             reason,
         } => Some(EngineEvent::PermissionAutoJudged {
+            request_id: request_id
+                .as_ref()
+                .map(|id| id.0.clone())
+                .unwrap_or_default(),
             tool_name: tool_name.clone(),
             decision: decision.clone(),
             reason: reason.clone(),
@@ -2048,17 +2077,13 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             question,
             options,
             multi,
+            questions,
         } => Some(EngineEvent::UserQuestionRequested {
             request_id: request_id.0.clone(),
             question: question.clone(),
-            options: options
-                .iter()
-                .map(|o| crate::engine::QuestionOptionDto {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                })
-                .collect(),
+            options: options.iter().cloned().map(Into::into).collect(),
             multi: *multi,
+            questions: questions.iter().cloned().map(Into::into).collect(),
         }),
         UserQuestionAnswered { request_id, answer } => {
             let (kind, text) = match answer {
@@ -2068,6 +2093,14 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 }
                 protocol::UserAnswer::Custom { text } => ("custom", text.clone()),
                 protocol::UserAnswer::Cancelled => ("cancelled", String::new()),
+                protocol::UserAnswer::Multi { items } => {
+                    let text = items
+                        .iter()
+                        .map(|item| format!("{}: {}", item.title, item.answer.to_agent_text()))
+                        .collect::<Vec<_>>()
+                        .join("；");
+                    ("multi", text)
+                }
             };
             Some(EngineEvent::UserQuestionAnswered {
                 request_id: request_id.0.clone(),
@@ -2075,43 +2108,24 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 text,
             })
         }
-        EditSnapshotCreated {
-            call_id,
-            snapshot_id,
-            file_path,
-            action,
-            before_sha,
-            after_sha,
-            before_bytes,
-            after_bytes,
-        } => Some(EngineEvent::EditSnapshotCreated {
-            call_id: call_id.clone(),
-            snapshot_id: snapshot_id.clone(),
-            file_path: file_path.clone(),
-            action: match action {
-                protocol::EditAction::Create => "create",
-                protocol::EditAction::Overwrite => "overwrite",
-                protocol::EditAction::Modify => "modify",
-            }
-            .to_string(),
-            before_sha: before_sha.clone(),
-            after_sha: after_sha.clone(),
-            before_bytes: *before_bytes,
-            after_bytes: *after_bytes,
+        TurnEditsCommitted {
+            turn_id,
+            turn,
+            files,
+        } => Some(EngineEvent::TurnEditsCommitted {
+            turn_id: turn_id.0.clone(),
+            turn: *turn,
+            files: files.clone(),
         }),
-        EditReverted {
-            snapshot_id,
-            file_path,
-        } => Some(EngineEvent::EditReverted {
-            snapshot_id: snapshot_id.clone(),
-            file_path: file_path.clone(),
+        TurnEditsReverted { turn_id } => Some(EngineEvent::TurnEditsReverted {
+            turn_id: turn_id.0.clone(),
         }),
-        EditRevertFailed {
-            snapshot_id,
+        TurnEditsRevertFailed {
+            turn_id,
             file_path,
             error,
-        } => Some(EngineEvent::EditRevertFailed {
-            snapshot_id: snapshot_id.clone(),
+        } => Some(EngineEvent::TurnEditsRevertFailed {
+            turn_id: turn_id.0.clone(),
             file_path: file_path.clone(),
             error: error.clone(),
         }),
@@ -2247,6 +2261,7 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             question,
             options,
             multi,
+            ..
         } => {
             // 构建 options JSON
             let options_json: Vec<String> = options

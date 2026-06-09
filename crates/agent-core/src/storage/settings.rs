@@ -31,6 +31,9 @@ pub struct GeneralSettings {
     /// 开机启动（macOS / Windows）
     #[serde(default)]
     pub launch_at_login: bool,
+    /// 用户界面语言偏好。当前用于控制 AutoMode 判官原因的输出语言。
+    #[serde(default)]
+    pub language: AppLanguage,
     /// Grep 工具结果中显示搜索位置。
     #[serde(default = "default_show_grep_search_path")]
     pub show_grep_search_path: bool,
@@ -54,6 +57,27 @@ pub struct GeneralSettings {
     /// Run 非正常结束后，ContinueBar 上点 continue 的恢复方式（架构 §7.3）。
     #[serde(default)]
     pub continue_strategy: ContinueStrategy,
+    /// 启动时自动打开浏览器 DevTools（F12）。手动改配置文件开启，默认关闭。
+    #[serde(default)]
+    pub open_devtools: bool,
+}
+
+/// 应用语言偏好。当前只影响 AutoMode 判官原因；不做整套 UI i18n。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppLanguage {
+    #[default]
+    ZhCn,
+    En,
+}
+
+impl AppLanguage {
+    pub fn judge_reason_instruction(self) -> &'static str {
+        match self {
+            Self::ZhCn => "Write DENY and ASK reasons in Simplified Chinese.",
+            Self::En => "Write DENY and ASK reasons in English.",
+        }
+    }
 }
 
 /// 点「继续」的恢复方式（架构 §7.3）。这是一个 UI 行为偏好——后端只存储，
@@ -84,12 +108,14 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             launch_at_login: false,
+            language: AppLanguage::default(),
             show_grep_search_path: default_show_grep_search_path(),
             shell: default_shell(),
             log_enabled: false,
             edit_backend: EditBackend::default(),
             automode_models: default_automode_models(),
             continue_strategy: ContinueStrategy::default(),
+            open_devtools: false,
         }
     }
 }

@@ -6536,3 +6536,75 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx`: 上传图片时支持方形裁剪，裁剪后保存为头像图片。
 - **影响范围**: Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改全局 settings API。用户头像继续沿用现有本地前端偏好。
 - **留尾巴**: 当前裁剪交互用滑块选择方形区域，后续如果需要更像图片编辑器，可再补鼠标拖拽缩放手柄。
+
+### 2026-06-09 — 恢复正式工作台会话完成与审批外框状态
+
+- **Why**: 用户反馈左侧运行呼吸灯仍在选中底色框内，导致框左侧空白过大；同时旧版“完成绿色边框”和“审批黄色呼吸边框”在正式工作台没有接回。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 正式工作台会话行接入 `sessionStreams`，按 pending approval/question 标记审批态；完成未读态与运行态互斥，避免完成态误压运行态。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 将选中/hover/状态边框画到内部会话框 `.dsp-session-row`，状态点用负 left 放到框外侧；标题左侧 padding 收紧；完成态恢复绿色边框与柔和光晕；审批态恢复黄色呼吸外框。
+- **影响范围**: 仅 Desktop/hebweb 共享前端正式工作台左侧会话列表视觉；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 扩展 Ask 工具支持一次性多题提问
+
+- **Why**: 用户希望 Ask 工具能一次性问多个问题，并且每题有标题、可选说明，选项也有正文与可选说明；前端同一弹窗要能按题目渲染，减少连续多次打断。
+- **改动**:
+  - `crates/protocol/src/permission.rs` / `crates/protocol/src/event.rs`: 新增 `AskQuestion`、`SingleAnswer`、`MultiQuestionAnswer` 与 `UserAnswer::Multi`；`UserQuestionRequested` 增加 `questions` 字段，保留旧 `question/options/multi` 单题路径。
+  - `crates/agent-core/src/tools/mod.rs` / `crates/agent-core/src/dispatch.rs`: Ask schema 支持单题与 `questions[]` 双形态；dispatch 根据是否传 `questions` 发单题或多题事件；新增解析回归测试。
+  - `apps/desktop/src/*` / `apps/desktop/frontend/src/desktop/*`: Desktop 后端事件翻译、Tauri `answer_question`、store/types 与 `UserQuestionPopup` 支持多题同屏渲染和一次性提交。
+  - `apps/cli` / `apps/web-server` / `apps/channel-gateway`: 同步事件 DTO、observer 签名与 answer 解析，CLI/Channel 多题走顺序提示，hebweb 透传给共享前端。
+  - `docs/架构.md`: 补充 Ask 单题/多题双协议形态与 surface 渲染规则。
+- **影响范围**: protocol / agent-core / desktop / CLI / hebweb / channel-gateway；协议为 additive，老单题事件与老 ask 输入保持兼容。
+- **留尾巴**: 未跑 `pnpm tauri dev` 做人工 UI 点击验证；已跑编译、前端类型检查与 ask 解析单测。
+
+### 2026-06-09 — 增加删除二次确认并限制项目会话展示数量
+
+- **Why**: 用户要求删除项目或对话必须二次确认，避免误删；项目对话历史列表最多只显示 8 条，减少左侧项目展开后过长。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 正式工作台删除项目/对话增加第二次 `confirm`；项目下会话列表只渲染最新 8 条。
+  - `apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx`: 旧侧栏删除项目/对话入口同步增加第二次确认，避免未来切回旧入口时漏掉保护。
+- **影响范围**: 仅 Desktop/hebweb 共享前端交互与左侧列表渲染；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 统一前端滚动条为左侧列表淡色系
+
+- **Why**: 用户要求 chat 区域滚动条和对话 list 一样淡，并且其他所有地方的滚动条都统一使用这个色系。
+- **改动**:
+  - `apps/desktop/frontend/src/index.css`: 将全局 WebKit / Firefox 滚动条统一为 4px、透明轨道、`rgba(32, 54, 78, 0.1)` 淡色 thumb，hover 仅轻微加深。
+  - `apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx`: 移除局部内联滚动条颜色覆盖，避免右侧栏横向滚动条变成黑色或透明而不跟随全局样式。
+- **影响范围**: Desktop/hebweb 共享前端全局滚动条视觉；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 暂停展示 chat 顶部浮动用户消息
+
+- **Why**: 用户要求先不展示 chat 区域上方的浮动 user message，但组件逻辑可以保留。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`: 增加 `PINNED_USER_MESSAGE_VISIBLE = false` 渲染开关，保留 pinned user message 的组件代码和状态逻辑，但当前不再渲染浮动副本。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 ChatView 展示；不改消息数据、不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 后续若要恢复，只需打开渲染开关。
+
+### 2026-06-09 — 将 edits-worktree 改为按 turn 聚合并自动聚焦修改文件栏
+
+- **Why**: 用户希望每轮对话结束后，如果本轮有文件修改，右侧 sidebar 自动切到「修改文件」栏；同一轮内同一文件中间改多次不用展示，只看本轮开始前到完成后的净变化，并用绿色 `+` / 红色 `-` 展示。
+- **改动**:
+  - `docs/架构.md`: §4.13 从 per-Edit 快照/单次回退改写为 per-Turn before/after 快照与整轮回退；同步 §3 事件/API 与 §13 决策表。
+  - `crates/protocol/src/event.rs` / `crates/protocol/src/lib.rs`: 删除 `EditSnapshotCreated / EditReverted / EditRevertFailed`，新增 `TurnEditsCommitted / TurnEditsReverted / TurnEditsRevertFailed` 与 `TurnFileChange`。
+  - `crates/agent-core/src/edits/*`: metadata 升到 v2 `turns[]`；`EditsWorktree` 新增 `begin_turn / ensure_turn_before / commit_turn / revert_turn`；同一 turn 内同一文件只保留首个 before 和最终 after；回归测试改成 turn 粒度。
+  - `crates/agent-core/src/agent_loop.rs` / `dispatch.rs`: TurnStarted 后登记 active turn，Edit 执行前只在本轮首次触达文件时拍 before，TurnFinished 前统一 commit after 并 emit `TurnEditsCommitted`。
+  - `apps/desktop/src/*` / `apps/web-server/src/server.rs`: 事件翻译与 edits-worktree IPC 切到 turn 级语义；保留旧 Tauri command 名以降低前端调用面改动，但入参/返回内容变为 turn 级。
+  - `apps/desktop/frontend/src/desktop/*`: 前端类型、bridge、store、RightSidebar、EditTreePanel 改为 turn 分组展示；TurnEditsCommitted 后自动展开右侧栏、切到「修改文件」tab、滚动并高亮本轮分组；每个文件卡片用 `DiffViewer` 展示完整净 diff。
+- **影响范围**: protocol / agent-core / desktop / hebweb / frontend / docs；这是 §4.13 的不兼容语义变更，旧 `.hebbian-edits.json` v1 per-Edit metadata 不迁移，旧会话的历史 Edit 记录会消失；per-Edit 单次回退能力被整轮回退替代。
+- **留尾巴**: `cargo test -p agent-core --lib` 当前被既有 `storage/settings.rs` 中缺失 `AppLanguage` 类型阻塞；已通过 `cargo check --workspace`、`cargo check -p agent-core --tests`、`pnpm exec tsc --noEmit`（apps/desktop）以及 edits 相关单测。未跑 `pnpm tauri dev` 人工确认 UI 自动聚焦。
+
+### 2026-06-09 — 增加语言设置并约束 AutoMode 判官原因语言
+
+- **Why**: 用户希望设置里有「语言」下拉框（中文 / English），并让 AutoMode judge 返回的拒绝 / 询问原因按该语言生成。
+- **改动**:
+  - `crates/agent-core/src/storage/settings.rs`: `GeneralSettings` 新增 `language` 字段和 `AppLanguage` 枚举，默认中文。
+  - `crates/agent-core/src/automode.rs` / `crates/agent-core/prompts/automode_judge.md`: judge prompt 增加 `reason_language` 输入，并约束 `DENY:` / `ASK:` 后的 reason 使用设置语言；新增 prompt 语言回归测试。
+  - `crates/agent-core/src/dispatch.rs`: AutoMode 判官调用读取最新全局设置，把语言传入 judge，并在 model_io judge 记录里带上语言。
+  - `apps/desktop/frontend/src/desktop/ui/types.ts` / `AppSettingsDialog.tsx`: 设置页通用项新增「语言」下拉框，选项为「中文 / English」。
+  - `docs/架构.md`: 补充 `general.language` 与 AutoMode 判官原因语言约定。
+- **影响范围**: agent-core settings schema / AutoMode judge prompt / Desktop 设置 UI；新增 settings 字段有默认值，老 settings.json 兼容。
+- **留尾巴**: 无

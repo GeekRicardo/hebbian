@@ -26,6 +26,7 @@ use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
 use crate::effects::Effects;
+use crate::storage::settings::AppLanguage;
 use crate::tools::{bash_prefix, shell_parse};
 
 /// AutoMode 的判官 system prompt（编译进二进制，跨会话稳定）。
@@ -97,8 +98,9 @@ pub async fn judge_auto_mode(
     tool_input: &Value,
     effects: &Effects,
     recent_transcript: &[TranscriptEntry],
+    language: AppLanguage,
 ) -> AutoModeDecision {
-    let prompt = format_judge_prompt(tool_name, tool_input, effects, recent_transcript);
+    let prompt = format_judge_prompt(tool_name, tool_input, effects, recent_transcript, language);
 
     let request = ModelRequest {
         model: current_model_id.to_string(),
@@ -222,6 +224,7 @@ fn format_judge_prompt(
     tool_input: &Value,
     effects: &Effects,
     recent_transcript: &[TranscriptEntry],
+    language: AppLanguage,
 ) -> String {
     let recent: Vec<String> = recent_transcript
         .iter()
@@ -299,12 +302,15 @@ fn format_judge_prompt(
          segments:\n\
          {segments_block}\n\
          \n\
+         reason_language: {reason_language}\n\
+         \n\
          recent_transcript (oldest first):\n\
          {recent}\n\
          \n\
          Output one line per the system prompt's format.",
         class = effects.class,
         fingerprint = effects.command_fingerprint.as_deref().unwrap_or("(n/a)"),
+        reason_language = language.judge_reason_instruction(),
         recent = recent.join("\n"),
     )
 }
@@ -428,6 +434,27 @@ mod tests {
     fn parse_unknown_falls_back_to_ask() {
         assert!(matches!(parse_decision("MAYBE"), AutoModeDecision::Ask(_)));
         assert!(matches!(parse_decision(""), AutoModeDecision::Ask(_)));
+    }
+
+    #[test]
+    fn judge_prompt_carries_reason_language() {
+        let effects = crate::effects::analyze_effects("Edit", &json!({"file_path": "/tmp/a"}));
+        let zh = format_judge_prompt(
+            "Edit",
+            &json!({"file_path": "/tmp/a"}),
+            &effects,
+            &[],
+            AppLanguage::ZhCn,
+        );
+        let en = format_judge_prompt(
+            "Edit",
+            &json!({"file_path": "/tmp/a"}),
+            &effects,
+            &[],
+            AppLanguage::En,
+        );
+        assert!(zh.contains("Simplified Chinese"));
+        assert!(en.contains("English"));
     }
 
     #[test]

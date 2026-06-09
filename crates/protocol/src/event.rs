@@ -176,6 +176,8 @@ pub enum EventPayload {
     /// AutoMode 判官自动给出决策（架构 §4.4.4）。surface 端用来在 UI 上提示
     /// 「agent 替我决定了 X」，并落进 jsonl 作为审计证据。
     PermissionAutoJudged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<PermissionRequestId>,
         tool_name: String,
         /// `allow` / `deny` / `ask`
         decision: String,
@@ -195,13 +197,21 @@ pub enum EventPayload {
     },
 
     // —— 人机协作：agent 主动提问 ——
+    /// 老路径（单题）：`question / options / multi` 顶层字段，`questions` 为空。
+    /// 新路径（多题）：`questions` 非空，老顶层字段保持兼容默认（surface 端按
+    /// `questions.is_empty()` 判断走哪条渲染）。两者不可同时非空。
     UserQuestionRequested {
         request_id: PermissionRequestId,
+        #[serde(default)]
         question: String,
+        #[serde(default)]
         options: Vec<crate::permission::QuestionOption>,
         /// 是否允许多选（true = 用户可勾选多个选项）
         #[serde(default)]
         multi: bool,
+        /// 多题模式的子题列表。非空时 surface 走多题渲染、老顶层字段忽略。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<crate::permission::AskQuestion>,
     },
     UserQuestionAnswered {
         request_id: PermissionRequestId,
@@ -259,22 +269,16 @@ pub enum EventPayload {
     },
 
     // —— 编辑快照（§4.13） ——
-    EditSnapshotCreated {
-        call_id: String,
-        snapshot_id: String,
-        file_path: String,
-        action: EditAction,
-        before_sha: String,
-        after_sha: String,
-        before_bytes: u64,
-        after_bytes: u64,
+    TurnEditsCommitted {
+        turn_id: TurnId,
+        turn: u32,
+        files: Vec<TurnFileChange>,
     },
-    EditReverted {
-        snapshot_id: String,
-        file_path: String,
+    TurnEditsReverted {
+        turn_id: TurnId,
     },
-    EditRevertFailed {
-        snapshot_id: String,
+    TurnEditsRevertFailed {
+        turn_id: TurnId,
         file_path: String,
         error: String,
     },
@@ -293,6 +297,17 @@ pub enum EditAction {
     Create,
     Overwrite,
     Modify,
+}
+
+/// 单个 turn 内某个文件的净变化（§4.13.6）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnFileChange {
+    pub real_path: String,
+    pub action: EditAction,
+    pub before_sha: String,
+    pub after_sha: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
 }
 
 /// Step 粒度（架构 §4.2）。

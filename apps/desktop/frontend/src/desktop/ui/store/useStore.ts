@@ -6,7 +6,7 @@ import type {
   CatalogEntry,
   ContextUsage,
   ContinueKind,
-  EditEntry,
+  TurnEditEntry,
   EngineEvent,
   LogEntry,
   Message,
@@ -352,6 +352,7 @@ export type SuspendedInfo = {
 };
 
 export type AutoJudgedNote = {
+  requestId: string;
   toolName: string;
   decision: string;
   reason?: string | null;
@@ -519,17 +520,25 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     };
   }
   if (e.type === "permission_auto_judged") {
-    // AutoMode 判官标记（架构 §4.4.4）：累积到 slot.autoJudgedNotes，ChatView 渲染气泡。
+    if (e.decision === "deny" && (e.tool_name === "Edit" || e.tool_name === "Write")) {
+      toast.info(`自动拒绝：${e.tool_name}`, {
+        description: e.reason ?? undefined,
+        duration: 5000,
+      });
+    }
+    if (e.decision !== "deny" && e.decision !== "ask") return slot;
+    const attachReason = (approval: PendingApproval | null) =>
+      approval?.requestId === e.request_id
+        ? { ...approval, autoJudgeReason: e.reason ?? null }
+        : approval;
     return {
       ...slot,
-      autoJudgedNotes: [
-        ...slot.autoJudgedNotes,
-        {
-          toolName: e.tool_name,
-          decision: e.decision,
-          reason: e.reason ?? null,
-        },
-      ],
+      pendingApproval: attachReason(slot.pendingApproval),
+      pendingApprovalQueue: slot.pendingApprovalQueue.map((approval) =>
+        approval.requestId === e.request_id
+          ? { ...approval, autoJudgeReason: e.reason ?? null }
+          : approval
+      ),
     };
   }
   if (e.type === "step_started" || e.type === "step_finished") {
@@ -579,6 +588,7 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       question: e.question,
       options: e.options,
       multi: e.multi ?? false,
+      questions: e.questions ?? [],
     };
     if (slot.pendingQuestion) {
       return { ...slot, pendingQuestionQueue: [...slot.pendingQuestionQueue, q] };
@@ -697,39 +707,34 @@ function patchSessionSlot(
   void get;
 }
 
-/** edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
+/** turn edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
 function applyEditEvent(
-  current: Record<string, EditEntry[]>,
+  current: Record<string, TurnEditEntry[]>,
   sessionId: string,
   e: EngineEvent,
-): Record<string, EditEntry[]> | null {
-  if (e.type === "edit_snapshot_created") {
+): Record<string, TurnEditEntry[]> | null {
+  if (e.type === "turn_edits_committed") {
     const existing = current[sessionId] ?? [];
-    // 去重：补全量拉取后又收到同名事件时，避免重复 push
-    if (existing.some((x) => x.snapshot_id === e.snapshot_id)) return null;
-    const next: EditEntry[] = [
+    if (existing.some((x) => x.turn_id === e.turn_id)) return null;
+    const now = Date.now();
+    const next: TurnEditEntry[] = [
       ...existing,
       {
-        snapshot_id: e.snapshot_id,
-        call_id: e.call_id,
-        tool: "Edit",
-        real_path: e.file_path,
-        action: e.action,
-        before_sha: e.before_sha,
-        after_sha: e.after_sha,
-        before_bytes: e.before_bytes,
-        after_bytes: e.after_bytes,
-        ts_ms: Date.now(),
+        turn_id: e.turn_id,
+        turn_index: e.turn,
+        started_at_ms: now,
+        finished_at_ms: now,
+        files: e.files,
         reverted: false,
       },
     ];
     return { ...current, [sessionId]: next };
   }
-  if (e.type === "edit_reverted") {
+  if (e.type === "turn_edits_reverted") {
     const existing = current[sessionId];
     if (!existing) return null;
     const next = existing.map((entry) =>
-      entry.snapshot_id === e.snapshot_id
+      entry.turn_id === e.turn_id
         ? { ...entry, reverted: true, reverted_at_ms: Date.now() }
         : entry,
     );
@@ -925,7 +930,7 @@ interface AppState {
    * - 全量由 `refreshEdits` 在 openSession 时拉一次
    * - **session-scoped**：跟 run 生命周期解耦（run 结束 slot 删除时不会跟着清掉）
    */
-  sessionEditSnapshots: Record<string, EditEntry[]>;
+  sessionEditSnapshots: Record<string, TurnEditEntry[]>;
 
   /**
    * 架构 §4.14：每个 session「最近一个 Run 后台抽取写入的记忆」。
@@ -976,7 +981,7 @@ interface AppState {
 
   // ── edits worktree（架构 §4.13）──
   /** 回退单次 Edit（调 Tauri revert_edit 命令）。成功/失败直接在 UI 展示 toast。 */
-  revertEdit: (sessionId: string, snapshotId: string) => Promise<void>;
+  revertEdit: (sessionId: string, turnId: string) => Promise<void>;
   /** 从后端重新加载当前 session 的 edits 条目列表。 */
   refreshEdits: () => Promise<void>;
 
@@ -1327,15 +1332,14 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  async revertEdit(sessionId: string, snapshotId: string) {
-    const result = await api.revertEdit(sessionId, snapshotId);
+  async revertEdit(sessionId: string, turnId: string) {
+    const result = await api.revertEdit(sessionId, turnId);
     if (result.success) {
-      // 立刻给当前列表打 reverted 标，UI 不用等后端 refresh 才置灰
       set((state) => {
         const existing = state.sessionEditSnapshots[sessionId];
         if (!existing) return state;
         const next = existing.map((e) =>
-          e.snapshot_id === snapshotId
+          e.turn_id === turnId
             ? { ...e, reverted: true, reverted_at_ms: Date.now() }
             : e,
         );
@@ -1343,7 +1347,6 @@ export const useStore = create<AppState>((set, get) => ({
           sessionEditSnapshots: { ...state.sessionEditSnapshots, [sessionId]: next },
         };
       });
-      // 用后端权威数据兜底（修正 reverted_at_ms 等字段）
       const cur = get().currentSession;
       if (cur?.id === sessionId) {
         get().refreshEdits();
@@ -1668,14 +1671,16 @@ export const useStore = create<AppState>((set, get) => ({
       ...mirrorFromSlot(nextSlot),
     }));
     try {
-      const payload: { text?: string; labels?: string[] } | undefined =
+      const payload: { text?: string; labels?: string[]; items?: any[] } | undefined =
         answer.kind === "selected"
           ? { text: answer.label }
           : answer.kind === "selected_multi"
             ? { labels: answer.labels }
             : answer.kind === "custom"
               ? { text: answer.text }
-              : undefined;
+              : answer.kind === "multi"
+                ? { items: answer.items }
+                : undefined;
       await api.answerQuestion(pending.requestId, answer.kind, payload);
     } catch (e) {
       set((state) => {
@@ -1917,7 +1922,7 @@ export const useStore = create<AppState>((set, get) => ({
       : undefined;
     const promptId = matchedPrompt?.id ?? null;
     const prompt = matchedPrompt?.content;
-    const activeProjectId = opts?.projectId ?? (get().projectSidebarMode === "projects" ? get().selectedProjectId : null);
+    const activeProjectId = opts?.projectId ?? null;
     const selectedProject = activeProjectId
       ? get().projects.find((project) => project.id === activeProjectId) ?? null
       : null;
@@ -1931,16 +1936,6 @@ export const useStore = create<AppState>((set, get) => ({
           allowed_paths: projectAllowed,
         }
       : undefined);
-    // 把"待继承"的 workdir / allowed_paths 立即注入新 session：
-    // 输入框 + 菜单的选择是跨对话黏的，新建对话时无需用户重新选。
-    const inheritWorkdir = selectedProject ? null : get().pendingWorkdir;
-    const inheritAllowed = selectedProject ? [] : get().pendingAllowedPaths;
-    if (!selectedProject && (inheritWorkdir || inheritAllowed.length > 0)) {
-      s = await api.updateSessionSettings(s.id, {
-        ...(inheritWorkdir ? { workdir: inheritWorkdir } : {}),
-        ...(inheritAllowed.length > 0 ? { allowed_paths: inheritAllowed } : {}),
-      });
-    }
     // 继承上一个对话的全局规则设置
     const inheritGlobalRules = readStoredGlobalRules();
     if (inheritGlobalRules !== null) {
@@ -2223,8 +2218,8 @@ export const useStore = create<AppState>((set, get) => ({
               else toast(e.message, opts);
               return;
             }
-            // Edit 快照事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
-            if (e.type === "edit_snapshot_created" || e.type === "edit_reverted") {
+            // Edit turn 事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
+            if (e.type === "turn_edits_committed" || e.type === "turn_edits_reverted") {
               set((state) => {
                 const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
                 return next === null ? state : { sessionEditSnapshots: next };

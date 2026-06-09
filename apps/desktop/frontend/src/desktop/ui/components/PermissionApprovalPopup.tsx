@@ -337,6 +337,13 @@ export function PermissionApprovalPopup() {
           )
         )}
 
+        {pending.autoJudgeReason && !feedbackOpen && (
+          <div className="px-3 py-2 border-t border-border/60 text-[12px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+            <MessageSquareWarning className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{pending.autoJudgeReason}</span>
+          </div>
+        )}
+
         {/* 反馈输入框（按需展开，仅 tool_call 有） */}
         {feedbackOpen && (
           <div className="px-3 py-2 border-t border-border">

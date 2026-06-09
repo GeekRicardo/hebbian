@@ -80,6 +80,7 @@ const TAB_GROUPS = ["基础", "Agent", "扩展", "调试"];
 const PREVIEW_SETTINGS_FALLBACK: AppSettings = {
   general: {
     launch_at_login: false,
+    language: "zh-cn",
     show_grep_search_path: true,
     shell: null,
     log_enabled: false,
@@ -724,6 +725,25 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
           }
           className="h-4 w-4 rounded"
         />
+      </FieldRow>
+
+      <FieldRow label="语言" description="用于自动模式的审批原因；界面文案暂时不跟随切换">
+        <select
+          value={draft.general.language ?? "zh-cn"}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              general: {
+                ...draft.general,
+                language: e.target.value as "zh-cn" | "en",
+              },
+            })
+          }
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="zh-cn">中文</option>
+          <option value="en">English</option>
+        </select>
       </FieldRow>
 
       <FieldRow label="显示 Grep 位置" description="在搜索代码的结果里显示这次查的是哪个文件夹">

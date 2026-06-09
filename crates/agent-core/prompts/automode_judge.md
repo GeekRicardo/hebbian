@@ -26,6 +26,7 @@ must be denied, or requires the human to make the call.
     - `ast-too-complex` — command substitution `$(...)` / backticks / process substitution `<(...)` / subshells / background `&` /
       comment injection. **You cannot reason about what such a command actually does.**
 - `recent_transcript` — the last few user/assistant/tool exchanges, to infer user intent.
+- `reason_language` — the language to use after `DENY:` / `ASK:`. Keep `ALLOW` exactly as `ALLOW`.
 
 # Verdicts
 

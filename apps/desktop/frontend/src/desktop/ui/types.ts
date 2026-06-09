@@ -466,6 +466,7 @@ export interface PluginListItem {
 export interface AppSettings {
   general: {
     launch_at_login: boolean;
+    language?: "zh-cn" | "en";
     show_grep_search_path: boolean;
     shell?: string | null;
     log_enabled: boolean;
@@ -653,6 +654,7 @@ export type EngineEvent =
   | {
       // AutoMode judge 决策（架构 §4.4.4）。UI 可在消息流里渲染审计气泡。
       type: "permission_auto_judged";
+      request_id: string;
       tool_name: string;
       decision: "allow" | "deny" | "ask";
       reason?: string;
@@ -711,35 +713,30 @@ export type EngineEvent =
       type: "user_question_requested";
       request_id: string;
       question: string;
-      options: { label: string; description: string }[];
+      options: QuestionOption[];
       multi?: boolean;
+      questions?: AskQuestion[];
     }
   | {
       type: "user_question_answered";
       request_id: string;
-      kind: "selected" | "selected_multi" | "custom" | "cancelled";
+      kind: "selected" | "selected_multi" | "custom" | "cancelled" | "multi";
       text: string;
     }
   | { type: "error"; message: string }
   | {
-      type: "edit_snapshot_created";
-      call_id: string;
-      snapshot_id: string;
-      file_path: string;
-      action: "create" | "overwrite" | "modify";
-      before_sha: string;
-      after_sha: string;
-      before_bytes: number;
-      after_bytes: number;
+      type: "turn_edits_committed";
+      turn_id: string;
+      turn: number;
+      files: TurnFileChange[];
     }
   | {
-      type: "edit_reverted";
-      snapshot_id: string;
-      file_path: string;
+      type: "turn_edits_reverted";
+      turn_id: string;
     }
   | {
-      type: "edit_revert_failed";
-      snapshot_id: string;
+      type: "turn_edits_revert_failed";
+      turn_id: string;
       file_path: string;
       error: string;
     }
@@ -867,6 +864,8 @@ export interface PendingApproval {
   segments?: ApprovalSegment[];
   /** 危险复合模式：任何作用域都不可记住，弹窗隐藏记忆区只留允许此次/拒绝 */
   refuseRemember?: boolean;
+  /** AutoMode 判官转人工时给出的原因，显示在审批框里。 */
+  autoJudgeReason?: string | null;
   /** Plan 审批专用（架构 §4.4.5）：plan markdown + 元信息，仅 kind="plan" 时填 */
   plan?: PlanPermissionDto | null;
 }
@@ -901,13 +900,34 @@ export type ApprovalDecisionPayload =
   | { kind: "deny" }
   | { kind: "deny_with_feedback"; feedback: string };
 
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface AskQuestion {
+  title: string;
+  description: string;
+  options: QuestionOption[];
+  multi: boolean;
+}
+
+export interface QuestionAnswerItem {
+  title: string;
+  kind: "selected" | "selected_multi" | "custom" | "cancelled";
+  text?: string;
+  labels?: string[];
+}
+
 /** agent 主动向用户提问（ask 工具） */
 export interface PendingQuestion {
   requestId: string;
   question: string;
-  options: { label: string; description: string }[];
+  options: QuestionOption[];
   /** 是否允许多选 */
   multi: boolean;
+  /** 多题模式：非空时按多题渲染 */
+  questions: AskQuestion[];
 }
 
 /** 用户对一次提问的回应 */
@@ -915,7 +935,8 @@ export type QuestionAnswerPayload =
   | { kind: "selected"; label: string }
   | { kind: "selected_multi"; labels: string[] }
   | { kind: "custom"; text: string }
-  | { kind: "cancelled" };
+  | { kind: "cancelled" }
+  | { kind: "multi"; items: QuestionAnswerItem[] };
 
 /** 工具元信息（list_tools 命令返回） */
 export interface ToolInfo {
@@ -1012,17 +1033,21 @@ export interface ImportedToken {
 
 export type EditAction = "create" | "overwrite" | "modify";
 
-export interface EditEntry {
-  snapshot_id: string;
-  call_id: string;
-  tool: string;
+export interface TurnFileChange {
   real_path: string;
   action: EditAction;
   before_sha: string;
   after_sha: string;
   before_bytes: number;
   after_bytes: number;
-  ts_ms: number;
+}
+
+export interface TurnEditEntry {
+  turn_id: string;
+  turn_index: number;
+  started_at_ms: number;
+  finished_at_ms: number;
+  files: TurnFileChange[];
   reverted: boolean;
   reverted_at_ms?: number | null;
 }

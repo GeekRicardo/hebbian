@@ -1012,6 +1012,126 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
     Ok(session)
 }
 
+/// 只解析 meta 信息，跳过 Message/Event 行的 content 反序列化。
+/// 用于 `list()` 等只需要 SessionMeta 的场景，避免解析 15MB+ 大文件的 messages。
+/// 返回 (Session 骨架, 非 marker message 数量)。
+fn read_jsonl_meta_only(path: &Path) -> AppResult<(Session, usize)> {
+    let content = std::fs::read_to_string(path)?;
+
+    // 兼容老 pretty-JSON 格式（同 read_jsonl）
+    let head = content.trim_start();
+    if head.starts_with("{\n") || head.starts_with("{\r\n") {
+        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+            let count = session.messages.iter().filter(|m| !matches!(m.role, Role::Marker)).count();
+            return Ok((session, count));
+        }
+    }
+
+    let mut session = Session {
+        id: String::new(),
+        title: "新对话".to_string(),
+        provider_id: String::new(),
+        model: String::new(),
+        system_prompt: None,
+        prompt_id: None,
+        stream: true,
+        messages: Vec::new(),
+        workdir: None,
+        allowed_paths: None,
+        runtime_allowed_paths: Vec::new(),
+        pending_runtime_allowed_paths: Vec::new(),
+        enabled_tools: None,
+        skill_dirs: None,
+        reasoning: None,
+        token_stats: None,
+        source: None,
+        project_id: None,
+        run_mode: RunMode::default(),
+        global_rules: None,
+        rules_files: None,
+        todos: Vec::new(),
+        active_plan: None,
+        pre_plan_mode: None,
+        pending_continue: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mut latest_ts: i64 = 0;
+    let mut got_meta = false;
+    let mut message_count: usize = 0;
+
+    for (lineno, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // 快速跳过 message/event 行的 content 反序列化：serde internally tagged enum
+        // 把 type 字段放在最前面，字符串匹配 O(1) 跳过，避免反序列化巨大的
+        // Message content / tool_calls。这是 list() 性能的关键优化——231 个 session
+        // 中最大的 15MB，全解析会卡死主线程。
+        if trimmed.starts_with(r#"{"type":"message"#) {
+            // 统计非 marker message 数量。marker 行的特征是 `"role":"marker"` 紧跟在
+            // type/id 之后（前 100 字符内），content 为空字符串。
+            // 不用完整反序列化，用字符串启发式匹配——实际场景中 content 几乎不可能包含
+            // `"role":"marker"` 这个精确子串（注意引号）。
+            let is_marker = trimmed.len() < 200 && trimmed.contains(r#""role":"marker"#);
+            if !is_marker {
+                message_count += 1;
+            }
+            continue;
+        }
+        if trimmed.starts_with(r#"{"type":"event"#) {
+            continue;
+        }
+
+        // 只有 meta/meta_update 行才完整解析
+        let parsed: RolloutLine = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[hebbian] skip malformed rollout line {}:{}: {e}",
+                    path.display(),
+                    lineno + 1
+                );
+                continue;
+            }
+        };
+        match parsed {
+            RolloutLine::Meta(m) => {
+                if m.schema > ROLLOUT_SCHEMA {
+                    return Err(AppError::msg(format!(
+                        "session {} schema {} 比当前可读最大版本 {ROLLOUT_SCHEMA} 还新；请升级 hebbian",
+                        m.id, m.schema
+                    )));
+                }
+                latest_ts = latest_ts.max(m.created_at);
+                apply_meta(&mut session, m);
+                got_meta = true;
+            }
+            RolloutLine::Message(msg) => {
+                latest_ts = latest_ts.max(msg.created_at);
+                if !matches!(msg.role, Role::Marker) {
+                    message_count += 1;
+                }
+            }
+            RolloutLine::MetaUpdate(u) => {
+                latest_ts = latest_ts.max(u.at);
+                apply_update(&mut session, u);
+            }
+            RolloutLine::Event(_) => {}
+        }
+    }
+    if !got_meta {
+        return Err(AppError::msg(format!(
+            "session 文件 {} 缺少 Meta 头行",
+            path.display()
+        )));
+    }
+    session.updated_at = latest_ts.max(session.created_at);
+    Ok((session, message_count))
+}
+
 /// 全量重写 jsonl 文件（meta + messages）。clean slate，过去的 MetaUpdate 行被丢弃。
 fn write_jsonl_full(path: &Path, s: &Session, source: String) -> AppResult<()> {
     if let Some(parent) = path.parent() {
@@ -1084,15 +1204,26 @@ fn archive_legacy_json(data_dir: &Path, id: &str) {
 pub fn list(data_dir: &Path) -> AppResult<Vec<SessionMeta>> {
     let mut out = Vec::new();
     for file in all_session_files(data_dir)? {
-        let session = match load_from_path(&file) {
-            Ok(s) => s,
+        // 性能关键路径：用 meta-only 解析，跳过 Message/Event 行的 content 反序列化。
+        // 231 个 session 中最大 15MB/748 行，全解析会阻塞 Tauri 主线程导致页面空白。
+        let result = match file.extension().and_then(|s| s.to_str()) {
+            Some("jsonl") => read_jsonl_meta_only(&file),
+            Some("json") => {
+                // legacy json 文件通常不大，走完整解析
+                match common::storage::read_json_required::<Session>(&file) {
+                    Ok(s) => {
+                        let count = s.messages.iter().filter(|m| !matches!(m.role, Role::Marker)).count();
+                        Ok((s, count))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            _ => continue,
+        };
+        let (session, count) = match result {
+            Ok(v) => v,
             Err(_) => continue,
         };
-        let count = session
-            .messages
-            .iter()
-            .filter(|m| !matches!(m.role, Role::Marker))
-            .count();
         out.push(SessionMeta {
             id: session.id,
             title: session.title,
@@ -1504,6 +1635,12 @@ pub fn create_with_workspace(
         session.allowed_paths = Some(allowed_paths);
     }
     save(data_dir, session)
+}
+
+pub fn append_event(data_dir: &Path, id: &str, event: &protocol::Event) -> AppResult<()> {
+    let path = ensure_jsonl(data_dir, id)?;
+    let value = serde_json::to_value(event)?;
+    append_line(&path, &RolloutLine::Event(value))
 }
 
 pub fn append_message(data_dir: &Path, id: &str, msg: Message) -> AppResult<Session> {

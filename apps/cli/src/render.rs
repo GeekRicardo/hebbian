@@ -169,6 +169,7 @@ impl TurnRenderer {
                 tool_name,
                 decision,
                 reason,
+                ..
             } => {
                 self.stop_run_spinner();
                 self.flush_streaming_line();
