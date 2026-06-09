@@ -252,12 +252,16 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
                 args,
                 session_id,
             } => {
-                let response = dispatch_invoke(&state, &cmd, args, session_id).await;
-                let msg = match response {
-                    Ok(data) => WsServerMessage::ok(id, data),
-                    Err(e) => WsServerMessage::err(id, e),
-                };
-                let _ = out_tx.send(msg);
+                let state = state.clone();
+                let tx = out_tx.clone();
+                tokio::spawn(async move {
+                    let response = dispatch_invoke(&state, &cmd, args, session_id).await;
+                    let msg = match response {
+                        Ok(data) => WsServerMessage::ok(id, data),
+                        Err(e) => WsServerMessage::err(id, e),
+                    };
+                    let _ = tx.send(msg);
+                });
             }
         }
     }

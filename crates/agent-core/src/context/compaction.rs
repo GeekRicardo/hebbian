@@ -54,7 +54,11 @@ pub fn compact_structural(
             }
             s += 1;
         }
-        if s >= total { raw_start } else { s }
+        if s >= total {
+            raw_start
+        } else {
+            s
+        }
     };
 
     let compacted: Vec<TranscriptEntry> = entries.into_iter().skip(start).collect();
@@ -77,14 +81,13 @@ pub fn needs_compaction(
     budget::estimate_transcript_tokens(system, entries) > policy.token_budget
 }
 
-/// LLM 摘要式压缩：用一次 `complete()` 调用把整段对话浓缩成一份简明摘要，
-/// 然后用 `[前情概要 + assistant 确认]` 这一对消息替换原 entries。
-pub async fn compact_with_llm(
-    client: &dyn ModelClient,
+/// 构造 LLM 摘要压缩请求。调用方需要日志 / model_io dump 时可以先拿到真实 request，
+/// 再交给 [`compact_request_with_llm`] 执行，避免日志里的 payload 与实际请求不一致。
+pub fn build_compaction_request(
     system: Option<&str>,
     entries: Vec<TranscriptEntry>,
     custom_instructions: Option<&str>,
-) -> Result<CompactionResult, ModelError> {
+) -> (usize, ModelRequest) {
     let before_tokens = budget::estimate_transcript_tokens(system, &entries);
 
     let mut summarize_entries = entries;
@@ -110,6 +113,16 @@ pub async fn compact_with_llm(
         max_tokens: 4096,
         reasoning: None,
     };
+    (before_tokens, req)
+}
+
+/// 执行已构造好的 LLM 摘要压缩请求，并把摘要转换成新的 transcript entries。
+pub async fn compact_request_with_llm(
+    client: &dyn ModelClient,
+    req: ModelRequest,
+    before_tokens: usize,
+) -> Result<CompactionResult, ModelError> {
+    let system = req.system.clone();
     let cancel = Arc::new(AtomicBool::new(false));
     let summary = match client.complete(req, cancel).await? {
         ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => text,
@@ -129,7 +142,7 @@ pub async fn compact_with_llm(
             tool_calls: Vec::new(),
         }),
     ];
-    let after_tokens = budget::estimate_transcript_tokens(system, &new_entries);
+    let after_tokens = budget::estimate_transcript_tokens(system.as_deref(), &new_entries);
 
     Ok(CompactionResult {
         entries: new_entries,
@@ -137,6 +150,18 @@ pub async fn compact_with_llm(
         after_tokens,
         summary,
     })
+}
+
+/// LLM 摘要式压缩：用一次 `complete()` 调用把整段对话浓缩成一份简明摘要，
+/// 然后用 `[前情概要 + assistant 确认]` 这一对消息替换原 entries。
+pub async fn compact_with_llm(
+    client: &dyn ModelClient,
+    system: Option<&str>,
+    entries: Vec<TranscriptEntry>,
+    custom_instructions: Option<&str>,
+) -> Result<CompactionResult, ModelError> {
+    let (before_tokens, req) = build_compaction_request(system, entries, custom_instructions);
+    compact_request_with_llm(client, req, before_tokens).await
 }
 
 #[cfg(test)]
