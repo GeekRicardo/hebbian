@@ -21,6 +21,8 @@ export interface Provider {
   models: string[];
   /** 从 provider /models 端点拉取的全量模型 ID 缓存（用于 UI 展示）。 */
   fetched_models?: string[] | null;
+  /** 手动设置的模型上下文窗口，优先于自动识别。 */
+  model_context_windows?: Record<string, number>;
   default_model?: string | null;
   /** 是否把这个 provider 用作「标题生成模型」。整份配置最多一个 provider 应该勾上。 */
   title_gen_enabled?: boolean;

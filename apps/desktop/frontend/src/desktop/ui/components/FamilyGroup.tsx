@@ -12,10 +12,10 @@ interface FamilyGroupProps {
   onToggleModel: (modelId: string) => void;
   /** models.dev catalog（用于查找元数据） */
   catalog: Record<string, CatalogEntry> | null;
-  /** 用户手动 override 的 context/output */
-  overrides: Record<string, { context?: string; output?: string }>;
-  /** 更新某个模型的 override */
-  onUpdateOverride: (modelId: string, patch: { context?: string; output?: string }) => void;
+  /** 用户手动设置的 context window */
+  contextWindows: Record<string, number>;
+  /** 更新某个模型的 context window */
+  onUpdateContextWindow: (modelId: string, value: string) => void;
 }
 
 export interface ModelItem {
@@ -32,8 +32,8 @@ export function FamilyGroup({
   selectedModels,
   onToggleModel,
   catalog,
-  overrides,
-  onUpdateOverride,
+  contextWindows,
+  onUpdateContextWindow,
 }: FamilyGroupProps) {
   // 构建不带前缀的 catalog 映射（如 "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"）
   const catalogLookup = (modelId: string): CatalogEntry | undefined => {
@@ -64,15 +64,10 @@ export function FamilyGroup({
             key={model.id}
             modelId={model.id}
             entry={catalogLookup(model.id)}
-            override={overrides[model.id]}
+            contextOverride={contextWindows[model.id]}
             selected={selectedModels.includes(model.id)}
             onClick={() => onToggleModel(model.id)}
-            onContextChange={(value) =>
-              onUpdateOverride(model.id, { context: value })
-            }
-            onOutputChange={(value) =>
-              onUpdateOverride(model.id, { output: value })
-            }
+            onContextChange={(value) => onUpdateContextWindow(model.id, value)}
           />
         ))}
       </div>

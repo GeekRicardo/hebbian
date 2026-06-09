@@ -2,7 +2,6 @@ use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hebisland_client::HebislandClient;
 use crate::hitl::HitlState;
-use tauri::Manager;
 use agent_core::storage::{
     sessions::{
         self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
@@ -37,6 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tauri::Manager;
 use tauri::{ipc::Channel, AppHandle};
 
 pub struct SendArgs {
@@ -144,7 +144,8 @@ pub async fn send_and_save_in_data_dir(
         move |provider, model, reasoning| {
             let client = model_gateway::build_client(provider)
                 .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
-            let client = agent_core::vision_bridge::wrap_with_vision_client(client, vision_client.clone());
+            let client =
+                agent_core::vision_bridge::wrap_with_vision_client(client, vision_client.clone());
             Ok(
                 Arc::new(ModelWithName::with_reasoning(client, model, reasoning))
                     as Arc<dyn ModelClient>,
@@ -219,8 +220,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
     let model = session.model.clone();
     let reasoning = session.reasoning.clone();
-    let provider_kind = provider.kind;
 
+    let ctx_window = model_gateway::context_window::effective_context_window_for(&provider, &model);
     let client = build_client(provider, model.clone(), reasoning)?;
 
     // Workspace：session 字段优先；没设则用全局设置；都没设则 ~/
@@ -295,8 +296,6 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     ));
     // 按实际模型上下文窗口动态设定压缩预算（架构 §4.1.3：占 context_window 70% 触发）。
     let mut definition = AgentDefinition::default();
-    let ctx_window =
-        model_gateway::context_window::context_window_for(provider_kind, &model);
     definition.compaction_policy.token_budget = (ctx_window as f64 * 0.75) as usize;
 
     // 优先级：args（前端 send_message 显式传） > session.enabled_tools（非空） > 全局 settings
@@ -1319,14 +1318,67 @@ pub async fn compact_session(
     let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(inner, model));
 
     let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
-    let result = agent_core::context::compaction::compact_with_llm(
-        client.as_ref(),
+    let (before_tokens, req) = agent_core::context::compaction::build_compaction_request(
         transcript.system.as_deref(),
         transcript.entries,
         custom_instructions.as_deref(),
+    );
+    tracing::info!(
+        session_id,
+        before_tokens,
+        entries = req.entries.len(),
+        "manual compaction started"
+    );
+    let dump = agent_core::model_io_dump::open_for_session_if_enabled(data_dir, session_id).await;
+    let req_snapshot = dump.as_ref().map(|_| req.clone());
+    let started = std::time::Instant::now();
+    let outcome = agent_core::context::compaction::compact_request_with_llm(
+        client.as_ref(),
+        req,
+        before_tokens,
     )
-    .await
-    .map_err(|e| AppError::msg(format!("压缩失败: {e}")))?;
+    .await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    if let (Some(dump), Some(req)) = (dump.as_ref(), req_snapshot) {
+        let response = match &outcome {
+            Ok(result) => serde_json::json!({
+                "type": "Done",
+                "text": result.summary,
+                "before_tokens": result.before_tokens,
+                "after_tokens": result.after_tokens,
+            }),
+            Err(e) => serde_json::json!({
+                "type": "Error",
+                "error": e.to_string(),
+            }),
+        };
+        dump.record(agent_core::model_io_dump::DumpEntry {
+            ts: agent_core::model_io_dump::iso_now(),
+            run_id: "manual-compact".to_string(),
+            turn: 0,
+            model: client.provider_id().to_string(),
+            request: agent_core::model_io_dump::request_to_json(&req, client.provider_id()),
+            response,
+            duration_ms,
+            kind: "compaction".to_string(),
+        });
+        if let Err(e) = dump.flush().await {
+            tracing::warn!(session_id, error = %e, "manual compaction model_io flush failed");
+        }
+    }
+
+    let result = outcome.map_err(|e| {
+        tracing::error!(session_id, error = %e, "manual compaction failed");
+        AppError::msg(format!("压缩失败: {e}"))
+    })?;
+    tracing::info!(
+        session_id,
+        before_tokens = result.before_tokens,
+        after_tokens = result.after_tokens,
+        duration_ms,
+        "manual compaction finished"
+    );
 
     let marker = Message {
         id: sessions::new_id(),
@@ -2197,16 +2249,24 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             multi,
         } => {
             // 构建 options JSON
-            let options_json: Vec<String> = options.iter().map(|opt| {
-                format!(r#"{{"label":"{}","desc":"{}"}}"#,
-                    opt.label.replace('"', r#"\""#),
-                    opt.description.replace('"', r#"\""#)
-                )
-            }).collect();
+            let options_json: Vec<String> = options
+                .iter()
+                .map(|opt| {
+                    format!(
+                        r#"{{"label":"{}","desc":"{}"}}"#,
+                        opt.label.replace('"', r#"\""#),
+                        opt.description.replace('"', r#"\""#)
+                    )
+                })
+                .collect();
             let extra = if options_json.is_empty() {
                 format!(r#","multiSelect":{}"#, multi)
             } else {
-                format!(r#","options":[{}],"multiSelect":{}"#, options_json.join(","), multi)
+                format!(
+                    r#","options":[{}],"multiSelect":{}"#,
+                    options_json.join(","),
+                    multi
+                )
             };
             client.push(
                 format!("question-{request_id}"),
@@ -2311,6 +2371,7 @@ mod tests {
                     extra_headers: BTreeMap::new(),
                     models: vec!["gpt-test".to_string()],
                     fetched_models: None,
+                    model_context_windows: BTreeMap::new(),
                     default_model: Some("gpt-test".to_string()),
                     title_gen_enabled: false,
                     title_gen_model: None,

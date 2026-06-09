@@ -60,6 +60,9 @@ pub struct Provider {
     /// 拉取时按 ID 合并：新模型追加，已存在的保留。
     #[serde(default)]
     pub fetched_models: Option<Vec<String>>,
+    /// 用户为单个模型手动设置的上下文窗口，优先于远端 metadata 与内置兜底。
+    #[serde(default)]
+    pub model_context_windows: BTreeMap<String, usize>,
     #[serde(default)]
     pub default_model: Option<String>,
     /// 是否把这个 provider 用作「标题生成模型」。整个配置最多一个 provider 应该勾上；

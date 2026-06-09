@@ -127,6 +127,8 @@ mod tests {
             account_id: None,
             extra_headers: BTreeMap::new(),
             models: vec![],
+            fetched_models: None,
+            model_context_windows: BTreeMap::new(),
             default_model: None,
             title_gen_enabled: false,
             title_gen_model: None,

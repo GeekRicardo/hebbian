@@ -84,6 +84,17 @@ function isDeepseekProvider(p: Provider | null | undefined) {
   );
 }
 
+function parseTokenCount(text: string): number | null {
+  const raw = text.trim().toLowerCase();
+  if (!raw) return null;
+  const match = raw.match(/^(\d+(?:\.\d+)?)([km])?$/);
+  if (!match) return null;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const multiplier = match[2] === "m" ? 1_000_000 : match[2] === "k" ? 1_000 : 1;
+  return Math.round(n * multiplier);
+}
+
 function modelsToText(models: string[]) {
   return models.join("\n");
 }
@@ -151,10 +162,6 @@ export function ProvidersPane({ active }: { active: boolean }) {
     ok: boolean;
     message: string;
   } | null>(null);
-  /** 用户手动 override 的 context/output（按 model id 索引）。优先于 models.dev + fallback 200K */
-  const [modelMetaOverrides, setModelMetaOverrides] = useState<
-    Record<string, { context?: string; output?: string }>
-  >({});
 
   useEffect(() => {
     if (active) {
@@ -198,6 +205,8 @@ export function ProvidersPane({ active }: { active: boolean }) {
       account_id: null,
       extra_headers: {},
       models: [],
+      fetched_models: null,
+      model_context_windows: {},
       default_model: null,
       title_gen_enabled: false,
       title_gen_model: null,
@@ -385,6 +394,7 @@ export function ProvidersPane({ active }: { active: boolean }) {
         toast.success(`拉取到 ${list.length} 个模型`);
       }
       setFetchedModels(list);
+      updateCurrent({ fetched_models: list.map((model) => model.id) });
     } catch (e: any) {
       toast.error(e.message || String(e));
     } finally {
@@ -444,6 +454,18 @@ export function ProvidersPane({ active }: { active: boolean }) {
     const models = Array.from(existing);
     setModelsText(modelsToText(models));
     updateCurrent({ models });
+  }
+
+  function updateModelContextWindow(modelId: string, value: string) {
+    if (!current) return;
+    const parsed = parseTokenCount(value);
+    const next = { ...(current.model_context_windows ?? {}) };
+    if (parsed == null) {
+      delete next[modelId];
+    } else {
+      next[modelId] = parsed;
+    }
+    updateCurrent({ model_context_windows: next });
   }
 
   function openOAuth(mode: AuthMode) {
@@ -819,7 +841,7 @@ export function ProvidersPane({ active }: { active: boolean }) {
                     {(fetchedModels && fetchedModels.length > 0) || (current.fetched_models && current.fetched_models.length > 0) ? (
                       <div className="pt-2">
                         <div className="text-xs text-muted-foreground mb-2">
-                          点击卡片选中模型（已选 {current.models.length}）。context / output 可手动修改，留空走 models.dev 或默认 200K/64K
+                          点击卡片选中模型（已选 {current.models.length}）。上下文可手动修改，留空走自动识别
                           {fetchedModels && ` · 共 ${fetchedModels.length} 个模型`}
                           {!fetchedModels && current.fetched_models && ` · 显示缓存 · 共 ${current.fetched_models.length} 个模型`}
                         </div>
@@ -836,13 +858,8 @@ export function ProvidersPane({ active }: { active: boolean }) {
                                 selectedModels={current.models}
                                 onToggleModel={toggleFetchedModel}
                                 catalog={modelsCatalog?.entries || null}
-                                overrides={modelMetaOverrides}
-                                onUpdateOverride={(modelId, patch) =>
-                                  setModelMetaOverrides((prev) => ({
-                                    ...prev,
-                                    [modelId]: { ...prev[modelId], ...patch },
-                                  }))
-                                }
+                                contextWindows={current.model_context_windows ?? {}}
+                                onUpdateContextWindow={updateModelContextWindow}
                               />
                             )
                           )}

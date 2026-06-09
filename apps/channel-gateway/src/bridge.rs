@@ -84,7 +84,10 @@ impl ChannelBridge {
             };
 
             for message in messages {
-                if let Err(err) = self.handle_message(channel.clone(), state, account_id, message).await {
+                if let Err(err) = self
+                    .handle_message(channel.clone(), state, account_id, message)
+                    .await
+                {
                     error!(error = %err, "处理渠道消息失败");
                 }
             }
@@ -236,12 +239,11 @@ impl ChannelBridge {
             .find(|provider| &provider.id == provider_id)
             .ok_or_else(|| anyhow!("provider {provider_id} 不存在"))?
             .clone();
-        let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(
-            &self.data_dir,
-            provider,
-        )
-        .await?;
-        let provider_kind = provider.kind;
+        let provider =
+            model_gateway::auth::refresh::ensure_fresh_provider_token(&self.data_dir, provider)
+                .await?;
+        let ctx_window =
+            model_gateway::context_window::effective_context_window_for(&provider, model);
         let vision = agent_core::vision_bridge::build_vision_client(&self.data_dir).await?;
         let inner = model_gateway::build_client(provider)?;
         let inner = agent_core::vision_bridge::wrap_with_vision_client(inner, vision);
@@ -288,7 +290,8 @@ impl ChannelBridge {
         let shells = background::registry_for_session(session_id);
         agent_core::wakeup::WakeupScheduler::global()
             .register_session_shells(session_id.clone(), shells.clone());
-        let hook_cfg = agent_core::hooks::load_hooks_config(&self.data_dir, Some(workspace.workdir()));
+        let hook_cfg =
+            agent_core::hooks::load_hooks_config(&self.data_dir, Some(workspace.workdir()));
         let external_hooks = agent_core::hooks::ExternalHook::from_config(hook_cfg);
         let bg_log_dir = Some(sessions_dir::bg_dir(&self.data_dir, session_id));
         let read_state_tracker = Arc::new(ReadStateTracker::new());
@@ -306,7 +309,8 @@ impl ChannelBridge {
                 Some(read_state_tracker),
                 settings.general.shell.clone(),
                 settings.general.edit_backend,
-                agent_core::storage::mcp::load(&self.data_dir).with_cwd(workspace.workdir().to_path_buf()),
+                agent_core::storage::mcp::load(&self.data_dir)
+                    .with_cwd(workspace.workdir().to_path_buf()),
             )
             .await,
             HookManager::new(external_hooks),
@@ -335,17 +339,16 @@ impl ChannelBridge {
             SessionConfig {
                 definition: {
                     let mut definition = AgentDefinition::default();
-                    let ctx_window = model_gateway::context_window::context_window_for(
-                        provider_kind,
-                        model,
-                    );
                     definition.compaction_policy.token_budget = (ctx_window as f64 * 0.75) as usize;
                     definition
                 },
                 workspace: workspace.clone(),
                 client,
                 enabled_tools,
-                initial_transcript: Transcript::from_session(prior.system_prompt.clone(), &prior.messages),
+                initial_transcript: Transcript::from_session(
+                    prior.system_prompt.clone(),
+                    &prior.messages,
+                ),
                 recorder: None,
                 model_io_dump: agent_core::model_io_dump::open_for_session_if_enabled(
                     &self.data_dir,
@@ -509,7 +512,12 @@ impl TurnObserver for ChannelObserver {
                     text: full_text.clone(),
                 });
             }
-            EventPayload::ToolCallStarted { call_id, name, input, .. } => {
+            EventPayload::ToolCallStarted {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
                 self.pending_tools
                     .insert(call_id.clone(), (name.clone(), input.clone()));
             }
@@ -579,8 +587,10 @@ impl TurnObserver for ChannelObserver {
             .map(|option| option.label.as_str())
             .collect::<Vec<_>>()
             .join(" / ");
-        self.send(&format!("❓ {question}\n选项：{labels}\n也可以直接回复自定义文本。"))
-            .await;
+        self.send(&format!(
+            "❓ {question}\n选项：{labels}\n也可以直接回复自定义文本。"
+        ))
+        .await;
         rx.await.ok()
     }
 }
@@ -668,6 +678,8 @@ impl ModelClient for NamedModelClient {
         cancel: common::CancelFlag,
         on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
     ) -> Result<ModelResponse, ModelError> {
-        self.inner.stream(self.patch(request), cancel, on_event).await
+        self.inner
+            .stream(self.patch(request), cancel, on_event)
+            .await
     }
 }

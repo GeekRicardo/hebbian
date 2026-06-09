@@ -6283,40 +6283,40 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 仅 Desktop/hebweb 共享前端 UI 展示；不改 agent-core、不改协议、不改 storage。
 - **留尾巴**: 无
 
-### 2026-06-08 — 新增 DeepSeek 风格 Desktop 预览界面壳
+### 2026-06-08 — 新增 Desktop 前端风格预览界面壳
 
-- **Why**: 用户希望参考工作区 DeepSeek-GUI 的整体配色、左侧 list / 项目布局，先做一个纯前端预览稿；为避免影响现有 Hebbian 生产 UI，预览必须放在独立目录里。
+- **Why**: 用户希望先做一个纯前端风格方案，验证整体配色、左侧 list / 项目布局和三栏工作台；为避免影响现有 Hebbian 生产 UI，预览必须放在独立目录里。
 - **改动**:
-  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 新增独立预览 shell，复用现有 store 数据展示项目、对话、聊天区、输入区和右侧工作台。
-  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 新增 DeepSeek-GUI 风格的 preview token、整体三栏布局、左侧项目/list、聊天消息、composer 与右侧工作台样式。
-  - `apps/desktop/frontend/src/App.tsx`: 增加 `?deepseek-preview` 本地预览开关；未带该参数时仍渲染原生产 UI。
+  - `apps/desktop/frontend/src/desktop/ui/preview/DesktopStylePreviewShell.tsx`: 新增独立预览 shell，复用现有 store 数据展示项目、对话、聊天区、输入区和右侧工作台。
+  - `apps/desktop/frontend/src/desktop/ui/preview/desktopStylePreview.css`: 新增浅色低对比的 preview token、整体三栏布局、左侧项目/list、聊天消息、composer 与右侧工作台样式。
+  - `apps/desktop/frontend/src/App.tsx`: 增加本地预览开关；未带该参数时仍渲染原生产 UI。
 - **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改 agent-core、不改协议、不改 storage，不破坏现有入口。
 - **留尾巴**: 这只是预览壳，未迁移完整生产组件能力（审批弹窗、复杂工具卡片、完整输入附件交互仍走旧 UI）；用户确认视觉方向后再收敛进正式样式。
 
-### 2026-06-08 — 调整 DeepSeek 预览壳左栏与输入区
+### 2026-06-08 — 调整 Desktop 前端预览左栏与输入区
 
 - **Why**: 用户反馈第一版预览左栏不应脱离原来的圆角卡片结构，项目/全部切换不需要；右侧工作区也不应被重做。需要保留原有信息架构，重点重排项目分组和输入区信息展示。
 - **改动**:
-  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏改为单张圆角卡片；移除项目/全部切换；对话按项目归组，未归属对话进入「默认项目」；项目可折叠，每组最多展示 10 条；欢迎页展示 logo、标题和版本号；右侧恢复使用原 `RightSidebar`。
-  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 调整左栏卡片、项目折叠组、局部滚动提示、欢迎页品牌块和输入框下方信息行样式。
+  - `apps/desktop/frontend/src/desktop/ui/preview/DesktopStylePreviewShell.tsx`: 左栏改为单张圆角卡片；移除项目/全部切换；对话按项目归组，未归属对话进入「默认项目」；项目可折叠，每组最多展示 10 条；欢迎页展示 logo、标题和版本号；右侧恢复使用原 `RightSidebar`。
+  - `apps/desktop/frontend/src/desktop/ui/preview/desktopStylePreview.css`: 调整左栏卡片、项目折叠组、局部滚动提示、欢迎页品牌块和输入框下方信息行样式。
 - **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改生产 UI、不改 agent-core、不改协议、不改 storage。
 - **留尾巴**: 当前仍是预览壳，输入框只实现基础文本发送；完整附件/运行设置弹层后续确认视觉方向后再迁移。
 
-### 2026-06-08 — 重调 DeepSeek 预览壳配色与输入控件
+### 2026-06-08 — 重调 Desktop 前端预览配色与输入控件
 
-- **Why**: 用户提供 DeepSeek-GUI 截图后指出第一版配色相差过大，且输入框缺少内部 `+` / 命令 / 模型选择器、下方运行模式 / effort / cache / context 指示器，左侧底部也缺少分割线和设置区。
+- **Why**: 用户指出第一版配色不够接近目标方向，且输入框缺少内部 `+` / 命令 / 模型选择器、下方运行模式 / effort / cache / context 指示器，左侧底部也缺少分割线和设置区。
 - **改动**:
-  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏补 Code/写作 tabs、快捷动作、底部分割线与设置区；输入框补内部 `+`、命令、模型选择器、右侧状态与发送按钮；下方补 Git / RunMode / Effort / Cache / Context 指示行。
-  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 将预览配色重调为截图式极浅冷灰侧栏、近白主画布、低对比线框控件和轻蓝雾化背景。
+  - `apps/desktop/frontend/src/desktop/ui/preview/DesktopStylePreviewShell.tsx`: 左栏补 Code/写作 tabs、快捷动作、底部分割线与设置区；输入框补内部 `+`、命令、模型选择器、右侧状态与发送按钮；下方补 Git / RunMode / Effort / Cache / Context 指示行。
+  - `apps/desktop/frontend/src/desktop/ui/preview/desktopStylePreview.css`: 将预览配色重调为极浅冷灰侧栏、近白主画布、低对比线框控件和轻蓝雾化背景。
 - **影响范围**: 仅 Desktop/hebweb 共享前端 UI 预览层；不改生产 UI、不改 agent-core、不改协议、不改 storage。
 - **留尾巴**: 预览控件只做视觉壳，命令 / 模型 / effort 下拉还未接入真实交互；后续确认视觉后再接正式组件。
 
-### 2026-06-08 — 收敛 DeepSeek 预览为原组件浅色换肤并全屏重排设置页
+### 2026-06-08 — 收敛 Desktop 前端预览为原组件浅色换肤并全屏重排设置页
 
-- **Why**: 用户明确要求不是全抄 DeepSeek-GUI，而是保留 Hebbian 原有元素和交互，只参考浅色低对比风格；同时设置页需要类似风格、重新分类，并从小弹窗改为占满整个窗口。
+- **Why**: 用户明确要求保留 Hebbian 原有元素和交互，只采用浅色低对比风格；同时设置页需要同一视觉体系、重新分类，并从小弹窗改为占满整个窗口。
 - **改动**:
-  - `apps/desktop/frontend/src/desktop/ui/preview/DeepseekPreviewShell.tsx`: 左栏 tabs 改为 code/chat；去掉「连接手机」和多余快捷入口；保留搜索；默认项目始终显示；项目 hover 显示新增对话，session hover 显示删除对话；输入区恢复使用原 `ChatInput` 组件。
-  - `apps/desktop/frontend/src/desktop/ui/preview/deepseekPreview.css`: 给原输入区、模型选择器、右侧工作区套同一套极浅冷灰色系，避免假控件替代真实组件。
+  - `apps/desktop/frontend/src/desktop/ui/preview/DesktopStylePreviewShell.tsx`: 左栏 tabs 改为 code/chat；去掉「连接手机」和多余快捷入口；保留搜索；默认项目始终显示；项目 hover 显示新增对话，session hover 显示删除对话；输入区恢复使用原 `ChatInput` 组件。
+  - `apps/desktop/frontend/src/desktop/ui/preview/desktopStylePreview.css`: 给原输入区、模型选择器、右侧工作区套同一套极浅冷灰色系，避免假控件替代真实组件。
   - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`: 设置页改为全窗口设置工作台；左侧按「基础 / Agent / 扩展 / 调试」重新分组；主体改为低对比浅色内容卡。
 - **影响范围**: Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。AppSettings 从 modal 视觉变为全窗口 overlay，但入口和保存逻辑不变。
 - **留尾巴**: 设置页内部各 pane 的表单控件仍是既有组件，后续可继续逐个 pane 做更细的低对比样式打磨。
@@ -6329,3 +6329,75 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `docs/changelog.md`: 记录本次修复。
 - **影响范围**: Desktop send_message / hebweb 共享的 Desktop chat 后端路径；不改协议、不改前端、不改 storage schema。`send_continue` 策略仍按设置显式发送「继续」消息。
 - **留尾巴**: 无
+
+### 2026-06-08 — 正式应用 Desktop 浅色工作台前端风格
+
+- **Why**: 用户确认前端风格方案可以进入正式 Hebbian Desktop，需要把独立预览入口收敛为默认界面，并统一命名为正常的前端风格重构。
+- **改动**:
+  - `apps/desktop/frontend/src/App.tsx`: 移除本地预览开关，默认渲染新的 `DesktopShell`。
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 将预览壳迁移为正式三栏工作台，保留真实 `ChatInput`、`ModelPickerButton`、`RightSidebar` 和 store 交互。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 将稳定的浅色低对比 token、左侧项目卡片、聊天区、输入区、模型选择器和右侧工作区样式作为正式样式接入。
+  - `apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx`: 保留默认兼容参数，同时支持正式工作台传入更宽展开尺寸和独立宽度记忆。
+  - `docs/superpowers/specs/2026-06-08-desktop-style-redesign.md`: 将前端设计记录命名为 Desktop 风格重构文档。
+- **影响范围**: Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。旧的三组件默认布局不再由 `App.tsx` 直接渲染，相关真实组件仍被新 shell 复用。
+- **留尾巴**: 左侧项目内超过 10 条对话仍沿用当前局部滚动策略；后续如需要可单独做“查看更多”或虚拟列表。
+
+### 2026-06-08 — 恢复 Desktop 正式工作台的原聊天消息渲染
+
+- **Why**: 正式应用前端风格后，中间聊天区使用了自定义消息气泡和 tool 胶囊，偏离原 ChatView 的消息/tool 渲染；长对话还会把底部输入框和左侧列表挤出窗口。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 中间区域改为直接复用原 `ChatView`，恢复原 `MessageBubble`、tool 渲染、streaming timeline、查找、审批弹窗和输入框贴底逻辑。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 增加正式 shell 的高度约束和滚动约束，只给原 ChatView 外层换背景，不再接管消息气泡；左侧项目列表改为卡片内部滚动。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-08 — 修复正式工作台空态、输入设置行与左侧滚动
+
+- **Why**: 正式工作台恢复原 ChatView 后，新建对话丢失欢迎卡片；输入框下方二级设置行仍显示黑色抽屉底；左侧项目列表的小标题和局部滚动在长列表下不可用。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`: 增加可选 `emptyState` 插槽，保留原消息/tool 渲染，同时允许正式工作台提供新建对话欢迎卡片。
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 给 ChatView 传入正式欢迎卡片；左侧项目组渲染完整对话列表，让项目内列表可局部滚动。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 将 ChatInput 下方二级设置行改为透明轻量行；固定左侧 header/footer，不让项目列表撑爆卡片；项目列表和项目内对话列表都启用局部滚动。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-08 — 调整正式工作台左侧列表、输入框宽度和右侧工作区宽度
+
+- **Why**: 用户反馈左侧对话列表仍显示截断提示且标题不可见，左上角假窗口点不应出现；同时输入框宽度需要缩短，右侧工作区需要更宽。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 左侧项目列表渲染完整会话，不再显示“还有 X 条”；右侧工作区默认展开宽度调大，并换用新的宽度记忆 key。
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`: 给输入框外层增加稳定 class，方便正式工作台单独控制输入框宽度。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 移除左上角假窗口点，缩短顶部留白；强制显示左侧项目标题与对话标题；正式工作台输入框宽度缩短约 30%。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-08 — 拆分 code/chat tab 并调整左侧列表与输入框样式
+
+- **Why**: 用户要求 code/chat tab 有实际过滤作用；左侧对话行需要更紧凑、颜色更淡、hover/active 状态更清晰；输入框 Continue 和 placeholder 字体需要缩小。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: code tab 只显示项目绑定对话，chat tab 只显示默认项目对话；新建按钮按 tab 决定目标；对话行用日期替代模型 ID；移除 `formatTime` 未使用导入。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 对话行高度降低、颜色更淡、hover 底色明确、active 带阴影边框；项目标题行高度降低；滚动条极淡化；Continue 按钮和输入框 placeholder 字体缩小；右侧 sidebar grid 列改为 `auto` 让展开宽度生效。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 修复 hebweb 压缩阻塞其他对话发送并补齐压缩日志
+
+- **Why**: 用户反馈一个对话执行上下文压缩时，其他对话不能继续发消息；同时压缩失败时只看到 UI 报错，不知道模型请求、响应和失败原因。
+- **改动**:
+  - `apps/web-server/src/server.rs`: WebSocket 收到 `invoke` 后改为独立 task 派发，避免 `compact_session` 这类长请求阻塞同一连接上的后续 `send_message` / `subscribe` 等命令。
+  - `crates/agent-core/src/context/compaction.rs`: 拆出压缩请求构造与请求执行函数，让自动压缩、手动压缩和日志记录使用同一份真实 payload。
+  - `crates/agent-core/src/agent_loop.rs`: 自动压缩开始/成功/失败输出结构化日志；失败升级为 error 日志；`model_io.jsonl` 记录成功与失败两种 compaction entry。
+  - `apps/desktop/src/chat.rs` / `apps/web-server/src/chat_helpers.rs`: 手动 `/compact` 输出开始/成功/error 日志，并把 compaction 请求和失败响应写入当前 session 的 `model_io.jsonl`。
+- **影响范围**: agent-core 压缩实现、Desktop 手动压缩、hebweb WS invoke 派发；不改协议字段、不改 session 存储格式。
+- **留尾巴**: WS invoke 现在允许同一连接多命令并发返回，前端已按 invoke id 匹配响应；如果后续发现需要严格顺序的命令，应在对应命令内部按 session 加细粒度锁，而不是恢复整条 WS 串行。
+
+### 2026-06-09 — 支持为供应商模型手动设置上下文窗口
+
+- **Why**: 用户反馈供应商设置里拉取模型后只能依赖 models.dev 的 context 大小，但 models.dev 可能不准确，需要能手动覆盖，避免错误窗口影响上下文用量和自动压缩预算。
+- **改动**:
+  - `crates/model-gateway/src/config.rs`: `Provider` 新增 `model_context_windows`，按模型 ID 保存手动 context window，旧配置默认空 map 兼容。
+  - `crates/model-gateway/src/context_window.rs`: 新增配置优先的解析入口；手动值优先于 `/models` metadata、models.dev 展示值和内置兜底。
+  - `apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx` / `ModelCard.tsx` / `FamilyGroup.tsx`: 模型卡片的「上下文」输入改为持久化到供应商配置；拉取模型后同步更新当前草稿里的模型缓存，避免保存时丢失缓存。
+  - `apps/desktop/src/chat.rs` / `apps/web-server/src/session.rs` / `apps/cli/src/daemon.rs` / `apps/channel-gateway/src/bridge.rs`: run 启动时的压缩预算统一使用手动设置后的上下文窗口。
+- **影响范围**: model-gateway provider 配置、Desktop/hebweb 前端供应商设置、Desktop/CLI/hebweb/channel-gateway 的压缩预算；providers.json 新增可选字段，向后兼容，不改协议。
+- **留尾巴**: 输出 token 上限仍只作为卡片展示信息，不参与请求预算；后续如需要可单独持久化 output limit。

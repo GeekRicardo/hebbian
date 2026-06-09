@@ -931,6 +931,8 @@ mod tests {
             account_id: None,
             extra_headers: Default::default(),
             models: Vec::new(),
+            fetched_models: None,
+            model_context_windows: Default::default(),
             default_model: None,
             title_gen_enabled: false,
             title_gen_model: None,

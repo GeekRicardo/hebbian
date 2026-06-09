@@ -14,13 +14,31 @@
 
 use crate::config::{Provider, ProviderKind};
 
-/// 从 /v1/models 获取 context_length，失败时回退到预设查表。
+/// 解析模型上下文窗口：用户手动设置 > /v1/models metadata > 预设查表。
 /// 适用于 session 创建 / 首次加载时一次性解析。
 pub async fn resolve_context_window(provider: &Provider, model: &str) -> usize {
+    if let Some(ctx) = configured_context_window(provider, model) {
+        return ctx;
+    }
     if let Some(ctx) = crate::discovery::fetch_context_length(provider, model).await {
         return ctx;
     }
     context_window_for(provider.kind, model)
+}
+
+/// 解析本地配置里的模型上下文窗口。
+pub fn configured_context_window(provider: &Provider, model: &str) -> Option<usize> {
+    provider
+        .model_context_windows
+        .get(model)
+        .copied()
+        .filter(|n| *n > 0)
+}
+
+/// 同步路径使用的上下文窗口解析：用户手动设置 > 预设查表。
+pub fn effective_context_window_for(provider: &Provider, model: &str) -> usize {
+    configured_context_window(provider, model)
+        .unwrap_or_else(|| context_window_for(provider.kind, model))
 }
 
 /// 按 model 名优先 + provider kind 兜底解析 context window（tokens）。
@@ -287,6 +305,39 @@ mod tests {
             context_window_for(ProviderKind::Deepseek, "deepseek-v3.2"),
             163_840
         );
+    }
+
+    #[test]
+    fn configured_context_window_wins() {
+        let mut provider = Provider {
+            id: "custom".into(),
+            name: "Custom".into(),
+            kind: ProviderKind::Openai,
+            enabled: true,
+            auth_mode: crate::config::AuthMode::ApiKey,
+            base_url: "https://example.test/v1".into(),
+            api_key: "test".into(),
+            refresh_token: None,
+            token_expires_at: None,
+            account_id: None,
+            extra_headers: std::collections::BTreeMap::new(),
+            models: vec!["gpt-4o".into()],
+            fetched_models: None,
+            model_context_windows: std::collections::BTreeMap::new(),
+            default_model: None,
+            title_gen_enabled: false,
+            title_gen_model: None,
+            claude_code_compat: false,
+        };
+        provider
+            .model_context_windows
+            .insert("gpt-4o".into(), 256_000);
+
+        assert_eq!(
+            configured_context_window(&provider, "gpt-4o"),
+            Some(256_000)
+        );
+        assert_eq!(effective_context_window_for(&provider, "gpt-4o"), 256_000);
     }
 
     /// MiMo v2+ 是 1M 上下文，但其 /v1/models 不返回 context_length，
