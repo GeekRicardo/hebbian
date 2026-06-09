@@ -42,7 +42,6 @@ import {
   Square,
 } from "lucide-react";
 import type {
-  EditEntry,
   Message,
   MessagePart,
   Prompt,
@@ -53,7 +52,6 @@ import type {
 } from "@/desktop/ui/types";
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
-const EMPTY_EDIT_ENTRIES: EditEntry[] = [];
 const EMPTY_STR_ARR: string[] = [];
 import { cn } from "@/desktop/ui/lib/utils";
 import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
@@ -1071,74 +1069,29 @@ function DefaultToolDetail({ call }: { call: ToolCallItem }) {
  * 数据源策略：
  * - **默认（非放大）**：永远只渲 args 的 old_string / new_string，不读 worktree——
  *   零网络等待，每次 ToolCallDelta 立刻刷新画面。
- * - **放大（GitHub review 风格）**：若 `editSnapshots` 里能按 `call.id` 找到 EditEntry，
- *   异步拉 `api.diffEdit` 取完整 before/after（含未改动上下文行），否则仍渲局部 args。
+ * - **放大（GitHub review 风格）**：per-turn 完整净变化在右侧「修改文件」栏展示；
+ *   消息内放大仍渲染本次 tool args 的局部 diff。
  *
  * 布局（inline / split）和"是否放大"两个状态独立——切换 inline↔split 不会关掉放大框。
  */
 function EditDiffDetail({ call }: { call: ToolCallItem }) {
-  const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const workdir = useStore((s) => s.currentSession?.workdir ?? null);
-  const editSnapshots = useStore(
-    (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_EDIT_ENTRIES,
-  );
   const [viewMode, setViewMode] = useState<DiffMode>("split");
   const [expanded, setExpanded] = useState(false);
-  const [fullPayload, setFullPayload] = useState<{
-    before: string;
-    after: string;
-    action: string;
-    file_path: string;
-  } | null>(null);
-  const [fullError, setFullError] = useState<string | null>(null);
-
-  const snapshot = call.id
-    ? editSnapshots.find((e) => e.call_id === call.id)
-    : null;
-
-  // 仅在「放大且有 snapshot」时才拉服务端权威完整文件——非放大永不发请求。
-  useEffect(() => {
-    if (!expanded || !sessionId || !snapshot) {
-      return;
-    }
-    let cancelled = false;
-    setFullError(null);
-    api
-      .diffEdit(sessionId, snapshot.snapshot_id)
-      .then((p) => {
-        if (cancelled) return;
-        setFullPayload({
-          before: p.before_text,
-          after: p.after_text,
-          action: p.action,
-          file_path: p.file_path,
-        });
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setFullError(e?.message ?? String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [expanded, sessionId, snapshot?.snapshot_id]);
 
   const partial = parsePartialEditArgs(call.argumentsText);
   const argSides = diffSidesFromArgs(call.name, partial);
-  const action = snapshot?.action ?? inferDiffAction(call.name, partial);
+  const action = inferDiffAction(call.name, partial);
   const actionLabel =
     action === "create" ? "创建文件" : action === "overwrite" ? "覆盖文件" : "修改文件";
 
-  // 数据源选择：放大态优先用完整 payload；非放大态/未加载完成都用 args 局部
-  const useFull = expanded && !!fullPayload && !!snapshot;
-  const beforeText = useFull ? fullPayload!.before : argSides.beforeText;
-  const afterText = useFull ? fullPayload!.after : argSides.afterText;
-  const filePath = (useFull ? fullPayload!.file_path : partial.file_path) ?? "";
+  const beforeText = argSides.beforeText;
+  const afterText = argSides.afterText;
+  const filePath = partial.file_path ?? "";
 
-  // args 局部 diff 渲染时（流式 / 非放大 detail），读盘原文件给出 old_string
-  // 真实起始行号；放大态 fullPayload 已是完整文件，行号天然正确。
+  // args 局部 diff 渲染时，读盘原文件给出 old_string 真实起始行号。
   const isCreateAction = action === "create" || call.name === "Write";
-  const enableBaseLookup = !useFull && !isCreateAction && !!partial.old_string;
+  const enableBaseLookup = !isCreateAction && !!partial.old_string;
   const originalText = useOriginalFileText(
     partial.file_path,
     workdir,
@@ -1149,13 +1102,7 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
     : 1;
 
   const streamingFlag = call.status === "streaming";
-  const badge = (() => {
-    if (call.status === "streaming") return "实时预览";
-    if (expanded && snapshot && !fullPayload && !fullError) return "加载完整文件…";
-    if (expanded && fullError) return "完整文件加载失败";
-    if (expanded && useFull) return "完整文件";
-    return undefined;
-  })();
+  const badge = call.status === "streaming" ? "实时预览" : undefined;
 
   const cycleMode = () => setViewMode((prev) => (prev === "split" ? "inline" : "split"));
   const toggleExpanded = () => setExpanded((e) => !e);
@@ -1197,7 +1144,7 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
             streaming={streamingFlag}
             onClose={() => setExpanded(false)}
             className="min-h-0 flex-1"
-            collapseContext={useFull ? 3 : undefined}
+            collapseContext={undefined}
             baseLineBefore={baseLine}
             baseLineAfter={baseLine}
           />
@@ -1751,8 +1698,6 @@ function ReasoningBlock({
   text: string;
   streaming: boolean;
 }) {
-  // 流式时展开、流完立即折叠（不等整个 loop 结束）。
-  // 用 prev ref detect streaming 边界变化，避免覆盖用户在 streaming 期间的手动 toggle。
   const [open, setOpen] = useState(streaming);
   const prevStreamingRef = useRef(streaming);
   useEffect(() => {
@@ -1786,21 +1731,48 @@ function ReasoningBlock({
         )}
       </button>
       {open && (
-        <div className="border-l border-border/50 pl-3 text-[12px] leading-relaxed text-muted-foreground break-words">
-          {text ? (
-            <div className="markdown-segment">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {text}
-              </ReactMarkdown>
-            </div>
-          ) : streaming ? (
-            "▍"
-          ) : null}
-        </div>
+        <ReasoningScrollArea text={text} streaming={streaming} />
       )}
+    </div>
+  );
+}
+
+function ReasoningScrollArea({ text, streaming }: { text: string; streaming: boolean }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+
+  useEffect(() => {
+    if (!stickRef.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickRef.current = distFromBottom < 30;
+  };
+
+  return (
+    <div
+      ref={scrollRef}
+      onScroll={handleScroll}
+      className="border-l border-border/50 pl-3 text-[12px] leading-relaxed text-muted-foreground break-words overflow-y-auto"
+      style={{ maxHeight: "10lh" }}
+    >
+      {text ? (
+        <div className="markdown-segment">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents}
+          >
+            {text}
+          </ReactMarkdown>
+        </div>
+      ) : streaming ? (
+        "▍"
+      ) : null}
     </div>
   );
 }
@@ -2273,7 +2245,7 @@ export const MessageBubble = memo(function MessageBubble({
         />
       </div>
       <div className={cn("flex-1 min-w-0", canToggleRawText && "pr-8")}>
-        <div className="flex items-center gap-2 mb-1.5 text-xs">
+        <div className="flex items-center gap-2 mb-1.5 text-xs message-role-label">
           <span className="font-medium">
             {isUser ? "你" : prompt?.name ?? "助手"}
           </span>

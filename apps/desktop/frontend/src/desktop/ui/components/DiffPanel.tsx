@@ -13,7 +13,7 @@ import {
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { PathHint } from "@/desktop/ui/components/PathHint";
-import type { DiffPayload, EditEntry } from "@/desktop/ui/types";
+import type { DiffPayload, TurnFileChange } from "@/desktop/ui/types";
 
 /**
  * 把全屏内容渲到 ChatView 末尾的 `#chat-fullscreen-anchor`。
@@ -799,11 +799,12 @@ function StreamCursor() {
 
 interface DiffPanelProps {
   sessionId: string;
-  entry: EditEntry;
+  turnId: string;
+  entry: TurnFileChange;
   onClose: () => void;
 }
 
-export function DiffPanel({ sessionId, entry, onClose }: DiffPanelProps) {
+export function DiffPanel({ sessionId, turnId, entry, onClose }: DiffPanelProps) {
   const [payload, setPayload] = useState<DiffPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -815,7 +816,7 @@ export function DiffPanel({ sessionId, entry, onClose }: DiffPanelProps) {
     setLoading(true);
     setError(null);
     api
-      .diffEdit(sessionId, entry.snapshot_id)
+      .diffEdit(sessionId, turnId, entry.real_path)
       .then((p) => {
         if (!cancelled) setPayload(p);
       })
@@ -828,7 +829,7 @@ export function DiffPanel({ sessionId, entry, onClose }: DiffPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, entry.snapshot_id]);
+  }, [sessionId, turnId, entry.real_path]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {

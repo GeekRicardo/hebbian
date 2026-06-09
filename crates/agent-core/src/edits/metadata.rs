@@ -10,19 +10,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage;
 
-/// 单次 Edit 的元数据条目。
+/// 单个 turn 内某个文件的净变化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditEntry {
-    pub snapshot_id: String,
-    pub call_id: String,
-    pub tool: String,
+pub struct TurnFileChange {
     pub real_path: String,
     pub action: EditAction,
     pub before_sha: String,
     pub after_sha: String,
     pub before_bytes: u64,
     pub after_bytes: u64,
-    pub ts_ms: i64,
+}
+
+impl From<TurnFileChange> for protocol::TurnFileChange {
+    fn from(value: TurnFileChange) -> Self {
+        Self {
+            real_path: value.real_path,
+            action: value.action,
+            before_sha: value.before_sha,
+            after_sha: value.after_sha,
+            before_bytes: value.before_bytes,
+            after_bytes: value.after_bytes,
+        }
+    }
+}
+
+/// 一轮对话的 Edit 净变化元数据条目。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnEditEntry {
+    pub turn_id: String,
+    pub turn_index: u32,
+    pub started_at_ms: i64,
+    pub finished_at_ms: i64,
+    pub files: Vec<TurnFileChange>,
     #[serde(default)]
     pub reverted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,14 +52,15 @@ pub struct EditEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditsMetadata {
     pub version: u32,
-    pub entries: Vec<EditEntry>,
+    #[serde(default)]
+    pub turns: Vec<TurnEditEntry>,
 }
 
 impl Default for EditsMetadata {
     fn default() -> Self {
         Self {
-            version: 1,
-            entries: Vec::new(),
+            version: 2,
+            turns: Vec::new(),
         }
     }
 }
@@ -69,7 +89,12 @@ pub fn load_metadata(worktree_dir: &Path) -> AppResult<EditsMetadata> {
     if s.trim().is_empty() {
         return Ok(EditsMetadata::default());
     }
-    serde_json::from_str(&s)
+    let value: serde_json::Value = serde_json::from_str(&s)
+        .map_err(|e| AppError::msg(format!("解析 .hebbian-edits.json 失败: {e}")))?;
+    if value.get("version").and_then(|v| v.as_u64()) != Some(2) {
+        return Ok(EditsMetadata::default());
+    }
+    serde_json::from_value(value)
         .map_err(|e| AppError::msg(format!("解析 .hebbian-edits.json 失败: {e}")))
 }
 
@@ -84,19 +109,17 @@ pub fn save_metadata(worktree_dir: &Path, meta: &EditsMetadata) -> AppResult<()>
     storage::lock::write_atomic(&path, json.as_bytes())
 }
 
-/// 按 snapshot_id 查找条目。
-pub fn find_entry<'a>(meta: &'a EditsMetadata, snapshot_id: &str) -> Option<&'a EditEntry> {
-    meta.entries.iter().find(|e| e.snapshot_id == snapshot_id)
+/// 按 turn_id 查找条目。
+pub fn find_turn<'a>(meta: &'a EditsMetadata, turn_id: &str) -> Option<&'a TurnEditEntry> {
+    meta.turns.iter().find(|e| e.turn_id == turn_id)
 }
 
-/// 按 snapshot_id 查找可变条目。
-pub fn find_entry_mut<'a>(
+/// 按 turn_id 查找可变条目。
+pub fn find_turn_mut<'a>(
     meta: &'a mut EditsMetadata,
-    snapshot_id: &str,
-) -> Option<&'a mut EditEntry> {
-    meta.entries
-        .iter_mut()
-        .find(|e| e.snapshot_id == snapshot_id)
+    turn_id: &str,
+) -> Option<&'a mut TurnEditEntry> {
+    meta.turns.iter_mut().find(|e| e.turn_id == turn_id)
 }
 
 #[cfg(test)]
@@ -106,28 +129,30 @@ mod tests {
     #[test]
     fn roundtrip_default() {
         let meta = EditsMetadata::default();
-        assert_eq!(meta.version, 1);
-        assert!(meta.entries.is_empty());
+        assert_eq!(meta.version, 2);
+        assert!(meta.turns.is_empty());
     }
 
     #[test]
-    fn find_entry_by_snapshot_id() {
+    fn find_turn_by_turn_id() {
         let mut meta = EditsMetadata::default();
-        meta.entries.push(EditEntry {
-            snapshot_id: "s1".into(),
-            call_id: "c1".into(),
-            tool: "Edit".into(),
-            real_path: "/tmp/a.txt".into(),
-            action: EditAction::Modify,
-            before_sha: "abc".into(),
-            after_sha: "def".into(),
-            before_bytes: 100,
-            after_bytes: 200,
-            ts_ms: 1000,
+        meta.turns.push(TurnEditEntry {
+            turn_id: "t1".into(),
+            turn_index: 1,
+            started_at_ms: 1000,
+            finished_at_ms: 2000,
+            files: vec![TurnFileChange {
+                real_path: "/tmp/a.txt".into(),
+                action: EditAction::Modify,
+                before_sha: "abc".into(),
+                after_sha: "def".into(),
+                before_bytes: 100,
+                after_bytes: 200,
+            }],
             reverted: false,
             reverted_at_ms: None,
         });
-        assert!(find_entry(&meta, "s1").is_some());
-        assert!(find_entry(&meta, "nope").is_none());
+        assert!(find_turn(&meta, "t1").is_some());
+        assert!(find_turn(&meta, "nope").is_none());
     }
 }

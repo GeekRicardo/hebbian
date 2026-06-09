@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+import type { TurnEditEntry } from "@/desktop/ui/types";
+
+const EMPTY_EDIT_TURNS: TurnEditEntry[] = [];
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
 import { ModelIoInspector } from "./ModelIoInspector";
@@ -33,14 +36,19 @@ type TabId = "tasks" | "edits" | "todos" | "plans";
 
 const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans"];
 
-const STORAGE_WIDTH = "hebbian.rightSidebar.width";
-const STORAGE_COLLAPSED = "hebbian.rightSidebar.collapsed";
-const STORAGE_TAB = "hebbian.rightSidebar.tab";
+const STORAGE_PREFIX = "hebbian.rightSidebar";
 
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
 const COLLAPSED_WIDTH = 36;
+
+interface RightSidebarProps {
+  defaultWidth?: number;
+  minWidth?: number;
+  maxWidth?: number;
+  storagePrefix?: string;
+}
 
 function loadInitial<T>(key: string, fallback: T, parse: (raw: string) => T): T {
   try {
@@ -52,20 +60,29 @@ function loadInitial<T>(key: string, fallback: T, parse: (raw: string) => T): T 
   }
 }
 
-export function RightSidebar() {
+export function RightSidebar({
+  defaultWidth = DEFAULT_WIDTH,
+  minWidth = MIN_WIDTH,
+  maxWidth = MAX_WIDTH,
+  storagePrefix = STORAGE_PREFIX,
+}: RightSidebarProps = {}) {
+  const storageWidthKey = `${storagePrefix}.width`;
+  const storageCollapsedKey = `${storagePrefix}.collapsed`;
+  const storageTabKey = `${storagePrefix}.tab`;
+
   // 首次打开默认折叠（仅显示 36px 图标列），用户主动点开。
   // localStorage 有记录则用记录值。
   const [collapsed, setCollapsed] = useState(() =>
-    loadInitial(STORAGE_COLLAPSED, true, (s) => s === "1")
+    loadInitial(storageCollapsedKey, true, (s) => s === "1")
   );
   const [width, setWidth] = useState(() =>
-    loadInitial(STORAGE_WIDTH, DEFAULT_WIDTH, (s) => {
+    loadInitial(storageWidthKey, defaultWidth, (s) => {
       const n = Number(s);
-      return Number.isFinite(n) && n >= MIN_WIDTH && n <= MAX_WIDTH ? n : DEFAULT_WIDTH;
+      return Number.isFinite(n) && n >= minWidth && n <= maxWidth ? n : defaultWidth;
     })
   );
   const [tab, setTab] = useState<TabId>(() =>
-    loadInitial<TabId>(STORAGE_TAB, "tasks", (s) =>
+    loadInitial<TabId>(storageTabKey, "tasks", (s) =>
       (TAB_IDS as string[]).includes(s) ? (s as TabId) : "tasks"
     )
   );
@@ -76,6 +93,10 @@ export function RightSidebar() {
   const debugEnabled = useStore((s) => s.debugEnabled);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const todos = useStore((s) => s.todos);
+  const editTurns = useStore((s) => {
+    const id = s.currentSession?.id;
+    return id ? (s.sessionEditSnapshots[id] ?? EMPTY_EDIT_TURNS) : EMPTY_EDIT_TURNS;
+  });
   const [modelIoOpen, setModelIoOpen] = useState(false);
   const closeModelIo = useCallback(() => setModelIoOpen(false), []);
 
@@ -108,16 +129,44 @@ export function RightSidebar() {
     setTab("todos");
   }, [sessionId, todosKey, todos.length]);
 
+  const editTurnsKey = useMemo(
+    () => editTurns.map((t) => `${t.turn_id}:${t.files.length}:${t.reverted}`).join("|"),
+    [editTurns],
+  );
+  const prevEditTurnsKeyRef = useRef(editTurnsKey);
+  const prevEditSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevEditSessionIdRef.current !== sessionId) {
+      prevEditSessionIdRef.current = sessionId;
+      prevEditTurnsKeyRef.current = editTurnsKey;
+      return;
+    }
+    if (editTurnsKey === prevEditTurnsKeyRef.current) return;
+    prevEditTurnsKeyRef.current = editTurnsKey;
+    if (editTurns.length === 0) return;
+    setCollapsed(false);
+    setTab("edits");
+    const latest = [...editTurns].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
+    window.setTimeout(() => {
+      const node = document.getElementById(`turn-edits-${latest.turn_id}`);
+      node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      node?.classList.add("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
+      window.setTimeout(() => {
+        node?.classList.remove("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
+      }, 1500);
+    }, 50);
+  }, [sessionId, editTurnsKey, editTurns]);
+
   // 持久化折叠状态
   useEffect(() => {
-    localStorage.setItem(STORAGE_COLLAPSED, collapsed ? "1" : "0");
-  }, [collapsed]);
+    localStorage.setItem(storageCollapsedKey, collapsed ? "1" : "0");
+  }, [storageCollapsedKey, collapsed]);
   useEffect(() => {
-    if (!collapsed) localStorage.setItem(STORAGE_WIDTH, String(width));
-  }, [width, collapsed]);
+    if (!collapsed) localStorage.setItem(storageWidthKey, String(width));
+  }, [storageWidthKey, width, collapsed]);
   useEffect(() => {
-    localStorage.setItem(STORAGE_TAB, tab);
-  }, [tab]);
+    localStorage.setItem(storageTabKey, tab);
+  }, [storageTabKey, tab]);
 
   // 拖拽逻辑：mousedown 在左边缘 → 进入 dragging 模式 → mousemove 更新宽度
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -134,8 +183,8 @@ export function RightSidebar() {
         // 拖向左 = 增宽；拖向右 = 减宽
         const delta = dragRef.current.startX - ev.clientX;
         const next = Math.min(
-          MAX_WIDTH,
-          Math.max(MIN_WIDTH, dragRef.current.startWidth + delta)
+          maxWidth,
+          Math.max(minWidth, dragRef.current.startWidth + delta)
         );
         setWidth(next);
       };
@@ -149,7 +198,7 @@ export function RightSidebar() {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [collapsed, width]
+    [collapsed, width, minWidth, maxWidth]
   );
 
   // 折叠态：仅显示一列图标 + 展开按钮；点图标也直接展开到对应 tab
@@ -388,16 +437,6 @@ function TabScroller({ children }: { children: ReactNode }) {
     <div
       ref={ref}
       className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1.5 [scrollbar-width:thin]"
-      style={{ scrollbarColor: "transparent transparent" }}
-      onMouseEnter={(e) => {
-        // hover 时显示滚动条颜色（仅本元素，避免侵入全局样式）
-        (e.currentTarget as HTMLDivElement).style.scrollbarColor =
-          "rgb(0 0 0 / 0.2) transparent";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.scrollbarColor =
-          "transparent transparent";
-      }}
     >
       {children}
     </div>

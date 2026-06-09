@@ -1,11 +1,12 @@
 //! Edits Worktree（架构 §4.13）。
 //!
-//! Session 私有的独立 git 仓库，给每次 Edit 调用拍快照，支持单次精确回退。
+//! Session 私有的独立 git 仓库，按 turn 边界给 Edit 修改拍快照，支持整轮回退。
 //!
 //! 核心操作：
-//! - [`EditsWorktree::snapshot_before`] / [`EditsWorktree::snapshot_after`]
-//!   在 Edit 执行前后包夹调用，把真实文件镜像进 worktree 并 git commit
-//! - [`EditsWorktree::revert`] 生成反向 patch 并 apply 到真实文件
+//! - [`EditsWorktree::begin_turn`] 在 TurnStarted 后登记当前 turn
+//! - [`EditsWorktree::ensure_turn_before`] 在本轮首次触达某文件时拍 before
+//! - [`EditsWorktree::commit_turn`] 在 TurnFinished 前拍 after 并写 turn 级 metadata
+//! - [`EditsWorktree::revert_turn`] 生成反向 patch 并 apply 到真实文件
 //! - 无 git CLI → enabled=false，整套机制降级，不阻塞 Edit 本身
 
 use std::collections::hash_map::DefaultHasher;
@@ -26,7 +27,7 @@ use crate::workspace::Workspace;
 pub mod hashline;
 pub mod metadata;
 
-use metadata::{load_metadata, save_metadata, worktree_dir, EditEntry};
+use metadata::{load_metadata, save_metadata, worktree_dir, TurnEditEntry, TurnFileChange};
 
 /// 同进程内每个 real_path 对应一把 async Mutex，dispatch 时同 path 的多个 Edit
 /// 在 async 层串行化，**不阻塞 tokio worker**。
@@ -44,6 +45,23 @@ const FD_LOCK_TIMEOUT_SECS: u64 = 30;
 pub struct Snapshot {
     pub sha: String,
     pub file_bytes: u64,
+}
+
+/// 本轮某文件的 before 快照。
+#[derive(Debug, Clone)]
+struct BeforeSnapshot {
+    real_path: PathBuf,
+    action: protocol::EditAction,
+    sha: String,
+    file_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTurn {
+    turn_id: String,
+    turn_index: u32,
+    started_at_ms: i64,
+    files: HashMap<PathBuf, BeforeSnapshot>,
 }
 
 /// 文件互斥锁 guard（架构 §4.13.4）。同时持有：
@@ -68,6 +86,7 @@ pub struct EditsWorktree {
     workspace_root: PathBuf,
     git_available: Mutex<Option<bool>>,
     per_path_locks: PerPathLocks,
+    active_turn: AsyncMutex<Option<ActiveTurn>>,
 }
 
 impl EditsWorktree {
@@ -77,6 +96,7 @@ impl EditsWorktree {
             workspace_root: workspace.workdir().to_path_buf(),
             git_available: Mutex::new(None),
             per_path_locks: AsyncMutex::new(HashMap::new()),
+            active_turn: AsyncMutex::new(None),
         }
     }
 
@@ -157,127 +177,188 @@ impl EditsWorktree {
         })
     }
 
-    /// Edit 执行前快照。git 不可用时返回 `Ok(None)`——调用方跳过，不阻塞 Edit。
-    pub async fn snapshot_before(
-        &self,
-        call_id: &str,
-        real_path: &Path,
-    ) -> AppResult<Option<Snapshot>> {
-        if !self.enabled().await {
-            return Ok(None);
-        }
-        self.ensure_init().await?;
-        self.mirror_file(real_path).await?;
-        self.git_add(real_path).await?;
-        let sha = self.git_commit(&format!("before:{call_id}")).await?;
-        let file_bytes = self.file_size(real_path).await;
-        Ok(Some(Snapshot { sha, file_bytes }))
+    pub async fn begin_turn(&self, turn_id: &str, turn_index: u32) {
+        let mut active = self.active_turn.lock().await;
+        *active = Some(ActiveTurn {
+            turn_id: turn_id.to_string(),
+            turn_index,
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+            files: HashMap::new(),
+        });
     }
 
-    /// Edit 执行后快照。
-    pub async fn snapshot_after(
+    /// 本 turn 首次触达某文件时拍 before；同文件后续 Edit 跳过。
+    pub async fn ensure_turn_before(
         &self,
-        call_id: &str,
+        turn_id: &str,
         real_path: &Path,
-    ) -> AppResult<Option<Snapshot>> {
+        action: protocol::EditAction,
+    ) -> AppResult<()> {
         if !self.enabled().await {
-            return Ok(None);
+            return Ok(());
         }
+        {
+            let active = self.active_turn.lock().await;
+            if active
+                .as_ref()
+                .and_then(|t| (t.turn_id == turn_id).then_some(t))
+                .and_then(|t| t.files.get(real_path))
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
+
         self.ensure_init().await?;
-        self.mirror_file(real_path).await?;
-        self.git_add(real_path).await?;
-        let sha = self.git_commit(&format!("after:{call_id}")).await?;
-        let file_bytes = self.file_size(real_path).await;
-        Ok(Some(Snapshot { sha, file_bytes }))
+        let snapshot = match self
+            .snapshot_file(&format!("before:{turn_id}"), real_path)
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(_) if matches!(action, protocol::EditAction::Create) => Snapshot {
+                sha: String::new(),
+                file_bytes: 0,
+            },
+            Err(e) => return Err(e),
+        };
+
+        let mut active = self.active_turn.lock().await;
+        let turn = active
+            .as_mut()
+            .ok_or_else(|| AppError::msg("edits-worktree 当前没有 active turn"))?;
+        if turn.turn_id != turn_id {
+            return Err(AppError::msg("edits-worktree active turn 不匹配"));
+        }
+        turn.files
+            .entry(real_path.to_path_buf())
+            .or_insert(BeforeSnapshot {
+                real_path: real_path.to_path_buf(),
+                action,
+                sha: snapshot.sha,
+                file_bytes: snapshot.file_bytes,
+            });
+        Ok(())
     }
 
-    /// 回退单次 Edit。按 entry.action 分派：
-    /// - `Create`：直接删除真实文件（before 状态本就是「不存在」）
-    /// - `Modify` / `Overwrite`：生成 after→before 反向 patch，apply 到当前真实文件
-    ///
-    /// 反向 patch 路径：
-    /// 1. `git diff after before -- <mirrored>`（**保留 stdout 原样**，patch 末尾换行不能丢，否则 `git apply` 报 `corrupt patch`）
-    /// 2. 拷贝真实文件 → 镜像位置（apply 的目标 = 当前状态）
-    /// 3. `git apply --check` 探测冲突；无冲突则 `git apply`
-    /// 4. 拷贝镜像 → 真实文件
-    ///
-    /// 冲突时拒绝，不动真实文件。
-    pub async fn revert(&self, entry: &EditEntry) -> AppResult<()> {
+    /// TurnFinished 前提交本 turn 的 after 快照并写 metadata。无文件修改返回 Ok(None)。
+    pub async fn commit_turn(&self, turn_id: &str) -> AppResult<Option<TurnEditEntry>> {
+        if !self.enabled().await {
+            let mut active = self.active_turn.lock().await;
+            if active.as_ref().is_some_and(|t| t.turn_id == turn_id) {
+                *active = None;
+            }
+            return Ok(None);
+        }
+        let turn = {
+            let mut active = self.active_turn.lock().await;
+            match active.take() {
+                Some(t) if t.turn_id == turn_id => t,
+                Some(t) => {
+                    *active = Some(t);
+                    return Ok(None);
+                }
+                None => return Ok(None),
+            }
+        };
+        if turn.files.is_empty() {
+            return Ok(None);
+        }
+
+        self.ensure_init().await?;
+        let mut files = Vec::new();
+        for before in turn.files.into_values() {
+            let after = self
+                .snapshot_file(&format!("after:{turn_id}"), &before.real_path)
+                .await?;
+            files.push(TurnFileChange {
+                real_path: before.real_path.to_string_lossy().to_string(),
+                action: before.action,
+                before_sha: before.sha,
+                after_sha: after.sha,
+                before_bytes: before.file_bytes,
+                after_bytes: after.file_bytes,
+            });
+        }
+
+        let entry = TurnEditEntry {
+            turn_id: turn.turn_id,
+            turn_index: turn.turn_index,
+            started_at_ms: turn.started_at_ms,
+            finished_at_ms: chrono::Utc::now().timestamp_millis(),
+            files,
+            reverted: false,
+            reverted_at_ms: None,
+        };
+        self.append_turn(entry.clone())?;
+        Ok(Some(entry))
+    }
+
+    /// 回退一整个 turn。
+    pub async fn revert_turn(&self, entry: &TurnEditEntry) -> AppResult<()> {
         if !self.enabled().await {
             return Err(AppError::msg("git 不可用，回退功能已禁用"));
         }
-        let real_path = Path::new(&entry.real_path);
 
-        // create 的 before 状态 = 文件不存在；patch 路径走不通（before_sha 为空 ref）。
-        // 语义上回退 = 删除文件即可。
-        if matches!(entry.action, protocol::EditAction::Create) {
-            match tokio::fs::remove_file(real_path).await {
-                Ok(()) => return Ok(()),
-                // 用户已经手动删了——视作回退已达成的等价状态
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(e) => {
-                    return Err(AppError::msg(format!(
-                        "删除 create 文件失败 {}: {e}",
-                        real_path.display()
-                    )))
+        for file in &entry.files {
+            let real_path = Path::new(&file.real_path);
+            let _lock = self.lock_file(real_path).await?;
+            if matches!(file.action, protocol::EditAction::Create) {
+                match tokio::fs::remove_file(real_path).await {
+                    Ok(()) => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => {
+                        return Err(AppError::msg(format!(
+                            "删除 create 文件失败 {}: {e}",
+                            real_path.display()
+                        )))
+                    }
                 }
             }
-        }
 
-        // Modify / Overwrite：走反向 patch
-        if entry.before_sha.is_empty() {
-            return Err(AppError::msg(
-                "非 create 类型但 before_sha 为空，metadata 损坏",
-            ));
-        }
-
-        let patch = self
-            .git_diff(&entry.after_sha, &entry.before_sha, real_path)
-            .await?;
-
-        if patch.trim().is_empty() {
-            return Err(AppError::msg("回退 patch 为空"));
-        }
-
-        // 拷贝真实文件 → 镜像，作为 apply 的目标
-        self.mirror_file(real_path).await?;
-
-        // 写临时 patch 文件
-        let patch_file = self.worktree_dir.join(".revert.patch");
-        tokio::fs::write(&patch_file, &patch)
-            .await
-            .map_err(|e| AppError::msg(format!("写临时 patch 失败: {e}")))?;
-
-        let result = self.git_apply(&patch_file).await;
-        let _ = tokio::fs::remove_file(&patch_file).await;
-
-        match result {
-            Ok(()) => {
-                // 拷贝镜像 → 真实文件
-                let mirrored = self.mirrored_path(real_path);
-                tokio::fs::copy(&mirrored, real_path)
-                    .await
-                    .map_err(|e| AppError::msg(format!("回退写入失败: {e}")))?;
-                Ok(())
+            if file.before_sha.is_empty() {
+                return Err(AppError::msg(
+                    "非 create 类型但 before_sha 为空，metadata 损坏",
+                ));
             }
-            Err(e) => Err(e),
+
+            let patch = self
+                .git_diff(&file.after_sha, &file.before_sha, real_path)
+                .await?;
+            if patch.trim().is_empty() {
+                continue;
+            }
+            self.mirror_file(real_path).await?;
+            let patch_file = self
+                .worktree_dir
+                .join(format!(".revert-{}.patch", entry.turn_id));
+            tokio::fs::write(&patch_file, &patch)
+                .await
+                .map_err(|e| AppError::msg(format!("写临时 patch 失败: {e}")))?;
+            let result = self.git_apply(&patch_file).await;
+            let _ = tokio::fs::remove_file(&patch_file).await;
+            result?;
+            let mirrored = self.mirrored_path(real_path);
+            tokio::fs::copy(&mirrored, real_path)
+                .await
+                .map_err(|e| AppError::msg(format!("回退写入失败: {e}")))?;
         }
+        Ok(())
     }
 
-    pub fn list_entries(&self) -> AppResult<Vec<EditEntry>> {
+    pub fn list_turns(&self) -> AppResult<Vec<TurnEditEntry>> {
         let meta = load_metadata(&self.worktree_dir)?;
-        Ok(meta.entries)
+        Ok(meta.turns)
     }
 
-    pub fn append_entry(&self, entry: EditEntry) -> AppResult<()> {
+    pub fn append_turn(&self, entry: TurnEditEntry) -> AppResult<()> {
         let mut meta = load_metadata(&self.worktree_dir)?;
-        meta.entries.push(entry);
+        meta.turns.push(entry);
         save_metadata(&self.worktree_dir, &meta)
     }
 
-    pub fn mark_reverted(&self, snapshot_id: &str) -> AppResult<()> {
+    pub fn mark_turn_reverted(&self, turn_id: &str) -> AppResult<()> {
         let mut meta = load_metadata(&self.worktree_dir)?;
-        if let Some(entry) = metadata::find_entry_mut(&mut meta, snapshot_id) {
+        if let Some(entry) = metadata::find_turn_mut(&mut meta, turn_id) {
             entry.reverted = true;
             entry.reverted_at_ms = Some(chrono::Utc::now().timestamp_millis());
         }
@@ -286,15 +367,18 @@ impl EditsWorktree {
 
     /// 取某个 commit 上的文件镜像内容（`git show <sha>:<path>`）。
     pub async fn get_file_at_sha(&self, sha: &str, real_path: &Path) -> AppResult<String> {
+        if sha.is_empty() {
+            return Ok(String::new());
+        }
         let rel = self.mirrored_path_relative(real_path);
         run_git(&self.worktree_dir, &["show", &format!("{sha}:{rel}")]).await
     }
 
-    /// 取 entry 对应的 before / after 文本内容。
-    pub async fn diff_text(&self, entry: &EditEntry) -> AppResult<(String, String)> {
-        let real_path = Path::new(&entry.real_path);
-        let before = self.get_file_at_sha(&entry.before_sha, real_path).await?;
-        let after = self.get_file_at_sha(&entry.after_sha, real_path).await?;
+    /// 取 turn 内某个文件对应的 before / after 文本内容。
+    pub async fn diff_text(&self, file: &TurnFileChange) -> AppResult<(String, String)> {
+        let real_path = Path::new(&file.real_path);
+        let before = self.get_file_at_sha(&file.before_sha, real_path).await?;
+        let after = self.get_file_at_sha(&file.after_sha, real_path).await?;
         Ok((before, after))
     }
 }
@@ -362,7 +446,7 @@ impl EditsWorktree {
             &["commit", "--allow-empty", "-m", message],
         )
         .await?;
-        // rev-parse 返回 `<sha>\n`；存进 EditEntry 前要 trim，否则字符串 sha 带换行
+        // rev-parse 返回 `<sha>\n`；存进 metadata 前要 trim，否则字符串 sha 带换行
         // 会污染后续 git 命令拼接。
         let raw = run_git(&self.worktree_dir, &["rev-parse", "HEAD"]).await?;
         Ok(raw.trim().to_string())
@@ -408,6 +492,14 @@ impl EditsWorktree {
         .map_err(|e| AppError::msg(format!("spawn_blocking join: {e}")))?;
 
         output
+    }
+
+    async fn snapshot_file(&self, message: &str, real_path: &Path) -> AppResult<Snapshot> {
+        self.mirror_file(real_path).await?;
+        self.git_add(real_path).await?;
+        let sha = self.git_commit(message).await?;
+        let file_bytes = self.file_size(real_path).await;
+        Ok(Snapshot { sha, file_bytes })
     }
 
     async fn file_size(&self, real_path: &Path) -> u64 {
@@ -520,33 +612,11 @@ mod tests {
         assert!(mirrored.ends_with("hosts"));
     }
 
-    // ── 端到端：snapshot → revert ────────────────────────────────────────
+    // ── 端到端：turn snapshot → revert ──────────────────────────────────────
     //
     // 这一组测试固化一个曾经长期 broken 的属性：worktree 的反向 patch 回退
     // 必须真的能把文件改回去。回归点是 `run_git` 之前对 stdout 调用 `.trim()`，
     // 吃掉了 `git diff` 输出末尾的 `\n`，导致 patch 永远 `corrupt`。
-
-    fn fake_entry(
-        real: &Path,
-        before_sha: String,
-        after_sha: String,
-        action: protocol::EditAction,
-    ) -> metadata::EditEntry {
-        metadata::EditEntry {
-            snapshot_id: "s".into(),
-            call_id: "c".into(),
-            tool: "Edit".into(),
-            real_path: real.to_string_lossy().to_string(),
-            action,
-            before_sha,
-            after_sha,
-            before_bytes: 0,
-            after_bytes: 0,
-            ts_ms: 0,
-            reverted: false,
-            reverted_at_ms: None,
-        }
-    }
 
     /// 同步检查 git 可用；不可用时打印跳过。所有依赖 git 的测试都走这一关。
     async fn require_git_or_skip(wt: &EditsWorktree) -> bool {
@@ -558,7 +628,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_then_revert_restores_modify() {
+    async fn turn_revert_restores_modify_after_multiple_edits() {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let real = ws.path().join("foo.txt");
@@ -569,29 +639,34 @@ mod tests {
             return;
         }
 
-        let before = wt
-            .snapshot_before("c1", &real)
+        wt.begin_turn("t1", 1).await;
+        wt.ensure_turn_before("t1", &real, protocol::EditAction::Modify)
             .await
-            .unwrap()
-            .expect("before snapshot");
+            .unwrap();
         tokio::fs::write(&real, b"line-1\nline-2\n").await.unwrap();
-        let after = wt
-            .snapshot_after("c1", &real)
+        wt.ensure_turn_before("t1", &real, protocol::EditAction::Modify)
             .await
-            .unwrap()
-            .expect("after snapshot");
+            .unwrap();
+        tokio::fs::write(&real, b"line-1\nline-2\nline-3\n")
+            .await
+            .unwrap();
+        let entry = wt.commit_turn("t1").await.unwrap().expect("turn entry");
 
-        let entry = fake_entry(&real, before.sha, after.sha, protocol::EditAction::Modify);
-        wt.revert(&entry)
+        assert_eq!(
+            entry.files.len(),
+            1,
+            "同一文件本轮多次 Edit 应折叠为一个文件变化"
+        );
+        wt.revert_turn(&entry)
             .await
-            .expect("revert 应当成功（trim 不再破坏 patch）");
+            .expect("turn revert 应当成功（trim 不再破坏 patch）");
 
         let got = tokio::fs::read_to_string(&real).await.unwrap();
-        assert_eq!(got, "line-1\n", "文件没被回退到 before 状态");
+        assert_eq!(got, "line-1\n", "文件没被回退到 turn before 状态");
     }
 
     #[tokio::test]
-    async fn revert_create_deletes_file() {
+    async fn turn_revert_create_deletes_file() {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let real = ws.path().join("new.txt");
@@ -601,34 +676,22 @@ mod tests {
             return;
         }
 
-        // before：文件不存在，snapshot_before 会因 mirror_file 失败而 Err，
-        // dispatch 路径用 unwrap_or(None) 吞掉——这里复现该兼容。
-        let before_sha = wt
-            .snapshot_before("c2", &real)
+        wt.begin_turn("t2", 2).await;
+        wt.ensure_turn_before("t2", &real, protocol::EditAction::Create)
             .await
-            .ok()
-            .flatten()
-            .map(|s| s.sha)
-            .unwrap_or_default();
+            .unwrap();
         tokio::fs::write(&real, b"hello\n").await.unwrap();
-        let after = wt
-            .snapshot_after("c2", &real)
-            .await
-            .unwrap()
-            .expect("after snapshot");
+        let entry = wt.commit_turn("t2").await.unwrap().expect("turn entry");
 
-        let entry = fake_entry(&real, before_sha, after.sha, protocol::EditAction::Create);
-        wt.revert(&entry)
+        wt.revert_turn(&entry)
             .await
-            .expect("create 类型 revert 应直接删文件");
+            .expect("create 类型 turn revert 应直接删文件");
 
         assert!(!real.exists(), "create 回退后真实文件应被删除");
     }
 
     #[tokio::test]
-    async fn revert_rejects_when_user_changed_same_line() {
-        // 模型 Edit 后用户绕开 Edit 又动了同一段文本——git apply --check 应当冲突，
-        // 不动真实文件。这是「保留用户改动」的硬保证。
+    async fn turn_revert_rejects_when_user_changed_same_line() {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let real = ws.path().join("foo.txt");
@@ -641,19 +704,20 @@ mod tests {
             return;
         }
 
-        let before = wt.snapshot_before("c3", &real).await.unwrap().unwrap();
+        wt.begin_turn("t3", 3).await;
+        wt.ensure_turn_before("t3", &real, protocol::EditAction::Modify)
+            .await
+            .unwrap();
         tokio::fs::write(&real, b"alpha\nBETA-EDIT\ngamma\n")
             .await
             .unwrap();
-        let after = wt.snapshot_after("c3", &real).await.unwrap().unwrap();
+        let entry = wt.commit_turn("t3").await.unwrap().expect("turn entry");
 
-        // 用户在 Edit 改过的那一行再动一下
         tokio::fs::write(&real, b"alpha\nBETA-USER\ngamma\n")
             .await
             .unwrap();
 
-        let entry = fake_entry(&real, before.sha, after.sha, protocol::EditAction::Modify);
-        let err = wt.revert(&entry).await.unwrap_err();
+        let err = wt.revert_turn(&entry).await.unwrap_err();
         assert!(err.to_string().contains("冲突"), "应当报冲突，实际: {err}");
 
         let got = tokio::fs::read_to_string(&real).await.unwrap();
@@ -661,9 +725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_entries_works_on_fresh_instance() {
-        // 模拟「desktop 重启」：写一份 metadata，然后用全新的 EditsWorktree
-        // 实例（sessionStreams 一定不存在）拿 list_entries——后端必须能读到。
+    async fn list_turns_works_on_fresh_instance() {
         let ws = tempfile::tempdir().unwrap();
         let dd = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(ws.path(), Vec::new());
@@ -672,18 +734,28 @@ mod tests {
         let dir = metadata::worktree_dir(dd.path(), "sid");
         std::fs::create_dir_all(&dir).unwrap();
         let meta = metadata::EditsMetadata {
-            version: 1,
-            entries: vec![fake_entry(
-                Path::new("/tmp/x"),
-                String::new(),
-                "abcd".into(),
-                protocol::EditAction::Create,
-            )],
+            version: 2,
+            turns: vec![metadata::TurnEditEntry {
+                turn_id: "t".into(),
+                turn_index: 1,
+                started_at_ms: 0,
+                finished_at_ms: 1,
+                files: vec![metadata::TurnFileChange {
+                    real_path: "/tmp/x".into(),
+                    action: protocol::EditAction::Create,
+                    before_sha: String::new(),
+                    after_sha: "abcd".into(),
+                    before_bytes: 0,
+                    after_bytes: 4,
+                }],
+                reverted: false,
+                reverted_at_ms: None,
+            }],
         };
         metadata::save_metadata(&dir, &meta).unwrap();
 
-        let entries = wt.list_entries().unwrap();
-        assert_eq!(entries.len(), 1);
+        let turns = wt.list_turns().unwrap();
+        assert_eq!(turns.len(), 1);
     }
 
     /// 回归：5 个 future 并发拿同 path 的 lock_file 必须在 5s 内全部 ok。

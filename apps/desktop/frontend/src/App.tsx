@@ -2,9 +2,7 @@ import { useEffect } from "react";
 import { Toaster, toast } from "sonner";
 import { listen } from "@/desktop/bridge/transport";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Sidebar } from "@/desktop/ui/components/Sidebar";
-import { ChatView } from "@/desktop/ui/components/ChatView";
-import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
+import { DesktopShell } from "@/desktop/ui/components/DesktopShell";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
 import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
@@ -21,18 +19,17 @@ interface WakeupFiredPayload {
 
 interface EditRevertedPayload {
   session_id: string;
-  snapshot_id: string;
-  file_path: string;
+  turn_id: string;
 }
 
 export default function App() {
-  const { init, theme } = useStore();
+  const theme = useStore((s) => s.theme);
 
   useEffect(() => {
-    init().catch((e) => {
+    useStore.getState().init().catch((e) => {
       console.error("init failed:", e);
     });
-  }, [init]);
+  }, []);  // empty deps - init only once on mount
 
   // 全局异常捕获：事件回调 + 异步代码中的未处理异常 → toast 报错
   useEffect(() => {
@@ -106,9 +103,7 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen flex overflow-hidden bg-muted/40 text-foreground">
-      <Sidebar />
-      <ChatView />
-      <RightSidebar />
+      <DesktopShell />
       <SessionSettingsDialog />
       <PromptsDialog />
       <AppSettingsDialog />

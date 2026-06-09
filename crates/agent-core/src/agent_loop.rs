@@ -221,6 +221,37 @@ pub use crate::system_prompt::compose_system_prompt as build_system_prompt;
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
+async fn commit_turn_edits(
+    edits_worktree: &Option<Arc<crate::edits::EditsWorktree>>,
+    state: &Arc<RunState>,
+    sink: &EventSink,
+    turn_id: &protocol::TurnId,
+    turn_index: u32,
+) {
+    let Some(wt) = edits_worktree.as_ref() else {
+        return;
+    };
+    match wt.commit_turn(&turn_id.to_string()).await {
+        Ok(Some(entry)) => {
+            let files = entry.files.into_iter().map(Into::into).collect();
+            sink(state.event(EventPayload::TurnEditsCommitted {
+                turn_id: turn_id.clone(),
+                turn: turn_index,
+                files,
+            }));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "commit turn edits failed");
+            sink(state.event(EventPayload::Notice {
+                level: LogLevel::Warn,
+                message: format!("保存本轮文件修改记录失败：{e}"),
+                dedup_key: None,
+            }));
+        }
+    }
+}
+
 fn drain_pending_inputs(
     pending_inputs: Option<&PendingInputs>,
     consumed_pending_inputs: Option<&ConsumedPendingInputs>,
@@ -552,6 +583,9 @@ pub async fn run_loop(
             turn_id: turn_id.clone(),
             turn: turn_index,
         });
+        if let Some(wt) = edits_worktree.as_ref() {
+            wt.begin_turn(&turn_id.to_string(), turn_index).await;
+        }
 
         // 内置工具每轮都自动注入：ask + Bash/Read/Write/Grep/Skill。
         // 用户可选工具按 enabled_tools 过滤。条件注入工具（如 Task）一律加进白名单，
@@ -703,6 +737,7 @@ pub async fn run_loop(
             Ok(response) => response,
             Err(e) => {
                 turn_span.record(attr::STOP_REASON, "failed");
+                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id: turn_id.clone(),
                     turn: turn_index,
@@ -746,6 +781,7 @@ pub async fn run_loop(
                     full_text: text.clone(),
                 });
                 turn_span.record(attr::STOP_REASON, "end_turn");
+                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
@@ -859,6 +895,8 @@ pub async fn run_loop(
                         let msg = format!("已达到最大工具调用轮数 {max}");
                         tracing::warn!(max_iterations = max, "max iterations");
                         turn_span.record(attr::STOP_REASON, "max_iterations");
+                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
+                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -886,6 +924,8 @@ pub async fn run_loop(
                     data_dir_for_artifacts: data_dir.clone(),
                     permission_store: hitl.permission_store().cloned(),
                     edits_worktree: edits_worktree.clone(),
+                    current_turn_id: Some(turn_id.to_string()),
+                    current_turn_index: turn_index,
                     subagent_ctx: subagent_ctx.clone(),
                     parent_transcript_snapshot,
                     model_io_dump: model_io_dump.clone(),
@@ -910,6 +950,8 @@ pub async fn run_loop(
                     Ok(results) => results,
                     Err(e) => {
                         turn_span.record(attr::STOP_REASON, "cancelled");
+                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
+                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -1002,6 +1044,8 @@ pub async fn run_loop(
                         // 取巧：emit TurnFinished 后 break 出循环，result 保持
                         // 上一个 step 的状态；外层把 Suspended 视为 Run 没结束。
                         turn_span.record(attr::STOP_REASON, "suspended");
+                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
+                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -1012,6 +1056,7 @@ pub async fn run_loop(
                 }
 
                 turn_span.record(attr::STOP_REASON, "end_turn");
+                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
