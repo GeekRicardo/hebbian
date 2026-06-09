@@ -6401,3 +6401,138 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/src/chat.rs` / `apps/web-server/src/session.rs` / `apps/cli/src/daemon.rs` / `apps/channel-gateway/src/bridge.rs`: run 启动时的压缩预算统一使用手动设置后的上下文窗口。
 - **影响范围**: model-gateway provider 配置、Desktop/hebweb 前端供应商设置、Desktop/CLI/hebweb/channel-gateway 的压缩预算；providers.json 新增可选字段，向后兼容，不改协议。
 - **留尾巴**: 输出 token 上限仍只作为卡片展示信息，不参与请求预算；后续如需要可单独持久化 output limit。
+
+### 2026-06-09 — 修复模型选择器不显示手动上下文窗口
+
+- **Why**: 供应商设置里手动把模型上下文窗口改成 200K 并保存后，后端预算已经按 200K 生效，但输入框模型选择器仍按前端兜底 / models.dev 展示 1M，造成“显示不一致、以为没生效”的误导。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx`: 模型行和当前模型 tooltip 的上下文显示改为 `provider.model_context_windows` 优先，其次 models.dev entry，最后前端兜底表。
+- **影响范围**: 仅 Desktop/hebweb 共享前端模型选择器显示；不改后端、不改协议、不改 storage schema。
+- **留尾巴**: 无
+
+### 2026-06-08 — chat/code tab 拆分行为、项目删除、新建对话定位
+
+- **Why**: 用户要求 chat tab 平铺所有对话（不分组）、新建不继承项目目录；code tab 项目允许删除；新建对话时卡片和输入框位置需要下移。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: chat tab 渲染平铺对话列表（不分组）；chat 新建对话前清空 pending workdir/allowed_paths；code tab 项目标题行增加删除按钮；toolbar 标题按 tab 切换显示「对话」或「项目」。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 新增项目删除按钮样式；新建对话输入框从 `44vh` 下移到 `28vh`；空状态卡片增加顶部间距。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-08 — 去除聊天气泡角色标签、思考过程限高滚动
+
+- **Why**: 用户要求聊天气泡不显示「你」「Hebbian」标签，直接展示内容；思考过程展开后内容过长时需要限高滚动，自动跟底但不与用户手动滚动对抗。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 给消息角色标签行加 `message-role-label` class 供 CSS 隐藏；ReasoningBlock 拆出 `ReasoningScrollArea` 子组件，限高 10 行可滚动，流式时自动跟底，用户手动上滚后停止自动滚动。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 隐藏 `.message-role-label`；思考过程滚动条极淡化。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 调整左侧对话列表状态灯、特效和搜索过滤
+
+- **Why**: 用户反馈左侧对话列表里运行呼吸灯位置偏到标题区域上方，完成/审批外框特效不明显，标题被日期和按钮过早挤断，同时项目列表页顶部搜索框没有实际过滤效果。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx`: 将状态点放到标题内容块外侧并与标题行对齐；日期改为 hover 时覆盖显示，让标题默认占满标题块；搜索结果同步作用到项目列表，并按命中会话更新项目计数。
+  - `apps/desktop/frontend/src/index.css`: 加强待处理黄色呼吸外框和完成未读绿色外框的可见度。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 调整侧栏 Code/Chat 会话归属
+
+- **Why**: 用户要求左侧侧栏中 Code 只展示属于某个项目的对话，Chat 只展示不属于项目的对话；默认 workdir 对话也应归到 Chat，且在哪栏新建就属于哪栏。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/Sidebar.tsx`: Chat 栏过滤掉所有能匹配项目的会话，项目栏继续按 `project_id` 和项目主目录兜底匹配；tab 文案从“全部”改为“Chat”。
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`: 区分未传 `projectId` 与显式传 `projectId: null`；显式 Chat 新建不再回退选中项目，也不继承 pending workdir/allowed_paths。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 状态与会话列表展示；不改 agent-core、不改协议、不改 storage schema。
+- **留尾巴**: 无
+
+### 2026-06-09 — 修复 Chat 对话输入框误显示项目标识
+
+- **Why**: Chat 栏新建的对话没有绑定项目，但输入框仍按旧侧栏选中项目预显示项目 tag，导致用户误以为 Chat 对话仍属于项目。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`: 项目 tag 只根据当前 session 的 `project_id` 显示，不再根据侧栏选中的项目兜底显示。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 展示；不改 agent-core、不改协议、不改 storage schema。
+- **留尾巴**: 无
+
+### 2026-06-09 — 打磨输入框底部模型与状态指示器细节
+
+- **Why**: 用户反馈输入框内部模型 ID 字体偏大；输入框外部底部的模式 / effort hover 底色下图标不居中、边框不像正方形圆角；运行时 cache/context 指示器的圆环图标消失且 hover 状态异常。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx`: 缩小模型选择触发器里的 model id 字号并收紧行高。
+  - `apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx` / `ReasoningEffortPill.tsx`: 将底部 chip 改成稳定的 28px 高度、11px 文本和收紧行高，图标固定不收缩，让 hover 底色里的内容视觉居中。
+  - `apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx` / `desktopShell.css`: 避免正式工作台的通用 SVG 缩放覆盖 context 圆环尺寸；状态按钮改为圆角方形 hover。
+- **影响范围**: 仅 Desktop/hebweb 共享前端输入区视觉；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 类型检查命令本轮被自动审批拒绝，未完成本地验证。
+
+### 2026-06-09 — 修复正式工作台左侧呼吸灯仍停在标题区域
+
+- **Why**: 用户截图确认呼吸灯位置仍未变化；根因是当前正式界面使用 `DesktopShell` 左栏，而前一轮主要改到了旧 `Sidebar`，并且正式工作台后置 CSS 覆盖把会话行三列布局继续保留。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 在正式工作台最终覆盖层将会话行改为相对定位布局；状态点绝对定位到标题内容块外侧左边并垂直居中；标题块独立占满剩余宽度，hover 日期覆盖标题右端。
+- **影响范围**: 仅 Desktop/hebweb 共享前端正式工作台左侧列表视觉；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 修复新侧栏 Chat tab 误显示 Code 对话
+
+- **Why**: 用户在 Code 区域运行中的项目对话切到 Chat 后仍出现在列表里；根因是新侧栏已经计算出 Code/Chat 分桶，但 Chat tab 渲染时仍使用未过滤的全量会话列表。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: Chat tab 改为渲染已按归属过滤后的 bucket sessions，移除未过滤的 flatSessions 渲染路径。
+- **影响范围**: 仅 Desktop/hebweb 共享前端新侧栏列表展示；不改 agent-core、不改协议、不改 storage schema。
+- **留尾巴**: 无
+
+### 2026-06-09 — 修正新建对话归属只由点击入口决定
+
+- **Why**: 用户在 Chat 新建后回到 Code 顶部新建，对话仍可能不属于项目；根因是正式侧栏 Code 顶部存在无项目上下文的新建按钮，并且 `newSession` 仍保留从输入框 pending workdir/allowed_paths 继承到新 session 的旧逻辑。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: Code tab 不再显示顶部通用“新建对话”；用户只能在具体项目行点击 `+` 新建项目对话，Chat tab 顶部新建显式创建非项目对话。
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`: 新建 session 不再从 pending workdir/allowed_paths 继承工作区；项目归属只来自显式传入的 `projectId`。
+- **影响范围**: Desktop/hebweb 共享前端新侧栏和会话创建状态逻辑；不改 agent-core、不改协议、不改 storage schema。
+- **留尾巴**: 旧 `Sidebar.tsx` 仍保留项目模式新建入口，但当前正式工作台使用 `DesktopShell`。
+
+### 2026-06-09 — 修复新侧栏项目管理和滚动回归
+
+- **Why**: 用户反馈左侧对话列表不能局部滚动，项目新建/导入入口消失，项目删除按钮与对话数量重叠。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 在 Code toolbar 恢复新建项目、导入项目、导入 VS Code 项目入口；项目/Chat 会话列表显式启用局部滚动 class。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 给侧栏补 `min-height: 0`，补项目管理按钮样式，扩大项目标题右侧操作区预留空间避免删除按钮和数量重叠。
+- **影响范围**: 仅 Desktop/hebweb 共享前端新侧栏 UI；不改 agent-core、不改协议、不改 storage schema。
+- **留尾巴**: 无
+
+### 2026-06-09 — 调整 AutoMode 审批提示与拒绝审计
+
+- **Why**: 用户反馈 AutoMode 判官结果不应在输入框上方长期占位；放行不需要打扰，文件编辑拒绝只需短提示，命令类拒绝需要用户最终确认，并希望把拒绝记录落到 session.jsonl 供后续集中分析优化 prompt。
+- **改动**:
+  - `crates/protocol/src/event.rs` / `apps/desktop/src/engine/mod.rs`: `PermissionAutoJudged` 增加可选 `request_id`，让前端把判官原因关联回对应审批。
+  - `crates/agent-core/src/dispatch.rs`: AutoMode allow 只自动 resolve 不展示；Edit/Write deny 自动拒绝；Bash/PowerShell deny 保留人工审批，把 reason 留给审批框展示。
+  - `crates/agent-core/src/storage/sessions.rs` / `apps/desktop/src/chat.rs`: 新增事件行追加入口，并把 AutoMode 自动拒绝、用户拒绝审批写入 `session.jsonl` 的 `event` 行。
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts` / `PermissionApprovalPopup.tsx` / `ChatView.tsx` / `types.ts`: 移除输入框上方 AutoMode 内联提示；Edit/Write 自动拒绝用 5s toast；命令类转人工时在审批框展示判官原因。
+  - `docs/架构.md`: 更新 AutoMode DENY/ASK 行为和审计落盘约定。
+- **影响范围**: agent-core / protocol / desktop / CLI 类型匹配 / Desktop 前端；协议字段为 additive，老事件读侧不受影响；session.jsonl 新增 `event` 行，现有 fold 已跳过该类型。
+- **留尾巴**: 无
+
+### 2026-06-09 — 调整正式工作台左侧项目区和会话选中态
+
+- **Why**: 用户反馈左侧「项目」标题偏小，项目管理入口图标横排不清晰，工具区与项目列表缺少分隔，项目 hover 删除按钮仍与对话数重叠；会话选中态底色/边框过重，hover 时间底色突兀且压在标题上。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`: 项目管理入口改为“图标 + 文本”的纵向按钮；项目行只显示项目名，不再显示路径第二行。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: 放大项目标题；工具区改为标题、入口、搜索、分隔线后再显示项目列表；项目行右侧给计数、加号、删除按钮分别预留空间；会话选中态改为基于当前 hue 的浅底、弱内边框和柔和阴影；hover 时间改为文字提亮，并通过标题右侧留白形成遮挡和间隔。
+- **影响范围**: 仅 Desktop/hebweb 共享前端正式工作台左侧视觉；适配现有 4 个 hue 预设，不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 类型检查命令本轮可能仍需用户批准后运行。
+
+### 2026-06-09 — 修复运行态 cache/context 指示器被隐藏
+
+- **Why**: 用户反馈 agent_loop 运行时输入框下方右侧 cache/context 指示器只在 hover 时出现，且 hover 形状变成长方形；根因是 streaming 样式用宽泛选择器隐藏了所有底部 chip 内的 span，误伤了 TokenStatsPanel 的圆环容器。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx`: 给 cache/context 触发按钮和文字加稳定 class，方便运行态样式精确区分圆环和文本。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`: streaming 时只隐藏普通 chip 文本；cache/context 保留圆环图标，隐藏文字标签，并固定为 32px 居中方形 hover。
+- **影响范围**: 仅 Desktop/hebweb 共享前端输入区底部状态指示器视觉；不改 agent-core、不改协议、不改 storage。
+- **留尾巴**: 无
+
+### 2026-06-09 — 新增设置页外观项与用户头像裁剪
+
+- **Why**: 用户希望设置页第三项改为「外观」，并先提供一个常见的用户头像设置入口：上传图片后能选择方形显示区域。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx`: 基础分组第三项新增「外观」，接入用户头像设置。
+  - `apps/desktop/frontend/src/desktop/ui/components/AvatarField.tsx`: 上传图片时支持方形裁剪，裁剪后保存为头像图片。
+- **影响范围**: Desktop/hebweb 共享前端 UI；不改 agent-core、不改协议、不改全局 settings API。用户头像继续沿用现有本地前端偏好。
+- **留尾巴**: 当前裁剪交互用滑块选择方形区域，后续如果需要更像图片编辑器，可再补鼠标拖拽缩放手柄。

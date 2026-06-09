@@ -9,6 +9,7 @@ import {
   GitBranch,
   Maximize2,
   Package,
+  Palette,
   Plug,
   RefreshCw,
   ScrollText,
@@ -17,6 +18,8 @@ import {
   Shield,
   Sparkles,
   Trash2,
+  User,
+  X,
 } from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Button } from "@/desktop/ui/components/ui/button";
@@ -30,6 +33,7 @@ import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
 import { PluginsPane } from "@/desktop/ui/components/PluginsPane";
 import { HooksPane } from "@/desktop/ui/components/HooksPane";
 import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
+import { AvatarField } from "@/desktop/ui/components/AvatarField";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import type {
@@ -53,22 +57,51 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "appearance" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "logs";
 
-const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon }[] = [
-  { key: "general", label: "通用", icon: SettingsIcon },
-  { key: "conversation", label: "对话设置", icon: FolderOpen },
-  { key: "models", label: "模型", icon: Bot },
-  { key: "providers", label: "供应商", icon: Server },
-  { key: "agents", label: "Agents", icon: Bot },
-  { key: "memory", label: "记忆", icon: Brain },
-  { key: "permissions", label: "权限", icon: Shield },
-  { key: "skills", label: "Skills", icon: Sparkles },
-  { key: "plugins", label: "插件", icon: Package },
-  { key: "hooks", label: "Hooks", icon: GitBranch },
-  { key: "mcp", label: "MCP", icon: Plug },
-  { key: "logs", label: "日志", icon: ScrollText },
+const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: string }[] = [
+  { key: "general", label: "通用", icon: SettingsIcon, group: "基础" },
+  { key: "conversation", label: "对话", icon: FolderOpen, group: "基础" },
+  { key: "appearance", label: "外观", icon: Palette, group: "基础" },
+  { key: "models", label: "模型", icon: Bot, group: "基础" },
+  { key: "providers", label: "供应商", icon: Server, group: "基础" },
+  { key: "agents", label: "Agents", icon: Bot, group: "Agent" },
+  { key: "memory", label: "记忆", icon: Brain, group: "Agent" },
+  { key: "permissions", label: "权限", icon: Shield, group: "Agent" },
+  { key: "skills", label: "Skills", icon: Sparkles, group: "扩展" },
+  { key: "plugins", label: "插件", icon: Package, group: "扩展" },
+  { key: "hooks", label: "Hooks", icon: GitBranch, group: "扩展" },
+  { key: "mcp", label: "MCP", icon: Plug, group: "扩展" },
+  { key: "logs", label: "日志", icon: ScrollText, group: "调试" },
 ];
+
+const TAB_GROUPS = ["基础", "Agent", "扩展", "调试"];
+
+const PREVIEW_SETTINGS_FALLBACK: AppSettings = {
+  general: {
+    launch_at_login: false,
+    show_grep_search_path: true,
+    shell: null,
+    log_enabled: false,
+    edit_backend: "string-replace",
+    automode_models: [],
+    continue_strategy: "resume_loop",
+  },
+  conversation: {
+    workdir: null,
+    allowed_paths: [],
+    enabled_tools: [],
+    skill_dirs: [],
+    global_rules: [],
+  },
+  agents: {
+    default_prompt_id: null,
+  },
+  memory: {
+    enabled: false,
+    models: [],
+  },
+};
 
 /**
  * 应用级设置弹窗：通用 / 对话设置 / Agent 配置。
@@ -85,6 +118,8 @@ export function AppSettingsDialog() {
     promptsFile,
     pendingAppSettingsTab,
     setPendingAppSettingsTab,
+    userAvatar,
+    setUserAvatar,
   } = useStore();
 
   const [tab, setTab] = useState<TabKey>("conversation");
@@ -134,68 +169,104 @@ export function AppSettingsDialog() {
     }
   }
 
-  if (!draft) return null;
+  if (!appSettingsOpen) return null;
+
+  const visibleDraft = draft ?? PREVIEW_SETTINGS_FALLBACK;
 
   return (
-    <Dialog
-      open={appSettingsOpen}
-      onOpenChange={setAppSettingsOpen}
-      title="设置"
-      description="应用级偏好。新对话会继承「对话设置」，当前对话可在右上角单独覆盖。"
-      size="2xl"
-      footer={
-        <>
-          <Button
-            variant="outline"
-            onClick={() => setAppSettingsOpen(false)}
-            disabled={saving}
-          >
-            取消
-          </Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? "保存中…" : "保存"}
-          </Button>
-        </>
-      }
+    <div
+      className={cn(
+        "fixed inset-0 z-[100] bg-white text-slate-800",
+        appSettingsOpen ? "flex" : "hidden"
+      )}
     >
-      <div className="flex gap-4 h-[65vh] overflow-hidden">
-        <div className="w-36 shrink-0 space-y-1 overflow-y-auto">
-          {TABS.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(key)}
-              className={cn(
-                "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-colors text-left",
-                tab === key
-                  ? "bg-accent text-accent-foreground font-medium"
-                  : "text-muted-foreground hover:bg-accent/40"
-              )}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          ))}
+      <aside className="w-[252px] shrink-0 border-r border-slate-200/70 bg-[#f3f7fb] px-3 py-5">
+        <div className="mb-6 flex items-center gap-3 px-2">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-white text-sky-500 shadow-sm ring-1 ring-slate-200/70">
+            <SettingsIcon className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold text-slate-800">设置</h2>
+            <p className="truncate text-[11px] text-slate-400">全局偏好与扩展</p>
+          </div>
         </div>
 
-        <div className={cn("flex-1 min-w-0", tab === "logs" ? "overflow-hidden" : "overflow-y-auto")}>
+        <nav className="space-y-5 overflow-y-auto">
+          {TAB_GROUPS.map((group) => {
+            const items = TABS.filter((item) => item.group === group);
+            return (
+              <section key={group}>
+                <div className="mb-1 px-2 text-[11px] font-medium text-slate-400">{group}</div>
+                <div className="space-y-0.5">
+                  {items.map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setTab(key)}
+                      className={cn(
+                        "flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs transition-colors",
+                        tab === key
+                          ? "bg-white font-medium text-slate-800 shadow-sm ring-1 ring-slate-200/70"
+                          : "text-slate-500 hover:bg-white/60 hover:text-slate-800"
+                      )}
+                    >
+                      <Icon className={cn("h-3.5 w-3.5", tab === key && "text-sky-500")} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <main className="flex min-w-0 flex-1 flex-col bg-white">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200/70 px-8">
+          <div>
+            <div className="text-[11px] text-slate-400">Hebbian settings</div>
+            <h1 className="text-lg font-semibold tracking-[-0.03em] text-slate-800">
+              {TABS.find((item) => item.key === tab)?.label ?? "设置"}
+            </h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setAppSettingsOpen(false)} disabled={saving}>
+              取消
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? "保存中…" : "保存"}
+            </Button>
+            <button
+              aria-label="关闭设置"
+              onClick={() => setAppSettingsOpen(false)}
+              className="ml-1 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className={cn("min-h-0 flex-1 px-8 py-6", tab === "logs" ? "overflow-hidden" : "overflow-y-auto") }>
           {tab === "logs" ? (
-            <LogPane draft={draft} setDraft={setDraft} />
+            <LogPane draft={visibleDraft} setDraft={setDraft} />
           ) : (
-            <div className="space-y-6 pr-1">
+            <div className="mx-auto max-w-[1120px] space-y-6 rounded-3xl border border-slate-200/70 bg-[#fbfdff] p-6 shadow-[0_18px_46px_rgba(45,61,83,0.06)]">
               {tab === "general" && (
-                <GeneralPane draft={draft} setDraft={setDraft} />
+                <GeneralPane draft={visibleDraft} setDraft={setDraft} />
               )}
               {tab === "conversation" && (
                 <ConversationPane
-                  draft={draft}
+                  draft={visibleDraft}
                   setDraft={setDraft}
                   availableTools={availableTools}
                 />
               )}
+              {tab === "appearance" && (
+                <AppearancePane userAvatar={userAvatar} setUserAvatar={setUserAvatar} />
+              )}
               {tab === "models" && (
                 <ModelsPane
-                  draft={draft}
+                  draft={visibleDraft}
                   setDraft={setDraft}
                   prompts={promptsFile.prompts}
                 />
@@ -204,18 +275,18 @@ export function AppSettingsDialog() {
                 <ProvidersPane active={tab === "providers"} />
               )}
               {tab === "agents" && (
-                <SubagentsPane workdir={draft.conversation.workdir ?? null} />
+                <SubagentsPane workdir={visibleDraft.conversation.workdir ?? null} />
               )}
               {tab === "memory" && (
                 <MemoryPane
-                  settings={draft}
+                  settings={visibleDraft}
                   onChange={setDraft}
-                  workdir={draft.conversation.workdir ?? null}
+                  workdir={visibleDraft.conversation.workdir ?? null}
                 />
               )}
               {tab === "permissions" && <PermissionsPane />}
               {tab === "skills" && (
-                <SkillsPane workdir={draft.conversation.workdir ?? null} scope="global" />
+                <SkillsPane workdir={visibleDraft.conversation.workdir ?? null} scope="global" />
               )}
               {tab === "plugins" && <PluginsPane />}
               {tab === "hooks" && <HooksPane />}
@@ -223,8 +294,8 @@ export function AppSettingsDialog() {
             </div>
           )}
         </div>
-      </div>
-    </Dialog>
+      </main>
+    </div>
   );
 }
 
@@ -588,6 +659,37 @@ type PaneProps = {
   draft: AppSettings;
   setDraft: (s: AppSettings) => void;
 };
+
+const USER_AVATAR_SUGGESTIONS = [
+  "🙂", "😎", "🧑", "👩", "👨", "🧑‍💻", "🧑‍🎨", "🧑‍🔬", "🧑‍🏫", "✨",
+];
+
+function AppearancePane({
+  userAvatar,
+  setUserAvatar,
+}: {
+  userAvatar: string;
+  setUserAvatar: (value: string) => void;
+}) {
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-slate-800">个人资料</h3>
+        <p className="mt-1 text-xs text-slate-500">设置聊天里显示的头像。</p>
+      </div>
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-4">
+        <AvatarField
+          label="我的头像"
+          value={userAvatar}
+          onChange={setUserAvatar}
+          suggestions={USER_AVATAR_SUGGESTIONS}
+          previewFallback={<User className="h-5 w-5" />}
+          cropImage
+        />
+      </div>
+    </section>
+  );
+}
 
 function GeneralPane({ draft, setDraft }: PaneProps) {
   const debugEnabled = useStore((s) => s.debugEnabled);
