@@ -137,9 +137,7 @@ where
         return Ok(None);
     };
     match v {
-        serde_json::Value::String(s) => {
-            Ok(Some(CatalogPluginSource::Relative { path: s }))
-        }
+        serde_json::Value::String(s) => Ok(Some(CatalogPluginSource::Relative { path: s })),
         serde_json::Value::Object(map) => {
             let tag = map
                 .get("source")
@@ -333,10 +331,12 @@ pub fn marketplace_add(data_dir: &Path, input: &str) -> AppResult<MarketplaceEnt
     // 检查是否已添加
     let mut reg = load_marketplaces(data_dir);
     let source_display = source.display();
-    if reg.marketplaces.iter().any(|m| m.source.display() == source_display) {
-        return Err(AppError::msg(format!(
-            "已添加过该来源：{source_display}"
-        )));
+    if reg
+        .marketplaces
+        .iter()
+        .any(|m| m.source.display() == source_display)
+    {
+        return Err(AppError::msg(format!("已添加过该来源：{source_display}")));
     }
 
     // clone 到临时目录探测类型
@@ -446,9 +446,7 @@ pub fn marketplace_list_plugins(
     }
 
     // 真正的 marketplace → 读 marketplace.json
-    let mkt_path = clone_dir
-        .join(".claude-plugin")
-        .join("marketplace.json");
+    let mkt_path = clone_dir.join(".claude-plugin").join("marketplace.json");
     let raw = std::fs::read_to_string(&mkt_path)
         .map_err(|e| AppError::msg(format!("读取 marketplace.json 失败：{e}")))?;
     let catalog: MarketplaceCatalog = serde_json::from_str(&raw)
@@ -588,11 +586,7 @@ fn extract_skills(plugin_dir: &Path, data_dir: &Path) -> AppResult<Vec<String>> 
 
 /// 提取 agents：对 plugin_dir/agents/*.md，copy 到
 /// `~/.hebbian/subagents/<plugin-name>-<agent-name>.md`。
-fn extract_agents(
-    plugin_dir: &Path,
-    data_dir: &Path,
-    plugin_name: &str,
-) -> AppResult<Vec<String>> {
+fn extract_agents(plugin_dir: &Path, data_dir: &Path, plugin_name: &str) -> AppResult<Vec<String>> {
     let agents_dir = plugin_dir.join("agents");
     if !agents_dir.exists() {
         return Ok(Vec::new());
@@ -630,11 +624,7 @@ fn extract_agents(
 /// ```json
 /// { "PostToolUse": [{ "matcher": { "tool": "Bash" }, "command": "..." }] }
 /// ```
-fn extract_hooks(
-    plugin_dir: &Path,
-    data_dir: &Path,
-    plugin_name: &str,
-) -> AppResult<bool> {
+fn extract_hooks(plugin_dir: &Path, data_dir: &Path, plugin_name: &str) -> AppResult<bool> {
     let hooks_path = plugin_dir.join("hooks").join("hooks.json");
     if !hooks_path.exists() {
         return Ok(false);
@@ -685,10 +675,7 @@ fn extract_hooks(
     // 清理空事件
     global.retain(|_, v| !v.is_empty());
 
-    std::fs::write(
-        &global_hooks_path,
-        serde_json::to_string_pretty(&global)?,
-    )?;
+    std::fs::write(&global_hooks_path, serde_json::to_string_pretty(&global)?)?;
     Ok(true)
 }
 
@@ -737,10 +724,7 @@ fn parse_plugin_hooks(
         let mut hebbian_rules = Vec::new();
         for entry in entries {
             // 每个 entry 形如 { "matcher": "Bash", "hooks": [{ "type": "command", "command": "..." }] }
-            let matcher_str = entry
-                .get("matcher")
-                .and_then(|v| v.as_str())
-                .unwrap_or("*");
+            let matcher_str = entry.get("matcher").and_then(|v| v.as_str()).unwrap_or("*");
             let sub_hooks = entry
                 .get("hooks")
                 .and_then(|v| v.as_array())
@@ -777,11 +761,7 @@ fn parse_plugin_hooks(
 }
 
 /// 提取 MCP：读 plugin 的 .mcp.json，用 `<plugin>-` 前缀 merge 进全局 mcp.json。
-fn extract_mcp(
-    plugin_dir: &Path,
-    data_dir: &Path,
-    plugin_name: &str,
-) -> AppResult<Vec<String>> {
+fn extract_mcp(plugin_dir: &Path, data_dir: &Path, plugin_name: &str) -> AppResult<Vec<String>> {
     let mcp_path = plugin_dir.join(".mcp.json");
     if !mcp_path.exists() {
         return Ok(Vec::new());
@@ -844,7 +824,10 @@ fn remove_hooks(data_dir: &Path, plugin_name: &str) {
         });
     }
     global.retain(|_, v| !v.is_empty());
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&global).unwrap_or_default(),
+    );
 }
 
 /// 移除 plugin 的 MCP servers。
@@ -972,7 +955,10 @@ enum FoundPluginSource {
     /// 独立 git repo，需要 clone
     Remote { repo_url: String },
     /// marketplace clone 里的子目录，直接拷贝
-    LocalSubdir { marketplace_clone: PathBuf, subpath: String },
+    LocalSubdir {
+        marketplace_clone: PathBuf,
+        subpath: String,
+    },
 }
 
 /// 在 marketplace 中查找 plugin 的 repo URL + subpath。

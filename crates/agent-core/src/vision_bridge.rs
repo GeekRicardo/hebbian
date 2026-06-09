@@ -58,7 +58,11 @@ impl VisionBridgeClient {
     }
 
     /// 扫描 entries 里所有 UserEntry 的 Image 附件，用视觉模型转成文字描述。
-    async fn adapt_request(&self, mut req: ModelRequest, cancel: &CancelFlag) -> Result<ModelRequest, ModelError> {
+    async fn adapt_request(
+        &self,
+        mut req: ModelRequest,
+        cancel: &CancelFlag,
+    ) -> Result<ModelRequest, ModelError> {
         // 从后往前找最近的用户文字，作为视觉分析的情景上下文。
         let user_context = req
             .entries
@@ -101,7 +105,11 @@ impl VisionBridgeClient {
 
         for attachment in user.attachments {
             match &attachment {
-                MessageAttachment::Image { name, media_type, data } => {
+                MessageAttachment::Image {
+                    name,
+                    media_type,
+                    data,
+                } => {
                     let note = self
                         .analyze_image(media_type, data, user_context, cancel)
                         .await?;
@@ -118,7 +126,10 @@ impl VisionBridgeClient {
             user.text
         } else {
             let block = vision_notes.join("\n\n");
-            format!("<vision-context>\n{block}\n</vision-context>\n\n{}", user.text)
+            format!(
+                "<vision-context>\n{block}\n</vision-context>\n\n{}",
+                user.text
+            )
         };
 
         Ok(UserEntry {
@@ -219,19 +230,20 @@ pub async fn build_vision_client(
     let providers_file = model_gateway::config::load(data_dir)
         .map_err(|e| ModelError::Other(format!("load providers: {e}")))?;
 
-    let (vision_provider_id, vision_model) =
-        match (providers_file.vision_provider_id, providers_file.vision_model) {
-            (Some(pid), Some(model)) if !pid.is_empty() && !model.is_empty() => (pid, model),
-            _ => return Ok(None),
-        };
+    let (vision_provider_id, vision_model) = match (
+        providers_file.vision_provider_id,
+        providers_file.vision_model,
+    ) {
+        (Some(pid), Some(model)) if !pid.is_empty() && !model.is_empty() => (pid, model),
+        _ => return Ok(None),
+    };
 
     let provider = model_gateway::config::get(data_dir, &vision_provider_id)
         .map_err(|e| ModelError::Other(format!("vision provider: {e}")))?;
 
-    let provider =
-        model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-            .await
-            .map_err(|e| ModelError::Other(format!("vision provider token refresh: {e}")))?;
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .map_err(|e| ModelError::Other(format!("vision provider token refresh: {e}")))?;
 
     let client = model_gateway::build_client(provider)?;
 
@@ -275,10 +287,7 @@ mod tests {
         ) -> Result<ModelResponse, ModelError> {
             // 记录用户 prompt
             if let Some(TranscriptEntry::User(u)) = req.entries.first() {
-                self.received_prompts
-                    .lock()
-                    .unwrap()
-                    .push(u.text.clone());
+                self.received_prompts.lock().unwrap().push(u.text.clone());
             }
             Ok(ModelResponse::Done {
                 text: "image_overview: a screenshot showing an error dialog".to_string(),
@@ -341,11 +350,7 @@ mod tests {
         let inner = Arc::new(MockInnerClient {
             last_req: std::sync::Mutex::new(None),
         });
-        let bridge = VisionBridgeClient::new(
-            inner.clone(),
-            vision.clone(),
-            "gpt-4o".to_string(),
-        );
+        let bridge = VisionBridgeClient::new(inner.clone(), vision.clone(), "gpt-4o".to_string());
 
         let req = ModelRequest {
             model: String::new(),
@@ -396,11 +401,7 @@ mod tests {
         let inner = Arc::new(MockInnerClient {
             last_req: std::sync::Mutex::new(None),
         });
-        let bridge = VisionBridgeClient::new(
-            inner.clone(),
-            vision.clone(),
-            "gpt-4o".to_string(),
-        );
+        let bridge = VisionBridgeClient::new(inner.clone(), vision.clone(), "gpt-4o".to_string());
 
         let req = ModelRequest {
             model: String::new(),
@@ -436,11 +437,7 @@ mod tests {
         let inner = Arc::new(MockInnerClient {
             last_req: std::sync::Mutex::new(None),
         });
-        let bridge = VisionBridgeClient::new(
-            inner.clone(),
-            vision.clone(),
-            "gpt-4o".to_string(),
-        );
+        let bridge = VisionBridgeClient::new(inner.clone(), vision.clone(), "gpt-4o".to_string());
 
         let req = ModelRequest {
             model: String::new(),

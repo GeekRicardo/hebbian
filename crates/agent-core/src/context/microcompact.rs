@@ -139,9 +139,7 @@ mod tests {
     #[test]
     fn large_result_immediately_shadowed() {
         let big = large_content(11_000); // > 10k token
-        let mut entries = vec![TranscriptEntry::ToolResults(vec![
-            tr("Bash", &big),
-        ])];
+        let mut entries = vec![TranscriptEntry::ToolResults(vec![tr("Bash", &big)])];
         let report = microcompact(&mut entries, &MicrocompactPolicy::default());
         assert_eq!(report.shadowed_count, 1);
         assert_eq!(report.kept_count, 0);
@@ -154,7 +152,9 @@ mod tests {
     #[test]
     fn small_results_always_kept_regardless_of_count() {
         // 20 个小结果，全保留（不因数量多就压）
-        let items: Vec<ToolResult> = (0..20).map(|i| tr("Bash", &format!("output {i}"))).collect();
+        let items: Vec<ToolResult> = (0..20)
+            .map(|i| tr("Bash", &format!("output {i}")))
+            .collect();
         let mut entries = vec![TranscriptEntry::ToolResults(items)];
         let report = microcompact(&mut entries, &MicrocompactPolicy::default());
         assert_eq!(report.shadowed_count, 0);

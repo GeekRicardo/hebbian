@@ -124,8 +124,9 @@ pub fn read_session_summaries(data_dir: &Path, session_id: &str) -> std::io::Res
                 let req = v.get("request");
 
                 // 计算 message_count：兼容增量格式和老格式
-                let msg_count = if let Some(carried) =
-                    req.and_then(|r| r.get("messages_carried")).and_then(|c| c.as_u64())
+                let msg_count = if let Some(carried) = req
+                    .and_then(|r| r.get("messages_carried"))
+                    .and_then(|c| c.as_u64())
                 {
                     let new_len = req
                         .and_then(|r| r.get("messages_new"))
@@ -133,8 +134,9 @@ pub fn read_session_summaries(data_dir: &Path, session_id: &str) -> std::io::Res
                         .map(|a| a.len())
                         .unwrap_or(0);
                     (carried as usize + new_len) as u64
-                } else if let Some(msgs) =
-                    req.and_then(|r| r.get("messages")).and_then(|m| m.as_array())
+                } else if let Some(msgs) = req
+                    .and_then(|r| r.get("messages"))
+                    .and_then(|m| m.as_array())
                 {
                     msgs.len() as u64
                 } else {
@@ -344,7 +346,10 @@ mod tests {
         assert_eq!(msgs1[0]["content"], "hello");
         assert_eq!(msgs1[2]["content"], "how are you");
         // 第三条 judge：没有 messages
-        assert!(entries[2]["request"]["messages"].is_null() || entries[2]["request"].get("messages").is_none());
+        assert!(
+            entries[2]["request"]["messages"].is_null()
+                || entries[2]["request"].get("messages").is_none()
+        );
         // 第四条：重建完整 5 条
         let msgs3 = entries[3]["request"]["messages"].as_array().unwrap();
         assert_eq!(msgs3.len(), 5);

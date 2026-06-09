@@ -199,9 +199,9 @@ pub fn record_import(
 /// **不删 skill 物理目录**——调用方（plugins::plugin_uninstall）自行清理。
 pub fn remove_by_plugin(data_dir: &Path, plugin_name: &str) -> AppResult<()> {
     let mut file = load(data_dir);
-    file.collections.retain(|c| {
-        !matches!(&c.source, CollectionSource::Plugin { plugin_name: pn } if pn == plugin_name)
-    });
+    file.collections.retain(
+        |c| !matches!(&c.source, CollectionSource::Plugin { plugin_name: pn } if pn == plugin_name),
+    );
     save(data_dir, &file)
 }
 

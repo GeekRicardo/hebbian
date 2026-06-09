@@ -334,9 +334,9 @@ mod tests {
         let ws = Workspace::new(
             &workdir,
             vec![
-                PathBuf::from("../sibling"),      // 相对路径
-                PathBuf::from("sub"),              // 相对路径
-                sibling.clone(),                   // 绝对路径，不该被改
+                PathBuf::from("../sibling"), // 相对路径
+                PathBuf::from("sub"),        // 相对路径
+                sibling.clone(),             // 绝对路径，不该被改
             ],
         );
 

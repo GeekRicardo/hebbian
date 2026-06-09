@@ -298,8 +298,11 @@ pub trait CoreClient: Send + Sync {
         name: &str,
     ) -> Result<Vec<crate::storage::plugins::CatalogEntry>, CoreError>;
     fn plugin_marketplace_remove(&self, name: &str) -> Result<(), CoreError>;
-    fn plugin_install(&self, name: &str, marketplace: Option<&str>)
-        -> Result<crate::storage::plugins::PluginListItem, CoreError>;
+    fn plugin_install(
+        &self,
+        name: &str,
+        marketplace: Option<&str>,
+    ) -> Result<crate::storage::plugins::PluginListItem, CoreError>;
     fn plugin_uninstall(&self, name: &str) -> Result<(), CoreError>;
     fn plugin_list(&self) -> Vec<crate::storage::plugins::PluginListItem>;
 
@@ -943,8 +946,8 @@ impl CoreClient for LocalCoreClient {
     }
 
     fn plugin_marketplace_add(&self, source: &str) -> Result<String, CoreError> {
-        let entry =
-            crate::storage::plugins::marketplace_add(&self.data_dir, source).map_err(CoreError::from)?;
+        let entry = crate::storage::plugins::marketplace_add(&self.data_dir, source)
+            .map_err(CoreError::from)?;
         Ok(entry.name)
     }
 
@@ -999,10 +1002,9 @@ impl CoreClient for LocalCoreClient {
 
     fn save_hooks_raw(&self, raw: &str) -> Result<(), CoreError> {
         // 校验 JSON 合法性
-        let value: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| {
-                CoreError::Storage(common::AppError::msg(format!("JSON 格式错误：{e}")))
-            })?;
+        let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+            CoreError::Storage(common::AppError::msg(format!("JSON 格式错误：{e}")))
+        })?;
         // 格式化后写回
         let pretty = serde_json::to_string_pretty(&value).map_err(|e| {
             CoreError::Storage(common::AppError::msg(format!("JSON 序列化失败：{e}")))

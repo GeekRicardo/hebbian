@@ -201,10 +201,8 @@ fn try_load_disk_cache(data_dir: &Path) -> std::io::Result<Option<CatalogCache>>
 }
 
 fn fallback_cache() -> CatalogCache {
-    let entries: HashMap<String, CatalogEntry> =
-        serde_json::from_str(FALLBACK_JSON).unwrap_or_else(|e| {
-            panic!("内置 models_catalog_fallback.json 解析失败：{e}")
-        });
+    let entries: HashMap<String, CatalogEntry> = serde_json::from_str(FALLBACK_JSON)
+        .unwrap_or_else(|e| panic!("内置 models_catalog_fallback.json 解析失败：{e}"));
     let count = entries.len();
     tracing::debug!(count, "models_catalog 内置兜底加载完成");
     CatalogCache {
@@ -260,9 +258,8 @@ async fn fetch_remote(if_none_match: Option<&str>) -> AppResult<RemoteResult> {
         .and_then(|v| v.to_str().ok())
         .map(String::from);
     let body = resp.bytes().await?;
-    let entries: HashMap<String, CatalogEntry> = serde_json::from_slice(&body).map_err(|e| {
-        AppError::Msg(format!("models.dev JSON 解析失败：{e}"))
-    })?;
+    let entries: HashMap<String, CatalogEntry> = serde_json::from_slice(&body)
+        .map_err(|e| AppError::Msg(format!("models.dev JSON 解析失败：{e}")))?;
     Ok(RemoteResult::Updated { entries, etag })
 }
 

@@ -150,7 +150,11 @@ fn convert_messages(
 
     // claude --resume 读取最后一个 last-prompt 行的 leafUuid 定位对话末端，
     // 没有这行会直接报 "Failed to resume"。
-    if let Some(leaf_uuid) = lines.last().and_then(|l| l["uuid"].as_str()).map(String::from) {
+    if let Some(leaf_uuid) = lines
+        .last()
+        .and_then(|l| l["uuid"].as_str())
+        .map(String::from)
+    {
         lines.push(json!({
             "type": "last-prompt",
             "leafUuid": leaf_uuid,
@@ -310,7 +314,11 @@ mod tests {
         assert_eq!(lines.len(), 4);
 
         // last-prompt 指向最后一条消息
-        let last_prompt = lines.iter().rev().find(|l| l["type"] == "last-prompt").unwrap();
+        let last_prompt = lines
+            .iter()
+            .rev()
+            .find(|l| l["type"] == "last-prompt")
+            .unwrap();
         assert_eq!(last_prompt["leafUuid"], msg_lines.last().unwrap()["uuid"]);
     }
 
