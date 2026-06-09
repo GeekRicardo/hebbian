@@ -634,11 +634,52 @@ async fn cmd_answer_question(
                 .collect()
         })
         .unwrap_or_default();
+    let items = args
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|item| {
+                    let title = item
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let kind = item
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("selected");
+                    let text = item
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let labels = item
+                        .get("labels")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let answer = match kind {
+                        "custom" => protocol::SingleAnswer::Custom { text },
+                        "selected_multi" => protocol::SingleAnswer::SelectedMulti { labels },
+                        "cancelled" => protocol::SingleAnswer::Cancelled,
+                        _ => protocol::SingleAnswer::Selected { label: text },
+                    };
+                    protocol::MultiQuestionAnswer { title, answer }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     let answer = match kind {
         "cancelled" => UserAnswer::Cancelled,
         "custom" => UserAnswer::Custom { text: value },
         "selected_multi" => UserAnswer::SelectedMulti { labels },
+        "multi" => UserAnswer::Multi { items },
         _ => UserAnswer::Selected { label: value },
     };
 
@@ -1664,7 +1705,7 @@ async fn cmd_list_edits(state: &ServerState, args: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let wd = edits::metadata::worktree_dir(&state.data_dir, sid);
     let meta = edits::metadata::load_metadata(&wd).map_err(|e| anyhow!("{e}"))?;
-    Ok(serde_json::to_value(meta.entries)?)
+    Ok(serde_json::to_value(meta.turns)?)
 }
 
 async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
@@ -1672,30 +1713,39 @@ async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let snap = args
-        .get("snapshotId")
+    let turn_id = args
+        .get("turnId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing `snapshotId`"))?;
+        .ok_or_else(|| anyhow!("missing `turnId`"))?;
+    let file_path = args
+        .get("filePath")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `filePath`"))?;
     let worktree = build_edits_worktree_for(state, sid)?;
     if !worktree.enabled().await {
         return Err(anyhow!("git 不可用，无法生成 diff"));
     }
-    let entries = worktree.list_entries().map_err(|e| anyhow!("{e}"))?;
-    let entry = entries
+    let turns = worktree.list_turns().map_err(|e| anyhow!("{e}"))?;
+    let turn = turns
         .into_iter()
-        .find(|e| e.snapshot_id == snap)
-        .ok_or_else(|| anyhow!("找不到该快照"))?;
+        .find(|e| e.turn_id == turn_id)
+        .ok_or_else(|| anyhow!("找不到该轮修改"))?;
+    let file = turn
+        .files
+        .into_iter()
+        .find(|f| f.real_path == file_path)
+        .ok_or_else(|| anyhow!("找不到该文件修改"))?;
     let (before_text, after_text) = worktree
-        .diff_text(&entry)
+        .diff_text(&file)
         .await
         .map_err(|e| anyhow!("{e}"))?;
     Ok(json!({
         "before_text": before_text,
         "after_text": after_text,
-        "before_sha": entry.before_sha,
-        "after_sha": entry.after_sha,
-        "file_path": entry.real_path,
-        "action": format!("{:?}", entry.action).to_lowercase(),
+        "before_sha": file.before_sha,
+        "after_sha": file.after_sha,
+        "file_path": file.real_path,
+        "action": format!("{:?}", file.action).to_lowercase(),
     }))
 }
 
@@ -1721,25 +1771,27 @@ async fn cmd_revert_edit(state: &ServerState, args: Value) -> Result<Value> {
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let snap = args
-        .get("snapshotId")
+    let turn_id = args
+        .get("turnId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing `snapshotId`"))?;
+        .ok_or_else(|| anyhow!("missing `turnId`"))?;
     let worktree = build_edits_worktree_for(state, sid)?;
     if !worktree.enabled().await {
         return Err(anyhow!("git 不可用，回退功能已禁用"));
     }
-    let entries = worktree.list_entries().map_err(|e| anyhow!("{e}"))?;
-    let entry = entries
+    let turns = worktree.list_turns().map_err(|e| anyhow!("{e}"))?;
+    let entry = turns
         .into_iter()
-        .find(|e| e.snapshot_id == snap)
-        .ok_or_else(|| anyhow!("找不到该快照"))?;
+        .find(|e| e.turn_id == turn_id)
+        .ok_or_else(|| anyhow!("找不到该轮修改"))?;
     if entry.reverted {
-        return Err(anyhow!("该快照已回退过"));
+        return Err(anyhow!("该轮修改已回退过"));
     }
-    match worktree.revert(&entry).await {
+    match worktree.revert_turn(&entry).await {
         Ok(()) => {
-            worktree.mark_reverted(snap).map_err(|e| anyhow!("{e}"))?;
+            worktree
+                .mark_turn_reverted(turn_id)
+                .map_err(|e| anyhow!("{e}"))?;
             Ok(json!({ "success": true }))
         }
         Err(e) => Ok(json!({ "success": false, "error": e.to_string() })),
@@ -1754,7 +1806,7 @@ async fn cmd_edits_worktree_status(state: &ServerState, args: Value) -> Result<V
     let worktree = build_edits_worktree_for(state, sid)?;
     let enabled = worktree.enabled().await;
     let entry_count = if enabled {
-        worktree.list_entries().map(|e| e.len()).unwrap_or(0)
+        worktree.list_turns().map(|e| e.len()).unwrap_or(0)
     } else {
         0
     };

@@ -144,18 +144,79 @@ pub struct QuestionOption {
     pub description: String,
 }
 
+/// 一道子题（多题 ask 用）。
+///
+/// 老的单题 ask 仍走 `EventPayload::UserQuestionRequested` 顶层
+/// `question / options / multi`，本类型只在新的 `questions` 字段非空时使用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskQuestion {
+    /// 题目标题（必填）
+    pub title: String,
+    /// 题目说明，给用户更多上下文（可空）
+    #[serde(default)]
+    pub description: String,
+    /// 候选选项
+    pub options: Vec<QuestionOption>,
+    /// 是否多选；缺省 false（单选）
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// 多题答案的一项：题目标题 + 子答案。
+///
+/// 落到 tool_result 时按 `title: <子答案文本>` 行序拼回，让模型知道每个答案
+/// 对应的是哪道子题（避免 surface 端要把题目重新塞回 ToolResult 文本）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiQuestionAnswer {
+    pub title: String,
+    pub answer: SingleAnswer,
+}
+
+/// 单题答案：四种 wire 形态与老 `UserAnswer` 完全对齐。
+///
+/// 抽出来给 `UserAnswer::Multi.items` 用——多题答案里每一项都是一道子题的
+/// 单题答案，但**不允许再嵌套 Multi**（用类型把这一约束钉死）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SingleAnswer {
+    Selected { label: String },
+    SelectedMulti { labels: Vec<String> },
+    Custom { text: String },
+    Cancelled,
+}
+
+impl SingleAnswer {
+    pub fn to_agent_text(&self) -> String {
+        match self {
+            SingleAnswer::Selected { label } => format!("选择：{label}"),
+            SingleAnswer::SelectedMulti { labels } => {
+                if labels.is_empty() {
+                    "[未选]".to_string()
+                } else {
+                    format!("多选：{}", labels.join("、"))
+                }
+            }
+            SingleAnswer::Custom { text } => format!("输入：{text}"),
+            SingleAnswer::Cancelled => "[已取消]".to_string(),
+        }
+    }
+}
+
 /// 用户对一次 ask 的回应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserAnswer {
-    /// 单选：选了某个固定选项（带回 label）
+    /// 单题单选：选了某个固定选项（带回 label）
     Selected { label: String },
-    /// 多选：选了若干固定选项（带回 labels，按用户勾选顺序）
+    /// 单题多选：选了若干固定选项（带回 labels，按用户勾选顺序）
     SelectedMulti { labels: Vec<String> },
-    /// 用户在自由输入框写的文字
+    /// 单题自由输入：用户在自由输入框写的文字
     Custom { text: String },
-    /// 用户取消（TUI 中按 ESC、UI 关闭弹窗等）
+    /// 用户取消整轮提问（TUI 中按 ESC、UI 关闭弹窗等）
     Cancelled,
+    /// 多题答案：每道子题一个 [`MultiQuestionAnswer`]。
+    /// 整轮取消请直接用 [`Cancelled`] 而不是给每道题都塞 `Cancelled`。
+    Multi { items: Vec<MultiQuestionAnswer> },
 }
 
 impl UserAnswer {
@@ -172,6 +233,17 @@ impl UserAnswer {
             }
             UserAnswer::Custom { text } => format!("用户输入：{text}"),
             UserAnswer::Cancelled => "[用户取消了提问]".to_string(),
+            UserAnswer::Multi { items } => {
+                if items.is_empty() {
+                    "[用户未作答]".to_string()
+                } else {
+                    let lines: Vec<String> = items
+                        .iter()
+                        .map(|item| format!("- {}: {}", item.title, item.answer.to_agent_text()))
+                        .collect();
+                    format!("用户回答（多题）：\n{}", lines.join("\n"))
+                }
+            }
         }
     }
 }

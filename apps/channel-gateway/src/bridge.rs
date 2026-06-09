@@ -575,6 +575,7 @@ impl TurnObserver for ChannelObserver {
         question: &str,
         options: &[QuestionOption],
         _multi: bool,
+        questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -582,15 +583,35 @@ impl TurnObserver for ChannelObserver {
             .unwrap()
             .questions
             .insert(request_id.as_str().to_string(), tx);
-        let labels = options
-            .iter()
-            .map(|option| option.label.as_str())
-            .collect::<Vec<_>>()
-            .join(" / ");
-        self.send(&format!(
-            "❓ {question}\n选项：{labels}\n也可以直接回复自定义文本。"
-        ))
-        .await;
+        if !questions.is_empty() {
+            let body = questions
+                .iter()
+                .map(|q| {
+                    let labels = q
+                        .options
+                        .iter()
+                        .map(|option| option.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / ");
+                    format!("- {}：{}", q.title, labels)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.send(&format!(
+                "❓ 请回答下面几个问题：\n{body}\n也可以直接回复自定义文本。"
+            ))
+            .await;
+        } else {
+            let labels = options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ");
+            self.send(&format!(
+                "❓ {question}\n选项：{labels}\n也可以直接回复自定义文本。"
+            ))
+            .await;
+        }
         rx.await.ok()
     }
 }

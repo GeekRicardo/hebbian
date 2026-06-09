@@ -3,8 +3,8 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use async_trait::async_trait;
 use protocol::{
-    AgentRef, ApprovalDecision, Event, EventPayload, Op, PermissionKind, PermissionRequestId,
-    QuestionOption, RunId, Submission, SubmissionId, UserAnswer,
+    AgentRef, ApprovalDecision, AskQuestion, Event, EventPayload, Op, PermissionKind,
+    PermissionRequestId, QuestionOption, RunId, Submission, SubmissionId, UserAnswer,
 };
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -425,9 +425,10 @@ impl RunHandle {
                     question,
                     options,
                     multi,
+                    questions,
                 } => {
                     if let Some(answer) = observer
-                        .on_question(request_id, question, options, *multi)
+                        .on_question(request_id, question, options, *multi, questions)
                         .await
                     {
                         self.answer_question(request_id, answer);
@@ -550,6 +551,7 @@ pub trait TurnObserver: Send {
         question: &str,
         options: &[QuestionOption],
         multi: bool,
+        questions: &[AskQuestion],
     ) -> Option<UserAnswer>;
 }
 
@@ -779,6 +781,7 @@ mod tests {
             _question: &str,
             _options: &[QuestionOption],
             _multi: bool,
+            _questions: &[AskQuestion],
         ) -> Option<UserAnswer> {
             None
         }
@@ -807,6 +810,7 @@ mod tests {
             _question: &str,
             _options: &[QuestionOption],
             _multi: bool,
+            _questions: &[AskQuestion],
         ) -> Option<UserAnswer> {
             self.questions.fetch_add(1, Ordering::SeqCst);
             None
@@ -937,6 +941,7 @@ mod tests {
                 question: "继续吗？".to_string(),
                 options: vec![],
                 multi: false,
+                questions: vec![],
             },
         ))
         .await

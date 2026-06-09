@@ -186,6 +186,8 @@ pub enum DaemonEvent {
         question: String,
         options: Vec<QuestionOptionDto>,
         multi: bool,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        questions: Vec<AskQuestionDto>,
     },
     QuestionAnswered {
         request_id: String,
@@ -229,4 +231,32 @@ pub enum DaemonEvent {
 pub struct QuestionOptionDto {
     pub label: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskQuestionDto {
+    pub title: String,
+    pub description: String,
+    pub options: Vec<QuestionOptionDto>,
+    pub multi: bool,
+}
+
+impl From<protocol::QuestionOption> for QuestionOptionDto {
+    fn from(o: protocol::QuestionOption) -> Self {
+        Self {
+            label: o.label,
+            description: o.description,
+        }
+    }
+}
+
+impl From<protocol::AskQuestion> for AskQuestionDto {
+    fn from(q: protocol::AskQuestion) -> Self {
+        Self {
+            title: q.title,
+            description: q.description,
+            options: q.options.into_iter().map(Into::into).collect(),
+            multi: q.multi,
+        }
+    }
 }

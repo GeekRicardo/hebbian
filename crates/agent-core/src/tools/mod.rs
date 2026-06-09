@@ -330,50 +330,92 @@ pub fn ask_only_definitions() -> Vec<ToolDefinition> {
     vec![ask_tool_definition()]
 }
 
-/// `ask` 工具的 schema：让 agent 主动向用户提问，2-5 个候选选项。
+/// `ask` 工具的 schema：让 agent 主动向用户提问。
+///
+/// 两种入参形态二选一：
+/// - **单题**：`question` + `options`（2-5 个）+ 可选 `multi`
+/// - **多题**：`questions`（1-5 道，每道独立 `title` / `description` / `options` / `multi`）
 pub fn ask_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: ASK_TOOL_NAME.to_string(),
-        description: "向用户提问以澄清需求或获取决策。务必同时给出 2-5 个**实质性**候选选项 \
+        description: "向用户提问以澄清需求或获取决策。务必给出 2-5 个**实质性**候选选项 \
                       （label 控制在 12 字以内）：每个选项都必须是用户可能直接选中的具体答案。\
                       **禁止**出现「其他」「让我重新描述」「以上都不是」「自由回答」「再想想」 \
-                      之类的兜底/元选项。需要让用户多选时把 `multi` 设为 true。"
+                      之类的兜底/元选项。需要让用户多选时把 `multi` 设为 true。\
+                      \n\n一次需要问多道关联问题时填 `questions` 数组（最多 5 道，每道独立 \
+                      `title` / 可选 `description` / `options` / `multi`），用户在同一弹窗里逐题回答。"
             .into(),
         parameters: serde_json::json!({
             "type": "object",
-            "required": ["question", "options"],
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "提给用户的问题。简短直接，避免冗长背景。"
+                    "description": "单题模式：提给用户的问题。简短直接，避免冗长背景。"
                 },
                 "options": {
                     "type": "array",
                     "minItems": 2,
                     "maxItems": 5,
-                    "items": {
-                        "type": "object",
-                        "required": ["label"],
-                        "properties": {
-                            "label": {
-                                "type": "string",
-                                "description": "选项的简短文字（按钮文字），1-12 字。"
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "可选的详细说明。"
-                            }
-                        }
-                    }
+                    "description": "单题模式：候选选项 2-5 个。",
+                    "items": ask_option_schema()
                 },
                 "multi": {
                     "type": "boolean",
                     "default": false,
-                    "description": "是否允许用户多选。true=允许勾选多个选项；缺省 false（单选）。"
+                    "description": "单题模式：是否允许多选。true=允许勾选多个选项；缺省 false（单选）。"
+                },
+                "questions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "description": "多题模式：把多道子题一次性发给用户，按顺序展示。\
+                                    非空时本字段优先，单题字段被忽略。",
+                    "items": {
+                        "type": "object",
+                        "required": ["title", "options"],
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "子题标题。简短直接。"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "子题说明，给用户更多上下文。可选。"
+                            },
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 5,
+                                "items": ask_option_schema()
+                            },
+                            "multi": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "该子题是否允许多选。"
+                            }
+                        }
+                    }
                 }
             }
         }),
     }
+}
+
+fn ask_option_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "required": ["label"],
+        "properties": {
+            "label": {
+                "type": "string",
+                "description": "选项的简短文字（按钮文字），1-12 字。"
+            },
+            "description": {
+                "type": "string",
+                "description": "可选的详细说明。"
+            }
+        }
+    })
 }
 
 #[derive(Debug, serde::Serialize, Clone)]

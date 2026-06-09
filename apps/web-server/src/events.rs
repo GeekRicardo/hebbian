@@ -119,6 +119,8 @@ pub enum EngineEvent {
         options: Vec<QuestionOptionDto>,
         #[serde(default)]
         multi: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<AskQuestionDto>,
     },
     UserQuestionAnswered {
         request_id: String,
@@ -140,6 +142,34 @@ pub enum EngineEvent {
 pub struct QuestionOptionDto {
     pub label: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AskQuestionDto {
+    pub title: String,
+    pub description: String,
+    pub options: Vec<QuestionOptionDto>,
+    pub multi: bool,
+}
+
+impl From<protocol::QuestionOption> for QuestionOptionDto {
+    fn from(o: protocol::QuestionOption) -> Self {
+        Self {
+            label: o.label,
+            description: o.description,
+        }
+    }
+}
+
+impl From<protocol::AskQuestion> for AskQuestionDto {
+    fn from(q: protocol::AskQuestion) -> Self {
+        Self {
+            title: q.title,
+            description: q.description,
+            options: q.options.into_iter().map(Into::into).collect(),
+            multi: q.multi,
+        }
+    }
 }
 
 /// AgentEvent → EngineEvent。仅翻译浏览器 surface 需要的事件，其余返回 None。
@@ -322,17 +352,13 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             question,
             options,
             multi,
+            questions,
         } => EngineEvent::UserQuestionRequested {
             request_id: request_id.as_str().to_string(),
             question: question.clone(),
-            options: options
-                .iter()
-                .map(|o| QuestionOptionDto {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                })
-                .collect(),
+            options: options.iter().cloned().map(Into::into).collect(),
             multi: *multi,
+            questions: questions.iter().cloned().map(Into::into).collect(),
         },
         UserQuestionAnswered { request_id, answer } => {
             use protocol::UserAnswer::*;
@@ -341,6 +367,14 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 SelectedMulti { labels } => ("selected_multi".to_string(), labels.join("、")),
                 Custom { text } => ("custom".to_string(), text.clone()),
                 Cancelled => ("cancelled".to_string(), String::new()),
+                Multi { items } => {
+                    let text = items
+                        .iter()
+                        .map(|item| format!("{}: {}", item.title, item.answer.to_agent_text()))
+                        .collect::<Vec<_>>()
+                        .join("；");
+                    ("multi".to_string(), text)
+                }
             };
             EngineEvent::UserQuestionAnswered {
                 request_id: request_id.as_str().to_string(),

@@ -130,7 +130,7 @@ pub fn resolve_hitl_from_island(
     app: &tauri::AppHandle,
     request_id: &str,
     decision_str: &str,
-    checked: Option<&[usize]>,
+    _checked: Option<&[usize]>,
 ) {
     use std::sync::Arc;
     use tauri::Manager;
@@ -188,11 +188,15 @@ pub fn answer_question_from_island(
         "submit" => {
             // 优先用自由输入，其次用选中项
             if let Some(text) = input {
-                protocol::UserAnswer::Custom { text: text.to_string() }
+                protocol::UserAnswer::Custom {
+                    text: text.to_string(),
+                }
             } else if let Some(indices) = selected {
                 if indices.len() == 1 {
                     // 单选：用索引占位，实际 label 由后端从 options 里取
-                    protocol::UserAnswer::Selected { label: format!("option_{}", indices[0]) }
+                    protocol::UserAnswer::Selected {
+                        label: format!("option_{}", indices[0]),
+                    }
                 } else {
                     protocol::UserAnswer::SelectedMulti {
                         labels: indices.iter().map(|i| format!("option_{i}")).collect(),

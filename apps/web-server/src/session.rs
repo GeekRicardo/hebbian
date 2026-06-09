@@ -270,6 +270,7 @@ impl TurnObserver for WebObserver {
         _question: &str,
         _options: &[QuestionOption],
         _multi: bool,
+        _questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
         let (tx, rx) = oneshot::channel();
         self.runtime

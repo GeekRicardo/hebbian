@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
 use agent_core::edits;
-use agent_core::edits::metadata::EditEntry;
+use agent_core::edits::metadata::TurnEditEntry;
 use agent_core::permissions::PermissionStore;
 use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
@@ -176,11 +176,17 @@ fn map_core_err(e: agent_core::core_client::CoreError) -> AppError {
 
 #[tauri::command]
 fn get_providers(app: AppHandle) -> AppResult<ProvidersFile> {
+    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] get_providers #{n}"); }
     core(&app)?.list_providers().map_err(map_core_err)
 }
 
 #[tauri::command]
 fn save_providers(app: AppHandle, file: ProvidersFile) -> AppResult<()> {
+    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    eprintln!("[COUNT] save_providers #{n}");
     core(&app)?.save_providers(file).map_err(map_core_err)
 }
 
@@ -223,9 +229,17 @@ async fn test_provider_model(
 // ========== models.dev catalog（模型元数据目录） ==========
 
 #[tauri::command]
-fn get_models_catalog(app: AppHandle) -> AppResult<agent_core::storage::models_catalog::CatalogCache> {
+async fn get_models_catalog(
+    app: AppHandle,
+) -> AppResult<agent_core::storage::models_catalog::CatalogCache> {
+    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] get_models_catalog #{n}"); }
+    // 129KB JSON 在 debug 模式下解析较慢，spawn_blocking 避免阻塞 Tauri 主线程。
     let dir = data_dir(&app)?;
-    Ok(agent_core::storage::models_catalog::read_catalog(&dir))
+    tokio::task::spawn_blocking(move || Ok(agent_core::storage::models_catalog::read_catalog(&dir)))
+        .await
+        .map_err(|e| AppError::msg(format!("get_models_catalog join error: {e}")))?
 }
 
 #[tauri::command]
@@ -260,8 +274,15 @@ fn set_default_prompt(app: AppHandle, id: Option<String>) -> AppResult<PromptsFi
 // ========== Sessions ==========
 
 #[tauri::command]
-fn list_sessions(app: AppHandle) -> AppResult<Vec<SessionMeta>> {
-    core(&app)?.list_sessions().map_err(map_core_err)
+async fn list_sessions(app: AppHandle) -> AppResult<Vec<SessionMeta>> {
+    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] list_sessions #{n}"); }
+    let core = core(&app)?;
+    tokio::task::spawn_blocking(move || core.list_sessions())
+        .await
+        .map_err(|e| AppError::msg(format!("list_sessions join error: {e}")))?
+        .map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -360,6 +381,9 @@ fn get_session_model_io_entry(
 
 #[tauri::command]
 fn list_projects(app: AppHandle) -> AppResult<Vec<WorkspaceProject>> {
+    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 3 || n % 100 == 0 { eprintln!("[COUNT] list_projects #{n}"); }
     core(&app)?.list_projects().map_err(map_core_err)
 }
 
@@ -643,37 +667,43 @@ fn read_text_file(path: PathBuf) -> AppResult<String> {
 }
 
 #[tauri::command]
-fn list_edits(app: AppHandle, session_id: String) -> AppResult<Vec<EditEntry>> {
+fn list_edits(app: AppHandle, session_id: String) -> AppResult<Vec<TurnEditEntry>> {
     let dd = data_dir(&app)?;
     let wd = edits::metadata::worktree_dir(&dd, &session_id);
     let meta = edits::metadata::load_metadata(&wd)?;
-    Ok(meta.entries)
+    Ok(meta.turns)
 }
 
 #[tauri::command]
 async fn diff_edit(
     app: AppHandle,
     session_id: String,
-    snapshot_id: String,
+    turn_id: String,
+    file_path: String,
 ) -> AppResult<DiffPayload> {
     let dd = data_dir(&app)?;
     let worktree = build_edits_worktree(&dd, &session_id)?;
     if !worktree.enabled().await {
         return Err(AppError::msg("git 不可用，无法生成 diff"));
     }
-    let entries = worktree.list_entries()?;
-    let entry = entries
+    let turns = worktree.list_turns()?;
+    let turn = turns
         .into_iter()
-        .find(|e| e.snapshot_id == snapshot_id)
-        .ok_or_else(|| AppError::msg("找不到该快照"))?;
-    let (before_text, after_text) = worktree.diff_text(&entry).await?;
+        .find(|e| e.turn_id == turn_id)
+        .ok_or_else(|| AppError::msg("找不到该轮修改"))?;
+    let file = turn
+        .files
+        .into_iter()
+        .find(|f| f.real_path == file_path)
+        .ok_or_else(|| AppError::msg("找不到该文件修改"))?;
+    let (before_text, after_text) = worktree.diff_text(&file).await?;
     Ok(DiffPayload {
         before_text,
         after_text,
-        before_sha: entry.before_sha,
-        after_sha: entry.after_sha,
-        file_path: entry.real_path,
-        action: format!("{:?}", entry.action).to_lowercase(),
+        before_sha: file.before_sha,
+        after_sha: file.after_sha,
+        file_path: file.real_path,
+        action: format!("{:?}", file.action).to_lowercase(),
     })
 }
 
@@ -681,28 +711,27 @@ async fn diff_edit(
 async fn revert_edit(
     app: AppHandle,
     session_id: String,
-    snapshot_id: String,
+    turn_id: String,
 ) -> AppResult<RevertResult> {
     let dd = data_dir(&app)?;
     let worktree = build_edits_worktree(&dd, &session_id)?;
     if !worktree.enabled().await {
         return Err(AppError::msg("git 不可用，回退功能已禁用"));
     }
-    let entries = worktree.list_entries()?;
-    let entry = entries
+    let turns = worktree.list_turns()?;
+    let entry = turns
         .into_iter()
-        .find(|e| e.snapshot_id == snapshot_id)
-        .ok_or_else(|| AppError::msg("找不到该快照"))?;
+        .find(|e| e.turn_id == turn_id)
+        .ok_or_else(|| AppError::msg("找不到该轮修改"))?;
     if entry.reverted {
-        return Err(AppError::msg("该快照已回退过"));
+        return Err(AppError::msg("该轮修改已回退过"));
     }
-    match worktree.revert(&entry).await {
+    match worktree.revert_turn(&entry).await {
         Ok(()) => {
-            worktree.mark_reverted(&snapshot_id)?;
+            worktree.mark_turn_reverted(&turn_id)?;
             let payload = serde_json::json!({
                 "session_id": session_id,
-                "snapshot_id": snapshot_id,
-                "file_path": entry.real_path,
+                "turn_id": turn_id,
             });
             app.emit("edit-reverted", payload).ok();
             Ok(RevertResult {
@@ -726,7 +755,7 @@ async fn edits_worktree_status(
     let worktree = build_edits_worktree(&dd, &session_id)?;
     let enabled = worktree.enabled().await;
     let entry_count = if enabled {
-        worktree.list_entries().map(|e| e.len()).unwrap_or(0)
+        worktree.list_turns().map(|e| e.len()).unwrap_or(0)
     } else {
         0
     };
@@ -1072,12 +1101,43 @@ fn approve_permission(
         .map_err(AppError::msg)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+struct QuestionAnswerItemDto {
+    title: String,
+    kind: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+}
+
+fn single_answer_from_dto(
+    kind: &str,
+    text: Option<String>,
+    labels: Option<Vec<String>>,
+) -> AppResult<protocol::SingleAnswer> {
+    match kind {
+        "selected" => Ok(protocol::SingleAnswer::Selected {
+            label: text.unwrap_or_default(),
+        }),
+        "selected_multi" => Ok(protocol::SingleAnswer::SelectedMulti {
+            labels: labels.unwrap_or_default(),
+        }),
+        "custom" => Ok(protocol::SingleAnswer::Custom {
+            text: text.unwrap_or_default(),
+        }),
+        "cancelled" => Ok(protocol::SingleAnswer::Cancelled),
+        other => Err(AppError::msg(format!("未知 kind: {other}"))),
+    }
+}
+
 /// 用户回应一次 agent 提问（ask 工具）。
 ///
-/// `kind` 取值：`"selected"` / `"selected_multi"` / `"custom"` / `"cancelled"`
+/// `kind` 取值：`"selected"` / `"selected_multi"` / `"custom"` / `"cancelled"` / `"multi"`
 /// - `selected` → `text` 为单个 label
 /// - `selected_multi` → `labels` 为勾选的 label 列表
 /// - `custom` → `text` 为用户输入
+/// - `multi` → `items` 为每道子题的回答
 /// - `cancelled` → 字段忽略
 #[tauri::command]
 fn answer_question(
@@ -1086,6 +1146,7 @@ fn answer_question(
     kind: String,
     text: Option<String>,
     labels: Option<Vec<String>>,
+    items: Option<Vec<QuestionAnswerItemDto>>,
 ) -> AppResult<()> {
     let answer = match kind.as_str() {
         "selected" => protocol::UserAnswer::Selected {
@@ -1096,6 +1157,18 @@ fn answer_question(
         },
         "custom" => protocol::UserAnswer::Custom {
             text: text.unwrap_or_default(),
+        },
+        "multi" => protocol::UserAnswer::Multi {
+            items: items
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| {
+                    Ok(protocol::MultiQuestionAnswer {
+                        title: item.title,
+                        answer: single_answer_from_dto(&item.kind, item.text, item.labels)?,
+                    })
+                })
+                .collect::<AppResult<Vec<_>>>()?,
         },
         "cancelled" => protocol::UserAnswer::Cancelled,
         other => return Err(AppError::msg(format!("未知 kind: {other}"))),
@@ -1886,9 +1959,7 @@ fn plugin_install(
 
 #[tauri::command]
 fn plugin_uninstall(app: AppHandle, name: String) -> AppResult<()> {
-    core(&app)?
-        .plugin_uninstall(&name)
-        .map_err(map_core_err)
+    core(&app)?.plugin_uninstall(&name).map_err(map_core_err)
 }
 
 #[tauri::command]
@@ -2612,7 +2683,9 @@ pub fn run() {
         .manage(core_client)
         .setup(|app| {
             // hebisland socket client 初始化（独立 Tauri 二进制，不持有 agent_core）
-            app.handle().manage(hebisland_client::init_hebisland_client(app.handle().clone()));
+            app.handle().manage(hebisland_client::init_hebisland_client(
+                app.handle().clone(),
+            ));
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，
@@ -2627,6 +2700,14 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
                 });
+            }
+            {
+                let settings = settings_store::load(&agent_core::storage::default_data_dir());
+                if settings.general.open_devtools {
+                    if let Some(win) = app.get_webview_window("main") {
+                        win.open_devtools();
+                    }
+                }
             }
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))

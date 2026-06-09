@@ -45,7 +45,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::socket_path;
-use crate::ipc::{DaemonEvent, IpcCommand, IpcResponse, QuestionOptionDto};
+use crate::ipc::{DaemonEvent, IpcCommand, IpcResponse};
 
 // ─── 启动参数 ───────────────────────────────────────────────────────────────
 
@@ -290,6 +290,7 @@ impl TurnObserver for DaemonObserver {
         _question: &str,
         _options: &[QuestionOption],
         _multi: bool,
+        _questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
         let (tx, rx) = oneshot::channel();
         self.state
@@ -438,17 +439,13 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             question,
             options,
             multi,
+            questions,
         } => Some(DaemonEvent::QuestionRequested {
             request_id: request_id.as_str().to_string(),
             question: question.clone(),
-            options: options
-                .iter()
-                .map(|o| QuestionOptionDto {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                })
-                .collect(),
+            options: options.iter().cloned().map(Into::into).collect(),
             multi: *multi,
+            questions: questions.iter().cloned().map(Into::into).collect(),
         }),
         EventPayload::UserQuestionAnswered { request_id, .. } => {
             Some(DaemonEvent::QuestionAnswered {

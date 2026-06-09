@@ -359,8 +359,13 @@ impl TurnObserver for CliObserver {
         question: &str,
         options: &[QuestionOption],
         multi: bool,
+        questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
-        Some(ask_user_in_terminal(question.to_string(), options.to_vec(), multi).await)
+        if questions.is_empty() {
+            Some(ask_user_in_terminal(question.to_string(), options.to_vec(), multi).await)
+        } else {
+            Some(ask_questions_in_terminal(questions.to_vec()).await)
+        }
     }
 }
 
@@ -469,6 +474,25 @@ async fn ask_user_in_terminal(
     })
     .await
     .unwrap_or(UserAnswer::Cancelled)
+}
+
+async fn ask_questions_in_terminal(questions: Vec<protocol::AskQuestion>) -> UserAnswer {
+    let mut items = Vec::new();
+    for q in questions {
+        if !q.description.is_empty() {
+            println!("{}", q.description.dimmed());
+        }
+        let answer = ask_user_in_terminal(q.title.clone(), q.options, q.multi).await;
+        let answer = match answer {
+            UserAnswer::Selected { label } => protocol::SingleAnswer::Selected { label },
+            UserAnswer::SelectedMulti { labels } => protocol::SingleAnswer::SelectedMulti { labels },
+            UserAnswer::Custom { text } => protocol::SingleAnswer::Custom { text },
+            UserAnswer::Cancelled => return UserAnswer::Cancelled,
+            UserAnswer::Multi { .. } => protocol::SingleAnswer::Cancelled,
+        };
+        items.push(protocol::MultiQuestionAnswer { title: q.title, answer });
+    }
+    UserAnswer::Multi { items }
 }
 
 /// 终端里弹审批选单，用 inquire + spawn_blocking。

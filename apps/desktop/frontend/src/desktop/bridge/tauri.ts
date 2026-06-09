@@ -7,7 +7,7 @@ import type {
   ContextUsage,
   DeviceCodeInfo,
   DiffPayload,
-  EditEntry,
+  TurnEditEntry,
   EditsWorktreeStatus,
   EngineEvent,
   FetchedModel,
@@ -293,14 +293,15 @@ export const api = {
   /** 用户回应一次 agent 提问（ask 工具）。UI 未实装时可立即 "cancelled" */
   answerQuestion: (
     requestId: string,
-    kind: "selected" | "selected_multi" | "custom" | "cancelled",
-    payload?: { text?: string; labels?: string[] }
+    kind: "selected" | "selected_multi" | "custom" | "cancelled" | "multi",
+    payload?: { text?: string; labels?: string[]; items?: any[] }
   ) =>
     invoke<void>("answer_question", {
       requestId,
       kind,
       text: payload?.text ?? null,
       labels: payload?.labels ?? null,
+      items: payload?.items ?? null,
     }),
 
   /**
@@ -532,13 +533,13 @@ export const api = {
     invoke<DeepseekLoginToken>("deepseek_login", { input }),
 
   // ── edits worktree（架构 §4.13）──
-  /** 列出某 session 所有 Edit 快照条目。 */
+  /** 列出某 session 所有 turn 修改条目。 */
   listEdits: (sessionId: string) =>
-    invoke<EditEntry[]>("list_edits", { sessionId }),
+    invoke<TurnEditEntry[]>("list_edits", { sessionId }),
 
-  /** 获取某次 Edit 的 before/after 文本内容。 */
-  diffEdit: (sessionId: string, snapshotId: string) =>
-    invoke<DiffPayload>("diff_edit", { sessionId, snapshotId }),
+  /** 获取某轮某文件的 before/after 文本内容。 */
+  diffEdit: (sessionId: string, turnId: string, filePath: string) =>
+    invoke<DiffPayload>("diff_edit", { sessionId, turnId, filePath }),
 
   /**
    * 读盘文件文本——服务于 UI 渲染（如 Edit diff 在原文里 indexOf 定位真实行号）。
@@ -546,9 +547,9 @@ export const api = {
    */
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
 
-  /** 回退单次 Edit。返回 `{ success, error? }`。 */
-  revertEdit: (sessionId: string, snapshotId: string) =>
-    invoke<RevertResult>("revert_edit", { sessionId, snapshotId }),
+  /** 回退整轮 Edit。返回 `{ success, error? }`。 */
+  revertEdit: (sessionId: string, turnId: string) =>
+    invoke<RevertResult>("revert_edit", { sessionId, turnId }),
 
   /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
   editsWorktreeStatus: (sessionId: string) =>

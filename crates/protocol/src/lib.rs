@@ -16,13 +16,13 @@ pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
 pub use event::{
     EditAction, Event, EventPayload, LogLevel, ResumeCause, RiskLevel, StepKind, StopReason,
-    SuspendReason,
+    SuspendReason, TurnFileChange,
 };
 pub use ids::{AgentRef, MessageId, PermissionRequestId, RunId, SubmissionId, TurnId};
 pub use memory::MemoryWriteItem;
 pub use permission::{
-    ApprovalDecision, ApprovalSegment, ApprovalSegmentStatus, PermissionKind, PermissionScope,
-    QuestionOption, UserAnswer,
+    ApprovalDecision, ApprovalSegment, ApprovalSegmentStatus, AskQuestion, MultiQuestionAnswer,
+    PermissionKind, PermissionScope, QuestionOption, SingleAnswer, UserAnswer,
 };
 pub use submission::{Op, Submission, UserInput};
 pub use todo::{PlanComment, TodoItem, TodoStatus};
