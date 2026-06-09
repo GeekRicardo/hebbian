@@ -26,7 +26,10 @@ impl ILinkClient {
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert("AuthorizationType", HeaderValue::from_static("ilink_bot_token"));
+        headers.insert(
+            "AuthorizationType",
+            HeaderValue::from_static("ilink_bot_token"),
+        );
         headers.insert(
             "Authorization",
             HeaderValue::from_str(&format!("Bearer {}", self.token)).expect("valid bearer token"),
@@ -34,7 +37,10 @@ impl ILinkClient {
 
         let uin: u32 = rand::thread_rng().gen();
         let uin = base64::engine::general_purpose::STANDARD.encode(uin.to_string());
-        headers.insert("X-WECHAT-UIN", HeaderValue::from_str(&uin).expect("valid uin"));
+        headers.insert(
+            "X-WECHAT-UIN",
+            HeaderValue::from_str(&uin).expect("valid uin"),
+        );
         headers
     }
 

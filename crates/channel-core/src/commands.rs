@@ -44,7 +44,9 @@ fn cmd_projects(core: &dyn CoreClient) -> CommandResult {
     match core.list_projects() {
         Ok(projects) => {
             if projects.is_empty() {
-                return CommandResult::Reply("暂无项目。在 Desktop 里添加项目后这里就能看到。".into());
+                return CommandResult::Reply(
+                    "暂无项目。在 Desktop 里添加项目后这里就能看到。".into(),
+                );
             }
             let mut lines = vec!["📂 项目列表：".to_string()];
             for project in projects {
@@ -80,7 +82,13 @@ fn cmd_threads(core: &dyn CoreClient, state: &OwnerState) -> CommandResult {
                     ""
                 };
                 let short_id = session.id.chars().take(8).collect::<String>();
-                lines.push(format!("  {}. [{}] {}{}", index + 1, short_id, session.title, marker));
+                lines.push(format!(
+                    "  {}. [{}] {}{}",
+                    index + 1,
+                    short_id,
+                    session.title,
+                    marker
+                ));
             }
             if filtered.len() > 20 {
                 lines.push(format!("  ...共 {} 条，只显示最近 20 条", filtered.len()));
@@ -109,7 +117,10 @@ fn cmd_providers(core: &dyn CoreClient) -> CommandResult {
                 } else {
                     ""
                 };
-                lines.push(format!("  {} — {:?}{}{}", provider.id, provider.kind, default, marker));
+                lines.push(format!(
+                    "  {} — {:?}{}{}",
+                    provider.id, provider.kind, default, marker
+                ));
             }
             CommandResult::Reply(lines.join("\n"))
         }
@@ -131,7 +142,11 @@ fn cmd_models(core: &dyn CoreClient, args: &str, state: &OwnerState) -> CommandR
         Ok(file) => file,
         Err(err) => return CommandResult::Reply(format!("❌ 获取供应商失败：{err}")),
     };
-    let provider = match file.providers.iter().find(|provider| provider.id == provider_id) {
+    let provider = match file
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+    {
         Some(provider) => provider,
         None => return CommandResult::Reply(format!("❌ 供应商 {provider_id} 不存在")),
     };
@@ -151,7 +166,9 @@ fn cmd_models(core: &dyn CoreClient, args: &str, state: &OwnerState) -> CommandR
     }
 
     if models.is_empty() {
-        return CommandResult::Reply(format!("供应商 {provider_id} 下暂无模型缓存。请在 Desktop 里刷新模型列表。"));
+        return CommandResult::Reply(format!(
+            "供应商 {provider_id} 下暂无模型缓存。请在 Desktop 里刷新模型列表。"
+        ));
     }
 
     let mut lines = vec![format!("🤖 {provider_id} 下的模型：")];
@@ -281,8 +298,14 @@ fn cmd_new(
 fn cmd_status(state: &OwnerState) -> CommandResult {
     let lines = [
         "📊 当前状态：".to_string(),
-        format!("  Session: {}", state.active_session_id.as_deref().unwrap_or("无")),
-        format!("  Provider: {}", state.provider_id.as_deref().unwrap_or("无")),
+        format!(
+            "  Session: {}",
+            state.active_session_id.as_deref().unwrap_or("无")
+        ),
+        format!(
+            "  Provider: {}",
+            state.provider_id.as_deref().unwrap_or("无")
+        ),
         format!("  Model: {}", state.model.as_deref().unwrap_or("无")),
         format!("  Project: {}", state.project_id.as_deref().unwrap_or("无")),
     ];

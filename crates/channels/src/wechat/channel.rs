@@ -111,7 +111,10 @@ impl Channel for WeChatChannel {
     ) -> anyhow::Result<()> {
         if let Ok(config) = self.client.get_config().await {
             if !config.typing_ticket.is_empty() {
-                let _ = self.client.send_typing(to, &config.typing_ticket, true).await;
+                let _ = self
+                    .client
+                    .send_typing(to, &config.typing_ticket, true)
+                    .await;
             }
         }
         Ok(())

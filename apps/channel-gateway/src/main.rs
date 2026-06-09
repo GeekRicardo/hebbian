@@ -43,8 +43,14 @@ async fn main() -> anyhow::Result<()> {
         Commands::WeChatLogin => {
             let credentials = channels::wechat::login::login().await?;
             channels::wechat::login::save_credentials(&data_dir, &credentials)?;
-            eprintln!("凭证已保存到 ~/.hebbian/channels/wechat/{}/", credentials.bot_id);
-            eprintln!("启动网关：heb-channel wechat --bot-id {}", credentials.bot_id);
+            eprintln!(
+                "凭证已保存到 ~/.hebbian/channels/wechat/{}/",
+                credentials.bot_id
+            );
+            eprintln!(
+                "启动网关：heb-channel wechat --bot-id {}",
+                credentials.bot_id
+            );
             Ok(())
         }
         Commands::WeChatRun { bot_id } => {
@@ -60,7 +66,9 @@ async fn main() -> anyhow::Result<()> {
                 &credentials.bot_id,
             );
             let bridge = bridge::ChannelBridge::new(data_dir.clone());
-            bridge.run_loop(channel, &mut state, &credentials.bot_id).await
+            bridge
+                .run_loop(channel, &mut state, &credentials.bot_id)
+                .await
         }
     }
 }
