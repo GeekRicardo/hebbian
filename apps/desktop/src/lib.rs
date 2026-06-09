@@ -176,17 +176,11 @@ fn map_core_err(e: agent_core::core_client::CoreError) -> AppError {
 
 #[tauri::command]
 fn get_providers(app: AppHandle) -> AppResult<ProvidersFile> {
-    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] get_providers #{n}"); }
     core(&app)?.list_providers().map_err(map_core_err)
 }
 
 #[tauri::command]
 fn save_providers(app: AppHandle, file: ProvidersFile) -> AppResult<()> {
-    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    eprintln!("[COUNT] save_providers #{n}");
     core(&app)?.save_providers(file).map_err(map_core_err)
 }
 
@@ -232,9 +226,6 @@ async fn test_provider_model(
 async fn get_models_catalog(
     app: AppHandle,
 ) -> AppResult<agent_core::storage::models_catalog::CatalogCache> {
-    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] get_models_catalog #{n}"); }
     // 129KB JSON 在 debug 模式下解析较慢，spawn_blocking 避免阻塞 Tauri 主线程。
     let dir = data_dir(&app)?;
     tokio::task::spawn_blocking(move || Ok(agent_core::storage::models_catalog::read_catalog(&dir)))
@@ -275,9 +266,6 @@ fn set_default_prompt(app: AppHandle, id: Option<String>) -> AppResult<PromptsFi
 
 #[tauri::command]
 async fn list_sessions(app: AppHandle) -> AppResult<Vec<SessionMeta>> {
-    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n < 3 || n % 20 == 0 { eprintln!("[COUNT] list_sessions #{n}"); }
     let core = core(&app)?;
     tokio::task::spawn_blocking(move || core.list_sessions())
         .await
@@ -381,9 +369,6 @@ fn get_session_model_io_entry(
 
 #[tauri::command]
 fn list_projects(app: AppHandle) -> AppResult<Vec<WorkspaceProject>> {
-    static C: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = C.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n < 3 || n % 100 == 0 { eprintln!("[COUNT] list_projects #{n}"); }
     core(&app)?.list_projects().map_err(map_core_err)
 }
 

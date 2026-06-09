@@ -139,12 +139,53 @@ function cloneStreamingParts(
   return parts.map((part) => ({ ...part }));
 }
 
+function finalizeOpenReasoning(
+  parts: StreamingAssistantPart[],
+  now = Date.now()
+): StreamingAssistantPart[] {
+  const last = parts[parts.length - 1];
+  if (last?.type !== "reasoning" || last.duration_ms != null) return parts;
+  const next = cloneStreamingParts(parts);
+  const reasoning = next[next.length - 1];
+  if (reasoning.type === "reasoning") {
+    reasoning.duration_ms = Math.max(0, now - (reasoning.started_at_ms ?? now));
+  }
+  return next;
+}
+
+function attachReasoningDurations(
+  session: Session,
+  liveParts: StreamingAssistantPart[]
+): Session {
+  const durations = liveParts.flatMap((part) =>
+    part.type === "reasoning" && part.duration_ms != null ? [part.duration_ms] : []
+  );
+  if (durations.length === 0) return session;
+  const messages = [...session.messages];
+  let durationIndex = durations.length - 1;
+  for (let messageIndex = messages.length - 1; messageIndex >= 0 && durationIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex];
+    if (message.role !== "assistant" || !message.parts?.length) continue;
+    let changed = false;
+    const parts = [...message.parts];
+    for (let partIndex = parts.length - 1; partIndex >= 0 && durationIndex >= 0; partIndex--) {
+      const part = parts[partIndex];
+      if (part.type !== "reasoning" || part.duration_ms != null) continue;
+      parts[partIndex] = { ...part, duration_ms: durations[durationIndex--] };
+      changed = true;
+    }
+    if (changed) messages[messageIndex] = { ...message, parts };
+  }
+  return durationIndex < durations.length - 1 ? { ...session, messages } : session;
+}
+
 function applyTextDelta(
   parts: StreamingAssistantPart[],
   text: string
 ): StreamingAssistantPart[] {
   if (!text) return parts;
-  const next = cloneStreamingParts(parts);
+  const base = finalizeOpenReasoning(parts);
+  const next = cloneStreamingParts(base);
   const last = next[next.length - 1];
   if (last?.type === "text") {
     last.text += text;
@@ -165,10 +206,10 @@ function applyReasoningDelta(
   if (!text) return parts;
   const next = cloneStreamingParts(parts);
   const last = next[next.length - 1];
-  if (last?.type === "reasoning") {
+  if (last?.type === "reasoning" && last.duration_ms == null) {
     last.text += text;
   } else {
-    next.push({ type: "reasoning", text });
+    next.push({ type: "reasoning", text, started_at_ms: Date.now() });
   }
   return next;
 }
@@ -195,7 +236,7 @@ function ensureToolPart(
   id?: string | null,
   name?: string | null
 ): [StreamingAssistantPart[], number] {
-  const next = cloneStreamingParts(parts);
+  const next = cloneStreamingParts(finalizeOpenReasoning(parts));
   const existing = toolPartIndex(next, index, id);
   if (existing >= 0) return [next, existing];
 
@@ -411,6 +452,9 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       ...slot,
       streamingParts: applyNestedEvent(slot.streamingParts, nestedCallId, e),
     };
+  }
+  if (e.type === "run_finished") {
+    return { ...slot, streamingParts: finalizeOpenReasoning(slot.streamingParts) };
   }
   if (e.type === "model_retry") {
     // 重试：丢掉上次失败 attempt 已 emit 的 partial（避免和重试输出叠加），
@@ -940,6 +984,9 @@ interface AppState {
    */
   sessionMemoryWrites: Record<string, MemoryWriteItem[]>;
 
+  /** 当前对话最后一次 agent_loop 完整用时。 */
+  sessionLastRunDurationMs: Record<string, number>;
+
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
   /** 后台跑完但用户尚未查看的会话 id 集合，用于 Sidebar 静态点。 */
@@ -1306,6 +1353,7 @@ export const useStore = create<AppState>((set, get) => ({
   compacting: false,
   sessionEditSnapshots: {},
   sessionMemoryWrites: {},
+  sessionLastRunDurationMs: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -2226,6 +2274,14 @@ export const useStore = create<AppState>((set, get) => ({
               });
               return;
             }
+            if (e.type === "run_finished") {
+              set((state) => ({
+                sessionLastRunDurationMs: {
+                  ...state.sessionLastRunDurationMs,
+                  [sessionId]: e.duration_ms,
+                },
+              }));
+            }
             set((state) => {
               const slot = state.sessionStreams[sessionId];
               // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
@@ -2246,12 +2302,14 @@ export const useStore = create<AppState>((set, get) => ({
           meta,
           options.continueRun,
         );
+        const live = get().sessionStreams[sessionId];
         const stillForeground = get().currentSession?.id === sessionId;
         if (stillForeground) {
-          const fresh = await api.getSession(
+          const loaded = await api.getSession(
             sessionId,
             activeRequestForSession(get(), sessionId)
           );
+          const fresh = live ? attachReasoningDurations(loaded, live.streamingParts) : loaded;
           set((state) => {
             const { [sessionId]: _drop, ...rest } = state.sessionStreams;
             return {
@@ -2305,11 +2363,13 @@ export const useStore = create<AppState>((set, get) => ({
           return next as AppState;
         });
         if (String(err?.message ?? err).includes("请求已中断")) {
+          const live = get().sessionStreams[sessionId];
           if (stillForeground) {
-            const fresh = await api.getSession(
+            const loaded = await api.getSession(
               sessionId,
               activeRequestForSession(get(), sessionId)
             );
+            const fresh = live ? attachReasoningDurations(loaded, live.streamingParts) : loaded;
             set({ currentSession: fresh });
           }
           await get().refreshSessions();

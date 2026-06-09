@@ -222,6 +222,7 @@ export type MessagePart =
   | {
       type: "reasoning";
       text: string;
+      duration_ms?: number | null;
     }
   | {
       type: "tool_call";
@@ -243,6 +244,8 @@ export type StreamingAssistantPart =
   | {
       type: "reasoning";
       text: string;
+      started_at_ms?: number | null;
+      duration_ms?: number | null;
     }
   | {
       type: "tool_call";
@@ -594,6 +597,10 @@ export type EngineEvent =
       id: string;
       chunk: string;
       subagent_call_id?: string | null;
+    }
+  | {
+      type: "run_finished";
+      duration_ms: number;
     }
   | {
       /** 架构 §4.12：Run 进入挂起态。 */

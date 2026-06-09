@@ -306,12 +306,28 @@ export function Sidebar() {
   const displayProjects = useMemo(() => {
     if (projectSidebarMode !== "projects" || selectedProject) return projects;
     const trimmed = query.trim();
-    if (!trimmed) return projects;
-    const matchingSessions = searchResults ?? sessions;
-    return projects.filter((project) => {
-      const projectText = `${project.name} ${project.folders.map((folder) => folder.path).join(" ")}`;
-      if (textMatchesQuery(projectText, query, searchCaseSensitive, searchRegex)) return true;
-      return matchingSessions.some((session) => sessionBelongsToProject(session, project));
+    let list = projects;
+    if (trimmed) {
+      const matchingSessions = searchResults ?? sessions;
+      list = projects.filter((project) => {
+        const projectText = `${project.name} ${project.folders.map((folder) => folder.path).join(" ")}`;
+        if (textMatchesQuery(projectText, query, searchCaseSensitive, searchRegex)) return true;
+        return matchingSessions.some((session) => sessionBelongsToProject(session, project));
+      });
+    }
+    // 按该项目下最新会话的时间降序排列
+    return [...list].sort((a, b) => {
+      const aTime = Math.max(
+        a.updated_at,
+        ...sessions.filter((s) => sessionBelongsToProject(s, a)).map((s) => s.updated_at),
+        0
+      );
+      const bTime = Math.max(
+        b.updated_at,
+        ...sessions.filter((s) => sessionBelongsToProject(s, b)).map((s) => s.updated_at),
+        0
+      );
+      return bTime - aTime;
     });
   }, [projects, projectSidebarMode, query, searchCaseSensitive, searchRegex, searchResults, selectedProject, sessions]);
 

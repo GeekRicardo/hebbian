@@ -2627,6 +2627,10 @@
   background: color-mix(in srgb, var(--dsp-accent) 5%, transparent) !important;
 }
 
+.dsp-session-row-wrap:not(.is-active) .dsp-session-row:focus-visible {
+  background: color-mix(in srgb, var(--dsp-accent) 3.5%, white) !important;
+}
+
 .dsp-session-row-wrap.is-active .dsp-session-row {
   background: color-mix(in srgb, var(--dsp-accent) 7%, white) !important;
   box-shadow:

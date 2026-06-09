@@ -68,6 +68,9 @@ pub enum EngineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_call_id: Option<String>,
     },
+    RunFinished {
+        duration_ms: u64,
+    },
     /// Run 进入挂起态（架构 §4.12）。surface 据此渲染 BackgroundTaskPanel 占位。
     RunSuspended {
         /// "background_task" / "cron" / "manual"

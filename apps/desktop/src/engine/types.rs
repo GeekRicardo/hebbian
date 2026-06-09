@@ -40,6 +40,9 @@ pub enum EngineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
     },
+    RunFinished {
+        duration_ms: u64,
+    },
     /// Run 进入挂起态（架构 §4.12）。
     RunSuspended {
         reason: String,

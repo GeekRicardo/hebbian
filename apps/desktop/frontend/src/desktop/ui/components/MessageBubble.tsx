@@ -157,7 +157,13 @@ interface ToolCallItem {
 
 type AssistantRenderPart =
   | { type: "text"; key: string; text: string }
-  | { type: "reasoning"; key: string; text: string; streaming: boolean }
+  | {
+      type: "reasoning";
+      key: string;
+      text: string;
+      streaming: boolean;
+      durationMs?: number | null;
+    }
   | { type: "tool_group"; key: string; calls: ToolCallItem[] };
 
 function formatJsonLike(value: unknown): string {
@@ -269,6 +275,7 @@ function buildAssistantRenderParts(
           key: `stream-reasoning-${index}`,
           text: part.text,
           streaming: !!streaming && isLast,
+          durationMs: part.duration_ms,
         });
       } else {
         pendingTools.push(normalizeStreamingToolPart(part, index));
@@ -290,6 +297,7 @@ function buildAssistantRenderParts(
           key: `saved-reasoning-${index}`,
           text: part.text,
           streaming: false,
+          durationMs: part.duration_ms,
         });
       } else {
         pendingTools.push(normalizeSavedToolPart(part, index));
@@ -307,6 +315,15 @@ function buildAssistantRenderParts(
     out.push({ type: "tool_group", key: "legacy-tools", calls: legacyCalls });
   }
   return out;
+}
+
+export function formatCompactDuration(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
 }
 
 function statusLabel(status: ToolCallItem["status"]) {
@@ -1530,7 +1547,7 @@ function ToolCallTimeline({
 
   if (calls.length === 0) return null;
   return (
-    <div className="relative mt-3 space-y-1 rounded-md bg-muted/70 py-1.5 pl-6 pr-2">
+    <div className="relative mt-1.5 space-y-px rounded-md bg-muted/70 py-0.5 pl-6 pr-2">
       {calls.map((call, index) => {
         // 未 done 时（streaming / running / failed）默认展开，让运行中的 tool
         // 边输出边看；done 后立即折叠，靠用户手动 toggle 展开看 detail。
@@ -1568,7 +1585,7 @@ function ToolCallTimeline({
             // focus-flash 闪烁时 box-shadow 沿这个 wrapper 自身的 border-radius 绘制，
             // 视觉上贴着卡片本身边缘的圆角，不再"小一圈"。平时 wrapper 无背景 / 边框，
             // 圆角不可见——仅 focus-flash 期间 box-shadow 才显示。
-            className={cn("relative rounded-md", index === calls.length - 1 && "pb-0")}
+            className={cn("relative rounded-[5px]", index === calls.length - 1 && "pb-0")}
           >
             {index !== calls.length - 1 && (
               <div className="absolute -left-[15px] top-6 bottom-[-8px] w-px bg-border" />
@@ -1586,10 +1603,8 @@ function ToolCallTimeline({
             />
             <div
               className={cn(
-                // border 始终占 1px，避免 active 切换时几何偏移导致 button 行抖动；
-                // 折叠态 border-transparent 看不到，展开态切到 border-border 显形
-                "overflow-hidden border border-transparent",
-                active && "border-border bg-background"
+                "overflow-hidden",
+                active && "bg-background"
               )}
             >
               {call.name === "Read" ? (
@@ -1694,9 +1709,11 @@ const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
 function ReasoningBlock({
   text,
   streaming,
+  durationMs,
 }: {
   text: string;
   streaming: boolean;
+  durationMs?: number | null;
 }) {
   const [open, setOpen] = useState(streaming);
   const prevStreamingRef = useRef(streaming);
@@ -1707,19 +1724,37 @@ function ReasoningBlock({
     prevStreamingRef.current = streaming;
   }, [streaming]);
 
+  const [elapsedMs, setElapsedMs] = useState(durationMs ?? 0);
+  const startedAtRef = useRef(Date.now() - (durationMs ?? 0));
+
+  useEffect(() => {
+    if (!streaming) {
+      setElapsedMs(durationMs ?? elapsedMs);
+      return;
+    }
+    const tick = () => setElapsedMs(Date.now() - startedAtRef.current);
+    tick();
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [streaming, durationMs]);
+
+  const shownDuration = durationMs ?? elapsedMs;
   const trimmed = text.trim();
   if (!trimmed && !streaming) return null;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-px">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-0.5 text-[7px] leading-[9px] text-muted-foreground hover:text-foreground"
       >
-        <Brain className="h-3.5 w-3.5 shrink-0" />
+        <Brain className="h-3 w-3 shrink-0" />
         <span className="font-medium">
           {streaming ? "思考中…" : "思考过程"}
+        </span>
+        <span className="tabular-nums text-muted-foreground/80">
+          {formatCompactDuration(shownDuration)}
         </span>
         {streaming && (
           <span className="ml-1 inline-flex h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
@@ -1758,7 +1793,7 @@ function ReasoningScrollArea({ text, streaming }: { text: string; streaming: boo
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="border-l border-border/50 pl-3 text-[12px] leading-relaxed text-muted-foreground break-words overflow-y-auto"
+      className="border-l border-border/50 pl-2 text-[12px] leading-relaxed text-muted-foreground break-words overflow-y-auto"
       style={{ maxHeight: "10lh" }}
     >
       {text ? (
@@ -1797,7 +1832,7 @@ function AssistantParts({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {parts.map((part) => {
         if (part.type === "text") {
           return (
@@ -1817,6 +1852,7 @@ function AssistantParts({
               key={part.key}
               text={part.text}
               streaming={part.streaming}
+              durationMs={part.durationMs}
             />
           );
         }
@@ -2271,10 +2307,10 @@ export const MessageBubble = memo(function MessageBubble({
           className="mt-2"
         />
         {!streaming && !editing && (
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-2 -ml-1.5">
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-2 -ml-1.5 text-[10px]">
             <button
               onClick={handleCopy}
-              className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
+              className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"
               title="复制"
             >
               {copied ? (
@@ -2286,7 +2322,7 @@ export const MessageBubble = memo(function MessageBubble({
             {onFork && (
               <button
                 onClick={() => onFork(message.id)}
-                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
+                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"
                 title="从此处分叉新对话"
               >
                 <GitBranch className="w-3.5 h-3.5" />
@@ -2296,7 +2332,7 @@ export const MessageBubble = memo(function MessageBubble({
             {isUser && onEdit && (
               <button
                 onClick={startEdit}
-                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
+                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"
                 title="编辑后重跑"
               >
                 <Pencil className="w-3.5 h-3.5" />
@@ -2306,7 +2342,7 @@ export const MessageBubble = memo(function MessageBubble({
             {onRegenerate && (
               <button
                 onClick={() => onRegenerate(message.id)}
-                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-xs"
+                className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"
                 title={isUser ? "用同样内容重跑" : "重新生成"}
               >
                 <RefreshCw className="w-3.5 h-3.5" />

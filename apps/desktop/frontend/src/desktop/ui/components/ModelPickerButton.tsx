@@ -78,7 +78,7 @@ function ProviderModels({
     ? [provider.default_model]
     : [];
   return (
-    <div className="model-picker-model-popover absolute bottom-0 left-[calc(100%+8px)] w-80 rounded-lg border border-border bg-card shadow-lg z-[91] overflow-hidden animate-slide-up">
+    <div className="model-picker-model-popover absolute top-0 left-[calc(100%+8px)] w-80 rounded-lg border border-border bg-card shadow-lg z-[91] overflow-hidden animate-slide-up">
       <div className="model-picker-model-popover-head px-3 py-2 text-[11px] font-semibold text-muted-foreground">
         {provider.name} 的模型
       </div>

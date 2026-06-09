@@ -1851,6 +1851,9 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             chunk: chunk.clone(),
             subagent_call_id: subagent.clone(),
         }),
+        RunFinished { duration_ms, .. } => Some(EngineEvent::RunFinished {
+            duration_ms: *duration_ms,
+        }),
         RunFailed { error } => Some(EngineEvent::Error {
             message: error.message.clone(),
         }),

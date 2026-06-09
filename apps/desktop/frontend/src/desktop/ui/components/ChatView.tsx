@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown, Share, RotateCw, Scissors } from "lucide-react";
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble, formatCompactDuration } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
 import { ChatInput } from "./ChatInput";
@@ -60,6 +60,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     contextCompacted,
     undoCompaction,
     sessionMemoryWrites,
+    sessionLastRunDurationMs,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -870,6 +871,11 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
           {isStreaming && currentRunMode ? (
             <div className="mx-auto my-1 text-[11px] tracking-wide text-muted-foreground/80">
               当前模式：{runModeLabel(currentRunMode)}
+            </div>
+          ) : null}
+          {currentSession && sessionLastRunDurationMs[currentSession.id] != null && !isStreaming ? (
+            <div className="mx-auto my-1 text-center text-[11px] text-muted-foreground/80">
+              本轮完成 · {formatCompactDuration(sessionLastRunDurationMs[currentSession.id])}
             </div>
           ) : null}
           {/* 本轮后台记忆抽取写入的记忆（架构 §4.14）：会话末尾一行低调摘要，可展开。

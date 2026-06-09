@@ -6584,6 +6584,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 仅 Desktop/hebweb 共享前端 ChatView 展示；不改消息数据、不改 agent-core、不改协议、不改 storage。
 - **留尾巴**: 后续若要恢复，只需打开渲染开关。
 
+### 2026-06-09 — 对齐输入框模型选择器的供应商与模型列表上沿，并进一步收小思考字号与工具区间距
+
+- **Why**: 用户反馈输入框模型选择器弹出后，第二栏模型列表顶部与第一栏供应商列表顶部没有对齐；同时希望「思考中 / 思考过程」字号更小，思考块与工具块之间的间距也进一步收紧。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx`: 把模型子列表的绝对定位从 `bottom-0` 改为 `top-0`，使右侧模型面板与左侧供应商列表顶部齐平。
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 将「思考中 / 思考过程」触发条字号从 `text-[11px]` 依次收小到 `text-[7px]`；`ToolCallTimeline` 容器间距从 `mt-3 space-y-1` 进一步收紧到 `mt-1.5 space-y-px`，`py-1` 改为 `py-0.5`。
+- **影响范围**: 仅 Desktop/hebweb 共享前端输入框弹出菜单与聊天区 assistant 渲染样式；不改 agent-core、不改协议、不改持久化。
+- **留尾巴**: 无
+
 ### 2026-06-09 — 将 edits-worktree 改为按 turn 聚合并自动聚焦修改文件栏
 
 - **Why**: 用户希望每轮对话结束后，如果本轮有文件修改，右侧 sidebar 自动切到「修改文件」栏；同一轮内同一文件中间改多次不用展示，只看本轮开始前到完成后的净变化，并用绿色 `+` / 红色 `-` 展示。
@@ -6608,3 +6617,45 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `docs/架构.md`: 补充 `general.language` 与 AutoMode 判官原因语言约定。
 - **影响范围**: agent-core settings schema / AutoMode judge prompt / Desktop 设置 UI；新增 settings 字段有默认值，老 settings.json 兼容。
 - **留尾巴**: 无
+
+### 2026-06-09 — 进一步收紧 thinking 与 tool 之间的间距
+
+- **Why**: 用户要求 `thinking` 与下方 tool 区域之间的间距再小一半。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 把 `ReasoningBlock` 外层间距从 `space-y-0.5` 改为 `space-y-px`，让 thinking 与 tool 区域贴得更近。
+- **影响范围**: 仅 Desktop/hebweb 前端聊天区 assistant 渲染间距；不改 agent-core、不改协议。
+- **留尾巴**: 无
+
+### 2026-06-09 — 再次压小「思考中 / 思考过程」触发条字号与图标，使其变化更容易被肉眼感知
+
+- **Why**: 用户反馈即便改成 `text-[8px] leading-[10px]`，在实际界面里仍几乎看不出变化，原因是同一行内的图标尺寸和行高仍在撑视觉高度。需要把字号、行高、图标一起压小，变化才会明显。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 把 reasoning 触发按钮改成 `text-[7px] leading-[9px] gap-0.5`，并将 `<Brain>` 图标从 `h-3 w-3` 收到 `h-2.5 w-2.5`。
+- **影响范围**: 仅 Desktop/hebweb 前端 assistant reasoning 触发条样式；不改 agent-core、不改协议。
+- **留尾巴**: 无
+
+### 2026-06-09 — 继续压小「思考中 / 思考过程」视觉字号，同步收紧行高
+
+- **Why**: 上一轮只调了字号但图标和行高没同步压，视觉上几乎看不出变化。用户反馈 tool 一行明显变小了，但「思考中 / 思考过程」仍然没变。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 把 reasoning 触发条改成 `text-[8px] leading-[10px]`，让字号和行高一起压小，避免被图标/默认行高兜住。
+- **影响范围**: 仅 Desktop/hebweb 前端 assistant reasoning 触发条样式；不改 agent-core、不改协议。
+- **留尾巴**: 无
+
+### 2026-06-09 — 修正「思考中 / 思考过程」字号不生效并压实到 9px 行高 12px
+
+- **Why**: 之前只改了 `text-[7px]` 甚至 `text-[3px]`，但用户在实际界面几乎看不出变化；原因是同一按钮内有固定高的图标与默认行高兜底，单纯压字号不够。需要同时把行高压下来，字号变化才会真正可见。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`: 把「思考中 / 思考过程」按钮从 `text-[3px]` 改为 `text-[9px] leading-3`，在可读性范围内把字号+行高一起压小。
+- **影响范围**: 仅 Desktop/hebweb 前端聊天区 assistant reasoning 触发条样式；不改 agent-core、不改协议。
+- **留尾巴**: 无
+
+### 2026-06-09 — 调整聊天区操作字号与思考/运行计时展示
+
+- **Why**: 用户希望 chat 区域的「复制 / 分叉 / 重新生成」操作更低调，思考状态字号更小，并能看到每段思考耗时与整轮 agent_loop 停止时的总耗时；同时希望思考、工具、正文之间间距更紧凑。
+- **改动**:
+  - `apps/desktop/src/engine/mod.rs` / `apps/desktop/src/engine/types.rs` / `apps/desktop/src/chat.rs`: 将 core 已有的 `RunFinished.duration_ms` 透传为前端 `run_finished` 事件。
+  - `apps/desktop/frontend/src/desktop/ui/types.ts` / `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`: 为流式 reasoning 记录运行时起止时间，run 结束后把本轮耗时留在当前内存会话用于展示。
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx` / `ChatView.tsx`: 降低消息操作和「思考中 / 思考过程」字号，展示思考计时与 agent_loop 总耗时，并收紧 reasoning / tool / 正文之间的垂直间距。
+- **影响范围**: Desktop/hebweb 共享前端聊天区与 Desktop 事件翻译层；不改 agent-core、不改持久化格式；`run_finished` 是 additive 前端事件。
+- **留尾巴**: 思考分段耗时是前端运行时展示信息，刷新页面或重新加载历史后不会从磁盘恢复。
