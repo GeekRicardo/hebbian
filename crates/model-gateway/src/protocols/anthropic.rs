@@ -631,12 +631,14 @@ pub fn parse_stream_event(event_type: &str, data: &str) -> Option<AnthropicStrea
                         partial_json: s.to_string(),
                     }
                 }),
-                Some("signature_delta") => v["delta"]["signature"].as_str().map(|s| {
-                    AnthropicStreamEvent::Signature {
-                        index,
-                        signature: s.to_string(),
-                    }
-                }),
+                Some("signature_delta") => {
+                    v["delta"]["signature"]
+                        .as_str()
+                        .map(|s| AnthropicStreamEvent::Signature {
+                            index,
+                            signature: s.to_string(),
+                        })
+                }
                 _ => None,
             }
         }
