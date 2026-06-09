@@ -65,7 +65,7 @@ export function ReasoningEffortPill() {
         onClick={() => setOpen((v) => !v)}
         disabled={!enabled}
         className={cn(
-          "h-8 inline-flex items-center gap-1 rounded-md px-2 text-xs",
+          "h-7 inline-flex items-center gap-1 rounded-md px-2 text-[11px] leading-none",
           "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
           "disabled:opacity-40 disabled:pointer-events-none",
           open && "bg-muted text-foreground"
@@ -76,9 +76,9 @@ export function ReasoningEffortPill() {
             : "thinking 已关闭，可在模型菜单里开启"
         }
       >
-        <Flame className="h-3.5 w-3.5" />
-        <span className="font-medium">{REASONING_EFFORT_LABEL[effort]}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <Flame className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium leading-none">{REASONING_EFFORT_LABEL[effort]}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
       </button>
       {open && (
         <div

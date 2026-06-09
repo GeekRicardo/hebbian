@@ -111,14 +111,14 @@ export function RunModeChip({ sessionId, disabled }: Props) {
         onClick={() => setOpen((v) => !v)}
         disabled={buttonDisabled}
         className={cn(
-          "h-8 inline-flex items-center gap-1 rounded-md px-2 text-xs bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none",
+          "h-7 inline-flex items-center gap-1 rounded-md px-2 text-[11px] leading-none bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none",
           open && "bg-muted text-foreground"
         )}
         title="切换运行模式"
       >
-        <Gauge className="w-3.5 h-3.5" />
-        <span className="font-medium">{labelOf(mode)}</span>
-        <ChevronDown className="w-3 h-3 opacity-60" />
+        <Gauge className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium leading-none">{labelOf(mode)}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
       </button>
       {open && (
         <div

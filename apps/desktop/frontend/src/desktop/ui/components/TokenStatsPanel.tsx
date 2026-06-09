@@ -1,47 +1,96 @@
 import { ArrowDownToLine, ArrowUpFromLine, Database, Layers } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
-import type { TokenStats } from "@/desktop/ui/types";
+import type { ContextUsage, TokenStats } from "@/desktop/ui/types";
 
 interface Props {
   stats: TokenStats | null;
+  contextUsage?: ContextUsage | null;
   size?: number;
   className?: string;
+  onCompact?: () => void;
 }
 
 /**
- * 紧贴输入框右侧的 token 统计图标：默认只显示一个圆形按钮（与 ContextRing 同尺寸），
- * 鼠标悬停时浮出面板展示输入 / 输出 / 缓存命中 / 缓存写入 详情。
+ * 输入框右侧的合并状态：用上下文进度圆环承载 context 百分比，旁边显示 cache 命中率。
  */
-export function TokenStatsPanel({ stats, size = 14, className }: Props) {
+export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onCompact }: Props) {
   const empty = !stats || stats.run_count === 0;
   const hitRate =
     !empty && stats!.input_tokens > 0
       ? Math.round((stats!.cache_read_tokens / stats!.input_tokens) * 100)
       : 0;
+  const contextRatio = contextUsage && contextUsage.budget_tokens > 0
+    ? Math.min(contextUsage.used_tokens / contextUsage.budget_tokens, 1.5)
+    : 0;
+  const contextDisplay = Math.min(contextRatio, 1);
+  const contextPct = Math.round(contextRatio * 100);
+  const stroke = 2.5;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const dash = c * contextDisplay;
+  const color = contextPct >= 90
+    ? "text-destructive"
+    : contextPct >= 70
+      ? "text-amber-500"
+      : "text-primary";
+  const title = contextUsage
+    ? `缓存 ${hitRate}% · 上下文 ${contextPct}%`
+    : `缓存 ${hitRate}%`;
 
   return (
     <div className={cn("relative group/token", className)}>
       <button
         type="button"
         tabIndex={-1}
+        onClick={onCompact}
         className={cn(
-          "inline-flex items-center justify-center rounded-lg border border-transparent",
-          "text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground transition-colors cursor-default",
-          empty && "opacity-60"
+          "token-stats-trigger inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-1.5",
+          "text-muted-foreground hover:bg-muted hover:text-foreground transition-colors leading-none",
+          onCompact ? "cursor-pointer" : "cursor-default",
+          empty && !contextUsage && "opacity-60"
         )}
-        style={{ width: size + 8, height: size + 8 }}
-        aria-label="Token 用量"
+        aria-label={title}
       >
-        {/* 「两个桶」造型：两个 Database 圆柱错位叠加，象征 cache 读 + 写双层 */}
-        <span className="relative inline-block h-3 w-3">
-          <Database className="absolute left-0 top-0 h-2.5 w-2.5 opacity-50" />
-          <Database className="absolute -right-px -bottom-px h-2.5 w-2.5" />
+        <span className="relative inline-flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
+          <svg
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            className={cn("token-stats-ring rotate-[-90deg]", color)}
+          >
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              strokeWidth={stroke}
+              className="stroke-muted"
+            />
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              fill="none"
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              strokeDasharray={`${dash} ${c}`}
+              className="stroke-current transition-[stroke-dasharray] duration-300"
+            />
+          </svg>
+          <span className="absolute text-[7px] font-semibold leading-none tabular-nums text-foreground/70">
+            {contextUsage ? contextPct : "–"}
+          </span>
+        </span>
+        <span className="token-stats-label inline-flex items-center gap-1 text-[10px] tabular-nums leading-none">
+          <span>cache {hitRate}%</span>
+          <span className="text-muted-foreground/50">/</span>
+          <span>ctx {contextUsage ? contextPct : 0}%</span>
         </span>
       </button>
 
       <div
         className={cn(
-          "pointer-events-none absolute bottom-full right-0 mb-2 w-52 z-50",
+          "pointer-events-none absolute bottom-full right-0 mb-2 w-56 z-50",
           "rounded-lg border border-border bg-background text-foreground shadow-lg",
           "px-3 py-2 text-[11px] select-none",
           "opacity-0 translate-y-1 transition-all duration-150",
@@ -86,6 +135,14 @@ export function TokenStatsPanel({ stats, size = 14, className }: Props) {
               />
             )}
           </>
+        )}
+        {contextUsage && (
+          <div className="mt-2 border-t border-border pt-1.5 text-muted-foreground">
+            上下文 <span className="tabular-nums text-foreground/80">{contextPct}%</span>
+            <span className="ml-1 tabular-nums">
+              {formatTokens(contextUsage.used_tokens)} / {formatTokens(contextUsage.budget_tokens)}
+            </span>
+          </div>
         )}
       </div>
     </div>

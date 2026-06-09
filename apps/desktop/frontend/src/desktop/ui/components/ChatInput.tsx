@@ -17,12 +17,11 @@ import {
   type ChatInputHistoryState,
 } from "@/desktop/ui/components/chatInputHistory";
 import { shouldSubmitChatInput } from "@/desktop/ui/components/chatInputKeyboard";
-import { ContextRing } from "@/desktop/ui/components/ContextRing";
 import {
   ConversationRefPopup,
   type ConversationItem,
 } from "@/desktop/ui/components/ConversationRefPopup";
-import { DrawerToggle, InputDrawer } from "@/desktop/ui/components/InputDrawer";
+import { InputDrawer } from "@/desktop/ui/components/InputDrawer";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { ModelPickerButton } from "@/desktop/ui/components/ModelPickerButton";
@@ -106,19 +105,13 @@ export function ChatInput({
   const setPendingAllowedPaths = useStore((s) => s.setPendingAllowedPaths);
   const currentSession = useStore((s) => s.currentSession);
   const projects = useStore((s) => s.projects);
-  const projectSidebarMode = useStore((s) => s.projectSidebarMode);
-  const selectedProjectId = useStore((s) => s.selectedProjectId);
 
   // activeWorkdir 用 pending 即可：openSession 会同步 pending 值。
   const activeWorkdir = pendingWorkdir;
   const activeAllowedPaths = pendingAllowedPaths;
-  // 已有对话优先取其绑定的项目；新建对话（project_id 为空）时，
-  // 若侧栏在项目模式且选中了项目，则预显示该项目 tag——与 newSession 继承行为对齐。
   const activeProject = currentSession?.project_id
     ? (projects.find((p) => p.id === currentSession.project_id) ?? null)
-    : projectSidebarMode === "projects" && selectedProjectId
-      ? (projects.find((p) => p.id === selectedProjectId) ?? null)
-      : null;
+    : null;
 
   // 输入框文本 (value) 与附件 (attachments) 故意不绑定 currentSession：
   // 这是用户当前的"草稿"，跨对话保留，切到老对话也不会被清空（老对话已发送的消息
@@ -126,12 +119,8 @@ export function ChatInput({
 
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
-  // 二级抽屉（RunMode / Reasoning / 状态）展开态——跟随 run 生命周期：空闲展开，生成中折叠。
-  const [drawerOpen, setDrawerOpen] = useState(!isStreaming);
-
-  useEffect(() => {
-    setDrawerOpen(!isStreaming);
-  }, [currentSession?.id, isStreaming]);
+  // 二级设置行（RunMode / Reasoning / 状态）固定展开；不再提供底部折叠小按钮。
+  const drawerOpen = true;
 
   // 架构 §6.1.3 / §8：当前 workdir 下加载的三层 skills，驱动 `//<skill-name>` 命令注册表
   // 和 SlashCommandButton 的 popup 列表。workdir 变化时刷新；失败时退回空数组（仍可用
@@ -406,8 +395,6 @@ export function ChatInput({
   async function submit() {
     const v = value.trim();
     if ((!v && attachments.length === 0) || sending) return;
-    // 用户开始发送/入队，抽屉自动折叠——这时焦点应该回到对话本身。
-    setDrawerOpen(false);
     // streaming 时回车不再直接发送，而是入队（FIFO 自动消费）。
     if (isStreaming) {
       enqueueAndClear("tail");
@@ -486,7 +473,6 @@ export function ChatInput({
     const v = value.trim();
     const hasDraft = v || attachments.length > 0;
     if (!hasDraft && currentInputQueue.length === 0) return;
-    setDrawerOpen(false);
     if (hasDraft) {
       enqueueInput(v, attachments, "head");
       setValue("");
@@ -859,7 +845,7 @@ export function ChatInput({
     (!disabled && !sending && (!!value.trim() || attachments.length > 0));
 
   return (
-    <div className="pl-2 pr-4 pt-0 pb-3">
+    <div className={cn("pl-2 pr-4 pt-0 pb-3", isStreaming && "chat-input-streaming")}>
       <div className="pt-2 relative">
         {/* 上边框拖拽热区：贴在外壳顶 border 外侧 ~6px 区域，光标变 ns-resize 暗示可拖；
             双击恢复自适应高度。不画可见手柄——保持视觉干净。 */}
@@ -1254,12 +1240,6 @@ export function ChatInput({
             </div>
           </div>
 
-          {/* 抽屉触发条：白色卡片内最底部一条 chevron，点击切换下方反色抽屉 */}
-          <DrawerToggle
-            open={drawerOpen}
-            onToggle={() => setDrawerOpen((v) => !v)}
-            disabled={inputDisabled}
-          />
         </div>
 
         {/* 二级抽屉：紧贴白色卡片下方的独立反色卡片。
@@ -1289,18 +1269,15 @@ export function ChatInput({
                   </span>
                 </HoverHint>
               )}
-              <div className="flex items-center gap-0.5 [&_button]:h-7 [&_button]:w-7">
-                <TokenStatsPanel stats={tokenStats} />
-                {contextUsage && (
-                  <ContextRing
-                    used={contextUsage.used_tokens}
-                    budget={contextUsage.budget_tokens}
-                    onClick={() => {
-                      if (compacting) return;
-                      void runCompact("");
-                    }}
-                  />
-                )}
+              <div className="flex items-center gap-0.5">
+                <TokenStatsPanel
+                  stats={tokenStats}
+                  contextUsage={contextUsage}
+                  onCompact={contextUsage ? () => {
+                    if (compacting) return;
+                    void runCompact("");
+                  } : undefined}
+                />
               </div>
             </>
           }

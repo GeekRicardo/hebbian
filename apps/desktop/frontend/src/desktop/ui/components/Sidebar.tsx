@@ -63,6 +63,21 @@ function groupOf(updatedAt: number): GroupKey {
   return "older";
 }
 
+function textMatchesQuery(text: string, query: string, caseSensitive: boolean, regex: boolean) {
+  const trimmed = query.trim();
+  if (!trimmed) return true;
+  if (regex) {
+    try {
+      return new RegExp(trimmed, caseSensitive ? "" : "i").test(text);
+    } catch {
+      return false;
+    }
+  }
+  return caseSensitive
+    ? text.includes(trimmed)
+    : text.toLowerCase().includes(trimmed.toLowerCase());
+}
+
 const GROUP_LABEL: Record<GroupKey, string> = {
   today: "今天",
   yesterday: "昨天",
@@ -272,14 +287,33 @@ export function Sidebar() {
     return session.project_id === project.id || (!!workdir && session.workdir === workdir);
   }
 
-  // 显示源：搜索命中或全量会话
+  function sessionBelongsToAnyProject(session: SessionMeta) {
+    return projects.some((project) => sessionBelongsToProject(session, project));
+  }
+
+  // 显示源：搜索命中或全量会话。项目栏只显示项目对话，Chat 栏只显示未绑定项目的对话。
   const displayItems: (SessionMeta & { snippet?: string | null })[] = useMemo(() => {
     const base = searchResults ?? sessions;
     if (projectSidebarMode === "projects" && selectedProject) {
       return base.filter((session) => sessionBelongsToProject(session, selectedProject));
     }
+    if (projectSidebarMode === "all") {
+      return base.filter((session) => !sessionBelongsToAnyProject(session));
+    }
     return base;
-  }, [searchResults, sessions, projectSidebarMode, selectedProject]);
+  }, [searchResults, sessions, projectSidebarMode, selectedProject, projects]);
+
+  const displayProjects = useMemo(() => {
+    if (projectSidebarMode !== "projects" || selectedProject) return projects;
+    const trimmed = query.trim();
+    if (!trimmed) return projects;
+    const matchingSessions = searchResults ?? sessions;
+    return projects.filter((project) => {
+      const projectText = `${project.name} ${project.folders.map((folder) => folder.path).join(" ")}`;
+      if (textMatchesQuery(projectText, query, searchCaseSensitive, searchRegex)) return true;
+      return matchingSessions.some((session) => sessionBelongsToProject(session, project));
+    });
+  }, [projects, projectSidebarMode, query, searchCaseSensitive, searchRegex, searchResults, selectedProject, sessions]);
 
   const grouped = useMemo(() => {
     const g: Record<GroupKey, typeof displayItems> = {
@@ -350,7 +384,7 @@ export function Sidebar() {
     const active = currentSession?.id === s.id;
     const regenerating = regeneratingId === s.id;
     const snippet = (s as any).snippet as string | undefined;
-    const running = runningSessions.has(s.id) && !active;
+    const running = runningSessions.has(s.id);
     const unread = !active && !running && unreadFinishedSessions.has(s.id);
     // 待审批：slot 本身持有悬挂的审批 / 提问（run 结束 slot 被删，自然清除）。
     const slot = sessionStreams[s.id];
@@ -360,103 +394,133 @@ export function Sidebar() {
         <div
           onClick={() => openSession(s.id)}
           className={cn(
-            "group px-3 py-2 rounded-md cursor-pointer transition-colors",
+            "group relative px-3 py-2 rounded-md cursor-pointer transition-colors",
             active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
             pendingApproval ? "glow-pending" : unread && "glow-finished"
           )}
         >
-          <div className="flex items-center gap-2 min-w-0">
-            {(running || unread) && (
-              <span
-                className={cn("h-2 w-2 shrink-0 rounded-full bg-primary", running && "animate-breathe")}
-                title={running ? "后台正在运行" : "运行已完成，未查看"}
-                aria-label={running ? "running" : "unread"}
-              />
-            )}
-            {renamingId === s.id ? (
-              <input
-                autoFocus
-                spellCheck={false}
-                autoCorrect="off"
-                value={renameText}
-                onChange={(e) => setRenameText(e.target.value)}
-                onBlur={() => commitRename(s.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitRename(s.id);
-                  if (e.key === "Escape") setRenamingId(null);
-                }}
-                className="flex-1 text-sm bg-background border border-input rounded px-1.5 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            ) : (
-              <span className="text-sm truncate flex-1" title={s.title}>
-                {renderSearchText(s.title, `${s.id}-title`)}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1 mt-0.5 text-[11px] text-muted-foreground">
-            <span className="truncate flex-1">{s.model}</span>
-            {s.source === "cli" && (
-              <span
-                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-primary/10 text-primary border border-primary/20 shrink-0"
-                title="本对话由 hebbian-cli 创建"
-              >
-                <Terminal className="w-2.5 h-2.5" />
-                CLI
-              </span>
-            )}
-            {s.source === "claude" && (
-              <span
-                className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-amber-500/10 text-amber-600 border border-amber-500/20 shrink-0"
-                title="从 Claude 导入"
-              >
-                <Download className="w-2.5 h-2.5" />
-                Claude
-              </span>
-            )}
-            {!renamingId && (
-              <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                {active && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRegenerateTitle(s.id);
+          <div className="flex min-w-0 gap-2">
+            <span className="flex h-5 w-2 shrink-0 items-center justify-center">
+              {(running || unread || pendingApproval) && (
+                <span
+                  className={cn(
+                    "h-2 w-2 rounded-full",
+                    pendingApproval
+                      ? "bg-amber-500 animate-breathe"
+                      : unread
+                        ? "bg-emerald-500"
+                        : "bg-primary animate-breathe"
+                  )}
+                  title={
+                    pendingApproval
+                      ? "等待处理"
+                      : running
+                        ? "后台正在运行"
+                        : "运行已完成，未查看"
+                  }
+                  aria-label={
+                    pendingApproval
+                      ? "pending"
+                      : running
+                        ? "running"
+                        : "unread"
+                  }
+                />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="relative min-w-0">
+                {renamingId === s.id ? (
+                  <input
+                    autoFocus
+                    spellCheck={false}
+                    autoCorrect="off"
+                    value={renameText}
+                    onChange={(e) => setRenameText(e.target.value)}
+                    onBlur={() => commitRename(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(s.id);
+                      if (e.key === "Escape") setRenamingId(null);
                     }}
-                    disabled={regenerating}
-                    className="p-0.5 rounded hover:bg-background text-muted-foreground disabled:opacity-50"
-                    title="用模型重新生成标题"
-                  >
-                    <Sparkles className={cn("w-3 h-3", regenerating && "animate-pulse text-primary")} />
-                  </button>
+                    className="w-full text-sm bg-background border border-input rounded px-1.5 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                ) : (
+                  <span className="block truncate text-sm" title={s.title}>
+                    {renderSearchText(s.title, `${s.id}-title`)}
+                  </span>
                 )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRenamingId(s.id);
-                    setRenameText(s.title);
-                  }}
-                  className="p-0.5 rounded hover:bg-background text-muted-foreground"
-                  title="重命名"
-                >
-                  <Edit3 className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`删除对话 "${s.title}"？`)) {
-                      deleteSession(s.id).catch((err) => toast.error(err.message || String(err)));
-                    }
-                  }}
-                  className="p-0.5 rounded hover:bg-background text-muted-foreground hover:text-destructive"
-                  title="删除"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
+                <span className="pointer-events-none absolute right-0 top-0 hidden max-w-14 bg-accent/95 pl-2 text-[11px] text-muted-foreground group-hover:block">
+                  {formatTime(s.updated_at)}
+                </span>
               </div>
-            )}
-            <span className="shrink-0">{formatTime(s.updated_at)}</span>
+              <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                <span className="truncate flex-1">{s.model}</span>
+                {s.source === "cli" && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-primary/10 text-primary border border-primary/20 shrink-0"
+                    title="本对话由 hebbian-cli 创建"
+                  >
+                    <Terminal className="w-2.5 h-2.5" />
+                    CLI
+                  </span>
+                )}
+                {s.source === "claude" && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] font-medium uppercase tracking-wide bg-amber-500/10 text-amber-600 border border-amber-500/20 shrink-0"
+                    title="从 Claude 导入"
+                  >
+                    <Download className="w-2.5 h-2.5" />
+                    Claude
+                  </span>
+                )}
+                {!renamingId && (
+                  <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    {active && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRegenerateTitle(s.id);
+                        }}
+                        disabled={regenerating}
+                        className="p-0.5 rounded hover:bg-background text-muted-foreground disabled:opacity-50"
+                        title="用模型重新生成标题"
+                      >
+                        <Sparkles className={cn("w-3 h-3", regenerating && "animate-pulse text-primary")} />
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenamingId(s.id);
+                        setRenameText(s.title);
+                      }}
+                      className="p-0.5 rounded hover:bg-background text-muted-foreground"
+                      title="重命名"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (
+                          confirm(`删除对话 "${s.title}"？`) &&
+                          confirm(`再次确认删除对话 "${s.title}"？此操作不可撤销。`)
+                        ) {
+                          deleteSession(s.id).catch((err) => toast.error(err.message || String(err)));
+                        }
+                      }}
+                      className="p-0.5 rounded hover:bg-background text-muted-foreground hover:text-destructive"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
           {snippet && (
-            <div className="text-[11px] text-muted-foreground/80 mt-1 line-clamp-2">
+            <div className="ml-4 text-[11px] text-muted-foreground/80 mt-1 line-clamp-2">
               {renderSearchText(snippet, `${s.id}-snippet`)}
             </div>
           )}
@@ -510,7 +574,7 @@ export function Sidebar() {
             )}
           >
             <BriefcaseBusiness className="w-3.5 h-3.5" />
-            项目
+            Code
           </button>
           <button
             type="button"
@@ -523,7 +587,7 @@ export function Sidebar() {
             )}
           >
             <MessagesSquare className="w-3.5 h-3.5" />
-            全部
+            Chat
           </button>
         </div>
         <Button
@@ -729,14 +793,15 @@ export function Sidebar() {
 
       <div className="flex-1 overflow-y-auto px-2 pb-2 no-drag">
         {projectSidebarMode === "projects" && !selectedProject ? (
-          projects.length === 0 ? (
+          displayProjects.length === 0 ? (
             <div className="text-center text-xs text-muted-foreground py-10 px-4">
-              暂无项目，点击上方加号创建
+              {query.trim() ? "无匹配结果" : "暂无项目，点击上方加号创建"}
             </div>
           ) : (
             <ul className="space-y-1">
-              {projects.map((project) => {
-                const count = sessions.filter((session) => sessionBelongsToProject(session, project)).length;
+              {displayProjects.map((project) => {
+                const countSource = searchResults ?? sessions;
+                const count = countSource.filter((session) => sessionBelongsToProject(session, project)).length;
                 return (
                   <li key={project.id}>
                     <div
@@ -750,7 +815,10 @@ export function Sidebar() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (confirm(`删除项目 "${project.name}"？不会删除已有对话。`)) {
+                            if (
+                              confirm(`删除项目 "${project.name}"？不会删除已有对话。`) &&
+                              confirm(`再次确认删除项目 "${project.name}"？`)
+                            ) {
                               deleteProjectAction(project.id).catch((err) =>
                                 toast.error(err.message || String(err))
                               );

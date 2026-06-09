@@ -87,23 +87,25 @@
       "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
 
-  /* 滚动条样式：窄条 + 透明 track + hover 加深 */
+  /* 全局滚动条：与左侧对话 list 一致的极淡色系 */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-border rounded-full;
+    border-radius: 999px;
+    background: rgba(32, 54, 78, 0.1);
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-muted-foreground/50;
+    background: rgba(32, 54, 78, 0.16);
   }
   /* Firefox */
   * {
     scrollbar-width: thin;
+    scrollbar-color: rgba(32, 54, 78, 0.1) transparent;
   }
 }
 
@@ -175,14 +177,14 @@
   animation: breathe 1.6s ease-in-out infinite;
 }
 
-/* 侧边栏会话光晕：待审批 = 闪烁黄色，完成未读 = 常亮绿色。
+/* 侧边栏会话光晕：待处理 = 闪烁黄色，完成未读 = 绿色外框。
    光晕画在会话条目自身（rounded-md），box-shadow 自动跟随其圆角。 */
 @keyframes glow-pending {
   0%, 100% {
-    box-shadow: inset 0 0 0 1px hsl(45 93% 47% / 0.45), 0 0 10px 0 hsl(45 93% 47% / 0.3);
+    box-shadow: inset 0 0 0 1px hsl(45 93% 47% / 0.5), 0 0 0 0 hsl(45 93% 47% / 0.28), 0 0 10px 0 hsl(45 93% 47% / 0.28);
   }
   50% {
-    box-shadow: inset 0 0 0 1px hsl(45 93% 47% / 0.95), 0 0 18px 2px hsl(45 93% 47% / 0.6);
+    box-shadow: inset 0 0 0 1px hsl(45 93% 47% / 0.95), 0 0 0 3px hsl(45 93% 47% / 0.18), 0 0 18px 2px hsl(45 93% 47% / 0.55);
   }
 }
 
@@ -191,7 +193,7 @@
 }
 
 .glow-finished {
-  box-shadow: inset 0 0 0 1px hsl(142 71% 45% / 0.5), 0 0 12px 0 hsl(142 71% 45% / 0.35);
+  box-shadow: inset 0 0 0 1px hsl(142 71% 45% / 0.65), 0 0 0 2px hsl(142 71% 45% / 0.12), 0 0 12px 0 hsl(142 71% 45% / 0.35);
 }
 
 /* 「跳转到 tool_call」时给目标卡片一个短暂的边框闪烁，

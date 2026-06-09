@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { ChevronDown, Brain, Image, FileText, Music, Video } from "lucide-react";
+import { ChevronDown, Brain, Flame, Image, FileText, Music, Video } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/desktop/ui/lib/utils";
 import {
@@ -25,6 +25,111 @@ import type {
 
 function isProviderEnabled(p: Provider) {
   return p.enabled !== false;
+}
+
+function providerContextWindow(
+  provider: Pick<Provider, "kind" | "model_context_windows">,
+  model: string,
+  entry?: CatalogEntry
+) {
+  return provider.model_context_windows?.[model] ?? entry?.limit?.context ?? contextWindowFor(provider.kind, model);
+}
+
+function ModelReasoningBadges({
+  providerKind,
+  model,
+  reasoning,
+}: {
+  providerKind: string;
+  model: string;
+  reasoning: ReasoningConfig;
+}) {
+  if (!modelSupportsReasoning(providerKind, model)) return null;
+  const enabled = reasoning.enabled ?? true;
+  if (!enabled) return null;
+  const effort: ReasoningEffort = reasoning.effort ?? "extra";
+  return (
+    <span className="model-picker-trigger-badges inline-flex items-center gap-0.5" aria-hidden="true">
+      <Brain className="h-3 w-3" />
+      <span className="inline-flex h-4 items-center gap-0.5 rounded-full px-1 text-[9px] font-semibold leading-none">
+        <Flame className="h-2.5 w-2.5" />
+        {REASONING_EFFORT_LABEL[effort]}
+      </span>
+    </span>
+  );
+}
+
+function ProviderModels({
+  provider,
+  currentProviderId,
+  currentModel,
+  onPick,
+  catalogWithoutPrefix,
+}: {
+  provider: Pick<Provider, "id" | "name" | "kind" | "models" | "default_model" | "model_context_windows">;
+  currentProviderId?: string | null;
+  currentModel?: string | null;
+  onPick: (model: string) => void;
+  catalogWithoutPrefix: Record<string, CatalogEntry>;
+}) {
+  const models = provider.models.length > 0
+    ? provider.models
+    : provider.default_model
+    ? [provider.default_model]
+    : [];
+  return (
+    <div className="model-picker-model-popover absolute bottom-0 left-[calc(100%+8px)] w-80 rounded-lg border border-border bg-card shadow-lg z-[91] overflow-hidden animate-slide-up">
+      <div className="model-picker-model-popover-head px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+        {provider.name} 的模型
+      </div>
+      <div className="model-picker-model-list max-h-[320px] overflow-y-auto py-1">
+        {models.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground italic">没有可选模型</div>
+        ) : (
+          models.map((m) => {
+            const active = provider.id === currentProviderId && m === currentModel;
+            const catalogKey = `${provider.kind}/${m}`;
+            const entry = catalogWithoutPrefix[m] || catalogWithoutPrefix[catalogKey];
+            const ctx = formatContextWindow(providerContextWindow(provider, m, entry));
+            const inputModalities = entry?.modalities?.input || [];
+            const hasReasoning = entry?.reasoning || modelSupportsReasoning(provider.kind, m);
+            const outputLimit = entry?.limit?.output;
+            const outputFormatted = outputLimit ? formatContextWindow(outputLimit) : null;
+            return (
+              <button
+                key={`${provider.id}-${m}`}
+                type="button"
+                onClick={() => onPick(m)}
+                title={`${provider.name} · ${m}（上下文 ${ctx}${outputFormatted ? `，输出 ${outputFormatted}` : ""}）`}
+                className={cn(
+                  "model-picker-model-row w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between gap-2",
+                  active && "bg-primary/10 text-primary"
+                )}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <span className="truncate flex-1 min-w-0">{m}</span>
+                  {inputModalities.length > 0 && (
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      {inputModalities.includes("image") && <Image className="w-3 h-3 text-green-600" />}
+                      {inputModalities.includes("audio") && <Music className="w-3 h-3 text-orange-600" />}
+                      {inputModalities.includes("video") && <Video className="w-3 h-3 text-pink-600" />}
+                      {inputModalities.includes("pdf") && <FileText className="w-3 h-3 text-red-600" />}
+                    </span>
+                  )}
+                  {hasReasoning && <Brain className="w-3 h-3 text-purple-600 shrink-0" />}
+                </div>
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+                  <span>{ctx}</span>
+                  {outputFormatted && <span className="text-muted-foreground/60">/ {outputFormatted}</span>}
+                </div>
+                {active && <span className="text-xs">✓</span>}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -85,7 +190,7 @@ function ReasoningControls({
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      className="px-3 py-2 border-t border-border bg-muted/40 space-y-2"
+      className="model-picker-reasoning px-3 py-2 border-t border-border bg-muted/40 space-y-2"
     >
       {showReasoning && (
         <>
@@ -163,10 +268,8 @@ export function ModelPickerButton() {
   const modelsCatalog = useStore((s) => s.modelsCatalog);
 
   const [open, setOpen] = useState(false);
-  // 默认展开当前对话所用的 provider；用户可手动展开/折叠其他。
-  const [expandedProviderIds, setExpandedProviderIds] = useState<Set<string>>(
-    () => new Set(currentSession ? [currentSession.provider_id] : [])
-  );
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [pickedModel, setPickedModel] = useState<{ providerId: string; model: string } | null>(null);
 
   // 构建不带前缀的 catalog 映射（如 "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"）
   const catalogWithoutPrefix = useMemo(() => {
@@ -184,23 +287,135 @@ export function ModelPickerButton() {
     return map;
   }, [modelsCatalog]);
 
-  // 切换会话时，重置展开集合到新的当前 provider
   useEffect(() => {
     if (!currentSession) return;
-    setExpandedProviderIds(new Set([currentSession.provider_id]));
-  }, [currentSession?.provider_id]);
+    setSelectedProviderId(currentSession.provider_id);
+    setPickedModel(null);
+  }, [currentSession?.provider_id, currentSession?.model]);
 
   useEffect(() => {
     if (!open) return;
-    const onClick = () => setOpen(false);
+    const onClick = () => {
+      setOpen(false);
+      setPickedModel(null);
+    };
     window.addEventListener("click", onClick);
     return () => window.removeEventListener("click", onClick);
   }, [open]);
 
-  if (!currentSession) return null;
-
   const providers = providersFile.providers;
   const enabledProviders = providers.filter(isProviderEnabled);
+
+  if (!currentSession) {
+    const previewProviders: Array<{
+      id: string;
+      name: string;
+      kind: Provider["kind"];
+      models: string[];
+      default_model?: string | null;
+    }> = enabledProviders.length > 0
+      ? enabledProviders
+      : [
+          {
+            id: "mock-anthropic",
+            name: "Anthropic",
+            kind: "anthropic",
+            default_model: "claude-sonnet-4-5",
+            models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+          },
+          {
+            id: "mock-openai",
+            name: "OpenAI",
+            kind: "openai",
+            default_model: "gpt-5-codex",
+            models: ["gpt-5-codex", "gpt-5.1", "o4-mini"],
+          },
+          {
+            id: "mock-deepseek",
+            name: "DeepSeek",
+            kind: "deepseek",
+            default_model: "deepseek-v3.2",
+            models: ["deepseek-v3.2", "deepseek-reasoner", "deepseek-chat"],
+          },
+        ];
+    const selectedPreviewProviderId = selectedProviderId ?? previewProviders[0]?.id ?? null;
+    const selectedPreviewProvider = previewProviders.find((p) => p.id === selectedPreviewProviderId) ?? previewProviders[0];
+    const fallbackModel = pickedModel?.model ?? selectedPreviewProvider?.default_model ?? selectedPreviewProvider?.models[0] ?? "选择模型";
+    const previewReasoning: ReasoningConfig = DEFAULT_REASONING;
+    return (
+      <div className="model-picker relative">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-expanded={open}
+          className="model-picker-trigger inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <span className="truncate max-w-[160px] leading-none">{fallbackModel}</span>
+          {selectedPreviewProvider && (
+            <ModelReasoningBadges providerKind={selectedPreviewProvider.kind} model={fallbackModel} reasoning={previewReasoning} />
+          )}
+          <ChevronDown className="w-3 h-3 opacity-60" />
+        </button>
+        {open && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="model-picker-popup absolute bottom-full left-0 mb-1 w-64 rounded-lg border border-border bg-card shadow-lg z-[90] animate-slide-up"
+          >
+            <div className="model-picker-provider-head px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+              供应商
+            </div>
+            <div className="model-picker-provider-list max-h-[280px] overflow-y-auto py-1">
+              {previewProviders.map((p) => (
+                <div key={p.id} className="model-picker-provider relative">
+                  <button
+                    type="button"
+                    className={cn(
+                      "model-picker-provider-toggle w-full px-3 py-2 text-[12px] font-semibold flex items-center justify-between transition-colors",
+                      p.id === selectedPreviewProviderId && "is-selected"
+                    )}
+                    onClick={() => {
+                      setSelectedProviderId(p.id);
+                      setPickedModel(null);
+                    }}
+                  >
+                    <span>{p.name}</span>
+                    <span className="text-[10px] text-muted-foreground uppercase">{p.kind}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+            {selectedPreviewProvider && (
+              <ProviderModels
+                provider={selectedPreviewProvider}
+                currentProviderId={pickedModel?.providerId ?? selectedPreviewProvider.id}
+                currentModel={pickedModel?.model ?? fallbackModel}
+                onPick={(model) => setPickedModel({ providerId: selectedPreviewProvider.id, model })}
+                catalogWithoutPrefix={catalogWithoutPrefix}
+              />
+            )}
+            {pickedModel && selectedPreviewProvider && (
+              <div className="model-picker-selected-controls">
+                <ReasoningControls
+                  providerKind={selectedPreviewProvider.kind}
+                  model={pickedModel.model}
+                  reasoning={previewReasoning}
+                  catalogEntry={catalogWithoutPrefix[pickedModel.model] || catalogWithoutPrefix[`${selectedPreviewProvider.kind}/${pickedModel.model}`]}
+                  onChange={() => {}}
+                />
+                <button type="button" className="model-picker-done" onClick={() => setOpen(false)}>
+                  完成
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const currentProvider = providers.find(
     (p) => p.id === currentSession.provider_id
   );
@@ -208,14 +423,21 @@ export function ModelPickerButton() {
   async function handleSwitch(providerId: string, model: string) {
     try {
       await switchProviderModel(providerId, model);
+      setPickedModel({ providerId, model });
     } catch (e: any) {
       toast.error(e.message || String(e));
     }
   }
 
+  const selectedProvider = enabledProviders.find((p) => p.id === selectedProviderId) ?? currentProvider ?? enabledProviders[0] ?? null;
+  const selectedModel = pickedModel?.providerId === selectedProvider?.id ? pickedModel.model : currentSession.model;
+  const selectedCatalogEntry = selectedProvider
+    ? catalogWithoutPrefix[selectedModel] || catalogWithoutPrefix[`${selectedProvider.kind}/${selectedModel}`]
+    : undefined;
+
   const currentContext = currentProvider
     ? formatContextWindow(
-        contextWindowFor(currentProvider.kind, currentSession.model)
+        providerContextWindow(currentProvider, currentSession.model, selectedCatalogEntry)
       )
     : "";
   const currentTooltip = currentProvider
@@ -223,7 +445,7 @@ export function ModelPickerButton() {
     : "切换模型";
 
   return (
-    <div className="relative">
+    <div className="model-picker relative">
       <HoverHint hint={currentTooltip} align="end">
         <button
           type="button"
@@ -232,158 +454,100 @@ export function ModelPickerButton() {
             setOpen((v) => {
               const next = !v;
               if (next) {
-                setExpandedProviderIds((ids) => {
-                  if (ids.has(currentSession.provider_id)) return ids;
-                  return new Set([...ids, currentSession.provider_id]);
-                });
+                setSelectedProviderId(currentSession.provider_id);
+                setPickedModel(null);
               }
               return next;
             });
           }}
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          aria-expanded={open}
+          className="model-picker-trigger inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         >
-          <span className="truncate max-w-[160px]">{currentSession.model}</span>
+          <span className="truncate max-w-[160px] leading-none">{currentSession.model}</span>
+          {currentProvider && (
+            <ModelReasoningBadges
+              providerKind={currentProvider.kind}
+              model={currentSession.model}
+              reasoning={currentSession.reasoning ?? DEFAULT_REASONING}
+            />
+          )}
           <ChevronDown className="w-3 h-3 opacity-60" />
         </button>
       </HoverHint>
       {open && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute bottom-full right-0 mb-1 w-72 max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-card shadow-lg z-[90] animate-slide-up"
+          className="model-picker-popup absolute bottom-full left-0 mb-1 w-64 rounded-lg border border-border bg-card shadow-lg z-[90] animate-slide-up"
         >
-          {enabledProviders.length === 0 && (
+          <div className="model-picker-provider-head px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+            供应商
+          </div>
+          {enabledProviders.length === 0 ? (
             <div className="p-4 text-xs text-muted-foreground text-center">
               没有已启用的供应商
             </div>
-          )}
-          {enabledProviders.map((p) => {
-            const isActiveProvider = p.id === currentSession.provider_id;
-            const expanded = expandedProviderIds.has(p.id);
-            const models =
-              p.models.length > 0
-                ? p.models
-                : p.default_model
-                ? [p.default_model]
-                : [];
-            return (
-              <div key={p.id} className="border-b border-border last:border-b-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpandedProviderIds((ids) => {
-                      const next = new Set(ids);
-                      if (next.has(p.id)) next.delete(p.id);
-                      else next.add(p.id);
-                      return next;
-                    })
-                  }
-                  className="w-full px-3 py-1.5 text-[11px] font-semibold text-foreground bg-muted hover:bg-accent flex items-center justify-between transition-colors"
-                >
-                  <span>{p.name}</span>
-                  <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground uppercase">
-                    {p.kind}
-                    <ChevronDown
+          ) : (
+            <div className="model-picker-provider-list max-h-[280px] overflow-y-auto py-1">
+              {enabledProviders.map((p) => {
+                const isSelectedProvider = p.id === selectedProvider?.id;
+                return (
+                  <div key={p.id} className="model-picker-provider relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedProviderId(p.id);
+                        setPickedModel(null);
+                      }}
                       className={cn(
-                        "h-3 w-3 transition-transform",
-                        !expanded && "-rotate-90"
+                        "model-picker-provider-toggle w-full px-3 py-2 text-[12px] font-semibold flex items-center justify-between transition-colors",
+                        isSelectedProvider && "is-selected"
                       )}
-                    />
-                  </span>
-                </button>
-                {expanded && models.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-muted-foreground italic">
-                    （无模型）
+                    >
+                      <span>{p.name}</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground uppercase">
+                        {p.kind}
+                        <ChevronDown className="h-3 w-3 -rotate-90" />
+                      </span>
+                    </button>
                   </div>
-                )}
-                {expanded && models.length > 0 && (
-                  <div>
-                    {models.map((m) => {
-                      const act =
-                        isActiveProvider && m === currentSession.model;
-                      const showControls =
-                        act &&
-                        (modelSupportsReasoning(p.kind, m) ||
-                          modelExposesLongContextToggle(p.kind, m));
-                      const ctx = formatContextWindow(
-                        contextWindowFor(p.kind, m)
-                      );
-                      // 查找 models.dev 元数据（支持带前缀和不带前缀）
-                      const catalogKey = `${p.kind}/${m}`;
-                      const entry = catalogWithoutPrefix[m] || catalogWithoutPrefix[catalogKey];
-                      const inputModalities = entry?.modalities?.input || [];
-                      const hasReasoning = entry?.reasoning;
-                      const outputLimit = entry?.limit?.output;
-                      const outputFormatted = outputLimit
-                        ? formatContextWindow(outputLimit)
-                        : null;
-
-                      return (
-                        <div key={`${p.id}-${m}`}>
-                          <button
-                            onClick={() => handleSwitch(p.id, m)}
-                            title={`${p.name} · ${m}（上下文 ${ctx}${outputFormatted ? `，输出 ${outputFormatted}` : ""}）`}
-                            className={cn(
-                              "w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center justify-between gap-2",
-                              act && "bg-primary/10 text-primary"
-                            )}
-                          >
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <span className="truncate flex-1 min-w-0">{m}</span>
-                              {/* 模态徽章：紧凑版，只显示图标 */}
-                              {inputModalities.length > 0 && (
-                                <span className="flex items-center gap-0.5 shrink-0">
-                                  {inputModalities.includes("image") && (
-                                    <Image className="w-3 h-3 text-green-600" />
-                                  )}
-                                  {inputModalities.includes("audio") && (
-                                    <Music className="w-3 h-3 text-orange-600" />
-                                  )}
-                                  {inputModalities.includes("video") && (
-                                    <Video className="w-3 h-3 text-pink-600" />
-                                  )}
-                                  {inputModalities.includes("pdf") && (
-                                    <FileText className="w-3 h-3 text-red-600" />
-                                  )}
-                                </span>
-                              )}
-                              {/* Reasoning 徽章 */}
-                              {hasReasoning && (
-                                <Brain className="w-3 h-3 text-purple-600 shrink-0" />
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
-                              <span>{ctx}</span>
-                              {outputFormatted && (
-                                <span className="text-muted-foreground/60">/ {outputFormatted}</span>
-                              )}
-                            </div>
-                            {act && <span className="text-xs">✓</span>}
-                          </button>
-                          {showControls && (
-                            <ReasoningControls
-                              providerKind={p.kind}
-                              model={m}
-                              catalogEntry={entry}
-                              reasoning={
-                                currentSession.reasoning ?? DEFAULT_REASONING
-                              }
-                              onChange={(next) => {
-                                void setReasoning(next).catch((e: unknown) => {
-                                  const msg =
-                                    e instanceof Error ? e.message : String(e);
-                                  toast.error(msg);
-                                });
-                              }}
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
+          {selectedProvider && (
+            <ProviderModels
+              provider={selectedProvider}
+              currentProviderId={currentSession.provider_id}
+              currentModel={currentSession.model}
+              onPick={(model) => void handleSwitch(selectedProvider.id, model)}
+              catalogWithoutPrefix={catalogWithoutPrefix}
+            />
+          )}
+          {pickedModel && selectedProvider && (
+            <div className="model-picker-selected-controls">
+              <ReasoningControls
+                providerKind={selectedProvider.kind}
+                model={pickedModel.model}
+                catalogEntry={selectedCatalogEntry}
+                reasoning={currentSession.reasoning ?? DEFAULT_REASONING}
+                onChange={(next) => {
+                  void setReasoning(next).catch((e: unknown) => {
+                    toast.error(e instanceof Error ? e.message : String(e));
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className="model-picker-done"
+                onClick={() => {
+                  setOpen(false);
+                  setPickedModel(null);
+                }}
+              >
+                完成
+              </button>
+            </div>
+          )}
         </div>
       )}
       {currentProvider && (
