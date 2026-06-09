@@ -116,11 +116,15 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
 
                         // 提取可选的 selected / input / checked
                         let selected = v["selected"].as_array().map(|arr| {
-                            arr.iter().filter_map(|x| x.as_i64().map(|n| n as usize)).collect::<Vec<_>>()
+                            arr.iter()
+                                .filter_map(|x| x.as_i64().map(|n| n as usize))
+                                .collect::<Vec<_>>()
                         });
                         let input = v["input"].as_str().map(|s| s.to_string());
                         let checked = v["checked"].as_array().map(|arr| {
-                            arr.iter().filter_map(|x| x.as_i64().map(|n| n as usize)).collect::<Vec<_>>()
+                            arr.iter()
+                                .filter_map(|x| x.as_i64().map(|n| n as usize))
+                                .collect::<Vec<_>>()
                         });
 
                         // msg_id 格式为 "perm-{request_id}" 或 "question-{request_id}"
@@ -135,14 +139,19 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
                         match prefix {
                             "perm" => {
                                 crate::hitl::resolve_hitl_from_island(
-                                    &reader_app, request_id, action,
+                                    &reader_app,
+                                    request_id,
+                                    action,
                                     checked.as_deref(),
                                 );
                             }
                             "question" => {
                                 crate::hitl::answer_question_from_island(
-                                    &reader_app, request_id, action,
-                                    selected.as_deref(), input.as_deref(),
+                                    &reader_app,
+                                    request_id,
+                                    action,
+                                    selected.as_deref(),
+                                    input.as_deref(),
                                 );
                             }
                             _ => {
