@@ -15,6 +15,12 @@ pub struct ClaudeUsageInfo {
     pub five_hour: Option<UsageProgress>,
     pub seven_day: Option<UsageProgress>,
     pub seven_day_sonnet: Option<UsageProgress>,
+    /// 账号邮箱（来自 /api/oauth/profile，拉取失败为 None）。
+    #[serde(default)]
+    pub email: Option<String>,
+    /// 订阅档位标签：Max / Pro / Free 等（同源 profile）。
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,11 +66,50 @@ pub async fn fetch_claude_usage(access_token: &str) -> Result<ClaudeUsageInfo, S
     }
 
     let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    // 邮箱 + 订阅档位另从 profile 接口取（usage 接口不带），失败不影响用量展示。
+    let (email, plan) = fetch_claude_profile(&client, access_token)
+        .await
+        .unwrap_or((None, None));
     Ok(ClaudeUsageInfo {
         five_hour: parse_progress(&data["five_hour"]),
         seven_day: parse_progress(&data["seven_day"]),
         seven_day_sonnet: parse_progress(&data["seven_day_sonnet"]),
+        email,
+        plan,
     })
+}
+
+/// 从 `/api/oauth/profile` 取账号邮箱 + 订阅档位，给 usage 指示器展示。
+/// 任何失败都返回 None——纯展示信息，不该影响用量拉取主流程。
+async fn fetch_claude_profile(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let resp = client
+        .get("https://api.anthropic.com/api/oauth/profile")
+        .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+        .header(header::ACCEPT, "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    let email = v["account"]["email"].as_str().map(|s| s.to_string());
+    // 优先用 has_claude_max/pro 给出干净标签，兜底取 organization_type（去掉 claude_ 前缀）。
+    let plan = if v["account"]["has_claude_max"].as_bool().unwrap_or(false) {
+        Some("Max".to_string())
+    } else if v["account"]["has_claude_pro"].as_bool().unwrap_or(false) {
+        Some("Pro".to_string())
+    } else {
+        v["organization"]["organization_type"]
+            .as_str()
+            .map(|s| s.trim_start_matches("claude_").to_string())
+    };
+    Some((email, plan))
 }
 
 fn parse_progress(v: &serde_json::Value) -> Option<UsageProgress> {

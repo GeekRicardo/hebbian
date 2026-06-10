@@ -1118,6 +1118,10 @@ export interface ClaudeUsageInfo {
   five_hour: UsageProgress | null;
   seven_day: UsageProgress | null;
   seven_day_sonnet: UsageProgress | null;
+  /** 账号邮箱（来自 profile 接口，拉取失败为 null） */
+  email?: string | null;
+  /** 订阅档位：Max / Pro / Free 等 */
+  plan?: string | null;
 }
 
 export interface DeepSeekBalanceEntry {

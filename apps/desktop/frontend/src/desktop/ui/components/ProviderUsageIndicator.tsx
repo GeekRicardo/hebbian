@@ -76,7 +76,14 @@ function ClaudeTooltip({ info }: { info: ClaudeUsageInfo }) {
   }
   return (
     <div className="flex flex-col gap-1.5 text-[11px]">
-      <span className="font-medium text-foreground/80">Claude 用量</span>
+      <div className="flex items-center justify-between gap-4">
+        <span className="font-medium text-foreground/80">Claude 用量</span>
+        {info.plan && (
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-primary">
+            {info.plan}
+          </span>
+        )}
+      </div>
       {rows.map((r) => (
         <div key={r.label} className="flex items-center justify-between gap-4">
           <span className="text-muted-foreground">{r.label}</span>
@@ -87,6 +94,11 @@ function ClaudeTooltip({ info }: { info: ClaudeUsageInfo }) {
       ))}
       {rows.length === 0 && (
         <span className="text-muted-foreground/70">暂无数据</span>
+      )}
+      {info.email && (
+        <div className="mt-1 border-t border-border pt-1 text-muted-foreground/80 truncate">
+          {info.email}
+        </div>
       )}
     </div>
   );
@@ -206,10 +218,15 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           type="button"
           tabIndex={-1}
           className="inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-default"
-          aria-label={`Claude 用量 ${label}`}
+          aria-label={`Claude 用量 ${label}${result.plan ? ` · ${result.plan}` : ""}`}
         >
           <Zap className={cn("w-3 h-3", color)} />
           <span className={cn("text-[10px] tabular-nums leading-none", color)}>{label}</span>
+          {result.plan && (
+            <span className="text-[10px] leading-none text-muted-foreground/70">
+              {result.plan}
+            </span>
+          )}
         </button>
         <div
           className={cn(

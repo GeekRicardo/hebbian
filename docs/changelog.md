@@ -6795,3 +6795,14 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: protocol（新事件，additive）+ agent-core + 三 surface + 前端。**token_stats 语义从 per-run 变 per-turn**：`run_count` 现在 = 模型请求数（非 run 数），TokenStatsPanel 的「第 N 次」相应变为请求数
 - **验证**: heb 真实 OAuth 跑触发工具的任务——单个 run 内 2 次模型请求，`token_stats` `run_count 1→2`、`cum_input 15841→31778` 各更新一次、`last_input` 覆盖为 15937；`[Cache]` 日志 2 条。单测 `token_stats_accumulate` + `tsc --noEmit` + `cargo check --workspace` 通过
 - **留尾巴**: 前端 `usage` 只实时更新前台 `currentSession`；后台 session 靠 per-turn 落盘，切回去 `getSession` 取到一致值。`[Cache]` 日志走专属 `cache` target，`grep cache` 可一键看每次请求命中
+
+### 2026-06-10 — ProviderUsageIndicator 加显示账号邮箱 + 订阅档位
+
+- **Why**: 用户希望 usage 指示器除用量外，也显示当前 Claude 账号的邮箱和订阅档位（Pro/Max），一眼确认用的哪个号。
+- **改动**:
+  - [model-gateway/usage.rs](../crates/model-gateway/src/usage.rs): `ClaudeUsageInfo` 加 `email` + `plan`；`fetch_claude_usage` 拉完用量后另调 `/api/oauth/profile` 取 `account.email` + 派生 `plan`（`has_claude_max`→Max / `has_claude_pro`→Pro / 兜底 `organization_type` 去 `claude_` 前缀），profile 失败不影响用量展示
+  - 前端 [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `ClaudeUsageInfo` 加 `email?` / `plan?`
+  - 前端 [ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx): 按钮主显示加 plan 小标（`⚡ 45% Pro`）；hover tooltip 标题行加 plan 徽章、底部加邮箱
+- **影响范围**: model-gateway（usage）+ desktop 前端。usage 轮询（3 分钟一次）每次多一个 profile 请求，可忽略
+- **验证**: `curl /api/oauth/profile` 确认 `account.email` 取到、`plan` 派生为 `Pro`；`cargo check -p model-gateway` + `tsc --noEmit` 通过
+- **留尾巴**: profile 拉取与 [auth/mod.rs](../crates/model-gateway/src/auth/mod.rs) 的 `fetch_claude_account_uuid` 都打 `/api/oauth/profile`，各取所需字段（登录拿 uuid / 展示拿 email+plan），暂未合并成一个 profile 抓取
