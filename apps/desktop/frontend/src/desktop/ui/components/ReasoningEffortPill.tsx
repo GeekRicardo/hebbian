@@ -6,8 +6,8 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import {
   DEFAULT_REASONING,
   REASONING_EFFORT_LABEL,
-  REASONING_EFFORT_ORDER,
   effortDisplay,
+  getModelEffortOptions,
   modelSupportsReasoning,
 } from "@/desktop/ui/lib/reasoning";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -85,7 +85,7 @@ export function ReasoningEffortPill() {
           onClick={(e) => e.stopPropagation()}
           className="absolute bottom-full left-0 mb-1 min-w-[160px] rounded-lg border border-border bg-card shadow-lg z-[90] overflow-hidden animate-slide-up"
         >
-          {REASONING_EFFORT_ORDER.map((level, i) => {
+          {getModelEffortOptions(provider.kind, session.model, undefined).map((level, i) => {
             const real = effortDisplay(provider.kind, session.model, level);
             return (
               <Fragment key={level}>

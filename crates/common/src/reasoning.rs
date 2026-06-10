@@ -15,12 +15,13 @@
 use serde::{Deserialize, Serialize};
 
 /// 推理强度。具体含义由各 provider 的翻译函数处理：
-/// - Anthropic Opus 4.7（adaptive47）：写到 `output_config.effort`，能用到 `xhigh`。
-/// - Anthropic 4.6 (adaptive)：写到 `thinking.effort`，**只支持 low/medium/high**，
-///   `Extra` 钳成 `high`。
-/// - Anthropic legacy enabled（3.7 / 4.x 旧型号）：用 [`Self::anthropic_legacy_budget_tokens`]。
-/// - OpenAI：见 [`Self::openai_effort_for_model`]，按模型决定 high vs xhigh。
+/// - Anthropic adaptive（CC 兼容 / OAuth）：写到 `output_config.effort`，按模型量程取
+///   `low|medium|high|xhigh|max`（见 [`Self::anthropic_adaptive_effort_for_model`]）。
+/// - Anthropic legacy enabled（3.7 / 4.x 旧型号，直连）：用 [`Self::anthropic_legacy_budget_tokens`]。
+/// - OpenAI：见 [`Self::openai_effort_for_model`]，按模型决定 high vs xhigh（无 max）。
+/// - DeepSeek：只有 high / max 两档（见 [`Self::deepseek_effort`]）。
 ///
+/// 档位对齐 Claude Code 2.1.170：low / medium / high / `Extra`(=xhigh) / `Max`。
 /// 默认 [`ReasoningEffort::Extra`]：希望默认值「尽量想清楚再回」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -28,9 +29,12 @@ pub enum ReasoningEffort {
     Low,
     Medium,
     High,
-    /// 项目内部最高档。具体翻译看上面注释。
+    /// 对齐 Claude Code 的 `xhigh` 档；序列化为 `"extra"`（历史值，未改名以保持持久化兼容）。
     #[default]
     Extra,
+    /// 对齐 Claude Code 的 `max` 档——仅 [`anthropic_supports_high_effort`] 列出的模型支持，
+    /// 其余钳到 high。
+    Max,
 }
 
 impl ReasoningEffort {
@@ -42,36 +46,28 @@ impl ReasoningEffort {
             Self::Medium => 4096,
             Self::High => 16_384,
             Self::Extra => 32_000,
+            Self::Max => 48_000,
         }
     }
 
-    /// 用于 Anthropic 4.6 adaptive `thinking.effort` —— 仅支持 low/medium/high。
-    pub fn anthropic_adaptive46_effort(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High | Self::Extra => "high",
-        }
-    }
-
-    /// 用于 Anthropic 4.7 `output_config.effort` —— 4 档全有，含 `xhigh`。
-    pub fn anthropic_adaptive47_effort(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Extra => "xhigh",
-        }
-    }
-
-    /// 用于 Anthropic adaptive `output_config.effort`，按模型量程选 effort 字符串。
-    /// Opus 4.7 / 4.8 支持到 `xhigh`；4.6 最高 `high`；其余（legacy / 未知）走 4.6 量程。
-    /// 走 Claude Code 兼容 / OAuth 路径时用它把用户的思考强度翻成 effort，
-    /// 而不是写死一档。
+    /// 用于 Anthropic adaptive `output_config.effort`（CC 兼容 / OAuth 路径），按模型量程取值。
+    /// 对齐 Claude Code 2.1.170 的 effort 字符串集 `low|medium|high|xhigh|max`：
+    /// [`anthropic_supports_high_effort`] 列出的模型给到 xhigh/max，其余钳到 high。
     pub fn anthropic_adaptive_effort_for_model(self, model: &str) -> &'static str {
-        match anthropic_thinking_mode(model) {
-            Some(AnthropicThinkingMode::Opus47Adaptive) => self.anthropic_adaptive47_effort(),
-            _ => self.anthropic_adaptive46_effort(),
+        if anthropic_supports_high_effort(model) {
+            match self {
+                Self::Low => "low",
+                Self::Medium => "medium",
+                Self::High => "high",
+                Self::Extra => "xhigh",
+                Self::Max => "max",
+            }
+        } else {
+            match self {
+                Self::Low => "low",
+                Self::Medium => "medium",
+                Self::High | Self::Extra | Self::Max => "high",
+            }
         }
     }
 
@@ -81,7 +77,7 @@ impl ReasoningEffort {
     pub fn deepseek_effort(self) -> &'static str {
         match self {
             Self::Low | Self::Medium | Self::High => "high",
-            Self::Extra => "max",
+            Self::Extra | Self::Max => "max",
         }
     }
 
@@ -93,7 +89,7 @@ impl ReasoningEffort {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
-            Self::Extra => {
+            Self::Extra | Self::Max => {
                 if openai_supports_xhigh(model) {
                     "xhigh"
                 } else {
@@ -198,6 +194,20 @@ pub fn anthropic_thinking_mode(model: &str) -> Option<AnthropicThinkingMode> {
 /// 兼容老 API：是否支持 thinking。
 pub fn anthropic_supports_thinking(model: &str) -> bool {
     anthropic_thinking_mode(model).is_some()
+}
+
+/// 该 Anthropic 模型的 `output_config.effort` 是否支持高档位 `xhigh` / `max`。
+/// 对齐 Claude Code 2.1.170 的量程判定（`VP` / `gNH` 列表一致）：
+/// `opus-4-6` / `opus-4-7` / `opus-4-8` / `sonnet-4-6` / `fable-5` / `mythos-5`。
+/// 其余模型只有 low/medium/high。
+pub fn anthropic_supports_high_effort(model: &str) -> bool {
+    let m = normalize_model_id(model);
+    m.contains("opus-4-6")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+        || m.contains("sonnet-4-6")
+        || m.contains("fable-5")
+        || m.contains("mythos-5")
 }
 
 /// 该 Anthropic 模型是否需要靠 `anthropic-beta: context-1m-2025-08-07` 才能开 1M。
@@ -381,25 +391,45 @@ mod tests {
 
     #[test]
     fn adaptive_effort_scale_by_model() {
-        // 4.7 / 4.8 可达 xhigh
-        assert_eq!(
-            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-8"),
-            "xhigh"
-        );
-        assert_eq!(
-            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-7"),
-            "xhigh"
-        );
-        // 4.6 最高 high（Extra 钳到 high）
-        assert_eq!(
-            ReasoningEffort::Extra.anthropic_adaptive_effort_for_model("claude-opus-4-6"),
-            "high"
-        );
-        // 低档原样透传
-        assert_eq!(
-            ReasoningEffort::Low.anthropic_adaptive_effort_for_model("claude-opus-4-8"),
-            "low"
-        );
+        // 支持高档的模型（opus 4.6/4.7/4.8、sonnet-4.6、fable-5、mythos-5）：Extra→xhigh、Max→max。
+        // 对齐 Claude Code 2.1.170 的 VP/gNH 量程。
+        for m in [
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-fable-5",
+            "claude-mythos-5",
+        ] {
+            assert_eq!(
+                ReasoningEffort::Extra.anthropic_adaptive_effort_for_model(m),
+                "xhigh",
+                "{m}"
+            );
+            assert_eq!(
+                ReasoningEffort::Max.anthropic_adaptive_effort_for_model(m),
+                "max",
+                "{m}"
+            );
+            assert_eq!(
+                ReasoningEffort::Low.anthropic_adaptive_effort_for_model(m),
+                "low",
+                "{m}"
+            );
+        }
+        // 不支持高档的模型（legacy）：Extra / Max 钳到 high。
+        for m in ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"] {
+            assert_eq!(
+                ReasoningEffort::Extra.anthropic_adaptive_effort_for_model(m),
+                "high",
+                "{m}"
+            );
+            assert_eq!(
+                ReasoningEffort::Max.anthropic_adaptive_effort_for_model(m),
+                "high",
+                "{m}"
+            );
+        }
     }
 
     #[test]

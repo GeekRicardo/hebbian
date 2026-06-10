@@ -6680,3 +6680,43 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `cargo test -p agent-core --lib`：462 通过，4 个已有波动测试失败（无新增）
   - 手动 curl 到 sub2api-freemodel 验证：`max_tokens=64000` + `thinking={type:adaptive}`(无 display) + `model=claude-opus-4-8` + 2-block system → 200 OK，完整 event stream 返回
 - **留尾巴**: 直连 Anthropic OAuth 路径不再加 `display: "summarized"`，4.7/4.8 的 stream thinking_delta 可能变空（由 Anthropic API 默认 `display=omitted` 决定）。如果 OAuth 用户发现没有 thinking 输出，需要单独回加 display 字段，区分 `claude_code_compat` 与真实 OAuth 两条路径的 display 策略。
+
+### 2026-06-10 — base_system.md 全面英文化 + CC 兼容请求体深度对齐真实 Claude Code
+
+- **Why**: 用户要把 system prompt 改成英文（结构参考 Claude Code 的 harness、能力按 hebbian 实有的来），并让 CC 兼容模式发出的请求体尽可能贴合真实 Claude Code 客户端流量。对照真 CC 2.1.170 抓包（`c.json`）与反编译二进制（VS Code 扩展 `native-binary/claude`）逐字段比对得出差异清单。
+- **改动**:
+  - [crates/agent-core/prompts/base_system.md](../crates/agent-core/prompts/base_system.md): 整篇重写为英文中性 harness——开头中性身份句（不带产品名，便于 CC / 非 CC 两条路径共用），CC 风格 markdown 分块（# Harness / # Communicating / # Objectivity / # Tools / # Reversibility / # Writing code / # Verification / # Git / # Security / # Output / # Environment / # Memory / # Run modes），内容严格按 hebbian 实有的工具/模式/SEMI 块翻译，不照搬 CC 的 Chrome/Cron/memory-path 等不存在能力
+  - [crates/model-gateway/src/protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs):
+    - `build_system` CC 分支重构为 `[banner, harness 正文]` 两 block；删除 `CLAUDE_CODE_AGENT_DESC` 常量（中性身份句已并入 base_system.md 开头）
+    - `build_body` 新增 `account_uuid` 参数；CC 分支补 `fallbacks: [{model: claude-opus-4-8}]` + `diagnostics: {previous_message_id: null}`；tools 注入 `eager_input_streaming: true`
+    - `metadata.user_id` 改为 `device_id`（机器级稳定 64-hex，按 $HOME 派生）+ `account_uuid`（OAuth 账号）+ `session_id`（首条 transcript 条目派生，同会话稳定、跨会话不同），取代原先每请求 `Uuid::new_v4()`、空 `account_uuid`、16-hex device_id
+    - `apply_cache_control`: 缓存断点 ttl 升到 `1h`，system 末 block 加 `scope: "global"`，message 断点从「倒数第二条」改贴「最后一条」（对齐真 CC）
+  - [crates/model-gateway/src/providers/anthropic.rs](../crates/model-gateway/src/providers/anthropic.rs) / [mod.rs](../crates/model-gateway/src/providers/mod.rs): 两处 build_body 调用透传 `provider.account_id`；user-agent `2.1.150` → `2.1.170`
+  - [crates/agent-core/src/system_prompt.rs](../crates/agent-core/src/system_prompt.rs): 烟雾测试章节断言改英文
+- **调研结论（attribution / billing header）**: 反编译 CC 2.1.170 二进制确认——`CLAUDE_CODE_ATTRIBUTION_HEADER` ∈ {0,false,no,off}（大小写/空白不敏感）会让 `u86()` 返回空串、不发 `x-anthropic-billing-header`，是官方支持的合法 CC 形态。二进制里 `cch` 直连场景写死 `00000`，c.json 抓到的 `cch=825bf` 是客户端在网络层运行时注入的真实值，无法稳定复现。结论：CC 兼容**默认不发 billing block**（等价 attribution=0），既保 prompt cache 稳定前缀又仍是合法 CC 流量。
+- **影响范围**: 仅 model-gateway 的 Anthropic 协议构造 + agent-core 的 system prompt 文本/测试。非破坏兼容（build_body 加参数是内部 API；非 CC 路径行为不变，只是 system 文本变英文）。所有走 Anthropic 的 provider（含直连 OAuth、sub2api 等 CC 兼容代理）都会发新形态。
+- **验证**:
+  - `cargo check --workspace`：通过
+  - `cargo test -p model-gateway --lib`：103 通过（含新增回归测试 `cc_compat_body_matches_real_cc_shape`，固化 banner/无 billing/cache ttl+scope/eager/fallbacks/account_uuid/message cache 全套形态）。注：该 test binary 之前因 `reasoning_signature` 字段欠债（commit 6a568ac 加字段后 openai/deepseek/anthropic 测试构造点未更新）一直编译不过、从未运行；本次顺带补全 7 处缺失字段使其恢复，并修正两个陈旧断言（`user_attachments` 的 image block 现带 cache_control；`cc_compat_effort` 的 thinking 不再期望 display，与现行代码 + 真 CC 一致）
+  - `cargo test -p agent-core --lib`：本次相关的 `system_prompt` 9 个全过；4 个无关失败（storage/tools::bash/tools::read/dispatch）是预先存在的环境敏感/时序测试，未触碰
+- **留尾巴**: `session_id` 用首条消息 hash 派生而非真实会话 id（避免给 ModelRequest 加字段、改 8+ 处构造点）——将来若需与服务端真实会话关联，得在 ModelRequest 加 session 标识透传。base_system.md 的 6-segment 组装（架构 §9.2 旧描述）与实现长期不符（实际只 base+persona），本次未一并整改。`x-stainless-*` 指纹仍是 2.1.150 时期的值，无法从 c.json（只有 body）对照真 CC 2.1.170 的 HTTP 头，未改。
+- **关联**: docs/架构.md §9.7（新增）
+
+### 2026-06-10 — reasoning effort 档位对齐 Claude Code（新增 max 档 + 按模型量程）
+
+- **Why**: 用户反馈 hebbian 的 effort 跟 Claude Code 对不上。反编译 CC 2.1.170 二进制确认其 effort 体系：`output_config.effort` 下发值为 `low/medium/high/xhigh/max` 5 档（`ultracode` 不是独立值，是 xhigh+workflow 标志）；模型量程由 `VP`/`gNH`/`XJH` 判定——`opus-4-6/4-7/4-8 + sonnet-4-6 + fable-5/mythos-5` 支持 xhigh+max，其余只有 low/medium/high。hebbian 原先只有 4 档（low/medium/high/extra），缺 `max`，且 CC 兼容路径对 4.6/sonnet-4.6 错误钳 high、对 fable-5 识别失败也钳 high。
+- **改动**:
+  - [crates/common/src/reasoning.rs](../crates/common/src/reasoning.rs):
+    - `ReasoningEffort` 新增 `Max` 档（保留 `Extra`=xhigh 不改名、序列化仍 `"extra"`——避免动 25 处引用 + 保持 session 持久化兼容）
+    - 新增 `anthropic_supports_high_effort(model)`，对齐 CC 的 VP/gNH 量程
+    - 重写 `anthropic_adaptive_effort_for_model`：按 supports_high_effort 决定——支持的模型给 low/medium/high/xhigh(extra)/max，其余钳 high（删掉旧 `anthropic_adaptive46_effort`/`anthropic_adaptive47_effort` 两个 helper，逻辑内联）
+    - `anthropic_legacy_budget_tokens` / `deepseek_effort` / `openai_effort_for_model` 补 `Max` 分支（OpenAI 无 max 钳 xhigh、DeepSeek→max）
+  - 前端 [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) + [lib/reasoning.ts](../apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts): `ReasoningEffort` 加 `"max"`；镜像 `anthropicSupportsHighEffort`；`getModelEffortOptions` 对 Anthropic 按量程动态返回 5 档 / 3 档；`REASONING_EFFORT_ORDER`/`LABEL` 加 max（「最高」）；`effortDisplay` 对齐
+  - 前端 [ReasoningEffortPill.tsx](../apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx): 选择器从固定 4 档改用 `getModelEffortOptions` 按模型量程显示（ModelPickerButton 已用它，无需改）
+- **影响范围**: common（ReasoningEffort 跨 provider）+ model-gateway（Anthropic effort 下发）+ 前端选择器。非破坏兼容：Extra 未改名、serde `"extra"` 不变、老 session 行为一致；只是支持的模型多了 max 档、4.6/sonnet-4.6/fable-5 现在能到 xhigh/max。
+- **验证**:
+  - `cargo test -p hebbian-common --lib`：9 通过（更新 `adaptive_effort_scale_by_model`：6 个高档模型 Extra→xhigh/Max→max，legacy 钳 high）
+  - `cargo test -p model-gateway --lib`：104 通过（更新 `cc_compat_effort` 的 4.6 断言为 xhigh/max）
+  - `cargo check --workspace` + `apps/desktop` 下 `tsc --noEmit`：通过
+- **留尾巴**: `ReasoningEffortPill` 传 `catalogEntry=undefined`（Anthropic 量程不依赖 catalog；openai/deepseek 模型在该 pill 走 fallback 4 档而非真实 catalog——ModelPickerButton 有真实 catalog 不受影响）。CC 的 `ultracode`（xhigh+workflow）未引入，hebbian 用自己的编排。
+- **关联**: 承接同日「base_system 英文化 + CC 兼容」一条；docs/架构.md §9.7

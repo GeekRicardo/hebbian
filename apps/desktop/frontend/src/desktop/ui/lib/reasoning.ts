@@ -38,18 +38,22 @@ export function getModelEffortOptions(
   model: string,
   entry: CatalogEntry | undefined
 ): ReasoningEffort[] {
-  // 1. 优先用 models.dev catalog
+  // Anthropic：按 Claude Code 的模型量程动态决定档位（不走 models.dev，确保与 CC 对齐）。
+  // 支持高档的模型给 5 档（含 max），其余只有 low/medium/high。
+  if (anthropicSupportsThinking(model) || anthropicSupportsHighEffort(model)) {
+    return anthropicSupportsHighEffort(model)
+      ? ["low", "medium", "high", "extra", "max"]
+      : ["low", "medium", "high"];
+  }
+
+  // 其他 provider：优先 models.dev catalog
   const catalogConfig = getModelReasoningConfig(entry);
   if (catalogConfig) {
     return catalogConfig.effort;
   }
-
-  // 2. Fallback: 根据 provider kind 和模型名判断
   if (!modelSupportsReasoning(providerKind, model)) {
     return [];
   }
-
-  // 默认 4 档
   return ["low", "medium", "high", "extra"];
 }
 
@@ -80,6 +84,23 @@ export function anthropicThinkingMode(
 
 export function anthropicSupportsThinking(model: string): boolean {
   return anthropicThinkingMode(model) !== null;
+}
+
+/**
+ * 该 Anthropic 模型的 output_config.effort 是否支持高档位 xhigh / max。
+ * 对齐 Claude Code 2.1.170：opus-4-6 / 4-7 / 4-8 / sonnet-4-6 / fable-5 / mythos-5。
+ * 其余模型只有 low/medium/high。
+ */
+export function anthropicSupportsHighEffort(model: string): boolean {
+  const m = normalizeModelId(model);
+  return (
+    m.includes("opus-4-6") ||
+    m.includes("opus-4-7") ||
+    m.includes("opus-4-8") ||
+    m.includes("sonnet-4-6") ||
+    m.includes("fable-5") ||
+    m.includes("mythos-5")
+  );
 }
 
 /**
@@ -200,6 +221,7 @@ export const REASONING_EFFORT_ORDER: ReasoningEffort[] = [
   "medium",
   "high",
   "extra",
+  "max",
 ];
 
 export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
@@ -207,6 +229,7 @@ export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
   medium: "中",
   high: "高",
   extra: "极高",
+  max: "最高",
 };
 
 /**
@@ -218,31 +241,29 @@ export function effortDisplay(
   model: string,
   effort: ReasoningEffort
 ): string {
-  if (providerKind === "anthropic") {
-    const mode = anthropicThinkingMode(model);
-    if (mode === "opus_47_adaptive") {
+  if (
+    providerKind === "anthropic" ||
+    anthropicSupportsThinking(model) ||
+    anthropicSupportsHighEffort(model)
+  ) {
+    // CC 兼容 / OAuth：adaptive + output_config.effort，按模型量程下发。
+    if (anthropicSupportsHighEffort(model)) {
+      // low / medium / high / xhigh(=extra) / max
       return effort === "extra" ? "xhigh" : effort;
     }
-    if (mode === "adaptive_46") {
-      // 4.6 没有 xhigh，Extra 钳到 high
-      return effort === "extra" ? "high" : effort;
-    }
-    if (mode === "legacy_enabled") {
-      const budgets = { low: 1024, medium: 4096, high: 16384, extra: 32000 };
-      return `${budgets[effort]} tok`;
-    }
-    return effort;
+    // 不支持高档的模型钳到 high。
+    return effort === "extra" || effort === "max" ? "high" : effort;
   }
   if (providerKind === "openai") {
-    if (effort === "extra") {
+    if (effort === "extra" || effort === "max") {
       return openaiSupportsXhigh(model) ? "xhigh" : "high";
     }
     return effort;
   }
-  // DeepSeek v4 系列：「极高」档实际下发 xhigh，其余原样。
+  // DeepSeek：只有 high / max 两档。
   if (deepseekSupportsReasoning(model)) {
-    if (effort === "extra") {
-      return deepseekSupportsXhigh(model) ? "xhigh" : "high";
+    if (effort === "extra" || effort === "max") {
+      return deepseekSupportsXhigh(model) ? "max" : "high";
     }
     return effort;
   }

@@ -1166,6 +1166,7 @@ mod responses_tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
                     reasoning: String::new(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_1".into(),
                         name: "web_search".into(),
@@ -1201,6 +1202,7 @@ mod responses_tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
                     reasoning: String::new(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![
                         ToolCall {
                             id: "call_1".into(),
@@ -1231,6 +1233,7 @@ mod responses_tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
                     reasoning: String::new(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_3".into(),
                         name: "web_search".into(),
@@ -1275,6 +1278,7 @@ mod responses_tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
                     reasoning: String::new(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_1".into(),
                         name: "web_search".into(),
@@ -1553,6 +1557,7 @@ mod deepseek_compat_tests {
                 TranscriptEntry::Assistant(AssistantEntry {
                     text: String::new(),
                     reasoning: assistant_reasoning.into(),
+                    reasoning_signature: String::new(),
                     tool_calls: vec![ToolCall {
                         id: "call_1".into(),
                         name: "Bash".into(),

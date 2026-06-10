@@ -56,7 +56,7 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                     "anthropic-beta",
                     "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
                 )
-                .header("user-agent", "claude-cli/2.1.150 (external, cli)")
+                .header("user-agent", "claude-cli/2.1.170 (external, cli)")
                 .header("x-app", "cli")
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-stainless-lang", "js")
@@ -76,7 +76,7 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                     "anthropic-beta",
                     "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
                 )
-                .header("user-agent", "claude-cli/2.1.150 (external, cli)")
+                .header("user-agent", "claude-cli/2.1.170 (external, cli)")
                 .header("x-app", "cli")
                 .header("anthropic-dangerous-direct-browser-access", "true")
                 .header("x-stainless-lang", "js")

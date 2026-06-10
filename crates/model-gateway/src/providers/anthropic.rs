@@ -137,7 +137,12 @@ impl ModelClient for AnthropicClient {
     ) -> Result<ModelResponse, ModelError> {
         reject_image_generation_tool(&req)?;
         tracing::info!(model = %req.model, "anthropic complete: dispatched");
-        let body = proto::build_body(&req, false, self.is_claude_code_oauth())?;
+        let body = proto::build_body(
+            &req,
+            false,
+            self.is_claude_code_oauth(),
+            self.provider.account_id.as_deref(),
+        )?;
         let attach_long = needs_long_context_beta(&req);
 
         if let Some(thinking) = body.get("thinking") {
@@ -189,7 +194,12 @@ impl ModelClient for AnthropicClient {
         }
 
         reject_image_generation_tool(&req)?;
-        let body = proto::build_body(&req, true, self.is_claude_code_oauth())?;
+        let body = proto::build_body(
+            &req,
+            true,
+            self.is_claude_code_oauth(),
+            self.provider.account_id.as_deref(),
+        )?;
         let attach_long = needs_long_context_beta(&req);
         tracing::info!(
             model = %req.model,

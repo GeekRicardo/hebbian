@@ -304,7 +304,7 @@ export type MessageAttachment =
  * 推理强度。Anthropic 翻译成 budget_tokens（Extra ≈ 32k），
  * OpenAI 翻译成 reasoning_effort（Extra 钳到 high）。
  */
-export type ReasoningEffort = "low" | "medium" | "high" | "extra";
+export type ReasoningEffort = "low" | "medium" | "high" | "extra" | "max";
 
 export interface ReasoningConfig {
   /**

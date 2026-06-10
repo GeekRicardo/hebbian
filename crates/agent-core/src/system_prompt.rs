@@ -268,16 +268,19 @@ mod tests {
         // 烟雾测试：所有关键章节都在
         let s = BASE_SYSTEM_PROMPT;
         for h in [
-            "# 沟通",
-            "# 客观性与诚实",
-            "# 工具策略",
-            "# 行动的可逆性",
-            "# 写代码",
-            "# 完成与验收",
-            "# Git 与版本控制",
-            "# 安全",
-            "# 输出",
-            "# 环境上下文",
+            "# Harness",
+            "# Communicating",
+            "# Objectivity",
+            "# Tools",
+            "# Reversibility",
+            "# Writing code",
+            "# Verification",
+            "# Git",
+            "# Security",
+            "# Output",
+            "# Environment",
+            "# Memory",
+            "# Run modes",
         ] {
             assert!(s.contains(h), "missing section: {h}");
         }

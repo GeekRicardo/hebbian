@@ -21,9 +21,9 @@ use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
 /// Claude Code OAuth token 必须看到这一行 system 才会被服务端识别为合法 CLI 流量。
+/// CC 兼容模式把它作为 system 第一个 block；harness 正文（base_system.md，中性身份开头）
+/// 作为第二个 block，对应真 CC 的 system 结构。
 const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
-const CLAUDE_CODE_AGENT_DESC: &str =
-    "\nYou are an interactive agent that helps users with software engineering tasks.";
 // DeepSeek v4 走 Anthropic Messages 端点时的 thinking 预算下限（与 protocols/openai.rs
 // 同源；server 拒掉「thinking 启用 & max_tokens 不足」的请求）。
 const DEEPSEEK_HIGH_THINKING_BUDGET: u32 = 32_768;
@@ -51,6 +51,7 @@ pub fn build_body(
     req: &ModelRequest,
     stream: bool,
     claude_code_oauth: bool,
+    account_uuid: Option<&str>,
 ) -> Result<Value, ModelError> {
     let dialect_deepseek = is_deepseek_v4_anthropic_dialect(&req.model);
     let messages: Vec<Value> = req
@@ -210,101 +211,80 @@ pub fn build_body(
         body.as_object_mut().unwrap().remove("system");
     }
 
-    // Claude Code 客户端特征：metadata.user_id + context_management
+    // Claude Code 客户端特征：metadata.user_id + context_management + fallbacks + diagnostics。
+    // billing header（x-anthropic-billing-header）不发——等价于 CLAUDE_CODE_ATTRIBUTION_HEADER=0
+    // 的合法 CC 行为：真实 cch 由 CC 客户端在网络层运行时注入、无法稳定复现，
+    // 发占位值反而坏掉 prompt cache 的稳定前缀。
     if claude_code_oauth {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        "hebbian".hash(&mut h);
-        let device_id = format!("{:016x}", h.finish());
-        let session_id = uuid::Uuid::new_v4();
-        body["metadata"] = json!({
-            "user_id": serde_json::to_string(&serde_json::json!({
-                "device_id": device_id,
-                "account_uuid": "",
-                "session_id": session_id.to_string()
-            })).unwrap()
-        });
+        body["metadata"] = json!({ "user_id": cc_user_id(req, account_uuid) });
         body["context_management"] = json!({
             "edits": [{ "type": "clear_thinking_20251015", "keep": "all" }]
         });
+        body["fallbacks"] = json!([{ "model": "claude-opus-4-8" }]);
+        body["diagnostics"] = json!({ "previous_message_id": null });
     }
 
     if !req.tools.is_empty() {
-        body["tools"] = json!(tool_defs(&req.tools));
+        let mut defs = tool_defs(&req.tools);
+        if claude_code_oauth {
+            // 真 CC 给每个 tool 带 eager_input_streaming，CC 兼容流量对齐。
+            for d in defs.iter_mut() {
+                if let Some(o) = d.as_object_mut() {
+                    o.insert("eager_input_streaming".into(), json!(true));
+                }
+            }
+        }
+        body["tools"] = json!(defs);
     }
 
     // ── Prompt cache 标记 ─────────────────────────────────────────────────
-    // Anthropic 支持最多 4 个 `cache_control: { type: "ephemeral" }` 标记，
-    // 落到任意 content block 上后，从开头到该 block 的所有内容都会被缓存
-    // （5 分钟 TTL；Claude 4 系列上 ~10% 折扣命中读、写入加价）。
-    //
-    // 我们贴 2 个标记：
-    //   1. system 末尾 —— 最稳定的前缀，几乎所有轮都能命中
-    //   2. 倒数第二条 messages 里最后一个 block —— 把"上一轮已经发过的历史"
-    //      整段标缓存，让本轮第一次发就把它写进缓存，下一轮 0 成本读出来
+    // 贴 2 个断点（Anthropic 上限 4 个）：
+    //   1. system 末 block —— ttl 1h + scope global，最稳定前缀，跨会话可共享命中
+    //   2. 最后一条 message 尾 block —— ttl 1h，把到本轮为止的历史整段写进缓存，
+    //      下一轮 0 成本读出（对齐真 CC 的缓存断点位置）
     apply_cache_control(&mut body);
 
     Ok(body)
 }
 
-/// 把 `cache_control: ephemeral` 打到 system 末尾 + 倒数第二条 message 的尾 block。
-/// 必须发生在 `system` / `messages` 都已写入 body 之后。
+/// 打两个缓存断点：system 末 block（ttl 1h + scope global，最稳定前缀，跨会话可共享）
+/// 与最后一条 message 的尾 block（ttl 1h）。必须在 `system` / `messages` 都写入 body 后调用。
 fn apply_cache_control(body: &mut Value) {
-    // system 兼容两种形态：纯字符串 or [content blocks]。
-    // Anthropic cache_control 必须挂在 block object 上，所以纯字符串得升格成 block。
+    // system 兼容两种形态：纯字符串 or [content blocks]。cache_control 必须挂在 block 上，
+    // 纯字符串先升格成 block。
     if let Some(sys) = body.get_mut("system") {
+        let cc = json!({ "type": "ephemeral", "ttl": "1h", "scope": "global" });
         match sys {
             Value::String(s) => {
                 let text = std::mem::take(s);
-                *sys = json!([{
-                    "type": "text",
-                    "text": text,
-                    "cache_control": { "type": "ephemeral" }
-                }]);
+                *sys = json!([{ "type": "text", "text": text, "cache_control": cc }]);
             }
             Value::Array(arr) if !arr.is_empty() => {
-                if let Some(last) = arr.last_mut() {
-                    if let Some(obj) = last.as_object_mut() {
-                        obj.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
-                    }
+                if let Some(obj) = arr.last_mut().and_then(|b| b.as_object_mut()) {
+                    obj.insert("cache_control".into(), cc);
                 }
             }
             _ => {}
         }
     }
 
-    // 把 cache_control 贴到「倒数第二条 message」的最后一个 content block 上。
-    // 这样从 system 到这条消息为止的所有内容都会缓存；下一轮第一条新 user 消息就
-    // 能命中这一段。如果消息只有 1 条，没法贴第二个标记，跳过。
+    // 贴到最后一条 message 的尾 block：从 system 到这条为止全部缓存，下一轮直接命中。
+    // messages 随会话变，只用 ttl，不用 scope（scope 仅适合稳定前缀）。
     if let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-        if msgs.len() >= 2 {
-            let idx = msgs.len() - 2;
-            let target = &mut msgs[idx];
-            // content 可能是 string，也可能是 [block]；统一升格成 [block] 后挂标记
-            if let Some(obj) = target.as_object_mut() {
-                let content = obj.entry("content").or_insert(Value::Null);
-                match content {
-                    Value::String(s) => {
-                        let text = std::mem::take(s);
-                        *content = json!([{
-                            "type": "text",
-                            "text": text,
-                            "cache_control": { "type": "ephemeral" }
-                        }]);
-                    }
-                    Value::Array(arr) if !arr.is_empty() => {
-                        if let Some(last) = arr.last_mut() {
-                            if let Some(block) = last.as_object_mut() {
-                                block.insert(
-                                    "cache_control".to_string(),
-                                    json!({ "type": "ephemeral" }),
-                                );
-                            }
-                        }
-                    }
-                    _ => {}
+        if let Some(target) = msgs.last_mut().and_then(|m| m.as_object_mut()) {
+            let cc = json!({ "type": "ephemeral", "ttl": "1h" });
+            let content = target.entry("content").or_insert(Value::Null);
+            match content {
+                Value::String(s) => {
+                    let text = std::mem::take(s);
+                    *content = json!([{ "type": "text", "text": text, "cache_control": cc }]);
                 }
+                Value::Array(arr) if !arr.is_empty() => {
+                    if let Some(block) = arr.last_mut().and_then(|b| b.as_object_mut()) {
+                        block.insert("cache_control".into(), cc);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -317,26 +297,56 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
         return user_system.map(|s| json!(s)).unwrap_or(Value::Null);
     }
 
-    // Claude Code 兼容 / OAuth 路径用 content-block 数组格式。
-    // 注意：不附加 x-anthropic-billing-header 块——sub2api 等第三方代理不接受它，
-    // 且实际 Claude Code 客户端也不发送（2026-06-10 实测）。
+    // CC 兼容：banner block + harness 正文 block。banner 在前（让服务端识别为合法 CLI 流量），
+    // 正文（base_system.md，中性身份开头）对应真 CC 的 system 结构。
     let banner = json!({ "type": "text", "text": CLAUDE_CODE_BANNER });
     match user_system {
-        Some(s) if s == CLAUDE_CODE_BANNER => {
-            json!([
-                banner,
-                { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
-            ])
-        }
-        Some(s) => json!([
-            banner,
-            { "type": "text", "text": format!("{CLAUDE_CODE_AGENT_DESC}\n\n{s}") }
-        ]),
-        None => json!([
-            banner,
-            { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
-        ]),
+        Some(s) => json!([banner, { "type": "text", "text": s }]),
+        None => json!([banner]),
     }
+}
+
+/// CC 兼容 `metadata.user_id`：CC 客户端把它发成一个 JSON-string。
+/// device_id 机器级稳定、account_uuid 取 OAuth 账号、session_id 由首条消息派生
+/// （同会话稳定、跨会话不同），贴合真 CC 同会话 session_id 不变的特征。
+fn cc_user_id(req: &ModelRequest, account_uuid: Option<&str>) -> String {
+    serde_json::to_string(&json!({
+        "device_id": machine_device_id(),
+        "account_uuid": account_uuid.unwrap_or(""),
+        "session_id": stable_session_id(&req.entries),
+    }))
+    .unwrap_or_default()
+}
+
+/// 机器级稳定的 64-hex device 指纹，按 $HOME 派生（同机稳定、跨机不同）。
+fn machine_device_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let seed = std::env::var("HOME").unwrap_or_default();
+    let mut out = String::with_capacity(64);
+    for i in 0u8..4 {
+        let mut h = DefaultHasher::new();
+        (i, "hebbian-device", seed.as_str()).hash(&mut h);
+        out.push_str(&format!("{:016x}", h.finish()));
+    }
+    out
+}
+
+/// 由首条 transcript 条目派生的稳定 session id（v4 形态）。首条在会话内恒定，
+/// 故同会话所有请求得到同一个 id；跨会话首条不同则 id 不同。
+fn stable_session_id(entries: &[TranscriptEntry]) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let seed = entries.first().map(|e| format!("{e:?}")).unwrap_or_default();
+    let mut bytes = [0u8; 16];
+    for (chunk, salt) in [(0usize, "a"), (8usize, "b")] {
+        let mut h = DefaultHasher::new();
+        (salt, seed.as_str()).hash(&mut h);
+        bytes[chunk..chunk + 8].copy_from_slice(&h.finish().to_be_bytes());
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // uuid v4 version
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
+    uuid::Uuid::from_bytes(bytes).to_string()
 }
 
 fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> Option<Value> {
@@ -717,7 +727,7 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         let content = body["messages"][0]["content"].as_array().unwrap();
 
         assert_eq!(content[0], json!({"type": "text", "text": "what changed?"}));
@@ -725,15 +735,15 @@ mod tests {
             content[1],
             json!({"type": "text", "text": "<file name=\"diff.txt\" media_type=\"text/plain\">\n+hello\n</file>"})
         );
+        // content[2] 是最后一个 block，apply_cache_control 会给它打 cache_control，
+        // 故只校验 attachment 本身的结构。
+        assert_eq!(content[2]["type"], "image");
         assert_eq!(
-            content[2],
+            content[2]["source"],
             json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/webp",
-                    "data": "webpbytes"
-                }
+                "type": "base64",
+                "media_type": "image/webp",
+                "data": "webpbytes"
             })
         );
     }
@@ -749,15 +759,13 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, true).unwrap();
+        let body = build_body(&req, false, true, None).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
+        // CC 兼容：banner block + 用户 system 正文 block（无 billing block）。
         assert_eq!(system.len(), 2);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
-        assert_eq!(
-            system[1]["text"],
-            format!("{CLAUDE_CODE_AGENT_DESC}\n\nBe terse.")
-        );
+        assert_eq!(system[1]["text"], "Be terse.");
     }
 
     #[test]
@@ -771,12 +779,12 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, true).unwrap();
+        let body = build_body(&req, false, true, None).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        assert_eq!(system.len(), 2);
+        // 无用户 system 时只发 banner block。
+        assert_eq!(system.len(), 1);
         assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
-        assert_eq!(system[1]["text"], CLAUDE_CODE_AGENT_DESC);
     }
 
     #[test]
@@ -790,7 +798,7 @@ mod tests {
             reasoning: None,
         };
 
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         // apply_cache_control 会把字符串 system 升格为带 cache_control 的 block 数组。
         let arr = body["system"]
             .as_array()
@@ -822,7 +830,7 @@ mod tests {
                 long_context: None,
             }),
         };
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         assert_eq!(
             body["thinking"]["display"], "summarized",
             "dot variant of opus-4-7 must walk Opus47Adaptive branch (has display:summarized), body={body}"
@@ -846,7 +854,7 @@ mod tests {
                 long_context: None,
             }),
         };
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert!(body["thinking"]["budget_tokens"].is_number());
         // LegacyEnabled 不该带 display
@@ -874,7 +882,7 @@ mod tests {
                     long_context: None,
                 }),
             };
-            build_body(&req, false, true).unwrap()
+            build_body(&req, false, true, None).unwrap()
         };
 
         // 4.8：Extra → xhigh，Low → low
@@ -886,10 +894,14 @@ mod tests {
             build("claude-opus-4-8", Some(ReasoningEffort::Low))["output_config"]["effort"],
             "low"
         );
-        // 4.6：Extra 钳到 high
+        // 4.6 / sonnet-4.6 也支持高档（对齐 CC 量程）：Extra→xhigh、Max→max
         assert_eq!(
             build("claude-opus-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"],
-            "high"
+            "xhigh"
+        );
+        assert_eq!(
+            build("claude-opus-4-6", Some(ReasoningEffort::Max))["output_config"]["effort"],
+            "max"
         );
         // reasoning 未设时用默认 Extra → 4.8 走 xhigh
         assert_eq!(
@@ -902,22 +914,88 @@ mod tests {
             "adaptive"
         );
 
-        // 4.7/4.8 必须带 display:summarized 才外显思考；4.6 不带（adaptive 默认即外显）
-        let b48 = build("claude-opus-4-8", None);
-        assert_eq!(
-            b48["thinking"]["display"], "summarized",
-            "4.8 必须 summarized: {b48}"
-        );
-        let b47 = build("claude-opus-4-7", None);
-        assert_eq!(
-            b47["thinking"]["display"], "summarized",
-            "4.7 必须 summarized: {b47}"
-        );
-        let b46 = build("claude-opus-4-6", None);
+        // CC 兼容的 adaptive thinking 一律不带 display（与 c.json 真 CC 实测一致）：
+        // 直连默认 display=omitted，sub2api 等第三方代理不接受 display 字段，统一不发。
+        for m in ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"] {
+            let b = build(m, None);
+            assert!(
+                b["thinking"].get("display").is_none(),
+                "{m} 不该带 display: {b}"
+            );
+        }
+    }
+
+    /// CC 兼容 body 形态对齐真 CC（c.json 2.1.170 实测）的回归测试：
+    /// banner+harness 双 block 且无 billing block、cache ttl/scope、fallbacks/diagnostics、
+    /// metadata 稳定 session_id+account、tools eager。任一项回退都会被这里拍醒。
+    #[test]
+    fn cc_compat_body_matches_real_cc_shape() {
+        let req = ModelRequest {
+            model: "claude-opus-4-8".into(),
+            system: Some("Be terse.".into()),
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![ToolDefinition {
+                name: "Read".into(),
+                description: "read a file".into(),
+                parameters: json!({ "type": "object" }),
+            }],
+            max_tokens: 8192,
+            reasoning: None,
+        };
+        let body = build_body(&req, false, true, Some("acct-123")).unwrap();
+
+        // system：[banner, 用户正文]，绝不含 billing header block。
+        let system = body["system"].as_array().unwrap();
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system[1]["text"], "Be terse.");
         assert!(
-            b46["thinking"].get("display").is_none(),
-            "4.6 不该带 display: {b46}"
+            !system.iter().any(|b| b["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("x-anthropic-billing-header")),
+            "CC 兼容不应发 billing header block: {body}"
         );
+        // system 末 block：ttl 1h + scope global。
+        assert_eq!(
+            system[1]["cache_control"],
+            json!({ "type": "ephemeral", "ttl": "1h", "scope": "global" })
+        );
+
+        // fallbacks / diagnostics。
+        assert_eq!(body["fallbacks"], json!([{ "model": "claude-opus-4-8" }]));
+        assert_eq!(body["diagnostics"], json!({ "previous_message_id": null }));
+
+        // metadata.user_id 是 JSON-string，含 account + 36 字符 session_id + 非空 device_id。
+        let uid = body["metadata"]["user_id"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(uid).unwrap();
+        assert_eq!(parsed["account_uuid"], "acct-123");
+        assert_eq!(parsed["session_id"].as_str().unwrap().len(), 36);
+        assert!(!parsed["device_id"].as_str().unwrap().is_empty());
+
+        // tools 带 eager_input_streaming。
+        assert_eq!(body["tools"][0]["eager_input_streaming"], true);
+
+        // 最后一条 message 尾 block：ttl 1h，无 scope。
+        let last_block = body["messages"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["content"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert_eq!(
+            last_block["cache_control"],
+            json!({ "type": "ephemeral", "ttl": "1h" })
+        );
+
+        // session_id 同会话稳定：同 entries 再 build 得到同一个 id。
+        let body2 = build_body(&req, false, true, Some("acct-123")).unwrap();
+        let uid2 = body2["metadata"]["user_id"].as_str().unwrap();
+        let parsed2: Value = serde_json::from_str(uid2).unwrap();
+        assert_eq!(parsed["session_id"], parsed2["session_id"]);
     }
 
     // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────
@@ -934,6 +1012,7 @@ mod tests {
             entries.push(TranscriptEntry::Assistant(AssistantEntry {
                 text: String::new(),
                 reasoning: assistant_reasoning.into(),
+                reasoning_signature: String::new(),
                 tool_calls: vec![ToolCall {
                     id: "call_1".into(),
                     name: "Bash".into(),
@@ -968,6 +1047,7 @@ mod tests {
             &req_for_deepseek_anthropic(Some(cfg), "", false, 8192),
             false,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -984,6 +1064,7 @@ mod tests {
             &req_for_deepseek_anthropic(None, "", false, 8192),
             false,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -1001,6 +1082,7 @@ mod tests {
             &req_for_deepseek_anthropic(Some(cfg), "", false, 8192),
             false,
             false,
+            None,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "disabled");
@@ -1015,7 +1097,7 @@ mod tests {
             long_context: None,
         };
         let req = req_for_deepseek_anthropic(Some(cfg), "", true, 8192);
-        let err = build_body(&req, false, false).unwrap_err();
+        let err = build_body(&req, false, false, None).unwrap_err();
         let crate::types::ModelError::Other(msg) = err else {
             panic!("expected ModelError::Other");
         };
@@ -1030,7 +1112,7 @@ mod tests {
             long_context: None,
         };
         let req = req_for_deepseek_anthropic(Some(cfg), "之前的思考", true, 8192);
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         let assistant = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
         let content = assistant["content"].as_array().unwrap();
@@ -1057,7 +1139,7 @@ mod tests {
             max_tokens: 8192,
             reasoning: Some(cfg),
         };
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         assert!(body.get("thinking").is_none());
         assert!(body.get("output_config").is_none());
     }
@@ -1078,7 +1160,7 @@ mod tests {
             max_tokens: 8192,
             reasoning: Some(cfg),
         };
-        let body = build_body(&req, false, false).unwrap();
+        let body = build_body(&req, false, false, None).unwrap();
         // claude-sonnet-4-5 走 LegacyEnabled：thinking.type=enabled + budget_tokens
         assert_eq!(body["thinking"]["type"], "enabled");
         assert!(body["thinking"]["budget_tokens"].is_number());
