@@ -8,6 +8,7 @@ pub mod instrument;
 pub mod protocols;
 pub mod providers;
 pub mod types;
+pub mod usage;
 
 use client::DynModelClient;
 use config::{Provider, ProviderKind};

@@ -220,6 +220,52 @@ async fn test_provider_model(
         .map_err(map_core_err)
 }
 
+// ========== provider usage / balance 查询 ==========
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProviderUsageResult {
+    Claude(model_gateway::usage::ClaudeUsageInfo),
+    Deepseek {
+        balances: model_gateway::usage::DeepSeekBalanceInfo,
+    },
+    Unsupported,
+}
+
+#[tauri::command]
+async fn fetch_provider_usage(
+    app: AppHandle,
+    provider_id: String,
+) -> AppResult<ProviderUsageResult> {
+    use model_gateway::config::AuthMode;
+    let dir = data_dir(&app)?;
+    let file =
+        providers::load(&dir).map_err(|e| AppError::msg(format!("read providers: {e}")))?;
+    let provider = file
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| AppError::msg(format!("provider not found: {provider_id}")))?;
+
+    // Claude OAuth → 拉取用量百分比
+    if provider.auth_mode == AuthMode::OauthClaudeCode {
+        let info = model_gateway::usage::fetch_claude_usage(&provider.api_key)
+            .await
+            .map_err(|e| AppError::msg(format!("fetch claude usage: {e}")))?;
+        return Ok(ProviderUsageResult::Claude(info));
+    }
+
+    // DeepSeek API Key → 拉取账户余额（通过 base_url 识别）
+    if provider.base_url.contains("api.deepseek.com") {
+        let balances = model_gateway::usage::fetch_deepseek_balance(&provider.api_key)
+            .await
+            .map_err(|e| AppError::msg(format!("fetch deepseek balance: {e}")))?;
+        return Ok(ProviderUsageResult::Deepseek { balances });
+    }
+
+    Ok(ProviderUsageResult::Unsupported)
+}
+
 // ========== models.dev catalog（模型元数据目录） ==========
 
 #[tauri::command]
@@ -2734,6 +2780,7 @@ pub fn run() {
             upsert_provider,
             list_provider_presets,
             fetch_provider_models,
+            fetch_provider_usage,
             test_provider_model,
             get_models_catalog,
             refresh_models_catalog,

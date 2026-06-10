@@ -6720,3 +6720,18 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `cargo check --workspace` + `apps/desktop` 下 `tsc --noEmit`：通过
 - **留尾巴**: `ReasoningEffortPill` 传 `catalogEntry=undefined`（Anthropic 量程不依赖 catalog；openai/deepseek 模型在该 pill 走 fallback 4 档而非真实 catalog——ModelPickerButton 有真实 catalog 不受影响）。CC 的 `ultracode`（xhigh+workflow）未引入，hebbian 用自己的编排。
 - **关联**: 承接同日「base_system 英文化 + CC 兼容」一条；docs/架构.md §9.7
+
+### 2026-06-10 — 新增 ProviderUsageIndicator：Claude OAuth 用量 + DeepSeek 余额与本次对话估算费用
+
+- **Why**: 用户希望在输入框右下角直接看到 Claude 额度消耗和 DeepSeek 账户余额，省去打开网页查账的步骤
+- **改动**:
+  - [crates/model-gateway/src/usage.rs](../crates/model-gateway/src/usage.rs)（新增）：`fetch_claude_usage` 调用 `https://api.anthropic.com/api/oauth/usage`（需 `anthropic-beta: oauth-2025-04-20` header），`fetch_deepseek_balance` 调用 `https://api.deepseek.com/user/balance`；两者均返回结构化结果供前端渲染
+  - [crates/model-gateway/src/lib.rs](../crates/model-gateway/src/lib.rs)：pub mod usage
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs)：新增 `fetch_provider_usage` Tauri command，通过 provider 的 `auth_mode == OauthClaudeCode` 判断 Claude、通过 `base_url.contains("api.deepseek.com")` 判断 DeepSeek API key；`kind=Deepseek`（网页登录）返回 Unsupported
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts)：追加 `UsageProgress / ClaudeUsageInfo / DeepSeekBalanceEntry / DeepSeekBalanceInfo / ProviderUsageResult` 类型
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts)：`api.fetchProviderUsage(providerId)`
+  - [apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx)（新增）：3 分钟轮询，Claude 显示 Zap 图标 + 5h 窗口用量百分比，DeepSeek 显示 Wallet 图标 + 账户余额 + 本次对话估算费用（CNY）
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx)：在 `TokenStatsPanel` 左侧插入 `ProviderUsageIndicator`
+- **影响范围**: Desktop surface；model-gateway 新增 `usage` 模块（reqwest 已有）。无协议变更，无向后兼容问题
+- **验证**: `cargo check -p model-gateway` + `cargo check -p hebbian` + `pnpm exec tsc --noEmit` 全部通过
+- **留尾巴**: DeepSeek 定价硬编码在前端（deepseek-v3/r1，CNY，2026-06 价格），日后官方改价需手动更新 `DS_PRICE`；`kind=Deepseek`（网页登录型）不支持余额查询，Unsupported 分支静默不渲染

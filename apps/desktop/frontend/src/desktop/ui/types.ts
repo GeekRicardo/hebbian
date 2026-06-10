@@ -1092,3 +1092,34 @@ export interface SubagentDefinition {
 
 /** Subagent 启用 scope（对应 Rust SubagentScope）。 */
 export type SubagentScope = "Global" | { Project: string };
+
+// -------- Provider Usage / Balance --------
+
+export interface UsageProgress {
+  utilization: number;
+  resets_at: string | null;
+  remaining_seconds: number;
+}
+
+export interface ClaudeUsageInfo {
+  five_hour: UsageProgress | null;
+  seven_day: UsageProgress | null;
+  seven_day_sonnet: UsageProgress | null;
+}
+
+export interface DeepSeekBalanceEntry {
+  currency: string;
+  total_balance: string;
+  granted_balance: string;
+  topped_up_balance: string;
+}
+
+export interface DeepSeekBalanceInfo {
+  available: boolean;
+  entries: DeepSeekBalanceEntry[];
+}
+
+export type ProviderUsageResult =
+  | { kind: "claude" } & ClaudeUsageInfo
+  | { kind: "deepseek"; balances: DeepSeekBalanceInfo }
+  | { kind: "unsupported" };

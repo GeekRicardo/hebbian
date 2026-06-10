@@ -30,6 +30,7 @@ import { ReasoningEffortPill } from "@/desktop/ui/components/ReasoningEffortPill
 import { RunModeChip } from "@/desktop/ui/components/RunModeChip";
 import { SlashCommandButton } from "@/desktop/ui/components/SlashCommandButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
+import { ProviderUsageIndicator } from "@/desktop/ui/components/ProviderUsageIndicator";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { PathTypeIcon } from "@/desktop/ui/components/workspaceFields";
 import { shouldSuppressBareEnterOnDocument } from "@/desktop/ui/lib/keyboardShortcuts";
@@ -105,6 +106,7 @@ export function ChatInput({
   const setPendingAllowedPaths = useStore((s) => s.setPendingAllowedPaths);
   const currentSession = useStore((s) => s.currentSession);
   const projects = useStore((s) => s.projects);
+  const providersFile = useStore((s) => s.providersFile);
 
   // activeWorkdir 用 pending 即可：openSession 会同步 pending 值。
   const activeWorkdir = pendingWorkdir;
@@ -1270,6 +1272,15 @@ export function ChatInput({
                 </HoverHint>
               )}
               <div className="flex items-center gap-0.5">
+                <ProviderUsageIndicator
+                  provider={
+                    currentSession?.provider_id
+                      ? (providersFile.providers.find((p) => p.id === currentSession.provider_id) ?? null)
+                      : null
+                  }
+                  tokenStats={tokenStats}
+                  model={currentSession?.model ?? ""}
+                />
                 <TokenStatsPanel
                   stats={tokenStats}
                   contextUsage={contextUsage}

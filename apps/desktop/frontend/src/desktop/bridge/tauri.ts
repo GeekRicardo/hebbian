@@ -26,6 +26,7 @@ import type {
   Provider,
   ProviderModelTestResult,
   ProviderPreset,
+  ProviderUsageResult,
   ProvidersFile,
   ReasoningConfig,
   RevertResult,
@@ -60,6 +61,8 @@ export const api = {
     invoke<ProviderPreset[]>("list_provider_presets"),
   fetchProviderModels: (provider: Provider) =>
     invoke<FetchedModel[]>("fetch_provider_models", { provider }),
+  fetchProviderUsage: (providerId: string) =>
+    invoke<ProviderUsageResult>("fetch_provider_usage", { providerId }),
   testProviderModel: (provider: Provider, model: string) =>
     invoke<ProviderModelTestResult>("test_provider_model", { provider, model }),
   getModelsCatalog: () => invoke<CatalogCache>("get_models_catalog"),
