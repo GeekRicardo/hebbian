@@ -579,7 +579,7 @@ fn prepend_workspace_update(text: String, pending: &[PathBuf]) -> String {
         return text;
     }
     let mut s = String::from("<workspace-update>\n");
-    s.push_str("以下路径已被加入本次对话的允许访问范围（运行时追加）：\n");
+    s.push_str("以下目录已被加入本次对话的可访问范围（运行时追加）：\n");
     for p in pending {
         s.push_str(&format!("  - {}\n", p.display()));
     }
