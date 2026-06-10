@@ -24,9 +24,6 @@ use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
 const CLAUDE_CODE_BANNER: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 const CLAUDE_CODE_AGENT_DESC: &str =
     "\nYou are an interactive agent that helps users with software engineering tasks.";
-const CLAUDE_CODE_BILLING_PREFIX: &str =
-    "x-anthropic-billing-header: cc_version=2.1.150.474; cc_entrypoint=cli; cch=bb1ee;";
-
 // DeepSeek v4 走 Anthropic Messages 端点时的 thinking 预算下限（与 protocols/openai.rs
 // 同源；server 拒掉「thinking 启用 & max_tokens 不足」的请求）。
 const DEEPSEEK_HIGH_THINKING_BUDGET: u32 = 32_768;
@@ -156,6 +153,13 @@ pub fn build_body(
         }
     }
 
+    // Claude Code 兼容 / OAuth 需要 adaptive thinking。adaptive 要求 max_tokens 远大于
+    // 默认 8192：实测太小会触发 sub2api 代理的 unknown_messages_shape 错误。
+    // 抬到 64000（与 claude-code 客户端一致），放在 body 构造前生效。
+    if claude_code_oauth && max_tokens < 64000 {
+        max_tokens = 64000;
+    }
+
     let mut body = json!({
         "model": req.model,
         "max_tokens": max_tokens,
@@ -167,6 +171,13 @@ pub fn build_body(
     // effort 取用户选的思考强度（按模型量程：4.7/4.8 可达 xhigh，4.6 最高 high），
     // 不再写死 high——否则思考强度选择对所有走 CC 兼容 / OAuth 的 provider 完全失效。
     // reasoning 未设时用 ReasoningEffort 默认（Extra → 4.8 走 xhigh），符合「默认想清楚」。
+    //
+    // display 字段：不同代理行为不同。
+    // - 直连 Anthropic API（OAuth）：4.7/4.8 的 adaptive 默认 display=omitted，思考会计费但
+    //   不发 stream thinking_delta，必须加 `"display": "summarized"` 才外显推理摘要。
+    // - sub2api 等第三方代理：不接受 display 字段（400 unknown_messages_shape），
+    //   且代理服务端可能自行决定是否返回 thinking_delta。
+    // 这里统一不加 display，各代理按各自默认行为处理。
     if claude_code_oauth {
         let effort = req
             .reasoning
@@ -174,18 +185,7 @@ pub fn build_body(
             .map(|c| c.effective_effort())
             .unwrap_or_default()
             .anthropic_adaptive_effort_for_model(&req.model);
-        // 4.7/4.8 的 adaptive 默认 display=omitted：思考会计费但既不进响应也不发
-        // stream thinking_delta，UI 端推理一片空白。必须显式 summarized 才外显推理摘要
-        // （实测加 summarized 后 stream 正常发 thinking_delta）。4.6 及以下 adaptive
-        // 默认即外显，不额外加 display。
-        let mut thinking = json!({ "type": "adaptive" });
-        if matches!(
-            anthropic_thinking_mode(&req.model),
-            Some(AnthropicThinkingMode::Opus47Adaptive)
-        ) {
-            thinking["display"] = json!("summarized");
-        }
-        thinking_block = Some(thinking);
+        thinking_block = Some(json!({ "type": "adaptive" }));
         output_config = Some(json!({ "effort": effort }));
     }
 
@@ -317,23 +317,22 @@ fn build_system(user_system: Option<&str>, claude_code_oauth: bool) -> Value {
         return user_system.map(|s| json!(s)).unwrap_or(Value::Null);
     }
 
-    let billing = json!({ "type": "text", "text": CLAUDE_CODE_BILLING_PREFIX });
+    // Claude Code 兼容 / OAuth 路径用 content-block 数组格式。
+    // 注意：不附加 x-anthropic-billing-header 块——sub2api 等第三方代理不接受它，
+    // 且实际 Claude Code 客户端也不发送（2026-06-10 实测）。
     let banner = json!({ "type": "text", "text": CLAUDE_CODE_BANNER });
     match user_system {
         Some(s) if s == CLAUDE_CODE_BANNER => {
             json!([
-                billing,
                 banner,
                 { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
             ])
         }
         Some(s) => json!([
-            billing,
             banner,
             { "type": "text", "text": format!("{CLAUDE_CODE_AGENT_DESC}\n\n{s}") }
         ]),
         None => json!([
-            billing,
             banner,
             { "type": "text", "text": CLAUDE_CODE_AGENT_DESC }
         ]),
@@ -753,11 +752,10 @@ mod tests {
         let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        assert_eq!(system.len(), 3);
-        assert_eq!(system[0]["text"], CLAUDE_CODE_BILLING_PREFIX);
-        assert_eq!(system[1]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
         assert_eq!(
-            system[2]["text"],
+            system[1]["text"],
             format!("{CLAUDE_CODE_AGENT_DESC}\n\nBe terse.")
         );
     }
@@ -776,10 +774,9 @@ mod tests {
         let body = build_body(&req, false, true).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
-        assert_eq!(system.len(), 3);
-        assert_eq!(system[0]["text"], CLAUDE_CODE_BILLING_PREFIX);
-        assert_eq!(system[1]["text"], CLAUDE_CODE_BANNER);
-        assert_eq!(system[2]["text"], CLAUDE_CODE_AGENT_DESC);
+        assert_eq!(system.len(), 2);
+        assert_eq!(system[0]["text"], CLAUDE_CODE_BANNER);
+        assert_eq!(system[1]["text"], CLAUDE_CODE_AGENT_DESC);
     }
 
     #[test]

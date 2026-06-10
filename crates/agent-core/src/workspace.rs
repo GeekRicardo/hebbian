@@ -60,7 +60,10 @@ impl Workspace {
         let resolve = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
             paths
                 .into_iter()
-                .map(|p| if p.is_relative() { workdir.join(&p) } else { p })
+                .map(|p| {
+                    let abs = if p.is_relative() { workdir.join(&p) } else { p };
+                    std::fs::canonicalize(&abs).unwrap_or(abs)
+                })
                 .collect()
         };
         let initial = dedup(resolve(initial_allowed_paths));
@@ -114,7 +117,8 @@ impl Workspace {
 
     /// 运行时扩展允许路径：已存在则跳过，否则进 pending（下次 user message 通知模型）。
     pub fn add_allowed_path(&self, path: impl Into<PathBuf>) {
-        let path = path.into();
+        let raw: PathBuf = path.into();
+        let path = std::fs::canonicalize(&raw).unwrap_or(raw);
         if self.initial_allowed_paths.iter().any(|d| d == &path) {
             return;
         }

@@ -629,7 +629,7 @@ pub async fn run_loop(
         };
 
         let req = ModelRequest {
-            model: String::new(),
+            model: model_id.clone().unwrap_or_default(),
             system: Some(combined_system),
             entries: transcript.entries.clone(),
             tools: tool_defs,
