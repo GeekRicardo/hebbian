@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
     // （target="permission"，[Permission:*] / [AutoMode] 前缀）的动作日志默认放行到 info，
     // 让「解析/匹配/审批/记忆/判官」始终可见且可一键 grep，又不抬高全局噪声。
     // RUST_LOG 设置时以其为准。
-    observability::init("warn,memory=info,permission=info");
+    observability::init("warn,memory=info,permission=info,cache=info");
     let cli = Cli::parse();
 
     match cli.command {

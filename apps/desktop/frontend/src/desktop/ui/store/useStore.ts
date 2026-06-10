@@ -28,6 +28,7 @@ import type {
   SessionMeta,
   StreamingAssistantPart,
   TodoItem,
+  TokenStats,
   ToolInfo,
   WorkspaceProject,
   WorkspaceProjectInput,
@@ -2281,6 +2282,30 @@ export const useStore = create<AppState>((set, get) => ({
                   [sessionId]: e.duration_ms,
                 },
               }));
+            }
+            // turn 级 usage：run 进行中每次模型请求完成就累加 token_stats，前台实时刷新
+            // cache 指示器。后端已 per-turn 落盘，切回来 getSession 取到的值一致。
+            if (e.type === "usage") {
+              set((state) => {
+                if (state.currentSession?.id !== sessionId) return state;
+                const prev = state.currentSession.token_stats;
+                const next: TokenStats = {
+                  input_tokens: (prev?.input_tokens ?? 0) + e.input_tokens,
+                  output_tokens: (prev?.output_tokens ?? 0) + e.output_tokens,
+                  cache_read_tokens: (prev?.cache_read_tokens ?? 0) + e.cache_read_tokens,
+                  cache_creation_tokens:
+                    (prev?.cache_creation_tokens ?? 0) + e.cache_creation_tokens,
+                  run_count: (prev?.run_count ?? 0) + 1,
+                  last_input_tokens: e.input_tokens,
+                  last_output_tokens: e.output_tokens,
+                  last_cache_read_tokens: e.cache_read_tokens,
+                  last_cache_creation_tokens: e.cache_creation_tokens,
+                };
+                return {
+                  currentSession: { ...state.currentSession, token_stats: next },
+                };
+              });
+              return;
             }
             set((state) => {
               const slot = state.sessionStreams[sessionId];

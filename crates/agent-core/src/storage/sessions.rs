@@ -290,12 +290,24 @@ impl TokenStats {
         self.cache_read_tokens += delta.cache_read_tokens;
         self.cache_creation_tokens += delta.cache_creation_tokens;
         self.run_count += delta.run_count;
-        // last_* 覆盖为本次 run 的用量（delta 即单次 run 的统计），供 hover 看最新一次。
+        // last_* 覆盖为本次 delta（一次模型请求）的用量，供 hover 看最新一次。
         self.last_input_tokens = delta.input_tokens;
         self.last_output_tokens = delta.output_tokens;
         self.last_cache_read_tokens = delta.cache_read_tokens;
         self.last_cache_creation_tokens = delta.cache_creation_tokens;
     }
+}
+
+/// per-turn 累加一次模型请求的 token 用量到 session.token_stats（append 一行 MetaUpdate）。
+/// agent_loop 每次模型请求完成时调用，让 cache 指示器在 run 进行中就能实时刷新。
+/// 失败不传染（拿不到 session / 写盘失败都不该影响主请求结果）。
+pub fn bump_token_stats(data_dir: &Path, session_id: &str, delta: TokenStats) {
+    let _ = update_meta(data_dir, session_id, |session| {
+        let mut stats = session.token_stats.unwrap_or_default();
+        stats.accumulate(delta);
+        session.token_stats = Some(stats);
+        Ok(())
+    });
 }
 
 fn default_stream() -> bool {

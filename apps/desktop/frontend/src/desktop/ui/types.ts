@@ -608,6 +608,14 @@ export type EngineEvent =
       duration_ms: number;
     }
   | {
+      /** turn 级 token 用量增量（run 进行中就来）：前端实时累加 token_stats、刷新 cache 指示器。 */
+      type: "usage";
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_creation_tokens: number;
+    }
+  | {
       /** 架构 §4.12：Run 进入挂起态。 */
       type: "run_suspended";
       reason: string;

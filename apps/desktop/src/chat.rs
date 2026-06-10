@@ -4,7 +4,7 @@ use crate::hebisland_client::HebislandClient;
 use crate::hitl::HitlState;
 use agent_core::storage::{
     sessions::{
-        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session, TokenStats,
+        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session,
     },
     sessions_dir::{self as sessions_dir, PartialFragment},
     settings as global_settings,
@@ -437,22 +437,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         state.forget(&hitl);
     }
 
-    // 不论 Done / Cancelled / Failed 都把这一轮的 token 用量累加进 session.json，
-    // 让前端 TokenStatsPanel 即使在中断/失败的情况下也能反映已扣费的部分。
-    if let Some(usage) = summary.usage {
-        accumulate_session_tokens(
-            data_dir,
-            &args.session_id,
-            TokenStats {
-                input_tokens: usage.input,
-                output_tokens: usage.output,
-                cache_read_tokens: usage.cache_read,
-                cache_creation_tokens: usage.cache_creation,
-                run_count: 1,
-                ..Default::default()
-            },
-        );
-    }
+    // token_stats 由 agent_loop 在每次模型请求完成时 per-turn 落盘
+    // （sessions::bump_token_stats）：run 进行中前端就能实时刷新 cache 指示器，
+    // 中断/失败也保住已完成请求的扣费。这里不再 run-end 累加——否则与 per-turn 重复计数。
 
     // 把 workspace 运行时状态（已宣告 + 仍 pending）写回 session.json。
     // - append_user 已经把上一轮的 pending drain 进 announced，下一轮也能恢复
@@ -1292,16 +1279,6 @@ fn persist_workspace_runtime_dirs(
     });
 }
 
-/// 把这一轮 run 的 token delta 累加进 session.json 的 token_stats 字段。
-/// 失败不传染（拿不到 session 文件 / 序列化失败也不能影响主请求结果）。
-fn accumulate_session_tokens(data_dir: &Path, session_id: &str, delta: TokenStats) {
-    let _ = sessions::update_meta(data_dir, session_id, |session| {
-        let mut stats = session.token_stats.unwrap_or_default();
-        stats.accumulate(delta);
-        session.token_stats = Some(stats);
-        Ok(())
-    });
-}
 
 /// 计算指定 session 的上下文用量。优先从 /v1/models 获取模型的 context_length，
 /// 拉不到时回退到预设查表。与发起 run 时看到的口径一致。
@@ -1854,6 +1831,17 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
         }),
         RunFinished { duration_ms, .. } => Some(EngineEvent::RunFinished {
             duration_ms: *duration_ms,
+        }),
+        Usage {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+        } => Some(EngineEvent::Usage {
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+            cache_read_tokens: *cache_read_tokens,
+            cache_creation_tokens: *cache_creation_tokens,
         }),
         RunFailed { error } => Some(EngineEvent::Error {
             message: error.message.clone(),

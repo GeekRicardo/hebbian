@@ -6780,3 +6780,18 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: agent-core（TokenStats，三 surface 共用）+ 前端展示。每次 run 结束 `accumulate`→落盘→前端 `getSession` 重渲染（现有机制，天然「每次请求后更新」）。向后兼容：`last_*` serde default，旧 session 加载为 0、hover 本轮段显示「本轮暂无 token 记录」直到下一次 run
 - **验证**: heb CLI 真实 OAuth 连发两轮——token_stats 演化正确：`cum_input 15823→31351`（累加）、`last_input` 覆盖为 `15528`、`run_count 1→2`；hover 平均 30866/31351≈98%、最新 15433/15528≈99%。单测 + `tsc --noEmit` 通过
 - **留尾巴**: 「平均」口径用累计 `cache_read/input`（整体命中率），非「每轮命中率算术平均」——前者更反映整体缓存效率、不被小请求扭曲。另发现 pre-existing 失败 `list_self_heals_pretty_json_session_files`（list 自愈 "EOF while parsing object"，HEAD 即失败，与本次无关），未在此修
+
+### 2026-06-10 — cache 指示器 turn 级实时更新 + 每次请求打 cache 日志
+
+- **Why**: 用户「输入框下方 cache 指示器每次模型请求之后都要更新」「agent_loop 还在跑的时候每次模型请求完成没更新指示器」。原 token_stats 只在 **run 结束**累加一次（surface 的 `accumulate_session_tokens` 用 `summary.usage` 整 run 累计），所以一个 run 内的工具调用循环、中途多次模型请求完成时指示器不动，要等整 run 结束才跳。另外要把每次请求的缓存命中打到日志便于诊断。
+- **改动**:
+  - [protocol/event.rs](../crates/protocol/src/event.rs): 新增 `EventPayload::Usage`（turn 级 token 增量，run 进行中就 emit）
+  - [agent-core/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `record_request_usage`——每次模型请求完成（Done + ToolCalls 两分支）统一做三件事：① 打 `[Cache]` 日志到专属 `cache` target；② emit `Usage` 事件让前端实时刷指示器；③ per-turn 落盘 `token_stats`（崩溃/取消也保住已完成请求的扣费）
+  - [agent-core/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): 新增 `bump_token_stats`（per-turn 累加 helper，下沉自原 surface 的 accumulate）
+  - **去掉** chat.rs / cli/daemon.rs / web-server/session.rs 三处 run-end accumulate（改 per-turn 后再 run-end 累加会重复计数）
+  - [engine/mod.rs](../apps/desktop/src/engine/mod.rs) + [chat.rs](../apps/desktop/src/chat.rs): `EngineEvent::Usage` + `agent_event_to_engine_event` 翻译
+  - [cli/main.rs](../apps/cli/src/main.rs) + [desktop/lib.rs](../apps/desktop/src/lib.rs): 日志 filter 加 `cache=info` 放行专属 cache target（web-server 全局 info 已显示）
+  - 前端 [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts) + [useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `usage` 事件 → 实时累加前台 `currentSession.token_stats`（cumulative += delta、last_* = delta、run_count += 1）
+- **影响范围**: protocol（新事件，additive）+ agent-core + 三 surface + 前端。**token_stats 语义从 per-run 变 per-turn**：`run_count` 现在 = 模型请求数（非 run 数），TokenStatsPanel 的「第 N 次」相应变为请求数
+- **验证**: heb 真实 OAuth 跑触发工具的任务——单个 run 内 2 次模型请求，`token_stats` `run_count 1→2`、`cum_input 15841→31778` 各更新一次、`last_input` 覆盖为 15937；`[Cache]` 日志 2 条。单测 `token_stats_accumulate` + `tsc --noEmit` + `cargo check --workspace` 通过
+- **留尾巴**: 前端 `usage` 只实时更新前台 `currentSession`；后台 session 靠 per-turn 落盘，切回去 `getSession` 取到一致值。`[Cache]` 日志走专属 `cache` target，`grep cache` 可一键看每次请求命中

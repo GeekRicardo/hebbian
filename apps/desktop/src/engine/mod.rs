@@ -71,6 +71,14 @@ pub enum EngineEvent {
     RunFinished {
         duration_ms: u64,
     },
+    /// 一次模型请求完成的 token 用量增量（turn 级，run 进行中就来）。前端据此实时
+    /// 累加 token_stats、刷新输入框下方的 cache 指示器，不必等整个 run 结束。
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+    },
     /// Run 进入挂起态（架构 §4.12）。surface 据此渲染 BackgroundTaskPanel 占位。
     RunSuspended {
         /// "background_task" / "cron" / "manual"

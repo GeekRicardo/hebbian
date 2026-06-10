@@ -25,7 +25,7 @@ use agent_core::{
     read_state::ReadStateTracker,
     run_mode::RunMode,
     storage::{
-        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role, TokenStats},
+        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role},
         sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
@@ -522,23 +522,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
 
     runtime.clear_active();
 
-    // 累加 token stats
-    if let Some(usage) = summary.usage {
-        let delta = TokenStats {
-            input_tokens: usage.input,
-            output_tokens: usage.output,
-            cache_read_tokens: usage.cache_read,
-            cache_creation_tokens: usage.cache_creation,
-            run_count: 1,
-            ..Default::default()
-        };
-        let _ = sessions::update_meta(data_dir, session_id, |sess| {
-            let mut stats = sess.token_stats.unwrap_or_default();
-            stats.accumulate(delta);
-            sess.token_stats = Some(stats);
-            Ok(())
-        });
-    }
+    // token_stats 由 agent_loop per-turn 落盘（sessions::bump_token_stats），不再 run-end 累加。
 
     let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
 

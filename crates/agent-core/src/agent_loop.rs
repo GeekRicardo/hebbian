@@ -48,6 +48,55 @@ const MAX_STOP_INJECTIONS: u32 = 3;
 const MAX_MODEL_RETRIES: u32 = 5;
 
 /// 第 `attempt`（从 1 起）次重试前的退避时长：1s / 2s / 4s / 8s / 16s 封顶。
+/// 一次模型请求完成后的统一记账，三件事一起做：
+/// 1. 打 cache 日志到专属 `cache` target（info 级，各 surface `cache=info` 白名单放行，
+///    每次请求命中情况「始终可见、可一键 `grep cache`」——和 memory/permission 同套路）；
+/// 2. emit `Usage` 事件让前端实时刷新 cache 指示器（不必等整个 run 结束）；
+/// 3. per-turn 落盘到 session.token_stats（run 进行中就累加，崩溃/取消也保住已扣费部分）。
+fn record_request_usage<F: Fn(EventPayload)>(
+    usage: &model_gateway::types::Usage,
+    emit: &F,
+    data_dir: Option<&std::path::Path>,
+    session_id: Option<&str>,
+) {
+    let hit_pct = if usage.input_tokens > 0 {
+        usage.cache_read_tokens * 100 / usage.input_tokens
+    } else {
+        0
+    };
+    info!(
+        target: "cache",
+        input = usage.input_tokens,
+        cache_read = usage.cache_read_tokens,
+        cache_write = usage.cache_creation_tokens,
+        hit_pct,
+        "[Cache] 命中 {hit_pct}% · read {} / input {} · write {}",
+        usage.cache_read_tokens,
+        usage.input_tokens,
+        usage.cache_creation_tokens,
+    );
+    emit(EventPayload::Usage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+    });
+    if let (Some(dd), Some(sid)) = (data_dir, session_id) {
+        crate::storage::sessions::bump_token_stats(
+            dd,
+            sid,
+            crate::storage::sessions::TokenStats {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                run_count: 1,
+                ..Default::default()
+            },
+        );
+    }
+}
+
 fn model_retry_delay(attempt: u32) -> std::time::Duration {
     let secs = 1u64 << attempt.saturating_sub(1).min(4);
     std::time::Duration::from_secs(secs)
@@ -764,6 +813,7 @@ pub async fn run_loop(
                     text_len = text.len(),
                     "model done"
                 );
+                record_request_usage(&usage, &emit, data_dir.as_deref(), session_id.as_deref());
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
                 total_cache_read_tokens += usage.cache_read_tokens;
@@ -857,6 +907,7 @@ pub async fn run_loop(
                     calls_count = calls.len(),
                     "model requested tool calls"
                 );
+                record_request_usage(&usage, &emit, data_dir.as_deref(), session_id.as_deref());
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
                 total_cache_read_tokens += usage.cache_read_tokens;

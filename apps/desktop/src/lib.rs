@@ -1,3 +1,4 @@
+mod browser;
 pub mod chat;
 mod engine;
 mod error;
@@ -2683,7 +2684,7 @@ pub fn run() {
 
     // memory=info：记忆系统动作日志（target="memory"，带 [Memory] 前缀）默认放行到 info，
     // 让「查/写/抽取/注入」始终可见且可一键 grep。
-    observability::init("agent_core=debug,model_gateway=info,memory=info,warn");
+    observability::init("agent_core=debug,model_gateway=info,memory=info,cache=info,warn");
 
     // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
@@ -2710,6 +2711,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(HitlState::default()))
         .manage(Arc::new(ForceAutomodeState::default()))
+        .manage(browser::BrowserState::default())
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
@@ -2743,6 +2745,17 @@ pub fn run() {
             window_control::initialize(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))
             })?;
+
+            if std::env::var("HEBBIAN_WEBVIEW_SPIKE").as_deref() == Ok("1") {
+                let spike_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // 等主窗口完成首帧，再叠子 webview，避免启动竞态
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if let Err(e) = browser::run_spike(&spike_handle) {
+                        tracing::error!(target: "webview_spike", "spike failed: {e}");
+                    }
+                });
+            }
 
             // 架构 §4.12.6：注册 WakeupScheduler 的 resume 回调。BgFinishHook /
             // CronTimer 触发时把 `<wakeup>` XML + session_id 通过 Tauri 事件

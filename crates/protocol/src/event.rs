@@ -77,6 +77,17 @@ pub enum EventPayload {
         turn: u32,
         stop_reason: StopReason,
     },
+    /// 一次模型请求完成的 token 用量增量（turn 级，run 进行中就 emit）。surface 据此
+    /// per-turn 累加进 session.token_stats，前端实时刷新 cache 指示器，不必等 run 结束。
+    /// 字段语义同 `RunFinished` 的 `total_*`，但只含这一次请求。
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        #[serde(default)]
+        cache_read_tokens: u64,
+        #[serde(default)]
+        cache_creation_tokens: u64,
+    },
 
     // —— Step 粒度（架构 §4.2）：ModelStep = 一次 model.stream 调用；
     //    ToolStep = 一批 tool_call 并发执行 ——

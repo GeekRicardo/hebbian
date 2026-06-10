@@ -19,7 +19,7 @@ use agent_core::{
     read_state::ReadStateTracker,
     run_mode::RunMode,
     storage::{
-        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role, TokenStats},
+        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role},
         sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
@@ -749,23 +749,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
 
     state.clear_active();
 
-    // 把这轮 token 用量累加进 session.json（失败不传染）
-    if let Some(usage) = summary.usage {
-        let delta = TokenStats {
-            input_tokens: usage.input,
-            output_tokens: usage.output,
-            cache_read_tokens: usage.cache_read,
-            cache_creation_tokens: usage.cache_creation,
-            run_count: 1,
-            ..Default::default()
-        };
-        let _ = sessions::update_meta(data_dir, session_id, |sess| {
-            let mut stats = sess.token_stats.unwrap_or_default();
-            stats.accumulate(delta);
-            sess.token_stats = Some(stats);
-            Ok(())
-        });
-    }
+    // token_stats 由 agent_loop per-turn 落盘（sessions::bump_token_stats），不再 run-end 累加。
 
     // 架构 §4.12.5 修订：插队 user message（含 wakeup notification）已经在 wakeup
     // resume_handler / 主动 inject 路径即写即落到 jsonl，run 结束不再二次落盘 consumed，
