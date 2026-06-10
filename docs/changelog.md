@@ -6813,3 +6813,27 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **改动**: 新增 [docs/claude-code-逆向笔记.md](claude-code-逆向笔记.md)：①怎么读 CC binary（strings+grep minified bundle、追别名、信描述字符串、从 error-classify 反推）；②字段↔enabling beta 成对规律 + beta 全集；③effort 两套独立白名单（XJH/gNH）；④fallbacks 仅 Fable（R76/GlH/lJ5）；⑤cache 前缀顺序 tools→system→messages + ttl/scope；⑥profile 接口字段；⑦system 四块结构 + metadata + billing cch；⑧通用坑；⑨待挖方向清单
 - **影响范围**: 纯文档新增，无代码改动
 - **留尾巴**: 文档列了 9 个「还没挖、值得继续看」的方向（structured-outputs / tool-search / skills / mid-conversation-system / compaction / managed-agents 等）供后续
+
+### 2026-06-11 — 新增内置浏览器（Tauri 子 webview）+ 页面元素注释（P0 spike + P1 + P2）
+
+- **Why**: 用户要 hebbian 内置一个完整浏览器：能打开本地 dev server 与任意公网页（含自己登录），并能像 Codex Desktop / stagewise 那样「点选页面元素 → 自然语言 + 实时调样式参数 → 发给 LLM 改代码」。调研结论（见 [docs/内置浏览器与临时对话框-spec.md](内置浏览器与临时对话框-spec.md) §1）：codex 本体闭源、stagewise(AGPL) 用 CDP、deepseek-gui 用沙箱 webview 无注入。选型拍板走 Tauri 子 webview（真 cookie/登录/公网），hebweb 留代理+iframe 降级（P2.5 未做）。
+- **改动**:
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): tauri 开 `unstable` feature（`Window::add_child` / `Manager::get_window` 需要）
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): 新增 `BrowserController`——子 webview 生命周期 + 13 个 `browser_*` Tauri command + `browser://*` 事件。双向信道：上行 inspector 用 `heb-bridge://` 自定义 scheme 导航，`on_navigation` 拦截解析后 return false（外部 URL 子 webview 无 Tauri IPC）；下行 `webview.eval`。导航历史自维护（Webview 未暴露 go_back）。`HEBBIAN_WEBVIEW_SPIKE=1` 跑 P0 验证序列
+  - [apps/desktop/src/browser/url_policy.rs](../apps/desktop/src/browser/url_policy.rs): 两档 URL 校验（auto 仅本地网段 / user 放行公网，元数据地址硬黑名单），`on_navigation` 强制（页面内跳转同样拦），4 个单测
+  - [apps/desktop/src/browser/inspector.js](../apps/desktop/src/browser/inspector.js): 注入脚本——picker(elementFromPoint+overlay) / snapshot(DOM+computedStyles+react fiber 链) / styler(实时预览+diff) / bridge(双轨 wry/iframe)。纯函数核心可 node 单测（inspector.test.cjs）。`include_str!` 进 init script，无构建步骤
+  - 前端：[previewUrl.ts](../apps/desktop/frontend/src/desktop/ui/lib/previewUrl.ts)(URL 归一/两档校验/聊天流双阈值检测，与 Rust 共享 case)、[annotation.ts](../apps/desktop/frontend/src/desktop/ui/lib/annotation.ts)(snapshot 类型 + 注释消息组装纯函数)、[browserHost.ts](../apps/desktop/frontend/src/desktop/ui/lib/browserHost.ts)(承载适配层)、[BrowserPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BrowserPanel.tsx)(地址栏/导航/bounds 同步/auto-follow/候选 chips/选取按钮)、[AnnotationCard.tsx](../apps/desktop/frontend/src/desktop/ui/components/AnnotationCard.tsx)(元素徽章 + 注释输入 + 样式参数编辑器 + 发送)、[browserPanel.ts](../apps/desktop/frontend/src/desktop/ui/store/browserPanel.ts)(开关 store)
+  - [RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx) / [DesktopShell.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx): 右侧 sidebar 加内置浏览器图标，面板作为 dsp-shell 独立列渲染
+  - 注释 = 普通带附件 user message（`<web_annotation>` + element.json，导语第一人称），走现有 `sendUserMessage`，agent-core/protocol/model-gateway 零改动
+  - 文档：[docs/架构.md](架构.md) §8.5/§8.6 + §13 决策行；[docs/内置浏览器-tdd.md](内置浏览器-tdd.md) §1 补 Spike 结果
+- **影响范围**: 仅 apps/desktop（commands + 前端组件 + sidebar）；agent-core/protocol/model-gateway/prompts 零改动，prompt cache 不受影响。tauri 加 unstable feature（重编一次）
+- **验证**:
+  - P0 spike 七项全过（add_child/跨导航注入持续/heb-bridge 双向/bounds/导航事件/hide-show/cookie），日志取证写入 tdd §1
+  - 单测：url_policy 4 个 cargo test；previewUrl/annotation/inspector 三套 node 纯函数测试全绿；tsc --noEmit 0 error
+  - dev 模式启动干净无 panic/React error
+- **留尾巴**:
+  - 真实窗口里「鼠标点选元素 → 注释卡片 → 发送」的交互未做人工点击验证（原生子 webview 无法从 CI 自动点击）；spike 用合成 click 验证了 picker→snapshot→上行事件链路，AnnotationCard 渲染+发送逻辑由 tsc + annotation 单测覆盖，但端到端鼠标流需用户在 Desktop 实机眼验
+  - P2.5 hebweb 降级路径（preview-proxy crate + iframe BrowserHost）未做——浏览器目前仅 Desktop 可用，hebweb 打开面板会因缺 browser_* command 报错
+  - P3 旁支对话（QuickChat floating/aside session/returnToChat）整体未做
+  - 多注释/区域圈选/截图附件/Vue 支持/多标签未做
+  - spike 代码（`run_spike` + forward 里的 spike 日志分支）仍在 mod.rs 内，env-gated 不影响生产，后续可清

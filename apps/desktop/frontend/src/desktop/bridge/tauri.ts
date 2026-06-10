@@ -611,6 +611,35 @@ export const api = {
       anchor,
       body,
     }),
+
+  // 内置浏览器（架构 §8.5）。origin: "auto"=自动通道仅本地 / "user"=用户主动可公网。
+  browserOpen: (
+    url: string,
+    origin: "auto" | "user",
+    bounds: { x: number; y: number; width: number; height: number }
+  ) =>
+    invoke<string>("browser_open", {
+      url,
+      origin,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    }),
+  browserNavigate: (url: string) => invoke<string>("browser_navigate", { url }),
+  browserBack: () => invoke<void>("browser_back"),
+  browserForward: () => invoke<void>("browser_forward"),
+  browserReload: () => invoke<void>("browser_reload"),
+  browserSetBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+    invoke<void>("browser_set_bounds", bounds),
+  browserSetVisible: (visible: boolean) => invoke<void>("browser_set_visible", { visible }),
+  browserClose: () => invoke<void>("browser_close"),
+  browserPicker: (active: boolean) => invoke<void>("browser_picker", { active }),
+  browserStyleApply: (prop: string, value: string) =>
+    invoke<void>("browser_style_apply", { prop, value }),
+  browserStyleRevert: () => invoke<void>("browser_style_revert"),
+  browserStyleTakeDiff: () => invoke<void>("browser_style_take_diff"),
+  browserClearSelection: () => invoke<void>("browser_clear_selection"),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */

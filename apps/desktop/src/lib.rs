@@ -2915,6 +2915,19 @@ pub fn run() {
             read_log_file,
             open_log_viewer_window,
             set_log_viewer_always_on_top,
+            browser::browser_open,
+            browser::browser_navigate,
+            browser::browser_back,
+            browser::browser_forward,
+            browser::browser_reload,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_close,
+            browser::browser_picker,
+            browser::browser_style_apply,
+            browser::browser_style_revert,
+            browser::browser_style_take_diff,
+            browser::browser_clear_selection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

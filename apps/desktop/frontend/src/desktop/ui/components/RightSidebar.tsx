@@ -5,11 +5,13 @@ import {
   Terminal,
   FilePenLine,
   FileJson,
+  Globe2,
   ListChecks,
   ClipboardList,
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { useBrowserPanel } from "@/desktop/ui/store/browserPanel";
 import type { TurnEditEntry } from "@/desktop/ui/types";
 
 const EMPTY_EDIT_TURNS: TurnEditEntry[] = [];
@@ -92,6 +94,8 @@ export function RightSidebar({
   // 320px tab 容不下。
   const debugEnabled = useStore((s) => s.debugEnabled);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
+  const browserOpen = useBrowserPanel((s) => s.open);
+  const toggleBrowser = useBrowserPanel((s) => s.toggle);
   const todos = useStore((s) => s.todos);
   const editTurns = useStore((s) => {
     const id = s.currentSession?.id;
@@ -254,6 +258,12 @@ export function RightSidebar({
             }}
             active={tab === "plans"}
           />
+          <SidebarIconButton
+            icon={<Globe2 className="h-4 w-4" />}
+            label="内置浏览器"
+            onClick={toggleBrowser}
+            active={browserOpen}
+          />
           {debugEnabled && sessionId && (
             <SidebarIconButton
               icon={<FileJson className="h-4 w-4" />}
@@ -324,6 +334,18 @@ export function RightSidebar({
             />
           </TabScroller>
           <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
+            <button
+              type="button"
+              onClick={toggleBrowser}
+              className={cn(
+                "grid h-6 w-6 place-items-center rounded hover:bg-accent hover:text-foreground",
+                browserOpen ? "bg-primary/15 text-primary" : "text-muted-foreground"
+              )}
+              title="内置浏览器"
+              aria-label="内置浏览器"
+            >
+              <Globe2 className="h-3.5 w-3.5" />
+            </button>
             {debugEnabled && sessionId && (
               <button
                 type="button"
