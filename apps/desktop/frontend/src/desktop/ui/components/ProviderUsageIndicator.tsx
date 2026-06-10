@@ -100,14 +100,14 @@ function ClaudeTooltip({ info }: { info: ClaudeUsageInfo }) {
         <div key={r.label} className="flex items-center justify-between gap-4">
           <span className="text-muted-foreground">{r.label}</span>
           <span className="flex items-baseline gap-2">
-            <span className={cn("tabular-nums font-medium", claudeProgressColor(r.pct))}>
-              {r.pct}%
-            </span>
             {r.remaining > 0 && (
               <span className="tabular-nums text-[10px] text-muted-foreground/60">
                 {formatRemaining(r.remaining)}后刷新
               </span>
             )}
+            <span className={cn("tabular-nums font-medium", claudeProgressColor(r.pct))}>
+              {r.pct}%
+            </span>
           </span>
         </div>
       ))}
