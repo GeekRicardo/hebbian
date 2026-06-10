@@ -16,7 +16,7 @@ pub fn map_anthropic_finish(stop_reason: &str) -> FinishReason {
         other => FinishReason::Other(other.to_string()),
     }
 }
-use common::reasoning::{anthropic_thinking_mode, AnthropicThinkingMode};
+use common::reasoning::{anthropic_supports_fallbacks, anthropic_thinking_mode, AnthropicThinkingMode};
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -211,7 +211,17 @@ pub fn build_body(
         body.as_object_mut().unwrap().remove("system");
     }
 
-    // Claude Code 客户端特征：metadata.user_id + context_management + fallbacks + diagnostics。
+    // Claude Code 客户端特征：metadata.user_id + context_management + diagnostics + fallbacks。
+    //
+    // diagnostics / fallbacks 是顶层字段，必须配对应的 enabling beta 才被服务端 schema
+    // 接受：diagnostics 需 cache-diagnosis-*、fallbacks 需 server-side-fallback-*（两者都在
+    // OAuth 请求头 anthropic-beta 里固定带上，见 providers/mod.rs）。字段与 beta 必须成对——
+    // 只发字段不带 beta 会被服务端当未知字段直接 400 "Extra inputs are not permitted"。
+    //
+    // fallbacks 还有 per-model 限制：只有 Fable 系列支持，其它模型带它会 400
+    // "does not support the fallbacks parameter"（见 anthropic_supports_fallbacks）。
+    // diagnostics 无 per-model 限制，所有模型通用。
+    //
     // billing header（x-anthropic-billing-header）不发——等价于 CLAUDE_CODE_ATTRIBUTION_HEADER=0
     // 的合法 CC 行为：真实 cch 由 CC 客户端在网络层运行时注入、无法稳定复现，
     // 发占位值反而坏掉 prompt cache 的稳定前缀。
@@ -220,8 +230,10 @@ pub fn build_body(
         body["context_management"] = json!({
             "edits": [{ "type": "clear_thinking_20251015", "keep": "all" }]
         });
-        body["fallbacks"] = json!([{ "model": "claude-opus-4-8" }]);
         body["diagnostics"] = json!({ "previous_message_id": null });
+        if anthropic_supports_fallbacks(&req.model) {
+            body["fallbacks"] = json!([{ "model": "claude-opus-4-8" }]);
+        }
     }
 
     if !req.tools.is_empty() {
@@ -894,14 +906,19 @@ mod tests {
             build("claude-opus-4-8", Some(ReasoningEffort::Low))["output_config"]["effort"],
             "low"
         );
-        // 4.6 / sonnet-4.6 也支持高档（对齐 CC 量程）：Extra→xhigh、Max→max
+        // 4.6 / sonnet-4.6 支持 max 但**不**支持 xhigh（对齐 CC 量程）：
+        // Extra(xhigh) 钳到 high、Max 保留 max。这是本次 opus-4-6 xhigh 400 的回归点。
         assert_eq!(
             build("claude-opus-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"],
-            "xhigh"
+            "high"
         );
         assert_eq!(
             build("claude-opus-4-6", Some(ReasoningEffort::Max))["output_config"]["effort"],
             "max"
+        );
+        assert_eq!(
+            build("claude-sonnet-4-6", Some(ReasoningEffort::Extra))["output_config"]["effort"],
+            "high"
         );
         // reasoning 未设时用默认 Extra → 4.8 走 xhigh
         assert_eq!(
@@ -928,10 +945,11 @@ mod tests {
     /// CC 兼容 body 形态对齐真 CC（c.json 2.1.170 实测）的回归测试：
     /// banner+harness 双 block 且无 billing block、cache ttl/scope、fallbacks/diagnostics、
     /// metadata 稳定 session_id+account、tools eager。任一项回退都会被这里拍醒。
+    /// 用 fable-5：c.json 的真实模型，也是唯一会发 fallbacks 的家族。
     #[test]
     fn cc_compat_body_matches_real_cc_shape() {
         let req = ModelRequest {
-            model: "claude-opus-4-8".into(),
+            model: "claude-fable-5".into(),
             system: Some("Be terse.".into()),
             entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
             tools: vec![ToolDefinition {
@@ -962,9 +980,9 @@ mod tests {
             json!({ "type": "ephemeral", "ttl": "1h", "scope": "global" })
         );
 
-        // fallbacks / diagnostics。
-        assert_eq!(body["fallbacks"], json!([{ "model": "claude-opus-4-8" }]));
+        // diagnostics 所有模型都发；fallbacks 仅 Fable 系列发，target = 默认 opus。
         assert_eq!(body["diagnostics"], json!({ "previous_message_id": null }));
+        assert_eq!(body["fallbacks"], json!([{ "model": "claude-opus-4-8" }]));
 
         // metadata.user_id 是 JSON-string，含 account + 36 字符 session_id + 非空 device_id。
         let uid = body["metadata"]["user_id"].as_str().unwrap();
@@ -996,6 +1014,32 @@ mod tests {
         let uid2 = body2["metadata"]["user_id"].as_str().unwrap();
         let parsed2: Value = serde_json::from_str(uid2).unwrap();
         assert_eq!(parsed["session_id"], parsed2["session_id"]);
+    }
+
+    /// 非 Fable 模型不发 fallbacks（会 400 "does not support the fallbacks parameter"），
+    /// 但 diagnostics 仍然发（所有模型通用）。这是本次 opus-4-8 fallbacks 400 的回归点。
+    #[test]
+    fn cc_compat_omits_fallbacks_for_non_fable_models() {
+        for model in ["claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6"] {
+            let req = ModelRequest {
+                model: model.into(),
+                system: Some("Be terse.".into()),
+                entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+                tools: vec![],
+                max_tokens: 8192,
+                reasoning: None,
+            };
+            let body = build_body(&req, false, true, Some("acct-123")).unwrap();
+            assert!(
+                body.get("fallbacks").is_none(),
+                "{model} 不该发 fallbacks: {body}"
+            );
+            assert_eq!(
+                body["diagnostics"],
+                json!({ "previous_message_id": null }),
+                "{model} 仍应发 diagnostics"
+            );
+        }
     }
 
     // ── DeepSeek v4 on Anthropic 端点的方言测试 ──────────────────────────────

@@ -32,7 +32,7 @@ pub enum ReasoningEffort {
     /// 对齐 Claude Code 的 `xhigh` 档；序列化为 `"extra"`（历史值，未改名以保持持久化兼容）。
     #[default]
     Extra,
-    /// 对齐 Claude Code 的 `max` 档——仅 [`anthropic_supports_high_effort`] 列出的模型支持，
+    /// 对齐 Claude Code 的 `max` 档——仅 [`anthropic_supports_max_effort`] 列出的模型支持，
     /// 其余钳到 high。
     Max,
 }
@@ -51,22 +51,28 @@ impl ReasoningEffort {
     }
 
     /// 用于 Anthropic adaptive `output_config.effort`（CC 兼容 / OAuth 路径），按模型量程取值。
-    /// 对齐 Claude Code 2.1.170 的 effort 字符串集 `low|medium|high|xhigh|max`：
-    /// [`anthropic_supports_high_effort`] 列出的模型给到 xhigh/max，其余钳到 high。
+    /// 对齐 Claude Code 2.1.170：`xhigh` 与 `max` 是两套**独立**的 per-model 白名单
+    /// （见 [`anthropic_supports_xhigh_effort`] / [`anthropic_supports_max_effort`]）——
+    /// 例如 Opus 4.6 / Sonnet 4.6 支持 max 但不支持 xhigh。模型不支持对应档时钳到
+    /// `high`（与 CC 的 downgrade 行为一致）。
     pub fn anthropic_adaptive_effort_for_model(self, model: &str) -> &'static str {
-        if anthropic_supports_high_effort(model) {
-            match self {
-                Self::Low => "low",
-                Self::Medium => "medium",
-                Self::High => "high",
-                Self::Extra => "xhigh",
-                Self::Max => "max",
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Extra => {
+                if anthropic_supports_xhigh_effort(model) {
+                    "xhigh"
+                } else {
+                    "high"
+                }
             }
-        } else {
-            match self {
-                Self::Low => "low",
-                Self::Medium => "medium",
-                Self::High | Self::Extra | Self::Max => "high",
+            Self::Max => {
+                if anthropic_supports_max_effort(model) {
+                    "max"
+                } else {
+                    "high"
+                }
             }
         }
     }
@@ -196,18 +202,36 @@ pub fn anthropic_supports_thinking(model: &str) -> bool {
     anthropic_thinking_mode(model).is_some()
 }
 
-/// 该 Anthropic 模型的 `output_config.effort` 是否支持高档位 `xhigh` / `max`。
-/// 对齐 Claude Code 2.1.170 的量程判定（`VP` / `gNH` 列表一致）：
-/// `opus-4-6` / `opus-4-7` / `opus-4-8` / `sonnet-4-6` / `fable-5` / `mythos-5`。
-/// 其余模型只有 low/medium/high。
-pub fn anthropic_supports_high_effort(model: &str) -> bool {
+/// 该 Anthropic 模型的 `output_config.effort` 是否支持 `xhigh` 档。
+/// 对齐 Claude Code 2.1.170（档位说明 "Fable 5, Opus 4.8/4.7 only"）：仅 Fable/Mythos 5、
+/// Opus 4.7、Opus 4.8 支持；Opus 4.6 / Sonnet 4.6 **不**支持（xhigh 钳到 high）。
+pub fn anthropic_supports_xhigh_effort(model: &str) -> bool {
     let m = normalize_model_id(model);
-    m.contains("opus-4-6")
+    m.contains("fable-5")
+        || m.contains("mythos-5")
+        || m.contains("opus-4-7")
+        || m.contains("opus-4-8")
+}
+
+/// 该 Anthropic 模型的 `output_config.effort` 是否支持 `max` 档。
+/// 对齐 Claude Code 2.1.170（档位说明 "Fable 5, Opus 4.6+, Sonnet 4.6"）：Fable/Mythos 5、
+/// Opus 4.6/4.7/4.8、Sonnet 4.6 支持；其余钳到 high。`max` 与 `xhigh` 各自独立。
+pub fn anthropic_supports_max_effort(model: &str) -> bool {
+    let m = normalize_model_id(model);
+    m.contains("fable-5")
+        || m.contains("mythos-5")
+        || m.contains("opus-4-6")
         || m.contains("opus-4-7")
         || m.contains("opus-4-8")
         || m.contains("sonnet-4-6")
-        || m.contains("fable-5")
-        || m.contains("mythos-5")
+}
+
+/// 该 Anthropic 模型是否支持服务端 `fallbacks` 参数。
+/// 对齐 Claude Code 2.1.170：仅 Fable 系列（含内部代号 Mythos）支持——其它模型带
+/// `fallbacks` 字段会 400 "does not support the fallbacks parameter"。
+pub fn anthropic_supports_fallbacks(model: &str) -> bool {
+    let m = normalize_model_id(model);
+    m.contains("fable") || m.contains("mythos")
 }
 
 /// 该 Anthropic 模型是否需要靠 `anthropic-beta: context-1m-2025-08-07` 才能开 1M。
@@ -391,15 +415,12 @@ mod tests {
 
     #[test]
     fn adaptive_effort_scale_by_model() {
-        // 支持高档的模型（opus 4.6/4.7/4.8、sonnet-4.6、fable-5、mythos-5）：Extra→xhigh、Max→max。
-        // 对齐 Claude Code 2.1.170 的 VP/gNH 量程。
+        // xhigh + max 都支持：Fable/Mythos 5、Opus 4.7/4.8 —— Extra→xhigh、Max→max。
         for m in [
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
             "claude-fable-5",
             "claude-mythos-5",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
         ] {
             assert_eq!(
                 ReasoningEffort::Extra.anthropic_adaptive_effort_for_model(m),
@@ -417,7 +438,21 @@ mod tests {
                 "{m}"
             );
         }
-        // 不支持高档的模型（legacy）：Extra / Max 钳到 high。
+        // 只支持 max、不支持 xhigh：Opus 4.6 / Sonnet 4.6 —— Extra(xhigh) 钳到 high，Max 保留 max。
+        // 这正是本次 `opus-4-6 不支持 xhigh` 400 的回归点。
+        for m in ["claude-opus-4-6", "claude-sonnet-4-6"] {
+            assert_eq!(
+                ReasoningEffort::Extra.anthropic_adaptive_effort_for_model(m),
+                "high",
+                "{m}"
+            );
+            assert_eq!(
+                ReasoningEffort::Max.anthropic_adaptive_effort_for_model(m),
+                "max",
+                "{m}"
+            );
+        }
+        // 两档都不支持的 legacy 模型：Extra / Max 钳到 high。
         for m in ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"] {
             assert_eq!(
                 ReasoningEffort::Extra.anthropic_adaptive_effort_for_model(m),
@@ -430,6 +465,15 @@ mod tests {
                 "{m}"
             );
         }
+    }
+
+    #[test]
+    fn fallbacks_only_for_fable() {
+        assert!(anthropic_supports_fallbacks("claude-fable-5"));
+        assert!(anthropic_supports_fallbacks("claude-mythos-5"));
+        assert!(!anthropic_supports_fallbacks("claude-opus-4-8"));
+        assert!(!anthropic_supports_fallbacks("claude-opus-4-6"));
+        assert!(!anthropic_supports_fallbacks("claude-sonnet-4-6"));
     }
 
     #[test]

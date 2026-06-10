@@ -39,11 +39,12 @@ export function getModelEffortOptions(
   entry: CatalogEntry | undefined
 ): ReasoningEffort[] {
   // Anthropic：按 Claude Code 的模型量程动态决定档位（不走 models.dev，确保与 CC 对齐）。
-  // 支持高档的模型给 5 档（含 max），其余只有 low/medium/high。
-  if (anthropicSupportsThinking(model) || anthropicSupportsHighEffort(model)) {
-    return anthropicSupportsHighEffort(model)
-      ? ["low", "medium", "high", "extra", "max"]
-      : ["low", "medium", "high"];
+  // xhigh 与 max 各自独立 gating——如 Opus 4.6 有 max 无 xhigh（low/medium/high/max）。
+  if (anthropicSupportsThinking(model) || anthropicSupportsMaxEffort(model)) {
+    const opts: ReasoningEffort[] = ["low", "medium", "high"];
+    if (anthropicSupportsXhighEffort(model)) opts.push("extra");
+    if (anthropicSupportsMaxEffort(model)) opts.push("max");
+    return opts;
   }
 
   // 其他 provider：优先 models.dev catalog
@@ -87,19 +88,34 @@ export function anthropicSupportsThinking(model: string): boolean {
 }
 
 /**
- * 该 Anthropic 模型的 output_config.effort 是否支持高档位 xhigh / max。
- * 对齐 Claude Code 2.1.170：opus-4-6 / 4-7 / 4-8 / sonnet-4-6 / fable-5 / mythos-5。
- * 其余模型只有 low/medium/high。
+ * 该 Anthropic 模型的 output_config.effort 是否支持 xhigh 档。
+ * 对齐 Claude Code 2.1.170（"Fable 5, Opus 4.8/4.7 only"）：仅 Fable/Mythos 5、
+ * Opus 4.7、Opus 4.8 支持；Opus 4.6 / Sonnet 4.6 不支持（xhigh 钳到 high）。
  */
-export function anthropicSupportsHighEffort(model: string): boolean {
+export function anthropicSupportsXhighEffort(model: string): boolean {
   const m = normalizeModelId(model);
   return (
+    m.includes("fable-5") ||
+    m.includes("mythos-5") ||
+    m.includes("opus-4-7") ||
+    m.includes("opus-4-8")
+  );
+}
+
+/**
+ * 该 Anthropic 模型的 output_config.effort 是否支持 max 档。
+ * 对齐 Claude Code 2.1.170（"Fable 5, Opus 4.6+, Sonnet 4.6"）：Fable/Mythos 5、
+ * Opus 4.6/4.7/4.8、Sonnet 4.6 支持。max 与 xhigh 各自独立。
+ */
+export function anthropicSupportsMaxEffort(model: string): boolean {
+  const m = normalizeModelId(model);
+  return (
+    m.includes("fable-5") ||
+    m.includes("mythos-5") ||
     m.includes("opus-4-6") ||
     m.includes("opus-4-7") ||
     m.includes("opus-4-8") ||
-    m.includes("sonnet-4-6") ||
-    m.includes("fable-5") ||
-    m.includes("mythos-5")
+    m.includes("sonnet-4-6")
   );
 }
 
@@ -244,15 +260,17 @@ export function effortDisplay(
   if (
     providerKind === "anthropic" ||
     anthropicSupportsThinking(model) ||
-    anthropicSupportsHighEffort(model)
+    anthropicSupportsMaxEffort(model)
   ) {
     // CC 兼容 / OAuth：adaptive + output_config.effort，按模型量程下发。
-    if (anthropicSupportsHighEffort(model)) {
-      // low / medium / high / xhigh(=extra) / max
-      return effort === "extra" ? "xhigh" : effort;
+    // xhigh / max 各自独立，不支持就钳到 high（与 Rust / CC downgrade 一致）。
+    if (effort === "extra") {
+      return anthropicSupportsXhighEffort(model) ? "xhigh" : "high";
     }
-    // 不支持高档的模型钳到 high。
-    return effort === "extra" || effort === "max" ? "high" : effort;
+    if (effort === "max") {
+      return anthropicSupportsMaxEffort(model) ? "max" : "high";
+    }
+    return effort;
   }
   if (providerKind === "openai") {
     if (effort === "extra" || effort === "max") {

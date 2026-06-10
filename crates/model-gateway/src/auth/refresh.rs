@@ -86,7 +86,7 @@ pub async fn ensure_fresh_provider_token(
                 error = %refresh_err,
                 "Claude OAuth refresh 失败，尝试从本地 Claude Code 凭据恢复"
             );
-            match claude_code_import() {
+            match claude_code_import().await {
                 Ok(imported) if !imported.access_token.is_empty() => {
                     tracing::info!("已从本地 Claude Code 凭据恢复 access_token");
                     imported
@@ -102,6 +102,11 @@ pub async fn ensure_fresh_provider_token(
     }
     if refreshed.expires_at.is_some() {
         provider.token_expires_at = refreshed.expires_at;
+    }
+    // 从本地凭据恢复这条路径会带上 profile 补全的 account uuid；顺手回填，
+    // 修正历史上被错存成订阅档位（"max"）的 account_id。
+    if refreshed.account_id.is_some() {
+        provider.account_id = refreshed.account_id;
     }
 
     let saved = config::upsert(data_dir, provider)?;

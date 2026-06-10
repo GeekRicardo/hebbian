@@ -6735,3 +6735,23 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: Desktop surface；model-gateway 新增 `usage` 模块（reqwest 已有）。无协议变更，无向后兼容问题
 - **验证**: `cargo check -p model-gateway` + `cargo check -p hebbian` + `pnpm exec tsc --noEmit` 全部通过
 - **留尾巴**: DeepSeek 定价硬编码在前端（deepseek-v3/r1，CNY，2026-06 价格），日后官方改价需手动更新 `DS_PRICE`；`kind=Deepseek`（网页登录型）不支持余额查询，Unsupported 分支静默不渲染
+
+### 2026-06-10 — 修复 CC OAuth 请求三连 400（diagnostics/effort/fallbacks）+ account_uuid 误用订阅档位
+
+- **Why**: 用户实测 Claude OAuth（官方 `api.anthropic.com`）请求连续撞三个 400：① `diagnostics: Extra inputs are not permitted` ② `does not support effort level 'xhigh'`（opus-4-6）③ `'claude-opus-4-8' does not support the fallbacks parameter`。根因都是同日上一条提交「CC 兼容字段」加得不完整——逆向 CC 2.1.170 binary 后确认：这些字段都是**条件发送**且与 beta / per-model 强绑定，之前却无条件硬发。另外用户发现 `metadata.user_id` 的 `account_uuid` 是字符串 `"max"`（订阅档位）而非真实 uuid。
+- **改动**:
+  - [providers/mod.rs](../crates/model-gateway/src/providers/mod.rs): OAuth 分支 anthropic-beta 末尾补 `cache-diagnosis-2026-04-07`（diagnostics 字段的 enabling beta）+ `server-side-fallback-2026-06-01`（fallbacks 的）。CC 真身把「字段 + 对应 beta」成对发，只发字段不带 beta 会被服务端 schema 当未知字段 400。加回归测试 `oauth_anthropic_beta_carries_cc_field_enabling_betas`
+  - [protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs): `fallbacks` 改 per-model——只有 Fable 系列发（`anthropic_supports_fallbacks`），target=opus-4-8；diagnostics 保持所有模型。回归测试改用 fable-5（c.json 真实模型），新增 `cc_compat_omits_fallbacks_for_non_fable_models`
+  - [common/reasoning.rs](../crates/common/src/reasoning.rs): 删掉错误的单布尔 `anthropic_supports_high_effort`，拆成两套**独立** per-model 白名单——`anthropic_supports_xhigh_effort`（仅 fable/mythos-5 + opus-4-7/4-8）与 `anthropic_supports_max_effort`（再加 opus-4-6 + sonnet-4-6）。逆向自 CC binary 的 `XJH`/`gNH` 函数 + 档位说明字符串 "Fable 5, Opus 4.8/4.7 only" / "Fable 5, Opus 4.6+, Sonnet 4.6"。`anthropic_adaptive_effort_for_model` 按两档独立 gating，不支持钳 high。新增 `anthropic_supports_fallbacks`
+  - [auth/mod.rs](../crates/model-gateway/src/auth/mod.rs): `account_uuid="max"` 根因——`parse_claude_credentials_json` 错把 `subscriptionType` 当 account_id（本地 CC 凭据根本没 uuid，access_token 也非 JWT）。改为：parse 时 account_id 留空，`claude_code_import` 升 async，新增 `fetch_claude_account_uuid` 调 `/api/oauth/profile` 拿真实 `account.uuid` 补全（失败不阻塞导入）
+  - [auth/refresh.rs](../crates/model-gateway/src/auth/refresh.rs): `claude_code_import().await`，且本地凭据恢复路径回填 `provider.account_id`（仅 `is_some()` 才覆盖，正常 refresh 的 None 不会冲掉已有 uuid）
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `oauth_claude_code_import` 改 async command
+  - 前端 [lib/reasoning.ts](../apps/desktop/frontend/src/desktop/ui/lib/reasoning.ts): 镜像拆分 `anthropicSupportsXhighEffort`/`anthropicSupportsMaxEffort`；`getModelEffortOptions` 按两档独立拼档位（如 opus-4-6 → low/medium/high/max）；`effortDisplay` 对齐
+- **影响范围**: model-gateway（请求构造 + OAuth 导入）+ common（effort 量程）+ desktop（import command）+ 前端档位。**修正同日上一条**「effort 按模型量程」的模型分类（之前把 opus-4-6/sonnet-4-6 当支持 xhigh，实际只支持 max）。无协议变更
+- **验证**:
+  - 逆向：CC 2.1.170 binary 确认 diagnostics←`cache-diagnosis`、fallbacks←`server-side-fallback`+仅 Fable（`R76`/`GlH`）、xhigh←`XJH`、max←`gNH`、profile endpoint 字段 `account.uuid`
+  - 实跑（heb CLI + 真实 OAuth provider + opus-4-6）：修前撞 effort/fallbacks 400，修后 `run_finished` 正常回复，三个 400 全消失
+  - `curl /api/oauth/profile` 确认拿到真实 uuid，已修正用户当前 provider 的 `account_id`
+  - `cargo test -p hebbian-common --lib`（10）+ `-p model-gateway --lib`（106）+ `cargo check --workspace` + `tsc --noEmit` 全过
+- **留尾巴**: fallbacks target 硬编码 opus-4-8（真 CC 的 `lJ5()` 取默认 opus，当前等价）；profile 补全只在「OAuth 授权流」和「refresh 失败回退本地凭据」两条路径触发，纯 refresh 不刷新 account_uuid（已存对的就不动，无需刷新）
+- **关联**: 承接同日「reasoning effort 档位对齐 CC」「base_system 英文化 + CC 兼容」；docs/架构.md §9.7

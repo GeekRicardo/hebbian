@@ -2527,8 +2527,8 @@ async fn oauth_claude_refresh(refresh_token: String) -> AppResult<oauth::Importe
 }
 
 #[tauri::command]
-fn oauth_claude_code_import() -> AppResult<oauth::ImportedToken> {
-    oauth::claude_code_import()
+async fn oauth_claude_code_import() -> AppResult<oauth::ImportedToken> {
+    oauth::claude_code_import().await
 }
 
 #[tauri::command]

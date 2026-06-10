@@ -49,12 +49,14 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
             req = req.bearer_auth(&provider.api_key);
         }
         (ProviderKind::Anthropic, AuthMode::OauthClaudeCode) => {
+            // anthropic-beta 末两项 cache-diagnosis-* / server-side-fallback-* 给 body 里的
+            // diagnostics / fallbacks 字段开 schema——字段与 beta 必须成对，缺则服务端 400。
             req = req
                 .bearer_auth(&provider.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header(
                     "anthropic-beta",
-                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
+                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24,cache-diagnosis-2026-04-07,server-side-fallback-2026-06-01",
                 )
                 .header("user-agent", "claude-cli/2.1.170 (external, cli)")
                 .header("x-app", "cli")
@@ -276,5 +278,53 @@ mod tests {
 
         assert!(matches!(result, Err(ModelError::Http { status: 400, .. })));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    /// CC OAuth 请求体带 fallbacks / diagnostics 顶层字段，服务端必须看到对应的
+    /// enabling beta 才认这两个字段——否则 400 "Extra inputs are not permitted"。
+    /// 这条把「字段与 beta 成对」固化：删掉任一 beta 都会 fail。
+    #[test]
+    fn oauth_anthropic_beta_carries_cc_field_enabling_betas() {
+        use crate::config::{AuthMode, Provider, ProviderKind};
+
+        let provider = Provider {
+            id: "p".into(),
+            name: "p".into(),
+            kind: ProviderKind::Anthropic,
+            enabled: true,
+            auth_mode: AuthMode::OauthClaudeCode,
+            base_url: "https://api.anthropic.com".into(),
+            api_key: "sk-test".into(),
+            refresh_token: None,
+            token_expires_at: None,
+            account_id: Some("acct".into()),
+            extra_headers: Default::default(),
+            models: vec![],
+            fetched_models: None,
+            model_context_windows: Default::default(),
+            default_model: None,
+            title_gen_enabled: false,
+            title_gen_model: None,
+            claude_code_compat: false,
+        };
+
+        let http = reqwest::Client::new();
+        let built = apply_auth(http.post(&provider.base_url), &provider)
+            .build()
+            .unwrap();
+        let beta = built
+            .headers()
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        assert!(
+            beta.contains("cache-diagnosis-2026-04-07"),
+            "diagnostics 字段缺 enabling beta: {beta}"
+        );
+        assert!(
+            beta.contains("server-side-fallback-2026-06-01"),
+            "fallbacks 字段缺 enabling beta: {beta}"
+        );
     }
 }

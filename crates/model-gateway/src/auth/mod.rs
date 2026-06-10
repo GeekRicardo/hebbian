@@ -872,7 +872,10 @@ struct ClaudeOAuthEntry {
     refresh_token: Option<String>,
     #[serde(rename = "expiresAt")]
     expires_at: Option<Value>,
+    /// 订阅档位（"max"/"pro"）——仅记录凭据 schema。account_uuid 改由 profile
+    /// endpoint 拿，不再用这个字段（曾被误当 account_id 发出去）。
     #[serde(rename = "subscriptionType")]
+    #[allow(dead_code)]
     subscription_type: Option<String>,
 }
 
@@ -884,7 +887,20 @@ struct ClaudeOAuthEntry {
 /// 3. `~/.config/claude/.credentials.json`（XDG 路径，少数 Linux 发行版）
 ///
 /// JSON schema 兼容 `claudeAiOauth` 与 `claude.ai_oauth` 两种 key 名。
-pub fn claude_code_import() -> AppResult<ImportedToken> {
+///
+/// 本地凭据不含 account uuid，导入后用 access_token 调 profile endpoint 补全，
+/// 失败不阻塞（account_uuid 缺失只影响 CC 伪装完整度，不影响请求成功）。
+pub async fn claude_code_import() -> AppResult<ImportedToken> {
+    let mut token = read_local_claude_credentials()?;
+    if token.account_id.is_none() {
+        token.account_id = fetch_claude_account_uuid(&token.access_token).await;
+    }
+    Ok(token)
+}
+
+/// 同步读取本地 Claude Code 凭据（Keychain / 文件）；account_id 留空，
+/// 由 [`claude_code_import`] 调 profile endpoint 补全。
+fn read_local_claude_credentials() -> AppResult<ImportedToken> {
     let mut tried: Vec<String> = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -965,11 +981,39 @@ fn parse_claude_credentials_json(text: &str) -> AppResult<ImportedToken> {
     Ok(ImportedToken {
         access_token,
         refresh_token: parsed.refresh_token,
-        account_id: parsed.subscription_type,
+        // 本地凭据里没有 account uuid——subscriptionType 是订阅档位（"max"/"pro"），
+        // 不是账号标识。account_id 留空，由 claude_code_import 调 profile endpoint 补全。
+        account_id: None,
         expires_at,
         client_id: None,
         client_secret: None,
     })
+}
+
+/// Claude OAuth profile endpoint：用 access_token 换账号 uuid。
+const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// 用 access_token 拉取账号 uuid（写进 metadata.user_id 的 account_uuid，对齐真 CC）。
+/// 本地凭据不含 uuid、access_token 也不是可解析的 JWT，只能调这个端点拿。
+/// 任何失败都返回 None：account_uuid 缺失只影响 CC 伪装完整度，不该阻塞登录导入。
+async fn fetch_claude_account_uuid(access_token: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .user_agent("claude-cli/2.1.170 (external, cli)")
+        .build()
+        .ok()?;
+    let resp = client
+        .get(CLAUDE_PROFILE_URL)
+        .bearer_auth(access_token)
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: Value = resp.json().await.ok()?;
+    v["account"]["uuid"].as_str().map(String::from)
 }
 
 #[derive(Debug, Deserialize)]
