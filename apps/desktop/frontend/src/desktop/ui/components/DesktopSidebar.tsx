@@ -1,0 +1,470 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  Edit3,
+  FolderOpen,
+  Import,
+  MessageSquarePlus,
+  Palette,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+} from "lucide-react";
+import { toast } from "sonner";
+import { useStore } from "@/desktop/ui/store/useStore";
+import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
+import type { SessionMeta, WorkspaceProject } from "@/desktop/ui/types";
+import "./desktopShell.css";
+
+/* ── Types ── */
+
+interface ProjectBucket {
+  id: string;
+  name: string;
+  path: string;
+  projectId: string | null;
+  sessions: SessionMeta[];
+}
+
+/* ── Theme presets ── */
+
+const THEME_PRESETS = [
+  { id: "glacier", name: "冰湖蓝绿", hue: 208, colors: ["#EAF4FF", "#EEF0FF", "#E8FFF5"] },
+  { id: "mist", name: "雾蓝灰", hue: 214, colors: ["#EEF4FA", "#F3F6FA", "#E8F0F7"] },
+  { id: "porcelain", name: "青瓷灰", hue: 190, colors: ["#EEF8F8", "#F4F8F6", "#E7F1F2"] },
+  { id: "moon", name: "月白灰", hue: 204, colors: ["#F6F8FA", "#EEF5F7", "#F9FAFB"] },
+];
+
+/* ── Helpers ── */
+
+function projectPath(project: WorkspaceProject) {
+  return project.folders[0]?.path ?? "";
+}
+
+function relativeTime(ts: number) {
+  const diff = Date.now() - ts;
+  const min = 60_000;
+  const hour = 3_600_000;
+  const day = 86_400_000;
+  if (diff < min) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / min)}分钟前`;
+  if (diff < day) return `${Math.floor(diff / hour)}小时前`;
+  if (diff < 3 * day) return `${Math.floor(diff / day)}天前`;
+  return new Date(ts).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+function sessionMatchesQuery(session: SessionMeta, query: string, caseSensitive: boolean, regex: boolean) {
+  const text = `${session.title} ${session.model}`;
+  if (!query.trim()) return true;
+  if (regex) {
+    try {
+      return new RegExp(query, caseSensitive ? "" : "i").test(text);
+    } catch {
+      return false;
+    }
+  }
+  return caseSensitive
+    ? text.includes(query)
+    : text.toLowerCase().includes(query.toLowerCase());
+}
+
+function buildProjectBuckets(
+  projects: WorkspaceProject[],
+  sessions: SessionMeta[],
+  query: string,
+  caseSensitive: boolean,
+  regex: boolean
+): ProjectBucket[] {
+  const buckets: ProjectBucket[] = projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    path: projectPath(project),
+    projectId: project.id,
+    sessions: [],
+  }));
+  const defaultBucket: ProjectBucket = {
+    id: "default",
+    name: "默认项目",
+    path: "未归入项目的对话",
+    projectId: null,
+    sessions: [],
+  };
+
+  for (const session of sessions) {
+    if (!sessionMatchesQuery(session, query, caseSensitive, regex)) continue;
+    const bucket = buckets.find(
+      (b) => b.projectId === session.project_id || (!!b.path && session.workdir === b.path)
+    );
+    (bucket ?? defaultBucket).sessions.push(session);
+  }
+
+  for (const bucket of buckets) {
+    bucket.sessions.sort((a, b) => b.updated_at - a.updated_at);
+  }
+  defaultBucket.sessions.sort((a, b) => b.updated_at - a.updated_at);
+  return [...buckets, defaultBucket];
+}
+
+/* ── DesktopHueControl ── */
+
+function DesktopHueControl({ hue, setHue }: { hue: number; setHue: (hue: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const angle = (hue - 90) * (Math.PI / 180);
+  const dotX = 48 + Math.cos(angle) * 34;
+  const dotY = 48 + Math.sin(angle) * 34;
+
+  function pickFromPointer(event: PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left - rect.width / 2;
+    const y = event.clientY - rect.top - rect.height / 2;
+    const next = (Math.round((Math.atan2(y, x) * 180) / Math.PI + 90) + 360) % 360;
+    setHue(next);
+  }
+
+  return (
+    <div className="dsp-hue-control">
+      <button className="dsp-hue-button" type="button" onClick={() => setOpen((value) => !value)} title="调整色系">
+        <Palette size={15} />
+      </button>
+      {open && (
+        <div className="dsp-hue-popover" onClick={(event) => event.stopPropagation()}>
+          <div className="dsp-hue-title">统一色系</div>
+          <div className="dsp-theme-presets">
+            {THEME_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={cn("dsp-theme-preset", Math.abs(preset.hue - hue) < 3 && "is-active")}
+                onClick={() => setHue(preset.hue)}
+                title={preset.name}
+              >
+                <span className="dsp-theme-preset-swatch" style={{ background: `linear-gradient(135deg, ${preset.colors.join(", ")})` }} />
+                <span>{preset.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="dsp-hue-ring" onPointerDown={pickFromPointer} onPointerMove={(event) => event.buttons === 1 && pickFromPointer(event)}>
+            <span className="dsp-hue-ring-dot" style={{ left: dotX, top: dotY }} />
+          </div>
+          <input
+            aria-label="调整色系"
+            className="dsp-hue-slider"
+            type="range"
+            min={0}
+            max={359}
+            value={hue}
+            onChange={(event) => setHue(Number(event.target.value))}
+          />
+          <div className="dsp-hue-meta">
+            <span>#{hue.toString(16).padStart(2, "0").toUpperCase()}</span>
+            <span style={{ color: `hsl(${hue} 92% 45%)` }}>●</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── DesktopSidebar ── */
+
+export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: number) => void }) {
+  const {
+    sessions,
+    projects,
+    currentSession,
+    openSession,
+    newSession,
+    saveProject,
+    importProjectFile,
+    importVscodeProject,
+    deleteSession,
+    deleteProject,
+    runningSessions,
+    unreadFinishedSessions,
+    sessionStreams,
+    setAppSettingsOpen,
+  } = useStore();
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchRegex, setSearchRegex] = useState(false);
+  const [searchCase, setSearchCase] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [activeTab, setActiveTab] = useState<"code" | "chat">("code");
+  const [sbVisible, setSbVisible] = useState<Set<string>>(() => new Set());
+  const sbTimers = useRef<Map<string, number>>(new Map());
+
+  function sbShow(id: string) {
+    const timers = sbTimers.current;
+    const existing = timers.get(id);
+    if (existing !== undefined) window.clearTimeout(existing);
+    timers.delete(id);
+    setSbVisible((prev) => { const n = new Set(prev); n.add(id); return n; });
+  }
+
+  function sbHideAfter(id: string, ms: number) {
+    const timers = sbTimers.current;
+    const existing = timers.get(id);
+    if (existing !== undefined) window.clearTimeout(existing);
+    const tid = window.setTimeout(() => {
+      timers.delete(id);
+      setSbVisible((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    }, ms);
+    timers.set(id, tid);
+  }
+
+  const buckets = useMemo(
+    () => buildProjectBuckets(projects, sessions, query, searchCase, searchRegex),
+    [projects, query, searchCase, searchRegex, sessions]
+  );
+
+  const filteredBuckets = useMemo(() => {
+    if (activeTab === "chat") {
+      return buckets.filter((b) => b.projectId === null);
+    }
+    return buckets.filter((b) => b.projectId !== null);
+  }, [buckets, activeTab]);
+
+  async function handleNewSession(projectId: string | null) {
+    try {
+      await newSession({ projectId });
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
+
+  async function handleCreateProject() {
+    try {
+      const dir = await openDialog({ directory: true, multiple: false });
+      if (typeof dir !== "string") return;
+      await saveProject({
+        name: pathLeaf(dir) || "项目",
+        workdir: dir,
+        allowed_paths: [],
+        source: "manual",
+      });
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
+
+  async function handleImportProject(vscode: boolean) {
+    try {
+      const file = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [{ name: "Workspace JSON", extensions: ["json", "code-workspace"] }],
+      });
+      if (typeof file !== "string") return;
+      if (vscode) {
+        await importVscodeProject(file, pathLeaf(file).replace(/\.code-workspace$|\.json$/i, ""));
+        return;
+      }
+      await importProjectFile(file);
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
+
+  async function handleDeleteProject(id: string, name: string) {
+    if (!confirm(`删除项目 "${name}"？项目下的对话不会被删除。`)) return;
+    if (!confirm(`再次确认删除项目 "${name}"？`)) return;
+    try {
+      await deleteProject(id);
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
+
+  function toggleBucket(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleDeleteSession(session: SessionMeta) {
+    if (!confirm(`删除对话 "${session.title}"？`)) return;
+    if (!confirm(`再次确认删除对话 "${session.title}"？此操作不可撤销。`)) return;
+    try {
+      await deleteSession(session.id);
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
+
+  function renderSessionRow(session: SessionMeta) {
+    const active = currentSession?.id === session.id;
+    const running = runningSessions.has(session.id);
+    const unread = !active && !running && unreadFinishedSessions.has(session.id);
+    const slot = sessionStreams[session.id];
+    const pendingApproval = !!(slot?.pendingApproval || slot?.pendingQuestion);
+    const timeStr = relativeTime(session.updated_at);
+    return (
+      <div
+        key={session.id}
+        className={cn(
+          "dsp-session-row-wrap",
+          active && "is-active",
+          unread && "is-unread",
+          pendingApproval && "is-approval"
+        )}
+      >
+        <button
+          type="button"
+          className="dsp-session-row"
+          onClick={() => openSession(session.id)}
+        >
+          <span className={cn("dsp-session-status", running && "is-running", unread && "is-unread")} />
+          <span className="dsp-session-main">
+            <strong>{session.title}</strong>
+            <span className="dsp-session-time">{timeStr}</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          className="dsp-session-delete"
+          title="删除对话"
+          onClick={() => handleDeleteSession(session)}
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="dsp-sidebar">
+      <div className="dsp-window-space" data-tauri-drag-region />
+      <div className="dsp-sidebar-card">
+        <div className="dsp-sidebar-tabs">
+          <button className={cn(activeTab === "code" && "is-active")} type="button" onClick={() => setActiveTab("code")}><Code2 size={14} />code</button>
+          <button className={cn(activeTab === "chat" && "is-active")} type="button" onClick={() => setActiveTab("chat")}><Edit3 size={14} />chat</button>
+        </div>
+
+        {activeTab === "chat" && (
+          <button className="dsp-sidebar-new-chat" type="button" onClick={() => handleNewSession(null)}>
+            <MessageSquarePlus size={14} />
+            新建对话
+          </button>
+        )}
+
+        <div className="dsp-project-toolbar">
+          <div className="dsp-project-toolbar-head">
+            <span>{activeTab === "chat" ? "对话" : "项目"}</span>
+          </div>
+          {activeTab === "code" && (
+            <div className="dsp-project-actions">
+              <button type="button" title="新建项目" onClick={handleCreateProject}>
+                <Plus size={13} />
+                <span>新建项目</span>
+              </button>
+              <button type="button" title="导入项目" onClick={() => handleImportProject(false)}>
+                <Import size={13} />
+                <span>导入项目</span>
+              </button>
+              <button type="button" title="导入 VS Code 项目" onClick={() => handleImportProject(true)}>
+                <FolderOpen size={13} />
+                <span>导入 VS Code</span>
+              </button>
+            </div>
+          )}
+          <div className={cn("dsp-project-search", searchOpen && "is-open")}>
+            <label>
+              <Search size={13} />
+              <input
+                value={query}
+                onFocus={() => setSearchOpen(true)}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索"
+              />
+            </label>
+            {searchOpen && (
+              <div className="dsp-search-options">
+                <button
+                  type="button"
+                  className={cn(searchCase && "is-active")}
+                  onClick={() => setSearchCase((v) => !v)}
+                  title="区分大小写"
+                >
+                  Aa
+                </button>
+                <button
+                  type="button"
+                  className={cn(searchRegex && "is-active")}
+                  onClick={() => setSearchRegex((v) => !v)}
+                  title="正则表达式"
+                >
+                  .*
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="dsp-project-groups">
+          {activeTab === "chat" ? (
+            <div className="dsp-project-session-list has-overflow">
+              {filteredBuckets.flatMap((bucket) => bucket.sessions).map(renderSessionRow)}
+            </div>
+          ) : (
+            filteredBuckets.map((bucket) => {
+              const isCollapsed = collapsed.has(bucket.id);
+              return (
+                <section className="dsp-project-group" key={bucket.id}>
+                  <div className="dsp-project-heading-wrap">
+                    <button className="dsp-project-heading" type="button" onClick={() => toggleBucket(bucket.id)}>
+                      {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                      <FolderOpen size={15} />
+                      <span>
+                        <strong>{bucket.name}</strong>
+                      </span>
+                      <em>{bucket.sessions.length}</em>
+                    </button>
+                    <button
+                      className="dsp-project-add"
+                      type="button"
+                      title="在这个项目中新建对话"
+                      onClick={() => handleNewSession(bucket.projectId)}
+                    >
+                      <Plus size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="dsp-project-delete"
+                      title="删除项目"
+                      onClick={() => handleDeleteProject(bucket.projectId!, bucket.name)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+
+                  {!isCollapsed && (
+                    <div
+                      className={cn("dsp-project-session-list has-overflow", sbVisible.has(bucket.id) && "is-visible")}
+                      onScroll={() => { sbShow(bucket.id); sbHideAfter(bucket.id, 3000); }}
+                      onMouseEnter={() => sbShow(bucket.id)}
+                      onMouseLeave={() => sbHideAfter(bucket.id, 3000)}
+                    >
+                      {bucket.sessions.map(renderSessionRow)}
+                    </div>
+                  )}
+                </section>
+              );
+            })
+          )}
+        </div>
+
+        <div className="dsp-sidebar-footer">
+          <button type="button" onClick={() => setAppSettingsOpen(true)}><Settings size={14} />设置</button>
+          <DesktopHueControl hue={hue} setHue={setHue} />
+        </div>
+      </div>
+    </aside>
+  );
+}

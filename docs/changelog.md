@@ -6659,3 +6659,24 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx` / `ChatView.tsx`: 降低消息操作和「思考中 / 思考过程」字号，展示思考计时与 agent_loop 总耗时，并收紧 reasoning / tool / 正文之间的垂直间距。
 - **影响范围**: Desktop/hebweb 共享前端聊天区与 Desktop 事件翻译层；不改 agent-core、不改持久化格式；`run_finished` 是 additive 前端事件。
 - **留尾巴**: 思考分段耗时是前端运行时展示信息，刷新页面或重新加载历史后不会从磁盘恢复。
+
+### 2026-06-10 — 修复 claude_code_compat 模式：对齐纯正 Claude Code 请求格式
+
+- **Why**: sub2api-freemodel 等第三方代理在 `claude_code_compat: true` 时返回 `400 unknown_messages_shape`。对比纯正 Claude Code 客户端发出的请求（`a.json`），hebbian 的 build_body 有 4 处不兼容：
+  1. `ModelRequest.model` 是空字符串（`String::new()`），sub2api 拒绝空 model
+  2. `thinking` 块含 `display: "summarized"` 字段，sub2api 不接受
+  3. `max_tokens` 仅 8192，adaptive thinking 要求远大于（64000）
+  4. `build_system` 含 `x-anthropic-billing-header` 块，claude-code 客户端实际不发送
+
+- **改动**:
+  - `crates/agent-core/src/agent_loop.rs` (`agent_loop.rs:632`)：`ModelRequest.model` 从 `String::new()` 改为 `model_id.clone().unwrap_or_default()`，取 session 的实际模型 ID
+  - `crates/model-gateway/src/protocols/anthropic.rs`:
+    - `build_body` claude_code_oauth 分支：去掉 `display: "summarized"`；`max_tokens < 64000` 时抬到 64000
+    - `build_system` claude_code_oauth 分支：去掉 `CLAUDE_CODE_BILLING_PREFIX` 块，改为 2-block 格式（banner + agent_desc+user_system），对齐纯正 Claude Code 输出
+    - 删除不再使用的 `CLAUDE_CODE_BILLING_PREFIX` 常量
+    - 修复两个关联的单测（`system` 断言 2 块而非 3 块）
+- **验证**:
+  - `cargo check --workspace`：通过
+  - `cargo test -p agent-core --lib`：462 通过，4 个已有波动测试失败（无新增）
+  - 手动 curl 到 sub2api-freemodel 验证：`max_tokens=64000` + `thinking={type:adaptive}`(无 display) + `model=claude-opus-4-8` + 2-block system → 200 OK，完整 event stream 返回
+- **留尾巴**: 直连 Anthropic OAuth 路径不再加 `display: "summarized"`，4.7/4.8 的 stream thinking_delta 可能变空（由 Anthropic API 默认 `display=omitted` 决定）。如果 OAuth 用户发现没有 thinking 输出，需要单独回加 display 字段，区分 `claude_code_compat` 与真实 OAuth 两条路径的 display 策略。
