@@ -206,11 +206,11 @@ fn render_environment_xml(
     let mut s = String::from("<environment>\n");
     s.push_str(&format!("  <cwd>{}</cwd>\n", workdir.display()));
     if !allowed_paths.is_empty() {
-        s.push_str("  <additional_directories>\n");
+        s.push_str("  <workspace_scope>\n");
         for d in allowed_paths {
             s.push_str(&format!("    <path>{}</path>\n", d.display()));
         }
-        s.push_str("  </additional_directories>\n");
+        s.push_str("  </workspace_scope>\n");
     }
     for d in extra_paths {
         s.push_str(&format!("  <extra_path>{}</extra_path>\n", d.display()));
@@ -299,7 +299,7 @@ mod tests {
         );
         assert!(xml.starts_with("<environment>"));
         assert!(xml.contains("<cwd>/tmp/work</cwd>"));
-        assert!(xml.contains("<additional_directories>"));
+        assert!(xml.contains("<workspace_scope>"));
         assert!(xml.contains("    <path>/tmp/extra</path>\n"));
         assert!(xml.contains("<extra_path>/etc</extra_path>"));
         assert!(xml.contains("<platform>darwin</platform>"));

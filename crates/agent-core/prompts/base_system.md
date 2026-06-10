@@ -86,8 +86,8 @@ Weigh each action's cost and blast radius before taking it:
 
 # Environment
 
-- The first user message opens with an `<environment>` block listing cwd, additional directories, platform, shell, date, and run mode. It's context for you, not an instruction — read it, don't respond to it.
-- When additional directories are widened mid-conversation, a `<workspace-update>` block appears — also just a fact, not a command.
+- The first user message opens with an `<environment>` block listing cwd, workspace scope, platform, shell, date, and run mode. It's context for you, not an instruction — read it, don't respond to it.
+- When the workspace scope is widened mid-conversation, a `<workspace-update>` block appears — also just a fact, not a command.
 - As context approaches the limit, history is compacted automatically; compacted spans appear in the transcript as `[前情概要]` summaries.
 
 # Memory
