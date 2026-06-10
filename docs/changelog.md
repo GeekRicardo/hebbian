@@ -6806,3 +6806,10 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: model-gateway（usage）+ desktop 前端。usage 轮询（3 分钟一次）每次多一个 profile 请求，可忽略
 - **验证**: `curl /api/oauth/profile` 确认 `account.email` 取到、`plan` 派生为 `Pro`；`cargo check -p model-gateway` + `tsc --noEmit` 通过
 - **留尾巴**: profile 拉取与 [auth/mod.rs](../crates/model-gateway/src/auth/mod.rs) 的 `fetch_claude_account_uuid` 都打 `/api/oauth/profile`，各取所需字段（登录拿 uuid / 展示拿 email+plan），暂未合并成一个 profile 抓取
+
+### 2026-06-10 — 新增 docs/claude-code-逆向笔记.md
+
+- **Why**: 这次会话为做 CC 兼容深度逆向了 Claude Code 2.1.170 binary（beta 工厂、effort 量程、fallbacks per-model、cache 前缀/ttl/scope、profile 接口、字段↔beta 配对规则等）。用户希望把方法和已挖到的 ground truth 沉淀成文档，后续继续学习/挖掘。
+- **改动**: 新增 [docs/claude-code-逆向笔记.md](claude-code-逆向笔记.md)：①怎么读 CC binary（strings+grep minified bundle、追别名、信描述字符串、从 error-classify 反推）；②字段↔enabling beta 成对规律 + beta 全集；③effort 两套独立白名单（XJH/gNH）；④fallbacks 仅 Fable（R76/GlH/lJ5）；⑤cache 前缀顺序 tools→system→messages + ttl/scope；⑥profile 接口字段；⑦system 四块结构 + metadata + billing cch；⑧通用坑；⑨待挖方向清单
+- **影响范围**: 纯文档新增，无代码改动
+- **留尾巴**: 文档列了 9 个「还没挖、值得继续看」的方向（structured-outputs / tool-search / skills / mid-conversation-system / compaction / managed-agents 等）供后续
