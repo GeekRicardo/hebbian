@@ -271,6 +271,16 @@ pub struct TokenStats {
     /// run 总轮数（含 failed / cancelled）
     #[serde(default)]
     pub run_count: u64,
+    /// 最新一次 run 的用量快照（上面的字段是整个对话累计）。
+    /// 供 TokenStatsPanel hover 展开「最新一次」的缓存命中明细。
+    #[serde(default)]
+    pub last_input_tokens: u64,
+    #[serde(default)]
+    pub last_output_tokens: u64,
+    #[serde(default)]
+    pub last_cache_read_tokens: u64,
+    #[serde(default)]
+    pub last_cache_creation_tokens: u64,
 }
 
 impl TokenStats {
@@ -280,6 +290,11 @@ impl TokenStats {
         self.cache_read_tokens += delta.cache_read_tokens;
         self.cache_creation_tokens += delta.cache_creation_tokens;
         self.run_count += delta.run_count;
+        // last_* 覆盖为本次 run 的用量（delta 即单次 run 的统计），供 hover 看最新一次。
+        self.last_input_tokens = delta.input_tokens;
+        self.last_output_tokens = delta.output_tokens;
+        self.last_cache_read_tokens = delta.cache_read_tokens;
+        self.last_cache_creation_tokens = delta.cache_creation_tokens;
     }
 }
 
@@ -2101,6 +2116,38 @@ mod tests {
 
     /// 回归测试：set_todos 落 meta_update 行后，全量 save 重写 jsonl，todos 不能丢。
     /// 这是 2026-05-26 "完成的 todo 在 sidebar 消失" bug 的真正根因——save 调
+    /// accumulate：累计字段累加、last_* 覆盖为最新一次 run。
+    /// 支撑 TokenStatsPanel 的「全程平均（累计）+ hover 看最新一次（last_*）」。
+    #[test]
+    fn token_stats_accumulate_tracks_cumulative_and_last() {
+        let mut s = TokenStats::default();
+        s.accumulate(TokenStats {
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_creation_tokens: 100,
+            run_count: 1,
+            ..Default::default()
+        });
+        s.accumulate(TokenStats {
+            input_tokens: 80,
+            output_tokens: 8,
+            cache_read_tokens: 70,
+            cache_creation_tokens: 2,
+            run_count: 1,
+            ..Default::default()
+        });
+        // 累计字段累加
+        assert_eq!(s.input_tokens, 180);
+        assert_eq!(s.output_tokens, 13);
+        assert_eq!(s.cache_read_tokens, 70);
+        assert_eq!(s.run_count, 2);
+        // last_* 覆盖为最新一次（第二次）的值，不累加
+        assert_eq!(s.last_input_tokens, 80);
+        assert_eq!(s.last_output_tokens, 8);
+        assert_eq!(s.last_cache_read_tokens, 70);
+        assert_eq!(s.last_cache_creation_tokens, 2);
+    }
+
     /// write_jsonl_full 把 meta + messages 重写，把累积的 meta_update 行抹掉，
     /// 同时 RolloutMeta 缺 todos 字段，没法把当前 todos 折叠到新写的 meta 行里。
     #[test]

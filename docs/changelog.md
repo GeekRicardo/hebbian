@@ -6768,3 +6768,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: agent-core（tools 顺序，现为字母序，不影响功能）+ model-gateway（beta header）。**惠及所有 provider 的 prompt cache**——OpenAI/DeepSeek 的缓存同样受 tools 顺序影响，之前一起被这个 bug 拖累
 - **验证**: heb CLI 真实 OAuth 连发两轮——修前第二轮 `cache_read=0 / cache_creation=15524`（全重写）；修后 `cache_read=15433 / cache_creation=91`（命中）。`cargo test -p agent-core --lib registry`（4）+ `-p model-gateway --lib`（106）通过
 - **留尾巴**: system harness 含 session 信息（Environment 段），`scope:"global"` 的跨会话共享发挥不了（退化成会话内命中）；要真正跨会话共享需把 system 拆成 `[稳定 harness(scope:global), session-specific(ttl)]` 两段断点，留作后续优化。「输入框下方 cache 展示器：平均 + hover 最新」的前端改动另起一条
+
+### 2026-06-10 — TokenStatsPanel：主显示全程平均缓存命中率 + hover 看最新一次
+
+- **Why**: 用户要「输入框下方 cache 展示器：显示整个对话平均 cache，hover 展开显示最新一次的 cache，每次请求后更新」。原 panel 主显示已是累计命中率（即平均），但 hover 展开的是累计明细，缺「最新一次」维度
+- **改动**:
+  - [agent-core/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `TokenStats` 加 `last_input/output/cache_read/cache_creation_tokens` 四个字段（serde default，保留 Copy）；`accumulate` 累计字段累加、`last_*` 覆盖为本次 run 的用量。单测 `token_stats_accumulate_tracks_cumulative_and_last` 固化「累计累加 + last 覆盖」
+  - [chat.rs](../apps/desktop/src/chat.rs) / [web-server/session.rs](../apps/web-server/src/session.rs) / [cli/daemon.rs](../apps/cli/src/daemon.rs): `TokenStats` 构造加 `..Default::default()` 适配新字段（三 surface 各一处）
+  - 前端 [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `TokenStats` 加可选 `last_*` 字段
+  - 前端 [TokenStatsPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx): 主按钮 `cache %` 标为「全程平均」（累计 cache_read/input）；hover 拆两段——「最新一次」（last_* 明细 + 该次命中率）+「全程平均」（命中率 + 累计 input/output）
+- **影响范围**: agent-core（TokenStats，三 surface 共用）+ 前端展示。每次 run 结束 `accumulate`→落盘→前端 `getSession` 重渲染（现有机制，天然「每次请求后更新」）。向后兼容：`last_*` serde default，旧 session 加载为 0、hover 本轮段显示「本轮暂无 token 记录」直到下一次 run
+- **验证**: heb CLI 真实 OAuth 连发两轮——token_stats 演化正确：`cum_input 15823→31351`（累加）、`last_input` 覆盖为 `15528`、`run_count 1→2`；hover 平均 30866/31351≈98%、最新 15433/15528≈99%。单测 + `tsc --noEmit` 通过
+- **留尾巴**: 「平均」口径用累计 `cache_read/input`（整体命中率），非「每轮命中率算术平均」——前者更反映整体缓存效率、不被小请求扭曲。另发现 pre-existing 失败 `list_self_heals_pretty_json_session_files`（list 自愈 "EOF while parsing object"，HEAD 即失败，与本次无关），未在此修

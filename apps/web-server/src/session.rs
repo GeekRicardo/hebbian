@@ -530,6 +530,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             cache_read_tokens: usage.cache_read,
             cache_creation_tokens: usage.cache_creation,
             run_count: 1,
+            ..Default::default()
         };
         let _ = sessions::update_meta(data_dir, session_id, |sess| {
             let mut stats = sess.token_stats.unwrap_or_default();

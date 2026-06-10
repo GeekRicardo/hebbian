@@ -189,6 +189,11 @@ export interface TokenStats {
   cache_read_tokens: number;
   cache_creation_tokens: number;
   run_count: number;
+  /** 最新一次 run 的用量快照（上面是累计），供 hover 看最新一次缓存命中 */
+  last_input_tokens?: number;
+  last_output_tokens?: number;
+  last_cache_read_tokens?: number;
+  last_cache_creation_tokens?: number;
 }
 
 export interface Message {

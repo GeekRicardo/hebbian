@@ -449,6 +449,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 cache_read_tokens: usage.cache_read,
                 cache_creation_tokens: usage.cache_creation,
                 run_count: 1,
+                ..Default::default()
             },
         );
     }

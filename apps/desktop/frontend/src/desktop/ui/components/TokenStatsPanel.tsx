@@ -15,10 +15,18 @@ interface Props {
  */
 export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onCompact }: Props) {
   const empty = !stats || stats.run_count === 0;
-  const hitRate =
+  // 主显示：整个对话平均命中率（累计 cache_read / 累计 input）
+  const avgHitRate =
     !empty && stats!.input_tokens > 0
       ? Math.round((stats!.cache_read_tokens / stats!.input_tokens) * 100)
       : 0;
+  // hover：最新一次 run 的用量与命中率
+  const lastInput = stats?.last_input_tokens ?? 0;
+  const lastOutput = stats?.last_output_tokens ?? 0;
+  const lastCacheRead = stats?.last_cache_read_tokens ?? 0;
+  const lastCacheCreation = stats?.last_cache_creation_tokens ?? 0;
+  const lastHitRate = lastInput > 0 ? Math.round((lastCacheRead / lastInput) * 100) : 0;
+  const hasLast = lastInput > 0;
   const contextRatio = contextUsage && contextUsage.budget_tokens > 0
     ? Math.min(contextUsage.used_tokens / contextUsage.budget_tokens, 1.5)
     : 0;
@@ -34,8 +42,8 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onC
       ? "text-amber-500"
       : "text-primary";
   const title = contextUsage
-    ? `缓存 ${hitRate}% · 上下文 ${contextPct}%`
-    : `缓存 ${hitRate}%`;
+    ? `缓存平均 ${avgHitRate}% · 上下文 ${contextPct}%`
+    : `缓存平均 ${avgHitRate}%`;
 
   return (
     <div className={cn("relative group/token", className)}>
@@ -82,7 +90,7 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onC
           </span>
         </span>
         <span className="token-stats-label inline-flex items-center gap-1 text-[10px] tabular-nums leading-none">
-          <span>cache {hitRate}%</span>
+          <span>cache {avgHitRate}%</span>
           <span className="text-muted-foreground/50">/</span>
           <span>ctx {contextUsage ? contextPct : 0}%</span>
         </span>
@@ -102,38 +110,62 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onC
         ) : (
           <>
             <div className="flex items-center justify-between mb-1.5">
-              <span className="font-medium text-foreground/80">Token 用量</span>
-              <span className="text-muted-foreground tabular-nums">
-                ×{stats!.run_count}
-              </span>
+              <span className="font-medium text-foreground/80">最新一次</span>
+              <span className="text-muted-foreground tabular-nums">第 {stats!.run_count} 次</span>
             </div>
-            <Row
-              icon={<ArrowUpFromLine className="w-3 h-3" />}
-              label="输入"
-              value={stats!.input_tokens}
-              tone="text-foreground/80"
-            />
-            <Row
-              icon={<ArrowDownToLine className="w-3 h-3" />}
-              label="输出"
-              value={stats!.output_tokens}
-              tone="text-foreground/80"
-            />
-            <Row
-              icon={<Database className="w-3 h-3" />}
-              label="缓存命中"
-              value={stats!.cache_read_tokens}
-              tone="text-emerald-600 dark:text-emerald-400"
-              suffix={hitRate > 0 ? ` (${hitRate}%)` : undefined}
-            />
-            {stats!.cache_creation_tokens > 0 && (
-              <Row
-                icon={<Layers className="w-3 h-3" />}
-                label="缓存写入"
-                value={stats!.cache_creation_tokens}
-                tone="text-amber-600 dark:text-amber-400"
-              />
+            {hasLast ? (
+              <>
+                <Row
+                  icon={<ArrowUpFromLine className="w-3 h-3" />}
+                  label="输入"
+                  value={lastInput}
+                  tone="text-foreground/80"
+                />
+                <Row
+                  icon={<ArrowDownToLine className="w-3 h-3" />}
+                  label="输出"
+                  value={lastOutput}
+                  tone="text-foreground/80"
+                />
+                <Row
+                  icon={<Database className="w-3 h-3" />}
+                  label="缓存命中"
+                  value={lastCacheRead}
+                  tone="text-emerald-600 dark:text-emerald-400"
+                  suffix={lastHitRate > 0 ? ` (${lastHitRate}%)` : undefined}
+                />
+                {lastCacheCreation > 0 && (
+                  <Row
+                    icon={<Layers className="w-3 h-3" />}
+                    label="缓存写入"
+                    value={lastCacheCreation}
+                    tone="text-amber-600 dark:text-amber-400"
+                  />
+                )}
+              </>
+            ) : (
+              <div className="text-muted-foreground/70 py-0.5">本轮暂无 token 记录</div>
             )}
+            <div className="mt-2 border-t border-border pt-1.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-medium text-foreground/80">全程平均</span>
+                <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
+                  命中 {avgHitRate}%
+                </span>
+              </div>
+              <Row
+                icon={<ArrowUpFromLine className="w-3 h-3" />}
+                label="累计输入"
+                value={stats!.input_tokens}
+                tone="text-foreground/70"
+              />
+              <Row
+                icon={<ArrowDownToLine className="w-3 h-3" />}
+                label="累计输出"
+                value={stats!.output_tokens}
+                tone="text-foreground/70"
+              />
+            </div>
           </>
         )}
         {contextUsage && (
