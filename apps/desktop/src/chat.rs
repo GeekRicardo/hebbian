@@ -2100,24 +2100,19 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 text,
             })
         }
-        TurnEditsCommitted {
-            turn_id,
-            turn,
-            files,
-        } => Some(EngineEvent::TurnEditsCommitted {
-            turn_id: turn_id.0.clone(),
-            turn: *turn,
+        RunEditsCommitted { run_id, files } => Some(EngineEvent::RunEditsCommitted {
+            run_id: run_id.0.clone(),
             files: files.clone(),
         }),
-        TurnEditsReverted { turn_id } => Some(EngineEvent::TurnEditsReverted {
-            turn_id: turn_id.0.clone(),
+        RunEditsReverted { run_id } => Some(EngineEvent::RunEditsReverted {
+            run_id: run_id.0.clone(),
         }),
-        TurnEditsRevertFailed {
-            turn_id,
+        RunEditsRevertFailed {
+            run_id,
             file_path,
             error,
-        } => Some(EngineEvent::TurnEditsRevertFailed {
-            turn_id: turn_id.0.clone(),
+        } => Some(EngineEvent::RunEditsRevertFailed {
+            run_id: run_id.0.clone(),
             file_path: file_path.clone(),
             error: error.clone(),
         }),

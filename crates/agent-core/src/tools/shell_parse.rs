@@ -1335,6 +1335,26 @@ fn collect_argv_write_targets(cmd: &ParsedCommand) -> Vec<String> {
     out
 }
 
+/// 提取 `rm` / `rmdir` 的删除目标（位置参数，跳过 flag）。
+///
+/// 复用已 tokenize 好的 argv，不重新解析 shell。`-rf` / `--recursive` 这类 flag 被
+/// `positional()` 过滤掉，只留真实路径。edits-worktree 据此在删除前拍 before 快照，
+/// 让本 Run 回退能重建被删文件。
+pub fn delete_targets(cmd: &ParsedCommand) -> Vec<String> {
+    let (_env, base) = strip_prefix(&cmd.argv);
+    let Some(root) = base.first().map(String::as_str) else {
+        return Vec::new();
+    };
+    if root != "rm" && root != "rmdir" {
+        return Vec::new();
+    }
+    base.iter()
+        .skip(1)
+        .filter(|t| !t.starts_with('-'))
+        .cloned()
+        .collect()
+}
+
 /// 简单识别 `open('FILE','w'|'a'|'wb'|...)` / `open("FILE", ...)`，返回 FILE。
 fn python_open_target(body: &str) -> Option<String> {
     let idx = body.find("open(")?;
@@ -1543,6 +1563,25 @@ mod tests {
     fn python_open_write() {
         let r = cmd(r#"python -c "open('secrets.txt','w').write('x')""#);
         assert_eq!(r.commands[0].write_targets, vec!["secrets.txt".to_string()]);
+    }
+
+    #[test]
+    fn rm_extracts_delete_targets() {
+        let r = cmd("rm -rf build dist/output.js");
+        let targets = delete_targets(&r.commands[0]);
+        assert_eq!(targets, vec!["build".to_string(), "dist/output.js".to_string()]);
+    }
+
+    #[test]
+    fn rmdir_extracts_delete_targets() {
+        let r = cmd("rmdir tmpdir");
+        assert_eq!(delete_targets(&r.commands[0]), vec!["tmpdir".to_string()]);
+    }
+
+    #[test]
+    fn non_rm_has_no_delete_targets() {
+        let r = cmd("ls -la /tmp");
+        assert!(delete_targets(&r.commands[0]).is_empty());
     }
 
     #[test]

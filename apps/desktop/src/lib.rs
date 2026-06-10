@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use agent_core::core_client::{CoreClient, LocalCoreClient};
 use agent_core::edits;
-use agent_core::edits::metadata::TurnEditEntry;
+use agent_core::edits::metadata::RunEditEntry;
 use agent_core::permissions::PermissionStore;
 use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
@@ -699,18 +699,18 @@ fn read_text_file(path: PathBuf) -> AppResult<String> {
 }
 
 #[tauri::command]
-fn list_edits(app: AppHandle, session_id: String) -> AppResult<Vec<TurnEditEntry>> {
+fn list_edits(app: AppHandle, session_id: String) -> AppResult<Vec<RunEditEntry>> {
     let dd = data_dir(&app)?;
     let wd = edits::metadata::worktree_dir(&dd, &session_id);
     let meta = edits::metadata::load_metadata(&wd)?;
-    Ok(meta.turns)
+    Ok(meta.runs)
 }
 
 #[tauri::command]
 async fn diff_edit(
     app: AppHandle,
     session_id: String,
-    turn_id: String,
+    run_id: String,
     file_path: String,
 ) -> AppResult<DiffPayload> {
     let dd = data_dir(&app)?;
@@ -718,12 +718,12 @@ async fn diff_edit(
     if !worktree.enabled().await {
         return Err(AppError::msg("git 不可用，无法生成 diff"));
     }
-    let turns = worktree.list_turns()?;
-    let turn = turns
+    let runs = worktree.list_runs()?;
+    let run = runs
         .into_iter()
-        .find(|e| e.turn_id == turn_id)
+        .find(|e| e.run_id == run_id)
         .ok_or_else(|| AppError::msg("找不到该轮修改"))?;
-    let file = turn
+    let file = run
         .files
         .into_iter()
         .find(|f| f.real_path == file_path)
@@ -743,27 +743,27 @@ async fn diff_edit(
 async fn revert_edit(
     app: AppHandle,
     session_id: String,
-    turn_id: String,
+    run_id: String,
 ) -> AppResult<RevertResult> {
     let dd = data_dir(&app)?;
     let worktree = build_edits_worktree(&dd, &session_id)?;
     if !worktree.enabled().await {
         return Err(AppError::msg("git 不可用，回退功能已禁用"));
     }
-    let turns = worktree.list_turns()?;
-    let entry = turns
+    let runs = worktree.list_runs()?;
+    let entry = runs
         .into_iter()
-        .find(|e| e.turn_id == turn_id)
+        .find(|e| e.run_id == run_id)
         .ok_or_else(|| AppError::msg("找不到该轮修改"))?;
     if entry.reverted {
         return Err(AppError::msg("该轮修改已回退过"));
     }
-    match worktree.revert_turn(&entry).await {
+    match worktree.revert_run(&entry).await {
         Ok(()) => {
-            worktree.mark_turn_reverted(&turn_id)?;
+            worktree.mark_run_reverted(&run_id)?;
             let payload = serde_json::json!({
                 "session_id": session_id,
-                "turn_id": turn_id,
+                "run_id": run_id,
             });
             app.emit("edit-reverted", payload).ok();
             Ok(RevertResult {
@@ -787,7 +787,7 @@ async fn edits_worktree_status(
     let worktree = build_edits_worktree(&dd, &session_id)?;
     let enabled = worktree.enabled().await;
     let entry_count = if enabled {
-        worktree.list_turns().map(|e| e.len()).unwrap_or(0)
+        worktree.list_runs().map(|e| e.len()).unwrap_or(0)
     } else {
         0
     };

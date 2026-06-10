@@ -19,7 +19,7 @@ interface WakeupFiredPayload {
 
 interface EditRevertedPayload {
   session_id: string;
-  turn_id: string;
+  run_id: string;
 }
 
 export default function App() {

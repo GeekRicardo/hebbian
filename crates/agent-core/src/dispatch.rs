@@ -71,14 +71,6 @@ impl ToolProgress for ToolProgressEmitter {
     }
 }
 
-fn edit_action_from_input(input: &serde_json::Value) -> protocol::EditAction {
-    if input["old_string"].as_str().is_some_and(|s| s.is_empty()) {
-        protocol::EditAction::Create
-    } else {
-        protocol::EditAction::Modify
-    }
-}
-
 fn effect_class_label(class: EffectClass) -> &'static str {
     match class {
         EffectClass::ReadOnly => "read_only",
@@ -173,9 +165,8 @@ pub struct ToolDispatcher {
     pub permission_store: Option<Arc<PermissionStore>>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
     pub edits_worktree: Option<Arc<EditsWorktree>>,
-    /// Edit turn 快照所属 turn（架构 §4.13）。
-    pub current_turn_id: Option<String>,
-    pub current_turn_index: u32,
+    /// Edit/Bash 文件快照所属 Run（架构 §4.13）。整个 agent_loop 共享一个 run_id。
+    pub current_run_id: Option<String>,
     /// Subagent / NestedRun 上下文（架构 §4.4.11）。`None` 表示当前进程不支持
     /// subagent 调度（单测路径 / 没有可用 subagent 定义时），spawn_task 直接拒绝。
     pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
@@ -488,7 +479,8 @@ impl ToolDispatcher {
         let data_dir_for_artifacts = self.data_dir_for_artifacts.clone();
         let permission_store = self.permission_store.clone();
         let edits_worktree_for_snapshot = self.edits_worktree.clone();
-        let current_turn_id_for_snapshot = self.current_turn_id.clone();
+        let current_run_id_for_snapshot = self.current_run_id.clone();
+        let workspace_for_snapshot = self.workspace.clone();
         let model_io_dump_for_judge = self.model_io_dump.clone();
 
         let tool_span_name = format!("tool.{}", call.name);
@@ -740,31 +732,24 @@ impl ToolDispatcher {
                     }
                 }
 
-                // —— Edit 工具快照：本 turn 首次触达该文件时拍 before（架构 §4.13.2）——
-                // 按真实文件路径加排他锁，确保同 turn 内同 path 的多个 Edit 串行。
-                let _edit_lock = if call.name == "Edit" {
-                    if let Some(wt) = edits_worktree_for_snapshot.as_ref() {
-                        let fp = effective_input["file_path"].as_str().map(Path::new);
-                        if let Some(fp) = fp {
-                            wt.lock_file(fp).await.ok()
-                        } else {
-                            None
+                // —— Edits 快照（架构 §4.13）：本 Run 首次触达某文件时拍 before ——
+                // 触达路径 = effects.paths（Edit 的 file_path + Bash 写目标 + rm/rmdir 删除目标）。
+                // 在工具执行前拍：删除类命令执行后文件就没了。按真实路径加锁，保证
+                // ensure_run_before 与执行串行。post-hook 用 effective_input 重新解析路径。
+                let mut _edit_locks: Vec<crate::edits::FileLockGuard> = Vec::new();
+                if let (Some(wt), Some(run_id)) = (
+                    edits_worktree_for_snapshot.as_ref(),
+                    current_run_id_for_snapshot.as_deref(),
+                ) {
+                    let touched = analyze_effects(&call.name, &effective_input).paths;
+                    for path in touched {
+                        if !workspace_for_snapshot.allows(&path) {
+                            continue; // 越界路径由 PathAccess 审批把关，未授权不快照
                         }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if call.name == "Edit" {
-                    if let (Some(wt), Some(turn_id)) = (
-                        edits_worktree_for_snapshot.as_ref(),
-                        current_turn_id_for_snapshot.as_deref(),
-                    ) {
-                        if let Some(fp) = effective_input["file_path"].as_str().map(Path::new) {
-                            let action = edit_action_from_input(&effective_input);
-                            let _ = wt.ensure_turn_before(turn_id, fp, action).await;
+                        if let Ok(guard) = wt.lock_file(&path).await {
+                            _edit_locks.push(guard);
                         }
+                        let _ = wt.ensure_run_before(run_id, &path).await;
                     }
                 }
 
@@ -811,7 +796,7 @@ impl ToolDispatcher {
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
 
-                // Turn 级 edits-worktree 在 TurnFinished 前统一拍 after；这里不写 per-Edit metadata。
+                // Run 级 edits-worktree 在 RunFinished 前统一拍 after；这里不写 per-Edit metadata。
 
                 // 大输出统一落 artifact（架构 §4.4.9）：超 6 KB 写盘 + 给模型「头部预览 +
                 // 工件指针」。失败路径（exec_failed）不走 materialize——错误文本通常很短，
@@ -1968,8 +1953,7 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2035,8 +2019,7 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
@@ -2102,8 +2085,7 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
@@ -2195,8 +2177,7 @@ mod tests {
             data_dir_for_artifacts: None,
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2313,8 +2294,7 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,
@@ -2433,8 +2413,7 @@ mod tests {
             data_dir_for_artifacts: Some(data_dir.clone()),
             permission_store: None,
             edits_worktree: None,
-            current_turn_id: None,
-            current_turn_index: 0,
+            current_run_id: None,
 
             subagent_ctx: None,
             parent_transcript_snapshot: None,

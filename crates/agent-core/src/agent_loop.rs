@@ -270,28 +270,26 @@ pub use crate::system_prompt::compose_system_prompt as build_system_prompt;
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
-async fn commit_turn_edits(
+async fn commit_run_edits(
     edits_worktree: &Option<Arc<crate::edits::EditsWorktree>>,
     state: &Arc<RunState>,
     sink: &EventSink,
-    turn_id: &protocol::TurnId,
-    turn_index: u32,
+    run_id: &str,
 ) {
     let Some(wt) = edits_worktree.as_ref() else {
         return;
     };
-    match wt.commit_turn(&turn_id.to_string()).await {
+    match wt.finalize_run(run_id).await {
         Ok(Some(entry)) => {
             let files = entry.files.into_iter().map(Into::into).collect();
-            sink(state.event(EventPayload::TurnEditsCommitted {
-                turn_id: turn_id.clone(),
-                turn: turn_index,
+            sink(state.event(EventPayload::RunEditsCommitted {
+                run_id: state.run_id.clone(),
                 files,
             }));
         }
         Ok(None) => {}
         Err(e) => {
-            tracing::warn!(error = %e, "commit turn edits failed");
+            tracing::warn!(error = %e, "finalize run edits failed");
             sink(state.event(EventPayload::Notice {
                 level: LogLevel::Warn,
                 message: format!("保存本轮文件修改记录失败：{e}"),
@@ -380,6 +378,15 @@ pub async fn run_loop(
     let emit = |payload: EventPayload| on_event(state.event(payload));
     let run_span = tracing::Span::current();
 
+    // Edits 跟踪（架构 §4.13）：以 Run 为单位。subagent（parent.is_some()）的文件改动
+    // 归属父 Run——共用 parent_run_id 累积进父的 active run，子 loop 不 begin/finalize
+    // （否则会覆盖父的单槽 active run）。顶层 Run 才负责 begin/finalize。
+    let is_nested_run = parent.is_some();
+    let edits_run_id = parent
+        .clone()
+        .unwrap_or_else(|| state.run_id.clone())
+        .to_string();
+
     // 入口：resume_from 给定时 emit `RunResumed`（架构 §4.12.6），否则 `RunStarted`。
     // 计数器从 checkpoint 起步，保证 max_tool_iterations 累积、Step index 单调。
     let (
@@ -421,6 +428,15 @@ pub async fn run_loop(
             if let Err(e) = crate::storage::run_checkpoint::delete(dd, sid) {
                 tracing::warn!(error = %e, "resume: delete checkpoint failed");
             }
+        }
+    }
+
+    // 登记本 Run 的 edits 跟踪（架构 §4.13）：整个 agent_loop 生命周期内（含插队、
+    // 多 turn、resume）触达的文件，Run 结束时统一对比净变化。resume 用同一 run_id 续跑。
+    // 嵌套子 Run 不另开 active run（归属父 Run）。
+    if !is_nested_run {
+        if let Some(wt) = edits_worktree.as_ref() {
+            wt.begin_run(&edits_run_id).await;
         }
     }
 
@@ -632,9 +648,6 @@ pub async fn run_loop(
             turn_id: turn_id.clone(),
             turn: turn_index,
         });
-        if let Some(wt) = edits_worktree.as_ref() {
-            wt.begin_turn(&turn_id.to_string(), turn_index).await;
-        }
 
         // 内置工具每轮都自动注入：ask + Bash/Read/Write/Grep/Skill。
         // 用户可选工具按 enabled_tools 过滤。条件注入工具（如 Task）一律加进白名单，
@@ -786,7 +799,6 @@ pub async fn run_loop(
             Ok(response) => response,
             Err(e) => {
                 turn_span.record(attr::STOP_REASON, "failed");
-                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id: turn_id.clone(),
                     turn: turn_index,
@@ -831,7 +843,6 @@ pub async fn run_loop(
                     full_text: text.clone(),
                 });
                 turn_span.record(attr::STOP_REASON, "end_turn");
-                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
@@ -946,8 +957,6 @@ pub async fn run_loop(
                         let msg = format!("已达到最大工具调用轮数 {max}");
                         tracing::warn!(max_iterations = max, "max iterations");
                         turn_span.record(attr::STOP_REASON, "max_iterations");
-                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
-                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -975,8 +984,7 @@ pub async fn run_loop(
                     data_dir_for_artifacts: data_dir.clone(),
                     permission_store: hitl.permission_store().cloned(),
                     edits_worktree: edits_worktree.clone(),
-                    current_turn_id: Some(turn_id.to_string()),
-                    current_turn_index: turn_index,
+                    current_run_id: Some(edits_run_id.clone()),
                     subagent_ctx: subagent_ctx.clone(),
                     parent_transcript_snapshot,
                     model_io_dump: model_io_dump.clone(),
@@ -1001,8 +1009,6 @@ pub async fn run_loop(
                     Ok(results) => results,
                     Err(e) => {
                         turn_span.record(attr::STOP_REASON, "cancelled");
-                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
-                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -1095,8 +1101,6 @@ pub async fn run_loop(
                         // 取巧：emit TurnFinished 后 break 出循环，result 保持
                         // 上一个 step 的状态；外层把 Suspended 视为 Run 没结束。
                         turn_span.record(attr::STOP_REASON, "suspended");
-                        commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index)
-                            .await;
                         emit(EventPayload::TurnFinished {
                             turn_id: turn_id.clone(),
                             turn: turn_index,
@@ -1107,7 +1111,6 @@ pub async fn run_loop(
                 }
 
                 turn_span.record(attr::STOP_REASON, "end_turn");
-                commit_turn_edits(&edits_worktree, &state, &on_event, &turn_id, turn_index).await;
                 emit(EventPayload::TurnFinished {
                     turn_id,
                     turn: turn_index,
@@ -1120,6 +1123,11 @@ pub async fn run_loop(
     let duration_ms = run_start.elapsed().as_millis() as u64;
     set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), false);
     run_span.record("hebbian.run.iterations", iteration);
+    // 本 Run 结束（非挂起、非嵌套子 Run）→ 对比 Run 开始至今所有触达文件的净变化，
+    // emit RunEditsCommitted。挂起态 Run 仍 Active，留到真正终结时再 finalize。
+    if !is_nested_run && !matches!(result, Err(ModelError::Suspended)) {
+        commit_run_edits(&edits_worktree, &state, &on_event, &edits_run_id).await;
+    }
     match &result {
         Ok(_) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::DONE);

@@ -270,6 +270,11 @@ fn analyze_shell(input: &Value) -> Effects {
                 for t in &cmd.write_targets {
                     paths.push(PathBuf::from(t));
                 }
+                // rm / rmdir 删除目标也并进 paths：edits-worktree 在执行前据此拍 before
+                // 快照（删除后文件就没了，拍不到），让本 Run 回退能重建被删文件。
+                for t in shell_parse::delete_targets(cmd) {
+                    paths.push(PathBuf::from(t));
+                }
                 segments.push(SegmentEffect {
                     fingerprint,
                     env_prefix: cmd.env_prefix.clone(),

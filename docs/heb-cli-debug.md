@@ -101,6 +101,7 @@ daemon stdout 是 **NDJSON 流**——每行一个 JSON 对象，字段 `event` 
 | `question_requested` | `request_id, question, options[{label,description}], multi` | agent 用 `AskFollowup` 工具问问题 |
 | `question_answered` | `request_id` | 问题被回答（不重复回答内容） |
 | `run_mode_changed` | `from, to` | mode 切换 |
+| `run_edits_committed` | `run_id, files[{real_path, action, before_bytes, after_bytes}]` | 一个 Run 跑完后本次文件净变化汇总（§4.13）。`action` ∈ create/modify/overwrite/delete。无文件变化的 Run 不发本事件 |
 | `error` | `message` | 非致命错误通告 |
 
 ---

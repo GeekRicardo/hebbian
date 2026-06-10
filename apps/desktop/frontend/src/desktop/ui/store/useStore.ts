@@ -6,7 +6,7 @@ import type {
   CatalogEntry,
   ContextUsage,
   ContinueKind,
-  TurnEditEntry,
+  RunEditEntry,
   EngineEvent,
   LogEntry,
   Message,
@@ -752,21 +752,20 @@ function patchSessionSlot(
   void get;
 }
 
-/** turn edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
+/** run edit 类事件 → 顶层 sessionEditSnapshots 增量。返回新 record 或 null（无变化）。 */
 function applyEditEvent(
-  current: Record<string, TurnEditEntry[]>,
+  current: Record<string, RunEditEntry[]>,
   sessionId: string,
   e: EngineEvent,
-): Record<string, TurnEditEntry[]> | null {
-  if (e.type === "turn_edits_committed") {
+): Record<string, RunEditEntry[]> | null {
+  if (e.type === "run_edits_committed") {
     const existing = current[sessionId] ?? [];
-    if (existing.some((x) => x.turn_id === e.turn_id)) return null;
+    if (existing.some((x) => x.run_id === e.run_id)) return null;
     const now = Date.now();
-    const next: TurnEditEntry[] = [
+    const next: RunEditEntry[] = [
       ...existing,
       {
-        turn_id: e.turn_id,
-        turn_index: e.turn,
+        run_id: e.run_id,
         started_at_ms: now,
         finished_at_ms: now,
         files: e.files,
@@ -775,11 +774,11 @@ function applyEditEvent(
     ];
     return { ...current, [sessionId]: next };
   }
-  if (e.type === "turn_edits_reverted") {
+  if (e.type === "run_edits_reverted") {
     const existing = current[sessionId];
     if (!existing) return null;
     const next = existing.map((entry) =>
-      entry.turn_id === e.turn_id
+      entry.run_id === e.run_id
         ? { ...entry, reverted: true, reverted_at_ms: Date.now() }
         : entry,
     );
@@ -975,7 +974,7 @@ interface AppState {
    * - 全量由 `refreshEdits` 在 openSession 时拉一次
    * - **session-scoped**：跟 run 生命周期解耦（run 结束 slot 删除时不会跟着清掉）
    */
-  sessionEditSnapshots: Record<string, TurnEditEntry[]>;
+  sessionEditSnapshots: Record<string, RunEditEntry[]>;
 
   /**
    * 架构 §4.14：每个 session「最近一个 Run 后台抽取写入的记忆」。
@@ -1029,7 +1028,7 @@ interface AppState {
 
   // ── edits worktree（架构 §4.13）──
   /** 回退单次 Edit（调 Tauri revert_edit 命令）。成功/失败直接在 UI 展示 toast。 */
-  revertEdit: (sessionId: string, turnId: string) => Promise<void>;
+  revertEdit: (sessionId: string, runId: string) => Promise<void>;
   /** 从后端重新加载当前 session 的 edits 条目列表。 */
   refreshEdits: () => Promise<void>;
 
@@ -1381,14 +1380,14 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  async revertEdit(sessionId: string, turnId: string) {
-    const result = await api.revertEdit(sessionId, turnId);
+  async revertEdit(sessionId: string, runId: string) {
+    const result = await api.revertEdit(sessionId, runId);
     if (result.success) {
       set((state) => {
         const existing = state.sessionEditSnapshots[sessionId];
         if (!existing) return state;
         const next = existing.map((e) =>
-          e.turn_id === turnId
+          e.run_id === runId
             ? { ...e, reverted: true, reverted_at_ms: Date.now() }
             : e,
         );
@@ -2267,8 +2266,8 @@ export const useStore = create<AppState>((set, get) => ({
               else toast(e.message, opts);
               return;
             }
-            // Edit turn 事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
-            if (e.type === "turn_edits_committed" || e.type === "turn_edits_reverted") {
+            // Edit Run 事件：session-scoped，不进 slot；run 结束 slot 被删后仍然保留
+            if (e.type === "run_edits_committed" || e.type === "run_edits_reverted") {
               set((state) => {
                 const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
                 return next === null ? state : { sessionEditSnapshots: next };

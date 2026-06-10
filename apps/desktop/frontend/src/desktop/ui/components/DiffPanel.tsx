@@ -795,16 +795,16 @@ function StreamCursor() {
   );
 }
 
-/* ───────────────── DiffPanel：detail 态浮层（基于 EditEntry / api.diffEdit）─────── */
+/* ───────────────── DiffPanel：detail 态浮层（基于 TurnFileChange / api.diffEdit）─────── */
 
 interface DiffPanelProps {
   sessionId: string;
-  turnId: string;
+  runId: string;
   entry: TurnFileChange;
   onClose: () => void;
 }
 
-export function DiffPanel({ sessionId, turnId, entry, onClose }: DiffPanelProps) {
+export function DiffPanel({ sessionId, runId, entry, onClose }: DiffPanelProps) {
   const [payload, setPayload] = useState<DiffPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -816,7 +816,7 @@ export function DiffPanel({ sessionId, turnId, entry, onClose }: DiffPanelProps)
     setLoading(true);
     setError(null);
     api
-      .diffEdit(sessionId, turnId, entry.real_path)
+      .diffEdit(sessionId, runId, entry.real_path)
       .then((p) => {
         if (!cancelled) setPayload(p);
       })
@@ -829,7 +829,7 @@ export function DiffPanel({ sessionId, turnId, entry, onClose }: DiffPanelProps)
     return () => {
       cancelled = true;
     };
-  }, [sessionId, turnId, entry.real_path]);
+  }, [sessionId, runId, entry.real_path]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {

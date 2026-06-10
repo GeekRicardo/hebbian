@@ -5,9 +5,9 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
 import { DiffViewer, type DiffMode } from "./DiffPanel";
-import type { DiffPayload, TurnEditEntry, TurnFileChange } from "@/desktop/ui/types";
+import type { DiffPayload, RunEditEntry, TurnFileChange } from "@/desktop/ui/types";
 
-const EMPTY_TURNS: TurnEditEntry[] = [];
+const EMPTY_RUNS: RunEditEntry[] = [];
 
 export function EditTreePanel() {
   return null;
@@ -15,11 +15,10 @@ export function EditTreePanel() {
 
 export function EditTreeTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const turns = useStore(
-    (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_TURNS,
+  const runs = useStore(
+    (s) => (sessionId ? s.sessionEditSnapshots[sessionId] : undefined) ?? EMPTY_RUNS,
   );
   const revertEdit = useStore((s) => s.revertEdit);
-  const refreshEdits = useStore((s) => s.refreshEdits);
   const [reverting, setReverting] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -36,41 +35,42 @@ export function EditTreeTab() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [sessionId]);  // 移除 refreshEdits 依赖，避免函数引用不稳定导致无限循环
+  }, [sessionId]);
 
-  async function handleRevert(turnId: string) {
+  async function handleRevert(runId: string) {
     if (!sessionId) return;
-    setReverting((prev) => new Set(prev).add(turnId));
+    setReverting((prev) => new Set(prev).add(runId));
     try {
-      await revertEdit(sessionId, turnId);
-      toast.success("已回退本轮修改");
+      await revertEdit(sessionId, runId);
+      toast.success("已回退本次修改");
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     } finally {
       setReverting((prev) => {
         const next = new Set(prev);
-        next.delete(turnId);
+        next.delete(runId);
         return next;
       });
     }
   }
 
   if (!sessionId) return <EmptyState text="当前没打开对话" />;
-  if (turns.length === 0) {
+  if (runs.length === 0) {
     return <EmptyState text="还没有文件修改。" hint="模型修改文件后会出现在这里。" />;
   }
 
-  const sorted = [...turns].sort((a, b) => b.finished_at_ms - a.finished_at_ms);
+  const sorted = [...runs].sort((a, b) => b.finished_at_ms - a.finished_at_ms);
 
   return (
     <div className="space-y-2 px-2 py-2 text-[12px]">
-      {sorted.map((turn, idx) => (
-        <TurnGroup
-          key={turn.turn_id}
+      {sorted.map((run, idx) => (
+        <RunGroup
+          key={run.run_id}
           sessionId={sessionId}
-          turn={turn}
+          run={run}
+          label={idx === 0 ? "最新一次修改" : "较早的修改"}
           defaultExpanded={idx === 0}
-          reverting={reverting.has(turn.turn_id)}
+          reverting={reverting.has(run.run_id)}
           onRevert={handleRevert}
         />
       ))}
@@ -90,33 +90,35 @@ function EmptyState({ text, hint }: { text: string; hint?: string }) {
   );
 }
 
-function TurnGroup({
+function RunGroup({
   sessionId,
-  turn,
+  run,
+  label,
   defaultExpanded,
   reverting,
   onRevert,
 }: {
   sessionId: string;
-  turn: TurnEditEntry;
+  run: RunEditEntry;
+  label: string;
   defaultExpanded: boolean;
   reverting: boolean;
-  onRevert: (turnId: string) => void;
+  onRevert: (runId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const files = useMemo(
-    () => [...turn.files].sort((a, b) => a.real_path.localeCompare(b.real_path)),
-    [turn.files],
+    () => [...run.files].sort((a, b) => a.real_path.localeCompare(b.real_path)),
+    [run.files],
   );
 
   return (
     <section
-      id={`turn-edits-${turn.turn_id}`}
+      id={`run-edits-${run.run_id}`}
       className={cn(
         "overflow-hidden rounded-md border border-border/60 bg-background",
         "shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.10),-1px_1px_2px_-1px_rgba(0,0,0,0.06)]",
         "dark:shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.45),-1px_1px_2px_-1px_rgba(0,0,0,0.3)]",
-        turn.reverted && "opacity-60",
+        run.reverted && "opacity-60",
       )}
     >
       <div className="flex items-center gap-1 border-b border-border/50 px-2 py-1.5">
@@ -126,17 +128,17 @@ function TurnGroup({
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
         >
           {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          <span className="truncate font-medium">第 {turn.turn_index} 轮</span>
+          <span className="truncate font-medium">{label}</span>
           <span className="shrink-0 text-[10px] text-muted-foreground">
-            {files.length} 个文件 · {formatTime(turn.finished_at_ms)}
+            {files.length} 个文件 · {formatTime(run.finished_at_ms)}
           </span>
         </button>
-        {!turn.reverted && (
+        {!run.reverted && (
           <button
             type="button"
-            onClick={() => onRevert(turn.turn_id)}
+            onClick={() => onRevert(run.run_id)}
             disabled={reverting}
-            title="回退本轮修改"
+            title="撤销本次对话的所有文件修改"
             className="rounded px-1 text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
           >
             <Rewind className="h-3.5 w-3.5" />
@@ -146,10 +148,10 @@ function TurnGroup({
       {expanded && (
         <div className="space-y-2 bg-muted/10 p-2">
           {files.map((file) => (
-            <TurnFileDiff
+            <RunFileDiff
               key={file.real_path}
               sessionId={sessionId}
-              turnId={turn.turn_id}
+              runId={run.run_id}
               file={file}
             />
           ))}
@@ -159,13 +161,13 @@ function TurnGroup({
   );
 }
 
-function TurnFileDiff({
+function RunFileDiff({
   sessionId,
-  turnId,
+  runId,
   file,
 }: {
   sessionId: string;
-  turnId: string;
+  runId: string;
   file: TurnFileChange;
 }) {
   const [payload, setPayload] = useState<DiffPayload | null>(null);
@@ -173,13 +175,23 @@ function TurnFileDiff({
 
   useEffect(() => {
     let cancelled = false;
-    api.diffEdit(sessionId, turnId, file.real_path)
+    api.diffEdit(sessionId, runId, file.real_path)
       .then((p) => { if (!cancelled) setPayload(p); })
       .catch((e) => {
         if (!cancelled) toast.error(e?.message ?? String(e));
       });
     return () => { cancelled = true; };
-  }, [sessionId, turnId, file.real_path]);
+  }, [sessionId, runId, file.real_path]);
+
+  // 删除类没有 after 内容，直接展示标记，不渲染 diff 详情
+  if (file.action === "delete") {
+    return (
+      <div className="flex items-center gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-[10px]">
+        <span className="rounded bg-red-500/15 px-1 font-medium text-red-600">已删除</span>
+        <span className="truncate font-mono">{pathLeaf(file.real_path)}</span>
+      </div>
+    );
+  }
 
   if (!payload) {
     return (
@@ -197,7 +209,7 @@ function TurnFileDiff({
       actionLabel={actionLabel(file.action)}
       mode={mode}
       onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
-      badge="本轮净变化"
+      badge="本次净变化"
       maxRows={80}
       collapseContext={3}
       className="border-border/50"
@@ -208,6 +220,7 @@ function TurnFileDiff({
 function actionLabel(action: TurnFileChange["action"]): string {
   if (action === "create") return "创建文件";
   if (action === "overwrite") return "覆盖文件";
+  if (action === "delete") return "删除文件";
   return "修改文件";
 }
 

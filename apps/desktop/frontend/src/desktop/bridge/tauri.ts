@@ -7,7 +7,7 @@ import type {
   ContextUsage,
   DeviceCodeInfo,
   DiffPayload,
-  TurnEditEntry,
+  RunEditEntry,
   EditsWorktreeStatus,
   EngineEvent,
   FetchedModel,
@@ -536,13 +536,13 @@ export const api = {
     invoke<DeepseekLoginToken>("deepseek_login", { input }),
 
   // ── edits worktree（架构 §4.13）──
-  /** 列出某 session 所有 turn 修改条目。 */
+  /** 列出某 session 所有 Run 修改条目。 */
   listEdits: (sessionId: string) =>
-    invoke<TurnEditEntry[]>("list_edits", { sessionId }),
+    invoke<RunEditEntry[]>("list_edits", { sessionId }),
 
-  /** 获取某轮某文件的 before/after 文本内容。 */
-  diffEdit: (sessionId: string, turnId: string, filePath: string) =>
-    invoke<DiffPayload>("diff_edit", { sessionId, turnId, filePath }),
+  /** 获取某 Run 某文件的 before/after 文本内容。 */
+  diffEdit: (sessionId: string, runId: string, filePath: string) =>
+    invoke<DiffPayload>("diff_edit", { sessionId, runId, filePath }),
 
   /**
    * 读盘文件文本——服务于 UI 渲染（如 Edit diff 在原文里 indexOf 定位真实行号）。
@@ -550,9 +550,9 @@ export const api = {
    */
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
 
-  /** 回退整轮 Edit。返回 `{ success, error? }`。 */
-  revertEdit: (sessionId: string, turnId: string) =>
-    invoke<RevertResult>("revert_edit", { sessionId, turnId }),
+  /** 回退整个 Run 的 Edit。返回 `{ success, error? }`。 */
+  revertEdit: (sessionId: string, runId: string) =>
+    invoke<RevertResult>("revert_edit", { sessionId, runId }),
 
   /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
   editsWorktreeStatus: (sessionId: string) =>

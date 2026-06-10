@@ -203,6 +203,13 @@ pub enum DaemonEvent {
         session_id: String,
         title: String,
     },
+    /// 本 Run（整个 agent_loop）结束后汇总的文件净变化（架构 §4.13）。
+    /// `files[]` 每项含 real_path / action（create|modify|overwrite|delete）/ before_bytes / after_bytes。
+    /// 无文件变化的 Run 不发本事件。旧脚本忽略未知 event。
+    RunEditsCommitted {
+        run_id: String,
+        files: Vec<Value>,
+    },
     /// 一个 Run 跑完后，agent_core 后台记忆抽取写入了若干条记忆（架构 §4.14）。
     /// 自动化脚本可监听这条核对落盘结果；记忆已由 agent_core 写盘，客户端无需回写。
     MemoryExtracted {

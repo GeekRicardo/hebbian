@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage;
 
-/// 单个 turn 内某个文件的净变化。
+/// 一个 Run 内某个文件的净变化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnFileChange {
     pub real_path: String,
@@ -34,11 +34,10 @@ impl From<TurnFileChange> for protocol::TurnFileChange {
     }
 }
 
-/// 一轮对话的 Edit 净变化元数据条目。
+/// 一个 Run（整个 agent_loop，含插队）的文件净变化元数据条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnEditEntry {
-    pub turn_id: String,
-    pub turn_index: u32,
+pub struct RunEditEntry {
+    pub run_id: String,
     pub started_at_ms: i64,
     pub finished_at_ms: i64,
     pub files: Vec<TurnFileChange>,
@@ -53,14 +52,14 @@ pub struct TurnEditEntry {
 pub struct EditsMetadata {
     pub version: u32,
     #[serde(default)]
-    pub turns: Vec<TurnEditEntry>,
+    pub runs: Vec<RunEditEntry>,
 }
 
 impl Default for EditsMetadata {
     fn default() -> Self {
         Self {
-            version: 2,
-            turns: Vec::new(),
+            version: 3,
+            runs: Vec::new(),
         }
     }
 }
@@ -91,7 +90,9 @@ pub fn load_metadata(worktree_dir: &Path) -> AppResult<EditsMetadata> {
     }
     let value: serde_json::Value = serde_json::from_str(&s)
         .map_err(|e| AppError::msg(format!("解析 .hebbian-edits.json 失败: {e}")))?;
-    if value.get("version").and_then(|v| v.as_u64()) != Some(2) {
+    // 版本守卫：v3 之前是 per-Edit(v1) / per-Turn(v2) 旧格式，结构不兼容，整体丢弃
+    // （不迁移；旧会话失去历史 Edit 记录但不影响 session transcript）。
+    if value.get("version").and_then(|v| v.as_u64()) != Some(3) {
         return Ok(EditsMetadata::default());
     }
     serde_json::from_value(value)
@@ -109,17 +110,17 @@ pub fn save_metadata(worktree_dir: &Path, meta: &EditsMetadata) -> AppResult<()>
     storage::lock::write_atomic(&path, json.as_bytes())
 }
 
-/// 按 turn_id 查找条目。
-pub fn find_turn<'a>(meta: &'a EditsMetadata, turn_id: &str) -> Option<&'a TurnEditEntry> {
-    meta.turns.iter().find(|e| e.turn_id == turn_id)
+/// 按 run_id 查找条目。
+pub fn find_run<'a>(meta: &'a EditsMetadata, run_id: &str) -> Option<&'a RunEditEntry> {
+    meta.runs.iter().find(|e| e.run_id == run_id)
 }
 
-/// 按 turn_id 查找可变条目。
-pub fn find_turn_mut<'a>(
+/// 按 run_id 查找可变条目。
+pub fn find_run_mut<'a>(
     meta: &'a mut EditsMetadata,
-    turn_id: &str,
-) -> Option<&'a mut TurnEditEntry> {
-    meta.turns.iter_mut().find(|e| e.turn_id == turn_id)
+    run_id: &str,
+) -> Option<&'a mut RunEditEntry> {
+    meta.runs.iter_mut().find(|e| e.run_id == run_id)
 }
 
 #[cfg(test)]
@@ -129,16 +130,15 @@ mod tests {
     #[test]
     fn roundtrip_default() {
         let meta = EditsMetadata::default();
-        assert_eq!(meta.version, 2);
-        assert!(meta.turns.is_empty());
+        assert_eq!(meta.version, 3);
+        assert!(meta.runs.is_empty());
     }
 
     #[test]
-    fn find_turn_by_turn_id() {
+    fn find_run_by_run_id() {
         let mut meta = EditsMetadata::default();
-        meta.turns.push(TurnEditEntry {
-            turn_id: "t1".into(),
-            turn_index: 1,
+        meta.runs.push(RunEditEntry {
+            run_id: "r1".into(),
             started_at_ms: 1000,
             finished_at_ms: 2000,
             files: vec![TurnFileChange {
@@ -152,7 +152,7 @@ mod tests {
             reverted: false,
             reverted_at_ms: None,
         });
-        assert!(find_turn(&meta, "t1").is_some());
-        assert!(find_turn(&meta, "nope").is_none());
+        assert!(find_run(&meta, "r1").is_some());
+        assert!(find_run(&meta, "nope").is_none());
     }
 }

@@ -279,17 +279,17 @@ pub enum EventPayload {
         comment: PlanComment,
     },
 
-    // —— 编辑快照（§4.13） ——
-    TurnEditsCommitted {
-        turn_id: TurnId,
-        turn: u32,
+    // —— 编辑快照（§4.13）：按 Run（整个 agent_loop）聚合 ——
+    /// 一个 Run 跑完后，本 Run 内所有发生净变化的文件汇总。空（无文件变化）则不 emit。
+    RunEditsCommitted {
+        run_id: RunId,
         files: Vec<TurnFileChange>,
     },
-    TurnEditsReverted {
-        turn_id: TurnId,
+    RunEditsReverted {
+        run_id: RunId,
     },
-    TurnEditsRevertFailed {
-        turn_id: TurnId,
+    RunEditsRevertFailed {
+        run_id: RunId,
         file_path: String,
         error: String,
     },
@@ -308,6 +308,8 @@ pub enum EditAction {
     Create,
     Overwrite,
     Modify,
+    /// 文件被删除（rm / rmdir）。after 状态 = 不存在。
+    Delete,
 }
 
 /// 单个 turn 内某个文件的净变化（§4.13.6）。

@@ -1705,7 +1705,7 @@ async fn cmd_list_edits(state: &ServerState, args: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
     let wd = edits::metadata::worktree_dir(&state.data_dir, sid);
     let meta = edits::metadata::load_metadata(&wd).map_err(|e| anyhow!("{e}"))?;
-    Ok(serde_json::to_value(meta.turns)?)
+    Ok(serde_json::to_value(meta.runs)?)
 }
 
 async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
@@ -1713,10 +1713,10 @@ async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let turn_id = args
-        .get("turnId")
+    let run_id = args
+        .get("runId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing `turnId`"))?;
+        .ok_or_else(|| anyhow!("missing `runId`"))?;
     let file_path = args
         .get("filePath")
         .and_then(|v| v.as_str())
@@ -1725,12 +1725,12 @@ async fn cmd_diff_edit(state: &ServerState, args: Value) -> Result<Value> {
     if !worktree.enabled().await {
         return Err(anyhow!("git 不可用，无法生成 diff"));
     }
-    let turns = worktree.list_turns().map_err(|e| anyhow!("{e}"))?;
-    let turn = turns
+    let runs = worktree.list_runs().map_err(|e| anyhow!("{e}"))?;
+    let run = runs
         .into_iter()
-        .find(|e| e.turn_id == turn_id)
+        .find(|e| e.run_id == run_id)
         .ok_or_else(|| anyhow!("找不到该轮修改"))?;
-    let file = turn
+    let file = run
         .files
         .into_iter()
         .find(|f| f.real_path == file_path)
@@ -1771,26 +1771,26 @@ async fn cmd_revert_edit(state: &ServerState, args: Value) -> Result<Value> {
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `sessionId`"))?;
-    let turn_id = args
-        .get("turnId")
+    let run_id = args
+        .get("runId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing `turnId`"))?;
+        .ok_or_else(|| anyhow!("missing `runId`"))?;
     let worktree = build_edits_worktree_for(state, sid)?;
     if !worktree.enabled().await {
         return Err(anyhow!("git 不可用，回退功能已禁用"));
     }
-    let turns = worktree.list_turns().map_err(|e| anyhow!("{e}"))?;
-    let entry = turns
+    let runs = worktree.list_runs().map_err(|e| anyhow!("{e}"))?;
+    let entry = runs
         .into_iter()
-        .find(|e| e.turn_id == turn_id)
+        .find(|e| e.run_id == run_id)
         .ok_or_else(|| anyhow!("找不到该轮修改"))?;
     if entry.reverted {
         return Err(anyhow!("该轮修改已回退过"));
     }
-    match worktree.revert_turn(&entry).await {
+    match worktree.revert_run(&entry).await {
         Ok(()) => {
             worktree
-                .mark_turn_reverted(turn_id)
+                .mark_run_reverted(run_id)
                 .map_err(|e| anyhow!("{e}"))?;
             Ok(json!({ "success": true }))
         }
@@ -1806,7 +1806,7 @@ async fn cmd_edits_worktree_status(state: &ServerState, args: Value) -> Result<V
     let worktree = build_edits_worktree_for(state, sid)?;
     let enabled = worktree.enabled().await;
     let entry_count = if enabled {
-        worktree.list_turns().map(|e| e.len()).unwrap_or(0)
+        worktree.list_runs().map(|e| e.len()).unwrap_or(0)
     } else {
         0
     };

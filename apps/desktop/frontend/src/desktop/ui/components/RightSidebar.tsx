@@ -11,9 +11,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
-import type { TurnEditEntry } from "@/desktop/ui/types";
+import type { RunEditEntry } from "@/desktop/ui/types";
 
-const EMPTY_EDIT_TURNS: TurnEditEntry[] = [];
+const EMPTY_EDIT_RUNS: RunEditEntry[] = [];
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
 import { ModelIoInspector } from "./ModelIoInspector";
@@ -102,9 +102,9 @@ export function RightSidebar({
   const debugEnabled = useStore((s) => s.debugEnabled);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const todos = useStore((s) => s.todos);
-  const editTurns = useStore((s) => {
+  const editRuns = useStore((s) => {
     const id = s.currentSession?.id;
-    return id ? (s.sessionEditSnapshots[id] ?? EMPTY_EDIT_TURNS) : EMPTY_EDIT_TURNS;
+    return id ? (s.sessionEditSnapshots[id] ?? EMPTY_EDIT_RUNS) : EMPTY_EDIT_RUNS;
   });
   const [modelIoOpen, setModelIoOpen] = useState(false);
   const closeModelIo = useCallback(() => setModelIoOpen(false), []);
@@ -138,33 +138,33 @@ export function RightSidebar({
     setTab("todos");
   }, [sessionId, todosKey, todos.length]);
 
-  const editTurnsKey = useMemo(
-    () => editTurns.map((t) => `${t.turn_id}:${t.files.length}:${t.reverted}`).join("|"),
-    [editTurns],
-  );
-  const prevEditTurnsKeyRef = useRef(editTurnsKey);
+  // 自动聚焦只在「某个 Run 刚跑完、首次出现修改记录」那一下触发一次：
+  // 用已见过的 run_id 集合判断，避免回退（reverted 翻转）或切 tab 时又抢焦点。
+  // 用户原话："只有跑完那一下会自动跳到修改文件 sidebar，后面切换都不会自动了"。
+  const seenRunIdsRef = useRef<Set<string>>(new Set());
   const prevEditSessionIdRef = useRef(sessionId);
   useEffect(() => {
+    // 切 session：重置已见集合为当前快照，不抢焦点（历史记录不该触发跳转）
     if (prevEditSessionIdRef.current !== sessionId) {
       prevEditSessionIdRef.current = sessionId;
-      prevEditTurnsKeyRef.current = editTurnsKey;
+      seenRunIdsRef.current = new Set(editRuns.map((r) => r.run_id));
       return;
     }
-    if (editTurnsKey === prevEditTurnsKeyRef.current) return;
-    prevEditTurnsKeyRef.current = editTurnsKey;
-    if (editTurns.length === 0) return;
+    const fresh = editRuns.filter((r) => !seenRunIdsRef.current.has(r.run_id));
+    if (fresh.length === 0) return;
+    for (const r of editRuns) seenRunIdsRef.current.add(r.run_id);
     setCollapsed(false);
     setTab("edits");
-    const latest = [...editTurns].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
+    const latest = [...fresh].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
     window.setTimeout(() => {
-      const node = document.getElementById(`turn-edits-${latest.turn_id}`);
+      const node = document.getElementById(`run-edits-${latest.run_id}`);
       node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       node?.classList.add("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
       window.setTimeout(() => {
         node?.classList.remove("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
       }, 1500);
     }, 50);
-  }, [sessionId, editTurnsKey, editTurns]);
+  }, [sessionId, editRuns]);
 
   // 持久化折叠状态
   useEffect(() => {

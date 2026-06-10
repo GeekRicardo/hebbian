@@ -745,18 +745,17 @@ export type EngineEvent =
     }
   | { type: "error"; message: string }
   | {
-      type: "turn_edits_committed";
-      turn_id: string;
-      turn: number;
+      type: "run_edits_committed";
+      run_id: string;
       files: TurnFileChange[];
     }
   | {
-      type: "turn_edits_reverted";
-      turn_id: string;
+      type: "run_edits_reverted";
+      run_id: string;
     }
   | {
-      type: "turn_edits_revert_failed";
-      turn_id: string;
+      type: "run_edits_revert_failed";
+      run_id: string;
       file_path: string;
       error: string;
     }
@@ -1051,7 +1050,7 @@ export interface ImportedToken {
 
 // ========== Edits Worktree（架构 §4.13）==========
 
-export type EditAction = "create" | "overwrite" | "modify";
+export type EditAction = "create" | "overwrite" | "modify" | "delete";
 
 export interface TurnFileChange {
   real_path: string;
@@ -1062,9 +1061,9 @@ export interface TurnFileChange {
   after_bytes: number;
 }
 
-export interface TurnEditEntry {
-  turn_id: string;
-  turn_index: number;
+/** 一个 Run（整个 agent_loop）内所有文件净变化。 */
+export interface RunEditEntry {
+  run_id: string;
   started_at_ms: number;
   finished_at_ms: number;
   files: TurnFileChange[];

@@ -214,19 +214,18 @@ pub enum EngineEvent {
         /// custom 时是 text，cancelled 时为空
         text: String,
     },
-    /// 本轮 Edit 修改已提交（架构 §4.13）。前端修改文件栏按 turn 展示。
-    TurnEditsCommitted {
-        turn_id: String,
-        turn: u32,
+    /// 本 Run 文件修改已提交（架构 §4.13）。前端修改文件栏按 Run 展示。
+    RunEditsCommitted {
+        run_id: String,
         files: Vec<protocol::TurnFileChange>,
     },
-    /// 本轮 Edit 回退成功。
-    TurnEditsReverted {
-        turn_id: String,
+    /// 本 Run Edit 回退成功。
+    RunEditsReverted {
+        run_id: String,
     },
-    /// 本轮 Edit 回退失败。
-    TurnEditsRevertFailed {
-        turn_id: String,
+    /// 本 Run Edit 回退失败。
+    RunEditsRevertFailed {
+        run_id: String,
         file_path: String,
         error: String,
     },
