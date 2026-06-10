@@ -6755,3 +6755,16 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - `cargo test -p hebbian-common --lib`（10）+ `-p model-gateway --lib`（106）+ `cargo check --workspace` + `tsc --noEmit` 全过
 - **留尾巴**: fallbacks target 硬编码 opus-4-8（真 CC 的 `lJ5()` 取默认 opus，当前等价）；profile 补全只在「OAuth 授权流」和「refresh 失败回退本地凭据」两条路径触发，纯 refresh 不刷新 account_uuid（已存对的就不动，无需刷新）
 - **关联**: 承接同日「reasoning effort 档位对齐 CC」「base_system 英文化 + CC 兼容」；docs/架构.md §9.7
+
+### 2026-06-10 — 修复 prompt cache 永不命中（tools 顺序不稳定 + 缺 extended-cache-ttl beta）
+
+- **Why**: 用户要求「cache 写入要对」。实测连续两轮对话第二轮 `cache_read=0`、`cache_creation` 仍满额（每轮把整个前缀重新写入），prompt cache **完全没命中**——白白浪费缓存写入成本却拿不到读取折扣。
+- **根因**（wire body dump + 逆向定位）:
+  - **主因**：`ToolRegistry` 用 `HashMap<String, Arc<dyn Tool>>` 存工具，`.values()` 迭代序每次进程随机。Anthropic 的 prompt cache 前缀顺序是 **tools→system→messages**，tools 在最前——tools 顺序一抖动，整个缓存前缀逐字节失配，**所有 cache_control 断点全部 miss**。实测两轮 tools 集合相同（24 个）但顺序不同、md5 不同，而 system md5 相同
+  - **次因**：`cache_control.ttl="1h"` 需要 `extended-cache-ttl-2025-04-11` beta 才生效（CC binary `U==="1h"?3600000:300000` 证实），hebbian 没带这个 beta
+- **改动**:
+  - [agent-core/tools/registry.rs](../crates/agent-core/src/tools/registry.rs): `HashMap` → `BTreeMap`（按 name 字母序，迭代序进程间稳定）。一处类型改动让 `values()`/`keys()`/`definitions()`/`mcp_definitions()` 全部稳定
+  - [providers/mod.rs](../crates/model-gateway/src/providers/mod.rs): OAuth + api_key 两个 anthropic 分支的 anthropic-beta 补 `extended-cache-ttl-2025-04-11`
+- **影响范围**: agent-core（tools 顺序，现为字母序，不影响功能）+ model-gateway（beta header）。**惠及所有 provider 的 prompt cache**——OpenAI/DeepSeek 的缓存同样受 tools 顺序影响，之前一起被这个 bug 拖累
+- **验证**: heb CLI 真实 OAuth 连发两轮——修前第二轮 `cache_read=0 / cache_creation=15524`（全重写）；修后 `cache_read=15433 / cache_creation=91`（命中）。`cargo test -p agent-core --lib registry`（4）+ `-p model-gateway --lib`（106）通过
+- **留尾巴**: system harness 含 session 信息（Environment 段），`scope:"global"` 的跨会话共享发挥不了（退化成会话内命中）；要真正跨会话共享需把 system 拆成 `[稳定 harness(scope:global), session-specific(ttl)]` 两段断点，留作后续优化。「输入框下方 cache 展示器：平均 + hover 最新」的前端改动另起一条

@@ -56,7 +56,7 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                 .header("anthropic-version", "2023-06-01")
                 .header(
                     "anthropic-beta",
-                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24,cache-diagnosis-2026-04-07,server-side-fallback-2026-06-01",
+                    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,extended-cache-ttl-2025-04-11,effort-2025-11-24,cache-diagnosis-2026-04-07,server-side-fallback-2026-06-01",
                 )
                 .header("user-agent", "claude-cli/2.1.170 (external, cli)")
                 .header("x-app", "cli")
@@ -76,7 +76,7 @@ pub fn apply_auth(req: RequestBuilder, provider: &Provider) -> RequestBuilder {
                 .header("anthropic-version", "2023-06-01")
                 .header(
                     "anthropic-beta",
-                    "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
+                    "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,extended-cache-ttl-2025-04-11,effort-2025-11-24",
                 )
                 .header("user-agent", "claude-cli/2.1.170 (external, cli)")
                 .header("x-app", "cli")

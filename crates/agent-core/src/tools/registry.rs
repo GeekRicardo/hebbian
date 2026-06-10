@@ -1,12 +1,17 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::Tool;
 use model_gateway::types::ToolDefinition;
 
-/// 工具注册表：持有所有可用工具，支持按名称查找
+/// 工具注册表：持有所有可用工具，支持按名称查找。
+///
+/// 用 `BTreeMap`（按 name 字母序）而非 `HashMap`：工具列表会进 ModelRequest 的
+/// `tools`，而 Anthropic 的 prompt cache 前缀顺序是 tools→system→messages——tools
+/// 在最前，顺序一抖动整个缓存前缀就失效、每轮全部 cache miss。BTreeMap 让迭代
+/// 顺序在进程间稳定（HashMap 随机），缓存前缀才能命中。
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: BTreeMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -35,8 +40,8 @@ impl ToolRegistry {
         self.tools.get(name).cloned()
     }
 
-    /// 按注册顺序遍历所有工具的 `Arc`。给 [`crate::subagent::SubagentRunner`] 构造子 registry 用。
-    /// `HashMap` 不保证迭代顺序，调用方对顺序敏感时应自行排序。
+    /// 按 name 字母序遍历所有工具的 `Arc`（BTreeMap 保证进程间稳定顺序）。
+    /// 给 [`crate::subagent::SubagentRunner`] 构造子 registry 用。
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
         self.tools.values()
     }
