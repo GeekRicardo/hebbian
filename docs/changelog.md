@@ -6850,3 +6850,28 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 仅 apps/desktop 前端；Rust 侧 `browser_*` command / 事件 / setVisible 能力不变（setVisible 早在 P0 spike S6 验证过，本次正好用于 tab 切换隐藏）
 - **验证**: tsc --noEmit 0 error；切 tab 隐藏/显示 webview 逻辑靠 setVisible（spike S6 已验证可用），实机鼠标流仍需眼验
 - **留尾巴**: 折叠 sidebar 会卸载 BrowserPanel → 关闭 webview，重新展开重载页面（折叠=不看，可接受）；其余留尾巴同上一条
+
+### 2026-06-10 — edits-worktree 从 turn 粒度改为 Run 粒度，捕获 Bash 写/rm 删除
+
+- **Why**: 用户澄清需求——记录单位应是「一个 agent_loop（一次对话，含中途插队的追加消息）」而不是 turn；捕获范围不止 Edit 工具，Bash 的 `rm` / 重定向等改文件也要算；机制改为「文件首次触达时拍 worktree 快照，Run 跑完对比净变化，无修改的快照丢弃」；UI 参考 stagewise 修改文件页，且**只在 Run 跑完那一下自动跳到修改文件 sidebar**，之后手动切 tab 不再自动跳。覆盖前一条（2026-06-09 per-Turn）。
+- **调研结论**: 读了 stagewise 的 `diff-history` 服务——它是工具层显式 `registerAgentEdit(path, before, after)` 上报 + SQLite + `.gitignore` 过滤，**不是**「Run 前后全量扫 workspace 快照」。cursor / stagewise 都只在打开的 workspace 树内做 watcher，没有任何工具会给整个磁盘拍快照（物理上不可行）。因此本实现采用「按工具触达的 `effects.paths` 精准拍快照」而非全量 mirror，复用 §4.4.2 已解析好的 Bash 写目标，并新增 `rm`/`rmdir` 删除目标提取（不重写 shell 解析，只读已 tokenize 的 argv）。
+- **改动**:
+  - `crates/protocol/src/event.rs`: `TurnEditsCommitted/Reverted/RevertFailed` → `RunEditsCommitted/Reverted/RevertFailed`（带 `run_id`）；`EditAction` 加 `Delete` 变体。
+  - `crates/agent-core/src/tools/shell_parse.rs`: 新增 `delete_targets(cmd)` 提取 `rm`/`rmdir` 位置参数；`effects.rs` 把删除目标也并进 `effects.paths`（执行前据此拍 before，否则删完拍不到）。
+  - `crates/agent-core/src/edits/{mod,metadata}.rs`: metadata v3 `runs[]`（`RunEditEntry`）；`EditsWorktree` 改为 `begin_run / ensure_run_before / finalize_run / revert_run`；finalize 按 before/after 存在性 + 内容 diff 推断 create/modify/delete，无净变化丢弃（commit sha 含时间戳每次不同，改用 `git diff` 判净变化——这是修一版的真 bug）；revert 的 delete 路径从 before 镜像重建文件；版本守卫认 v3。
+  - `crates/agent-core/src/agent_loop.rs`: RunStarted 后 `begin_run`，RunFinished/Cancelled/Failed（非挂起、非嵌套）前 `finalize_run` + emit `RunEditsCommitted`；删掉所有 per-turn commit；subagent 嵌套 Run 共用 parent_run_id 累积进父 active run，子 loop 不 begin/finalize（避免覆盖父的单槽 active run）。
+  - `crates/agent-core/src/dispatch.rs`: 工具执行前对 `analyze_effects(tool, effective_input).paths` 内 workspace 允许的每个路径加锁 + `ensure_run_before`；传 `current_run_id`。
+  - `apps/desktop/src/{lib,chat,engine}.rs` / `apps/web-server/src/server.rs` / `apps/cli/src/{ipc,daemon}.rs`: IPC 与事件翻译切到 Run 语义（`list_edits`/`diff_edit`/`revert_edit` 命令名保留，入参 turnId→runId）；CLI 新增 `RunEditsCommitted` DaemonEvent（additive，旧脚本忽略）。
+  - `apps/desktop/frontend/src/desktop/*`: 类型/bridge/store/EditTreePanel/RightSidebar/App 改为 Run 分组；delete 文件标红不渲染 diff；自动聚焦改为「已见 run_id 集合」只在新 run_id 首现时触发一次。
+  - `docs/架构.md` §4.13 全面改写为 Run 粒度 + §13 决策表 + §3 事件/API；`docs/heb-cli-debug.md` 事件表加 `run_edits_committed`。
+- **影响范围**: protocol / agent-core / desktop / hebweb / cli / frontend / docs；§4.13 不兼容语义变更，v1/v2 旧 metadata 不迁移（旧会话历史 Edit 记录消失）；per-Edit/per-Turn 回退能力被整 Run 回退替代。
+- **验证**: `cargo check --workspace` 通过（仅既有 `web-server/session.rs:73 input_tx` dead_code warning）；`cargo test -p agent-core --lib edits::`（35 passed，含 rm 删除重建 / 空 Run 不记录 / 多次 Edit 折叠 / 冲突拒绝）+ `shell_parse::tests` rm 提取测试全绿；`pnpm exec tsc --noEmit`（apps/desktop）0 error。**heb CLI 端到端复现**：deepseek-v4-flash 跑「Edit 改 keep.txt + Bash rm trash.txt」，事件流 `run_started → 3×tool_start → run_edits_committed{files:[keep.txt modify 21→28B, trash.txt delete 10→0B]} → run_finished`，metadata v3 一条 Run 两个 file，action 正确；前面 provider 503 那次 run_failed 无 committed 事件（空 Run 不记录验证通过）。
+- **留尾巴**: 回退 UI 入口（revert_edit）仅 Tauri/web，未在 heb CLI 加 revert 子命令（回退三路径由单测覆盖）；`cargo test -p agent-core --lib` 全量仍被既有 `storage/settings.rs` 缺 `AppLanguage` 阻塞（非本次路径）；未跑 `pnpm tauri dev` 人工眼验自动聚焦动画。
+
+### 2026-06-11 — usage 指示器显示额度刷新倒计时
+
+- **Why**: 用户要在 usage 指示器看到「还有多久刷新额度」。数据（`resets_at` / `remaining_seconds`）后端 `UsageProgress` 早已有，只是 `ClaudeTooltip` 没渲染出来。
+- **改动**: [ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx) 加 `formatRemaining`（秒 → `3d5h` / `5h30m` / `45m` / `<1m`）；每个用量窗口行在百分比旁显示「XX后刷新」。
+- **影响范围**: 纯前端展示，无后端 / 数据改动。
+- **验证**: `tsc --noEmit` 通过；`curl /api/oauth/usage` 实测 `five_hour 100%·2m后刷新`、`seven_day 10%·5d13h后刷新`，与 `formatRemaining` 一致。
+- **留尾巴**: 倒计时是 3 分钟轮询拉取时刻的快照，不做秒级 tick；够用。

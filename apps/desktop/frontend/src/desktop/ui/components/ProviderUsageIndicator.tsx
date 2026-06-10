@@ -51,6 +51,18 @@ function claudeProgressColor(pct: number): string {
   return "text-emerald-500";
 }
 
+/** 距额度刷新还剩多久：3d5h / 5h30m / 45m / <1m。 */
+function formatRemaining(sec: number): string {
+  if (sec <= 0) return "即将";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d${h > 0 ? `${h}h` : ""}`;
+  if (h > 0) return `${h}h${m > 0 ? `${m}m` : ""}`;
+  if (m > 0) return `${m}m`;
+  return "<1m";
+}
+
 function ClaudeTooltip({ info }: { info: ClaudeUsageInfo }) {
   const rows: { label: string; pct: number; remaining: number }[] = [];
   if (info.five_hour) {
@@ -87,8 +99,15 @@ function ClaudeTooltip({ info }: { info: ClaudeUsageInfo }) {
       {rows.map((r) => (
         <div key={r.label} className="flex items-center justify-between gap-4">
           <span className="text-muted-foreground">{r.label}</span>
-          <span className={cn("tabular-nums font-medium", claudeProgressColor(r.pct))}>
-            {r.pct}%
+          <span className="flex items-baseline gap-2">
+            <span className={cn("tabular-nums font-medium", claudeProgressColor(r.pct))}>
+              {r.pct}%
+            </span>
+            {r.remaining > 0 && (
+              <span className="tabular-nums text-[10px] text-muted-foreground/60">
+                {formatRemaining(r.remaining)}后刷新
+              </span>
+            )}
           </span>
         </div>
       ))}
