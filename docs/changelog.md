@@ -6837,3 +6837,16 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
   - P3 旁支对话（QuickChat floating/aside session/returnToChat）整体未做
   - 多注释/区域圈选/截图附件/Vue 支持/多标签未做
   - spike 代码（`run_spike` + forward 里的 spike 日志分支）仍在 mod.rs 内，env-gated 不影响生产，后续可清
+
+### 2026-06-11 — 内置浏览器从独立面板列改为 RightSidebar 的一个 tab
+
+- **Why**: 上一条把浏览器做成了 dsp-shell 里的独立列，打开会把右侧工作台 sidebar 挤走。用户本意是「浏览器是 sidebar 里的一个 tab」（与后台任务/修改文件/任务清单/计划并列），不该挤占别的 surface。
+- **改动**:
+  - [RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): TabId 加 `browser`，折叠图标列 + 展开顶栏各加一个浏览器 tab（Globe2 图标）。内容区：浏览器 tab **常驻挂载、切走只 hidden 不卸载**（原生子 webview 重建代价大且丢页面/登录态），其余 tab 仍条件渲染。`browserMounted` 懒挂载——首次切到才创建 webview
+  - [BrowserPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BrowserPanel.tsx): 外层从固定宽度 `aside` 改为填满 tab 内容区的 `div`；去掉面板内关闭按钮（切 tab/折叠即可）；新增 `active` prop——`active` 变化时 `setVisible` + 重新 `syncBounds`（hidden→显示要等布局再取 rect），active=false 时收起注释卡片
+  - 注释卡片定位修正：原生 webview 永远盖在 DOM 之上（spike S6），卡片若锚在元素位置（webview 区内）会被盖住。改为落到 sidebar **左侧的聊天区**（纯 DOM，无 webview），纵向对齐元素；元素高亮框由 inspector.js 画在页面内
+  - 删除 [store/browserPanel.ts](../apps/desktop/frontend/src/desktop/ui/store/browserPanel.ts)（open 状态）与 [DesktopShell.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx) 的独立列渲染——改用 RightSidebar 既有 tab 状态
+  - [架构.md](架构.md) §8.5-1 描述同步：「独立列」→「RightSidebar 的一个 tab」
+- **影响范围**: 仅 apps/desktop 前端；Rust 侧 `browser_*` command / 事件 / setVisible 能力不变（setVisible 早在 P0 spike S6 验证过，本次正好用于 tab 切换隐藏）
+- **验证**: tsc --noEmit 0 error；切 tab 隐藏/显示 webview 逻辑靠 setVisible（spike S6 已验证可用），实机鼠标流仍需眼验
+- **留尾巴**: 折叠 sidebar 会卸载 BrowserPanel → 关闭 webview，重新展开重载页面（折叠=不看，可接受）；其余留尾巴同上一条

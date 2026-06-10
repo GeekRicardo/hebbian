@@ -2,8 +2,6 @@ import { useState, type CSSProperties } from "react";
 import { ChatView } from "@/desktop/ui/components/ChatView";
 import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
 import { DesktopSidebar } from "@/desktop/ui/components/DesktopSidebar";
-import { BrowserPanel } from "@/desktop/ui/components/BrowserPanel";
-import { useBrowserPanel } from "@/desktop/ui/store/browserPanel";
 import "./desktopShell.css";
 
 function clampColor(value: number) {
@@ -114,12 +112,10 @@ function DesktopChat() {
 
 export function DesktopShell() {
   const [hue, setHue] = useState(208);
-  const browserOpen = useBrowserPanel((s) => s.open);
   return (
     <div className="dsp-shell" style={hueStyle(hue)}>
       <DesktopSidebar hue={hue} setHue={setHue} />
       <DesktopChat />
-      {browserOpen && <BrowserPanel />}
       <RightSidebar
         defaultWidth={640}
         minWidth={500}

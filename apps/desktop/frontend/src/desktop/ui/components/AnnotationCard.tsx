@@ -75,12 +75,12 @@ function toHexColor(raw: string): string {
 
 export function AnnotationCard({
   snapshot,
-  anchorRect,
+  anchor,
   onClose,
 }: {
   snapshot: HebElementSnapshot;
-  /** 选中元素在主窗口中的屏幕矩形（占位 div offset + snapshot.rect 换算后） */
-  anchorRect: { left: number; top: number; width: number; height: number };
+  /** elementTop=选中元素屏幕 y；panelLeft=浏览器视口左边界 x（卡片落到它左侧的 DOM 区） */
+  anchor: { elementTop: number; panelLeft: number };
   onClose: () => void;
 }) {
   const host = getBrowserHost();
@@ -91,16 +91,18 @@ export function AnnotationCard({
   // 本地维护用户调过的值（受控控件显示用）；真实 diff 由 inspector 侧累积，提交时取回。
   const [edited, setEdited] = useState<Record<string, string>>({});
 
-  // 卡片定位：锚点右下方，避免遮住元素本身；超出视口则翻到左/上侧。
+  // 卡片定位：落到浏览器视口左侧（聊天区，纯 DOM，不被原生 webview 盖住），
+  // 纵向对齐选中元素。视口左侧空间不够时退回贴左边缘。
   const style = useMemo(() => {
     const margin = 8;
     const cardW = 320;
-    let left = anchorRect.left;
-    let top = anchorRect.top + anchorRect.height + margin;
-    if (left + cardW > window.innerWidth - 12) left = Math.max(12, window.innerWidth - cardW - 12);
-    if (top + 420 > window.innerHeight - 12) top = Math.max(12, anchorRect.top - 420 - margin);
+    const cardH = 420;
+    let left = anchor.panelLeft - cardW - margin;
+    if (left < 12) left = 12;
+    let top = anchor.elementTop;
+    if (top + cardH > window.innerHeight - 12) top = Math.max(12, window.innerHeight - cardH - 12);
     return { left, top, width: cardW } as const;
-  }, [anchorRect]);
+  }, [anchor]);
 
   useEffect(() => {
     // 切换选中元素时清空本地编辑态

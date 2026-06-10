@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
-import { useBrowserPanel } from "@/desktop/ui/store/browserPanel";
 import type { TurnEditEntry } from "@/desktop/ui/types";
 
 const EMPTY_EDIT_TURNS: TurnEditEntry[] = [];
@@ -20,6 +19,7 @@ import { EditTreeTab } from "./EditTreePanel";
 import { ModelIoInspector } from "./ModelIoInspector";
 import { TodoTab } from "./TodoTab";
 import { PlanTab } from "./PlanTab";
+import { BrowserPanel } from "./BrowserPanel";
 
 /**
  * 右侧工作台：固定列布局（被 ChatView 的 grid 让位），承载「后台任务 / 修改文件」两个 tab。
@@ -34,9 +34,9 @@ import { PlanTab } from "./PlanTab";
  * sidebar 不持有业务数据，仅管布局。
  */
 
-type TabId = "tasks" | "edits" | "todos" | "plans";
+type TabId = "tasks" | "edits" | "todos" | "plans" | "browser";
 
-const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans"];
+const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "browser"];
 
 const STORAGE_PREFIX = "hebbian.rightSidebar";
 
@@ -89,13 +89,18 @@ export function RightSidebar({
     )
   );
 
+  // 浏览器 tab 懒挂载：首次切到它才创建子 webview（没人看就不起浏览器）。
+  // 一旦挂上就保留（切走靠 hidden + setVisible(false)），直到 sidebar 折叠卸载整个展开视图。
+  const [browserMounted, setBrowserMounted] = useState(tab === "browser");
+  useEffect(() => {
+    if (tab === "browser") setBrowserMounted(true);
+  }, [tab]);
+
   // Model I/O Drawer 由本 sidebar 持有：debug 开启时多一个入口，点击打开覆盖式查看器。
   // 不放进 tab 内嵌是因为 Inspector 信息密度极大（RequestDetail/N 条 MessageRow/嵌套 PrettyJson），
   // 320px tab 容不下。
   const debugEnabled = useStore((s) => s.debugEnabled);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const browserOpen = useBrowserPanel((s) => s.open);
-  const toggleBrowser = useBrowserPanel((s) => s.toggle);
   const todos = useStore((s) => s.todos);
   const editTurns = useStore((s) => {
     const id = s.currentSession?.id;
@@ -261,8 +266,11 @@ export function RightSidebar({
           <SidebarIconButton
             icon={<Globe2 className="h-4 w-4" />}
             label="内置浏览器"
-            onClick={toggleBrowser}
-            active={browserOpen}
+            onClick={() => {
+              setTab("browser");
+              setCollapsed(false);
+            }}
+            active={tab === "browser"}
           />
           {debugEnabled && sessionId && (
             <SidebarIconButton
@@ -332,20 +340,15 @@ export function RightSidebar({
               icon={<ClipboardList className="h-3.5 w-3.5" />}
               label="计划"
             />
+            <SidebarTab
+              id="browser"
+              current={tab}
+              onClick={setTab}
+              icon={<Globe2 className="h-3.5 w-3.5" />}
+              label="浏览器"
+            />
           </TabScroller>
           <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
-            <button
-              type="button"
-              onClick={toggleBrowser}
-              className={cn(
-                "grid h-6 w-6 place-items-center rounded hover:bg-accent hover:text-foreground",
-                browserOpen ? "bg-primary/15 text-primary" : "text-muted-foreground"
-              )}
-              title="内置浏览器"
-              aria-label="内置浏览器"
-            >
-              <Globe2 className="h-3.5 w-3.5" />
-            </button>
             {debugEnabled && sessionId && (
               <button
                 type="button"
@@ -369,12 +372,20 @@ export function RightSidebar({
           </div>
         </div>
 
-        {/* tab 内容区 */}
-        <div className="min-h-0 flex-1 overflow-auto">
-          {tab === "tasks" && <BackgroundTaskTab />}
-          {tab === "edits" && <EditTreeTab />}
-          {tab === "todos" && <TodoTab />}
-          {tab === "plans" && <PlanTab />}
+        {/* tab 内容区。浏览器 tab 例外：常驻挂载、切走只隐藏（hidden）不卸载——
+           原生子 webview 重建代价大且会丢页面/登录态。其余 tab 是纯 React，条件渲染即可。 */}
+        <div className="relative min-h-0 flex-1">
+          <div className={cn("h-full overflow-auto", tab === "browser" && "hidden")}>
+            {tab === "tasks" && <BackgroundTaskTab />}
+            {tab === "edits" && <EditTreeTab />}
+            {tab === "todos" && <TodoTab />}
+            {tab === "plans" && <PlanTab />}
+          </div>
+          {browserMounted && (
+            <div className={cn("absolute inset-0", tab !== "browser" && "hidden")}>
+              <BrowserPanel active={tab === "browser"} />
+            </div>
+          )}
         </div>
       </aside>
       {sessionId && (
