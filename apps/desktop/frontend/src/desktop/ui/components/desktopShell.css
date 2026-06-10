@@ -1222,8 +1222,7 @@
   border-radius: 6px;
 }
 
-.dsp-project-add:hover,
-.dsp-session-delete:hover {
+.dsp-project-add:hover {
   color: #227ed7;
   background: rgba(63, 155, 255, 0.08);
 }
@@ -2744,6 +2743,11 @@
   50% { opacity: 0.5; box-shadow: 0 0 0 6px rgba(216, 146, 22, 0.08); }
 }
 
+@keyframes dsp-fade-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(3px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ── 项目列表缩进 ── */
 
 .dsp-project-session-list {
@@ -2843,4 +2847,69 @@
 .dsp-chat-host [class*="border-l"][class*="pl-3"].overflow-y-auto::-webkit-scrollbar-thumb {
   background: rgba(32, 54, 78, 0.08);
   border-radius: 999px;
+}
+
+/* ── hover 3s 浮窗：Portal 到 body，position:fixed 由 inline style 控制 ── */
+
+.dsp-hover-popup {
+  z-index: 9999;
+  pointer-events: auto;
+}
+
+.dsp-hover-popup-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 1px solid var(--dsp-line);
+  border-radius: 8px;
+  color: var(--dsp-text, #3a4b5e);
+  background: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+  animation: dsp-fade-in 120ms ease;
+  user-select: none;
+}
+
+.dsp-hover-popup-btn:hover {
+  color: var(--dsp-accent, #227ed7);
+  background: #f7faff;
+  border-color: color-mix(in srgb, var(--dsp-accent, #227ed7) 25%, transparent);
+}
+
+/* 小三角指向锚点（按钮在锚点上方，三角在按钮底部朝下） */
+.dsp-hover-popup-btn::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--dsp-line);
+}
+
+.dsp-hover-popup-btn::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: #fff;
+  z-index: 1;
+  margin-top: -1px;
+}
+
+.dsp-hover-popup-btn:hover::before {
+  border-top-color: #f7faff;
+}
+
+/* 删除按钮淡红色 */
+.dsp-session-delete:hover {
+  color: #d35b5b;
+  background: rgba(211, 91, 91, 0.1);
 }

@@ -1,6 +1,8 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import {
+  ArrowUpFromLine,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -17,7 +19,9 @@ import {
 import { toast } from "sonner";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
+import { api } from "@/desktop/bridge/tauri";
 import type { SessionMeta, WorkspaceProject } from "@/desktop/ui/types";
+import { ImportClaudeDialog } from "@/desktop/ui/components/ImportClaudeDialog";
 import "./desktopShell.css";
 
 /* ── Types ── */
@@ -55,6 +59,16 @@ function relativeTime(ts: number) {
   if (diff < day) return `${Math.floor(diff / hour)}小时前`;
   if (diff < 3 * day) return `${Math.floor(diff / day)}天前`;
   return new Date(ts).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+/** 锚点 rect → fixed 定位 style：居中浮在锚点上方 */
+function popupStyle(r: DOMRect): CSSProperties {
+  return {
+    position: "fixed",
+    left: r.left + r.width / 2,
+    top: r.top - 8,
+    transform: "translate(-50%, -100%)",
+  };
 }
 
 function sessionMatchesQuery(session: SessionMeta, query: string, caseSensitive: boolean, regex: boolean) {
@@ -183,6 +197,7 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
     importVscodeProject,
     deleteSession,
     deleteProject,
+    refreshSessions,
     runningSessions,
     unreadFinishedSessions,
     sessionStreams,
@@ -196,6 +211,58 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
   const [activeTab, setActiveTab] = useState<"code" | "chat">("code");
   const [sbVisible, setSbVisible] = useState<Set<string>>(() => new Set());
   const sbTimers = useRef<Map<string, number>>(new Map());
+
+  /* ── hover 3s 浮出选项 ── */
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [hoverPopup, setHoverPopup] = useState<string | null>(null);
+  const [popupAnchor, setPopupAnchor] = useState<HTMLElement | null>(null);
+  const [popupRect, setPopupRect] = useState<DOMRect | null>(null);
+  const hoverTimers = useRef<Map<string, number>>(new Map());
+
+  /* 滚动时同步 popup 位置 */
+  useEffect(() => {
+    if (!hoverPopup || !popupAnchor) return;
+    const sync = () => setPopupRect(popupAnchor.getBoundingClientRect());
+    const containers = document.querySelectorAll(".dsp-project-groups, .dsp-project-session-list, .dsp-sidebar-card");
+    containers.forEach((c) => c.addEventListener("scroll", sync, { passive: true }));
+    window.addEventListener("scroll", sync, { passive: true });
+    return () => {
+      containers.forEach((c) => c.removeEventListener("scroll", sync));
+      window.removeEventListener("scroll", sync);
+    };
+  }, [hoverPopup, popupAnchor]);
+
+  function startHoverPopup(key: string, el: HTMLElement) {
+    cancelHoverPopup(key);
+    setPopupAnchor(el);
+    setPopupRect(el.getBoundingClientRect());
+    const tid = window.setTimeout(() => setHoverPopup(key), 3000);
+    hoverTimers.current.set(key, tid);
+  }
+
+  function cancelHoverPopup(key: string) {
+    const timer = hoverTimers.current.get(key);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      hoverTimers.current.delete(key);
+      if (hoverPopup === key) {
+        setHoverPopup(null);
+        setPopupAnchor(null);
+        setPopupRect(null);
+      }
+    }
+  }
+
+  async function handleExportClaude(session: SessionMeta) {
+    try {
+      const result = await api.exportSessionToClaude(session.id, true);
+      toast.success("已导出到 Claude", {
+        description: `运行 \`${result.resume_command}\` 可继续`,
+      });
+    } catch (error: any) {
+      toast.error(error.message || String(error));
+    }
+  }
 
   function sbShow(id: string) {
     const timers = sbTimers.current;
@@ -331,6 +398,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
           className="dsp-session-delete"
           title="删除对话"
           onClick={() => handleDeleteSession(session)}
+          onMouseEnter={(e) => startHoverPopup(`export:${session.id}`, e.currentTarget)}
+          onMouseLeave={() => cancelHoverPopup(`export:${session.id}`)}
         >
           <Trash2 size={12} />
         </button>
@@ -348,7 +417,13 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
         </div>
 
         {activeTab === "chat" && (
-          <button className="dsp-sidebar-new-chat" type="button" onClick={() => handleNewSession(null)}>
+          <button
+            className="dsp-sidebar-new-chat"
+            type="button"
+            onClick={() => handleNewSession(null)}
+            onMouseEnter={(e) => startHoverPopup("import", e.currentTarget)}
+            onMouseLeave={() => cancelHoverPopup("import")}
+          >
             <MessageSquarePlus size={14} />
             新建对话
           </button>
@@ -431,6 +506,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
                       type="button"
                       title="在这个项目中新建对话"
                       onClick={() => handleNewSession(bucket.projectId)}
+                      onMouseEnter={(e) => startHoverPopup(`import:${bucket.id}`, e.currentTarget)}
+                      onMouseLeave={() => cancelHoverPopup(`import:${bucket.id}`)}
                     >
                       <Plus size={13} />
                     </button>
@@ -465,6 +542,61 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
           <DesktopHueControl hue={hue} setHue={setHue} />
         </div>
       </div>
+
+      <ImportClaudeDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImported={(sessionId) => {
+          refreshSessions();
+          openSession(sessionId);
+        }}
+      />
+
+      {/* Portal 浮窗：渲染到 body，不被 sidebar overflow 裁剪 */}
+      {hoverPopup && popupRect &&
+        createPortal(
+          <div className="dsp-hover-popup" style={popupStyle(popupRect)}>
+            {hoverPopup.startsWith("export:") ? (
+              <button
+                type="button"
+                className="dsp-hover-popup-btn"
+                onClick={() => {
+                  const sid = hoverPopup.slice(7);
+                  const s = sessions.find((x) => x.id === sid);
+                  if (s) handleExportClaude(s);
+                  setHoverPopup(null); setPopupAnchor(null); setPopupRect(null);
+                }}
+                onMouseEnter={() => {
+                  // 保持 popup 不消失
+                  cancelHoverPopup(hoverPopup);
+                  startHoverPopup(hoverPopup, popupAnchor!);
+                }}
+                onMouseLeave={() => cancelHoverPopup(hoverPopup)}
+              >
+                <ArrowUpFromLine size={11} />
+                导出到 Claude
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="dsp-hover-popup-btn"
+                onClick={() => {
+                  setHoverPopup(null); setPopupAnchor(null); setPopupRect(null);
+                  setImportDialogOpen(true);
+                }}
+                onMouseEnter={() => {
+                  cancelHoverPopup(hoverPopup);
+                  startHoverPopup(hoverPopup, popupAnchor!);
+                }}
+                onMouseLeave={() => cancelHoverPopup(hoverPopup)}
+              >
+                <Import size={11} />
+                从 Claude 导入
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
     </aside>
   );
 }

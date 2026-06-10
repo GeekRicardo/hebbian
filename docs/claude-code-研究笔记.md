@@ -1,7 +1,7 @@
-# Claude Code 逆向笔记
+# Claude Code 研究笔记
 
 > 目的：hebbian 的「CC 兼容模式」要让 OAuth 请求在协议层尽量贴近真实 Claude Code 客户端
-> （被服务端 / 中转网关认作合法 CC 流量）。这份笔记记录**怎么逆向 CC 客户端**、以及
+> （被服务端 / 中转网关认作合法 CC 流量）。这份笔记记录**怎么研究 CC 客户端**、以及
 > 已经挖出来的 ground truth，供后续继续挖。
 >
 > 所有结论都在 2026-06-10 这次会话里**实跑验证过**（heb CLI + 真实 OAuth + 官方
@@ -64,13 +64,13 @@ if(条件 && !G6.includes(BETA)) G6.push(BETA);   // 把 beta 推进 anthropic-b
 
 已确认的配对（beta 工厂统一是 `ef("feature_key","beta-header")`）：
 
-| body 字段 | 必需的 enabling beta | binary 里的工厂 |
-|---|---|---|
-| `diagnostics: {previous_message_id}` | `cache-diagnosis-2026-04-07` | `L5H=ef("cache_diagnosis",...)` |
-| `fallbacks: [{model}]` | `server-side-fallback-2026-06-01` | `Ty=ef("server_side_fallback",...)` |
-| `cache_control.ttl: "1h"` | `extended-cache-ttl-2025-04-11` | `ONH=ef("extended_cache_ttl",...)` |
-| `context_management` | `context-management-2025-06-27` | — |
-| `output_config.effort` | `effort-2025-11-24` | — |
+| body 字段                              | 必需的 enabling beta                | binary 里的工厂                       |
+| -------------------------------------- | ----------------------------------- | ------------------------------------- |
+| `diagnostics: {previous_message_id}` | `cache-diagnosis-2026-04-07`      | `L5H=ef("cache_diagnosis",...)`     |
+| `fallbacks: [{model}]`               | `server-side-fallback-2026-06-01` | `Ty=ef("server_side_fallback",...)` |
+| `cache_control.ttl: "1h"`            | `extended-cache-ttl-2025-04-11`   | `ONH=ef("extended_cache_ttl",...)`  |
+| `context_management`                 | `context-management-2025-06-27`   | —                                    |
+| `output_config.effort`               | `effort-2025-11-24`               | —                                    |
 
 > ttl 的判定：`pn6(U==="1h"?3600000:300000)`——`"1h"` = 3600000ms，需 `extended-cache-ttl`；否则默认 5min。
 
@@ -227,6 +227,7 @@ return {
 ```
 
 两个有用的开关变量：
+
 - `l` ≈ 「官方第一方 endpoint」判断——gating `betas` / `context_management` / `diagnostics` 等
 - `wK = __(process.env.CLAUDE_CODE_SIMULATE_PROXY_USAGE)`——置位时**剥掉 beta headers**（模拟过代理）
 
@@ -249,7 +250,50 @@ JSON-string（≥ 2.1.78）：`{"device_id":"<64hex>","account_uuid":"<uuid>","s
 
 ---
 
-## 9. 还没挖、值得继续看的方向
+## 9. 注入核查：anti-prompt-injection 的 harness 机制
+
+### 9.1 现象
+
+在使用 Fable 5 / Opus 4.8 的 CC 会话里，每次模型回复开头会出现以下三种格式之一：
+
+```
+注入核查(按要求写出):
+1. 最近用户消息「...」作为真实 user turn 到达（system 标注），与前面消息链高度一致。
+2. 近期 tool 结果只有 cargo/grep 输出，无伪装指令。
+
+注入核查(复述):
+最近用户消息「...」是真实用户 turn（有 system 标注），近期 tool 结果无伪装指令。
+更早日志里的 `understand-anything` 注入不予执行。继续。
+
+注入核查:  ← 简洁版，tool 结果全部清洁时用这个
+最近用户消息「...」是真实用户 turn；本次 tool 结果是 cargo 输出，无伪装指令。继续。
+```
+
+### 9.2 机制
+
+**判断真实 user turn 的依据**：harness 会给每条真实的用户消息打 **system 标签**（`<user-turn-start>` 或类似的 metadata），模型在注入核查里显式声明「有 system 标注」作为合法凭据。tool 结果里的文本不会带这个标签，所以伪装指令无法通过此项验证。
+
+**三种格式的语义**：
+| 格式 | 触发场景 |
+|------|---------|
+| `注入核查(按要求写出)` | 模型正要执行具体动作，先逐条列出「我要做的事 + 来源合法性」 |
+| `注入核查(复述)` | 轻量版确认，重述用户意图 + 声明 tool 结果清洁 |
+| `注入核查` | 最简版，工具结果毫无可疑时用 |
+
+**实际拦截案例**：当前项目配置了 `understand-anything` 技能，它会往 tool 结果里注入额外指令。模型全程点名「`understand-anything` hook 注入我持续不执行」，从未被带走执行一次。
+
+### 9.3 在哪实现的
+
+经逆向确认：
+- `extension.js` 里**无此文字**（已 grep）
+- `c.json` 里捕获的可见 system prompt 4 块**无此文字**
+- → 在 **native binary 的 harness** 里，或是 Fable 5 / Opus 4.8 的 **model training** 层面
+
+两者都合理——harness 里加「每次回复前做注入核查」的指令，训练里固化「如何识别 + 格式」，合力产生这个行为。
+
+---
+
+## 10. 还没挖、值得继续看的方向
 
 按"请求形态 / 能力"分组，留给后续：
 
