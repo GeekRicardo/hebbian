@@ -7131,6 +7131,22 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
 - **留尾巴**: 无
 
+### 2026-06-11 — 固化页面预览里的输入区 14px 字号
+
+- **Why**: 页面预览中确认 `ChatInput` 外层输入区容器从默认 16px 改为 14px 后更紧凑，需要同步到源码。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 给输入区外层容器增加 `text-sm`，把该区域继承字号固化为 14px。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 固化页面预览里的输入框底部间距
+
+- **Why**: 页面预览中确认 `div.chat-input-shell` 底部间距从 46px 减半到 23px 后更贴合当前紧凑输入区，需要同步到源码。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 将非 streaming、非新对话布局下的输入框容器 `mb-[46px]` 改为 `mb-[23px]`。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
 ### 2026-06-11 — 修 AutoMode 审批框闪现 + judge 评估中黄色呼吸 + compact 图标可见 + judge prompt 按危害分级
 
 - **Why**: 用户报三个问题——① AutoMode 下审批框「弹一下又消失」（前端靠 `currentRunMode` 推断要不要弹，但它初始 null、模型不在白名单时还会误判）；② 跑 run 时模式选择器只剩 hover 没图标；③ judge 一看到 `rm` 就拦，不看实际危害（删 `/tmp` 临时文件、build 产物这种删了无所谓的也 ASK）。外加一个 idea：judge 评估期间对应 Bash 卡片黄色呼吸。

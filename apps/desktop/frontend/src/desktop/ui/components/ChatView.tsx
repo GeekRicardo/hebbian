@@ -978,7 +978,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             ? "w-3/4 mb-[44vh]"
             : isStreaming
             ? "w-full mb-0"
-            : "w-full mb-[46px]"
+            : "w-full mb-[23px]"
         }`}
       >
         <div className="absolute inset-x-0 bottom-full pointer-events-none z-30">

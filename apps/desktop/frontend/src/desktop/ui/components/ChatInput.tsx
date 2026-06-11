@@ -847,7 +847,7 @@ export function ChatInput({
     (!disabled && !sending && (!!value.trim() || attachments.length > 0));
 
   return (
-    <div className={cn("pl-2 pr-4 pt-0 pb-3", isStreaming && "chat-input-streaming")}>
+    <div className={cn("pl-2 pr-4 pt-0 pb-3 text-sm", isStreaming && "chat-input-streaming")}>
       <div className="pt-2 relative">
         {/* 上边框拖拽热区：贴在外壳顶 border 外侧 ~6px 区域，光标变 ns-resize 暗示可拖；
             双击恢复自适应高度。不画可见手柄——保持视觉干净。 */}
