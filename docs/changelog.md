@@ -6887,3 +6887,13 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: model-gateway + 三 surface 主对话路径。原 `build_client` 行为不变（健康检查 / 标题 / 测试 / compaction 不带 data_dir、无 401 自愈——单次快请求不需要）
 - **验证**: 实跑——把 access_token 改坏、`expires_at` 不动（模拟「token 已失效但提前量判断不会刷」）→ run 入口 `ensure_fresh` 不刷 → 请求撞 401 → `force_refresh` 自愈 → `run_finished` 成功、token 被刷新。A/B：修前 401 直接 `run_failed`，修后自愈成功
 - **留尾巴**: 401 自愈只 Anthropic OAuth（`force_refresh` 限 Claude OAuth）；其它 provider 401 仍直接失败。usage 指示器点击 / 5min 刷用量 + 后台 token 保活另起一条
+
+### 2026-06-11 — usage 指示器点击/5min 刷用量 + 后台 token 保活
+
+- **Why**: 用户要 usage 指示器「点击立即刷用量、不点也每 5 分钟刷」；并问 token 有没有后台自动刷新机制。
+- **改动**:
+  - 前端 [ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx): 轮询 3min → 5min；Claude / DeepSeek 按钮加 `onClick` 点击立即刷新（`cursor-pointer` + title 提示）
+  - 后端 [lib.rs](../apps/desktop/src/lib.rs) `fetch_provider_usage`: Claude OAuth 拉用量前先 `ensure_fresh_provider_token`——usage 轮询（5min）/ 点击就顺带**保活 token**（这就是「后台自动刷新机制」），Desktop 开着 token 一直 fresh，配合模型请求的 401 自愈兜底，token 基本不会因过期导致请求失败
+- **影响范围**: desktop 前端 + lib.rs command。
+- **验证**: `tsc --noEmit` + `cargo check -p hebbian` 通过。
+- **留尾巴**: 后台保活依赖 Desktop 开着时的 usage 轮询；Desktop 关闭期间不刷，但下次用时请求驱动的 `ensure_fresh` / 401 自愈兜底。承接同日「401 自愈刷新」一条。

@@ -250,6 +250,12 @@ async fn fetch_provider_usage(
 
     // Claude OAuth → 拉取用量百分比
     if provider.auth_mode == AuthMode::OauthClaudeCode {
+        // 拉用量前顺带 ensure_fresh：usage 轮询（5min）/ 点击刷新就成了后台 token 保活——
+        // Desktop 开着时即使不发对话、token 也保持 fresh（配合模型请求的 401 自愈兜底）。
+        let provider =
+            model_gateway::auth::refresh::ensure_fresh_provider_token(&dir, provider.clone())
+                .await
+                .map_err(|e| AppError::msg(format!("refresh token: {e}")))?;
         let info = model_gateway::usage::fetch_claude_usage(&provider.api_key)
             .await
             .map_err(|e| AppError::msg(format!("fetch claude usage: {e}")))?;
@@ -2928,6 +2934,8 @@ pub fn run() {
             browser::browser_style_revert,
             browser::browser_style_take_diff,
             browser::browser_clear_selection,
+            browser::browser_popout,
+            browser::browser_close_popout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

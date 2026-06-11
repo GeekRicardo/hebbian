@@ -11,7 +11,7 @@ import type {
   UsageProgress,
 } from "@/desktop/ui/types";
 
-const REFRESH_MS = 3 * 60 * 1000; // 3 分钟轮询
+const REFRESH_MS = 5 * 60 * 1000; // 5 分钟轮询（顺带保活 OAuth token：后端拉用量前会 ensure_fresh）
 
 // DeepSeek 官方定价（2026-06）：按 CNY 计，cache miss 价格，单位 元/M token
 const DS_PRICE: Record<string, { input: number; output: number; cacheRead: number }> = {
@@ -236,7 +236,9 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
         <button
           type="button"
           tabIndex={-1}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-default"
+          onClick={() => void doFetch()}
+          title="点击刷新用量"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
           aria-label={`Claude 用量 ${label}${result.plan ? ` · ${result.plan}` : ""}`}
         >
           <Zap className={cn("w-3 h-3", color)} />
@@ -275,7 +277,9 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
         <button
           type="button"
           tabIndex={-1}
-          className="inline-flex h-7 items-center rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-default"
+          onClick={() => void doFetch()}
+          title="点击刷新余额"
+          className="inline-flex h-7 items-center rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
           aria-label="DeepSeek 账户"
         >
           <Wallet className={cn("w-3 h-3", available ? "text-emerald-500" : "text-destructive")} />
