@@ -7284,3 +7284,17 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 纯 Desktop（apps/desktop）。不改 protocol / agent-core / storage。
 - **验证**: `cargo check -p hebbian` + `apps/desktop` 下 `tsc --noEmit` 绿。实测：popout 显示 / 工具栏完整 / resize 跟随 / 收回生效 / baidu 渲染均 OK；embedded localhost 稳定（tab 不再被抢）。
 - **留尾巴**: ① embedded（主窗口子 webview）加载 baidu 仍黑，而 popout 同 UA 同引擎能渲染——疑 WKWebView 在主窗口子 webview 的固有差异，baidu 非核心用途（dev 预览 localhost 是主用途、已 OK），暂搁；② embedded 浏览器内容区左侧偶现一块空白（webview bounds 偏右，疑 `syncBounds` 取的 `viewportRef` rect 坐标在某布局下算偏），下次加 `browser_set_bounds` 坐标诊断定位。
+
+### 2026-06-12 — 修复 hebisland 多题 ask 收到空白卡 + 审批卡显示「Bash null」，回传协议改 answer 对象
+
+- **Why**: hebisland（apps/island-mac，native surface）落后主线两个 bug：① 多题 ask（一次弹多道关联问题）时 island 收到空白卡——`chat.rs` 桥接只读顶层 `question`/`options`，而多题 ask 顶层是空、真实题目在 `questions` 数组里，被整个忽略；② 普通工具审批卡根本弹不出来 + PathAccess 审批显示「Bash null」「Grep null」——根因有二：`HebislandClient::push` 用 `format!` 手拼 JSON，命令含引号/换行时 body 内插不转义直接破坏整条 JSON，Swift `JSONDecoder` 静默丢弃；PathAccess 审批的 `input` 硬编码为 `Value::Null` 拼出字面量 null。连带 bug：island 单选旧回传填 `option_0` 占位，但 agent_core 无处把 `option_N` 还原成真实 label，模型收到字面量。
+- **改动**:
+  - [apps/desktop/src/hebisland_client.rs](../apps/desktop/src/hebisland_client.rs): `push` 改为 `show(IslandCard)`，用 serde 序列化整张卡（自动转义，根治手拼 JSON 破损）。新增 `IslandCard`/`IslandOption`/`IslandQuestion` 强类型 + `IslandCard::new()`。reader 线程 question 回传改为提取 `answer` 对象透传。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 重写 `push_engine_event_to_island`——审批卡新增 `approval_card_body(kind, tool_name, input, summary, paths)` 抽工具关键参数（Bash→命令 / Read·Edit·Write→file_path / Grep→pattern+path / 越界→paths / 兜底 summary）；question 卡按 `questions` 是否为空走多题（逐题铺开）/ 单题（顶层 body·options·multi）两路。
+  - [apps/desktop/src/hitl.rs](../apps/desktop/src/hitl.rs): `answer_question_from_island` 签名改收 `answer: Option<Value>`，删 option_N 占位；抽纯函数 `parse_island_answer` 直接 `serde_json::from_value::<protocol::UserAnswer>`，加 3 个回归测试。
+  - [apps/island-mac/Sources/HebIsland/Protocol.swift](../apps/island-mac/Sources/HebIsland/Protocol.swift): `NotificationCard` 加 `questions` + `CardQuestion`；新增 `UserAnswer`/`SingleAnswer`/`MultiAnswerItem` enum（Encodable，wire 形态逐字对齐 `protocol::UserAnswer`，tag=`type` snake_case）；`ActionResult`/`ActionMessage` 用 `answer: UserAnswer?` 取代散字段 `selected`/`input`。
+  - [apps/island-mac/Sources/HebIsland/CardView.swift](../apps/island-mac/Sources/HebIsland/CardView.swift): 重写 question 渲染——单题归一成一道题、多题 ScrollView 限高 280 逐题铺开 + 跳过/提交（按 `allAnswered` 禁用提交），per-question 状态 `selectedByQ`/`customByQ`，`buildAnswer` 构造 UserAnswer。
+  - [docs/hebisland-spec.md](../docs/hebisland-spec.md): §4.3 回传改 `answer` 对象、§4.4 加 `questions` 字段、§4.7 重写问答回传协议（单题/多题/answer 形态完整示例）。
+- **影响范围**: Desktop 桥接（chat.rs/hitl.rs/hebisland_client.rs）+ island-mac native + spec。**协议改动**：island→Desktop 问答回传从 `selected`/`input` 散字段改为 `answer` 结构化对象——两端同步改、逐字对齐 `protocol::UserAnswer`。只有 Desktop 桥接 island（heb CLI / hebweb 不桥接）。
+- **验证**: `cargo check -p hebbian` 绿；`cargo test -p hebbian --lib hitl` 3 个 parse 回归全过；`swift build` 绿、`swift test` 14 个全过。手发 4 张卡到重启后的 daemon，log 无 `Invalid JSON`，单题/多题/审批渲染 OK（无屏幕录制权限截图失败，靠 daemon log + 单测固化）。
+- **留尾巴**: 无。

@@ -8,11 +8,15 @@
 //   {"type":"dismiss","id":"..."}
 //
 // 回传方向（hebisland → Desktop）：
-//   {"msg_id":"...","action":"...","selected":[...],"input":"...","checked":[...]}
+//   审批：{"msg_id":"perm-<id>","action":"allow|deny|...","checked":[...]}
+//   问答：{"msg_id":"question-<id>","action":"submit","answer":{<UserAnswer>}}
+//         {"msg_id":"question-<id>","action":"skip"}
+//   其中 answer 直接是 protocol::UserAnswer 的 wire 形态，hitl 侧零翻译反序列化。
 //
 // 回传收到后调 `hitl::resolve_hitl_from_island` 落地审批决定，
 // 或 `hitl::answer_question_from_island` 落地问答回答。
 
+use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
@@ -26,6 +30,65 @@ enum ClientMsg {
     Dismiss { json: String },
 }
 
+/// 一张推给 hebisland 的通知卡。
+///
+/// 用 serde 序列化而非手拼字符串：body / 选项 label 里只要带引号或换行，
+/// 手拼就会破坏 JSON 让 Swift 端 JSONDecoder 整条丢弃（审批卡显示不出来的根因）。
+#[derive(Serialize, Default)]
+pub struct IslandCard {
+    pub id: String,
+    #[serde(rename = "cardType")]
+    pub card_type: String,
+    pub title: String,
+    pub body: String,
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// 单题 question 卡的选项。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<IslandOption>,
+    /// 单题 question 卡是否多选。
+    #[serde(rename = "multiSelect", skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
+    /// 多题 question 卡：每道子题。非空时 island 逐题渲染，body 留空。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<IslandQuestion>,
+}
+
+#[derive(Serialize)]
+pub struct IslandOption {
+    pub label: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub desc: String,
+}
+
+#[derive(Serialize)]
+pub struct IslandQuestion {
+    pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub desc: String,
+    pub options: Vec<IslandOption>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
+}
+
+impl IslandCard {
+    /// 构造一张基础卡（id / 类型 / 标题 / 正文），可选字段走 `..Default::default()`。
+    pub fn new(
+        id: impl Into<String>,
+        card_type: &str,
+        title: &str,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            card_type: card_type.into(),
+            title: title.into(),
+            body: body.into(),
+            ..Default::default()
+        }
+    }
+}
+
 /// 客户端句柄：clone 安全，内部只是一个 channel sender。
 #[derive(Clone)]
 pub struct HebislandClient {
@@ -33,34 +96,42 @@ pub struct HebislandClient {
 }
 
 impl HebislandClient {
-    /// 推送一条通知。id 同时用作 msg_id（回传时映射回 request_id）。
-    /// card_type: "approval" | "info" | "question" | "success"
-    /// extra_fields: 可选的额外 card 字段（options / multiSelect / subcommands），
-    ///   格式如 r#","options":[{"label":"A"},{"label":"B"}],"multiSelect":false"#
-    pub fn push(
-        &self,
-        id: String,
-        card_type: &str,
-        title: &str,
-        body: &str,
-        session_id: Option<&str>,
-        extra_fields: Option<&str>,
-    ) {
-        let sid = match session_id {
-            Some(s) => format!(r#","sessionId":"{}""#, s),
-            None => String::new(),
+    /// 推送一条通知。card.id 同时用作 msg_id（回传时映射回 request_id）。
+    pub fn show(&self, card: IslandCard) {
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            #[serde(rename = "type")]
+            kind: &'a str,
+            id: &'a str,
+            card: &'a IslandCard,
+        }
+        let env = Envelope {
+            kind: "show",
+            id: &card.id,
+            card: &card,
         };
-        let extra = extra_fields.unwrap_or("");
-        let json = format!(
-            r#"{{"type":"show","id":"{id}","card":{{"id":"{id}","cardType":"{card_type}","title":"{title}","body":"{body}"{sid}{extra}}}}}"#
-        );
-        let _ = self.tx.send(ClientMsg::Show { json });
+        match serde_json::to_string(&env) {
+            Ok(json) => {
+                let _ = self.tx.send(ClientMsg::Show { json });
+            }
+            Err(e) => tracing::warn!(error = %e, "hebisland card 序列化失败，跳过推送"),
+        }
     }
 
     /// 关闭一条通知。
     pub fn dismiss(&self, id: &str) {
-        let json = format!(r#"{{"type":"dismiss","id":"{id}"}}"#);
-        let _ = self.tx.send(ClientMsg::Dismiss { json });
+        #[derive(Serialize)]
+        struct Dismiss<'a> {
+            #[serde(rename = "type")]
+            kind: &'a str,
+            id: &'a str,
+        }
+        if let Ok(json) = serde_json::to_string(&Dismiss {
+            kind: "dismiss",
+            id,
+        }) {
+            let _ = self.tx.send(ClientMsg::Dismiss { json });
+        }
     }
 }
 
@@ -114,13 +185,7 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
                         let action = v["action"].as_str().unwrap_or("");
                         tracing::info!(msg_id, action, "hebisland action 回传");
 
-                        // 提取可选的 selected / input / checked
-                        let selected = v["selected"].as_array().map(|arr| {
-                            arr.iter()
-                                .filter_map(|x| x.as_i64().map(|n| n as usize))
-                                .collect::<Vec<_>>()
-                        });
-                        let input = v["input"].as_str().map(|s| s.to_string());
+                        // 审批勾选的子命令索引（空 = 全选）。
                         let checked = v["checked"].as_array().map(|arr| {
                             arr.iter()
                                 .filter_map(|x| x.as_i64().map(|n| n as usize))
@@ -146,12 +211,13 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
                                 );
                             }
                             "question" => {
+                                // answer 直接是 protocol::UserAnswer 的 wire JSON（island 自己
+                                // 拼好真实 label / 多题 items），hitl 侧零翻译反序列化。
                                 crate::hitl::answer_question_from_island(
                                     &reader_app,
                                     request_id,
                                     action,
-                                    selected.as_deref(),
-                                    input.as_deref(),
+                                    v.get("answer").cloned(),
                                 );
                             }
                             _ => {

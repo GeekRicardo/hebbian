@@ -13,6 +13,16 @@ struct CardOption: Decodable {
     let desc: String?
 }
 
+/// 一道子题（多题 question 卡）。单题卡用顶层 options/multiSelect，多题卡用本结构数组。
+struct CardQuestion: Decodable {
+    let title: String
+    let desc: String?
+    let options: [CardOption]
+    let multi: Bool?
+
+    var isMulti: Bool { multi ?? false }
+}
+
 /// 审批子命令（approval 卡的待审批队列勾选项）
 struct CardSubcommand: Decodable {
     let tool: String       // 工具名（Bash / Edit ...）
@@ -29,9 +39,10 @@ struct NotificationCard: Decodable {
     let sessionId: String?
     let durationMs: Int?   // null/omit = default per cardType; 0 = never
     let actions: [String]? // null/omit = default per cardType
-    let options: [CardOption]?      // question 卡的可选项
-    let multiSelect: Bool?          // question 卡是否多选（默认单选）
-    let subcommands: [CardSubcommand]? // approval 卡的子命令勾选列表
+    var options: [CardOption]? = nil      // 单题 question 卡的可选项
+    var multiSelect: Bool? = nil          // 单题 question 卡是否多选（默认单选）
+    var questions: [CardQuestion]? = nil  // 多题 question 卡：非空时逐题渲染，body/options 忽略
+    var subcommands: [CardSubcommand]? = nil // approval 卡的子命令勾选列表
 
     /// Resolved auto-dismiss duration in ms (nil = never auto-dismiss)
     var effectiveDurationMs: Int? {
@@ -70,35 +81,90 @@ struct NotificationCard: Decodable {
         }
     }
 
+    /// 多题卡：非空 questions。否则按单题卡处理。
+    var multiQuestions: [CardQuestion] { questions ?? [] }
+    var isMultiQuestion: Bool { !(questions ?? []).isEmpty }
     var isMultiSelect: Bool { multiSelect ?? false }
 }
 
-/// 用户操作结果：按钮 action + 可选的问答选择 / 输入 / 子命令勾选。
+// MARK: - 问答答案（与 Rust 端 protocol::UserAnswer wire 形态逐字对齐）
+
+/// 一道题的单题答案。`type` + 字段对齐 protocol::SingleAnswer / UserAnswer 的非 Multi 分支。
+enum SingleAnswer: Encodable {
+    case selected(label: String)
+    case selectedMulti(labels: [String])
+    case custom(text: String)
+    case cancelled
+
+    enum CodingKeys: String, CodingKey { case type, label, labels, text }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .selected(let label):
+            try c.encode("selected", forKey: .type)
+            try c.encode(label, forKey: .label)
+        case .selectedMulti(let labels):
+            try c.encode("selected_multi", forKey: .type)
+            try c.encode(labels, forKey: .labels)
+        case .custom(let text):
+            try c.encode("custom", forKey: .type)
+            try c.encode(text, forKey: .text)
+        case .cancelled:
+            try c.encode("cancelled", forKey: .type)
+        }
+    }
+}
+
+/// 多题答案的一项：题目标题 + 子答案（对齐 protocol::MultiQuestionAnswer）。
+struct MultiAnswerItem: Encodable {
+    let title: String
+    let answer: SingleAnswer
+}
+
+/// 一轮 ask 的完整答案，提交时整体序列化进回传的 `answer` 字段。
+/// 与 protocol::UserAnswer 同形：单题走 SingleAnswer 的四个分支，多题走 .multi。
+enum UserAnswer: Encodable {
+    case single(SingleAnswer)
+    case multi(items: [MultiAnswerItem])
+
+    enum MultiKeys: String, CodingKey { case type, items }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .single(let s):
+            try s.encode(to: encoder)
+        case .multi(let items):
+            var c = encoder.container(keyedBy: MultiKeys.self)
+            try c.encode("multi", forKey: .type)
+            try c.encode(items, forKey: .items)
+        }
+    }
+}
+
+/// 用户操作结果：按钮 action + 可选的问答答案 / 子命令勾选。
 struct ActionResult {
     let action: String
-    var selected: [Int]? = nil   // question 选中的选项索引
-    var input: String? = nil     // question 自由输入文本
-    var checked: [Int]? = nil    // approval 勾选的子命令索引
+    var answer: UserAnswer? = nil   // question 提交时的完整答案
+    var checked: [Int]? = nil       // approval 勾选的子命令索引
 }
 
 /// Outgoing action message from island to caller
 struct ActionMessage: Encodable {
     let msgId: String
     let action: String
-    let selected: [Int]?
-    let input: String?
+    let answer: UserAnswer?
     let checked: [Int]?
 
     enum CodingKeys: String, CodingKey {
         case msgId = "msg_id"
-        case action, selected, input, checked
+        case action, answer, checked
     }
 
     init(msgId: String, result: ActionResult) {
         self.msgId = msgId
         self.action = result.action
-        self.selected = result.selected
-        self.input = result.input
+        self.answer = result.answer
         self.checked = result.checked
     }
 

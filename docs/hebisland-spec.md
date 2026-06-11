@@ -108,13 +108,18 @@ apps/island-mac/
 ### 4.3 island → 调用方（action 回传）
 
 ```jsonc
+// 纯按钮动作（审批 allow/deny、关闭 dismiss）
 {"msg_id":"<id>","action":"<action>"}
+
+// 问答提交：answer 是一个与 protocol::UserAnswer 逐字对齐的对象（见 §4.7）
+{"msg_id":"<id>","action":"submit","answer":{"type":"selected","label":"右上角"}}
 ```
 
 - **回传写回「展示该通知的那条连接」**。Desktop 的长连接据此落地 HITL。
 - `notify --wait` 的短连接：保持连接直到收到首个 action，打印后退出。
 - `notify`（无 `--wait`）：写完即断开，收不到回传。
 - 字段名 `msg_id` 是 **snake_case**（既成契约，勿改）。
+- 问答提交统一携带 `answer`（结构化答案对象），不再用 `selected`/`input` 散字段（见 §4.7）。
 
 ### 4.4 NotificationCard
 
@@ -127,15 +132,20 @@ apps/island-mac/
   "sessionId":  "<string>?",             // 可选
   "durationMs": 5000,                    // 可选；null/省略=按 cardType 默认
   "actions":    ["知道了","打开"],         // 可选；null/省略=按 cardType 默认按钮
-  "options":    [{"label":"右上角","desc":"经典位置"}],  // 可选；question 卡的可选项
-  "multiSelect": false,                  // 可选；question 卡是否多选（默认单选）
+  "options":    [{"label":"右上角","desc":"经典位置"}],  // 可选；单题 question 卡的可选项
+  "multiSelect": false,                  // 可选；单题 question 卡是否多选（默认单选）
+  "questions":  [{"title":"...","desc":"...","options":[...],"multi":false}],  // 可选；多题 question 卡
   "subcommands": [{"tool":"Bash","detail":"cargo test","checked":true}]  // 可选；approval 卡的子命令勾选列表
 }
 ```
 
 字段命名：外部 JSON 用 camelCase（`cardType` / `sessionId` / `durationMs` / `multiSelect`），唯一例外是回传的 `msg_id`（历史契约）。Swift 侧用 `CodingKeys` 映射。
 
-**向后兼容**：Desktop 当前只发 `id/cardType/title/body/sessionId`，**不发** `durationMs/actions/options/multiSelect/subcommands`。native 端必须把这些当可选，缺省走默认。
+**单题 vs 多题 question 卡**：
+- `questions` 为空 / 省略 → 单题卡，读顶层 `body`（题干）/ `options` / `multiSelect`。
+- `questions` 非空 → 多题卡，island 逐题铺开渲染（限高滚动），每题独立 `title` / `desc` / `options` / `multi`，忽略顶层 `options` / `multiSelect`。
+
+**向后兼容**：Desktop 当前只发 `id/cardType/title/body/sessionId`（外加 question 卡的 `options`/`multiSelect`/`questions`），**不发** `durationMs/actions/subcommands`。native 端必须把这些当可选，缺省走默认。
 
 ### 4.5 durationMs 语义
 
@@ -166,12 +176,19 @@ apps/island-mac/
 
 ### 4.7 问答选项与子命令勾选
 
-**问答选项**（`card.options`）：
+**单题问答**（`card.options` + `card.multiSelect`）：
 
 - `question` 卡可携带 `options: [{label, desc?}]` 数组，渲染为选项列表
 - `multiSelect: true` 时多选（方框），`false` 或省略时单选（圆点）
-- 用户选中后点「提交」→ 回传 `{"action":"submit","selected":[0,2],"input":"自由输入文本"}`
+- 单选题额外提供「其他回答」自由输入框
+- 用户选中后点「提交」→ 回传 `{"action":"submit","answer":{...}}`，answer 形态见下
 - 点「跳过」→ 回传 `{"action":"skip"}`
+
+**多题问答**（`card.questions`）：
+
+- `questions: [{title, desc?, options, multi}]` 数组，island 逐题铺开 + 限高滚动
+- 每题独立选择，「提交」按钮在所有题作答后才可点
+- 提交回传 `{"action":"submit","answer":{"type":"multi","items":[...]}}`
 
 **子命令勾选**（`card.subcommands`）：
 
@@ -179,20 +196,47 @@ apps/island-mac/
 - 用户可切换勾选状态，点审批按钮时回传 `{"action":"allow","checked":[0,1]}`
 - `checked` 数组为空表示用户取消了所有勾选
 
-**回传格式**：
+**`answer` 协议**（与 `protocol::UserAnswer` 逐字对齐，tag = `type`，snake_case）：
 
 ```jsonc
-// 按钮 action（无额外数据）
-{"msg_id":"perm-1","action":"allow"}
+// 单选：选了一个固定选项
+{"type":"selected","label":"右上角"}
 
-// 问答提交（带选中项 + 输入）
-{"msg_id":"q-1","action":"submit","selected":[0],"input":"右上角"}
+// 多选：选了若干固定选项（按勾选顺序）
+{"type":"selected_multi","labels":["右上角","左下角"]}
 
-// 审批带勾选
-{"msg_id":"perm-2","action":"allow","checked":[0,1]}
+// 自由输入：用户在「其他回答」框写的文字
+{"type":"custom","text":"屏幕正中间"}
+
+// 整轮取消（等价于点「跳过」）
+{"type":"cancelled"}
+
+// 多题：每道子题一个 {title, answer}，answer 是上面前四种之一（不再嵌套 multi）
+{"type":"multi","items":[
+  {"title":"位置？","answer":{"type":"selected","label":"右上角"}},
+  {"title":"颜色？","answer":{"type":"custom","text":"蓝色"}}
+]}
 ```
 
-字段 `selected`/`input`/`checked` 为可选，缺省为 `null`。
+**完整回传示例**：
+
+```jsonc
+// 审批按钮（无额外数据）
+{"msg_id":"perm-1","action":"allow"}
+
+// 审批带子命令勾选
+{"msg_id":"perm-2","action":"allow","checked":[0,1]}
+
+// 单题单选提交
+{"msg_id":"q-1","action":"submit","answer":{"type":"selected","label":"右上角"}}
+
+// 多题提交
+{"msg_id":"q-2","action":"submit","answer":{"type":"multi","items":[
+  {"title":"位置？","answer":{"type":"selected","label":"右上角"}}
+]}}
+```
+
+`checked` 为可选（缺省 `null`）；`answer` 仅 `submit` 时存在。Desktop reader 拿到 `submit` 时把 `answer` 整个对象直接 `serde_json::from_value::<UserAnswer>` 反序列化，反序列化失败按取消处理。
 
 ---
 

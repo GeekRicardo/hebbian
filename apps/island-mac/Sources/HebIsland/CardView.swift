@@ -100,9 +100,12 @@ struct CardView: View {
     let theme: CardTheme
 
     @State private var isHovering = false
-    @State private var checkedSubs: Set<Int>      // 审批勾选的子命令
-    @State private var selectedOpts: Set<Int> = []// 问答选中的选项
-    @State private var inputText = ""              // 问答自由输入
+    @State private var checkedSubs: Set<Int>          // 审批勾选的子命令
+    @State private var selectedByQ: [Int: Set<Int>] = [:] // 每题选中的选项索引（otherIndex=自由输入）
+    @State private var customByQ: [Int: String] = [:]      // 每题自由输入文本
+
+    /// 单选题里「其他回答」占的伪索引（与真实选项 0..n 区分）。
+    private let otherIndex = -1
 
     init(card: NotificationCard,
          onResult: @escaping (ActionResult) -> Void,
@@ -288,30 +291,36 @@ struct CardView: View {
         }
     }
 
-    // MARK: - Question: 选项 + 输入 + 跳过/提交
+    // MARK: - Question: 逐题选项 + 自由输入 + 跳过/提交
+
+    /// 归一化：单题卡 → 一道用顶层字段拼的题；多题卡 → card.multiQuestions。
+    private var normalizedQuestions: [CardQuestion] {
+        if card.isMultiQuestion { return card.multiQuestions }
+        return [CardQuestion(
+            title: card.body,
+            desc: nil,
+            options: card.options ?? [],
+            multi: card.multiSelect
+        )]
+    }
+
+    private var allAnswered: Bool {
+        normalizedQuestions.enumerated().allSatisfy { idx, q in isAnswered(idx, q) }
+    }
 
     private var questionContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let opts = card.options, !opts.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(opts.enumerated()), id: \.offset) { idx, opt in
-                        optionRow(idx, opt)
+        let questions = normalizedQuestions
+        let multiQ = card.isMultiQuestion
+        return VStack(alignment: .leading, spacing: 8) {
+            // 逐题铺开，限高滚动（题多时不撑爆卡片）。
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, q in
+                        questionBlock(qIdx, q, showHeader: multiQ)
                     }
                 }
             }
-
-            // 自由输入
-            HStack(spacing: 6) {
-                Text(">").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundColor(Palette.green)
-                TextField("自由输入…", text: $inputText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundColor(.white)
-            }
-            .padding(.vertical, 6).padding(.horizontal, 10)
-            .background(Color.white.opacity(0.03))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.10), lineWidth: 1))
-            .cornerRadius(4)
+            .frame(maxHeight: 280)
 
             HStack(spacing: 6) {
                 Button { onResult(ActionResult(action: "skip")) } label: {
@@ -325,36 +334,65 @@ struct CardView: View {
                 }.buttonStyle(.plain)
 
                 Button {
-                    let sel = selectedOpts.isEmpty ? nil : Array(selectedOpts).sorted()
-                    let text = inputText.isEmpty ? nil : inputText
-                    onResult(ActionResult(action: "submit", selected: sel, input: text))
+                    onResult(ActionResult(action: "submit", answer: buildAnswer(questions)))
                 } label: {
                     Text("提交")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(Color.white.opacity(0.95))
+                        .foregroundColor(allAnswered ? Color.white.opacity(0.95) : Color.white.opacity(0.4))
                         .frame(maxWidth: .infinity).padding(.vertical, 7)
-                        .background(Palette.greenBg)
+                        .background(allAnswered ? Palette.greenBg : Color.white.opacity(0.04))
                         .cornerRadius(4)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Palette.greenBorder, lineWidth: 1))
-                }.buttonStyle(.plain)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(allAnswered ? Palette.greenBorder : Color.white.opacity(0.10), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(!allAnswered)
             }
         }
         .padding(.top, 2)
     }
 
-    private func optionRow(_ idx: Int, _ opt: CardOption) -> some View {
-        let on = selectedOpts.contains(idx)
-        return Button {
-            if card.isMultiSelect {
-                if on { selectedOpts.remove(idx) } else { selectedOpts.insert(idx) }
-            } else {
-                selectedOpts = [idx]   // 单选
+    private func questionBlock(_ qIdx: Int, _ q: CardQuestion, showHeader: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if showHeader {
+                HStack(spacing: 6) {
+                    Text("\(qIdx + 1).")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(Palette.cyan)
+                    Text(q.title)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                    if q.isMulti {
+                        Text("多选")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundColor(Palette.cyan)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Palette.cyan.opacity(0.15))
+                            .cornerRadius(3)
+                    }
+                    Spacer(minLength: 0)
+                }
+                if let d = q.desc, !d.isEmpty {
+                    Text(d).font(.system(size: 9, design: .monospaced)).foregroundColor(Color.white.opacity(0.45))
+                }
             }
+            ForEach(Array(q.options.enumerated()), id: \.offset) { idx, opt in
+                optionRow(qIdx, q, idx, opt.label, opt.desc)
+            }
+            // 单选题提供「其他回答」自由输入；多选题不提供（与主窗口一致）。
+            if !q.isMulti {
+                otherInputRow(qIdx)
+            }
+        }
+    }
+
+    private func optionRow(_ qIdx: Int, _ q: CardQuestion, _ idx: Int, _ label: String, _ desc: String?) -> some View {
+        let on = (selectedByQ[qIdx] ?? []).contains(idx)
+        return Button {
+            toggle(qIdx, idx, multi: q.isMulti)
         } label: {
             HStack(alignment: .top, spacing: 8) {
-                // 多选用方框，单选用圆点
                 ZStack {
-                    if card.isMultiSelect {
+                    if q.isMulti {
                         RoundedRectangle(cornerRadius: 3).fill(on ? Palette.cyan.opacity(0.25) : .clear)
                         RoundedRectangle(cornerRadius: 3).stroke(on ? Palette.cyan : Color.white.opacity(0.25), lineWidth: 1)
                         if on { Text("\u{2713}").font(.system(size: 9, weight: .bold)).foregroundColor(Palette.cyan) }
@@ -366,10 +404,10 @@ struct CardView: View {
                 .frame(width: 14, height: 14)
                 .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(opt.label)
+                    Text(label)
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundColor(on ? .white : Color.white.opacity(0.75))
-                    if let d = opt.desc, !d.isEmpty {
+                    if let d = desc, !d.isEmpty {
                         Text(d).font(.system(size: 9, design: .monospaced)).foregroundColor(Color.white.opacity(0.4))
                     }
                 }
@@ -380,6 +418,75 @@ struct CardView: View {
             .cornerRadius(4)
         }
         .buttonStyle(.plain)
+    }
+
+    private func otherInputRow(_ qIdx: Int) -> some View {
+        let picked = (selectedByQ[qIdx] ?? []).contains(otherIndex)
+        return HStack(spacing: 6) {
+            Text(">").font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(picked ? Palette.green : Color.white.opacity(0.4))
+            TextField("自由输入…", text: Binding(
+                get: { customByQ[qIdx] ?? "" },
+                set: { newVal in
+                    customByQ[qIdx] = newVal
+                    // 单选题：写自由输入即占据选择，清掉固定选项。
+                    selectedByQ[qIdx] = newVal.isEmpty ? [] : [otherIndex]
+                }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(.white)
+        }
+        .padding(.vertical, 6).padding(.horizontal, 10)
+        .background(Color.white.opacity(0.03))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.10), lineWidth: 1))
+        .cornerRadius(4)
+    }
+
+    // MARK: - Question: 状态 + 答案构造
+
+    private func toggle(_ qIdx: Int, _ idx: Int, multi: Bool) {
+        var set = selectedByQ[qIdx] ?? []
+        if multi {
+            if set.contains(idx) { set.remove(idx) } else { set.insert(idx) }
+        } else {
+            set = [idx]
+            customByQ[qIdx] = ""   // 选固定选项即放弃自由输入
+        }
+        selectedByQ[qIdx] = set
+    }
+
+    private func isAnswered(_ qIdx: Int, _ q: CardQuestion) -> Bool {
+        let set = selectedByQ[qIdx] ?? []
+        if q.isMulti { return !set.isEmpty }
+        if set.contains(otherIndex) { return !(customByQ[qIdx] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return !set.isEmpty
+    }
+
+    /// 把每题状态规约成与 Rust 端对齐的 UserAnswer。
+    private func buildAnswer(_ questions: [CardQuestion]) -> UserAnswer {
+        if card.isMultiQuestion {
+            let items = questions.enumerated().map { qIdx, q in
+                MultiAnswerItem(title: q.title, answer: singleAnswer(qIdx, q))
+            }
+            return .multi(items: items)
+        }
+        return .single(singleAnswer(0, questions[0]))
+    }
+
+    private func singleAnswer(_ qIdx: Int, _ q: CardQuestion) -> SingleAnswer {
+        let set = selectedByQ[qIdx] ?? []
+        if q.isMulti {
+            let labels = set.sorted().compactMap { idx in q.options.indices.contains(idx) ? q.options[idx].label : nil }
+            return .selectedMulti(labels: labels)
+        }
+        if set.contains(otherIndex) {
+            return .custom(text: (customByQ[qIdx] ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if let idx = set.first, q.options.indices.contains(idx) {
+            return .selected(label: q.options[idx].label)
+        }
+        return .cancelled
     }
 
     // MARK: - Colors

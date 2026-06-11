@@ -167,14 +167,15 @@ pub fn resolve_hitl_from_island(
     }
 }
 
-/// Island 问答回答入口：支持 Selected / SelectedMulti / Custom / Cancelled。
-/// `selected` 是用户选中的选项索引，`input` 是自由输入文本。
+/// Island 问答回答入口。
+///
+/// `action`：`"submit"` → 用户提交，`answer` 携带 [`protocol::UserAnswer`] 的 wire JSON
+/// （island 自己拼好真实 label / 多题 items，与主窗口走同一类型）；`"skip"` → 取消。
 pub fn answer_question_from_island(
     app: &tauri::AppHandle,
     request_id: &str,
     action: &str,
-    selected: Option<&[usize]>,
-    input: Option<&str>,
+    answer: Option<serde_json::Value>,
 ) {
     use std::sync::Arc;
     use tauri::Manager;
@@ -183,35 +184,78 @@ pub fn answer_question_from_island(
         tracing::warn!("island_answer: HitlState not available");
         return;
     };
-    let answer = match action {
-        "skip" => protocol::UserAnswer::Cancelled,
-        "submit" => {
-            // 优先用自由输入，其次用选中项
-            if let Some(text) = input {
-                protocol::UserAnswer::Custom {
-                    text: text.to_string(),
-                }
-            } else if let Some(indices) = selected {
-                if indices.len() == 1 {
-                    // 单选：用索引占位，实际 label 由后端从 options 里取
-                    protocol::UserAnswer::Selected {
-                        label: format!("option_{}", indices[0]),
-                    }
-                } else {
-                    protocol::UserAnswer::SelectedMulti {
-                        labels: indices.iter().map(|i| format!("option_{i}")).collect(),
-                    }
-                }
-            } else {
-                protocol::UserAnswer::Cancelled
-            }
-        }
-        other => {
-            tracing::warn!(action = other, "island_answer: unknown action");
+    let answer = match parse_island_answer(action, answer) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, action, "island_answer: 无法解析回传");
             return;
         }
     };
     if let Err(e) = state.answer_question(request_id, answer) {
         tracing::warn!(error = %e, "island_answer: failed to answer");
+    }
+}
+
+/// 把 island 回传的 `action` + `answer` JSON 规约成 [`protocol::UserAnswer`]。
+///
+/// island 端按 `protocol::UserAnswer` 的 wire 形态自己拼好答案（真实 label、多题 items），
+/// 这里只做反序列化——不再有 `option_N` 索引占位需要后端翻译。
+fn parse_island_answer(
+    action: &str,
+    answer: Option<serde_json::Value>,
+) -> Result<protocol::UserAnswer, String> {
+    match action {
+        "skip" => Ok(protocol::UserAnswer::Cancelled),
+        "submit" => match answer {
+            Some(v) => serde_json::from_value::<protocol::UserAnswer>(v)
+                .map_err(|e| format!("answer 反序列化失败: {e}")),
+            None => Ok(protocol::UserAnswer::Cancelled),
+        },
+        other => Err(format!("未知 action: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_island_answer;
+    use serde_json::json;
+
+    /// island 单选回传须解析成带真实 label 的 Selected（而非历史的 option_N 占位）。
+    #[test]
+    fn island_single_selected_carries_real_label() {
+        let ans = parse_island_answer("submit", Some(json!({"type": "selected", "label": "右上角"})))
+            .unwrap();
+        match ans {
+            protocol::UserAnswer::Selected { label } => assert_eq!(label, "右上角"),
+            other => panic!("期望 Selected，得到 {other:?}"),
+        }
+    }
+
+    /// island 多题回传须解析成 Multi，每项带 title + 子答案。
+    #[test]
+    fn island_multi_answer_roundtrips() {
+        let payload = json!({
+            "type": "multi",
+            "items": [
+                {"title": "策略", "answer": {"type": "selected", "label": "A"}},
+                {"title": "范围", "answer": {"type": "selected_multi", "labels": ["x", "y"]}},
+                {"title": "备注", "answer": {"type": "custom", "text": "随便写写"}},
+            ]
+        });
+        let ans = parse_island_answer("submit", Some(payload)).unwrap();
+        match ans {
+            protocol::UserAnswer::Multi { items } => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].title, "策略");
+                assert!(matches!(&items[1].answer, protocol::SingleAnswer::SelectedMulti { labels } if labels == &["x", "y"]));
+            }
+            other => panic!("期望 Multi，得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn island_skip_is_cancelled() {
+        let ans = parse_island_answer("skip", None).unwrap();
+        assert!(matches!(ans, protocol::UserAnswer::Cancelled));
     }
 }

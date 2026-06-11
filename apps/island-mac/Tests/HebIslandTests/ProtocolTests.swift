@@ -43,12 +43,45 @@ final class ProtocolTests: XCTestCase {
     // MARK: - ActionMessage encoding
 
     func testEncodeActionMessage() throws {
-        let msg = ActionMessage(msgId: "p1", action: "allow")
+        let msg = ActionMessage(msgId: "p1", result: ActionResult(action: "allow"))
         let jsonLine = msg.toJSONLine()!
         XCTAssertTrue(jsonLine.contains("\"msg_id\":\"p1\""))
         XCTAssertTrue(jsonLine.contains("\"action\":\"allow\""))
         // Must end with newline
         XCTAssertTrue(jsonLine.hasSuffix("\n"))
+    }
+
+    /// 单选答案的 wire 形态须对齐 protocol::UserAnswer::Selected。
+    func testEncodeSingleSelectedAnswer() throws {
+        let result = ActionResult(action: "submit", answer: .single(.selected(label: "右上角")))
+        let json = ActionMessage(msgId: "question-1", result: result).toJSONLine()!
+        XCTAssertTrue(json.contains("\"action\":\"submit\""))
+        XCTAssertTrue(json.contains("\"type\":\"selected\""))
+        XCTAssertTrue(json.contains("\"label\":\"右上角\""))
+    }
+
+    /// 多题答案须对齐 protocol::UserAnswer::Multi { items: [{title, answer}] }。
+    func testEncodeMultiAnswer() throws {
+        let items = [
+            MultiAnswerItem(title: "策略", answer: .selected(label: "A")),
+            MultiAnswerItem(title: "范围", answer: .selectedMulti(labels: ["x", "y"])),
+            MultiAnswerItem(title: "备注", answer: .custom(text: "随便写写")),
+        ]
+        let result = ActionResult(action: "submit", answer: .multi(items: items))
+        let json = ActionMessage(msgId: "question-2", result: result).toJSONLine()!
+        XCTAssertTrue(json.contains("\"type\":\"multi\""))
+        XCTAssertTrue(json.contains("\"title\":\"策略\""))
+        XCTAssertTrue(json.contains("\"type\":\"selected_multi\""))
+        XCTAssertTrue(json.contains("\"type\":\"custom\""))
+    }
+
+    /// 多题卡解码：questions 数组应被吃下。
+    func testDecodeMultiQuestionCard() throws {
+        let json = #"{"type":"show","id":"q1","card":{"id":"q1","cardType":"question","title":"T","body":"","questions":[{"title":"策略","options":[{"label":"A"},{"label":"B"}],"multi":false},{"title":"范围","options":[{"label":"x"}],"multi":true}]}}"#
+        let msg = try JSONDecoder().decode(IncomingMessage.self, from: json.data(using: .utf8)!)
+        XCTAssertEqual(msg.card?.isMultiQuestion, true)
+        XCTAssertEqual(msg.card?.multiQuestions.count, 2)
+        XCTAssertEqual(msg.card?.multiQuestions[1].isMulti, true)
     }
 
     // MARK: - NotificationCard defaults
@@ -63,22 +96,20 @@ final class ProtocolTests: XCTestCase {
         let card = NotificationCard(id: "a1", cardType: "approval", title: "T", body: "B", sessionId: nil, durationMs: nil, actions: nil)
         XCTAssertNil(card.effectiveDurationMs)
         let buttons = card.resolvedButtons
-        XCTAssertEqual(buttons.count, 3)
+        XCTAssertEqual(buttons.count, 5)
         XCTAssertEqual(buttons[0].label, "拒绝")
         XCTAssertEqual(buttons[0].action, "deny")
-        XCTAssertEqual(buttons[1].label, "允许")
+        XCTAssertEqual(buttons[1].label, "一次")
         XCTAssertEqual(buttons[1].action, "allow")
-        XCTAssertEqual(buttons[2].label, "打开")
-        XCTAssertEqual(buttons[2].action, "open")
+        XCTAssertEqual(buttons[4].label, "全局")
+        XCTAssertEqual(buttons[4].action, "allow_global")
     }
 
     func testQuestionDefaults() {
         let card = NotificationCard(id: "q1", cardType: "question", title: "T", body: "B", sessionId: nil, durationMs: nil, actions: nil)
         XCTAssertNil(card.effectiveDurationMs)
-        let buttons = card.resolvedButtons
-        XCTAssertEqual(buttons.count, 1)
-        XCTAssertEqual(buttons[0].label, "打开处理")
-        XCTAssertEqual(buttons[0].action, "open")
+        // question 走专门的选项/输入 UI，不走通用按钮行。
+        XCTAssertTrue(card.resolvedButtons.isEmpty)
     }
 
     func testZeroDurationMeansNever() {

@@ -1,6 +1,6 @@
 use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
-use crate::hebisland_client::HebislandClient;
+use crate::hebisland_client::{HebislandClient, IslandCard, IslandOption, IslandQuestion};
 use crate::hitl::HitlState;
 use agent_core::storage::{
     sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
@@ -124,14 +124,12 @@ pub async fn send_and_save(
     // 整轮 run 真正结束才弹一次「回答完成」（多回合只弹一次；取消 / 失败不弹）。
     if result.is_ok() {
         if let Some(client) = app.try_state::<HebislandClient>() {
-            client.push(
+            client.show(IslandCard::new(
                 format!("done-{}", chrono::Utc::now().timestamp_millis()),
                 "info",
                 "回答完成",
                 "Agent 已完成本次回答",
-                None,
-                None,
-            );
+            ));
         }
     }
     result
@@ -2318,56 +2316,61 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
     match event {
         EngineEvent::PermissionRequested {
             request_id,
+            kind,
             tool_name,
             input,
+            summary,
+            paths,
             ..
         } => {
-            let summary: String = input.to_string().chars().take(80).collect();
-            // TODO: 推送子命令勾选列表（需要 EngineEvent 携带 subcommands 数据）
-            client.push(
+            let body = approval_card_body(kind, tool_name, input, summary, paths);
+            client.show(IslandCard::new(
                 format!("perm-{request_id}"),
                 "approval",
                 "需要你的审批",
-                &format!("{tool_name} {summary}"),
-                None,
-                None,
-            );
+                body,
+            ));
         }
         EngineEvent::UserQuestionRequested {
             request_id,
             question,
             options,
             multi,
-            ..
+            questions,
         } => {
-            // 构建 options JSON
-            let options_json: Vec<String> = options
-                .iter()
-                .map(|opt| {
-                    format!(
-                        r#"{{"label":"{}","desc":"{}"}}"#,
-                        opt.label.replace('"', r#"\""#),
-                        opt.description.replace('"', r#"\""#)
-                    )
-                })
-                .collect();
-            let extra = if options_json.is_empty() {
-                format!(r#","multiSelect":{}"#, multi)
+            let mut card =
+                IslandCard::new(format!("question-{request_id}"), "question", "需要你的回答", "");
+            if questions.is_empty() {
+                // 单题：顶层 question / options / multi。
+                card.body = question.clone();
+                card.options = options
+                    .iter()
+                    .map(|o| IslandOption {
+                        label: o.label.clone(),
+                        desc: o.description.clone(),
+                    })
+                    .collect();
+                card.multi_select = *multi;
             } else {
-                format!(
-                    r#","options":[{}],"multiSelect":{}"#,
-                    options_json.join(","),
-                    multi
-                )
-            };
-            client.push(
-                format!("question-{request_id}"),
-                "question",
-                "需要你的回答",
-                question,
-                None,
-                Some(&extra),
-            );
+                // 多题：逐题铺开，island 限高滚动。
+                card.questions = questions
+                    .iter()
+                    .map(|q| IslandQuestion {
+                        title: q.title.clone(),
+                        desc: q.description.clone(),
+                        options: q
+                            .options
+                            .iter()
+                            .map(|o| IslandOption {
+                                label: o.label.clone(),
+                                desc: o.description.clone(),
+                            })
+                            .collect(),
+                        multi: q.multi,
+                    })
+                    .collect();
+            }
+            client.show(card);
         }
         EngineEvent::PermissionResolved { request_id, .. }
         | EngineEvent::UserQuestionAnswered { request_id, .. } => {
@@ -2375,6 +2378,43 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             client.dismiss(&format!("question-{request_id}"));
         }
         _ => {}
+    }
+}
+
+/// 审批卡正文：抽工具的关键参数，而非整坨 input JSON。
+///
+/// 不同工具看不同字段——Bash 看命令、Read/Edit/Write 看文件、Grep 看 pattern+路径，
+/// 越界访问（PathAccess，input 为 null）看越界路径列表。提不出关键字段时退回 summary。
+fn approval_card_body(
+    kind: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+    summary: &str,
+    paths: &[String],
+) -> String {
+    let str_field = |k: &str| input.get(k).and_then(|v| v.as_str());
+    let key = match tool_name {
+        "Bash" | "BashOutput" | "KillShell" => str_field("command"),
+        "Read" | "Edit" | "Write" => str_field("file_path"),
+        "Grep" => match (str_field("pattern"), str_field("path")) {
+            (Some(p), Some(path)) => return format!("{tool_name} {p} @ {path}"),
+            (Some(p), None) => Some(p),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(detail) = key {
+        return format!("{tool_name} {detail}");
+    }
+    if !paths.is_empty() {
+        return format!("{tool_name} 越界访问：{}", paths.join("、"));
+    }
+    // 兜底：summary 是 agent_core 给的人话短句（如「工具 X 请求执行」）。
+    if !summary.is_empty() {
+        summary.to_string()
+    } else {
+        let _ = kind;
+        tool_name.to_string()
     }
 }
 
