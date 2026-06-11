@@ -54,7 +54,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
 
   // 元素对话的上下文：把当前对话 + provider/model + 可选模型列表喂给后端
   // （旁支会话建会话 / 卡片模型选择器 / 提交总结要用）
-  const ctxSession = useStore((s) => s.currentSession);
   const providers = useStore((s) => s.providersFile.providers);
   const modelOptions = useMemo(
     () =>
@@ -65,13 +64,21 @@ export function BrowserPanel({ active }: { active: boolean }) {
         ),
     [providers]
   );
-  useEffect(() => {
-    if (active && ctxSession?.id && ctxSession.provider_id && ctxSession.model) {
-      void host
-        .setContext(ctxSession.id, ctxSession.provider_id, ctxSession.model, modelOptions)
-        .catch(() => undefined);
+  // 把当前对话绑定给浏览器——注释/队列/旁支结论都提交回这个对话，不随之后切到的别的对话变（否则会串）。
+  // 绑定时机：首次显示浏览器 tab + 用户/agent 每次导航浏览器（见 loadUrl）——即「最后操作浏览器的对话」。
+  const bindContext = useCallback(() => {
+    const s = useStore.getState().currentSession;
+    if (s?.id && s.provider_id && s.model) {
+      void host.setContext(s.id, s.provider_id, s.model, modelOptions).catch(() => undefined);
     }
-  }, [active, ctxSession?.id, ctxSession?.provider_id, ctxSession?.model, modelOptions, host]);
+  }, [host, modelOptions]);
+  const boundOnceRef = useRef(false);
+  useEffect(() => {
+    if (active && !boundOnceRef.current) {
+      boundOnceRef.current = true;
+      bindContext();
+    }
+  }, [active, bindContext]);
 
   // 聊天流里检测到的本地 dev server 地址（架构 §4.2）。
   const messages = useStore((s) => s.currentSession?.messages);
@@ -179,6 +186,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
       return;
     }
     if (origin === "user") setAutoFollow(false);
+    bindContext(); // 导航浏览器即把当前对话绑定为提交目标
     if (!state.url)
       void host.open(norm, origin, currentBounds(viewportRef.current)).catch((err) => toast.error(String(err)));
     else void host.navigate(norm).catch((err) => toast.error(String(err)));

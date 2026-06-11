@@ -13,6 +13,14 @@ export interface AnnotationSubmit {
   snapshot: HebElementSnapshot;
   comment: string;
   styleDiff: StyleDiffEntry[];
+  /** 浏览器绑定的对话 id（提交回这个对话，不串到当前打开的别的对话） */
+  boundSessionId?: string | null;
+}
+
+/** 修改队列批量提交：多个元素的改动。 */
+export interface AnnotationBatchItem {
+  snapshot: HebElementSnapshot;
+  styleDiff: StyleDiffEntry[];
 }
 
 export interface BrowserStateEvent {
@@ -60,6 +68,9 @@ export interface BrowserHost {
   onTitle(cb: (t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
   onPickerOff(cb: () => void): Promise<UnlistenFn>;
   onAnnotation(cb: (a: AnnotationSubmit) => void): Promise<UnlistenFn>;
+  onAnnotationBatch(
+    cb: (items: AnnotationBatchItem[], boundSessionId?: string | null) => void
+  ): Promise<UnlistenFn>;
   onEscaped(cb: (info: { url: string; reason: string }) => void): Promise<UnlistenFn>;
   onPopout(cb: (open: boolean) => void): Promise<UnlistenFn>;
 }
@@ -120,6 +131,12 @@ class TauriBrowserHost implements BrowserHost {
   }
   onAnnotation(cb: (a: AnnotationSubmit) => void) {
     return listen<AnnotationSubmit>("browser://annotation", (e) => cb(e.payload));
+  }
+  onAnnotationBatch(cb: (items: AnnotationBatchItem[], boundSessionId?: string | null) => void) {
+    return listen<{ items: AnnotationBatchItem[]; boundSessionId?: string | null }>(
+      "browser://annotation-batch",
+      (e) => cb(e.payload.items, e.payload.boundSessionId)
+    );
   }
   onEscaped(cb: (info: { url: string; reason: string }) => void) {
     return listen<{ url: string; reason: string }>("browser://escaped", (e) => cb(e.payload));

@@ -127,3 +127,52 @@ export function buildAnnotationMessage(input: {
 
   return { content: lines.join("\n"), attachments };
 }
+
+/** 单个元素的 <web_annotation> 块（批量提交复用）。 */
+function annotationBlock(snapshot: HebElementSnapshot, styleDiff: StyleDiffEntry[]): string {
+  const compChain = snapshot.react?.componentChain ?? [];
+  const target = compChain.length
+    ? `${snapshot.selectorPath}（React: ${[...compChain].reverse().join(" > ")}）`
+    : snapshot.selectorPath;
+  const lines = [
+    `<web_annotation url="${escapeAttr(snapshot.url)}" viewport="${snapshot.viewport.width}x${snapshot.viewport.height}">`,
+    `  <target>${escapeText(target)}</target>`,
+  ];
+  if (snapshot.react?.source) {
+    const s = snapshot.react.source;
+    lines.push(`  <source>${escapeText(s.file + (s.line ? `:${s.line}` : ""))}</source>`);
+  }
+  if (snapshot.ownText) lines.push(`  <text>${escapeText(snapshot.ownText)}</text>`);
+  if (styleDiff.length) {
+    lines.push("  <style_changes>");
+    for (const d of styleDiff) lines.push(`    ${d.prop}: ${d.before} → ${d.after}`);
+    lines.push("  </style_changes>");
+  }
+  lines.push("</web_annotation>");
+  return lines.join("\n");
+}
+
+/** 修改队列「提交到主对话」：多个元素的改动一次性组装成一条消息。 */
+export function buildBatchAnnotationMessage(
+  items: { snapshot: HebElementSnapshot; styleDiff: StyleDiffEntry[] }[]
+): { content: string; attachments: MessageAttachment[] } {
+  const lines: string[] = [
+    `我在页面预览里调整了 ${items.length} 个元素，下面是每个的改动，请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：`,
+    "",
+  ];
+  const attachments: MessageAttachment[] = [];
+  items.forEach((it, i) => {
+    lines.push(annotationBlock(it.snapshot, it.styleDiff));
+    lines.push("");
+    attachments.push({
+      kind: "text_file",
+      name: `element-${i + 1}.json`,
+      media_type: "application/json",
+      content: JSON.stringify(it.snapshot, null, 2),
+    });
+  });
+  lines.push(
+    "各元素完整快照在附件 element-N.json。style_changes 是我在预览上实时调过、确认了效果的精确值，改源码时请原样采用。"
+  );
+  return { content: lines.join("\n"), attachments };
+}

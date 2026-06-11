@@ -565,6 +565,10 @@
   var asideKeyCounter = 0;
   var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
   var cardChat = null;  // 当前卡片打开的聊天：{ elementKey, sessionId, msgList, assistantRow }
+  // 修改队列：多个元素的待提交改动按元素累积，统一提交到主对话
+  var editQueue = []; // [{ elementKey, badge, snapshot, styleDiff }]
+  var queuePanelEl = null;
+  var queuePos = null; // 拖动后记住的位置
 
   function elementKeyOf(el) {
     if (!el) return "el-0";
@@ -716,6 +720,103 @@
       document.addEventListener("mousemove", onMove, true);
       document.addEventListener("mouseup", onUp, true);
     });
+  }
+
+  // ─────────────────────── 修改队列框（可拖动，统一提交） ───────────────────────
+  function addToQueue(elementKey, badge, snapshot, styleDiff) {
+    if (!styleDiff || !styleDiff.length) return;
+    var existing = null;
+    for (var i = 0; i < editQueue.length; i++) if (editQueue[i].elementKey === elementKey) existing = editQueue[i];
+    if (existing) { existing.snapshot = snapshot; existing.styleDiff = styleDiff; existing.badge = badge; }
+    else editQueue.push({ elementKey: elementKey, badge: badge, snapshot: snapshot, styleDiff: styleDiff });
+    renderQueuePanel();
+  }
+
+  function removeQueueItem(elementKey) {
+    editQueue = editQueue.filter(function (q) { return q.elementKey !== elementKey; });
+    renderQueuePanel();
+  }
+
+  function makeQueueDraggable(panel, handle) {
+    handle.addEventListener("mousedown", function (e) {
+      if (e.target && e.target.tagName === "BUTTON") return;
+      e.preventDefault();
+      var rect = panel.getBoundingClientRect();
+      panel.style.left = rect.left + "px"; panel.style.top = rect.top + "px";
+      panel.style.right = "auto"; panel.style.bottom = "auto";
+      var sx = e.clientX, sy = e.clientY, bl = rect.left, bt = rect.top;
+      var onMove = function (ev) {
+        var l = Math.max(0, Math.min(window.innerWidth - 40, bl + ev.clientX - sx));
+        var t = Math.max(0, Math.min(window.innerHeight - 24, bt + ev.clientY - sy));
+        panel.style.left = l + "px"; panel.style.top = t + "px";
+        queuePos = { x: l, y: t };
+      };
+      var onUp = function () {
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+      };
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    });
+  }
+
+  function renderQueuePanel() {
+    if (!editQueue.length) {
+      if (queuePanelEl && queuePanelEl.parentNode) queuePanelEl.parentNode.removeChild(queuePanelEl);
+      queuePanelEl = null;
+      return;
+    }
+    if (!queuePanelEl) {
+      queuePanelEl = document.createElement("div");
+      queuePanelEl.setAttribute(OVERLAY_ATTR, "queue");
+      var pos = queuePos ? "left:" + queuePos.x + "px;top:" + queuePos.y + "px;" : "right:16px;bottom:16px;";
+      queuePanelEl.style.cssText = "position:fixed;" + pos + "width:288px;max-height:62vh;display:flex;flex-direction:column;z-index:2147483646;" +
+        "background:#fff;color:#1f2328;border:1px solid #d9dde3;border-radius:10px;box-shadow:0 8px 30px rgba(15,23,42,0.18);" +
+        "font-family:-apple-system,system-ui,sans-serif;overflow:hidden;";
+      queuePanelEl.addEventListener("click", function (e) { e.stopPropagation(); }, false);
+      queuePanelEl.addEventListener("mousedown", function (e) { e.stopPropagation(); }, false);
+      document.documentElement.appendChild(queuePanelEl);
+    }
+    queuePanelEl.innerHTML = "";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid #d9dde3;cursor:move;user-select:none;font-size:12px;font-weight:500;";
+    head.textContent = "修改队列 (" + editQueue.length + ")";
+    makeQueueDraggable(queuePanelEl, head);
+    var list = document.createElement("div");
+    list.style.cssText = "flex:1;overflow-y:auto;padding:6px 8px;";
+    editQueue.forEach(function (item) {
+      var row = document.createElement("div");
+      row.style.cssText = "padding:6px 0;border-bottom:1px solid #f0f2f4;";
+      var top = document.createElement("div");
+      top.style.cssText = "display:flex;align-items:center;gap:6px;";
+      var b = document.createElement("span");
+      b.textContent = item.badge;
+      b.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px ui-monospace,monospace;color:#1f2328;";
+      var del = document.createElement("button");
+      del.textContent = "×";
+      del.style.cssText = "border:none;background:none;color:#8c949e;font-size:15px;line-height:1;cursor:pointer;padding:0 2px;";
+      del.addEventListener("click", function () { removeQueueItem(item.elementKey); });
+      top.appendChild(b); top.appendChild(del);
+      var diff = document.createElement("div");
+      diff.style.cssText = "margin-top:2px;font:10px ui-monospace,monospace;color:#6e7681;white-space:pre-wrap;";
+      diff.textContent = item.styleDiff.map(function (d) { return d.prop + ": " + d.before + " → " + d.after; }).join("\n");
+      row.appendChild(top); row.appendChild(diff);
+      list.appendChild(row);
+    });
+    var foot = document.createElement("div");
+    foot.style.cssText = "display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-top:1px solid #d9dde3;";
+    var clear = mkFlatBtn("清空");
+    clear.addEventListener("click", function () { editQueue = []; renderQueuePanel(); });
+    var submit = mkPrimaryBtn("提交到主对话");
+    submit.addEventListener("click", function () {
+      send("heb:annotation:submit-batch", {
+        items: editQueue.map(function (q) { return { snapshot: q.snapshot, styleDiff: q.styleDiff }; }),
+      });
+      editQueue = [];
+      renderQueuePanel();
+    });
+    foot.appendChild(clear); foot.appendChild(submit);
+    queuePanelEl.appendChild(head); queuePanelEl.appendChild(list); queuePanelEl.appendChild(foot);
   }
 
   function elementBadge(snap) {
@@ -995,9 +1096,10 @@
         "\n请基于此继续——告诉我这些改动对应源码该怎么改，或我们再调调。";
       if (pushStyleToAside) pushStyleToAside(txt);
     });
-    var sSend = mkPrimaryBtn("发送到对话");
+    var sSend = mkPrimaryBtn("加入队列");
+    sSend.title = "把这个元素的改动加入修改队列；攒够多个元素后在队列框里统一提交到主对话";
     sSend.addEventListener("click", function () {
-      send("heb:annotation:submit", { snapshot: cardSnapshot, comment: "", styleDiff: takeStyleDiff() });
+      addToQueue(elementKey, elementBadge(cardSnapshot), cardSnapshot, takeStyleDiff());
       removeCard();
     });
     styleFoot.appendChild(sCancel); styleFoot.appendChild(sAside); styleFoot.appendChild(sSend);

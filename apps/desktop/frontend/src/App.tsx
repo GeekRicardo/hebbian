@@ -8,7 +8,7 @@ import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { getBrowserHost } from "@/desktop/ui/lib/browserHost";
-import { buildAnnotationMessage } from "@/desktop/ui/lib/annotation";
+import { buildAnnotationMessage, buildBatchAnnotationMessage } from "@/desktop/ui/lib/annotation";
 
 interface WakeupFiredPayload {
   session_id: string;
@@ -91,7 +91,8 @@ export default function App() {
     getBrowserHost()
       .onAnnotation((a) => {
         const store = useStore.getState();
-        if (!store.currentSession) {
+        const target = a.boundSessionId ?? store.currentSession?.id ?? null;
+        if (!target) {
           toast.error("先打开一个对话，注释才有地方发");
           return;
         }
@@ -100,7 +101,7 @@ export default function App() {
           comment: a.comment,
           styleDiff: a.styleDiff,
         });
-        void store.sendUserMessage(content, attachments);
+        void store.sendUserMessage(content, attachments, null, {}, target);
         toast.success("页面标注已发送到对话");
       })
       .then((fn) => {
@@ -114,25 +115,57 @@ export default function App() {
     };
   }, []);
 
+  // 修改队列「提交到主对话」：多元素改动一次性组装成一条消息发进当前对话。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getBrowserHost()
+      .onAnnotationBatch((items, boundSessionId) => {
+        const store = useStore.getState();
+        const target = boundSessionId ?? store.currentSession?.id ?? null;
+        if (!target) {
+          toast.error("先打开一个对话，才能提交修改队列");
+          return;
+        }
+        if (!items.length) return;
+        const { content, attachments } = buildBatchAnnotationMessage(items);
+        void store.sendUserMessage(content, attachments, null, {}, target);
+        toast.success(`已把 ${items.length} 个元素的改动提交到对话`);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("annotation-batch listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // 元素对话「提交到主对话」（架构 §8.5）：旁支会话总结改动 → emit browser://aside-result
   // → 这里组装成 user message 发进当前对话，让主对话据此改源码。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    listen<{ summary: string; element: string }>("browser://aside-result", (e) => {
-      const store = useStore.getState();
-      if (!store.currentSession) {
-        toast.error("先打开一个对话，才能把元素改动提交进去");
-        return;
+    listen<{ summary: string; element: string; boundSessionId?: string | null }>(
+      "browser://aside-result",
+      (e) => {
+        const store = useStore.getState();
+        const target = e.payload.boundSessionId ?? store.currentSession?.id ?? null;
+        if (!target) {
+          toast.error("先打开一个对话，才能把元素改动提交进去");
+          return;
+        }
+        const { summary } = e.payload;
+        // summary 里已带元素定位信息（旁支总结时被要求带上），这里不重复 element
+        const content =
+          `我在内置浏览器预览里和助手一起调整了一个页面元素，下面是这次调整的总结，` +
+          `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${summary}`;
+        void store.sendUserMessage(content, [], null, {}, target);
+        toast.success("元素改动已提交到对话");
       }
-      const { summary } = e.payload;
-      // summary 里已带元素定位信息（旁支总结时被要求带上），这里不重复 element
-      const content =
-        `我在内置浏览器预览里和助手一起调整了一个页面元素，下面是这次调整的总结，` +
-        `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${summary}`;
-      void store.sendUserMessage(content, []);
-      toast.success("元素改动已提交到对话");
-    })
+    )
       .then((fn) => {
         if (cancelled) fn();
         else unlisten = fn;

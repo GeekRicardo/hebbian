@@ -211,10 +211,24 @@ fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
         let preview: String = preview.chars().take(240).collect();
         tracing::info!(target: "webview_spike", "fwd {ty}: {preview}");
     }
+    // 浏览器绑定的对话 id（注释/队列提交回这个对话，不串到当前打开的别的对话）
+    let bound = app
+        .try_state::<BrowserState>()
+        .and_then(|st| st.aside_context.lock().unwrap().as_ref().map(|c| c.main_session_id.clone()));
+    let with_bound = |mut p: serde_json::Value| -> serde_json::Value {
+        if let (Some(sid), Some(obj)) = (bound.clone(), p.as_object_mut()) {
+            obj.insert("boundSessionId".to_string(), serde_json::Value::String(sid));
+        }
+        p
+    };
     match ty {
         // 页面内注释卡片提交：{snapshot, comment, styleDiff} → 主窗口 React 组装成 user message
         "heb:annotation:submit" => {
-            let _ = app.emit("browser://annotation", payload);
+            let _ = app.emit("browser://annotation", with_bound(payload));
+        }
+        // 修改队列：多元素改动统一提交
+        "heb:annotation:submit-batch" => {
+            let _ = app.emit("browser://annotation-batch", with_bound(payload));
         }
         // 元素对话（旁支会话，机制 B）
         "heb:aside:send" => handle_aside_send(app, &payload),
@@ -782,9 +796,17 @@ fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
         let args = aside_send_args(session_id.clone(), prompt, vec![]);
         match chat::send_and_save_in_data_dir(&dd, args, |_| {}).await {
             Ok(msg) => {
+                // 发到浏览器绑定的对话，不串到当前打开的别的对话
+                let bound = app2
+                    .state::<BrowserState>()
+                    .aside_context
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|c| c.main_session_id.clone());
                 let _ = app2.emit(
                     "browser://aside-result",
-                    serde_json::json!({ "summary": msg.content, "element": element_desc }),
+                    serde_json::json!({ "summary": msg.content, "element": element_desc, "boundSessionId": bound }),
                 );
                 eval_aside_down(
                     &app2,

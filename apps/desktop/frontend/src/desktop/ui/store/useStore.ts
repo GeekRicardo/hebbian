@@ -1240,7 +1240,9 @@ interface AppState {
     content: string,
     attachments?: MessageAttachment[],
     meta?: MessageMeta | null,
-    options?: { skipOptimisticUser?: boolean; continueRun?: boolean }
+    options?: { skipOptimisticUser?: boolean; continueRun?: boolean },
+    /** 发到指定对话（内置浏览器绑定的对话），默认当前对话 */
+    targetSessionId?: string | null
   ) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
@@ -2155,8 +2157,13 @@ export const useStore = create<AppState>((set, get) => ({
     await get().refreshSessions();
   },
 
-  async sendUserMessage(content, attachments = [], meta = null, options = {}) {
-    const cur = get().currentSession;
+  async sendUserMessage(content, attachments = [], meta = null, options = {}, targetSessionId = null) {
+    // targetSessionId：发到指定对话（内置浏览器绑定的对话），不随当前打开的对话变——
+    // 否则切到别的对话时提交注释会串到那个对话。非当前对话时后台落盘，切回时显示。
+    let cur = get().currentSession;
+    if (targetSessionId && targetSessionId !== cur?.id) {
+      cur = await api.getSession(targetSessionId).catch(() => null);
+    }
     if (!cur) return;
 
     const removeQueuedForSession = (sessionId: string, id: string) => {
