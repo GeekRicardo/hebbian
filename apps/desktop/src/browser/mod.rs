@@ -16,11 +16,15 @@ mod url_policy;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl,
+    WebviewWindowBuilder,
+};
 
 use url_policy::{validate_preview_url, PreviewOrigin};
 
 const WEBVIEW_LABEL: &str = "heb-preview";
+const POPOUT_LABEL: &str = "preview-popout";
 const INSPECTOR_JS: &str = include_str!("inspector.js");
 
 /// 注入到子 webview 的引导脚本：先装 inspector.js，再安装上行 bridge。
@@ -183,14 +187,12 @@ fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
         tracing::info!(target: "webview_spike", "fwd {ty}: {preview}");
     }
     match ty {
-        "heb:picker:selected" => {
-            let _ = app.emit("browser://element", payload);
+        // 页面内注释卡片提交：{snapshot, comment, styleDiff} → 主窗口 React 组装成 user message
+        "heb:annotation:submit" => {
+            let _ = app.emit("browser://annotation", payload);
         }
         "heb:picker:cancelled" => {
             let _ = app.emit("browser://picker-off", ());
-        }
-        "heb:style:diff" => {
-            let _ = app.emit("browser://style-diff", payload);
         }
         "heb:ready" | "heb:navigated" => {
             // 携带 title，补一条 state（loading=false）
@@ -304,6 +306,56 @@ pub fn browser_close(state: tauri::State<'_, BrowserState>) -> Result<(), String
     Ok(())
 }
 
+/// 把当前页面弹出成一个独立可缩放窗口（测响应式样式用）。窗口直接加载目标 URL，
+/// 注入同一份 inspector.js——页面内注释卡片（vanilla DOM）与 embedded 共用，
+/// 提交经 heb-bridge 上行回主进程，再由主窗口 React 发进对话。
+#[tauri::command]
+pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
+    let url = state
+        .inner
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|i| i.history.get(i.cursor).cloned())
+        .ok_or_else(|| "浏览器还没打开页面".to_string())?;
+    let target: Url = url.parse().map_err(|_| "当前地址异常".to_string())?;
+
+    // 已有 popout 先关，避免重复
+    if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+        let _ = w.close();
+    }
+
+    let app_for_nav = app.clone();
+    WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(target))
+        .title("页面预览（可缩放测样式）")
+        .inner_size(1280.0, 800.0)
+        .resizable(true)
+        .initialization_script(init_script())
+        .on_navigation(move |url: &Url| {
+            // popout 不维护 embedded 的历史，只做上行转发 + 安全校验
+            if let Some(msg) = decode_bridge(url) {
+                forward_inspector_message(&app_for_nav, msg);
+                return false;
+            }
+            if url.scheme() != "http" && url.scheme() != "https" {
+                return true;
+            }
+            validate_preview_url(url.as_str(), PreviewOrigin::User).is_ok()
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 关闭独立预览窗口。
+#[tauri::command]
+pub fn browser_close_popout(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+        w.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn browser_picker(state: tauri::State<'_, BrowserState>, active: bool) -> Result<(), String> {
     let mut guard = state.inner.lock().unwrap();
@@ -393,9 +445,45 @@ pub fn run_spike(app: &AppHandle) -> tauri::Result<()> {
             tracing::info!(target: "webview_spike", "P2 synthetic click dispatched");
         }
 
+        // 诊断：卡片是否渲染 + 按钮数（不点提交，避免与诊断导航冲突）
+        wait(2).await;
+        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
+            let probe_js = r#"
+                (function(){
+                  var card = document.querySelector('[data-hebbian-overlay="card"]');
+                  var report = { hasCard: !!card, btnCount: card ? card.querySelectorAll('button').length : 0,
+                                 numInputs: card ? card.querySelectorAll('input[type=number]').length : 0 };
+                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify(
+                    {source:'hebbian-inspector', type:'heb:debug', payload: report})));
+                })();
+            "#;
+            let _ = inst.webview.eval(probe_js);
+            tracing::info!(target: "webview_spike", "P2 card probe dispatched");
+        }
+
+        // 单独验证上行通道能承载注释提交（小 payload）
+        wait(2).await;
+        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
+            let submit_js = r#"
+                (function(){
+                  var card = document.querySelector('[data-hebbian-overlay="card"]');
+                  if(!card) return;
+                  var btns = card.querySelectorAll('button');
+                  for(var i=0;i<btns.length;i++){ if(btns[i].textContent.indexOf('发送')>=0){ btns[i].click(); break; } }
+                })();
+            "#;
+            let _ = inst.webview.eval(submit_js);
+            tracing::info!(target: "webview_spike", "P2 synthetic annotation submit dispatched");
+        }
+
         wait(2).await;
         let r = browser_set_bounds(st.clone(), 40.0, 40.0, 420.0, 320.0);
         tracing::info!(target: "webview_spike", "S4 set_bounds → {r:?}");
+
+        // 弹出独立窗口验证
+        wait(2).await;
+        let r = browser_popout(app2.clone(), st.clone());
+        tracing::info!(target: "webview_spike", "popout → {r:?}");
 
         wait(2).await;
         let h = browser_set_visible(st.clone(), false);

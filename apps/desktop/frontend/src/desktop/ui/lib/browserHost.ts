@@ -8,6 +8,13 @@ import { listen } from "@/desktop/bridge/transport";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { HebElementSnapshot, StyleDiffEntry } from "@/desktop/ui/lib/annotation";
 
+/** 页面内注释卡片提交的上行载荷（架构 §8.5）。 */
+export interface AnnotationSubmit {
+  snapshot: HebElementSnapshot;
+  comment: string;
+  styleDiff: StyleDiffEntry[];
+}
+
 export interface BrowserStateEvent {
   url: string;
   can_go_back: boolean;
@@ -39,16 +46,14 @@ export interface BrowserHost {
   setVisible(visible: boolean): Promise<void>;
   close(): Promise<void>;
   setPicker(active: boolean): Promise<void>;
-  applyStyle(prop: string, value: string): Promise<void>;
-  revertStyles(): Promise<void>;
-  requestStyleDiff(): Promise<void>;
   clearSelection(): Promise<void>;
+  popout(): Promise<void>;
+  closePopout(): Promise<void>;
 
   onState(cb: (s: BrowserStateEvent) => void): Promise<UnlistenFn>;
   onTitle(cb: (t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
-  onElement(cb: (snap: HebElementSnapshot) => void): Promise<UnlistenFn>;
   onPickerOff(cb: () => void): Promise<UnlistenFn>;
-  onStyleDiff(cb: (diff: StyleDiffEntry[]) => void): Promise<UnlistenFn>;
+  onAnnotation(cb: (a: AnnotationSubmit) => void): Promise<UnlistenFn>;
   onEscaped(cb: (info: { url: string; reason: string }) => void): Promise<UnlistenFn>;
 }
 
@@ -80,17 +85,14 @@ class TauriBrowserHost implements BrowserHost {
   setPicker(active: boolean) {
     return api.browserPicker(active);
   }
-  applyStyle(prop: string, value: string) {
-    return api.browserStyleApply(prop, value);
-  }
-  revertStyles() {
-    return api.browserStyleRevert();
-  }
-  requestStyleDiff() {
-    return api.browserStyleTakeDiff();
-  }
   clearSelection() {
     return api.browserClearSelection();
+  }
+  popout() {
+    return api.browserPopout();
+  }
+  closePopout() {
+    return api.browserClosePopout();
   }
   onState(cb: (s: BrowserStateEvent) => void) {
     return listen<BrowserStateEvent>("browser://state", (e) => cb(e.payload));
@@ -98,16 +100,11 @@ class TauriBrowserHost implements BrowserHost {
   onTitle(cb: (t: BrowserTitleEvent) => void) {
     return listen<BrowserTitleEvent>("browser://title", (e) => cb(e.payload));
   }
-  onElement(cb: (snap: HebElementSnapshot) => void) {
-    return listen<{ snapshot: HebElementSnapshot }>("browser://element", (e) =>
-      cb(e.payload.snapshot)
-    );
-  }
   onPickerOff(cb: () => void) {
     return listen<unknown>("browser://picker-off", () => cb());
   }
-  onStyleDiff(cb: (diff: StyleDiffEntry[]) => void) {
-    return listen<{ diff: StyleDiffEntry[] }>("browser://style-diff", (e) => cb(e.payload.diff));
+  onAnnotation(cb: (a: AnnotationSubmit) => void) {
+    return listen<AnnotationSubmit>("browser://annotation", (e) => cb(e.payload));
   }
   onEscaped(cb: (info: { url: string; reason: string }) => void) {
     return listen<{ url: string; reason: string }>("browser://escaped", (e) => cb(e.payload));

@@ -7,6 +7,8 @@ import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDi
 import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { getBrowserHost } from "@/desktop/ui/lib/browserHost";
+import { buildAnnotationMessage } from "@/desktop/ui/lib/annotation";
 
 interface WakeupFiredPayload {
   session_id: string;
@@ -74,6 +76,38 @@ export default function App() {
         else unlisten = fn;
       })
       .catch((err) => console.warn("wakeup-fired listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 内置浏览器页面内注释提交（架构 §8.5）：embedded 子 webview 或 popout 独立窗口里
+  // 的注释卡片提交 → 主进程 emit browser://annotation → 这里组装成 user message 发进
+  // 当前对话。放 App 级（常驻）而非 BrowserPanel——popout 注释时浏览器 tab 可能没在前台。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getBrowserHost()
+      .onAnnotation((a) => {
+        const store = useStore.getState();
+        if (!store.currentSession) {
+          toast.error("先打开一个对话，注释才有地方发");
+          return;
+        }
+        const { content, attachments } = buildAnnotationMessage({
+          snapshot: a.snapshot,
+          comment: a.comment,
+          styleDiff: a.styleDiff,
+        });
+        void store.sendUserMessage(content, attachments);
+        toast.success("页面标注已发送到对话");
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("annotation listener failed:", err));
     return () => {
       cancelled = true;
       unlisten?.();

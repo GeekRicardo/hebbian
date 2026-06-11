@@ -6897,3 +6897,20 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: desktop 前端 + lib.rs command。
 - **验证**: `tsc --noEmit` + `cargo check -p hebbian` 通过。
 - **留尾巴**: 后台保活依赖 Desktop 开着时的 usage 轮询；Desktop 关闭期间不刷，但下次用时请求驱动的 `ensure_fresh` / 401 自愈兜底。承接同日「401 自愈刷新」一条。
+
+### 2026-06-11 — 注释卡片改页面内渲染（vanilla）+ 弹出独立窗口 + 淡色系
+
+- **Why**: 用户自举（内置浏览器开 dev 前端改它自己）时提出：①注释要能在弹出的独立窗口里用（调窗口大小测响应式样式）；②原 React 注释卡片在 popout（纯 External 页面，无我们的 React）里渲染不出来，且原生 webview 永远盖 DOM 导致卡片定位别扭；③卡片配色要淡色系
+- **根因与改动**:
+  - inspector.js: 注释卡片从「主窗口 React 渲染」改为「inspector 在被注入页面内用 vanilla DOM 渲染」。这样 embedded 子 webview 与 popout 独立窗口共用同一套、卡片就在元素旁、不被任何原生层盖住（stagewise/Codex 同款）。卡片含元素徽章 + 注释输入 + 样式参数编辑器（字号/字重/颜色/圆角/边框/间距，实时预览）+ 发送/取消。提交经 heb-bridge 上行 `heb:annotation:submit{snapshot,comment,styleDiff}`
+  - **修了一个真 bug**：卡片用捕获阶段 stopPropagation 隔离页面点击，结果先于按钮触发把点击吃掉→发送按钮失效。改成冒泡阶段（按钮 handler 先跑，再阻止冒泡到页面）。spike 合成点击验证：修前无 `heb:annotation:submit` 上行，修后完整 snapshot payload 正常到达
+  - mod.rs: 新增 `browser_popout`（把当前页弹成可缩放独立窗口 `preview-popout`，注入同一 inspector，on_navigation 走上行转发+校验不碰 embedded 历史）+ `browser_close_popout`；`forward_inspector_message` 新增 `heb:annotation:submit → browser://annotation`
+  - App.tsx: App 级监听 `browser://annotation`（常驻，popout 注释时浏览器 tab 可能不在前台）→ buildAnnotationMessage → sendUserMessage
+  - BrowserPanel.tsx: 删除 React 注释卡片相关（selected state / onElement / AnnotationCard），加「弹出独立窗口」按钮；删除 AnnotationCard.tsx
+  - 卡片配色改淡色系（白底 #ffffff / 深字 #1f2328 / 浅边 #d9dde3 / 柔和阴影），呼应 app 浅色主题
+  - browserHost.ts / tauri.ts: 加 popout/closePopout + onAnnotation；移除已不用的 onElement/onStyleDiff
+- **影响范围**: apps/desktop（inspector.js / mod.rs / App.tsx / BrowserPanel / browserHost / tauri.ts）；新增 2 个 Tauri command + 1 个 popout 窗口（capability 上条已预声明 preview-popout）
+- **验证**: spike 合成全链路——选元素→卡片渲染(hasCard:true,btnCount:3,numInputs:5)→点发送→`heb:annotation:submit` 带完整 snapshot 上行→browser://annotation；popout→Ok(())+独立窗口注入(heb:ready)；inspector 纯函数测试 + tsc + cargo check 全绿
+- **留尾巴**: 真实窗口里鼠标实操（点选→淡色卡片→改参数→发送→popout 调大小）仍需用户眼验（合成验证覆盖数据层，不覆盖视觉/手感）；popout 无地址栏（弹出即固定当前 URL，导航在 embedded 里做）；spike 探针代码 env-gated 保留
+
+Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它们的 commit（已在 HEAD，功能完好）；本次提交不含 lib.rs。工作区其余 claude-code 笔记重命名 / c.json 非本次。

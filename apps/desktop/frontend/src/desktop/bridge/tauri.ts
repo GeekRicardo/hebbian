@@ -640,6 +640,8 @@ export const api = {
   browserStyleRevert: () => invoke<void>("browser_style_revert"),
   browserStyleTakeDiff: () => invoke<void>("browser_style_take_diff"),
   browserClearSelection: () => invoke<void>("browser_clear_selection"),
+  browserPopout: () => invoke<void>("browser_popout"),
+  browserClosePopout: () => invoke<void>("browser_close_popout"),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */

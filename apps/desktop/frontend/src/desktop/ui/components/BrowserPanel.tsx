@@ -6,6 +6,7 @@ import {
   Globe2,
   Loader2,
   MousePointerSquareDashed,
+  PictureInPicture2,
   RefreshCw,
   Sparkles,
 } from "lucide-react";
@@ -19,21 +20,13 @@ import {
   messagesToDetectSources,
   normalizePreviewUrlInput,
 } from "@/desktop/ui/lib/previewUrl";
-import type { HebElementSnapshot } from "@/desktop/ui/lib/annotation";
-import { AnnotationCard } from "@/desktop/ui/components/AnnotationCard";
-
-interface SelectedState {
-  snapshot: HebElementSnapshot;
-  /** 选中元素在主窗口的屏幕位置 + 浏览器视口左边界（卡片要避开原生 webview，落到它左侧的 DOM 区） */
-  anchor: { elementTop: number; panelLeft: number };
-}
 
 /**
  * 内置浏览器（架构 §4 / §8.5）——RightSidebar 的一个 tab。
  *
  * 承载是原生子 webview（浮在 viewportRef 占位区上方）。本组件负责：地址栏/导航工具栏、
- * 占位区 bounds 同步（ResizeObserver）、选取按钮、注释卡片锚定。webview 内容不在 React
- * 树里——viewportRef 只是一块"留白"，真实页面由 Rust 侧 set_bounds 定位覆盖上去。
+ * 占位区 bounds 同步、选取按钮、弹出独立窗口。注释卡片由注入页面的 inspector.js 在页面内
+ * 渲染（embedded 与 popout 共用），提交经上行通道 → App 级监听 → 发进对话。
  *
  * `active`：是否当前显示的 tab。常驻挂载、切走只隐藏不卸载（保住页面/登录态/滚动）；
  * active=false 时 setVisible(false) 让原生 webview 不盖住别的 tab 内容。
@@ -52,7 +45,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
     loading: false,
   });
   const [title, setTitle] = useState("");
-  const [selected, setSelected] = useState<SelectedState | null>(null);
   const [pickerActive, setPickerActive] = useState(false);
   const [autoFollow, setAutoFollow] = useState(true);
 
@@ -87,19 +79,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
       host.onTitle((t) => {
         setTitle(t.title);
         setState((prev) => (prev.url === t.url ? prev : { ...prev, url: t.url }));
-      })
-    );
-    track(
-      host.onElement((snapshot) => {
-        setPickerActive(false);
-        const el = viewportRef.current;
-        const base = el ? el.getBoundingClientRect() : { left: 0, top: 0 };
-        // 原生 webview 盖在 DOM 之上 → 注释卡片不能落在 webview 区域（会被盖住）。
-        // 落到 sidebar 左侧的聊天区（纯 DOM）；元素本身的高亮框由 inspector.js 画在页面内。
-        setSelected({
-          snapshot,
-          anchor: { elementTop: base.top + snapshot.boundingClientRect.y, panelLeft: base.left },
-        });
       })
     );
     track(host.onPickerOff(() => setPickerActive(false)));
@@ -137,7 +116,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
       return () => cancelAnimationFrame(raf);
     }
     void host.setVisible(false);
-    setSelected(null); // 切走时收起注释卡片
+    void host.clearSelection(); // 切走时收起页面内注释卡片
     return undefined;
   }, [active, host, syncBounds]);
 
@@ -162,7 +141,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
   useEffect(() => {
     if (!autoFollow || !autoOpenUrl || followedRef.current === autoOpenUrl) return;
     followedRef.current = autoOpenUrl;
-    setSelected(null);
     if (!state.url) void host.open(autoOpenUrl, "auto", currentBounds(viewportRef.current));
     else void host.navigate(autoOpenUrl).catch(() => undefined);
   }, [autoFollow, autoOpenUrl, state.url, host]);
@@ -174,7 +152,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
       return;
     }
     if (origin === "user") setAutoFollow(false);
-    setSelected(null);
     if (!state.url)
       void host.open(norm, origin, currentBounds(viewportRef.current)).catch((err) => toast.error(String(err)));
     else void host.navigate(norm).catch((err) => toast.error(String(err)));
@@ -188,12 +165,16 @@ export function BrowserPanel({ active }: { active: boolean }) {
   const togglePicker = () => {
     const next = !pickerActive;
     setPickerActive(next);
-    setSelected(null);
     void host.setPicker(next);
   };
 
   const openExternal = () => {
     if (state.url) void openUrl(state.url).catch(() => undefined);
+  };
+
+  const popout = () => {
+    if (!state.url) return;
+    void host.popout().catch((err) => toast.error(String(err)));
   };
 
   return (
@@ -262,6 +243,15 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </button>
         <button
           type="button"
+          onClick={popout}
+          disabled={!state.url}
+          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
+          title="弹出独立窗口（可缩放测样式，同样能标注）"
+        >
+          <PictureInPicture2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
           onClick={openExternal}
           disabled={!state.url}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
@@ -301,14 +291,6 @@ export function BrowserPanel({ active }: { active: boolean }) {
           </div>
         )}
       </div>
-
-      {selected && (
-        <AnnotationCard
-          snapshot={selected.snapshot}
-          anchor={selected.anchor}
-          onClose={() => setSelected(null)}
-        />
-      )}
     </div>
   );
 }

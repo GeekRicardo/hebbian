@@ -318,6 +318,8 @@
     // 边框背景
     "border-radius", "border-width", "border-style", "border-color",
     "background-color", "box-shadow", "opacity",
+    // 盒模型简写（页面内卡片用）
+    "padding", "margin",
     // 布局
     "display", "position", "flex-direction", "justify-content", "align-items",
   ];
@@ -456,6 +458,178 @@
     return out;
   }
 
+  /* ─────────────────────── 页面内注释卡片（vanilla DOM） ───────────────────────
+     渲染在页面自身 DOM 里——embedded 子 webview 与 popout 独立窗口共用同一套，
+     不被原生 webview 遮挡，且就在元素旁边。提交时把 {snapshot, comment, styleDiff}
+     经上行通道发回宿主，由主窗口 React 组装成 user message 发进对话。 */
+
+  var cardEl = null;
+  var cardSnapshot = null;
+
+  // 样式编辑器字段（对齐用户截图：字号/字重/颜色/圆角/边框/间距）
+  var CARD_FIELDS = [
+    { prop: "font-size", label: "字号", kind: "px" },
+    { prop: "font-weight", label: "字重", kind: "select", options: ["300", "400", "500", "600", "700", "800"] },
+    { prop: "color", label: "文字颜色", kind: "color" },
+    { prop: "text-align", label: "对齐", kind: "select", options: ["left", "center", "right", "justify"] },
+    { prop: "background-color", label: "背景色", kind: "color" },
+    { prop: "border-radius", label: "圆角", kind: "px" },
+    { prop: "border-width", label: "边框宽度", kind: "px" },
+    { prop: "border-color", label: "边框颜色", kind: "color" },
+    { prop: "padding", label: "内边距", kind: "px" },
+    { prop: "margin", label: "外边距", kind: "px" },
+  ];
+
+  function readComputed(prop) {
+    try {
+      var v = window.getComputedStyle(selectedTarget).getPropertyValue(prop);
+      if ((!v || v === "") && prop === "border-width") v = window.getComputedStyle(selectedTarget).getPropertyValue("border-top-width");
+      if ((!v || v === "") && prop === "border-color") v = window.getComputedStyle(selectedTarget).getPropertyValue("border-top-color");
+      if ((!v || v === "") && prop === "padding") v = window.getComputedStyle(selectedTarget).getPropertyValue("padding-top");
+      if ((!v || v === "") && prop === "margin") v = window.getComputedStyle(selectedTarget).getPropertyValue("margin-top");
+      return v || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function pxNumber(raw) {
+    var m = String(raw).match(/^(-?\d+(?:\.\d+)?)/);
+    return m ? m[1] : "";
+  }
+
+  function rgbToHex(raw) {
+    var m = String(raw).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!m) return /^#[0-9a-fA-F]{6}$/.test(String(raw).trim()) ? String(raw).trim() : "#000000";
+    var h = function (n) { return ("0" + Number(n).toString(16)).slice(-2); };
+    return "#" + h(m[1]) + h(m[2]) + h(m[3]);
+  }
+
+  function cardRow(field) {
+    var row = document.createElement("label");
+    row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:6px;";
+    var name = document.createElement("span");
+    name.textContent = field.label;
+    name.style.cssText = "width:64px;flex:none;color:#57606a;";
+    row.appendChild(name);
+    var raw = readComputed(field.prop);
+    var input;
+    if (field.kind === "color") {
+      input = document.createElement("input");
+      input.type = "color";
+      input.value = rgbToHex(raw);
+      input.style.cssText = "flex:1;height:22px;background:#f6f8fa;border:1px solid #d9dde3;border-radius:4px;";
+      input.addEventListener("input", function () { styleApply(field.prop, input.value); });
+    } else if (field.kind === "select") {
+      input = document.createElement("select");
+      input.style.cssText = "flex:1;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:4px;font-size:12px;";
+      var empty = document.createElement("option"); empty.value = ""; empty.textContent = "—"; input.appendChild(empty);
+      for (var i = 0; i < field.options.length; i++) {
+        var o = document.createElement("option"); o.value = field.options[i]; o.textContent = field.options[i];
+        if (String(raw).trim() === field.options[i]) o.selected = true;
+        input.appendChild(o);
+      }
+      input.addEventListener("change", function () { if (input.value) styleApply(field.prop, input.value); });
+    } else {
+      var wrap = document.createElement("span");
+      wrap.style.cssText = "flex:1;display:flex;align-items:center;gap:4px;";
+      input = document.createElement("input");
+      input.type = "number";
+      input.value = pxNumber(raw);
+      input.style.cssText = "width:100%;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:4px;font-size:12px;padding:0 6px;box-sizing:border-box;";
+      input.addEventListener("input", function () { styleApply(field.prop, input.value + "px"); });
+      var unit = document.createElement("span"); unit.textContent = "px"; unit.style.cssText = "color:#6e7681;font-size:10px;";
+      wrap.appendChild(input); wrap.appendChild(unit);
+      row.appendChild(wrap);
+      return row;
+    }
+    row.appendChild(input);
+    return row;
+  }
+
+  function removeCard() {
+    if (cardEl && cardEl.parentNode) cardEl.parentNode.removeChild(cardEl);
+    cardEl = null;
+    cardSnapshot = null;
+  }
+
+  function elementBadge(snap) {
+    var t = snap.tagName;
+    if (snap.id) t += "#" + snap.id;
+    else if (snap.classList && snap.classList.length) t += "." + snap.classList[0];
+    var comp = snap.react && snap.react.componentChain && snap.react.componentChain[0];
+    return comp ? t + "  ⟨" + comp + "⟩" : t;
+  }
+
+  function showAnnotationCard(snap) {
+    removeCard();
+    cardSnapshot = snap;
+    var card = document.createElement("div");
+    card.setAttribute(OVERLAY_ATTR, "card");
+    card.style.cssText = [
+      "position:fixed", "top:16px", "right:16px", "width:300px", "max-height:84vh",
+      "display:flex", "flex-direction:column", "z-index:2147483647",
+      "background:#ffffff", "color:#1f2328", "border:1px solid #d9dde3",
+      "border-radius:10px", "box-shadow:0 8px 30px rgba(15,23,42,0.16)",
+      "font-family:-apple-system,system-ui,sans-serif", "overflow:hidden",
+    ].join(";");
+    // 卡片内的点击/输入不冒泡到页面（冒泡阶段拦截——按钮自己的 handler 先触发，
+    // 再在这里阻止继续冒泡到页面 document；不能用捕获阶段，否则会先于按钮 stopPropagation 把点击吃掉）
+    card.addEventListener("click", function (e) { e.stopPropagation(); }, false);
+    card.addEventListener("mousedown", function (e) { e.stopPropagation(); }, false);
+
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #d9dde3;";
+    var badge = document.createElement("span");
+    badge.textContent = elementBadge(snap);
+    badge.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px ui-monospace,monospace;";
+    var closeBtn = document.createElement("button");
+    closeBtn.textContent = "×";
+    closeBtn.style.cssText = "border:none;background:none;color:#57606a;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;";
+    closeBtn.addEventListener("click", function () { styleRevert(); removeCard(); });
+    head.appendChild(badge); head.appendChild(closeBtn);
+
+    var comment = document.createElement("textarea");
+    comment.placeholder = "描述这些更改…"; // 描述这些更改…
+    comment.rows = 2;
+    comment.style.cssText = "margin:8px 10px 0;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:13px;padding:6px;outline:none;";
+
+    var body = document.createElement("div");
+    body.style.cssText = "padding:8px 10px;overflow-y:auto;flex:1;";
+    var groupTitle = document.createElement("div");
+    groupTitle.textContent = "样式调整"; // 样式调整
+    groupTitle.style.cssText = "font-size:11px;color:#6e7681;margin-bottom:6px;";
+    body.appendChild(groupTitle);
+    for (var i = 0; i < CARD_FIELDS.length; i++) body.appendChild(cardRow(CARD_FIELDS[i]));
+
+    var foot = document.createElement("div");
+    foot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:8px 10px;border-top:1px solid #d9dde3;";
+    var cancel = document.createElement("button");
+    cancel.textContent = "取消";
+    cancel.style.cssText = "padding:4px 10px;font-size:12px;background:none;border:none;color:#57606a;cursor:pointer;";
+    cancel.addEventListener("click", function () { styleRevert(); removeCard(); });
+    var submit = document.createElement("button");
+    submit.textContent = "发送到对话";
+    submit.style.cssText = "padding:4px 12px;font-size:12px;background:#2f81f7;border:none;color:#fff;border-radius:6px;cursor:pointer;";
+    submit.addEventListener("click", function () {
+      send("heb:annotation:submit", {
+        snapshot: cardSnapshot,
+        comment: comment.value || "",
+        styleDiff: takeStyleDiff(),
+      });
+      removeCard();
+    });
+    foot.appendChild(cancel); foot.appendChild(submit);
+
+    card.appendChild(head);
+    card.appendChild(comment);
+    card.appendChild(body);
+    card.appendChild(foot);
+    document.documentElement.appendChild(card);
+    cardEl = card;
+    setTimeout(function () { comment.focus(); }, 0);
+  }
+
   /* ───────────────────────── picker 状态机 ───────────────────────── */
 
   var pickerActive = false;
@@ -493,7 +667,7 @@
     hoverTarget = null;
     styleDiff = {};
     stopPicker(false);
-    send("heb:picker:selected", { snapshot: collectSnapshot(el) });
+    showAnnotationCard(collectSnapshot(el));
   }
 
   function onKeyDown(e) {
@@ -536,6 +710,7 @@
   }
 
   function clearSelection() {
+    removeCard();
     selectedTarget = null;
     styleDiff = {};
   }
