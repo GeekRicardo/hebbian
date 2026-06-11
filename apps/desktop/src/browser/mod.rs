@@ -17,8 +17,8 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl, WindowEvent,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 use url_policy::{validate_preview_url, PreviewOrigin};
@@ -87,7 +87,10 @@ fn decode_bridge(url: &Url) -> Option<serde_json::Value> {
     if url.scheme() != "heb-bridge" {
         return None;
     }
-    let encoded = url.query_pairs().find(|(k, _)| k == "d").map(|(_, v)| v.into_owned())?;
+    let encoded = url
+        .query_pairs()
+        .find(|(k, _)| k == "d")
+        .map(|(_, v)| v.into_owned())?;
     serde_json::from_str(&encoded).ok()
 }
 
@@ -124,17 +127,18 @@ pub fn browser_open(
 
     let app_for_nav = app.clone();
     let app_for_load = app.clone();
-    let builder = tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, WebviewUrl::External(target.clone()))
-        .initialization_script(init_script())
-        .on_navigation(move |url: &Url| handle_navigation(&app_for_nav, url))
-        .on_page_load(move |_wv, payload| {
-            let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
-            if let Some(st) = app_for_load.try_state::<BrowserState>() {
-                if let Some(inst) = st.inner.lock().unwrap().as_ref() {
-                    emit_state(&app_for_load, inst, loading);
+    let builder =
+        tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, WebviewUrl::External(target.clone()))
+            .initialization_script(init_script())
+            .on_navigation(move |url: &Url| handle_navigation(&app_for_nav, url))
+            .on_page_load(move |_wv, payload| {
+                let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
+                if let Some(st) = app_for_load.try_state::<BrowserState>() {
+                    if let Some(inst) = st.inner.lock().unwrap().as_ref() {
+                        emit_state(&app_for_load, inst, loading);
+                    }
                 }
-            }
-        });
+            });
 
     let webview = window
         .add_child(
@@ -187,7 +191,10 @@ fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
             true
         }
         Err(reason) => {
-            let _ = app.emit("browser://escaped", serde_json::json!({ "url": url.to_string(), "reason": reason }));
+            let _ = app.emit(
+                "browser://escaped",
+                serde_json::json!({ "url": url.to_string(), "reason": reason }),
+            );
             false
         }
     }
@@ -195,7 +202,10 @@ fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
 
 fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
     let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-    let payload = msg.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+    let payload = msg
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     if std::env::var("HEBBIAN_WEBVIEW_SPIKE").as_deref() == Ok("1") {
         let preview = serde_json::to_string(&payload).unwrap_or_default();
         let preview: String = preview.chars().take(240).collect();
@@ -210,15 +220,23 @@ fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
         "heb:aside:send" => handle_aside_send(app, &payload),
         "heb:aside:submit" => handle_aside_submit(app, &payload),
         "heb:aside:models:request" => {
-            let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded");
+            let surface = payload
+                .get("surface")
+                .and_then(|v| v.as_str())
+                .unwrap_or("embedded");
             let ctx = app
                 .try_state::<BrowserState>()
                 .and_then(|st| st.aside_context.lock().unwrap().clone());
             if let Some(ctx) = ctx {
-                eval_aside_down(app, surface, "heb:aside:models", serde_json::json!({
-                    "list": ctx.models,
-                    "current": { "providerId": ctx.provider_id, "model": ctx.model },
-                }));
+                eval_aside_down(
+                    app,
+                    surface,
+                    "heb:aside:models",
+                    serde_json::json!({
+                        "list": ctx.models,
+                        "current": { "providerId": ctx.provider_id, "model": ctx.model },
+                    }),
+                );
             }
         }
         "heb:picker:cancelled" => {
@@ -246,7 +264,9 @@ pub fn browser_navigate(
     inst.history.push(target.to_string());
     inst.cursor = inst.history.len() - 1;
     inst.programmatic = true;
-    inst.webview.navigate(target.clone()).map_err(|e| e.to_string())?;
+    inst.webview
+        .navigate(target.clone())
+        .map_err(|e| e.to_string())?;
     emit_state(&app, inst, true);
     Ok(target.to_string())
 }
@@ -260,14 +280,19 @@ pub fn browser_back(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Re
     }
     inst.cursor -= 1;
     inst.programmatic = true;
-    let url: Url = inst.history[inst.cursor].parse().map_err(|_| "历史地址异常".to_string())?;
+    let url: Url = inst.history[inst.cursor]
+        .parse()
+        .map_err(|_| "历史地址异常".to_string())?;
     inst.webview.navigate(url).map_err(|e| e.to_string())?;
     emit_state(&app, inst, true);
     Ok(())
 }
 
 #[tauri::command]
-pub fn browser_forward(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
+pub fn browser_forward(
+    app: AppHandle,
+    state: tauri::State<'_, BrowserState>,
+) -> Result<(), String> {
     let mut guard = state.inner.lock().unwrap();
     let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor + 1 >= inst.history.len() {
@@ -275,7 +300,9 @@ pub fn browser_forward(app: AppHandle, state: tauri::State<'_, BrowserState>) ->
     }
     inst.cursor += 1;
     inst.programmatic = true;
-    let url: Url = inst.history[inst.cursor].parse().map_err(|_| "历史地址异常".to_string())?;
+    let url: Url = inst.history[inst.cursor]
+        .parse()
+        .map_err(|_| "历史地址异常".to_string())?;
     inst.webview.navigate(url).map_err(|e| e.to_string())?;
     emit_state(&app, inst, true);
     Ok(())
@@ -316,7 +343,10 @@ pub fn browser_set_bounds(
 }
 
 #[tauri::command]
-pub fn browser_set_visible(state: tauri::State<'_, BrowserState>, visible: bool) -> Result<(), String> {
+pub fn browser_set_visible(
+    state: tauri::State<'_, BrowserState>,
+    visible: bool,
+) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
     if let Some(inst) = guard.as_ref() {
         if visible {
@@ -381,7 +411,10 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
     // popout 窗口关闭（OS 关 / 收回）时通知前端恢复内嵌浏览器
     let app_for_close = app.clone();
     win.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+        if matches!(
+            event,
+            WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }
+        ) {
             let _ = app_for_close.emit("browser://popout", serde_json::json!({ "open": false }));
         }
     });
@@ -407,9 +440,19 @@ pub fn browser_close_popout(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn browser_picker(state: tauri::State<'_, BrowserState>, active: bool) -> Result<(), String> {
     let mut guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_mut() else { return Ok(()) };
+    let Some(inst) = guard.as_mut() else {
+        return Ok(());
+    };
     inst.picker_active = active;
-    send_down(inst, if active { "heb:picker:start" } else { "heb:picker:stop" }, serde_json::json!({}))
+    send_down(
+        inst,
+        if active {
+            "heb:picker:start"
+        } else {
+            "heb:picker:stop"
+        },
+        serde_json::json!({}),
+    )
 }
 
 #[tauri::command]
@@ -419,14 +462,22 @@ pub fn browser_style_apply(
     value: String,
 ) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else { return Ok(()) };
-    send_down(inst, "heb:style:apply", serde_json::json!({ "prop": prop, "value": value }))
+    let Some(inst) = guard.as_ref() else {
+        return Ok(());
+    };
+    send_down(
+        inst,
+        "heb:style:apply",
+        serde_json::json!({ "prop": prop, "value": value }),
+    )
 }
 
 #[tauri::command]
 pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else { return Ok(()) };
+    let Some(inst) = guard.as_ref() else {
+        return Ok(());
+    };
     send_down(inst, "heb:style:revert", serde_json::json!({}))
 }
 
@@ -434,7 +485,9 @@ pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(),
 #[tauri::command]
 pub fn browser_style_take_diff(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else { return Ok(()) };
+    let Some(inst) = guard.as_ref() else {
+        return Ok(());
+    };
     send_down(inst, "heb:style:take-diff", serde_json::json!({}))
 }
 
@@ -442,7 +495,9 @@ pub fn browser_style_take_diff(state: tauri::State<'_, BrowserState>) -> Result<
 #[tauri::command]
 pub fn browser_clear_selection(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else { return Ok(()) };
+    let Some(inst) = guard.as_ref() else {
+        return Ok(());
+    };
     send_down(inst, "heb:selection:clear", serde_json::json!({}))
 }
 
@@ -468,11 +523,18 @@ pub fn browser_set_context(
 
 fn aside_system_prompt(element_desc: &str) -> String {
     format!(
-        "你正在帮用户调整一个网页元素的样式。当前元素：{element_desc}。\n\
-         你可以调用 PreviewStyle(prop, value) 工具实时改这个元素的外观（颜色 color、字号 font-size、\
-         字重 font-weight、间距 padding/margin、圆角 border-radius、边框 border-width/border-color、\
-         背景 background-color 等），用户会立刻在页面上看到效果。一次调一个属性，想微调就再调一次。\n\
-         先理解用户想要什么视觉效果，再动手改；改完用一句话说明你做了什么。保持简洁，别长篇大论。"
+        "你是网页预览里的「样式调整助手」。用户选中了一个元素，你帮他在预览上**临时**调整看效果。\n\n\
+         选中元素的定位信息：\n{element_desc}\n\n\
+         你的工具：PreviewStyle(prop, value) —— 实时改这个元素的内联样式（color / font-size / \
+         font-weight / padding / margin / border-radius / border-width / border-color / \
+         background-color / display 等），用户立刻在页面上看到效果。一次改一个属性，想微调再调一次。\n\n\
+         重要——理解你的定位：\n\
+         • 你改的是**临时预览效果**，不是最终实现。用户满意后，会由「主对话」**修改源代码**来真正落地这些改动。\n\
+         • 所以你心里要清楚「这个视觉效果对应到源码该怎么改」，过程中可以简短点一下。\n\
+         • 如果用户想**删除/移除**元素：PreviewStyle 只能改样式、改不了 DOM 结构。你可以先用 \
+         display:none 把它藏起来让用户看「删掉后的样子」，但要说明这只是预览——真正删除要在源码里移除这个元素/组件，而不是留个 display:none。\n\
+         • 别假设源码怎么存放（本地项目可直接改文件，线上站点可能要去对应仓库复刻）。你只负责把视觉效果调好，并说清楚改了什么、对应什么源码改动。\n\n\
+         先理解用户要的视觉效果，再动手。保持简洁。"
     )
 }
 
@@ -495,16 +557,39 @@ fn eval_aside_down(app: &AppHandle, surface: &str, ty: &str, payload: serde_json
 fn route_aside_event(app: &AppHandle, surface: &str, session_id: &str, event: EngineEvent) {
     match event {
         EngineEvent::TextDelta { text, .. } => {
-            eval_aside_down(app, surface, "heb:aside:delta", serde_json::json!({ "sessionId": session_id, "text": text }));
+            eval_aside_down(
+                app,
+                surface,
+                "heb:aside:delta",
+                serde_json::json!({ "sessionId": session_id, "text": text }),
+            );
         }
         EngineEvent::ToolStart { name, input, .. } if name == "PreviewStyle" => {
-            let prop = input.get("prop").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let value = input.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let prop = input
+                .get("prop")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let value = input
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             // 实时应用到页面 + 在聊天里显示这一步
-            eval_aside_down(app, surface, "heb:aside:apply", serde_json::json!({ "sessionId": session_id, "prop": prop, "value": value }));
+            eval_aside_down(
+                app,
+                surface,
+                "heb:aside:apply",
+                serde_json::json!({ "sessionId": session_id, "prop": prop, "value": value }),
+            );
         }
         EngineEvent::RunFinished { .. } => {
-            eval_aside_down(app, surface, "heb:aside:done", serde_json::json!({ "sessionId": session_id }));
+            eval_aside_down(
+                app,
+                surface,
+                "heb:aside:done",
+                serde_json::json!({ "sessionId": session_id }),
+            );
         }
         _ => {}
     }
@@ -514,7 +599,11 @@ fn fresh_cancel() -> common::CancelFlag {
     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
-fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<String>) -> SendArgs {
+fn aside_send_args(
+    session_id: String,
+    user_content: String,
+    enabled_tools: Vec<String>,
+) -> SendArgs {
     // 总结那轮 enabled_tools 传 []，配合 restrict_tools 白名单连 PreviewStyle 也不暴露，纯文本总结。
     let restrict_tools = Some(if enabled_tools.is_empty() {
         vec![]
@@ -532,7 +621,7 @@ fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<
         pending_inputs: None,
         consumed_pending_inputs: None,
         pending_inputs_accepting: None,
-        hitl: None,            // 旁支只有 PreviewStyle（无副作用），不触发审批
+        hitl: None, // 旁支只有 PreviewStyle（无副作用），不触发审批
         permission_store: None,
         force_automode: false,
         request_id: Some(format!("aside-{}", chrono::Utc::now().timestamp_millis())),
@@ -544,14 +633,39 @@ fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<
 
 /// 处理 heb:aside:send：建/续旁支会话，驱动一轮，事件流下发卡片。
 fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
-    let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded").to_string();
-    let element_key = payload.get("elementKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let session_id_opt = payload.get("sessionId").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let element_desc = payload.get("element").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let surface = payload
+        .get("surface")
+        .and_then(|v| v.as_str())
+        .unwrap_or("embedded")
+        .to_string();
+    let element_key = payload
+        .get("elementKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_id_opt = payload
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let element_desc = payload
+        .get("element")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     // 卡片里模型选择器选的 provider/model（可空 → 用上下文默认）
-    let sel_provider = payload.get("providerId").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let sel_model = payload.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let sel_provider = payload
+        .get("providerId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let sel_model = payload
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         let ctx = app2
@@ -561,7 +675,12 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
             .unwrap()
             .clone();
         let Some(ctx) = ctx else {
-            eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": "先在主窗口打开一个对话，元素对话才有上下文" }));
+            eval_aside_down(
+                &app2,
+                &surface,
+                "heb:aside:error",
+                serde_json::json!({ "message": "先在主窗口打开一个对话，元素对话才有上下文" }),
+            );
             return;
         };
         let dd = agent_core::storage::default_data_dir();
@@ -577,11 +696,21 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
                 None,
             ) {
                 Ok(s) => {
-                    eval_aside_down(&app2, &surface, "heb:aside:session", serde_json::json!({ "elementKey": element_key, "sessionId": s.id }));
+                    eval_aside_down(
+                        &app2,
+                        &surface,
+                        "heb:aside:session",
+                        serde_json::json!({ "elementKey": element_key, "sessionId": s.id }),
+                    );
                     s.id
                 }
                 Err(e) => {
-                    eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("建会话失败：{e}") }));
+                    eval_aside_down(
+                        &app2,
+                        &surface,
+                        "heb:aside:error",
+                        serde_json::json!({ "message": format!("建会话失败：{e}") }),
+                    );
                     return;
                 }
             },
@@ -595,26 +724,49 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
         })
         .await;
         if let Err(e) = result {
-            eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("助手出错：{e}") }));
+            eval_aside_down(
+                &app2,
+                &surface,
+                "heb:aside:error",
+                serde_json::json!({ "message": format!("助手出错：{e}") }),
+            );
         }
     });
 }
 
 /// 处理 heb:aside:submit：让旁支总结改动，注入主对话（复用 App 级 aside-result 监听）。
 fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
-    let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded").to_string();
-    let session_id = payload.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let element_desc = payload.get("element").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let surface = payload
+        .get("surface")
+        .and_then(|v| v.as_str())
+        .unwrap_or("embedded")
+        .to_string();
+    let session_id = payload
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let element_desc = payload
+        .get("element")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if session_id.is_empty() {
         return;
     }
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         let dd = agent_core::storage::default_data_dir();
-        let prompt = "把这次对话里你对这个元素做的修改总结成一段给主对话参考的话：\
-            ①改了哪些样式（CSS 属性 → 目标值）；②达到了什么视觉效果；③为什么这么改/怎么实现的。\
-            目的是让主对话据此去改源码。只输出这段总结，别再调工具。"
-            .to_string();
+        let prompt = format!(
+            "现在把这次调整总结成一段给「主对话」看的话，让它去改源代码真正实现这些效果。\n\n\
+             元素定位信息（务必带进总结，让主对话能精确找到源码）：\n{element_desc}\n\n\
+             总结要包含：\n\
+             ① 改了什么视觉效果——逐条列「CSS 属性 → 目标值」，或结构改动如「隐藏/移除」；\n\
+             ② 对应到源码怎么改——结合上面的源码位置（file:line）/ 组件名 / 元素文本，明确指出该改哪个文件里的哪个元素，\
+             给的定位锚点要足够让人 grep 到（别只说 div+class，要带文本内容或组件名）；\n\
+             ③ 若是删除类操作，说明要在源码里移除该元素，而不是加 display:none。\n\n\
+             只输出这段总结，不要再调工具。"
+        );
         let args = aside_send_args(session_id.clone(), prompt, vec![]);
         match chat::send_and_save_in_data_dir(&dd, args, |_| {}).await {
             Ok(msg) => {
@@ -622,10 +774,20 @@ fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
                     "browser://aside-result",
                     serde_json::json!({ "summary": msg.content, "element": element_desc }),
                 );
-                eval_aside_down(&app2, &surface, "heb:aside:submitted", serde_json::json!({ "sessionId": session_id }));
+                eval_aside_down(
+                    &app2,
+                    &surface,
+                    "heb:aside:submitted",
+                    serde_json::json!({ "sessionId": session_id }),
+                );
             }
             Err(e) => {
-                eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("总结失败：{e}") }));
+                eval_aside_down(
+                    &app2,
+                    &surface,
+                    "heb:aside:error",
+                    serde_json::json!({ "message": format!("总结失败：{e}") }),
+                );
             }
         }
     });
@@ -652,11 +814,19 @@ pub fn run_spike(app: &AppHandle) -> tauri::Result<()> {
         let st = app2.state::<BrowserState>();
 
         wait(6).await;
-        let r = browser_navigate(app2.clone(), st.clone(), "https://httpbin.org/cookies/set?heb=1".into());
+        let r = browser_navigate(
+            app2.clone(),
+            st.clone(),
+            "https://httpbin.org/cookies/set?heb=1".into(),
+        );
         tracing::info!(target: "webview_spike", "S2/S7 navigate set-cookie → {r:?}");
 
         wait(8).await;
-        let r = browser_navigate(app2.clone(), st.clone(), "https://httpbin.org/cookies".into());
+        let r = browser_navigate(
+            app2.clone(),
+            st.clone(),
+            "https://httpbin.org/cookies".into(),
+        );
         tracing::info!(target: "webview_spike", "S7 navigate cookie echo → {r:?}");
 
         wait(6).await;

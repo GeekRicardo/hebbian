@@ -125,10 +125,11 @@ export default function App() {
         toast.error("先打开一个对话，才能把元素改动提交进去");
         return;
       }
-      const { summary, element } = e.payload;
+      const { summary } = e.payload;
+      // summary 里已带元素定位信息（旁支总结时被要求带上），这里不重复 element
       const content =
-        `我在页面预览里和你的助手一起调了一个元素（${element}）的样式，下面是这次调整的总结，` +
-        `请据此去改对应的前端源码，让效果固化下来：\n\n${summary}`;
+        `我在内置浏览器预览里和助手一起调整了一个页面元素，下面是这次调整的总结，` +
+        `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${summary}`;
       void store.sendUserMessage(content, []);
       toast.success("元素改动已提交到对话");
     })

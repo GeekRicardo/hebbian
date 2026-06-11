@@ -186,6 +186,10 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
 
         "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
 
+        // PreviewStyle 只改内置浏览器预览元素的内联样式（不碰用户文件 / 不跑命令 / 不联网）——
+        // 免审批。否则旁支会话每改一个样式都要审批，而旁支跑时无 HITL observer 会直接挂死。
+        "PreviewStyle" => Effects::read_only(),
+
         // 记忆工具只动 hebbian 内部记忆库（~/.hebbian/.../memory/），不碰用户工作区文件——
         // 免审批。否则 agent 每记一条 / 每读一条都弹审批，体验灾难（架构 §4.14）。
         "ReadMemory" | "WriteMemory" => Effects::read_only(),

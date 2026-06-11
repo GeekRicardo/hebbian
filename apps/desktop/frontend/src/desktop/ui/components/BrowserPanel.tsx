@@ -261,10 +261,10 @@ export function BrowserPanel({ active }: { active: boolean }) {
           type="button"
           onClick={togglePicker}
           disabled={!state.url}
-          className={`grid h-7 w-7 place-items-center rounded hover:bg-accent disabled:opacity-30 ${
-            pickerActive ? "bg-primary/15 text-primary" : "text-muted-foreground"
+          className={`grid h-7 w-7 place-items-center rounded transition-transform hover:bg-accent active:scale-90 disabled:opacity-30 ${
+            pickerActive ? "bg-primary/20 text-primary ring-1 ring-primary/40" : "text-muted-foreground"
           }`}
-          title="选取页面元素标注"
+          title={pickerActive ? "选取中…点页面元素，或再点这里退出" : "选取页面元素标注"}
         >
           <MousePointerSquareDashed className="h-4 w-4" />
         </button>

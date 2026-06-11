@@ -240,8 +240,7 @@ async fn fetch_provider_usage(
 ) -> AppResult<ProviderUsageResult> {
     use model_gateway::config::AuthMode;
     let dir = data_dir(&app)?;
-    let file =
-        providers::load(&dir).map_err(|e| AppError::msg(format!("read providers: {e}")))?;
+    let file = providers::load(&dir).map_err(|e| AppError::msg(format!("read providers: {e}")))?;
     let provider = file
         .providers
         .iter()
@@ -975,6 +974,7 @@ async fn send_message(
             permission_store: permission_store.inner().clone(),
             force_automode: force_automode_enabled,
             request_id: Some(request_id.clone()),
+            restrict_tools: None,
         },
         on_event,
     )

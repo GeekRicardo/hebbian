@@ -307,6 +307,24 @@
     return [];
   }
 
+  // React dev 模式的源码位置（babel jsx-source 注入 _debugSource = {fileName,lineNumber}）。
+  // 这是给主对话精确定位源码的金钥匙——沿 _debugOwner / return 上行找最近的有效位置。
+  function extractDebugSource(fiber) {
+    var node = fiber, guard = 0;
+    while (node && guard < 24) {
+      guard += 1;
+      var src = node._debugSource;
+      if (src && src.fileName) {
+        var f = String(src.fileName);
+        // 路径去前缀只留项目相对部分（src/... 或最后两三段），方便 grep
+        var m = f.match(/(?:^|\/)((?:src|app|components|pages|apps)\/.*)$/);
+        return { file: m ? m[1] : f.split("/").slice(-3).join("/"), line: src.lineNumber || null };
+      }
+      node = node._debugOwner || node.return;
+    }
+    return null;
+  }
+
   /* ───────────────────────── snapshot 采集 ───────────────────────── */
 
   var STYLE_WHITELIST = [
@@ -379,11 +397,21 @@
       };
       var sourceAttr = el.getAttribute("data-source") || el.getAttribute("data-inspector-relative-path");
       if (sourceAttr) react.sourceHint = truncate(sourceAttr, 200);
+      var dbg = extractDebugSource(fiber);
+      if (dbg) react.source = dbg; // {file, line} —— dev 模式精确源码位置
     }
     var children = [];
     for (var k = 0; k < el.children.length && k < 10; k++) {
       children.push(el.children[k].tagName.toLowerCase());
     }
+    // 直接文本（不含子元素文本）——比 innerText 更适合 grep 定位
+    var ownText = "";
+    try {
+      for (var t = 0; t < el.childNodes.length; t++) {
+        if (el.childNodes[t].nodeType === 3) ownText += el.childNodes[t].nodeValue;
+      }
+      ownText = ownText.trim();
+    } catch (e) {}
     var snap = {
       url: window.location.href,
       viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -394,6 +422,7 @@
       selectorPath: buildSelectorPath(chain),
       xpath: buildXPath(chain),
       attributes: attributes,
+      ownText: ownText ? truncate(ownText, 120) : undefined, // 元素自身文本（最佳 grep 锚）
       innerText: truncate(el.innerText || "", 500),
       react: react,
       boundingClientRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
@@ -402,6 +431,7 @@
         ? {
             tagName: el.parentElement.tagName.toLowerCase(),
             classList: Array.prototype.slice.call(el.parentElement.classList || [], 0, 5),
+            id: el.parentElement.id || undefined,
           }
         : undefined,
       childrenSummary: children,
@@ -413,22 +443,44 @@
 
   var styleDiff = {}; // prop -> { before, after }
 
+  // 取当前可改的元素：selectedTarget detach（React 等重渲染换了 DOM 节点）时，
+  // 用 snapshot 的 selector/xpath 找回最新节点——否则改的是不在文档里的旧节点，看不到效果。
+  function currentTarget() {
+    if (selectedTarget && selectedTarget.isConnected) return selectedTarget;
+    if (cardSnapshot) {
+      var el = null;
+      try { if (cardSnapshot.selectorPath) el = document.querySelector(cardSnapshot.selectorPath); } catch (e) {}
+      if (!el && cardSnapshot.xpath) {
+        try { el = document.evaluate(cardSnapshot.xpath, document, null, 9, null).singleNodeValue; } catch (e) {}
+      }
+      if (el) selectedTarget = el;
+    }
+    return selectedTarget;
+  }
+
   function styleApply(prop, value) {
-    if (!selectedTarget || STYLE_WHITELIST.indexOf(prop) === -1) return;
+    var el = currentTarget();
+    if (!el || STYLE_WHITELIST.indexOf(prop) === -1) return;
     try {
       if (!(prop in styleDiff)) {
-        styleDiff[prop] = { before: selectedTarget.style.getPropertyValue(prop), after: value };
+        styleDiff[prop] = { before: el.style.getPropertyValue(prop), after: value };
       } else {
         styleDiff[prop].after = value;
       }
-      selectedTarget.style.setProperty(prop, value);
+      el.style.setProperty(prop, value);
+      // 改边框宽度/颜色但 border-style 为 none 时看不到——自动补 solid
+      if ((prop === "border-width" || prop === "border-color") &&
+          window.getComputedStyle(el).borderStyle === "none") {
+        el.style.setProperty("border-style", "solid");
+      }
     } catch (e) {
       /* 静默 */
     }
   }
 
   function styleRevert() {
-    if (!selectedTarget) {
+    var el = currentTarget();
+    if (!el) {
       styleDiff = {};
       return;
     }
@@ -437,8 +489,8 @@
       for (var i = props.length - 1; i >= 0; i--) {
         var prop = props[i];
         var before = styleDiff[prop].before;
-        if (before) selectedTarget.style.setProperty(prop, before);
-        else selectedTarget.style.removeProperty(prop);
+        if (before) el.style.setProperty(prop, before);
+        else el.style.removeProperty(prop);
       }
     } catch (e) {
       /* 静默 */
@@ -615,6 +667,29 @@
     return comp ? t + "  ⟨" + comp + "⟩" : t;
   }
 
+  // 给旁支 LLM / 主对话的完整元素定位描述——尽量多锚点让源码定位精确
+  function elementLocator(snap) {
+    var lines = [elementBadge(snap)];
+    if (snap.react && snap.react.source) {
+      lines.push("源码位置: " + snap.react.source.file + (snap.react.source.line ? ":" + snap.react.source.line : ""));
+    }
+    if (snap.react && snap.react.componentChain && snap.react.componentChain.length) {
+      lines.push("React 组件链(近→远): " + snap.react.componentChain.join(" > "));
+    }
+    if (snap.react && snap.react.props && Object.keys(snap.react.props).length) {
+      lines.push("组件 props: " + JSON.stringify(snap.react.props));
+    }
+    if (snap.ownText) lines.push('元素文本: "' + snap.ownText + '"');
+    if (snap.id) lines.push("id: #" + snap.id);
+    if (snap.classList && snap.classList.length) lines.push("class: " + snap.classList.join(" "));
+    if (snap.attributes) {
+      var attrKeys = Object.keys(snap.attributes).filter(function (k) { return k !== "class" && k !== "id"; });
+      if (attrKeys.length) lines.push("属性: " + attrKeys.map(function (k) { return k + '="' + snap.attributes[k] + '"'; }).join(" "));
+    }
+    if (snap.selectorPath) lines.push("CSS 路径: " + snap.selectorPath);
+    return lines.join("\n");
+  }
+
   function showAnnotationCard(snap) {
     removeCard();
     cardSnapshot = snap;
@@ -662,23 +737,19 @@
     styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
     var styleBody = document.createElement("div");
     styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;";
-    var comment = document.createElement("textarea");
-    comment.placeholder = "（可选）描述这次手动改动…";
-    comment.rows = 2;
-    comment.style.cssText = "margin:0 10px;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;";
     var fields = document.createElement("div");
-    fields.style.cssText = "padding:8px 10px;max-height:220px;overflow-y:auto;";
+    fields.style.cssText = "padding:8px 10px;max-height:240px;overflow-y:auto;";
     for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
     var styleFoot = document.createElement("div");
     styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:0 10px 8px;";
     var sCancel = mkFlatBtn("撤销"); sCancel.addEventListener("click", function () { styleRevert(); });
     var sSend = mkPrimaryBtn("发送到对话");
     sSend.addEventListener("click", function () {
-      send("heb:annotation:submit", { snapshot: cardSnapshot, comment: comment.value || "", styleDiff: takeStyleDiff() });
+      send("heb:annotation:submit", { snapshot: cardSnapshot, comment: "", styleDiff: takeStyleDiff() });
       removeCard();
     });
     styleFoot.appendChild(sCancel); styleFoot.appendChild(sSend);
-    styleBody.appendChild(comment); styleBody.appendChild(fields); styleBody.appendChild(styleFoot);
+    styleBody.appendChild(fields); styleBody.appendChild(styleFoot);
     var styleCollapsed = false;
     styleHead.addEventListener("click", function () {
       styleCollapsed = !styleCollapsed;
@@ -724,7 +795,7 @@
         text: t,
         providerId: sel[0] || undefined,
         model: sel[1] || undefined,
-        element: elementBadge(cardSnapshot) + " — " + (cardSnapshot.selectorPath || ""),
+        element: elementLocator(cardSnapshot),
       });
     };
     chatSend.addEventListener("click", sendChat);
@@ -737,7 +808,7 @@
       var conv = asideConvos[elementKey];
       if (!conv || !conv.sessionId) { appendChatMsg(msgList, "assistant", "（还没开始对话）"); return; }
       appendChatMsg(msgList, "assistant", "正在总结并提交到主对话…");
-      send("heb:aside:submit", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded", sessionId: conv.sessionId, element: elementBadge(cardSnapshot) });
+      send("heb:aside:submit", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded", sessionId: conv.sessionId, element: elementLocator(cardSnapshot) });
     });
     chatFoot.appendChild(submitMain);
     chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
@@ -822,8 +893,13 @@
     return el;
   }
 
+  var lastHitTest = 0;
   function onMouseMove(e) {
     if (!pickerActive) return;
+    // 节流到 ~30fps：elementFromPoint + overlay 重绘在复杂页面上每像素跑会卡
+    var now = Date.now();
+    if (now - lastHitTest < 33) return;
+    lastHitTest = now;
     hoverTarget = pickableAt(e.clientX, e.clientY);
   }
 
@@ -836,8 +912,26 @@
     selectedTarget = el;
     hoverTarget = null;
     styleDiff = {};
+    flashSelect(el); // 点中瞬间闪一下，给「按下选中」的反馈
     stopPicker(false);
+    // 通知宿主 picker 已结束（选中成功也算结束）→ embedded 模式 React 按钮恢复非激活态
+    send("heb:picker:cancelled", {});
     showAnnotationCard(collectSnapshot(el));
+  }
+
+  // 选中瞬间在元素上叠一层蓝色高亮快速淡出——告诉用户「点中了」
+  function flashSelect(el) {
+    try {
+      var r = el.getBoundingClientRect();
+      var f = document.createElement("div");
+      f.setAttribute(OVERLAY_ATTR, "flash");
+      f.style.cssText = "position:fixed;pointer-events:none;z-index:2147483646;border-radius:3px;" +
+        "left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px;height:" + r.height + "px;" +
+        "background:rgba(47,129,247,0.35);transition:opacity .35s ease;opacity:1;";
+      document.documentElement.appendChild(f);
+      requestAnimationFrame(function () { f.style.opacity = "0"; });
+      setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 400);
+    } catch (e) {}
   }
 
   function onKeyDown(e) {
@@ -849,9 +943,24 @@
     }
   }
 
+  var popoutPickerBtn = null; // popout 工具栏的选取按钮，picker 激活时高亮
+  function syncPickerBtn() {
+    if (!popoutPickerBtn) return;
+    if (pickerActive) {
+      popoutPickerBtn.style.background = "#2f81f7";
+      popoutPickerBtn.style.color = "#fff";
+      popoutPickerBtn.style.borderColor = "#2f81f7";
+    } else {
+      popoutPickerBtn.style.background = "#fff";
+      popoutPickerBtn.style.color = "#1f2328";
+      popoutPickerBtn.style.borderColor = "#d9dde3";
+    }
+  }
+
   function startPicker() {
     if (pickerActive) return;
     pickerActive = true;
+    syncPickerBtn();
     ensureOverlayLoop();
     document.addEventListener("mousemove", onMouseMove, true);
     document.addEventListener("click", onClick, true);
@@ -870,6 +979,7 @@
   function stopPicker(cancelled) {
     if (!pickerActive) return;
     pickerActive = false;
+    syncPickerBtn();
     hoverTarget = null;
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("click", onClick, true);
@@ -942,9 +1052,11 @@
     bar.appendChild(addr);
     popoutAddr = addr;
 
-    bar.appendChild(popoutBtn("⌖", "选取页面元素标注", function () {
+    popoutPickerBtn = popoutBtn("⌖", "选取页面元素标注", function () {
       if (pickerActive) stopPicker(false); else startPicker();
-    }));
+    });
+    bar.appendChild(popoutPickerBtn);
+    syncPickerBtn();
 
     document.documentElement.appendChild(bar);
     // 把页面内容下移，避免被工具栏盖住

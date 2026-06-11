@@ -57,6 +57,9 @@ impl Tool for PreviewStyleTool {
     async fn execute(&self, input: Value) -> AppResult<String> {
         let parsed: PreviewStyleInput = serde_json::from_value(input)
             .map_err(|e| AppError::msg(format!("invalid PreviewStyle input: {e}")))?;
-        Ok(format!("已实时应用到预览元素：{} = {}", parsed.prop, parsed.value))
+        Ok(format!(
+            "已实时应用到预览元素：{} = {}",
+            parsed.prop, parsed.value
+        ))
     }
 }

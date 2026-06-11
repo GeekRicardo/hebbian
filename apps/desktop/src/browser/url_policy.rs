@@ -84,8 +84,18 @@ pub fn normalize_preview_url(input: &str) -> Option<Url> {
         format!("http://127.0.0.1:{trimmed}")
     } else if !trimmed.contains("://") {
         // 像真浏览器一样补 scheme：本地地址用 http，公网域名默认 https
-        let bare_host = trimmed.split('/').next().unwrap_or(trimmed).split(':').next().unwrap_or(trimmed);
-        let scheme = if is_local_preview_host(bare_host) { "http" } else { "https" };
+        let bare_host = trimmed
+            .split('/')
+            .next()
+            .unwrap_or(trimmed)
+            .split(':')
+            .next()
+            .unwrap_or(trimmed);
+        let scheme = if is_local_preview_host(bare_host) {
+            "http"
+        } else {
+            "https"
+        };
         format!("{scheme}://{trimmed}")
     } else {
         trimmed.to_string()
@@ -134,7 +144,9 @@ mod tests {
             "https://example.com/"
         );
         assert_eq!(
-            normalize_preview_url("example.com:8443/app").unwrap().as_str(),
+            normalize_preview_url("example.com:8443/app")
+                .unwrap()
+                .as_str(),
             "https://example.com:8443/app"
         );
         assert_eq!(
@@ -142,7 +154,9 @@ mod tests {
             "http://192.168.1.5:8080/"
         );
         assert_eq!(
-            normalize_preview_url("http://0.0.0.0:5173").unwrap().as_str(),
+            normalize_preview_url("http://0.0.0.0:5173")
+                .unwrap()
+                .as_str(),
             "http://127.0.0.1:5173/"
         );
         assert_eq!(
@@ -203,10 +217,14 @@ mod tests {
             "https://example.com/"
         );
         assert_eq!(
-            validate_preview_url("3000", PreviewOrigin::User).unwrap().as_str(),
+            validate_preview_url("3000", PreviewOrigin::User)
+                .unwrap()
+                .as_str(),
             "http://127.0.0.1:3000/"
         );
-        assert!(validate_preview_url("http://169.254.169.254/latest", PreviewOrigin::User).is_err());
+        assert!(
+            validate_preview_url("http://169.254.169.254/latest", PreviewOrigin::User).is_err()
+        );
         assert!(validate_preview_url("169.254.169.254", PreviewOrigin::Auto).is_err());
         assert!(validate_preview_url("ftp://example.com", PreviewOrigin::User).is_err());
         assert_eq!(
