@@ -573,26 +573,33 @@
   }
 
   // 样式编辑器字段（对齐用户截图：字号/字重/颜色/圆角/边框/间距）
+  // 视觉属性（盒子尺寸 margin/border/padding 四边由盒模型图精确管，这里不重复，避免不一致）
   var CARD_FIELDS = [
+    { prop: "width", label: "宽度", kind: "px" },
+    { prop: "height", label: "高度", kind: "px" },
     { prop: "font-size", label: "字号", kind: "px" },
     { prop: "font-weight", label: "字重", kind: "select", options: ["300", "400", "500", "600", "700", "800"] },
+    { prop: "line-height", label: "行高", kind: "px" },
+    { prop: "letter-spacing", label: "字距", kind: "px" },
     { prop: "color", label: "文字颜色", kind: "color" },
     { prop: "text-align", label: "对齐", kind: "select", options: ["left", "center", "right", "justify"] },
     { prop: "background-color", label: "背景色", kind: "color" },
     { prop: "border-radius", label: "圆角", kind: "px" },
-    { prop: "border-width", label: "边框宽度", kind: "px" },
     { prop: "border-color", label: "边框颜色", kind: "color" },
-    { prop: "padding", label: "内边距", kind: "px" },
-    { prop: "margin", label: "外边距", kind: "px" },
+    { prop: "opacity", label: "透明度", kind: "text" },
+    { prop: "display", label: "显示", kind: "select", options: ["block", "inline-block", "flex", "inline-flex", "grid", "inline", "none"] },
+    { prop: "justify-content", label: "主轴对齐", kind: "select", options: ["flex-start", "center", "flex-end", "space-between", "space-around"] },
+    { prop: "align-items", label: "交叉对齐", kind: "select", options: ["stretch", "flex-start", "center", "flex-end", "baseline"] },
   ];
 
   function readComputed(prop) {
+    var el = currentTarget();
+    if (!el) return "";
     try {
-      var v = window.getComputedStyle(selectedTarget).getPropertyValue(prop);
-      if ((!v || v === "") && prop === "border-width") v = window.getComputedStyle(selectedTarget).getPropertyValue("border-top-width");
-      if ((!v || v === "") && prop === "border-color") v = window.getComputedStyle(selectedTarget).getPropertyValue("border-top-color");
-      if ((!v || v === "") && prop === "padding") v = window.getComputedStyle(selectedTarget).getPropertyValue("padding-top");
-      if ((!v || v === "") && prop === "margin") v = window.getComputedStyle(selectedTarget).getPropertyValue("margin-top");
+      var cs = window.getComputedStyle(el);
+      var v = cs.getPropertyValue(prop);
+      // border-color 简写 computed 常返回空，回退到 -top-color（盒模型已管 border 宽度，这里只调色）
+      if ((!v || v === "") && prop === "border-color") v = cs.getPropertyValue("border-top-color");
       return v || "";
     } catch (e) {
       return "";
@@ -655,6 +662,13 @@
         input.appendChild(o);
       }
       input.addEventListener("change", function () { if (input.value) styleApply(field.prop, input.value); });
+    } else if (field.kind === "text") {
+      // 自由文本（opacity / 复杂值）——原值应用，不加 px
+      input = document.createElement("input");
+      input.type = "text";
+      input.value = String(raw).trim();
+      input.style.cssText = "flex:1;min-width:0;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:4px;font:12px ui-monospace,monospace;padding:0 8px;box-sizing:border-box;outline:none;";
+      input.addEventListener("input", function () { styleApply(field.prop, input.value); });
     } else {
       var wrap = document.createElement("span");
       wrap.style.cssText = "flex:1;display:flex;align-items:center;gap:4px;";

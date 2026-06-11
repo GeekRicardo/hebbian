@@ -371,15 +371,27 @@ pub fn browser_close(state: tauri::State<'_, BrowserState>) -> Result<(), String
 /// 提交经 heb-bridge 上行回主进程，再由主窗口 React 发进对话。
 #[tauri::command]
 pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    // 没有当前页时弹一个空白窗口——用户可在 popout 自带的地址栏里输网址
+    // 没有当前页时弹一个空白窗口——用户在 popout 自带的地址栏里输网址。
+    // 不用 about:blank：WKWebView 对它不执行 initialization_script（inspector 不注入 → 无工具栏）。
+    // 用 base64 data URL 的最小 HTML 文档，是正常文档、会注入。
     let url = state
         .inner
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|i| i.history.get(i.cursor).cloned())
-        .unwrap_or_else(|| "about:blank".to_string());
-    let target: Url = url.parse().map_err(|_| "当前地址异常".to_string())?;
+        .and_then(|i| i.history.get(i.cursor).cloned());
+    let target: Url = match url {
+        Some(u) => u.parse().map_err(|_| "当前地址异常".to_string())?,
+        None => {
+            use base64::Engine;
+            let html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>新页面</title></head><body style=\"margin:0;background:#fff\"></body></html>";
+            let data = format!(
+                "data:text/html;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(html)
+            );
+            data.parse().map_err(|_| "空白页生成失败".to_string())?
+        }
+    };
 
     // 已有 popout 先关，避免重复
     if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
