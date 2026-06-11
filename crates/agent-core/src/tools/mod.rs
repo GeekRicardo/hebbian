@@ -9,6 +9,7 @@ pub mod grep;
 pub mod hitl;
 pub mod kill_shell;
 pub mod mcp;
+pub mod preview_style;
 pub use mcp::McpToolReport;
 pub mod read;
 pub mod read_hashline;
@@ -28,6 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use common::attachments::MessageAttachment;
 use model_gateway::types::{ToolDefinition, IMAGE_GENERATION_TOOL_NAME};
 use serde_json::Value;
 
@@ -89,6 +91,30 @@ impl ToolCtx {
     }
 }
 
+/// 工具的完整输出（架构 §4.4.1）：文本 + 多模态附件。
+///
+/// 绝大多数工具只产文本，返回 `text.into()` 即可，`attachments` 默认空。
+/// 产出图片等多模态内容的工具（首期仅 `Read` 读图片）把 base64 附件挂到
+/// `attachments`，由 dispatcher 透传进 `ToolResult.attachments`，再经协议层
+/// 编码进模型上下文（强模型原生图片块 / 弱模型 VisionBridge 转文字）。
+///
+/// 与 progress chunk 的区别：progress 是 surface-only 观察通道（不进模型上下文），
+/// 这里的 attachments **进**模型上下文。
+#[derive(Debug, Clone, Default)]
+pub struct ToolOutput {
+    pub text: String,
+    pub attachments: Vec<MessageAttachment>,
+}
+
+impl From<String> for ToolOutput {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            attachments: Vec::new(),
+        }
+    }
+}
+
 /// 极简 Tool 接口（架构 §4.4.1）：只描述「我是什么 + 我怎么干」。
 ///
 /// 权限分类、路径解析、命令指纹等上下文相关信息由 dispatcher 旁的
@@ -99,6 +125,10 @@ impl ToolCtx {
 /// 通过 `ctx.emit_chunk(...)` 向 surface 推 `ToolCallOutputDelta`，返回值仍
 /// 是聚合后的完整文本（写入 ToolCallFinished.result + 推回模型）。
 /// 非流式工具不用覆盖——默认实现直接委托给 [`execute`]，忽略 ctx。
+///
+/// **多模态工具**（如 Read 读图片）覆盖 [`execute_rich`]：返回 [`ToolOutput`]
+/// 携带附件。默认实现把 `execute_streaming` 的文本包成纯文本 ToolOutput——
+/// 文本工具不用动。dispatcher 统一走 `execute_rich`。
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -108,6 +138,10 @@ pub trait Tool: Send + Sync {
 
     async fn execute_streaming(&self, _ctx: ToolCtx, input: Value) -> AppResult<String> {
         self.execute(input).await
+    }
+
+    async fn execute_rich(&self, ctx: ToolCtx, input: Value) -> AppResult<ToolOutput> {
+        Ok(self.execute_streaming(ctx, input).await?.into())
     }
 }
 
@@ -208,6 +242,9 @@ pub fn default_tools(
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
         Box::new(exit_plan_mode::ExitPlanModeTool),
+        // 仅内置浏览器「元素对话」旁支会话用（enabled_tools 含 PreviewStyle 才暴露，
+        // 不进 BUILTIN_TOOL_NAMES，普通会话看不到）。
+        Box::new(preview_style::PreviewStyleTool),
         Box::new(read_memory::ReadMemoryTool::new(
             mem_data_dir.clone(),
             project_workdir.clone(),
