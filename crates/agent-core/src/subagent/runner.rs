@@ -231,11 +231,12 @@ impl SubagentRunner {
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,
             run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::EditAutomatically,
+                crate::run_mode::RunMode::Default,
             )),
             model_id,
             judge_client: Some(self.ctx.client.clone()),
-            force_automode: false,
+            // 子 agent 不参与 hands-off（始终走父继承的审批策略）。
+            force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             data_dir: self.ctx.data_dir.clone(),
             session_id: child_session_id,
             phase: None,
@@ -400,6 +401,7 @@ mod tests {
                 name: "Read".to_string(),
                 content: "...file body...".to_string(),
                 artifact: None,
+                attachments: Vec::new(),
             }]),
         ];
 

@@ -72,7 +72,7 @@ pub struct SessionConfig {
     /// PermissionStore 按 session 索引内存规则，以及未来 Recorder 定位
     /// `~/.hebbian/sessions/<id>/session.jsonl`。
     pub session_id: Option<String>,
-    /// 运行模式（架构 §4.4.3）：默认 `AskBeforeEdits`。
+    /// 运行模式（架构 §4.4.3）：默认 `Default`。
     /// `AutoMode` 时派发器在 destructive 工具调用前调一次 LLM judge（限定 claude-opus-4-7）。
     pub run_mode: RunMode,
     /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用它做模型限定。

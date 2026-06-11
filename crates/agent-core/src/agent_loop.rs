@@ -234,10 +234,10 @@ pub struct LoopParams<'a> {
     /// AutoMode judge 用的 client。通常 = 主 client，便于复用 OAuth/重试链。
     /// `None` 时 AutoMode 直接降级为 Ask。
     pub judge_client: Option<Arc<dyn ModelClient>>,
-    /// `force_automode` 子开关（架构 §4.4.4）。仅 [`crate::run_mode::RunMode::AutoMode`]
-    /// 下生效：判官返回 `Ask` 时折叠成 `Deny`，让"放手跑"模式不被打断。
-    /// 由 CLI flag `--force-automode` 或 REPL `/force-automode` 切换。
-    pub force_automode: bool,
+    /// `force_automode`（hands-off「全自动」）子开关（架构 §4.4.4）。仅
+    /// [`crate::run_mode::RunMode::AutoMode`] 下生效：判官 `Ask` 折叠成 `Deny`、命令类
+    /// `Deny` 也自动拒不弹。**共享句柄**，surface 改后 run 中途即生效。
+    pub force_automode: crate::run_mode::SharedForceAutomode,
     /// 数据目录路径，用于把 microcompact 压缩的原文落 txt（架构 §4.7 / Step 9）。
     pub data_dir: Option<std::path::PathBuf>,
     /// 会话 id（格式 `{yyyymmddHHmm}-{shortUuid}`）。与 `data_dir` 拼成
@@ -937,18 +937,14 @@ pub async fn run_loop(
                 }
                 output_attachments.extend(attachments);
 
-                // inherit 模式（架构 §4.4.11.3）需要"父当前 transcript 副本"。
-                // 在 push 触发 turn 之前抓快照——子看到的形态截止上一 turn 结束，不含
-                // 触发它的 assistant tool_call（避免子 transcript 出现无对应 ToolResult 的 self-reference）。
+                // 父当前 transcript 副本：在 push 触发 turn 之前抓快照——看到的形态
+                // 截止上一 turn 结束，不含触发它的 assistant tool_call（避免子 transcript
+                // 出现无对应 ToolResult 的 self-reference）。两个消费方：
+                // 1. inherit 模式 Task 子 agent（架构 §4.4.11.3）
+                // 2. AutoMode judge——需要 recent_transcript 推断用户意图，否则永远判
+                //    「no user intent」误杀（架构 §4.4.4）。
                 // 同 ToolStep 内的 parallel Task 共享同一份 Arc，看到一致形态。
-                let parent_transcript_snapshot = if calls
-                    .iter()
-                    .any(|c| c.name == crate::tools::task::TASK_TOOL_NAME)
-                {
-                    Some(Arc::new(transcript.entries.clone()))
-                } else {
-                    None
-                };
+                let parent_transcript_snapshot = Some(Arc::new(transcript.entries.clone()));
 
                 transcript.push_assistant_with_reasoning(text, reasoning, calls.clone());
 
@@ -978,7 +974,7 @@ pub async fn run_loop(
                     run_mode: run_mode.clone(),
                     model_id: model_id.clone(),
                     judge_client: judge_client.clone(),
-                    force_automode,
+                    force_automode: force_automode.clone(),
                     hooks: hooks.clone(),
                     session_id_for_hooks: session_id.clone(),
                     data_dir_for_artifacts: data_dir.clone(),
@@ -1430,11 +1426,11 @@ mod tests {
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
                 run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::AskBeforeEdits,
+                    crate::run_mode::RunMode::Default,
                 )),
                 model_id: None,
                 judge_client: None,
-                force_automode: false,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 data_dir: None,
                 session_id: None,
                 phase: None,
@@ -1493,11 +1489,11 @@ mod tests {
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
                 run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::AskBeforeEdits,
+                    crate::run_mode::RunMode::Default,
                 )),
                 model_id: None,
                 judge_client: None,
-                force_automode: false,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 data_dir: None,
                 session_id: None,
                 phase: None,
@@ -1568,11 +1564,11 @@ mod tests {
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
                 run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::AskBeforeEdits,
+                    crate::run_mode::RunMode::Default,
                 )),
                 model_id: None,
                 judge_client: None,
-                force_automode: false,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 data_dir: None,
                 session_id: None,
                 phase: None,
@@ -1697,11 +1693,11 @@ mod tests {
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
                 run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::AskBeforeEdits,
+                    crate::run_mode::RunMode::Default,
                 )),
                 model_id: None,
                 judge_client: None,
-                force_automode: false,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 data_dir: None,
                 session_id: None,
                 phase: None,

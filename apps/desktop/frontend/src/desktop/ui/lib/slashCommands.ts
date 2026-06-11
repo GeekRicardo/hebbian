@@ -3,7 +3,7 @@
  *
  * 命令分两类，语义不同（§8.1）：
  *
- * 1. **内置控制命令**（如 `//force-automode`）——本地派发，**不发给 LLM**：
+ * 1. **内置控制命令**（如 `//hands-off`）——本地派发，**不发给 LLM**：
  *    handler 直接调 Tauri command 改 desktop 进程态 / session meta，结果以 toast 回显，
  *    不写 transcript / 不写 model request。失败 fail-closed 弹 toast。
  *
@@ -54,7 +54,7 @@ type BuiltinHandler = (args: string[], ctx: SlashContext) => Promise<void>;
  * - `"skill"`：动态 skill 命令，handler 由 [`dispatchSlashCommand`] 统一处理
  */
 export interface SlashCommandMeta {
-  /** 不带 `//` 前缀的命令名，例如 `"force-automode"`。 */
+  /** 不带 `//` 前缀的命令名，例如 `"hands-off"`。 */
   name: string;
   /** 在 popup 列表里跟在命令名后的参数提示，例如 `"[on|off|toggle|status]"`。 */
   args: string;
@@ -68,9 +68,9 @@ export interface SlashCommandMeta {
 /** 内置命令的静态清单，供 popup 列表的"内置"分组使用。 */
 export const builtinSlashCommands: SlashCommandMeta[] = [
   {
-    name: "force-automode",
+    name: "hands-off",
     args: "[on|off|toggle|status]",
-    desc: "自动模式下遇到不确定操作直接拒绝",
+    desc: "放手跑：自动模式不再弹审批，AI 判官说了算",
     kind: "builtin",
   },
   {
@@ -82,22 +82,22 @@ export const builtinSlashCommands: SlashCommandMeta[] = [
 ];
 
 const builtinRegistry: Record<string, BuiltinHandler> = {
-  "force-automode": async (args, ctx) => {
+  "hands-off": async (args, ctx) => {
     if (!ctx.sessionId) {
       throw new Error("当前没有打开的对话");
     }
     const current = await api.getForceAutomode(ctx.sessionId);
     const arg = args[0]?.toLowerCase();
     if (arg === "status") {
-      ctx.toast.success(current ? "「自动拒绝」当前已开启" : "「自动拒绝」当前已关闭");
+      ctx.toast.success(current ? "「放手跑」当前已开启" : "「放手跑」当前已关闭");
       return;
     }
     const next = parseBoolArg(arg, current);
     const applied = await api.setForceAutomode(ctx.sessionId, next);
     ctx.toast.success(
       applied
-        ? "已开启「自动拒绝」：不确定的操作不再询问，直接拒绝"
-        : "已关闭「自动拒绝」"
+        ? "已开启「放手跑」：自动模式不再弹审批，判官拦下的操作会让 AI 自己换思路"
+        : "已关闭「放手跑」：自动模式遇到拿不准的操作仍会问你"
     );
   },
 
@@ -296,7 +296,7 @@ export async function dispatchSlashCommand(
   }
   const body = raw.slice(2).trim();
   if (!body) {
-    return { handled: true, error: "空命令：示例 `//force-automode on`" };
+    return { handled: true, error: "空命令：示例 `//hands-off on`" };
   }
   const [name, ...args] = body.split(/\s+/);
 

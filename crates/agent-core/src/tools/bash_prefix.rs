@@ -8,7 +8,6 @@
 //! `extract_prefix` 是本地启发式 fallback，`classify_prefix` 是 AutoMode 下可选的
 //! LLM 版本：严格解析 `prefix` / `none` / `command_injection_detected` 三种输出。
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use model_gateway::client::ModelClient;
@@ -71,6 +70,7 @@ pub async fn classify_prefix(
     client: &Arc<dyn ModelClient>,
     model_id: &str,
     command_segment: &str,
+    cancel: common::CancelFlag,
 ) -> Result<Option<BashPrefix>, ModelError> {
     let request = ModelRequest {
         model: model_id.to_string(),
@@ -83,7 +83,7 @@ pub async fn classify_prefix(
         reasoning: None,
     };
 
-    let cancel = Arc::new(AtomicBool::new(false));
+    // 传 dispatcher 真实 cancel：中断时这个 prefix 分类 LLM 调用要能立即停。
     let response = client.complete(request, cancel).await?;
     Ok(parse_classifier_output(&extract_text(&response)))
 }

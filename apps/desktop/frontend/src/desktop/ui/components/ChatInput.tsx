@@ -408,7 +408,7 @@ export function ChatInput({
       return;
     }
     // `//` 命令系统（架构 §8）：
-    // - 内置控制命令（如 //force-automode）→ 本地派发，不发给模型
+    // - 内置控制命令（如 //hands-off）→ 本地派发，不发给模型
     // - skill 命令（如 //commit）→ 通过 sendPrompt 改写成 `/<name> [args]` 走正常发送路径
     // - 未知命令 → 错误 toast，绝不降级成 prompt 发给模型（fail-closed）
     if (v.startsWith("//")) {
@@ -1254,7 +1254,7 @@ export function ChatInput({
             <>
               <RunModeChip
                 sessionId={currentSession?.id ?? null}
-                disabled={inputDisabled}
+                compact={isStreaming}
               />
               <ReasoningEffortPill />
             </>

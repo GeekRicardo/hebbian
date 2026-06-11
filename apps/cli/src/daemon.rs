@@ -1006,7 +1006,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     };
 
     // ── run mode ──
-    let run_mode = RunMode::parse(&args.run_mode).unwrap_or(RunMode::AskBeforeEdits);
+    let run_mode = RunMode::parse(&args.run_mode).unwrap_or(RunMode::Default);
 
     // ── permission store ──
     let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);

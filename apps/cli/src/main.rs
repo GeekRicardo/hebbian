@@ -62,8 +62,8 @@ enum Command {
         #[arg(long)]
         workdir: Option<PathBuf>,
 
-        /// 运行模式：ask-before-edits | edit-automatically | plan-mode | auto-mode
-        #[arg(long = "mode", default_value = "ask-before-edits")]
+        /// 运行模式：default | plan-mode | auto-mode
+        #[arg(long = "mode", default_value = "default")]
         run_mode: String,
 
         /// 数据目录（默认 ~/.hebbian）
@@ -124,7 +124,7 @@ enum Command {
     /// 切换 run mode
     Mode {
         session_id: String,
-        /// ask-before-edits | edit-automatically | plan-mode | auto-mode
+        /// default | plan-mode | auto-mode
         mode: String,
     },
 

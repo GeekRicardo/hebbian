@@ -65,7 +65,7 @@ pub struct RunParams {
     pub consumed_pending_inputs: Option<ConsumedPendingInputs>,
     /// run 结束前为 true；terminal/suspended 后由 agent_loop 置 false。
     pub pending_inputs_accepting: Option<Arc<AtomicBool>>,
-    /// 运行模式（架构 §4.4.3）。默认 [`crate::run_mode::RunMode::AskBeforeEdits`]。
+    /// 运行模式（架构 §4.4.3）。默认 [`crate::run_mode::RunMode::Default`]。
     pub run_mode: crate::run_mode::RunMode,
     /// 当前会话使用的模型 id（如 `"claude-opus-4-7"`）。AutoMode judge 用作模型限定。
     pub model_id: Option<String>,
@@ -280,6 +280,15 @@ impl Harness {
         let judge_client = client.clone();
         let session_id_for_cleanup = loop_session_id.clone();
 
+        // force_automode（hands-off「全自动」）共享句柄：与 run_mode_shared 对称，注册到
+        // 全局表让 surface 的 set_force_automode 能在 run 中途即时改值（架构 §4.4.4）。
+        let force_automode_shared: crate::run_mode::SharedForceAutomode =
+            Arc::new(std::sync::atomic::AtomicBool::new(force_automode));
+        if let Some(sid) = &session_id_for_cleanup {
+            crate::run_mode::LiveForceAutomodeRegistry::global()
+                .register(sid.clone(), force_automode_shared.clone());
+        }
+
         tokio::spawn(async move {
             let params = LoopParams {
                 client: client.as_ref(),
@@ -302,7 +311,7 @@ impl Harness {
                 run_mode: run_mode_shared.clone(),
                 model_id,
                 judge_client: Some(judge_client),
-                force_automode,
+                force_automode: force_automode_shared,
                 data_dir,
                 session_id: loop_session_id,
                 phase,

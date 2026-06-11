@@ -15,7 +15,6 @@
 //! `force_automode` 子开关由调用方在拿到 `Ask` 后自行折叠成 `Deny`，本模块不处理——
 //! 让 dispatcher 控制策略，automode 只负责 LLM 判定。
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -98,9 +97,18 @@ pub async fn judge_auto_mode(
     tool_input: &Value,
     effects: &Effects,
     recent_transcript: &[TranscriptEntry],
+    whitelisted_fingerprints: &[String],
     language: AppLanguage,
+    cancel: common::CancelFlag,
 ) -> AutoModeDecision {
-    let prompt = format_judge_prompt(tool_name, tool_input, effects, recent_transcript, language);
+    let prompt = format_judge_prompt(
+        tool_name,
+        tool_input,
+        effects,
+        recent_transcript,
+        whitelisted_fingerprints,
+        language,
+    );
 
     let request = ModelRequest {
         model: current_model_id.to_string(),
@@ -112,7 +120,8 @@ pub async fn judge_auto_mode(
         reasoning: None,
     };
 
-    let cancel = Arc::new(AtomicBool::new(false));
+    // 必须传 dispatcher 的真实 cancel——用户点中断时这个 judge LLM 请求要能立即停，
+    // 否则 AutoMode 自动审批阶段中断按钮失效（judge 照样跑完才返回）。
     match judge_client.complete(request, cancel).await {
         Ok(resp) => parse_decision(&extract_text(&resp)),
         Err(ModelError::Cancelled) => {
@@ -140,6 +149,7 @@ pub async fn classify_bash_prefixes_for_automode(
     tool_name: &str,
     tool_input: &Value,
     effects: &Effects,
+    cancel: common::CancelFlag,
 ) -> BashPrefixClassifierOutcome {
     let mut enriched = effects.clone();
     let mut command_injection_detected = false;
@@ -174,7 +184,13 @@ pub async fn classify_bash_prefixes_for_automode(
     for (index, cmd) in parsed.commands.iter().enumerate() {
         let segment_text = cmd.argv.join(" ");
         let classified =
-            match bash_prefix::classify_prefix(judge_client, current_model_id, &segment_text).await
+            match bash_prefix::classify_prefix(
+                judge_client,
+                current_model_id,
+                &segment_text,
+                cancel.clone(),
+            )
+            .await
             {
                 Ok(Some(result)) => result,
                 Ok(None) => continue,
@@ -224,6 +240,7 @@ fn format_judge_prompt(
     tool_input: &Value,
     effects: &Effects,
     recent_transcript: &[TranscriptEntry],
+    whitelisted_fingerprints: &[String],
     language: AppLanguage,
 ) -> String {
     let recent: Vec<String> = recent_transcript
@@ -254,12 +271,20 @@ fn format_judge_prompt(
                 } else {
                     format!(" write_targets={:?}", seg.write_targets)
                 };
+                // 该段命中用户已存的 allow 规则 / session 记忆 → 标注，让判官放心 ALLOW
+                // （用户先前已显式批准过这条命令，架构 §4.4.4）。
+                let allowed = if whitelisted_fingerprints.contains(&seg.fingerprint) {
+                    " [user-allowed]"
+                } else {
+                    ""
+                };
                 format!(
-                    "  [{}] fingerprint={:?}{}{}",
+                    "  [{}] fingerprint={:?}{}{}{}",
                     i + 1,
                     seg.fingerprint,
                     env,
-                    targets
+                    targets,
+                    allowed
                 )
             })
             .collect::<Vec<_>>()
@@ -444,12 +469,14 @@ mod tests {
             &json!({"file_path": "/tmp/a"}),
             &effects,
             &[],
+            &[],
             AppLanguage::ZhCn,
         );
         let en = format_judge_prompt(
             "Edit",
             &json!({"file_path": "/tmp/a"}),
             &effects,
+            &[],
             &[],
             AppLanguage::En,
         );
@@ -521,6 +548,7 @@ mod tests {
             "Bash",
             &json!({"command": "python3 script.py arg"}),
             &effects,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -544,6 +572,7 @@ mod tests {
             "Bash",
             &json!({"command": "echo ok"}),
             &effects,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 

@@ -148,10 +148,11 @@ pub struct ToolDispatcher {
     pub model_id: Option<String>,
     /// AutoMode judge 复用的 ModelClient（通常 = 主 client）。`None` 时降级 Ask。
     pub judge_client: Option<std::sync::Arc<dyn model_gateway::client::ModelClient>>,
-    /// `force_automode` 子开关（架构 §4.4.4）。仅 [`RunMode::AutoMode`] 下生效：
-    /// 判官返回 `Ask` 时直接折叠成 `Deny` 不打断用户；`Allow` / `Deny` 不变。
-    /// 由 CLI flag `--force-automode` 或 REPL `/force-automode` 切换。
-    pub force_automode: bool,
+    /// `force_automode`（hands-off「全自动」）子开关（架构 §4.4.4）。仅 [`RunMode::AutoMode`]
+    /// 下生效：判官返回 `Ask` 时折叠成 `Deny`、命令类 `Deny` 也自动拒不弹审批。
+    /// **共享句柄**：surface 的 `set_force_automode` 改它后，run 中途下一个工具调用即生效
+    /// （由 [`crate::run_mode::LiveForceAutomodeRegistry`] 管理）。
+    pub force_automode: crate::run_mode::SharedForceAutomode,
     /// Hook 管理器（架构 §4.8）。dispatch_one 内在工具调用前后 trigger PreToolUse /
     /// PostToolUse / PostToolUseFailure 让外部 hook 介入。
     pub hooks: std::sync::Arc<crate::hooks::HookManager>,
@@ -176,6 +177,30 @@ pub struct ToolDispatcher {
     pub parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>,
     /// 模型 IO dump 句柄。AutoMode 判官请求记入 model_io.jsonl（`kind: "judge"`）。
     pub model_io_dump: Option<ModelIoDump>,
+}
+
+/// 文件编辑免审判定（架构 §4.4.3 Default 模式）。
+///
+/// `Edit`/`Write` 写「工作区内、非 git 元数据」的文件直接放行——edits-worktree 在执行前
+/// 拍 before 快照，整个 Run 的界内写入都能一键回退，免审是安全的。三类不可还原写入不在
+/// 此列，仍按原审批强度：
+/// - 界外文件（`paths_in_bounds == false` → 已走 PathAccess 审批）
+/// - git 元数据（改 `.git/hooks` 后下次 git 操作即执行，worktree 兜不住 → 走工具审批）
+/// - 命令副作用（Bash/PowerShell 不是文件编辑，直接 false）
+///
+/// AutoMode 不免审：界内编辑也交判官把关，所以仅 `Default` 命中。
+///
+/// 抽成纯函数让生产派发路径与历史重放测试共用同一份判定，杜绝复现偏差。
+pub(crate) fn edit_auto_allowed(
+    tool_name: &str,
+    run_mode: crate::run_mode::RunMode,
+    paths_in_bounds: bool,
+    touches_git_meta: bool,
+) -> bool {
+    matches!(tool_name, "Edit" | "Write")
+        && run_mode == crate::run_mode::RunMode::Default
+        && paths_in_bounds
+        && !touches_git_meta
 }
 
 impl ToolDispatcher {
@@ -405,8 +430,26 @@ impl ToolDispatcher {
             Some(self.request_path_approval(&call.name, out_of_scope))
         };
 
+        // 文件编辑免审判定（架构 §4.4.3 Default 模式）：见 [`edit_auto_allowed`]。
+        let current_run_mode = *self.run_mode.lock().unwrap();
+        let touches_git_meta = effects
+            .paths
+            .iter()
+            .any(|p| crate::tools::shell_parse::is_git_meta_path(&p.to_string_lossy()));
+        let edit_allowed =
+            edit_auto_allowed(&call.name, current_run_mode, path_pending.is_none(), touches_git_meta);
+
         // 工具审批
-        let permission = self.hitl.check(&call.name, &effects);
+        let permission = if edit_allowed {
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                "[Permission:ToolCall] in-workspace file edit auto-allowed (Default mode, worktree-backed)"
+            );
+            PermissionDecision::Approved
+        } else {
+            self.hitl.check(&call.name, &effects)
+        };
         match &permission {
             PermissionDecision::Approved => {
                 info!(
@@ -469,7 +512,10 @@ impl ToolDispatcher {
         let run_mode = self.run_mode.clone();
         let judge_client = self.judge_client.clone();
         let model_id_for_judge = self.model_id.clone();
-        let force_automode = self.force_automode;
+        // 实时读 force_automode：run 中途用户切「全自动」开关，下一个工具调用即生效。
+        let force_automode = self
+            .force_automode
+            .load(std::sync::atomic::Ordering::Relaxed);
         let effects_for_judge = effects.clone();
         let hitl_for_future = self.hitl.clone();
         let call_name_for_judge = call.name.clone();
@@ -482,6 +528,9 @@ impl ToolDispatcher {
         let current_run_id_for_snapshot = self.current_run_id.clone();
         let workspace_for_snapshot = self.workspace.clone();
         let model_io_dump_for_judge = self.model_io_dump.clone();
+        // AutoMode judge 的 recent_transcript：用父 transcript 快照推断用户意图。
+        // 缺失（None）时退化为空——但 agent_loop 现已无条件填充（架构 §4.4.4）。
+        let transcript_for_judge = self.parent_transcript_snapshot.clone();
 
         let tool_span_name = format!("tool.{}", call.name);
         let tool_span = tracing::info_span!(
@@ -523,29 +572,10 @@ impl ToolDispatcher {
                     }
                 }
 
-                // EditAutomatically 短路（架构 §4.4.3）：文件编辑类（Edit/Write）NeedsApproval
-                // 直接 AllowOnce 短路；命令类（Bash/PowerShell）仍走原审批路径。
-                // 实时读取：用户在 agent_loop 运行中切 mode 时下一轮 dispatch 立即生效。
+                // 实时读取当前 mode：用户在 agent_loop 运行中切 mode 时下一轮 dispatch
+                // 立即生效。Default 的界内编辑免审已在同步段（dispatch 入口）处理，这里
+                // 只剩 AutoMode 的 judge 短路。
                 let current_run_mode = *run_mode.lock().unwrap();
-                if current_run_mode == crate::run_mode::RunMode::EditAutomatically {
-                    if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
-                        let is_edit = matches!(call_name_for_judge.as_str(), "Edit" | "edit");
-                        if is_edit {
-                            info!(
-                                tool = %call_name_for_judge,
-                                call_id = %call.id,
-                                "EditAutomatically: NeedsApproval → AllowOnce (file edit shortcut)"
-                            );
-                            sink(state.event(protocol::EventPayload::PermissionAutoJudged {
-                                request_id: Some(request_id.clone()),
-                                tool_name: call_name_for_judge.clone(),
-                                decision: "allow".to_string(),
-                                reason: Some("EditAutomatically: 文件编辑自动放行".to_string()),
-                            }));
-                            hitl_for_future.resolve(request_id, ApprovalDecision::AllowOnce);
-                        }
-                    }
-                }
 
                 // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
                 // 调一次 judge_auto_mode 决定 Allow / Deny / Ask；Allow 自动执行，
@@ -589,17 +619,36 @@ impl ToolDispatcher {
                                     &call_name_for_judge,
                                     &call_input_for_judge,
                                     &effects_for_judge,
+                                    cancel.clone(),
                                 )
                                 .await;
                             let judge_effects = prefix_outcome.effects;
+                            // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官
+                            // 让它对「用户先前已批准过」的命令放心 ALLOW（架构 §4.4.4）。
+                            let whitelisted_fingerprints: Vec<String> = hitl_for_future
+                                .approval_segments(&call_name_for_judge, &judge_effects)
+                                .into_iter()
+                                .filter(|s| {
+                                    matches!(
+                                        s.status,
+                                        protocol::ApprovalSegmentStatus::Whitelisted
+                                    )
+                                })
+                                .map(|s| s.fingerprint)
+                                .collect();
                             let raw_decision = crate::automode::judge_auto_mode(
                                 judge,
                                 model_id_str,
                                 &call_name_for_judge,
                                 &call_input_for_judge,
                                 &judge_effects,
-                                &[],
+                                transcript_for_judge
+                                    .as_deref()
+                                    .map(Vec::as_slice)
+                                    .unwrap_or(&[]),
+                                &whitelisted_fingerprints,
                                 judge_language,
+                                cancel.clone(),
                             )
                             .await;
                             let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
@@ -661,10 +710,16 @@ impl ToolDispatcher {
                                         .resolve(request_id, ApprovalDecision::AllowOnce);
                                 }
                                 crate::automode::AutoModeDecision::Deny(reason) => {
-                                    if matches!(call_name_for_judge.as_str(), "Bash" | "PowerShell") {
-                                        // 命令类拒绝需要用户最终确认：保留既有 PermissionRequested
-                                        // 弹窗，并把判官 reason 展示在审批框里。
+                                    let is_command =
+                                        matches!(call_name_for_judge.as_str(), "Bash" | "PowerShell");
+                                    if is_command && !force_automode {
+                                        // 普通 AutoMode：命令类拒绝需要用户最终确认，保留既有
+                                        // PermissionRequested 弹窗，把判官 reason 展示在审批框里。
                                     } else {
+                                        // hands-off（force_automode）下命令类也直接拒，不弹——
+                                        // 判官说了算，把「为什么拒」作为 tool_result 回给 agent，
+                                        // 让它自己换思路，从不打扰用户（架构 §4.4.4）。其它工具
+                                        // 在两种模式下都直接拒。
                                         hitl_for_future.resolve(
                                             request_id,
                                             ApprovalDecision::DenyWithFeedback { feedback: reason },
@@ -672,11 +727,18 @@ impl ToolDispatcher {
                                     }
                                 }
                                 crate::automode::AutoModeDecision::Ask(_) => {
-                                    // 保留人工决策
+                                    // 保留人工决策（force_automode 下 ASK 已在上方折叠为 Deny，
+                                    // 走不到这里；普通 AutoMode 的 ASK 留人工审批）。
                                 }
                             }
                         }
                     }
+                }
+
+                // judge 阶段可能耗时（LLM 调用）；若用户在此期间点了中断，judge 的
+                // complete 已被 cancel 唤醒返回，这里直接短路——不再弹人工审批阻塞用户。
+                if cancellation::is_cancelled(&cancel) {
+                    return Err(ModelError::Cancelled);
                 }
 
                 // 工具审批
@@ -781,17 +843,17 @@ impl ToolDispatcher {
                     run_id: Some(state.run_id.to_string()),
                     cancel: Some(cancel.clone()),
                 };
-                let (raw, exec_failed) = match tool {
-                    Some(t) => match t.execute_streaming(tool_ctx, effective_input.clone()).await {
-                        Ok(s) => (s, false),
+                let (raw, attachments, exec_failed) = match tool {
+                    Some(t) => match t.execute_rich(tool_ctx, effective_input.clone()).await {
+                        Ok(out) => (out.text, out.attachments, false),
                         Err(e) => {
                             warn!(tool = %call.name, error = %e, "tool exec error");
-                            (format!("工具执行错误: {e}"), true)
+                            (format!("工具执行错误: {e}"), Vec::new(), true)
                         }
                     },
                     None => {
                         warn!(tool = %call.name, "tool not in registry");
-                        (format!("未找到工具: {}", call.name), true)
+                        (format!("未找到工具: {}", call.name), Vec::new(), true)
                     }
                 };
                 let duration_ms = started.elapsed().as_millis() as u64;
@@ -891,6 +953,7 @@ impl ToolDispatcher {
                         name: call.name.clone(),
                         content,
                         artifact,
+                        attachments,
                     },
                 ))
             }
@@ -1023,6 +1086,7 @@ impl ToolDispatcher {
                         name: call.name.clone(),
                         content,
                         artifact: None,
+                        attachments: Vec::new(),
                     },
                 ))
             }
@@ -1087,6 +1151,7 @@ impl ToolDispatcher {
                                 name: call.name.clone(),
                                 content: msg,
                                 artifact: None,
+                                attachments: Vec::new(),
                             },
                         ));
                     }
@@ -1130,6 +1195,7 @@ impl ToolDispatcher {
                         name: call.name.clone(),
                         content: summary_text,
                         artifact: None,
+                        attachments: Vec::new(),
                     },
                 ))
             }
@@ -1201,6 +1267,7 @@ impl ToolDispatcher {
                                 name: call.name.clone(),
                                 content: msg,
                                 artifact: None,
+                                attachments: Vec::new(),
                             },
                         ));
                     }
@@ -1227,6 +1294,7 @@ impl ToolDispatcher {
                                 name: call.name.clone(),
                                 content: msg,
                                 artifact: None,
+                                attachments: Vec::new(),
                             },
                         ));
                     }
@@ -1254,6 +1322,7 @@ impl ToolDispatcher {
                                 name: call.name.clone(),
                                 content: msg,
                                 artifact: None,
+                                attachments: Vec::new(),
                             },
                         ));
                     }
@@ -1322,7 +1391,7 @@ impl ToolDispatcher {
                         if let Ok(s) = session_store::load(dd, sid) {
                             let target_mode = s
                                 .pre_plan_mode
-                                .unwrap_or(crate::run_mode::RunMode::AskBeforeEdits);
+                                .unwrap_or(crate::run_mode::RunMode::Default);
                             if let Err(e) = session_store::set_run_mode(dd, sid, target_mode) {
                                 warn!(error = %e, "ExitPlanMode: set_run_mode 失败");
                             } else {
@@ -1380,6 +1449,7 @@ impl ToolDispatcher {
                         name: call.name.clone(),
                         content,
                         artifact: None,
+                        attachments: Vec::new(),
                     },
                 ))
             }
@@ -1460,6 +1530,7 @@ impl ToolDispatcher {
                             name: call.name.clone(),
                             content,
                             artifact: None,
+                            attachments: Vec::new(),
                         },
                     )
                 };
@@ -1693,6 +1764,7 @@ fn deny_tool(
             name: call.name.clone(),
             content: denied,
             artifact: None,
+            attachments: Vec::new(),
         },
     )
 }
@@ -1726,6 +1798,7 @@ fn finish_ask_with_error(
             name: call.name.clone(),
             content: error,
             artifact: None,
+            attachments: Vec::new(),
         },
     )
 }
@@ -1892,6 +1965,72 @@ mod tests {
         }
     }
 
+    /// 判官恒输出 DENY，用于验证 hands-off（force_automode）下命令类拒绝的处置。
+    struct StaticDenyJudge;
+
+    #[async_trait]
+    impl model_gateway::client::ModelClient for StaticDenyJudge {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: common::CancelFlag,
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "DENY: judged unsafe in test".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: common::CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
+
+    /// 判官 mock：模拟「judge 跑到一半用户点中断」——complete 内把传入的 cancel 置位
+    /// 并返回 `Cancelled`。固化「中断按钮在 AutoMode 自动审批阶段失效」回归：旧代码给
+    /// judge 传独立的 `AtomicBool::new(false)` 假 flag，judge 内即便置位也影响不到
+    /// dispatcher 的真实 cancel → 后续 `is_cancelled` 检测不到 → 工具照常执行。
+    struct CancelAwareJudge;
+
+    #[async_trait]
+    impl model_gateway::client::ModelClient for CancelAwareJudge {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            cancel: common::CancelFlag,
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            // 模拟用户在 judge 运行期间点了中断：置位真实 cancel 并报取消。
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            Err(model_gateway::types::ModelError::Cancelled)
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: common::CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
+
     struct DestructiveNoopTool;
 
     #[async_trait]
@@ -1912,6 +2051,192 @@ mod tests {
             Ok("executed".to_string())
         }
     }
+
+    /// 测试用 Edit 工具：name="Edit"，effects 走 `Effects::mutating(file_path)`。
+    /// 不真正落盘，只验证 dispatcher 的免审 / 审批决策。
+    struct NoopEditTool;
+
+    #[async_trait]
+    impl crate::tools::Tool for NoopEditTool {
+        fn name(&self) -> &str {
+            "Edit"
+        }
+
+        fn description(&self) -> &str {
+            "test edit tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            Ok("edited".to_string())
+        }
+    }
+
+    /// 构造一个最小 Default-mode dispatcher（Edit 工具 + 给定 workspace），返回
+    /// dispatcher 与事件接收端。回归测试 §4.4.3 界内编辑免审用。
+    fn default_mode_edit_dispatcher(
+        workspace: Arc<Workspace>,
+    ) -> (ToolDispatcher, tokio::sync::mpsc::Receiver<protocol::Event>) {
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(NoopEditTool) as Box<dyn crate::tools::Tool>
+        ]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+            model_id: None,
+            judge_client: None,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+        };
+        (dispatcher, rx)
+    }
+
+    /// 架构 §4.4.3：Default 模式下，写工作区内、非 git 元数据的文件 → 直接执行，
+    /// **不** emit PermissionRequested。修前（EditAutomatically 删除前的 AskBeforeEdits
+    /// 默认）这里必然弹审批，A/B 翻转可复现。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_mode_in_workspace_edit_auto_allowed_without_prompt() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = default_mode_edit_dispatcher(workspace);
+
+        let target = tmp.path().join("src/main.rs");
+        let call = ToolCall {
+            id: "call_edit_in".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("界内编辑不应卡在审批")
+            .expect("dispatch 不应返回错误");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "edited");
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("界内编辑不应 emit PermissionRequested");
+            }
+        }
+    }
+
+    /// 架构 §4.4.3：Default 模式下，写工作区外的文件 → PathAccess 审批，必 emit
+    /// PermissionRequested。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_mode_out_of_workspace_edit_requires_approval() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = default_mode_edit_dispatcher(workspace);
+
+        let target = outside.path().join("evil.rs");
+        let call = ToolCall {
+            id: "call_edit_out".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        // 模拟 surface：收到审批请求即拒绝，让 dispatch 尽快返回。
+        let hitl_for_surface = dispatcher.hitl.clone();
+        let saw_prompt = Arc::new(AtomicBool::new(false));
+        let saw_prompt_for_task = saw_prompt.clone();
+        let surface = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
+                    saw_prompt_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+                    hitl_for_surface.resolve(
+                        request_id,
+                        ApprovalDecision::DenyWithFeedback {
+                            feedback: "test deny".into(),
+                        },
+                    );
+                    break;
+                }
+            }
+        });
+
+        let _ = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("界外编辑应在 5s 内被拒绝返回");
+        surface.await.unwrap();
+        assert!(
+            saw_prompt.load(std::sync::atomic::Ordering::SeqCst),
+            "界外编辑必须 emit PermissionRequested"
+        );
+    }
+
+    /// 架构 §4.4.3：Default 模式下，写界内但命中 git 元数据（.git/config）的文件 →
+    /// 仍走工具审批（worktree 兜不住，不可逆），必 emit PermissionRequested。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_mode_git_meta_edit_requires_approval() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = default_mode_edit_dispatcher(workspace);
+
+        let target = tmp.path().join(".git/config");
+        let call = ToolCall {
+            id: "call_edit_gitmeta".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let hitl_for_surface = dispatcher.hitl.clone();
+        let saw_prompt = Arc::new(AtomicBool::new(false));
+        let saw_prompt_for_task = saw_prompt.clone();
+        let surface = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
+                    saw_prompt_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+                    hitl_for_surface.resolve(
+                        request_id,
+                        ApprovalDecision::DenyWithFeedback {
+                            feedback: "test deny".into(),
+                        },
+                    );
+                    break;
+                }
+            }
+        });
+
+        let _ = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("git 元数据编辑应在 5s 内返回");
+        surface.await.unwrap();
+        assert!(
+            saw_prompt.load(std::sync::atomic::Ordering::SeqCst),
+            "写 .git/config 必须 emit PermissionRequested"
+        );
+    }
+
 
     /// 端到端复现 desktop 路径：dispatch 一个 Bash destructive 调用 → emit 收到
     /// PermissionRequested → 模拟 surface 通过 hitl gate resolve → waiter 唤醒 → 命令执行。
@@ -1943,11 +2268,11 @@ mod tests {
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
             run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::AskBeforeEdits,
+                crate::run_mode::RunMode::Default,
             )),
             model_id: None,
             judge_client: None,
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
@@ -2013,7 +2338,7 @@ mod tests {
             run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
             model_id: Some("claude-opus-4.7".to_string()),
             judge_client: Some(Arc::new(StaticAllowJudge)),
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
@@ -2048,6 +2373,135 @@ mod tests {
         assert!(saw_allow, "AutoMode judge should allow the supported model");
     }
 
+    /// 架构 §4.4.4 hands-off（force_automode）：判官 DENY 命令类（Bash）时，**不弹**
+    /// PermissionRequested，直接自动拒，把拒绝 reason 作为 tool_result 回给 agent。
+    /// 修前（force_automode 下 Bash 仍保留弹窗）这里会卡在审批超时，A/B 翻转可复现。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hands_off_auto_denies_command_without_prompt() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
+        ]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
+            model_id: Some("claude-opus-4.7".to_string()),
+            judge_client: Some(Arc::new(StaticDenyJudge)),
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(true)), // hands-off 开启
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+        };
+
+        let call = ToolCall {
+            id: "call_handsoff".into(),
+            // 无界外路径的会写命令：避免先卡在 PathAccess 审批，直达 AutoMode judge。
+            input: serde_json::json!({ "command": "git push --force origin main", "cwd": tmp.path() }),
+            name: "Bash".into(),
+        };
+
+        // 不挂任何 surface 响应——hands-off 必须自己把命令拒掉，否则会卡审批超时。
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("hands-off 下命令类 DENY 应自动拒，不卡审批")
+            .expect("dispatch 不应返回错误");
+
+        // 工具未执行（被拒），结果是拒绝反馈
+        assert_eq!(result.len(), 1);
+        assert_ne!(result[0].content, "executed", "命令不该被执行");
+
+        // 关键：PermissionRequested 会先 emit（架构上 judge 在它之后异步判），但
+        // hands-off 下被判官 DENY 自动 resolve——**无需任何人工响应** dispatch 就完成
+        // （上面 timeout 没挂 surface 也跑通即证明）。同时应看到 deny 的 AutoJudged。
+        let mut saw_deny = false;
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionAutoJudged { decision, .. } = event.payload {
+                if decision == "deny" {
+                    saw_deny = true;
+                }
+            }
+        }
+        assert!(saw_deny, "应有 deny 的 PermissionAutoJudged（判官自动拒，未询问用户）");
+    }
+
+    /// 回归：AutoMode 自动审批阶段点中断必须生效（架构 §4.4.4）。
+    /// dispatcher 的 cancel 预先置位 → judge 的 LLM 调用应收到**真实** cancel 并返回
+    /// Cancelled → dispatch 整体返回 `ModelError::Cancelled`，工具不执行、不弹审批。
+    /// 修前 judge 用独立假 flag（`AtomicBool::new(false)`），收不到中断，judge 照跑完。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn automode_judge_respects_cancel_during_auto_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(NoopEditTool) as Box<dyn crate::tools::Tool>
+        ]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        // cancel 初始 false（run_calls 入口不短路）；judge 运行中模拟用户点中断。
+        let cancel = Arc::new(AtomicBool::new(false));
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel,
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
+            model_id: Some("claude-opus-4.7".to_string()),
+            judge_client: Some(Arc::new(CancelAwareJudge)),
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+        };
+
+        let call = ToolCall {
+            id: "call_cancel".into(),
+            input: serde_json::json!({ "file_path": tmp.path().join("src/x.rs").to_string_lossy() }),
+            name: "Edit".into(),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("中断后应快速返回，不卡审批");
+
+        // judge 收到 cancel → 整体返回 Cancelled；工具绝不执行。
+        assert!(
+            matches!(result, Err(ModelError::Cancelled)),
+            "AutoMode judge 阶段中断应让 dispatch 返回 Cancelled，实际：{result:?}"
+        );
+    }
+
     /// AutoMode 下模型不在白名单（data_dir=None → 默认白名单 opus-4-7/4-8/gpt-5.5，
     /// 这里用 sonnet-4-6 故意落空）：dispatcher 应 emit Notice(warn) 提示转手动审批，
     /// 且**不调判官**（无 PermissionAutoJudged），保留 NeedsApproval 走人工。
@@ -2079,7 +2533,7 @@ mod tests {
             // judge 给 StaticAllowJudge：若错误地调用了它，命令会被自动放行——
             // 用它来反证"不该调判官"（断言看到的是 NeedsApproval 而非 auto allow）。
             judge_client: Some(Arc::new(StaticAllowJudge)),
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
@@ -2167,11 +2621,11 @@ mod tests {
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
             run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::AskBeforeEdits,
+                crate::run_mode::RunMode::Default,
             )),
             model_id: None,
             judge_client: None,
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: None,
             data_dir_for_artifacts: None,
@@ -2283,11 +2737,11 @@ mod tests {
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
             run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::AskBeforeEdits,
+                crate::run_mode::RunMode::Default,
             )),
             model_id: None,
             judge_client: None,
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             // 关键：传 data_dir + session_id，让 short-circuit 走落盘分支
             session_id_for_hooks: Some(session_id.clone()),
@@ -2403,11 +2857,11 @@ mod tests {
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
             run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::AskBeforeEdits,
+                crate::run_mode::RunMode::Default,
             )),
             model_id: None,
             judge_client: None,
-            force_automode: false,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hooks: Arc::new(crate::hooks::HookManager::empty()),
             session_id_for_hooks: Some("sid-skill".to_string()),
             data_dir_for_artifacts: Some(data_dir.clone()),
@@ -2565,5 +3019,164 @@ mod tests {
         // 没 data_dir → 不落盘，inline 保持原样（交给后续 truncate 收尾）
         assert!(artifact.is_none());
         assert_eq!(inline, raw);
+    }
+
+    /// 历史审批重放（手动跑：`cargo test -p agent-core --lib replay_historical -- --ignored --nocapture`）。
+    ///
+    /// 读 `~/.hebbian/sessions/*/session.jsonl` 里所有 Edit/Write 工具调用，用**生产代码**
+    /// （`analyze_effects` + `Workspace::allows` + `edit_auto_allowed`）重放新决策，统计：
+    /// - 新逻辑免审（界内、非 git-meta）：老逻辑这些全弹审批，现在零打扰
+    /// - 仍弹·界外 / 仍弹·git-meta：保留审批（worktree 兜不住）
+    /// 重点核对「仍弹·界外」是否全为真界外（无误拦），以及有无被错放的不可逆写入。
+    #[test]
+    #[ignore]
+    fn replay_historical_edit_approvals() {
+        use crate::run_mode::RunMode;
+        use std::io::{BufRead, BufReader};
+        use std::path::PathBuf;
+
+        let home = std::env::var("HOME").expect("HOME");
+        let sessions_dir = PathBuf::from(&home).join(".hebbian/sessions");
+        let entries = std::fs::read_dir(&sessions_dir).expect("read sessions dir");
+
+        let mut total_edits = 0usize;
+        let mut auto_allowed = 0usize;
+        let mut still_prompt_out_of_bounds = 0usize;
+        let mut still_prompt_git_meta = 0usize;
+        let mut no_path = 0usize;
+        let mut out_samples: Vec<String> = Vec::new();
+        let mut gitmeta_samples: Vec<String> = Vec::new();
+        // 反向核对：被免审的路径若看起来在 .hebbian / 系统目录则可疑（潜在误放）
+        let mut suspicious_allowed: Vec<String> = Vec::new();
+
+        for entry in entries.flatten() {
+            let sdir = entry.path();
+            let jsonl = sdir.join("session.jsonl");
+            if !jsonl.exists() {
+                continue;
+            }
+            // workdir 从 meta 行（首行 type=meta）拿；allowed_paths 用空（最严格——
+            // 只有 workdir 内算界内，比生产更保守，宁可多算「仍弹」也不误判免审）。
+            let file = match std::fs::File::open(&jsonl) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
+            let mut workdir: Option<PathBuf> = None;
+            let mut workspace: Option<std::sync::Arc<Workspace>> = None;
+
+            for line in reader.lines().map_while(Result::ok) {
+                let v: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty == "meta" {
+                    if let Some(wd) = v.get("workdir").and_then(|w| w.as_str()) {
+                        let wd = PathBuf::from(wd);
+                        workspace = Some(Workspace::new(wd.clone(), Vec::new()));
+                        workdir = Some(wd);
+                    }
+                    continue;
+                }
+                if ty != "message" {
+                    continue;
+                }
+                let Some(tool_calls) = v.get("tool_calls").and_then(|t| t.as_array()) else {
+                    continue;
+                };
+                for tc in tool_calls {
+                    let name = tc.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if !matches!(name, "Edit" | "Write") {
+                        continue;
+                    }
+                    total_edits += 1;
+                    let input = tc.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                    let fp = input.get("file_path").and_then(|p| p.as_str());
+                    let Some(fp) = fp else {
+                        no_path += 1;
+                        continue;
+                    };
+                    // 真实生产判定：effects → paths_in_bounds → git_meta → edit_auto_allowed
+                    let effects = crate::effects::analyze_effects(name, &input);
+                    let ws = match &workspace {
+                        Some(w) => w.clone(),
+                        // 无 workdir 的老 session：用 file_path 父目录无从判界内，跳过
+                        None => {
+                            no_path += 1;
+                            continue;
+                        }
+                    };
+                    let in_bounds = effects.paths.iter().all(|p| ws.allows(p));
+                    let git_meta = effects
+                        .paths
+                        .iter()
+                        .any(|p| crate::tools::shell_parse::is_git_meta_path(&p.to_string_lossy()));
+                    let allowed = edit_auto_allowed(name, RunMode::Default, in_bounds, git_meta);
+                    if allowed {
+                        auto_allowed += 1;
+                        // 误放体检：免审路径不该落在 ~/.hebbian 配置区 / ~/.ssh / /etc
+                        let lossy = fp.to_string();
+                        if lossy.contains("/.hebbian/")
+                            || lossy.contains("/.ssh/")
+                            || lossy.starts_with("/etc/")
+                        {
+                            if suspicious_allowed.len() < 20 {
+                                suspicious_allowed.push(format!(
+                                    "{} (workdir={})",
+                                    lossy,
+                                    workdir.as_ref().map(|w| w.display().to_string()).unwrap_or_default()
+                                ));
+                            }
+                        }
+                    } else if git_meta {
+                        still_prompt_git_meta += 1;
+                        if gitmeta_samples.len() < 20 {
+                            gitmeta_samples.push(fp.to_string());
+                        }
+                    } else {
+                        still_prompt_out_of_bounds += 1;
+                        if out_samples.len() < 30 {
+                            out_samples.push(format!(
+                                "{} (workdir={})",
+                                fp,
+                                workdir.as_ref().map(|w| w.display().to_string()).unwrap_or_default()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("\n===== 历史 Edit/Write 审批重放（生产代码，Default 模式）=====");
+        println!("总 Edit/Write 调用: {total_edits}");
+        println!("  ✅ 新逻辑免审（界内非 git-meta）: {auto_allowed}  ← 老逻辑这些全弹审批");
+        println!("  ⚠️ 仍弹·界外:      {still_prompt_out_of_bounds}");
+        println!("  ⚠️ 仍弹·git 元数据: {still_prompt_git_meta}");
+        println!("  ·  无 workdir/路径跳过: {no_path}");
+        println!("\n--- 仍弹·界外 样本（核对是否全为真界外，无误拦）---");
+        for s in &out_samples {
+            println!("  {s}");
+        }
+        if !gitmeta_samples.is_empty() {
+            println!("\n--- 仍弹·git 元数据 样本 ---");
+            for s in &gitmeta_samples {
+                println!("  {s}");
+            }
+        }
+        println!("\n--- 误放体检：免审路径落在 .hebbian/.ssh/etc 的（应为空）---");
+        if suspicious_allowed.is_empty() {
+            println!("  （空，无可疑误放）");
+        } else {
+            for s in &suspicious_allowed {
+                println!("  ⚠️ {s}");
+            }
+        }
+        // 硬断言：不能有任何免审路径落在敏感配置区
+        assert!(
+            suspicious_allowed.is_empty(),
+            "发现 {} 条免审路径落在 .hebbian/.ssh/etc，策略有漏洞",
+            suspicious_allowed.len()
+        );
     }
 }

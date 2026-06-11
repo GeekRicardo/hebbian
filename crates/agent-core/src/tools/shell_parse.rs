@@ -1450,7 +1450,10 @@ pub fn detect_dangerous_patterns(commands: &[ParsedCommand]) -> Vec<DangerousKin
     kinds
 }
 
-fn is_git_meta_path(p: &str) -> bool {
+/// 判断路径是否触达 git 元数据（`.git/hooks` / `.git/config` / `.git/HEAD` /
+/// `.git/objects` / `.git/refs`）。命中即不可逆——改 `.git/hooks` 后下次 git 操作
+/// 就会执行注入代码，edits-worktree 兜不住。Bash 写目标与 Edit/Write 路径共用此判定。
+pub fn is_git_meta_path(p: &str) -> bool {
     let trimmed = p.trim_start_matches("./");
     trimmed.contains(".git/hooks")
         || trimmed.contains(".git/config")

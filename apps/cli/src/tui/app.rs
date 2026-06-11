@@ -262,10 +262,9 @@ impl App {
 
     fn cycle_run_mode(&mut self) {
         let next = match self.run_mode {
-            RunMode::AskBeforeEdits => RunMode::EditAutomatically,
-            RunMode::EditAutomatically => RunMode::PlanMode,
+            RunMode::Default => RunMode::PlanMode,
             RunMode::PlanMode => RunMode::AutoMode,
-            RunMode::AutoMode => RunMode::AskBeforeEdits,
+            RunMode::AutoMode => RunMode::Default,
         };
         self.run_mode = next;
         self.status.run_mode = next.as_str().to_string();
