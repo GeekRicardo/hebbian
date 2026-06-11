@@ -117,6 +117,8 @@ interface DiffViewerProps {
   className?: string;
   /** 滚动区域最多显示行数。超过自动滚动，未传则不限。 */
   maxRows?: number;
+  /** 隐藏顶栏左侧文件名/动作/统计；调用方已在外层文件卡片展示时使用。 */
+  hideHeaderMeta?: boolean;
   /**
    * GitHub PR review 风格折叠：每个 change 行外保留 ±N 行 same 上下文，
    * 中间没被任何 change 邻居覆盖的 same 段折叠成「展开 K 行」按钮可点开。
@@ -293,6 +295,7 @@ export function DiffViewer({
   rightExtras,
   className,
   maxRows,
+  hideHeaderMeta,
   collapseContext,
   baseLineBefore = 1,
   baseLineAfter = 1,
@@ -345,6 +348,7 @@ export function DiffViewer({
         onToggleExpanded={onToggleExpanded}
         onClose={onClose}
         rightExtras={rightExtras}
+        hideMeta={hideHeaderMeta}
       />
       {isEmpty ? (
         <div className="flex-1 px-3 py-6 text-center text-[12px] text-muted-foreground">
@@ -388,6 +392,7 @@ function DiffHeader({
   onToggleExpanded,
   onClose,
   rightExtras,
+  hideMeta,
 }: {
   filePath: string;
   actionLabel: string;
@@ -402,6 +407,7 @@ function DiffHeader({
   onToggleExpanded?: () => void;
   onClose?: () => void;
   rightExtras?: React.ReactNode;
+  hideMeta?: boolean;
 }) {
   // 顶栏循环按钮：split ↔ inline；放大/缩小走独立按钮，不再混进 mode
   const modeLabel = mode === "split" ? "分栏" : "行内";
@@ -410,25 +416,25 @@ function DiffHeader({
   return (
     <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
       <div className="min-w-0 flex items-center gap-2">
-        {filePath && (
+        {!hideMeta && filePath && (
           <PathHint path={filePath}>
             <span className="truncate text-[12px] font-medium font-mono">
               {pathLeaf(filePath)}
             </span>
           </PathHint>
         )}
-        {actionLabel && (
+        {!hideMeta && actionLabel && (
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {actionLabel}
           </span>
         )}
-        {badge && (
+        {!hideMeta && badge && (
           <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
             {badge}
           </span>
         )}
         {/* GitHub PR 风格：+N -M 分开渲染，绿/红 token；无变更则隐藏 */}
-        {(addCount > 0 || removeCount > 0) && (
+        {!hideMeta && (addCount > 0 || removeCount > 0) && (
           <span className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] tabular-nums">
             {addCount > 0 && (
               <span className="text-green-700 dark:text-green-400">

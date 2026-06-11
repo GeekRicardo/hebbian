@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, FilePenLine, Rewind } from "lucide-react";
+import { ChevronDown, ChevronRight, FilePenLine, RotateCcw } from "lucide-react";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
@@ -138,21 +138,23 @@ function RunGroup({
             type="button"
             onClick={() => onRevert(run.run_id)}
             disabled={reverting}
-            title="撤销本次对话的所有文件修改"
-            className="rounded px-1 text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
+            title="回退这次修改"
+            aria-label="回退这次修改"
+            className="grid h-6 w-6 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-amber-500/10 hover:text-amber-700 disabled:opacity-50 dark:hover:text-amber-300"
           >
-            <Rewind className="h-3.5 w-3.5" />
+            <RotateCcw className={cn("h-3.5 w-3.5", reverting && "animate-spin")} />
           </button>
         )}
       </div>
       {expanded && (
         <div className="space-y-2 bg-muted/10 p-2">
-          {files.map((file) => (
-            <RunFileDiff
+          {files.map((file, idx) => (
+            <RunFileCard
               key={file.real_path}
               sessionId={sessionId}
               runId={run.run_id}
               file={file}
+              defaultExpanded={idx === 0}
             />
           ))}
         </div>
@@ -161,19 +163,29 @@ function RunGroup({
   );
 }
 
-function RunFileDiff({
+/**
+ * 单个文件的可折叠子卡片：标题行（action 角标 + 文件名 + 大小变化 + 折叠箭头）
+ * 点击切换展开/折叠 diff。删除类不渲染 diff，仅展示标题。
+ */
+function RunFileCard({
   sessionId,
   runId,
   file,
+  defaultExpanded,
 }: {
   sessionId: string;
   runId: string;
   file: TurnFileChange;
+  defaultExpanded: boolean;
 }) {
+  const isDelete = file.action === "delete";
+  const [expanded, setExpanded] = useState(defaultExpanded && !isDelete);
   const [payload, setPayload] = useState<DiffPayload | null>(null);
   const [mode, setMode] = useState<DiffMode>("inline");
 
+  // 仅展开且非删除时才拉 diff——折叠的文件不发请求，省网络。
   useEffect(() => {
+    if (!expanded || isDelete || payload) return;
     let cancelled = false;
     api.diffEdit(sessionId, runId, file.real_path)
       .then((p) => { if (!cancelled) setPayload(p); })
@@ -181,47 +193,70 @@ function RunFileDiff({
         if (!cancelled) toast.error(e?.message ?? String(e));
       });
     return () => { cancelled = true; };
-  }, [sessionId, runId, file.real_path]);
-
-  // 删除类没有 after 内容，直接展示标记，不渲染 diff 详情
-  if (file.action === "delete") {
-    return (
-      <div className="flex items-center gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-[10px]">
-        <span className="rounded bg-red-500/15 px-1 font-medium text-red-600">已删除</span>
-        <span className="truncate font-mono">{pathLeaf(file.real_path)}</span>
-      </div>
-    );
-  }
-
-  if (!payload) {
-    return (
-      <div className="rounded border border-border/40 bg-background px-2 py-1 text-[10px] text-muted-foreground">
-        正在加载 {pathLeaf(file.real_path)} 的修改…
-      </div>
-    );
-  }
+  }, [expanded, isDelete, payload, sessionId, runId, file.real_path]);
 
   return (
-    <DiffViewer
-      beforeText={payload.before_text}
-      afterText={payload.after_text}
-      filePath={file.real_path}
-      actionLabel={actionLabel(file.action)}
-      mode={mode}
-      onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
-      badge="本次净变化"
-      maxRows={80}
-      collapseContext={3}
-      className="border-border/50"
-    />
+    <div className="overflow-hidden rounded border border-border/50 bg-background">
+      <button
+        type="button"
+        onClick={() => !isDelete && setExpanded((v) => !v)}
+        className={cn(
+          "flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[10px]",
+          !isDelete && "hover:bg-accent/30",
+        )}
+      >
+        {isDelete ? (
+          <span className="w-3 shrink-0" />
+        ) : expanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+        )}
+        <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
+          {actionLabel(file.action)}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono">{pathLeaf(file.real_path)}</span>
+        <span className="shrink-0 text-[9px] text-muted-foreground">
+          {file.before_bytes}→{file.after_bytes}B
+        </span>
+      </button>
+      {expanded && !isDelete && (
+        payload ? (
+          <DiffViewer
+            beforeText={payload.before_text}
+            afterText={payload.after_text}
+            filePath={file.real_path}
+            actionLabel={actionLabel(file.action)}
+            mode={mode}
+            onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
+            badge="本次净变化"
+            hideHeaderMeta
+            maxRows={80}
+            collapseContext={3}
+            className="rounded-none border-0 border-t border-border/40"
+          />
+        ) : (
+          <div className="border-t border-border/40 px-2 py-1.5 text-[10px] text-muted-foreground">
+            正在加载修改…
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
 function actionLabel(action: TurnFileChange["action"]): string {
-  if (action === "create") return "创建文件";
-  if (action === "overwrite") return "覆盖文件";
-  if (action === "delete") return "删除文件";
-  return "修改文件";
+  if (action === "create") return "创建";
+  if (action === "overwrite") return "覆盖";
+  if (action === "delete") return "删除";
+  return "修改";
+}
+
+function actionBadgeClass(action: TurnFileChange["action"]): string {
+  if (action === "create") return "bg-emerald-500/15 text-emerald-600";
+  if (action === "delete") return "bg-red-500/15 text-red-600";
+  if (action === "overwrite") return "bg-amber-500/15 text-amber-600";
+  return "bg-sky-500/15 text-sky-600";
 }
 
 function pathLeaf(filePath: string): string {

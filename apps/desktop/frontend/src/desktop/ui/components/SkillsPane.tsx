@@ -7,7 +7,7 @@ import { invoke } from "@/desktop/bridge/transport";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
 import { Input, Label } from "@/desktop/ui/components/ui/input";
-import { cn } from "@/desktop/ui/lib/utils";
+import { cn, ipcConfirm } from "@/desktop/ui/lib/utils";
 import type { SkillCollection, SkillItem } from "@/desktop/ui/types";
 
 // 老调用路径仍想从本文件 import SkillItem 时不破坏。
@@ -171,11 +171,10 @@ export function SkillsPane({
 
   async function uninstallCollection(c: SkillCollection) {
     const count = c.skills.length;
-    if (
-      !confirm(
-        `卸载「${c.label}」整组？将删除 ${count} 个 skill 目录（来源：${formatSource(c.source)}）`
-      )
-    ) {
+    if (!await ipcConfirm(
+      `卸载「${c.label}」整组？将删除 ${count} 个 skill。`,
+      "卸载 Skills"
+    )) {
       return;
     }
     try {

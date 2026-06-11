@@ -21,6 +21,7 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
+import { stickyBottomScrollTop } from "@/desktop/ui/lib/chatScrollPosition";
 import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
 import type { MessageAttachment } from "@/desktop/ui/types";
 
@@ -199,6 +200,26 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
+
+  // 右侧工作台展开/收起会改变 chat 宽度，长文本重新换行后 scrollHeight 变大。
+  // 如果用户原本贴底，应在这次重排后仍贴底；如果用户在看历史，则保持原位置不抢滚动。
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottomRef.current) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        el.scrollTop = stickyBottomScrollTop(el);
+      });
+    });
+    observer.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
 
   // 监听滚动：贴底检测 + 浮动副本几何判定 + 死区保护
   const BOTTOM_SLACK_PX = 80;
@@ -485,6 +506,9 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       // 用户主动发消息 → 期望看到自己刚发的消息，强制贴回底部
       // （即使之前在看历史）。流式 delta 也会重新跟随到底。
       stickToBottomRef.current = true;
+      // 点发送那一下就请求折叠右侧工作台（与「Run 跑完自动展开」配对）：
+      // sidebar 先缓慢折叠，输入框随后过渡到全宽。
+      useStore.getState().triggerCollapseRightSidebar();
       try {
         await sendUserMessage(content, attachments);
       } catch (e: any) {

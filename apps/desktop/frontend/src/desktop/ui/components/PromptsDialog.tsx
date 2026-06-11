@@ -11,7 +11,7 @@ import {
 } from "@/desktop/ui/components/AvatarField";
 import { useStore } from "@/desktop/ui/store/useStore";
 import type { Prompt } from "@/desktop/ui/types";
-import { cn } from "@/desktop/ui/lib/utils";
+import { cn, ipcConfirm } from "@/desktop/ui/lib/utils";
 
 const AGENT_AVATAR_SUGGESTIONS = [
   "🤖", "💻", "🌐", "✍️", "📚", "🎨", "🧠", "🔬", "💡", "🎯",
@@ -59,8 +59,8 @@ export function PromptsDialog() {
     setDirty(false);
   }, [promptsDialogOpen, prompts, defaultPromptId]);
 
-  function selectPrompt(p: Prompt) {
-    if (dirty && !confirm("当前未保存的修改将丢失，确定切换？")) return;
+  async function selectPrompt(p: Prompt) {
+    if (dirty && !await ipcConfirm("当前未保存的修改将丢失，确定切换？", "切换 Agent")) return;
     setSelectedId(p.id);
     setDraft({ ...p });
     setDirty(false);
@@ -93,7 +93,7 @@ export function PromptsDialog() {
 
   async function handleDelete() {
     if (!draft || !selectedId) return;
-    if (!confirm(`删除 Agent "${draft.name}"？`)) return;
+    if (!await ipcConfirm(`删除 Agent "${draft.name}"？`, "删除 Agent")) return;
     try {
       await deletePrompt(selectedId);
       toast.success("已删除");

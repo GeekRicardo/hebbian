@@ -1,5 +1,13 @@
 import clsx, { type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
+
+/**
+ * Tauri ACL 禁止原生 window.confirm()，统一走 plugin-dialog 的 message 命令。
+ */
+export async function ipcConfirm(message: string, title?: string): Promise<boolean> {
+  return tauriConfirm(message, { title, kind: "warning" });
+}
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

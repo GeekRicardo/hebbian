@@ -141,18 +141,28 @@ export function RightSidebar({
   // 自动聚焦只在「某个 Run 刚跑完、首次出现修改记录」那一下触发一次：
   // 用已见过的 run_id 集合判断，避免回退（reverted 翻转）或切 tab 时又抢焦点。
   // 用户原话："只有跑完那一下会自动跳到修改文件 sidebar，后面切换都不会自动了"。
-  const seenRunIdsRef = useRef<Set<string>>(new Set());
-  const prevEditSessionIdRef = useRef(sessionId);
+  //
+  // **按 session 隔离 seen 集合**（修「切对话误弹」bug）：sessionId 与 editRuns 是两个
+  // 独立 selector，切对话时二者更新不同步——若用「单 Set + 切换时重置」会出现「新
+  // sessionId 配旧 editRuns 先重置基线 return，下一拍新 editRuns 进来又被当 fresh 误弹」
+  // 的竞态。改用 Map<sessionId, Set<runId>>，effect 始终查当前 session 自己的已见集合，
+  // 不依赖渲染时序：某对话首次见到的 run 集合直接记为「已见、不弹」，只有该对话内**之后**
+  // 新增的 run（=刚跑完一次）才弹。
+  const seenRunIdsBySessionRef = useRef<Map<string, Set<string>>>(new Map());
   useEffect(() => {
-    // 切 session：重置已见集合为当前快照，不抢焦点（历史记录不该触发跳转）
-    if (prevEditSessionIdRef.current !== sessionId) {
-      prevEditSessionIdRef.current = sessionId;
-      seenRunIdsRef.current = new Set(editRuns.map((r) => r.run_id));
+    if (!sessionId) return;
+    const seen = seenRunIdsBySessionRef.current.get(sessionId);
+    if (!seen) {
+      // 本对话首次进入：当前所有 run 记为已见（历史记录不触发跳转），不弹
+      seenRunIdsBySessionRef.current.set(
+        sessionId,
+        new Set(editRuns.map((r) => r.run_id)),
+      );
       return;
     }
-    const fresh = editRuns.filter((r) => !seenRunIdsRef.current.has(r.run_id));
+    const fresh = editRuns.filter((r) => !seen.has(r.run_id));
     if (fresh.length === 0) return;
-    for (const r of editRuns) seenRunIdsRef.current.add(r.run_id);
+    for (const r of editRuns) seen.add(r.run_id);
     setCollapsed(false);
     setTab("edits");
     const latest = [...fresh].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
@@ -165,6 +175,16 @@ export function RightSidebar({
       }, 1500);
     }, 50);
   }, [sessionId, editRuns]);
+
+  // 用户发送消息 → 缓慢折叠工作台（store 一次性 tick 信号驱动；与上面「Run 跑完
+  // 自动展开」配对）。首帧不折叠，只对真实的 tick 自增响应。
+  const collapseTick = useStore((s) => s.collapseRightSidebarTick);
+  const prevCollapseTickRef = useRef(collapseTick);
+  useEffect(() => {
+    if (collapseTick === prevCollapseTickRef.current) return;
+    prevCollapseTickRef.current = collapseTick;
+    setCollapsed(true);
+  }, [collapseTick]);
 
   // 持久化折叠状态
   useEffect(() => {
@@ -210,183 +230,183 @@ export function RightSidebar({
     [collapsed, width, minWidth, maxWidth]
   );
 
-  // 折叠态：仅显示一列图标 + 展开按钮；点图标也直接展开到对应 tab
-  if (collapsed) {
-    return (
-      <>
-        <aside
-          className="relative flex h-full flex-col border-l border-border"
-          style={{ width: `${COLLAPSED_WIDTH}px` }}
-        >
-          <button
-            type="button"
-            onClick={() => setCollapsed(false)}
-            className="grid h-9 w-full place-items-center border-b border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="展开工作台"
-            aria-label="展开工作台"
-          >
-            <ChevronsLeft className="h-4 w-4" />
-          </button>
-          <SidebarIconButton
-            icon={<Terminal className="h-4 w-4" />}
-            label="后台任务"
-            onClick={() => {
-              setTab("tasks");
-              setCollapsed(false);
-            }}
-            active={tab === "tasks"}
-          />
-          <SidebarIconButton
-            icon={<FilePenLine className="h-4 w-4" />}
-            label="修改文件"
-            onClick={() => {
-              setTab("edits");
-              setCollapsed(false);
-            }}
-            active={tab === "edits"}
-          />
-          <SidebarIconButton
-            icon={<ListChecks className="h-4 w-4" />}
-            label="任务清单"
-            onClick={() => {
-              setTab("todos");
-              setCollapsed(false);
-            }}
-            active={tab === "todos"}
-          />
-          <SidebarIconButton
-            icon={<ClipboardList className="h-4 w-4" />}
-            label="计划"
-            onClick={() => {
-              setTab("plans");
-              setCollapsed(false);
-            }}
-            active={tab === "plans"}
-          />
-          <SidebarIconButton
-            icon={<Globe2 className="h-4 w-4" />}
-            label="内置浏览器"
-            onClick={() => {
-              setTab("browser");
-              setCollapsed(false);
-            }}
-            active={tab === "browser"}
-          />
-          {debugEnabled && sessionId && (
-            <SidebarIconButton
-              icon={<FileJson className="h-4 w-4" />}
-              label="Model I/O"
-              onClick={() => setModelIoOpen(true)}
-              active={false}
-            />
-          )}
-        </aside>
-        {sessionId && (
-          <ModelIoInspector
-            sessionId={sessionId}
-            open={modelIoOpen}
-            onClose={closeModelIo}
-          />
-        )}
-      </>
-    );
-  }
+  // 折叠态图标列（折叠后展示，可点图标直接展开到对应 tab）。
+  const collapsedIcons = (
+    <div className="flex h-full w-9 shrink-0 flex-col">
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        className="grid h-9 w-full place-items-center border-b border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+        title="展开工作台"
+        aria-label="展开工作台"
+      >
+        <ChevronsLeft className="h-4 w-4" />
+      </button>
+      <SidebarIconButton
+        icon={<Terminal className="h-4 w-4" />}
+        label="后台任务"
+        onClick={() => {
+          setTab("tasks");
+          setCollapsed(false);
+        }}
+        active={tab === "tasks"}
+      />
+      <SidebarIconButton
+        icon={<FilePenLine className="h-4 w-4" />}
+        label="修改文件"
+        onClick={() => {
+          setTab("edits");
+          setCollapsed(false);
+        }}
+        active={tab === "edits"}
+      />
+      <SidebarIconButton
+        icon={<ListChecks className="h-4 w-4" />}
+        label="任务清单"
+        onClick={() => {
+          setTab("todos");
+          setCollapsed(false);
+        }}
+        active={tab === "todos"}
+      />
+      <SidebarIconButton
+        icon={<ClipboardList className="h-4 w-4" />}
+        label="计划"
+        onClick={() => {
+          setTab("plans");
+          setCollapsed(false);
+        }}
+        active={tab === "plans"}
+      />
+      <SidebarIconButton
+        icon={<Globe2 className="h-4 w-4" />}
+        label="内置浏览器"
+        onClick={() => {
+          setTab("browser");
+          setCollapsed(false);
+        }}
+        active={tab === "browser"}
+      />
+      {debugEnabled && sessionId && (
+        <SidebarIconButton
+          icon={<FileJson className="h-4 w-4" />}
+          label="Model I/O"
+          onClick={() => setModelIoOpen(true)}
+          active={false}
+        />
+      )}
+    </div>
+  );
 
   return (
     <>
+      {/*
+        单 aside 外壳：width 在 36px（折叠）↔ width px（展开）之间走 700ms 过渡，
+        实现「缓慢折叠」。内部两套内容（折叠图标列 / 展开完整面板）按 collapsed 切换并
+        各自固定宽度，靠外壳 overflow-hidden 裁切，宽度收缩时内容不被挤压变形。
+      */}
       <aside
-        className="relative flex h-full flex-col border-l border-border bg-muted/40"
-        style={{ width: `${width}px` }}
+        className="relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border bg-muted/40 transition-[width] duration-700 ease-in-out"
+        style={{ width: `${collapsed ? COLLAPSED_WIDTH : width}px` }}
       >
-        {/* 拖拽抓手：左边缘 4px 透明区域，hover 时显示一条细线 */}
-        <div
-          onMouseDown={onDragStart}
-          className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize hover:bg-primary/30"
-          title="拖动改宽度"
-          aria-label="调整工作台宽度"
-        />
+        {collapsed ? (
+          collapsedIcons
+        ) : (
+          <div
+            className="flex h-full flex-col"
+            style={{ width: `${width}px` }}
+          >
+            {/* 拖拽抓手：左边缘 4px 透明区域，hover 时显示一条细线 */}
+            <div
+              onMouseDown={onDragStart}
+              className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize hover:bg-primary/30"
+              title="拖动改宽度"
+              aria-label="调整工作台宽度"
+            />
 
-        {/* 顶栏：tab 切换 + 折叠按钮。
-           - tab 列表始终显示完整中文标签（不缩成图标）
-           - 容器宽度不够时整条横向滚动
-           - 鼠标在 tab 区上下滚动会被 onWheel 转成横向滚动，免按 Shift */}
-        <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-background/50">
-          <TabScroller>
-            <SidebarTab
-              id="tasks"
-              current={tab}
-              onClick={setTab}
-              icon={<Terminal className="h-3.5 w-3.5" />}
-              label="后台任务"
-            />
-            <SidebarTab
-              id="edits"
-              current={tab}
-              onClick={setTab}
-              icon={<FilePenLine className="h-3.5 w-3.5" />}
-              label="修改文件"
-            />
-            <SidebarTab
-              id="todos"
-              current={tab}
-              onClick={setTab}
-              icon={<ListChecks className="h-3.5 w-3.5" />}
-              label="任务清单"
-            />
-            <SidebarTab
-              id="plans"
-              current={tab}
-              onClick={setTab}
-              icon={<ClipboardList className="h-3.5 w-3.5" />}
-              label="计划"
-            />
-            <SidebarTab
-              id="browser"
-              current={tab}
-              onClick={setTab}
-              icon={<Globe2 className="h-3.5 w-3.5" />}
-              label="浏览器"
-            />
-          </TabScroller>
-          <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
-            {debugEnabled && sessionId && (
-              <button
-                type="button"
-                onClick={() => setModelIoOpen(true)}
-                className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-                title="Model I/O"
-                aria-label="Model I/O"
-              >
-                <FileJson className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setCollapsed(true)}
-              className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-              title="折叠工作台"
-              aria-label="折叠工作台"
-            >
-              <ChevronsRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* tab 内容区。浏览器 tab 例外：常驻挂载、切走只隐藏（hidden）不卸载——
-           原生子 webview 重建代价大且会丢页面/登录态。其余 tab 是纯 React，条件渲染即可。 */}
-        <div className="relative min-h-0 flex-1">
-          <div className={cn("h-full overflow-auto", tab === "browser" && "hidden")}>
-            {tab === "tasks" && <BackgroundTaskTab />}
-            {tab === "edits" && <EditTreeTab />}
-            {tab === "todos" && <TodoTab />}
-            {tab === "plans" && <PlanTab />}
-          </div>
-          {browserMounted && (
-            <div className={cn("absolute inset-0", tab !== "browser" && "hidden")}>
-              <BrowserPanel active={tab === "browser"} />
+            {/* 顶栏：tab 切换 + 折叠按钮。
+               - tab 列表始终显示完整中文标签（不缩成图标）
+               - 容器宽度不够时整条横向滚动
+               - 鼠标在 tab 区上下滚动会被 onWheel 转成横向滚动，免按 Shift */}
+            <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-background/50">
+              <TabScroller>
+                <SidebarTab
+                  id="tasks"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<Terminal className="h-3.5 w-3.5" />}
+                  label="后台任务"
+                />
+                <SidebarTab
+                  id="edits"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<FilePenLine className="h-3.5 w-3.5" />}
+                  label="修改文件"
+                />
+                <SidebarTab
+                  id="todos"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<ListChecks className="h-3.5 w-3.5" />}
+                  label="任务清单"
+                />
+                <SidebarTab
+                  id="plans"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<ClipboardList className="h-3.5 w-3.5" />}
+                  label="计划"
+                />
+                <SidebarTab
+                  id="browser"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<Globe2 className="h-3.5 w-3.5" />}
+                  label="浏览器"
+                />
+              </TabScroller>
+              <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
+                {debugEnabled && sessionId && (
+                  <button
+                    type="button"
+                    onClick={() => setModelIoOpen(true)}
+                    className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    title="Model I/O"
+                    aria-label="Model I/O"
+                  >
+                    <FileJson className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setCollapsed(true)}
+                  className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title="折叠工作台"
+                  aria-label="折叠工作台"
+                >
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
-          )}
-        </div>
+
+            {/* tab 内容区。浏览器 tab 例外：常驻挂载、切走只隐藏（hidden）不卸载——
+               原生子 webview 重建代价大且会丢页面/登录态。其余 tab 是纯 React，条件渲染即可。 */}
+            <div className="relative min-h-0 flex-1">
+              <div className={cn("h-full overflow-auto", tab === "browser" && "hidden")}>
+                {tab === "tasks" && <BackgroundTaskTab />}
+                {tab === "edits" && <EditTreeTab />}
+                {tab === "todos" && <TodoTab />}
+                {tab === "plans" && <PlanTab />}
+              </div>
+              {browserMounted && (
+                <div className={cn("absolute inset-0", tab !== "browser" && "hidden")}>
+                  <BrowserPanel active={tab === "browser"} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </aside>
       {sessionId && (
         <ModelIoInspector

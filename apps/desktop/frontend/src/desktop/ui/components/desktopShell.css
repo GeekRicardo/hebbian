@@ -2421,6 +2421,14 @@
 .dsp-chat-host .chat-input-shell {
   width: min(70%, 760px) !important;
   min-width: min(520px, calc(100% - 48px));
+  /* 与 RightSidebar 折叠联动（用户原话「先折叠 sidebar，输入框再变化过去」）：
+     右侧工作台收起时 chat 列瞬间变宽，输入框的 width 用 700ms 延迟过渡，等
+     sidebar 折叠动画基本走完再舒展；margin / transform 仍由 tailwind 的
+     transition-all duration-300 负责，故这里显式列出 width 单独给 delay。 */
+  transition:
+    width 360ms ease-out 700ms,
+    margin 300ms ease-out,
+    transform 300ms ease-out !important;
 }
 
 /* ── 项目工具区：标题 + 纵向入口 + 搜索 + 分隔线 ── */
@@ -2849,11 +2857,20 @@
   border-radius: 999px;
 }
 
-/* ── hover 3s 浮窗：Portal 到 body，position:fixed 由 inline style 控制 ── */
+/* ── hover 浮窗：Portal 到 body，position:fixed 由 inline style 控制 ── */
 
 .dsp-hover-popup {
   z-index: 9999;
   pointer-events: auto;
+  /* 底部留白桥接浮窗与锚点之间的间隙，鼠标移动路径不脱离容器 */
+  padding-bottom: 9px;
+  /* 纯 opacity 淡入：不能用带 transform 的动画，否则会覆盖 inline 的定位 transform */
+  animation: dsp-popup-fade 110ms ease;
+}
+
+@keyframes dsp-popup-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .dsp-hover-popup-btn {
@@ -2871,7 +2888,6 @@
   white-space: nowrap;
   cursor: pointer;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
-  animation: dsp-fade-in 120ms ease;
   user-select: none;
 }
 
@@ -2879,33 +2895,6 @@
   color: var(--dsp-accent, #227ed7);
   background: #f7faff;
   border-color: color-mix(in srgb, var(--dsp-accent, #227ed7) 25%, transparent);
-}
-
-/* 小三角指向锚点（按钮在锚点上方，三角在按钮底部朝下） */
-.dsp-hover-popup-btn::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 100%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: var(--dsp-line);
-}
-
-.dsp-hover-popup-btn::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 100%;
-  transform: translateX(-50%);
-  border: 4px solid transparent;
-  border-top-color: #fff;
-  z-index: 1;
-  margin-top: -1px;
-}
-
-.dsp-hover-popup-btn:hover::before {
-  border-top-color: #f7faff;
 }
 
 /* 删除按钮淡红色 */

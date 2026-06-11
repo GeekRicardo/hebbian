@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/desktop/ui/store/useStore";
-import { cn, pathLeaf } from "@/desktop/ui/lib/utils";
+import { cn, ipcConfirm, pathLeaf } from "@/desktop/ui/lib/utils";
 import { api } from "@/desktop/bridge/tauri";
 import type { SessionMeta, WorkspaceProject } from "@/desktop/ui/types";
 import { ImportClaudeDialog } from "@/desktop/ui/components/ImportClaudeDialog";
@@ -61,12 +61,12 @@ function relativeTime(ts: number) {
   return new Date(ts).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
-/** 锚点 rect → fixed 定位 style：居中浮在锚点上方 */
+/** 锚点 rect → fixed 定位 style：浮窗底边贴着锚点顶边（间隙由容器内 padding 桥接） */
 function popupStyle(r: DOMRect): CSSProperties {
   return {
     position: "fixed",
     left: r.left + r.width / 2,
-    top: r.top - 8,
+    top: r.top,
     transform: "translate(-50%, -100%)",
   };
 }
@@ -212,12 +212,13 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
   const [sbVisible, setSbVisible] = useState<Set<string>>(() => new Set());
   const sbTimers = useRef<Map<string, number>>(new Map());
 
-  /* ── hover 3s 浮出选项 ── */
+  /* ── hover 浮出选项（0.3s 延迟显示，离开有宽限期，方便挪到浮窗上点击） ── */
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [hoverPopup, setHoverPopup] = useState<string | null>(null);
   const [popupAnchor, setPopupAnchor] = useState<HTMLElement | null>(null);
   const [popupRect, setPopupRect] = useState<DOMRect | null>(null);
-  const hoverTimers = useRef<Map<string, number>>(new Map());
+  const showTimer = useRef<number | null>(null);
+  const hideTimer = useRef<number | null>(null);
 
   /* 滚动时同步 popup 位置 */
   useEffect(() => {
@@ -232,25 +233,41 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
     };
   }, [hoverPopup, popupAnchor]);
 
-  function startHoverPopup(key: string, el: HTMLElement) {
-    cancelHoverPopup(key);
-    setPopupAnchor(el);
-    setPopupRect(el.getBoundingClientRect());
-    const tid = window.setTimeout(() => setHoverPopup(key), 3000);
-    hoverTimers.current.set(key, tid);
+  function clearTimers() {
+    if (showTimer.current !== null) { window.clearTimeout(showTimer.current); showTimer.current = null; }
+    if (hideTimer.current !== null) { window.clearTimeout(hideTimer.current); hideTimer.current = null; }
   }
 
-  function cancelHoverPopup(key: string) {
-    const timer = hoverTimers.current.get(key);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      hoverTimers.current.delete(key);
-      if (hoverPopup === key) {
-        setHoverPopup(null);
-        setPopupAnchor(null);
-        setPopupRect(null);
-      }
-    }
+  function closeHover() {
+    clearTimers();
+    setHoverPopup(null);
+    setPopupAnchor(null);
+    setPopupRect(null);
+  }
+
+  /* 鼠标进入锚点按钮：0.3s 后弹出。
+     fire 时复核 :hover——streaming 时 store 高频重渲染会丢失 mouseleave，
+     不复核会出现鼠标已离开却照常弹出的误触。 */
+  function openHover(key: string, el: HTMLElement) {
+    clearTimers();
+    showTimer.current = window.setTimeout(() => {
+      if (!el.matches(":hover")) return;
+      setPopupAnchor(el);
+      setPopupRect(el.getBoundingClientRect());
+      setHoverPopup(key);
+    }, 300);
+  }
+
+  /* 鼠标离开按钮或浮窗：留 150ms 宽限期，期间挪到对方身上可取消关闭 */
+  function scheduleClose() {
+    if (showTimer.current !== null) { window.clearTimeout(showTimer.current); showTimer.current = null; }
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(closeHover, 150);
+  }
+
+  /* 鼠标进入浮窗：取消待关闭 */
+  function keepHover() {
+    if (hideTimer.current !== null) { window.clearTimeout(hideTimer.current); hideTimer.current = null; }
   }
 
   async function handleExportClaude(session: SessionMeta) {
@@ -337,8 +354,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
   }
 
   async function handleDeleteProject(id: string, name: string) {
-    if (!confirm(`删除项目 "${name}"？项目下的对话不会被删除。`)) return;
-    if (!confirm(`再次确认删除项目 "${name}"？`)) return;
+    if (!await ipcConfirm(`删除项目 "${name}"？项目下的对话不会被删除。`, "删除项目")) return;
+    if (!await ipcConfirm(`再次确认删除项目 "${name}"？`, "删除项目")) return;
     try {
       await deleteProject(id);
     } catch (error: any) {
@@ -356,8 +373,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
   }
 
   async function handleDeleteSession(session: SessionMeta) {
-    if (!confirm(`删除对话 "${session.title}"？`)) return;
-    if (!confirm(`再次确认删除对话 "${session.title}"？此操作不可撤销。`)) return;
+    if (!await ipcConfirm(`删除对话 "${session.title}"？`, "删除对话")) return;
+    if (!await ipcConfirm(`再次确认删除对话 "${session.title}"？此操作不可撤销。`, "删除对话")) return;
     try {
       await deleteSession(session.id);
     } catch (error: any) {
@@ -398,8 +415,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
           className="dsp-session-delete"
           title="删除对话"
           onClick={() => handleDeleteSession(session)}
-          onMouseEnter={(e) => startHoverPopup(`export:${session.id}`, e.currentTarget)}
-          onMouseLeave={() => cancelHoverPopup(`export:${session.id}`)}
+          onMouseEnter={(e) => openHover(`export:${session.id}`, e.currentTarget)}
+          onMouseLeave={scheduleClose}
         >
           <Trash2 size={12} />
         </button>
@@ -421,8 +438,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
             className="dsp-sidebar-new-chat"
             type="button"
             onClick={() => handleNewSession(null)}
-            onMouseEnter={(e) => startHoverPopup("import", e.currentTarget)}
-            onMouseLeave={() => cancelHoverPopup("import")}
+            onMouseEnter={(e) => openHover("import", e.currentTarget)}
+            onMouseLeave={scheduleClose}
           >
             <MessageSquarePlus size={14} />
             新建对话
@@ -506,8 +523,8 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
                       type="button"
                       title="在这个项目中新建对话"
                       onClick={() => handleNewSession(bucket.projectId)}
-                      onMouseEnter={(e) => startHoverPopup(`import:${bucket.id}`, e.currentTarget)}
-                      onMouseLeave={() => cancelHoverPopup(`import:${bucket.id}`)}
+                      onMouseEnter={(e) => openHover(`import:${bucket.id}`, e.currentTarget)}
+                      onMouseLeave={scheduleClose}
                     >
                       <Plus size={13} />
                     </button>
@@ -555,23 +572,21 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
       {/* Portal 浮窗：渲染到 body，不被 sidebar overflow 裁剪 */}
       {hoverPopup && popupRect &&
         createPortal(
-          <div className="dsp-hover-popup" style={popupStyle(popupRect)}>
+          <div
+            className="dsp-hover-popup"
+            style={popupStyle(popupRect)}
+            onMouseEnter={keepHover}
+            onMouseLeave={scheduleClose}
+          >
             {hoverPopup.startsWith("export:") ? (
               <button
                 type="button"
                 className="dsp-hover-popup-btn"
                 onClick={() => {
-                  const sid = hoverPopup.slice(7);
-                  const s = sessions.find((x) => x.id === sid);
+                  const s = sessions.find((x) => x.id === hoverPopup.slice(7));
                   if (s) handleExportClaude(s);
-                  setHoverPopup(null); setPopupAnchor(null); setPopupRect(null);
+                  closeHover();
                 }}
-                onMouseEnter={() => {
-                  // 保持 popup 不消失
-                  cancelHoverPopup(hoverPopup);
-                  startHoverPopup(hoverPopup, popupAnchor!);
-                }}
-                onMouseLeave={() => cancelHoverPopup(hoverPopup)}
               >
                 <ArrowUpFromLine size={11} />
                 导出到 Claude
@@ -581,14 +596,9 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
                 type="button"
                 className="dsp-hover-popup-btn"
                 onClick={() => {
-                  setHoverPopup(null); setPopupAnchor(null); setPopupRect(null);
+                  closeHover();
                   setImportDialogOpen(true);
                 }}
-                onMouseEnter={() => {
-                  cancelHoverPopup(hoverPopup);
-                  startHoverPopup(hoverPopup, popupAnchor!);
-                }}
-                onMouseLeave={() => cancelHoverPopup(hoverPopup)}
               >
                 <Import size={11} />
                 从 Claude 导入

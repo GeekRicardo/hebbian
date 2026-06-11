@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ipcConfirm } from "@/desktop/ui/lib/utils";
 import {
   Activity,
   Plus,
@@ -288,9 +289,9 @@ export function ProvidersPane({ active }: { active: boolean }) {
     toast.success(`已添加 ${preset.name}，请填入 API Key`);
   }
 
-  function removeCurrent() {
+  async function removeCurrent() {
     if (!current) return;
-    if (!confirm(`删除供应商 "${current.name}"？`)) return;
+    if (!await ipcConfirm(`删除供应商 "${current.name}"？`, "删除供应商")) return;
     const next = draft.providers.filter((p) => p.id !== current.id);
     setDraft({
       ...draft,
