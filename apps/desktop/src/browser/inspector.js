@@ -676,6 +676,7 @@
     if (cardEl && cardEl.parentNode) cardEl.parentNode.removeChild(cardEl);
     cardEl = null;
     cardSnapshot = null;
+    if (typeof removeBoxRegion === "function") removeBoxRegion(); // 清盒模型 hover 高亮残留
   }
 
   // 拖动卡片：按住 handle 移动 card（改 left/top，清掉 right 定位）
@@ -777,6 +778,7 @@
 
   function boxLayer(color, label, topP, rightP, bottomP, leftP) {
     var layer = document.createElement("div");
+    layer.setAttribute("data-box-region", label); // hover 时高亮元素对应区域
     layer.style.cssText = "position:relative;background:" + color + ";border-radius:3px;padding:16px 30px;display:flex;align-items:center;justify-content:center;";
     var lab = document.createElement("span");
     lab.textContent = label;
@@ -790,6 +792,35 @@
     return layer;
   }
 
+  // 盒模型 hover → 在实际元素上高亮对应区域（Chrome F12 式）
+  var boxRegionEl = null;
+  function removeBoxRegion() {
+    if (boxRegionEl && boxRegionEl.parentNode) boxRegionEl.parentNode.removeChild(boxRegionEl);
+    boxRegionEl = null;
+  }
+  function showBoxRegion(region) {
+    removeBoxRegion();
+    var el = currentTarget();
+    if (!el) return;
+    var cs = window.getComputedStyle(el);
+    var r = el.getBoundingClientRect(); // border box
+    var n = function (p) { return parseFloat(cs.getPropertyValue(p)) || 0; };
+    var mt = n("margin-top"), mr = n("margin-right"), mb = n("margin-bottom"), ml = n("margin-left");
+    var bt = n("border-top-width"), br = n("border-right-width"), bb = n("border-bottom-width"), bl = n("border-left-width");
+    var pt = n("padding-top"), pr = n("padding-right"), pb = n("padding-bottom"), pl = n("padding-left");
+    var box;
+    if (region === "margin") box = { left: r.left - ml, top: r.top - mt, width: r.width + ml + mr, height: r.height + mt + mb, color: "rgba(246,178,107,0.55)" };
+    else if (region === "border") box = { left: r.left, top: r.top, width: r.width, height: r.height, color: "rgba(253,201,108,0.6)" };
+    else if (region === "padding") box = { left: r.left + bl, top: r.top + bt, width: r.width - bl - br, height: r.height - bt - bb, color: "rgba(147,196,125,0.55)" };
+    else box = { left: r.left + bl + pl, top: r.top + bt + pt, width: r.width - bl - br - pl - pr, height: r.height - bt - bb - pt - pb, color: "rgba(111,168,220,0.55)" };
+    var d = document.createElement("div");
+    d.setAttribute(OVERLAY_ATTR, "region");
+    d.style.cssText = "position:fixed;pointer-events:none;z-index:2147483645;left:" + box.left + "px;top:" + box.top +
+      "px;width:" + Math.max(0, box.width) + "px;height:" + Math.max(0, box.height) + "px;background:" + box.color + ";";
+    document.documentElement.appendChild(d);
+    boxRegionEl = d;
+  }
+
   function buildBoxModel() {
     var wrap = document.createElement("div");
     wrap.style.cssText = "padding:10px;display:flex;justify-content:center;background:#fafbfc;border-bottom:1px solid #eaedf0;";
@@ -800,6 +831,7 @@
     var border = boxLayer("#fdd9a0", "border", "border-top-width", "border-right-width", "border-bottom-width", "border-left-width");
     var padding = boxLayer("#c3dca4", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left");
     var content = document.createElement("div");
+    content.setAttribute("data-box-region", "content");
     content.style.cssText = "background:#a3c5e8;border-radius:2px;padding:6px 14px;font:11px ui-monospace,monospace;color:#1f2328;white-space:nowrap;";
     var w = Math.round(parseFloat(cs.width) || 0), h = Math.round(parseFloat(cs.height) || 0);
     content.textContent = w + " × " + h;
@@ -807,6 +839,16 @@
     border.appendChild(padding);
     margin.appendChild(border);
     wrap.appendChild(margin);
+    // hover 盒模型某层 → 高亮元素对应区域（取最内层有 data-box-region 的祖先）
+    wrap.addEventListener("mouseover", function (e) {
+      var node = e.target;
+      while (node && node !== wrap) {
+        var reg = node.getAttribute && node.getAttribute("data-box-region");
+        if (reg) { showBoxRegion(reg); return; }
+        node = node.parentElement;
+      }
+    });
+    wrap.addEventListener("mouseleave", removeBoxRegion);
     return wrap;
   }
 
@@ -925,15 +967,26 @@
     fields.style.cssText = "padding:8px 10px;";
     for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
     var cssList = buildCssList(); // 全部 CSS（折叠）
+    var pushStyleToAside = null; // chatCard 构造后赋值——把当前样式改动发到下面的临时对话
     var styleFoot = document.createElement("div");
     styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:6px 10px 8px;";
     var sCancel = mkFlatBtn("撤销"); sCancel.addEventListener("click", function () { styleRevert(); });
+    var sAside = mkFlatBtn("到临时对话");
+    sAside.title = "把刚调的样式改动发到下面的临时对话，继续和助手讨论 / 让它定位源码";
+    sAside.addEventListener("click", function () {
+      var diff = takeStyleDiff();
+      if (!diff.length) return;
+      var txt = "我在样式参数里手动调了这些：\n" +
+        diff.map(function (d) { return "· " + d.prop + ": " + d.before + " → " + d.after; }).join("\n") +
+        "\n请基于此继续——告诉我这些改动对应源码该怎么改，或我们再调调。";
+      if (pushStyleToAside) pushStyleToAside(txt);
+    });
     var sSend = mkPrimaryBtn("发送到对话");
     sSend.addEventListener("click", function () {
       send("heb:annotation:submit", { snapshot: cardSnapshot, comment: "", styleDiff: takeStyleDiff() });
       removeCard();
     });
-    styleFoot.appendChild(sCancel); styleFoot.appendChild(sSend);
+    styleFoot.appendChild(sCancel); styleFoot.appendChild(sAside); styleFoot.appendChild(sSend);
     styleBody.appendChild(boxModel); styleBody.appendChild(fields); styleBody.appendChild(cssList); styleBody.appendChild(styleFoot);
     var styleCollapsed = false;
     styleHead.addEventListener("click", function () {
@@ -986,6 +1039,12 @@
     chatSend.addEventListener("click", sendChat);
     chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
     chatInputRow.appendChild(chatInput); chatInputRow.appendChild(chatSend);
+    // 样式参数区的「到临时对话」按钮回调：发到旁支会话 + 折叠样式区露出对话
+    pushStyleToAside = function (text) {
+      chatInput.value = text;
+      sendChat();
+      styleCollapsed = true; styleBody.style.display = "none"; chevron.textContent = "▸";
+    };
     var chatFoot = document.createElement("div");
     chatFoot.style.cssText = "display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #d9dde3;";
     var submitMain = mkPrimaryBtn("提交到主对话");
@@ -1079,21 +1138,56 @@
   }
 
   var lastHitTest = 0;
+  var lastMouse = { x: 0, y: 0 };
+  var wheelLockUntil = 0; // 滚轮调整父子后短暂锁定，避免 mousemove 抖动重置
   function onMouseMove(e) {
     if (!pickerActive) return;
-    // 节流到 ~30fps：elementFromPoint + overlay 重绘在复杂页面上每像素跑会卡
+    lastMouse.x = e.clientX;
+    lastMouse.y = e.clientY;
+    if (Date.now() < wheelLockUntil) return; // 滚轮锁定期内不跟随鼠标
     var now = Date.now();
-    if (now - lastHitTest < 33) return;
+    if (now - lastHitTest < 33) return; // 节流 ~30fps（复杂页面每像素跑会卡）
     lastHitTest = now;
     hoverTarget = pickableAt(e.clientX, e.clientY);
+  }
+
+  // 找 parent 里包含 (x,y) 的直接子元素（滚轮下钻用）；没命中点则取第一个非 overlay 子
+  function childAtPoint(parent, x, y) {
+    var fallback = null;
+    for (var i = 0; i < parent.children.length; i++) {
+      var c = parent.children[i];
+      if (isOurNode(c)) continue;
+      if (!fallback) fallback = c;
+      var r = c.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return c;
+    }
+    return fallback;
+  }
+
+  // 滚轮选父/子（DevTools / 截图工具式精确选取）：上滚→父，下滚→子
+  function onWheel(e) {
+    if (!pickerActive) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!hoverTarget) hoverTarget = pickableAt(lastMouse.x, lastMouse.y);
+    if (!hoverTarget) return;
+    if (e.deltaY < 0) {
+      var p = hoverTarget.parentElement;
+      if (p && p !== document.body && p !== document.documentElement && !isOurNode(p)) hoverTarget = p;
+    } else if (e.deltaY > 0) {
+      var child = childAtPoint(hoverTarget, lastMouse.x, lastMouse.y);
+      if (child) hoverTarget = child;
+    }
+    wheelLockUntil = Date.now() + 700;
   }
 
   function onClick(e) {
     if (!pickerActive) return;
     e.preventDefault();
     e.stopPropagation();
-    var el = pickableAt(e.clientX, e.clientY);
-    if (!el) return;
+    // 优先用当前 hover（可能被滚轮选成了父/子），否则回退到鼠标点下的元素
+    var el = (hoverTarget && hoverTarget.isConnected) ? hoverTarget : pickableAt(e.clientX, e.clientY);
+    if (!el || isOurNode(el)) return;
     selectedTarget = el;
     hoverTarget = null;
     styleDiff = {};
@@ -1152,6 +1246,7 @@
     document.addEventListener("mousedown", swallow, true);
     document.addEventListener("mouseup", swallow, true);
     document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("wheel", onWheel, { capture: true, passive: false });
   }
 
   function swallow(e) {
@@ -1171,6 +1266,7 @@
     document.removeEventListener("mousedown", swallow, true);
     document.removeEventListener("mouseup", swallow, true);
     document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("wheel", onWheel, { capture: true });
     if (cancelled) send("heb:picker:cancelled", {});
   }
 
