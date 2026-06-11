@@ -515,6 +515,12 @@ fn fresh_cancel() -> common::CancelFlag {
 }
 
 fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<String>) -> SendArgs {
+    // 总结那轮 enabled_tools 传 []，配合 restrict_tools 白名单连 PreviewStyle 也不暴露，纯文本总结。
+    let restrict_tools = Some(if enabled_tools.is_empty() {
+        vec![]
+    } else {
+        vec!["PreviewStyle".to_string()]
+    });
     SendArgs {
         session_id,
         user_content,
@@ -531,6 +537,8 @@ fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<
         force_automode: false,
         request_id: Some(format!("aside-{}", chrono::Utc::now().timestamp_millis())),
         continue_run: false,
+        // 旁支会话只暴露 PreviewStyle——绝不让 styling agent 拿到 Bash/Edit（危险 + hitl=None 挂死）。
+        restrict_tools,
     }
 }
 

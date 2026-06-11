@@ -47,6 +47,10 @@ pub fn partial_path(data_dir: &Path, session_id: &str, msg_id: &str) -> PathBuf 
     partial_dir(data_dir, session_id).join(format!("{msg_id}.partial.jsonl"))
 }
 
+fn partial_live_path(data_dir: &Path, session_id: &str, msg_id: &str) -> PathBuf {
+    partial_dir(data_dir, session_id).join(format!("{msg_id}.partial.jsonl.live"))
+}
+
 /// 架构 §4.12.3：后台 Bash 进程的输出日志目录。
 /// 每个 BackgroundShell 在这里落一份 `<task_id>.log`，与内存 tail buffer 双轨。
 pub fn bg_dir(data_dir: &Path, session_id: &str) -> PathBuf {
@@ -124,7 +128,7 @@ pub fn load_meta(data_dir: &Path, session_id: &str) -> AppResult<Option<SessionD
 // partial sidecar
 // ──────────────────────────────────────────────────────────────────────────
 
-/// partial 文件单行格式。`text` / `reasoning` / `tool_call` 三类增量。
+/// partial 文件单行格式。`text` / `reasoning` / `tool_call` / `tool_result` 四类增量。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum PartialFragment {
@@ -141,6 +145,14 @@ pub enum PartialFragment {
         #[serde(default)]
         arguments_chunk: String,
     },
+    /// 工具执行完成后的结果（架构 §4.9.3 中断恢复）。
+    /// `ToolCallFinished` 到达时立刻落盘，保证强退后恢复时 tool call 有 result。
+    ToolResult {
+        index: u32,
+        result: String,
+        #[serde(default)]
+        duration_ms: u64,
+    },
 }
 
 pub fn append_partial(
@@ -156,7 +168,54 @@ pub fn append_partial(
     lock::append_jsonl(&path, &line)
 }
 
-pub fn delete_partial(data_dir: &Path, session_id: &str, msg_id: &str) -> AppResult<()> {
+/// partial 活性锁（架构 §4.9.3 恢复边界）。
+///
+/// 流式写入方在整个 run 期间排他持有 `<msg_id>.partial.jsonl.live`；
+/// [`recover_interrupted_partials`] 据此区分「死进程残留」与「活 run 正在写」——
+/// try-lock 拿不到就跳过，不折叠不删除。进程被 SIGKILL / 崩溃时锁由 OS 自动释放，
+/// 崩溃残留照常恢复。锁文件本身不删（与 `.lock` 同类的零字节哨兵），
+/// 由 [`delete_partial`] 统一清理。
+pub struct PartialLiveGuard {
+    _file: std::fs::File,
+}
+
+impl PartialLiveGuard {
+    pub fn acquire(data_dir: &Path, session_id: &str, msg_id: &str) -> AppResult<Self> {
+        let dir = partial_dir(data_dir, session_id);
+        std::fs::create_dir_all(&dir)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(partial_live_path(data_dir, session_id, msg_id))?;
+        fs2::FileExt::lock_exclusive(&file)
+            .map_err(|e| common::AppError::msg(format!("acquire partial live lock: {e}")))?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// 写入方是否仍持有该 partial 的活性锁。open 失败按「不存活」处理——
+/// 老 partial（修复前产生）没有 `.live` 文件，open 会新建后立刻拿到锁。
+fn partial_writer_alive(data_dir: &Path, session_id: &str, msg_id: &str) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(partial_live_path(data_dir, session_id, msg_id))
+    else {
+        return false;
+    };
+    match fs2::FileExt::try_lock_exclusive(&file) {
+        Ok(()) => {
+            let _ = fs2::FileExt::unlock(&file);
+            false
+        }
+        Err(_) => true,
+    }
+}
+
+/// 清空 partial 内容但保留活性锁——drain 边界把已落盘段对应的中间态清零用。
+pub fn clear_partial(data_dir: &Path, session_id: &str, msg_id: &str) -> AppResult<()> {
     let path = partial_path(data_dir, session_id, msg_id);
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -164,14 +223,34 @@ pub fn delete_partial(data_dir: &Path, session_id: &str, msg_id: &str) -> AppRes
     Ok(())
 }
 
-/// 中断恢复结果：每个 msg_id 累出文本 + reasoning + tool_call 串。
+pub fn delete_partial(data_dir: &Path, session_id: &str, msg_id: &str) -> AppResult<()> {
+    let path = partial_path(data_dir, session_id, msg_id);
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    // 哨兵文件一并清理：lock::append_jsonl 的 `.lock` 与活性锁 `.live`。
+    // 先删 partial 再删哨兵——中间窗口里其他进程的恢复扫描看不到 partial，无害。
+    for sentinel in [
+        partial_live_path(data_dir, session_id, msg_id),
+        PathBuf::from(format!("{}.lock", path.display())),
+    ] {
+        if sentinel.exists() {
+            let _ = std::fs::remove_file(&sentinel);
+        }
+    }
+    Ok(())
+}
+
+/// 中断恢复结果：每个 msg_id 累出文本 + reasoning + tool_call 串 + tool_result。
 #[derive(Debug, Default, Clone)]
 pub struct RecoveredPartial {
     pub msg_id: String,
     pub text: String,
     pub reasoning: String,
-    /// 按 index 聚合的 tool_call arguments 累积字符串。
+    /// 按 index 聚合的 tool_call arguments 累积字符串（name, arguments）。
     pub tool_calls: std::collections::BTreeMap<u32, (Option<String>, String)>,
+    /// 按 index 聚合的 tool 执行结果（result, duration_ms）。
+    pub tool_results: std::collections::BTreeMap<u32, (String, u64)>,
 }
 
 /// 扫描 partial 目录，把每个残留文件聚合并返回。返回后调用方负责把内容写到
@@ -196,6 +275,13 @@ pub fn recover_interrupted_partials(
         let Some(msg_id) = name.strip_suffix(".partial.jsonl") else {
             continue;
         };
+        // 活性检测：写入方（本进程或共享数据目录的其他 surface 进程）还在流式写
+        // 这个 partial 时绝不折叠——否则活 run 会被错标「输出中断」落进 session.jsonl，
+        // run 结束正常落盘后同一段内容就重复两份。
+        if partial_writer_alive(data_dir, session_id, msg_id) {
+            tracing::debug!(msg_id, "partial 写入方仍存活，跳过中断恢复");
+            continue;
+        }
         let bytes = match lock::read_locked(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -229,6 +315,20 @@ pub fn recover_interrupted_partials(
                         entry.0 = name;
                     }
                     entry.1.push_str(&arguments_chunk);
+                }
+                Ok(PartialFragment::ToolResult {
+                    index,
+                    result,
+                    duration_ms,
+                }) => {
+                    recovered
+                        .tool_results
+                        .entry(index)
+                        .and_modify(|(r, d)| {
+                            *r = result.clone();
+                            *d = duration_ms;
+                        })
+                        .or_insert((result, duration_ms));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "解析 partial 行失败");
@@ -312,5 +412,61 @@ mod tests {
         let tc = r.tool_calls.get(&0).unwrap();
         assert_eq!(tc.0.as_deref(), Some("Bash"));
         assert_eq!(tc.1, r#"{"command":"ls"}"#);
+    }
+
+    /// 回归：活 run 的 partial 不得被中断恢复折叠（架构 §4.9.3 恢复边界）。
+    /// 修复前 recover 无条件折叠——长 run 期间任何 surface 加载历史都会把
+    /// 正在写的 partial 错标「输出中断」，run 结束正常落盘后内容重复两份。
+    #[test]
+    fn recover_skips_partial_while_writer_alive() {
+        let dir = tmp("partial-live");
+        let sid = "20260611-live1234";
+        ensure_session_dirs(&dir, sid).unwrap();
+
+        let guard = PartialLiveGuard::acquire(&dir, sid, "msg1").unwrap();
+        append_partial(
+            &dir,
+            sid,
+            "msg1",
+            &PartialFragment::Text {
+                text: "streaming...".into(),
+            },
+        )
+        .unwrap();
+
+        // 写入方存活（锁被持有）：恢复扫描必须跳过，partial 文件保持原样
+        let recovered = recover_interrupted_partials(&dir, sid).unwrap();
+        assert!(recovered.is_empty(), "活 partial 被折叠了");
+        assert!(partial_path(&dir, sid, "msg1").exists());
+
+        // 写入方退出（锁释放，等价进程崩溃后 OS 释放）：按残留正常恢复
+        drop(guard);
+        let recovered = recover_interrupted_partials(&dir, sid).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].text, "streaming...");
+    }
+
+    /// delete_partial 连同 `.live` / `.lock` 哨兵一起清理，不留目录垃圾。
+    #[test]
+    fn delete_partial_cleans_sentinels() {
+        let dir = tmp("partial-clean");
+        let sid = "20260611-clean123";
+        ensure_session_dirs(&dir, sid).unwrap();
+        let guard = PartialLiveGuard::acquire(&dir, sid, "msg1").unwrap();
+        append_partial(
+            &dir,
+            sid,
+            "msg1",
+            &PartialFragment::Text { text: "x".into() },
+        )
+        .unwrap();
+        drop(guard);
+        delete_partial(&dir, sid, "msg1").unwrap();
+        let leftover: Vec<_> = std::fs::read_dir(partial_dir(&dir, sid))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftover.is_empty(), "残留哨兵: {leftover:?}");
     }
 }

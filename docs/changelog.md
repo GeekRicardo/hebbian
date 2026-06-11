@@ -7019,3 +7019,46 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 仅 apps/desktop（mod.rs + BrowserPanel + inspector.js）
 - **验证**: spike 探测——about:blank popout `{blankPopout:true, hasToolbar:true, isPopout:true}`（空窗口注入+工具栏OK）；inspector 测试 + cargo check + tsc 全绿。拖动手感需用户眼验
 - **留尾巴**: 注释卡片样式参数实时预览本就实现（cardRow input/change → styleApply → setProperty 直接作用于选中元素）；用户提的「注释框内局部多轮对话（subagent）+ LLM 实时改页面 + 提交时总结」是大特性，另行设计实现
+
+### 2026-06-11 — hands-off「全自动」实时生效 + 选择器行内开关 + 修中断在 AutoMode 自动审批阶段失效
+
+- **Why**: 接上一条。①「全自动」(hands-off) 开关原本发消息时快照、run 中途切不生效——用户要它实时。② 还要在模式选择器的「自动模式」行内直接切「问我↔全自动」，不必记 `//hands-off` 命令。③ **发现并修复一个独立 bug**：AutoMode 自动审批阶段（judge LLM 跑着时）点中断按钮无效——judge 照样跑完。根因：`automode.rs` / `bash_prefix.rs` 给 judge / prefix-classifier 的 LLM 调用各自 `let cancel = Arc::new(AtomicBool::new(false))` 建了个**独立假 flag**，和 dispatcher 真实 cancel 无关，用户中断置位的是真 flag，judge 请求用的是假 flag → 取消信号传不进去。
+- **改动**:
+  - [crates/agent-core/src/run_mode.rs](../crates/agent-core/src/run_mode.rs): 新增 `LiveForceAutomodeRegistry`（仿 `LiveRunModeRegistry`），`SharedForceAutomode = Arc<AtomicBool>` 作为 force_automode 的进程级唯一真源；不随 run 结束 unregister（进程级持久，符合「重启才回归 false」语义）
+  - [crates/agent-core/src/{dispatch,agent_loop,harness,subagent/runner}.rs](../crates/agent-core/src): `force_automode` 字段 `bool`→`SharedForceAutomode`；dispatch 每个工具调用 `.load()` 实时读；harness spawn_run 建 shared 句柄并注册
+  - [apps/desktop/src/force_automode.rs](../apps/desktop/src/force_automode.rs): `ForceAutomodeState` 改为对 `LiveForceAutomodeRegistry` 的薄委托——`set` 命中活跃 run 立即生效，desktop 其它调用点不变
+  - [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs) + [tools/bash_prefix.rs](../crates/agent-core/src/tools/bash_prefix.rs): `judge_auto_mode` / `classify_bash_prefixes_for_automode` / `classify_prefix` 加 `cancel: CancelFlag` 参数，用 dispatcher 真实 cancel 替换假 flag；dispatch 两处调用传 `cancel.clone()`；judge 阶段后、人工审批前加一道 `is_cancelled` 短路（中断后不再弹审批阻塞）
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx): 「自动模式」选中时行内展开「问我↔全自动」分段开关（`SegBtn`），调 `setForceAutomode` 实时切；trigger 统一 `h-8 w-8 rounded-md`（与 `+`/Slash/Model 按钮一致）、compact 态保留图标 + HoverHint；下拉面板对齐浅色卡片规范
+- **影响范围**: agent-core（run_mode/dispatch/agent_loop/harness/automode/bash_prefix）+ desktop force_automode + RunModeChip。force_automode 跨 surface 真源统一到 agent-core，向后兼容（RunParams.force_automode 仍是 bool 初值）
+- **验证**:
+  - 新增 `automode_judge_respects_cancel_during_auto_approval` 回归：CancelAwareJudge 在 complete 内置位 cancel 模拟「judge 跑到一半中断」，断言 dispatch 返回 `Cancelled`。A/B 翻转——还原假 flag 版测试卡 5s 超时 FAIL（正是 bug 现象：中断无效、卡审批），真 cancel 版 PASS
+  - automode+dispatch 全量 27 passed；cargo check --workspace 绿；tsc 绿
+  - RunModeChip 用 hebweb + Playwright 确认渲染：默认态显示图标+「默认」、下拉浅色面板三选项、AutoMode 行 hands-off 开关（视觉细调留 desktop dev 眼验）
+- **留尾巴**:
+  - hebweb 环境 `setRunMode` 因缺 `transformCallback`（Tauri API 在浏览器无 mock）切换失败，是 hebweb 既有限制，不影响 desktop；hands-off 开关的端到端实时切换需在 desktop dev 真验
+  - 工作区另有他人未完成改动，不在本次提交范围
+
+### 2026-06-11 — 修复活 run 期间 partial sidecar 被误折叠导致 session.jsonl 顺序错乱
+
+- **Why**: `recover_interrupted_partials` 一直没实现架构 §4.9.3 要求的「恢复边界」——任何 surface 调用 `load_with_partial_recovery` 时都会无条件折叠 partial 目录下的所有残片，包括**当前进程活跃 run 正在流式写入的 partial**。结果：运行中会话被其他窗口/surface 加载一次，活 partial 就被当成「崩溃残留」折叠成 `recovered-` 前缀的假 interrupted 消息追加进 session.jsonl；run 结束后真实 assistant 再次落盘——同一段内容出现两份，且位置错乱（假消息时间戳来自折叠时刻，真消息时间戳是真正生成时刻，两者可能颠倒）。2026-06-11 `c6cd5319` 修复「ToolResult 落入 partial sidecar」后，折叠产生的假消息更完整，视觉上更明显。
+- **根因链**: `b56eb0d`（2026-05-23）让 desktop/cli/hebweb 所有 surface 入口都走 `load_with_partial_recovery`；但 `recover_interrupted_partials` 从未检测「写入方是否仍存活」——扫 partial 目录时不区分死进程残留与活 run 正在写，全部折叠。
+- **修复**: `PartialLiveGuard` 活性文件锁——写入方（`PartialFileWriter::new`）在整个 run 期间排他持有 `<msg_id>.partial.jsonl.live`；`recover_interrupted_partials` 对每个 partial 文件做 `try_lock_exclusive`：拿到锁说明写入方不在，按崩溃残留正常恢复；拿不到说明写入方仍存活，跳过不折叠。OS 在进程崩溃/SIGKILL 时自动释放文件锁，崩溃恢复路径不受影响。`delete_partial` 连同 `.live` / `.lock` 哨兵一并清理。
+- **同步修复**: 插队 drain 边界新增 `flush_segments_at_drain`——已落盘段对应的全程累积器（`parts`/`partial_output`/`tool_calls`）及 partial sidecar 即时清零；之后崩溃恢复只折叠未落盘的尾段，不与已落盘段重复。`flushed_segments` 计数让 run 结束只补写尾段，避免二次落盘。
+- **改动文件**:
+  - [crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs): `PartialLiveGuard` + `partial_writer_alive` + `clear_partial`；`recover_interrupted_partials` 加活性检测跳过逻辑；`delete_partial` 清理哨兵；新增 3 个单元测试（roundtrip 保持、活写入方跳过回归、哨兵清理）
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `PartialFileWriter` 加 `_live: Option<PartialLiveGuard>` + `reset()`；`DesktopObserver` 加 `flushed_segments`；`finish_segment_if_pending_was_consumed` 调 `flush_segments_at_drain`；run 结束只补写 `flushed_segments` 之后的尾段
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): 修 `aside_send_args` 中 `enabled_tools` borrow-after-move 编译错误（拆出 `restrict_tools` 提前计算）
+- **影响范围**: agent-core storage（partial 恢复逻辑）+ desktop chat（PartialFileWriter + drain 落盘顺序）；不改协议/EventPayload/前端；CLI/hebweb 走同一 `recover_interrupted_partials`，同样受益
+- **验证**:
+  - 新增回归测试 `recover_skips_partial_while_writer_alive`（A: 禁用修复 → FAIL；B: 修复 → PASS）
+  - 新增 `delete_partial_cleans_sentinels`；4 个 sessions_dir 测试全 PASS
+  - 13 个 desktop chat 测试全 PASS（含 `partial_writer_survives_process_kill_without_drop`：`_live = None` 手动释放锁模拟 SIGKILL）
+  - `202606101731-d7bc47da` 历史 session：手动去除 10 条误折叠假消息（保留 1 条确实中断的 recovered），顺序恢复正常
+- **留尾巴**: `list_self_heals_pretty_json_session_files` 单测是预先存在的 FAIL（pretty-JSON 自愈路径），与本次无关，后续另修
+
+### 2026-06-11 — 修复删除 session / project / agent 时报 `plugin:dialog|confirm not allowed by ACL`
+
+- **Why**: 前端多处删除操作调用原生 `window.confirm()`，Tauri webview 将其路由到 `plugin:dialog|confirm` 命令。但 `dialog:default` 权限集只含 `allow-message`/`allow-save`/`allow-open`，不含 `allow-confirm`，ACL 拦截后抛未处理异步错误，删除操作无法完成。
+- **改动**: `apps/desktop/capabilities/default.json` 新增 `"dialog:allow-confirm"`
+- **影响范围**: Desktop main/log-viewer 窗口；仅 capabilities 配置，无 Rust/TS 代码变动
+- **留尾巴**: `allow-confirm` 在 Tauri 2.7 已标 deprecated（是 `allow-message` 的别名），升级 v3 后需移除此条并确认行为不变。无

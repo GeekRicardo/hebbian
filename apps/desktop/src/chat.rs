@@ -73,6 +73,18 @@ pub struct SendArgs {
     /// transcript 原样再起一次 agent_loop。失败请求天然重发、截断让模型接着写。
     /// `user_content` 此时应为空。
     pub continue_run: bool,
+    /// 工具白名单：`Some(names)` 时把 registry 过滤到只含这些工具（+ MCP），
+    /// `None` = 全量。内置浏览器「元素对话」旁支会话用它把工具限制成只有 `PreviewStyle`，
+    /// 否则 LLM 会看到 Bash/Edit 等内置工具——既危险又会在 `hitl=None` 下挂死。
+    pub restrict_tools: Option<Vec<String>>,
+}
+
+impl SendArgs {
+    /// 给 `restrict_tools` 默认 `None` 的便捷方法——避免每个构造点都写一遍。
+    /// 现有构造点保持显式字段；新加这个仅为可读性，不强制使用。
+    pub fn no_restrict() -> Option<Vec<String>> {
+        None
+    }
 }
 
 fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -280,23 +292,29 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         .register_session_shells(args.session_id.clone(), shells.clone());
     let read_state_tracker = Arc::new(ReadStateTracker::new());
     let edits_worktree = Arc::new(EditsWorktree::new(data_dir, &args.session_id, &workspace));
-    let harness = Arc::new(Harness::new(
-        agent_core::tools::default_tools_with_mcp(
-            workspace.clone(),
-            &skill_dirs,
-            bg_log_dir,
-            phase.clone(),
-            shells,
-            Some(data_dir.to_path_buf()),
-            Some(args.session_id.clone()),
-            Some(read_state_tracker),
-            settings.general.shell.clone(),
-            settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
-        )
-        .await,
-        HookManager::new(external_hooks),
-    ));
+    let mut tools = agent_core::tools::default_tools_with_mcp(
+        workspace.clone(),
+        &skill_dirs,
+        bg_log_dir,
+        phase.clone(),
+        shells,
+        Some(data_dir.to_path_buf()),
+        Some(args.session_id.clone()),
+        Some(read_state_tracker),
+        settings.general.shell.clone(),
+        settings.general.edit_backend,
+        agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
+    )
+    .await;
+    // 工具白名单（元素对话旁支会话用）：把 registry 限制到只含指定工具（MCP 工具放行，
+    // 它们的暴露另由 enabled_tools 控）。普通 send restrict_tools=None，不过滤。
+    if let Some(allow) = &args.restrict_tools {
+        tools.retain(|t| {
+            let n = t.name();
+            n.starts_with("Mcp__") || allow.iter().any(|a| a == n)
+        });
+    }
+    let harness = Arc::new(Harness::new(tools, HookManager::new(external_hooks)));
     // 按实际模型上下文窗口动态设定压缩预算（架构 §4.1.3：占 context_window 70% 触发）。
     let mut definition = AgentDefinition::default();
     definition.compaction_policy.token_budget = (ctx_window as f64 * 0.75) as usize;
@@ -455,6 +473,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         partial_output,
         tool_calls,
         mut segment_messages,
+        flushed_segments,
         output_attachments,
         partial_writer,
         ..
@@ -479,6 +498,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         // assistant 落盘逻辑——transcript 不进 checkpoint（§4.12.3），resume 时
         // agent_loop 从 session.jsonl 重建，所以本轮模型已经说过的话必须落盘。
         TurnOutcome::Done | TurnOutcome::Suspended => {}
+        // Cancelled / Failed：全程累积器在每次 drain 落盘后已被清零（见
+        // flush_segments_at_drain 的不变量），这里拿到的只是未落盘的尾段，
+        // 不会与 drain 边界已写入的 assistant 段重复。
         TurnOutcome::Cancelled => {
             persist_interrupted_assistant_output(
                 data_dir,
@@ -509,9 +531,9 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     }
 
     // Done：写 assistant 段。
-    // - had_pending_during_run=true：run 内发生过 PendingInputs drain，assistant 被切成多段
-    //   （segment_messages 含各段）→ 分段写。各段之间逻辑上夹着的插队 user message 已经在
-    //   inject_user_message 时即写即落，物理 jsonl 已经有了，这里仅追加 assistant 段。
+    // - had_pending_during_run=true：run 内发生过 PendingInputs drain，assistant 被切成多段；
+    //   非末段已在 drain 边界即时落盘（flush_segments_at_drain，物理位置紧跟插队 user），
+    //   这里只补写 flushed_segments 之后的尾段。
     // - had_pending_during_run=false：用全 run 累积的 parts 拼成单段 assistant 落盘，
     //   保持原有"一次 run = 一条 assistant message"语义（多 turn 但无插队的常态）。
     let assistant_msg = if had_pending_during_run {
@@ -523,10 +545,19 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
                 Vec::new(),
             ));
         }
-        if let Some(last) = segment_messages.last_mut() {
+        // 尾段通常未落盘（最后一次 drain 之后的输出由 run 结束前的
+        // finish_current_segment 切下）。极端情况全部段都已落盘且本轮还有
+        // output_attachments——补一条仅含附件的 assistant，不回写已落盘段。
+        if flushed_segments == segment_messages.len() {
+            if !output_attachments.is_empty() {
+                let mut m = empty_assistant_message();
+                m.attachments = output_attachments;
+                segment_messages.push(m);
+            }
+        } else if let Some(last) = segment_messages.last_mut() {
             last.attachments = output_attachments;
         }
-        for assistant in &segment_messages {
+        for assistant in segment_messages.iter().skip(flushed_segments) {
             sessions::append_message(data_dir, &args.session_id, assistant.clone())?;
         }
         segment_messages
@@ -602,15 +633,22 @@ struct PartialFileWriter {
     session_id: String,
     msg_id: String,
     wrote_text: bool,
+    /// run 存活期间排他持有的活性锁：恢复扫描据此识别「活 run 正在写」并跳过折叠
+    /// （架构 §4.9.3 恢复边界）。拿锁失败只降级警告——丢的是误折叠防护，不是数据。
+    _live: Option<sessions_dir::PartialLiveGuard>,
 }
 
 impl PartialFileWriter {
     fn new(data_dir: &Path, session_id: &str, msg_id: String) -> Self {
+        let live = sessions_dir::PartialLiveGuard::acquire(data_dir, session_id, &msg_id)
+            .map_err(|e| tracing::warn!(error = %e, msg_id = %msg_id, "partial 活性锁获取失败"))
+            .ok();
         Self {
             data_dir: data_dir.to_path_buf(),
             session_id: session_id.to_string(),
             msg_id,
             wrote_text: false,
+            _live: live,
         }
     }
 
@@ -623,6 +661,13 @@ impl PartialFileWriter {
         {
             tracing::warn!(error = %e, msg_id = %self.msg_id, "append_partial 失败");
         }
+    }
+
+    /// drain 边界已落盘段对应的中间态清零：之后崩溃恢复只折叠未落盘的尾段。
+    /// 活性锁保持持有，文件由下一帧 append 重建。
+    fn reset(&mut self) {
+        self.wrote_text = false;
+        let _ = sessions_dir::clear_partial(&self.data_dir, &self.session_id, &self.msg_id);
     }
 
     fn delete(self) {
@@ -640,6 +685,8 @@ struct DesktopObserver<'a> {
     segment_partial_output: String,
     segment_tool_calls: Vec<MessageToolCall>,
     segment_messages: Vec<Message>,
+    /// segment_messages 中已在 drain 边界即时落盘的前缀长度；run 结束只补写其余。
+    flushed_segments: usize,
     consumed_pending_inputs: Option<ConsumedPendingInputs>,
     consumed_pending_seen: usize,
     output_attachments: Vec<MessageAttachment>,
@@ -671,6 +718,7 @@ impl<'a> DesktopObserver<'a> {
             segment_partial_output: String::new(),
             segment_tool_calls: Vec::new(),
             segment_messages: Vec::new(),
+            flushed_segments: 0,
             consumed_pending_inputs,
             consumed_pending_seen,
             output_attachments: Vec::new(),
@@ -712,6 +760,32 @@ impl<'a> DesktopObserver<'a> {
         }
         self.consumed_pending_seen = consumed_len;
         self.finish_current_segment();
+        self.flush_segments_at_drain();
+    }
+
+    /// drain 边界：已切下的段立即落盘（架构 §4.9.5「流式 Done 后一次写」），
+    /// 物理位置紧跟触发插队的 user message——不等 run 结束才补写，长 run 的
+    /// session.jsonl 才能保持 user → assistant 段交替的真实顺序。
+    ///
+    /// 全部落盘成功后重置全程累积器与 partial sidecar。不变量：内存累积器 +
+    /// partial sidecar 永远只描述「尚未写入 session.jsonl」的内容——之后无论
+    /// cancel / fail / 崩溃恢复都不会与已落盘段重复。落盘失败则不重置，
+    /// 留待 run 结束按 flushed_segments 续写。
+    fn flush_segments_at_drain(&mut self) {
+        while self.flushed_segments < self.segment_messages.len() {
+            let msg = self.segment_messages[self.flushed_segments].clone();
+            if let Err(e) = sessions::append_message(&self.data_dir, &self.session_id, msg) {
+                tracing::warn!(error = %e, "drain 段落盘失败，留待 run 结束续写");
+                return;
+            }
+            self.flushed_segments += 1;
+        }
+        self.parts = AssistantPartsRecorder::default();
+        self.partial_output.clear();
+        self.tool_calls.clear();
+        if let Some(pw) = &mut self.partial_writer {
+            pw.reset();
+        }
     }
 }
 
@@ -827,6 +901,18 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
                             arguments_chunk: chunk.clone(),
                         });
                     }
+                }
+                EventPayload::ToolCallFinished {
+                    index,
+                    result,
+                    duration_ms,
+                    ..
+                } => {
+                    pw.append(&PartialFragment::ToolResult {
+                        index: *index as u32,
+                        result: result.clone(),
+                        duration_ms: *duration_ms,
+                    });
                 }
                 _ => {}
             }
@@ -2343,7 +2429,10 @@ mod tests {
             arguments_chunk: r#":"ls"}"#.into(),
         });
 
-        // 模拟进程被 SIGKILL：Drop 不跑，writer 状态全部丢
+        // 模拟进程被 SIGKILL：Drop 不跑，writer 状态全部丢。
+        // 活性锁先单独释放——真实 SIGKILL 下锁由 OS 回收，同进程测试只能手动等价，
+        // 否则本进程仍持锁会让恢复扫描（正确地）把它当活 run 跳过。
+        pw._live = None;
         std::mem::forget(pw);
 
         // 此刻文件必须已经在磁盘上有完整内容——不依赖任何 flush
@@ -2498,6 +2587,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {
@@ -3247,6 +3337,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -3313,6 +3404,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -3387,6 +3479,7 @@ mod tests {
                         permission_store: None,
                         force_automode: true,
                         request_id: None,
+                        restrict_tools: None,
                     },
                     move |event| {
                         events_for_emit.lock().unwrap().push(event);
@@ -3467,6 +3560,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {
@@ -3540,6 +3634,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {
@@ -3610,6 +3705,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 move |_provider, _model, _reasoning| {
@@ -3711,6 +3807,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {
@@ -3816,6 +3913,7 @@ mod tests {
                     permission_store: None,
                     force_automode: false,
                     request_id: None,
+                    restrict_tools: None,
                 },
                 |_| {},
                 |_provider, _model, _reasoning| {

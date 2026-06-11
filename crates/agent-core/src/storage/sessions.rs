@@ -222,7 +222,7 @@ pub struct Session {
     pub project_id: Option<String>,
     /// 本对话的 [`RunMode`]（架构 §4.4.3 / §8）。Desktop mode chip 切换时持久化到这里，
     /// chat 路径每次 send_message 从这里取真值传给 SessionConfig。
-    /// 老 jsonl 无此字段反序列化默认 [`RunMode::AskBeforeEdits`]。
+    /// 老 jsonl 无此字段反序列化默认 [`RunMode::Default`]（老值 AskBeforeEdits / EditAutomatically 经 serde alias 映射）。
     #[serde(default)]
     pub run_mode: RunMode,
     /// 启用的全局规则文件路径列表。None = 继承全局默认。
@@ -244,7 +244,7 @@ pub struct Session {
     pub active_plan: Option<String>,
     /// 进入 PlanMode 之前的 [`RunMode`]，用于 ExitPlanMode 审批通过后切回去
     /// （架构 §4.4.5）。默认 `None`——表示从未进过 PlanMode；如果未来切到
-    /// PlanMode 时找不到 pre_plan_mode 则回落到 `AskBeforeEdits`。
+    /// PlanMode 时找不到 pre_plan_mode 则回落到 `Default`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_plan_mode: Option<RunMode>,
     /// 上一个 Run 非正常结束（截断 / 拒答 / 拦截 / 请求失败 / 轮数超限）留下的续作入口
@@ -457,7 +457,7 @@ pub struct RolloutMeta {
     pub token_stats: Option<TokenStats>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
-    /// [`RunMode`] 起始快照。老 RolloutMeta 无此字段反序列化为 `AskBeforeEdits`。
+    /// [`RunMode`] 起始快照。老 RolloutMeta 无此字段反序列化为 `Default`。
     #[serde(default)]
     pub run_mode: RunMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1373,13 +1373,18 @@ fn partial_to_interrupted_message(
     }
     for (idx, name, args) in &named_tool_calls {
         let input: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+        let (result, duration_ms) = partial
+            .tool_results
+            .get(idx)
+            .map(|(r, d)| (Some(r.clone()), Some(*d)))
+            .unwrap_or((None, None));
         parts.push(MessagePart::ToolCall {
             id: format!("recovered-{idx}"),
             name: name.clone(),
             input,
             arguments: args.clone(),
-            result: None,
-            duration_ms: None,
+            result: result.clone(),
+            duration_ms,
         });
     }
     parts.push(MessagePart::Text {
@@ -1394,12 +1399,19 @@ fn partial_to_interrupted_message(
 
     let tool_calls: Vec<MessageToolCall> = named_tool_calls
         .iter()
-        .map(|(idx, name, args)| MessageToolCall {
-            id: format!("recovered-{idx}"),
-            name: name.clone(),
-            input: serde_json::from_str(args).unwrap_or(Value::Null),
-            result: None,
-            duration_ms: None,
+        .map(|(idx, name, args)| {
+            let (result, duration_ms) = partial
+                .tool_results
+                .get(idx)
+                .map(|(r, d)| (Some(r.clone()), Some(*d)))
+                .unwrap_or((None, None));
+            MessageToolCall {
+                id: format!("recovered-{idx}"),
+                name: name.clone(),
+                input: serde_json::from_str(args).unwrap_or(Value::Null),
+                result,
+                duration_ms,
+            }
         })
         .collect();
 
