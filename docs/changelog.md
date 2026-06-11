@@ -7246,3 +7246,41 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 纯 Desktop 编译 feature；无代码逻辑改动。安全面上启用后所有 webview 可加载 data URL，但本项目只内部用（工具栏 + 空白页），page webview 的真实导航仍走 `on_navigation` 两档校验。
 - **验证**: `cargo build -p hebbian` 绿（重编 tauri）。data URL webview 实际加载（popout 工具栏渲染 + 页面渲染 + 地址栏导航）须 `pnpm tauri dev` 眼验——这是用户已复现的 bug，feature 开启是确定性修复。
 - **留尾巴**: GUI 验证待用户 desktop dev 实测。
+
+### 2026-06-12 — 粘贴文件路径文本改为「只引用路径」，不再读内容上传
+
+- **Why**: 用户痛点——在输入框粘贴文件路径（终端/Finder 拷的路径字符串）时，原实现把整个文件读成 attachment 塞进上下文（图片读成 base64、文本读成 `<file>` 块），白白吃 token。用户诉求：粘贴**路径文本** = 引用（加进 allowed_paths 让 agent 按需 Read），只有复制**文件对象**（Finder Cmd+C / 截图）粘贴才算上传内容。两者本就由 `clipboardData.files` 是否非空天然区分（web 沙箱对 File 对象只能拿内容拿不到磁盘路径，所以文件对象只能上传；路径文本只有字符串，正好走引用）。
+- **改动**:
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `attach_path` 退化为纯路径探测——只回 `File { path }` / `Dir { path }` / `Missing`，不再读内容、不再 base64、删掉 `Unsupported`（引用语义下任何文件都能引用）。连带删掉只服务于读内容的 `guess_media_type` / `looks_like_text` / `MAX_TEXT_FILE_BYTES` / `MAX_IMAGE_BYTES`（grep 确认仅此一处用）；`percent_decode` / `hex_val` 保留（仍处理 `file://` URI）。新增回归测试 `attach_path_references_file_without_reading_content` 断言「文件路径回 File 且结果里不含 content/data 字段、不含文件内容」。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): `attachPath` 返回类型同步收窄成 file/dir/missing 三态。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): `onPaste` 路径分支不再 `preventDefault`（路径原文照常由浏览器插入 textarea，满足「插入路径文本」）；`attachPathCandidates` 重写为把文件和目录统一加进 `allowed_paths` chip（复用既有 `activeAllowedPaths` 渲染，满足「显示引用标签」），与 `@` 对话引用、加号菜单选路径走同一条授权通道。图片路径也统一只引用（用户选「统一只引用」），模型靠 `Read` 多模态读图（§4.4.1 支持）。复制文件对象那支（`addFiles` 上传）零改动。
+- **影响范围**: 仅 Desktop surface（前端 ChatInput/bridge + 后端 `attach_path` 命令）。hebweb 未镜像此命令、heb CLI 无 UI 粘贴，均无影响。协议无改动、不破坏兼容。落在架构.md §4.5 路径授权既有机制内，不新增协议/工具，不改架构.md。
+- **验证**: `cargo check -p hebbian` 绿、`tsc --noEmit` 绿。回归测试逻辑用独立 Rust 脚本等价验证通过（文件→File 不含内容 / file:// URI / 目录→Dir / 缺失→Missing 四态全过）；固化在 lib.rs 里的同名 `#[test]` 因工作区另含「内置终端」在途半成品（`chat.rs`/`hitl.rs`/`hebisland_client.rs` 接口未完成）暂时挡住整 crate 的 test build，待其合并后即可跑。
+- **留尾巴**: 上述回归测试需等「内置终端」改动 test build 修复后才能在 `cargo test -p hebbian --lib` 跑通——我的 lib.rs 部分零错误，阻塞点不在本次改动。GUI 端粘贴交互（路径插入 + chip 显示 + 不上传内容）待 desktop dev 眼验。
+
+### 2026-06-12 — 只读工具读 ~/.hebbian 整树免 PathAccess 审批
+
+- **Why**: 用户痛点——agent 自查历史（读跨 session 的 session.jsonl / model_io.jsonl、读 logs/）几乎每次都弹 PathAccess。原来 dispatch 路径检查只豁免「当前 session 自己的目录」（`sessions/<当前sid>/`），读别的 session、读日志全算越界。这类自查是高频只读操作，每次弹框纯噪音。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 路径越界检查在「当前 session artifact 豁免」旁加第二条豁免——`effects.class == ReadOnly` 且路径落在 data_dir（`~/.hebbian/`）下 → 放行，不 emit PathAccess。日志 level=`data_dir_readonly`。**严格限定只读**：判定用 `EffectClass::ReadOnly`（语义分类，自动覆盖 Read/Grep/Glob），不硬编码工具名。写工具（Edit / Bash 重定向）改 data_dir 下文件**完全不变**仍走审批。
+  - [docs/架构.md](../docs/架构.md): §4.4.2 路径越界伪代码补豁免说明；§13 决策表追加一行（决策点 4.4.2）。
+- **影响范围**: 仅 agent-core dispatch 路径检查。协议 / 前端 / storage 零改动，不破坏兼容。三 surface（Desktop / heb / hebweb）走同一 dispatch 主路径，行为对称。
+- **安全权衡**: `~/.hebbian/` 根下躺着 providers.json（明文 api_key / refresh_token）、settings.json、permissions.json。放行后只读工具能读到这些明文，读内容会进 model_io 发给模型方——用户已知并明确确认接受（换取自查历史不被打断）。**底线**：写工具改这些凭证仍审批，避免一次写入即篡改 / 经 model_io 泄漏，所以放行严格限定 ReadOnly class。
+- **验证**: 新增两个回归测试（`cargo test -p agent-core --lib`）：① `read_only_access_to_data_dir_skips_path_approval`——Read 读 `data_dir/sessions/other-sid/session.jsonl` 不 emit PermissionRequested；② `write_access_to_data_dir_still_requires_approval`——Edit 写 `data_dir/providers.json` 仍 emit PermissionRequested。A/B 翻转固化：把豁免条件改 `false && ...` 后测试①超时 fail（卡审批）、测试②照常 pass，证明翻转点精确。
+- **留尾巴**: 无。
+
+### 2026-06-12 — popout 双 webview 落地后的一批实测修复（显示/标题栏/resize/收回/UA/抢焦点）
+
+- **Why**: popout 双 webview（2026-06-11 那条）合入后用 desktop dev 实测，连环暴露一串运行时 bug，逐一靠 `~/.hebbian/logs` 的 `[popout]`/`[embedded]` 诊断日志定位（已清理）：① page 子 webview 不显示（全白）；② 工具栏上半被 macOS 系统 titlebar 遮；③ 拖窗口 resize 页面不跟随；④ 收回按钮无效；⑤ baidu 等公网站点白屏；⑥ 主窗口 embedded 浏览器加载慢页面时闪一下变空白。
+- **改动**:
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs):
+    - **显示**：`add_child` 出的 page 子 webview 加 `page.show()`——子 webview 默认不保证可见（embedded 也是靠 `setVisible` 显式 show），漏了就露出下层工具栏白底看着像没加载。
+    - **标题栏**：popout 窗口显式 `title_bar_style(Overlay) + hidden_title`（与主窗口一致）。根因：默认标准 titlebar 下 `add_child` 的 y 坐标相对窗口外框、page 被上移一个 titlebar 高度盖住工具栏；改 Overlay 让 webview 内容区 = 整窗口，坐标系与主窗口统一。工具栏 HTML 顶部让出 28px 给系统红绿灯（可拖）。
+    - **resize**：改用工具栏 webview 的 `window.onresize`→`tb:resize` 上行驱动 `popout_resize`——`on_window_event` 的 `Resized` 在多 webview 窗口实测不触发。
+    - **收回 / resize 取窗口**：`get_webview_window(POPOUT_LABEL)`→`get_window`——`add_child` 后 popout 是多 webview 窗口，`get_webview_window`（只认单 webview 窗口）返回 None 导致 `close()`/`inner_size()` 全失效。
+    - **UA**：embedded + popout 的 webview 都设完整 Safari UA（`BROWSER_UA`）——WKWebView 默认 UA 缺 `Version/Safari` 后缀，baidu 等站点据此返回空白/简化页。popout 设后 baidu 能渲染。
+  - [apps/desktop/src/browser/popout_toolbar.html](../apps/desktop/src/browser/popout_toolbar.html): 顶部加 28px `-webkit-app-region: drag` 的 titlebar 占位（露红绿灯、可拖窗口）；`window.onresize`（16ms 防抖）→ `tb:resize`。
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 用户主动停在浏览器/终端 tab 时，agent 更新 todos / 写文件（edits）**不再自动抢走 tab**（`autoSwitchBlocked()` 守卫）。根因：自动切 tab 把原生子 webview 切走隐藏，慢页面（baidu 2s）加载期间被隐藏就黑屏；快页面（localhost <1s）趁可见那一下躲过去了。
+- **影响范围**: 纯 Desktop（apps/desktop）。不改 protocol / agent-core / storage。
+- **验证**: `cargo check -p hebbian` + `apps/desktop` 下 `tsc --noEmit` 绿。实测：popout 显示 / 工具栏完整 / resize 跟随 / 收回生效 / baidu 渲染均 OK；embedded localhost 稳定（tab 不再被抢）。
+- **留尾巴**: ① embedded（主窗口子 webview）加载 baidu 仍黑，而 popout 同 UA 同引擎能渲染——疑 WKWebView 在主窗口子 webview 的固有差异，baidu 非核心用途（dev 预览 localhost 是主用途、已 OK），暂搁；② embedded 浏览器内容区左侧偶现一块空白（webview bounds 偏右，疑 `syncBounds` 取的 `viewportRef` rect 坐标在某布局下算偏），下次加 `browser_set_bounds` 坐标诊断定位。

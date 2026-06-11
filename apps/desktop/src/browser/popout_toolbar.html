@@ -15,6 +15,9 @@
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body { height: 100%; background: transparent;
         font: 13px -apple-system, system-ui, "PingFang SC", sans-serif; }
+      /* popout 窗口内容延伸到系统 titlebar 下方，顶部让出 28px 露出系统 titlebar（红绿灯），
+         可拖动窗口；工具栏按钮/地址栏在其下，不被 titlebar 盖。 */
+      #titlebar { height: 28px; -webkit-app-region: drag; }
       #bar { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px;
         background: #f6f8fa; border-bottom: 1px solid #d9dde3; }
       .btn { width: 30px; height: 30px; display: grid; place-items: center;
@@ -29,6 +32,7 @@
     </style>
   </head>
   <body>
+    <div id="titlebar"></div>
     <div id="bar">
       <div class="btn" id="back" title="后退">‹</div>
       <div class="btn" id="fwd" title="前进">›</div>
@@ -56,6 +60,13 @@
       addr.addEventListener("blur", function () { addrFocused = false; });
       addr.addEventListener("keydown", function (e) {
         if (e.key === "Enter" && addr.value.trim()) up("tb:navigate", { url: addr.value.trim() });
+      });
+      // 工具栏主 webview 随窗口缩放，onresize 一定触发——以此驱动 Rust 把页面子 webview
+      // 重新铺满工具栏下方（on_window_event 的 Resized 在多 webview 窗口不可靠）。
+      var resizeTimer = null;
+      window.addEventListener("resize", function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () { up("tb:resize"); }, 16);
       });
       function setDisabled(el, off) { if (off) el.setAttribute("disabled", ""); else el.removeAttribute("disabled"); }
       // 下行：Rust 更新地址栏 / 前进后退可用态 / 选取按钮高亮

@@ -8,6 +8,7 @@ import {
   Globe2,
   ListChecks,
   ClipboardList,
+  SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -20,6 +21,7 @@ import { ModelIoInspector } from "./ModelIoInspector";
 import { TodoTab } from "./TodoTab";
 import { PlanTab } from "./PlanTab";
 import { BrowserPanel } from "./BrowserPanel";
+import { TerminalSurface } from "./TerminalSurface";
 
 /**
  * 右侧工作台：固定列布局（被 ChatView 的 grid 让位），承载「后台任务 / 修改文件」两个 tab。
@@ -34,9 +36,9 @@ import { BrowserPanel } from "./BrowserPanel";
  * sidebar 不持有业务数据，仅管布局。
  */
 
-type TabId = "tasks" | "edits" | "todos" | "plans" | "browser";
+type TabId = "tasks" | "edits" | "todos" | "plans" | "browser" | "terminal";
 
-const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "browser"];
+const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "browser", "terminal"];
 
 const STORAGE_PREFIX = "hebbian.rightSidebar";
 
@@ -51,6 +53,7 @@ const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
   todos: Math.round(DEFAULT_WIDTH / 2),
   plans: DEFAULT_WIDTH,
   browser: DEFAULT_WIDTH,
+  terminal: 480,
 };
 
 interface RightSidebarProps {
@@ -111,6 +114,13 @@ export function RightSidebar({
   );
   const [width, setWidth] = useState(() => loadWidthForTab(tab));
 
+  // 用户主动停在浏览器/终端 tab 时，agent 更新（todos/edits）不该抢走焦点——否则原生子
+  // webview 被切走隐藏，正在加载的慢页面（如 baidu）会黑屏。tabRef 供下面不依赖 tab 的
+  // 自动切 tab effect 读最新值。
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const autoSwitchBlocked = () => tabRef.current === "browser" || tabRef.current === "terminal";
+
   // 浏览器 tab 懒挂载：首次切到它才创建子 webview（没人看就不起浏览器）。
   // 一旦挂上就保留（切走靠 hidden + setVisible(false)），直到 sidebar 折叠卸载整个展开视图。
   const [browserMounted, setBrowserMounted] = useState(tab === "browser");
@@ -118,11 +128,18 @@ export function RightSidebar({
     if (tab === "browser") setBrowserMounted(true);
   }, [tab]);
 
+  // 终端 tab 同样懒挂载 + 切走只隐藏（保住 xterm 实例与输出订阅，PTY 在 Rust 端常驻）。
+  const [terminalMounted, setTerminalMounted] = useState(tab === "terminal");
+  useEffect(() => {
+    if (tab === "terminal") setTerminalMounted(true);
+  }, [tab]);
+
   // Model I/O Drawer 由本 sidebar 持有：debug 开启时多一个入口，点击打开覆盖式查看器。
   // 不放进 tab 内嵌是因为 Inspector 信息密度极大（RequestDetail/N 条 MessageRow/嵌套 PrettyJson），
   // 320px tab 容不下。
   const debugEnabled = useStore((s) => s.debugEnabled);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
+  const sessionWorkdir = useStore((s) => s.currentSession?.workdir ?? null);
   const todos = useStore((s) => s.todos);
   const editRuns = useStore((s) => {
     const id = s.currentSession?.id;
@@ -156,6 +173,7 @@ export function RightSidebar({
     if (todosKey === prevTodosKeyRef.current) return;
     prevTodosKeyRef.current = todosKey;
     if (todos.length === 0) return;
+    if (autoSwitchBlocked()) return; // 用户在浏览器/终端 tab，不抢焦点
     setCollapsed(false);
     setTab("todos");
   }, [sessionId, todosKey, todos.length]);
@@ -185,6 +203,7 @@ export function RightSidebar({
     const fresh = editRuns.filter((r) => !seen.has(r.run_id));
     if (fresh.length === 0) return;
     for (const r of editRuns) seen.add(r.run_id);
+    if (autoSwitchBlocked()) return; // 用户在浏览器/终端 tab，不抢焦点
     setCollapsed(false);
     setTab("edits");
     const latest = [...fresh].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
@@ -310,6 +329,15 @@ export function RightSidebar({
         }}
         active={tab === "browser"}
       />
+      <SidebarIconButton
+        icon={<SquareTerminal className="h-4 w-4" />}
+        label="终端"
+        onClick={() => {
+          setTab("terminal");
+          setCollapsed(false);
+        }}
+        active={tab === "terminal"}
+      />
       {debugEnabled && sessionId && (
         <SidebarIconButton
           icon={<FileJson className="h-4 w-4" />}
@@ -388,6 +416,13 @@ export function RightSidebar({
                   icon={<Globe2 className="h-3.5 w-3.5" />}
                   label="浏览器"
                 />
+                <SidebarTab
+                  id="terminal"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<SquareTerminal className="h-3.5 w-3.5" />}
+                  label="终端"
+                />
               </TabScroller>
               <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
                 {debugEnabled && sessionId && (
@@ -416,7 +451,12 @@ export function RightSidebar({
             {/* tab 内容区。浏览器 tab 例外：常驻挂载、切走只隐藏（hidden）不卸载——
                原生子 webview 重建代价大且会丢页面/登录态。其余 tab 是纯 React，条件渲染即可。 */}
             <div className="relative min-h-0 flex-1">
-              <div className={cn("h-full overflow-auto", tab === "browser" && "hidden")}>
+              <div
+                className={cn(
+                  "h-full overflow-auto",
+                  (tab === "browser" || tab === "terminal") && "hidden",
+                )}
+              >
                 {tab === "tasks" && <BackgroundTaskTab />}
                 {tab === "edits" && <EditTreeTab />}
                 {tab === "todos" && <TodoTab />}
@@ -425,6 +465,15 @@ export function RightSidebar({
               {browserMounted && (
                 <div className={cn("absolute inset-0", tab !== "browser" && "hidden")}>
                   <BrowserPanel active={tab === "browser"} />
+                </div>
+              )}
+              {terminalMounted && (
+                <div className={cn("absolute inset-0", tab !== "terminal" && "hidden")}>
+                  <TerminalSurface
+                    variant="embedded"
+                    active={tab === "terminal"}
+                    defaultCwd={sessionWorkdir}
+                  />
                 </div>
               )}
             </div>

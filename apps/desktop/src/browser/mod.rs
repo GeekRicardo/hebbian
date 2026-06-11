@@ -29,10 +29,15 @@ use crate::engine::EngineEvent;
 
 const POPOUT_LABEL: &str = "preview-popout";
 const POPOUT_PAGE_LABEL: &str = "preview-popout-page";
-/// popout 工具栏高度（logical px）——页面子 webview 从这个 y 起，渲染区与工具栏物理分离。
-const POPOUT_TOOLBAR_H: f64 = 44.0;
+/// popout 顶部栏总高（logical px）= macOS 系统 titlebar 让位区 28 + 工具栏按钮/地址栏 44。
+/// 页面子 webview 从这个 y 起——避开系统 titlebar 与工具栏，渲染区与它们物理分离。
+/// （popout 窗口的 webview 内容会延伸到系统 titlebar 下方，故工具栏顶部要为 titlebar 让位。）
+const POPOUT_TOOLBAR_H: f64 = 72.0;
 const INSPECTOR_JS: &str = include_str!("inspector.js");
 const POPOUT_TOOLBAR_HTML: &str = include_str!("popout_toolbar.html");
+/// 给 webview 设完整 Safari UA——WKWebView 默认 UA 缺 `Version/Safari` 后缀，部分站点
+/// （如 baidu）据此判定非标准浏览器、返回空白/简化页。补全后它们当正常浏览器渲染。
+const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 const BLANK_PAGE_HTML: &str = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>新页面</title></head><body style=\"margin:0;background:#fff\"></body></html>";
 
 /// base64 data URL——WKWebView 对 about:blank 不执行 initialization_script，但对正常 data
@@ -177,6 +182,7 @@ pub fn browser_open(
     let sid_load = session_id.clone();
     let app_for_load = app.clone();
     let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(target.clone()))
+        .user_agent(BROWSER_UA)
         .initialization_script(init_script())
         .on_navigation(move |url: &Url| handle_navigation(&app_for_nav, &sid_nav, url))
         .on_page_load(move |_wv, payload| {
@@ -510,7 +516,7 @@ pub fn browser_popout(
     if let Some(p) = state.popout.lock().unwrap().take() {
         let _ = p.window.close();
     }
-    if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+    if let Some(w) = app.get_window(POPOUT_LABEL) {
         let _ = w.close();
     }
 
@@ -519,13 +525,21 @@ pub fn browser_popout(
         .parse()
         .map_err(|_| "工具栏生成失败".to_string())?;
     let app_tb = app.clone();
-    let win = WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(toolbar_url))
+    let mut tb_builder = WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(toolbar_url))
         .title("页面预览（可缩放测样式）")
         .inner_size(1280.0, 800.0)
         .resizable(true)
-        .on_navigation(move |url: &Url| handle_toolbar_nav(&app_tb, url))
-        .build()
-        .map_err(|e| e.to_string())?;
+        .on_navigation(move |url: &Url| handle_toolbar_nav(&app_tb, url));
+    // popout 用 overlay titlebar（与主窗口一致）：webview 内容区 = 整个窗口（含 titlebar 区），
+    // add_child 的坐标系才和主窗口统一。否则标准 titlebar 下 add_child 的 y 相对窗口外框，
+    // page 会被上移一个 titlebar 高度盖住工具栏。工具栏 HTML 顶部已留 28px 给系统红绿灯。
+    #[cfg(target_os = "macos")]
+    {
+        tb_builder = tb_builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+    let win = tb_builder.build().map_err(|e| e.to_string())?;
 
     // 页面子 webview：注入 inspector（注释/选取/旁支），不再注入工具栏
     let window = app
@@ -535,12 +549,16 @@ pub fn browser_popout(
     let page = window
         .add_child(
             tauri::webview::WebviewBuilder::new(POPOUT_PAGE_LABEL, WebviewUrl::External(page_url))
+                .user_agent(BROWSER_UA)
                 .initialization_script(format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"))
                 .on_navigation(move |url: &Url| handle_popout_page_nav(&app_pg, url)),
             LogicalPosition::new(0.0, POPOUT_TOOLBAR_H),
             LogicalSize::new(1280.0, (800.0 - POPOUT_TOOLBAR_H).max(1.0)),
         )
         .map_err(|e| e.to_string())?;
+
+    // add_child 的子 webview 默认不保证可见（embedded 也是靠 setVisible 显式 show 才出现）。
+    let _ = page.show();
 
     *state.popout.lock().unwrap() = Some(PopoutInstance {
         session_id: session_id.clone(),
@@ -569,7 +587,9 @@ pub fn browser_popout(
         _ => {}
     });
 
-    // 初始同步地址栏（页面有 url 时）
+    // 用实际 client area 修正页面 webview 的位置/尺寸（固定 1280×800 可能与真实窗口尺寸/
+    // titlebar 不符，导致页面跑偏或被遮）+ 初始同步地址栏。
+    popout_resize(&app);
     send_toolbar_state(&app);
     let _ = app.emit(
         "browser://popout",
@@ -586,7 +606,7 @@ pub fn browser_close_popout(
 ) -> Result<(), String> {
     if let Some(p) = state.popout.lock().unwrap().take() {
         p.window.close().map_err(|e| e.to_string())?;
-    } else if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+    } else if let Some(w) = app.get_window(POPOUT_LABEL) {
         w.close().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -616,7 +636,7 @@ fn send_toolbar_state(app: &AppHandle) {
 
 /// 窗口 resize：页面子 webview 铺满工具栏下方区域。
 fn popout_resize(app: &AppHandle) {
-    let Some(w) = app.get_webview_window(POPOUT_LABEL) else {
+    let Some(w) = app.get_window(POPOUT_LABEL) else {
         return;
     };
     let (Ok(size), Ok(sf)) = (w.inner_size(), w.scale_factor()) else {
@@ -649,8 +669,12 @@ fn handle_toolbar_nav(app: &AppHandle, url: &Url) -> bool {
         "tb:forward" => popout_go(app, 1),
         "tb:reload" => popout_reload(app),
         "tb:picker" => popout_toggle_picker(app),
+        // 窗口 resize 由工具栏 webview 的 JS resize 事件上行触发——on_window_event 的
+        // Resized 在多 webview 窗口不可靠（实测不触发），工具栏主 webview 随窗口缩放、
+        // 它的 window.onresize 一定触发，是可靠的 resize 钩子。
+        "tb:resize" => popout_resize(app),
         "tb:close" => {
-            if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+            if let Some(w) = app.get_window(POPOUT_LABEL) {
                 let _ = w.close();
             }
         }
