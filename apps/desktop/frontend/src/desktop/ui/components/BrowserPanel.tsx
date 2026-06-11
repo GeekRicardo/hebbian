@@ -179,7 +179,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
   };
 
   const popout = () => {
-    if (!state.url) return;
+    // 空浏览器也允许弹出——popout 自带地址栏，可在新窗口里输网址
     void host.popout().catch((err) => toast.error(String(err)));
   };
 
@@ -250,8 +250,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
         <button
           type="button"
           onClick={popout}
-          disabled={!state.url}
-          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
+          className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent"
           title="弹出独立窗口（可缩放测样式，同样能标注）"
         >
           <PictureInPicture2 className="h-4 w-4" />

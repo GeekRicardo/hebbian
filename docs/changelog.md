@@ -7008,3 +7008,14 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 仅 apps/desktop（mod.rs + browserHost + BrowserPanel）
 - **验证**: cargo check + tsc 全绿；事件接线逻辑直接（emit/监听/state）。占位显示、webview 让位、OS 关闭恢复的视觉行为需用户眼验（原生窗口我点不到）
 - **留尾巴**: poppedOut 时主窗口工具栏的后退/前进/刷新/选取仍作用于隐藏的内嵌 webview（无害但无意义），未禁用；可后续 polish
+
+### 2026-06-11 — 空浏览器也可弹出独立窗口（about:blank）+ 注释框可拖动
+
+- **Why**: 用户要——①没输网址时也能弹出新窗口（在 popout 自带地址栏里输）；②注释框可拖到任意位置避免遮住元素
+- **改动**:
+  - mod.rs: browser_popout 没有当前页时用 `about:blank` 起空窗口（不再报错）；spike 验证 about:blank 上 inspector 注入 + 工具栏渲染
+  - BrowserPanel.tsx: 弹出按钮去掉 `disabled={!state.url}`
+  - inspector.js: 注释卡片头部成为拖动手柄（makeCardDraggable）——按住移动，改 left/top 清掉 right 定位，限制在视口内；关闭按钮不触发拖动
+- **影响范围**: 仅 apps/desktop（mod.rs + BrowserPanel + inspector.js）
+- **验证**: spike 探测——about:blank popout `{blankPopout:true, hasToolbar:true, isPopout:true}`（空窗口注入+工具栏OK）；inspector 测试 + cargo check + tsc 全绿。拖动手感需用户眼验
+- **留尾巴**: 注释卡片样式参数实时预览本就实现（cardRow input/change → styleApply → setProperty 直接作用于选中元素）；用户提的「注释框内局部多轮对话（subagent）+ LLM 实时改页面 + 提交时总结」是大特性，另行设计实现

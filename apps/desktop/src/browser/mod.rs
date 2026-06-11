@@ -311,13 +311,14 @@ pub fn browser_close(state: tauri::State<'_, BrowserState>) -> Result<(), String
 /// 提交经 heb-bridge 上行回主进程，再由主窗口 React 发进对话。
 #[tauri::command]
 pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
+    // 没有当前页时弹一个空白窗口——用户可在 popout 自带的地址栏里输网址
     let url = state
         .inner
         .lock()
         .unwrap()
         .as_ref()
         .and_then(|i| i.history.get(i.cursor).cloned())
-        .ok_or_else(|| "浏览器还没打开页面".to_string())?;
+        .unwrap_or_else(|| "about:blank".to_string());
     let target: Url = url.parse().map_err(|_| "当前地址异常".to_string())?;
 
     // 已有 popout 先关，避免重复
@@ -517,6 +518,26 @@ pub fn run_spike(app: &AppHandle) -> tauri::Result<()> {
             "#;
             let _ = w.eval(probe);
             tracing::info!(target: "webview_spike", "popout toolbar probe dispatched");
+        }
+
+        // 验证 about:blank 空窗口也注入 + 渲染工具栏（空浏览器 popout 走这条路）
+        wait(2).await;
+        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
+            let _ = w.eval("window.location.href='about:blank'");
+        }
+        wait(4).await;
+        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
+            let probe = r#"
+                (function(){
+                  var bar = document.querySelector('[data-hebbian-overlay="toolbar"]');
+                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify({
+                    source:'hebbian-inspector', type:'heb:debug',
+                    payload:{ blankPopout:true, isPopout: !!window.__HEB_POPOUT__, hasToolbar: !!bar,
+                              href: window.location.href }})));
+                })();
+            "#;
+            let _ = w.eval(probe);
+            tracing::info!(target: "webview_spike", "about:blank toolbar probe dispatched");
         }
 
         wait(2).await;

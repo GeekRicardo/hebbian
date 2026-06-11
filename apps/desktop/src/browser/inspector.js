@@ -553,6 +553,31 @@
     cardSnapshot = null;
   }
 
+  // 拖动卡片：按住 handle 移动 card（改 left/top，清掉 right 定位）
+  function makeCardDraggable(card, handle) {
+    handle.addEventListener("mousedown", function (e) {
+      if (e.target && e.target.tagName === "BUTTON") return; // 关闭按钮不触发拖动
+      e.preventDefault();
+      var rect = card.getBoundingClientRect();
+      card.style.left = rect.left + "px";
+      card.style.top = rect.top + "px";
+      card.style.right = "auto";
+      var startX = e.clientX, startY = e.clientY, baseL = rect.left, baseT = rect.top;
+      var onMove = function (ev) {
+        var l = Math.max(0, Math.min(window.innerWidth - 40, baseL + ev.clientX - startX));
+        var t = Math.max(0, Math.min(window.innerHeight - 24, baseT + ev.clientY - startY));
+        card.style.left = l + "px";
+        card.style.top = t + "px";
+      };
+      var onUp = function () {
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+      };
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    });
+  }
+
   function elementBadge(snap) {
     var t = snap.tagName;
     if (snap.id) t += "#" + snap.id;
@@ -580,7 +605,7 @@
     card.addEventListener("mousedown", function (e) { e.stopPropagation(); }, false);
 
     var head = document.createElement("div");
-    head.style.cssText = "display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #d9dde3;";
+    head.style.cssText = "display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #d9dde3;cursor:move;user-select:none;";
     var badge = document.createElement("span");
     badge.textContent = elementBadge(snap);
     badge.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px ui-monospace,monospace;";
@@ -589,6 +614,8 @@
     closeBtn.style.cssText = "border:none;background:none;color:#57606a;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;";
     closeBtn.addEventListener("click", function () { styleRevert(); removeCard(); });
     head.appendChild(badge); head.appendChild(closeBtn);
+    // 拖动：按住头部移动卡片（改 left/top，避开 right 定位），避免遮住元素
+    makeCardDraggable(card, head);
 
     var comment = document.createElement("textarea");
     comment.placeholder = "描述这些更改…"; // 描述这些更改…
