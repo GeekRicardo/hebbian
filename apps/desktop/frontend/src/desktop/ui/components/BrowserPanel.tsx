@@ -28,57 +28,62 @@ import {
  * 占位区 bounds 同步、选取按钮、弹出独立窗口。注释卡片由注入页面的 inspector.js 在页面内
  * 渲染（embedded 与 popout 共用），提交经上行通道 → App 级监听 → 发进对话。
  *
- * `active`：是否当前显示的 tab。常驻挂载、切走只隐藏不卸载（保住页面/登录态/滚动）；
- * active=false 时 setVisible(false) 让原生 webview 不盖住别的 tab 内容。
+ * 多对话多实例：每个对话一个子 webview，状态（url/标题/历史/选取/弹出/自动跟随）各存一份，
+ * 按 currentSession 渲染。webview 在「输入网址打开」那一刻才在后端懒创建——没碰过浏览器的
+ * 对话不占实例。切对话先 hideOthers 把别的对话的 webview 收起，再显示当前对话的那个。
+ *
+ * `active`：是否当前显示的 tab。常驻挂载、切走只隐藏不卸载（保住页面/登录态/滚动）。
  */
+interface Inst {
+  state: BrowserStateEvent;
+  title: string;
+  pickerActive: boolean;
+  poppedOut: boolean;
+  autoFollow: boolean;
+  /** 本实例已自动跟随过的地址（同一地址不重复跟随） */
+  followed: string | null;
+  /** 已在后端创建子 webview（懒创建标记）——false 时下次导航走 open，true 走 navigate */
+  opened: boolean;
+}
+
+const BLANK_STATE: BrowserStateEvent = {
+  url: "",
+  can_go_back: false,
+  can_go_forward: false,
+  loading: false,
+};
+const BLANK_INST: Inst = {
+  state: BLANK_STATE,
+  title: "",
+  pickerActive: false,
+  poppedOut: false,
+  autoFollow: true,
+  followed: null,
+  opened: false,
+};
+
 export function BrowserPanel({ active }: { active: boolean }) {
   const host = getBrowserHost();
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
-  const [draftUrl, setDraftUrl] = useState("");
-  const [state, setState] = useState<BrowserStateEvent>({
-    url: "",
-    can_go_back: false,
-    can_go_forward: false,
-    loading: false,
-  });
-  const [title, setTitle] = useState("");
-  const [pickerActive, setPickerActive] = useState(false);
-  const [autoFollow, setAutoFollow] = useState(true);
-  // 已弹出到独立窗口：内嵌 webview 让位，显示占位
-  const [poppedOut, setPoppedOut] = useState(false);
-  const poppedOutRef = useRef(false);
-  poppedOutRef.current = poppedOut;
 
-  // 元素对话的上下文：把当前对话 + provider/model + 可选模型列表喂给后端
-  // （旁支会话建会话 / 卡片模型选择器 / 提交总结要用）
-  const providers = useStore((s) => s.providersFile.providers);
-  const modelOptions = useMemo(
-    () =>
-      providers
-        .filter((p) => p.enabled !== false)
-        .flatMap((p) =>
-          (p.models ?? []).map((m) => ({ providerId: p.id, model: m, label: `${m} · ${p.name}` }))
-        ),
-    [providers]
-  );
-  // 把当前对话绑定给浏览器——注释/队列/旁支结论都提交回这个对话，不随之后切到的别的对话变（否则会串）。
-  // 绑定时机：首次显示浏览器 tab + 用户/agent 每次导航浏览器（见 loadUrl）——即「最后操作浏览器的对话」。
-  const bindContext = useCallback(() => {
-    const s = useStore.getState().currentSession;
-    if (s?.id && s.provider_id && s.model) {
-      void host.setContext(s.id, s.provider_id, s.model, modelOptions).catch(() => undefined);
-    }
-  }, [host, modelOptions]);
-  const boundOnceRef = useRef(false);
-  useEffect(() => {
-    if (active && !boundOnceRef.current) {
-      boundOnceRef.current = true;
-      bindContext();
-    }
-  }, [active, bindContext]);
+  const currentSessionId = useStore((s) => s.currentSession?.id ?? null);
+  const currentSessionIdRef = useRef(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
+
+  // 每个对话一份浏览器状态，按 session_id 索引；渲染当前对话的那份。
+  const [insts, setInsts] = useState<Record<string, Inst>>({});
+  const instsRef = useRef(insts);
+  instsRef.current = insts;
+  const cur = (currentSessionId ? insts[currentSessionId] : undefined) ?? BLANK_INST;
+
+  const [draftUrl, setDraftUrl] = useState("");
+
+  const patchInst = useCallback((sid: string, patch: Partial<Inst>) => {
+    setInsts((prev) => ({ ...prev, [sid]: { ...(prev[sid] ?? BLANK_INST), ...patch } }));
+  }, []);
 
   // 聊天流里检测到的本地 dev server 地址（架构 §4.2）。
   const messages = useStore((s) => s.currentSession?.messages);
@@ -86,17 +91,19 @@ export function BrowserPanel({ active }: { active: boolean }) {
   const detectedUrls = useMemo(() => extractPreviewUrls(sources, "card"), [sources]);
   const autoOpenUrl = useMemo(() => extractPreviewUrls(sources, "autoOpen")[0] ?? null, [sources]);
 
-  // 占位区 → 子 webview bounds 同步。active=false（隐藏 tab）时不同步，避免把 webview
-  // 定位到 0×0 或别的 tab 区域。
+  // 占位区 → 当前对话子 webview bounds 同步。隐藏 tab / 弹出 / 无实例时不同步。
   const syncBounds = useCallback(() => {
-    if (!activeRef.current || poppedOutRef.current) return;
+    const sid = currentSessionIdRef.current;
+    if (!sid || !activeRef.current) return;
+    const inst = instsRef.current[sid];
+    if (!inst?.opened || inst.poppedOut) return;
     const el = viewportRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    void host.setBounds({ x: r.left, y: r.top, width: r.width, height: r.height });
+    void host.setBounds(sid, { x: r.left, y: r.top, width: r.width, height: r.height });
   }, [host]);
 
-  // 订阅 webview 事件
+  // 订阅 webview 事件——回调带 session_id，落到对应实例；当前对话才弹 toast。
   useEffect(() => {
     const unlistens: Array<() => void> = [];
     let alive = true;
@@ -106,26 +113,35 @@ export function BrowserPanel({ active }: { active: boolean }) {
         else fn();
       });
 
-    track(host.onState((s) => setState(s)));
+    track(host.onState((sid, s) => patchInst(sid, { state: s })));
     track(
-      host.onTitle((t) => {
-        setTitle(t.title);
-        setState((prev) => (prev.url === t.url ? prev : { ...prev, url: t.url }));
+      host.onTitle((sid, t) =>
+        setInsts((prev) => {
+          const base = prev[sid] ?? BLANK_INST;
+          return {
+            ...prev,
+            [sid]: {
+              ...base,
+              title: t.title,
+              state: base.state.url === t.url ? base.state : { ...base.state, url: t.url },
+            },
+          };
+        })
+      )
+    );
+    track(host.onPickerOff((sid) => patchInst(sid, { pickerActive: false })));
+    track(
+      host.onEscaped((sid, info) => {
+        if (sid === currentSessionIdRef.current) toast.warning(info.reason || "该地址无法打开");
       })
     );
-    track(host.onPickerOff(() => setPickerActive(false)));
-    track(
-      host.onEscaped((info) => {
-        toast.warning(info.reason || "该地址无法打开");
-      })
-    );
-    track(host.onPopout((open) => setPoppedOut(open)));
+    track(host.onPopout((sid, open) => patchInst(sid, { poppedOut: open })));
 
     return () => {
       alive = false;
       unlistens.forEach((fn) => fn());
     };
-  }, [host]);
+  }, [host, patchInst]);
 
   // bounds 同步：窗口 resize + 占位区 resize（sidebar 拖宽/折叠都会触发）
   useEffect(() => {
@@ -140,57 +156,68 @@ export function BrowserPanel({ active }: { active: boolean }) {
     };
   }, [syncBounds]);
 
-  // active 切换：显示 tab → 重新定位 + 显示 webview；切走 → 隐藏 webview（不盖别的 tab）
+  // 切对话 / 切 tab / 实例懒创建后：收起别的对话的 webview，按可见性显示当前对话的那个。
   useEffect(() => {
-    // 可见 = 当前 tab 且未弹出到独立窗口
-    if (active && !poppedOut) {
-      void host.setVisible(true);
+    if (!currentSessionId) {
+      if (active) void host.hideOthers(""); // 没绑定对话——全部收起
+      return;
+    }
+    void host.hideOthers(currentSessionId); // 切对话先把别的对话的 webview 收起
+    const visible = active && cur.opened && !cur.poppedOut;
+    void host.setVisible(currentSessionId, visible);
+    if (visible) {
       // 等 DOM 完成布局再取 rect（hidden→显示这一帧 rect 才有效）
       const raf = requestAnimationFrame(() => syncBounds());
       return () => cancelAnimationFrame(raf);
     }
-    void host.setVisible(false);
-    void host.clearSelection(); // 切走 / 弹出时收起页面内注释卡片
+    void host.clearSelection(currentSessionId); // 切走 / 弹出时收起页面内注释卡片
     return undefined;
-  }, [active, poppedOut, host, syncBounds]);
+  }, [active, currentSessionId, cur.opened, cur.poppedOut, host, syncBounds]);
 
-  // 卸载（折叠 sidebar / 关闭对话窗口）：关掉子 webview
-  useEffect(() => {
-    return () => {
-      void host.close();
-    };
-  }, [host]);
-
-  // 地址栏 url 跟随 state（用户聚焦编辑时不抢）
+  // 地址栏跟随当前对话实例的 url（用户聚焦编辑时不抢）；切到没开浏览器的对话则清空。
   const addrFocusedRef = useRef(false);
   useEffect(() => {
-    if (!addrFocusedRef.current && state.url) {
-      setDraftUrl(formatPreviewUrlLabel(state.url));
-    }
-  }, [state.url]);
+    if (addrFocusedRef.current) return;
+    setDraftUrl(cur.state.url ? formatPreviewUrlLabel(cur.state.url) : "");
+  }, [cur.state.url, currentSessionId]);
 
-  // auto-follow：聊天流里冒出新的 dev server 地址且开关打开时自动跟随。
+  const loadUrl = useCallback(
+    (raw: string, origin: "auto" | "user") => {
+      const sid = currentSessionIdRef.current;
+      if (!sid) {
+        toast.error("先打开一个对话，再开浏览器");
+        return;
+      }
+      const norm = normalizePreviewUrlInput(raw);
+      if (!norm) {
+        toast.error("这个地址没法打开");
+        return;
+      }
+      if (origin === "user") patchInst(sid, { autoFollow: false });
+      const inst = instsRef.current[sid];
+      if (!inst?.opened) {
+        // 懒创建：这个对话第一次开浏览器，才在后端建子 webview
+        patchInst(sid, { opened: true });
+        void host
+          .open(sid, norm, origin, currentBounds(viewportRef.current))
+          .catch((err) => {
+            toast.error(String(err));
+            patchInst(sid, { opened: false });
+          });
+      } else {
+        void host.navigate(sid, norm).catch((err) => toast.error(String(err)));
+      }
+    },
+    [host, patchInst]
+  );
+
+  // auto-follow：聊天流里冒出新的 dev server 地址且当前对话开关打开时自动跟随。
   // 用户手动输地址（loadUrl user 档）会关掉它，把控制权交还用户。
-  const followedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!autoFollow || !autoOpenUrl || followedRef.current === autoOpenUrl) return;
-    followedRef.current = autoOpenUrl;
-    if (!state.url) void host.open(autoOpenUrl, "auto", currentBounds(viewportRef.current));
-    else void host.navigate(autoOpenUrl).catch(() => undefined);
-  }, [autoFollow, autoOpenUrl, state.url, host]);
-
-  const loadUrl = (raw: string, origin: "auto" | "user") => {
-    const norm = normalizePreviewUrlInput(raw);
-    if (!norm) {
-      toast.error("这个地址没法打开");
-      return;
-    }
-    if (origin === "user") setAutoFollow(false);
-    bindContext(); // 导航浏览器即把当前对话绑定为提交目标
-    if (!state.url)
-      void host.open(norm, origin, currentBounds(viewportRef.current)).catch((err) => toast.error(String(err)));
-    else void host.navigate(norm).catch((err) => toast.error(String(err)));
-  };
+    if (!currentSessionId || !cur.autoFollow || !autoOpenUrl || cur.followed === autoOpenUrl) return;
+    patchInst(currentSessionId, { followed: autoOpenUrl });
+    loadUrl(autoOpenUrl, "auto");
+  }, [currentSessionId, cur.autoFollow, cur.followed, autoOpenUrl, patchInst, loadUrl]);
 
   const submitUrl = (e: FormEvent) => {
     e.preventDefault();
@@ -198,18 +225,19 @@ export function BrowserPanel({ active }: { active: boolean }) {
   };
 
   const togglePicker = () => {
-    const next = !pickerActive;
-    setPickerActive(next);
-    void host.setPicker(next);
+    if (!currentSessionId) return;
+    const next = !cur.pickerActive;
+    patchInst(currentSessionId, { pickerActive: next });
+    void host.setPicker(currentSessionId, next);
   };
 
   const openExternal = () => {
-    if (state.url) void openUrl(state.url).catch(() => undefined);
+    if (cur.state.url) void openUrl(cur.state.url).catch(() => undefined);
   };
 
   const popout = () => {
     // 空浏览器也允许弹出——popout 自带地址栏，可在新窗口里输网址
-    void host.popout().catch((err) => toast.error(String(err)));
+    if (currentSessionId) void host.popout(currentSessionId).catch((err) => toast.error(String(err)));
   };
 
   return (
@@ -217,8 +245,8 @@ export function BrowserPanel({ active }: { active: boolean }) {
       <form onSubmit={submitUrl} className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <button
           type="button"
-          onClick={() => void host.back()}
-          disabled={!state.can_go_back}
+          onClick={() => currentSessionId && void host.back(currentSessionId)}
+          disabled={!cur.state.can_go_back}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="后退"
         >
@@ -226,8 +254,8 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </button>
         <button
           type="button"
-          onClick={() => void host.forward()}
-          disabled={!state.can_go_forward}
+          onClick={() => currentSessionId && void host.forward(currentSessionId)}
+          disabled={!cur.state.can_go_forward}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="前进"
         >
@@ -235,12 +263,12 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </button>
         <button
           type="button"
-          onClick={() => void host.reload()}
-          disabled={!state.url}
+          onClick={() => currentSessionId && void host.reload(currentSessionId)}
+          disabled={!cur.state.url}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="刷新"
         >
-          {state.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          {cur.state.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </button>
         <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 focus-within:border-primary">
           <Globe2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -256,23 +284,23 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </div>
         <button
           type="button"
-          onClick={() => setAutoFollow((v) => !v)}
+          onClick={() => currentSessionId && patchInst(currentSessionId, { autoFollow: !cur.autoFollow })}
           className={`grid h-7 w-7 place-items-center rounded hover:bg-accent ${
-            autoFollow ? "text-primary" : "text-muted-foreground"
+            cur.autoFollow ? "text-primary" : "text-muted-foreground"
           }`}
-          title={autoFollow ? "自动跟随助手打开的地址（已开）" : "自动跟随助手打开的地址（已关）"}
-          aria-pressed={autoFollow}
+          title={cur.autoFollow ? "自动跟随助手打开的地址（已开）" : "自动跟随助手打开的地址（已关）"}
+          aria-pressed={cur.autoFollow}
         >
           <Sparkles className="h-4 w-4" />
         </button>
         <button
           type="button"
           onClick={togglePicker}
-          disabled={!state.url}
+          disabled={!cur.state.url}
           className={`grid h-7 w-7 place-items-center rounded transition-transform hover:bg-accent active:scale-90 disabled:opacity-30 ${
-            pickerActive ? "bg-primary/20 text-primary ring-1 ring-primary/40" : "text-muted-foreground"
+            cur.pickerActive ? "bg-primary/20 text-primary ring-1 ring-primary/40" : "text-muted-foreground"
           }`}
-          title={pickerActive ? "选取中…点页面元素，或再点这里退出" : "选取页面元素标注"}
+          title={cur.pickerActive ? "选取中…点页面元素，或再点这里退出" : "选取页面元素标注"}
         >
           <MousePointerSquareDashed className="h-4 w-4" />
         </button>
@@ -287,7 +315,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
         <button
           type="button"
           onClick={openExternal}
-          disabled={!state.url}
+          disabled={!cur.state.url}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="在系统浏览器打开"
         >
@@ -313,7 +341,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
 
       {/* 占位区：原生子 webview 浮在它上面。空态给引导。 */}
       <div ref={viewportRef} className="relative min-h-0 flex-1 bg-muted/20">
-        {poppedOut ? (
+        {cur.poppedOut ? (
           <div className="absolute inset-0 grid place-items-center px-4 text-center">
             <div>
               <PictureInPicture2 className="mx-auto h-10 w-10 text-muted-foreground/50" />
@@ -331,7 +359,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
             </div>
           </div>
         ) : (
-          !state.url && (
+          !cur.state.url && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center">
               <div>
                 <Globe2 className="mx-auto h-10 w-10 text-muted-foreground/40" />

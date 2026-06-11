@@ -3,6 +3,10 @@
 // 接口抽象两路实现：Desktop = Tauri 子 webview（本文件 TauriBrowserHost）；
 // hebweb = iframe + 代理（P2.5 再加 IframeBrowserHost）。面板 UI 与注释流只依赖
 // 本接口，对承载方式无感知。
+//
+// 多对话多实例：每个对话一个子 webview（后端按 session_id 区分）。所有命令带
+// sessionId 定位实例；导航/标题/逃逸等事件回调把 sessionId 透出来，面板按当前
+// 对话过滤——别的对话的实例事件不串进来。
 import { api } from "@/desktop/bridge/tauri";
 import { listen } from "@/desktop/bridge/transport";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -45,89 +49,87 @@ export interface BrowserBounds {
 export type BrowserOrigin = "auto" | "user";
 
 export interface BrowserHost {
-  open(url: string, origin: BrowserOrigin, bounds: BrowserBounds): Promise<string>;
-  navigate(url: string): Promise<string>;
-  back(): Promise<void>;
-  forward(): Promise<void>;
-  reload(): Promise<void>;
-  setBounds(bounds: BrowserBounds): Promise<void>;
-  setVisible(visible: boolean): Promise<void>;
-  close(): Promise<void>;
-  setPicker(active: boolean): Promise<void>;
-  clearSelection(): Promise<void>;
-  popout(): Promise<void>;
+  open(sessionId: string, url: string, origin: BrowserOrigin, bounds: BrowserBounds): Promise<string>;
+  navigate(sessionId: string, url: string): Promise<string>;
+  back(sessionId: string): Promise<void>;
+  forward(sessionId: string): Promise<void>;
+  reload(sessionId: string): Promise<void>;
+  setBounds(sessionId: string, bounds: BrowserBounds): Promise<void>;
+  setVisible(sessionId: string, visible: boolean): Promise<void>;
+  /** 切对话时隐藏除 keepSession 外的所有实例，避免叠在面板上。 */
+  hideOthers(keepSession: string): Promise<void>;
+  close(sessionId: string): Promise<void>;
+  setPicker(sessionId: string, active: boolean): Promise<void>;
+  clearSelection(sessionId: string): Promise<void>;
+  popout(sessionId: string): Promise<void>;
   closePopout(): Promise<void>;
-  setContext(
-    sessionId: string,
-    providerId: string,
-    model: string,
-    models: { providerId: string; model: string; label: string }[]
-  ): Promise<void>;
 
-  onState(cb: (s: BrowserStateEvent) => void): Promise<UnlistenFn>;
-  onTitle(cb: (t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
-  onPickerOff(cb: () => void): Promise<UnlistenFn>;
+  onState(cb: (sessionId: string, s: BrowserStateEvent) => void): Promise<UnlistenFn>;
+  onTitle(cb: (sessionId: string, t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
+  onPickerOff(cb: (sessionId: string) => void): Promise<UnlistenFn>;
   onAnnotation(cb: (a: AnnotationSubmit) => void): Promise<UnlistenFn>;
   onAnnotationBatch(
     cb: (items: AnnotationBatchItem[], boundSessionId?: string | null) => void
   ): Promise<UnlistenFn>;
-  onEscaped(cb: (info: { url: string; reason: string }) => void): Promise<UnlistenFn>;
-  onPopout(cb: (open: boolean) => void): Promise<UnlistenFn>;
+  onEscaped(
+    cb: (sessionId: string, info: { url: string; reason: string }) => void
+  ): Promise<UnlistenFn>;
+  onPopout(cb: (sessionId: string, open: boolean) => void): Promise<UnlistenFn>;
 }
 
 class TauriBrowserHost implements BrowserHost {
-  open(url: string, origin: BrowserOrigin, bounds: BrowserBounds) {
-    return api.browserOpen(url, origin, bounds);
+  open(sessionId: string, url: string, origin: BrowserOrigin, bounds: BrowserBounds) {
+    return api.browserOpen(sessionId, url, origin, bounds);
   }
-  navigate(url: string) {
-    return api.browserNavigate(url);
+  navigate(sessionId: string, url: string) {
+    return api.browserNavigate(sessionId, url);
   }
-  back() {
-    return api.browserBack();
+  back(sessionId: string) {
+    return api.browserBack(sessionId);
   }
-  forward() {
-    return api.browserForward();
+  forward(sessionId: string) {
+    return api.browserForward(sessionId);
   }
-  reload() {
-    return api.browserReload();
+  reload(sessionId: string) {
+    return api.browserReload(sessionId);
   }
-  setBounds(bounds: BrowserBounds) {
-    return api.browserSetBounds(bounds);
+  setBounds(sessionId: string, bounds: BrowserBounds) {
+    return api.browserSetBounds(sessionId, bounds);
   }
-  setVisible(visible: boolean) {
-    return api.browserSetVisible(visible);
+  setVisible(sessionId: string, visible: boolean) {
+    return api.browserSetVisible(sessionId, visible);
   }
-  close() {
-    return api.browserClose();
+  hideOthers(keepSession: string) {
+    return api.browserHideOthers(keepSession);
   }
-  setPicker(active: boolean) {
-    return api.browserPicker(active);
+  close(sessionId: string) {
+    return api.browserClose(sessionId);
   }
-  clearSelection() {
-    return api.browserClearSelection();
+  setPicker(sessionId: string, active: boolean) {
+    return api.browserPicker(sessionId, active);
   }
-  popout() {
-    return api.browserPopout();
+  clearSelection(sessionId: string) {
+    return api.browserClearSelection(sessionId);
+  }
+  popout(sessionId: string) {
+    return api.browserPopout(sessionId);
   }
   closePopout() {
     return api.browserClosePopout();
   }
-  setContext(
-    sessionId: string,
-    providerId: string,
-    model: string,
-    models: { providerId: string; model: string; label: string }[]
-  ) {
-    return api.browserSetContext(sessionId, providerId, model, models);
+  onState(cb: (sessionId: string, s: BrowserStateEvent) => void) {
+    return listen<BrowserStateEvent & { session_id: string }>("browser://state", (e) => {
+      const { session_id, ...s } = e.payload;
+      cb(session_id, s);
+    });
   }
-  onState(cb: (s: BrowserStateEvent) => void) {
-    return listen<BrowserStateEvent>("browser://state", (e) => cb(e.payload));
+  onTitle(cb: (sessionId: string, t: BrowserTitleEvent) => void) {
+    return listen<BrowserTitleEvent & { sessionId: string }>("browser://title", (e) =>
+      cb(e.payload.sessionId, { url: e.payload.url, title: e.payload.title })
+    );
   }
-  onTitle(cb: (t: BrowserTitleEvent) => void) {
-    return listen<BrowserTitleEvent>("browser://title", (e) => cb(e.payload));
-  }
-  onPickerOff(cb: () => void) {
-    return listen<unknown>("browser://picker-off", () => cb());
+  onPickerOff(cb: (sessionId: string) => void) {
+    return listen<{ sessionId: string }>("browser://picker-off", (e) => cb(e.payload.sessionId));
   }
   onAnnotation(cb: (a: AnnotationSubmit) => void) {
     return listen<AnnotationSubmit>("browser://annotation", (e) => cb(e.payload));
@@ -138,11 +140,15 @@ class TauriBrowserHost implements BrowserHost {
       (e) => cb(e.payload.items, e.payload.boundSessionId)
     );
   }
-  onEscaped(cb: (info: { url: string; reason: string }) => void) {
-    return listen<{ url: string; reason: string }>("browser://escaped", (e) => cb(e.payload));
+  onEscaped(cb: (sessionId: string, info: { url: string; reason: string }) => void) {
+    return listen<{ sessionId: string; url: string; reason: string }>("browser://escaped", (e) =>
+      cb(e.payload.sessionId, { url: e.payload.url, reason: e.payload.reason })
+    );
   }
-  onPopout(cb: (open: boolean) => void) {
-    return listen<{ open: boolean }>("browser://popout", (e) => cb(e.payload.open));
+  onPopout(cb: (sessionId: string, open: boolean) => void) {
+    return listen<{ sessionId: string; open: boolean }>("browser://popout", (e) =>
+      cb(e.payload.sessionId, e.payload.open)
+    );
   }
 }
 

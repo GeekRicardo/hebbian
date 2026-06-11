@@ -614,11 +614,13 @@ export const api = {
 
   // 内置浏览器（架构 §8.5）。origin: "auto"=自动通道仅本地 / "user"=用户主动可公网。
   browserOpen: (
+    sessionId: string,
     url: string,
     origin: "auto" | "user",
     bounds: { x: number; y: number; width: number; height: number }
   ) =>
     invoke<string>("browser_open", {
+      sessionId,
       url,
       origin,
       x: bounds.x,
@@ -626,28 +628,27 @@ export const api = {
       width: bounds.width,
       height: bounds.height,
     }),
-  browserNavigate: (url: string) => invoke<string>("browser_navigate", { url }),
-  browserBack: () => invoke<void>("browser_back"),
-  browserForward: () => invoke<void>("browser_forward"),
-  browserReload: () => invoke<void>("browser_reload"),
-  browserSetBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
-    invoke<void>("browser_set_bounds", bounds),
-  browserSetVisible: (visible: boolean) => invoke<void>("browser_set_visible", { visible }),
-  browserClose: () => invoke<void>("browser_close"),
-  browserPicker: (active: boolean) => invoke<void>("browser_picker", { active }),
-  browserStyleApply: (prop: string, value: string) =>
-    invoke<void>("browser_style_apply", { prop, value }),
-  browserStyleRevert: () => invoke<void>("browser_style_revert"),
-  browserStyleTakeDiff: () => invoke<void>("browser_style_take_diff"),
-  browserClearSelection: () => invoke<void>("browser_clear_selection"),
-  browserPopout: () => invoke<void>("browser_popout"),
+  browserNavigate: (sessionId: string, url: string) =>
+    invoke<string>("browser_navigate", { sessionId, url }),
+  browserBack: (sessionId: string) => invoke<void>("browser_back", { sessionId }),
+  browserForward: (sessionId: string) => invoke<void>("browser_forward", { sessionId }),
+  browserReload: (sessionId: string) => invoke<void>("browser_reload", { sessionId }),
+  browserSetBounds: (sessionId: string, bounds: { x: number; y: number; width: number; height: number }) =>
+    invoke<void>("browser_set_bounds", { sessionId, ...bounds }),
+  browserSetVisible: (sessionId: string, visible: boolean) =>
+    invoke<void>("browser_set_visible", { sessionId, visible }),
+  browserHideOthers: (keepSession: string) =>
+    invoke<void>("browser_hide_others", { keepSession }),
+  browserClose: (sessionId: string) => invoke<void>("browser_close", { sessionId }),
+  browserPicker: (sessionId: string, active: boolean) =>
+    invoke<void>("browser_picker", { sessionId, active }),
+  browserStyleApply: (sessionId: string, prop: string, value: string) =>
+    invoke<void>("browser_style_apply", { sessionId, prop, value }),
+  browserStyleRevert: (sessionId: string) => invoke<void>("browser_style_revert", { sessionId }),
+  browserStyleTakeDiff: (sessionId: string) => invoke<void>("browser_style_take_diff", { sessionId }),
+  browserClearSelection: (sessionId: string) => invoke<void>("browser_clear_selection", { sessionId }),
+  browserPopout: (sessionId: string) => invoke<void>("browser_popout", { sessionId }),
   browserClosePopout: () => invoke<void>("browser_close_popout"),
-  browserSetContext: (
-    sessionId: string,
-    providerId: string,
-    model: string,
-    models: { providerId: string; model: string; label: string }[]
-  ) => invoke<void>("browser_set_context", { sessionId, providerId, model, models }),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */

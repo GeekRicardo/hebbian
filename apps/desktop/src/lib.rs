@@ -2752,17 +2752,6 @@ pub fn run() {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(err.to_string()))
             })?;
 
-            if std::env::var("HEBBIAN_WEBVIEW_SPIKE").as_deref() == Ok("1") {
-                let spike_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    // 等主窗口完成首帧，再叠子 webview，避免启动竞态
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    if let Err(e) = browser::run_spike(&spike_handle) {
-                        tracing::error!(target: "webview_spike", "spike failed: {e}");
-                    }
-                });
-            }
-
             // 架构 §4.12.6：注册 WakeupScheduler 的 resume 回调。BgFinishHook /
             // CronTimer 触发时把 `<wakeup>` XML + session_id 通过 Tauri 事件
             // `wakeup-fired` 推给前端，前端 listener 自动把它当 user message 发出
@@ -2928,6 +2917,7 @@ pub fn run() {
             browser::browser_reload,
             browser::browser_set_bounds,
             browser::browser_set_visible,
+            browser::browser_hide_others,
             browser::browser_close,
             browser::browser_picker,
             browser::browser_style_apply,
@@ -2936,7 +2926,6 @@ pub fn run() {
             browser::browser_clear_selection,
             browser::browser_popout,
             browser::browser_close_popout,
-            browser::browser_set_context,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

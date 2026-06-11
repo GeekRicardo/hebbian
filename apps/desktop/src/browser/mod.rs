@@ -13,6 +13,7 @@
 
 mod url_policy;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -26,9 +27,13 @@ use url_policy::{validate_preview_url, PreviewOrigin};
 use crate::chat::{self, SendArgs};
 use crate::engine::EngineEvent;
 
-const WEBVIEW_LABEL: &str = "heb-preview";
 const POPOUT_LABEL: &str = "preview-popout";
 const INSPECTOR_JS: &str = include_str!("inspector.js");
+
+/// 每个对话一个子 webview，label 按 session_id 区分（多对话多实例）。
+fn webview_label(session_id: &str) -> String {
+    format!("heb-preview-{session_id}")
+}
 
 /// 注入到子 webview 的引导脚本：先装 inspector.js，再安装上行 bridge。
 /// inspector.js 内部检测到非 iframe 环境（子 webview）时，上行走 heb-bridge 导航，
@@ -39,6 +44,7 @@ fn init_script() -> String {
 
 /// 子 webview 实例 + 自维护导航历史（Webview API 未暴露 go_back/forward）。
 struct BrowserInstance {
+    session_id: String,
     webview: tauri::Webview,
     history: Vec<String>,
     cursor: usize,
@@ -47,25 +53,16 @@ struct BrowserInstance {
     picker_active: bool,
 }
 
+/// 多对话多实例：每个对话一个浏览器实例，懒创建（对话里实际打开网页才建）。
+/// session_id 天然就是「绑定的对话」——注释/队列/旁支结论提交回它，不串。
 #[derive(Default)]
 pub struct BrowserState {
-    inner: Mutex<Option<BrowserInstance>>,
-    /// 「元素对话」旁支会话用的上下文：主对话 session + provider/model。
-    /// 主窗口 React 在浏览器 tab 活跃 / 切会话时通过 browser_set_context 喂进来。
-    aside_context: Mutex<Option<AsideContext>>,
-}
-
-#[derive(Clone)]
-struct AsideContext {
-    main_session_id: String,
-    provider_id: String,
-    model: String,
-    /// 可选模型列表（[{providerId, model, label}]），供卡片里的模型选择器用。
-    models: serde_json::Value,
+    instances: Mutex<HashMap<String, BrowserInstance>>,
 }
 
 #[derive(Serialize, Clone)]
 struct BrowserStateEvent {
+    session_id: String,
     url: String,
     can_go_back: bool,
     can_go_forward: bool,
@@ -74,6 +71,7 @@ struct BrowserStateEvent {
 
 fn emit_state(app: &AppHandle, inst: &BrowserInstance, loading: bool) {
     let evt = BrowserStateEvent {
+        session_id: inst.session_id.clone(),
         url: inst.history.get(inst.cursor).cloned().unwrap_or_default(),
         can_go_back: inst.cursor > 0,
         can_go_forward: inst.cursor + 1 < inst.history.len(),
@@ -106,6 +104,7 @@ fn send_down(inst: &BrowserInstance, ty: &str, payload: serde_json::Value) -> Re
 pub fn browser_open(
     app: AppHandle,
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
     url: String,
     origin: PreviewOrigin,
     x: f64,
@@ -116,29 +115,40 @@ pub fn browser_open(
     let target = validate_preview_url(&url, origin)?;
     let target_str = target.to_string();
 
-    // 关掉旧实例
-    if let Some(old) = state.inner.lock().unwrap().take() {
-        let _ = old.webview.close();
+    // 已有该对话的实例：直接导航（保留每对话独立的页面 / 历史，不重建）
+    {
+        let mut guard = state.instances.lock().unwrap();
+        if let Some(inst) = guard.get_mut(&session_id) {
+            inst.history.truncate(inst.cursor + 1);
+            inst.history.push(target_str.clone());
+            inst.cursor = inst.history.len() - 1;
+            inst.programmatic = true;
+            inst.webview.navigate(target.clone()).map_err(|e| e.to_string())?;
+            emit_state(&app, inst, true);
+            return Ok(target_str);
+        }
     }
 
+    // 懒创建：该对话首次实际打开网页时才建实例（用户输网址 / agent 触发）
     let window = app
         .get_window("main")
         .ok_or_else(|| "主窗口不存在".to_string())?;
-
+    let label = webview_label(&session_id);
+    let sid_nav = session_id.clone();
     let app_for_nav = app.clone();
+    let sid_load = session_id.clone();
     let app_for_load = app.clone();
-    let builder =
-        tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, WebviewUrl::External(target.clone()))
-            .initialization_script(init_script())
-            .on_navigation(move |url: &Url| handle_navigation(&app_for_nav, url))
-            .on_page_load(move |_wv, payload| {
-                let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
-                if let Some(st) = app_for_load.try_state::<BrowserState>() {
-                    if let Some(inst) = st.inner.lock().unwrap().as_ref() {
-                        emit_state(&app_for_load, inst, loading);
-                    }
+    let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(target.clone()))
+        .initialization_script(init_script())
+        .on_navigation(move |url: &Url| handle_navigation(&app_for_nav, &sid_nav, url))
+        .on_page_load(move |_wv, payload| {
+            let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
+            if let Some(st) = app_for_load.try_state::<BrowserState>() {
+                if let Some(inst) = st.instances.lock().unwrap().get(&sid_load) {
+                    emit_state(&app_for_load, inst, loading);
                 }
-            });
+            }
+        });
 
     let webview = window
         .add_child(
@@ -149,22 +159,23 @@ pub fn browser_open(
         .map_err(|e| e.to_string())?;
 
     let inst = BrowserInstance {
+        session_id: session_id.clone(),
         webview,
         history: vec![target_str.clone()],
         cursor: 0,
         programmatic: true, // 首次加载也算程序触发，on_navigation 不重复入栈
         picker_active: false,
     };
-    *state.inner.lock().unwrap() = Some(inst);
+    state.instances.lock().unwrap().insert(session_id, inst);
     Ok(target_str)
 }
 
 /// on_navigation 回调：bridge 消息转发给前端；真实导航做安全校验 + 历史维护。
-/// 返回 false 阻断本次导航。
-fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
+/// 返回 false 阻断本次导航。session_id 标识来自哪个对话的实例。
+fn handle_navigation(app: &AppHandle, session_id: &str, url: &Url) -> bool {
     // 上行 bridge：解析转发，永不真导航
     if let Some(msg) = decode_bridge(url) {
-        forward_inspector_message(app, msg);
+        forward_inspector_message(app, session_id, msg);
         return false;
     }
     // about:blank 等内部页放行不记录
@@ -175,8 +186,8 @@ fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
     match validate_preview_url(url.as_str(), PreviewOrigin::User) {
         Ok(_) => {
             if let Some(st) = app.try_state::<BrowserState>() {
-                let mut guard = st.inner.lock().unwrap();
-                if let Some(inst) = guard.as_mut() {
+                let mut guard = st.instances.lock().unwrap();
+                if let Some(inst) = guard.get_mut(session_id) {
                     if inst.programmatic {
                         inst.programmatic = false;
                     } else {
@@ -193,14 +204,14 @@ fn handle_navigation(app: &AppHandle, url: &Url) -> bool {
         Err(reason) => {
             let _ = app.emit(
                 "browser://escaped",
-                serde_json::json!({ "url": url.to_string(), "reason": reason }),
+                serde_json::json!({ "sessionId": session_id, "url": url.to_string(), "reason": reason }),
             );
             false
         }
     }
 }
 
-fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
+fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json::Value) {
     let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or_default();
     let payload = msg
         .get("payload")
@@ -211,69 +222,91 @@ fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
         let preview: String = preview.chars().take(240).collect();
         tracing::info!(target: "webview_spike", "fwd {ty}: {preview}");
     }
-    // 浏览器绑定的对话 id（注释/队列提交回这个对话，不串到当前打开的别的对话）
-    let bound = app
-        .try_state::<BrowserState>()
-        .and_then(|st| st.aside_context.lock().unwrap().as_ref().map(|c| c.main_session_id.clone()));
-    let with_bound = |mut p: serde_json::Value| -> serde_json::Value {
-        if let (Some(sid), Some(obj)) = (bound.clone(), p.as_object_mut()) {
-            obj.insert("boundSessionId".to_string(), serde_json::Value::String(sid));
+    // 多实例下 session_id 就是绑定的对话——注释/队列/标题事件都带上它，前端按它路由 + 提交回去
+    let with_session = |mut p: serde_json::Value| -> serde_json::Value {
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("boundSessionId".to_string(), serde_json::Value::String(session_id.to_string()));
+            obj.insert("sessionId".to_string(), serde_json::Value::String(session_id.to_string()));
         }
         p
     };
     match ty {
         // 页面内注释卡片提交：{snapshot, comment, styleDiff} → 主窗口 React 组装成 user message
         "heb:annotation:submit" => {
-            let _ = app.emit("browser://annotation", with_bound(payload));
+            let _ = app.emit("browser://annotation", with_session(payload));
         }
         // 修改队列：多元素改动统一提交
         "heb:annotation:submit-batch" => {
-            let _ = app.emit("browser://annotation-batch", with_bound(payload));
+            let _ = app.emit("browser://annotation-batch", with_session(payload));
         }
-        // 元素对话（旁支会话，机制 B）
-        "heb:aside:send" => handle_aside_send(app, &payload),
-        "heb:aside:submit" => handle_aside_submit(app, &payload),
+        // 元素对话（旁支会话，机制 B）——session_id 即主对话
+        "heb:aside:send" => handle_aside_send(app, session_id, &payload),
+        "heb:aside:submit" => handle_aside_submit(app, session_id, &payload),
         "heb:aside:models:request" => {
             let surface = payload
                 .get("surface")
                 .and_then(|v| v.as_str())
                 .unwrap_or("embedded");
-            let ctx = app
-                .try_state::<BrowserState>()
-                .and_then(|st| st.aside_context.lock().unwrap().clone());
-            if let Some(ctx) = ctx {
-                eval_aside_down(
-                    app,
-                    surface,
-                    "heb:aside:models",
-                    serde_json::json!({
-                        "list": ctx.models,
-                        "current": { "providerId": ctx.provider_id, "model": ctx.model },
-                    }),
-                );
-            }
+            send_aside_models(app, session_id, surface);
         }
         "heb:picker:cancelled" => {
-            let _ = app.emit("browser://picker-off", ());
+            let _ = app.emit("browser://picker-off", serde_json::json!({ "sessionId": session_id }));
         }
         "heb:ready" | "heb:navigated" => {
             // 携带 title，补一条 state（loading=false）
-            let _ = app.emit("browser://title", payload);
+            let _ = app.emit("browser://title", with_session(payload));
         }
         _ => {}
     }
+}
+
+/// 读 providers.json 拼模型列表 + 当前对话的 provider/model，下发给卡片的模型选择器。
+fn send_aside_models(app: &AppHandle, session_id: &str, surface: &str) {
+    let dd = agent_core::storage::default_data_dir();
+    let mut list: Vec<serde_json::Value> = Vec::new();
+    if let Ok(txt) = std::fs::read_to_string(dd.join("providers.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if let Some(provs) = v.get("providers").and_then(|p| p.as_array()) {
+                for p in provs {
+                    if p.get("enabled").and_then(|e| e.as_bool()) == Some(false) {
+                        continue;
+                    }
+                    let pid = p.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                    let pname = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                    if let Some(models) = p.get("models").and_then(|m| m.as_array()) {
+                        for m in models {
+                            if let Some(mn) = m.as_str() {
+                                list.push(serde_json::json!({ "providerId": pid, "model": mn, "label": format!("{mn} · {pname}") }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let current = agent_core::storage::sessions::load(&dd, session_id)
+        .ok()
+        .map(|s| serde_json::json!({ "providerId": s.provider_id, "model": s.model }));
+    eval_aside_down(
+        app,
+        session_id,
+        surface,
+        "heb:aside:models",
+        serde_json::json!({ "list": list, "current": current }),
+    );
 }
 
 #[tauri::command]
 pub fn browser_navigate(
     app: AppHandle,
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
     url: String,
 ) -> Result<String, String> {
     // 地址栏输入 = user 档
     let target = validate_preview_url(&url, PreviewOrigin::User)?;
-    let mut guard = state.inner.lock().unwrap();
-    let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
+    let mut guard = state.instances.lock().unwrap();
+    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     inst.history.truncate(inst.cursor + 1);
     inst.history.push(target.to_string());
     inst.cursor = inst.history.len() - 1;
@@ -286,9 +319,13 @@ pub fn browser_navigate(
 }
 
 #[tauri::command]
-pub fn browser_back(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let mut guard = state.inner.lock().unwrap();
-    let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
+pub fn browser_back(
+    app: AppHandle,
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut guard = state.instances.lock().unwrap();
+    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor == 0 {
         return Ok(());
     }
@@ -306,9 +343,10 @@ pub fn browser_back(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Re
 pub fn browser_forward(
     app: AppHandle,
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
 ) -> Result<(), String> {
-    let mut guard = state.inner.lock().unwrap();
-    let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
+    let mut guard = state.instances.lock().unwrap();
+    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor + 1 >= inst.history.len() {
         return Ok(());
     }
@@ -323,9 +361,12 @@ pub fn browser_forward(
 }
 
 #[tauri::command]
-pub fn browser_reload(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let mut guard = state.inner.lock().unwrap();
-    let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
+pub fn browser_reload(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut guard = state.instances.lock().unwrap();
+    let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     let url: Url = inst
         .history
         .get(inst.cursor)
@@ -338,15 +379,16 @@ pub fn browser_reload(state: tauri::State<'_, BrowserState>) -> Result<(), Strin
 #[tauri::command]
 pub fn browser_set_bounds(
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    let inst = match guard.as_ref() {
+    let guard = state.instances.lock().unwrap();
+    let inst = match guard.get(&session_id) {
         Some(i) => i,
-        None => return Ok(()), // 面板未挂载时静默
+        None => return Ok(()), // 该对话还没浏览器实例时静默
     };
     inst.webview
         .set_bounds(Rect {
@@ -359,10 +401,11 @@ pub fn browser_set_bounds(
 #[tauri::command]
 pub fn browser_set_visible(
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    if let Some(inst) = guard.as_ref() {
+    let guard = state.instances.lock().unwrap();
+    if let Some(inst) = guard.get(&session_id) {
         if visible {
             inst.webview.show().map_err(|e| e.to_string())?;
         } else {
@@ -372,9 +415,27 @@ pub fn browser_set_visible(
     Ok(())
 }
 
+/// 隐藏除 keep_session 外所有实例（切对话时只显示当前对话的浏览器）。
 #[tauri::command]
-pub fn browser_close(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    if let Some(inst) = state.inner.lock().unwrap().take() {
+pub fn browser_hide_others(
+    state: tauri::State<'_, BrowserState>,
+    keep_session: String,
+) -> Result<(), String> {
+    let guard = state.instances.lock().unwrap();
+    for (sid, inst) in guard.iter() {
+        if *sid != keep_session {
+            let _ = inst.webview.hide();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_close(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    if let Some(inst) = state.instances.lock().unwrap().remove(&session_id) {
         inst.webview.close().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -384,15 +445,19 @@ pub fn browser_close(state: tauri::State<'_, BrowserState>) -> Result<(), String
 /// 注入同一份 inspector.js——页面内注释卡片（vanilla DOM）与 embedded 共用，
 /// 提交经 heb-bridge 上行回主进程，再由主窗口 React 发进对话。
 #[tauri::command]
-pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    // 没有当前页时弹一个空白窗口——用户在 popout 自带的地址栏里输网址。
+pub fn browser_popout(
+    app: AppHandle,
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    // 取该对话实例的当前页；没有当前页时弹一个空白窗口——用户在 popout 自带的地址栏里输网址。
     // 不用 about:blank：WKWebView 对它不执行 initialization_script（inspector 不注入 → 无工具栏）。
     // 用 base64 data URL 的最小 HTML 文档，是正常文档、会注入。
     let url = state
-        .inner
+        .instances
         .lock()
         .unwrap()
-        .as_ref()
+        .get(&session_id)
         .and_then(|i| i.history.get(i.cursor).cloned());
     let target: Url = match url {
         Some(u) => u.parse().map_err(|_| "当前地址异常".to_string())?,
@@ -412,6 +477,7 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
         let _ = w.close();
     }
 
+    let sid_nav = session_id.clone();
     let app_for_nav = app.clone();
     // 注入 __HEB_POPOUT__ 标记：inspector 据此在页面内渲染工具栏（地址栏/导航/选取）
     let popout_script = format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}");
@@ -421,9 +487,9 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
         .resizable(true)
         .initialization_script(popout_script)
         .on_navigation(move |url: &Url| {
-            // popout 不维护 embedded 的历史，只做上行转发 + 安全校验
+            // popout 上行消息归属于打开它的对话（与 embedded 同一 session_id）
             if let Some(msg) = decode_bridge(url) {
-                forward_inspector_message(&app_for_nav, msg);
+                forward_inspector_message(&app_for_nav, &sid_nav, msg);
                 return false;
             }
             if url.scheme() != "http" && url.scheme() != "https" {
@@ -436,17 +502,24 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
 
     // popout 窗口关闭（OS 关 / 收回）时通知前端恢复内嵌浏览器
     let app_for_close = app.clone();
+    let sid_close = session_id.clone();
     win.on_window_event(move |event| {
         if matches!(
             event,
             WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }
         ) {
-            let _ = app_for_close.emit("browser://popout", serde_json::json!({ "open": false }));
+            let _ = app_for_close.emit(
+                "browser://popout",
+                serde_json::json!({ "sessionId": sid_close, "open": false }),
+            );
         }
     });
 
     // 通知前端：已弹出 → 内嵌浏览器让位显示占位
-    let _ = app.emit("browser://popout", serde_json::json!({ "open": true }));
+    let _ = app.emit(
+        "browser://popout",
+        serde_json::json!({ "sessionId": session_id, "open": true }),
+    );
     Ok(())
 }
 
@@ -464,9 +537,13 @@ pub fn browser_close_popout(app: AppHandle) -> Result<(), String> {
 // 被全局 unhandledrejection 弹 toast（启动即弹的根因）。
 
 #[tauri::command]
-pub fn browser_picker(state: tauri::State<'_, BrowserState>, active: bool) -> Result<(), String> {
-    let mut guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_mut() else {
+pub fn browser_picker(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+    active: bool,
+) -> Result<(), String> {
+    let mut guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get_mut(&session_id) else {
         return Ok(());
     };
     inst.picker_active = active;
@@ -484,11 +561,12 @@ pub fn browser_picker(state: tauri::State<'_, BrowserState>, active: bool) -> Re
 #[tauri::command]
 pub fn browser_style_apply(
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
     prop: String,
     value: String,
 ) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else {
+    let guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get(&session_id) else {
         return Ok(());
     };
     send_down(
@@ -499,9 +577,12 @@ pub fn browser_style_apply(
 }
 
 #[tauri::command]
-pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else {
+pub fn browser_style_revert(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get(&session_id) else {
         return Ok(());
     };
     send_down(inst, "heb:style:revert", serde_json::json!({}))
@@ -509,9 +590,12 @@ pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(),
 
 /// 请求 inspector 回吐当前 styleDiff（异步：结果经 browser://style-diff 事件返回）。
 #[tauri::command]
-pub fn browser_style_take_diff(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else {
+pub fn browser_style_take_diff(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get(&session_id) else {
         return Ok(());
     };
     send_down(inst, "heb:style:take-diff", serde_json::json!({}))
@@ -519,33 +603,18 @@ pub fn browser_style_take_diff(state: tauri::State<'_, BrowserState>) -> Result<
 
 /// 清除选中态（注释卡片关闭 / 切走 tab 时调）。无浏览器时无操作。
 #[tauri::command]
-pub fn browser_clear_selection(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    let Some(inst) = guard.as_ref() else {
+pub fn browser_clear_selection(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get(&session_id) else {
         return Ok(());
     };
     send_down(inst, "heb:selection:clear", serde_json::json!({}))
 }
 
 // ─────────────────────── 元素对话（旁支会话，机制 B）───────────────────────
-
-/// 主窗口 React 喂进当前对话上下文——旁支会话建会话要 provider/model，提交总结要主 session。
-#[tauri::command]
-pub fn browser_set_context(
-    state: tauri::State<'_, BrowserState>,
-    session_id: String,
-    provider_id: String,
-    model: String,
-    models: Option<serde_json::Value>,
-) -> Result<(), String> {
-    *state.aside_context.lock().unwrap() = Some(AsideContext {
-        main_session_id: session_id,
-        provider_id,
-        model,
-        models: models.unwrap_or(serde_json::Value::Null),
-    });
-    Ok(())
-}
 
 fn aside_system_prompt(element_desc: &str) -> String {
     format!(
@@ -565,7 +634,15 @@ fn aside_system_prompt(element_desc: &str) -> String {
 }
 
 /// 把一条下行消息 eval 到来源 webview（embedded 子 webview 或 popout 窗口）。
-fn eval_aside_down(app: &AppHandle, surface: &str, ty: &str, payload: serde_json::Value) {
+/// 把下行消息 eval 到来源 webview。host_session = 发起这次对话的主对话（embedded 实例所属）；
+/// popout 走全局 POPOUT_LABEL 窗口。
+fn eval_aside_down(
+    app: &AppHandle,
+    host_session: &str,
+    surface: &str,
+    ty: &str,
+    payload: serde_json::Value,
+) {
     let msg = serde_json::json!({ "source": "hebbian-host", "type": ty, "payload": payload });
     let js = format!("window.__HEB_RX__ && window.__HEB_RX__({msg})");
     if surface == "popout" {
@@ -573,21 +650,29 @@ fn eval_aside_down(app: &AppHandle, surface: &str, ty: &str, payload: serde_json
             let _ = w.eval(&js);
         }
     } else if let Some(st) = app.try_state::<BrowserState>() {
-        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
+        if let Some(inst) = st.instances.lock().unwrap().get(host_session) {
             let _ = inst.webview.eval(&js);
         }
     }
 }
 
 /// 把旁支会话的事件流路由下发到来源 webview：文本增量 + PreviewStyle 实时应用 + 结束。
-fn route_aside_event(app: &AppHandle, surface: &str, session_id: &str, event: EngineEvent) {
+/// host_session = embedded 实例所属的主对话；aside_session = 旁支会话 id（事件标识）。
+fn route_aside_event(
+    app: &AppHandle,
+    host_session: &str,
+    surface: &str,
+    aside_session: &str,
+    event: EngineEvent,
+) {
     match event {
         EngineEvent::TextDelta { text, .. } => {
             eval_aside_down(
                 app,
+                host_session,
                 surface,
                 "heb:aside:delta",
-                serde_json::json!({ "sessionId": session_id, "text": text }),
+                serde_json::json!({ "sessionId": aside_session, "text": text }),
             );
         }
         EngineEvent::ToolStart { name, input, .. } if name == "PreviewStyle" => {
@@ -604,17 +689,19 @@ fn route_aside_event(app: &AppHandle, surface: &str, session_id: &str, event: En
             // 实时应用到页面 + 在聊天里显示这一步
             eval_aside_down(
                 app,
+                host_session,
                 surface,
                 "heb:aside:apply",
-                serde_json::json!({ "sessionId": session_id, "prop": prop, "value": value }),
+                serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value }),
             );
         }
         EngineEvent::RunFinished { .. } => {
             eval_aside_down(
                 app,
+                host_session,
                 surface,
                 "heb:aside:done",
-                serde_json::json!({ "sessionId": session_id }),
+                serde_json::json!({ "sessionId": aside_session }),
             );
         }
         _ => {}
@@ -658,7 +745,7 @@ fn aside_send_args(
 }
 
 /// 处理 heb:aside:send：建/续旁支会话，驱动一轮，事件流下发卡片。
-fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
+fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
     let surface = payload
         .get("surface")
         .and_then(|v| v.as_str())
@@ -692,26 +779,26 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
         .get("model")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let main_sid = main_session_id.to_string();
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
-        let ctx = app2
-            .state::<BrowserState>()
-            .aside_context
-            .lock()
-            .unwrap()
-            .clone();
-        let Some(ctx) = ctx else {
+        let dd = agent_core::storage::default_data_dir();
+        // 默认用主对话（浏览器绑定的对话）的 provider/model，卡片选了模型就用选的
+        let (def_provider, def_model) = agent_core::storage::sessions::load(&dd, &main_sid)
+            .map(|s| (s.provider_id, s.model))
+            .unwrap_or_default();
+        let provider_id = sel_provider.unwrap_or(def_provider);
+        let model = sel_model.unwrap_or(def_model);
+        if provider_id.is_empty() {
             eval_aside_down(
                 &app2,
+                &main_sid,
                 &surface,
                 "heb:aside:error",
-                serde_json::json!({ "message": "先在主窗口打开一个对话，元素对话才有上下文" }),
+                serde_json::json!({ "message": "这个对话还没配置模型，没法开元素对话" }),
             );
             return;
-        };
-        let dd = agent_core::storage::default_data_dir();
-        let provider_id = sel_provider.unwrap_or_else(|| ctx.provider_id.clone());
-        let model = sel_model.unwrap_or_else(|| ctx.model.clone());
+        }
         let session_id = match session_id_opt {
             Some(s) => s,
             None => match agent_core::storage::sessions::create(
@@ -724,6 +811,7 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
                 Ok(s) => {
                     eval_aside_down(
                         &app2,
+                        &main_sid,
                         &surface,
                         "heb:aside:session",
                         serde_json::json!({ "elementKey": element_key, "sessionId": s.id }),
@@ -733,6 +821,7 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
                 Err(e) => {
                     eval_aside_down(
                         &app2,
+                        &main_sid,
                         &surface,
                         "heb:aside:error",
                         serde_json::json!({ "message": format!("建会话失败：{e}") }),
@@ -744,14 +833,16 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
         let args = aside_send_args(session_id.clone(), text, vec!["PreviewStyle".to_string()]);
         let app3 = app2.clone();
         let surface2 = surface.clone();
+        let host = main_sid.clone();
         let sid = session_id.clone();
         let result = chat::send_and_save_in_data_dir(&dd, args, move |event| {
-            route_aside_event(&app3, &surface2, &sid, event);
+            route_aside_event(&app3, &host, &surface2, &sid, event);
         })
         .await;
         if let Err(e) = result {
             eval_aside_down(
                 &app2,
+                &main_sid,
                 &surface,
                 "heb:aside:error",
                 serde_json::json!({ "message": format!("助手出错：{e}") }),
@@ -761,12 +852,13 @@ fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
 }
 
 /// 处理 heb:aside:submit：让旁支总结改动，注入主对话（复用 App 级 aside-result 监听）。
-fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
+fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
     let surface = payload
         .get("surface")
         .and_then(|v| v.as_str())
         .unwrap_or("embedded")
         .to_string();
+    let main_sid = main_session_id.to_string();
     let session_id = payload
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -796,20 +888,14 @@ fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
         let args = aside_send_args(session_id.clone(), prompt, vec![]);
         match chat::send_and_save_in_data_dir(&dd, args, |_| {}).await {
             Ok(msg) => {
-                // 发到浏览器绑定的对话，不串到当前打开的别的对话
-                let bound = app2
-                    .state::<BrowserState>()
-                    .aside_context
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .map(|c| c.main_session_id.clone());
+                // 发到浏览器绑定的对话（main_sid），不串到当前打开的别的对话
                 let _ = app2.emit(
                     "browser://aside-result",
-                    serde_json::json!({ "summary": msg.content, "element": element_desc, "boundSessionId": bound }),
+                    serde_json::json!({ "summary": msg.content, "element": element_desc, "boundSessionId": main_sid.clone() }),
                 );
                 eval_aside_down(
                     &app2,
+                    &main_sid,
                     &surface,
                     "heb:aside:submitted",
                     serde_json::json!({ "sessionId": session_id }),
@@ -818,6 +904,7 @@ fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
             Err(e) => {
                 eval_aside_down(
                     &app2,
+                    &main_sid,
                     &surface,
                     "heb:aside:error",
                     serde_json::json!({ "message": format!("总结失败：{e}") }),
@@ -825,148 +912,4 @@ fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
             }
         }
     });
-}
-
-/// P0 spike 入口（HEBBIAN_WEBVIEW_SPIKE=1 时跑），验证 multi-webview 七项能力。
-pub fn run_spike(app: &AppHandle) -> tauri::Result<()> {
-    let state = app.state::<BrowserState>();
-    let url = browser_open(
-        app.clone(),
-        state,
-        "https://example.com".to_string(),
-        PreviewOrigin::User,
-        620.0,
-        80.0,
-        760.0,
-        560.0,
-    );
-    tracing::info!(target: "webview_spike", "S1 browser_open → {url:?}");
-
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let wait = |s: u64| tokio::time::sleep(std::time::Duration::from_secs(s));
-        let st = app2.state::<BrowserState>();
-
-        wait(6).await;
-        let r = browser_navigate(
-            app2.clone(),
-            st.clone(),
-            "https://httpbin.org/cookies/set?heb=1".into(),
-        );
-        tracing::info!(target: "webview_spike", "S2/S7 navigate set-cookie → {r:?}");
-
-        wait(8).await;
-        let r = browser_navigate(
-            app2.clone(),
-            st.clone(),
-            "https://httpbin.org/cookies".into(),
-        );
-        tracing::info!(target: "webview_spike", "S7 navigate cookie echo → {r:?}");
-
-        wait(6).await;
-        let r = browser_picker(st.clone(), true);
-        tracing::info!(target: "webview_spike", "S3-down picker start → {r:?}");
-
-        // 自动派发一次合成点击到页面里的 <a>，验证 picker → snapshot → 上行事件全链路
-        wait(2).await;
-        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
-            let click_js = r#"
-                (function(){
-                  var el = document.querySelector('a') || document.body.firstElementChild || document.body;
-                  var r = el.getBoundingClientRect();
-                  var ev = new MouseEvent('click', {clientX: r.left + r.width/2, clientY: r.top + r.height/2, bubbles: true, cancelable: true});
-                  document.dispatchEvent(ev);
-                })();
-            "#;
-            let _ = inst.webview.eval(click_js);
-            tracing::info!(target: "webview_spike", "P2 synthetic click dispatched");
-        }
-
-        // 诊断：卡片是否渲染 + 按钮数（不点提交，避免与诊断导航冲突）
-        wait(2).await;
-        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
-            let probe_js = r#"
-                (function(){
-                  var card = document.querySelector('[data-hebbian-overlay="card"]');
-                  var report = { hasCard: !!card, btnCount: card ? card.querySelectorAll('button').length : 0,
-                                 numInputs: card ? card.querySelectorAll('input[type=number]').length : 0 };
-                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify(
-                    {source:'hebbian-inspector', type:'heb:debug', payload: report})));
-                })();
-            "#;
-            let _ = inst.webview.eval(probe_js);
-            tracing::info!(target: "webview_spike", "P2 card probe dispatched");
-        }
-
-        // 单独验证上行通道能承载注释提交（小 payload）
-        wait(2).await;
-        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
-            let submit_js = r#"
-                (function(){
-                  var card = document.querySelector('[data-hebbian-overlay="card"]');
-                  if(!card) return;
-                  var btns = card.querySelectorAll('button');
-                  for(var i=0;i<btns.length;i++){ if(btns[i].textContent.indexOf('发送')>=0){ btns[i].click(); break; } }
-                })();
-            "#;
-            let _ = inst.webview.eval(submit_js);
-            tracing::info!(target: "webview_spike", "P2 synthetic annotation submit dispatched");
-        }
-
-        wait(2).await;
-        let r = browser_set_bounds(st.clone(), 40.0, 40.0, 420.0, 320.0);
-        tracing::info!(target: "webview_spike", "S4 set_bounds → {r:?}");
-
-        // 弹出独立窗口验证
-        wait(2).await;
-        let r = browser_popout(app2.clone(), st.clone());
-        tracing::info!(target: "webview_spike", "popout → {r:?}");
-
-        // 探测 popout 窗口里的工具栏是否渲染
-        wait(4).await;
-        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
-            let probe = r#"
-                (function(){
-                  var bar = document.querySelector('[data-hebbian-overlay="toolbar"]');
-                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify({
-                    source:'hebbian-inspector', type:'heb:debug',
-                    payload:{ isPopout: !!window.__HEB_POPOUT__, hasToolbar: !!bar,
-                              inputs: bar ? bar.querySelectorAll('input').length : 0,
-                              btns: bar ? bar.querySelectorAll('button').length : 0 }})));
-                })();
-            "#;
-            let _ = w.eval(probe);
-            tracing::info!(target: "webview_spike", "popout toolbar probe dispatched");
-        }
-
-        // 验证 about:blank 空窗口也注入 + 渲染工具栏（空浏览器 popout 走这条路）
-        wait(2).await;
-        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
-            let _ = w.eval("window.location.href='about:blank'");
-        }
-        wait(4).await;
-        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
-            let probe = r#"
-                (function(){
-                  var bar = document.querySelector('[data-hebbian-overlay="toolbar"]');
-                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify({
-                    source:'hebbian-inspector', type:'heb:debug',
-                    payload:{ blankPopout:true, isPopout: !!window.__HEB_POPOUT__, hasToolbar: !!bar,
-                              href: window.location.href }})));
-                })();
-            "#;
-            let _ = w.eval(probe);
-            tracing::info!(target: "webview_spike", "about:blank toolbar probe dispatched");
-        }
-
-        wait(2).await;
-        let h = browser_set_visible(st.clone(), false);
-        wait(1).await;
-        let s = browser_set_visible(st.clone(), true);
-        tracing::info!(target: "webview_spike", "S6 hide={h:?} show={s:?}");
-
-        tracing::info!(target: "webview_spike", "spike sequence finished");
-    });
-
-    Ok(())
 }

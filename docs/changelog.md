@@ -7147,6 +7147,31 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
 - **留尾巴**: 无
 
+### 2026-06-11 — 固化页面预览里的输入框拖拽热区高度
+
+- **Why**: 页面预览中确认输入框上沿拖拽热区高度从 8px 改为 2px 后更贴合当前紧凑输入区，需要同步到源码。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 将拖拽调整输入框高度的热区 class 从 `h-2` 改为 `h-0.5`，其余定位和交互保持不变。
+- **影响范围**: Desktop 前端输入区视觉与拖拽命中区域；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 固化页面预览里的输入框上方间距
+
+- **Why**: 页面预览中确认输入框外层卡片上移 8px 后，上边框与拖拽热区之间的空隙消失，视觉更紧凑；按源码实现优先移除父容器上内边距，而不是给卡片加负 margin。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 将输入框卡片父容器 class 从 `pt-2 relative` 改为 `pt-0 relative`。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 调整右侧工作台不同 tab 的默认宽度
+
+- **Why**: 用户希望右侧 sidebar 不同 tab 的默认宽度不同：任务清单更窄，后台任务略窄，减少对主聊天区的挤占。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 新增按 tab 的默认宽度映射；后台任务默认约为原宽度 2/3，任务清单默认约为原宽度 1/2，其余 tab 保持原默认宽度。
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): sidebar 宽度改为按 tab 单独保存/恢复，用户手动拖动某个 tab 后只影响该 tab。
+- **影响范围**: Desktop 前端右侧工作台布局；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
 ### 2026-06-11 — 修 AutoMode 审批框闪现 + judge 评估中黄色呼吸 + compact 图标可见 + judge prompt 按危害分级
 
 - **Why**: 用户报三个问题——① AutoMode 下审批框「弹一下又消失」（前端靠 `currentRunMode` 推断要不要弹，但它初始 null、模型不在白名单时还会误判）；② 跑 run 时模式选择器只剩 hover 没图标；③ judge 一看到 `rm` 就拦，不看实际危害（删 `/tmp` 临时文件、build 产物这种删了无所谓的也 ASK）。外加一个 idea：judge 评估期间对应 Bash 卡片黄色呼吸。
@@ -7160,3 +7185,15 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: protocol + agent-core dispatch + 三 surface（desktop chat.rs / web-server / cli 解构补字段）+ 前端 store/卡片/样式 + judge prompt。协议加字段，`#[serde(default)]` 向后兼容
 - **验证**: `automode_allows_real_opus` 测试加 auto_handled 断言 + A/B 翻转（还原成 Vec::default → FAIL，修复版 PASS），固化一致性 bug；automode+dispatch 全量 27 passed；cargo check --workspace 绿；tsc 绿
 - **留尾巴**: compact 图标修复（颜色）+ 黄色呼吸的实际视觉效果需 desktop dev 眼验（hebweb 缺 Tauri API 造不出 streaming 态）；judge prompt 的分级效果需真模型实跑观察
+
+### 2026-06-11 — 重构内置浏览器为多对话多实例（懒创建 + 切对话不串）
+
+- **Why**: 之前内置浏览器是全局单例（`BrowserState` 持一个 `Option<BrowserInstance>` + 一个固定 webview label + 一份全局 `aside_context`）。多对话场景下所有对话共用同一个 webview——切到对话 B 时仍看到对话 A 打开的页面，注释/队列/旁支结论的提交目标也靠「最后一次绑定的全局 context」决定，极易串台（A 的标注发进 B）。用户要求：一个对话一个实例，从哪个对话打开浏览器，注释就提交回哪个对话；且没碰过浏览器的对话不应在代码层面创建实例（省内存/省 webview）。
+- **改动**:
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): `BrowserState` 从 `Mutex<Option<BrowserInstance>>` 改为 `Mutex<HashMap<String, BrowserInstance>>`（key=session_id）；webview label 从固定常量改为 `webview_label(session_id)` 按对话区分；`BrowserInstance` 加 `session_id` 字段。所有命令（open/navigate/back/forward/reload/set_bounds/set_visible/close/picker/style_*/clear_selection/popout）加 `session_id` 入参，按 key 取实例。删除全局 `aside_context`/`AsideContext`/`browser_set_context` 命令——session_id 天然就是「绑定的对话」，注释/队列/旁支结论直接以它为提交目标。新增 `browser_hide_others(keep_session)`：切对话时收起除当前对话外所有实例的 webview。所有上行事件（state/title/escaped/picker-off/popout/annotation/annotation-batch/aside-result）带上 sessionId，前端据此路由。旁支会话模型列表改由后端 `send_aside_models` 直接读 `~/.hebbian/providers.json`（不再靠前端 setContext 喂）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): invoke_handler 注册 `browser_hide_others`，移除 `browser_set_context`。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts) + [browserHost.ts](../apps/desktop/frontend/src/desktop/ui/lib/browserHost.ts): 所有命令方法加 `sessionId` 形参；事件回调把 `sessionId` 透出来给面板按当前对话过滤；删 `setContext`，加 `hideOthers`。`browser://state` 走 struct（snake_case `session_id`），其余事件走 json!（camelCase `sessionId`），browserHost 内部消化这个差异、对面板统一暴露 `sessionId`。
+  - [apps/desktop/frontend/src/desktop/ui/components/BrowserPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BrowserPanel.tsx): 单份 state 重构为 `Record<sessionId, Inst>`（每对话独立持有 url/标题/历史/选取/弹出/自动跟随），按 `currentSession` 渲染；事件按 `session_id` 落到对应实例（别的对话后台导航也存着，切过去能看到）；懒创建——只在 `loadUrl`（用户输地址/点检测地址/auto-follow）那一刻才 `browser_open`，用 `inst.opened` 标记区分首次 open 与后续 navigate，open 失败回滚标记；切对话/切 tab 走同一 effect：先 `hideOthers(currentSessionId)` 收起别的对话的 webview，再按可见性 `setVisible` 当前对话的那个。
+- **影响范围**: 纯 Desktop（`apps/desktop` 的 mod.rs/lib.rs + 前端 3 文件）。不改 protocol、不改 agent-core、不改 storage 格式。`browser_set_context` 是 additive 删除（前端同步移除唯一调用方），无外部依赖。
+- **验证**: `cargo check -p hebbian` 绿；`apps/desktop` 下 `tsc --noEmit` 绿。多对话多实例的实际行为（开两个对话各开不同网址、切换不串、注释提交回正确对话、未开浏览器的对话不建实例）属 Tauri 子 webview native 能力，heb CLI / hebweb 都造不出真子 webview，须 `pnpm tauri dev` 眼验。
+- **留尾巴**: ① 对话删除时未清理其后端 `BrowserInstance`（HashMap entry + webview 泄漏到进程退出）——下一步在对话删除路径调 `browser_close`；② popout 仍是全局单窗口，多对话同时 popout 未支持（够用，暂不做）；③ GUI 交互验证待用户在 desktop dev 实测。
