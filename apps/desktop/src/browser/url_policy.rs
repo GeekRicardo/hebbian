@@ -47,6 +47,8 @@ pub fn is_local_preview_host(hostname: &str) -> bool {
         || host == "host.docker.internal"
         || host.ends_with(".local")
         || host == "::1"
+        || host == "0.0.0.0" // dev server bind-all，归一化时重写成 127.0.0.1
+        || host == "::"
     {
         return true;
     }
@@ -81,7 +83,10 @@ pub fn normalize_preview_url(input: &str) -> Option<Url> {
     {
         format!("http://127.0.0.1:{trimmed}")
     } else if !trimmed.contains("://") {
-        format!("http://{trimmed}")
+        // 像真浏览器一样补 scheme：本地地址用 http，公网域名默认 https
+        let bare_host = trimmed.split('/').next().unwrap_or(trimmed).split(':').next().unwrap_or(trimmed);
+        let scheme = if is_local_preview_host(bare_host) { "http" } else { "https" };
+        format!("{scheme}://{trimmed}")
     } else {
         trimmed.to_string()
     };
@@ -122,6 +127,19 @@ mod tests {
         assert_eq!(
             normalize_preview_url("localhost:5173").unwrap().as_str(),
             "http://localhost:5173/"
+        );
+        // 像真浏览器：公网域名默认 https，本地用 http
+        assert_eq!(
+            normalize_preview_url("example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
+        assert_eq!(
+            normalize_preview_url("example.com:8443/app").unwrap().as_str(),
+            "https://example.com:8443/app"
+        );
+        assert_eq!(
+            normalize_preview_url("192.168.1.5:8080").unwrap().as_str(),
+            "http://192.168.1.5:8080/"
         );
         assert_eq!(
             normalize_preview_url("http://0.0.0.0:5173").unwrap().as_str(),

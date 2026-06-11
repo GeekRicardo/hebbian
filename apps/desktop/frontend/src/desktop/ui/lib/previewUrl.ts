@@ -12,7 +12,9 @@ export function isLocalPreviewHostname(hostname: string): boolean {
     host.endsWith(".localhost") ||
     host === "host.docker.internal" ||
     host.endsWith(".local") ||
-    host === "::1"
+    host === "::1" ||
+    host === "0.0.0.0" || // dev server bind-all，归一化时重写成 127.0.0.1
+    host === "::"
   ) {
     return true;
   }
@@ -64,7 +66,10 @@ export function normalizePreviewUrlInput(input: string): string | null {
   if (/^\d{2,5}$/.test(value)) {
     value = `http://127.0.0.1:${value}`;
   } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-    value = `http://${value}`;
+    // 像真浏览器一样补 scheme：本地地址用 http，公网域名默认 https
+    const bareHost = value.split("/")[0].split(":")[0];
+    const scheme = isLocalPreviewHostname(bareHost) ? "http" : "https";
+    value = `${scheme}://${value}`;
   }
   let url: URL;
   try {

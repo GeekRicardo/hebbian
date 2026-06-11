@@ -24,7 +24,10 @@ function expectEqual(name: string, actual: unknown, expected: unknown) {
 
 // ── 归一化 ──────────────────────────────────────────────────────────────
 expectEqual("纯端口补全", normalizePreviewUrlInput("3000"), "http://127.0.0.1:3000/");
-expectEqual("无 scheme 补 http", normalizePreviewUrlInput("localhost:5173"), "http://localhost:5173/");
+expectEqual("本地无 scheme 补 http", normalizePreviewUrlInput("localhost:5173"), "http://localhost:5173/");
+expectEqual("公网无 scheme 补 https", normalizePreviewUrlInput("example.com"), "https://example.com/");
+expectEqual("公网带端口路径补 https", normalizePreviewUrlInput("example.com:8443/app"), "https://example.com:8443/app");
+expectEqual("局域网 IP 补 http", normalizePreviewUrlInput("192.168.1.5:8080"), "http://192.168.1.5:8080/");
 expectEqual("0.0.0.0 重写", normalizePreviewUrlInput("http://0.0.0.0:5173"), "http://127.0.0.1:5173/");
 expectEqual("保留路径", normalizePreviewUrlInput("127.0.0.1:3000/settings?a=1"), "http://127.0.0.1:3000/settings?a=1");
 expectEqual("拒绝 ftp", normalizePreviewUrlInput("ftp://127.0.0.1/x"), null);

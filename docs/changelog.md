@@ -6914,3 +6914,13 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **留尾巴**: 真实窗口里鼠标实操（点选→淡色卡片→改参数→发送→popout 调大小）仍需用户眼验（合成验证覆盖数据层，不覆盖视觉/手感）；popout 无地址栏（弹出即固定当前 URL，导航在 embedded 里做）；spike 探针代码 env-gated 保留
 
 Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它们的 commit（已在 HEAD，功能完好）；本次提交不含 lib.rs。工作区其余 claude-code 笔记重命名 / c.json 非本次。
+
+### 2026-06-11 — 修启动弹「浏览器未打开」+ 地址栏 scheme 像真浏览器（公网 https/本地 http）
+
+- **Why**: 用户报 ①desktop 一开窗就弹"未处理的异步错误: 浏览器未打开"；②希望地址栏不带 scheme 时像真浏览器一样自动补全（公网默认 https）
+- **根因与改动**:
+  - mod.rs: 「命令 inspector」类命令（browser_picker / browser_style_apply|revert|take_diff / browser_clear_selection）在没有 webview 实例时原本返回 Err("浏览器未打开")。这些是 fire-and-forget 调用（面板挂载/切 tab 时触发），rejection 被 App.tsx 全局 unhandledrejection 弹 toast。改为**无 webview 时无操作返回 Ok**——没浏览器可命令就啥也不做，本就不是错误
+  - previewUrl.ts + url_policy.rs（共享逻辑同步改）: 无 scheme 输入按 host 归属补全——本地地址（localhost/局域网/0.0.0.0 等）用 http，公网域名默认 https（对齐现代浏览器 https-first）。顺带把 `0.0.0.0`/`::` 这类 bind-all 地址纳入"本地"判定（它们归一化时本就重写成 127.0.0.1）
+- **影响范围**: 仅 apps/desktop（browser 模块 + previewUrl）；两档 URL 安全校验逻辑不变
+- **验证**: previewUrl（新增公网→https/本地→http/局域网→http 用例）+ url_policy 4 cargo test 全过；tsc + cargo check 绿；dev 启动无 panic/报错
+- **留尾巴**: 公网若是 http-only 站点，强制 https 可能失败（真浏览器会回退 http，本次未做失败回退）——目标场景是 localhost dev + 主流 https 公网，可接受；真实开窗无 toast 需用户眼验

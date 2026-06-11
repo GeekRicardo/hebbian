@@ -356,10 +356,14 @@ pub fn browser_close_popout(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// 以下「命令 inspector」的命令在没有 webview 时是无操作（返回 Ok）——没浏览器可命令
+// 就啥也不做，不是错误。否则面板挂载/切 tab 等 fire-and-forget 调用会抛"浏览器未打开"
+// 被全局 unhandledrejection 弹 toast（启动即弹的根因）。
+
 #[tauri::command]
 pub fn browser_picker(state: tauri::State<'_, BrowserState>, active: bool) -> Result<(), String> {
     let mut guard = state.inner.lock().unwrap();
-    let inst = guard.as_mut().ok_or_else(|| "浏览器未打开".to_string())?;
+    let Some(inst) = guard.as_mut() else { return Ok(()) };
     inst.picker_active = active;
     send_down(inst, if active { "heb:picker:start" } else { "heb:picker:stop" }, serde_json::json!({}))
 }
@@ -371,14 +375,14 @@ pub fn browser_style_apply(
     value: String,
 ) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let inst = guard.as_ref().ok_or_else(|| "浏览器未打开".to_string())?;
+    let Some(inst) = guard.as_ref() else { return Ok(()) };
     send_down(inst, "heb:style:apply", serde_json::json!({ "prop": prop, "value": value }))
 }
 
 #[tauri::command]
 pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let inst = guard.as_ref().ok_or_else(|| "浏览器未打开".to_string())?;
+    let Some(inst) = guard.as_ref() else { return Ok(()) };
     send_down(inst, "heb:style:revert", serde_json::json!({}))
 }
 
@@ -386,15 +390,15 @@ pub fn browser_style_revert(state: tauri::State<'_, BrowserState>) -> Result<(),
 #[tauri::command]
 pub fn browser_style_take_diff(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let inst = guard.as_ref().ok_or_else(|| "浏览器未打开".to_string())?;
+    let Some(inst) = guard.as_ref() else { return Ok(()) };
     send_down(inst, "heb:style:take-diff", serde_json::json!({}))
 }
 
-/// 清除选中态（注释卡片关闭时调）。
+/// 清除选中态（注释卡片关闭 / 切走 tab 时调）。无浏览器时无操作。
 #[tauri::command]
 pub fn browser_clear_selection(state: tauri::State<'_, BrowserState>) -> Result<(), String> {
     let guard = state.inner.lock().unwrap();
-    let inst = guard.as_ref().ok_or_else(|| "浏览器未打开".to_string())?;
+    let Some(inst) = guard.as_ref() else { return Ok(()) };
     send_down(inst, "heb:selection:clear", serde_json::json!({}))
 }
 
