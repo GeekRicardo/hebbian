@@ -16,7 +16,7 @@ model-gateway = { path = "../../crates/model-gateway" }
 observability = { path = "../../crates/observability" }
 common = { package = "hebbian-common", path = "../../crates/common" }
 protocol = { path = "../../crates/protocol" }
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "devtools", "unstable"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "devtools", "unstable", "webview-data-url"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 dirs = "5"
@@ -27,6 +27,7 @@ async-trait = "0.1"
 global-hotkey = "0.7"
 anyhow = "1"
 base64 = "0.22"
+portable-pty = "0.8"
 tracing = "0.1"
 tokio = { version = "1", features = ["sync"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

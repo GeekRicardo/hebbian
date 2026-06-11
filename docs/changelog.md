@@ -7237,3 +7237,12 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 纯 Desktop。不改 protocol / `browser_popout`/`browser_close_popout` 对前端的命令签名（`state` 是 Tauri 注入，前端 `closePopout()` 无感）/ agent-core / storage。
 - **验证**: `cargo check -p hebbian` 绿；`inspector.js` `node --check` 语法绿 + 纯函数单测（核心 `__hebCore` 未动）。popout 双 webview 的交互（工具栏导航/选取/收回、页面渲染区不含工具栏、resize 页面跟随、旁支在 popout 内可用）属 Tauri 子 webview native，须 `pnpm tauri dev` 眼验。
 - **留尾巴**: ① 选中元素后工具栏选取按钮不自动灭（`onClick → stopPicker(false)` 不发通知，与 embedded 既有行为一致，本期不额外改）；② popout 仍全局单例，多对话同时 popout 不支持（够用）；③ GUI 交互待用户 desktop dev 实测。
+
+### 2026-06-12 — 修 popout data URL 加载报错（开 webview-data-url feature）
+
+- **Why**: 上一条 popout 双 webview 用 data URL 加载工具栏 HTML（主 webview）+ 空白页（无当前页时的 page webview），但 Tauri 默认不接受 data URL 作为 webview URL，运行时报 `invalid window url: data URLs are not supported without the webview-data-url feature`——导致点 popout 报错、工具栏空壳、页面渲染不出。空白页之前只在无当前页时偶发没被注意，工具栏每次必触发。
+- **改动**:
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): tauri features 加 `webview-data-url`。这是 Tauri 官方支持 data URL webview 的开关（错误信息本身就在引导开它），不是 hack；data URL 用法（内联工具栏 HTML / 空白页）本身合理。
+- **影响范围**: 纯 Desktop 编译 feature；无代码逻辑改动。安全面上启用后所有 webview 可加载 data URL，但本项目只内部用（工具栏 + 空白页），page webview 的真实导航仍走 `on_navigation` 两档校验。
+- **验证**: `cargo build -p hebbian` 绿（重编 tauri）。data URL webview 实际加载（popout 工具栏渲染 + 页面渲染 + 地址栏导航）须 `pnpm tauri dev` 眼验——这是用户已复现的 bug，feature 开启是确定性修复。
+- **留尾巴**: GUI 验证待用户 desktop dev 实测。
