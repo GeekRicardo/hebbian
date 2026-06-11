@@ -105,8 +105,10 @@
   }
 
   // snapshot 体积上限：超 8KB 时按价值从低到高丢字段。
+  // 优先丢体积大且次要的（computedStyles——盒模型图用 live computed 不依赖它）；
+  // 保住关系（parent/siblings）与源码定位（react）到最后。
   function capSnapshot(snap) {
-    var droppable = ["childrenSummary", "computedStyles", "attributes", "react"];
+    var droppable = ["computedStyles", "innerText", "attributes", "childrenSummary", "siblings", "react"];
     var i = 0;
     while (JSON.stringify(snap).length > MAX_SNAPSHOT_BYTES && i < droppable.length) {
       delete snap[droppable[i]];
@@ -400,10 +402,21 @@
       var dbg = extractDebugSource(fiber);
       if (dbg) react.source = dbg; // {file, line} —— dev 模式精确源码位置
     }
+    // 元素摘要（给关系上下文用）：tag + class[0] + 短文本
+    var briefEl = function (e) {
+      if (!e || !e.tagName) return null;
+      var t = e.tagName.toLowerCase();
+      if (e.id) t += "#" + e.id;
+      else if (e.classList && e.classList.length) t += "." + e.classList[0];
+      var txt = "";
+      try {
+        for (var n = 0; n < e.childNodes.length; n++) if (e.childNodes[n].nodeType === 3) txt += e.childNodes[n].nodeValue;
+        txt = txt.trim();
+      } catch (x) {}
+      return txt ? t + ' "' + truncate(txt, 40) + '"' : t;
+    };
     var children = [];
-    for (var k = 0; k < el.children.length && k < 10; k++) {
-      children.push(el.children[k].tagName.toLowerCase());
-    }
+    for (var k = 0; k < el.children.length && k < 12; k++) children.push(briefEl(el.children[k]));
     // 直接文本（不含子元素文本）——比 innerText 更适合 grep 定位
     var ownText = "";
     try {
@@ -412,6 +425,36 @@
       }
       ownText = ownText.trim();
     } catch (e) {}
+    // 兄弟元素 + 自己在父中的位置（改「与其他元素关系」必需：对齐 / 间距 / 排列顺序）
+    var siblings;
+    var indexInParent;
+    if (el.parentElement) {
+      var sibs = el.parentElement.children;
+      siblings = [];
+      for (var s = 0; s < sibs.length && s < 16; s++) {
+        if (sibs[s] === el) indexInParent = s;
+        siblings.push((sibs[s] === el ? "→ " : "") + briefEl(sibs[s]));
+      }
+    }
+    // 父容器布局（决定子元素怎么排——flex/grid/对齐/间距）
+    var parentInfo;
+    if (el.parentElement) {
+      var pcs = window.getComputedStyle(el.parentElement);
+      parentInfo = {
+        tagName: el.parentElement.tagName.toLowerCase(),
+        classList: Array.prototype.slice.call(el.parentElement.classList || [], 0, 5),
+        id: el.parentElement.id || undefined,
+        layout: {
+          display: pcs.display,
+          flexDirection: pcs.flexDirection,
+          justifyContent: pcs.justifyContent,
+          alignItems: pcs.alignItems,
+          gap: pcs.gap,
+          gridTemplateColumns: pcs.gridTemplateColumns,
+        },
+        childCount: el.parentElement.children.length,
+      };
+    }
     var snap = {
       url: window.location.href,
       viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -427,13 +470,9 @@
       react: react,
       boundingClientRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       computedStyles: computed,
-      parent: el.parentElement
-        ? {
-            tagName: el.parentElement.tagName.toLowerCase(),
-            classList: Array.prototype.slice.call(el.parentElement.classList || [], 0, 5),
-            id: el.parentElement.id || undefined,
-          }
-        : undefined,
+      parent: parentInfo,
+      indexInParent: indexInParent,
+      siblings: siblings,
       childrenSummary: children,
     };
     return capSnapshot(snap);
@@ -458,9 +497,12 @@
     return selectedTarget;
   }
 
-  function styleApply(prop, value) {
+  function styleSet(prop, value, allowAny) {
     var el = currentTarget();
-    if (!el || STYLE_WHITELIST.indexOf(prop) === -1) return;
+    if (!el) return;
+    // CARD_FIELDS 走白名单（防误操作）；盒模型图 / 全部 CSS 列表走 allowAny（任意属性，
+    // 改 inline style 不执行代码、安全）。
+    if (!allowAny && STYLE_WHITELIST.indexOf(prop) === -1) return;
     try {
       if (!(prop in styleDiff)) {
         styleDiff[prop] = { before: el.style.getPropertyValue(prop), after: value };
@@ -469,7 +511,7 @@
       }
       el.style.setProperty(prop, value);
       // 改边框宽度/颜色但 border-style 为 none 时看不到——自动补 solid
-      if ((prop === "border-width" || prop === "border-color") &&
+      if ((/border.*width/.test(prop) || prop === "border-color") &&
           window.getComputedStyle(el).borderStyle === "none") {
         el.style.setProperty("border-style", "solid");
       }
@@ -477,6 +519,8 @@
       /* 静默 */
     }
   }
+  function styleApply(prop, value) { styleSet(prop, value, false); }
+  function styleApplyAny(prop, value) { styleSet(prop, value, true); }
 
   function styleRevert() {
     var el = currentTarget();
@@ -687,7 +731,146 @@
       if (attrKeys.length) lines.push("属性: " + attrKeys.map(function (k) { return k + '="' + snap.attributes[k] + '"'; }).join(" "));
     }
     if (snap.selectorPath) lines.push("CSS 路径: " + snap.selectorPath);
+    // 与周围元素的关系（改对齐 / 间距 / 排列顺序 / 增删时必需）
+    if (snap.parent) {
+      var p = snap.parent;
+      var pd = p.tagName + (p.id ? "#" + p.id : (p.classList && p.classList.length ? "." + p.classList[0] : ""));
+      var lay = "";
+      if (p.layout) {
+        lay = " [" + p.layout.display;
+        if (p.layout.display === "flex") {
+          lay += " " + p.layout.flexDirection + " justify:" + p.layout.justifyContent + " align:" + p.layout.alignItems;
+        } else if (p.layout.display === "grid") {
+          lay += " cols:" + p.layout.gridTemplateColumns;
+        }
+        if (p.layout.gap && p.layout.gap !== "normal" && p.layout.gap !== "0px") lay += " gap:" + p.layout.gap;
+        lay += "]";
+      }
+      lines.push("父容器: " + pd + lay + "（共 " + (p.childCount != null ? p.childCount : "?") + " 个直接子元素）");
+    }
+    if (snap.siblings && snap.siblings.length > 1) {
+      lines.push("同级元素（→ 标记的是当前，第 " + ((snap.indexInParent || 0) + 1) + "/" + snap.siblings.length + " 个）: " + snap.siblings.join(" ｜ "));
+    }
+    if (snap.childrenSummary && snap.childrenSummary.length) {
+      lines.push("它的子元素: " + snap.childrenSummary.join(" ｜ "));
+    }
     return lines.join("\n");
+  }
+
+  // ── Chrome F12 式盒模型图（margin/border/padding/content 嵌套，每个数字可改立即生效）──
+  function boxNumInput(prop) {
+    var el = currentTarget();
+    var raw = el ? Math.round(parseFloat(window.getComputedStyle(el).getPropertyValue(prop)) || 0) : 0;
+    var inp = document.createElement("input");
+    inp.type = "text";
+    inp.value = String(raw);
+    inp.style.cssText = "width:26px;border:none;background:transparent;text-align:center;font:11px ui-monospace,monospace;color:#1f2328;outline:none;cursor:text;";
+    inp.addEventListener("focus", function () { inp.style.background = "rgba(255,255,255,0.7)"; inp.select(); });
+    inp.addEventListener("blur", function () { inp.style.background = "transparent"; });
+    inp.addEventListener("input", function () {
+      var v = inp.value.trim();
+      var n = parseFloat(v);
+      styleApplyAny(prop, isNaN(n) ? v : n + "px");
+    });
+    return inp;
+  }
+
+  function boxLayer(color, label, topP, rightP, bottomP, leftP) {
+    var layer = document.createElement("div");
+    layer.style.cssText = "position:relative;background:" + color + ";border-radius:3px;padding:16px 30px;display:flex;align-items:center;justify-content:center;";
+    var lab = document.createElement("span");
+    lab.textContent = label;
+    lab.style.cssText = "position:absolute;top:2px;left:5px;font-size:9px;color:#6b5a3e;text-transform:lowercase;";
+    layer.appendChild(lab);
+    var mk = function (prop, css) { var w = document.createElement("span"); w.style.cssText = "position:absolute;" + css; w.appendChild(boxNumInput(prop)); layer.appendChild(w); };
+    mk(topP, "top:1px;left:50%;transform:translateX(-50%);");
+    mk(bottomP, "bottom:1px;left:50%;transform:translateX(-50%);");
+    mk(leftP, "left:2px;top:50%;transform:translateY(-50%);");
+    mk(rightP, "right:2px;top:50%;transform:translateY(-50%);");
+    return layer;
+  }
+
+  function buildBoxModel() {
+    var wrap = document.createElement("div");
+    wrap.style.cssText = "padding:10px;display:flex;justify-content:center;background:#fafbfc;border-bottom:1px solid #eaedf0;";
+    var el = currentTarget();
+    if (!el) return wrap;
+    var cs = window.getComputedStyle(el);
+    var margin = boxLayer("#f7cd9c", "margin", "margin-top", "margin-right", "margin-bottom", "margin-left");
+    var border = boxLayer("#fdd9a0", "border", "border-top-width", "border-right-width", "border-bottom-width", "border-left-width");
+    var padding = boxLayer("#c3dca4", "padding", "padding-top", "padding-right", "padding-bottom", "padding-left");
+    var content = document.createElement("div");
+    content.style.cssText = "background:#a3c5e8;border-radius:2px;padding:6px 14px;font:11px ui-monospace,monospace;color:#1f2328;white-space:nowrap;";
+    var w = Math.round(parseFloat(cs.width) || 0), h = Math.round(parseFloat(cs.height) || 0);
+    content.textContent = w + " × " + h;
+    padding.appendChild(content);
+    border.appendChild(padding);
+    margin.appendChild(border);
+    wrap.appendChild(margin);
+    return wrap;
+  }
+
+  // ── 全部 CSS 列表（computed 全量，搜索 + 每条可改立即生效）──
+  function buildCssList() {
+    var wrap = document.createElement("div");
+    wrap.style.cssText = "border-top:1px solid #eaedf0;";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;user-select:none;font-size:12px;color:#1f2328;";
+    var chev = document.createElement("span"); chev.textContent = "▸"; chev.style.cssText = "color:#8c949e;font-size:10px;";
+    var title = document.createElement("span"); title.textContent = "全部 CSS"; title.style.cssText = "flex:1;font-weight:500;";
+    head.appendChild(chev); head.appendChild(title);
+    var body = document.createElement("div"); body.style.cssText = "display:none;flex-direction:column;";
+    var search = document.createElement("input");
+    search.type = "text"; search.placeholder = "搜索属性…";
+    search.style.cssText = "margin:6px 10px;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:0 8px;outline:none;";
+    var list = document.createElement("div"); list.style.cssText = "padding:0 10px 8px;";
+    body.appendChild(search); body.appendChild(list);
+    var built = false;
+    var buildRows = function () {
+      if (built) return; built = true;
+      var el = currentTarget();
+      if (!el) return;
+      var cs = window.getComputedStyle(el);
+      var frag = document.createDocumentFragment();
+      var names = [];
+      for (var i = 0; i < cs.length; i++) names.push(cs[i]);
+      names.sort();
+      for (var j = 0; j < names.length; j++) frag.appendChild(cssRow(names[j], cs.getPropertyValue(names[j])));
+      list.appendChild(frag);
+    };
+    search.addEventListener("input", function () {
+      var q = search.value.trim().toLowerCase();
+      var rows = list.children;
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].style.display = !q || rows[i].getAttribute("data-prop").indexOf(q) >= 0 ? "flex" : "none";
+      }
+    });
+    var collapsed = true;
+    head.addEventListener("click", function () {
+      collapsed = !collapsed;
+      body.style.display = collapsed ? "none" : "flex";
+      chev.textContent = collapsed ? "▸" : "▾";
+      if (!collapsed) buildRows();
+    });
+    wrap.appendChild(head); wrap.appendChild(body);
+    return wrap;
+  }
+
+  function cssRow(prop, value) {
+    var row = document.createElement("div");
+    row.setAttribute("data-prop", prop);
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:2px 0;font:11px ui-monospace,monospace;";
+    var name = document.createElement("span");
+    name.textContent = prop; name.title = prop;
+    name.style.cssText = "flex:0 0 44%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8250df;";
+    var inp = document.createElement("input");
+    inp.type = "text"; inp.value = value;
+    inp.style.cssText = "flex:1;min-width:0;height:20px;background:transparent;color:#1f2328;border:1px solid transparent;border-radius:4px;font:11px ui-monospace,monospace;padding:0 4px;outline:none;";
+    inp.addEventListener("focus", function () { inp.style.background = "#f6f8fa"; inp.style.borderColor = "#d9dde3"; });
+    inp.addEventListener("blur", function () { inp.style.background = "transparent"; inp.style.borderColor = "transparent"; });
+    inp.addEventListener("input", function () { styleApplyAny(prop, inp.value); });
+    row.appendChild(name); row.appendChild(inp);
+    return row;
   }
 
   function showAnnotationCard(snap) {
@@ -736,12 +919,14 @@
     styleTitle.style.cssText = "flex:1;font-weight:500;";
     styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
     var styleBody = document.createElement("div");
-    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;";
+    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;max-height:52vh;overflow-y:auto;";
+    var boxModel = buildBoxModel(); // Chrome F12 式盒模型图
     var fields = document.createElement("div");
-    fields.style.cssText = "padding:8px 10px;max-height:240px;overflow-y:auto;";
+    fields.style.cssText = "padding:8px 10px;";
     for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
+    var cssList = buildCssList(); // 全部 CSS（折叠）
     var styleFoot = document.createElement("div");
-    styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:0 10px 8px;";
+    styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:6px 10px 8px;";
     var sCancel = mkFlatBtn("撤销"); sCancel.addEventListener("click", function () { styleRevert(); });
     var sSend = mkPrimaryBtn("发送到对话");
     sSend.addEventListener("click", function () {
@@ -749,7 +934,7 @@
       removeCard();
     });
     styleFoot.appendChild(sCancel); styleFoot.appendChild(sSend);
-    styleBody.appendChild(fields); styleBody.appendChild(styleFoot);
+    styleBody.appendChild(boxModel); styleBody.appendChild(fields); styleBody.appendChild(cssList); styleBody.appendChild(styleFoot);
     var styleCollapsed = false;
     styleHead.addEventListener("click", function () {
       styleCollapsed = !styleCollapsed;

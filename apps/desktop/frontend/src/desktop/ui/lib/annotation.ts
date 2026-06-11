@@ -14,6 +14,24 @@ export interface ReactElementInfo {
   componentChain: string[];
   props: Record<string, string>;
   sourceHint?: string;
+  /** dev 模式 _debugSource 精确源码位置 */
+  source?: { file: string; line: number | null };
+}
+
+export interface ParentInfo {
+  tagName: string;
+  classList: string[];
+  id?: string;
+  /** 父容器布局（决定子元素怎么排——改对齐 / 间距 / 排列时用） */
+  layout?: {
+    display: string;
+    flexDirection: string;
+    justifyContent: string;
+    alignItems: string;
+    gap: string;
+    gridTemplateColumns: string;
+  };
+  childCount?: number;
 }
 
 export interface HebElementSnapshot {
@@ -26,11 +44,15 @@ export interface HebElementSnapshot {
   selectorPath: string;
   xpath: string;
   attributes: Record<string, string>;
+  ownText?: string;
   innerText?: string;
   react?: ReactElementInfo | null;
   boundingClientRect: { x: number; y: number; width: number; height: number };
   computedStyles: Record<string, string>;
-  parent?: { tagName: string; classList: string[] };
+  parent?: ParentInfo;
+  /** 当前元素在父中的下标 + 同级元素摘要（改与其他元素关系用） */
+  indexInParent?: number;
+  siblings?: string[];
   childrenSummary?: string[];
 }
 
