@@ -67,6 +67,9 @@ pub struct ToolResult {
     pub content: String,
     /// 超阈值时的 artifact 元数据；未触发落盘时为 `None`。
     pub artifact: Option<ToolArtifact>,
+    /// 工具产出的多模态附件（架构 §4.4.1）。首期仅 `Read` 读图片时非空。
+    /// 协议层把它编码进模型上下文（强模型原生图片块 / 弱模型 VisionBridge 转文字）。
+    pub attachments: Vec<MessageAttachment>,
 }
 
 /// 工具输出落盘后的元数据。dispatcher 在 `materialize_tool_output` 里产出，

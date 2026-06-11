@@ -64,7 +64,10 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Result<Value, ModelError>
             }
             TranscriptEntry::ToolResults(results) => {
                 for ToolResult {
-                    call_id, content, ..
+                    call_id,
+                    content,
+                    attachments,
+                    ..
                 } in results
                 {
                     messages.push(json!({
@@ -72,6 +75,16 @@ pub fn build_body(req: &ModelRequest, stream: bool) -> Result<Value, ModelError>
                         "tool_call_id": call_id,
                         "content": content
                     }));
+                    // OpenAI 的 tool message 不支持图片块——图片附件改用紧跟的一条
+                    // user message（tool 后接 user 合法）携带 image_url（架构 §4.4.1）。
+                    let images: Vec<Value> = attachments
+                        .iter()
+                        .filter_map(|a| a.image_data_url())
+                        .map(|url| json!({"type": "image_url", "image_url": {"url": url}}))
+                        .collect();
+                    if !images.is_empty() {
+                        messages.push(json!({"role": "user", "content": images}));
+                    }
                 }
             }
         }
@@ -247,6 +260,7 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
                     call_id,
                     name,
                     content,
+                    attachments,
                     ..
                 } in results
                 {
@@ -263,6 +277,16 @@ pub fn build_responses_body(req: &ModelRequest, stream: bool, codex_oauth: bool)
                         ));
                     }
                     input.push(item);
+                    // function_call_output 不带图片块——图片改用紧跟的一条 user message
+                    // 携带 input_image（架构 §4.4.1）。
+                    let images: Vec<Value> = attachments
+                        .iter()
+                        .filter_map(|a| a.image_data_url())
+                        .map(|url| json!({"type": "input_image", "image_url": url}))
+                        .collect();
+                    if !images.is_empty() {
+                        input.push(json!({"role": "user", "content": images}));
+                    }
                 }
             }
         }
@@ -981,6 +1005,52 @@ mod responses_tests {
         );
     }
 
+    fn req_with_tool_image() -> ModelRequest {
+        ModelRequest {
+            model: "gpt-5".into(),
+            system: None,
+            entries: vec![TranscriptEntry::ToolResults(vec![ToolResult {
+                call_id: "call_1".into(),
+                name: "Read".into(),
+                content: "已读取图片 a.png".into(),
+                artifact: None,
+                attachments: vec![MessageAttachment::Image {
+                    name: "a.png".into(),
+                    media_type: "image/png".into(),
+                    data: "BASE64DATA".into(),
+                }],
+            }])],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: None,
+        }
+    }
+
+    #[test]
+    fn chat_tool_image_appends_user_image_message() {
+        let body = build_body(&req_with_tool_image(), false).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        // tool message 仍是纯文本占位
+        assert_eq!(messages[0]["role"], "tool");
+        assert_eq!(messages[0]["content"], "已读取图片 a.png");
+        // 紧跟一条 user message 带 image_url
+        assert_eq!(messages[1]["role"], "user");
+        let img = &messages[1]["content"][0];
+        assert_eq!(img["type"], "image_url");
+        assert_eq!(img["image_url"]["url"], "data:image/png;base64,BASE64DATA");
+    }
+
+    #[test]
+    fn responses_tool_image_appends_user_input_image() {
+        let body = build_responses_body(&req_with_tool_image(), false, false);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input[0]["type"], "function_call_output");
+        assert_eq!(input[1]["role"], "user");
+        let img = &input[1]["content"][0];
+        assert_eq!(img["type"], "input_image");
+        assert_eq!(img["image_url"], "data:image/png;base64,BASE64DATA");
+    }
+
     #[test]
     fn parse_response_length_finish_surfaces() {
         // 被 token 上限截断的非流式响应必须归一成 Length，而不是被当成正常 Stop。
@@ -1178,6 +1248,7 @@ mod responses_tests {
                     name: "web_search".into(),
                     content: "Sources:\n- [Rust](https://www.rust-lang.org/)".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: vec![],
@@ -1222,12 +1293,14 @@ mod responses_tests {
                         name: "web_search".into(),
                         content: "one".into(),
                         artifact: None,
+                        attachments: Vec::new(),
                     },
                     ToolResult {
                         call_id: "call_2".into(),
                         name: "web_fetch".into(),
                         content: "two".into(),
                         artifact: None,
+                        attachments: Vec::new(),
                     },
                 ]),
                 TranscriptEntry::Assistant(AssistantEntry {
@@ -1245,6 +1318,7 @@ mod responses_tests {
                     name: "web_search".into(),
                     content: "three".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: vec![],
@@ -1290,6 +1364,7 @@ mod responses_tests {
                     name: String::new(),
                     content: "one".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: vec![],
@@ -1569,6 +1644,7 @@ mod deepseek_compat_tests {
                     name: "Bash".into(),
                     content: "a.txt".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: vec![],

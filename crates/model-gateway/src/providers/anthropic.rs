@@ -152,7 +152,8 @@ impl AnthropicClient {
             output_config = %body.get("output_config").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
             "anthropic request dispatched"
         );
-        let first = post_messages(&self.http, &url, &self.provider, &body, attach_long, cancel).await;
+        let first =
+            post_messages(&self.http, &url, &self.provider, &body, attach_long, cancel).await;
 
         // 仅 401 + 带 data_dir 才走自愈；其它错误（含别的 4xx/5xx）原样返回。
         let Err(ModelError::Http { status: 401, .. }) = &first else {
@@ -162,7 +163,8 @@ impl AnthropicClient {
             return first;
         };
         let fresh =
-            match crate::auth::refresh::force_refresh_provider_token(dd, self.provider.clone()).await
+            match crate::auth::refresh::force_refresh_provider_token(dd, self.provider.clone())
+                .await
             {
                 Ok(p) => p,
                 Err(e) => {

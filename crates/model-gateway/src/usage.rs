@@ -122,9 +122,7 @@ fn parse_progress(v: &serde_json::Value) -> Option<UsageProgress> {
         .as_deref()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|t| {
-            let diff = t
-                .signed_duration_since(chrono::Utc::now())
-                .num_seconds();
+            let diff = t.signed_duration_since(chrono::Utc::now()).num_seconds();
             diff.max(0)
         })
         .unwrap_or(0);

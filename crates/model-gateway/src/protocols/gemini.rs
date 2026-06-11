@@ -5,6 +5,7 @@ use crate::types::{
     AssistantEntry, FinishReason, ModelRequest, ModelResponse, ToolCall, ToolDefinition,
     ToolResult, TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
+use common::attachments::MessageAttachment;
 
 /// 把 Gemini 的 `candidates[0].finishReason` 归一成 [`FinishReason`]（架构 §4.11.4）。
 pub fn map_gemini_finish(finish: &str) -> FinishReason {
@@ -63,17 +64,33 @@ fn entry_to_content(entry: &TranscriptEntry) -> Option<Value> {
             if results.is_empty() {
                 return None;
             }
-            let parts: Vec<Value> = results
-                .iter()
-                .map(|ToolResult { name, content, .. }| {
-                    json!({
-                        "functionResponse": {
-                            "name": name,
-                            "response": {"result": content}
-                        }
-                    })
-                })
-                .collect();
+            let mut parts: Vec<Value> = Vec::new();
+            for ToolResult {
+                name,
+                content,
+                attachments,
+                ..
+            } in results
+            {
+                parts.push(json!({
+                    "functionResponse": {
+                        "name": name,
+                        "response": {"result": content}
+                    }
+                }));
+                // functionResponse 不带图片——图片附件在同一 user role 里追加
+                // inlineData part（架构 §4.4.1）。
+                for attachment in attachments {
+                    if let MessageAttachment::Image {
+                        media_type, data, ..
+                    } = attachment
+                    {
+                        parts.push(json!({
+                            "inlineData": {"mimeType": media_type, "data": data}
+                        }));
+                    }
+                }
+            }
             Some(json!({"role": "user", "parts": parts}))
         }
     }
@@ -86,12 +103,12 @@ fn user_parts(user: &UserEntry) -> Vec<Value> {
     }
     for attachment in &user.attachments {
         match attachment {
-            common::attachments::MessageAttachment::TextFile { .. } => {
+            MessageAttachment::TextFile { .. } => {
                 if let Some(text) = attachment.as_text_block() {
                     parts.push(json!({"text": text}));
                 }
             }
-            common::attachments::MessageAttachment::Image {
+            MessageAttachment::Image {
                 media_type, data, ..
             } => {
                 parts.push(json!({
@@ -232,6 +249,34 @@ mod tests {
             map_gemini_finish("MALFORMED_FUNCTION_CALL"),
             FinishReason::Other("MALFORMED_FUNCTION_CALL".to_string())
         );
+    }
+
+    #[test]
+    fn tool_result_image_becomes_inline_data_part() {
+        let req = ModelRequest {
+            model: "gemini-3-pro".into(),
+            system: None,
+            entries: vec![TranscriptEntry::ToolResults(vec![ToolResult {
+                call_id: "call_1".into(),
+                name: "Read".into(),
+                content: "已读取图片 a.png".into(),
+                artifact: None,
+                attachments: vec![MessageAttachment::Image {
+                    name: "a.png".into(),
+                    media_type: "image/png".into(),
+                    data: "BASE64DATA".into(),
+                }],
+            }])],
+            tools: vec![],
+            max_tokens: 4096,
+            reasoning: None,
+        };
+        let body = build_body(&req);
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        // functionResponse part + inlineData part 在同一 user role
+        assert!(parts[0].get("functionResponse").is_some());
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[1]["inlineData"]["data"], "BASE64DATA");
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::types::{
     AssistantEntry, FinishReason, ModelError, ModelRequest, ModelResponse, ToolCall,
     ToolDefinition, ToolResult, TranscriptEntry, Usage, UserEntry, IMAGE_GENERATION_TOOL_NAME,
 };
+use common::attachments::MessageAttachment;
 
 /// 把 Anthropic 的 `stop_reason` 归一成 [`FinishReason`]（架构 §4.11.4）。
 /// `tool_use` 由调用方前置分支拦掉，不会走到这里。
@@ -16,7 +17,9 @@ pub fn map_anthropic_finish(stop_reason: &str) -> FinishReason {
         other => FinishReason::Other(other.to_string()),
     }
 }
-use common::reasoning::{anthropic_supports_fallbacks, anthropic_thinking_mode, AnthropicThinkingMode};
+use common::reasoning::{
+    anthropic_supports_fallbacks, anthropic_thinking_mode, AnthropicThinkingMode,
+};
 
 // ── 请求构建 ──────────────────────────────────────────────────────────────────
 
@@ -349,7 +352,10 @@ fn machine_device_id() -> String {
 fn stable_session_id(entries: &[TranscriptEntry]) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let seed = entries.first().map(|e| format!("{e:?}")).unwrap_or_default();
+    let seed = entries
+        .first()
+        .map(|e| format!("{e:?}"))
+        .unwrap_or_default();
     let mut bytes = [0u8; 16];
     for (chunk, salt) in [(0usize, "a"), (8usize, "b")] {
         let mut h = DefaultHasher::new();
@@ -408,12 +414,24 @@ fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> 
                 .iter()
                 .map(
                     |ToolResult {
-                         call_id, content, ..
+                         call_id,
+                         content,
+                         attachments,
+                         ..
                      }| {
+                        // 无附件：content 是纯字符串（现状）。带图片附件：tool_result.content
+                        // 用块数组（Anthropic 原生支持 text + image 块），文本占位 + image 块。
+                        let inner = if attachments.is_empty() {
+                            json!(content)
+                        } else {
+                            let mut blocks = vec![json!({"type": "text", "text": content})];
+                            blocks.extend(attachments.iter().filter_map(image_block));
+                            Value::Array(blocks)
+                        };
                         json!({
                             "type": "tool_result",
                             "tool_use_id": call_id,
-                            "content": content
+                            "content": inner
                         })
                     },
                 )
@@ -424,6 +442,23 @@ fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> 
                 Some(json!({"role": "user", "content": content}))
             }
         }
+    }
+}
+
+/// 把图片附件编码成 Anthropic image 块；非图片附件返回 `None`。
+fn image_block(attachment: &MessageAttachment) -> Option<Value> {
+    match attachment {
+        MessageAttachment::Image {
+            media_type, data, ..
+        } => Some(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data
+            }
+        })),
+        MessageAttachment::TextFile { .. } => None,
     }
 }
 
@@ -438,22 +473,15 @@ fn user_content(user: &UserEntry) -> Value {
     }
     for attachment in &user.attachments {
         match attachment {
-            common::attachments::MessageAttachment::TextFile { .. } => {
+            MessageAttachment::TextFile { .. } => {
                 if let Some(text) = attachment.as_text_block() {
                     content.push(json!({"type": "text", "text": text}));
                 }
             }
-            common::attachments::MessageAttachment::Image {
-                media_type, data, ..
-            } => {
-                content.push(json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": data
-                    }
-                }));
+            MessageAttachment::Image { .. } => {
+                if let Some(block) = image_block(attachment) {
+                    content.push(block);
+                }
             }
         }
     }
@@ -701,6 +729,42 @@ mod tests {
     use super::*;
     use crate::types::{TranscriptEntry, UserEntry};
     use common::attachments::MessageAttachment;
+
+    #[test]
+    fn tool_result_image_encoded_as_image_block() {
+        let entry = TranscriptEntry::ToolResults(vec![ToolResult {
+            call_id: "call_1".into(),
+            name: "Read".into(),
+            content: "已读取图片 a.png".into(),
+            artifact: None,
+            attachments: vec![MessageAttachment::Image {
+                name: "a.png".into(),
+                media_type: "image/png".into(),
+                data: "BASE64DATA".into(),
+            }],
+        }]);
+        let msg = entry_to_message(&entry, false).unwrap();
+        let blocks = msg["content"][0]["content"].as_array().unwrap();
+        // tool_result.content 是块数组：text 占位 + image 块。
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["source"]["data"], "BASE64DATA");
+    }
+
+    #[test]
+    fn tool_result_without_attachment_stays_plain_string() {
+        let entry = TranscriptEntry::ToolResults(vec![ToolResult {
+            call_id: "call_1".into(),
+            name: "Bash".into(),
+            content: "a.txt".into(),
+            artifact: None,
+            attachments: Vec::new(),
+        }]);
+        let msg = entry_to_message(&entry, false).unwrap();
+        // 无附件：content 仍是纯字符串，不退化成块数组。
+        assert_eq!(msg["content"][0]["content"], "a.txt");
+    }
 
     #[test]
     fn anthropic_finish_maps_all_variants() {
@@ -995,11 +1059,7 @@ mod tests {
         assert_eq!(body["tools"][0]["eager_input_streaming"], true);
 
         // 最后一条 message 尾 block：ttl 1h，无 scope。
-        let last_block = body["messages"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()["content"]
+        let last_block = body["messages"].as_array().unwrap().last().unwrap()["content"]
             .as_array()
             .unwrap()
             .last()
@@ -1068,6 +1128,7 @@ mod tests {
                 name: "Bash".into(),
                 content: "a.txt".into(),
                 artifact: None,
+                attachments: Vec::new(),
             }]));
         }
         ModelRequest {

@@ -1559,6 +1559,7 @@ mod tests {
                     name: "Bash".into(),
                     content: "a.txt\nb.txt".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: Vec::new(),
