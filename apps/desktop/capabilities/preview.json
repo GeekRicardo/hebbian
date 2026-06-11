@@ -1,0 +1,15 @@
+{
+  "identifier": "preview-surface",
+  "description": "内置浏览器子 webview（heb-preview）与弹出窗口（preview-popout）：放行其中加载的前端用到的插件命令（event/dialog/opener），消除 plugin:event|listen 等 ACL 报错。app 自定义命令本不受 ACL 管，故无需在此列出。",
+  "windows": ["preview-popout"],
+  "webviews": ["heb-preview"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "dialog:default",
+    "opener:default"
+  ]
+}

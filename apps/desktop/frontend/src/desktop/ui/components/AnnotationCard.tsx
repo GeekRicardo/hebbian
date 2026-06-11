@@ -141,7 +141,7 @@ export function AnnotationCard({
 
   return (
     <div
-      className="fixed z-[60] flex max-h-[420px] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
+      className="fixed z-[60] flex max-h-[420px] flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl"
       style={style}
     >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
