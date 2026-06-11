@@ -371,6 +371,26 @@ impl ToolDispatcher {
                 );
                 continue;
             }
+            // 只读工具读 data_dir（~/.hebbian/）整树免 PathAccess：跨 session 的
+            // jsonl / model_io、logs/ 是 agent 自查自己历史的主战场，每次弹框反成噪音。
+            // 严格限定 ReadOnly class——写工具（Edit/Bash 重定向）改 providers.json 等
+            // 明文凭证仍走审批，避免一次 Read 之外的写入泄漏 / 篡改 key。
+            let read_only_data_dir_allowed = matches!(effects.class, EffectClass::ReadOnly)
+                && self
+                    .data_dir_for_artifacts
+                    .as_ref()
+                    .map_or(false, |dd| p.starts_with(dd));
+            if read_only_data_dir_allowed {
+                info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    path = %p.display(),
+                    matched = true,
+                    level = "data_dir_readonly",
+                    "[Permission:Path] read-only access to data dir allowed"
+                );
+                continue;
+            }
             if let Some(hit) = self.permission_store.as_ref().and_then(|store| {
                 store.allows_path_diagnostic(
                     self.session_id_for_hooks.as_deref(),
@@ -2113,6 +2133,155 @@ mod tests {
         async fn execute(&self, _input: Value) -> AppResult<String> {
             Ok("edited".to_string())
         }
+    }
+
+    struct NoopReadTool;
+
+    #[async_trait]
+    impl crate::tools::Tool for NoopReadTool {
+        fn name(&self) -> &str {
+            "Read"
+        }
+
+        fn description(&self) -> &str {
+            "test read tool"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            Ok("file contents".to_string())
+        }
+    }
+
+    /// 构造一个 Default-mode dispatcher，挂上指定 data_dir / session_id，注册 Read +
+    /// Edit 两个桩工具。data_dir 只读豁免测试用——验证只读工具读 data_dir 整树免
+    /// PathAccess、写工具仍审批。
+    fn data_dir_dispatcher(
+        workspace: Arc<Workspace>,
+        data_dir: PathBuf,
+        session_id: String,
+    ) -> (ToolDispatcher, tokio::sync::mpsc::Receiver<protocol::Event>) {
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(NoopReadTool) as Box<dyn crate::tools::Tool>,
+            Box::new(NoopEditTool) as Box<dyn crate::tools::Tool>,
+        ]));
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: Arc::new(crate::tools::hitl::HitlGate::default()),
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+            model_id: None,
+            judge_client: None,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: Some(session_id),
+            data_dir_for_artifacts: Some(data_dir),
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+        };
+        (dispatcher, rx)
+    }
+
+    /// 架构 §4.4.2：只读工具读 data_dir（~/.hebbian/）下「非当前 session」的路径——
+    /// 别的 session 的 jsonl、logs/ ——免 PathAccess 审批，不 emit PermissionRequested。
+    /// 修前（无 data_dir 只读豁免）这里必然弹审批，A/B 翻转可复现。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_only_access_to_data_dir_skips_path_approval() {
+        use protocol::EventPayload;
+
+        let workdir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        // data_dir 下「别的 session」+ logs/ 的真实文件，模拟 agent 自查历史。
+        let other_session = data_dir.path().join("sessions/other-sid");
+        std::fs::create_dir_all(&other_session).unwrap();
+        let target = other_session.join("session.jsonl");
+        std::fs::write(&target, "{}\n").unwrap();
+
+        let workspace = Workspace::new(workdir.path(), Vec::new());
+        let (dispatcher, mut rx) =
+            data_dir_dispatcher(workspace, data_dir.path().to_path_buf(), "sid-current".into());
+
+        let call = ToolCall {
+            id: "call_read_other_session".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let results = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("只读访问 data_dir 应直接执行，不卡审批")
+            .expect("dispatch 不应报错");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Read");
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("只读访问 data_dir 不应 emit PermissionRequested");
+            }
+        }
+    }
+
+    /// 安全底线：写工具（Edit）写 data_dir 下的文件——即便只读工具对同路径免审——
+    /// 仍走 PathAccess 审批。保护 providers.json 等明文凭证不被一次写入篡改 / 泄漏。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_access_to_data_dir_still_requires_approval() {
+        use protocol::EventPayload;
+
+        let workdir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(workdir.path(), Vec::new());
+        let (dispatcher, mut rx) =
+            data_dir_dispatcher(workspace, data_dir.path().to_path_buf(), "sid-current".into());
+
+        // 直指 data_dir 根下的敏感配置——只读会放行，写入必须审批。
+        let target = data_dir.path().join("providers.json");
+        let call = ToolCall {
+            id: "call_edit_providers".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let hitl_for_surface = dispatcher.hitl.clone();
+        let saw_prompt = Arc::new(AtomicBool::new(false));
+        let saw_prompt_for_task = saw_prompt.clone();
+        let surface = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionRequested { request_id, .. } = &event.payload {
+                    saw_prompt_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+                    hitl_for_surface.resolve(
+                        request_id,
+                        ApprovalDecision::DenyWithFeedback {
+                            feedback: "test deny".into(),
+                        },
+                    );
+                    break;
+                }
+            }
+        });
+
+        let _ = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("写 data_dir 应在 5s 内被拒绝返回");
+        surface.await.unwrap();
+        assert!(
+            saw_prompt.load(std::sync::atomic::Ordering::SeqCst),
+            "写 data_dir 必须 emit PermissionRequested"
+        );
     }
 
     /// 构造一个最小 Default-mode dispatcher（Edit 工具 + 给定 workspace），返回
