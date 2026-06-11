@@ -15,11 +15,12 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use async_trait::async_trait;
+use common::attachments::{detect_image_media_type, MessageAttachment};
 use common::{AppError, AppResult};
 use serde_json::{json, Value};
 use tokio::fs;
 
-use super::Tool;
+use super::{Tool, ToolCtx, ToolOutput};
 use crate::read_state::ReadStateTracker;
 
 const DEFAULT_LIMIT: usize = 2_000;
@@ -145,6 +146,18 @@ impl Tool for ReadTool {
     }
 
     async fn execute(&self, input: Value) -> AppResult<String> {
+        Ok(self.read_to_output(input).await?.text)
+    }
+
+    async fn execute_rich(&self, _ctx: ToolCtx, input: Value) -> AppResult<ToolOutput> {
+        self.read_to_output(input).await
+    }
+}
+
+impl ReadTool {
+    /// Read 的核心实现：读文件 → 文本（图片则附 base64 附件）。
+    /// `execute` 取 `.text`，`execute_rich` 取整体，二者共用此方法不重复读盘。
+    async fn read_to_output(&self, input: Value) -> AppResult<ToolOutput> {
         let file_path_str = input["file_path"]
             .as_str()
             .ok_or_else(|| AppError::msg("Read: 缺少 file_path"))?;
@@ -186,6 +199,20 @@ impl Tool for ReadTool {
             .unwrap_or(0);
         self.record_read(&file_path, &content, mtime_ms);
 
+        // 图片走多模态附件通道（架构 §4.4.1）：base64 进 attachments，文本只留占位。
+        // 不支持图片的模型由 VisionBridge 在 transcript 层转文字兜底。
+        if let Some(media_type) = detect_image_media_type(file_path_str, &content) {
+            let name = file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| file_path_str.to_string());
+            let attachment = MessageAttachment::image_from_bytes(&name, media_type, &content);
+            return Ok(ToolOutput {
+                text: format!("已读取图片 {name}（{media_type}），见附件。"),
+                attachments: vec![attachment],
+            });
+        }
+
         let text = String::from_utf8_lossy(&content);
 
         let mut out = String::new();
@@ -225,7 +252,7 @@ impl Tool for ReadTool {
                      请用 offset/limit 翻页读取（当前 offset={offset} limit={limit}）。]"
                 )
                 .ok();
-                return Ok(out);
+                return Ok(out.into());
             }
 
             out.push_str(&line_str);
@@ -235,9 +262,10 @@ impl Tool for ReadTool {
         if out.is_empty() {
             return Ok(format!(
                 "(文件共 {total_lines} 行；offset={offset} limit={limit} 范围内无内容)"
-            ));
+            )
+            .into());
         }
-        Ok(out)
+        Ok(out.into())
     }
 }
 
@@ -342,5 +370,66 @@ mod tests {
         assert!(!out.contains("已落盘到"));
         // 至少显示了第一行
         assert!(out.contains("line 0001"));
+    }
+
+    /// 最小合法 PNG（1×1 像素）的原始字节：8 字节签名 + IHDR + IDAT + IEND。
+    /// detect_image_media_type 只看 PNG 签名，故这里给完整签名 + 占位 chunk 即可。
+    fn tiny_png() -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(b"\x00\x00\x00\x0DIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1F\x15\xC4\x89");
+        bytes.extend_from_slice(b"\x00\x00\x00\x00IEND\xAE\x42\x60\x82");
+        bytes
+    }
+
+    #[tokio::test]
+    async fn read_image_returns_attachment_not_garbled_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("pixel.png");
+        std::fs::write(&file, tiny_png()).unwrap();
+        let tool = ReadTool::new(None, None, None);
+
+        let out = tool
+            .execute_rich(
+                ToolCtx::noop(),
+                json!({"file_path": file.to_string_lossy()}),
+            )
+            .await
+            .unwrap();
+
+        // 图片走附件通道：text 是占位、attachments 携带 base64 图片块。
+        assert_eq!(out.attachments.len(), 1, "应产出 1 个图片附件");
+        match &out.attachments[0] {
+            MessageAttachment::Image {
+                media_type, data, ..
+            } => {
+                assert_eq!(media_type, "image/png");
+                assert!(!data.is_empty(), "base64 数据非空");
+            }
+            other => panic!("应是 Image 附件，实际 {other:?}"),
+        }
+        assert!(out.text.contains("图片"), "text 应是占位说明");
+        // 修复前的 bug：from_utf8_lossy 把 PNG 二进制变成乱码文本塞进 content。
+        assert!(out
+            .attachments
+            .iter()
+            .any(|a| matches!(a, MessageAttachment::Image { .. })));
+    }
+
+    #[tokio::test]
+    async fn read_text_file_has_no_attachment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+        let tool = ReadTool::new(None, None, None);
+
+        let out = tool
+            .execute_rich(
+                ToolCtx::noop(),
+                json!({"file_path": file.to_string_lossy()}),
+            )
+            .await
+            .unwrap();
+        assert!(out.attachments.is_empty(), "文本文件不该有附件");
+        assert!(out.text.contains("hello"));
     }
 }

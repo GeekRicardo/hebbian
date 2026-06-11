@@ -347,6 +347,7 @@ mod tests {
                 name: "Bash".to_string(),
                 content: "file1.rs\nfile2.rs".to_string(),
                 artifact: None,
+                attachments: Vec::new(),
             }]));
         }
         assert_eq!(entries.len(), 101);

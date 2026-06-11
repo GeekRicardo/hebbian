@@ -116,10 +116,7 @@ pub fn find_run<'a>(meta: &'a EditsMetadata, run_id: &str) -> Option<&'a RunEdit
 }
 
 /// 按 run_id 查找可变条目。
-pub fn find_run_mut<'a>(
-    meta: &'a mut EditsMetadata,
-    run_id: &str,
-) -> Option<&'a mut RunEditEntry> {
+pub fn find_run_mut<'a>(meta: &'a mut EditsMetadata, run_id: &str) -> Option<&'a mut RunEditEntry> {
     meta.runs.iter_mut().find(|e| e.run_id == run_id)
 }
 

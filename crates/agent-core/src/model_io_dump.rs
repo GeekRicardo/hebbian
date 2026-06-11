@@ -378,6 +378,7 @@ mod tests {
                     name: "Read".into(),
                     content: "file body".into(),
                     artifact: None,
+                    attachments: Vec::new(),
                 }]),
             ],
             tools: vec![ToolDefinition {

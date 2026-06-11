@@ -92,6 +92,7 @@ pub fn microcompact(
                 name: r.name.clone(),
                 content: placeholder,
                 artifact: None,
+                attachments: Vec::new(),
             };
             shadowed += 1;
         }
@@ -116,6 +117,7 @@ mod tests {
             name: name.to_string(),
             content: content.to_string(),
             artifact: None,
+            attachments: Vec::new(),
         }
     }
 

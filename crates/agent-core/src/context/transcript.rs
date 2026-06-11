@@ -141,6 +141,7 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
                 name: call.name.clone(),
                 content: content.clone(),
                 artifact: None,
+                attachments: Vec::new(),
             })
         })
         .collect();
@@ -211,6 +212,7 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                     name: name.clone(),
                     content: content.clone(),
                     artifact: None,
+                    attachments: Vec::new(),
                 });
             }
             MessagePart::ToolCall { result: None, .. } => {}

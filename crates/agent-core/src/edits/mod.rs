@@ -342,9 +342,9 @@ impl EditsWorktree {
                     }
                     let content = self.get_file_at_sha(&file.before_sha, real_path).await?;
                     if let Some(parent) = real_path.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                            AppError::msg(format!("重建文件父目录失败: {e}"))
-                        })?;
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(|e| AppError::msg(format!("重建文件父目录失败: {e}")))?;
                     }
                     tokio::fs::write(real_path, content)
                         .await
@@ -692,7 +692,10 @@ mod tests {
             1,
             "同一文件本 Run 多次修改应折叠为一个文件变化"
         );
-        assert!(matches!(entry.files[0].action, protocol::EditAction::Modify));
+        assert!(matches!(
+            entry.files[0].action,
+            protocol::EditAction::Modify
+        ));
         wt.revert_run(&entry)
             .await
             .expect("run revert 应当成功（trim 不再破坏 patch）");
@@ -717,7 +720,10 @@ mod tests {
         tokio::fs::write(&real, b"hello\n").await.unwrap();
         let entry = wt.finalize_run("r2").await.unwrap().expect("run entry");
 
-        assert!(matches!(entry.files[0].action, protocol::EditAction::Create));
+        assert!(matches!(
+            entry.files[0].action,
+            protocol::EditAction::Create
+        ));
         wt.revert_run(&entry)
             .await
             .expect("create 类型 run revert 应直接删文件");
@@ -742,8 +748,13 @@ mod tests {
         tokio::fs::remove_file(&real).await.unwrap(); // 模拟 rm
         let entry = wt.finalize_run("r3").await.unwrap().expect("run entry");
 
-        assert!(matches!(entry.files[0].action, protocol::EditAction::Delete));
-        wt.revert_run(&entry).await.expect("delete revert 应重建文件");
+        assert!(matches!(
+            entry.files[0].action,
+            protocol::EditAction::Delete
+        ));
+        wt.revert_run(&entry)
+            .await
+            .expect("delete revert 应重建文件");
         let got = tokio::fs::read_to_string(&real).await.unwrap();
         assert_eq!(got, "keep me\n", "被删文件应从 before 镜像重建");
     }

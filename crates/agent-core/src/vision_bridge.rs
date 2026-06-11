@@ -13,7 +13,8 @@ use common::attachments::MessageAttachment;
 use common::CancelFlag;
 use model_gateway::client::ModelClient;
 use model_gateway::types::{
-    ModelError, ModelRequest, ModelResponse, ModelStreamEvent, TranscriptEntry, UserEntry,
+    ModelError, ModelRequest, ModelResponse, ModelStreamEvent, ToolResult, TranscriptEntry,
+    UserEntry,
 };
 
 const VISION_ANALYSIS_MAX_TOKENS: u32 = 900;
@@ -86,11 +87,62 @@ impl VisionBridgeClient {
                     let adapted = self.adapt_user_entry(user, &context, cancel).await?;
                     adapted_entries.push(TranscriptEntry::User(adapted));
                 }
+                TranscriptEntry::ToolResults(results)
+                    if results
+                        .iter()
+                        .any(|r| has_image_attachments(&r.attachments)) =>
+                {
+                    let adapted = self
+                        .adapt_tool_results(results, &user_context, cancel)
+                        .await?;
+                    adapted_entries.push(TranscriptEntry::ToolResults(adapted));
+                }
                 other => adapted_entries.push(other),
             }
         }
         req.entries = adapted_entries;
         Ok(req)
+    }
+
+    /// 把工具结果里的图片附件逐个替换为视觉模型生成的文字描述，注入回 `content`。
+    /// 弱文本模型据此「看见」工具读到的图片（架构 §4.4.1 / §4.11）。
+    async fn adapt_tool_results(
+        &self,
+        results: Vec<ToolResult>,
+        user_context: &str,
+        cancel: &CancelFlag,
+    ) -> Result<Vec<ToolResult>, ModelError> {
+        let mut adapted = Vec::with_capacity(results.len());
+        for mut result in results {
+            if !has_image_attachments(&result.attachments) {
+                adapted.push(result);
+                continue;
+            }
+            let mut vision_notes = Vec::new();
+            for attachment in &result.attachments {
+                if let MessageAttachment::Image {
+                    name,
+                    media_type,
+                    data,
+                } = attachment
+                {
+                    let note = self
+                        .analyze_image(media_type, data, user_context, cancel)
+                        .await?;
+                    vision_notes.push(format!("[图片 {name}]\n{note}"));
+                }
+            }
+            if !vision_notes.is_empty() {
+                let block = vision_notes.join("\n\n");
+                result.content = format!(
+                    "{}\n<vision-context>\n{block}\n</vision-context>",
+                    result.content
+                );
+            }
+            result.attachments.clear();
+            adapted.push(result);
+        }
+        Ok(adapted)
     }
 
     /// 把一条 UserEntry 里的 Image 附件逐个替换为视觉模型生成的文字描述。
@@ -469,5 +521,57 @@ mod tests {
         let prompts = vision.received_prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("帮我看看这个界面的布局问题"));
+    }
+
+    #[tokio::test]
+    async fn tool_result_image_replaced_with_vision_notes() {
+        let vision = Arc::new(MockVisionClient {
+            received_prompts: std::sync::Mutex::new(Vec::new()),
+        });
+        let inner = Arc::new(MockInnerClient {
+            last_req: std::sync::Mutex::new(None),
+        });
+        let bridge = VisionBridgeClient::new(inner.clone(), vision.clone(), "gpt-4o".to_string());
+
+        // 工具读到一张图片：弱文本模型必须经 VisionBridge 转文字才能「看见」。
+        let req = ModelRequest {
+            model: String::new(),
+            system: None,
+            entries: vec![
+                TranscriptEntry::User(UserEntry::text("看看这张图")),
+                TranscriptEntry::ToolResults(vec![ToolResult {
+                    call_id: "call_1".to_string(),
+                    name: "Read".to_string(),
+                    content: "已读取图片 a.png".to_string(),
+                    artifact: None,
+                    attachments: vec![MessageAttachment::Image {
+                        name: "a.png".to_string(),
+                        media_type: "image/png".to_string(),
+                        data: "base64".to_string(),
+                    }],
+                }]),
+            ],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning: None,
+        };
+
+        let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
+        bridge.complete(req, cancel).await.unwrap();
+
+        let inner_req = inner.last_req.lock().unwrap();
+        let inner_req = inner_req.as_ref().unwrap();
+        match &inner_req.entries[1] {
+            TranscriptEntry::ToolResults(results) => {
+                // 图片附件被删除、转成 content 里的 vision-context 文字。
+                assert!(results[0].attachments.is_empty(), "图片附件应被移除");
+                assert!(
+                    results[0].content.contains("<vision-context>"),
+                    "应注入视觉描述，实际: {}",
+                    results[0].content
+                );
+            }
+            other => panic!("expected ToolResults, got {other:?}"),
+        }
     }
 }
