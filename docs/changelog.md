@@ -7062,3 +7062,85 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **改动**: `apps/desktop/capabilities/default.json` 新增 `"dialog:allow-confirm"`
 - **影响范围**: Desktop main/log-viewer 窗口；仅 capabilities 配置，无 Rust/TS 代码变动
 - **留尾巴**: `allow-confirm` 在 Tauri 2.7 已标 deprecated（是 `allow-message` 的别名），升级 v3 后需移除此条并确认行为不变。无
+
+### 2026-06-11 — 彻底修复 `plugin:dialog|confirm not allowed by ACL`（capabilities 方案无效，改用 plugin-dialog API）
+
+- **Why**: 上一条 capabilities 修法失效——`allow-confirm` 权限集里 `commands.allow` 实际只授权 `["message"]`，并不授权 `confirm` 命令，ACL 仍然拒绝。根本原因是前端直接调用原生 `window.confirm()`；Tauri 拦截并路由到 `plugin:dialog|confirm` IPC，而该 IPC 命令根本没有独立权限声明。真正有效的修法：改用 `@tauri-apps/plugin-dialog` 的异步 `confirm()`，它内部调用 `plugin:dialog|message`（已被 `allow-message` 授权），彻底绕开 ACL 问题。
+- **改动**:
+  - `apps/desktop/frontend/src/desktop/ui/lib/utils.ts`：新增 `ipcConfirm(message, title?)` 封装 `@tauri-apps/plugin-dialog` 的 `confirm()`，作为全局统一替代
+  - `DesktopSidebar.tsx`：`handleDeleteProject` / `handleDeleteSession` 改用 `await ipcConfirm()`
+  - `ProvidersPane.tsx`：`removeCurrent` 升 async + 改用 `await ipcConfirm()`
+  - `PromptsDialog.tsx`：`selectPrompt` 升 async + `handleDelete` 改用 `await ipcConfirm()`
+  - `SkillsPane.tsx`：`uninstallCollection` 改用 `await ipcConfirm()`
+  - `capabilities/default.json`：保留上一条加的 `dialog:allow-confirm`（无害，留着等升 v3 再清理）
+- **影响范围**: 5 个前端组件，无 Rust/协议/store 变动；tsc 无报错
+- **留尾巴**: 无
+
+### 2026-06-11 — 去掉 HoverHint 生成的行内提示节点
+
+- **Why**: 页面预览调样式时明确要求去掉 `span.inline-flex`（HoverHint）元素；仅用 CSS `display: none` 会留下永远隐藏的包装节点，不如在组件层直接不渲染提示容器。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx](../apps/desktop/frontend/src/desktop/ui/components/HoverHint.tsx): 改为只透传 children，不再生成外层 `span.inline-flex`，也不再创建 tooltip portal。
+- **影响范围**: Desktop 前端 UI；所有 HoverHint 使用点不再显示 hover 提示，但被包裹的按钮/文字仍正常渲染；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 修复 session 列表未按最新消息时间排序
+
+- **Why**: 用户反馈 Hebbian session 排序不按更新时间。根因是 `list()` 虽然按 `SessionMeta.updated_at` 倒序排序，但性能优化后的 `read_jsonl_meta_only()` 为避免反序列化大消息，直接跳过了 `message` 行，导致 `updated_at` 只来自 Meta / MetaUpdate；旧会话追加新消息后不会在列表升到顶部。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): meta-only 快速路径从 message 行顶层字段轻量提取 `created_at`，不反序列化 `content` / `tool_calls`；新增 `list_moves_session_to_top_after_new_message` 回归测试。
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): 同步修复既有 `list_self_heals_pretty_json_session_files` 失败——list 的 meta-only 路径检测到旧 pretty JSON session 后也会写回合法 jsonl，与完整 load 路径保持一致。
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): 补齐测试里 `PermissionRequested` 构造缺失的 `auto_handled` / `call_id` 字段，恢复 agent-core 测试编译。
+- **影响范围**: agent-core storage / CoreClient `list_sessions`；Desktop / hebweb / CLI 会话列表共享受益。不改协议、不改文件格式，保持旧 session 兼容。
+- **验证**:
+  - `cargo test -p agent-core storage::sessions::tests -- --nocapture` 通过（23 passed）
+  - `cargo check -p agent-core --tests` 通过
+  - `cargo test -p agent-core --lib` 未全绿：`tools::bash::tests::run_in_background_returns_immediately` 与 `tools::read::tests::output_capped_with_offset_limit_hint` 仍失败，均与本次 session 排序改动无关。
+- **留尾巴**: 需另行处理上述两个 agent-core 既有测试失败。
+
+### 2026-06-11 — 调整 Desktop 输入框高度并移除底部项目目录提示
+
+- **Why**: 用户觉得 Hebbian 输入框输入区域偏高，希望矮 1/5；同时输入框下方右侧的文件夹目录指示器占位且信息重复，希望去掉。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 默认高度、最大手动高度、自适应最大高度和 textarea 内边距整体下调约 1/5；保留拖拽调高能力。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 移除 InputDrawer 右侧的当前目录文件夹指示器，只保留供应商用量和 token/context 状态。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 继续压低 Desktop 输入框输入区域
+
+- **Why**: 用户希望在上一版基础上输入框再矮一半，减少底部输入区占用的垂直空间。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 将默认高度、自适应最大高度、手动拖拽最大高度在上一版基础上再减半，并收紧 textarea 垂直内边距。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 再次压低 Desktop 输入框输入区域
+
+- **Why**: 用户希望在当前基础上输入框再矮 1/3，进一步减少底部输入区占用。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 默认高度调整为 32px，自适应最大高度调整为 54px，手动拖拽最大高度调整为 128px；最低高度保留 32px，避免低于单行输入可用尺寸。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 固化页面预览里的输入框 25% 高度
+
+- **Why**: 页面预览中已把 `textarea.chat-input-textarea` 调到最初显示高度的 25%，需要同步到源码；同时原 Tailwind `min-h-8` 会把实际高度顶到 32px，和 25% 目标不完全一致。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 将默认高度、最小高度和自适应高度约束统一为 30px，并把手动拖拽最大高度调整为 120px；textarea 的 Tailwind 最小高度改为 `min-h-[30px]`，避免 class 覆盖高度计算。
+- **影响范围**: Desktop 前端输入区视觉；不改协议、不改 Rust、不影响 agent-core。
+- **留尾巴**: 无
+
+### 2026-06-11 — 修 AutoMode 审批框闪现 + judge 评估中黄色呼吸 + compact 图标可见 + judge prompt 按危害分级
+
+- **Why**: 用户报三个问题——① AutoMode 下审批框「弹一下又消失」（前端靠 `currentRunMode` 推断要不要弹，但它初始 null、模型不在白名单时还会误判）；② 跑 run 时模式选择器只剩 hover 没图标；③ judge 一看到 `rm` 就拦，不看实际危害（删 `/tmp` 临时文件、build 产物这种删了无所谓的也 ASK）。外加一个 idea：judge 评估期间对应 Bash 卡片黄色呼吸。
+- **改动**:
+  - 协议 [event.rs](../crates/protocol/src/event.rs): `PermissionRequested` 加 `auto_handled`（这条审批是否会被 judge 接管）+ `call_id`（挂呼吸用）。透传链 dispatch → chat.rs / web-server events → 前端 types
+  - [dispatch.rs](../crates/agent-core/src/dispatch.rs): 新增 `automode_will_handle()`（RunMode=AutoMode + judge 可用 + 模型在白名单），emit PermissionRequested 时带 `auto_handled`/`call_id`；**修一致性 bug**：data_dir=None 时该退回 `GeneralSettings::default()`（含内置白名单）而非空 Vec，否则 auto_handled 恒判 false 但实际接管
+  - 前端 [useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): permission_requested 改用后端权威 `auto_handled`（替换脆弱的 currentRunMode），auto_handled 时不弹框 + 给 call_id 卡片设 isJudging；permission_resolved / auto_judged 时清呼吸。slot 加 `judgingRequests` 映射
+  - [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) + [index.css](../apps/desktop/frontend/src/index.css): 工具卡片 `isJudging` → `judge-breathe` 黄色边框呼吸 + 状态点黄色呼吸
+  - [RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx): compact 图标颜色 muted→foreground，在深色抽屉上清晰可见
+  - [automode_judge.md](../crates/agent-core/prompts/automode_judge.md): ALLOW 段加「低危删除/写入 disposable 目标」（`/tmp`、build/cache 产物、本会话自建文件）；ASK 段重写为「按目标价值分级，不按命令名」——`rm /tmp/x` 放行、`rm ~/Documents` 才 ASK；加一个 `rm -rf /tmp/scratch` → ALLOW 示例
+- **影响范围**: protocol + agent-core dispatch + 三 surface（desktop chat.rs / web-server / cli 解构补字段）+ 前端 store/卡片/样式 + judge prompt。协议加字段，`#[serde(default)]` 向后兼容
+- **验证**: `automode_allows_real_opus` 测试加 auto_handled 断言 + A/B 翻转（还原成 Vec::default → FAIL，修复版 PASS），固化一致性 bug；automode+dispatch 全量 27 passed；cargo check --workspace 绿；tsc 绿
+- **留尾巴**: compact 图标修复（颜色）+ 黄色呼吸的实际视觉效果需 desktop dev 眼验（hebweb 缺 Tauri API 造不出 streaming 态）；judge prompt 的分级效果需真模型实跑观察

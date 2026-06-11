@@ -3,9 +3,7 @@ use crate::error::{AppError, AppResult};
 use crate::hebisland_client::HebislandClient;
 use crate::hitl::HitlState;
 use agent_core::storage::{
-    sessions::{
-        self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session,
-    },
+    sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
     sessions_dir::{self as sessions_dir, PartialFragment},
     settings as global_settings,
 };
@@ -1368,7 +1366,6 @@ fn persist_workspace_runtime_dirs(
     });
 }
 
-
 /// 计算指定 session 的上下文用量。优先从 /v1/models 获取模型的 context_length，
 /// 拉不到时回退到预设查表。与发起 run 时看到的口径一致。
 pub async fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
@@ -1965,6 +1962,8 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             kind,
             summary,
             risk,
+            auto_handled,
+            call_id,
         } => {
             let (
                 kind_str,
@@ -2053,6 +2052,8 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 segments,
                 refuse_remember,
                 plan,
+                auto_handled: *auto_handled,
+                call_id: call_id.clone(),
             })
         }
         PermissionResolved {

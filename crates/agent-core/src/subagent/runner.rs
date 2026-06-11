@@ -230,9 +230,7 @@ impl SubagentRunner {
             pending_inputs: None,
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,
-            run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::Default,
-            )),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id,
             judge_client: Some(self.ctx.client.clone()),
             // 子 agent 不参与 hands-off（始终走父继承的审批策略）。

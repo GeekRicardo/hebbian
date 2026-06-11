@@ -374,6 +374,7 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             kind,
             summary,
             risk,
+            ..
         } => {
             let (tool_name, kind_str, fingerprint, command_segments, input, paths) = match kind {
                 PermissionKind::ToolCall {
@@ -488,22 +489,20 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             message: message.clone(),
             dedup_key: dedup_key.clone(),
         }),
-        EventPayload::RunEditsCommitted { run_id, files } => {
-            Some(DaemonEvent::RunEditsCommitted {
-                run_id: run_id.as_str().to_string(),
-                files: files
-                    .iter()
-                    .map(|f| {
-                        serde_json::json!({
-                            "real_path": f.real_path,
-                            "action": format!("{:?}", f.action).to_lowercase(),
-                            "before_bytes": f.before_bytes,
-                            "after_bytes": f.after_bytes,
-                        })
+        EventPayload::RunEditsCommitted { run_id, files } => Some(DaemonEvent::RunEditsCommitted {
+            run_id: run_id.as_str().to_string(),
+            files: files
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "real_path": f.real_path,
+                        "action": format!("{:?}", f.action).to_lowercase(),
+                        "before_bytes": f.before_bytes,
+                        "after_bytes": f.after_bytes,
                     })
-                    .collect(),
-            })
-        }
+                })
+                .collect(),
+        }),
         _ => None,
     }
 }

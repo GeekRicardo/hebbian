@@ -306,6 +306,27 @@ function dropKey<V>(rec: Record<string, V>, key: string): Record<string, V> {
 }
 
 /**
+ * 给 streamingParts 里 id===callId 的 tool_call part 设/清 `isJudging`
+ * （AutoMode judge 评估中的黄色呼吸，架构 §4.4.4）。callId 空或找不到则原样返回。
+ */
+function setPartJudging(
+  parts: StreamingAssistantPart[],
+  callId: string,
+  on: boolean
+): StreamingAssistantPart[] {
+  if (!callId) return parts;
+  let changed = false;
+  const next = parts.map((p) => {
+    if (p.type === "tool_call" && p.id === callId && Boolean(p.isJudging) !== on) {
+      changed = true;
+      return { ...p, isJudging: on };
+    }
+    return p;
+  });
+  return changed ? next : parts;
+}
+
+/**
  * Run 内时间线条目（架构 §4.2 + §4.12.5）。run 跑到一半时把"已完成 turn 快照"
  * 和"streaming 中插队的 user message"按真实发生顺序穿插起来，避免插队消息被
  * 错乱地黏在下一轮 assistant 输出之后。
@@ -361,6 +382,8 @@ type SessionStream = {
   autoJudgedNotes: AutoJudgedNote[];
   /** 当前对话的 RunMode 字符串（由 run_mode_changed event 维护）。 */
   currentRunMode: string | null;
+  /** AutoMode judge 评估中的审批：request_id → call_id，用于 resolve/judged 时清呼吸。 */
+  judgingRequests: Record<string, string>;
   /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
   suspended: SuspendedInfo | null;
   /**
@@ -413,6 +436,8 @@ const EMPTY_MIRROR = {
   pendingQuestionQueue: [] as PendingQuestion[],
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
+  /** AutoMode judge 评估中的审批：request_id → call_id，用于 resolve/judged 时清呼吸。 */
+  judgingRequests: {} as Record<string, string>,
   suspended: null as SuspendedInfo | null,
   todos: [] as TodoItem[],
   activePlan: null as SessionStream["activePlan"],
@@ -458,12 +483,11 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, streamingParts: finalizeOpenReasoning(slot.streamingParts) };
   }
   if (e.type === "model_retry") {
-    // 重试：丢掉上次失败 attempt 已 emit 的 partial（避免和重试输出叠加），
-    // 存一份进度供 turn 区内联渲染「重试中 N/max」。
+    // 重试中：保留已展示内容不变（用户仍能看到），仅设进度指示。
+    // 旧内容在新 attempt 的首个 delta 到达时由对应 handler 清掉再替换，
+    // 避免叠加；如果用户在重试间隙点了暂停，旧内容仍在 slot 里可供保存。
     return {
       ...slot,
-      streamingText: "",
-      streamingParts: [],
       modelRetry: { attempt: e.attempt, max: e.max, reason: e.reason },
     };
   }
@@ -475,12 +499,15 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   }
   if (e.type === "text_delta") {
     if (!e.text) return slot;
+    // 重试后首个 delta：从干净状态开始，不追加到旧 attempt 的残片后面。
+    const hadRetry = slot.modelRetry !== null;
     return {
       ...slot,
-      // 有新内容流出 → 重试成功，清掉重试进度指示；压缩提示保持到 run 结束。
       modelRetry: null,
-      streamingText: slot.streamingText + e.text,
-      streamingParts: applyTextDelta(slot.streamingParts, e.text),
+      streamingText: hadRetry ? e.text : slot.streamingText + e.text,
+      streamingParts: hadRetry
+        ? applyTextDelta([], e.text)
+        : applyTextDelta(slot.streamingParts, e.text),
     };
   }
   if (e.type === "text_done") {
@@ -497,10 +524,25 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return slot;
   }
   if (e.type === "reasoning") {
-    return { ...slot, streamingParts: applyReasoningDelta(slot.streamingParts, e.text) };
+    const hadRetry = slot.modelRetry !== null;
+    return {
+      ...slot,
+      modelRetry: null,
+      streamingParts: hadRetry
+        ? applyReasoningDelta([], e.text)
+        : applyReasoningDelta(slot.streamingParts, e.text),
+    };
   }
   if (e.type === "tool_call_delta") {
-    return { ...slot, streamingParts: applyToolCallDelta(slot.streamingParts, e) };
+    const hadRetry = slot.modelRetry !== null;
+    return {
+      ...slot,
+      modelRetry: null,
+      streamingParts: applyToolCallDelta(
+        hadRetry ? [] : slot.streamingParts,
+        e,
+      ),
+    };
   }
   if (e.type === "tool_start") {
     return { ...slot, streamingParts: applyToolStart(slot.streamingParts, e) };
@@ -526,9 +568,21 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, suspended: null };
   }
   if (e.type === "permission_requested") {
-    // AutoMode 下判官已做二元决策（Allow/Deny），PermissionRequested 总是立即
-    // 被 PermissionResolved 消解——不弹审批框，避免闪现 + 点击后审批失败。
-    if (slot.currentRunMode === "AutoMode") return slot;
+    // AutoMode judge 会接管这条审批时（后端判定：AutoMode + 模型在白名单），**不弹
+    // 审批框**——judge 异步出结果后紧跟 permission_auto_judged / permission_resolved，
+    // 避免审批框闪现（架构 §4.4.4）。改用后端权威的 `auto_handled`，不再靠前端
+    // currentRunMode 推断（它初始为 null、且模型不在白名单时该弹却被压住）。
+    // 同时给触发审批的工具卡片挂「judge 评估中」黄色呼吸（按 call_id 定位）。
+    if (e.auto_handled) {
+      const callId = e.call_id ?? "";
+      return {
+        ...slot,
+        streamingParts: setPartJudging(slot.streamingParts, callId, true),
+        judgingRequests: callId
+          ? { ...slot.judgingRequests, [e.request_id]: callId }
+          : slot.judgingRequests,
+      };
+    }
     const approval: PendingApproval = {
       requestId: e.request_id,
       toolName: e.tool_name,
@@ -549,16 +603,28 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, pendingApproval: approval };
   }
   if (e.type === "permission_resolved") {
+    // 若这条审批曾被 judge 接管（黄色呼吸），先清掉呼吸 + 映射。
+    const judgingCallId = slot.judgingRequests[e.request_id];
+    const baseParts = judgingCallId
+      ? setPartJudging(slot.streamingParts, judgingCallId, false)
+      : slot.streamingParts;
+    const baseJudging = judgingCallId
+      ? dropKey(slot.judgingRequests, e.request_id)
+      : slot.judgingRequests;
     if (slot.pendingApproval?.requestId === e.request_id) {
       const next = slot.pendingApprovalQueue[0] ?? null;
       return {
         ...slot,
+        streamingParts: baseParts,
+        judgingRequests: baseJudging,
         pendingApproval: next,
         pendingApprovalQueue: slot.pendingApprovalQueue.slice(1),
       };
     }
     return {
       ...slot,
+      streamingParts: baseParts,
+      judgingRequests: baseJudging,
       pendingApprovalQueue: slot.pendingApprovalQueue.filter(
         (it) => it.requestId !== e.request_id
       ),
@@ -571,13 +637,28 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
         duration: 5000,
       });
     }
-    if (e.decision !== "deny" && e.decision !== "ask") return slot;
+    // judge 出结果（allow / deny / ask）→ 清掉这条审批的黄色呼吸：allow 工具紧接执行、
+    // deny/ask 也已定论，呼吸都该停（架构 §4.4.4）。
+    const judgingCallId = e.request_id
+      ? slot.judgingRequests[e.request_id]
+      : undefined;
+    const clearedParts = judgingCallId
+      ? setPartJudging(slot.streamingParts, judgingCallId, false)
+      : slot.streamingParts;
+    const clearedJudging = judgingCallId
+      ? dropKey(slot.judgingRequests, e.request_id!)
+      : slot.judgingRequests;
+    if (e.decision !== "deny" && e.decision !== "ask") {
+      return { ...slot, streamingParts: clearedParts, judgingRequests: clearedJudging };
+    }
     const attachReason = (approval: PendingApproval | null) =>
       approval?.requestId === e.request_id
         ? { ...approval, autoJudgeReason: e.reason ?? null }
         : approval;
     return {
       ...slot,
+      streamingParts: clearedParts,
+      judgingRequests: clearedJudging,
       pendingApproval: attachReason(slot.pendingApproval),
       pendingApprovalQueue: slot.pendingApprovalQueue.map((approval) =>
         approval.requestId === e.request_id
@@ -734,6 +815,7 @@ function patchSessionSlot(
         pendingQuestionQueue: [],
         autoJudgedNotes: [],
         currentRunMode: null,
+        judgingRequests: {},
         suspended: null,
         todos: [],
         activePlan: null,
@@ -1187,6 +1269,10 @@ interface AppState {
 
   setSettingsOpen: (v: boolean) => void;
   setPromptsDialogOpen: (v: boolean) => void;
+  /** 一次性「请折叠右侧工作台」信号：每次自增。用户发送消息时触发，
+   *  RightSidebar 监听其变化 → 缓慢折叠（与「Run 跑完自动展开」配对）。 */
+  collapseRightSidebarTick: number;
+  triggerCollapseRightSidebar: () => void;
   /** 应用级设置窗口（通用 / 对话 / 供应商 / agent 等多个 tab） */
   appSettingsOpen: boolean;
   setAppSettingsOpen: (v: boolean) => void;
@@ -2146,6 +2232,7 @@ export const useStore = create<AppState>((set, get) => ({
         pendingQuestionQueue: [],
         autoJudgedNotes: [],
         currentRunMode: priorSlot?.currentRunMode ?? null,
+        judgingRequests: {},
         suspended: null,
         todos: priorSlot?.todos ?? priorSession?.todos ?? [],
         activePlan:
@@ -2545,6 +2632,10 @@ export const useStore = create<AppState>((set, get) => ({
   appSettingsOpen: false,
   setAppSettingsOpen(v) {
     set({ appSettingsOpen: v });
+  },
+  collapseRightSidebarTick: 0,
+  triggerCollapseRightSidebar() {
+    set((s) => ({ collapseRightSidebarTick: s.collapseRightSidebarTick + 1 }));
   },
   setPendingAppSettingsTab(tab) {
     set({ pendingAppSettingsTab: tab });

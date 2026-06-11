@@ -850,6 +850,8 @@ mod tests {
                 },
                 summary: "工具 Bash 请求执行".to_string(),
                 risk: protocol::RiskLevel::Medium,
+                auto_handled: false,
+                call_id: "call-test".to_string(),
             },
         ))
         .await
@@ -908,6 +910,8 @@ mod tests {
                 },
                 summary: "工具 Bash 请求执行".to_string(),
                 risk: protocol::RiskLevel::Medium,
+                auto_handled: false,
+                call_id: "call-test".to_string(),
             },
         ))
         .await

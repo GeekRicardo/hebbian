@@ -52,8 +52,8 @@ interface Props {
   userMessageHistory?: string[];
 }
 
-const MIN_H = 48;
-const MAX_H = 480;
+const MIN_H = 30;
+const MAX_H = 120;
 const KEY = "chatInputHeight";
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -76,7 +76,7 @@ export function ChatInput({
   const [height, setHeight] = useState<number>(() => {
     const raw = localStorage.getItem(KEY);
     const n = raw ? parseInt(raw, 10) : NaN;
-    return Number.isFinite(n) && n >= MIN_H && n <= MAX_H ? n : 120;
+    return Number.isFinite(n) && n >= MIN_H && n <= MAX_H ? n : 30;
   });
   const [manual, setManual] = useState(false);
 
@@ -364,7 +364,7 @@ export function ChatInput({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const h = Math.min(Math.max(el.scrollHeight, MIN_H), 200);
+    const h = Math.min(Math.max(el.scrollHeight, MIN_H), 30);
     el.style.height = `${h}px`;
   }, [value, manual]);
 
@@ -1085,7 +1085,7 @@ export function ChatInput({
             }
             rows={1}
             style={manual ? { height } : undefined}
-            className="chat-input-textarea w-full resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-muted-foreground min-h-[56px] overflow-y-auto"
+            className="chat-input-textarea w-full resize-none bg-transparent px-3 py-1 text-sm outline-none placeholder:text-muted-foreground min-h-[30px] overflow-y-auto"
           />
 
           {/* 底部工具条：左 = + 菜单 / `//` 命令 / 模型选择，右 = 发送。
@@ -1261,16 +1261,6 @@ export function ChatInput({
           }
           right={
             <>
-              {activeWorkdir && (
-                <HoverHint hint={activeWorkdir} align="end">
-                  <span className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground">
-                    <FolderOpen className="w-3 h-3" />
-                    <span className="truncate max-w-[160px] font-mono">
-                      {pathLeaf(activeWorkdir)}
-                    </span>
-                  </span>
-                </HoverHint>
-              )}
               <div className="flex items-center gap-0.5">
                 <ProviderUsageIndicator
                   provider={

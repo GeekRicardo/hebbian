@@ -436,8 +436,12 @@ impl ToolDispatcher {
             .paths
             .iter()
             .any(|p| crate::tools::shell_parse::is_git_meta_path(&p.to_string_lossy()));
-        let edit_allowed =
-            edit_auto_allowed(&call.name, current_run_mode, path_pending.is_none(), touches_git_meta);
+        let edit_allowed = edit_auto_allowed(
+            &call.name,
+            current_run_mode,
+            path_pending.is_none(),
+            touches_git_meta,
+        );
 
         // 工具审批
         let permission = if edit_allowed {
@@ -489,6 +493,10 @@ impl ToolDispatcher {
                 // （危险复合）。让弹窗逐段如实展示，rm 这类只标红不毒化良性段（架构 §4.4.2.3）。
                 let segments = self.hitl.approval_segments(&call.name, &effects);
                 let refuse_remember = effects.has_dangerous_pattern();
+                // 这条审批是否会被 AutoMode judge 接管：与下方 async 块的判定一致
+                // （RunMode=AutoMode + judge 可用 + 模型在白名单）。true 时 surface 不弹框，
+                // 等 judge 异步出结果，避免「弹一下又消失」的闪现（架构 §4.4.4）。
+                let auto_handled = self.automode_will_handle();
                 self.emit(EventPayload::PermissionRequested {
                     request_id: request_id.clone(),
                     kind: PermissionKind::ToolCall {
@@ -501,6 +509,8 @@ impl ToolDispatcher {
                     },
                     summary: format!("工具 {} 请求执行", call.name),
                     risk: RiskLevel::Medium,
+                    auto_handled,
+                    call_id: call.id.clone(),
                 });
             }
         }
@@ -1360,6 +1370,9 @@ impl ToolDispatcher {
                         parsed.summary.clone()
                     },
                     risk: RiskLevel::Low,
+                    // 计划审批走 PlanMode 流程，不被 AutoMode judge 接管。
+                    auto_handled: false,
+                    call_id: String::new(),
                 }));
 
                 let permission_span = tracing::info_span!(
@@ -1389,9 +1402,8 @@ impl ToolDispatcher {
                     ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => {
                         // 切回 pre_plan_mode（从 session 当前快照里读）
                         if let Ok(s) = session_store::load(dd, sid) {
-                            let target_mode = s
-                                .pre_plan_mode
-                                .unwrap_or(crate::run_mode::RunMode::Default);
+                            let target_mode =
+                                s.pre_plan_mode.unwrap_or(crate::run_mode::RunMode::Default);
                             if let Err(e) = session_store::set_run_mode(dd, sid, target_mode) {
                                 warn!(error = %e, "ExitPlanMode: set_run_mode 失败");
                             } else {
@@ -1594,12 +1606,40 @@ impl ToolDispatcher {
             },
             summary,
             risk: RiskLevel::Medium,
+            // 路径越界审批不走 AutoMode judge，正常弹框。
+            auto_handled: false,
+            call_id: String::new(),
         });
         PathApproval {
             request_id,
             paths,
             waiter,
         }
+    }
+
+    /// 当前工具审批是否会被 AutoMode judge 接管——决定 surface 要不要立即弹审批框。
+    ///
+    /// 条件与 async 块里的实际 judge 短路判定一致：RunMode=AutoMode + judge_client 可用
+    /// + 当前模型在白名单。任一不满足（非 AutoMode，或模型不在白名单已降级人工）都返回
+    /// `false`，让 surface 正常弹框，避免「标了接管但其实没接管 → 该弹的不弹卡死」。
+    fn automode_will_handle(&self) -> bool {
+        if *self.run_mode.lock().unwrap() != crate::run_mode::RunMode::AutoMode {
+            return false;
+        }
+        if self.judge_client.is_none() {
+            return false;
+        }
+        let model_id = self.model_id.as_deref().unwrap_or("");
+        // 与 async 块的 judge 短路判定保持一致：data_dir=None 时退回 GeneralSettings
+        // 默认值（其 automode_models 含内置白名单），而非空 Vec——否则这里恒判 false、
+        // 实际却接管，前端该压住的框反而弹出来。
+        let automode_models = self
+            .data_dir_for_artifacts
+            .as_deref()
+            .map(|d| crate::storage::settings::load(d).general)
+            .unwrap_or_default()
+            .automode_models;
+        crate::automode::is_allowed_model(model_id, &automode_models)
     }
 
     fn emit(&self, payload: EventPayload) {
@@ -2237,7 +2277,6 @@ mod tests {
         );
     }
 
-
     /// 端到端复现 desktop 路径：dispatch 一个 Bash destructive 调用 → emit 收到
     /// PermissionRequested → 模拟 surface 通过 hitl gate resolve → waiter 唤醒 → 命令执行。
     /// 用来兜底"审批后卡住"这类回归。
@@ -2267,9 +2306,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::Default,
-            )),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id: None,
             judge_client: None,
             force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2365,12 +2402,22 @@ mod tests {
         assert_eq!(result[0].content, "executed");
 
         let mut saw_allow = false;
+        let mut saw_auto_handled = false;
         while let Ok(event) = rx.try_recv() {
-            if let EventPayload::PermissionAutoJudged { decision, .. } = event.payload {
+            if let EventPayload::PermissionAutoJudged { decision, .. } = &event.payload {
                 saw_allow = decision == "allow";
+            }
+            // 审批框闪现修复（架构 §4.4.4）：AutoMode + 白名单模型时，PermissionRequested
+            // 必须带 auto_handled=true，让 surface 不弹框、等 judge。与 judge 实际接管一致。
+            if let EventPayload::PermissionRequested { auto_handled, .. } = &event.payload {
+                saw_auto_handled = *auto_handled;
             }
         }
         assert!(saw_allow, "AutoMode judge should allow the supported model");
+        assert!(
+            saw_auto_handled,
+            "AutoMode + 白名单模型应在 PermissionRequested 标 auto_handled=true（前端据此不弹框）"
+        );
     }
 
     /// 架构 §4.4.4 hands-off（force_automode）：判官 DENY 命令类（Bash）时，**不弹**
@@ -2441,7 +2488,10 @@ mod tests {
                 }
             }
         }
-        assert!(saw_deny, "应有 deny 的 PermissionAutoJudged（判官自动拒，未询问用户）");
+        assert!(
+            saw_deny,
+            "应有 deny 的 PermissionAutoJudged（判官自动拒，未询问用户）"
+        );
     }
 
     /// 回归：AutoMode 自动审批阶段点中断必须生效（架构 §4.4.4）。
@@ -2620,9 +2670,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::Default,
-            )),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id: None,
             judge_client: None,
             force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2736,9 +2784,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::Default,
-            )),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id: None,
             judge_client: None,
             force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2856,9 +2902,7 @@ mod tests {
             state: run_state,
             sink,
             cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(
-                crate::run_mode::RunMode::Default,
-            )),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id: None,
             judge_client: None,
             force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3125,7 +3169,10 @@ mod tests {
                                 suspicious_allowed.push(format!(
                                     "{} (workdir={})",
                                     lossy,
-                                    workdir.as_ref().map(|w| w.display().to_string()).unwrap_or_default()
+                                    workdir
+                                        .as_ref()
+                                        .map(|w| w.display().to_string())
+                                        .unwrap_or_default()
                                 ));
                             }
                         }
@@ -3140,7 +3187,10 @@ mod tests {
                             out_samples.push(format!(
                                 "{} (workdir={})",
                                 fp,
-                                workdir.as_ref().map(|w| w.display().to_string()).unwrap_or_default()
+                                workdir
+                                    .as_ref()
+                                    .map(|w| w.display().to_string())
+                                    .unwrap_or_default()
                             ));
                         }
                     }

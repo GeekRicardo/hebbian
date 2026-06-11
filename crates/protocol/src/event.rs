@@ -179,6 +179,16 @@ pub enum EventPayload {
         kind: PermissionKind,
         summary: String,
         risk: RiskLevel,
+        /// 这条审批是否会被 AutoMode judge 接管（当前 RunMode=AutoMode 且 judge 可用 +
+        /// 模型在白名单）。`true` 时 surface **不应立即弹审批框**——judge 会异步出结果，
+        /// 紧接着 emit `PermissionAutoJudged` / `PermissionResolved`，避免审批框闪现。
+        /// `false` 时（非 AutoMode，或模型不在白名单已降级人工）surface 正常弹框。
+        #[serde(default)]
+        auto_handled: bool,
+        /// 触发本次审批的工具调用 id（ToolCall 审批时填）。surface 据此把 judge 评估中
+        /// 的「黄色呼吸」效果挂到对应工具卡片；非工具审批（path_access/plan）为空串。
+        #[serde(default)]
+        call_id: String,
     },
     PermissionResolved {
         request_id: PermissionRequestId,

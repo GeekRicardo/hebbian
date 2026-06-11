@@ -265,6 +265,11 @@ export type StreamingAssistantPart =
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
       /**
+       * AutoMode judge 正在评估这次工具调用（架构 §4.4.4）：渲染层据此给卡片加
+       * 「黄色呼吸」效果。judge 出结果（放行执行 / 拒绝 / 转人工）后清除。
+       */
+      isJudging?: boolean;
+      /**
        * 工具执行中的流式输出累积（架构 §4.4.1）。Bash 前台等待期间
        * `tool_output_delta` 事件按 chunk 追加到这里，渲染层在 status="running"
        * 时把它当作"实时控制台"显示。`tool_done.result` 到来后变成聚合最终结果，
@@ -665,6 +670,14 @@ export type EngineEvent =
        * （通过 / 编辑后通过 / 重新规划带反馈）。
        */
       plan?: PlanPermissionDto | null;
+      /**
+       * AutoMode judge 会接管这条审批（架构 §4.4.4）：前端**不立即弹审批框**，等
+       * judge 异步出结果（permission_auto_judged / permission_resolved）。仅在 judge
+       * 真正接管时为 true（AutoMode + 模型在白名单）；不在白名单已降级人工则为 false。
+       */
+      auto_handled?: boolean;
+      /** 触发审批的工具调用 id：前端据此给对应工具卡片挂 judge 评估中的黄色呼吸。 */
+      call_id?: string;
     }
   | {
       type: "permission_resolved";

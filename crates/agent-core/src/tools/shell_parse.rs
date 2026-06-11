@@ -1572,7 +1572,10 @@ mod tests {
     fn rm_extracts_delete_targets() {
         let r = cmd("rm -rf build dist/output.js");
         let targets = delete_targets(&r.commands[0]);
-        assert_eq!(targets, vec!["build".to_string(), "dist/output.js".to_string()]);
+        assert_eq!(
+            targets,
+            vec!["build".to_string(), "dist/output.js".to_string()]
+        );
     }
 
     #[test]

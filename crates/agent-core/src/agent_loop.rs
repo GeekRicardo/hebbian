@@ -1425,9 +1425,7 @@ mod tests {
                 pending_inputs: None,
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
-                run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::Default,
-                )),
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
                 model_id: None,
                 judge_client: None,
                 force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1488,9 +1486,7 @@ mod tests {
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
-                run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::Default,
-                )),
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
                 model_id: None,
                 judge_client: None,
                 force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1563,9 +1559,7 @@ mod tests {
                 pending_inputs: Some(pending_inputs),
                 consumed_pending_inputs: Some(consumed_pending_inputs.clone()),
                 pending_inputs_accepting: None,
-                run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::Default,
-                )),
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
                 model_id: None,
                 judge_client: None,
                 force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1692,9 +1686,7 @@ mod tests {
                 pending_inputs: None,
                 consumed_pending_inputs: None,
                 pending_inputs_accepting: None,
-                run_mode: Arc::new(std::sync::Mutex::new(
-                    crate::run_mode::RunMode::Default,
-                )),
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
                 model_id: None,
                 judge_client: None,
                 force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

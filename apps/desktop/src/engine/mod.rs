@@ -130,6 +130,12 @@ pub enum EngineEvent {
         /// （通过 / 编辑后通过 / 重新规划带反馈）。
         #[serde(skip_serializing_if = "Option::is_none", default)]
         plan: Option<PlanPermissionDto>,
+        /// AutoMode judge 会接管这条审批，前端不立即弹框（架构 §4.4.4）。
+        #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+        auto_handled: bool,
+        /// 触发审批的工具调用 id，前端据此把 judge 评估中的黄色呼吸挂到对应工具卡片。
+        #[serde(skip_serializing_if = "String::is_empty", default)]
+        call_id: String,
     },
     /// 审批已被回应（无论 approve / deny）。前端关闭弹窗。
     PermissionResolved {

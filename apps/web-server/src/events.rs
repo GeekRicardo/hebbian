@@ -96,6 +96,12 @@ pub enum EngineEvent {
         /// 危险复合模式：任何作用域都不可记住，弹窗隐藏记忆区（架构 §4.4.2.2）。
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         refuse_remember: bool,
+        /// AutoMode judge 会接管这条审批，前端不立即弹框（架构 §4.4.4）。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto_handled: bool,
+        /// 触发审批的工具调用 id，前端据此挂 judge 评估中的黄色呼吸。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        call_id: String,
     },
     PermissionResolved {
         request_id: String,
@@ -258,6 +264,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             kind,
             summary,
             risk,
+            auto_handled,
+            call_id,
         } => {
             use protocol::PermissionKind::*;
             let (
@@ -330,6 +338,8 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
                 command_segments,
                 segments,
                 refuse_remember,
+                auto_handled: *auto_handled,
+                call_id: call_id.clone(),
             }
         }
         PermissionResolved {

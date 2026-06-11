@@ -183,22 +183,21 @@ pub async fn classify_bash_prefixes_for_automode(
 
     for (index, cmd) in parsed.commands.iter().enumerate() {
         let segment_text = cmd.argv.join(" ");
-        let classified =
-            match bash_prefix::classify_prefix(
-                judge_client,
-                current_model_id,
-                &segment_text,
-                cancel.clone(),
-            )
-            .await
-            {
-                Ok(Some(result)) => result,
-                Ok(None) => continue,
-                Err(err) => {
-                    warn!(%err, segment = %segment_text, "bash prefix classifier failed");
-                    continue;
-                }
-            };
+        let classified = match bash_prefix::classify_prefix(
+            judge_client,
+            current_model_id,
+            &segment_text,
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok(Some(result)) => result,
+            Ok(None) => continue,
+            Err(err) => {
+                warn!(%err, segment = %segment_text, "bash prefix classifier failed");
+                continue;
+            }
+        };
 
         match classified {
             bash_prefix::BashPrefix::Prefix(prefix) => {

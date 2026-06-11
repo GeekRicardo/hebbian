@@ -1039,6 +1039,87 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
     Ok(session)
 }
 
+fn top_level_i64_field(json: &str, field: &str) -> Option<i64> {
+    let bytes = json.as_bytes();
+    let mut i = 0usize;
+    let mut depth = 0i32;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'"' if depth == 1 => {
+                let key_start = i + 1;
+                i += 1;
+                let mut escaped = false;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if escaped {
+                        escaped = false;
+                    } else if b == b'\\' {
+                        escaped = true;
+                    } else if b == b'"' {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    return None;
+                }
+                let key = &json[key_start..i];
+                i += 1;
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                if i >= bytes.len() || bytes[i] != b':' {
+                    continue;
+                }
+                i += 1;
+                if key != field {
+                    continue;
+                }
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                let value_start = i;
+                if i < bytes.len() && bytes[i] == b'-' {
+                    i += 1;
+                }
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == value_start || (i == value_start + 1 && bytes[value_start] == b'-') {
+                    return None;
+                }
+                return json[value_start..i].parse().ok();
+            }
+            b'"' => {
+                i += 1;
+                let mut escaped = false;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if escaped {
+                        escaped = false;
+                    } else if b == b'\\' {
+                        escaped = true;
+                    } else if b == b'"' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// 只解析 meta 信息，跳过 Message/Event 行的 content 反序列化。
 /// 用于 `list()` 等只需要 SessionMeta 的场景，避免解析 15MB+ 大文件的 messages。
 /// 返回 (Session 骨架, 非 marker message 数量)。
@@ -1049,7 +1130,19 @@ fn read_jsonl_meta_only(path: &Path) -> AppResult<(Session, usize)> {
     let head = content.trim_start();
     if head.starts_with("{\n") || head.starts_with("{\r\n") {
         if let Ok(session) = serde_json::from_str::<Session>(&content) {
-            let count = session.messages.iter().filter(|m| !matches!(m.role, Role::Marker)).count();
+            let source = session.source.clone().unwrap_or_else(default_source);
+            if let Err(e) = write_jsonl_full(path, &session, source) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "检测到 pretty-JSON session，但重写为 jsonl 失败"
+                );
+            }
+            let count = session
+                .messages
+                .iter()
+                .filter(|m| !matches!(m.role, Role::Marker))
+                .count();
             return Ok((session, count));
         }
     }
@@ -1098,6 +1191,9 @@ fn read_jsonl_meta_only(path: &Path) -> AppResult<(Session, usize)> {
         // Message content / tool_calls。这是 list() 性能的关键优化——231 个 session
         // 中最大的 15MB，全解析会卡死主线程。
         if trimmed.starts_with(r#"{"type":"message"#) {
+            if let Some(created_at) = top_level_i64_field(trimmed, "created_at") {
+                latest_ts = latest_ts.max(created_at);
+            }
             // 统计非 marker message 数量。marker 行的特征是 `"role":"marker"` 紧跟在
             // type/id 之后（前 100 字符内），content 为空字符串。
             // 不用完整反序列化，用字符串启发式匹配——实际场景中 content 几乎不可能包含
@@ -1239,7 +1335,11 @@ pub fn list(data_dir: &Path) -> AppResult<Vec<SessionMeta>> {
                 // legacy json 文件通常不大，走完整解析
                 match common::storage::read_json_required::<Session>(&file) {
                     Ok(s) => {
-                        let count = s.messages.iter().filter(|m| !matches!(m.role, Role::Marker)).count();
+                        let count = s
+                            .messages
+                            .iter()
+                            .filter(|m| !matches!(m.role, Role::Marker))
+                            .count();
                         Ok((s, count))
                     }
                     Err(e) => Err(e),
@@ -2595,6 +2695,36 @@ mod tests {
         let metas = list(&dir).unwrap();
         let ids: Vec<_> = metas.iter().map(|m| m.id.clone()).collect();
         assert_eq!(ids, vec![s2.id, s1.id]);
+    }
+
+    #[test]
+    fn list_moves_session_to_top_after_new_message() {
+        let dir = temp_data_dir("list-message-time");
+        let older = save_session(&dir, "older", "msg1");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let newer = save_session(&dir, "newer", "msg2");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        append_message(
+            &dir,
+            &older.id,
+            Message {
+                id: new_id(),
+                role: Role::User,
+                content: "fresh message".into(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: now(),
+                meta: None,
+                subagent_call_id: None,
+            },
+        )
+        .unwrap();
+
+        let metas = list(&dir).unwrap();
+        let ids: Vec<_> = metas.iter().map(|m| m.id.clone()).collect();
+        assert_eq!(ids, vec![older.id, newer.id]);
     }
 
     #[test]

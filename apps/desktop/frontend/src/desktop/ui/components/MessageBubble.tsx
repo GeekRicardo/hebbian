@@ -153,6 +153,8 @@ interface ToolCallItem {
    * 这里透传给渲染层，在 Task 卡片内嵌套显示子工具调用 / 子文本 / 子推理。
    */
   nestedParts?: StreamingAssistantPart[];
+  /** AutoMode judge 正在评估这次调用（架构 §4.4.4）：卡片渲染黄色呼吸。 */
+  isJudging?: boolean;
 }
 
 type AssistantRenderPart =
@@ -203,6 +205,7 @@ function normalizeStreamingToolPart(
     artifactPath: part.artifact_path,
     liveOutput: part.live_output,
     nestedParts: part.nested_parts,
+    isJudging: part.isJudging,
   };
 }
 
@@ -1569,7 +1572,9 @@ function ToolCallTimeline({
         // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
         // failed 分支预留，等后端加枚举时自然激活。
         const statusDot =
-          call.status === "done"
+          call.isJudging
+            ? "animate-breathe bg-amber-400"
+            : call.status === "done"
             ? "bg-green-400"
             : call.status === "running"
               ? "animate-breathe bg-primary"
@@ -1585,7 +1590,12 @@ function ToolCallTimeline({
             // focus-flash 闪烁时 box-shadow 沿这个 wrapper 自身的 border-radius 绘制，
             // 视觉上贴着卡片本身边缘的圆角，不再"小一圈"。平时 wrapper 无背景 / 边框，
             // 圆角不可见——仅 focus-flash 期间 box-shadow 才显示。
-            className={cn("relative rounded-[5px]", index === calls.length - 1 && "pb-0")}
+            className={cn(
+              "relative rounded-[5px]",
+              index === calls.length - 1 && "pb-0",
+              // AutoMode judge 评估中：黄色边框呼吸（架构 §4.4.4）。
+              call.isJudging && "judge-breathe",
+            )}
           >
             {index !== calls.length - 1 && (
               <div className="absolute -left-[15px] top-6 bottom-[-8px] w-px bg-border" />
