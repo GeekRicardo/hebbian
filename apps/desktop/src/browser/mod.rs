@@ -326,11 +326,13 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
     }
 
     let app_for_nav = app.clone();
+    // 注入 __HEB_POPOUT__ 标记：inspector 据此在页面内渲染工具栏（地址栏/导航/选取）
+    let popout_script = format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}");
     WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(target))
         .title("页面预览（可缩放测样式）")
         .inner_size(1280.0, 800.0)
         .resizable(true)
-        .initialization_script(init_script())
+        .initialization_script(popout_script)
         .on_navigation(move |url: &Url| {
             // popout 不维护 embedded 的历史，只做上行转发 + 安全校验
             if let Some(msg) = decode_bridge(url) {
@@ -488,6 +490,23 @@ pub fn run_spike(app: &AppHandle) -> tauri::Result<()> {
         wait(2).await;
         let r = browser_popout(app2.clone(), st.clone());
         tracing::info!(target: "webview_spike", "popout → {r:?}");
+
+        // 探测 popout 窗口里的工具栏是否渲染
+        wait(4).await;
+        if let Some(w) = app2.get_webview_window(POPOUT_LABEL) {
+            let probe = r#"
+                (function(){
+                  var bar = document.querySelector('[data-hebbian-overlay="toolbar"]');
+                  window.location.replace('heb-bridge://msg/?d='+encodeURIComponent(JSON.stringify({
+                    source:'hebbian-inspector', type:'heb:debug',
+                    payload:{ isPopout: !!window.__HEB_POPOUT__, hasToolbar: !!bar,
+                              inputs: bar ? bar.querySelectorAll('input').length : 0,
+                              btns: bar ? bar.querySelectorAll('button').length : 0 }})));
+                })();
+            "#;
+            let _ = w.eval(probe);
+            tracing::info!(target: "webview_spike", "popout toolbar probe dispatched");
+        }
 
         wait(2).await;
         let h = browser_set_visible(st.clone(), false);

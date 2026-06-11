@@ -6924,3 +6924,57 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 仅 apps/desktop（browser 模块 + previewUrl）；两档 URL 安全校验逻辑不变
 - **验证**: previewUrl（新增公网→https/本地→http/局域网→http 用例）+ url_policy 4 cargo test 全过；tsc + cargo check 绿；dev 启动无 panic/报错
 - **留尾巴**: 公网若是 http-only 站点，强制 https 可能失败（真浏览器会回退 http，本次未做失败回退）——目标场景是 localhost dev + 主流 https 公网，可接受；真实开窗无 toast 需用户眼验
+
+### 2026-06-11 — 删 RunMode EditAutomatically，四模式收敛为三模式；Default 下界内文件编辑免审
+
+- **Why**: 用户痛点——审批弹窗太多、「记住了还反复弹」。回放 545 次历史 Bash 弹窗发现 44% 是「全段已审批、纯被危险复合模式短路拦下」；220 次人工决策里 deny 仅 5 次（2.3%），97.7% 都是放行，弹窗拦截价值极低。其中 Edit 弹窗 70 次（17%）全是界内编辑。既然 edits-worktree（§4.13.2）已保证界内写入整 Run 可回退，「界内编辑免审」就该是默认行为，不需要一个独立模式（EditAutomatically）承载——而 EditAutomatically 的全部功能（编辑免审、命令审批）正好等于「Default 默认 + 界内」。
+- **改动**:
+  - [docs/架构.md](架构.md): §4.4.3 四模式→三模式（Default / PlanMode / AutoMode），写明 Default 的界内编辑免审语义 + edits-worktree 安全前提 + 三类不可还原写入例外（界外 / git 元数据 / 命令）；§4.4.4 Classifier A、§4.4.5 PlanMode 退出、§8 命令清单 + SEMI 模板变量、§13 决策表两行同步
+  - [crates/agent-core/src/run_mode.rs](../crates/agent-core/src/run_mode.rs): `RunMode` 枚举删 `AskBeforeEdits` / `EditAutomatically`，合并为 `Default`（`#[serde(alias=...)]` 兼容老 jsonl）；`parse` 接受老 kebab/Pascal 名字仍落 Default；补 3 个 serde/parse 单测
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 删 async 块里的 EditAutomatically 短路；同步段新增「界内编辑免审」判定（Edit/Write + Default + path_pending.is_none() + 非 git-meta → 直接 Approved，不调 hitl.check、不 emit PermissionRequested）；补 3 个回归测试（界内放行 / 界外弹 / git-meta 弹）
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): `is_git_meta_path` 提为 `pub`，Bash 写目标与 Edit 路径共用同一 git 元数据判定（修了原先 Edit 直改 .git/config 不拦的漏洞）
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs) / [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs) / [apps/cli/src/tui/app.rs](../apps/cli/src/tui/app.rs): `--mode` help 文案 + 默认值改 default；cycle_run_mode 三态轮转
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx) / [bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): chip 选项三档，Default label「默认」，desc 改人话
+- **影响范围**: agent-core（run_mode / dispatch / shell_parse）+ CLI + desktop 前端；协议 RunMode 枚举变更但 serde alias 保证**向后兼容**（老 session 的 AskBeforeEdits / EditAutomatically 加载映射到 Default）；subagent run_mode 从 EditAutomatically 改 Default（语义等价，界内编辑仍免审）
+- **验证**:
+  - 单测：run_mode 3 个 + dispatch 3 个回归全过；A/B 翻转（禁用免审分支）确认界内编辑测试必 FAIL（卡审批超时）/ 启用必 PASS
+  - 端到端（heb CLI，Default 模式）：界内 Edit `/tmp/repro-edit/main.rs` → permission_requested=0，文件真实 old→new，无 judge 调用；界外访问 `/tmp/outside-target.rs` → 弹 path_access 审批。A/B 对照成立
+  - cargo check --workspace 绿；tsc 绿；agent-core 全量测试除 2 个预存失败（list_self_heals / output_capped，干净 HEAD 同样失败，与本次无关）外全过
+- **留尾巴**:
+  - 本次只删模式 + 界内编辑免审。仍待办（独立 PR）：① AutoMode judge transcript 空切片 bug（dispatch.rs 传 `&[]`，导致 judge 永远「no user intent」误杀，141 次 judge 里 9 次 deny 全是误杀）；② 危险复合模式两级化（ast-too-complex / cd-git-compound 不再短路 allow 规则）；③ automode_judge.md prompt 重写 + 注入 rule-hit 信息；④ git -C <path> 指纹粒度 bug（被当成 `git /path` 子命令，allow 的 git add/commit 匹配不上）
+  - 工作区另有他人未完成改动（desktopShell.css / useStore.ts / ChatView.tsx / 研究笔记.md 等），不在本次提交范围
+
+### 2026-07-16 — 修复四个数据持久化漏洞：retry 清空展示 / partial 缺 tool_result / recorder 丢事件 / tray 强退不保存
+
+- **Why**: 用户报 bug：
+  1. 模型调用出错重试时，前端展示内容消失，暂停后永久丢失
+  2. Cmd+Q / 强退后已输出的 tool_call result 丢失（partial sidecar 没存 ToolResult）
+  3. Recorder bounded channel 满时静默丢事件
+  4. Tray 菜单「退出」直接 `app.exit(0)` 跳过所有落盘逻辑
+- **改动**:
+  - `crates/agent-core/src/storage/sessions_dir.rs`: `PartialFragment` 新增 `ToolResult { index, result, duration_ms }` 变体；`RecoveredPartial` 新增 `tool_results: BTreeMap<u32, (String, u64)>` 字段；`recover_interrupted_partials` 处理 `ToolResult` 聚合
+  - `crates/agent-core/src/storage/sessions.rs`: `partial_to_interrupted_message` 恢复时从 `RecoveredPartial.tool_results` 取 result 填入 `MessagePart::ToolCall` 和 `MessageToolCall`
+  - `apps/desktop/src/chat.rs`: `DesktopObserver::on_event` 新增 `ToolCallFinished` → `PartialFragment::ToolResult` 写入
+  - `crates/agent-core/src/recorder.rs`: 通道从 `bounded(1024)` 改为 `unbounded`；`write()` 从 `try_send` 改 `send`（不丢事件）；`flush()` 去 `.await`（UnboundedSender::send 同步）
+  - `apps/desktop/frontend/src/desktop/ui/store/useStore.ts`: `model_retry` 处理器不再清空 `streamingText` / `streamingParts`——保留已展示内容；`text_delta` / `reasoning` / `tool_call_delta` 在重试后首个 delta 到达时从干净状态重建（避免新旧叠加）
+  - `apps/desktop/src/window_control.rs`: tray 菜单「退出」改调 `cooperative_quit()`：先 hide 窗口 → cancel 全部 HITL + run → 等 2s → 再 `app.exit(0)`
+- **影响范围**: agent-core（storage / recorder）+ desktop（chat / window_control / 前端 store）；协议无变化（PartialFragment 新增变体为 additive，老 partial 文件含未知 variant 时 serde 跳过，不抛错）
+- **验证**:
+  - `cargo check --workspace` 绿；`npx tsc --noEmit` 绿
+  - agent-core tests: `partial_roundtrip_and_recovery` 通过（含 ToolResult 变体 roundtrip），`load_with_partial_recovery_*` 通过，`recorder` 通过
+  - desktop chat tests 全部 13 个通过（`persist_interrupted_output_*` / `persist_failed_output_*` / `partial_writer_survives_process_kill_without_drop` 等）
+- **留尾巴**:
+  - `list_self_heals_pretty_json_session_files` 预存失败（与本次无关）
+  - ToolCallOutputDelta（工具执行中的流式输出片段）仍未写入 partial sidecar——最终结果靠 ToolCallFinished 兜底，但恢复后看不到中间增量
+  - cooperative_quit 的 2s 等跑完是 hard-coded，极端场景下大工具执行超过 2s 仍可能丢结果；长期考虑走 pending_inputs_accepting 关闸 + 等 run 自然结束的机制
+
+### 2026-06-11 — popout 独立窗口加页面内工具栏（地址栏/导航/选取）
+
+- **Why**: 用户要 popout 新窗口也保留网址输入框工具栏那些按钮、并支持注释。原 popout 是裸加载目标页面，没工具栏
+- **方案选择**: 没走「popout 加载我们的 React + 子 webview」的重方案（要多实例 BrowserController + 第二 React 实例 + 事件按窗口分流）。选轻方案——给 popout 注入 `window.__HEB_POPOUT__` 标记，inspector.js 据此在**页面内**渲染 vanilla 工具栏；导航走原生 window.location/history（Rust on_navigation 仍做两档安全校验）。与现有架构一脉相承（工具栏、注释卡片都是 inspector 页面内 vanilla DOM），无需多 React/多实例
+- **改动**:
+  - inspector.js: 新增 `showPopoutToolbar()`（仅 `__HEB_POPOUT__` 时渲染）——后退/前进/刷新/地址栏/选取元素；地址栏回车走 `navWithScheme`（本地 http / 公网 https）；body 下移 40px 避让；reportNavigated 同步刷新地址栏；注释卡片在 popout 下顶部下移避开工具栏
+  - mod.rs: browser_popout 的 initialization_script 前置 `window.__HEB_POPOUT__=true`；spike 加 popout 工具栏探测
+- **影响范围**: 仅 apps/desktop（inspector.js + mod.rs）
+- **验证**: spike 探测 popout 窗口——`{isPopout:true, hasToolbar:true, inputs:1, btns:4}`（地址栏+后退/前进/刷新/选取）；注释卡片在 popout 复用同一套已验证可用；inspector 测试 + tsc + cargo check 全绿
+- **留尾巴**: popout 工具栏无 auto-follow/检测 chips（无聊天流，不适用）；真实窗口里 popout 工具栏导航/选取/注释的手感需用户眼验；popout 地址栏的 scheme 补全逻辑在 inspector 里内联了一份（与 previewUrl 同义但独立，因 inspector 无法 import TS）

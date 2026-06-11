@@ -566,8 +566,9 @@
     cardSnapshot = snap;
     var card = document.createElement("div");
     card.setAttribute(OVERLAY_ATTR, "card");
+    var cardTop = window.__HEB_POPOUT__ ? TOOLBAR_H + 12 : 16;
     card.style.cssText = [
-      "position:fixed", "top:16px", "right:16px", "width:300px", "max-height:84vh",
+      "position:fixed", "top:" + cardTop + "px", "right:16px", "width:300px", "max-height:84vh",
       "display:flex", "flex-direction:column", "z-index:2147483647",
       "background:#ffffff", "color:#1f2328", "border:1px solid #d9dde3",
       "border-radius:10px", "box-shadow:0 8px 30px rgba(15,23,42,0.16)",
@@ -715,9 +716,76 @@
     styleDiff = {};
   }
 
+  /* ─────────────────── popout 窗口内工具栏（仅 __HEB_POPOUT__）───────────────────
+     popout 直接加载目标页面（无我们的 React），工具栏由 inspector 在页面内渲染：
+     地址栏 + 后退/前进/刷新 + 选取元素。导航走原生 window.location/history，
+     Rust on_navigation 仍做两档安全校验。注释卡片复用同一套页面内卡片。 */
+
+  var popoutAddr = null;
+  var TOOLBAR_H = 40;
+
+  function navWithScheme(raw) {
+    var v = (raw || "").trim();
+    if (!v) return;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+      var host = v.split("/")[0].split(":")[0].toLowerCase();
+      var local = host === "localhost" || /\.localhost$/.test(host) || host === "host.docker.internal" ||
+        /\.local$/.test(host) || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host === "0.0.0.0";
+      v = (local ? "http://" : "https://") + v;
+    }
+    window.location.href = v;
+  }
+
+  function popoutBtn(label, title, onClick) {
+    var b = document.createElement("button");
+    b.textContent = label;
+    b.title = title;
+    b.style.cssText = "flex:none;width:28px;height:28px;border:1px solid #d9dde3;background:#fff;color:#1f2328;" +
+      "border-radius:6px;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;";
+    b.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); onClick(); });
+    return b;
+  }
+
+  function showPopoutToolbar() {
+    var bar = document.createElement("div");
+    bar.setAttribute(OVERLAY_ATTR, "toolbar");
+    bar.style.cssText = [
+      "position:fixed", "top:0", "left:0", "right:0", "height:" + TOOLBAR_H + "px",
+      "display:flex", "align-items:center", "gap:6px", "padding:0 8px", "box-sizing:border-box",
+      "background:#f6f8fa", "border-bottom:1px solid #d9dde3", "z-index:2147483646",
+      "font-family:-apple-system,system-ui,sans-serif",
+    ].join(";");
+    bar.addEventListener("click", function (e) { e.stopPropagation(); }, false);
+    bar.addEventListener("mousedown", function (e) { e.stopPropagation(); }, false);
+
+    bar.appendChild(popoutBtn("‹", "后退", function () { history.back(); }));
+    bar.appendChild(popoutBtn("›", "前进", function () { history.forward(); }));
+    bar.appendChild(popoutBtn("⟳", "刷新", function () { location.reload(); }));
+
+    var addr = document.createElement("input");
+    addr.type = "text";
+    addr.value = window.location.href;
+    addr.spellcheck = false;
+    addr.style.cssText = "flex:1;height:28px;border:1px solid #d9dde3;background:#fff;color:#1f2328;" +
+      "border-radius:14px;padding:0 12px;font-size:12px;outline:none;box-sizing:border-box;";
+    addr.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); navWithScheme(addr.value); } });
+    bar.appendChild(addr);
+    popoutAddr = addr;
+
+    bar.appendChild(popoutBtn("⌖", "选取页面元素标注", function () {
+      if (pickerActive) stopPicker(false); else startPicker();
+    }));
+
+    document.documentElement.appendChild(bar);
+    // 把页面内容下移，避免被工具栏盖住
+    try { document.body.style.marginTop = TOOLBAR_H + "px"; } catch (e) {}
+  }
+
   /* ───────────────────────── SPA 导航上报 ───────────────────────── */
 
   function reportNavigated() {
+    if (popoutAddr) popoutAddr.value = window.location.href;
     send("heb:navigated", { url: window.location.href, title: document.title || "" });
   }
 
@@ -789,6 +857,9 @@
 
   function boot() {
     hookHistory();
+    if (window.__HEB_POPOUT__) {
+      try { showPopoutToolbar(); } catch (e) {}
+    }
     send("heb:ready", { url: window.location.href, title: document.title || "" });
   }
 
