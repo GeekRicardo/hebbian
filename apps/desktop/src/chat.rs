@@ -137,12 +137,15 @@ pub async fn send_and_save_in_data_dir(
     let vision_client = agent_core::vision_bridge::build_vision_client(data_dir)
         .await
         .map_err(|e| AppError::msg(format!("vision bridge: {e}")))?;
+    // 闭包要 'static（client factory 会进 agent_loop），data_dir 借不进去——拷一份 owned。
+    let dd = data_dir.to_path_buf();
     send_and_save_in_data_dir_with_client_factory(
         data_dir,
         args,
         emit_event,
         move |provider, model, reasoning| {
-            let client = model_gateway::build_client(provider)
+            // 带 data_dir：启用 401 自愈刷新（长 HITL 审批后 token 失效会自动续期重试）。
+            let client = model_gateway::build_client_with_data_dir(provider, dd.clone())
                 .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
             let client =
                 agent_core::vision_bridge::wrap_with_vision_client(client, vision_client.clone());

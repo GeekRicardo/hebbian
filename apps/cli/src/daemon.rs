@@ -611,7 +611,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
     let vision = agent_core::vision_bridge::build_vision_client(data_dir)
         .await
         .map_err(|e| anyhow!("vision bridge: {e}"))?;
-    let inner = model_gateway::build_client(provider)
+    let inner = model_gateway::build_client_with_data_dir(provider, data_dir.to_path_buf())
         .map_err(|e| anyhow!("构建 model client 失败: {e}"))?;
     let inner = agent_core::vision_bridge::wrap_with_vision_client(inner, vision);
     let client: Arc<dyn ModelClient> = Arc::new(NamedModelClient::new(

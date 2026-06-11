@@ -39,13 +39,28 @@ fn needs_long_context_beta(req: &ModelRequest) -> bool {
 
 pub struct AnthropicClient {
     provider: Provider,
+    /// 数据目录（含 providers.json）。`Some` 时启用 401 自愈：模型请求被判凭证无效
+    /// 会强制刷新 OAuth token 并用新凭证重试一次。主对话路径（`build_client_with_data_dir`）
+    /// 传 `Some`；健康检查 / 标题生成 / 测试等传 `None`（不需要长跑期间续期）。
+    data_dir: Option<std::path::PathBuf>,
     http: reqwest::Client,
 }
 
 impl AnthropicClient {
     pub fn new(provider: Provider) -> Result<Self, ModelError> {
+        Self::with_data_dir(provider, None)
+    }
+
+    pub fn with_data_dir(
+        provider: Provider,
+        data_dir: Option<std::path::PathBuf>,
+    ) -> Result<Self, ModelError> {
         let http = super::build_http_client()?;
-        Ok(Self { provider, http })
+        Ok(Self {
+            provider,
+            data_dir,
+            http,
+        })
     }
 
     fn messages_url(&self) -> String {
@@ -115,6 +130,74 @@ impl AnthropicClient {
         matches!(self.provider.auth_mode, AuthMode::OauthClaudeCode)
             || self.provider.claude_code_compat
     }
+
+    /// 发一次 Messages 请求拿到成功响应；内含 401 自愈：首次被判凭证无效（401）且
+    /// 本 client 带了 data_dir，就强制刷新 OAuth token、用新凭证重发一次。长时间
+    /// HITL 审批等待后 token 过期的 401 由此自动救回。
+    async fn send_with_refresh(
+        &self,
+        req: &ModelRequest,
+        stream: bool,
+        cancel: &CancelFlag,
+    ) -> Result<reqwest::Response, ModelError> {
+        let attach_long = needs_long_context_beta(req);
+        let oauth = self.is_claude_code_oauth();
+        let url = self.messages_url();
+
+        let body = proto::build_body(req, stream, oauth, self.provider.account_id.as_deref())?;
+        tracing::info!(
+            model = %req.model,
+            stream,
+            thinking = %body.get("thinking").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
+            output_config = %body.get("output_config").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
+            "anthropic request dispatched"
+        );
+        let first = post_messages(&self.http, &url, &self.provider, &body, attach_long, cancel).await;
+
+        // 仅 401 + 带 data_dir 才走自愈；其它错误（含别的 4xx/5xx）原样返回。
+        let Err(ModelError::Http { status: 401, .. }) = &first else {
+            return first;
+        };
+        let Some(dd) = self.data_dir.as_deref() else {
+            return first;
+        };
+        let fresh =
+            match crate::auth::refresh::force_refresh_provider_token(dd, self.provider.clone()).await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, "401 后强制刷新 OAuth token 失败");
+                    return first;
+                }
+            };
+        tracing::info!("模型请求收到 401，已强制刷新 OAuth token，用新凭证重试");
+        let body2 = proto::build_body(req, stream, oauth, fresh.account_id.as_deref())?;
+        post_messages(&self.http, &url, &fresh, &body2, attach_long, cancel).await
+    }
+}
+
+/// 发 Messages 请求（含瞬时重试），返回成功响应；HTTP >= 400 转成 `ModelError::Http`。
+async fn post_messages(
+    http: &reqwest::Client,
+    url: &str,
+    provider: &Provider,
+    body: &Value,
+    attach_long: bool,
+    cancel: &CancelFlag,
+) -> Result<reqwest::Response, ModelError> {
+    super::retry_request(cancel.clone(), || async {
+        let r = apply_optional_betas(apply_auth(http.post(url), provider), attach_long)
+            .json(body)
+            .send()
+            .await?;
+        let status = r.status().as_u16();
+        if status >= 400 {
+            let body = r.text().await?;
+            return Err(ModelError::Http { status, body });
+        }
+        Ok(r)
+    })
+    .await
 }
 
 #[async_trait]
@@ -136,39 +219,10 @@ impl ModelClient for AnthropicClient {
         cancel: CancelFlag,
     ) -> Result<ModelResponse, ModelError> {
         reject_image_generation_tool(&req)?;
-        tracing::info!(model = %req.model, "anthropic complete: dispatched");
-        let body = proto::build_body(
-            &req,
-            false,
-            self.is_claude_code_oauth(),
-            self.provider.account_id.as_deref(),
-        )?;
-        let attach_long = needs_long_context_beta(&req);
-
-        if let Some(thinking) = body.get("thinking") {
-            debug!(model = %req.model, thinking = %thinking, "anthropic complete: thinking field");
-        }
-
-        super::retry_request(cancel, || {
-            let body = body.clone();
-            async move {
-                let resp = apply_optional_betas(
-                    apply_auth(self.http.post(self.messages_url()), &self.provider),
-                    attach_long,
-                )
-                .json(&body)
-                .send()
-                .await?;
-                let status = resp.status().as_u16();
-                let text = resp.text().await?;
-                if status >= 400 {
-                    return Err(ModelError::Http { status, body: text });
-                }
-                let v: Value = serde_json::from_str(&text)?;
-                Ok(proto::parse_response(&v))
-            }
-        })
-        .await
+        let resp = self.send_with_refresh(&req, false, &cancel).await?;
+        let text = resp.text().await?;
+        let v: Value = serde_json::from_str(&text)?;
+        Ok(proto::parse_response(&v))
     }
 
     async fn stream(
@@ -194,40 +248,7 @@ impl ModelClient for AnthropicClient {
         }
 
         reject_image_generation_tool(&req)?;
-        let body = proto::build_body(
-            &req,
-            true,
-            self.is_claude_code_oauth(),
-            self.provider.account_id.as_deref(),
-        )?;
-        let attach_long = needs_long_context_beta(&req);
-        tracing::info!(
-            model = %req.model,
-            stream = %body.get("stream").map(|v| v.to_string()).unwrap_or_default(),
-            thinking = %body.get("thinking").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
-            output_config = %body.get("output_config").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
-            "anthropic stream: dispatched"
-        );
-
-        let resp = super::retry_request(cancel.clone(), || {
-            let body = body.clone();
-            async move {
-                let r = apply_optional_betas(
-                    apply_auth(self.http.post(self.messages_url()), &self.provider),
-                    attach_long,
-                )
-                .json(&body)
-                .send()
-                .await?;
-                let status = r.status().as_u16();
-                if status >= 400 {
-                    let body = r.text().await?;
-                    return Err(ModelError::Http { status, body });
-                }
-                Ok(r)
-            }
-        })
-        .await?;
+        let resp = self.send_with_refresh(&req, true, &cancel).await?;
 
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
@@ -365,7 +386,7 @@ impl ModelClient for AnthropicClient {
             }
         }
 
-        if body.get("thinking").is_some() {
+        if thinking_deltas_seen > 0 {
             debug!(
                 thinking_deltas_seen,
                 reasoning_chars = full_reasoning.len(),

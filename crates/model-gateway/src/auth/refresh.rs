@@ -36,13 +36,21 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn needs_refresh(provider: &Provider) -> bool {
+/// 该 provider 是否支持 OAuth 刷新：有 refresh_token + Claude OAuth。**不含**过期判断——
+/// 给 force_refresh（401 兜底）用：401 时 token 可能 expires_at 还没到却已被服务端判废。
+fn is_refreshable(provider: &Provider) -> bool {
     if provider.refresh_token.as_deref().unwrap_or("").is_empty() {
         return false;
     }
-    match (provider.kind, provider.auth_mode) {
-        (ProviderKind::Anthropic, AuthMode::OauthClaudeCode) => {}
-        _ => return false,
+    matches!(
+        (provider.kind, provider.auth_mode),
+        (ProviderKind::Anthropic, AuthMode::OauthClaudeCode)
+    )
+}
+
+fn needs_refresh(provider: &Provider) -> bool {
+    if !is_refreshable(provider) {
+        return false;
     }
     match provider.token_expires_at {
         Some(exp) => now_ms() + REFRESH_LEEWAY_MS >= exp,
@@ -54,7 +62,7 @@ fn needs_refresh(provider: &Provider) -> bool {
 /// 始终返回最新版本的 Provider（即便没刷新也可能从磁盘重读到他人刚写入的版本）。
 pub async fn ensure_fresh_provider_token(
     data_dir: &Path,
-    mut provider: Provider,
+    provider: Provider,
 ) -> AppResult<Provider> {
     if !needs_refresh(&provider) {
         return Ok(provider);
@@ -68,12 +76,39 @@ pub async fn ensure_fresh_provider_token(
     if !needs_refresh(&latest) {
         return Ok(latest);
     }
-    provider = latest;
+    do_refresh(data_dir, latest).await
+}
 
+/// 401 兜底刷新：模型请求被服务端判为「凭证无效」。这时 token 可能 expires_at 还没到
+/// 却已失效（长时间 HITL 审批等待后过期、服务端提前作废等），所以**绕过** needs_refresh
+/// 的提前量判断强制刷新。仍走 per-provider 锁 + token 比对去重：等锁期间若别的请求已经
+/// 刷出新 token（api_key 变了），直接复用、不重复刷。
+pub async fn force_refresh_provider_token(
+    data_dir: &Path,
+    provider: Provider,
+) -> AppResult<Provider> {
+    if !is_refreshable(&provider) {
+        return Ok(provider);
+    }
+
+    let lock = lock_for(&provider.id);
+    let _guard = lock.lock().await;
+
+    let latest = config::get(data_dir, &provider.id).unwrap_or_else(|_| provider.clone());
+    if latest.api_key != provider.api_key {
+        // 等锁期间别的请求已经刷出新 token，直接用，不重复刷
+        return Ok(latest);
+    }
+    do_refresh(data_dir, latest).await
+}
+
+/// 实际执行刷新 + 落盘。调用方需已持 per-provider 锁、且确认该刷。
+/// 先走 OAuth refresh_token 换新；失败则回退读本机 Claude Code 凭据顶上。
+async fn do_refresh(data_dir: &Path, mut provider: Provider) -> AppResult<Provider> {
     let refresh_token = provider
         .refresh_token
         .clone()
-        .expect("needs_refresh 已检查过 refresh_token 非空");
+        .expect("调用方已确认 refresh_token 非空");
 
     let refreshed = match claude_oauth_refresh(&refresh_token).await {
         Ok(t) => t,

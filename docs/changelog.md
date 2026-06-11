@@ -6875,3 +6875,15 @@ Note: 本条仅覆盖记忆系统。`ChatView.tsx`/`MessageBubble.tsx` 同文件
 - **影响范围**: 纯前端展示，无后端 / 数据改动。
 - **验证**: `tsc --noEmit` 通过；`curl /api/oauth/usage` 实测 `five_hour 100%·2m后刷新`、`seven_day 10%·5d13h后刷新`，与 `formatRemaining` 一致。
 - **留尾巴**: 倒计时是 3 分钟轮询拉取时刻的快照，不做秒级 tick；够用。
+
+### 2026-06-11 — Claude OAuth 401 自愈刷新（修长 HITL 审批后 token 过期 401）
+
+- **Why**: 用户遇到——一个请求触发审批，几小时后才点通过，审批通过的请求立即 `401 Invalid authentication credentials`。根因：token 只在 run 入口 `ensure_fresh` 一次、固定进 client；长审批等待期间 token 过期，审批后继续用旧 token → 401，而 401 当前不触发刷新。`ensure_fresh` 的「提前 5min」是请求驱动的，覆盖不了「请求已发出、卡在审批里」这段。
+- **改动**:
+  - [auth/refresh.rs](../crates/model-gateway/src/auth/refresh.rs): 拆 `is_refreshable`（只判类型 + 有 refresh_token，**不判过期**）/ `needs_refresh`；抽 `do_refresh`（实际刷新 + 落盘）；新增 `force_refresh_provider_token`（401 兜底：绕过提前量强制刷新，仍走 per-provider 锁 + token 比对去重）
+  - [providers/anthropic.rs](../crates/model-gateway/src/providers/anthropic.rs): `AnthropicClient` 加 `data_dir`（`with_data_dir` 构造器）；`send_with_refresh` 统一「发请求 + 401 自愈」——首次 401 且带 data_dir → `force_refresh` → 用新凭证重发一次；`complete`/`stream` 改用它（抽出 `post_messages`）
+  - [lib.rs](../crates/model-gateway/src/lib.rs): `build_client_with_data_dir`（委托，Anthropic 分支传 data_dir 启用自愈）；原 `build_client` 不变，12 处调用不动
+  - 主对话路径（[desktop chat.rs](../apps/desktop/src/chat.rs) / [cli daemon.rs](../apps/cli/src/daemon.rs) / [web session.rs](../apps/web-server/src/session.rs)）改用 `build_client_with_data_dir`
+- **影响范围**: model-gateway + 三 surface 主对话路径。原 `build_client` 行为不变（健康检查 / 标题 / 测试 / compaction 不带 data_dir、无 401 自愈——单次快请求不需要）
+- **验证**: 实跑——把 access_token 改坏、`expires_at` 不动（模拟「token 已失效但提前量判断不会刷」）→ run 入口 `ensure_fresh` 不刷 → 请求撞 401 → `force_refresh` 自愈 → `run_finished` 成功、token 被刷新。A/B：修前 401 直接 `run_failed`，修后自愈成功
+- **留尾巴**: 401 自愈只 Anthropic OAuth（`force_refresh` 限 Claude OAuth）；其它 provider 401 仍直接失败。usage 指示器点击 / 5min 刷用量 + 后台 token 保活另起一条
