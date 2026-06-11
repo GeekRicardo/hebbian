@@ -6978,3 +6978,33 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 仅 apps/desktop（inspector.js + mod.rs）
 - **验证**: spike 探测 popout 窗口——`{isPopout:true, hasToolbar:true, inputs:1, btns:4}`（地址栏+后退/前进/刷新/选取）；注释卡片在 popout 复用同一套已验证可用；inspector 测试 + tsc + cargo check 全绿
 - **留尾巴**: popout 工具栏无 auto-follow/检测 chips（无聊天流，不适用）；真实窗口里 popout 工具栏导航/选取/注释的手感需用户眼验；popout 地址栏的 scheme 补全逻辑在 inspector 里内联了一份（与 previewUrl 同义但独立，因 inspector 无法 import TS）
+
+### 2026-06-11 — AutoMode 判官修 3 个 bug + hands-off「放手跑」子开关补全（//force-automode 改名 //hands-off）
+
+- **Why**: 用户反馈 AutoMode 还是频繁弹审批、不省心。历史数据复盘：141 次 judge 调用里 76 次 ASK + 9 次 DENY 全弹给用户，9 次 DENY 全是误杀（`git commit` heredoc、`grep $(go env)`、`find` 都被拒）。根因三个：① 判官的 `recent_transcript` 被硬编码成 `&[]`，判官永远看不到用户说过什么 → 任何动作都「no user intent」→ ASK/DENY；② `ast-too-complex`（heredoc/`$()`）被当「无法推理」一刀切 DENY，但 effects 早把内部命令拆好了；③ 判官不知道某条命令用户已 allow 过，还在从头分析。另外用户要一个「真放手跑、判官说了算、从不打断我」的档位。
+- **改动**:
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): `parent_transcript_snapshot` 从「仅 Task 时抓」改为每轮无条件抓——judge 也要用它推断意图
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): judge 调用传真实 transcript（替换 `&[]`）；算出命中 allow 规则的段（`approval_segments` 的 `Whitelisted`）作为 `[user-allowed]` 标记喂 judge；**hands-off 语义补全**——`force_automode` 开启时 Bash/PowerShell 的 DENY 也直接拒（不再保留弹窗），reason 作为 tool_result 回灌 agent；加 `StaticDenyJudge` mock + `hands_off_auto_denies_command_without_prompt` 回归测试
+  - [crates/agent-core/src/automode.rs](../crates/agent-core/src/automode.rs): `judge_auto_mode` / `format_judge_prompt` 加 `whitelisted_fingerprints` 参数，segments 里给命中段标 `[user-allowed]`
+  - [crates/agent-core/prompts/automode_judge.md](../crates/agent-core/prompts/automode_judge.md): `ast-too-complex` 从「You cannot reason」改为「segments 已拆好，按内容判，raise scrutiny not unknowable」；DENY 收窄到注入/外传 + 危险段无意图，去掉 ast-too-complex 作为 DENY 理由；ALLOW 段加 `[user-allowed]` 预授权说明
+  - [apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts](../apps/desktop/frontend/src/desktop/ui/lib/slashCommands.ts): `//force-automode` 命令改名 `//hands-off`，文案重写为「放手跑」语义；前端其它命令文字引用同步（ChatInput.tsx / tauri.ts 注释）
+  - [docs/架构.md](架构.md): §4.4.4 判官输入端（transcript + user-allowed 标注）、设计原则 3（DENY 边界）、hands-off 表 + 含义、§8 命令表、§13 决策表（3 行）
+- **影响范围**: agent-core（agent_loop / dispatch / automode + prompt）+ desktop 前端命令名。**内部字段 `force_automode` / IPC 命令 `get_set_force_automode` 保持不动**（用户看不到，零冲突），只改用户可见的 `//hands-off` 命令名。协议无变更，向后兼容
+- **验证**:
+  - 单测：automode 10 个 + dispatch automode/default 全过；新增 `hands_off_auto_denies_command_without_prompt` A/B 翻转——旧逻辑（force_automode 下 Bash 仍弹）卡审批超时 FAIL / 新逻辑自动拒 PASS
+  - cargo check -p agent-core 绿；tsc 绿；automode+dispatch 全量 26 passed
+- **留尾巴**:
+  - hands-off 端到端（heb CLI 真模型）复现未做——judge 行为依赖真实 opus 模型，单测用 StaticDenyJudge 覆盖了 dispatch 处置链路。建议后续在 desktop 真跑一轮观察 ASK→自动拒 + transcript 是否让误杀消失
+  - 仍待办（独立 PR）：危险复合模式两级化（ast-too-complex / cd-git-compound 不再短路 allow 规则，命令审批侧）；`git -C <path>` 指纹粒度 bug
+  - 工作区另有他人未完成改动（recorder.rs 等），不在本次提交范围
+
+### 2026-06-11 — 弹出独立窗口后，主窗口内嵌浏览器让位显示「已在新窗口打开」
+
+- **Why**: 用户要——popout 开了之后主窗口的内嵌浏览器不再显示页面内容，改显示占位「已在新窗口打开」+ 收回入口，避免两个 webview 同时渲染同一页
+- **改动**:
+  - mod.rs: browser_popout 创建窗口后 emit `browser://popout {open:true}`；给 popout 窗口挂 on_window_event 监听 Destroyed/CloseRequested → emit `{open:false}`（OS 关或收回都恢复）
+  - browserHost.ts: 加 onPopout 监听
+  - BrowserPanel.tsx: 新增 poppedOut 状态（onPopout 驱动）；内嵌 webview 可见性改为 `active && !poppedOut`（弹出即 setVisible(false) + 不再 syncBounds）；占位区在 poppedOut 时显示「已在新窗口打开」+「收回到这里」按钮（调 closePopout）
+- **影响范围**: 仅 apps/desktop（mod.rs + browserHost + BrowserPanel）
+- **验证**: cargo check + tsc 全绿；事件接线逻辑直接（emit/监听/state）。占位显示、webview 让位、OS 关闭恢复的视觉行为需用户眼验（原生窗口我点不到）
+- **留尾巴**: poppedOut 时主窗口工具栏的后退/前进/刷新/选取仍作用于隐藏的内嵌 webview（无害但无意义），未禁用；可后续 polish

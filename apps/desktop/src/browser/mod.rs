@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl, WindowEvent,
     WebviewWindowBuilder,
 };
 
@@ -328,7 +328,7 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
     let app_for_nav = app.clone();
     // 注入 __HEB_POPOUT__ 标记：inspector 据此在页面内渲染工具栏（地址栏/导航/选取）
     let popout_script = format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}");
-    WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(target))
+    let win = WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(target))
         .title("页面预览（可缩放测样式）")
         .inner_size(1280.0, 800.0)
         .resizable(true)
@@ -346,6 +346,17 @@ pub fn browser_popout(app: AppHandle, state: tauri::State<'_, BrowserState>) -> 
         })
         .build()
         .map_err(|e| e.to_string())?;
+
+    // popout 窗口关闭（OS 关 / 收回）时通知前端恢复内嵌浏览器
+    let app_for_close = app.clone();
+    win.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }) {
+            let _ = app_for_close.emit("browser://popout", serde_json::json!({ "open": false }));
+        }
+    });
+
+    // 通知前端：已弹出 → 内嵌浏览器让位显示占位
+    let _ = app.emit("browser://popout", serde_json::json!({ "open": true }));
     Ok(())
 }
 

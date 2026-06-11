@@ -47,6 +47,10 @@ export function BrowserPanel({ active }: { active: boolean }) {
   const [title, setTitle] = useState("");
   const [pickerActive, setPickerActive] = useState(false);
   const [autoFollow, setAutoFollow] = useState(true);
+  // 已弹出到独立窗口：内嵌 webview 让位，显示占位
+  const [poppedOut, setPoppedOut] = useState(false);
+  const poppedOutRef = useRef(false);
+  poppedOutRef.current = poppedOut;
 
   // 聊天流里检测到的本地 dev server 地址（架构 §4.2）。
   const messages = useStore((s) => s.currentSession?.messages);
@@ -57,7 +61,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
   // 占位区 → 子 webview bounds 同步。active=false（隐藏 tab）时不同步，避免把 webview
   // 定位到 0×0 或别的 tab 区域。
   const syncBounds = useCallback(() => {
-    if (!activeRef.current) return;
+    if (!activeRef.current || poppedOutRef.current) return;
     const el = viewportRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
@@ -87,6 +91,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
         toast.warning(info.reason || "该地址无法打开");
       })
     );
+    track(host.onPopout((open) => setPoppedOut(open)));
 
     return () => {
       alive = false;
@@ -109,16 +114,17 @@ export function BrowserPanel({ active }: { active: boolean }) {
 
   // active 切换：显示 tab → 重新定位 + 显示 webview；切走 → 隐藏 webview（不盖别的 tab）
   useEffect(() => {
-    if (active) {
+    // 可见 = 当前 tab 且未弹出到独立窗口
+    if (active && !poppedOut) {
       void host.setVisible(true);
       // 等 DOM 完成布局再取 rect（hidden→显示这一帧 rect 才有效）
       const raf = requestAnimationFrame(() => syncBounds());
       return () => cancelAnimationFrame(raf);
     }
     void host.setVisible(false);
-    void host.clearSelection(); // 切走时收起页面内注释卡片
+    void host.clearSelection(); // 切走 / 弹出时收起页面内注释卡片
     return undefined;
-  }, [active, host, syncBounds]);
+  }, [active, poppedOut, host, syncBounds]);
 
   // 卸载（折叠 sidebar / 关闭对话窗口）：关掉子 webview
   useEffect(() => {
@@ -279,16 +285,35 @@ export function BrowserPanel({ active }: { active: boolean }) {
 
       {/* 占位区：原生子 webview 浮在它上面。空态给引导。 */}
       <div ref={viewportRef} className="relative min-h-0 flex-1 bg-muted/20">
-        {!state.url && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center">
+        {poppedOut ? (
+          <div className="absolute inset-0 grid place-items-center px-4 text-center">
             <div>
-              <Globe2 className="mx-auto h-10 w-10 text-muted-foreground/40" />
-              <div className="mt-3 text-[13px] font-medium text-foreground">内置浏览器</div>
+              <PictureInPicture2 className="mx-auto h-10 w-10 text-muted-foreground/50" />
+              <div className="mt-3 text-[13px] font-medium text-foreground">已在新窗口打开</div>
               <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
-                输入网址，或让助手启动开发服务器后自动打开预览
+                页面在独立窗口里，可缩放测样式、选元素标注
               </div>
+              <button
+                type="button"
+                onClick={() => void host.closePopout()}
+                className="mt-4 inline-flex h-7 items-center rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground"
+              >
+                收回到这里
+              </button>
             </div>
           </div>
+        ) : (
+          !state.url && (
+            <div className="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center">
+              <div>
+                <Globe2 className="mx-auto h-10 w-10 text-muted-foreground/40" />
+                <div className="mt-3 text-[13px] font-medium text-foreground">内置浏览器</div>
+                <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
+                  输入网址，或让助手启动开发服务器后自动打开预览
+                </div>
+              </div>
+            </div>
+          )
         )}
       </div>
     </div>

@@ -55,6 +55,7 @@ export interface BrowserHost {
   onPickerOff(cb: () => void): Promise<UnlistenFn>;
   onAnnotation(cb: (a: AnnotationSubmit) => void): Promise<UnlistenFn>;
   onEscaped(cb: (info: { url: string; reason: string }) => void): Promise<UnlistenFn>;
+  onPopout(cb: (open: boolean) => void): Promise<UnlistenFn>;
 }
 
 class TauriBrowserHost implements BrowserHost {
@@ -108,6 +109,9 @@ class TauriBrowserHost implements BrowserHost {
   }
   onEscaped(cb: (info: { url: string; reason: string }) => void) {
     return listen<{ url: string; reason: string }>("browser://escaped", (e) => cb(e.payload));
+  }
+  onPopout(cb: (open: boolean) => void) {
+    return listen<{ open: boolean }>("browser://popout", (e) => cb(e.payload.open));
   }
 }
 
