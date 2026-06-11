@@ -848,7 +848,7 @@ export function ChatInput({
 
   return (
     <div className={cn("pl-2 pr-4 pt-0 pb-3 text-sm", isStreaming && "chat-input-streaming")}>
-      <div className="pt-2 relative">
+      <div className="pt-0 relative">
         {/* 上边框拖拽热区：贴在外壳顶 border 外侧 ~6px 区域，光标变 ns-resize 暗示可拖；
             双击恢复自适应高度。不画可见手柄——保持视觉干净。 */}
         <div
@@ -857,7 +857,7 @@ export function ChatInput({
           onPointerUp={onGripPointerUp}
           onPointerCancel={onGripPointerUp}
           onDoubleClick={onGripDoubleClick}
-          className="absolute -top-1 left-6 right-6 h-2 cursor-ns-resize z-10"
+          className="absolute -top-1 left-6 right-6 h-0.5 cursor-ns-resize z-10"
           title="拖动调整高度（双击恢复自适应）"
           aria-label="拖动调整输入框高度"
         />

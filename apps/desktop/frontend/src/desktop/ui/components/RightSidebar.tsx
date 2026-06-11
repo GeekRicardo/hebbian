@@ -45,6 +45,14 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
 const COLLAPSED_WIDTH = 36;
 
+const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
+  tasks: Math.round(DEFAULT_WIDTH * 2 / 3),
+  edits: DEFAULT_WIDTH,
+  todos: Math.round(DEFAULT_WIDTH / 2),
+  plans: DEFAULT_WIDTH,
+  browser: DEFAULT_WIDTH,
+};
+
 interface RightSidebarProps {
   defaultWidth?: number;
   minWidth?: number;
@@ -68,26 +76,40 @@ export function RightSidebar({
   maxWidth = MAX_WIDTH,
   storagePrefix = STORAGE_PREFIX,
 }: RightSidebarProps = {}) {
-  const storageWidthKey = `${storagePrefix}.width`;
+  const storageWidthForTabKey = (id: TabId) => `${storagePrefix}.width.${id}`;
   const storageCollapsedKey = `${storagePrefix}.collapsed`;
   const storageTabKey = `${storagePrefix}.tab`;
+
+  const clampWidthForTab = useCallback(
+    (id: TabId, value: number) => {
+      const tabDefaultWidth = TAB_DEFAULT_WIDTH[id] ?? defaultWidth;
+      const tabMinWidth = Math.min(minWidth, tabDefaultWidth);
+      return Math.min(maxWidth, Math.max(tabMinWidth, value));
+    },
+    [defaultWidth, minWidth, maxWidth],
+  );
+  const loadWidthForTab = useCallback(
+    (id: TabId) => {
+      const tabDefaultWidth = TAB_DEFAULT_WIDTH[id] ?? defaultWidth;
+      return loadInitial(storageWidthForTabKey(id), tabDefaultWidth, (s) => {
+        const n = Number(s);
+        return Number.isFinite(n) ? clampWidthForTab(id, n) : tabDefaultWidth;
+      });
+    },
+    [defaultWidth, storagePrefix, clampWidthForTab],
+  );
 
   // 首次打开默认折叠（仅显示 36px 图标列），用户主动点开。
   // localStorage 有记录则用记录值。
   const [collapsed, setCollapsed] = useState(() =>
     loadInitial(storageCollapsedKey, true, (s) => s === "1")
   );
-  const [width, setWidth] = useState(() =>
-    loadInitial(storageWidthKey, defaultWidth, (s) => {
-      const n = Number(s);
-      return Number.isFinite(n) && n >= minWidth && n <= maxWidth ? n : defaultWidth;
-    })
-  );
   const [tab, setTab] = useState<TabId>(() =>
     loadInitial<TabId>(storageTabKey, "tasks", (s) =>
       (TAB_IDS as string[]).includes(s) ? (s as TabId) : "tasks"
     )
   );
+  const [width, setWidth] = useState(() => loadWidthForTab(tab));
 
   // 浏览器 tab 懒挂载：首次切到它才创建子 webview（没人看就不起浏览器）。
   // 一旦挂上就保留（切走靠 hidden + setVisible(false)），直到 sidebar 折叠卸载整个展开视图。
@@ -186,13 +208,17 @@ export function RightSidebar({
     setCollapsed(true);
   }, [collapseTick]);
 
+  useEffect(() => {
+    setWidth(loadWidthForTab(tab));
+  }, [tab, loadWidthForTab]);
+
   // 持久化折叠状态
   useEffect(() => {
     localStorage.setItem(storageCollapsedKey, collapsed ? "1" : "0");
   }, [storageCollapsedKey, collapsed]);
   useEffect(() => {
-    if (!collapsed) localStorage.setItem(storageWidthKey, String(width));
-  }, [storageWidthKey, width, collapsed]);
+    if (!collapsed) localStorage.setItem(storageWidthForTabKey(tab), String(width));
+  }, [storagePrefix, tab, width, collapsed]);
   useEffect(() => {
     localStorage.setItem(storageTabKey, tab);
   }, [storageTabKey, tab]);
@@ -211,10 +237,7 @@ export function RightSidebar({
         if (!dragRef.current) return;
         // 拖向左 = 增宽；拖向右 = 减宽
         const delta = dragRef.current.startX - ev.clientX;
-        const next = Math.min(
-          maxWidth,
-          Math.max(minWidth, dragRef.current.startWidth + delta)
-        );
+        const next = clampWidthForTab(tab, dragRef.current.startWidth + delta);
         setWidth(next);
       };
       const onUp = () => {
@@ -227,7 +250,7 @@ export function RightSidebar({
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [collapsed, width, minWidth, maxWidth]
+    [collapsed, width, tab, clampWidthForTab]
   );
 
   // 折叠态图标列（折叠后展示，可点图标直接展开到对应 tab）。
