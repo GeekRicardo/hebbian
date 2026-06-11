@@ -515,11 +515,30 @@
     var raw = readComputed(field.prop);
     var input;
     if (field.kind === "color") {
-      input = document.createElement("input");
-      input.type = "color";
-      input.value = rgbToHex(raw);
-      input.style.cssText = "flex:1;height:22px;background:#f6f8fa;border:1px solid #d9dde3;border-radius:4px;";
-      input.addEventListener("input", function () { styleApply(field.prop, input.value); });
+      // 方块色板 + # + 6 位 hex 文本框（双向同步）
+      var cwrap = document.createElement("span");
+      cwrap.style.cssText = "flex:1;display:flex;align-items:center;gap:6px;";
+      var swatch = document.createElement("input");
+      swatch.type = "color";
+      swatch.value = rgbToHex(raw);
+      swatch.style.cssText = "width:24px;height:24px;flex:none;padding:0;border:1px solid #d9dde3;border-radius:4px;background:#fff;cursor:pointer;";
+      var hash = document.createElement("span");
+      hash.textContent = "#";
+      hash.style.cssText = "color:#8c949e;font-size:12px;flex:none;";
+      var hex = document.createElement("input");
+      hex.type = "text";
+      hex.maxLength = 6;
+      hex.value = rgbToHex(raw).replace("#", "");
+      hex.style.cssText = "flex:1;min-width:0;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:4px;font:12px ui-monospace,monospace;padding:0 8px;box-sizing:border-box;outline:none;";
+      swatch.addEventListener("input", function () { hex.value = swatch.value.replace("#", ""); styleApply(field.prop, swatch.value); });
+      hex.addEventListener("input", function () {
+        var v = hex.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
+        hex.value = v;
+        if (v.length === 6) { swatch.value = "#" + v; styleApply(field.prop, "#" + v); }
+      });
+      cwrap.appendChild(swatch); cwrap.appendChild(hash); cwrap.appendChild(hex);
+      row.appendChild(cwrap);
+      return row;
     } else if (field.kind === "select") {
       input = document.createElement("select");
       input.style.cssText = "flex:1;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:4px;font-size:12px;";
