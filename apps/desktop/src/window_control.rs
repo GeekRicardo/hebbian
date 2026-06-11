@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Result};
+use common::runtime;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
@@ -334,9 +335,39 @@ fn handle_tray_menu_event(app: &AppHandle, event_id: &str) {
                 }
             }
         }
-        QUIT_MENU_ID => app.exit(0),
+        QUIT_MENU_ID => cooperative_quit(app),
         _ => {}
     }
+}
+
+/// 合作式退出：取消所有 pending / 活动 run，等待最多 2s 让
+/// send_and_save 走完 persist_interrupted 把状态写盘，然后退出。
+/// 替代直接 `app.exit(0)`——后者跳过所有落盘逻辑，导致 partial 和 jsonl 丢失。
+#[cfg(target_os = "macos")]
+fn cooperative_quit(app: &AppHandle) {
+    // 先隐藏窗口，给用户即时反馈
+    if let Err(err) = hide_main_window(app) {
+        eprintln!("Failed to hide main window during quit: {err:#}");
+    }
+
+    let hitl_state: std::sync::Arc<crate::HitlState> =
+        match app.try_state::<std::sync::Arc<crate::HitlState>>() {
+            Some(s) => s.inner().clone(),
+            None => {
+                app.exit(0);
+                return;
+            }
+        };
+    hitl_state.cancel_all_pending();
+    runtime::cancel_all();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while runtime::has_active_runs() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        app.exit(0);
+    });
 }
 
 #[cfg(target_os = "macos")]
