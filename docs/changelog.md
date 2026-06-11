@@ -7197,3 +7197,43 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 纯 Desktop（`apps/desktop` 的 mod.rs/lib.rs + 前端 3 文件）。不改 protocol、不改 agent-core、不改 storage 格式。`browser_set_context` 是 additive 删除（前端同步移除唯一调用方），无外部依赖。
 - **验证**: `cargo check -p hebbian` 绿；`apps/desktop` 下 `tsc --noEmit` 绿。多对话多实例的实际行为（开两个对话各开不同网址、切换不串、注释提交回正确对话、未开浏览器的对话不建实例）属 Tauri 子 webview native 能力，heb CLI / hebweb 都造不出真子 webview，须 `pnpm tauri dev` 眼验。
 - **留尾巴**: ① 对话删除时未清理其后端 `BrowserInstance`（HashMap entry + webview 泄漏到进程退出）——下一步在对话删除路径调 `browser_close`；② popout 仍是全局单窗口，多对话同时 popout 未支持（够用，暂不做）；③ GUI 交互验证待用户在 desktop dev 实测。
+
+### 2026-06-12 — 修复流式中断恢复后续聊 400 (tool_use.input: Input should be an object)
+
+- **Why**: 程序在流式响应中途退出后恢复会话，点「继续」报 HTTP 400 `messages.1.content.3.tool_use.input: Input should be an object`。根因：`partial_to_interrupted_message` 在恢复时用 `unwrap_or(Value::Null)` 把不完整 JSON 的工具调用 input 写成 `null`，但 Anthropic API 要求 `tool_use.input` 必须是 object，发 null 直接 400。
+- **改动**:
+  - `crates/agent-core/src/storage/sessions.rs`：`partial_to_interrupted_message` 里两处 `unwrap_or(Value::Null)` 改为 `unwrap_or_else(|_| json!({}))` 防止新产生的恢复消息写 null；同步新增 `json` macro import
+  - `crates/model-gateway/src/protocols/anthropic.rs`：`entry_to_message` 序列化 `tool_use.input` 前加 null guard（null → `{}`），修复历史 session 里已写入的 null input
+- **影响范围**: `agent-core` / `model-gateway` 两 crate；不改协议字段，三 surface 兼容不破坏
+- **留尾巴**: 历史 session 里 input=null 的那条恢复消息发出去，模型看到的是空 object，通常会感知到「工具调用没走完」并自行重试；个别情况下可能重复调用——属可接受代价，比每次 400 好
+
+### 2026-06-11 — 新增内置终端（全局单例 + 多子终端 + popout 独立窗口）
+
+- **Why**: 用户要一个像 VS Code / fanbox 那样的内置终端，挂在右侧 sidebar（和内置浏览器同位置），不用离开 app 就能起 dev server / 看日志 / 跑命令。要求：终端聚焦时终端惯用快捷键（Ctrl-C/B/F、Alt+←/→ 词跳等）不被应用快捷键截胡；选中文本自动复制；终端是「一个全局单独实例」，内部可开多个子终端 tab，并能像内置浏览器一样弹成独立窗口。**明确不与后台任务（Bash/BgTaskRegistry）融合**——agent 不读用户终端、用户终端不进协议（融合方案另议，见 spec §11）。
+- **设计依据**: 调研了 fanbox（Electron + xterm.js 5.5 + node-pty，本机源码级）与 stagewise（node-pty + xterm.js，本机源码级）。关键印证——stagewise 也把「用户终端」与「agent shell」做成两套完全独立的 PTY 生态：用户终端的输入输出 agent 完全看不到，绑定 agent 仅用于 UI 分组。这佐证了「用户终端独立于 agent」是成熟取舍，故本期同样不融合。fanbox 踩过的坑照单全收：GUI app 不继承 shell locale 导致中文路径乱码（spawn env 兜底 LANG=zh_CN.UTF-8 + TERM=xterm-256color）、CJK 宽字符需 unicode11 addon、bracketed paste 防多行粘贴逐行执行。与内置浏览器（session-scoped）刻意相反——终端是「我这台机器上的活儿」跨会话长存，故做成 app 全局单例（不按 session 路由）。详设见 [docs/内置终端-spec.md](内置终端-spec.md)。
+- **改动**:
+  - [apps/desktop/src/terminal/mod.rs](../apps/desktop/src/terminal/mod.rs): 新建。全局 `TerminalState`（`HashMap<term_id, Arc<TerminalInstance>>` + order + active_view，非 session 路由）；portable-pty openpty/spawn `$SHELL`；每终端一个 std::thread reader 阻塞读 PTY，按读 base64 后 emit `terminal://output`（全窗口广播）；scrollback 1 MiB ring buffer 供 attach 回放；8 个命令（open/write/resize/close/attach/list/popout/close_popout）+ 3 事件（output/exit/view）。PTY 单一真理源 + popout「让位」模型：同一时刻只有内嵌或 popout 一个视图活跃（避免两个 xterm 各自 fit 来回 resize PTY）。Drop 杀子进程防 orphan。
+  - [apps/desktop/Cargo.toml](../apps/desktop/Cargo.toml): + portable-pty 0.8
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): mod terminal + manage TerminalState + 注册 8 命令
+  - [apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx](../apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx): 新建。内嵌与 popout 共用主体。xterm 6 + fit/unicode11/webgl addon；多子终端 tab（全局，两视图共享）；键盘策略 `attachCustomKeyEventHandler`（除 Cmd 白名单外全透传 PTY，Alt+←/→ 映射 ESC b/f，Cmd+C 复制选区且不发 SIGINT、Cmd+V bracketed paste、Cmd+K 清屏）；copy-on-select 100ms debounce；让位时卸载 xterm 显示「已弹出」占位 + 收回按钮；attach base64 回放重建画面。
+  - [apps/desktop/frontend/src/main.tsx](../apps/desktop/frontend/src/main.tsx): + `?terminal-popout` surface 分支（照 `?log-viewer`），popout 窗口加载它
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): TabId 加 terminal（图标 SquareTerminal，默认宽 480）；折叠图标列 + tab 条 + 懒挂载（切走 hidden 不卸载，保 xterm/输出订阅）；defaultCwd 传当前会话 workdir
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): + 8 个 terminal 命令包装
+  - [apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts](../apps/desktop/frontend/src/desktop/ui/lib/keyboardShortcuts.ts): + `isTerminalFocusTarget` + 文件头规矩注释（今后走 hasPrimaryModifier 的全局快捷键 handler 入口必须先豁免终端焦点）
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): Cmd/Ctrl+F 查找 handler + Enter 聚焦 handler 入口加终端焦点豁免（Ctrl+F 是 readline 前移、Enter 是命令换行，不能被截胡）。注：`isNewConversationShortcut`/`isGlobalSearchShortcut` 当前未实际挂全局监听，无需改
+  - [apps/desktop/package.json](../apps/desktop/package.json): + @xterm/xterm 6 + addon-fit/unicode11/webgl；- ghostty-web（零引用，移除）
+- **影响范围**: 纯 Desktop surface（`apps/desktop` Rust + 前端）。不碰 protocol / EventPayload / agent-core / storage，三 surface 兼容不破坏。hebweb / heb CLI 无此面板（Tauri native PTY 能力，与内置浏览器同先例 surface 不对称）。
+- **验证**: `cargo check -p hebbian --bins` 绿（零警告）；`apps/desktop` 下 `tsc --noEmit` 绿；`pnpm build`（tsc + vite）绿。终端 GUI 交互（键盘透传 A/B、选中复制、popout 让位、全局单例跨会话长存、中文路径不乱码）属 Tauri native PTY，heb CLI / hebweb 造不出，须 `pnpm tauri dev` 眼验——验收清单见 spec §8。
+- **留尾巴**: ① GUI 交互验证待用户 desktop dev 实测（spec §8 清单逐条）；② 内嵌+popout 双屏镜像未做（本期让位模型规避，spec §11）；③ 与后台任务融合未做（stagewise 同样不做，spec §11）；④ 终端不持久化，app 退出即终止所有 PTY；⑤ P1 候选：终端内搜索、Option+Click 光标定位、右键菜单、路径点击跳转、cd 跟随会话 workdir。
+- **关联**: [docs/内置终端-spec.md](内置终端-spec.md)
+
+### 2026-06-11 — popout 工具栏改为独立 webview（双 webview 物理分离，页面渲染区零注入）
+
+- **Why**: 之前 popout 独立窗口是「单 webview 直接加载目标页面 + inspector 在页面 DOM 里注入工具栏」（fixed 浮层 + 改目标页面 `body margin-top` 把内容下移）。问题：① 工具栏是目标页面的一部分，污染页面 DOM；② 测响应式样式时注入的工具栏影响布局、`margin-top` 可能被页面 CSS 覆盖导致工具栏盖住内容；③ 选取元素时工具栏自身也是 DOM 节点、可能被选中。用户要求「渲染区域不能包含工具栏」——工具栏要和页面渲染物理分离。
+- **改动**:
+  - 新建 [apps/desktop/src/browser/popout_toolbar.html](../apps/desktop/src/browser/popout_toolbar.html): 独立工具栏 UI（后退/前进/刷新 + 地址栏 + 选取 + 收回），内联 CSS/JS。它是 popout 窗口的「主 webview」，加载 data URL（无 Tauri IPC），上行走 `heb-bridge://`（同 inspector 机制）、下行 `window.__HEB_TB__` 更新地址栏/前进后退/选取态。
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): 新增 `PopoutInstance`（`window`=工具栏主 webview + `page`=add_child 的页面子 webview + history/cursor/picker_active），`BrowserState` 加 `popout: Mutex<Option<_>>` 全局单例。`browser_popout` 重写：`WebviewWindowBuilder` 建工具栏窗口 → `Window::add_child` 在工具栏下方（y=44）叠页面子 webview（注入 inspector，不再注入工具栏）。新增 `handle_toolbar_nav`（工具栏上行 `tb:navigate/back/forward/reload/picker/close`）+ `handle_popout_page_nav`（页面上行：注释/旁支转发回对话；选取/导航态 eval 反馈到工具栏，popout 没有 React 不走 browser:// 事件）+ `popout_navigate/go/reload/toggle_picker/resize/send_toolbar_state/send_toolbar_picker` 等 helper。窗口 resize → 页面子 webview 重新铺满工具栏下方。`eval_aside_down` 的 popout 分支改 eval `page`（旁支面板在页面子 webview，不是工具栏主 webview）。`browser_close_popout` 加 Tauri 注入的 `state` 参数清实例。
+  - [apps/desktop/src/browser/inspector.js](../apps/desktop/src/browser/inspector.js): 删 `showPopoutToolbar`/`popoutBtn`/`navWithScheme`/`syncPickerBtn`/`popoutAddr`/`TOOLBAR_H` 及 boot 里的注入调用；`cardTop` 从「popout 时 TOOLBAR_H+12」改为恒 16（页面里没工具栏了）。`__HEB_POPOUT__` 仅保留作 surface 标识（旁支下行路由）。页面子 webview 现在和 embedded 子 webview 完全对称（纯注释/选取/旁支，无工具栏）。
+- **影响范围**: 纯 Desktop。不改 protocol / `browser_popout`/`browser_close_popout` 对前端的命令签名（`state` 是 Tauri 注入，前端 `closePopout()` 无感）/ agent-core / storage。
+- **验证**: `cargo check -p hebbian` 绿；`inspector.js` `node --check` 语法绿 + 纯函数单测（核心 `__hebCore` 未动）。popout 双 webview 的交互（工具栏导航/选取/收回、页面渲染区不含工具栏、resize 页面跟随、旁支在 popout 内可用）属 Tauri 子 webview native，须 `pnpm tauri dev` 眼验。
+- **留尾巴**: ① 选中元素后工具栏选取按钮不自动灭（`onClick → stopPicker(false)` 不发通知，与 embedded 既有行为一致，本期不额外改）；② popout 仍全局单例，多对话同时 popout 不支持（够用）；③ GUI 交互待用户 desktop dev 实测。

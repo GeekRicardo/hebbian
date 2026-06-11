@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!--
+  popout 独立窗口的工具栏（架构 §8.5）。它是 popout 窗口的「主 webview」，目标页面则是
+  add_child 的子 webview 浮在下方——工具栏与页面渲染区物理分离，页面不被注入任何工具栏 DOM。
+
+  双向信道与 inspector 同机制（data URL webview 没有 Tauri IPC）：
+    上行 工具栏→Rust：location.replace("heb-bridge://...")，被 on_navigation 拦截解析。
+    下行 Rust→工具栏：eval(window.__HEB_TB__(...)) 更新地址栏 / 前进后退 / 选取态。
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>页面预览</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; background: transparent;
+        font: 13px -apple-system, system-ui, "PingFang SC", sans-serif; }
+      #bar { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px;
+        background: #f6f8fa; border-bottom: 1px solid #d9dde3; }
+      .btn { width: 30px; height: 30px; display: grid; place-items: center;
+        border: 1px solid #d9dde3; border-radius: 7px; background: #fff; color: #1f2328;
+        cursor: pointer; font-size: 15px; line-height: 1; user-select: none; }
+      .btn:hover { background: #eef1f4; }
+      .btn[disabled] { opacity: .35; cursor: default; }
+      .btn.on { background: #2f81f7; color: #fff; border-color: #2f81f7; }
+      #addr { flex: 1; min-width: 0; height: 30px; padding: 0 12px; border: 1px solid #d9dde3;
+        border-radius: 15px; background: #fff; color: #1f2328; font-size: 12px; outline: none; }
+      #addr:focus { border-color: #2f81f7; }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <div class="btn" id="back" title="后退">‹</div>
+      <div class="btn" id="fwd" title="前进">›</div>
+      <div class="btn" id="reload" title="刷新">⟳</div>
+      <input id="addr" placeholder="输入网址，回车打开" spellcheck="false" />
+      <div class="btn" id="pick" title="选取页面元素标注">⌖</div>
+      <div class="btn" id="close" title="收回到主窗口">⤓</div>
+    </div>
+    <script>
+      function up(type, payload) {
+        var d = JSON.stringify({ type: type, payload: payload || {} });
+        location.replace("heb-bridge://msg/?d=" + encodeURIComponent(d));
+      }
+      var addr = document.getElementById("addr");
+      var back = document.getElementById("back");
+      var fwd = document.getElementById("fwd");
+      var pick = document.getElementById("pick");
+      back.onclick = function () { if (!back.hasAttribute("disabled")) up("tb:back"); };
+      fwd.onclick = function () { if (!fwd.hasAttribute("disabled")) up("tb:forward"); };
+      document.getElementById("reload").onclick = function () { up("tb:reload"); };
+      pick.onclick = function () { up("tb:picker"); };
+      document.getElementById("close").onclick = function () { up("tb:close"); };
+      var addrFocused = false;
+      addr.addEventListener("focus", function () { addrFocused = true; });
+      addr.addEventListener("blur", function () { addrFocused = false; });
+      addr.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && addr.value.trim()) up("tb:navigate", { url: addr.value.trim() });
+      });
+      function setDisabled(el, off) { if (off) el.setAttribute("disabled", ""); else el.removeAttribute("disabled"); }
+      // 下行：Rust 更新地址栏 / 前进后退可用态 / 选取按钮高亮
+      window.__HEB_TB__ = function (m) {
+        var p = (m && m.payload) || m || {};
+        if (typeof p.url === "string" && !addrFocused) addr.value = p.url;
+        if ("canBack" in p) setDisabled(back, !p.canBack);
+        if ("canForward" in p) setDisabled(fwd, !p.canForward);
+        if ("picker" in p) pick.classList.toggle("on", !!p.picker);
+      };
+    </script>
+  </body>
+</html>
