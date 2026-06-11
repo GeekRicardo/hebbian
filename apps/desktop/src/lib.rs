@@ -2936,6 +2936,7 @@ pub fn run() {
             browser::browser_clear_selection,
             browser::browser_popout,
             browser::browser_close_popout,
+            browser::browser_set_context,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

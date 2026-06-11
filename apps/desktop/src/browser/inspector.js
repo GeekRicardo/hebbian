@@ -465,6 +465,16 @@
 
   var cardEl = null;
   var cardSnapshot = null;
+  // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在
+  var asideKeyCounter = 0;
+  var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
+  var cardChat = null;  // 当前卡片打开的聊天：{ elementKey, sessionId, msgList, assistantRow }
+
+  function elementKeyOf(el) {
+    if (!el) return "el-0";
+    if (!el.__hebAsideKey__) el.__hebAsideKey__ = "el-" + (++asideKeyCounter);
+    return el.__hebAsideKey__;
+  }
 
   // 样式编辑器字段（对齐用户截图：字号/字重/颜色/圆角/边框/间距）
   var CARD_FIELDS = [
@@ -636,45 +646,158 @@
     // 拖动：按住头部移动卡片（改 left/top，避开 right 定位），避免遮住元素
     makeCardDraggable(card, head);
 
+    var elementKey = elementKeyOf(selectedTarget);
+
+    // ══ 子卡片 1：样式参数（可折叠）══
+    var styleCard = document.createElement("div");
+    styleCard.style.cssText = "border-bottom:1px solid #d9dde3;display:flex;flex-direction:column;min-height:0;";
+    var styleHead = document.createElement("div");
+    styleHead.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;user-select:none;font-size:12px;color:#1f2328;";
+    var chevron = document.createElement("span");
+    chevron.textContent = "▾";
+    chevron.style.cssText = "color:#8c949e;font-size:10px;";
+    var styleTitle = document.createElement("span");
+    styleTitle.textContent = "样式参数";
+    styleTitle.style.cssText = "flex:1;font-weight:500;";
+    styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
+    var styleBody = document.createElement("div");
+    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;";
     var comment = document.createElement("textarea");
-    comment.placeholder = "描述这些更改…"; // 描述这些更改…
+    comment.placeholder = "（可选）描述这次手动改动…";
     comment.rows = 2;
-    comment.style.cssText = "margin:8px 10px 0;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:13px;padding:6px;outline:none;";
-
-    var body = document.createElement("div");
-    body.style.cssText = "padding:8px 10px;overflow-y:auto;flex:1;";
-    var groupTitle = document.createElement("div");
-    groupTitle.textContent = "样式调整"; // 样式调整
-    groupTitle.style.cssText = "font-size:11px;color:#6e7681;margin-bottom:6px;";
-    body.appendChild(groupTitle);
-    for (var i = 0; i < CARD_FIELDS.length; i++) body.appendChild(cardRow(CARD_FIELDS[i]));
-
-    var foot = document.createElement("div");
-    foot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:8px 10px;border-top:1px solid #d9dde3;";
-    var cancel = document.createElement("button");
-    cancel.textContent = "取消";
-    cancel.style.cssText = "padding:4px 10px;font-size:12px;background:none;border:none;color:#57606a;cursor:pointer;";
-    cancel.addEventListener("click", function () { styleRevert(); removeCard(); });
-    var submit = document.createElement("button");
-    submit.textContent = "发送到对话";
-    submit.style.cssText = "padding:4px 12px;font-size:12px;background:#2f81f7;border:none;color:#fff;border-radius:6px;cursor:pointer;";
-    submit.addEventListener("click", function () {
-      send("heb:annotation:submit", {
-        snapshot: cardSnapshot,
-        comment: comment.value || "",
-        styleDiff: takeStyleDiff(),
-      });
+    comment.style.cssText = "margin:0 10px;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;";
+    var fields = document.createElement("div");
+    fields.style.cssText = "padding:8px 10px;max-height:220px;overflow-y:auto;";
+    for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
+    var styleFoot = document.createElement("div");
+    styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:0 10px 8px;";
+    var sCancel = mkFlatBtn("撤销"); sCancel.addEventListener("click", function () { styleRevert(); });
+    var sSend = mkPrimaryBtn("发送到对话");
+    sSend.addEventListener("click", function () {
+      send("heb:annotation:submit", { snapshot: cardSnapshot, comment: comment.value || "", styleDiff: takeStyleDiff() });
       removeCard();
     });
-    foot.appendChild(cancel); foot.appendChild(submit);
+    styleFoot.appendChild(sCancel); styleFoot.appendChild(sSend);
+    styleBody.appendChild(comment); styleBody.appendChild(fields); styleBody.appendChild(styleFoot);
+    var styleCollapsed = false;
+    styleHead.addEventListener("click", function () {
+      styleCollapsed = !styleCollapsed;
+      styleBody.style.display = styleCollapsed ? "none" : "flex";
+      chevron.textContent = styleCollapsed ? "▸" : "▾";
+    });
+    styleCard.appendChild(styleHead); styleCard.appendChild(styleBody);
+
+    // ══ 子卡片 2：和助手一起改（LLM 对话面板 + 模型选择器）══
+    var chatCard = document.createElement("div");
+    chatCard.style.cssText = "display:flex;flex-direction:column;min-height:0;flex:1;";
+    var chatHead = document.createElement("div");
+    chatHead.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:12px;color:#1f2328;";
+    var chatTitle = document.createElement("span");
+    chatTitle.textContent = "和助手一起改";
+    chatTitle.style.cssText = "flex:none;font-weight:500;";
+    var modelSelect = document.createElement("select");
+    modelSelect.style.cssText = "flex:1;min-width:0;height:24px;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:11px;padding:0 4px;";
+    var optLoading = document.createElement("option"); optLoading.textContent = "默认模型"; modelSelect.appendChild(optLoading);
+    chatHead.appendChild(chatTitle); chatHead.appendChild(modelSelect);
+    var msgList = document.createElement("div");
+    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:140px;";
+    var chatInputRow = document.createElement("div");
+    chatInputRow.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-top:1px solid #d9dde3;align-items:flex-end;";
+    var chatInput = document.createElement("textarea");
+    chatInput.placeholder = "让它改这个元素，比如「圆角大一点、配色柔和些」（⌘↵ 发送）";
+    chatInput.rows = 2;
+    chatInput.style.cssText = "flex:1;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;";
+    var chatSend = mkPrimaryBtn("发送");
+    var sendChat = function () {
+      var t = chatInput.value.trim();
+      if (!t) return;
+      chatInput.value = "";
+      appendChatMsg(msgList, "user", t);
+      asideConvos[elementKey] = asideConvos[elementKey] || { sessionId: null, messages: [] };
+      asideConvos[elementKey].messages.push({ role: "user", text: t });
+      cardChat.assistantRow = null;
+      var sel = modelSelect.value ? modelSelect.value.split("|") : ["", ""];
+      send("heb:aside:send", {
+        surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
+        elementKey: elementKey,
+        sessionId: asideConvos[elementKey].sessionId,
+        text: t,
+        providerId: sel[0] || undefined,
+        model: sel[1] || undefined,
+        element: elementBadge(cardSnapshot) + " — " + (cardSnapshot.selectorPath || ""),
+      });
+    };
+    chatSend.addEventListener("click", sendChat);
+    chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
+    chatInputRow.appendChild(chatInput); chatInputRow.appendChild(chatSend);
+    var chatFoot = document.createElement("div");
+    chatFoot.style.cssText = "display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #d9dde3;";
+    var submitMain = mkPrimaryBtn("提交到主对话");
+    submitMain.addEventListener("click", function () {
+      var conv = asideConvos[elementKey];
+      if (!conv || !conv.sessionId) { appendChatMsg(msgList, "assistant", "（还没开始对话）"); return; }
+      appendChatMsg(msgList, "assistant", "正在总结并提交到主对话…");
+      send("heb:aside:submit", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded", sessionId: conv.sessionId, element: elementBadge(cardSnapshot) });
+    });
+    chatFoot.appendChild(submitMain);
+    chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
+
+    cardChat = { elementKey: elementKey, sessionId: (asideConvos[elementKey] && asideConvos[elementKey].sessionId) || null, msgList: msgList, assistantRow: null, modelSelect: modelSelect };
+    if (asideConvos[elementKey]) {
+      for (var m = 0; m < asideConvos[elementKey].messages.length; m++) {
+        appendChatMsg(msgList, asideConvos[elementKey].messages[m].role, asideConvos[elementKey].messages[m].text);
+      }
+    }
+    // 请求模型列表填充选择器
+    send("heb:aside:models:request", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded" });
 
     card.appendChild(head);
-    card.appendChild(comment);
-    card.appendChild(body);
-    card.appendChild(foot);
+    card.appendChild(styleCard);
+    card.appendChild(chatCard);
     document.documentElement.appendChild(card);
     cardEl = card;
-    setTimeout(function () { comment.focus(); }, 0);
+  }
+
+  function fillModelSelect(select, list, current) {
+    if (!select) return;
+    select.innerHTML = "";
+    var arr = Array.isArray(list) ? list : [];
+    if (!arr.length && current && current.model) arr = [{ providerId: current.providerId, model: current.model, label: current.model }];
+    for (var i = 0; i < arr.length; i++) {
+      var o = document.createElement("option");
+      o.value = (arr[i].providerId || "") + "|" + (arr[i].model || "");
+      o.textContent = arr[i].label || arr[i].model || "?";
+      if (current && arr[i].providerId === current.providerId && arr[i].model === current.model) o.selected = true;
+      select.appendChild(o);
+    }
+  }
+
+  function mkFlatBtn(label) {
+    var b = document.createElement("button");
+    b.textContent = label;
+    b.style.cssText = "padding:4px 10px;font-size:12px;background:none;border:none;color:#57606a;cursor:pointer;";
+    return b;
+  }
+  function mkPrimaryBtn(label) {
+    var b = document.createElement("button");
+    b.textContent = label;
+    b.style.cssText = "padding:4px 12px;font-size:12px;background:#2f81f7;border:none;color:#fff;border-radius:6px;cursor:pointer;";
+    return b;
+  }
+
+  function appendChatMsg(msgList, role, text) {
+    var row = document.createElement("div");
+    if (role === "user") {
+      row.style.cssText = "align-self:flex-end;max-width:85%;background:#2f81f7;color:#fff;border-radius:10px;padding:6px 9px;font-size:12px;white-space:pre-wrap;word-break:break-word;";
+    } else if (role === "tool") {
+      row.style.cssText = "align-self:flex-start;max-width:90%;background:#eafaf0;color:#1a7f4b;border-radius:8px;padding:4px 8px;font:11px ui-monospace,monospace;";
+    } else {
+      row.style.cssText = "align-self:flex-start;max-width:90%;background:#f1f3f5;color:#1f2328;border-radius:10px;padding:6px 9px;font-size:12px;white-space:pre-wrap;word-break:break-word;";
+    }
+    row.textContent = text;
+    msgList.appendChild(row);
+    msgList.scrollTop = msgList.scrollHeight;
+    return row;
   }
 
   /* ───────────────────────── picker 状态机 ───────────────────────── */
@@ -885,6 +1008,44 @@
         break;
       case "heb:overlay:show":
         overlaysHidden = false;
+        break;
+      // ── 元素对话（旁支会话）下行 ──
+      case "heb:aside:session":
+        if (msg.payload) {
+          var ek = msg.payload.elementKey;
+          asideConvos[ek] = asideConvos[ek] || { sessionId: null, messages: [] };
+          asideConvos[ek].sessionId = msg.payload.sessionId;
+          if (cardChat && cardChat.elementKey === ek) cardChat.sessionId = msg.payload.sessionId;
+        }
+        break;
+      case "heb:aside:models":
+        if (cardChat && msg.payload) fillModelSelect(cardChat.modelSelect, msg.payload.list, msg.payload.current);
+        break;
+      case "heb:aside:delta":
+        if (cardChat && msg.payload) {
+          if (!cardChat.assistantRow) cardChat.assistantRow = appendChatMsg(cardChat.msgList, "assistant", "");
+          cardChat.assistantRow.textContent += msg.payload.text || "";
+          cardChat.msgList.scrollTop = cardChat.msgList.scrollHeight;
+        }
+        break;
+      case "heb:aside:apply":
+        if (msg.payload) {
+          styleApply(msg.payload.prop, msg.payload.value); // 实时改页面
+          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + msg.payload.prop + " → " + msg.payload.value);
+        }
+        break;
+      case "heb:aside:done":
+        if (cardChat && cardChat.assistantRow) {
+          var conv = asideConvos[cardChat.elementKey];
+          if (conv) conv.messages.push({ role: "assistant", text: cardChat.assistantRow.textContent });
+          cardChat.assistantRow = null;
+        }
+        break;
+      case "heb:aside:submitted":
+        if (cardChat) appendChatMsg(cardChat.msgList, "assistant", "✅ 已提交到主对话，主对话会据此改源码");
+        break;
+      case "heb:aside:error":
+        if (cardChat && msg.payload) appendChatMsg(cardChat.msgList, "assistant", "⚠️ " + (msg.payload.message || "出错了"));
         break;
       default:
         break;

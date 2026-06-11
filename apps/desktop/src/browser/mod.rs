@@ -23,6 +23,9 @@ use tauri::{
 
 use url_policy::{validate_preview_url, PreviewOrigin};
 
+use crate::chat::{self, SendArgs};
+use crate::engine::EngineEvent;
+
 const WEBVIEW_LABEL: &str = "heb-preview";
 const POPOUT_LABEL: &str = "preview-popout";
 const INSPECTOR_JS: &str = include_str!("inspector.js");
@@ -47,6 +50,18 @@ struct BrowserInstance {
 #[derive(Default)]
 pub struct BrowserState {
     inner: Mutex<Option<BrowserInstance>>,
+    /// 「元素对话」旁支会话用的上下文：主对话 session + provider/model。
+    /// 主窗口 React 在浏览器 tab 活跃 / 切会话时通过 browser_set_context 喂进来。
+    aside_context: Mutex<Option<AsideContext>>,
+}
+
+#[derive(Clone)]
+struct AsideContext {
+    main_session_id: String,
+    provider_id: String,
+    model: String,
+    /// 可选模型列表（[{providerId, model, label}]），供卡片里的模型选择器用。
+    models: serde_json::Value,
 }
 
 #[derive(Serialize, Clone)]
@@ -190,6 +205,21 @@ fn forward_inspector_message(app: &AppHandle, msg: serde_json::Value) {
         // 页面内注释卡片提交：{snapshot, comment, styleDiff} → 主窗口 React 组装成 user message
         "heb:annotation:submit" => {
             let _ = app.emit("browser://annotation", payload);
+        }
+        // 元素对话（旁支会话，机制 B）
+        "heb:aside:send" => handle_aside_send(app, &payload),
+        "heb:aside:submit" => handle_aside_submit(app, &payload),
+        "heb:aside:models:request" => {
+            let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded");
+            let ctx = app
+                .try_state::<BrowserState>()
+                .and_then(|st| st.aside_context.lock().unwrap().clone());
+            if let Some(ctx) = ctx {
+                eval_aside_down(app, surface, "heb:aside:models", serde_json::json!({
+                    "list": ctx.models,
+                    "current": { "providerId": ctx.provider_id, "model": ctx.model },
+                }));
+            }
         }
         "heb:picker:cancelled" => {
             let _ = app.emit("browser://picker-off", ());
@@ -414,6 +444,183 @@ pub fn browser_clear_selection(state: tauri::State<'_, BrowserState>) -> Result<
     let guard = state.inner.lock().unwrap();
     let Some(inst) = guard.as_ref() else { return Ok(()) };
     send_down(inst, "heb:selection:clear", serde_json::json!({}))
+}
+
+// ─────────────────────── 元素对话（旁支会话，机制 B）───────────────────────
+
+/// 主窗口 React 喂进当前对话上下文——旁支会话建会话要 provider/model，提交总结要主 session。
+#[tauri::command]
+pub fn browser_set_context(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+    provider_id: String,
+    model: String,
+    models: Option<serde_json::Value>,
+) -> Result<(), String> {
+    *state.aside_context.lock().unwrap() = Some(AsideContext {
+        main_session_id: session_id,
+        provider_id,
+        model,
+        models: models.unwrap_or(serde_json::Value::Null),
+    });
+    Ok(())
+}
+
+fn aside_system_prompt(element_desc: &str) -> String {
+    format!(
+        "你正在帮用户调整一个网页元素的样式。当前元素：{element_desc}。\n\
+         你可以调用 PreviewStyle(prop, value) 工具实时改这个元素的外观（颜色 color、字号 font-size、\
+         字重 font-weight、间距 padding/margin、圆角 border-radius、边框 border-width/border-color、\
+         背景 background-color 等），用户会立刻在页面上看到效果。一次调一个属性，想微调就再调一次。\n\
+         先理解用户想要什么视觉效果，再动手改；改完用一句话说明你做了什么。保持简洁，别长篇大论。"
+    )
+}
+
+/// 把一条下行消息 eval 到来源 webview（embedded 子 webview 或 popout 窗口）。
+fn eval_aside_down(app: &AppHandle, surface: &str, ty: &str, payload: serde_json::Value) {
+    let msg = serde_json::json!({ "source": "hebbian-host", "type": ty, "payload": payload });
+    let js = format!("window.__HEB_RX__ && window.__HEB_RX__({msg})");
+    if surface == "popout" {
+        if let Some(w) = app.get_webview_window(POPOUT_LABEL) {
+            let _ = w.eval(&js);
+        }
+    } else if let Some(st) = app.try_state::<BrowserState>() {
+        if let Some(inst) = st.inner.lock().unwrap().as_ref() {
+            let _ = inst.webview.eval(&js);
+        }
+    }
+}
+
+/// 把旁支会话的事件流路由下发到来源 webview：文本增量 + PreviewStyle 实时应用 + 结束。
+fn route_aside_event(app: &AppHandle, surface: &str, session_id: &str, event: EngineEvent) {
+    match event {
+        EngineEvent::TextDelta { text, .. } => {
+            eval_aside_down(app, surface, "heb:aside:delta", serde_json::json!({ "sessionId": session_id, "text": text }));
+        }
+        EngineEvent::ToolStart { name, input, .. } if name == "PreviewStyle" => {
+            let prop = input.get("prop").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let value = input.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            // 实时应用到页面 + 在聊天里显示这一步
+            eval_aside_down(app, surface, "heb:aside:apply", serde_json::json!({ "sessionId": session_id, "prop": prop, "value": value }));
+        }
+        EngineEvent::RunFinished { .. } => {
+            eval_aside_down(app, surface, "heb:aside:done", serde_json::json!({ "sessionId": session_id }));
+        }
+        _ => {}
+    }
+}
+
+fn fresh_cancel() -> common::CancelFlag {
+    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+}
+
+fn aside_send_args(session_id: String, user_content: String, enabled_tools: Vec<String>) -> SendArgs {
+    SendArgs {
+        session_id,
+        user_content,
+        attachments: vec![],
+        user_meta: None,
+        stream: true,
+        enabled_tools,
+        cancel_flag: fresh_cancel(),
+        pending_inputs: None,
+        consumed_pending_inputs: None,
+        pending_inputs_accepting: None,
+        hitl: None,            // 旁支只有 PreviewStyle（无副作用），不触发审批
+        permission_store: None,
+        force_automode: false,
+        request_id: Some(format!("aside-{}", chrono::Utc::now().timestamp_millis())),
+        continue_run: false,
+    }
+}
+
+/// 处理 heb:aside:send：建/续旁支会话，驱动一轮，事件流下发卡片。
+fn handle_aside_send(app: &AppHandle, payload: &serde_json::Value) {
+    let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded").to_string();
+    let element_key = payload.get("elementKey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let session_id_opt = payload.get("sessionId").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let text = payload.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let element_desc = payload.get("element").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // 卡片里模型选择器选的 provider/model（可空 → 用上下文默认）
+    let sel_provider = payload.get("providerId").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let sel_model = payload.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let ctx = app2
+            .state::<BrowserState>()
+            .aside_context
+            .lock()
+            .unwrap()
+            .clone();
+        let Some(ctx) = ctx else {
+            eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": "先在主窗口打开一个对话，元素对话才有上下文" }));
+            return;
+        };
+        let dd = agent_core::storage::default_data_dir();
+        let provider_id = sel_provider.unwrap_or_else(|| ctx.provider_id.clone());
+        let model = sel_model.unwrap_or_else(|| ctx.model.clone());
+        let session_id = match session_id_opt {
+            Some(s) => s,
+            None => match agent_core::storage::sessions::create(
+                &dd,
+                provider_id,
+                model,
+                Some(aside_system_prompt(&element_desc)),
+                None,
+            ) {
+                Ok(s) => {
+                    eval_aside_down(&app2, &surface, "heb:aside:session", serde_json::json!({ "elementKey": element_key, "sessionId": s.id }));
+                    s.id
+                }
+                Err(e) => {
+                    eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("建会话失败：{e}") }));
+                    return;
+                }
+            },
+        };
+        let args = aside_send_args(session_id.clone(), text, vec!["PreviewStyle".to_string()]);
+        let app3 = app2.clone();
+        let surface2 = surface.clone();
+        let sid = session_id.clone();
+        let result = chat::send_and_save_in_data_dir(&dd, args, move |event| {
+            route_aside_event(&app3, &surface2, &sid, event);
+        })
+        .await;
+        if let Err(e) = result {
+            eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("助手出错：{e}") }));
+        }
+    });
+}
+
+/// 处理 heb:aside:submit：让旁支总结改动，注入主对话（复用 App 级 aside-result 监听）。
+fn handle_aside_submit(app: &AppHandle, payload: &serde_json::Value) {
+    let surface = payload.get("surface").and_then(|v| v.as_str()).unwrap_or("embedded").to_string();
+    let session_id = payload.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let element_desc = payload.get("element").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if session_id.is_empty() {
+        return;
+    }
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let dd = agent_core::storage::default_data_dir();
+        let prompt = "把这次对话里你对这个元素做的修改总结成一段给主对话参考的话：\
+            ①改了哪些样式（CSS 属性 → 目标值）；②达到了什么视觉效果；③为什么这么改/怎么实现的。\
+            目的是让主对话据此去改源码。只输出这段总结，别再调工具。"
+            .to_string();
+        let args = aside_send_args(session_id.clone(), prompt, vec![]);
+        match chat::send_and_save_in_data_dir(&dd, args, |_| {}).await {
+            Ok(msg) => {
+                let _ = app2.emit(
+                    "browser://aside-result",
+                    serde_json::json!({ "summary": msg.content, "element": element_desc }),
+                );
+                eval_aside_down(&app2, &surface, "heb:aside:submitted", serde_json::json!({ "sessionId": session_id }));
+            }
+            Err(e) => {
+                eval_aside_down(&app2, &surface, "heb:aside:error", serde_json::json!({ "message": format!("总结失败：{e}") }));
+            }
+        }
+    });
 }
 
 /// P0 spike 入口（HEBBIAN_WEBVIEW_SPIKE=1 时跑），验证 multi-webview 七项能力。

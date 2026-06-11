@@ -114,6 +114,35 @@ export default function App() {
     };
   }, []);
 
+  // 元素对话「提交到主对话」（架构 §8.5）：旁支会话总结改动 → emit browser://aside-result
+  // → 这里组装成 user message 发进当前对话，让主对话据此改源码。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen<{ summary: string; element: string }>("browser://aside-result", (e) => {
+      const store = useStore.getState();
+      if (!store.currentSession) {
+        toast.error("先打开一个对话，才能把元素改动提交进去");
+        return;
+      }
+      const { summary, element } = e.payload;
+      const content =
+        `我在页面预览里和你的助手一起调了一个元素（${element}）的样式，下面是这次调整的总结，` +
+        `请据此去改对应的前端源码，让效果固化下来：\n\n${summary}`;
+      void store.sendUserMessage(content, []);
+      toast.success("元素改动已提交到对话");
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("aside-result listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // edits-worktree 全局事件：其他窗口回退 edit 后同步刷新当前窗口的 editSnapshots。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;

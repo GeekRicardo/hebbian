@@ -52,6 +52,27 @@ export function BrowserPanel({ active }: { active: boolean }) {
   const poppedOutRef = useRef(false);
   poppedOutRef.current = poppedOut;
 
+  // 元素对话的上下文：把当前对话 + provider/model + 可选模型列表喂给后端
+  // （旁支会话建会话 / 卡片模型选择器 / 提交总结要用）
+  const ctxSession = useStore((s) => s.currentSession);
+  const providers = useStore((s) => s.providersFile.providers);
+  const modelOptions = useMemo(
+    () =>
+      providers
+        .filter((p) => p.enabled !== false)
+        .flatMap((p) =>
+          (p.models ?? []).map((m) => ({ providerId: p.id, model: m, label: `${m} · ${p.name}` }))
+        ),
+    [providers]
+  );
+  useEffect(() => {
+    if (active && ctxSession?.id && ctxSession.provider_id && ctxSession.model) {
+      void host
+        .setContext(ctxSession.id, ctxSession.provider_id, ctxSession.model, modelOptions)
+        .catch(() => undefined);
+    }
+  }, [active, ctxSession?.id, ctxSession?.provider_id, ctxSession?.model, modelOptions, host]);
+
   // 聊天流里检测到的本地 dev server 地址（架构 §4.2）。
   const messages = useStore((s) => s.currentSession?.messages);
   const sources = useMemo(() => messagesToDetectSources(messages ?? []), [messages]);

@@ -49,6 +49,12 @@ export interface BrowserHost {
   clearSelection(): Promise<void>;
   popout(): Promise<void>;
   closePopout(): Promise<void>;
+  setContext(
+    sessionId: string,
+    providerId: string,
+    model: string,
+    models: { providerId: string; model: string; label: string }[]
+  ): Promise<void>;
 
   onState(cb: (s: BrowserStateEvent) => void): Promise<UnlistenFn>;
   onTitle(cb: (t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
@@ -94,6 +100,14 @@ class TauriBrowserHost implements BrowserHost {
   }
   closePopout() {
     return api.browserClosePopout();
+  }
+  setContext(
+    sessionId: string,
+    providerId: string,
+    model: string,
+    models: { providerId: string; model: string; label: string }[]
+  ) {
+    return api.browserSetContext(sessionId, providerId, model, models);
   }
   onState(cb: (s: BrowserStateEvent) => void) {
     return listen<BrowserStateEvent>("browser://state", (e) => cb(e.payload));

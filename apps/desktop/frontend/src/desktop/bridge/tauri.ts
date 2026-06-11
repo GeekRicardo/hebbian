@@ -316,15 +316,15 @@ export const api = {
 
   /**
    * 切换 `force_automode` 子开关；返回设置后的最新值。
-   * 由 `//force-automode [on|off|toggle]` 命令解析器调用。
+   * 由 `//hands-off [on|off|toggle]` 命令解析器调用。
    */
   setForceAutomode: (sessionId: string, enabled: boolean) =>
     invoke<boolean>("set_force_automode", { sessionId, enabled }),
 
   /**
    * 架构 §4.4.3 / §8：读取当前 session 的 [`RunMode`]。
-   * desktop 进程级状态，重启回归 `AskBeforeEdits`。
-   * 返回 PascalCase 字符串：`AskBeforeEdits` / `EditAutomatically` / `PlanMode` / `AutoMode`
+   * desktop 进程级状态，重启回归 `Default`。
+   * 返回 PascalCase 字符串：`Default` / `PlanMode` / `AutoMode`
    */
   getRunMode: (sessionId: string) =>
     invoke<string>("get_run_mode", { sessionId }),
@@ -642,6 +642,12 @@ export const api = {
   browserClearSelection: () => invoke<void>("browser_clear_selection"),
   browserPopout: () => invoke<void>("browser_popout"),
   browserClosePopout: () => invoke<void>("browser_close_popout"),
+  browserSetContext: (
+    sessionId: string,
+    providerId: string,
+    model: string,
+    models: { providerId: string; model: string; label: string }[]
+  ) => invoke<void>("browser_set_context", { sessionId, providerId, model, models }),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */
