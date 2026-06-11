@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Wallet, Zap } from "lucide-react";
+import { Loader2, Wallet, Zap } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { api } from "@/desktop/bridge/tauri";
 import type {
@@ -180,6 +180,7 @@ interface Props {
 export function ProviderUsageIndicator({ provider, tokenStats, model, className }: Props) {
   const [result, setResult] = useState<ProviderUsageResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -188,6 +189,7 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    setLoading(true);
     try {
       const res = await api.fetchProviderUsage(provider.id);
       if (!ctrl.signal.aborted) {
@@ -197,6 +199,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
     } catch (e: any) {
       if (!ctrl.signal.aborted) {
         setError(e?.message ?? String(e));
+      }
+    } finally {
+      // 被新一次 doFetch abort 掉的旧请求不要把 loading 关掉（新请求还在转）
+      if (!ctrl.signal.aborted) {
+        setLoading(false);
       }
     }
   }
@@ -241,7 +248,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           className="inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
           aria-label={`Claude 用量 ${label}${result.plan ? ` · ${result.plan}` : ""}`}
         >
-          <Zap className={cn("w-3 h-3", color)} />
+          {loading ? (
+            <Loader2 className={cn("w-3 h-3 animate-spin", color)} />
+          ) : (
+            <Zap className={cn("w-3 h-3", color)} />
+          )}
           <span className={cn("text-[10px] tabular-nums leading-none", color)}>{label}</span>
           {result.plan && (
             <span className="text-[10px] leading-none text-muted-foreground/70">
@@ -282,7 +293,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           className="inline-flex h-7 items-center rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
           aria-label="DeepSeek 账户"
         >
-          <Wallet className={cn("w-3 h-3", available ? "text-emerald-500" : "text-destructive")} />
+          {loading ? (
+            <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+          ) : (
+            <Wallet className={cn("w-3 h-3", available ? "text-emerald-500" : "text-destructive")} />
+          )}
         </button>
         <div
           className={cn(
