@@ -7509,3 +7509,24 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**：agent-core 工具注册（additive）、旁支会话协议（additive）、inspector.js、browser/mod.rs、chat.rs send_aside、desktop 前端 4 文件。旧单元素注释/单条直提通道保留，行为不变。
 - **验证**：`cargo test -p agent-core --lib preview`（8 过）、`node apps/desktop/src/browser/inspector.test.cjs`、`cargo check -p hebbian`、`pnpm exec tsc --noEmit` 全过。
 - **留尾巴**：`PreviewCapture`（截图视觉回传）推迟单独立项——`ToolCtx` 无 app handle、agent-core 不依赖 tauri，需先抽截图通道 async trait（spec §5.9 已标注；attachments 管线已现成）。`heb:annotation:submit-batch` 旧通道仍在（无 UI 入口），可在确认多端无引用后清理。端到端 GUI 验证（pnpm tauri dev 手动走多元素流程）未做，需人工过一遍。
+
+### 2026-06-12 · 修复 subagent 三个用户报的 bug：样式 + 权限 + 子过程持久化/loop（D9.2）
+
+- **Why**：用户在 session `202606120617-507dd863` 报三个现象——① Task 卡片显示成通用 "Task" 而非子 agent 名，子嵌套输出无限往下撑；② subagent 内工具调用还要用户逐个审批打断（"不能 subagent 还需要用户来审批吧"）；③ 一个 subagent 完成后前端已输出的子内容全丢、重启更没有、agent_loop 也停了。实测复现确认根因：子过程的 `nested_parts` 只活在前端 streaming 软状态、不落盘 → run 一结束就蒸发；子写死 `RunMode::Default` + 复用 parent_hitl → 会写工具弹审批（且子卡等审批可拖住父 loop）；run_calls 等全部并行子完成期间被强杀 → session.jsonl 留「有 tool_use 缺 tool_result」畸形尾。
+- **CC / Codex 调研**（按 docs/cc_research 逆向方法论挖 CC 2.1.170 binary）：CC 的 custom subagent 有三权限维度——`tools` 白名单（能力边界）、`model`（可 `inherit` 跟父）、`permissionMode`（每个 subagent 可声明自己的，"控制工具执行如何处理"）；子内工具调用经 `can_use_tool` 路由宿主决策，`PermissionDecisionReason` 含独立的 `asyncAgent` 档；调用某 subagent 本身也是一条 permission 规则（`subagent_type_denied`）。Codex 靠 sandbox 兜底免审批。两家都不为子任务逐工具打断用户——hebbian 原「子审批排队弹窗」是两家都没有的反模式。
+- **改动**：
+  - 架构.md：§4.4.11.1/.2 推翻原「子审批排队弹窗」决策；§4.4.11.4 加 `permission` 权限维度（inherit/acceptEdits/bypass，对齐 CC permissionMode）；§4.4.11.8 子过程改落**主** session.jsonl（废弃从未落地的子 session.jsonl + 单独子对话视图）；Phase P9 + §13 决策 D9.2。
+  - agent-core：`SubagentDefinition` 加 `permission`（frontmatter 解析 + 内置 general-purpose 配 `bypass`、三个只读 agent 用 inherit）；`MessageToolCall` 加 `nested: Vec<MessagePart>`；`runner` 删写死 `Default`、按 permission 解析子 RunMode + bypass 信任放行（`resolve_permission`）+ 透传父 RunMode；`dispatch` 加 `subagent_bypass`，审批层 bypass && 非危险红线 → Approved；新增共享 `storage::nested::NestedAccumulator`（4 surface 共用的子过程累积器，含回归测试）。
+  - surface：desktop chat.rs / CLI daemon.rs / hebweb web-server 三个 observer 全接 `NestedAccumulator`——子事件按 call_id 累积成 MessagePart 序列，落盘前同步进父 tool_calls 的 nested。原各 surface「子事件只转发不累积」逻辑（旧 P3.1b 占位）替换。
+  - 前端：MessageBubble Task 卡片标题用 `subagent_type` 名、nested 区限高滚动（max-h-96 + overflow，同 thinking）、持久化路径从 `MessageToolCall.nested` 渲染（`savedNestedToStreaming` 转换 + `nestedByCallId` 关联）；types.ts 加 nested/permission；AppSettingsDialog `.md` 序列化补 permission + 模板提示。
+- **影响范围**：协议 `MessageToolCall`（additive nested）、`SubagentDefinition`（additive permission）、`LoopParams`/`ToolDispatcher`（additive subagent_bypass）；agent-core / 4 surface（desktop/CLI/hebweb 接 nested，channel-gateway 仅补字段未接）/ 前端。向后兼容（老 jsonl 无 nested/permission，serde default）。
+- **验证**：A/B 复现实测——修复前 session.jsonl 的 Task tool_call `has_nested:false`（子过程全丢）；修复后 `has_nested:true, nested_count:3`（子文本 + 子 Bash + 结果 + 子总结完整落主 session.jsonl）。general-purpose（bypass）调 Bash 写文件 `permission_requested=0`（修复前必弹）；run_finished 正常（loop 不停）。`cargo build -p hebbian-cli`、`cargo check -p hebbian-web-server` / `hebbian`、`cargo test -p agent-core --lib`（504 过，1 个 bash 后台时间 flaky 重跑 pass）、`tsc --noEmit` 全过。
+- **留尾巴**：① channel-gateway（bridge.rs）未接 NestedAccumulator，子过程不落盘（次要 surface，wechat 等渠道）；② harness bounded(1024) channel 在子事件极端高频时仍可能 drop non-critical 事件 → nested 偶发不全（正常前台 run 不触发；持久化 recorder 在 try_send 前先写，本身不丢）；③ partial sidecar 不含 nested，run 中途崩溃恢复时子过程丢（非中断的正常落盘不受影响）；④ desktop / hebweb 端到端 GUI 验证（实际看 Task 卡片名字 + 限高滚动 + 重启可见子过程）未人工过，仅后端 A/B + tsc 验证。
+
+### 2026-06-12 · 旁支对话交互返工：@ 弹层 → 固定元素标签，新增粘贴截图与运行中动画
+
+- **Why**：用户实测 @ 引用 contenteditable 输入框问题成串——弹层上下键不可选、首次点击报 Script error、光标跳回行首要点两次。根因是 contenteditable 的 caret/Range/IME 交互复杂度远超收益。改成更直白的方案：输入框上方固定一排元素标签（hover 高亮），发送时全部元素自动以 XML 包裹传给助手，用户自然语言说 1、2、3 指代。
+- **改动**：inspector.js 输入框退回 textarea，删除 @ 弹层/chip/readChatInput 全套；`<selected_elements>` 前缀升级为 `<element index="N">` XML；system prompt 同步「用户说 1 → 工具 target @1」映射说明；粘贴截图（canvas 压 ≤800px JPEG 防 heb-bridge URL 截断，缩略图预览可删，`send_aside` 加 attachments 参数转 `MessageAttachment::Image`）；运行中动画（消息流末尾跳动点 + 发送按钮禁用，done/error 解除）。另修两处编辑事故拼行（asideKeyCounter 被并进注释、browser_clear_selection 签名拼行）。
+- **影响范围**：inspector.js / browser/mod.rs / chat.rs `send_aside` 签名（3 调用点同步）。`refToIndex`/`composeAsideText` 纯函数保留（@N 路由仍在用 refToIndex）。
+- **验证**：node --check + inspector.test.cjs + `tsc --checkJs` 扫 Cannot find name 归零 + `cargo check -p hebbian` 过。
+- **留尾巴**：GUI 端到端（粘贴截图发送、busy 动画、多元素标签 hover）待人工在 tauri dev 里过一遍；粘贴超大图的 URL 上限未实测，若仍截断需改上行通道分片。
