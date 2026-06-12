@@ -32,7 +32,7 @@ use common::attachments::MessageAttachment;
 use common::{AppError, AppResult};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -1472,7 +1472,9 @@ fn partial_to_interrupted_message(
         });
     }
     for (idx, name, args) in &named_tool_calls {
-        let input: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+        // 中断时 args 可能是不完整 JSON；fallback 用空 object 而非 null，
+        // 避免恢复续聊时向 API 发出 null input 被 400 拒绝。
+        let input: Value = serde_json::from_str(args).unwrap_or_else(|_| json!({}));
         let (result, duration_ms) = partial
             .tool_results
             .get(idx)
@@ -1508,7 +1510,7 @@ fn partial_to_interrupted_message(
             MessageToolCall {
                 id: format!("recovered-{idx}"),
                 name: name.clone(),
-                input: serde_json::from_str(args).unwrap_or(Value::Null),
+                input: serde_json::from_str(args).unwrap_or_else(|_| json!({})),
                 result,
                 duration_ms,
             }

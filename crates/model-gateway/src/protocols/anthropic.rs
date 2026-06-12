@@ -399,11 +399,18 @@ fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> 
                     content.push(json!({"type": "text", "text": text}));
                 }
                 for c in tool_calls {
+                    // API 要求 input 必须是 object；流式中断恢复后 input 可能为 null，
+                    // 用空 object 兜底比让 API 400 更可控。
+                    let input = if c.input.is_null() {
+                        json!({})
+                    } else {
+                        c.input.clone()
+                    };
                     content.push(json!({
                         "type": "tool_use",
                         "id": c.id,
                         "name": c.name,
-                        "input": c.input
+                        "input": input
                     }));
                 }
                 Some(json!({"role": "assistant", "content": content}))
