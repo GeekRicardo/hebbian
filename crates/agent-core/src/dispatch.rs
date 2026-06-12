@@ -145,10 +145,11 @@ pub struct ToolDispatcher {
     /// 运行模式（架构 §4.4.3）。AutoMode 时在 NeedsApproval 路径上调一次 judge。
     /// 共享引用：agent_loop / harness 各持一份，SwitchRunMode 实时更新。
     pub run_mode: Arc<std::sync::Mutex<crate::run_mode::RunMode>>,
-    /// 当前会话使用的模型 id（AutoMode judge 限定模型用，命中
-    /// [`crate::automode::AUTOMODE_ALLOWED_MODELS`] 才发请求）。
+    /// 当前会话使用的模型 id。provider 未配置专属 judge 模型时，AutoMode 判官
+    /// 复用它（架构 §4.4.4 判官模型选择）。
     pub model_id: Option<String>,
-    /// AutoMode judge 复用的 ModelClient（通常 = 主 client）。`None` 时降级 Ask。
+    /// AutoMode judge 兜底的 ModelClient（通常 = 主 client）。`None` 时降级 Ask。
+    /// 会话 provider 配置了专属 judge 模型时，dispatch 会另建专属 client 替换它。
     pub judge_client: Option<std::sync::Arc<dyn model_gateway::client::ModelClient>>,
     /// `force_automode`（hands-off「全自动」）子开关（架构 §4.4.4）。仅 [`RunMode::AutoMode`]
     /// 下生效：判官返回 `Ask` 时折叠成 `Deny`、命令类 `Deny` 也自动拒不弹审批。
@@ -529,7 +530,7 @@ impl ToolDispatcher {
                 let segments = self.hitl.approval_segments(&call.name, &effects);
                 let refuse_remember = effects.has_dangerous_pattern();
                 // 这条审批是否会被 AutoMode judge 接管：与下方 async 块的判定一致
-                // （RunMode=AutoMode + judge 可用 + 模型在白名单）。true 时 surface 不弹框，
+                // （RunMode=AutoMode + judge 可用）。true 时 surface 不弹框，
                 // 等 judge 异步出结果，避免「弹一下又消失」的闪现（架构 §4.4.4）。
                 let auto_handled = self.automode_will_handle();
                 self.emit(EventPayload::PermissionRequested {
@@ -598,31 +599,39 @@ impl ToolDispatcher {
                 // 只剩 AutoMode 的 judge 短路。
                 let current_run_mode = *run_mode.lock().unwrap();
 
+                // AutoMode 判官模型选择（架构 §4.4.4）：会话 provider 配置了专属 judge
+                // 模型则建专属 client，否则回退主 client + 主模型。每次审批时解析，
+                // 设置里改了即时生效（免重启）。
+                let judge_override: Option<(
+                    Arc<dyn model_gateway::client::ModelClient>,
+                    String,
+                )> = if current_run_mode == crate::run_mode::RunMode::AutoMode {
+                    judge_client.as_ref().map(|jc| {
+                        resolve_judge_for_call(
+                            data_dir_for_artifacts.as_deref(),
+                            jc,
+                            model_id_for_judge.as_deref().unwrap_or(""),
+                        )
+                    })
+                } else {
+                    None
+                };
+
                 // 路径越界审批（带 permission.check 子 span）。AutoMode 下先过 judge：
                 // judge ALLOW 自动放行越界路径（低风险目标如 /tmp 不打断用户）、DENY 自动
                 // 拒、ASK 才落到人工弹框（架构 §4.4.4）。与 ToolCall 链对称。
                 if let Some(p) = path_pending {
-                    if current_run_mode == crate::run_mode::RunMode::AutoMode {
-                        let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
-                        let automode_general = data_dir_for_artifacts
+                    if let Some((judge, judge_model)) = judge_override.as_ref() {
+                        let judge_language = data_dir_for_artifacts
                             .as_deref()
-                            .map(|d| crate::storage::settings::load(d).general)
+                            .map(|d| crate::storage::settings::load(d).general.language)
                             .unwrap_or_default();
-                        let automode_models = automode_general.automode_models.clone();
-                        if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
-                            emit_automode_unsupported_toast(
-                                &sink,
-                                &state,
-                                &call_name_for_judge,
-                                model_id_str,
-                                &automode_models,
-                            );
-                        } else if let Some(judge) = judge_client.as_ref() {
+                        {
                             let decision = judge_automode_request(AutoModeJudgeRequest {
                                 sink: &sink,
                                 state: &state,
                                 judge_client: judge,
-                                model_id: model_id_str,
+                                model_id: judge_model,
                                 tool_name: &call_name_for_judge,
                                 tool_input: &call_input_for_judge,
                                 effects: &effects_for_judge,
@@ -635,7 +644,7 @@ impl ToolDispatcher {
                                 request_id: &p.request_id,
                                 force_automode,
                                 is_path_access: true,
-                                language: automode_general.language,
+                                language: judge_language,
                                 cancel: cancel.clone(),
                             })
                             .await;
@@ -683,30 +692,18 @@ impl ToolDispatcher {
                 // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
                 // 调一次 judge 决定 Allow / Deny / Ask；Allow 自动执行，Deny 按工具类型
                 // 拒绝或转人工，Ask 默认保留人工审批。
-                if current_run_mode == crate::run_mode::RunMode::AutoMode {
+                if let Some((judge, judge_model)) = judge_override.as_ref() {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
-                        let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
-                        // 运行时读用户配置的 AutoMode 白名单（设置里改了即时生效，免重启）。
-                        let automode_general = data_dir_for_artifacts
+                        let judge_language = data_dir_for_artifacts
                             .as_deref()
-                            .map(|d| crate::storage::settings::load(d).general)
+                            .map(|d| crate::storage::settings::load(d).general.language)
                             .unwrap_or_default();
-                        let automode_models = automode_general.automode_models.clone();
-                        let judge_language = automode_general.language;
-                        if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
-                            emit_automode_unsupported_toast(
-                                &sink,
-                                &state,
-                                &call_name_for_judge,
-                                model_id_str,
-                                &automode_models,
-                            );
-                        } else if let Some(judge) = judge_client.as_ref() {
+                        {
                             let decision = judge_automode_request(AutoModeJudgeRequest {
                                 sink: &sink,
                                 state: &state,
                                 judge_client: judge,
-                                model_id: model_id_str,
+                                model_id: judge_model,
                                 tool_name: &call_name_for_judge,
                                 tool_input: &call_input_for_judge,
                                 effects: &effects_for_judge,
@@ -1630,7 +1627,7 @@ impl ToolDispatcher {
         } else {
             format!("工具 {tool_name} 想访问 {} 个越界路径", path_strings.len())
         };
-        // AutoMode + 白名单时 judge 会接管这条路径审批（judge ALLOW 自动放行低风险目标、
+        // AutoMode 时 judge 会接管这条路径审批（judge ALLOW 自动放行低风险目标、
         // ASK 才弹人工）——与 ToolCall 链对称，surface 据 auto_handled 决定先压住框等
         // judge，避免闪现（架构 §4.4.4）。
         let auto_handled = self.automode_will_handle();
@@ -1654,27 +1651,12 @@ impl ToolDispatcher {
 
     /// 当前工具审批是否会被 AutoMode judge 接管——决定 surface 要不要立即弹审批框。
     ///
-    /// 条件与 async 块里的实际 judge 短路判定一致：RunMode=AutoMode + judge_client 可用
-    /// + 当前模型在白名单。任一不满足（非 AutoMode，或模型不在白名单已降级人工）都返回
-    /// `false`，让 surface 正常弹框，避免「标了接管但其实没接管 → 该弹的不弹卡死」。
+    /// 条件与 async 块里的实际 judge 短路判定一致：RunMode=AutoMode + judge_client 可用。
+    /// 任一不满足都返回 `false`，让 surface 正常弹框，避免「标了接管但其实没接管 →
+    /// 该弹的不弹卡死」。
     fn automode_will_handle(&self) -> bool {
-        if *self.run_mode.lock().unwrap() != crate::run_mode::RunMode::AutoMode {
-            return false;
-        }
-        if self.judge_client.is_none() {
-            return false;
-        }
-        let model_id = self.model_id.as_deref().unwrap_or("");
-        // 与 async 块的 judge 短路判定保持一致：data_dir=None 时退回 GeneralSettings
-        // 默认值（其 automode_models 含内置白名单），而非空 Vec——否则这里恒判 false、
-        // 实际却接管，前端该压住的框反而弹出来。
-        let automode_models = self
-            .data_dir_for_artifacts
-            .as_deref()
-            .map(|d| crate::storage::settings::load(d).general)
-            .unwrap_or_default()
-            .automode_models;
-        crate::automode::is_allowed_model(model_id, &automode_models)
+        *self.run_mode.lock().unwrap() == crate::run_mode::RunMode::AutoMode
+            && self.judge_client.is_some()
     }
 
     fn emit(&self, payload: EventPayload) {
@@ -1793,29 +1775,21 @@ async fn await_permission_decision(
     }
 }
 
-/// 模型不在 AutoMode 白名单时 emit 一条降级 toast。ToolCall / PathAccess 共用。
-/// dedup_key 让前端对同一模型的多次提示只显示一个 toast，避免刷屏。
-fn emit_automode_unsupported_toast(
-    sink: &EventSink,
-    state: &Arc<RunState>,
-    tool_name: &str,
-    model_id: &str,
-    automode_models: &[String],
-) {
-    sink(state.event(protocol::EventPayload::Notice {
-        level: protocol::LogLevel::Warn,
-        message: format!(
-            "当前模型「{model_id}」不在自动模式名单里，本次已转手动审批。可在「设置 → 自动模式」里把它加进去。"
-        ),
-        dedup_key: Some(format!("automode-unsupported:{model_id}")),
-    }));
-    info!(
-        target: "permission",
-        tool = %tool_name,
-        model = model_id,
-        allowlist = ?automode_models,
-        "[AutoMode] 模型不在白名单 → 弹 toast + 降级手动审批，不调判官"
-    );
+/// 解析本次审批用的判官 client + model（架构 §4.4.4 判官模型选择）。
+/// 会话 provider 配置了专属 judge 模型 → 专属 client + judge_model；
+/// 未配置 / 构建失败 / 无 data_dir（单测路径）→ 回退主 client + 会话主模型。
+fn resolve_judge_for_call(
+    data_dir: Option<&std::path::Path>,
+    fallback_client: &Arc<dyn model_gateway::client::ModelClient>,
+    fallback_model: &str,
+) -> (Arc<dyn model_gateway::client::ModelClient>, String) {
+    if let Some(dd) = data_dir {
+        let session_provider_id = fallback_client.provider_id().to_string();
+        if let Some(cfg) = crate::automode::resolve_judge_config(dd, &session_provider_id) {
+            return (cfg.client, cfg.model);
+        }
+    }
+    (fallback_client.clone(), fallback_model.to_string())
 }
 
 /// AutoMode judge 判定一次审批请求（ToolCall 与 PathAccess 两条链共用）的入参。
@@ -1844,8 +1818,7 @@ struct AutoModeJudgeRequest<'a> {
 ///
 /// 返回 judge 的最终决策（已按 `force_automode` 折叠 Ask→Deny）。调用方据此决定
 /// resolve 还是保留人工弹框——ToolCall 与 PathAccess 的差异只在这一步，判定本身一致。
-/// 模型不在白名单已在 [`ToolDispatcher::automode_will_handle`] 侧拦下（emit toast），
-/// 不进入本函数。
+/// 判官 client / model 由 [`resolve_judge_for_call`] 决定（架构 §4.4.4 判官模型选择）。
 async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecision {
     // judge 必须看到 hebbian 静态分析的全量 effects（segments / write_targets /
     // dangerous_kinds），不重复解析 shell。Bash 段前缀分类只对命令类生效。
@@ -2894,99 +2867,6 @@ mod tests {
         assert!(
             matches!(result, Err(ModelError::Cancelled)),
             "AutoMode judge 阶段中断应让 dispatch 返回 Cancelled，实际：{result:?}"
-        );
-    }
-
-    /// AutoMode 下模型不在白名单（data_dir=None → 默认白名单 opus-4-7/4-8/gpt-5.5，
-    /// 这里用 sonnet-4-6 故意落空）：dispatcher 应 emit Notice(warn) 提示转手动审批，
-    /// 且**不调判官**（无 PermissionAutoJudged），保留 NeedsApproval 走人工。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn automode_unsupported_model_emits_notice_and_falls_back_to_manual() {
-        use protocol::EventPayload;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = Workspace::new(tmp.path(), Vec::new());
-        let registry = Arc::new(ToolRegistry::new(vec![
-            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
-        ]));
-        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
-        let run_state = Arc::new(RunState::new(RunId::new()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
-        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
-            let _ = tx.try_send(event);
-        });
-        let hitl_for_resolve = hitl.clone();
-        let dispatcher = ToolDispatcher {
-            registry,
-            hitl,
-            workspace,
-            state: run_state,
-            sink,
-            cancel: Arc::new(AtomicBool::new(false)),
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
-            model_id: Some("claude-sonnet-4-6".to_string()), // 不在默认白名单
-            // judge 给 StaticAllowJudge：若错误地调用了它，命令会被自动放行——
-            // 用它来反证"不该调判官"（断言看到的是 NeedsApproval 而非 auto allow）。
-            judge_client: Some(Arc::new(StaticAllowJudge)),
-            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            hooks: Arc::new(crate::hooks::HookManager::empty()),
-            session_id_for_hooks: None,
-            data_dir_for_artifacts: None,
-            permission_store: None,
-            edits_worktree: None,
-            current_run_id: None,
-            subagent_ctx: None,
-            parent_transcript_snapshot: None,
-            model_io_dump: None,
-            subagent_bypass: false,
-        };
-
-        let call = ToolCall {
-            id: "call_unsupported".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({ "command": "touch fallback-ok" }),
-        };
-
-        // 后台 surface：收到 NeedsApproval 就 deny（验证确实走了人工审批闸口）。
-        let surface = tokio::spawn(async move {
-            let mut saw_notice = false;
-            let mut saw_auto_judged = false;
-            while let Some(event) = rx.recv().await {
-                match &event.payload {
-                    EventPayload::Notice {
-                        level, dedup_key, ..
-                    } => {
-                        saw_notice = matches!(level, protocol::LogLevel::Warn)
-                            && dedup_key.as_deref()
-                                == Some("automode-unsupported:claude-sonnet-4-6");
-                    }
-                    EventPayload::PermissionAutoJudged { .. } => saw_auto_judged = true,
-                    EventPayload::PermissionRequested { request_id, .. } => {
-                        hitl_for_resolve.resolve(request_id, ApprovalDecision::Deny);
-                    }
-                    _ => {}
-                }
-            }
-            (saw_notice, saw_auto_judged)
-        });
-
-        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
-            .await
-            .expect("dispatch should complete")
-            .expect("dispatch should succeed");
-        // 人工审批被 deny → 工具不执行
-        assert_eq!(result.len(), 1);
-        assert_ne!(
-            result[0].content, "executed",
-            "应走人工审批且被拒，不该自动执行"
-        );
-
-        drop(dispatcher);
-        let (saw_notice, saw_auto_judged) = surface.await.unwrap();
-        assert!(saw_notice, "应 emit Notice(warn, dedup_key) 提示转手动审批");
-        assert!(
-            !saw_auto_judged,
-            "不在白名单的模型不该调判官（无 PermissionAutoJudged）"
         );
     }
 

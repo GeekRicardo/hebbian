@@ -28,6 +28,10 @@ export interface Provider {
   title_gen_enabled?: boolean;
   /** 配合 title_gen_enabled 的具体模型 id（必须出现在 `models` 列表中）。 */
   title_gen_model?: string | null;
+  /** 自动模式判官模型：用本供应商对话时，判官调用改走 judge_provider_id 的 judge_model。
+   *  两者都为空 = 判官直接用当前对话的模型。 */
+  judge_provider_id?: string | null;
+  judge_model?: string | null;
   /** 注入 Claude Code 客户端特征（banner / billing header / metadata / context_management）。 */
   claude_code_compat?: boolean;
 }
@@ -495,8 +499,6 @@ export interface AppSettings {
     shell?: string | null;
     log_enabled: boolean;
     edit_backend: "string-replace" | "hashline";
-    /** 允许启用自动模式判官的模型 id 列表（架构 §4.4.4）。 */
-    automode_models: string[];
     /** Run 非正常结束后点「继续」的恢复方式（架构 §7.3）。 */
     continue_strategy?: "resume_loop" | "send_continue" | "manual";
   };

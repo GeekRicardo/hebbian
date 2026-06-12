@@ -172,6 +172,8 @@ mod tests {
             default_model: None,
             title_gen_enabled: false,
             title_gen_model: None,
+            judge_provider_id: None,
+            judge_model: None,
             claude_code_compat: false,
         }
     }

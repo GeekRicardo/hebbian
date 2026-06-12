@@ -1,8 +1,8 @@
 //! AutoMode：在 destructive 工具调用前调一次轻量 LLM 决定是否放行。
 //!
 //! 架构 §4.4.4。流程：
-//! 1. 仅当 `current_model_id` 命中用户配置的 AutoMode 白名单时启用——dispatcher 先判，
-//!    不支持的模型不调判官，改成 toast 提示 + 降级普通审批（架构 §4.4.4）
+//! 1. 判官模型选择：会话 provider 配置了专属 judge 模型（`judge_provider_id` +
+//!    `judge_model`）则用它，否则复用会话主 client + 主模型（见 [`resolve_judge_config`]）
 //! 2. 构造 judge prompt：[`AUTOMODE_JUDGE_SYSTEM`] + 调用上下文 + hebbian 已识别的
 //!    `effects.segments` / `write_targets` / `paths` / `dangerous_kinds`。判官**不重复**
 //!    解析 shell，只在静态分析结果上做语境判定。
@@ -20,7 +20,6 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::warn;
 
-use common::reasoning::normalize_model_id;
 use model_gateway::client::ModelClient;
 use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEntry, UserEntry};
 
@@ -31,19 +30,55 @@ use crate::tools::{bash_prefix, shell_parse};
 /// AutoMode 的判官 system prompt（编译进二进制，跨会话稳定）。
 pub const AUTOMODE_JUDGE_SYSTEM: &str = include_str!("../prompts/automode_judge.md");
 
-/// 判定 model id 是否在 AutoMode 白名单内。`allowed` 来自
-/// [`crate::storage::settings`]`::Settings.general.automode_models`（用户在设置里多选，
-/// 内置默认见 [`crate::storage::settings::default_automode_models`]）。
+/// AutoMode 判官的专属 client + model（架构 §4.4.4 判官模型选择）。
+/// `None`（未配置 / 构建失败）时调用方回退会话主 client + 主模型。
+#[derive(Clone)]
+pub struct JudgeConfig {
+    pub client: Arc<dyn ModelClient>,
+    pub model: String,
+}
+
+/// 按会话 provider 的 judge 配置解析判官 client（架构 §4.4.4）。
 ///
-/// 双方都归一化（大小写 + 版本分隔符）后匹配：归一化相等，或 model 归一化以某条目
-/// 归一化为前缀（兼容带日期后缀的真实 id，如 `claude-opus-4-7-20260416` 命中
-/// `claude-opus-4-7`）。空白名单 → 全部不允许。模型质量由配置者负责。
-pub fn is_allowed_model(model_id: &str, allowed: &[String]) -> bool {
-    let normalized = normalize_model_id(model_id);
-    allowed.iter().any(|a| {
-        let na = normalize_model_id(a);
-        !na.is_empty() && (normalized == na || normalized.starts_with(na.as_str()))
-    })
+/// 会话 provider 的 `judge_provider_id` + `judge_model` 都非空 → 为目标 provider 建
+/// 专属 client（带 data_dir：401 自愈刷新兜底 OAuth 过期）。**显式配置即信任**：
+/// 不再做模型白名单二次把关，判官质量由配置者负责。
+/// 未配置或任一步失败（provider 被删 / 建 client 失败）→ 返回 `None` 并 warn，
+/// 调用方回退主 client，AutoMode 不静默失效。
+pub fn resolve_judge_config(
+    data_dir: &std::path::Path,
+    session_provider_id: &str,
+) -> Option<JudgeConfig> {
+    let provider = match model_gateway::config::get(data_dir, session_provider_id) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(provider = session_provider_id, %e, "resolve_judge_config: 会话 provider 读取失败");
+            return None;
+        }
+    };
+    let (judge_pid, judge_model) = match (&provider.judge_provider_id, &provider.judge_model) {
+        (Some(pid), Some(model)) if !pid.is_empty() && !model.is_empty() => {
+            (pid.clone(), model.clone())
+        }
+        _ => return None,
+    };
+    let judge_provider = match model_gateway::config::get(data_dir, &judge_pid) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(judge_provider = %judge_pid, %e, "judge provider 不存在，判官回退会话主模型");
+            return None;
+        }
+    };
+    match model_gateway::build_client_with_data_dir(judge_provider, data_dir.to_path_buf()) {
+        Ok(client) => Some(JudgeConfig {
+            client,
+            model: judge_model,
+        }),
+        Err(e) => {
+            warn!(judge_provider = %judge_pid, %e, "judge client 构建失败，判官回退会话主模型");
+            None
+        }
+    }
 }
 
 /// AutoMode 的判官决策。
@@ -85,8 +120,8 @@ impl AutoModeDecision {
 
 /// 调一次模型作为 AutoMode 判官。
 ///
-/// `judge_client` 通常等于会话的主 client。白名单判断已由 dispatcher 在调用前完成
-/// （见 [`is_allowed_model`]），本函数假定模型已获准启用判官，不再重复校验。
+/// `judge_client` / `current_model_id` 由 dispatcher 按 [`resolve_judge_config`]
+/// 解析（provider 配置的专属 judge 模型，或回退会话主 client + 主模型）。
 ///
 /// `effects` 必须传 hebbian 已分析好的结果——判官 prompt 依赖 `segments` / `paths` /
 /// `dangerous_kinds` 做段级拆解，**不能**让判官自己重新解析 shell。
@@ -154,7 +189,7 @@ pub async fn classify_bash_prefixes_for_automode(
     let mut enriched = effects.clone();
     let mut command_injection_detected = false;
 
-    // 白名单已由 dispatcher 在调用前确认，这里只判工具类型（非 Bash/PowerShell 不 classify）。
+    // 仅判工具类型（非 Bash/PowerShell 不 classify）。
     if !matches!(tool_name, "Bash" | "PowerShell") {
         return BashPrefixClassifierOutcome {
             effects: enriched,
@@ -484,34 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn allowed_model_accepts_real_supported_ids() {
-        let allowed = crate::storage::settings::default_automode_models();
-        // 内置默认（claude-opus-4-7 / 4-8 / gpt-5.5）+ 真实上游 / 网关 id 归一化命中
-        assert!(is_allowed_model("claude-opus-4-7", &allowed));
-        assert!(is_allowed_model("claude-opus-4.7", &allowed)); // 分隔符归一
-        assert!(is_allowed_model("claude-opus-4-7-20260416", &allowed)); // 日期后缀前缀匹配
-        assert!(is_allowed_model("claude-opus-4-8", &allowed));
-        assert!(is_allowed_model("gpt-5.5", &allowed));
-        assert!(is_allowed_model("gpt-5-5", &allowed));
-        assert!(is_allowed_model("GPT-5.5", &allowed)); // 大小写归一
-    }
-
-    #[test]
-    fn allowed_model_rejects_unsupported_and_empty_list() {
-        let allowed = crate::storage::settings::default_automode_models();
-        assert!(!is_allowed_model("claude-sonnet-4-6", &allowed));
-        assert!(!is_allowed_model("gpt-5.4", &allowed));
-        assert!(!is_allowed_model("gpt-4o", &allowed));
-        // 空白名单 → 全部不允许
-        assert!(!is_allowed_model("claude-opus-4-7", &[]));
-        // 用户没把某模型加进白名单 → 不允许（即使是强模型）
-        assert!(!is_allowed_model(
-            "claude-opus-4-8",
-            &["claude-opus-4-7".to_string()]
-        ));
-    }
-
-    #[test]
     fn collapse_ask_to_deny_prefixes_reason() {
         let collapsed = AutoModeDecision::Ask("reads SSH key".into()).collapse_ask_to_deny();
         match collapsed {
@@ -581,5 +588,67 @@ mod tests {
             .dangerous_kinds
             .iter()
             .any(|kind| kind == "ast-too-complex"));
+    }
+
+    fn provider(id: &str, judge: Option<(&str, &str)>) -> model_gateway::config::Provider {
+        model_gateway::config::Provider {
+            id: id.to_string(),
+            name: id.to_string(),
+            kind: model_gateway::config::ProviderKind::Openai,
+            enabled: true,
+            auth_mode: Default::default(),
+            base_url: "https://example.invalid/v1".to_string(),
+            api_key: "k".to_string(),
+            refresh_token: None,
+            token_expires_at: None,
+            account_id: None,
+            extra_headers: Default::default(),
+            models: vec!["m-big".to_string(), "m-small".to_string()],
+            fetched_models: None,
+            model_context_windows: Default::default(),
+            default_model: None,
+            title_gen_enabled: false,
+            title_gen_model: None,
+            judge_provider_id: judge.map(|(p, _)| p.to_string()),
+            judge_model: judge.map(|(_, m)| m.to_string()),
+            claude_code_compat: false,
+        }
+    }
+
+    #[test]
+    fn resolve_judge_config_uses_configured_provider_and_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = model_gateway::config::ProvidersFile {
+            providers: vec![
+                provider("main", Some(("cheap", "m-small"))),
+                provider("cheap", None),
+            ],
+            ..Default::default()
+        };
+        model_gateway::config::save(tmp.path(), &file).unwrap();
+
+        let cfg = resolve_judge_config(tmp.path(), "main").expect("配置了 judge 应解析成功");
+        assert_eq!(cfg.model, "m-small");
+        assert_eq!(cfg.client.provider_id(), "cheap");
+    }
+
+    #[test]
+    fn resolve_judge_config_falls_back_when_unconfigured_or_broken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = model_gateway::config::ProvidersFile {
+            providers: vec![
+                provider("plain", None),
+                provider("dangling", Some(("ghost", "m-x"))),
+            ],
+            ..Default::default()
+        };
+        model_gateway::config::save(tmp.path(), &file).unwrap();
+
+        // 未配置 judge → None（回退主 client）
+        assert!(resolve_judge_config(tmp.path(), "plain").is_none());
+        // judge_provider 指向不存在的 provider → None 而非 panic
+        assert!(resolve_judge_config(tmp.path(), "dangling").is_none());
+        // 会话 provider 本身不存在 → None
+        assert!(resolve_judge_config(tmp.path(), "nope").is_none());
     }
 }

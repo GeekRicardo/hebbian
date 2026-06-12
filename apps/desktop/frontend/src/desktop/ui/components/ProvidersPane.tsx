@@ -211,6 +211,8 @@ export function ProvidersPane({ active }: { active: boolean }) {
       default_model: null,
       title_gen_enabled: false,
       title_gen_model: null,
+      judge_provider_id: null,
+      judge_model: null,
       claude_code_compat: false,
       ...overrides,
     };
@@ -921,6 +923,123 @@ export function ProvidersPane({ active }: { active: boolean }) {
                           </option>
                         ))}
                       </Select>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>自动模式判官模型</Label>
+                    <div className="text-[11px] text-muted-foreground">
+                      自动模式下替你判断每个操作放不放行的轻量模型。不设置 =
+                      直接用当前对话的模型；主力模型很强时，选个便宜的小模型当判官更省
+                    </div>
+                    <div className="flex gap-2">
+                      <Select
+                        value={current.judge_provider_id ?? ""}
+                        onChange={(e) => {
+                          const pid = e.target.value || null;
+                          const target = draft.providers.find((p) => p.id === pid);
+                          updateCurrent({
+                            judge_provider_id: pid,
+                            judge_model: pid
+                              ? (target?.default_model ?? target?.models[0] ?? null)
+                              : null,
+                          });
+                        }}
+                      >
+                        <option value="">（不设置，用对话模型）</option>
+                        {draft.providers
+                          .filter((p) => p.models.length > 0)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </Select>
+                      {current.judge_provider_id && (
+                        <Select
+                          value={current.judge_model ?? ""}
+                          onChange={(e) =>
+                            updateCurrent({ judge_model: e.target.value || null })
+                          }
+                        >
+                          <option value="">（请选择模型）</option>
+                          {(
+                            draft.providers.find(
+                              (p) => p.id === current.judge_provider_id,
+                            )?.models ?? []
+                          ).map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={current.judge_provider_id != null}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            updateCurrent({
+                              judge_provider_id: current.id,
+                              judge_model:
+                                current.default_model ?? current.models[0] ?? null,
+                            });
+                          } else {
+                            updateCurrent({
+                              judge_provider_id: null,
+                              judge_model: null,
+                            });
+                          }
+                        }}
+                      />
+                      <span>自动模式判官模型</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        自动模式下替你审批的模型；不勾 = 直接用对话模型
+                      </span>
+                    </label>
+                    {current.judge_provider_id != null && (
+                      <div className="flex gap-2">
+                        <Select
+                          value={current.judge_provider_id}
+                          onChange={(e) => {
+                            const pid = e.target.value;
+                            const target = draft.providers.find((p) => p.id === pid);
+                            updateCurrent({
+                              judge_provider_id: pid,
+                              judge_model:
+                                target?.default_model ?? target?.models[0] ?? null,
+                            });
+                          }}
+                        >
+                          {draft.providers.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </Select>
+                        <Select
+                          value={current.judge_model ?? ""}
+                          onChange={(e) =>
+                            updateCurrent({ judge_model: e.target.value || null })
+                          }
+                        >
+                          <option value="">（请选择模型）</option>
+                          {(
+                            draft.providers.find(
+                              (p) => p.id === current.judge_provider_id
+                            )?.models ?? []
+                          ).map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     )}
                   </div>
 

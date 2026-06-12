@@ -2749,6 +2749,8 @@ mod tests {
                     default_model: Some("gpt-test".to_string()),
                     title_gen_enabled: false,
                     title_gen_model: None,
+                    judge_provider_id: None,
+                    judge_model: None,
                     claude_code_compat: false,
                 }],
                 default_provider_id: Some("openai".to_string()),
@@ -3547,6 +3549,7 @@ mod tests {
                 arguments: "{\"command\":\"pwd\"}".to_string(),
                 result: Some("/tmp\n".to_string()),
                 duration_ms: Some(12),
+                is_error: false,
             },
         ];
         let calls = vec![MessageToolCall {
@@ -3555,6 +3558,7 @@ mod tests {
             input: serde_json::json!({"command": "pwd"}),
             result: Some("/tmp\n".to_string()),
             duration_ms: Some(12),
+            is_error: false,
             nested: Vec::new(),
         }];
 

@@ -85,7 +85,6 @@ const PREVIEW_SETTINGS_FALLBACK: AppSettings = {
     shell: null,
     log_enabled: false,
     edit_backend: "string-replace",
-    automode_models: [],
     continue_strategy: "resume_loop",
   },
   conversation: {
@@ -695,22 +694,6 @@ function AppearancePane({
 function GeneralPane({ draft, setDraft }: PaneProps) {
   const debugEnabled = useStore((s) => s.debugEnabled);
   const setDebugEnabled = useStore((s) => s.setDebugEnabled);
-  // 收集所有 provider 的 model id 去重——自动模式判官白名单从这里勾选。
-  const [allModelIds, setAllModelIds] = useState<string[]>([]);
-  useEffect(() => {
-    api.getProviders().then((f) => {
-      const ids = new Set<string>();
-      for (const p of f.providers) for (const m of p.models ?? []) ids.add(m);
-      setAllModelIds([...ids].sort());
-    });
-  }, []);
-  const automodeModels = draft.general.automode_models ?? [];
-  const toggleAutomodeModel = (id: string) => {
-    const next = automodeModels.includes(id)
-      ? automodeModels.filter((x) => x !== id)
-      : [...automodeModels, id];
-    setDraft({ ...draft, general: { ...draft.general, automode_models: next } });
-  };
   return (
     <div className="space-y-1">
       <FieldRow label="开机启动" description="登录时自动启动 Hebbian">
@@ -836,34 +819,6 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
           <option value="send_continue">发一条「继续」消息</option>
           <option value="manual">手动续（聚焦输入框）</option>
         </select>
-      </FieldRow>
-
-      <FieldRow
-        label="自动模式可用的模型"
-        description="勾选的模型在「自动模式」下会自己判断命令安不安全、替你放行；没勾的模型切到自动模式时会提示并转成手动审批。判断质量取决于模型能力，建议用较强的模型"
-      >
-        <div className="w-72 max-h-[168px] overflow-y-auto rounded-md border border-border bg-background p-1.5 space-y-0.5">
-          {allModelIds.length === 0 ? (
-            <div className="text-xs text-muted-foreground px-1 py-1">
-              还没有可选模型，先去「模型」里添加
-            </div>
-          ) : (
-            allModelIds.map((id) => (
-              <label
-                key={id}
-                className="flex items-center gap-2 px-1.5 py-1 rounded text-sm cursor-pointer hover:bg-muted/50 select-none"
-              >
-                <input
-                  type="checkbox"
-                  checked={automodeModels.includes(id)}
-                  onChange={() => toggleAutomodeModel(id)}
-                  className="h-4 w-4 rounded shrink-0"
-                />
-                <span className="font-mono text-xs truncate">{id}</span>
-              </label>
-            ))
-          )}
-        </div>
       </FieldRow>
     </div>
   );

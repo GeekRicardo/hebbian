@@ -7723,3 +7723,29 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
   - `apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx`：卡片改 `w-[calc(100%+42px)]` 配负右外边距，撑满到右侧留白边界。
 - **影响范围**：仅 Desktop 前端提问弹窗布局。
 - **留尾巴**：无。
+
+### 2026-06-12 · 修复提问弹窗关闭后聊天底部空白残留
+
+- **Why**：为让提问弹窗打开时聊天内容能滚到弹窗上方，之前把 `Ask` 工具调用所在消息永久加了底部 margin；弹窗关闭后这段 margin 仍留在历史消息上，导致底部多出一大片空白。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`：把当前是否存在待回答问题传给消息列表与当前 run 的 assistant 气泡。
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx`：只允许最后一条 assistant 消息在待回答期间参与弹窗避让，避免历史 `Ask` 消息长期撑开列表。
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`：`Ask` 底部避让改为显式 prop 控制，不再因历史上出现过 `Ask` 工具调用而永久加空白。
+- **影响范围**：仅 Desktop 前端聊天布局；不改协议、agent-core、CoreClient 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-13 · 新增供应商级 AutoMode 判官模型配置，删除 automode_models 白名单
+
+- **Why**：用户痛点——用很强（贵）的主模型干活时，AutoMode 判官 / Bash prefix classifier 这种轻量分类任务没必要烧同级 token。原「模型白名单」（内置 opus-4-7 / 4-8 / gpt-5.5 + 设置多选）只能决定"主模型够不够格自任判官"，无法让判官换成另一个便宜模型；引入专属 judge 模型后白名单的检查对象也随之模糊，经用户拍板直接删除白名单整套机制——**显式配置即信任**，判官质量由配置者负责。
+- **改动**：
+  - `crates/model-gateway/src/config.rs`：`Provider` 新增 `judge_provider_id` / `judge_model`（serde default，老 providers.json 向后兼容）。
+  - `crates/agent-core/src/automode.rs`：删 `is_allowed_model`，新增 `JudgeConfig` + `resolve_judge_config(data_dir, session_provider_id)`——读会话 provider 的 judge 配置，建专属 client（`build_client_with_data_dir`，带 401 自愈）；未配置 / provider 不存在 / 建失败均返回 None 回退主 client，warn 不静默失效。附 2 条单测（成功解析 / 各失败路径回退）。
+  - `crates/agent-core/src/dispatch.rs`：ToolCall 与 PathAccess 两条判官链统一改为 dispatch 时解析 `judge_override = resolve_judge_for_call(...)`（每次审批解析，设置改了即时生效）；`automode_will_handle` 简化为「AutoMode + judge_client 存在」；删 `emit_automode_unsupported_toast`（"模型不在名单转手动"的降级路径整体不存在了）及对应单测。Classifier A 与判官共用同一 judge client / model。
+  - `crates/agent-core/src/storage/settings.rs`：删 `GeneralSettings.automode_models` 与 `default_automode_models`（老 settings.json 里残留字段被 serde 忽略，无需迁移）。
+  - 前端：`types.ts` Provider 加两字段、删 `general.automode_models`；`ProvidersPane.tsx` 每个供应商详情页加「自动模式判官模型」两级下拉（先选供应商再选模型，可跨供应商）；`AppSettingsDialog.tsx` 删除原「自动模式可用的模型」勾选区。
+  - 各处 `Provider` 字面量构造点（refresh.rs / providers/mod.rs / openai.rs / context_window.rs / chat.rs 测试）补新字段。
+  - `docs/架构.md`：§4.4.3 / §4.4.4（伪码 + 原"模型白名单"段改为"判官模型选择"）/ §13 决策表 / §16.10 对比表同步更新。
+- **Subagent**：经用户确认「子 agent 也跟随」——子 NestedRun 的 dispatcher 在审批时同样走 `resolve_judge_for_call`，按 judge client 的 provider_id 查 judge 配置；子用专属 provider 时按该 provider 的 judge 配置解析，自然继承本机制，无需额外改 runner.rs。
+- **影响范围**：agent-core（automode / dispatch / settings）、model-gateway（Provider 结构）、Desktop 前端（设置两个面板）。providers.json / settings.json 均向后兼容（新字段 default、旧字段忽略）。行为变化：原先不在白名单的模型切 AutoMode 会 toast + 转手动审批，现在任何模型都直接调判官（未配置时用模型自己）——这是有意的语义放宽。
+- **验证**：`cargo check --workspace`、`cargo test -p agent-core --lib`（504 passed）、`cargo test -p hebbian --lib`（34 passed，顺手补了既有测试缺 `is_error` 字段的编译错）、`pnpm exec tsc --noEmit` 全绿。
+- **留尾巴**：① 未跑 desktop dev 手动验证 ProvidersPane 新下拉的实际交互；② `model_io.jsonl` 的 judge 条目现在记录的是 judge 模型而非会话模型，分析脚本如有按模型过滤需注意；③ 旧 settings.json 的 `automode_models` 字段成为死数据（无害）。

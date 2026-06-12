@@ -72,6 +72,13 @@ pub struct Provider {
     /// 配合 `title_gen_enabled` 的具体模型 id（必须在 `models` 列表里）。
     #[serde(default)]
     pub title_gen_model: Option<String>,
+    /// AutoMode 判官模型（架构 §4.4.4）：用本 provider 对话时，判官调用改走
+    /// `judge_provider_id` 的 `judge_model`（可以指向任意已配置 provider，
+    /// 含自己）。两者都为空 → 判官复用会话主 client + 主模型。
+    #[serde(default)]
+    pub judge_provider_id: Option<String>,
+    #[serde(default)]
+    pub judge_model: Option<String>,
     /// 是否在请求体里注入 Claude Code 客户端特征（banner / billing header /
     /// metadata.user_id / context_management），让请求伪装成 Claude Code CLI 流量。
     /// 默认 false。与 auth_mode 独立——OAuth 模式自动注入，此开关让 API Key
