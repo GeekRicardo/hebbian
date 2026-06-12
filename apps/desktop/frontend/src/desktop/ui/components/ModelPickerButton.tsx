@@ -396,13 +396,13 @@ export function ModelPickerButton() {
                 catalogWithoutPrefix={catalogWithoutPrefix}
               />
             )}
-            {pickedModel && selectedPreviewProvider && (
+            {selectedPreviewProvider && (
               <div className="model-picker-selected-controls">
                 <ReasoningControls
                   providerKind={selectedPreviewProvider.kind}
-                  model={pickedModel.model}
+                  model={fallbackModel}
                   reasoning={previewReasoning}
-                  catalogEntry={catalogWithoutPrefix[pickedModel.model] || catalogWithoutPrefix[`${selectedPreviewProvider.kind}/${pickedModel.model}`]}
+                  catalogEntry={catalogWithoutPrefix[fallbackModel] || catalogWithoutPrefix[`${selectedPreviewProvider.kind}/${fallbackModel}`]}
                   onChange={() => {}}
                 />
                 <button type="button" className="model-picker-done" onClick={() => setOpen(false)}>
@@ -523,11 +523,11 @@ export function ModelPickerButton() {
               catalogWithoutPrefix={catalogWithoutPrefix}
             />
           )}
-          {pickedModel && selectedProvider && (
+          {selectedProvider && (
             <div className="model-picker-selected-controls">
               <ReasoningControls
                 providerKind={selectedProvider.kind}
-                model={pickedModel.model}
+                model={selectedModel}
                 catalogEntry={selectedCatalogEntry}
                 reasoning={currentSession.reasoning ?? DEFAULT_REASONING}
                 onChange={(next) => {
