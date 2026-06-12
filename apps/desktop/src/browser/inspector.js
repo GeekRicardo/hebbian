@@ -1007,7 +1007,8 @@
     if (!queuePanelEl) {
       queuePanelEl = document.createElement("div");
       queuePanelEl.setAttribute(OVERLAY_ATTR, "queue");
-      var pos = queuePos ? "left:" + queuePos.x + "px;top:" + queuePos.y + "px;" : "right:16px;bottom:16px;";
+      // 默认放左下角：注释卡片占右侧（最高 84vh、z-index 更高），放右下会被整张盖住
+      var pos = queuePos ? "left:" + queuePos.x + "px;top:" + queuePos.y + "px;" : "left:16px;bottom:16px;";
       queuePanelEl.style.cssText = "position:fixed;" + pos + "width:288px;max-height:62vh;display:flex;flex-direction:column;z-index:2147483646;" +
         "background:#fff;color:#1f2328;border:1px solid #d9dde3;border-radius:10px;box-shadow:0 8px 30px rgba(15,23,42,0.18);" +
         "font-family:-apple-system,system-ui,sans-serif;overflow:hidden;";
