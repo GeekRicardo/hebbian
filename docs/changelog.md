@@ -7670,3 +7670,56 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
   - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：拆分深海墨蓝主题下会话行 hover 与选中态背景，单独调暗选中会话行。
 - **影响范围**：仅 Desktop 前端视觉主题；不改协议、agent-core、CoreClient、storage 或持久化格式；亮色 preset 不受影响。
 - **留尾巴**：无。
+
+### 2026-06-12 · 新增删除对话尾部消息
+
+- **Why**：用户需要在对话跑偏或误发后清掉尾部内容，回到某条 user 之前重来，而不必整段重开会话。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx`：计算可删消息集合，只允许从后往前删——最后一个 run 的 assistant 可删（删整个 run 输出），最后一条真实 user 仅当其后无 assistant 时可删；streaming 时整体禁用。
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx`：接 `deleteTrailingMessage`，删前 `ipcConfirm` 二次确认，按 role 给不同文案。
+- **影响范围**：仅 Desktop 前端；底层走已有 `truncateAfter` / `truncateInclusive`，不改协议与持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 重构页面预览 popout 为每对话独立窗口
+
+- **Why**：旧实现 popout 是全局单例（同一时刻只能弹一个），多对话切换时互相抢占同一个窗口；且 `browser_close_popout` 不带 session，无法定位是哪个对话的窗口。
+- **改动**：
+  - `apps/desktop/src/browser/mod.rs`：`BrowserState.popout` 从 `Option<PopoutInstance>` 改为 `HashMap<session_id, _>`；窗口 label 按 session_id 区分；窗口标题带对话标题 + session_id；popout 内部所有 helper（resize / navigate / go / reload / picker / toolbar_state 等）透传 session_id；该对话已有 popout 则聚焦不重开。
+  - `apps/desktop/src/browser/popout_toolbar.html`：titlebar 拖拽改 `mousedown` 上行 `startDragging`（data URL webview 里 `-webkit-app-region` 不生效）。
+  - `browser_close_popout` 命令加 `session_id` 参数；`bridge/tauri.ts` / `lib/browserHost.ts` / `components/BrowserPanel.tsx` 同步透传。
+- **影响范围**：Desktop 内置浏览器 popout；`browser_close_popout` 命令签名变更（前后端同改，无旧客户端依赖）；不改 agent-core 与持久化。
+- **留尾巴**：需在 `pnpm tauri dev` 手动验证多对话各自弹窗、收回、注释回流到正确对话。
+
+### 2026-06-12 · 抽出 diffStats 共享模块并增强 EditTree 行卡片
+
+- **Why**：LCS diff 计算原本内嵌在 `DiffPanel`，`EditTreePanel` 想在折叠的文件行上直接展示增删行数与 inline/split 切换，需要复用同一份计算。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/lib/diffStats.ts`：抽出 `calculateDiffRows`（LCS 对齐）与 `calculateDiffStats`（增删计数），附 `diffStats.test.mjs` 回归测试。
+  - `apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx`：改用共享 `calculateDiffRows`；拆出可复用的 `DiffModeButton` / `DiffStatsBadge`；`hideHeaderMeta` 时整条 header 不渲染（替代逐项 `hideMeta` 判断）。
+  - `apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx`：文件行展开为 button + 行内 stats badge，展开时显示 inline/split 切换按钮。
+- **影响范围**：仅 Desktop 前端 diff 展示；纯重构 + UI 增强，无协议 / 数据变更。
+- **留尾巴**：无。
+
+### 2026-06-12 · 修复终端关闭时 write/resize 未处理 rejection
+
+- **Why**：xterm 的 `onData` / `onResize` 回调寿命跨越终端 close 那一刻，对已 remove 的 PTY 调用时 Rust 返回「终端不存在」，冒泡成未处理的 promise rejection。这是 UI 回调寿命长于 PTY 的固有竞态。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx`：`fireForget` 包装 fire-and-forget 的 `terminalWrite` / `terminalResize`，静默吞掉这类竞态错误；`activeRef` 在 `[]` deps 的初始化 effect 里读最新 `active` 避免重订阅；标签页加「·已退出」标记，关闭按钮改绝对定位、hover 渐显。
+- **影响范围**：仅 Desktop 内置终端前端。
+- **留尾巴**：无。
+
+### 2026-06-12 · 修复未选模型时不显示推理强度控件
+
+- **Why**：`ReasoningControls` 之前依赖 `pickedModel` 存在才渲染，导致刚进 picker 还没点选具体模型时看不到推理强度调节。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx`：去掉 `pickedModel` 前置条件，预览区用 `fallbackModel`、已选区用 `selectedModel` 兜底，只要有 provider 就显示 `ReasoningControls`。
+- **影响范围**：仅 Desktop 前端模型选择器。
+- **留尾巴**：无。
+
+### 2026-06-12 · 调整提问弹窗宽度对齐右侧留白区
+
+- **Why**：提问弹窗原本受 `pr-[50px]` 容器挤压，宽度与下方输入区不齐。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx`：卡片改 `w-[calc(100%+42px)]` 配负右外边距，撑满到右侧留白边界。
+- **影响范围**：仅 Desktop 前端提问弹窗布局。
+- **留尾巴**：无。
