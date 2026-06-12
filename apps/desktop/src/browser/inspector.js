@@ -218,6 +218,24 @@
   /* ───────────────────────── overlay ───────────────────────── */
 
   var OVERLAY_ATTR = "data-hebbian-overlay";
+  var SCROLL_ATTR = "data-hebbian-scroll";
+
+  function ensureInspectorStyles() {
+    if (document.getElementById("hebbian-inspector-style")) return;
+    var style = document.createElement("style");
+    style.id = "hebbian-inspector-style";
+    style.textContent = "[" + SCROLL_ATTR + "]{scrollbar-width:thin;scrollbar-color:#c8d0d8 transparent;}" +
+      "[" + SCROLL_ATTR + "]::-webkit-scrollbar{width:5px;height:5px;}" +
+      "[" + SCROLL_ATTR + "]::-webkit-scrollbar-thumb{background:#c8d0d8;border-radius:999px;}" +
+      "[" + SCROLL_ATTR + "]::-webkit-scrollbar-track{background:transparent;}";
+    document.documentElement.appendChild(style);
+  }
+
+  function markScrollable(el) {
+    ensureInspectorStyles();
+    el.setAttribute(SCROLL_ATTR, "");
+    return el;
+  }
 
   function makeOverlay(kind) {
     var el = document.createElement("div");
@@ -737,6 +755,7 @@
   var editQueue = []; // 注释列表 [{ id, badge, draft, conversation, styleDiffs, structuralChanges }]
   var queuePanelEl = null;
   var queuePos = null; // 拖动后记住的位置
+  var queueCollapsed = false; // 列表浮窗折叠成一条（仅标题行）
 
   function elementKeyOf(el) {
     if (!el) return "el-0";
@@ -938,6 +957,7 @@
       conversation: conv.slice(),
       styleDiffs: styleDiffs,
       structuralChanges: draft.structuralChanges.slice(),
+      submitted: idx >= 0 ? editQueue[idx].submitted : null, // 保留已提交水位
     };
     if (idx >= 0) {
       editQueue[idx] = item;
@@ -958,20 +978,56 @@
     notifyDirty();
   }
 
-  // 未提交注释数上行宿主（防丢失警告用）
+  // 未提交注释数上行宿主（防丢失警告用）——已全部提交过的项不算
   function notifyDirty() {
-    send("heb:annotation:dirty", { count: editQueue.length });
+    send("heb:annotation:dirty", { count: editQueue.filter(annotationHasDelta).length });
   }
 
-  // 注释项 → 提交载荷（snapshot 取各元素、对话原文、样式 diff、结构改动）
+  // 注释项 → 提交载荷（snapshot 取各元素、对话原文、样式 diff、结构改动）。
+  // 已提交过的部分（item.submitted 水位）不再重复提交——只发增量。
+  function annotationDelta(item) {
+    var sub = item.submitted || { styleKeys: {}, structCount: 0, convCount: 0 };
+    var styleDiffs = [];
+    item.styleDiffs.forEach(function (s) {
+      var diff = s.diff.filter(function (d) {
+        return sub.styleKeys[s.ref + "|" + d.prop] !== d.after;
+      });
+      if (diff.length) styleDiffs.push({ ref: s.ref, badge: s.badge, diff: diff });
+    });
+    return {
+      styleDiffs: styleDiffs,
+      structuralChanges: item.structuralChanges.slice(sub.structCount),
+      conversation: item.conversation.slice(sub.convCount),
+    };
+  }
+
+  function annotationHasDelta(item) {
+    var d = annotationDelta(item);
+    return d.styleDiffs.length > 0 || d.structuralChanges.length > 0 || d.conversation.length > 0;
+  }
+
+  // 提交后记水位：样式按 ref|prop→after 值、结构/对话按条数
+  function markSubmitted(item) {
+    var keys = (item.submitted && item.submitted.styleKeys) || {};
+    item.styleDiffs.forEach(function (s) {
+      s.diff.forEach(function (d) { keys[s.ref + "|" + d.prop] = d.after; });
+    });
+    item.submitted = {
+      styleKeys: keys,
+      structCount: item.structuralChanges.length,
+      convCount: item.conversation.length,
+    };
+  }
+
   function annotationPayload(item) {
+    var delta = annotationDelta(item);
     return {
       elements: item.draft.elements.map(function (e, i) {
         return { ref: "@" + (i + 1), snapshot: e.snapshot };
       }),
-      conversation: item.conversation,
-      styleDiffs: item.styleDiffs,
-      structuralChanges: item.structuralChanges,
+      conversation: delta.conversation,
+      styleDiffs: delta.styleDiffs,
+      structuralChanges: delta.structuralChanges,
     };
   }
 
@@ -1018,11 +1074,29 @@
     }
     queuePanelEl.innerHTML = "";
     var head = document.createElement("div");
-    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid #d9dde3;cursor:move;user-select:none;font-size:12px;font-weight:500;";
-    head.textContent = "注释列表 (" + editQueue.length + ")";
+    head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:move;user-select:none;font-size:12px;font-weight:500;" + (queueCollapsed ? "" : "border-bottom:1px solid #d9dde3;");
+    var headTitle = document.createElement("span");
+    headTitle.textContent = "注释列表 (" + editQueue.length + ")";
+    headTitle.style.cssText = "flex:1;";
+    // 折叠成一条：只留标题行，正文/底部按钮全部收起
+    var collapseBtn = document.createElement("button");
+    collapseBtn.textContent = queueCollapsed ? "▸" : "▾";
+    collapseBtn.title = queueCollapsed ? "展开" : "折叠成一条";
+    collapseBtn.style.cssText = "border:none;background:none;color:#8c949e;font-size:12px;cursor:pointer;padding:0 2px;";
+    collapseBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      queueCollapsed = !queueCollapsed;
+      renderQueuePanel();
+    });
+    head.appendChild(headTitle); head.appendChild(collapseBtn);
     makeQueueDraggable(queuePanelEl, head);
+    if (queueCollapsed) {
+      queuePanelEl.appendChild(head);
+      return;
+    }
     var list = document.createElement("div");
-    list.style.cssText = "flex:1;overflow-y:auto;padding:6px 8px;";
+    markScrollable(list);
+    list.style.cssText = "flex:1;min-height:0;overflow-y:auto;padding:6px 8px;";
     editQueue.forEach(function (item) {
       var row = document.createElement("div");
       row.style.cssText = "padding:6px 0;border-bottom:1px solid #f0f2f4;cursor:pointer;";
@@ -1038,14 +1112,44 @@
       del.addEventListener("click", function (e) { e.stopPropagation(); removeQueueItem(item.id); });
       top.appendChild(b); top.appendChild(del);
       var summary = document.createElement("div");
-      summary.style.cssText = "margin-top:2px;font:10px ui-monospace,monospace;color:#6e7681;white-space:pre-wrap;";
-      var lines = [];
-      item.styleDiffs.forEach(function (s) {
-        s.diff.forEach(function (d) { lines.push(s.ref + " " + d.prop + ": " + d.before + " → " + d.after); });
+      markScrollable(summary);
+      // 单项限高内滚：改动条目多时不把整个浮窗撑爆
+      summary.style.cssText = "margin-top:2px;font:10px ui-monospace,monospace;color:#6e7681;white-space:pre-wrap;max-height:110px;overflow-y:auto;";
+      // 已提交的改动灰显在分割线上方，未提交的在下方——一眼看出哪些还没发
+      var delta = annotationDelta(item);
+      var doneLines = [];
+      var newLines = [];
+      var newStyleSet = {};
+      delta.styleDiffs.forEach(function (s) {
+        s.diff.forEach(function (d) { newStyleSet[s.ref + "|" + d.prop] = true; });
       });
-      item.structuralChanges.forEach(function (c) { lines.push("🔧 " + c.desc); });
-      if (item.conversation.length) lines.push("💬 对话 " + item.conversation.length + " 条");
-      summary.textContent = lines.join("\n");
+      item.styleDiffs.forEach(function (s) {
+        s.diff.forEach(function (d) {
+          var line = s.ref + " " + d.prop + ": " + d.before + " → " + d.after;
+          (newStyleSet[s.ref + "|" + d.prop] ? newLines : doneLines).push(line);
+        });
+      });
+      var subStruct = (item.submitted && item.submitted.structCount) || 0;
+      item.structuralChanges.forEach(function (c, ci) {
+        (ci < subStruct ? doneLines : newLines).push("🔧 " + c.desc);
+      });
+      var subConv = (item.submitted && item.submitted.convCount) || 0;
+      if (subConv > 0) doneLines.push("💬 对话 " + subConv + " 条");
+      if (item.conversation.length > subConv) newLines.push("💬 新对话 " + (item.conversation.length - subConv) + " 条");
+      if (doneLines.length) {
+        var doneEl = document.createElement("div");
+        doneEl.style.cssText = "color:#a8b0b9;";
+        doneEl.textContent = doneLines.join("\n");
+        summary.appendChild(doneEl);
+        var sep = document.createElement("div");
+        sep.style.cssText = "display:flex;align-items:center;gap:6px;color:#a8b0b9;margin:3px 0;";
+        sep.innerHTML = "<span style='flex:1;border-top:1px dashed #d9dde3;'></span><span style='flex:none;font-size:9px;'>已提交 ↑</span><span style='flex:1;border-top:1px dashed #d9dde3;'></span>";
+        summary.appendChild(sep);
+      }
+      var newEl = document.createElement("div");
+      newEl.textContent = newLines.length ? newLines.join("\n") : "（无新改动）";
+      if (!newLines.length) newEl.style.color = "#a8b0b9";
+      summary.appendChild(newEl);
       row.appendChild(top); row.appendChild(summary);
       // 点击项重新展开：注释项移回 draft，重建卡片继续编辑
       row.addEventListener("click", function () {
@@ -1063,10 +1167,16 @@
     var submit = mkPrimaryBtn("全部提交");
     submit.title = "把所有注释交给助手合并总结成一条消息，发进主对话";
     submit.addEventListener("click", function () {
+      // 只提交有新改动的项（增量）；全部已提交过则无事可做
+      var pending = editQueue.filter(annotationHasDelta);
+      if (!pending.length) return;
       send("heb:annotation:submit-all", {
         surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
-        items: editQueue.map(annotationPayload),
+        items: pending.map(annotationPayload),
       });
+      pending.forEach(markSubmitted);
+      renderQueuePanel(); // 刷新分割线
+      notifyDirty(); // 增量清零，解除防丢失拦截
       // 列表保留：提交后可能还要继续改/再提交；不要就点「清空」
     });
     foot.appendChild(clear); foot.appendChild(submit);
@@ -1300,7 +1410,7 @@
     card.setAttribute(OVERLAY_ATTR, "card");
     var cardTop = 16;
     card.style.cssText = [
-      "position:fixed", "top:" + cardTop + "px", "right:16px", "width:300px", "max-height:84vh",
+      "position:fixed", "top:" + cardTop + "px", "right:16px", "width:300px", "height:min(760px, calc(100vh - 32px))",
       "display:flex", "flex-direction:column", "z-index:2147483647",
       "background:#ffffff", "color:#1f2328", "border:1px solid #d9dde3",
       "border-radius:10px", "box-shadow:0 8px 30px rgba(15,23,42,0.16)",
@@ -1319,10 +1429,14 @@
     // ➕ 追加选取：再选一个元素进当前注释框（不新建框）
     var addBtn = document.createElement("button");
     addBtn.textContent = "+";
-    addBtn.title = "再选一个元素，加进这条注释（对话里可用 @2 引用）";
+    addBtn.title = "再选一个元素，加进这条注释（对话里说 2、3 指代）";
     addBtn.style.cssText = "border:1px solid #d9dde3;background:#f6f8fa;color:#57606a;font-size:14px;line-height:1;cursor:pointer;border-radius:5px;width:20px;height:20px;flex:none;";
+    addBtn.setAttribute("data-heb-addbtn", "1");
     addBtn.addEventListener("click", function () {
       pickerMode = "append";
+      addBtn.style.background = "#2f81f7"; // 激活态：正在选取
+      addBtn.style.color = "#fff";
+      addBtn.style.borderColor = "#2f81f7";
       startPicker();
     });
     var closeBtn = document.createElement("button");
@@ -1383,7 +1497,7 @@
 
     // ══ 子卡片 1：样式参数（可折叠）══
     var styleCard = document.createElement("div");
-    styleCard.style.cssText = "border-bottom:1px solid #d9dde3;display:flex;flex-direction:column;min-height:0;";
+    styleCard.style.cssText = "border-bottom:1px solid #d9dde3;display:flex;flex-direction:column;flex:none;min-height:0;";
     var styleHead = document.createElement("div");
     styleHead.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;user-select:none;font-size:12px;color:#1f2328;";
     var chevron = document.createElement("span");
@@ -1436,8 +1550,9 @@
     var optLoading = document.createElement("option"); optLoading.textContent = "默认模型"; modelSelect.appendChild(optLoading);
     chatHead.appendChild(chatTitle); chatHead.appendChild(modelSelect);
     var msgList = document.createElement("div");
+    markScrollable(msgList);
     // 固定高度 + 子滚动条：在整卡全局滚动里对话区有自己的可滚视口，不挤样式区
-    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;height:260px;flex:none;";
+    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;height:220px;max-height:34vh;flex:none;";
     var chatInputRow = document.createElement("div");
     chatInputRow.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
     // 输入框上方固定一排元素标签：发送时全部元素自动随消息带给助手（XML 前缀），
@@ -1624,7 +1739,8 @@
     card.appendChild(head);
     // head 固定，其余进全局滚动区：样式区/对话区自然堆叠不互挤，整卡一根滚动条
     var cardScroll = document.createElement("div");
-    cardScroll.style.cssText = "flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;";
+    markScrollable(cardScroll);
+    cardScroll.style.cssText = "flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;overscroll-behavior:contain;";
     if (chipsRow) cardScroll.appendChild(chipsRow);
     cardScroll.appendChild(styleCard);
     cardScroll.appendChild(chatCard);
@@ -1756,11 +1872,19 @@
     // 通知宿主 picker 已结束（选中成功也算结束）→ embedded 模式 React 按钮恢复非激活态
     send("heb:picker:cancelled", {});
     if (pickerMode === "append" && draft) {
-      // 追加进当前注释框：新元素入列并激活，重建卡片（不新建 draft）
+      // 追加进当前注释框：去重（同一元素已在列表就只切激活）；重建卡片（不新建 draft）
       pickerMode = "new";
       selectedTarget = el;
-      draft.elements.push({ key: elementKeyOf(el), el: el, snapshot: collectSnapshot(el), styleDiff: {} });
-      draft.activeIndex = draft.elements.length - 1;
+      var dup = -1;
+      for (var di = 0; di < draft.elements.length; di++) {
+        if (draft.elements[di].el === el) { dup = di; break; }
+      }
+      if (dup >= 0) {
+        draft.activeIndex = dup;
+      } else {
+        draft.elements.push({ key: elementKeyOf(el), el: el, snapshot: collectSnapshot(el), styleDiff: {} });
+        draft.activeIndex = draft.elements.length - 1;
+      }
       showAnnotationCard(null, draft);
       return;
     }
@@ -1822,6 +1946,9 @@
     document.removeEventListener("mouseup", swallow, true);
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("wheel", onWheel, { capture: true });
+    // ➕ 按钮激活色还原（选中成功会重建卡片自然还原，这里兜 Esc 取消的场景）
+    var ab = document.querySelector('[data-heb-addbtn]');
+    if (ab) { ab.style.background = "#f6f8fa"; ab.style.color = "#57606a"; ab.style.borderColor = "#d9dde3"; }
     if (cancelled) {
       pickerMode = "new";
       send("heb:picker:cancelled", {});
@@ -1944,6 +2071,8 @@
         break;
       case "heb:aside:submitted":
         if (cardChat) appendChatMsg(cardChat.msgList, "assistant", "✅ 已提交到主对话，主对话会据此改源码");
+        // 这条注释已单独提交落地，从注释列表删掉对应项
+        if (draft && draft.listId) removeQueueItem(draft.listId);
         break;
       case "heb:aside:error":
         if (cardChat && msg.payload) appendChatMsg(cardChat.msgList, "assistant", "⚠️ " + (msg.payload.message || "出错了"));
@@ -1967,7 +2096,7 @@
   var unloadAllowOnce = false;
   window.addEventListener("beforeunload", function (e) {
     if (unloadAllowOnce) { unloadAllowOnce = false; return; }
-    if (editQueue.length > 0) {
+    if (editQueue.some(annotationHasDelta)) {
       e.preventDefault();
       e.returnValue = "";
     }
