@@ -56,6 +56,10 @@ const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
   terminal: 480,
 };
 
+// 拖动宽度只在本次 App 运行内记忆（模块级内存）；重启回各 tab 默认宽度。
+// 之前持久化进 localStorage，导致调过一次默认值就永远看不到新默认。
+const sessionWidths = new Map<TabId, number>();
+
 interface RightSidebarProps {
   defaultWidth?: number;
   minWidth?: number;
@@ -79,7 +83,6 @@ export function RightSidebar({
   maxWidth = MAX_WIDTH,
   storagePrefix = STORAGE_PREFIX,
 }: RightSidebarProps = {}) {
-  const storageWidthForTabKey = (id: TabId) => `${storagePrefix}.width.${id}`;
   const storageCollapsedKey = `${storagePrefix}.collapsed`;
   const storageTabKey = `${storagePrefix}.tab`;
 
@@ -90,12 +93,10 @@ export function RightSidebar({
   const loadWidthForTab = useCallback(
     (id: TabId) => {
       const tabDefaultWidth = clampWidthForTab(id, TAB_DEFAULT_WIDTH[id] ?? defaultWidth);
-      return loadInitial(storageWidthForTabKey(id), tabDefaultWidth, (s) => {
-        const n = Number(s);
-        return Number.isFinite(n) ? clampWidthForTab(id, n) : tabDefaultWidth;
-      });
+      const remembered = sessionWidths.get(id);
+      return remembered !== undefined ? clampWidthForTab(id, remembered) : tabDefaultWidth;
     },
-    [defaultWidth, storagePrefix, clampWidthForTab],
+    [defaultWidth, clampWidthForTab],
   );
 
   // 首次打开默认折叠（仅显示 36px 图标列），用户主动点开。
@@ -235,8 +236,8 @@ export function RightSidebar({
     localStorage.setItem(storageCollapsedKey, collapsed ? "1" : "0");
   }, [storageCollapsedKey, collapsed]);
   useEffect(() => {
-    if (!collapsed) localStorage.setItem(storageWidthForTabKey(tab), String(width));
-  }, [storagePrefix, tab, width, collapsed]);
+    if (!collapsed) sessionWidths.set(tab, width);
+  }, [tab, width, collapsed]);
   useEffect(() => {
     localStorage.setItem(storageTabKey, tab);
   }, [storageTabKey, tab]);

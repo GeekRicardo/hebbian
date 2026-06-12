@@ -7476,3 +7476,10 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **改动**：`RightSidebar.tsx`——`TAB_DEFAULT_WIDTH.edits` 320→640、`browser` 320→400；`MAX_WIDTH` 600→720（容纳 edits 新默认值，否则被 clamp 吃掉）；collapseTick 折叠 effect 里 `tabRef.current === "terminal"` 时跳过折叠（与既有「浏览器/终端不抢焦点」的 autoSwitchBlocked 思路一致，但折叠只豁免终端——浏览器 tab 用户没提）。
 - **影响范围**：仅 desktop 前端 RightSidebar；默认宽度只对无 localStorage 记录的 tab 生效（用户手动拖过的宽度优先）。
 - **留尾巴**：无。
+
+### 2026-06-12 · sidebar tab 宽度改为运行期记忆，不再持久化
+
+- **Why**：用户要求——拖动宽度只在本次 App 运行内有效，重启恢复各 tab 默认宽度。之前写 localStorage 导致调过一次默认值就永远生效不了（上一条改默认宽度被旧记录盖住）。
+- **改动**：`RightSidebar.tsx`——宽度记忆从 localStorage 换成模块级 `Map<TabId, number>`；折叠状态与当前 tab 仍持久化（用户没提，行为不变）。
+- **影响范围**：仅 desktop 前端 RightSidebar；旧 `*.width.*` localStorage 键变成死数据（无害，不读）。
+- **留尾巴**：无。
