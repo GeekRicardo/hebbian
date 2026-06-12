@@ -776,6 +776,9 @@
     if (cardEl && cardEl.parentNode) cardEl.parentNode.removeChild(cardEl);
     cardEl = null;
     cardSnapshot = null;
+    // @ 引用弹层挂在 documentElement 上，重建卡片时一并清掉
+    var menu = document.querySelector('[' + OVERLAY_ATTR + '="refmenu"]');
+    if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
     if (typeof removeBoxRegion === "function") removeBoxRegion(); // 清盒模型 hover 高亮残留
   }
 
@@ -1272,15 +1275,141 @@
     msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:140px;";
     var chatInputRow = document.createElement("div");
     chatInputRow.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-top:1px solid #d9dde3;align-items:flex-end;";
-    var chatInput = document.createElement("textarea");
-    chatInput.placeholder = "让它改这个元素，比如「圆角大一点、配色柔和些」（⌘↵ 发送）";
-    chatInput.rows = 2;
-    chatInput.style.cssText = "flex:1;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;";
+    // contenteditable 输入框：支持 @N 蓝色 chip 引用选中元素（textarea 放不下富内容）
+    var chatInput = document.createElement("div");
+    chatInput.contentEditable = "true";
+    chatInput.setAttribute("data-heb-placeholder", "让它改这个元素，@ 可引用元素（⌘↵ 发送）");
+    // contenteditable 无原生 placeholder，用 :empty::before 模拟（一次性注入样式）
+    if (!document.getElementById("heb-chatinput-style")) {
+      var phStyle = document.createElement("style");
+      phStyle.id = "heb-chatinput-style";
+      phStyle.textContent = "[data-heb-placeholder]:empty::before{content:attr(data-heb-placeholder);color:#8c949e;pointer-events:none;}";
+      document.documentElement.appendChild(phStyle);
+    }
+    chatInput.style.cssText = "flex:1;min-height:36px;max-height:96px;overflow-y:auto;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;white-space:pre-wrap;word-break:break-word;";
+    // IME 组合输入中不触发 @ 弹层（拼音打 "@" 前缀会误触）
+    var composing = false;
+    chatInput.addEventListener("compositionstart", function () { composing = true; });
+    chatInput.addEventListener("compositionend", function () { composing = false; });
+
+    function mkRefChip(i) {
+      var item = draft.elements[i];
+      var chip = document.createElement("span");
+      chip.contentEditable = "false";
+      chip.setAttribute("data-heb-ref", "@" + (i + 1));
+      chip.setAttribute("data-heb-locator", item.snapshot.selectorPath || "");
+      chip.textContent = "@" + (i + 1);
+      chip.title = elementBadge(item.snapshot);
+      chip.style.cssText = "display:inline-block;background:#2f81f7;color:#fff;border-radius:4px;padding:0 4px;margin:0 1px;font-size:11px;cursor:default;user-select:none;";
+      chip.addEventListener("mouseenter", function () {
+        ensureOverlayLoop();
+        hoverTarget = item.el && item.el.isConnected ? item.el : null;
+      });
+      chip.addEventListener("mouseleave", function () { hoverTarget = null; });
+      return chip;
+    }
+
+    // @ 弹层：列出 draft 里的元素，点选在光标处插 chip
+    var refMenu = null;
+    function closeRefMenu() {
+      if (refMenu && refMenu.parentNode) refMenu.parentNode.removeChild(refMenu);
+      refMenu = null;
+    }
+    function openRefMenu() {
+      closeRefMenu();
+      refMenu = document.createElement("div");
+      refMenu.setAttribute(OVERLAY_ATTR, "refmenu");
+      refMenu.style.cssText = "position:fixed;z-index:2147483647;background:#fff;border:1px solid #d9dde3;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,0.18);padding:4px;min-width:160px;font-family:-apple-system,system-ui,sans-serif;";
+      draft.elements.forEach(function (item, i) {
+        var row = document.createElement("div");
+        row.textContent = "@" + (i + 1) + "  " + elementBadge(item.snapshot);
+        row.style.cssText = "padding:5px 8px;font-size:12px;border-radius:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;";
+        row.addEventListener("mouseenter", function () {
+          row.style.background = "#f1f3f5";
+          ensureOverlayLoop();
+          hoverTarget = item.el && item.el.isConnected ? item.el : null;
+        });
+        row.addEventListener("mouseleave", function () { row.style.background = ""; hoverTarget = null; });
+        row.addEventListener("mousedown", function (e) {
+          e.preventDefault(); // 不抢输入框焦点
+          insertRefChip(i);
+          closeRefMenu();
+        });
+        refMenu.appendChild(row);
+      });
+      var r = chatInput.getBoundingClientRect();
+      refMenu.style.left = r.left + "px";
+      refMenu.style.bottom = (window.innerHeight - r.top + 4) + "px";
+      document.documentElement.appendChild(refMenu);
+    }
+    // 在光标处删掉触发的 "@" 再插 chip + 空格
+    function insertRefChip(i) {
+      chatInput.focus();
+      var sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        var range = sel.getRangeAt(0);
+        var node = range.startContainer;
+        if (node.nodeType === 3 && range.startOffset > 0 && node.textContent[range.startOffset - 1] === "@") {
+          node.textContent = node.textContent.slice(0, range.startOffset - 1) + node.textContent.slice(range.startOffset);
+          range.setStart(node, range.startOffset - 1);
+        }
+        range.collapse(true);
+        var chip = mkRefChip(i);
+        range.insertNode(chip);
+        var space = document.createTextNode("\u00a0");
+        chip.parentNode.insertBefore(space, chip.nextSibling);
+        range.setStartAfter(space);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } else {
+        chatInput.appendChild(mkRefChip(i));
+        chatInput.appendChild(document.createTextNode("\u00a0"));
+      }
+    }
+    chatInput.addEventListener("input", function () {
+      if (composing) return;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount) { closeRefMenu(); return; }
+      var node = sel.getRangeAt(0).startContainer;
+      var off = sel.getRangeAt(0).startOffset;
+      if (node.nodeType === 3 && off > 0 && node.textContent[off - 1] === "@" && draft && draft.elements.length > 0) {
+        openRefMenu();
+      } else {
+        closeRefMenu();
+      }
+    });
+    chatInput.addEventListener("blur", function () { setTimeout(closeRefMenu, 150); });
+
+    // 输入框内容 → {text, nodes, refs}：chip 还原成元素定位文本
+    function readChatInput() {
+      var nodes = [];
+      var refs = [];
+      (function walk(parent) {
+        for (var n = parent.firstChild; n; n = n.nextSibling) {
+          if (n.nodeType === 3) {
+            nodes.push({ type: "text", value: n.textContent.replace(/\u00a0/g, " ") });
+          } else if (n.nodeType === 1 && n.getAttribute("data-heb-ref")) {
+            var ref = n.getAttribute("data-heb-ref");
+            var locator = n.getAttribute("data-heb-locator") || "";
+            nodes.push({ type: "ref", ref: ref, locator: locator });
+            refs.push({ ref: ref, locator: locator });
+          } else if (n.nodeType === 1) {
+            if (n.tagName === "BR") nodes.push({ type: "text", value: "\n" });
+            else walk(n);
+          }
+        }
+      })(chatInput);
+      return { text: composeAsideText(nodes).trim(), refs: refs };
+    }
+
     var chatSend = mkPrimaryBtn("发送");
     var sendChat = function () {
-      var t = chatInput.value.trim();
+      var parsed = readChatInput();
+      var t = parsed.text;
       if (!t) return;
-      chatInput.value = "";
+      chatInput.innerHTML = "";
+      closeRefMenu();
       appendChatMsg(msgList, "user", t);
       asideConvos[elementKey] = asideConvos[elementKey] || { sessionId: null, messages: [] };
       asideConvos[elementKey].messages.push({ role: "user", text: t });
@@ -1294,6 +1423,10 @@
         providerId: sel[0] || undefined,
         model: sel[1] || undefined,
         element: elementLocator(cardSnapshot),
+        // 全部选中元素的 @N → 定位映射，宿主拼进每轮 user content 前缀
+        elements: draft.elements.map(function (item, i) {
+          return { ref: "@" + (i + 1), locator: elementLocator(item.snapshot) };
+        }),
       });
     };
     chatSend.addEventListener("click", sendChat);
@@ -1301,7 +1434,7 @@
     chatInputRow.appendChild(chatInput); chatInputRow.appendChild(chatSend);
     // 样式参数区的「到临时对话」按钮回调：发到旁支会话 + 折叠样式区露出对话
     pushStyleToAside = function (text) {
-      chatInput.value = text;
+      chatInput.textContent = text;
       sendChat();
       styleCollapsed = true; styleBody.style.display = "none"; chevron.textContent = "▸";
     };
