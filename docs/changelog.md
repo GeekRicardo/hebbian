@@ -7530,3 +7530,19 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**：inspector.js / browser/mod.rs / chat.rs `send_aside` 签名（3 调用点同步）。`refToIndex`/`composeAsideText` 纯函数保留（@N 路由仍在用 refToIndex）。
 - **验证**：node --check + inspector.test.cjs + `tsc --checkJs` 扫 Cannot find name 归零 + `cargo check -p hebbian` 过。
 - **留尾巴**：GUI 端到端（粘贴截图发送、busy 动画、多元素标签 hover）待人工在 tauri dev 里过一遍；粘贴超大图的 URL 上限未实测，若仍截断需改上行通道分片。
+
+### 2026-06-12 · 调整聊天输入框按内容增高到 20 行
+
+- **Why**：用户在内置浏览器预览里调好了输入框效果，希望真实落地：多行输入时 textarea 随内容向上增长，最多显示 20 行，超过后在输入框内部滚动。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`：把输入框行高固定为 20px，自动高度按 `scrollHeight` 计算，最大高度限制为 400px；保留 `rows=1`、`resize-none`、`min-h-[30px]`，内容超过 20 行时启用内部滚动。
+- **影响范围**：仅 desktop 前端输入框展示行为；不改协议、agent-core、storage 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 样式改动实时自动进注释列表 + 分区重置 + 修卡片底部按钮被挤出
+
+- **Why**：用户要求去掉「到临时对话/加入列表」手动出口——改了就该进列表；样式参数区与盒模型/全部 CSS 区各自要能「重置刚才的修改」，两边都重置则注释项自动从列表消失。另外「提交到主对话」按钮会被 msgList 的 min-height:140px 硬下限挤出 84vh 卡片可视区，点不到。
+- **改动**：inspector.js——styleSet 带 src 标记（fields/css）并在每次改动后 `syncDraftToList()`（upsert：draft.listId 关联列表项；样式 diff/结构改动/对话全空则自动移除项）；新增 `styleRevertSrc(src)` 分区还原；删掉样式区底部三按钮（撤销/到临时对话/加入列表）与 pushStyleToAside 死代码，换成两区各自的「重置」；关闭按钮不再 styleRevert（改动已在列表，点列表项可重新展开）；列表项点击展开不再从列表移除（实时同步语义下移除会丢关联）；清空/全部提交/单删都解除 draft.listId。布局修复：msgList min-height 140→60、styleBody max-height 52vh→40vh、chatInputRow/chatFoot 加 flex:none，保证「提交到主对话」始终可见可点。
+- **影响范围**：仅 inspector.js；mutate/对话轮结束（heb:aside:done）也同步列表。
+- **验证**：node --check + inspector.test.cjs + tsc --checkJs 扫未定义名归零。
+- **留尾巴**：GUI 实测两区重置的视觉还原与列表自动增删；对话进行中（busy）时项内容是轮次结束才同步。

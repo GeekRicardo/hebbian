@@ -524,7 +524,7 @@
     return selectedTarget;
   }
 
-  function styleSet(prop, value, allowAny) {
+  function styleSet(prop, value, allowAny, src) {
     var el = currentTarget();
     if (!el) return;
     // CARD_FIELDS 走白名单（防误操作）；盒模型图 / 全部 CSS 列表走 allowAny（任意属性，
@@ -532,7 +532,7 @@
     if (!allowAny && STYLE_WHITELIST.indexOf(prop) === -1) return;
     try {
       if (!(prop in styleDiff)) {
-        styleDiff[prop] = { before: el.style.getPropertyValue(prop), after: value };
+        styleDiff[prop] = { before: el.style.getPropertyValue(prop), after: value, src: src || "css" };
       } else {
         styleDiff[prop].after = value;
       }
@@ -545,9 +545,11 @@
     } catch (e) {
       /* 静默 */
     }
+    syncDraftToList();
   }
-  function styleApply(prop, value) { styleSet(prop, value, false); }
-  function styleApplyAny(prop, value) { styleSet(prop, value, true); }
+  // src 标记改动来源：fields=样式参数区 / css=盒模型+全部CSS——两区各自的「重置」只还原自己的
+  function styleApply(prop, value) { styleSet(prop, value, false, "fields"); }
+  function styleApplyAny(prop, value) { styleSet(prop, value, true, "css"); }
 
   function styleRevert() {
     var el = currentTarget();
@@ -567,6 +569,26 @@
       /* 静默 */
     }
     styleDiff = {};
+    syncDraftToList();
+  }
+
+  // 只还原指定来源（fields/css）的改动；激活元素生效。还原后同步注释列表。
+  function styleRevertSrc(src) {
+    var el = currentTarget();
+    var props = Object.keys(styleDiff);
+    for (var i = props.length - 1; i >= 0; i--) {
+      var prop = props[i];
+      if ((styleDiff[prop].src || "css") !== src) continue;
+      try {
+        var before = styleDiff[prop].before;
+        if (el) {
+          if (before) el.style.setProperty(prop, before);
+          else el.style.removeProperty(prop);
+        }
+      } catch (e) { /* 静默 */ }
+      delete styleDiff[prop];
+    }
+    syncDraftToList();
   }
 
   function takeStyleDiff() {
@@ -642,6 +664,7 @@
         item.el.style.setProperty("border-style", "solid");
       }
     } catch (e) { /* 静默 */ }
+    syncDraftToList();
   }
   // heb:aside:mutate：结构改动（草稿态，刷新即消失）。append 的新元素自动入 draft.elements。
   function handleAsideMutate(p) {
@@ -669,6 +692,7 @@
       }
     } catch (e) { return; }
     if (draft) draft.structuralChanges.push({ op: p.op, target: p.target || "@1", html: p.html || null, text: p.text || null, desc: desc });
+    syncDraftToList();
     if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🔧 " + desc);
   }
 
@@ -889,27 +913,47 @@
     return out;
   }
 
-  // 当前注释框（draft + 对话）收成一条注释项进列表。纯属性编辑也进（styleDiffs 非空即可）。
-  function addDraftToList(conversation) {
+  // 改动实时自动进注释列表（upsert；样式 diff / 结构改动 / 对话任一非空就保留，
+  // 全空则移除——对应「两区都重置 → 从队列删除」）。draft 持 listId 与列表项关联。
+  function syncDraftToList() {
     if (!draft) return;
     var styleDiffs = draftStyleDiffs(draft);
-    if (!styleDiffs.length && !draft.structuralChanges.length && !(conversation && conversation.length)) return;
-    annotationSeq++;
-    editQueue.push({
-      id: "ann-" + annotationSeq,
+    var conv = (asideConvos[draft.elements[0].key] && asideConvos[draft.elements[0].key].messages) || [];
+    var hasContent = styleDiffs.length || draft.structuralChanges.length || conv.length;
+    var idx = -1;
+    if (draft.listId) {
+      for (var i = 0; i < editQueue.length; i++) if (editQueue[i].id === draft.listId) { idx = i; break; }
+    }
+    if (!hasContent) {
+      if (idx >= 0) editQueue.splice(idx, 1);
+      draft.listId = null;
+      renderQueuePanel();
+      notifyDirty();
+      return;
+    }
+    var item = {
+      id: draft.listId,
       badge: elementBadge(draft.elements[0].snapshot) + (draft.elements.length > 1 ? " 等 " + draft.elements.length + " 个元素" : ""),
       draft: draft,
-      conversation: conversation || [],
+      conversation: conv.slice(),
       styleDiffs: styleDiffs,
       structuralChanges: draft.structuralChanges.slice(),
-    });
-    draft = null;
+    };
+    if (idx >= 0) {
+      editQueue[idx] = item;
+    } else {
+      annotationSeq++;
+      item.id = "ann-" + annotationSeq;
+      draft.listId = item.id;
+      editQueue.push(item);
+    }
     renderQueuePanel();
     notifyDirty();
   }
 
   function removeQueueItem(id) {
     editQueue = editQueue.filter(function (q) { return q.id !== id; });
+    if (draft && draft.listId === id) draft.listId = null; // 解除关联，后续改动新建项
     renderQueuePanel();
     notifyDirty();
   }
@@ -1004,11 +1048,9 @@
       row.appendChild(top); row.appendChild(summary);
       // 点击项重新展开：注释项移回 draft，重建卡片继续编辑
       row.addEventListener("click", function () {
-        editQueue = editQueue.filter(function (q) { return q.id !== item.id; });
+        // 重新展开继续编辑：项保留在列表（实时同步，listId 关联 upsert）
         draft = item.draft;
         setActiveElement(Math.min(draft.activeIndex, draft.elements.length - 1));
-        renderQueuePanel();
-        notifyDirty();
         showAnnotationCard(null, draft);
       });
       list.appendChild(row);
@@ -1016,7 +1058,7 @@
     var foot = document.createElement("div");
     foot.style.cssText = "display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-top:1px solid #d9dde3;";
     var clear = mkFlatBtn("清空");
-    clear.addEventListener("click", function () { editQueue = []; renderQueuePanel(); notifyDirty(); });
+    clear.addEventListener("click", function () { editQueue = []; if (draft) draft.listId = null; renderQueuePanel(); notifyDirty(); });
     var submit = mkPrimaryBtn("全部提交");
     submit.title = "把所有注释交给助手合并总结成一条消息，发进主对话";
     submit.addEventListener("click", function () {
@@ -1025,6 +1067,7 @@
         items: editQueue.map(annotationPayload),
       });
       editQueue = [];
+      if (draft) draft.listId = null;
       renderQueuePanel();
       notifyDirty();
     });
@@ -1287,7 +1330,8 @@
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
     closeBtn.style.cssText = "border:none;background:none;color:#57606a;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;";
-    closeBtn.addEventListener("click", function () { styleRevert(); draft = null; removeCard(); });
+    // 关闭只收起卡片：改动已实时进注释列表，点列表项可重新展开；想丢弃用各区「重置」
+    closeBtn.addEventListener("click", function () { draft = null; removeCard(); });
     head.appendChild(badge); head.appendChild(addBtn); head.appendChild(closeBtn);
     // 拖动：按住头部移动卡片（改 left/top，避开 right 定位），避免遮住元素
     makeCardDraggable(card, head);
@@ -1351,35 +1395,27 @@
     styleTitle.style.cssText = "flex:1;font-weight:500;";
     styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
     var styleBody = document.createElement("div");
-    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;max-height:52vh;overflow-y:auto;";
+    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;max-height:40vh;overflow-y:auto;flex:none;";
     var boxModel = buildBoxModel(); // Chrome F12 式盒模型图
     var fields = document.createElement("div");
     fields.style.cssText = "padding:8px 10px;";
     for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
     var cssList = buildCssList(); // 全部 CSS（折叠）
-    var pushStyleToAside = null; // chatCard 构造后赋值——把当前样式改动发到下面的临时对话
-    var styleFoot = document.createElement("div");
-    styleFoot.style.cssText = "display:flex;justify-content:flex-end;gap:8px;padding:6px 10px 8px;";
-    var sCancel = mkFlatBtn("撤销"); sCancel.addEventListener("click", function () { styleRevert(); });
-    var sAside = mkFlatBtn("到临时对话");
-    sAside.title = "把刚调的样式改动发到下面的临时对话，继续和助手讨论 / 让它定位源码";
-    sAside.addEventListener("click", function () {
-      var diff = takeStyleDiff();
-      if (!diff.length) return;
-      var txt = "我在样式参数里手动调了这些：\n" +
-        diff.map(function (d) { return "· " + d.prop + ": " + d.before + " → " + d.after; }).join("\n") +
-        "\n请基于此继续——告诉我这些改动对应源码该怎么改，或我们再调调。";
-      if (pushStyleToAside) pushStyleToAside(txt);
-    });
-    var sSend = mkPrimaryBtn("加入列表");
-    sSend.title = "把这条注释（含全部元素的改动与对话）加入注释列表；攒齐后在列表里统一提交";
-    sSend.addEventListener("click", function () {
-      var convForList = (asideConvos[elementKey] && asideConvos[elementKey].messages.slice()) || [];
-      addDraftToList(convForList);
-      removeCard();
-    });
-    styleFoot.appendChild(sCancel); styleFoot.appendChild(sAside); styleFoot.appendChild(sSend);
-    styleBody.appendChild(boxModel); styleBody.appendChild(fields); styleBody.appendChild(cssList); styleBody.appendChild(styleFoot);
+    // 改动实时自动进注释列表（styleSet → syncDraftToList），无需手动「加入」。
+    // 两区各自「重置」：样式参数区重置在 fields 尾部，盒模型+全部 CSS 的在 cssList 尾部。
+    var fieldsReset = document.createElement("div");
+    fieldsReset.style.cssText = "display:flex;justify-content:flex-end;padding:0 10px 6px;";
+    var frBtn = mkFlatBtn("重置样式参数");
+    frBtn.title = "还原上面字段刚才的修改；两边都重置后这条会从注释列表消失";
+    frBtn.addEventListener("click", function () { styleRevertSrc("fields"); showAnnotationCard(null, draft); });
+    fieldsReset.appendChild(frBtn);
+    var cssReset = document.createElement("div");
+    cssReset.style.cssText = "display:flex;justify-content:flex-end;padding:0 10px 8px;";
+    var crBtn = mkFlatBtn("重置 CSS 修改");
+    crBtn.title = "还原盒模型图与全部 CSS 里刚才的修改；两边都重置后这条会从注释列表消失";
+    crBtn.addEventListener("click", function () { styleRevertSrc("css"); showAnnotationCard(null, draft); });
+    cssReset.appendChild(crBtn);
+    styleBody.appendChild(boxModel); styleBody.appendChild(fields); styleBody.appendChild(fieldsReset); styleBody.appendChild(cssList); styleBody.appendChild(cssReset);
     var styleCollapsed = false;
     styleHead.addEventListener("click", function () {
       styleCollapsed = !styleCollapsed;
@@ -1401,9 +1437,11 @@
     var optLoading = document.createElement("option"); optLoading.textContent = "默认模型"; modelSelect.appendChild(optLoading);
     chatHead.appendChild(chatTitle); chatHead.appendChild(modelSelect);
     var msgList = document.createElement("div");
-    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:140px;";
+    // min-height 别太大：卡片 max-height 84vh + overflow:hidden，msgList 的硬下限
+    // 会把底部「提交到主对话」挤出可视区
+    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:60px;";
     var chatInputRow = document.createElement("div");
-    chatInputRow.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-top:1px solid #d9dde3;";
+    chatInputRow.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
     // 输入框上方固定一排元素标签：发送时全部元素自动随消息带给助手（XML 前缀），
     // 用户直接用自然语言说「1」「2」即可，无需 @ 引用。
     var refsRow = document.createElement("div");
@@ -1542,14 +1580,8 @@
     chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
     inputLine.appendChild(chatInput); inputLine.appendChild(chatSend);
     chatInputRow.appendChild(refsRow); chatInputRow.appendChild(imagesRow); chatInputRow.appendChild(inputLine);
-    // 样式参数区的「到临时对话」按钮回调：发到旁支会话 + 折叠样式区露出对话
-    pushStyleToAside = function (text) {
-      chatInput.value = text;
-      sendChat();
-      styleCollapsed = true; styleBody.style.display = "none"; chevron.textContent = "▸";
-    };
     var chatFoot = document.createElement("div");
-    chatFoot.style.cssText = "display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #d9dde3;";
+    chatFoot.style.cssText = "display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
     var submitMain = mkPrimaryBtn("提交到主对话");
     submitMain.addEventListener("click", function () {
       var conv = asideConvos[elementKey];
@@ -1884,6 +1916,7 @@
           cardChat.assistantRow = null;
         }
         if (cardChat && cardChat.setBusy) cardChat.setBusy(false);
+        syncDraftToList(); // 对话内容也属于注释项，轮次结束同步进列表
         break;
       case "heb:aside:submitted":
         if (cardChat) appendChatMsg(cardChat.msgList, "assistant", "✅ 已提交到主对话，主对话会据此改源码");
