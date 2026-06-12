@@ -7483,3 +7483,29 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **改动**：`RightSidebar.tsx`——宽度记忆从 localStorage 换成模块级 `Map<TabId, number>`；折叠状态与当前 tab 仍持久化（用户没提，行为不变）。
 - **影响范围**：仅 desktop 前端 RightSidebar；旧 `*.width.*` localStorage 键变成死数据（无害，不读）。
 - **留尾巴**：无。
+
+### 2026-06-12 · 消息三点菜单新增「删除」：从后往前删尾部 user / 整个 run 的 assistant
+
+- **Why**：用户要求——chat 气泡右上角三点菜单加删除功能，且约束为「只允许从后往前删：先删 assistant（整个 run 的输出）才允许删上面的 user」，删除前二次确认。
+- **改动**：
+  - `useStore.ts`：新增 `deleteTrailingMessage`——assistant 时回溯到最近真实 user（跳过 system_notification）后 `truncate_after`（删整个 run 输出）；user 时仅在其后无 assistant 才 `truncate_inclusive`；删后刷新 context usage。复用既有 Tauri 命令，无后端改动。
+  - `MessageList.tsx`：计算 `deletableIds`（最后一条真实 user 之后的 assistant；或后面无 assistant 时该 user 本身），只在可删消息上传 `onDelete`；streaming 期间不可删。
+  - `MessageBubble.tsx`：三点菜单加红色「删除」项（Trash2）。
+  - `ChatView.tsx`：`handleDeleteMessage`——`ipcConfirm` 二次确认后调 store。
+- **影响范围**：仅 Desktop/hebweb 前端；复用 `truncate_after` / `truncate_inclusive`，不改 protocol / agent-core / storage。
+- **验证**：`cd apps/desktop && pnpm exec tsc --noEmit` 通过。
+- **留尾巴**：删除不可撤销（jsonl rewrite）；compact boundary 等 marker 不参与删除判定，若 run 输出含 Interrupted marker 会随 truncate_after 一并删除（符合「删整个 run 输出」语义）。
+
+### 2026-06-12 · 内置浏览器注释升级：多元素注释框 + 旁支三工具 + 统一注释列表 + 防丢失
+
+- **Why**：单元素注释满足不了真实标注场景——用户常要圈多个元素讲一个事（「让 @1 和 @2 对齐」）；旁支助手只能改样式、改不了结构也做不了交互；旧「修改队列」只收纯样式 diff，对话原文/结构改动提交时全丢；注释是页面内存态，误刷新即全丢。
+- **改动**：
+  - agent-core：`PreviewStyle` 加 `target`（@N，缺省 @1）；新增 `PreviewMutate`（op=append/remove/setText，结构草稿）与 `PreviewAct`（click/type/hover/press/scroll，触发交互态），均为信号工具、不进 BUILTIN_TOOL_NAMES，8 个单测。
+  - inspector.js：多元素 draft 模型（`setActiveElement` 把旧全局指向激活元素，存量样式编辑零改动；切换=同 draft 重建整卡）；➕ 追加选取、小方块 [1][2][3] hover 高亮/切换/移除；对话输入框 textarea→contenteditable，@ 弹层插不可编辑蓝 chip，IME composition 防误触，发送时 `composeAsideText` 还原元素定位；`heb:aside:apply` 按 @N 路由 per-element diff；新增 `heb:aside:mutate`（append 新元素自动编号入 draft；remove 用隐藏代替真删保撤销）与 `heb:aside:act` 执行分支；纯函数 `refToIndex`/`composeAsideText` 进 `__hebCore` + node 单测。
+  - mod.rs：`aside_system_prompt` 通用化（不嵌元素定位→保 prompt cache + 支持中途追加），定位改放每轮 user content `<selected_elements>` 前缀，旧单元素载荷兜底当 @1；`route_aside_event` 透传 target + 两个新工具下发分支；`handle_annotation_submit_all`（注释列表 JSON 交 LLM 合并总结→`browser://annotation-summary`）；dirty 透传；新命令 `browser_allow_unload`。
+  - chat.rs `send_aside`：harness/enabled_tools 扩成三工具（不含 Capture）。
+  - 前端：App.tsx 消费 annotation-summary 发主对话；BrowserPanel 刷新/后退/前进/地址栏导航在 dirtyCount>0 时先弹中文确认框，确认后 allowUnload 一次性放行；inspector `beforeunload` 兜底页面自身跳转（放行标志去重避免双弹）。
+  - 架构.md：§8.5 新增第 6 点（多元素注释与统一提交）；§13 新增 8.5-2 决策行。
+- **影响范围**：agent-core 工具注册（additive）、旁支会话协议（additive）、inspector.js、browser/mod.rs、chat.rs send_aside、desktop 前端 4 文件。旧单元素注释/单条直提通道保留，行为不变。
+- **验证**：`cargo test -p agent-core --lib preview`（8 过）、`node apps/desktop/src/browser/inspector.test.cjs`、`cargo check -p hebbian`、`pnpm exec tsc --noEmit` 全过。
+- **留尾巴**：`PreviewCapture`（截图视觉回传）推迟单独立项——`ToolCtx` 无 app handle、agent-core 不依赖 tauri，需先抽截图通道 async trait（spec §5.9 已标注；attachments 管线已现成）。`heb:annotation:submit-batch` 旧通道仍在（无 UI 入口），可在确认多端无引用后清理。端到端 GUI 验证（pnpm tauri dev 手动走多元素流程）未做，需人工过一遍。
