@@ -27,7 +27,8 @@ use common::{
 };
 use model_gateway::{self, config::Provider};
 use protocol::{
-    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption, UserAnswer,
+    ApprovalDecision, AskQuestion, EventPayload, PermissionKind, PermissionRequestId,
+    QuestionOption, UserAnswer,
 };
 use std::{
     collections::HashMap,
@@ -1487,6 +1488,180 @@ pub async fn compact_session(
         used_tokens: result.after_tokens,
         budget_tokens,
     })
+}
+
+/// 内置浏览器「元素对话」旁支会话的一轮发送（架构 §8.5）。
+///
+/// 与主对话最大的不同：**旁支会话不落盘**。它是用户在页面预览上临时调样式的工作台，
+/// 关掉浏览器就该消失，没有任何持久化价值，却会污染会话列表。所以这里全程纯内存：
+/// - `session_id` / `data_dir` / `permission_store` 全 `None` → CoreSession 短路所有
+///   落盘与后台 task（标题生成 / 记忆抽取 / partial sidecar 都 gate 在 `session_id.is_some()`）。
+/// - 多轮历史由调用方（browser 模块）持有 `Vec<Message>`，每轮把 user + 重建的 assistant
+///   追加进去，下一轮用 [`Transcript::from_session`] 重建——浏览器实例关闭即一并丢弃。
+///
+/// 但旁支的模型 IO **要落进绑定主对话的 model_io.jsonl**（`kind="aside"`），让用户在主对话的
+/// Model I/O 调试面板里看到这些临时调用。这靠 [`agent_core::model_io_dump::open_for_session_with_kind`]
+/// 打开指向主对话文件、主调用标 `aside` 的 dump 实现——旁支行不参与 `"main"` 增量去重，
+/// 不污染主对话 transcript 的增量重建。
+///
+/// 工具只暴露 `PreviewStyle`（只读信号工具、无副作用），故即便走到审批 gate 也直接放行。
+///
+/// 返回更新后的内存历史（含本轮 user + assistant）+ 本轮 assistant message，
+/// 调用方持有历史续接下一轮。
+#[allow(clippy::too_many_arguments)]
+pub async fn send_aside(
+    data_dir: &Path,
+    bound_session_id: &str,
+    provider_id: &str,
+    model: &str,
+    system_prompt: String,
+    mut history: Vec<Message>,
+    user_content: String,
+    cancel_flag: CancelFlag,
+    emit_event: impl Fn(EngineEvent) + Send + Sync,
+) -> AppResult<(Vec<Message>, Message)> {
+    let provider = model_gateway::config::get(data_dir, provider_id)?;
+    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
+        .await
+        .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
+    let client = model_gateway::build_client_with_data_dir(provider, data_dir.to_path_buf())
+        .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
+    let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(client, model.to_string()));
+
+    // 旁支模型 IO 写进绑定主对话的面板（kind=aside），无需为旁支单独建 session。
+    let model_io_dump =
+        agent_core::model_io_dump::open_for_session_with_kind(data_dir, bound_session_id, "aside")
+            .await;
+    // 留一份句柄在 run 结束后 flush。主对话路径靠长驻进程让 actor 自然落盘，
+    // 但旁支可能由短命调用方触发——不显式 flush 会丢最后一条 entry。
+    let dump_for_flush = model_io_dump.clone();
+
+    let user_msg = Message {
+        id: sessions::new_id(),
+        role: Role::User,
+        content: user_content,
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: None,
+        subagent_call_id: None,
+    };
+    history.push(user_msg);
+
+    // 极简 harness：只暴露 PreviewStyle（旁支唯一工具），无外部 hook。
+    let harness = Arc::new(Harness::new(
+        vec![Box::new(agent_core::tools::preview_style::PreviewStyleTool)],
+        HookManager::new(vec![]),
+    ));
+    let workspace = Workspace::new(
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+        Vec::new(),
+    );
+    let transcript = Transcript::from_session(Some(system_prompt), &history);
+
+    let core_session = CoreSession::new(
+        harness,
+        SessionConfig {
+            definition: AgentDefinition::default(),
+            workspace,
+            client,
+            enabled_tools: vec!["PreviewStyle".to_string()],
+            initial_transcript: transcript,
+            recorder: None,
+            model_io_dump,
+            permission_store: None,
+            session_id: None,
+            run_mode: Default::default(),
+            model_id: Some(model.to_string()),
+            force_automode: false,
+            data_dir: None,
+            phase: None,
+            global_rules: Vec::new(),
+            rules_files: None,
+            edits_worktree: None,
+        },
+    );
+
+    let mut handle = core_session.run_with(cancel_flag);
+    let mut observer = AsideObserver {
+        parts: AssistantPartsRecorder::default(),
+        partial_output: String::new(),
+        tool_calls: Vec::new(),
+        emit: &emit_event,
+    };
+    let summary = handle.drive(&mut observer).await;
+
+    // 确保旁支的 model_io entry 落盘后再返回（短命调用方不会等 actor 异步写完）。
+    if let Some(dump) = &dump_for_flush {
+        if let Err(e) = dump.flush().await {
+            tracing::warn!(error = %e, "aside model_io flush failed");
+        }
+    }
+
+    let AsideObserver {
+        parts,
+        partial_output,
+        tool_calls,
+        ..
+    } = observer;
+
+    match summary.outcome {
+        TurnOutcome::Done | TurnOutcome::Suspended => {}
+        TurnOutcome::Cancelled => return Err(AppError::msg("请求已中断")),
+        TurnOutcome::Failed(error) => return Err(AppError::msg(error)),
+    }
+
+    let assistant_msg =
+        assistant_message_from_recorded_parts(parts, partial_output, tool_calls, Vec::new());
+    history.push(assistant_msg.clone());
+    Ok((history, assistant_msg))
+}
+
+/// 旁支会话的轻量观察者：转发 EngineEvent + 累积本轮 assistant message。
+///
+/// 不做 partial sidecar / segment 切分 / 落盘——那些都是主对话持久化才需要的。旁支只关心
+/// 「实时把事件下发给 inspector」+「跑完拿回 assistant message 续接内存多轮」。
+struct AsideObserver<'a> {
+    parts: AssistantPartsRecorder,
+    partial_output: String,
+    tool_calls: Vec<MessageToolCall>,
+    emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+}
+
+#[async_trait]
+impl<'a> TurnObserver for AsideObserver<'a> {
+    fn on_event(&mut self, event: &AgentEvent) {
+        if let AgentEventPayload::TextDelta { text } = &event.payload {
+            self.partial_output.push_str(text);
+        }
+        record_assistant_part_event(&mut self.parts, event);
+        record_tool_event(&mut self.tool_calls, event);
+        if let Some(ev) = agent_event_to_engine_event(event) {
+            (self.emit)(ev);
+        }
+    }
+
+    async fn on_permission_request(
+        &mut self,
+        _request_id: &PermissionRequestId,
+        _kind: &PermissionKind,
+        _summary: &str,
+    ) -> Option<ApprovalDecision> {
+        // 旁支只有 PreviewStyle（只读信号工具），不会走到审批；真到这里直接放行一次。
+        Some(ApprovalDecision::AllowOnce)
+    }
+
+    async fn on_question(
+        &mut self,
+        _request_id: &PermissionRequestId,
+        _question: &str,
+        _options: &[QuestionOption],
+        _multi: bool,
+        _questions: &[AskQuestion],
+    ) -> Option<UserAnswer> {
+        None
+    }
 }
 
 pub async fn send_once(

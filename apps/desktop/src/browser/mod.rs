@@ -24,8 +24,9 @@ use tauri::{
 
 use url_policy::{validate_preview_url, PreviewOrigin};
 
-use crate::chat::{self, SendArgs};
+use crate::chat;
 use crate::engine::EngineEvent;
+use agent_core::storage::sessions::Message;
 
 const POPOUT_LABEL: &str = "preview-popout";
 const POPOUT_PAGE_LABEL: &str = "preview-popout-page";
@@ -103,6 +104,11 @@ struct PopoutInstance {
 pub struct BrowserState {
     instances: Mutex<HashMap<String, BrowserInstance>>,
     popout: Mutex<Option<PopoutInstance>>,
+    /// 旁支会话（元素对话）的纯内存历史（架构 §8.5）：旁支不落盘、关掉浏览器即消失。
+    /// 外层 key = 绑定的主对话 id（浏览器实例），内层 key = 旁支 id（inspector 侧当不透明
+    /// token 用，按 elementKey 索引），value = 多轮历史。按主对话分组让 `browser_close`
+    /// 能随实例一并清理。模型 IO 仍写进主对话的 model_io.jsonl（kind=aside），供面板查看。
+    asides: Mutex<HashMap<String, HashMap<String, Vec<Message>>>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -482,6 +488,8 @@ pub fn browser_close(
     if let Some(inst) = state.instances.lock().unwrap().remove(&session_id) {
         inst.webview.close().map_err(|e| e.to_string())?;
     }
+    // 旁支会话纯内存、与浏览器实例同生命周期：实例关闭即丢弃这段对话的所有元素历史。
+    state.asides.lock().unwrap().remove(&session_id);
     Ok(())
 }
 
@@ -965,37 +973,6 @@ fn fresh_cancel() -> common::CancelFlag {
     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
-fn aside_send_args(
-    session_id: String,
-    user_content: String,
-    enabled_tools: Vec<String>,
-) -> SendArgs {
-    // 总结那轮 enabled_tools 传 []，配合 restrict_tools 白名单连 PreviewStyle 也不暴露，纯文本总结。
-    let restrict_tools = Some(if enabled_tools.is_empty() {
-        vec![]
-    } else {
-        vec!["PreviewStyle".to_string()]
-    });
-    SendArgs {
-        session_id,
-        user_content,
-        attachments: vec![],
-        user_meta: None,
-        stream: true,
-        enabled_tools,
-        cancel_flag: fresh_cancel(),
-        pending_inputs: None,
-        consumed_pending_inputs: None,
-        pending_inputs_accepting: None,
-        hitl: None, // 旁支只有 PreviewStyle（无副作用），不触发审批
-        permission_store: None,
-        force_automode: false,
-        request_id: Some(format!("aside-{}", chrono::Utc::now().timestamp_millis())),
-        continue_run: false,
-        // 旁支会话只暴露 PreviewStyle——绝不让 styling agent 拿到 Bash/Edit（危险 + hitl=None 挂死）。
-        restrict_tools,
-    }
-}
 
 /// 处理 heb:aside:send：建/续旁支会话，驱动一轮，事件流下发卡片。
 fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
@@ -1009,9 +986,12 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let session_id_opt = payload
+    // inspector 把后端回传的 aside id 当不透明 token（按 elementKey 索引）。
+    // 首轮为空 → 这里新建一个内存 aside；后续轮带回它定位历史。
+    let aside_id_opt = payload
         .get("sessionId")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
     let text = payload
         .get("text")
@@ -1052,54 +1032,72 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
             );
             return;
         }
-        let session_id = match session_id_opt {
-            Some(s) => s,
-            None => match agent_core::storage::sessions::create(
-                &dd,
-                provider_id,
-                model,
-                Some(aside_system_prompt(&element_desc)),
-                None,
-            ) {
-                Ok(s) => {
-                    eval_aside_down(
-                        &app2,
-                        &main_sid,
-                        &surface,
-                        "heb:aside:session",
-                        serde_json::json!({ "elementKey": element_key, "sessionId": s.id }),
-                    );
-                    s.id
-                }
-                Err(e) => {
-                    eval_aside_down(
-                        &app2,
-                        &main_sid,
-                        &surface,
-                        "heb:aside:error",
-                        serde_json::json!({ "message": format!("建会话失败：{e}") }),
-                    );
-                    return;
-                }
-            },
+
+        // 旁支历史纯内存持有（架构 §8.5）：首轮新建 aside id 并回填给 inspector，
+        // 后续轮取出已有历史续接。
+        let aside_id = match aside_id_opt {
+            Some(id) => id,
+            None => {
+                let id = format!("aside-{}", agent_core::storage::sessions::new_id());
+                eval_aside_down(
+                    &app2,
+                    &main_sid,
+                    &surface,
+                    "heb:aside:session",
+                    serde_json::json!({ "elementKey": element_key, "sessionId": id }),
+                );
+                id
+            }
         };
-        let args = aside_send_args(session_id.clone(), text, vec!["PreviewStyle".to_string()]);
+        let history = app2
+            .try_state::<BrowserState>()
+            .map(|st| {
+                st.asides
+                    .lock()
+                    .unwrap()
+                    .get(&main_sid)
+                    .and_then(|m| m.get(&aside_id))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
         let app3 = app2.clone();
         let surface2 = surface.clone();
         let host = main_sid.clone();
-        let sid = session_id.clone();
-        let result = chat::send_and_save_in_data_dir(&dd, args, move |event| {
-            route_aside_event(&app3, &host, &surface2, &sid, event);
-        })
+        let aside_for_event = aside_id.clone();
+        let result = chat::send_aside(
+            &dd,
+            &main_sid,
+            &provider_id,
+            &model,
+            aside_system_prompt(&element_desc),
+            history,
+            text,
+            fresh_cancel(),
+            move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
+        )
         .await;
-        if let Err(e) = result {
-            eval_aside_down(
-                &app2,
-                &main_sid,
-                &surface,
-                "heb:aside:error",
-                serde_json::json!({ "message": format!("助手出错：{e}") }),
-            );
+        match result {
+            Ok((updated_history, _)) => {
+                if let Some(st) = app2.try_state::<BrowserState>() {
+                    st.asides
+                        .lock()
+                        .unwrap()
+                        .entry(main_sid.clone())
+                        .or_default()
+                        .insert(aside_id, updated_history);
+                }
+            }
+            Err(e) => {
+                eval_aside_down(
+                    &app2,
+                    &main_sid,
+                    &surface,
+                    "heb:aside:error",
+                    serde_json::json!({ "message": format!("助手出错：{e}") }),
+                );
+            }
         }
     });
 }
@@ -1112,7 +1110,7 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
         .unwrap_or("embedded")
         .to_string();
     let main_sid = main_session_id.to_string();
-    let session_id = payload
+    let aside_id = payload
         .get("sessionId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -1122,12 +1120,38 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    if session_id.is_empty() {
+    if aside_id.is_empty() {
         return;
     }
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         let dd = agent_core::storage::default_data_dir();
+        let (provider_id, model) = agent_core::storage::sessions::load(&dd, &main_sid)
+            .map(|s| (s.provider_id, s.model))
+            .unwrap_or_default();
+        let history = match app2.try_state::<BrowserState>() {
+            Some(st) => st
+                .asides
+                .lock()
+                .unwrap()
+                .get(&main_sid)
+                .and_then(|m| m.get(&aside_id))
+                .cloned(),
+            None => None,
+        };
+        let Some(history) = history else {
+            return; // 没有这段旁支历史（浏览器已关 / 从没对话过）
+        };
+        if provider_id.is_empty() {
+            eval_aside_down(
+                &app2,
+                &main_sid,
+                &surface,
+                "heb:aside:error",
+                serde_json::json!({ "message": "这个对话还没配置模型，没法总结" }),
+            );
+            return;
+        }
         let prompt = format!(
             "现在把这次调整总结成一段给「主对话」看的话，让它去改源代码真正实现这些效果。\n\n\
              元素定位信息（务必带进总结，让主对话能精确找到源码）：\n{element_desc}\n\n\
@@ -1138,9 +1162,21 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
              ③ 若是删除类操作，说明要在源码里移除该元素，而不是加 display:none。\n\n\
              只输出这段总结，不要再调工具。"
         );
-        let args = aside_send_args(session_id.clone(), prompt, vec![]);
-        match chat::send_and_save_in_data_dir(&dd, args, |_| {}).await {
-            Ok(msg) => {
+        // 总结轮不需要把结果回写历史（旁支即将提交完结），事件流也不下发（纯文本总结）。
+        let result = chat::send_aside(
+            &dd,
+            &main_sid,
+            &provider_id,
+            &model,
+            aside_system_prompt(&element_desc),
+            history,
+            prompt,
+            fresh_cancel(),
+            |_event| {},
+        )
+        .await;
+        match result {
+            Ok((_, msg)) => {
                 // 发到浏览器绑定的对话（main_sid），不串到当前打开的别的对话
                 let _ = app2.emit(
                     "browser://aside-result",
@@ -1151,7 +1187,7 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
                     &main_sid,
                     &surface,
                     "heb:aside:submitted",
-                    serde_json::json!({ "sessionId": session_id }),
+                    serde_json::json!({ "sessionId": aside_id }),
                 );
             }
             Err(e) => {
