@@ -13,7 +13,12 @@
 //! - `messages_new: [...]` — 第 N+1 条起的新增 messages
 //!
 //! 读取侧顺序扫描时维护 `accumulated_messages` 累积数组，遇到增量格式时
-//! 取前 N 条 + 拼接 new 即可重建完整 messages。兼容老格式（有 `messages` 字段的）。
+//! 取前 N 条 + 拼接 new 即可重建完整 messages。
+//!
+//! **增量链只由 `kind == "main"` 的 entry 维护**：judge / compaction / aside 这类
+//! 非主调用即使带完整 `messages` 也不更新累积基线，否则混在 main 行之间会把下一条
+//! main 增量行的重建基线带偏（aside 行尤其——它来自内置浏览器旁支会话，与主对话
+//! transcript 完全无关）。兼容老格式（早期全量写 `messages` 的 main 行）。
 
 use std::path::Path;
 
@@ -21,21 +26,28 @@ use serde_json::Value;
 
 use crate::model_io_dump::default_path;
 
-/// 从增量格式重建完整 messages 数组，同时更新累积状态。
+/// 从增量格式重建一条 entry 的完整 messages 数组，并按需更新累积状态。
 ///
-/// 兼容三种格式：
-/// 1. 增量格式：`{messages_carried: N, messages_new: [...]}`
-/// 2. 老格式：`{messages: [...]}`
-/// 3. 非 main（judge/compaction）：无 messages 相关字段，不更新累积状态
-fn rebuild_messages(request: &mut Value, accumulated: &mut Vec<Value>) {
-    let obj = match request.as_object_mut() {
+/// `kind` 决定是否参与累积链：
+/// - `"main"`：增量格式从累积取前 N 条 + 拼 new 重建；老格式直接用 `messages` 刷新累积。
+/// - 其它（judge / compaction / aside）：不读也不写累积基线，原样保留各自字段。
+fn rebuild_messages(entry: &mut Value, accumulated: &mut Vec<Value>) {
+    // 无 kind 字段视为老格式 main；只有 main 参与累积链。
+    let is_main = match entry.get("kind").and_then(|k| k.as_str()) {
+        Some(k) => k == "main",
+        None => true,
+    };
+    let request = match entry.get_mut("request").and_then(|r| r.as_object_mut()) {
         Some(o) => o,
         None => return,
     };
+    if !is_main {
+        return;
+    }
 
-    if let Some(carried_val) = obj.remove("messages_carried") {
+    if let Some(carried_val) = request.remove("messages_carried") {
         let carried = carried_val.as_u64().unwrap_or(0) as usize;
-        let new_msgs = obj
+        let new_msgs = request
             .remove("messages_new")
             .and_then(|v| match v {
                 Value::Array(a) => Some(a),
@@ -48,12 +60,11 @@ fn rebuild_messages(request: &mut Value, accumulated: &mut Vec<Value>) {
         full.extend(new_msgs);
 
         *accumulated = full.clone();
-        obj.insert("messages".to_string(), Value::Array(full));
-    } else if let Some(messages) = obj.get("messages").and_then(|m| m.as_array()) {
+        request.insert("messages".to_string(), Value::Array(full));
+    } else if let Some(messages) = request.get("messages").and_then(|m| m.as_array()) {
         // 老格式或无去重的条目——直接用 messages 更新累积状态
         *accumulated = messages.clone();
     }
-    // judge/compaction 没有 messages 字段，不动累积状态
 }
 
 /// 读 session 的所有 model_io 条目（完整重建 messages）。
@@ -79,9 +90,7 @@ pub fn read_session(data_dir: &Path, session_id: &str) -> std::io::Result<Vec<Va
         }
         match serde_json::from_str::<Value>(trimmed) {
             Ok(mut v) => {
-                if let Some(req) = v.get_mut("request") {
-                    rebuild_messages(req, &mut accumulated);
-                }
+                rebuild_messages(&mut v, &mut accumulated);
                 out.push(v);
             }
             Err(e) => {
@@ -200,9 +209,7 @@ pub fn read_session_entry(
             // 目标行：完整解析 + 重建 messages
             return match serde_json::from_str::<Value>(trimmed) {
                 Ok(mut v) => {
-                    if let Some(req) = v.get_mut("request") {
-                        rebuild_messages(req, &mut accumulated);
-                    }
+                    rebuild_messages(&mut v, &mut accumulated);
                     Ok(Some(v))
                 }
                 Err(e) => {
@@ -218,9 +225,7 @@ pub fn read_session_entry(
         }
         // 非目标行：只更新累积状态
         if let Ok(mut v) = serde_json::from_str::<Value>(trimmed) {
-            if let Some(req) = v.get_mut("request") {
-                rebuild_messages(req, &mut accumulated);
-            }
+            rebuild_messages(&mut v, &mut accumulated);
         }
         valid_idx += 1;
     }
@@ -368,5 +373,66 @@ mod tests {
         assert_eq!(summaries[1]["message_count"], 4);
         assert_eq!(summaries[2]["message_count"], 0); // judge
         assert_eq!(summaries[3]["message_count"], 5);
+    }
+
+    /// 旁支会话（kind="aside"）的行带完整 messages、与主对话 transcript 无关。
+    /// 它夹在两条主对话 main 增量行之间时，绝不能污染后续 main 行的增量重建基线。
+    /// 修复前 rebuild_messages 对任意带 messages 的行刷新 accumulated，aside 行会把
+    /// 基线替换成旁支的 messages，下一条 main 增量行的 carried 前缀就拼错了。
+    #[test]
+    fn aside_entry_does_not_corrupt_main_increment_chain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = default_path(tmp.path(), "sid3");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // main 行 1：全量 2 条
+        let main1 = json!({
+            "ts": "2026-01-01T00:00:00Z", "run_id": "r1", "turn": 0, "model": "m1",
+            "kind": "main", "duration_ms": 10,
+            "request": { "messages": [
+                {"role": "user", "content": "改这个按钮"},
+                {"role": "assistant", "content": "好的"}
+            ]},
+            "response": {"type": "Done"}
+        });
+        // aside 行：完整 messages，但属于旁支会话，与主对话毫无关系
+        let aside = json!({
+            "ts": "2026-01-01T00:00:30Z", "run_id": "aside-r", "turn": 0, "model": "m1",
+            "kind": "aside", "duration_ms": 20,
+            "request": { "messages": [
+                {"role": "user", "content": "把它改成红色"},
+                {"role": "assistant", "content": "已临时改成红色"}
+            ]},
+            "response": {"type": "Done"}
+        });
+        // main 行 2：基于 main 行 1 的增量（carried=2 指向主对话的 2 条，而非 aside 的）
+        let main2 = json!({
+            "ts": "2026-01-01T00:01:00Z", "run_id": "r1", "turn": 1, "model": "m1",
+            "kind": "main", "duration_ms": 30,
+            "request": { "messages_carried": 2, "messages_new": [
+                {"role": "user", "content": "再改字号"}
+            ]},
+            "response": {"type": "Done"}
+        });
+
+        let body = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&main1).unwrap(),
+            serde_json::to_string(&aside).unwrap(),
+            serde_json::to_string(&main2).unwrap(),
+        );
+        std::fs::write(&path, body).unwrap();
+
+        let entries = read_session(tmp.path(), "sid3").unwrap();
+        // aside 行原样保留自己的 messages，不被增量改写
+        let aside_msgs = entries[1]["request"]["messages"].as_array().unwrap();
+        assert_eq!(aside_msgs.len(), 2);
+        assert_eq!(aside_msgs[0]["content"], "把它改成红色");
+        // main 行 2 必须基于主对话基线重建：前 2 条是主对话的，不是 aside 的
+        let main2_msgs = entries[2]["request"]["messages"].as_array().unwrap();
+        assert_eq!(main2_msgs.len(), 3);
+        assert_eq!(main2_msgs[0]["content"], "改这个按钮");
+        assert_eq!(main2_msgs[1]["content"], "好的");
+        assert_eq!(main2_msgs[2]["content"], "再改字号");
     }
 }

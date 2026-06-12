@@ -86,6 +86,27 @@ pub async fn open_for_session_if_enabled(data_dir: &Path, session_id: &str) -> O
     }
 }
 
+/// 同 [`open_for_session_if_enabled`]，但把主调用标成自定义 `kind`，并落到
+/// `session_id` 指向的同一份 `model_io.jsonl`。内置浏览器旁支会话用它把临时（不落盘）
+/// 会话的模型 IO 写进绑定主对话的面板（`kind="aside"`），无需为旁支单独建 session。
+pub async fn open_for_session_with_kind(
+    data_dir: &Path,
+    session_id: &str,
+    main_kind: &str,
+) -> Option<ModelIoDump> {
+    if !is_enabled() {
+        return None;
+    }
+    let path = default_path(data_dir, session_id);
+    match ModelIoDump::open_with_main_kind(&path, main_kind).await {
+        Ok(dump) => Some(dump),
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "model IO dump open failed");
+            None
+        }
+    }
+}
+
 /// 一对模型请求 / 响应记录。jsonl 里每行一条这样的对象。
 #[derive(Debug, Clone, Serialize)]
 pub struct DumpEntry {
@@ -114,11 +135,25 @@ enum DumpCmd {
 pub struct ModelIoDump {
     tx: mpsc::Sender<DumpCmd>,
     path: PathBuf,
+    /// 本 dump 的主模型调用该标成哪个 `kind`。默认 `"main"`；内置浏览器旁支会话把它
+    /// 设成 `"aside"`，让旁支调用写进绑定主对话的 model_io.jsonl 后能被前端区分、
+    /// 且不参与 `"main"` 增量去重（旁支行永远全量，不污染主对话的增量重建基线）。
+    main_kind: String,
 }
 
 impl ModelIoDump {
     /// 打开（创建或追加）一份 jsonl 文件。父目录会自动创建。
     pub async fn open(path: impl Into<PathBuf>) -> std::io::Result<Self> {
+        Self::open_with_main_kind(path, "main").await
+    }
+
+    /// 同 [`open`]，但指定主调用的 `kind`（见 [`ModelIoDump::main_kind`]）。
+    ///
+    /// [`open`]: ModelIoDump::open
+    pub async fn open_with_main_kind(
+        path: impl Into<PathBuf>,
+        main_kind: impl Into<String>,
+    ) -> std::io::Result<Self> {
         let path = path.into();
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -165,7 +200,16 @@ impl ModelIoDump {
             }
         });
 
-        Ok(Self { tx, path })
+        Ok(Self {
+            tx,
+            path,
+            main_kind: main_kind.into(),
+        })
+    }
+
+    /// 本 dump 主模型调用的 `kind`（见字段文档）。agent_loop 写主调用 entry 时取它。
+    pub fn main_kind(&self) -> &str {
+        &self.main_kind
     }
 
     /// fire-and-forget 写一条记录。失败仅记 trace，不向调用方传播。
