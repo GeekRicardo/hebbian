@@ -1622,7 +1622,7 @@ function ToolCallTimeline({
                   type="button"
                   onClick={() => onToggle(call.key)}
                   className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
                     active && "border-b border-border bg-muted/30"
                   )}
                 >
@@ -1645,11 +1645,11 @@ function ToolCallTimeline({
                         <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
                           <ScrollText className="h-3.5 w-3.5" />
                         </span>
-                        <span className="whitespace-nowrap text-[12px] font-semibold">
-                          Read
-                        </span>
-                        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-                          <span className="shrink-0">读取文件</span>
+                        <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
+                          <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
+                            Read
+                          </span>
+                          <span className="mr-[2ch] shrink-0">读取文件</span>
                           <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
                             {displayWithRange}
                           </code>
@@ -1663,19 +1663,19 @@ function ToolCallTimeline({
                   type="button"
                   onClick={() => onToggle(call.key)}
                   className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(88px,auto)_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
+                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
                     active && "border-b border-border bg-muted/30"
                   )}
                 >
                   <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
                     <ToolIcon name={call.name} />
                   </span>
-                  <span className="whitespace-nowrap text-[12px] font-semibold">
-                    {call.name || "工具调用"}
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground">
-   <span className="shrink-0">{callDescription(call)}</span>
-         <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
+                  <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
+                    <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
+                      {call.name || "工具调用"}
+                    </span>
+                    <span className="mr-[2ch] shrink-0">{callDescription(call)}</span>
+                    <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
                       {callSummary(call)}
                     </code>
                   </span>
@@ -1715,6 +1715,13 @@ function ToolCallTimeline({
 const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
   typeof ReactMarkdown
 >["components"];
+
+function isRequestFailureText(text: string) {
+  return text.trimStart().startsWith("[请求失败：");
+}
+
+const requestFailureMarkdownClass =
+  "block w-full max-w-full box-border whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-[1.45]";
 
 function ReasoningBlock({
   text,
@@ -1846,7 +1853,13 @@ function AssistantParts({
       {parts.map((part) => {
         if (part.type === "text") {
           return (
-            <div key={part.key} className="markdown-segment">
+            <div
+              key={part.key}
+              className={cn(
+                "markdown-segment",
+                isRequestFailureText(part.text) && requestFailureMarkdownClass
+              )}
+            >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
