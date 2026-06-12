@@ -7546,3 +7546,85 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**：仅 inspector.js；mutate/对话轮结束（heb:aside:done）也同步列表。
 - **验证**：node --check + inspector.test.cjs + tsc --checkJs 扫未定义名归零。
 - **留尾巴**：GUI 实测两区重置的视觉还原与列表自动增删；对话进行中（busy）时项内容是轮次结束才同步。
+
+### 2026-06-12 · 调整 Ask 提问浮层与输入区视觉间距
+
+- **Why**：用户在内置浏览器预览中调好了 Ask 提问场景的视觉布局，希望真实落地：提问卡片与输入框右侧对齐，Ask 工具消息下方留出更大空白，输入框宽度固定以配合浮层布局。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx`：提问卡片宽度扩展为 `calc(100% + 42px)`，右侧用负 margin 对齐输入框。
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`：包含 `Ask` 工具调用的 assistant 消息增加 320px 底部留白，避免与下方输入区/弹窗拥挤。
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`：输入框卡片容器固定为 496px 宽。
+- **影响范围**：仅 desktop 前端视觉样式；不改 JSX 结构、UI 文案、协议、agent-core 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 调整模型选择器底部操作区打开即显示
+
+- **Why**：用户在内置浏览器预览中确认，模型选择器弹窗底部的推理参数与完成按钮应在弹窗打开时始终可见，而不是等点击某个模型后才出现。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/ModelPickerButton.tsx`：把 `model-picker-selected-controls` 的条件渲染从「已临时选择模型」改为「已有当前选中的供应商」；真实会话分支使用当前展示模型，预览分支使用 fallback model，保留原有 ReasoningControls 与完成按钮行为。
+- **影响范围**：仅 desktop 前端模型选择器渲染逻辑；不改样式、协议、agent-core 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 修复内置浏览器注释框分区滚动布局
+
+- **Why**：用户反馈内置浏览器里的注释框三个区域挤在一起；期望注释框内容从上到下自然铺开，整体有很细的滚动条，同时下方「和助手一起改」里的 chat 消息区固定高度并使用自己的子滚动条。
+- **改动**：
+  - `apps/desktop/src/browser/inspector.js`：把注释卡片固定为视口内高度，头部固定、内容区整体纵向滚动；样式区与 chat 区按普通文档流从上到下排列；chat 消息列表改为固定展示高度并保留独立滚动；给注释卡片、chat 消息列表和注释列表统一加细滚动条样式。
+- **影响范围**：仅 Desktop 内置浏览器注入 UI；不改协议、agent-core、CoreClient、storage 或持久化格式。
+- **留尾巴**：需要在 `pnpm tauri dev` 里人工走一次页面选取和旁支对话，确认不同页面高度下的真实滚动手感。
+
+### 2026-06-12 · 修复桌面侧边栏会话行删除按钮与时间布局
+
+- **Why**：用户在内置浏览器预览里调整了会话列表行：删除按钮作为外部第二列会掉到下一行，时间与标题间距过大。第一次落地把删除入口嵌进会话按钮内部，实际会导致交互元素嵌套和标题裁剪错乱；随后用 hebweb 复现发现真正压扁标题的根因是旧规则 `.dsp-session-main { grid-column: 1; }` 仍在生效，把标题区放进了 7px 状态点列。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx`：保持删除按钮与会话打开按钮同级，不再作为外层第二列参与排版。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：让会话打开按钮占满整行并预留右侧删除按钮空间；删除按钮作为同级元素绝对定位到行右侧垂直居中；标题与时间用同一行 flex 布局，标题可截断、时间紧跟标题；时间默认隐藏，hover 会话行时再显示。
+- **影响范围**：仅 Desktop 前端侧边栏视觉与交互结构；不改协议、agent-core、CoreClient、storage 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 调整消息时间仅在 hover 时显示
+
+- **Why**：用户确认当前样式整体可用，但消息时间应减少常态视觉干扰，只在鼠标 hover 到消息时显示。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx`：复用现有消息 hover 操作行显示 `created_at` 格式化时间，默认透明，hover 消息时随操作按钮一起出现。
+- **影响范围**：仅 desktop 前端消息气泡展示；不改协议、agent-core、storage 或持久化格式。
+- **留尾巴**：无。
+
+### 2026-06-12 · 修正侧边栏会话行 hover 布局并撑满输入框
+
+- **Why**：用户在 hebweb 里确认侧边栏会话时间虽然默认透明但仍占布局宽度，导致未 hover 时标题不能延伸到最右侧；hover 时标题省略号与时间之间仍有明显空隙。同时内置浏览器预览确认 ChatInput 卡片不应固定 496px，而要跟随父容器撑满。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：会话时间默认 `display: none`，不再占位；hover 会话行时再显示；标题设为 flex 可收缩主体，省略号直接贴近时间。
+  - `apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx`：把输入卡片外层从 `w-[496px]` 改为 `w-full`，保留圆角、边框、阴影和 focus ring。
+- **影响范围**：仅 Desktop 前端视觉布局；不改协议、agent-core、CoreClient、storage 或持久化格式。
+- **留尾巴**：无。
+
+---
+
+### 2026-06-12 — 新增 macOS 发布打包流水线，hebisland 内嵌进 DMG
+
+- **Why**: 项目此前没有任何 release 打包手段（仅有 deploy-pages 的文档站 workflow），无法把 Hebbian 作为安装包交付。同时 hebisland（菜单栏通知 companion，独立 Swift Package）一直没被打包，且 changelog 2026-06-04 留的尾巴「hebisland daemon 自动拉起未实现（Phase 2）」导致即便装了 Hebbian，通知也不会弹。本次一并解决：打 tag 出 DMG + hebisland 随包内嵌 + Desktop 启动自动拉起。
+- **改动**:
+  - `apps/island-mac/build-app.sh`（新增）: 把 hebisland Swift Package 组装成 `HebIsland.app`——二进制进 `Contents/MacOS/hebisland`，`HebIsland_HebIsland.bundle`（4 个彩色图标 PNG）放 .app 根。根本原因：CardView 用 `Bundle.module` 加载图标，SPM 生成的 `Bundle.module` 第一优先路径是「可执行文件所在 .app 根 / HebIsland_HebIsland.bundle」，找不到才回退编译机硬编码路径——裸二进制 sidecar 在用户机找不到资源会 `fatalError` 崩溃，所以必须打成自包含 .app。
+  - `apps/island-mac/Info.plist`（新增）: HebIsland.app 的 plist，`LSUIElement=true`（纯菜单栏 companion，不进 Dock）。
+  - `apps/desktop/tauri.conf.json`: `bundle.resources` 加 `"../island-mac/dist/HebIsland.app/": "HebIsland.app/"` 把整个 .app 嵌进 `Hebbian.app/Contents/Resources/`；`beforeBuildCommand` 前置 `bash ../island-mac/build-app.sh release &&` 让 tauri build 自动组装 hebisland。
+  - `apps/desktop/src/hebisland_client.rs`: `client_loop` 连 socket 前，若 socket 不存在则 `spawn_bundled_daemon` 从 `resource_dir/HebIsland.app/Contents/MacOS/hebisland` 拉起 daemon（daemon 自带单例，重复拉起安全），`wait_for_socket` 轮询等就绪（最多 ~2s）。dev 模式无内嵌资源时静默跳过，依赖手动启动。补上了 2026-06-04 的「Phase 2 自动拉起」尾巴。
+  - `.github/workflows/release.yml`（新增）: push `v*` tag 触发，macos-latest runner 上装 Rust(aarch64)/pnpm/Node → `apps/desktop` 装依赖 → `tauri-apps/tauri-action` 跑 `tauri build --target aarch64-apple-darwin` 出 DMG 并发布 GitHub Release。**不签名 / 不公证**（首次打开需右键「打开」绕过 Gatekeeper）。
+  - `docs/架构.md`: §13 决策记录追加一行（编号 2.3）登记发布打包 + hebisland 内嵌形态与理由。
+- **影响范围**: 新增 CI workflow + 打包脚本 + Info.plist，纯 additive；改 `tauri.conf.json` 与 `hebisland_client.rs` 仅影响 Desktop 打包/启动，不动 agent-core、协议、storage、CoreClient。当前仅 macOS aarch64；x86_64 / Windows / Linux 未覆盖。
+- **验证**:
+  - 本地 `pnpm tauri build --target aarch64-apple-darwin` 全量跑通，产出 17MB DMG。
+  - 结构验证：`HebIsland.app` 正确嵌进 `Hebbian.app/Contents/Resources/`，hebisland 可执行位保留（`-rwxr-xr-x`），4 个图标 PNG 在 .app 根的 bundle 内。
+  - 端到端验证（地基 + 产物两轮）：移走编译机 fallback bundle 后，从打包产物里的 hebisland 拉起 daemon + 推 approval 卡（触发 `icon-approval.png` 加载），daemon 存活、socket 建立、日志无 `could not load resource bundle`——证明 .app 形态下 `Bundle.module` 走第一优先路径正确加载图标。
+- **留尾巴**:
+  - 仅 macOS aarch64；要支持 Intel Mac 需加 `x86_64-apple-darwin` target（或 universal binary，但 hebisland 也得同步出双架构）。Windows/Linux 因 hebisland 是 macOS-only Swift Package，需先有跨平台通知方案才谈。
+  - 不签名 → 用户首次打开有 Gatekeeper 摩擦（右键「打开」）。若要去掉摩擦需配 Apple 证书 + 公证 secrets。
+  - 自动拉起的 daemon 是 Desktop 子进程，Desktop 退出后 daemon 行为（是否随退、是否复用）未专门处理——daemon 自带单例，下次启动会复用，可接受。
+
+### 2026-06-12 · 缩紧侧边栏会话行间距并外移状态点
+
+- **Why**：用户确认侧边栏会话行整体可用后，希望 session 之间的垂直间距再减小一半；运行中/未读/审批状态点不应占用标题文本的左侧网格列，而应移动到行容器外侧左边，让标题自然向左靠。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：会话行最小高度和上下 padding 缩小；`.dsp-session-row` 改为单列标题网格；`.dsp-session-status` 改为绝对定位到行左侧外面，保留原呼吸动画和颜色状态。
+- **影响范围**：仅 Desktop 前端侧边栏视觉布局；不改协议、agent-core、CoreClient、storage 或持久化格式。
+- **留尾巴**：无。

@@ -2587,10 +2587,11 @@
   background: rgba(211, 91, 91, 0.1);
 }
 
-/* ── 左侧对话行：标题块独立占满，状态点在标题块外侧左边 ── */
+/* ── 左侧对话行：标题、时间、删除按钮同一行，删除按钮固定在右侧 ── */
 
 .dsp-session-row-wrap {
   position: relative;
+  display: block;
   border-radius: 8px;
   transition: none;
 }
@@ -2606,10 +2607,14 @@
 
 .dsp-session-row-wrap .dsp-session-row {
   position: relative;
-  display: block !important;
-  min-height: 26px;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  min-height: 24px;
   min-width: 0;
-  padding: 2px 8px !important;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 30px 2px 8px !important;
   border-radius: 8px;
   background: transparent !important;
   transition: background 120ms ease, box-shadow 120ms ease;
@@ -2641,13 +2646,18 @@
 }
 
 .dsp-session-main {
-  position: relative;
-  display: block;
+  position: static;
+  display: flex;
+  grid-column: 1;
+  align-items: baseline;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .dsp-session-row-wrap .dsp-session-main strong {
   display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: #5c6a7a;
@@ -2655,30 +2665,30 @@
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: padding-right 120ms ease;
+  transition: none;
 }
 
 .dsp-session-row-wrap:hover .dsp-session-main strong {
-  padding-right: 52px;
+  padding-right: 0;
 }
 
 .dsp-session-time {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  max-width: 44px;
-  overflow: hidden;
+  position: static;
+  display: none;
+  flex: 0 0 auto;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+  overflow: visible;
   color: color-mix(in srgb, var(--dsp-accent) 42%, var(--dsp-muted));
   font-size: 10px;
   line-height: 1;
-  opacity: 0;
-  transform: translateY(-50%);
-  transition: opacity 120ms ease;
+  transform: none;
   white-space: nowrap;
 }
 
 .dsp-session-row-wrap:hover .dsp-session-time {
-  opacity: 1;
+  display: inline-block;
 }
 
 /* ── 状态点：运行中呼吸灯、审批黄色、完成绿色 ── */
@@ -2879,6 +2889,26 @@
   color: var(--dsp-accent, #227ed7);
   background: #f7faff;
   border-color: color-mix(in srgb, var(--dsp-accent, #227ed7) 25%, transparent);
+}
+
+.dsp-session-delete {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #aab4c1;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
 }
 
 /* 删除按钮淡红色 */

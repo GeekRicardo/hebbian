@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   BriefcaseBusiness,
   FilePlus2,
@@ -53,7 +61,9 @@ interface Props {
 }
 
 const MIN_H = 30;
-const MAX_H = 120;
+const TEXTAREA_LINE_HEIGHT = 20;
+const MAX_TEXTAREA_LINES = 20;
+const MAX_H = TEXTAREA_LINE_HEIGHT * MAX_TEXTAREA_LINES;
 const KEY = "chatInputHeight";
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -358,14 +368,15 @@ export function ChatInput({
     }
   }
 
-  // 未手动调整高度时，按内容自适应
+  // 未手动调整高度时，按内容自适应，最多显示 20 行。
   useLayoutEffect(() => {
     if (manual) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const h = Math.min(Math.max(el.scrollHeight, MIN_H), 30);
-    el.style.height = `${h}px`;
+    const nextHeight = Math.min(Math.max(el.scrollHeight, MIN_H), MAX_H);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > MAX_H ? "auto" : "hidden";
   }, [value, manual]);
 
   useEffect(() => {
@@ -795,6 +806,7 @@ export function ChatInput({
     if (!manual) return;
     if (textareaRef.current) {
       textareaRef.current.style.height = `${height}px`;
+      textareaRef.current.style.overflowY = "auto";
     }
   }, [height, manual]);
 
@@ -811,6 +823,11 @@ export function ChatInput({
   // streaming 时仍允许输入（Enter 入队 / Shift+Enter 立即入队队首），
   // 只有外部显式 disabled（如未配置 provider）时才禁用。
   const inputDisabled = !!disabled;
+  const textareaStyle: CSSProperties = {
+    lineHeight: `${TEXTAREA_LINE_HEIGHT}px`,
+    maxHeight: MAX_H,
+    ...(manual ? { height, overflowY: "auto" } : undefined),
+  };
   const canSubmit =
     isStreaming ||
     (!disabled && !sending && (!!value.trim() || attachments.length > 0));
@@ -839,7 +856,7 @@ export function ChatInput({
           className={cn(
             // 主投影朝上散得多（投到消息区之上）；副投影 Y=0、spread 收紧——只在卡片四周
             // 烘出薄薄一圈光晕，不向下延伸，避免视觉底比 sidebar 主体卡片低几像素。
-            "relative z-10 rounded-3xl border border-input bg-background shadow-[0_-10px_28px_-10px_rgba(0,0,0,0.28),0_0_12px_-6px_rgba(0,0,0,0.12)] focus-within:ring-2 focus-within:ring-ring transition",
+            "relative z-10 w-full rounded-3xl border border-input bg-background shadow-[0_-10px_28px_-10px_rgba(0,0,0,0.28),0_0_12px_-6px_rgba(0,0,0,0.12)] focus-within:ring-2 focus-within:ring-ring transition",
             draggingFiles && "border-primary ring-2 ring-primary/30",
             disabled && "opacity-60"
           )}
@@ -1053,8 +1070,8 @@ export function ChatInput({
                 : "输入消息，Enter 发送，Shift+Enter 换行…"
             }
             rows={1}
-            style={manual ? { height } : undefined}
-            className="chat-input-textarea w-full resize-none bg-transparent px-3 py-1 text-sm outline-none placeholder:text-muted-foreground min-h-[30px] overflow-y-auto"
+            style={textareaStyle}
+            className="chat-input-textarea w-full resize-none bg-transparent px-3 py-1 text-sm outline-none placeholder:text-muted-foreground min-h-[30px] overflow-y-hidden"
           />
 
           {/* 底部工具条：左 = + 菜单 / `//` 命令 / 模型选择，右 = 发送。
