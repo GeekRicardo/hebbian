@@ -135,6 +135,31 @@
     return msg;
   }
 
+  // "@2" -> 1（0-based index）；非法返回 -1。注释框 @N 引用解析用。
+  function refToIndex(ref) {
+    var m = /^@(\d+)$/.exec(String(ref || "").trim());
+    if (!m) return -1;
+    var n = parseInt(m[1], 10);
+    return n >= 1 ? n - 1 : -1;
+  }
+
+  // contenteditable 输入框的子节点序列 → 发送给助手的纯文本。
+  // nodes: [{type:"text",value} | {type:"ref",ref:"@2",locator}]。
+  // chip 还原成「元素2: <locator>」让助手拿到元素定位。
+  function composeAsideText(nodes) {
+    var out = "";
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.type === "ref") {
+        var idx = refToIndex(n.ref);
+        out += "「元素" + (idx + 1) + (n.locator ? ": " + n.locator : "") + "」";
+      } else {
+        out += n.value || "";
+      }
+    }
+    return out;
+  }
+
   var __hebCore = {
     truncate: truncate,
     buildSelectorPath: buildSelectorPath,
@@ -144,6 +169,8 @@
     nearestComponentProps: nearestComponentProps,
     capSnapshot: capSnapshot,
     parseInMsg: parseInMsg,
+    refToIndex: refToIndex,
+    composeAsideText: composeAsideText,
     MAX_SNAPSHOT_BYTES: MAX_SNAPSHOT_BYTES,
   };
 

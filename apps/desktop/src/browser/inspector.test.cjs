@@ -115,4 +115,30 @@ assert.deepStrictEqual(
   { prop: "color", value: "red" }
 );
 
+
+// ── refToIndex：@N 引用解析（多元素注释框） ──
+assert.strictEqual(core.refToIndex("@1"), 0);
+assert.strictEqual(core.refToIndex("@3"), 2);
+assert.strictEqual(core.refToIndex(" @2 "), 1);
+assert.strictEqual(core.refToIndex("@0"), -1);
+assert.strictEqual(core.refToIndex("x"), -1);
+assert.strictEqual(core.refToIndex(""), -1);
+assert.strictEqual(core.refToIndex(null), -1);
+
+// ── composeAsideText：chip 还原成元素定位 ──
+assert.strictEqual(
+  core.composeAsideText([
+    { type: "text", value: "让 " },
+    { type: "ref", ref: "@1", locator: "button.btn" },
+    { type: "text", value: " 和 " },
+    { type: "ref", ref: "@2", locator: "div.card" },
+    { type: "text", value: " 对齐" },
+  ]),
+  "让 「元素1: button.btn」 和 「元素2: div.card」 对齐"
+);
+assert.strictEqual(
+  core.composeAsideText([{ type: "ref", ref: "@2", locator: "" }]),
+  "「元素2」"
+);
+assert.strictEqual(core.composeAsideText([]), "");
 console.log("inspector.test.cjs: all assertions passed");
