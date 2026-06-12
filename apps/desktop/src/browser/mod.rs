@@ -681,6 +681,13 @@ fn handle_toolbar_nav(app: &AppHandle, url: &Url) -> bool {
         // Resized 在多 webview 窗口不可靠（实测不触发），工具栏主 webview 随窗口缩放、
         // 它的 window.onresize 一定触发，是可靠的 resize 钩子。
         "tb:resize" => popout_resize(app),
+        // 顶部 titlebar 让位区按下拖窗口——data URL webview 的 -webkit-app-region 不生效，
+        // 用 startDragging。
+        "tb:drag" => {
+            if let Some(w) = app.get_window(POPOUT_LABEL) {
+                let _ = w.start_dragging();
+            }
+        }
         "tb:close" => {
             if let Some(w) = app.get_window(POPOUT_LABEL) {
                 let _ = w.close();
@@ -875,21 +882,26 @@ pub fn browser_clear_selection(
 
 // ─────────────────────── 元素对话（旁支会话，机制 B）───────────────────────
 
-fn aside_system_prompt(element_desc: &str) -> String {
-    format!(
-        "你是网页预览里的「样式调整助手」。用户选中了一个元素，你帮他在预览上**临时**调整看效果。\n\n\
-         选中元素的定位信息：\n{element_desc}\n\n\
-         你的工具：PreviewStyle(prop, value) —— 实时改这个元素的内联样式（color / font-size / \
-         font-weight / padding / margin / border-radius / border-width / border-color / \
-         background-color / display 等），用户立刻在页面上看到效果。一次改一个属性，想微调再调一次。\n\n\
-         重要——理解你的定位：\n\
-         • 你改的是**临时预览效果**，不是最终实现。用户满意后，会由「主对话」**修改源代码**来真正落地这些改动。\n\
-         • 所以你心里要清楚「这个视觉效果对应到源码该怎么改」，过程中可以简短点一下。\n\
-         • 如果用户想**删除/移除**元素：PreviewStyle 只能改样式、改不了 DOM 结构。你可以先用 \
-         display:none 把它藏起来让用户看「删掉后的样子」，但要说明这只是预览——真正删除要在源码里移除这个元素/组件，而不是留个 display:none。\n\
-         • 别假设源码怎么存放（本地项目可直接改文件，线上站点可能要去对应仓库复刻）。你只负责把视觉效果调好，并说清楚改了什么、对应什么源码改动。\n\n\
-         先理解用户要的视觉效果，再动手。保持简洁。"
-    )
+// system prompt 不嵌具体元素定位（保 prompt cache 命中 + 支持中途追加元素）；
+// 元素定位作为每轮 user content 前缀由 handle_aside_send 拼进去。
+fn aside_system_prompt() -> String {
+    "你是网页预览里的「样式调整助手」。用户在页面上圈了一个或多个元素（编号 @1、@2…），\
+     你帮他在预览上**临时**调整看效果。每轮用户消息前会附上当前选中元素的定位信息。\n\n\
+     你的工具：\n\
+     • PreviewStyle(prop, value, target) —— 实时改某个元素的内联样式（color / font-size / \
+     padding / border-radius / background-color 等），用户立刻看到效果。target 填 @N（缺省 @1）。\
+     一次改一个属性，想微调再调一次。\n\
+     • PreviewMutate(op, target, …) —— 改 DOM 结构：op=append（target 内追加 html 片段）/ \
+     remove（移除 target）/ setText（改 target 文本为 text）。同样是预览草稿，刷新即消失。\n\
+     • PreviewAct(action, target, …) —— 和页面交互：click / type(text) / hover / press(key) / \
+     scroll(delta)，用来触发弹窗、hover 菜单、表单校验等交互态。\n\n\
+     重要——理解你的定位：\n\
+     • 你做的都是**临时预览效果**，不是最终实现。用户满意后，会由「主对话」**修改源代码**真正落地。\n\
+     • 所以你心里要清楚「这个效果对应到源码该怎么改」，过程中可以简短点一下。\n\
+     • 删除元素用 PreviewMutate remove（预览态），并说明真正删除要在源码里移除该元素/组件。\n\
+     • 别假设源码怎么存放。你只负责把效果调好，并说清楚改了什么、对应什么源码改动。\n\n\
+     先理解用户要的效果，再动手。保持简洁。"
+        .to_string()
 }
 
 /// 把一条下行消息 eval 到来源 webview（embedded 子 webview 或 popout 窗口）。
@@ -947,14 +959,33 @@ fn route_aside_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let target = input
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("@1")
+                .to_string();
             // 实时应用到页面 + 在聊天里显示这一步
             eval_aside_down(
                 app,
                 host_session,
                 surface,
                 "heb:aside:apply",
-                serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value }),
+                serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value, "target": target }),
             );
+        }
+        EngineEvent::ToolStart { name, mut input, .. } if name == "PreviewMutate" => {
+            if input.get("target").and_then(|v| v.as_str()).is_none() {
+                input["target"] = serde_json::json!("@1");
+            }
+            input["sessionId"] = serde_json::json!(aside_session);
+            eval_aside_down(app, host_session, surface, "heb:aside:mutate", input);
+        }
+        EngineEvent::ToolStart { name, mut input, .. } if name == "PreviewAct" => {
+            if input.get("target").and_then(|v| v.as_str()).is_none() {
+                input["target"] = serde_json::json!("@1");
+            }
+            input["sessionId"] = serde_json::json!(aside_session);
+            eval_aside_down(app, host_session, surface, "heb:aside:act", input);
         }
         EngineEvent::RunFinished { .. } => {
             eval_aside_down(
@@ -1003,6 +1034,30 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    // 多元素 @N → 定位映射（inspector 每轮全量带上）；拼成 user content 前缀，
+    // system prompt 不嵌定位 → 保 prompt cache + 支持中途追加元素。
+    let elements_block = payload
+        .get("elements")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let r = e.get("ref").and_then(|v| v.as_str())?;
+                    let loc = e.get("locator").and_then(|v| v.as_str()).unwrap_or("");
+                    Some(format!("{r}:\n{loc}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .filter(|s| !s.is_empty())
+        // 旧单元素载荷兜底：把 element 当 @1
+        .unwrap_or_else(|| {
+            if element_desc.is_empty() {
+                String::new()
+            } else {
+                format!("@1:\n{element_desc}")
+            }
+        });
     // 卡片里模型选择器选的 provider/model（可空 → 用上下文默认）
     let sel_provider = payload
         .get("providerId")
@@ -1066,14 +1121,20 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         let surface2 = surface.clone();
         let host = main_sid.clone();
         let aside_for_event = aside_id.clone();
+        // 元素定位放每轮 user content 前缀（非 system prompt）
+        let user_content = if elements_block.is_empty() {
+            text
+        } else {
+            format!("<selected_elements>\n{elements_block}\n</selected_elements>\n\n{text}")
+        };
         let result = chat::send_aside(
             &dd,
             &main_sid,
             &provider_id,
             &model,
-            aside_system_prompt(&element_desc),
+            aside_system_prompt(),
             history,
-            text,
+            user_content,
             fresh_cancel(),
             move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
         )
@@ -1168,7 +1229,7 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
             &main_sid,
             &provider_id,
             &model,
-            aside_system_prompt(&element_desc),
+            aside_system_prompt(),
             history,
             prompt,
             fresh_cancel(),

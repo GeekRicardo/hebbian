@@ -693,6 +693,10 @@ struct DesktopObserver<'a> {
     session_id: String,
     emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
     partial_writer: Option<PartialFileWriter>,
+    /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：subagent_call_id → 子 parts recorder。
+    /// 子事件按 call_id 累积，同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父
+    /// message 落**主** session.jsonl，修复「子过程只活在内存事件流、run 一结束就蒸发」。
+    nested: std::collections::BTreeMap<String, AssistantPartsRecorder>,
 }
 
 impl<'a> DesktopObserver<'a> {
@@ -725,6 +729,7 @@ impl<'a> DesktopObserver<'a> {
             session_id: session_id.to_string(),
             emit,
             partial_writer,
+            nested: std::collections::BTreeMap::new(),
         }
     }
 
@@ -794,7 +799,19 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         // （前端按 subagent_call_id 嵌套渲染到父 Task 卡片内部），**不**累积到父 parts /
         // tool_calls / partial sidecar——避免子内容串入父 transcript / 父 jsonl。
         // 子 session.jsonl 独立落盘由 P3.1c 接上；本期 P3.1b 阶段先保住"父 transcript 不串入"。
-        if event.subagent_call_id.is_some() {
+        // 子 NestedRun 事件（架构 §4.4.11.8）：累积到对应 Task call 的 nested，随父 message
+        // 落**主** session.jsonl。用 per-call recorder 累积子的 text / reasoning / 子工具调用，
+        // 每次同步进 tool_calls 里 Task call 的 nested（顶层 + 当前 segment 两份都更新，落盘
+        // 走哪条路径都带上）。子事件仍转发 UI 做 streaming 嵌套渲染。
+        if let Some(call_id) = event.subagent_call_id.clone() {
+            let rec = self.nested.entry(call_id.clone()).or_default();
+            record_assistant_part_event(rec, event);
+            let nested_parts = rec.parts.clone();
+            for calls in [&mut self.tool_calls, &mut self.segment_tool_calls] {
+                if let Some(call) = calls.iter_mut().find(|c| c.id == call_id) {
+                    call.nested.clone_from(&nested_parts);
+                }
+            }
             if let Some(ev) = agent_event_to_engine_event(event) {
                 (self.emit)(ev);
             }
@@ -1339,6 +1356,7 @@ fn empty_tool_call() -> MessageToolCall {
         input: serde_json::json!({}),
         result: None,
         duration_ms: None,
+        nested: Vec::new(),
     }
 }
 
@@ -1549,9 +1567,13 @@ pub async fn send_aside(
     };
     history.push(user_msg);
 
-    // 极简 harness：只暴露 PreviewStyle（旁支唯一工具），无外部 hook。
+    // 极简 harness：只暴露三个 Preview 信号工具（无副作用），无外部 hook。
     let harness = Arc::new(Harness::new(
-        vec![Box::new(agent_core::tools::preview_style::PreviewStyleTool)],
+        vec![
+            Box::new(agent_core::tools::preview_style::PreviewStyleTool),
+            Box::new(agent_core::tools::preview_mutate::PreviewMutateTool),
+            Box::new(agent_core::tools::preview_act::PreviewActTool),
+        ],
         HookManager::new(vec![]),
     ));
     let workspace = Workspace::new(
@@ -1566,7 +1588,11 @@ pub async fn send_aside(
             definition: AgentDefinition::default(),
             workspace,
             client,
-            enabled_tools: vec!["PreviewStyle".to_string()],
+            enabled_tools: vec![
+                "PreviewStyle".to_string(),
+                "PreviewMutate".to_string(),
+                "PreviewAct".to_string(),
+            ],
             initial_transcript: transcript,
             recorder: None,
             model_io_dump,
@@ -3522,6 +3548,7 @@ mod tests {
             input: serde_json::json!({"command": "pwd"}),
             result: Some("/tmp\n".to_string()),
             duration_ms: Some(12),
+            nested: Vec::new(),
         }];
 
         persist_failed_assistant_output(

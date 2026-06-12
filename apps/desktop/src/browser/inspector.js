@@ -643,8 +643,69 @@
       }
     } catch (e) { /* 静默 */ }
   }
-  // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在
-  var asideKeyCounter = 0;
+  // heb:aside:mutate：结构改动（草稿态，刷新即消失）。append 的新元素自动入 draft.elements。
+  function handleAsideMutate(p) {
+    var el = elementForRef(p.target || "@1");
+    if (!el) return;
+    var desc = "";
+    try {
+      if (p.op === "append" && p.html) {
+        el.insertAdjacentHTML("beforeend", p.html);
+        var added = el.lastElementChild;
+        desc = "在 " + (p.target || "@1") + " 内追加了元素";
+        if (added && draft) {
+          draft.elements.push({ key: elementKeyOf(added), el: added, snapshot: collectSnapshot(added), styleDiff: {} });
+          desc += "（已编为 @" + draft.elements.length + "）";
+          showAnnotationCard(null, draft); // 重建卡片让小方块行出现新编号
+        }
+      } else if (p.op === "remove") {
+        el.style.display = "none"; // 草稿态用隐藏代替真删，撤销/找回都还在
+        desc = "移除了 " + (p.target || "@1") + "（预览态隐藏）";
+      } else if (p.op === "setText") {
+        el.textContent = p.text || "";
+        desc = (p.target || "@1") + " 文本改为「" + truncate(p.text || "", 40) + "」";
+      } else {
+        return;
+      }
+    } catch (e) { return; }
+    if (draft) draft.structuralChanges.push({ op: p.op, target: p.target || "@1", html: p.html || null, text: p.text || null, desc: desc });
+    if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🔧 " + desc);
+  }
+
+  // heb:aside:act：页面交互（点击/输入/hover/按键/滚动），触发交互态给用户看
+  function handleAsideAct(p) {
+    var el = elementForRef(p.target || "@1");
+    if (!el && p.action !== "scroll") return;
+    try {
+      if (p.action === "click") {
+        el.click();
+      } else if (p.action === "type") {
+        el.focus();
+        if ("value" in el) {
+          el.value = p.text || "";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          el.textContent = p.text || "";
+        }
+      } else if (p.action === "hover") {
+        el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        el.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));
+      } else if (p.action === "press") {
+        var k = p.key || "Enter";
+        var t = el || document.activeElement || document.body;
+        t.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+        t.dispatchEvent(new KeyboardEvent("keyup", { key: k, bubbles: true }));
+      } else if (p.action === "scroll") {
+        (el || window).scrollBy ? (el || window).scrollBy(0, p.delta || 0) : window.scrollBy(0, p.delta || 0);
+      } else {
+        return;
+      }
+    } catch (e) { return; }
+    if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🖱 " + p.action + " " + (p.target || "@1"));
+  }
+
+  // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在  var asideKeyCounter = 0;
   var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
   var cardChat = null;  // 当前卡片打开的聊天：{ elementKey, sessionId, msgList, assistantRow }
   // 修改队列：多个元素的待提交改动按元素累积，统一提交到主对话
@@ -1748,9 +1809,23 @@
         break;
       case "heb:aside:apply":
         if (msg.payload) {
-          styleApply(msg.payload.prop, msg.payload.value); // 实时改页面
-          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + msg.payload.prop + " → " + msg.payload.value);
+          // 按 @N 路由到 draft 里的对应元素；无 draft（旧单元素路径）退回激活元素
+          var apTarget = msg.payload.target || "@1";
+          if (draft) {
+            var apIdx = refToIndex(apTarget);
+            if (apIdx < 0 || apIdx >= draft.elements.length) apIdx = draft.activeIndex;
+            styleSetOn(draft.elements[apIdx], msg.payload.prop, msg.payload.value);
+          } else {
+            styleApply(msg.payload.prop, msg.payload.value);
+          }
+          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + apTarget + " " + msg.payload.prop + " → " + msg.payload.value);
         }
+        break;
+      case "heb:aside:mutate":
+        if (msg.payload) handleAsideMutate(msg.payload);
+        break;
+      case "heb:aside:act":
+        if (msg.payload) handleAsideAct(msg.payload);
         break;
       case "heb:aside:done":
         if (cardChat && cardChat.assistantRow) {
