@@ -705,7 +705,8 @@
     if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🖱 " + p.action + " " + (p.target || "@1"));
   }
 
-  // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在  var asideKeyCounter = 0;
+  // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在
+  var asideKeyCounter = 0;
   var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
   var cardChat = null;  // 当前卡片打开的聊天：{ elementKey, sessionId, msgList, assistantRow }
   // 修改队列：多个元素的待提交改动按元素累积，统一提交到主对话
