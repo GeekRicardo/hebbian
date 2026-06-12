@@ -40,6 +40,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     streamingText,
     streamingParts,
     liveTimeline,
+    pendingQuestion,
     assistantInsertPos,
     currentRunMode,
     sendUserMessage,
@@ -817,6 +818,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
           userAvatar={userAvatar}
           sessionId={currentSession?.id}
           isStreaming={isStreaming}
+          reserveBottomForQuestionPopup={!!pendingQuestion}
           lastUserMsgId={lastUserMsgId}
           lastUserHasAssistantAfter={lastUserHasAssistantAfter}
           lastCompactBoundaryIdx={boundaryInfo.lastIdx}
@@ -856,6 +858,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
                     userAvatar={userAvatar}
                     sessionId={currentSession?.id}
                     appSettings={appSettings ?? undefined}
+                    reserveBottomForQuestionPopup={!!pendingQuestion}
                     streamingParts={streamingParts}
                     message={{
                       id: "streaming",
@@ -874,6 +877,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
                   userAvatar={userAvatar}
                   sessionId={currentSession?.id}
                   appSettings={appSettings ?? undefined}
+                  reserveBottomForQuestionPopup={!!pendingQuestion}
                   streamingParts={item.parts}
                   message={{
                     id: item.id,

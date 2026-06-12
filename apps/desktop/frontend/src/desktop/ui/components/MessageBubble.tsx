@@ -91,6 +91,7 @@ interface Props {
   prompt?: Prompt;
   appSettings?: AppSettings;
   userAvatar?: string;
+  reserveBottomForQuestionPopup?: boolean;
   /** 当前 session id，用于后台任务 kill 操作 */
   sessionId?: string;
   onFork?: (id: string) => void;
@@ -1960,6 +1961,7 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   prompt,
   userAvatar,
+  reserveBottomForQuestionPopup,
   sessionId,
   onFork,
   onRegenerate,
@@ -2169,9 +2171,11 @@ export const MessageBubble = memo(function MessageBubble({
     streamingParts,
     streaming
   );
-  const hasAskToolCall = assistantParts.some(
-    (part) => part.type === "tool_group" && part.calls.some((call) => call.name === "Ask")
-  );
+  const shouldReserveBottomForQuestionPopup =
+    !!reserveBottomForQuestionPopup &&
+    assistantParts.some(
+      (part) => part.type === "tool_group" && part.calls.some((call) => call.name === "Ask")
+    );
   const rawText = getMessageRawText(message);
   const canToggleRawText = !streaming && canShowRawMessage(message);
 
@@ -2306,7 +2310,7 @@ export const MessageBubble = memo(function MessageBubble({
       title={archived ? "已被压缩，模型不再读取此消息（点击右上角圆环可再次压缩）" : undefined}
       className={cn(
         "group relative flex gap-3 px-6 py-4",
-        !isUser && hasAskToolCall && "mb-[320px]",
+        shouldReserveBottomForQuestionPopup && "mb-[320px]",
         archived && "opacity-50 hover:opacity-100 transition-opacity"
       )}
     >

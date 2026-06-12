@@ -86,6 +86,7 @@ export interface MessageListProps {
   userAvatar?: string;
   sessionId?: string;
   isStreaming: boolean;
+  reserveBottomForQuestionPopup: boolean;
   lastUserMsgId: string | null;
   lastUserHasAssistantAfter: boolean;
   lastCompactBoundaryIdx: number;
@@ -117,6 +118,7 @@ export const MessageList = memo(function MessageList({
   userAvatar,
   sessionId,
   isStreaming,
+  reserveBottomForQuestionPopup,
   lastUserMsgId,
   lastUserHasAssistantAfter,
   lastCompactBoundaryIdx,
@@ -210,6 +212,9 @@ export const MessageList = memo(function MessageList({
             prompt={prompt}
             userAvatar={userAvatar}
             sessionId={sessionId}
+            reserveBottomForQuestionPopup={
+              reserveBottomForQuestionPopup && m.role === "assistant" && i === messages.length - 1
+            }
             onFork={onFork}
             onRegenerate={onRegenerateProp}
             onEdit={onEditProp}
