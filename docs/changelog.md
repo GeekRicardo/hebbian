@@ -7446,3 +7446,15 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **验证**: `apps/desktop` 下 `pnpm exec tsc --noEmit` 绿（改前唯一报错 `useStore.ts:656` 消失）。
 - **留尾巴**: 端到端显形（AutoMode 跑并发审批，judge 判 ASK 看框弹出）需起 Desktop + 白名单模型实跑，本次未做 surface 级复现（heb CLI NDJSON 不渲染审批框）；逻辑已对齐架构 §4.4.4 与 protocol 注释。后续可把 `applyEventToSlot` 导出做 reducer 单测固化「auto_handled→requires_human=true→显形」这条回归。
 - **关联**: 架构 §4.4.4；protocol `event.rs` `PermissionAutoJudged.requires_human`
+
+### 2026-06-12 — hebisland 通知与 judge 接管对齐：auto_handled 压住、requires_human 显形
+
+- **Why**: 用户：「在 automode 全自动模式在 llm 审批时，还会弹 hebisland」。前端审批框已按 `auto_handled` 压住等 judge，但 desktop 的 island 桥接（`push_engine_event_to_island`）对 `PermissionRequested` 一律 `client.show()`——judge 接管的审批也弹系统通知，与前端行为不对称，违背「judge 评估期间不打扰用户」（架构 §4.4.4）。
+- **改动**:
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): `push_engine_event_to_island` 的 `PermissionRequested` 分支解构 `auto_handled`，为 true 时不推 island 卡片；新增 `PermissionAutoJudged` 分支——`requires_human=true`（ASK / 普通 AutoMode 命令类 DENY，审批框显形）时才补推 island 卡片，正文带 judge reason；卡片 id 仍是 `perm-{request_id}`，`PermissionResolved` 的 dismiss 逻辑零改动即可撤销。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 顺手删 `AutoModeJudgeRequest.automode_models` 死字段（白名单判定在进入该函数前已完成，函数体内从未读过；上次重构遗留，编译器 dead_code warning 即此）。
+  - [crates/agent-core/src/tools/read.rs](../crates/agent-core/src/tools/read.rs): 修 pre-existing 失败单测 `output_capped_with_offset_limit_hint`——Read 输出上限从 6KB 提到 100KB（commit a8bd20c）时测试数据没跟着改，500 行 ≈25KB 不再触发截断；改为 3000 行 ≈150KB。
+- **影响范围**: Desktop island 通知行为 + agent-core 内部结构体清理 + 单测修复。协议无变更。island 行为变化：judge 自动放行/自动拒的审批从「弹通知又消失」变为「全程无通知」；判转人工时通知正文从工具参数变为「工具名：judge reason」。
+- **验证**: `cargo check -p agent-core / -p hebbian` 绿（dead_code warning 消失）；`cargo test -p agent-core --lib` 493 passed，仅剩 2 个 pre-existing flaky（`remember_first_compound_bash_auto_resolves_matching_pending_call` / `run_in_background_returns_immediately`：单跑必过、同进程并行跑必挂，干净 HEAD worktree 复验同样挂，与本次改动无关）。
+- **留尾巴**: ① 2 个并行 flaky 测试待排查（疑似共享 tmp/注册表状态串扰）；② island 显形通知未实跑（需 Desktop + hebisland 进程）；③ web-server events.rs 仍不转发 PermissionAutoJudged，浏览器 surface 的显形依赖 v2 共享 crate 收敛。
+- **关联**: 架构 §4.4.4

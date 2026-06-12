@@ -622,7 +622,6 @@ impl ToolDispatcher {
                                 request_id: &p.request_id,
                                 force_automode,
                                 is_path_access: true,
-                                automode_models: &automode_models,
                                 language: automode_general.language,
                                 cancel: cancel.clone(),
                             })
@@ -707,7 +706,6 @@ impl ToolDispatcher {
                                 request_id,
                                 force_automode,
                                 is_path_access: false,
-                                automode_models: &automode_models,
                                 language: judge_language,
                                 cancel: cancel.clone(),
                             })
@@ -1809,7 +1807,6 @@ struct AutoModeJudgeRequest<'a> {
     /// 这条审批是否走路径越界链（PathAccess）。`true` 时 DENY 直接拒不保留人工
     /// （路径就是不让碰）；`false`（ToolCall）时命令类 DENY 保留用户最终拍板权。
     is_path_access: bool,
-    automode_models: &'a [String],
     language: crate::storage::settings::AppLanguage,
     cancel: CancelFlag,
 }

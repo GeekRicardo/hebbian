@@ -2498,8 +2498,15 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             input,
             summary,
             paths,
+            auto_handled,
             ..
         } => {
+            // AutoMode judge 接管的审批（auto_handled）不打扰用户：island 与前端审批框
+            // 同步压住，等 judge 出结果。若 judge 判「仍需人工」会再经 PermissionAutoJudged
+            // （requires_human=true）补推 island 卡片。
+            if *auto_handled {
+                return;
+            }
             let body = approval_card_body(kind, tool_name, input, summary, paths);
             client.show(IslandCard::new(
                 format!("perm-{request_id}"),
@@ -2507,6 +2514,28 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
                 "需要你的审批",
                 body,
             ));
+        }
+        EngineEvent::PermissionAutoJudged {
+            request_id,
+            tool_name,
+            reason,
+            requires_human,
+            ..
+        } => {
+            // judge 判 ASK / 普通 AutoMode 命令类 DENY：被接管时压住的审批显形，
+            // island 此时才需要用户注意。reason 是判官给的人话解释。
+            if *requires_human {
+                let body = match reason.as_deref() {
+                    Some(r) if !r.is_empty() => format!("{tool_name}：{r}"),
+                    _ => tool_name.clone(),
+                };
+                client.show(IslandCard::new(
+                    format!("perm-{request_id}"),
+                    "approval",
+                    "需要你的审批",
+                    body,
+                ));
+            }
         }
         EngineEvent::UserQuestionRequested {
             request_id,

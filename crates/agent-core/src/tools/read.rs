@@ -353,7 +353,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("big.txt");
         let mut f = std::fs::File::create(&file).unwrap();
-        for i in 1..=500 {
+        // 写超过 MAX_OUTPUT_BYTES（100KB）的内容才会触发截断：3000 行 × ~50B ≈ 150KB。
+        for i in 1..=3000 {
             writeln!(f, "line {i:04} {}", "x".repeat(40)).unwrap();
         }
         let tool = ReadTool::new(None, None, None);
