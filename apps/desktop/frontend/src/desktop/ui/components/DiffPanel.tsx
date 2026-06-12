@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { calculateDiffRows, type DiffRow } from "@/desktop/ui/lib/diffStats";
 import { PathHint } from "@/desktop/ui/components/PathHint";
 import type { DiffPayload, TurnFileChange } from "@/desktop/ui/types";
 
@@ -43,48 +44,6 @@ export function FullscreenPortal({ children }: { children: React.ReactNode }) {
  * 不再揉进 DiffMode——拆开后切换布局不会误关掉放大框。
  */
 export type DiffMode = "inline" | "split";
-
-interface DiffRow {
-  left: string;
-  right: string;
-  kind: "same" | "add" | "remove";
-}
-
-/** LCS-based diff: computes aligned rows marking added/removed/same lines. */
-function computeDiff(beforeLines: string[], afterLines: string[]): DiffRow[] {
-  const m = beforeLines.length;
-  const n = afterLines.length;
-  const dp = new Uint16Array((m + 1) * (n + 1));
-  const idx = (i: number, j: number) => i * (n + 1) + j;
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (beforeLines[i - 1] === afterLines[j - 1]) {
-        dp[idx(i, j)] = dp[idx(i - 1, j - 1)] + 1;
-      } else {
-        dp[idx(i, j)] = Math.max(dp[idx(i - 1, j)], dp[idx(i, j - 1)]);
-      }
-    }
-  }
-
-  const rev: DiffRow[] = [];
-  let i = m;
-  let j = n;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && beforeLines[i - 1] === afterLines[j - 1]) {
-      rev.push({ left: beforeLines[i - 1], right: afterLines[j - 1], kind: "same" });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[idx(i, j - 1)] >= dp[idx(i - 1, j)])) {
-      rev.push({ left: "", right: afterLines[j - 1], kind: "add" });
-      j--;
-    } else {
-      rev.push({ left: beforeLines[i - 1], right: "", kind: "remove" });
-      i--;
-    }
-  }
-  return rev.reverse();
-}
 
 interface DiffViewerProps {
   /** 修改前的全文文本。Edit 流式时是 `args.old_string` 已收部分；Write 时为 ""。 */
@@ -301,7 +260,7 @@ export function DiffViewer({
   baseLineAfter = 1,
 }: DiffViewerProps) {
   const diffRows = useMemo(
-    () => computeDiff(beforeText.split("\n"), afterText.split("\n")),
+    () => calculateDiffRows(beforeText, afterText),
     [beforeText, afterText],
   );
   const renderRows = useMemo(
@@ -335,21 +294,22 @@ export function DiffViewer({
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      <DiffHeader
-        filePath={filePath ?? ""}
-        actionLabel={actionLabel ?? ""}
-        badge={badge}
-        mode={mode}
-        addCount={addCount}
-        removeCount={removeCount}
-        onCycleMode={onCycleMode}
-        hideModeToggle={isCreate}
-        expanded={expanded}
-        onToggleExpanded={onToggleExpanded}
-        onClose={onClose}
-        rightExtras={rightExtras}
-        hideMeta={hideHeaderMeta}
-      />
+      {!hideHeaderMeta && (
+        <DiffHeader
+          filePath={filePath ?? ""}
+          actionLabel={actionLabel ?? ""}
+          badge={badge}
+          mode={mode}
+          addCount={addCount}
+          removeCount={removeCount}
+          onCycleMode={onCycleMode}
+          hideModeToggle={isCreate}
+          expanded={expanded}
+          onToggleExpanded={onToggleExpanded}
+          onClose={onClose}
+          rightExtras={rightExtras}
+        />
+      )}
       {isEmpty ? (
         <div className="flex-1 px-3 py-6 text-center text-[12px] text-muted-foreground">
           {streaming ? "等待参数…" : "文件为空（无变更）"}
@@ -379,6 +339,57 @@ export function DiffViewer({
   );
 }
 
+export function DiffModeButton({
+  mode,
+  onCycleMode,
+  className,
+}: {
+  mode: DiffMode;
+  onCycleMode: () => void;
+  className?: string;
+}) {
+  const modeLabel = mode === "split" ? "分栏" : "行内";
+  const ModeIcon = mode === "split" ? Columns2 : Rows3;
+
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onCycleMode();
+      }}
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground",
+        className,
+      )}
+      title={`当前：${modeLabel}。点击切换 split ↔ inline。`}
+    >
+      <ModeIcon className="h-3.5 w-3.5" />
+      <span>{modeLabel}</span>
+    </button>
+  );
+}
+
+export function DiffStatsBadge({
+  addCount,
+  removeCount,
+}: {
+  addCount: number;
+  removeCount: number;
+}) {
+  if (addCount === 0 && removeCount === 0) return null;
+  return (
+    <span className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] tabular-nums">
+      {addCount > 0 && (
+        <span className="text-green-700 dark:text-green-400">+{addCount}</span>
+      )}
+      {removeCount > 0 && (
+        <span className="text-rose-600 dark:text-rose-400">−{removeCount}</span>
+      )}
+    </span>
+  );
+}
+
 function DiffHeader({
   filePath,
   actionLabel,
@@ -392,7 +403,6 @@ function DiffHeader({
   onToggleExpanded,
   onClose,
   rightExtras,
-  hideMeta,
 }: {
   filePath: string;
   actionLabel: string;
@@ -407,59 +417,35 @@ function DiffHeader({
   onToggleExpanded?: () => void;
   onClose?: () => void;
   rightExtras?: React.ReactNode;
-  hideMeta?: boolean;
 }) {
-  // 顶栏循环按钮：split ↔ inline；放大/缩小走独立按钮，不再混进 mode
-  const modeLabel = mode === "split" ? "分栏" : "行内";
-  const ModeIcon = mode === "split" ? Columns2 : Rows3;
+  // 放大/缩小走独立按钮，不再混进 mode
 
   return (
     <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2 shrink-0">
       <div className="min-w-0 flex items-center gap-2">
-        {!hideMeta && filePath && (
+        {filePath && (
           <PathHint path={filePath}>
             <span className="truncate text-[12px] font-medium font-mono">
               {pathLeaf(filePath)}
             </span>
           </PathHint>
         )}
-        {!hideMeta && actionLabel && (
+        {actionLabel && (
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {actionLabel}
           </span>
         )}
-        {!hideMeta && badge && (
+        {badge && (
           <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
             {badge}
           </span>
         )}
         {/* GitHub PR 风格：+N -M 分开渲染，绿/红 token；无变更则隐藏 */}
-        {!hideMeta && (addCount > 0 || removeCount > 0) && (
-          <span className="shrink-0 inline-flex items-center gap-1.5 font-mono text-[10px] tabular-nums">
-            {addCount > 0 && (
-              <span className="text-green-700 dark:text-green-400">
-                +{addCount}
-              </span>
-            )}
-            {removeCount > 0 && (
-              <span className="text-rose-600 dark:text-rose-400">
-                −{removeCount}
-              </span>
-            )}
-          </span>
-        )}
+        <DiffStatsBadge addCount={addCount} removeCount={removeCount} />
       </div>
       <div className="flex items-center gap-1">
         {!hideModeToggle && (
-          <button
-            type="button"
-            onClick={onCycleMode}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={`当前：${modeLabel}。点击切换 split ↔ inline。`}
-          >
-            <ModeIcon className="h-3.5 w-3.5" />
-            <span>{modeLabel}</span>
-          </button>
+          <DiffModeButton mode={mode} onCycleMode={onCycleMode} />
         )}
         {onToggleExpanded && (
           <button

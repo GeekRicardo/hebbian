@@ -4,7 +4,8 @@ import { ChevronDown, ChevronRight, FilePenLine, RotateCcw } from "lucide-react"
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
-import { DiffViewer, type DiffMode } from "./DiffPanel";
+import { DiffModeButton, DiffStatsBadge, DiffViewer, type DiffMode } from "./DiffPanel";
+import { calculateDiffStats, type DiffStats } from "@/desktop/ui/lib/diffStats";
 import type { DiffPayload, RunEditEntry, TurnFileChange } from "@/desktop/ui/types";
 
 const EMPTY_RUNS: RunEditEntry[] = [];
@@ -195,31 +196,49 @@ function RunFileCard({
     return () => { cancelled = true; };
   }, [expanded, isDelete, payload, sessionId, runId, file.real_path]);
 
+  const diffStats = useMemo<DiffStats | null>(() => {
+    if (!payload) return null;
+    return calculateDiffStats(payload.before_text, payload.after_text);
+  }, [payload]);
+  const canCycleMode = !!payload && !(payload.before_text === "" && payload.after_text !== "");
+
   return (
     <div className="overflow-hidden rounded border border-border/50 bg-background">
-      <button
-        type="button"
-        onClick={() => !isDelete && setExpanded((v) => !v)}
+      <div
         className={cn(
           "flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[10px]",
           !isDelete && "hover:bg-accent/30",
         )}
       >
-        {isDelete ? (
-          <span className="w-3 shrink-0" />
-        ) : expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <button
+          type="button"
+          onClick={() => !isDelete && setExpanded((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          {isDelete ? (
+            <span className="w-3 shrink-0" />
+          ) : expanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+          )}
+          <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
+            {actionLabel(file.action)}
+          </span>
+          <span className="min-w-0 truncate font-mono">{pathLeaf(file.real_path)}</span>
+          {diffStats && <DiffStatsBadge {...diffStats} />}
+          <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">
+            {file.before_bytes}→{file.after_bytes}B
+          </span>
+        </button>
+        {expanded && !isDelete && canCycleMode && (
+          <DiffModeButton
+            mode={mode}
+            onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
+            className="px-1.5 py-0.5"
+          />
         )}
-        <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
-          {actionLabel(file.action)}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono">{pathLeaf(file.real_path)}</span>
-        <span className="shrink-0 text-[9px] text-muted-foreground">
-          {file.before_bytes}→{file.after_bytes}B
-        </span>
-      </button>
+      </div>
       {expanded && !isDelete && (
         payload ? (
           <DiffViewer
