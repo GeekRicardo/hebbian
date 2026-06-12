@@ -1907,6 +1907,10 @@
       case "heb:aside:error":
         if (cardChat && msg.payload) appendChatMsg(cardChat.msgList, "assistant", "⚠️ " + (msg.payload.message || "出错了"));
         break;
+      case "heb:unload:allow":
+        // 用户已在工具栏确认丢弃——本次离开不再被 beforeunload 拦（一次性）
+        unloadAllowOnce = true;
+        break;
       default:
         break;
     }
@@ -1914,6 +1918,18 @@
 
   // 下行入口：wry 模式 Rust eval 调它；iframe 模式 message 事件喂它。
   window.__HEB_RX__ = handleIn;
+
+  // 未提交注释防丢失兜底：页面自身跳转（链接点击 / location 赋值）触发 beforeunload。
+  // 工具栏发起的刷新/导航由 React 侧自定义弹窗拦截并先发 heb:unload:allow 放行，
+  // 这里见放行标志就不再拦（一次性，避免双弹）。
+  var unloadAllowOnce = false;
+  window.addEventListener("beforeunload", function (e) {
+    if (unloadAllowOnce) { unloadAllowOnce = false; return; }
+    if (editQueue.length > 0) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
   if (IN_IFRAME) {
     window.addEventListener("message", function (e) {
       handleIn(e.data);

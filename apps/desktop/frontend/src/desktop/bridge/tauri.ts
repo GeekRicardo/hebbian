@@ -632,6 +632,7 @@ export const api = {
   browserBack: (sessionId: string) => invoke<void>("browser_back", { sessionId }),
   browserForward: (sessionId: string) => invoke<void>("browser_forward", { sessionId }),
   browserReload: (sessionId: string) => invoke<void>("browser_reload", { sessionId }),
+  browserAllowUnload: (sessionId: string) => invoke<void>("browser_allow_unload", { sessionId }),
   browserSetBounds: (sessionId: string, bounds: { x: number; y: number; width: number; height: number }) =>
     invoke<void>("browser_set_bounds", { sessionId, ...bounds }),
   browserSetVisible: (sessionId: string, visible: boolean) =>

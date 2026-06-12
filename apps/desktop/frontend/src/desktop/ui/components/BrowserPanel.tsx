@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { getBrowserHost, type BrowserStateEvent } from "@/desktop/ui/lib/browserHost";
+import { ipcConfirm } from "@/desktop/ui/lib/utils";
 import {
   extractPreviewUrls,
   formatPreviewUrlLabel,
@@ -44,6 +45,8 @@ interface Inst {
   followed: string | null;
   /** 已在后端创建子 webview（懒创建标记）——false 时下次导航走 open，true 走 navigate */
   opened: boolean;
+  /** 页面里还没提交的注释条数（>0 时刷新/导航先确认，防丢） */
+  dirtyCount: number;
 }
 
 const BLANK_STATE: BrowserStateEvent = {
@@ -60,6 +63,7 @@ const BLANK_INST: Inst = {
   autoFollow: true,
   followed: null,
   opened: false,
+  dirtyCount: 0,
 };
 
 export function BrowserPanel({ active }: { active: boolean }) {
@@ -136,6 +140,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
       })
     );
     track(host.onPopout((sid, open) => patchInst(sid, { poppedOut: open })));
+    track(host.onAnnotationDirty((sid, count) => patchInst(sid, { dirtyCount: count })));
 
     return () => {
       alive = false;
@@ -181,6 +186,24 @@ export function BrowserPanel({ active }: { active: boolean }) {
     setDraftUrl(cur.state.url ? formatPreviewUrlLabel(cur.state.url) : "");
   }, [cur.state.url, currentSessionId]);
 
+  // 有未提交注释时先确认；确认后给页面发一次性放行，避免 beforeunload 再弹一次。
+  const confirmDiscardAnnotations = useCallback(
+    async (sid: string): Promise<boolean> => {
+      const inst = instsRef.current[sid];
+      if (!inst || inst.dirtyCount <= 0) return true;
+      const ok = await ipcConfirm(
+        `页面里还有 ${inst.dirtyCount} 条注释没提交，离开后会丢失。确定继续吗？`,
+        "注释还没提交"
+      );
+      if (ok) {
+        await host.allowUnload(sid).catch(() => {});
+        patchInst(sid, { dirtyCount: 0 });
+      }
+      return ok;
+    },
+    [host, patchInst]
+  );
+
   const loadUrl = useCallback(
     (raw: string, origin: "auto" | "user") => {
       const sid = currentSessionIdRef.current;
@@ -193,22 +216,25 @@ export function BrowserPanel({ active }: { active: boolean }) {
         toast.error("这个地址没法打开");
         return;
       }
-      if (origin === "user") patchInst(sid, { autoFollow: false });
-      const inst = instsRef.current[sid];
-      if (!inst?.opened) {
-        // 懒创建：这个对话第一次开浏览器，才在后端建子 webview
-        patchInst(sid, { opened: true });
-        void host
-          .open(sid, norm, origin, currentBounds(viewportRef.current))
-          .catch((err) => {
-            toast.error(String(err));
-            patchInst(sid, { opened: false });
-          });
-      } else {
-        void host.navigate(sid, norm).catch((err) => toast.error(String(err)));
-      }
+      void (async () => {
+        if (origin === "user" && !(await confirmDiscardAnnotations(sid))) return;
+        if (origin === "user") patchInst(sid, { autoFollow: false });
+        const inst = instsRef.current[sid];
+        if (!inst?.opened) {
+          // 懒创建：这个对话第一次开浏览器，才在后端建子 webview
+          patchInst(sid, { opened: true });
+          void host
+            .open(sid, norm, origin, currentBounds(viewportRef.current))
+            .catch((err) => {
+              toast.error(String(err));
+              patchInst(sid, { opened: false });
+            });
+        } else {
+          void host.navigate(sid, norm).catch((err) => toast.error(String(err)));
+        }
+      })();
     },
-    [host, patchInst]
+    [host, patchInst, confirmDiscardAnnotations]
   );
 
   // auto-follow：聊天流里冒出新的 dev server 地址且当前对话开关打开时自动跟随。
@@ -245,7 +271,13 @@ export function BrowserPanel({ active }: { active: boolean }) {
       <form onSubmit={submitUrl} className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <button
           type="button"
-          onClick={() => currentSessionId && void host.back(currentSessionId)}
+          onClick={() => {
+            const sid = currentSessionId;
+            if (!sid) return;
+            void confirmDiscardAnnotations(sid).then((ok) => {
+              if (ok) void host.back(sid);
+            });
+          }}
           disabled={!cur.state.can_go_back}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="后退"
@@ -254,7 +286,13 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </button>
         <button
           type="button"
-          onClick={() => currentSessionId && void host.forward(currentSessionId)}
+          onClick={() => {
+            const sid = currentSessionId;
+            if (!sid) return;
+            void confirmDiscardAnnotations(sid).then((ok) => {
+              if (ok) void host.forward(sid);
+            });
+          }}
           disabled={!cur.state.can_go_forward}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="前进"
@@ -263,7 +301,13 @@ export function BrowserPanel({ active }: { active: boolean }) {
         </button>
         <button
           type="button"
-          onClick={() => currentSessionId && void host.reload(currentSessionId)}
+          onClick={() => {
+            const sid = currentSessionId;
+            if (!sid) return;
+            void confirmDiscardAnnotations(sid).then((ok) => {
+              if (ok) void host.reload(sid);
+            });
+          }}
           disabled={!cur.state.url}
           className="grid h-7 w-7 place-items-center rounded text-muted-foreground hover:bg-accent disabled:opacity-30"
           title="刷新"

@@ -61,6 +61,8 @@ export interface BrowserHost {
   close(sessionId: string): Promise<void>;
   setPicker(sessionId: string, active: boolean): Promise<void>;
   clearSelection(sessionId: string): Promise<void>;
+  /** 用户确认丢弃未提交注释后调用——给页面发一次性放行，刷新/导航不再被兜底拦截。 */
+  allowUnload(sessionId: string): Promise<void>;
   popout(sessionId: string): Promise<void>;
   closePopout(): Promise<void>;
 
@@ -71,6 +73,8 @@ export interface BrowserHost {
   onAnnotationBatch(
     cb: (items: AnnotationBatchItem[], boundSessionId?: string | null) => void
   ): Promise<UnlistenFn>;
+  /** 页面里未提交注释数变化（防丢失警告用）。 */
+  onAnnotationDirty(cb: (sessionId: string, count: number) => void): Promise<UnlistenFn>;
   onEscaped(
     cb: (sessionId: string, info: { url: string; reason: string }) => void
   ): Promise<UnlistenFn>;
@@ -111,6 +115,9 @@ class TauriBrowserHost implements BrowserHost {
   clearSelection(sessionId: string) {
     return api.browserClearSelection(sessionId);
   }
+  allowUnload(sessionId: string) {
+    return api.browserAllowUnload(sessionId);
+  }
   popout(sessionId: string) {
     return api.browserPopout(sessionId);
   }
@@ -138,6 +145,11 @@ class TauriBrowserHost implements BrowserHost {
     return listen<{ items: AnnotationBatchItem[]; boundSessionId?: string | null }>(
       "browser://annotation-batch",
       (e) => cb(e.payload.items, e.payload.boundSessionId)
+    );
+  }
+  onAnnotationDirty(cb: (sessionId: string, count: number) => void) {
+    return listen<{ sessionId: string; count: number }>("browser://annotation-dirty", (e) =>
+      cb(e.payload.sessionId, e.payload.count ?? 0)
     );
   }
   onEscaped(cb: (sessionId: string, info: { url: string; reason: string }) => void) {

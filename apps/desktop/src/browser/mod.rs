@@ -873,10 +873,23 @@ pub fn browser_style_take_diff(
     send_down(inst, "heb:style:take-diff", serde_json::json!({}))
 }
 
+/// 用户已确认丢弃未提交注释——给 inspector 发一次性放行标志，
+/// 让接下来的刷新/导航不再被 beforeunload 兜底拦一遍（避免双弹）。
+#[tauri::command]
+pub fn browser_allow_unload(
+    state: tauri::State<'_, BrowserState>,
+    session_id: String,
+) -> Result<(), String> {
+    let guard = state.instances.lock().unwrap();
+    let Some(inst) = guard.get(&session_id) else {
+        return Ok(());
+    };
+    send_down(inst, "heb:unload:allow", serde_json::json!({}))
+}
+
 /// 清除选中态（注释卡片关闭 / 切走 tab 时调）。无浏览器时无操作。
 #[tauri::command]
-pub fn browser_clear_selection(
-    state: tauri::State<'_, BrowserState>,
+pub fn browser_clear_selection(    state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
     let guard = state.instances.lock().unwrap();

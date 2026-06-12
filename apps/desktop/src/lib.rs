@@ -2825,6 +2825,7 @@ pub fn run() {
             browser::browser_style_revert,
             browser::browser_style_take_diff,
             browser::browser_clear_selection,
+            browser::browser_allow_unload,
             browser::browser_popout,
             browser::browser_close_popout,
             terminal::terminal_open,
