@@ -23,6 +23,9 @@ pub struct PreviewStyleInput {
     pub prop: String,
     /// CSS 值，如 `12px` / `#1f2328` / `600`。
     pub value: String,
+    /// 改哪个选中元素（`@2`）；缺省主元素 `@1`。多元素注释框里指定目标用。
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 pub struct PreviewStyleTool;
@@ -34,12 +37,13 @@ impl Tool for PreviewStyleTool {
     }
 
     fn description(&self) -> &str {
-        "Apply a CSS style change to the web element currently under discussion, \
-         live in the page preview. Use this to iteratively adjust the element's look \
-         (color, size, spacing, border, font, etc.) while talking with the user. \
-         The change is applied immediately and the user sees it. Call it once per \
-         property; call again to tweak. Both `prop` (a CSS property name like \
-         `border-radius`) and `value` (a CSS value like `12px`) are required."
+        "Apply a CSS style change to a selected web element, live in the page preview. \
+         Use this to iteratively adjust the element's look (color, size, spacing, \
+         border, font, etc.) while talking with the user. The change is applied \
+         immediately and the user sees it. Call it once per property; call again to \
+         tweak. Both `prop` (a CSS property name like `border-radius`) and `value` \
+         (a CSS value like `12px`) are required. When multiple elements are selected, \
+         pass `target` like @2 to style a specific one; defaults to @1."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -48,7 +52,8 @@ impl Tool for PreviewStyleTool {
             "required": ["prop", "value"],
             "properties": {
                 "prop": { "type": "string", "description": "CSS property name, e.g. border-radius, color, font-size" },
-                "value": { "type": "string", "description": "CSS value, e.g. 12px, #1f2328, 600" }
+                "value": { "type": "string", "description": "CSS value, e.g. 12px, #1f2328, 600" },
+                "target": { "type": "string", "description": "Which selected element to style, like @2. Defaults to the primary element @1." }
             }
         })
     }
@@ -57,9 +62,39 @@ impl Tool for PreviewStyleTool {
     async fn execute(&self, input: Value) -> AppResult<String> {
         let parsed: PreviewStyleInput = serde_json::from_value(input)
             .map_err(|e| AppError::msg(format!("invalid PreviewStyle input: {e}")))?;
+        let target = parsed.target.as_deref().unwrap_or("@1");
         Ok(format!(
-            "已实时应用到预览元素：{} = {}",
+            "已实时应用到预览元素 {target}：{} = {}",
             parsed.prop, parsed.value
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn parses_target_and_returns_ack() {
+        let out = PreviewStyleTool
+            .execute(serde_json::json!({
+                "prop": "color",
+                "value": "#fff",
+                "target": "@2"
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("color"), "确认句应含属性名，实际: {out}");
+        assert!(out.contains("@2"), "确认句应含目标，实际: {out}");
+    }
+
+    #[tokio::test]
+    async fn target_is_optional_defaults_primary() {
+        let out = PreviewStyleTool
+            .execute(serde_json::json!({ "prop": "color", "value": "#fff" }))
+            .await
+            .unwrap();
+        assert!(out.contains("#fff"));
+        assert!(out.contains("@1"), "缺省 target 应为 @1，实际: {out}");
     }
 }

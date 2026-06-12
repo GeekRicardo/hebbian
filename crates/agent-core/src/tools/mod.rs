@@ -9,6 +9,8 @@ pub mod grep;
 pub mod hitl;
 pub mod kill_shell;
 pub mod mcp;
+pub mod preview_act;
+pub mod preview_mutate;
 pub mod preview_style;
 pub use mcp::McpToolReport;
 pub mod read;
@@ -245,6 +247,8 @@ pub fn default_tools(
         // 仅内置浏览器「元素对话」旁支会话用（enabled_tools 含 PreviewStyle 才暴露，
         // 不进 BUILTIN_TOOL_NAMES，普通会话看不到）。
         Box::new(preview_style::PreviewStyleTool),
+        Box::new(preview_mutate::PreviewMutateTool),
+        Box::new(preview_act::PreviewActTool),
         Box::new(read_memory::ReadMemoryTool::new(
             mem_data_dir.clone(),
             project_workdir.clone(),
