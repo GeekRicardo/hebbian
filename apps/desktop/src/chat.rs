@@ -693,10 +693,10 @@ struct DesktopObserver<'a> {
     session_id: String,
     emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
     partial_writer: Option<PartialFileWriter>,
-    /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：subagent_call_id → 子 parts recorder。
-    /// 子事件按 call_id 累积，同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父
-    /// message 落**主** session.jsonl，修复「子过程只活在内存事件流、run 一结束就蒸发」。
-    nested: std::collections::BTreeMap<String, AssistantPartsRecorder>,
+    /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：按 subagent_call_id 累积子过程，
+    /// 同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父 message 落**主** session.jsonl，
+    /// 修复「子过程只活在内存事件流、run 一结束就蒸发」。与 CLI / hebweb 共用同一份累积逻辑。
+    nested: agent_core::storage::nested::NestedAccumulator,
 }
 
 impl<'a> DesktopObserver<'a> {
@@ -729,7 +729,7 @@ impl<'a> DesktopObserver<'a> {
             session_id: session_id.to_string(),
             emit,
             partial_writer,
-            nested: std::collections::BTreeMap::new(),
+            nested: agent_core::storage::nested::NestedAccumulator::default(),
         }
     }
 
@@ -794,24 +794,14 @@ impl<'a> DesktopObserver<'a> {
 #[async_trait]
 impl<'a> TurnObserver for DesktopObserver<'a> {
     fn on_event(&mut self, event: &AgentEvent) {
-        // 子 Subagent NestedRun 的事件（架构 §4.4.11.8）：装饰器已把 event.run_id 重写
-        // 为父 RunId，但带 subagent_call_id 标识。父 observer 把这种事件**只**转发到 UI
-        // （前端按 subagent_call_id 嵌套渲染到父 Task 卡片内部），**不**累积到父 parts /
-        // tool_calls / partial sidecar——避免子内容串入父 transcript / 父 jsonl。
-        // 子 session.jsonl 独立落盘由 P3.1c 接上；本期 P3.1b 阶段先保住"父 transcript 不串入"。
-        // 子 NestedRun 事件（架构 §4.4.11.8）：累积到对应 Task call 的 nested，随父 message
-        // 落**主** session.jsonl。用 per-call recorder 累积子的 text / reasoning / 子工具调用，
-        // 每次同步进 tool_calls 里 Task call 的 nested（顶层 + 当前 segment 两份都更新，落盘
-        // 走哪条路径都带上）。子事件仍转发 UI 做 streaming 嵌套渲染。
-        if let Some(call_id) = event.subagent_call_id.clone() {
-            let rec = self.nested.entry(call_id.clone()).or_default();
-            record_assistant_part_event(rec, event);
-            let nested_parts = rec.parts.clone();
-            for calls in [&mut self.tool_calls, &mut self.segment_tool_calls] {
-                if let Some(call) = calls.iter_mut().find(|c| c.id == call_id) {
-                    call.nested.clone_from(&nested_parts);
-                }
-            }
+        // 子 NestedRun 事件（架构 §4.4.11.8）：装饰器已把 run_id 重写为父 RunId、带 subagent_call_id。
+        // 累积进对应 Task call 的 nested（顶层 + 当前 segment 两份 tool_calls 都同步，落盘走哪条
+        // 路径都带上），随父 message 落**主** session.jsonl——修复「子过程只活在内存事件流、run 一
+        // 结束就蒸发」。子事件仍转发 UI 做 streaming 嵌套渲染。与 CLI / hebweb 共用同一份累积逻辑。
+        if let Some(call_id) = event.subagent_call_id.as_deref() {
+            self.nested.record(call_id, &event.payload);
+            self.nested.sync_into(&mut self.tool_calls);
+            self.nested.sync_into(&mut self.segment_tool_calls);
             if let Some(ev) = agent_event_to_engine_event(event) {
                 (self.emit)(ev);
             }
@@ -1522,7 +1512,7 @@ pub async fn compact_session(
 /// 打开指向主对话文件、主调用标 `aside` 的 dump 实现——旁支行不参与 `"main"` 增量去重，
 /// 不污染主对话 transcript 的增量重建。
 ///
-/// 工具只暴露 `PreviewStyle`（只读信号工具、无副作用），故即便走到审批 gate 也直接放行。
+/// 工具只暴露 Preview 系信号工具（无副作用），故即便走到审批 gate 也直接放行。
 ///
 /// 返回更新后的内存历史（含本轮 user + assistant）+ 本轮 assistant message，
 /// 调用方持有历史续接下一轮。
@@ -1535,6 +1525,7 @@ pub async fn send_aside(
     system_prompt: String,
     mut history: Vec<Message>,
     user_content: String,
+    attachments: Vec<common::attachments::MessageAttachment>,
     cancel_flag: CancelFlag,
     emit_event: impl Fn(EngineEvent) + Send + Sync,
 ) -> AppResult<(Vec<Message>, Message)> {
@@ -1558,7 +1549,7 @@ pub async fn send_aside(
         id: sessions::new_id(),
         role: Role::User,
         content: user_content,
-        attachments: Vec::new(),
+        attachments,
         tool_calls: Vec::new(),
         parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),

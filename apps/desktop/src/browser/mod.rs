@@ -889,7 +889,8 @@ pub fn browser_allow_unload(
 
 /// 清除选中态（注释卡片关闭 / 切走 tab 时调）。无浏览器时无操作。
 #[tauri::command]
-pub fn browser_clear_selection(    state: tauri::State<'_, BrowserState>,
+pub fn browser_clear_selection(
+    state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
     let guard = state.instances.lock().unwrap();
@@ -904,11 +905,12 @@ pub fn browser_clear_selection(    state: tauri::State<'_, BrowserState>,
 // system prompt 不嵌具体元素定位（保 prompt cache 命中 + 支持中途追加元素）；
 // 元素定位作为每轮 user content 前缀由 handle_aside_send 拼进去。
 fn aside_system_prompt() -> String {
-    "你是网页预览里的「样式调整助手」。用户在页面上圈了一个或多个元素（编号 @1、@2…），\
-     你帮他在预览上**临时**调整看效果。每轮用户消息前会附上当前选中元素的定位信息。\n\n\
-     你的工具：\n\
+    "你是网页预览里的「样式调整助手」。用户在页面上圈了一个或多个元素（按 1、2、3… 编号），\
+     你帮他在预览上**临时**调整看效果。每轮用户消息前会附上 <selected_elements> 块：每个 \
+     <element index=\"N\"> 是一个选中元素的定位信息。用户会用自然语言说「1」「第二个」指代它们。\n\n\
+     你的工具（target 参数填 @N，如 @2 对应 index=2 的元素，缺省 @1）：\n\
      • PreviewStyle(prop, value, target) —— 实时改某个元素的内联样式（color / font-size / \
-     padding / border-radius / background-color 等），用户立刻看到效果。target 填 @N（缺省 @1）。\
+     padding / border-radius / background-color 等），用户立刻看到效果。\
      一次改一个属性，想微调再调一次。\n\
      • PreviewMutate(op, target, …) —— 改 DOM 结构：op=append（target 内追加 html 片段）/ \
      remove（移除 target）/ setText（改 target 文本为 text）。同样是预览草稿，刷新即消失。\n\
@@ -1061,22 +1063,46 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         .map(|arr| {
             arr.iter()
                 .filter_map(|e| {
+                    // inspector 传 "@N"，剥掉 @ 取纯编号（用户自然语言说「1」「2」）
                     let r = e.get("ref").and_then(|v| v.as_str())?;
+                    let n = r.trim_start_matches('@');
                     let loc = e.get("locator").and_then(|v| v.as_str()).unwrap_or("");
-                    Some(format!("{r}:\n{loc}"))
+                    Some(format!("<element index=\"{n}\">\n{loc}\n</element>"))
                 })
                 .collect::<Vec<_>>()
-                .join("\n\n")
+                .join("\n")
         })
         .filter(|s| !s.is_empty())
-        // 旧单元素载荷兜底：把 element 当 @1
+        // 旧单元素载荷兜底：把 element 当 1 号
         .unwrap_or_else(|| {
             if element_desc.is_empty() {
                 String::new()
             } else {
-                format!("@1:\n{element_desc}")
+                format!("<element index=\"1\">\n{element_desc}\n</element>")
             }
         });
+    // 粘贴的截图：inspector 传 [{mediaType, data(base64)}]，转成图片附件随消息发模型
+    let attachments: Vec<common::attachments::MessageAttachment> = payload
+        .get("images")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .filter_map(|(i, img)| {
+                    let data = img.get("data").and_then(|v| v.as_str())?;
+                    let media_type = img
+                        .get("mediaType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/png");
+                    Some(common::attachments::MessageAttachment::Image {
+                        name: format!("pasted-{}.png", i + 1),
+                        media_type: media_type.to_string(),
+                        data: data.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // 卡片里模型选择器选的 provider/model（可空 → 用上下文默认）
     let sel_provider = payload
         .get("providerId")
@@ -1154,6 +1180,7 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
             aside_system_prompt(),
             history,
             user_content,
+            attachments,
             fresh_cancel(),
             move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
         )
@@ -1251,6 +1278,7 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
             aside_system_prompt(),
             history,
             prompt,
+            Vec::new(),
             fresh_cancel(),
             |_event| {},
         )
@@ -1333,6 +1361,7 @@ fn handle_annotation_submit_all(app: &AppHandle, main_session_id: &str, payload:
             aside_system_prompt(),
             Vec::new(),
             prompt,
+            Vec::new(),
             fresh_cancel(),
             |_event| {},
         )

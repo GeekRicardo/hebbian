@@ -1403,152 +1403,130 @@
     var msgList = document.createElement("div");
     msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:140px;";
     var chatInputRow = document.createElement("div");
-    chatInputRow.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-top:1px solid #d9dde3;align-items:flex-end;";
-    // contenteditable 输入框：支持 @N 蓝色 chip 引用选中元素（textarea 放不下富内容）
-    var chatInput = document.createElement("div");
-    chatInput.contentEditable = "true";
-    chatInput.setAttribute("data-heb-placeholder", "让它改这个元素，@ 可引用元素（⌘↵ 发送）");
-    // contenteditable 无原生 placeholder，用 :empty::before 模拟（一次性注入样式）
-    if (!document.getElementById("heb-chatinput-style")) {
-      var phStyle = document.createElement("style");
-      phStyle.id = "heb-chatinput-style";
-      phStyle.textContent = "[data-heb-placeholder]:empty::before{content:attr(data-heb-placeholder);color:#8c949e;pointer-events:none;}";
-      document.documentElement.appendChild(phStyle);
-    }
-    chatInput.style.cssText = "flex:1;min-height:36px;max-height:96px;overflow-y:auto;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;white-space:pre-wrap;word-break:break-word;";
-    // IME 组合输入中不触发 @ 弹层（拼音打 "@" 前缀会误触）
-    var composing = false;
-    chatInput.addEventListener("compositionstart", function () { composing = true; });
-    chatInput.addEventListener("compositionend", function () { composing = false; });
-
-    function mkRefChip(i) {
-      var item = draft.elements[i];
-      var chip = document.createElement("span");
-      chip.contentEditable = "false";
-      chip.setAttribute("data-heb-ref", "@" + (i + 1));
-      chip.setAttribute("data-heb-locator", item.snapshot.selectorPath || "");
-      chip.textContent = "@" + (i + 1);
-      chip.title = elementBadge(item.snapshot);
-      chip.style.cssText = "display:inline-block;background:#2f81f7;color:#fff;border-radius:4px;padding:0 4px;margin:0 1px;font-size:11px;cursor:default;user-select:none;";
-      chip.addEventListener("mouseenter", function () {
+    chatInputRow.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-top:1px solid #d9dde3;";
+    // 输入框上方固定一排元素标签：发送时全部元素自动随消息带给助手（XML 前缀），
+    // 用户直接用自然语言说「1」「2」即可，无需 @ 引用。
+    var refsRow = document.createElement("div");
+    refsRow.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;align-items:center;";
+    draft.elements.forEach(function (item, i) {
+      var tag = document.createElement("span");
+      tag.textContent = (i + 1) + " " + elementBadge(item.snapshot);
+      tag.title = "对话里直接说「" + (i + 1) + "」指代它；悬停可在页面上高亮";
+      tag.style.cssText = "display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#ddf4ff;color:#0969da;border:1px solid #b6e3ff;border-radius:4px;padding:1px 6px;font-size:11px;cursor:default;user-select:none;";
+      tag.addEventListener("mouseenter", function () {
         ensureOverlayLoop();
         hoverTarget = item.el && item.el.isConnected ? item.el : null;
       });
-      chip.addEventListener("mouseleave", function () { hoverTarget = null; });
-      return chip;
-    }
+      tag.addEventListener("mouseleave", function () { hoverTarget = null; });
+      refsRow.appendChild(tag);
+    });
+    var inputLine = document.createElement("div");
+    inputLine.style.cssText = "display:flex;gap:6px;align-items:flex-end;";
+    var chatInput = document.createElement("textarea");
+    chatInput.rows = 2;
+    chatInput.placeholder = draft.elements.length > 1
+      ? "让它改这些元素，说 1、2 指代上方标签（⌘↵ 发送）"
+      : "让它改这个元素（⌘↵ 发送）";
+    chatInput.style.cssText = "flex:1;min-height:36px;max-height:96px;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;font-family:inherit;";
 
-    // @ 弹层：列出 draft 里的元素，点选在光标处插 chip
-    var refMenu = null;
-    function closeRefMenu() {
-      if (refMenu && refMenu.parentNode) refMenu.parentNode.removeChild(refMenu);
-      refMenu = null;
-    }
-    function openRefMenu() {
-      closeRefMenu();
-      refMenu = document.createElement("div");
-      refMenu.setAttribute(OVERLAY_ATTR, "refmenu");
-      refMenu.style.cssText = "position:fixed;z-index:2147483647;background:#fff;border:1px solid #d9dde3;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,0.18);padding:4px;min-width:160px;font-family:-apple-system,system-ui,sans-serif;";
-      draft.elements.forEach(function (item, i) {
-        var row = document.createElement("div");
-        row.textContent = "@" + (i + 1) + "  " + elementBadge(item.snapshot);
-        row.style.cssText = "padding:5px 8px;font-size:12px;border-radius:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;";
-        row.addEventListener("mouseenter", function () {
-          row.style.background = "#f1f3f5";
-          ensureOverlayLoop();
-          hoverTarget = item.el && item.el.isConnected ? item.el : null;
-        });
-        row.addEventListener("mouseleave", function () { row.style.background = ""; hoverTarget = null; });
-        row.addEventListener("mousedown", function (e) {
-          e.preventDefault(); // 不抢输入框焦点
-          insertRefChip(i);
-          closeRefMenu();
-        });
-        refMenu.appendChild(row);
+    // 粘贴截图：贴进输入框 → 缩略图行预览，发送时随消息带给助手。
+    // 上行通道是 URL 导航（wry heb-bridge），过大的 base64 会撑爆 URL——
+    // canvas 等比缩到 ≤1280px 并转 JPEG 压体积。
+    var pendingImages = []; // [{ mediaType, data(base64 无前缀) }]
+    var imagesRow = document.createElement("div");
+    imagesRow.style.cssText = "display:none;gap:4px;flex-wrap:wrap;align-items:center;";
+    function renderImagesRow() {
+      imagesRow.innerHTML = "";
+      imagesRow.style.display = pendingImages.length ? "flex" : "none";
+      pendingImages.forEach(function (img, i) {
+        var wrap = document.createElement("span");
+        wrap.style.cssText = "position:relative;display:inline-flex;";
+        var thumb = document.createElement("img");
+        thumb.src = "data:" + img.mediaType + ";base64," + img.data;
+        thumb.style.cssText = "width:36px;height:36px;object-fit:cover;border:1px solid #d9dde3;border-radius:5px;";
+        var rm = document.createElement("button");
+        rm.textContent = "×";
+        rm.style.cssText = "position:absolute;top:-5px;right:-5px;width:14px;height:14px;border:none;background:#8c949e;color:#fff;border-radius:50%;font-size:9px;line-height:14px;padding:0;cursor:pointer;";
+        rm.addEventListener("click", function () { pendingImages.splice(i, 1); renderImagesRow(); });
+        wrap.appendChild(thumb); wrap.appendChild(rm);
+        imagesRow.appendChild(wrap);
       });
-      var r = chatInput.getBoundingClientRect();
-      refMenu.style.left = r.left + "px";
-      refMenu.style.bottom = (window.innerHeight - r.top + 4) + "px";
-      document.documentElement.appendChild(refMenu);
     }
-    // 在光标处删掉触发的 "@" 再插 chip + 空格
-    function insertRefChip(i) {
-      chatInput.focus();
-      var sel = window.getSelection();
-      if (sel && sel.rangeCount) {
-        var range = sel.getRangeAt(0);
-        var node = range.startContainer;
-        if (node.nodeType === 3 && range.startOffset > 0 && node.textContent[range.startOffset - 1] === "@") {
-          node.textContent = node.textContent.slice(0, range.startOffset - 1) + node.textContent.slice(range.startOffset);
-          range.setStart(node, range.startOffset - 1);
-        }
-        range.collapse(true);
-        var chip = mkRefChip(i);
-        range.insertNode(chip);
-        var space = document.createTextNode("\u00a0");
-        chip.parentNode.insertBefore(space, chip.nextSibling);
-        range.setStartAfter(space);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      } else {
-        chatInput.appendChild(mkRefChip(i));
-        chatInput.appendChild(document.createTextNode("\u00a0"));
-      }
-    }
-    chatInput.addEventListener("input", function () {
-      if (composing) return;
-      var sel = window.getSelection();
-      if (!sel || !sel.rangeCount) { closeRefMenu(); return; }
-      var node = sel.getRangeAt(0).startContainer;
-      var off = sel.getRangeAt(0).startOffset;
-      if (node.nodeType === 3 && off > 0 && node.textContent[off - 1] === "@" && draft && draft.elements.length > 0) {
-        openRefMenu();
-      } else {
-        closeRefMenu();
+    chatInput.addEventListener("paste", function (e) {
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image/") !== 0) continue;
+        e.preventDefault();
+        var file = items[i].getAsFile();
+        if (!file) continue;
+        (function (f) {
+          var url = URL.createObjectURL(f);
+          var im = new Image();
+          im.onload = function () {
+            // 上行是 URL 导航（heb-bridge），URL 过长会被截断——压到 ≤800px JPEG 控体积
+            var scale = Math.min(1, 800 / Math.max(im.width, im.height));
+            var c = document.createElement("canvas");
+            c.width = Math.round(im.width * scale);
+            c.height = Math.round(im.height * scale);
+            c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+            URL.revokeObjectURL(url);
+            var dataUrl = c.toDataURL("image/jpeg", 0.7);
+            pendingImages.push({ mediaType: "image/jpeg", data: dataUrl.slice(dataUrl.indexOf(",") + 1) });
+            renderImagesRow();
+          };
+          im.src = url;
+        })(file);
       }
     });
-    chatInput.addEventListener("blur", function () { setTimeout(closeRefMenu, 150); });
-
-    // 输入框内容 → {text, nodes, refs}：chip 还原成元素定位文本
-    function readChatInput() {
-      var nodes = [];
-      var refs = [];
-      (function walk(parent) {
-        for (var n = parent.firstChild; n; n = n.nextSibling) {
-          if (n.nodeType === 3) {
-            nodes.push({ type: "text", value: n.textContent.replace(/\u00a0/g, " ") });
-          } else if (n.nodeType === 1 && n.getAttribute("data-heb-ref")) {
-            var ref = n.getAttribute("data-heb-ref");
-            var locator = n.getAttribute("data-heb-locator") || "";
-            nodes.push({ type: "ref", ref: ref, locator: locator });
-            refs.push({ ref: ref, locator: locator });
-          } else if (n.nodeType === 1) {
-            if (n.tagName === "BR") nodes.push({ type: "text", value: "\n" });
-            else walk(n);
-          }
-        }
-      })(chatInput);
-      return { text: composeAsideText(nodes).trim(), refs: refs };
-    }
 
     var chatSend = mkPrimaryBtn("发送");
+    // 运行中态：消息区末尾跳动点 + 发送按钮转圈禁用；heb:aside:done/error 解除
+    var spinnerRow = null;
+    function setAsideBusy(busy) {
+      if (busy) {
+        chatSend.disabled = true;
+        chatSend.textContent = "⋯";
+        chatSend.style.opacity = "0.6";
+        if (!spinnerRow) {
+          spinnerRow = document.createElement("div");
+          spinnerRow.style.cssText = "align-self:flex-start;padding:2px 6px;color:#57606a;font-size:14px;";
+          spinnerRow.textContent = "·";
+          var dots = 1;
+          spinnerRow.__hebTimer__ = setInterval(function () {
+            dots = dots % 3 + 1;
+            spinnerRow.textContent = new Array(dots + 1).join("·");
+          }, 400);
+        }
+        msgList.appendChild(spinnerRow); // 始终挪到末尾
+        msgList.scrollTop = msgList.scrollHeight;
+      } else {
+        chatSend.disabled = false;
+        chatSend.textContent = "发送";
+        chatSend.style.opacity = "";
+        if (spinnerRow) {
+          clearInterval(spinnerRow.__hebTimer__);
+          if (spinnerRow.parentNode) spinnerRow.parentNode.removeChild(spinnerRow);
+          spinnerRow = null;
+        }
+      }
+    }
     var sendChat = function () {
-      var parsed = readChatInput();
-      var t = parsed.text;
-      if (!t) return;
-      chatInput.innerHTML = "";
-      closeRefMenu();
-      appendChatMsg(msgList, "user", t);
+      var t = chatInput.value.trim();
+      if (!t && !pendingImages.length) return;
+      if (chatSend.disabled) return;
+      chatInput.value = "";
+      appendChatMsg(msgList, "user", t + (pendingImages.length ? "（含 " + pendingImages.length + " 张截图）" : ""));
       asideConvos[elementKey] = asideConvos[elementKey] || { sessionId: null, messages: [] };
       asideConvos[elementKey].messages.push({ role: "user", text: t });
       cardChat.assistantRow = null;
+      setAsideBusy(true);
       var sel = modelSelect.value ? modelSelect.value.split("|") : ["", ""];
       send("heb:aside:send", {
         surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
         elementKey: elementKey,
         sessionId: asideConvos[elementKey].sessionId,
-        text: t,
+        text: t || "（见截图）",
+        images: pendingImages.slice(),
         providerId: sel[0] || undefined,
         model: sel[1] || undefined,
         element: elementLocator(cardSnapshot),
@@ -1557,13 +1535,16 @@
           return { ref: "@" + (i + 1), locator: elementLocator(item.snapshot) };
         }),
       });
+      pendingImages = [];
+      renderImagesRow();
     };
     chatSend.addEventListener("click", sendChat);
     chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
-    chatInputRow.appendChild(chatInput); chatInputRow.appendChild(chatSend);
+    inputLine.appendChild(chatInput); inputLine.appendChild(chatSend);
+    chatInputRow.appendChild(refsRow); chatInputRow.appendChild(imagesRow); chatInputRow.appendChild(inputLine);
     // 样式参数区的「到临时对话」按钮回调：发到旁支会话 + 折叠样式区露出对话
     pushStyleToAside = function (text) {
-      chatInput.textContent = text;
+      chatInput.value = text;
       sendChat();
       styleCollapsed = true; styleBody.style.display = "none"; chevron.textContent = "▸";
     };
@@ -1579,7 +1560,7 @@
     chatFoot.appendChild(submitMain);
     chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
 
-    cardChat = { elementKey: elementKey, sessionId: (asideConvos[elementKey] && asideConvos[elementKey].sessionId) || null, msgList: msgList, assistantRow: null, modelSelect: modelSelect };
+    cardChat = { elementKey: elementKey, sessionId: (asideConvos[elementKey] && asideConvos[elementKey].sessionId) || null, msgList: msgList, assistantRow: null, modelSelect: modelSelect, setBusy: setAsideBusy };
     if (asideConvos[elementKey]) {
       for (var m = 0; m < asideConvos[elementKey].messages.length; m++) {
         appendChatMsg(msgList, asideConvos[elementKey].messages[m].role, asideConvos[elementKey].messages[m].text);
@@ -1872,6 +1853,7 @@
         if (cardChat && msg.payload) {
           if (!cardChat.assistantRow) cardChat.assistantRow = appendChatMsg(cardChat.msgList, "assistant", "");
           cardChat.assistantRow.textContent += msg.payload.text || "";
+          if (cardChat.setBusy) cardChat.setBusy(true); // spinner 保持在消息流末尾
           cardChat.msgList.scrollTop = cardChat.msgList.scrollHeight;
         }
         break;
@@ -1901,12 +1883,14 @@
           if (conv) conv.messages.push({ role: "assistant", text: cardChat.assistantRow.textContent });
           cardChat.assistantRow = null;
         }
+        if (cardChat && cardChat.setBusy) cardChat.setBusy(false);
         break;
       case "heb:aside:submitted":
         if (cardChat) appendChatMsg(cardChat.msgList, "assistant", "✅ 已提交到主对话，主对话会据此改源码");
         break;
       case "heb:aside:error":
         if (cardChat && msg.payload) appendChatMsg(cardChat.msgList, "assistant", "⚠️ " + (msg.payload.message || "出错了"));
+        if (cardChat && cardChat.setBusy) cardChat.setBusy(false);
         break;
       case "heb:unload:allow":
         // 用户已在工具栏确认丢弃——本次离开不再被 beforeunload 拦（一次性）
