@@ -960,6 +960,7 @@ function applyToolDone(
     result: event.result,
     duration_ms: event.duration_ms,
     status: "done",
+    is_error: event.is_error ?? false,
     artifact_path: event.artifact_path ?? null,
   };
   return next;
@@ -1275,6 +1276,12 @@ interface AppState {
   ) => Promise<void>;
   /** 撤销一次压缩：删掉指定 CompactBoundary marker，回到压缩前（仅压缩后无新对话时可用）。 */
   undoCompaction: (markerId: string) => Promise<void>;
+  /**
+   * 删除对话尾部消息（只允许从后往前删）：
+   * - assistant → 删掉它所属 run 的全部输出（回到最近一条真实 user 之后）
+   * - user → 仅当其后已无 assistant 时，连这条 user 一起删掉
+   */
+  deleteTrailingMessage: (msgId: string) => Promise<void>;
   updateCurrentConfig: (patch: {
     provider_id?: string;
     model?: string;
@@ -2612,6 +2619,48 @@ export const useStore = create<AppState>((set, get) => ({
     const refreshed = await api.undoCompaction(cur.id, markerId);
     set({ currentSession: refreshed });
     // 撤销后上下文用量会变（回到压缩前），刷新环形进度条。
+    await get().refreshContextUsage();
+  },
+
+  async deleteTrailingMessage(msgId) {
+    const cur = get().currentSession;
+    if (!cur) return;
+    const idx = cur.messages.findIndex((m) => m.id === msgId);
+    if (idx < 0) return;
+    const target = cur.messages[idx];
+
+    let refreshed: Session;
+    if (target.role === "assistant") {
+      // 删整个 run 的输出：回溯到这条 assistant 之前最近一条真实 user
+      //（跳过 wakeup 等 system_notification），把 user 之后的一切删掉。
+      // 仅允许删最后一个 run——target 之后不能再有真实 user 消息。
+      const hasUserAfter = cur.messages
+        .slice(idx + 1)
+        .some(
+          (m) => m.role === "user" && m.meta?.type !== "system_notification"
+        );
+      if (hasUserAfter) return;
+      let userIdx = idx - 1;
+      while (
+        userIdx >= 0 &&
+        (cur.messages[userIdx].role !== "user" ||
+          cur.messages[userIdx].meta?.type === "system_notification")
+      ) {
+        userIdx--;
+      }
+      if (userIdx < 0) return;
+      refreshed = await api.truncateAfter(cur.id, cur.messages[userIdx].id);
+    } else if (target.role === "user") {
+      // 只允许删尾部的 user：其后已无 assistant（先删 assistant 才能删它）。
+      const hasAssistantAfter = cur.messages
+        .slice(idx + 1)
+        .some((m) => m.role === "assistant");
+      if (hasAssistantAfter) return;
+      refreshed = await api.truncateInclusive(cur.id, msgId);
+    } else {
+      return;
+    }
+    set({ currentSession: refreshed });
     await get().refreshContextUsage();
   },
 

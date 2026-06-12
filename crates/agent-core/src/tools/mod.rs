@@ -106,6 +106,10 @@ impl ToolCtx {
 pub struct ToolOutput {
     pub text: String,
     pub attachments: Vec<MessageAttachment>,
+    /// 工具执行完成但语义上失败（如 Bash 命令退出码非 0）。
+    /// 与 `execute_rich` 返回 Err 的区别：Err 是执行层故障（入参非法 / 内部错误），
+    /// 这里是「跑完了但结果是失败」。二者最终都让 ToolCallFinished.is_error=true。
+    pub is_error: bool,
 }
 
 impl From<String> for ToolOutput {
@@ -113,6 +117,7 @@ impl From<String> for ToolOutput {
         Self {
             text,
             attachments: Vec::new(),
+            is_error: false,
         }
     }
 }

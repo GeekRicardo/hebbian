@@ -293,6 +293,7 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                         arguments: String::new(),
                         result: None,
                         duration_ms: None,
+                        is_error: false,
                     });
                     tool_calls.push(MessageToolCall {
                         id: id.clone(),
@@ -300,6 +301,7 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                         input,
                         result: None,
                         duration_ms: None,
+                        is_error: false,
                         nested: Vec::new(),
                     });
                     tool_ids.push(id);

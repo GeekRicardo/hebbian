@@ -353,6 +353,7 @@ mod tests {
                     arguments: "{\"file_path\":\"a.txt\"}".to_string(),
                     result: Some("file contents".to_string()),
                     duration_ms: None,
+                    is_error: false,
                 },
                 MessagePart::Text {
                     text: "after".to_string(),
@@ -364,6 +365,7 @@ mod tests {
                     arguments: "{\"file_path\":\"a.txt\"}".to_string(),
                     result: None,
                     duration_ms: None,
+                    is_error: false,
                 },
             ],
             Vec::new(),

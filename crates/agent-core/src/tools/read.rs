@@ -210,6 +210,7 @@ impl ReadTool {
             return Ok(ToolOutput {
                 text: format!("已读取图片 {name}（{media_type}），见附件。"),
                 attachments: vec![attachment],
+                is_error: false,
             });
         }
 

@@ -154,6 +154,9 @@ pub enum DaemonEvent {
         id: String,
         result: String,
         duration_ms: u64,
+        /// 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。
+        #[serde(default)]
+        is_error: bool,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         subagent_call_id: Option<String>,
     },

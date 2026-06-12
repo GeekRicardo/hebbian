@@ -287,6 +287,7 @@ mod tests {
                         arguments: String::new(),
                         result: Some("file body".into()),
                         duration_ms: Some(10),
+                        is_error: false,
                     },
                 ],
             ),

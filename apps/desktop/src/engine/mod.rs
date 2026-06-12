@@ -55,6 +55,9 @@ pub enum EngineEvent {
         /// MessageBubble 渲染「📎 完整输出」可点链接。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
+        /// 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。
+        #[serde(default)]
+        is_error: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_call_id: Option<String>,
     },

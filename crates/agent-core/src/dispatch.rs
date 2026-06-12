@@ -864,19 +864,23 @@ impl ToolDispatcher {
                     run_id: Some(state.run_id.to_string()),
                     cancel: Some(cancel.clone()),
                 };
-                let (raw, attachments, exec_failed) = match tool {
+                let (raw, attachments, exec_failed, semantic_failed) = match tool {
                     Some(t) => match t.execute_rich(tool_ctx, effective_input.clone()).await {
-                        Ok(out) => (out.text, out.attachments, false),
+                        Ok(out) => (out.text, out.attachments, false, out.is_error),
                         Err(e) => {
                             warn!(tool = %call.name, error = %e, "tool exec error");
-                            (format!("工具执行错误: {e}"), Vec::new(), true)
+                            (format!("工具执行错误: {e}"), Vec::new(), true, false)
                         }
                     },
                     None => {
                         warn!(tool = %call.name, "tool not in registry");
-                        (format!("未找到工具: {}", call.name), Vec::new(), true)
+                        (format!("未找到工具: {}", call.name), Vec::new(), true, false)
                     }
                 };
+                // 给 surface 的失败口径：执行层故障 + 工具自报语义失败（如 Bash 退出码非 0）。
+                // exec_failed 继续单独驱动 materialize 跳过 / PostToolUseFailure hook——
+                // 语义失败的输出仍是正常工具产物，照常落 artifact、走 PostToolUse。
+                let is_error = exec_failed || semantic_failed;
                 let duration_ms = started.elapsed().as_millis() as u64;
 
                 // Run 级 edits-worktree 在 RunFinished 前统一拍 after；这里不写 per-Edit metadata。
@@ -965,6 +969,7 @@ impl ToolDispatcher {
                     duration_ms,
                     truncated,
                     artifact_path: artifact_path_str,
+                    is_error,
                 }));
 
                 Ok((
@@ -1094,6 +1099,8 @@ impl ToolDispatcher {
                     duration_ms: 0,
                     truncated: false,
                     artifact_path: None,
+                    // 用户取消是主动行为，不算工具失败。
+                    is_error: false,
                 }));
 
                 if cancellation::is_cancelled(&cancel) {
@@ -1164,6 +1171,7 @@ impl ToolDispatcher {
                             duration_ms: 0,
                             truncated: false,
                             artifact_path: None,
+                            is_error: true,
                         }));
                         return Ok((
                             call_index,
@@ -1207,6 +1215,7 @@ impl ToolDispatcher {
                     duration_ms: 0,
                     truncated: false,
                     artifact_path: None,
+                    is_error: false,
                 }));
 
                 Ok((
@@ -1280,6 +1289,7 @@ impl ToolDispatcher {
                             duration_ms: 0,
                             truncated: false,
                             artifact_path: None,
+                            is_error: true,
                         }));
                         return Ok((
                             call_index,
@@ -1307,6 +1317,7 @@ impl ToolDispatcher {
                             duration_ms: 0,
                             truncated: false,
                             artifact_path: None,
+                            is_error: true,
                         }));
                         return Ok((
                             call_index,
@@ -1335,6 +1346,7 @@ impl ToolDispatcher {
                             duration_ms: 0,
                             truncated: false,
                             artifact_path: None,
+                            is_error: true,
                         }));
                         return Ok((
                             call_index,
@@ -1463,6 +1475,7 @@ impl ToolDispatcher {
                     duration_ms: 0,
                     truncated: false,
                     artifact_path: None,
+                    is_error: false,
                 }));
 
                 Ok((
@@ -1546,6 +1559,7 @@ impl ToolDispatcher {
                         duration_ms,
                         truncated: false,
                         artifact_path: None,
+                        is_error: !ok,
                     }));
                     (
                         call_index,
@@ -1970,6 +1984,7 @@ fn deny_tool(
         duration_ms: 0,
         truncated: false,
         artifact_path: None,
+        is_error: true,
     }));
     (
         call_index,
@@ -2004,6 +2019,7 @@ fn finish_ask_with_error(
         duration_ms: 0,
         truncated: false,
         artifact_path: None,
+        is_error: true,
     }));
     (
         call_index,

@@ -38,11 +38,13 @@ impl NestedAccumulator {
                 arguments: String::new(),
                 result: None,
                 duration_ms: None,
+                is_error: false,
             }),
             EventPayload::ToolCallFinished {
                 call_id,
                 result,
                 duration_ms,
+                is_error,
                 ..
             } => {
                 // 按 call_id 找到对应未完成的子 tool_call part，回填结果。
@@ -51,12 +53,14 @@ impl NestedAccumulator {
                         id,
                         result: r,
                         duration_ms: d,
+                        is_error: e,
                         ..
                     } = part
                     {
                         if id == call_id && r.is_none() {
                             *r = Some(result.clone());
                             *d = Some(*duration_ms);
+                            *e = *is_error;
                             break;
                         }
                     }
@@ -109,6 +113,7 @@ mod tests {
             input: json!({"subagent_type": "explore"}),
             result: None,
             duration_ms: None,
+            is_error: false,
             nested: Vec::new(),
         }
     }
@@ -137,6 +142,7 @@ mod tests {
                 duration_ms: 5,
                 truncated: false,
                 artifact_path: None,
+                is_error: false,
             },
         );
 

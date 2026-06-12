@@ -1183,18 +1183,27 @@ impl AssistantPartsRecorder {
         }
     }
 
-    fn finish_tool(&mut self, index: usize, call_id: &str, result: &str, duration_ms: u64) {
+    fn finish_tool(
+        &mut self,
+        index: usize,
+        call_id: &str,
+        result: &str,
+        duration_ms: u64,
+        is_error: bool,
+    ) {
         let pos = self.tool_position(index, Some(call_id), None);
         if let MessagePart::ToolCall {
             id,
             result: existing_result,
             duration_ms: existing_duration_ms,
+            is_error: existing_is_error,
             ..
         } = &mut self.parts[pos]
         {
             *id = call_id.to_string();
             *existing_result = Some(result.to_string());
             *existing_duration_ms = Some(duration_ms);
+            *existing_is_error = is_error;
             self.by_id.insert(call_id.to_string(), pos);
         }
     }
@@ -1227,6 +1236,7 @@ impl AssistantPartsRecorder {
             arguments: String::new(),
             result: None,
             duration_ms: None,
+            is_error: false,
         });
         self.by_index.insert(index, pos);
         if !clean_id.is_empty() {
@@ -1262,8 +1272,9 @@ fn record_assistant_part_event(parts: &mut AssistantPartsRecorder, event: &Agent
             call_id,
             result,
             duration_ms,
+            is_error,
             ..
-        } => parts.finish_tool(*index, call_id, result, *duration_ms),
+        } => parts.finish_tool(*index, call_id, result, *duration_ms, *is_error),
         _ => {}
     }
 }
@@ -1308,6 +1319,7 @@ fn record_tool_event(tool_calls: &mut Vec<MessageToolCall>, event: &AgentEvent) 
             call_id,
             result,
             duration_ms,
+            is_error,
             ..
         } => {
             if tool_calls.len() <= *index {
@@ -1317,6 +1329,7 @@ fn record_tool_event(tool_calls: &mut Vec<MessageToolCall>, event: &AgentEvent) 
             call.id = call_id.clone();
             call.result = Some(result.clone());
             call.duration_ms = Some(*duration_ms);
+            call.is_error = *is_error;
         }
         _ => {}
     }
@@ -1346,6 +1359,7 @@ fn empty_tool_call() -> MessageToolCall {
         input: serde_json::json!({}),
         result: None,
         duration_ms: None,
+        is_error: false,
         nested: Vec::new(),
     }
 }
@@ -2086,6 +2100,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             result,
             duration_ms,
             artifact_path,
+            is_error,
             ..
         } => Some(EngineEvent::ToolDone {
             index: *index,
@@ -2093,6 +2108,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             result: result.clone(),
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
+            is_error: *is_error,
             subagent_call_id: subagent.clone(),
         }),
         ToolCallOutputDelta {

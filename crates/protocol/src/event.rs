@@ -171,6 +171,11 @@ pub enum EventPayload {
         /// 指针拿到等价信息。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
+        /// 这次工具调用是否以失败收场：工具执行 Err / 未注册 / 入参解析失败 /
+        /// 被审批拒绝 / 工具自报失败（如 Bash 退出码非 0）。surface 用它渲染
+        /// 红色状态点；老事件无此字段，serde default 视为成功。
+        #[serde(default)]
+        is_error: bool,
     },
 
     // —— 人机协作：审批 ——

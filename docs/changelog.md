@@ -7628,3 +7628,28 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
   - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：会话行最小高度和上下 padding 缩小；`.dsp-session-row` 改为单列标题网格；`.dsp-session-status` 改为绝对定位到行左侧外面，保留原呼吸动画和颜色状态。
 - **影响范围**：仅 Desktop 前端侧边栏视觉布局；不改协议、agent-core、CoreClient、storage 或持久化格式。
 - **留尾巴**：无。
+
+### 2026-06-12 — 修复 tool_use input 非 object 导致会话永久 400；新增 ToolCallFinished.is_error 让失败工具卡片标红
+
+- **Why**: 用户会话 202606121316-882d597e 里模型生成了非法 tool_call 参数（Ask 工具的 arguments 不是合法 JSON），anthropic adapter 把原文退化成字符串存进历史。下次请求把这个字符串原样发给 Anthropic API → `tool_use.input: Input should be an object` 400，且历史不变重试必败，会话永久卡死。另外用户要求：失败的 tool_call（含 Bash 退出码非 0）在前端状态点显示红色。
+- **改动**:
+  - model-gateway/protocols/anthropic.rs: 历史 tool_use input 非 object 时归一——字符串先尝试再 parse（双重编码场景还原），仍不是 object 兜底空 object（原逻辑只兜 null）。回归测试 `non_object_tool_use_input_is_normalized_to_object` 覆盖字符串/非法字符串/null/数组四种 case
+  - protocol/event.rs: `ToolCallFinished` 新增 `is_error: bool`（serde default，老 jsonl 兼容）。语义 = 执行错误 / 入参解析失败 / 被审批拒绝 / 工具自报语义失败；用户取消 ask 不算
+  - agent-core/tools/mod.rs: `ToolOutput` 新增 `is_error`——工具"跑完但结果是失败"的自报通道，与 execute 返回 Err（执行层故障）区分
+  - agent-core/tools/bash.rs: 拆出 `run()` 返回 `(text, is_error)`；前台命令退出码非 0 / 被信号杀 / Failed 标 is_error=true；转后台、用户中断不算失败
+  - agent-core/dispatch.rs: 全部 11 个 ToolCallFinished emit 点填 is_error；exec_failed 与 semantic_failed 分离——后者照常走 materialize / PostToolUse hook
+  - storage/sessions.rs: `MessagePart::ToolCall` / `MessageToolCall` 加 is_error（false 不落盘）；nested.rs 子事件回填同步
+  - desktop chat.rs + engine/mod.rs：ToolDone 事件透传 is_error；cli daemon.rs / web-server session.rs / channel-gateway bridge.rs 落盘路径同步；cli ipc.rs `tool_done` NDJSON 与 web-server events.rs ToolDone 事件同样带 is_error（additive，老脚本无感）
+  - 前端 types.ts / useStore.ts / MessageBubble.tsx：tool_done 事件、StreamingAssistantPart、MessagePart、MessageToolCall 全链路透传；statusDot done+isError 渲染 rose-400 红点（替换原先永远不会命中的 "failed"/"error" 字符串分支）
+- **影响范围**: protocol / model-gateway / agent-core / desktop / cli / web-server / channel-gateway / 前端。事件与落盘格式 additive，老 jsonl 向下兼容
+- **留尾巴**: 仅 Bash 实现了语义失败自报；Edit/Grep 等失败仍只走 execute Err 路径（已覆盖）。crates/model-gateway/tests/thinking_integration.rs 存在先前遗留的编译损坏（build_body 签名变更未同步），与本次无关
+
+### 2026-06-12 · 新增桌面调色盘深海墨蓝暗色主题
+
+- **Why**：用户希望左下角调色盘除了淡色系亮色主题外，也有一款优雅美观、适合长时间对话和编码的暗色主题可自行试用。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`：调色变量生成从单纯 hue 扩展为 hue + themeId；新增「深海墨蓝」专用暗色 token，保留 hue slider 调整强调色。
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx`：调色盘 preset 新增「深海墨蓝」，选中态改按 preset id 判断，避免同色相 preset 误选。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：把 shell 背景、侧边栏渐变、聊天面板和调色盘浮层的浅色硬编码收敛为可覆盖变量，让暗色主题真正覆盖整体视觉。
+- **影响范围**：仅 Desktop 前端视觉主题；不改协议、agent-core、CoreClient、storage 或持久化格式。
+- **留尾巴**：需要在 `pnpm tauri dev` 里人工切到「深海墨蓝」确认实际屏幕观感，如有过亮/过暗再微调 token。

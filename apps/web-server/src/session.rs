@@ -186,6 +186,7 @@ impl TurnData {
                 call_id,
                 result,
                 duration_ms,
+                is_error,
                 ..
             } => {
                 if let Some((name, input)) = self.pending_tools.remove(call_id) {
@@ -195,6 +196,7 @@ impl TurnData {
                         input: input.clone(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                         nested: Vec::new(),
                     };
                     self.tool_calls.push(tc.clone());
@@ -205,6 +207,7 @@ impl TurnData {
                         arguments: String::new(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                     });
                 }
             }

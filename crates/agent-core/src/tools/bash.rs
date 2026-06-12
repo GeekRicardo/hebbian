@@ -108,6 +108,24 @@ impl Tool for BashTool {
     }
 
     async fn execute_streaming(&self, ctx: ToolCtx, input: Value) -> AppResult<String> {
+        Ok(self.run(ctx, input).await?.0)
+    }
+
+    async fn execute_rich(&self, ctx: ToolCtx, input: Value) -> AppResult<super::ToolOutput> {
+        let (text, is_error) = self.run(ctx, input).await?;
+        Ok(super::ToolOutput {
+            text,
+            attachments: Vec::new(),
+            is_error,
+        })
+    }
+}
+
+impl BashTool {
+    /// 主执行路径。返回 `(聚合输出文本, 是否语义失败)`——命令退出码非 0 /
+    /// 被信号杀死 / 启动后故障都算失败，surface 据此把这次调用标红。
+    /// 转后台 / 用户中断不算失败：前者结果未知，后者是用户主动行为。
+    async fn run(&self, ctx: ToolCtx, input: Value) -> AppResult<(String, bool)> {
         let command = input["command"]
             .as_str()
             .ok_or_else(|| AppError::msg("Bash: 缺少 command"))?;
@@ -159,7 +177,7 @@ impl Tool for BashTool {
             // BashOutput / KillShell 的用法 / 自动通知机制都在工具描述里讲一次就够，
             // 每条 tool_result 不重复；日志路径模型用不上（无 fs 读权限），surface
             // BackgroundTaskPanel 已展示，不污染 transcript。
-            return Ok(format!("[{}] 已在后台启动", shell.task_id));
+            return Ok((format!("[{}] 已在后台启动", shell.task_id), false));
         }
 
         // 前台等待：要么进程退出，要么超时。等待期间持续抽 tail buffer 增量，
@@ -213,7 +231,7 @@ impl Tool for BashTool {
                 text.push('\n');
             }
             text.push_str("[已中断]");
-            return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
+            return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), false));
         }
 
         if !exited {
@@ -229,14 +247,15 @@ impl Tool for BashTool {
                 text.push_str("\n--- 已产出 ---\n");
                 text.push_str(&buffer);
             }
-            return Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES));
+            return Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), false));
         }
 
         // 已退出：聚合 buffer + 终态后缀；从注册表摘掉前台条目。
         let final_state = shell.state();
+        let is_error = !matches!(final_state, ShellState::Exited { code: Some(0) });
         let text = format_finished(&buffer, &final_state);
         self.shells.unregister(&shell.task_id);
-        Ok(truncate_bytes(&text, MAX_OUTPUT_BYTES))
+        Ok((truncate_bytes(&text, MAX_OUTPUT_BYTES), is_error))
     }
 }
 
@@ -396,6 +415,24 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("[exit 7]"));
+    }
+
+    /// 非零退出码必须通过 execute_rich 自报 is_error=true（成功命令保持 false），
+    /// 否则前端状态点不会标红。
+    #[tokio::test]
+    async fn execute_rich_reports_is_error_on_nonzero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tool(tmp.path());
+        let fail = t
+            .execute_rich(ToolCtx::noop(), json!({"command": "exit 7"}))
+            .await
+            .unwrap();
+        assert!(fail.is_error, "exit 7 应自报失败");
+        let ok = t
+            .execute_rich(ToolCtx::noop(), json!({"command": "true"}))
+            .await
+            .unwrap();
+        assert!(!ok.is_error, "exit 0 不该标失败");
     }
 
     #[tokio::test]

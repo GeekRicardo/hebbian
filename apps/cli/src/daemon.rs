@@ -197,6 +197,7 @@ impl TurnData {
                 call_id,
                 result,
                 duration_ms,
+                is_error,
                 ..
             } => {
                 if let Some((name, input)) = self.pending_tools.remove(call_id) {
@@ -206,6 +207,7 @@ impl TurnData {
                         input: input.clone(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                         nested: Vec::new(),
                     };
                     self.tool_calls.push(tc.clone());
@@ -216,6 +218,7 @@ impl TurnData {
                         arguments: String::new(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                     });
                 }
             }
@@ -372,11 +375,13 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             call_id,
             result,
             duration_ms,
+            is_error,
             ..
         } => Some(DaemonEvent::ToolDone {
             id: call_id.clone(),
             result: result.chars().take(500).collect(),
             duration_ms: *duration_ms,
+            is_error: *is_error,
             subagent_call_id: subagent.clone(),
         }),
         EventPayload::PermissionRequested {

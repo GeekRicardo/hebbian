@@ -215,6 +215,8 @@ export interface MessageToolCall {
   input: unknown;
   result?: string | null;
   duration_ms?: number | null;
+  /** 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。 */
+  is_error?: boolean;
   /**
    * 子 NestedRun（subagent）过程：子文本 / 子推理 / 子工具调用（架构 §4.4.11.8）。
    * 仅 name=="Task" 可能非空。随父 message 落主 session.jsonl，重建后从此渲染嵌套区。
@@ -242,6 +244,8 @@ export type MessagePart =
       arguments?: string;
       result?: string | null;
       duration_ms?: number | null;
+      /** 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。 */
+      is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
     };
@@ -267,6 +271,8 @@ export type StreamingAssistantPart =
       result?: string | null;
       duration_ms?: number | null;
       status: ToolCallStatus;
+      /** 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。 */
+      is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
       /**
@@ -597,6 +603,8 @@ export type EngineEvent =
       id: string;
       result: string;
       duration_ms: number;
+      /** 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。 */
+      is_error?: boolean;
       /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9 / §4.12.11 Phase 2） */
       artifact_path?: string | null;
       subagent_call_id?: string | null;

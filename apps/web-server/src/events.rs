@@ -53,6 +53,9 @@ pub enum EngineEvent {
         duration_ms: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact_path: Option<String>,
+        /// 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）。
+        #[serde(default)]
+        is_error: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_call_id: Option<String>,
     },
@@ -225,6 +228,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             result,
             duration_ms,
             artifact_path,
+            is_error,
             ..
         } => EngineEvent::ToolDone {
             index: *index,
@@ -232,6 +236,7 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             result: result.clone(),
             duration_ms: *duration_ms,
             artifact_path: artifact_path.clone(),
+            is_error: *is_error,
             subagent_call_id: subagent.clone(),
         },
         ToolCallOutputDelta {

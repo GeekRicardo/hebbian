@@ -525,6 +525,7 @@ impl TurnObserver for ChannelObserver {
                 call_id,
                 result,
                 duration_ms,
+                is_error,
                 ..
             } => {
                 if let Some((name, input)) = self.pending_tools.remove(call_id) {
@@ -534,6 +535,7 @@ impl TurnObserver for ChannelObserver {
                         input: input.clone(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                         nested: Vec::new(),
                     };
                     self.tool_calls.push(tool_call);
@@ -544,6 +546,7 @@ impl TurnObserver for ChannelObserver {
                         arguments: String::new(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        is_error: *is_error,
                     });
                 }
             }

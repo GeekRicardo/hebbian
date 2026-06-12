@@ -145,6 +145,8 @@ interface ToolCallItem {
   result?: string | null;
   durationMs?: number | null;
   status: ToolCallStatus;
+  /** 这次调用以失败收场（执行错误 / 入参解析失败 / 被拒 / Bash 退出码非 0）：状态点标红。 */
+  isError?: boolean;
   /** 工具输出超阈值时落盘的工件路径（架构 §4.4.9） */
   artifactPath?: string | null;
   /**
@@ -213,6 +215,7 @@ function savedNestedToStreaming(
       result: p.result,
       duration_ms: p.duration_ms,
       status: p.result ? "done" : "running",
+      is_error: p.is_error,
       artifact_path: p.artifact_path,
     };
   });
@@ -243,6 +246,7 @@ function normalizeStreamingToolPart(
     result: part.result,
     durationMs: part.duration_ms,
     status: part.status,
+    isError: part.is_error,
     artifactPath: part.artifact_path,
     liveOutput: part.live_output,
     nestedParts: part.nested_parts,
@@ -265,6 +269,7 @@ function normalizeSavedToolPart(
     result: part.result,
     durationMs: part.duration_ms,
     status: part.result ? "done" : "running",
+    isError: part.is_error,
     artifactPath: part.artifact_path,
     // 子过程在 MessageToolCall.nested（落 message.tool_calls），按 id 关联回这条 part。
     nestedParts: part.id ? nestedByCallId?.get(part.id) : undefined,
@@ -285,6 +290,7 @@ function normalizeLegacyToolCall(
     result: call.result,
     durationMs: call.duration_ms,
     status: call.result ? "done" : "running",
+    isError: call.is_error,
     nestedParts: savedNestedToStreaming(call.nested),
     subagentType: extractSubagentType(call.input),
   };
@@ -1629,13 +1635,12 @@ function ToolCallTimeline({
           call.isJudging
             ? "animate-breathe bg-amber-400"
             : call.status === "done"
-            ? "bg-green-400"
+            ? call.isError
+              ? "bg-rose-400"
+              : "bg-green-400"
             : call.status === "running"
               ? "animate-breathe bg-primary"
-              : (call.status as string) === "failed" ||
-                (call.status as string) === "error"
-                ? "bg-rose-400"
-                : "bg-muted-foreground/40";
+              : "bg-muted-foreground/40";
         return (
           <div
             key={call.key}

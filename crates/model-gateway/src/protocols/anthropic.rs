@@ -399,12 +399,19 @@ fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> 
                     content.push(json!({"type": "text", "text": text}));
                 }
                 for c in tool_calls {
-                    // API 要求 input 必须是 object；流式中断恢复后 input 可能为 null，
-                    // 用空 object 兜底比让 API 400 更可控。
-                    let input = if c.input.is_null() {
-                        json!({})
-                    } else {
-                        c.input.clone()
+                    // API 要求 input 必须是 object，否则整个请求 400 且该会话永久卡死
+                    // （历史不变，重试还是 400）。非 object 的来源有两种：
+                    // - 流式中断恢复后 input 为 null；
+                    // - 模型生成的参数 JSON 非法，adapter 把原文退化成了字符串。
+                    // 字符串先尝试再 parse 一次（可能是双重编码的合法 JSON）；
+                    // 仍不是 object 就用空 object 兜底——工具侧早已把解析失败回报给模型。
+                    let input = match &c.input {
+                        Value::Object(_) => c.input.clone(),
+                        Value::String(s) => serde_json::from_str::<Value>(s)
+                            .ok()
+                            .filter(Value::is_object)
+                            .unwrap_or_else(|| json!({})),
+                        _ => json!({}),
                     };
                     content.push(json!({
                         "type": "tool_use",
@@ -771,6 +778,55 @@ mod tests {
         let msg = entry_to_message(&entry, false).unwrap();
         // 无附件：content 仍是纯字符串，不退化成块数组。
         assert_eq!(msg["content"][0]["content"], "a.txt");
+    }
+
+    /// 历史里 tool_use input 非 object（解析失败被退化成字符串 / null）时，
+    /// 发给 API 前必须归一成 object，否则整个会话后续请求永久 400。
+    #[test]
+    fn non_object_tool_use_input_is_normalized_to_object() {
+        let cases = [
+            // 双重编码的合法 JSON：应还原成对象
+            (json!("{\"command\": \"ls\"}"), json!({"command": "ls"})),
+            // 非法 JSON 字符串：兜底空对象
+            (json!("{\"question\": \n<parameter>坏的"), json!({})),
+            // null：兜底空对象
+            (Value::Null, json!({})),
+            // 数组：兜底空对象
+            (json!([1, 2]), json!({})),
+        ];
+        for (input, expected) in cases {
+            let req = ModelRequest {
+                model: "claude-sonnet-4-5".into(),
+                system: None,
+                entries: vec![
+                    TranscriptEntry::User(UserEntry::text("hi")),
+                    TranscriptEntry::Assistant(AssistantEntry {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        reasoning_signature: String::new(),
+                        tool_calls: vec![ToolCall {
+                            id: "call_1".into(),
+                            name: "Ask".into(),
+                            input: input.clone(),
+                        }],
+                    }),
+                    TranscriptEntry::ToolResults(vec![ToolResult {
+                        call_id: "call_1".into(),
+                        name: "Ask".into(),
+                        content: "入参解析失败".into(),
+                        artifact: None,
+                        attachments: Vec::new(),
+                    }]),
+                ],
+                tools: vec![],
+                max_tokens: 1024,
+                reasoning: None,
+            };
+            let body = build_body(&req, false, false, None).unwrap();
+            let tool_use = &body["messages"][1]["content"][0];
+            assert_eq!(tool_use["type"], "tool_use");
+            assert_eq!(tool_use["input"], expected, "input={input}");
+        }
     }
 
     #[test]
