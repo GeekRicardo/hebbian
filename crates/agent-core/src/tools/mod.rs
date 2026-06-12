@@ -556,8 +556,9 @@ mod tests {
     }
 
     #[test]
-    fn task_absent_when_no_subagent_definition() {
-        // 没有 subagent 定义时，default_tools 不应注册 Task（条件注入语义）。
+    fn task_present_due_to_builtin_subagents() {
+        // builtin 内置 subagent（架构 §4.4.11.12）让 subagents 永不为空：即使用户没写任何
+        // 磁盘定义，default_tools 也会注册 Task（D9.1 决策推翻了早先「无定义→无 Task」的假设）。
         let tmp = TempDir::new().unwrap();
         let workspace = crate::workspace::Workspace::new(tmp.path().to_path_buf(), vec![]);
         let phase: crate::wakeup::PhaseChannel = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -576,8 +577,8 @@ mod tests {
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(
-            !names.contains(&"Task"),
-            "无 subagent 定义时不应注册 Task：{names:?}"
+            names.contains(&"Task"),
+            "builtin subagent 在时应注册 Task：{names:?}"
         );
     }
 }

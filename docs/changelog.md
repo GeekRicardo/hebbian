@@ -7298,3 +7298,140 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: Desktop 桥接（chat.rs/hitl.rs/hebisland_client.rs）+ island-mac native + spec。**协议改动**：island→Desktop 问答回传从 `selected`/`input` 散字段改为 `answer` 结构化对象——两端同步改、逐字对齐 `protocol::UserAnswer`。只有 Desktop 桥接 island（heb CLI / hebweb 不桥接）。
 - **验证**: `cargo check -p hebbian` 绿；`cargo test -p hebbian --lib hitl` 3 个 parse 回归全过；`swift build` 绿、`swift test` 14 个全过。手发 4 张卡到重启后的 daemon，log 无 `Invalid JSON`，单题/多题/审批渲染 OK（无屏幕录制权限截图失败，靠 daemon log + 单测固化）。
 - **留尾巴**: 无。
+
+### 2026-06-12 — subagent 加内置层（builtin）+ `model` 字段语义定为 provider id（架构定调，代码待实现）
+
+- **Why**: 现状 subagent 基础设施齐全（isolated/inherit、前台/后台、嵌套事件流、子 session 落盘、两层 enabled、HITL/Edits/Read 父子共享），但**零内置 subagent**——磁盘上只有 coder/echo-agent/looper 三个测试占位 + understand-* 插件内部 agent。开箱时 `subagents` 为空，`default_tools` 的条件注入（`!subagents.is_empty()`）让 Task 工具压根不出现，subagent 能力对新用户完全隐形。用户原话："实现后还是 demo，需要实现一些真正实用的 subagent"。调研对标 CC（Explore / Plan / general-purpose）与 Codex 2026.3 GA 的 explorer/worker/default，两家收敛出的最高价值点是"只读探索 agent"（扫多文件只回结论、省主上下文）。
+- **决策**（用户拍板）:
+  - 内置集合 = 4 个基础套：`explore`（只读探索）/ `plan`（方案规划）/ `code-reviewer`（审 diff）/ `general-purpose`（兜底），按 §0 不过度设计，更多留用户自定义层补。
+  - 承载方式 = 代码内嵌 builtin 层（不 seed 磁盘）：与 skill 的 `project_code` 内嵌层设计对称，升级自动带新内置、不污染 `~/.hebbian/subagents/`，用户可建同名 `.md` 整体覆盖、也可禁用。
+  - `model` 字段语义 = providers.json 的 **provider id**（hebbian 选模型粒度 = 选供应商）：子 NestedRun 按它建专属 client、跑该 provider 的 `default_model`，缺省复用父 client。修正原实现"model 仅作元数据透传、子始终复用父 client（写了也不换供应商）"的缺口。
+- **改动**（本条仅架构定调，代码 P8 待实现）:
+  - [docs/架构.md](../docs/架构.md) §4.4.11.4：标题改"来源层级与文件格式"，新增 builtin/global 两层 + 合并规则（磁盘覆盖内嵌）；修正 `model` 字段语义为 provider id；示例 `tools` 去掉 hebbian 不存在的 Glob。
+  - §4.4.11.5：补"内置与自定义一视同仁走 enabled，内置可被禁用"。
+  - §4.4.11.11：Phase 表加 P8（builtin.rs + model 真切 provider + 前端区分内置/自定义）。
+  - 新增 §4.4.11.12 内置 subagent 清单：4 个 agent 的定位/工具/mode/选用时机 + system prompt 要点 + 为什么是这 4 个、为什么不更多。
+  - §13 决策表加 D9.1（内置层 + model=provider id）。
+- **影响范围**: 仅 docs/架构.md（设计定调），未动代码。不破坏兼容：builtin 是 additive，现有磁盘 `.md` 仍按原路加载，且同名优先级高于 builtin。
+- **留尾巴**: P8 待实现——① `subagent/builtin.rs`（4 个定义 + system_prompt 常量）；② `load_for_workdir` 接 builtin 垫底、磁盘同名覆盖；③ `run_nested_inner` 按 `def.model` 经 `config::get` + `build_client_with_data_dir` 为子建专属 client（现复用父 client）+ SubagentCtx 透传 data_dir；④ 前端 agents tab 区分内置/自定义 + "复制为自定义"。磁盘上的 coder/echo-agent/looper 测试占位是用户数据，不在本次清理范围。
+
+### 2026-06-12 — 修复输入框运行态模式图标与抽屉按钮 hover 尺寸
+
+- **Why**: agent run 开始后，输入框下方模式选择器会收成小图标，但默认模式图标在运行态视觉上像空白；同时抽屉里的模式、思考强度、用量、token 状态按钮各自高度/宽度不同，hover 底框大小形状不一致。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx): 默认模式图标换成更清晰的 `GaugeCircle`，运行态保持 32×32 圆角方形按钮。
+  - [apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx](../apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx): 增加 compact 展示，运行态只显示图标，并统一 32×32 hover 底框。
+  - [apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx) / [TokenStatsPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx): 增加 compact 展示，运行态隐藏文字，只保留图标/圆环并统一按钮尺寸。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatInput.tsx): 在 `isStreaming` 时把 compact 状态传给抽屉各控件。
+- **影响范围**: 仅 Desktop 前端 UI；不改 protocol / agent-core / storage，不影响运行模式语义。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 通过。未跑 `pnpm tauri dev` 做真机 hover 眼验。
+- **留尾巴**: 无。
+
+### 2026-06-12 — 修正运行态模式图标被旧 CSS 隐藏的根因
+
+- **Why**: 复现后确认模式按钮 DOM 里实际有 SVG，空白根因是旧的 streaming 折叠 CSS 用 `> svg:last-child { display: none }` 隐藏文字旁的下拉箭头；compact 态只有一个 SVG 时，它也成了 `last-child` 被一起隐藏。单纯换图标不能根治。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 删除 streaming 态强行隐藏抽屉按钮子节点的全局选择器，改由各组件的 `compact` prop 决定显示内容。
+  - [apps/desktop/frontend/src/desktop/ui/lib/toolbarStyles.ts](../apps/desktop/frontend/src/desktop/ui/lib/toolbarStyles.ts): 新增输入框抽屉 compact 按钮公共样式，统一 32×32、圆角、hover 底色与 disabled 状态。
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx) / [ReasoningEffortPill.tsx](../apps/desktop/frontend/src/desktop/ui/components/ReasoningEffortPill.tsx) / [ProviderUsageIndicator.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProviderUsageIndicator.tsx) / [TokenStatsPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/TokenStatsPanel.tsx): compact 态统一使用公共按钮样式；默认模式图标改为更醒目的 `Gauge`。
+- **影响范围**: 仅 Desktop/hebweb 前端输入框抽屉 UI；不改 protocol / agent-core / storage，不影响运行模式和思考强度语义。
+- **留尾巴**: 无。
+
+### 2026-06-11 — 内置浏览器旁支会话改纯内存 + 模型 IO 写进绑定主对话面板
+
+- **Why**: 用户痛点两条——①内置浏览器「元素对话」（选中元素后的样式调整助手，机制 B）会真的 `sessions::create` 建一个落盘 session，污染会话列表，而它只是临时调样式的工作台、关掉浏览器就该消失；②这些旁支 LLM 调用的 model_io 落进了旁支自己的目录，主对话的 Model I/O 调试面板（按主对话 id 读）看不到，调试时无从查旁支到底发了什么给模型。
+- **改动**:
+  - [crates/agent-core/src/model_io_dump.rs](../crates/agent-core/src/model_io_dump.rs): `ModelIoDump` 加 `main_kind` 字段 + `open_with_main_kind` / `open_for_session_with_kind`，让主调用 entry 的 `kind` 不再写死 `"main"`。旁支用 `open_for_session_with_kind(主对话 id, "aside")` 把模型 IO 写进绑定主对话的 `model_io.jsonl`。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs): 主调用落盘的 `kind` 改读 `dump.main_kind()`。
+  - [crates/agent-core/src/storage/model_io.rs](../crates/agent-core/src/storage/model_io.rs): **根因修复**——读取端 `rebuild_messages` 改成只对 `kind=="main"` 维护增量重建累积链。原实现对任意带 `messages` 字段的行都刷新 accumulated，judge/compaction 没 messages 恰好绕过，但 aside 行带完整 messages（与主对话无关）夹在 main 增量行之间会把下一条 main 行的重建基线带偏。加回归测试 `aside_entry_does_not_corrupt_main_increment_chain`（aside 行夹在两条 main 行间，验证后续 main 增量重建不被污染）。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 新增 `send_aside`——构造 `CoreSession`（`session_id`/`data_dir`/`permission_store` 全 `None` 短路一切落盘与后台 task），只暴露 `PreviewStyle`，注入 aside dump，用轻量 `AsideObserver` drive，返回更新后的内存历史。删除旧的 `aside_send_args`/`SendArgs` 路径在 browser 侧的使用。
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): `BrowserState` 加 `asides: Mutex<HashMap<主对话 id, HashMap<旁支 id, Vec<Message>>>>` 内存持有多轮历史，`browser_close` 随实例清理。`handle_aside_send`/`handle_aside_submit` 改调 `chat::send_aside`，不再建落盘 session；inspector 回传的旁支 id 现在是内存生成的不透明 token（inspector.js 零改动）。
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx): 左侧列表给 `kind="aside"` 加紫色 `aside` 标签。
+  - [docs/架构.md](架构.md): §8.5 第 5 条从「规划中的 aside session」改写为已实现的「纯内存旁支会话」；§4.9.1 model_io.jsonl 注明 `kind` 四类（main/judge/compaction/aside）与增量链只由 main 维护。
+- **影响范围**: agent-core（model_io_dump / model_io 读取 / agent_loop）+ Desktop（chat / browser / 前端面板）+ 架构文档。不破坏 model_io.jsonl 兼容（老格式无 kind 字段视为 main）；旁支 session 不再落盘是行为变更——之前误建的旁支 session 文件仍会留在 `~/.hebbian/sessions/`（历史脏数据，可手动清，不影响功能）。
+- **留尾巴**: 旁支历史是进程内存，Desktop 重启即丢——符合「临时工作台」定位，无需持久化。借鉴的事实：CoreSession 的 session_id/data_dir 本就是 Option，subagent NestedRun 早已用「内存 run + 独立 model_io」跑通，本次旁支复用同一模式。
+- **关联**: 架构 §8.5 / §4.9.1
+
+### 2026-06-12 — 修正右侧工作台拖拽改宽的锚点方向
+
+- **Why**: 用户在内置浏览器预览中确认右侧工作台拖拽左侧 handle 时，视觉上会出现先按错误方向变化、再被布局挤回来的不自然过程；期望右边缘固定，鼠标往左直接变宽、往右直接变窄。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 拖拽计算改为以起始宽度和左侧 handle 位移为基准的 `startWidth - deltaX`，继续走当前 tab 的 `minWidth/maxWidth` clamp；拖拽期间关闭外壳 width 过渡，避免 flex/grid 布局动画滞后造成错向视觉。
+- **影响范围**: 仅 Desktop/hebweb 前端右侧工作台布局交互；不改 protocol / agent-core / storage，不影响浏览器或终端业务逻辑。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-12 — 落地预览中的侧栏布局微调
+
+- **Why**: 用户在内置浏览器预览中确认两个布局细节：右侧工作台拖拽左侧 handle 时应以右边缘为锚点直接变宽/变窄；左侧 `dsp-sidebar-card` 上边框需要相对当前位置下移 5px。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 宽度 clamp 严格使用传入的 `minWidth/maxWidth`，并给外层 `aside` 显式 `justifySelf: "end"`，保持右边缘为布局锚点。
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): `.dsp-sidebar-card` 增加 `margin-top: 5px`，落地预览中的左侧卡片下移效果。
+- **影响范围**: 仅 Desktop/hebweb 前端布局；不改 protocol / agent-core / storage。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 未通过，失败点为既有工作区改动 `ChatView.tsx:751` 缺少 `Share` import，和本次文件无关。
+- **留尾巴**: 需要后续处理当前工作区已有的 `ChatView.tsx` 类型错误后再跑全量前端类型检查。
+
+### 2026-06-12 — 移除 ChatView 导出按钮并修正侧栏微调验证结果
+
+- **Why**: 用户在内置浏览器预览中确认 ChatView 顶部不再需要“导出到 Claude（终端里继续这段对话）”按钮；上一条侧栏布局记录写入时前端类型检查仍因 `Share` import 状态不一致失败，需要完成按钮移除并重新验证。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 直接移除 header 里的导出按钮、`ExportClaudeDialog` 渲染、相关 state 与不再使用的 import，不用 CSS 隐藏 DOM。
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 保持左侧 handle 的 `startWidth - deltaX` 拖拽计算，并把右锚点落到外层 aside class 上。
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 保留 `.dsp-sidebar-card { margin-top: 5px; }` 的预览落地效果。
+- **影响范围**: 仅 Desktop/hebweb 前端 header 与侧栏布局；不改 protocol / agent-core / storage。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-12 — 调整工具调用时间线的名称与描述间距
+
+- **Why**: 用户在内置浏览器预览中确认 `ToolCallTimeline` 不应再按最长工具名做固定列宽对齐；工具名应自然宽度显示，描述与工具名固定相距 `2ch`。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 将工具调用行从三列 grid 改为图标列 + 内容 flex；移除 `minmax(88px,auto)` 固定名称列，让工具名自然宽度显示，并用 `mr-[2ch]` 固定工具名、描述、摘要之间的间距。
+- **影响范围**: 仅 Desktop/hebweb 前端工具调用展示；不改 protocol / agent-core / storage。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-12 — 收紧请求失败 Markdown 段落的长文本换行
+
+- **Why**: 用户在内置浏览器预览中确认，助手消息里的 `[请求失败：HTTP 400: ...]` 长 JSON 错误段落会被挤成极窄列并产生夸张高度；需要让它按正常消息宽度展示并可在任意位置换行。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 在 `AssistantParts` 的 Markdown 文本分支识别请求失败文本，为对应 `markdown-segment` 补充完整宽度、盒模型、`pre-wrap`、`overflow-wrap:anywhere`、13px 字号和 1.45 行高样式。
+- **影响范围**: 仅 Desktop/hebweb 前端助手消息展示；不改 protocol / agent-core / storage。
+- **验证**: `cd apps/desktop && pnpm exec tsc --noEmit` 未通过，失败点为当前工作区已有的 `apps/desktop/frontend/src/desktop/ui/store/useStore.ts:656`：`JudgingEntry` 不能作为 `string` 传给 `setPartJudging`，与本次 `MessageBubble.tsx` 展示样式改动无关。
+- **留尾巴**: 无。
+
+### 2026-06-12 — subagent P8 落地：4 个内置 subagent + `model` 真按 provider id 切 client（承接本日架构定调条）
+
+- **Why**: 把本日「架构定调」条（§4.4.11.12 / D9.1）落成代码。此前 subagent 基础设施齐全但零内置、Task 工具因条件注入对新用户隐形（"还是 demo"）；且 `model` 字段是死的——子 NestedRun 始终复用父 client，写了 provider id 也不换供应商。
+- **改动**:
+  - 新增 [crates/agent-core/src/storage/subagents_builtin.rs](../crates/agent-core/src/storage/subagents_builtin.rs)：`builtin_subagents()` 定义 4 个内置 subagent（explore / plan / code-reviewer / general-purpose）+ 各自中文 system prompt 常量。三个只读 agent 白名单 = Read/Grep/Bash（剔除 Edit/Write），general-purpose 用全工具。**放 storage 层而非架构原写的 subagent 层**——理由：内置定义是 subagent 的一种来源、归 storage::subagents 多来源合并职责，storage 自给自足不反向依赖上层运行时（与 §6.1 providers.json 避免反向依赖同原则）。架构.md 路径同步改为 `storage/subagents_builtin.rs`。
+  - [crates/agent-core/src/storage/subagents.rs](../crates/agent-core/src/storage/subagents.rs)：`load_for_workdir` 改走新 `merge_builtin_with_disk`（builtin 垫底、磁盘同名覆盖），之上仍叠两层 enabled。更新旧测试 `enabled_defaults`（不再假设 `len==1`）+ 加 2 测试（builtin 默认出现 / 磁盘覆盖内嵌）。
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs)：新增 `resolve_child_client`——`def.model = Some(provider_id)` 时经 `config::get` + `build_client_with_data_dir` 为子建该 provider 专属 client、model 取 provider 的 `default_model`（无则 `models` 首个）；缺省 / 缺 data_dir / provider 不存在 / 无可用 model / 建 client 失败均降级复用父 client。删掉原 `model_id = def.model.clone()...`（那行把 provider id 错当 model 名发请求，是隐藏 bug）。LoopParams 的 `client` + `judge_client` 改用 `child_client`。
+  - [crates/agent-core/src/tools/mod.rs](../crates/agent-core/src/tools/mod.rs)：测试 `task_absent_when_no_subagent_definition` 改名 `task_present_due_to_builtin_subagents` 并翻转断言——builtin 让 subagents 永不为空、Task 默认常驻（D9.1）。`default_tools` 条件注入逻辑本身未动（builtin 让其自然常驻）。
+  - [docs/架构.md](../docs/架构.md)：§4.4.11.4 / P8 / §4.4.11.12 的 builtin 文件路径从 `subagent/builtin.rs` 改为 `storage/subagents_builtin.rs`。
+- **影响范围**: agent-core（storage + subagent runner + tools 测试）。additive、不破坏兼容：现有磁盘 `.md` 仍按原路加载且同名优先级高于 builtin。三 surface（heb / hebweb / desktop）即时获得 4 个开箱 subagent。
+- **验证**: `cargo check -p agent-core --tests` 绿（仅剩别人 dispatch.rs 重构的 1 个 dead_code warning）；`cargo test -p agent-core --lib -- subagent task_present` **29 passed / 0 failed**（含 builtin 清单 4 + merge 覆盖 2 + 翻转的 task_present + 全部原有 runner/task/storage 测试）。
+- **留尾巴**: ① 前端 agents tab 区分内置/自定义——见下一条（已落地）。② model 切 provider 的端到端验证（建 `model=某 provider id` 的自定义 subagent 实跑、看子 `model_io.jsonl` 用对 provider）需真 provider + 网络，未跑；逻辑已 review + 降级路径完备 + 删了原 provider-id-当-model-名 的隐藏 bug。③ 为让 crate 通过编译，临时给别人未完成的 dispatch.rs 重构补了 2 个明显遗漏的 import（`effects::Effects` / `serde_json::Value`）——非本任务内容，留给 dispatch.rs 作者合并。④ 磁盘上 coder/echo-agent/looper 测试占位是用户数据，未清理。
+
+### 2026-06-12 — subagent P8 前端：agents tab 区分内置/自定义（承接 P8 落地条）
+
+- **Why**: 承接本日「subagent P8 落地」条留尾巴①——后端已让内置 subagent 全功能可用，补上设置页管理 UI，让用户看得到内置 4 个、能禁用、能复制改成自己的版本。
+- **改动**:
+  - [crates/agent-core/src/storage/subagents.rs](../crates/agent-core/src/storage/subagents.rs): SubagentDefinition 加 `source` 字段（新增 `SubagentSource::{Builtin, Global}`，`#[serde(default)] = Global`）；parse_definition 填 Global、builtin 填 Builtin；`list_subagents` 透传给前端。subagents_builtin.rs / subagent/runner.rs / tools/task.rs 各 SubagentDefinition 构造点补 source。
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): SubagentDefinition 加 `source?: "builtin" | "global"`。
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): SubagentsPane 内置项显示「内置」徽章 + 「查看」只读展开 + 「复制为自定义」（无编辑/删除，仍可 enabled toggle）；自定义项保持编辑/删除。新增 `copyToCustom`（预填新建表单，同名保存即覆盖内置）。
+- **影响范围**: agent-core（SubagentDefinition additive 字段，serde default 兼容老数据）+ Desktop/hebweb 设置页。不破坏兼容。
+- **验证**: `cargo test -p agent-core --lib -- subagent task_present` 29 passed；`cd apps/desktop && pnpm exec tsc --noEmit` 我的两文件（types.ts / AppSettingsDialog.tsx）零错误（唯一报错 `useStore.ts:656` 是工作区已有的 JudgingEntry 问题，别人的，与本次无关）。
+- **留尾巴**: 内置 agent 走 `get_subagent`（直读单个 .md）会「不存在」——前端只用 `list_subagents`（走 merge 含 builtin）渲染、不对内置调 get，已规避；未来若别处用 get_subagent 取内置需注意。真实模型端到端验证同前条留尾巴②。
+
+### 2026-06-12 — subagent 模型 IO 写进父对话的 Model I/O 面板（kind="subagent"）
+
+- **Why**: subagent 的模型请求原落在子目录 `sessions/<父>/subagents/<子>/model_io.jsonl`，主对话的 Model I/O 调试面板（读 `sessions/<父>/model_io.jsonl`）看不到，调试 subagent 要手动翻子目录。用户：「把 subagent 的请求也如 model_io」——让它像主对话那样在面板可见。
+- **改动**:
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs): `run_nested_inner` 的 model_io dump 从 `open_for_session_if_enabled(子sid)` 改为 `open_for_session_with_kind(父sid, "subagent")`——子模型 IO 写进父 model_io.jsonl、主调用标 `kind="subagent"`（复用内置浏览器旁支 `kind="aside"` 的同套机制）。子 run_id 独立，前端按 run_id + kind 区分。
+  - [apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx](../apps/desktop/frontend/src/desktop/ui/components/ModelIoInspector.tsx): 加 `kind === "subagent"` 标签（teal 色），照 aside 标签。
+  - 读取侧 [crates/agent-core/src/storage/model_io.rs](../crates/agent-core/src/storage/model_io.rs) **零改动**：`is_main = kind=="main"`，非 main 自动走「不参与增量重建、原样保留全量 messages」分支，`"subagent"` 天然正确（且不碰别人正在改的该文件）。
+  - [docs/架构.md](../docs/架构.md) §4.4.11.8 补「子模型 IO 写父面板」段。
+- **影响范围**: agent-core（runner 一处）+ Desktop/hebweb 前端（ModelIoInspector 标签）。取舍：子目录不再单独存 model_io.jsonl（子对话视图读 session.jsonl 不依赖它，无损）；换主对话面板一处看全父 + 所有子的模型交互。
+- **验证**: `cargo check -p agent-core --tests` 绿；`cargo test -p agent-core --lib -- subagent` 29 passed；`tsc --noEmit` ModelIoInspector 零错误（唯一报错 `useStore.ts:656` 是别人 pre-existing 问题）。
+- **留尾巴**: 真实端到端（跑一个 Task 看父 model_io.jsonl 出现 `kind=subagent` 行）需 provider，没跑；机制与已上线的 aside 完全对称，逻辑等价。

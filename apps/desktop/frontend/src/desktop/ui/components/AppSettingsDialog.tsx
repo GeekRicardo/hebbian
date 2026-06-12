@@ -1571,6 +1571,14 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
     }
   };
 
+  // 复制内置 agent 为自定义：预填内容进新建表单，同名保存即整体覆盖内置（架构 §4.4.11.4）。
+  const copyToCustom = (def: SubagentDefinition) => {
+    setCreating(true);
+    setEditing(null);
+    setNewName(def.name);
+    setNewContent(buildSubagentContent(def));
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -1611,7 +1619,9 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
 
       {loading && <p className="text-sm text-muted-foreground">加载中…</p>}
 
-      {subagents.map((def) => (
+      {subagents.map((def) => {
+        const isBuiltin = def.source === "builtin";
+        return (
         <div key={def.name} className="border rounded-lg p-3 space-y-2">
           <div className="flex items-center gap-2">
             <input
@@ -1621,6 +1631,9 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
               className="h-4 w-4 cursor-pointer"
             />
             <span className="font-medium text-sm">{def.name}</span>
+            {isBuiltin && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">内置</span>
+            )}
             <span className="text-xs text-muted-foreground flex-1 truncate">{def.description}</span>
             <Button
               size="sm"
@@ -1628,16 +1641,27 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
               className="h-6 px-2 text-xs"
               onClick={() => editing === def.name ? setEditing(null) : startEdit(def)}
             >
-              {editing === def.name ? "收起" : "编辑"}
+              {editing === def.name ? "收起" : isBuiltin ? "查看" : "编辑"}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-destructive hover:text-destructive"
-              onClick={() => handleDelete(def.name)}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            {isBuiltin ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() => copyToCustom(def)}
+              >
+                复制为自定义
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-destructive hover:text-destructive"
+                onClick={() => handleDelete(def.name)}
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            )}
           </div>
 
           {editing === def.name && (
@@ -1646,19 +1670,27 @@ function SubagentsPane({ workdir }: { workdir: string | null }) {
                 className="w-full h-48 text-xs font-mono border rounded p-2 bg-background resize-y focus:outline-none focus:ring-1 focus:ring-ring"
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
+                readOnly={isBuiltin}
               />
-              <div className="flex gap-2">
-                <Button size="sm" onClick={saveEdit} disabled={saving}>
-                  {saving ? "保存中…" : "保存"}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-                  取消
-                </Button>
-              </div>
+              {isBuiltin ? (
+                <p className="text-xs text-muted-foreground">
+                  内置 agent 只读。点「复制为自定义」可改成你自己的版本（同名会覆盖内置）。
+                </p>
+              ) : (
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={saveEdit} disabled={saving}>
+                    {saving ? "保存中…" : "保存"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                    取消
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
 
       {!loading && subagents.length === 0 && !creating && (
         <p className="text-sm text-muted-foreground text-center py-6">

@@ -709,6 +709,16 @@ function RequestRow({
               压缩
             </span>
           )}
+          {summary.kind === "aside" && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-400">
+              aside
+            </span>
+          )}
+          {summary.kind === "subagent" && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-teal-500/15 text-teal-600 dark:text-teal-400">
+              subagent
+            </span>
+          )}
           {matchCount > 0 ? (
             <span
               className="text-[10px] px-1 py-0.5 rounded bg-yellow-400/30 text-yellow-700 dark:text-yellow-300 tabular-nums"

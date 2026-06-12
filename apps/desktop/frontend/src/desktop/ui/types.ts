@@ -902,6 +902,17 @@ export interface PendingApproval {
   plan?: PlanPermissionDto | null;
 }
 
+/**
+ * AutoMode judge 接管期间暂存的一条审批（架构 §4.4.4）。judge 出结果前不显示弹框，
+ * 只在对应工具卡片挂黄色呼吸；judge 判 ASK 时把 `approval` 取出转入 pendingApproval 显形。
+ */
+export interface JudgingEntry {
+  /** 触发审批的工具卡片 call_id，用于设/清黄色呼吸 */
+  callId: string;
+  /** 完整审批数据，judge 判 ASK 转人工时直接复用，不必后端补发事件 */
+  approval: PendingApproval;
+}
+
 /** 用户对审批的回应 */
 export type ApprovalDecisionPayload =
   | { kind: "allow_once" }
@@ -1113,6 +1124,8 @@ export interface SubagentDefinition {
   system_prompt: string;
   /** 合并两层 enabled 状态后的结果。 */
   enabled: boolean;
+  /** 来源：`builtin` = 内置（只读 + 可禁用 + 复制为自定义）；`global` = 用户自定义（可编辑/删除）。 */
+  source?: "builtin" | "global";
 }
 
 /** Subagent 启用 scope（对应 Rust SubagentScope）。 */

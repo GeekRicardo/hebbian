@@ -316,9 +316,10 @@ surface 端复现不了但单元层能复现（如纯函数行为）：写一个
 `git add <我本次涉及的文件> && git commit`。规则：
 
 1. **只 add 本次任务实际改的文件**——不要 `git add -A` / `git add .`，避免把别人在跑的改动混进来
-2. **即使涉及的文件里有别人/其他任务的未完成更改也照常 commit**——不 stash、不假装看不见——把当前任务该改的那部分作为一次 commit，**在 commit message 末尾用一段 "Note:" 说明剩余 staged/unstaged 的内容是什么**，让历史可追溯
+2. **我改的文件里混了别人/其他任务的未完成改动 → 连同别人那部分一起 commit，绝不剥离**——不 `git stash`、不 `git checkout -- <file>`、不手删别人的 hunk 去"只留自己的"（那样会弄丢别人的改动）。直接 `git add <该文件>` 整体提交，**在 commit message 末尾用 "Note:" 逐个说明这些文件里哪些改动是别人的、不属于本次任务**，让历史可追溯
 3. **commit message 用 HEREDOC** 保证多行格式；正文中文，遵循项目既有风格（动词开头 + Why + 影响范围 + 留尾巴的简化版本，无需重复 changelog 全文）
 4. **commit 之前必须 build / test 通过**——本次涉及的 surface 至少跑过 `cargo check` 和相关测试。如果是 agent_core 改动，跑 `cargo test -p agent-core --lib`；如果改 CLI，跑 `heb new` 起一个 session 基础链路通过；如果改 desktop / hebweb，跑 dev 模式 + tsc
+5. **⚠️ 红线：绝不能弄丢别人的修改**——不可逾越的底线，优先级高于一切"提交干净"的洁癖。working tree 里他人未提交的改动，任何可能丢失它的操作一律禁止：`git stash` / `git checkout -- <file>` / `git reset --hard` / 手动删别人的 hunk / 用旧版本覆盖文件。处置原则：① 我改的文件混了别人的 → 整体 `git add` + 提交 + Note 说明哪部分是别人的；② 纯别人的、本次完全没碰的文件 → 不 add，原样留在 working tree（不要"顺手清理"或 checkout 还原）；③ 拿不准某段是不是别人的 → 当作别人的，保留 + 说明。宁可多留、多说明，也不让任何一行别人的改动消失
 
 ### commit message 不带 AI 署名
 

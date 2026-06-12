@@ -24,6 +24,17 @@ const SETTINGS_FILENAME: &str = "settings.json";
 /// 时用这个；调用方按需读 `definition.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS)`。
 pub const DEFAULT_MAX_ITERATIONS: u32 = 50;
 
+/// Subagent 来源层级（架构 §4.4.11.4）。前端据此区分「内置」与「自定义」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentSource {
+    /// 代码内嵌（[`super::subagents_builtin`]）。
+    Builtin,
+    /// 用户磁盘 `~/.hebbian/subagents/<name>.md`。
+    #[default]
+    Global,
+}
+
 /// 单个 subagent 的完整定义（架构 §4.4.11.4）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentDefinition {
@@ -47,6 +58,10 @@ pub struct SubagentDefinition {
     /// 当前 workdir 下是否启用。由 [`load_for_workdir`] 合并两层 settings.json 后填。
     /// 直接读 `~/.hebbian/subagents/<name>.md` 不经合并时默认 `true`。
     pub enabled: bool,
+    /// 来源层级（架构 §4.4.11.4）：`Builtin` = 代码内嵌；`Global` = 用户磁盘 .md。
+    /// 前端据此区分「内置」（只读 + 可禁用 + 复制为自定义）与「自定义」（可编辑/删除）。
+    #[serde(default)]
+    pub source: SubagentSource,
 }
 
 /// settings.json 全局形态：`{ "enabled": { ... } }`。
@@ -252,7 +267,7 @@ pub fn delete_definition(data_dir: &Path, name: &str, workdir: Option<&Path>) ->
 ///
 /// `workdir = None` 时只查全局。
 pub fn load_for_workdir(data_dir: &Path, workdir: Option<&Path>) -> Vec<SubagentDefinition> {
-    let mut defs = load_global_definitions(data_dir);
+    let mut defs = merge_builtin_with_disk(data_dir);
     let global_settings = load_global_settings(data_dir);
     let project_settings = workdir.map(|wd| load_project_settings(data_dir, wd));
     for def in defs.iter_mut() {
@@ -263,6 +278,18 @@ pub fn load_for_workdir(data_dir: &Path, workdir: Option<&Path>) -> Vec<Subagent
         );
     }
     defs
+}
+
+/// builtin 垫底 + 磁盘同名覆盖（架构 §4.4.11.4 来源层级）：内置项被磁盘同名定义整体顶替。
+fn merge_builtin_with_disk(data_dir: &Path) -> Vec<SubagentDefinition> {
+    let disk = load_global_definitions(data_dir);
+    let mut out: Vec<SubagentDefinition> = super::subagents_builtin::builtin_subagents()
+        .into_iter()
+        .filter(|b| !disk.iter().any(|d| d.name == b.name))
+        .collect();
+    out.extend(disk);
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 fn resolve_enabled(
@@ -338,6 +365,7 @@ fn parse_definition(name: &str, content: &str) -> AppResult<SubagentDefinition> 
         max_iterations,
         system_prompt,
         enabled: true,
+        source: SubagentSource::Global,
     })
 }
 
@@ -478,8 +506,9 @@ mod tests {
         let dd = tmp_data_dir("default-enabled");
         save_definition(&dd, "a", "---\ndescription: A\n---\nbody").unwrap();
         let defs = load_for_workdir(&dd, None);
-        assert_eq!(defs.len(), 1);
-        assert!(defs[0].enabled);
+        // builtin 垫底后结果含内置项，按 name 找回自定义 "a"，验证两层都未设时缺省启用。
+        let a = defs.iter().find(|d| d.name == "a").expect("自定义 a 应在合并结果里");
+        assert!(a.enabled);
     }
 
     #[test]
@@ -549,5 +578,26 @@ mod tests {
         assert!(!g.enabled.contains_key("a"));
         let p = load_project_settings(&dd, &wd);
         assert!(!p.subagents.enabled.contains_key("a"));
+    }
+
+    #[test]
+    fn builtin_appears_when_no_disk_definitions() {
+        let dd = tmp_data_dir("builtin-default");
+        let defs = load_for_workdir(&dd, None);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"explore"), "内置 explore 应默认出现");
+        assert!(names.contains(&"general-purpose"));
+        assert!(defs.iter().all(|d| d.enabled), "内置缺省启用");
+    }
+
+    #[test]
+    fn disk_definition_overrides_builtin_with_same_name() {
+        let dd = tmp_data_dir("override-builtin");
+        save_definition(&dd, "explore", "---\ndescription: my explore\n---\nCustom explore.").unwrap();
+        let defs = load_for_workdir(&dd, None);
+        let explore: Vec<_> = defs.iter().filter(|d| d.name == "explore").collect();
+        assert_eq!(explore.len(), 1, "同名只保留磁盘版（覆盖内嵌）");
+        assert_eq!(explore[0].description, "my explore");
+        assert_eq!(explore[0].system_prompt, "Custom explore.");
     }
 }

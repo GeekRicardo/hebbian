@@ -38,6 +38,7 @@ pub mod settings;
 pub mod skill_collections;
 pub mod skills;
 pub mod subagents;
+pub mod subagents_builtin;
 pub mod tool_results;
 
 use std::path::{Path, PathBuf};

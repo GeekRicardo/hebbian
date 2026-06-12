@@ -170,6 +170,7 @@ mod tests {
             max_iterations: None,
             system_prompt: format!("You are {name}."),
             enabled: true,
+            source: crate::storage::subagents::SubagentSource::Global,
         }
     }
 

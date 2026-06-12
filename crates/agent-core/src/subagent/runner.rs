@@ -192,12 +192,17 @@ impl SubagentRunner {
             self.ctx.data_dir.as_deref(),
         );
 
-        // 子 model_io.jsonl 落盘（架构 §4.4.11.2）：与父子目录对称，给调试 / 审计用。
-        // 没这个落盘子 NestedRun 完全无痕迹，看不到「子模型实际收/发了什么」。
-        // 默认 on（与 surface 行为一致），HEBBIAN_DUMP_MODEL_IO=0 时关。
-        let model_io_dump = match (self.ctx.data_dir.as_deref(), child_session_id.as_deref()) {
-            (Some(dd), Some(sid)) => {
-                crate::model_io_dump::open_for_session_if_enabled(dd, sid).await
+        // 子模型 IO dump（架构 §4.4.11.2）：写进**父** session 的 model_io.jsonl、kind="subagent"，
+        // 让 subagent 的模型请求出现在主对话的 Model I/O 调试面板（与内置浏览器旁支 kind="aside"
+        // 同一套机制）。子 run_id 独立，前端按 run_id + kind 区分不同 subagent 的调用。
+        // 默认 on（HEBBIAN_DUMP_MODEL_IO=0 时关）。子 entry kind≠"main" → 读取侧不参与主对话
+        // 增量重建、原样保留全量 messages。
+        let model_io_dump = match (
+            self.ctx.data_dir.as_deref(),
+            self.ctx.parent_session_id.as_deref(),
+        ) {
+            (Some(dd), Some(parent_sid)) => {
+                crate::model_io_dump::open_for_session_with_kind(dd, parent_sid, "subagent").await
             }
             _ => None,
         };
@@ -209,11 +214,13 @@ impl SubagentRunner {
             .clone()
             .unwrap_or_else(|| child_registry.tool_names());
         let compaction_policy = self.ctx.compaction_policy.clone();
-        let model_id = def.model.clone().or_else(|| self.parent_model_id.clone());
+        // 子 client 与 model（架构 §4.4.11.4）：def.model = provider id 时用该 provider 建专属
+        // client、model 取该 provider 的 default_model；缺省复用父 client 与父 model。
+        let (child_client, model_id) = self.resolve_child_client(&def);
         let max_iter = def.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
 
         let params = LoopParams {
-            client: self.ctx.client.as_ref(),
+            client: child_client.as_ref(),
             registry: Arc::new(child_registry),
             hitl: self.parent_hitl.clone(),
             hooks: self.ctx.hooks.clone(),
@@ -232,7 +239,7 @@ impl SubagentRunner {
             pending_inputs_accepting: None,
             run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
             model_id,
-            judge_client: Some(self.ctx.client.clone()),
+            judge_client: Some(child_client.clone()),
             // 子 agent 不参与 hands-off（始终走父继承的审批策略）。
             force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             data_dir: self.ctx.data_dir.clone(),
@@ -247,6 +254,48 @@ impl SubagentRunner {
 
         let output = agent_loop::run_loop(params, child_sink).await?;
         Ok(output.text)
+    }
+
+    /// 按 `def.model`（= providers.json 的 provider id，架构 §4.4.11.4）决定子 NestedRun 用
+    /// 哪个 client 与 model：
+    /// - `Some(provider_id)` 且 data_dir 在、provider 存在且有可用 model → 用该 provider 建专属
+    ///   client，model 取 provider 的 `default_model`（无则 `models` 首个）。
+    /// - 其余（缺省 / 单测无 data_dir / provider 不存在 / 无可用 model / 建 client 失败）→ 复用
+    ///   父 client 与父 model（warn 一条便于排查）。
+    fn resolve_child_client(
+        &self,
+        def: &SubagentDefinition,
+    ) -> (Arc<dyn model_gateway::client::ModelClient>, Option<String>) {
+        let fallback = || (self.ctx.client.clone(), self.parent_model_id.clone());
+        let Some(provider_id) = def.model.as_deref() else {
+            return fallback();
+        };
+        let Some(data_dir) = self.ctx.data_dir.as_deref() else {
+            tracing::warn!(provider_id, subagent = %def.name, "subagent 指定了 model 但无 data_dir，复用父 client");
+            return fallback();
+        };
+        let provider = match model_gateway::config::get(data_dir, provider_id) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(provider_id, subagent = %def.name, error = %e, "subagent model 指定的 provider 未找到，复用父 client");
+                return fallback();
+            }
+        };
+        let model = provider
+            .default_model
+            .clone()
+            .or_else(|| provider.models.first().cloned());
+        let Some(model) = model else {
+            tracing::warn!(provider_id, subagent = %def.name, "subagent 指定的 provider 没有可用 model，复用父 client");
+            return fallback();
+        };
+        match model_gateway::build_client_with_data_dir(provider, data_dir.to_path_buf()) {
+            Ok(client) => (client, Some(model)),
+            Err(e) => {
+                tracing::warn!(provider_id, subagent = %def.name, error = %e, "subagent provider 建 client 失败，复用父 client");
+                fallback()
+            }
+        }
     }
 
     fn build_child_registry(&self, def: &SubagentDefinition) -> ToolRegistry {
@@ -363,6 +412,7 @@ mod tests {
             max_iterations: None,
             system_prompt: format!("You are {name}."),
             enabled: true,
+            source: crate::storage::subagents::SubagentSource::Global,
         }
     }
 
