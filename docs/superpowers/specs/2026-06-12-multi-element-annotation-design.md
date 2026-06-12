@@ -1,14 +1,15 @@
-# 内置浏览器：多元素注释 + 统一汇总浮窗 + 真实结构操作
+# 内置浏览器：多元素注释 + 统一汇总浮窗 + 真实结构操作 + 浏览器交互/视觉
 
 > 设计准则锚点：[架构.md §8.5 内置浏览器与页面注释](../../架构.md)。本设计不改 protocol / agent-core 主路径 / prompt cache，新增能力全部 additive。
 
 ## 1. 背景与动机
 
-现状（`apps/desktop/src/browser/inspector.js`）一个注释框只能绑定**单个**元素：选中 → 调样式 / 和助手对话 → 提交到主对话。三个痛点：
+现状（`apps/desktop/src/browser/inspector.js`）一个注释框只能绑定**单个**元素：选中 → 调样式 / 和助手对话 → 提交到主对话。四个痛点：
 
 1. **无法做元素之间的修改**：用户想表达「让 A 和 B 对齐」「把 C 移到 D 下面」时，注释框只认一个元素，助手拿不到第二个元素的定位。
 2. **汇总浮窗形同虚设**：现有的「修改队列框」（`editQueue` / `renderQueuePanel`）只在**手动样式 diff 非空**时才出现，纯对话不触发——用户从没见过它，等于不存在。
 3. **助手只能改样式，不能改结构**：`PreviewStyle` 信号工具只能改 CSS。用户想新增一个按钮、删除多余分隔线、改文案，预览里看不到效果，只能凭空想象。
+4. **前端不全是死样式**：弹窗、hover 菜单、表单交互态光调 CSS 测不出来；助手既不能**操作**页面（点击/输入/滚动/hover/按键）触发这些状态，也**看不见**操作后的真实效果。
 
 ## 2. 目标
 
@@ -16,12 +17,15 @@
 - **B. 对话 @N 引用**：contenteditable 输入框里用 `@1`/`@2` 引用选中元素（高亮 chip），助手据此做元素之间的修改，且能调任意被引用元素的样式。
 - **C. 真实结构操作**：助手能在预览里真实新增 / 删除元素、改文本内容（草稿态），用户所见即所得。
 - **D. 统一汇总浮窗**：一个浮窗收集多条注释（每条 = N 元素 + 样式 diff + 对话 + 结构改动，任意非空即可加入），可逐条展开、一键全部提交到主对话由助手一起总结。
+- **E. 浏览器交互**：助手能在预览里真实操作页面——点击、输入文字、滚动、hover、按键——触发弹窗 / 菜单 / 表单等交互态。
+- **F. 让助手「看见」**：助手能截取交互后的页面渲染图，回传作为视觉输入，自己判断效果对不对（复用现有 Image 附件 + VisionBridge 管线）。
 
 ## 3. 非目标
 
 - **不改源码落地**：预览里的样式 / 结构改动都是**草稿态**（刷新即失）。真正进产品靠「提交到主对话」让主对话改源码 JSX。预览永不直接写源码（§8.5 铁律）。
 - **不动 hebweb 降级路径的新增能力**：本期聚焦 Desktop 子 webview；iframe 路径沿用同一份 inspector.js，传输层已抽象，天然兼容。
 - **不做 @N 的跨注释框引用**：@N 只在当前注释框的选中列表范围内。
+- **截图不追求像素级保真**：用 DOM 渲染（html2canvas），阴影/滤镜/渐变/跨域图等复杂 CSS 还原近似。够用于验证「交互后状态变了没、布局对不对」，工具 description 会诚实告诉模型这是近似渲染，避免它对颜色/阴影过度自信。不做 OS 级屏幕截图（避开 DPI / 窗口遮挡的工程黑洞）。
 
 ## 4. 架构定位
 
@@ -29,13 +33,13 @@
 
 | 层 | 职责 | 改动 |
 |---|---|---|
-| `inspector.js`（注入页面） | 多元素状态机、小方块、@N chip、结构操作执行、统一浮窗 | 主战场 |
-| `apps/desktop/src/browser/mod.rs` | 旁支会话绑定多元素、观察 `PreviewMutate` 下发、多注释合并总结 | 中等 |
-| `crates/agent-core/src/tools/preview_style.rs` + 新增 `preview_mutate.rs` | `PreviewStyle` 加 `target`；`PreviewMutate` 信号工具 | 小 |
+| `inspector.js`（注入页面） | 多元素状态机、小方块、@N chip、结构操作执行、统一浮窗、交互动作执行、html2canvas 截图 | 主战场 |
+| `apps/desktop/src/browser/mod.rs` | 旁支会话绑定多元素、观察 `PreviewMutate` / `PreviewAct` / `PreviewCapture` 下发、回传截图作为工具结果、多注释合并总结 | 中等 |
+| `crates/agent-core/src/tools/preview_style.rs` + 新增 `preview_mutate.rs` / `preview_act.rs` / `preview_capture.rs` | `PreviewStyle` 加 `target`；新增结构 / 交互 / 截图信号工具 | 小 |
 | `App.tsx` / `annotation.ts` / `browserHost.ts` | 消费端 + 上行契约 | 小 |
-| `docs/架构.md §8.5` + changelog | 登记新工具 `PreviewMutate` | 文档 |
+| `docs/架构.md §8.5` + changelog | 登记新工具 | 文档 |
 
-**协议 / prompts / model-gateway 零改动。** 新增的 `browser://` 内部消息和旁支会话工具均 additive，旧客户端无感。
+**协议 / prompts / model-gateway 零改动。** 新增的 `browser://` 内部消息和旁支会话工具均 additive，旧客户端无感。截图回传复用既有 `MessageAttachment::Image` + `VisionBridgeClient`（弱文本模型自动降级转文字），**视觉管线零新建**。
 
 ## 5. 详细设计
 
@@ -154,15 +158,85 @@ pub struct PreviewMutateInput {
 
 纯样式 / 纯结构 / 纯对话的项都并入同一次总结，主对话拿到的是一份完整连贯需求。
 
+### 5.8 浏览器交互（功能 E）—— 新增工具 PreviewAct
+
+新增信号工具 `crates/agent-core/src/tools/preview_act.rs`，与 `PreviewStyle` 同源机制：
+
+```rust
+pub const PREVIEW_ACT_TOOL_NAME: &str = "PreviewAct";
+
+pub struct PreviewActInput {
+    pub action: String,              // "click" | "type" | "scroll" | "hover" | "press"
+    #[serde(default)]
+    pub target: Option<String>,      // "@N" 操作哪个选中元素（click/type/hover 用），默认 @1
+    #[serde(default)]
+    pub text: Option<String>,        // action=type 时：要输入的文字
+    #[serde(default)]
+    pub key: Option<String>,         // action=press 时：按键名（Enter/Escape/ArrowDown…）
+    #[serde(default)]
+    pub delta: Option<i32>,          // action=scroll 时：滚动量（px，正=向下）
+}
+```
+
+- `route_aside_event` 加 `name == "PreviewAct"` 分支 → 下发 `heb:aside:act`
+- inspector `handleIn` 加 `heb:aside:act`，按 action 在目标元素上执行：
+  - `click`：`el.click()`（合成完整 pointer 序列，触发框架事件监听）
+  - `type`：聚焦后逐字 `dispatchEvent(InputEvent)` + 设 `value`，触发 React 受控组件 onChange
+  - `hover`：`dispatchEvent(MouseEvent("mouseover"/"mouseenter"))`，触发 hover 菜单 / tooltip
+  - `press`：`dispatchEvent(KeyboardEvent("keydown"/"keyup"))`
+  - `scroll`：`window.scrollBy` 或目标元素 `scrollTop += delta`
+  - 每个动作对话流显示一条 tool 气泡（🖱 点击 @1 / ⌨ 输入…），并把动作记进 `draft.structuralChanges[]`（提交时一并描述给主对话，说明"这个效果是在 X 交互后出现的"）
+- **交互后新元素不自动选中**：交互后若 DOM 冒出新元素（弹窗 / 菜单），不自动选中——保持简单；助手要标注它再用 `PreviewMutate` 或让用户 ➕ 选取
+
+**安全**：交互只作用于目标预览页（用户自己的页面），旁支会话 `restrict_tools` 白名单加 `PreviewAct`（与其他 preview 工具并列，绝不暴露 Bash/Edit）。
+
+### 5.9 让助手「看见」（功能 F）—— 新增工具 PreviewCapture
+
+新增信号工具 `crates/agent-core/src/tools/preview_capture.rs`。**与前面工具的关键不同：它要等截图回传才能返回工具结果**（前面的工具 `execute` 立即返回确认即可）。
+
+```rust
+pub const PREVIEW_CAPTURE_TOOL_NAME: &str = "PreviewCapture";
+
+pub struct PreviewCaptureInput {
+    #[serde(default)]
+    pub target: Option<String>,      // "@N" 只截某个元素，缺省截整个可视区
+}
+```
+
+**截图链路**（打破单向下发模式）：
+
+1. 模型调 `PreviewCapture` → `route_aside_event` 观察到 → 下发 `heb:aside:capture`，**同时记一个 pending（capture_id → oneshot sender）**
+2. inspector 收到 `heb:aside:capture`：html2canvas 渲染目标 → `canvas.toDataURL("image/png")` → 上行 `heb:capture:result {captureId, dataUrl}`
+3. mod.rs 收到 `heb:capture:result` → 解出 base64 PNG → 通过 oneshot 唤醒 pending
+4. `PreviewCapture` 工具的 `execute` 一直 await 这个 oneshot（带超时），拿到 PNG 后**作为工具结果的 Image 附件返回**：
+
+```rust
+// execute 返回带图的 ToolResult
+Ok(ToolOutput {
+    content: "已截取当前预览（近似渲染，颜色/阴影可能不精确）".into(),
+    attachments: vec![MessageAttachment::image_from_bytes("preview.png", "image/png", &png_bytes)],
+})
+```
+
+5. 旁支会话下一轮把这个 Image 附件喂回模型——目标模型支持图片就直接看；不支持，`VisionBridgeClient` 自动用视觉辅助模型转文字描述（既有管线，`tool_result_image_replaced_with_vision_notes` 已覆盖）
+
+**html2canvas 引入**（用户已定：打包进 inspector）：把 html2canvas min 源码内联进 inspector 注入链路（或注入时附加 `<script>`），离线可用、任何页面可截。inspector 体积增 ~200KB，仅 Desktop 子 webview 注入一次。
+
+**工具结果通道（已核实，零改造）**：`Tool` trait 已有 `execute_rich(ctx, input) -> AppResult<ToolOutput>`，`ToolOutput { content, attachments: Vec<MessageAttachment> }`，且 dispatcher 会把 attachments 透传进 `ToolResult.attachments` 再进模型上下文（`Read` 读图片就走这条）。`PreviewCapture` 只实现 `execute_rich` 返回带 Image 的 ToolOutput 即可——**不动 Tool trait、不影响任何现有工具**。
+
+**超时与失败**：截图 10s 没回（页面卡 / html2canvas 异常）→ execute 返回文字「截图超时，无法查看当前渲染」，不挂死会话。
+
 ## 6. 数据流时序
 
 ```
 选元素 → ➕ 追加更多 → 小方块[1][2][3]
   ↓
-对话框 @1 @2 「让这俩对齐」→ heb:aside:send(elements) → 旁支会话
-  ↓ 助手调 PreviewStyle{target:@2} / PreviewMutate{op:append,target:@1}
-  ↓ route_aside_event 观察 → heb:aside:apply / heb:aside:mutate
-  ↓ inspector 实时改预览（多一个小方块）
+对话框 @1 @2 「点开 @1 的菜单看看对齐对不对」→ heb:aside:send(elements) → 旁支会话
+  ↓ 助手调 PreviewAct{action:click,target:@1} → heb:aside:act → inspector el.click()
+  ↓ 助手调 PreviewCapture → heb:aside:capture → inspector html2canvas → heb:capture:result
+  ↓ mod.rs oneshot 唤醒 → 工具结果带 PNG 附件 → 下一轮喂回模型（VisionBridge 自动降级）
+  ↓ 助手「看见」效果 → 调 PreviewStyle{target:@2} / PreviewMutate 调整
+  ↓ route_aside_event 观察 → heb:aside:apply / heb:aside:mutate → inspector 实时改预览
   ↓
 「加入列表」→ annotationList push → 浮窗 [注释1][注释2]
   ↓ 点注释项 → 重新展开注释框（恢复全部状态）
@@ -181,18 +255,18 @@ pub struct PreviewMutateInput {
 
 ## 8. 测试策略
 
-- **inspector.js 纯函数核心**（`__hebCore`，node 可测）：新增 `@N` 解析（contenteditable → locator 还原）、draft 序列化/反序列化（浮窗存取）写单测，落 `annotation.test.ts` 同级
-- **preview_mutate.rs**：`execute` 返回确认 + 参数解析单测（`cargo test -p agent-core --lib`）
-- **复现验证**（按 CLAUDE.md 修 bug 流程）：hebweb + Playwright 跑全链路——选多元素 → 小方块 hover 高亮 → @N 对话 → 助手 append → 加入列表 → 展开 → 全部提交，DOM/截图核对
+- **inspector.js 纯函数核心**（`__hebCore`，node 可测）：新增 `@N` 解析（contenteditable → locator 还原）、draft 序列化/反序列化（浮窗存取）、`target` 解析（@N → element index）写单测，落 `annotation.test.ts` 同级
+- **preview_mutate.rs / preview_act.rs / preview_capture.rs**：`execute` / `execute_rich` 返回 + 参数解析单测（`cargo test -p agent-core --lib`）；capture 的 oneshot 超时路径单测
+- **复现验证**（按 CLAUDE.md 修 bug 流程）：hebweb + Playwright 跑全链路——选多元素 → 小方块 hover 高亮 → @N 对话 → 助手 PreviewAct 点击触发弹窗 → PreviewCapture 截图回传 → append → 加入列表 → 展开 → 全部提交，DOM/截图核对
 - **回归**：`PreviewStyle` 无 target 时默认主元素（向后兼容旧旁支会话）
 
 ## 9. 架构.md 同步（实施时必做）
 
 按 CLAUDE.md「引入新工具必须先更新架构.md」：
 
-- §8.5 第 2 条补充「注释支持多元素 + 结构草稿操作」
-- §4.4 工具表 / BUILTIN_TOOL_NAMES 说明区登记 `PreviewMutate`（与 `PreviewStyle` 同为旁支会话专属信号工具，不进通用工具集）
-- §13 决策表追加一行：预览结构操作 = 草稿态 + 提交时由主对话落地源码（不直接写源码）
+- §8.5 第 2 条补充「注释支持多元素 + 结构草稿操作 + 浏览器交互 + 截图视觉回传」
+- §4.4 工具表 / BUILTIN_TOOL_NAMES 说明区登记 `PreviewMutate` / `PreviewAct` / `PreviewCapture`（与 `PreviewStyle` 同为旁支会话专属信号工具，不进通用工具集）
+- §13 决策表追加两行：① 预览结构操作 / 交互 = 草稿态 + 提交时由主对话落地源码（不直接写源码）；② 截图用 DOM 渲染（html2canvas 打包进 inspector）而非 OS 屏幕截图，取舍 = 避开 DPI/遮挡黑洞，代价 = 复杂 CSS 近似
 - changelog 追加一条
 
 ## 10. 实施顺序建议
@@ -201,5 +275,7 @@ pub struct PreviewMutateInput {
 2. inspector.js：多元素状态模型 + 小方块（功能 A 骨架）
 3. inspector.js：@N contenteditable 输入框（功能 B）
 4. mod.rs + inspector.js：旁支多元素绑定 + PreviewMutate 下发执行（功能 ①③）
-5. inspector.js + mod.rs + App.tsx：统一浮窗 + 合并总结（功能 D）
-6. 架构.md + changelog + 端到端复现验证
+5. agent-core + mod.rs + inspector.js：PreviewAct 交互动作集（功能 E）
+6. agent-core + mod.rs + inspector.js：PreviewCapture + html2canvas 截图回传链路（功能 F，最复杂——含 oneshot 等待 + Image 工具结果）
+7. inspector.js + mod.rs + App.tsx：统一浮窗 + 合并总结（功能 D）
+8. 架构.md + changelog + 端到端复现验证
