@@ -39,6 +39,15 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * 对正在消失的 PTY 的 fire-and-forget 调用（write / resize）：xterm 的 onData/onResize
+ * 回调存活会跨越终端 close 那一刻，对已 remove 的 id 调用时 Rust 返回「终端不存在」。
+ * 这是 UI 回调寿命长于 PTY 的固有竞态，静默忽略即可——不该冒泡成未处理的 rejection。
+ */
+function fireForget(p: Promise<unknown>) {
+  void p.catch(() => {});
+}
+
 const DARK_THEME = {
   background: "#0b0c0a",
   foreground: "#d6dac9",
@@ -67,6 +76,9 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
   const hostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const terminalsRef = useRef<TermMeta[]>([]);
   terminalsRef.current = terminals;
+  // 初始化 effect（[] deps）里读最新 active，避免把它写进依赖触发重订阅。
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   // ── 键盘策略（架构 §5.2）：终端聚焦时除 Cmd 白名单外按键全透传 PTY ──
   const installKeyHandler = useCallback((term: Terminal, termId: string) => {
@@ -182,11 +194,11 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
 
       // 用户输入 → PTY（普通键 xterm 编码后走这里；Alt/Cmd 特例已在 key handler 直写）
       term.onData((data) => {
-        void api.terminalWrite(termId, data);
+        fireForget(api.terminalWrite(termId, data));
       });
       // xterm 尺寸变化（fit 触发）→ 同步 PTY
       term.onResize(({ cols, rows }) => {
-        void api.terminalResize(termId, cols, rows);
+        fireForget(api.terminalResize(termId, cols, rows));
       });
 
       // 选中自动复制（copy-on-select），100ms debounce
@@ -208,7 +220,7 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
       }
 
       fit.fit();
-      void api.terminalResize(termId, term.cols, term.rows);
+      fireForget(api.terminalResize(termId, term.cols, term.rows));
 
       const resizeObserver = new ResizeObserver(() => {
         try {
@@ -245,6 +257,7 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
       if (prev && res.terminals.some((t) => t.id === prev)) return prev;
       return res.terminals[0]?.id ?? null;
     });
+    return res;
   }, []);
 
   const openTerminal = useCallback(async () => {
@@ -264,7 +277,16 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
 
   // ── 初始化：拉列表 + 订阅事件 ──
   useEffect(() => {
-    void refreshList();
+    let cancelled = false;
+    void (async () => {
+      const res = await refreshList();
+      if (cancelled) return;
+      // 自动开终端只看 Rust 端真实列表（全局单例常驻），且仅当本视图正显示终端时。
+      // 基于真实列表而非 state 初值 []，所以折叠→展开重挂时若已有终端不会再新建。
+      if (res.active_view === variant && activeRef.current && res.terminals.length === 0) {
+        void openTerminal();
+      }
+    })();
 
     const unlistens: Array<Promise<() => void>> = [];
     unlistens.push(
@@ -287,6 +309,7 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
     );
 
     return () => {
+      cancelled = true;
       unmountAll();
       for (const p of unlistens) void p.then((un) => un());
     };
@@ -305,13 +328,6 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
       if (!terminals.some((t) => t.id === id)) unmountTerm(id);
     }
   }, [isCeded, terminals, mountTerm, unmountTerm, unmountAll]);
-
-  // 内嵌视图首次成为活跃且无终端时，自动开一个
-  useEffect(() => {
-    if (isCeded) return;
-    if (active && terminals.length === 0) void openTerminal();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCeded, active, terminals.length]);
 
   // 切回可见 / 切换子 tab 时：fit + 聚焦（xterm 6 已修复隐藏期滚动区 bug，无需私有 hack）
   useEffect(() => {
@@ -358,16 +374,18 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
               onClick={() => setActiveTermId(t.id)}
               title={t.cwd}
               className={cn(
-                "group inline-flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[12px] transition-colors",
+                // 右侧固定留出 x 的位置（pr-6），x 用 absolute 覆盖在那儿——hover 才显形，
+                // 不挤压标题、不改变 tab 宽度。
+                "group relative inline-flex h-6 shrink-0 items-center gap-1 rounded py-0 pl-2 pr-6 text-[12px] transition-colors",
                 t.id === activeTermId
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 !t.alive && "opacity-50",
               )}
             >
-              <SquareTerminal className="h-3 w-3" />
+              <SquareTerminal className="h-3 w-3 shrink-0" />
               <span className="max-w-[120px] truncate">{baseName(t.cwd)}</span>
-              {!t.alive && <span className="text-[10px]">·已退出</span>}
+              {!t.alive && <span className="shrink-0 text-[10px]">·已退出</span>}
               <span
                 role="button"
                 tabIndex={-1}
@@ -375,7 +393,8 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
                   e.stopPropagation();
                   void closeTerminal(t.id);
                 }}
-                className="ml-0.5 hidden rounded p-0.5 hover:bg-accent group-hover:inline-flex"
+                title="关闭"
+                className="absolute right-1 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
               >
                 <X className="h-2.5 w-2.5" />
               </span>
