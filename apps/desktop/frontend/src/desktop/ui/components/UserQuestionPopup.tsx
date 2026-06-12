@@ -106,7 +106,7 @@ export function UserQuestionPopup() {
   return (
     <div className="px-4 pb-2">
       <div className="max-w-3xl mx-auto pr-[50px]">
-        <div className="w-full rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150">
+        <div className="w-[calc(100%+42px)] -mr-[42px] rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150">
           <div className="flex items-start gap-2 px-3 py-1.5 border-b border-border bg-muted/40">
             <CircleHelp className="w-3.5 h-3.5 text-primary shrink-0 mt-1" />
             <span className="text-sm font-medium flex-1 leading-5">
