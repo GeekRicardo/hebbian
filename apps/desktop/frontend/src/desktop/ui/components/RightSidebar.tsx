@@ -44,15 +44,15 @@ const STORAGE_PREFIX = "hebbian.rightSidebar";
 
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
-const MAX_WIDTH = 600;
+const MAX_WIDTH = 720;
 const COLLAPSED_WIDTH = 36;
 
 const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
   tasks: Math.round(DEFAULT_WIDTH * 2 / 3),
-  edits: DEFAULT_WIDTH,
+  edits: DEFAULT_WIDTH * 2,
   todos: Math.round(DEFAULT_WIDTH / 2),
   plans: DEFAULT_WIDTH,
-  browser: DEFAULT_WIDTH,
+  browser: Math.round(DEFAULT_WIDTH * 5 / 4),
   terminal: 480,
 };
 
@@ -221,6 +221,8 @@ export function RightSidebar({
   useEffect(() => {
     if (collapseTick === prevCollapseTickRef.current) return;
     prevCollapseTickRef.current = collapseTick;
+    // 用户停在终端 tab 时不自动折叠——终端是用户主动盯着的工作区，收起会打断他
+    if (tabRef.current === "terminal") return;
     setCollapsed(true);
   }, [collapseTick]);
 

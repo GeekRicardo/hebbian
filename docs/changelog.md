@@ -7458,3 +7458,21 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **验证**: `cargo check -p agent-core / -p hebbian` 绿（dead_code warning 消失）；`cargo test -p agent-core --lib` 493 passed，仅剩 2 个 pre-existing flaky（`remember_first_compound_bash_auto_resolves_matching_pending_call` / `run_in_background_returns_immediately`：单跑必过、同进程并行跑必挂，干净 HEAD worktree 复验同样挂，与本次改动无关）。
 - **留尾巴**: ① 2 个并行 flaky 测试待排查（疑似共享 tmp/注册表状态串扰）；② island 显形通知未实跑（需 Desktop + hebisland 进程）；③ web-server events.rs 仍不转发 PermissionAutoJudged，浏览器 surface 的显形依赖 v2 共享 crate 收敛。
 - **关联**: 架构 §4.4.4
+
+### 2026-06-12 — 调整修改文件侧栏 diff 头部结构
+
+- **Why**: 用户在内置浏览器预览中确认，修改文件侧栏里 diff 内容区域顶部的 `DiffHeader` 会把文件名、动作、净变化和「行内/分栏」按钮挤成一条重复标题栏；期望从结构上移除这条内部头栏，并把统计与模式切换上移到文件标题栏。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/lib/diffStats.ts](../apps/desktop/frontend/src/desktop/ui/lib/diffStats.ts): 抽出 diff 行计算与 `+/-` 统计纯函数，供 `DiffViewer` 和文件标题栏复用。
+  - [apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/DiffPanel.tsx): `hideHeaderMeta` 场景改为不渲染 `DiffHeader`；导出 `DiffModeButton` 和 `DiffStatsBadge`，避免侧栏复制按钮/统计样式。
+  - [apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditTreePanel.tsx): 文件标题栏展示绿色 `+N`、红色 `−N`，并把「行内/分栏」切换按钮放到同一行；diff 内容区不再显示内部头栏。
+- **影响范围**: 仅 Desktop/hebweb 前端修改文件侧栏与共享 DiffViewer 展示；不改 protocol / agent-core / storage。
+- **验证**: `cd apps/desktop && node frontend/src/desktop/ui/lib/diffStats.test.mjs` 通过；`cd apps/desktop && pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-12 · 调整右侧 sidebar 默认宽度 + 终端 tab 不被自动折叠
+
+- **Why**：用户反馈——修改文件 tab 默认太窄看 diff 费劲（要一倍宽），浏览器 tab 也偏窄（加 1/4）；以及发消息触发 agent_loop 时 sidebar 自动折叠会把正盯着的终端收掉，打断工作。
+- **改动**：`RightSidebar.tsx`——`TAB_DEFAULT_WIDTH.edits` 320→640、`browser` 320→400；`MAX_WIDTH` 600→720（容纳 edits 新默认值，否则被 clamp 吃掉）；collapseTick 折叠 effect 里 `tabRef.current === "terminal"` 时跳过折叠（与既有「浏览器/终端不抢焦点」的 autoSwitchBlocked 思路一致，但折叠只豁免终端——浏览器 tab 用户没提）。
+- **影响范围**：仅 desktop 前端 RightSidebar；默认宽度只对无 localStorage 记录的 tab 生效（用户手动拖过的宽度优先）。
+- **留尾巴**：无。
