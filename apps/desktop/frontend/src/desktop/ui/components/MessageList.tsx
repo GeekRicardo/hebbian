@@ -104,6 +104,11 @@ export interface MessageListProps {
   onUndoCompaction?: (markerId: string) => void;
   /** compact_boundary marker ID set：可撤销的压缩标记（之后无非 marker 消息）。 */
   undoableCompactionIds?: Set<string>;
+  /**
+   * 删除尾部消息（只允许从后往前删）：最后一个 run 的 assistant 可删（删整个 run
+   * 输出）；最后一条 user 仅当其后无 assistant 时可删。
+   */
+  onDelete?: (id: string, role: string) => void;
 }
 
 export const MessageList = memo(function MessageList({
@@ -128,6 +133,7 @@ export const MessageList = memo(function MessageList({
   onToggleHistory,
   onUndoCompaction,
   undoableCompactionIds,
+  onDelete,
 }: MessageListProps) {
   /**
    * 把 messages 转成 (m, i, baseMatchIdx) 元组：每条消息在「全局命中数组」里
@@ -150,6 +156,32 @@ export const MessageList = memo(function MessageList({
   // viewOrder 是原 index 序列——后续按物理 index 索引的字段（boundary / archived /
   // find activeLocation / matchBase）仍按原 i 取值，**仅渲染顺序**调整。
   const viewOrder = useMemo(() => reorderForWakeupView(messages), [messages]);
+
+  // 可删消息集合（删除只允许从后往前）：
+  // - 最后一条真实 user 之后的 assistant（= 最后一个 run 的输出）
+  // - 最后一条真实 user 自身，仅当其后已无 assistant
+  const deletableIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!onDelete || isStreaming) return ids;
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && m.meta?.type !== "system_notification") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return ids;
+    let hasAssistantAfter = false;
+    for (let i = lastUserIdx + 1; i < messages.length; i++) {
+      if (messages[i].role === "assistant") {
+        ids.add(messages[i].id);
+        hasAssistantAfter = true;
+      }
+    }
+    if (!hasAssistantAfter) ids.add(messages[lastUserIdx].id);
+    return ids;
+  }, [messages, onDelete, isStreaming]);
 
   return (
     <div>
@@ -181,6 +213,7 @@ export const MessageList = memo(function MessageList({
             onFork={onFork}
             onRegenerate={onRegenerateProp}
             onEdit={onEditProp}
+            onDelete={deletableIds.has(m.id) ? onDelete : undefined}
             archived={lastCompactBoundaryIdx > 0 && i < lastCompactBoundaryIdx}
             summaryExpanded={isBoundary && expandedSummaries.has(m.id)}
             onToggleSummary={isBoundary ? onToggleSummary : undefined}

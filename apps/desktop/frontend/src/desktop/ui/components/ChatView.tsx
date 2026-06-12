@@ -18,7 +18,7 @@ import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
-import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
+import { cn, hasSessionStarted, ipcConfirm } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut, isTerminalFocusTarget } from "@/desktop/ui/lib/keyboardShortcuts";
 import { stickyBottomScrollTop } from "@/desktop/ui/lib/chatScrollPosition";
 import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
@@ -59,6 +59,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     modelRetry,
     contextCompacted,
     undoCompaction,
+    deleteTrailingMessage,
     sessionMemoryWrites,
     sessionLastRunDurationMs,
   } = useStore();
@@ -591,6 +592,24 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     },
     [undoCompaction]
   );
+  const handleDeleteMessage = useCallback(
+    async (msgId: string, role: string) => {
+      if (isStreaming) return;
+      const ok = await ipcConfirm(
+        role === "assistant"
+          ? "删除这条回复？本轮回复的全部内容都会被删除，且无法恢复。"
+          : "删除这条消息？删除后无法恢复。",
+        "删除消息"
+      );
+      if (!ok) return;
+      try {
+        await deleteTrailingMessage(msgId);
+      } catch (e: any) {
+        toast.error(e.message || String(e));
+      }
+    },
+    [isStreaming, deleteTrailingMessage]
+  );
 
   /**
    * find 上下文打包：依赖搜索状态 + matchesPerMessage + activeLocation。
@@ -814,6 +833,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
           onToggleHistory={handleToggleHistory}
           onUndoCompaction={handleUndoCompaction}
           undoableCompactionIds={boundaryInfo.undoableIds}
+          onDelete={handleDeleteMessage}
         />
         <div>
           {/* Run 内时间线：已完成 turn 快照 + streaming 期间的插队 user message，
