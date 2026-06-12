@@ -209,6 +209,9 @@ export function modelSupportsReasoning(
 ): boolean {
   if (deepseekSupportsReasoning(model)) return true;
   if (anthropicSupportsThinking(model)) return true;
+  // fable-5 / mythos-5 等：anthropicThinkingMode 没列它们，但支持 effort 档位
+  // （CC OAuth 走 output_config.effort）——也要让 effort 选择器显示。
+  if (anthropicSupportsMaxEffort(model)) return true;
   if (openaiSupportsReasoning(model)) return true;
   if (providerKind === "anthropic") return anthropicSupportsThinking(model);
   if (providerKind === "openai") return openaiSupportsReasoning(model);
