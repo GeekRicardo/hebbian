@@ -1,0 +1,56 @@
+name: Release
+
+# 打 v* tag 时构建 macOS 安装包并发布到 GitHub Release。
+# HebIsland.app 由 apps/desktop 的 beforeBuildCommand 组装并经 bundle.resources 内嵌进 Hebbian.app，
+# 无需在此单独处理。不做代码签名 / 公证——用户首次打开需右键「打开」绕过 Gatekeeper。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # vite buildInfo 用 git rev-list --count HEAD，需完整历史。
+          fetch-depth: 0
+
+      - name: 安装 Rust（Apple Silicon）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: 安装前端依赖
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建并发布
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Hebbian ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin

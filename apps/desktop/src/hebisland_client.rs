@@ -148,11 +148,55 @@ pub fn init_hebisland_client(app: AppHandle) -> HebislandClient {
     HebislandClient { tx }
 }
 
+/// 拉起随 Hebbian.app 内嵌的 hebisland daemon。
+///
+/// release 包里 HebIsland.app 被 Tauri 放在 `resource_dir/HebIsland.app`，
+/// 可执行文件在 `.../Contents/MacOS/hebisland`。daemon 自带单例（已在跑就复用），
+/// 重复拉起安全。找不到内嵌资源（如 dev 模式）时不报错，交由后续 socket 连接逻辑兜底。
+fn spawn_bundled_daemon(app: &AppHandle) {
+    use tauri::Manager;
+
+    let Ok(resource_dir) = app.path().resource_dir() else {
+        return;
+    };
+    let bin = resource_dir
+        .join("HebIsland.app")
+        .join("Contents")
+        .join("MacOS")
+        .join("hebisland");
+    if !bin.exists() {
+        tracing::info!("未找到内嵌 hebisland（{}），跳过自动拉起", bin.display());
+        return;
+    }
+
+    match std::process::Command::new(&bin).arg("daemon").spawn() {
+        Ok(_) => tracing::info!("已拉起内嵌 hebisland daemon: {}", bin.display()),
+        Err(e) => tracing::warn!("拉起 hebisland daemon 失败: {e}"),
+    }
+}
+
+/// 轮询等待 daemon 把 socket 建好，最多等 ~2s。
+fn wait_for_socket(sock_path: &std::path::Path) {
+    for _ in 0..40 {
+        if sock_path.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
     let sock_path = dirs::home_dir()
         .expect("无法获取 home 目录")
         .join(".hebbian")
         .join("island.sock");
+
+    // socket 不在 → 尝试拉起随包内嵌的 hebisland daemon（自带单例，重复拉起安全），
+    // 再轮询等它把 socket 建好。dev 环境没有内嵌资源时静默跳过，依赖手动启动。
+    if !sock_path.exists() {
+        spawn_bundled_daemon(&app);
+        wait_for_socket(&sock_path);
+    }
 
     let mut stream = match UnixStream::connect(&sock_path) {
         Ok(s) => s,
