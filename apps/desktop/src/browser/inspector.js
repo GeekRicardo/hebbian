@@ -1067,10 +1067,7 @@
         surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
         items: editQueue.map(annotationPayload),
       });
-      editQueue = [];
-      if (draft) draft.listId = null;
-      renderQueuePanel();
-      notifyDirty();
+      // 列表保留：提交后可能还要继续改/再提交；不要就点「清空」
     });
     foot.appendChild(clear); foot.appendChild(submit);
     queuePanelEl.appendChild(head); queuePanelEl.appendChild(list); queuePanelEl.appendChild(foot);
@@ -1361,7 +1358,8 @@
           showAnnotationCard(item.snapshot, draft); // 重建卡片，样式编辑器切到该元素
         });
         chip.appendChild(num);
-        if (draft.elements.length > 1) {
+        // 对话绑定在 1 号元素上——1 号不可删，只能删后续追加的
+        if (i > 0) {
           var del = document.createElement("button");
           del.textContent = "×";
           del.title = "移除这个元素";
@@ -1396,7 +1394,7 @@
     styleTitle.style.cssText = "flex:1;font-weight:500;";
     styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
     var styleBody = document.createElement("div");
-    styleBody.style.cssText = "display:flex;flex-direction:column;min-height:0;max-height:40vh;overflow-y:auto;flex:none;";
+    styleBody.style.cssText = "display:flex;flex-direction:column;flex:none;";
     var boxModel = buildBoxModel(); // Chrome F12 式盒模型图
     var fields = document.createElement("div");
     fields.style.cssText = "padding:8px 10px;";
@@ -1427,7 +1425,7 @@
 
     // ══ 子卡片 2：和助手一起改（LLM 对话面板 + 模型选择器）══
     var chatCard = document.createElement("div");
-    chatCard.style.cssText = "display:flex;flex-direction:column;min-height:0;flex:1;";
+    chatCard.style.cssText = "display:flex;flex-direction:column;flex:none;";
     var chatHead = document.createElement("div");
     chatHead.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:12px;color:#1f2328;";
     var chatTitle = document.createElement("span");
@@ -1438,9 +1436,8 @@
     var optLoading = document.createElement("option"); optLoading.textContent = "默认模型"; modelSelect.appendChild(optLoading);
     chatHead.appendChild(chatTitle); chatHead.appendChild(modelSelect);
     var msgList = document.createElement("div");
-    // min-height 别太大：卡片 max-height 84vh + overflow:hidden，msgList 的硬下限
-    // 会把底部「提交到主对话」挤出可视区
-    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;flex:1;min-height:60px;";
+    // 固定高度 + 子滚动条：在整卡全局滚动里对话区有自己的可滚视口，不挤样式区
+    msgList.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:6px 10px;overflow-y:auto;height:260px;flex:none;";
     var chatInputRow = document.createElement("div");
     chatInputRow.style.cssText = "display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
     // 输入框上方固定一排元素标签：发送时全部元素自动随消息带给助手（XML 前缀），
@@ -1449,14 +1446,36 @@
     refsRow.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;align-items:center;";
     draft.elements.forEach(function (item, i) {
       var tag = document.createElement("span");
-      tag.textContent = (i + 1) + " " + elementBadge(item.snapshot);
+      tag.style.cssText = "position:relative;display:inline-flex;max-width:130px;background:#ddf4ff;color:#0969da;border:1px solid #b6e3ff;border-radius:4px;padding:1px 6px;font-size:11px;cursor:default;user-select:none;";
+      var txt = document.createElement("span");
+      txt.textContent = (i + 1) + " " + elementBadge(item.snapshot);
+      txt.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
       tag.title = "对话里直接说「" + (i + 1) + "」指代它；悬停可在页面上高亮";
-      tag.style.cssText = "display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#ddf4ff;color:#0969da;border:1px solid #b6e3ff;border-radius:4px;padding:1px 6px;font-size:11px;cursor:default;user-select:none;";
+      tag.appendChild(txt);
       tag.addEventListener("mouseenter", function () {
         ensureOverlayLoop();
         hoverTarget = item.el && item.el.isConnected ? item.el : null;
       });
       tag.addEventListener("mouseleave", function () { hoverTarget = null; });
+      // 对话绑定在第一个元素（elementKey 即它）——1 号不可删；后续可移除
+      if (i > 0) {
+        var rm = document.createElement("button");
+        rm.textContent = "×";
+        rm.title = "移除这个元素引用";
+        rm.style.cssText = "position:absolute;top:-5px;right:-5px;width:13px;height:13px;border:none;background:#8c949e;color:#fff;border-radius:50%;font-size:9px;line-height:13px;padding:0;cursor:pointer;display:none;";
+        tag.addEventListener("mouseenter", function () { rm.style.display = "block"; });
+        tag.addEventListener("mouseleave", function () { rm.style.display = "none"; });
+        rm.addEventListener("click", function (e) {
+          e.stopPropagation();
+          hoverTarget = null;
+          draft.elements.splice(i, 1);
+          if (draft.activeIndex >= draft.elements.length) draft.activeIndex = draft.elements.length - 1;
+          setActiveElement(draft.activeIndex);
+          syncDraftToList();
+          showAnnotationCard(null, draft);
+        });
+        tag.appendChild(rm);
+      }
       refsRow.appendChild(tag);
     });
     var inputLine = document.createElement("div");
@@ -1603,9 +1622,13 @@
     send("heb:aside:models:request", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded" });
 
     card.appendChild(head);
-    if (chipsRow) card.appendChild(chipsRow);
-    card.appendChild(styleCard);
-    card.appendChild(chatCard);
+    // head 固定，其余进全局滚动区：样式区/对话区自然堆叠不互挤，整卡一根滚动条
+    var cardScroll = document.createElement("div");
+    cardScroll.style.cssText = "flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;";
+    if (chipsRow) cardScroll.appendChild(chipsRow);
+    cardScroll.appendChild(styleCard);
+    cardScroll.appendChild(chatCard);
+    card.appendChild(cardScroll);
     document.documentElement.appendChild(card);
     cardEl = card;
   }
