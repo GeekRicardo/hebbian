@@ -28,8 +28,13 @@ use crate::chat;
 use crate::engine::EngineEvent;
 use agent_core::storage::sessions::Message;
 
-const POPOUT_LABEL: &str = "preview-popout";
-const POPOUT_PAGE_LABEL: &str = "preview-popout-page";
+/// 每个对话一个独立 popout 窗口，label 按 session_id 区分（与内置浏览器实例 per-session 一致）。
+fn popout_label(session_id: &str) -> String {
+    format!("preview-popout-{session_id}")
+}
+fn popout_page_label(session_id: &str) -> String {
+    format!("preview-popout-page-{session_id}")
+}
 /// popout 顶部栏总高（logical px）= macOS 系统 titlebar 让位区 28 + 工具栏按钮/地址栏 44。
 /// 页面子 webview 从这个 y 起——避开系统 titlebar 与工具栏，渲染区与它们物理分离。
 /// （popout 窗口的 webview 内容会延伸到系统 titlebar 下方，故工具栏顶部要为 titlebar 让位。）
@@ -86,9 +91,8 @@ struct BrowserInstance {
 }
 
 /// popout 独立窗口实例：主 webview = 工具栏，page = add_child 的目标页面子 webview。
-/// 全局单例（同一时刻只弹一个），绑定打开它的对话 session_id（注释/旁支结论提交回它）。
+/// 每个对话一个（按 session_id），绑定打开它的对话（注释/旁支结论提交回它）。
 struct PopoutInstance {
-    session_id: String,
     window: tauri::WebviewWindow,
     page: tauri::Webview,
     history: Vec<String>,
@@ -103,7 +107,8 @@ struct PopoutInstance {
 #[derive(Default)]
 pub struct BrowserState {
     instances: Mutex<HashMap<String, BrowserInstance>>,
-    popout: Mutex<Option<PopoutInstance>>,
+    /// 每个对话一个独立 popout 窗口（key = session_id），与浏览器实例 per-session 一致。
+    popout: Mutex<HashMap<String, PopoutInstance>>,
     /// 旁支会话（元素对话）的纯内存历史（架构 §8.5）：旁支不落盘、关掉浏览器即消失。
     /// 外层 key = 绑定的主对话 id（浏览器实例），内层 key = 旁支 id（inspector 侧当不透明
     /// token 用，按 elementKey 索引），value = 多轮历史。按主对话分组让 `browser_close`
@@ -499,10 +504,9 @@ pub fn browser_close(
     Ok(())
 }
 
-/// 把当前页面弹出成独立可缩放窗口（测响应式样式用）。窗口主 webview 加载工具栏 HTML，
-/// 目标页面是 add_child 的子 webview 浮在工具栏下方——工具栏与页面渲染区物理分离，页面不
-/// 被注入任何工具栏 DOM。注释卡片仍由 inspector 在页面内渲染、经 heb-bridge 上行回主进程，
-/// 再由主窗口 React 发进绑定的对话。
+/// 把当前页面弹出成独立可缩放窗口（测响应式样式用）。每个对话一个独立窗口（按 session_id），
+/// 窗口主 webview 加载工具栏 HTML，目标页面是 add_child 的子 webview 浮在工具栏下方——工具栏
+/// 与页面渲染区物理分离。注释卡片经 heb-bridge 上行回主进程，再由主窗口 React 发进绑定的对话。
 #[tauri::command]
 pub fn browser_popout(
     app: AppHandle,
@@ -526,24 +530,41 @@ pub fn browser_popout(
         ),
     };
 
-    // 已有 popout 先收掉（全局单例）
-    if let Some(p) = state.popout.lock().unwrap().take() {
-        let _ = p.window.close();
+    let label = popout_label(&session_id);
+    let page_label = popout_page_label(&session_id);
+
+    // 该对话已有 popout：聚焦它、不重开（避免同 label 冲突报错）
+    if state.popout.lock().unwrap().contains_key(&session_id) {
+        if let Some(w) = app.get_window(&label) {
+            let _ = w.set_focus();
+        }
+        return Ok(());
     }
-    if let Some(w) = app.get_window(POPOUT_LABEL) {
+    // 残留同 label 窗口（实例丢了但窗口还在）先收掉
+    if let Some(w) = app.get_window(&label) {
         let _ = w.close();
     }
 
-    // 主 webview = 工具栏（data URL，无 Tauri IPC → 同 inspector 走 heb-bridge 上行）
+    // 窗口标题 = 对话标题 · session_id，多个 popout 同开时区分
+    let dd = agent_core::storage::default_data_dir();
+    let title = agent_core::storage::sessions::load(&dd, &session_id)
+        .ok()
+        .map(|s| s.title)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "页面预览".to_string());
+    let win_title = format!("{title} · {session_id}");
+
+    // 主 webview = 工具栏（data URL，无 Tauri IPC → 走 heb-bridge 上行）
     let toolbar_url: Url = data_url(POPOUT_TOOLBAR_HTML)
         .parse()
         .map_err(|_| "工具栏生成失败".to_string())?;
     let app_tb = app.clone();
-    let mut tb_builder = WebviewWindowBuilder::new(&app, POPOUT_LABEL, WebviewUrl::External(toolbar_url))
-        .title("页面预览（可缩放测样式）")
+    let sid_tb = session_id.clone();
+    let mut tb_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(toolbar_url))
+        .title(&win_title)
         .inner_size(1280.0, 800.0)
         .resizable(true)
-        .on_navigation(move |url: &Url| handle_toolbar_nav(&app_tb, url));
+        .on_navigation(move |url: &Url| handle_toolbar_nav(&app_tb, &sid_tb, url));
     // popout 用 overlay titlebar（与主窗口一致）：webview 内容区 = 整个窗口（含 titlebar 区），
     // add_child 的坐标系才和主窗口统一。否则标准 titlebar 下 add_child 的 y 相对窗口外框，
     // page 会被上移一个 titlebar 高度盖住工具栏。工具栏 HTML 顶部已留 28px 给系统红绿灯。
@@ -557,15 +578,16 @@ pub fn browser_popout(
 
     // 页面子 webview：注入 inspector（注释/选取/旁支），不再注入工具栏
     let window = app
-        .get_window(POPOUT_LABEL)
+        .get_window(&label)
         .ok_or_else(|| "popout 窗口异常".to_string())?;
     let app_pg = app.clone();
+    let sid_pg = session_id.clone();
     let page = window
         .add_child(
-            tauri::webview::WebviewBuilder::new(POPOUT_PAGE_LABEL, WebviewUrl::External(page_url))
+            tauri::webview::WebviewBuilder::new(&page_label, WebviewUrl::External(page_url))
                 .user_agent(BROWSER_UA)
                 .initialization_script(format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"))
-                .on_navigation(move |url: &Url| handle_popout_page_nav(&app_pg, url)),
+                .on_navigation(move |url: &Url| handle_popout_page_nav(&app_pg, &sid_pg, url)),
             LogicalPosition::new(0.0, POPOUT_TOOLBAR_H),
             LogicalSize::new(1280.0, (800.0 - POPOUT_TOOLBAR_H).max(1.0)),
         )
@@ -574,24 +596,26 @@ pub fn browser_popout(
     // add_child 的子 webview 默认不保证可见（embedded 也是靠 setVisible 显式 show 才出现）。
     let _ = page.show();
 
-    *state.popout.lock().unwrap() = Some(PopoutInstance {
-        session_id: session_id.clone(),
-        window: win.clone(),
-        page,
-        history,
-        cursor: 0,
-        programmatic: true,
-        picker_active: false,
-    });
+    state.popout.lock().unwrap().insert(
+        session_id.clone(),
+        PopoutInstance {
+            window: win.clone(),
+            page,
+            history,
+            cursor: 0,
+            programmatic: true,
+            picker_active: false,
+        },
+    );
 
-    // 窗口 resize → 页面 webview 重新铺满工具栏下方；关窗 → 清实例 + 通知前端恢复内嵌
+    // 窗口 resize → 页面 webview 重新铺满工具栏下方；关窗 → 清该对话实例 + 通知前端恢复内嵌
     let app_evt = app.clone();
     let sid_evt = session_id.clone();
     win.on_window_event(move |event| match event {
-        WindowEvent::Resized(_) => popout_resize(&app_evt),
+        WindowEvent::Resized(_) => popout_resize(&app_evt, &sid_evt),
         WindowEvent::Destroyed | WindowEvent::CloseRequested { .. } => {
             if let Some(st) = app_evt.try_state::<BrowserState>() {
-                *st.popout.lock().unwrap() = None;
+                st.popout.lock().unwrap().remove(&sid_evt);
             }
             let _ = app_evt.emit(
                 "browser://popout",
@@ -601,10 +625,9 @@ pub fn browser_popout(
         _ => {}
     });
 
-    // 用实际 client area 修正页面 webview 的位置/尺寸（固定 1280×800 可能与真实窗口尺寸/
-    // titlebar 不符，导致页面跑偏或被遮）+ 初始同步地址栏。
-    popout_resize(&app);
-    send_toolbar_state(&app);
+    // 用实际 client area 修正页面 webview 的位置/尺寸 + 初始同步地址栏。
+    popout_resize(&app, &session_id);
+    send_toolbar_state(&app, &session_id);
     let _ = app.emit(
         "browser://popout",
         serde_json::json!({ "sessionId": session_id, "open": true }),
@@ -612,32 +635,33 @@ pub fn browser_popout(
     Ok(())
 }
 
-/// 关闭独立预览窗口。
+/// 关闭某对话的独立预览窗口。
 #[tauri::command]
 pub fn browser_close_popout(
     app: AppHandle,
     state: tauri::State<'_, BrowserState>,
+    session_id: String,
 ) -> Result<(), String> {
-    if let Some(p) = state.popout.lock().unwrap().take() {
+    if let Some(p) = state.popout.lock().unwrap().remove(&session_id) {
         p.window.close().map_err(|e| e.to_string())?;
-    } else if let Some(w) = app.get_window(POPOUT_LABEL) {
+    } else if let Some(w) = app.get_window(&popout_label(&session_id)) {
         w.close().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-/// 取一份 popout 实例的可变引用做操作；无 popout 时静默。
-fn with_popout<F: FnOnce(&mut PopoutInstance)>(app: &AppHandle, f: F) {
+/// 取某对话 popout 实例的可变引用做操作；无则静默。
+fn with_popout<F: FnOnce(&mut PopoutInstance)>(app: &AppHandle, session_id: &str, f: F) {
     if let Some(st) = app.try_state::<BrowserState>() {
-        if let Some(p) = st.popout.lock().unwrap().as_mut() {
+        if let Some(p) = st.popout.lock().unwrap().get_mut(session_id) {
             f(p);
         }
     }
 }
 
-/// 把当前 history 状态推给工具栏 webview（地址栏 + 前进后退可用态）。
-fn send_toolbar_state(app: &AppHandle) {
-    with_popout(app, |p| {
+/// 把某对话 popout 的 history 状态推给它的工具栏 webview（地址栏 + 前进后退可用态）。
+fn send_toolbar_state(app: &AppHandle, session_id: &str) {
+    with_popout(app, session_id, |p| {
         let url = p.history.get(p.cursor).cloned().unwrap_or_default();
         let payload = serde_json::json!({
             "url": url,
@@ -648,9 +672,9 @@ fn send_toolbar_state(app: &AppHandle) {
     });
 }
 
-/// 窗口 resize：页面子 webview 铺满工具栏下方区域。
-fn popout_resize(app: &AppHandle) {
-    let Some(w) = app.get_window(POPOUT_LABEL) else {
+/// 窗口 resize：某对话 popout 的页面子 webview 铺满工具栏下方区域。
+fn popout_resize(app: &AppHandle, session_id: &str) {
+    let Some(w) = app.get_window(&popout_label(session_id)) else {
         return;
     };
     let (Ok(size), Ok(sf)) = (w.inner_size(), w.scale_factor()) else {
@@ -658,7 +682,7 @@ fn popout_resize(app: &AppHandle) {
     };
     let lw = size.width as f64 / sf;
     let lh = size.height as f64 / sf;
-    with_popout(app, |p| {
+    with_popout(app, session_id, |p| {
         let _ = p.page.set_bounds(Rect {
             position: LogicalPosition::new(0.0, POPOUT_TOOLBAR_H).into(),
             size: LogicalSize::new(lw.max(1.0), (lh - POPOUT_TOOLBAR_H).max(1.0)).into(),
@@ -666,8 +690,8 @@ fn popout_resize(app: &AppHandle) {
     });
 }
 
-/// 工具栏 webview 的上行消息（地址栏导航 / 前进后退 / 刷新 / 选取 / 收回）。
-fn handle_toolbar_nav(app: &AppHandle, url: &Url) -> bool {
+/// 工具栏 webview 的上行消息（session_id 来自 on_navigation 闭包捕获，对应这个 popout）。
+fn handle_toolbar_nav(app: &AppHandle, session_id: &str, url: &Url) -> bool {
     let Some(msg) = decode_bridge(url) else {
         return true; // 初始 data URL 加载放行
     };
@@ -676,26 +700,25 @@ fn handle_toolbar_nav(app: &AppHandle, url: &Url) -> bool {
     match ty {
         "tb:navigate" => {
             if let Some(raw) = payload.get("url").and_then(|v| v.as_str()) {
-                popout_navigate(app, raw);
+                popout_navigate(app, session_id, raw);
             }
         }
-        "tb:back" => popout_go(app, -1),
-        "tb:forward" => popout_go(app, 1),
-        "tb:reload" => popout_reload(app),
-        "tb:picker" => popout_toggle_picker(app),
-        // 窗口 resize 由工具栏 webview 的 JS resize 事件上行触发——on_window_event 的
-        // Resized 在多 webview 窗口不可靠（实测不触发），工具栏主 webview 随窗口缩放、
-        // 它的 window.onresize 一定触发，是可靠的 resize 钩子。
-        "tb:resize" => popout_resize(app),
+        "tb:back" => popout_go(app, session_id, -1),
+        "tb:forward" => popout_go(app, session_id, 1),
+        "tb:reload" => popout_reload(app, session_id),
+        "tb:picker" => popout_toggle_picker(app, session_id),
+        // 窗口 resize 由工具栏 webview 的 JS resize 事件上行触发（on_window_event 的
+        // Resized 在多 webview 窗口不可靠，实测不触发）。
+        "tb:resize" => popout_resize(app, session_id),
         // 顶部 titlebar 让位区按下拖窗口——data URL webview 的 -webkit-app-region 不生效，
         // 用 startDragging。
         "tb:drag" => {
-            if let Some(w) = app.get_window(POPOUT_LABEL) {
+            if let Some(w) = app.get_window(&popout_label(session_id)) {
                 let _ = w.start_dragging();
             }
         }
         "tb:close" => {
-            if let Some(w) = app.get_window(POPOUT_LABEL) {
+            if let Some(w) = app.get_window(&popout_label(session_id)) {
                 let _ = w.close();
             }
         }
@@ -704,26 +727,18 @@ fn handle_toolbar_nav(app: &AppHandle, url: &Url) -> bool {
     false
 }
 
-/// 页面子 webview 的上行消息：注释/旁支提交回对话（复用 embedded 路径），选取/导航态反馈
-/// 到工具栏 webview（popout 没有 React，UI 反馈不走 browser:// 事件而是直接 eval 工具栏）。
-fn handle_popout_page_nav(app: &AppHandle, url: &Url) -> bool {
+/// 页面子 webview 的上行消息（session_id = 打开 popout 的对话）：注释/旁支提交回对话，选取/
+/// 导航态反馈到工具栏 webview。
+fn handle_popout_page_nav(app: &AppHandle, session_id: &str, url: &Url) -> bool {
     if let Some(msg) = decode_bridge(url) {
         let ty = msg.get("type").and_then(|v| v.as_str()).unwrap_or_default();
         match ty {
             "heb:picker:cancelled" => {
-                with_popout(app, |p| p.picker_active = false);
-                send_toolbar_picker(app, false);
+                with_popout(app, session_id, |p| p.picker_active = false);
+                send_toolbar_picker(app, session_id, false);
             }
-            "heb:ready" | "heb:navigated" => send_toolbar_state(app),
-            _ => {
-                // annotation / aside：提交回打开 popout 的对话
-                let sid = app
-                    .try_state::<BrowserState>()
-                    .and_then(|st| st.popout.lock().unwrap().as_ref().map(|p| p.session_id.clone()));
-                if let Some(sid) = sid {
-                    forward_inspector_message(app, &sid, msg);
-                }
-            }
+            "heb:ready" | "heb:navigated" => send_toolbar_state(app, session_id),
+            _ => forward_inspector_message(app, session_id, msg),
         }
         return false;
     }
@@ -732,7 +747,7 @@ fn handle_popout_page_nav(app: &AppHandle, url: &Url) -> bool {
     }
     match validate_preview_url(url.as_str(), PreviewOrigin::User) {
         Ok(_) => {
-            with_popout(app, |p| {
+            with_popout(app, session_id, |p| {
                 if p.programmatic {
                     p.programmatic = false;
                 } else {
@@ -741,36 +756,36 @@ fn handle_popout_page_nav(app: &AppHandle, url: &Url) -> bool {
                     p.cursor = p.history.len() - 1;
                 }
             });
-            send_toolbar_state(app);
+            send_toolbar_state(app, session_id);
             true
         }
         Err(_) => false,
     }
 }
 
-fn send_toolbar_picker(app: &AppHandle, active: bool) {
-    with_popout(app, |p| {
+fn send_toolbar_picker(app: &AppHandle, session_id: &str, active: bool) {
+    with_popout(app, session_id, |p| {
         let _ = p.window.eval(&tb_js(serde_json::json!({ "picker": active })));
     });
 }
 
-fn popout_navigate(app: &AppHandle, raw_url: &str) {
+fn popout_navigate(app: &AppHandle, session_id: &str, raw_url: &str) {
     let target = match validate_preview_url(raw_url, PreviewOrigin::User) {
         Ok(u) => u,
         Err(_) => return,
     };
-    with_popout(app, |p| {
+    with_popout(app, session_id, |p| {
         p.history.truncate(p.cursor + 1);
         p.history.push(target.to_string());
         p.cursor = p.history.len() - 1;
         p.programmatic = true;
         let _ = p.page.navigate(target.clone());
     });
-    send_toolbar_state(app);
+    send_toolbar_state(app, session_id);
 }
 
-fn popout_go(app: &AppHandle, delta: isize) {
-    with_popout(app, |p| {
+fn popout_go(app: &AppHandle, session_id: &str, delta: isize) {
+    with_popout(app, session_id, |p| {
         let ni = p.cursor as isize + delta;
         if ni < 0 || ni as usize >= p.history.len() {
             return;
@@ -781,11 +796,11 @@ fn popout_go(app: &AppHandle, delta: isize) {
             let _ = p.page.navigate(u);
         }
     });
-    send_toolbar_state(app);
+    send_toolbar_state(app, session_id);
 }
 
-fn popout_reload(app: &AppHandle) {
-    with_popout(app, |p| {
+fn popout_reload(app: &AppHandle, session_id: &str) {
+    with_popout(app, session_id, |p| {
         if let Some(u) = p.history.get(p.cursor).and_then(|s| s.parse::<Url>().ok()) {
             p.programmatic = true;
             let _ = p.page.navigate(u);
@@ -793,15 +808,15 @@ fn popout_reload(app: &AppHandle) {
     });
 }
 
-fn popout_toggle_picker(app: &AppHandle) {
+fn popout_toggle_picker(app: &AppHandle, session_id: &str) {
     let mut active = false;
-    with_popout(app, |p| {
+    with_popout(app, session_id, |p| {
         p.picker_active = !p.picker_active;
         active = p.picker_active;
         let ty = if active { "heb:picker:start" } else { "heb:picker:stop" };
         let _ = p.page.eval(&rx_js(ty, serde_json::json!({})));
     });
-    send_toolbar_picker(app, active);
+    send_toolbar_picker(app, session_id, active);
 }
 
 // 以下「命令 inspector」的命令在没有 webview 时是无操作（返回 Ok）——没浏览器可命令
@@ -925,9 +940,8 @@ fn aside_system_prompt() -> String {
         .to_string()
 }
 
-/// 把一条下行消息 eval 到来源 webview（embedded 子 webview 或 popout 窗口）。
-/// 把下行消息 eval 到来源 webview。host_session = 发起这次对话的主对话（embedded 实例所属）；
-/// popout 走全局 POPOUT_LABEL 窗口。
+/// 把下行消息 eval 到来源 webview。host_session = 发起这次对话的主对话（embedded 实例所属
+/// 或 popout 绑定的对话）。surface=popout 时走该对话的 popout 页面子 webview。
 fn eval_aside_down(
     app: &AppHandle,
     host_session: &str,
@@ -937,9 +951,9 @@ fn eval_aside_down(
 ) {
     let js = rx_js(ty, payload);
     if surface == "popout" {
-        // popout 的旁支面板在页面子 webview（窗口主 webview 现在是工具栏）
+        // popout 的旁支面板在页面子 webview（窗口主 webview 是工具栏）
         if let Some(st) = app.try_state::<BrowserState>() {
-            if let Some(p) = st.popout.lock().unwrap().as_ref() {
+            if let Some(p) = st.popout.lock().unwrap().get(host_session) {
                 let _ = p.page.eval(&js);
             }
         }

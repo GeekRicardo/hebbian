@@ -395,7 +395,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
               </div>
               <button
                 type="button"
-                onClick={() => void host.closePopout()}
+                onClick={() => currentSessionId && void host.closePopout(currentSessionId)}
                 className="mt-4 inline-flex h-7 items-center rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground"
               >
                 收回到这里

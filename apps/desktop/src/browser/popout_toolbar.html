@@ -15,9 +15,10 @@
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body { height: 100%; background: transparent;
         font: 13px -apple-system, system-ui, "PingFang SC", sans-serif; }
-      /* popout 窗口内容延伸到系统 titlebar 下方，顶部让出 28px 露出系统 titlebar（红绿灯），
-         可拖动窗口；工具栏按钮/地址栏在其下，不被 titlebar 盖。 */
-      #titlebar { height: 28px; -webkit-app-region: drag; }
+      /* popout 窗口内容延伸到系统 titlebar 下方，顶部让出 28px 露出系统 titlebar（红绿灯）。
+         拖动靠 mousedown 上行调 startDragging（-webkit-app-region 在这个 data URL webview 不生效）。
+         工具栏按钮/地址栏在其下，不被 titlebar 盖。 */
+      #titlebar { height: 28px; }
       #bar { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px;
         background: #f6f8fa; border-bottom: 1px solid #d9dde3; }
       .btn { width: 30px; height: 30px; display: grid; place-items: center;
@@ -55,6 +56,8 @@
       document.getElementById("reload").onclick = function () { up("tb:reload"); };
       pick.onclick = function () { up("tb:picker"); };
       document.getElementById("close").onclick = function () { up("tb:close"); };
+      // 顶部 titlebar 让位区按下即开始拖窗口（startDragging 走 Rust 侧）。
+      document.getElementById("titlebar").addEventListener("mousedown", function () { up("tb:drag"); });
       var addrFocused = false;
       addr.addEventListener("focus", function () { addrFocused = true; });
       addr.addEventListener("blur", function () { addrFocused = false; });

@@ -648,7 +648,8 @@ export const api = {
   browserStyleTakeDiff: (sessionId: string) => invoke<void>("browser_style_take_diff", { sessionId }),
   browserClearSelection: (sessionId: string) => invoke<void>("browser_clear_selection", { sessionId }),
   browserPopout: (sessionId: string) => invoke<void>("browser_popout", { sessionId }),
-  browserClosePopout: () => invoke<void>("browser_close_popout"),
+  browserClosePopout: (sessionId: string) =>
+    invoke<void>("browser_close_popout", { sessionId }),
 
   // 内置终端（架构 §8 内置终端）。全局单例，不绑 session。
   terminalOpen: (cwd: string | null, cols: number, rows: number) =>

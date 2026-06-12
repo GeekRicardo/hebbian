@@ -64,7 +64,7 @@ export interface BrowserHost {
   /** 用户确认丢弃未提交注释后调用——给页面发一次性放行，刷新/导航不再被兜底拦截。 */
   allowUnload(sessionId: string): Promise<void>;
   popout(sessionId: string): Promise<void>;
-  closePopout(): Promise<void>;
+  closePopout(sessionId: string): Promise<void>;
 
   onState(cb: (sessionId: string, s: BrowserStateEvent) => void): Promise<UnlistenFn>;
   onTitle(cb: (sessionId: string, t: BrowserTitleEvent) => void): Promise<UnlistenFn>;
@@ -121,8 +121,8 @@ class TauriBrowserHost implements BrowserHost {
   popout(sessionId: string) {
     return api.browserPopout(sessionId);
   }
-  closePopout() {
-    return api.browserClosePopout();
+  closePopout(sessionId: string) {
+    return api.browserClosePopout(sessionId);
   }
   onState(cb: (sessionId: string, s: BrowserStateEvent) => void) {
     return listen<BrowserStateEvent & { session_id: string }>("browser://state", (e) => {
