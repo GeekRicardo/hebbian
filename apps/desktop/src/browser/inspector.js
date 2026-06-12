@@ -709,7 +709,7 @@
   var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
   var cardChat = null;  // 当前卡片打开的聊天：{ elementKey, sessionId, msgList, assistantRow }
   // 修改队列：多个元素的待提交改动按元素累积，统一提交到主对话
-  var editQueue = []; // [{ elementKey, badge, snapshot, styleDiff }]
+  var editQueue = []; // 注释列表 [{ id, badge, draft, conversation, styleDiffs, structuralChanges }]
   var queuePanelEl = null;
   var queuePos = null; // 拖动后记住的位置
 
@@ -868,19 +868,66 @@
     });
   }
 
-  // ─────────────────────── 修改队列框（可拖动，统一提交） ───────────────────────
-  function addToQueue(elementKey, badge, snapshot, styleDiff) {
-    if (!styleDiff || !styleDiff.length) return;
-    var existing = null;
-    for (var i = 0; i < editQueue.length; i++) if (editQueue[i].elementKey === elementKey) existing = editQueue[i];
-    if (existing) { existing.snapshot = snapshot; existing.styleDiff = styleDiff; existing.badge = badge; }
-    else editQueue.push({ elementKey: elementKey, badge: badge, snapshot: snapshot, styleDiff: styleDiff });
-    renderQueuePanel();
+  // ─────────────────────── 注释列表浮窗（统一汇总，可拖动） ───────────────────────
+  var annotationSeq = 0;
+
+  // draft 的每元素样式 diff → [{ref, badge, diff:[{prop,before,after}]}]（只留有改动的）
+  function draftStyleDiffs(d) {
+    var out = [];
+    d.elements.forEach(function (item, i) {
+      var diff = [];
+      var props = Object.keys(item.styleDiff);
+      for (var j = 0; j < props.length; j++) {
+        var p = props[j];
+        if (item.styleDiff[p].before !== item.styleDiff[p].after) {
+          diff.push({ prop: p, before: item.styleDiff[p].before || "(默认)", after: item.styleDiff[p].after });
+        }
+      }
+      if (diff.length) out.push({ ref: "@" + (i + 1), badge: elementBadge(item.snapshot), diff: diff });
+    });
+    return out;
   }
 
-  function removeQueueItem(elementKey) {
-    editQueue = editQueue.filter(function (q) { return q.elementKey !== elementKey; });
+  // 当前注释框（draft + 对话）收成一条注释项进列表。纯属性编辑也进（styleDiffs 非空即可）。
+  function addDraftToList(conversation) {
+    if (!draft) return;
+    var styleDiffs = draftStyleDiffs(draft);
+    if (!styleDiffs.length && !draft.structuralChanges.length && !(conversation && conversation.length)) return;
+    annotationSeq++;
+    editQueue.push({
+      id: "ann-" + annotationSeq,
+      badge: elementBadge(draft.elements[0].snapshot) + (draft.elements.length > 1 ? " 等 " + draft.elements.length + " 个元素" : ""),
+      draft: draft,
+      conversation: conversation || [],
+      styleDiffs: styleDiffs,
+      structuralChanges: draft.structuralChanges.slice(),
+    });
+    draft = null;
     renderQueuePanel();
+    notifyDirty();
+  }
+
+  function removeQueueItem(id) {
+    editQueue = editQueue.filter(function (q) { return q.id !== id; });
+    renderQueuePanel();
+    notifyDirty();
+  }
+
+  // 未提交注释数上行宿主（防丢失警告用）
+  function notifyDirty() {
+    send("heb:annotation:dirty", { count: editQueue.length });
+  }
+
+  // 注释项 → 提交载荷（snapshot 取各元素、对话原文、样式 diff、结构改动）
+  function annotationPayload(item) {
+    return {
+      elements: item.draft.elements.map(function (e, i) {
+        return { ref: "@" + (i + 1), snapshot: e.snapshot };
+      }),
+      conversation: item.conversation,
+      styleDiffs: item.styleDiffs,
+      structuralChanges: item.structuralChanges,
+    };
   }
 
   function makeQueueDraggable(panel, handle) {
@@ -926,13 +973,14 @@
     queuePanelEl.innerHTML = "";
     var head = document.createElement("div");
     head.style.cssText = "display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid #d9dde3;cursor:move;user-select:none;font-size:12px;font-weight:500;";
-    head.textContent = "修改队列 (" + editQueue.length + ")";
+    head.textContent = "注释列表 (" + editQueue.length + ")";
     makeQueueDraggable(queuePanelEl, head);
     var list = document.createElement("div");
     list.style.cssText = "flex:1;overflow-y:auto;padding:6px 8px;";
     editQueue.forEach(function (item) {
       var row = document.createElement("div");
-      row.style.cssText = "padding:6px 0;border-bottom:1px solid #f0f2f4;";
+      row.style.cssText = "padding:6px 0;border-bottom:1px solid #f0f2f4;cursor:pointer;";
+      row.title = "点击重新展开这条注释继续编辑";
       var top = document.createElement("div");
       top.style.cssText = "display:flex;align-items:center;gap:6px;";
       var b = document.createElement("span");
@@ -941,25 +989,43 @@
       var del = document.createElement("button");
       del.textContent = "×";
       del.style.cssText = "border:none;background:none;color:#8c949e;font-size:15px;line-height:1;cursor:pointer;padding:0 2px;";
-      del.addEventListener("click", function () { removeQueueItem(item.elementKey); });
+      del.addEventListener("click", function (e) { e.stopPropagation(); removeQueueItem(item.id); });
       top.appendChild(b); top.appendChild(del);
-      var diff = document.createElement("div");
-      diff.style.cssText = "margin-top:2px;font:10px ui-monospace,monospace;color:#6e7681;white-space:pre-wrap;";
-      diff.textContent = item.styleDiff.map(function (d) { return d.prop + ": " + d.before + " → " + d.after; }).join("\n");
-      row.appendChild(top); row.appendChild(diff);
+      var summary = document.createElement("div");
+      summary.style.cssText = "margin-top:2px;font:10px ui-monospace,monospace;color:#6e7681;white-space:pre-wrap;";
+      var lines = [];
+      item.styleDiffs.forEach(function (s) {
+        s.diff.forEach(function (d) { lines.push(s.ref + " " + d.prop + ": " + d.before + " → " + d.after); });
+      });
+      item.structuralChanges.forEach(function (c) { lines.push("🔧 " + c.desc); });
+      if (item.conversation.length) lines.push("💬 对话 " + item.conversation.length + " 条");
+      summary.textContent = lines.join("\n");
+      row.appendChild(top); row.appendChild(summary);
+      // 点击项重新展开：注释项移回 draft，重建卡片继续编辑
+      row.addEventListener("click", function () {
+        editQueue = editQueue.filter(function (q) { return q.id !== item.id; });
+        draft = item.draft;
+        setActiveElement(Math.min(draft.activeIndex, draft.elements.length - 1));
+        renderQueuePanel();
+        notifyDirty();
+        showAnnotationCard(null, draft);
+      });
       list.appendChild(row);
     });
     var foot = document.createElement("div");
     foot.style.cssText = "display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-top:1px solid #d9dde3;";
     var clear = mkFlatBtn("清空");
-    clear.addEventListener("click", function () { editQueue = []; renderQueuePanel(); });
-    var submit = mkPrimaryBtn("提交到主对话");
+    clear.addEventListener("click", function () { editQueue = []; renderQueuePanel(); notifyDirty(); });
+    var submit = mkPrimaryBtn("全部提交");
+    submit.title = "把所有注释交给助手合并总结成一条消息，发进主对话";
     submit.addEventListener("click", function () {
-      send("heb:annotation:submit-batch", {
-        items: editQueue.map(function (q) { return { snapshot: q.snapshot, styleDiff: q.styleDiff }; }),
+      send("heb:annotation:submit-all", {
+        surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
+        items: editQueue.map(annotationPayload),
       });
       editQueue = [];
       renderQueuePanel();
+      notifyDirty();
     });
     foot.appendChild(clear); foot.appendChild(submit);
     queuePanelEl.appendChild(head); queuePanelEl.appendChild(list); queuePanelEl.appendChild(foot);
@@ -1304,10 +1370,11 @@
         "\n请基于此继续——告诉我这些改动对应源码该怎么改，或我们再调调。";
       if (pushStyleToAside) pushStyleToAside(txt);
     });
-    var sSend = mkPrimaryBtn("加入队列");
-    sSend.title = "把这个元素的改动加入修改队列；攒够多个元素后在队列框里统一提交到主对话";
+    var sSend = mkPrimaryBtn("加入列表");
+    sSend.title = "把这条注释（含全部元素的改动与对话）加入注释列表；攒齐后在列表里统一提交";
     sSend.addEventListener("click", function () {
-      addToQueue(elementKey, elementBadge(cardSnapshot), cardSnapshot, takeStyleDiff());
+      var convForList = (asideConvos[elementKey] && asideConvos[elementKey].messages.slice()) || [];
+      addDraftToList(convForList);
       removeCard();
     });
     styleFoot.appendChild(sCancel); styleFoot.appendChild(sAside); styleFoot.appendChild(sSend);

@@ -177,6 +177,38 @@ export default function App() {
     };
   }, []);
 
+  // 注释列表「全部提交」：多条注释由 LLM 合并总结 → emit browser://annotation-summary
+  // → 这里组装成 user message 发进绑定对话。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen<{ summary: string; boundSessionId?: string | null }>(
+      "browser://annotation-summary",
+      (e) => {
+        const store = useStore.getState();
+        const target = e.payload.boundSessionId ?? store.currentSession?.id ?? null;
+        if (!target) {
+          toast.error("先打开一个对话，注释才有地方发");
+          return;
+        }
+        const content =
+          `我在内置浏览器预览里圈了一批元素并做了调整，下面是这批注释的合并总结，` +
+          `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${e.payload.summary}`;
+        void store.sendUserMessage(content, [], null, {}, target);
+        toast.success("注释列表已提交到对话");
+      }
+    )
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("annotation-summary listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // edits-worktree 全局事件：其他窗口回退 edit 后同步刷新当前窗口的 editSnapshots。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;

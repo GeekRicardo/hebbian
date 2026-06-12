@@ -289,6 +289,12 @@ fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json:
         "heb:annotation:submit-batch" => {
             let _ = app.emit("browser://annotation-batch", with_session(payload));
         }
+        // 注释列表统一提交：LLM 合并总结成一条消息发主对话
+        "heb:annotation:submit-all" => handle_annotation_submit_all(app, session_id, &payload),
+        // 未提交注释数变化 → 前端工具栏防丢失警告用
+        "heb:annotation:dirty" => {
+            let _ = app.emit("browser://annotation-dirty", with_session(payload));
+        }
         // 元素对话（旁支会话，机制 B）——session_id 即主对话
         "heb:aside:send" => handle_aside_send(app, session_id, &payload),
         "heb:aside:submit" => handle_aside_submit(app, session_id, &payload),
@@ -1258,6 +1264,87 @@ fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_j
                     &surface,
                     "heb:aside:error",
                     serde_json::json!({ "message": format!("总结失败：{e}") }),
+                );
+            }
+        }
+    });
+}
+
+/// 处理 heb:annotation:submit-all：注释列表全部提交——LLM 把多条注释（多元素 +
+/// 对话 + 样式 diff + 结构改动）合并总结成一条给主对话的消息。
+fn handle_annotation_submit_all(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
+    let surface = payload
+        .get("surface")
+        .and_then(|v| v.as_str())
+        .unwrap_or("embedded")
+        .to_string();
+    let items = payload.get("items").cloned().unwrap_or(serde_json::json!([]));
+    if items.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+        return;
+    }
+    let main_sid = main_session_id.to_string();
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let dd = agent_core::storage::default_data_dir();
+        let (provider_id, model) = agent_core::storage::sessions::load(&dd, &main_sid)
+            .map(|s| (s.provider_id, s.model))
+            .unwrap_or_default();
+        if provider_id.is_empty() {
+            eval_aside_down(
+                &app2,
+                &main_sid,
+                &surface,
+                "heb:aside:error",
+                serde_json::json!({ "message": "这个对话还没配置模型，没法提交注释" }),
+            );
+            return;
+        }
+        let items_json = serde_json::to_string_pretty(&items).unwrap_or_default();
+        let prompt = format!(
+            "下面是用户在网页预览里收集的若干条注释（JSON）。每条含：选中元素的定位快照（elements，\
+             含 selectorPath / xpath / react 组件链 / 文本）、与样式助手的对话原文（conversation）、\
+             实际调过的样式（styleDiffs，prop: before → after）、结构改动（structuralChanges）。\n\n\
+             {items_json}\n\n\
+             把它们合并总结成**一段给「主对话」看的话**，让它去修改源代码真正实现这些效果。要求：\n\
+             ① 按元素分组，逐条列「CSS 属性 → 目标值」和结构改动；\n\
+             ② 结合 react 组件链 / 元素文本给出足够 grep 的源码定位锚点（别只说 div+class）；\n\
+             ③ 对话里用户表达的意图（如「要再醒目一点」）要保留为上下文；\n\
+             ④ 删除类操作说明要在源码里移除元素，而不是 display:none。\n\n\
+             只输出这段总结，不要再调工具。"
+        );
+        let result = chat::send_aside(
+            &dd,
+            &main_sid,
+            &provider_id,
+            &model,
+            aside_system_prompt(),
+            Vec::new(),
+            prompt,
+            fresh_cancel(),
+            |_event| {},
+        )
+        .await;
+        match result {
+            Ok((_, msg)) => {
+                let _ = app2.emit(
+                    "browser://annotation-summary",
+                    serde_json::json!({ "summary": msg.content, "boundSessionId": main_sid.clone() }),
+                );
+                eval_aside_down(
+                    &app2,
+                    &main_sid,
+                    &surface,
+                    "heb:aside:submitted",
+                    serde_json::json!({}),
+                );
+            }
+            Err(e) => {
+                eval_aside_down(
+                    &app2,
+                    &main_sid,
+                    &surface,
+                    "heb:aside:error",
+                    serde_json::json!({ "message": format!("提交注释失败：{e}") }),
                 );
             }
         }
