@@ -1159,7 +1159,7 @@
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
     closeBtn.style.cssText = "border:none;background:none;color:#57606a;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;";
-    closeBtn.addEventListener("click", function () { styleRevert(); removeCard(); });
+    closeBtn.addEventListener("click", function () { styleRevert(); draft = null; removeCard(); });
     head.appendChild(badge); head.appendChild(addBtn); head.appendChild(closeBtn);
     // 拖动：按住头部移动卡片（改 left/top，避开 right 定位），避免遮住元素
     makeCardDraggable(card, head);
