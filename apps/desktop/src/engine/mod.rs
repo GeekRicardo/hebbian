@@ -151,6 +151,9 @@ pub enum EngineEvent {
         decision: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         reason: Option<String>,
+        /// judge 出结果后这条审批是否仍需用户拍板（surface 据此把被接管的框显形）。
+        #[serde(default)]
+        requires_human: bool,
     },
     /// 给用户的一次性轻量通知（前端渲染成 toast）。例：AutoMode 模型不在白名单时
     /// 提示「已转手动审批」。`dedup_key` 非空时前端按它去重避免刷屏。

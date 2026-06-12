@@ -27,13 +27,15 @@ use protocol::{
     QuestionOption, RiskLevel, UserAnswer,
 };
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{field::Empty, info, warn, Instrument};
 
 use crate::{
     agent_loop::EventSink,
+    automode::AutoModeDecision,
     edits::EditsWorktree,
-    effects::{analyze_effects, EffectClass},
+    effects::{analyze_effects, EffectClass, Effects},
     model_io_dump::{self, DumpEntry, ModelIoDump},
     permissions::PermissionStore,
     run_state::RunState,
@@ -447,7 +449,7 @@ impl ToolDispatcher {
                 result = "waiting_for_approval",
                 "[Permission:Path] some paths out of bounds, waiting for approval"
             );
-            Some(self.request_path_approval(&call.name, out_of_scope))
+            Some(self.request_path_approval(&call.name, &call.id, out_of_scope))
         };
 
         // 文件编辑免审判定（架构 §4.4.3 Default 模式）：见 [`edit_auto_allowed`]。
@@ -578,8 +580,72 @@ impl ToolDispatcher {
 
         Box::pin(
             async move {
-                // 路径审批（带 permission.check 子 span）
+                // 实时读取当前 mode：用户在 agent_loop 运行中切 mode 时下一轮 dispatch
+                // 立即生效。Default 的界内编辑免审已在同步段（dispatch 入口）处理，这里
+                // 只剩 AutoMode 的 judge 短路。
+                let current_run_mode = *run_mode.lock().unwrap();
+
+                // 路径越界审批（带 permission.check 子 span）。AutoMode 下先过 judge：
+                // judge ALLOW 自动放行越界路径（低风险目标如 /tmp 不打断用户）、DENY 自动
+                // 拒、ASK 才落到人工弹框（架构 §4.4.4）。与 ToolCall 链对称。
                 if let Some(p) = path_pending {
+                    if current_run_mode == crate::run_mode::RunMode::AutoMode {
+                        let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
+                        let automode_general = data_dir_for_artifacts
+                            .as_deref()
+                            .map(|d| crate::storage::settings::load(d).general)
+                            .unwrap_or_default();
+                        let automode_models = automode_general.automode_models.clone();
+                        if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
+                            emit_automode_unsupported_toast(
+                                &sink,
+                                &state,
+                                &call_name_for_judge,
+                                model_id_str,
+                                &automode_models,
+                            );
+                        } else if let Some(judge) = judge_client.as_ref() {
+                            let decision = judge_automode_request(AutoModeJudgeRequest {
+                                sink: &sink,
+                                state: &state,
+                                judge_client: judge,
+                                model_id: model_id_str,
+                                tool_name: &call_name_for_judge,
+                                tool_input: &call_input_for_judge,
+                                effects: &effects_for_judge,
+                                transcript: transcript_for_judge
+                                    .as_deref()
+                                    .map(Vec::as_slice)
+                                    .unwrap_or(&[]),
+                                hitl: &hitl_for_future,
+                                model_io_dump: model_io_dump_for_judge.as_ref(),
+                                request_id: &p.request_id,
+                                force_automode,
+                                is_path_access: true,
+                                automode_models: &automode_models,
+                                language: automode_general.language,
+                                cancel: cancel.clone(),
+                            })
+                            .await;
+                            // 路径访问没有「命令保留人工」一说：ALLOW / DENY 都直接 resolve，
+                            // 让 await_path_decision 走自动放行 / 自动拒分支；ASK 不 resolve，
+                            // 落到下方人工弹框。
+                            match decision {
+                                AutoModeDecision::Allow => {
+                                    hitl_for_future
+                                        .resolve(&p.request_id, ApprovalDecision::AllowOnce);
+                                }
+                                AutoModeDecision::Deny(reason) => {
+                                    hitl_for_future.resolve(
+                                        &p.request_id,
+                                        ApprovalDecision::DenyWithFeedback { feedback: reason },
+                                    );
+                                }
+                                AutoModeDecision::Ask(_) => {}
+                            }
+                        }
+                    }
+
                     let outcome = await_path_decision(
                         &sink,
                         &state,
@@ -602,14 +668,9 @@ impl ToolDispatcher {
                     }
                 }
 
-                // 实时读取当前 mode：用户在 agent_loop 运行中切 mode 时下一轮 dispatch
-                // 立即生效。Default 的界内编辑免审已在同步段（dispatch 入口）处理，这里
-                // 只剩 AutoMode 的 judge 短路。
-                let current_run_mode = *run_mode.lock().unwrap();
-
                 // AutoMode 短路（架构 §4.4.4）：destructive 工具进入 NeedsApproval 时，
-                // 调一次 judge_auto_mode 决定 Allow / Deny / Ask；Allow 自动执行，
-                // Deny 按工具类型拒绝或转人工，Ask 默认保留人工审批。
+                // 调一次 judge 决定 Allow / Deny / Ask；Allow 自动执行，Deny 按工具类型
+                // 拒绝或转人工，Ask 默认保留人工审批。
                 if current_run_mode == crate::run_mode::RunMode::AutoMode {
                     if let PermissionDecision::NeedsApproval { request_id, .. } = &permission {
                         let model_id_str = model_id_for_judge.as_deref().unwrap_or("");
@@ -621,127 +682,46 @@ impl ToolDispatcher {
                         let automode_models = automode_general.automode_models.clone();
                         let judge_language = automode_general.language;
                         if !crate::automode::is_allowed_model(model_id_str, &automode_models) {
-                            // 模型不在白名单：不调判官，emit 一条 toast 提示并降级到普通审批
-                            // （PermissionRequested 已 emit，保留人工决策）。dedup_key 让前端
-                            // 对同一模型的多次提示只显示一个 toast，避免刷屏。
-                            sink(state.event(protocol::EventPayload::Notice {
-                                level: protocol::LogLevel::Warn,
-                                message: format!(
-                                    "当前模型「{model_id_str}」不在自动模式名单里，本次已转手动审批。可在「设置 → 自动模式」里把它加进去。"
-                                ),
-                                dedup_key: Some(format!("automode-unsupported:{model_id_str}")),
-                            }));
-                            info!(
-                                target: "permission",
-                                tool = %call_name_for_judge,
-                                model = model_id_str,
-                                allowlist = ?automode_models,
-                                "[AutoMode] 模型不在白名单 → 弹 toast + 降级手动审批，不调判官"
+                            emit_automode_unsupported_toast(
+                                &sink,
+                                &state,
+                                &call_name_for_judge,
+                                model_id_str,
+                                &automode_models,
                             );
                         } else if let Some(judge) = judge_client.as_ref() {
-                            // judge 必须看到 hebbian 静态分析的全量 effects（segments /
-                            // write_targets / dangerous_kinds），不重复解析 shell。
-                            let judge_start = Instant::now();
-                            let prefix_outcome =
-                                crate::automode::classify_bash_prefixes_for_automode(
-                                    judge,
-                                    model_id_str,
-                                    &call_name_for_judge,
-                                    &call_input_for_judge,
-                                    &effects_for_judge,
-                                    cancel.clone(),
-                                )
-                                .await;
-                            let judge_effects = prefix_outcome.effects;
-                            // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官
-                            // 让它对「用户先前已批准过」的命令放心 ALLOW（架构 §4.4.4）。
-                            let whitelisted_fingerprints: Vec<String> = hitl_for_future
-                                .approval_segments(&call_name_for_judge, &judge_effects)
-                                .into_iter()
-                                .filter(|s| {
-                                    matches!(
-                                        s.status,
-                                        protocol::ApprovalSegmentStatus::Whitelisted
-                                    )
-                                })
-                                .map(|s| s.fingerprint)
-                                .collect();
-                            let raw_decision = crate::automode::judge_auto_mode(
-                                judge,
-                                model_id_str,
-                                &call_name_for_judge,
-                                &call_input_for_judge,
-                                &judge_effects,
-                                transcript_for_judge
+                            let decision = judge_automode_request(AutoModeJudgeRequest {
+                                sink: &sink,
+                                state: &state,
+                                judge_client: judge,
+                                model_id: model_id_str,
+                                tool_name: &call_name_for_judge,
+                                tool_input: &call_input_for_judge,
+                                effects: &effects_for_judge,
+                                transcript: transcript_for_judge
                                     .as_deref()
                                     .map(Vec::as_slice)
                                     .unwrap_or(&[]),
-                                &whitelisted_fingerprints,
-                                judge_language,
-                                cancel.clone(),
-                            )
+                                hitl: &hitl_for_future,
+                                model_io_dump: model_io_dump_for_judge.as_ref(),
+                                request_id,
+                                force_automode,
+                                is_path_access: false,
+                                automode_models: &automode_models,
+                                language: judge_language,
+                                cancel: cancel.clone(),
+                            })
                             .await;
-                            let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
-                            // force_automode 子开关：把 ASK 收紧为 Deny；普通 AutoMode
-                            // 保留 ASK 走人工审批。
-                            let raw_label = raw_decision.as_label();
-                            let decision = match raw_decision {
-                                crate::automode::AutoModeDecision::Ask(reason) if force_automode => {
-                                    crate::automode::AutoModeDecision::Deny(format!(
-                                        "force-automode: {reason}"
-                                    ))
-                                }
-                                other => other,
-                            };
-                            info!(
-                                target: "permission",
-                                tool = %call_name_for_judge,
-                                call_id = %call.id,
-                                model = model_id_str,
-                                raw = raw_label,
-                                final = decision.as_label(),
-                                force_automode = force_automode,
-                                reason = decision.reason().unwrap_or(""),
-                                "[AutoMode] LLM 判官结果：{} → {}（{}）",
-                                raw_label,
-                                decision.as_label(),
-                                decision.reason().unwrap_or("无理由")
-                            );
-                            sink(state.event(protocol::EventPayload::PermissionAutoJudged {
-                                request_id: Some(request_id.clone()),
-                                tool_name: call_name_for_judge.clone(),
-                                decision: decision.as_label().to_string(),
-                                reason: decision.reason().map(str::to_string),
-                            }));
-                            // 判官请求记入 model_io.jsonl（kind="judge"），前端蓝色标签渲染。
-                            if let Some(dump) = model_io_dump_for_judge.as_ref() {
-                                dump.record(DumpEntry {
-                                    ts: model_io_dump::iso_now(),
-                                    run_id: state.run_id.to_string(),
-                                    turn: 0,
-                                    model: model_id_str.to_string(),
-                                    request: serde_json::json!({
-                                        "tool": call_name_for_judge,
-                                        "input": call_input_for_judge,
-                                        "language": judge_language,
-                                    }),
-                                    response: serde_json::json!({
-                                        "raw": raw_label,
-                                        "final": decision.as_label(),
-                                        "reason": decision.reason(),
-                                    }),
-                                    duration_ms: judge_duration_ms,
-                                    kind: "judge".to_string(),
-                                });
-                            }
                             match decision {
-                                crate::automode::AutoModeDecision::Allow => {
+                                AutoModeDecision::Allow => {
                                     hitl_for_future
                                         .resolve(request_id, ApprovalDecision::AllowOnce);
                                 }
-                                crate::automode::AutoModeDecision::Deny(reason) => {
-                                    let is_command =
-                                        matches!(call_name_for_judge.as_str(), "Bash" | "PowerShell");
+                                AutoModeDecision::Deny(reason) => {
+                                    let is_command = matches!(
+                                        call_name_for_judge.as_str(),
+                                        "Bash" | "PowerShell"
+                                    );
                                     if is_command && !force_automode {
                                         // 普通 AutoMode：命令类拒绝需要用户最终确认，保留既有
                                         // PermissionRequested 弹窗，把判官 reason 展示在审批框里。
@@ -756,9 +736,9 @@ impl ToolDispatcher {
                                         );
                                     }
                                 }
-                                crate::automode::AutoModeDecision::Ask(_) => {
-                                    // 保留人工决策（force_automode 下 ASK 已在上方折叠为 Deny，
-                                    // 走不到这里；普通 AutoMode 的 ASK 留人工审批）。
+                                AutoModeDecision::Ask(_) => {
+                                    // 保留人工决策（force_automode 下 ASK 已折叠为 Deny，走不到
+                                    // 这里；普通 AutoMode 的 ASK 留人工审批）。
                                 }
                             }
                         }
@@ -1608,7 +1588,12 @@ impl ToolDispatcher {
     }
 
     /// 申请越界路径访问审批：开 pending + emit `PermissionRequested { kind: PathAccess }`。
-    fn request_path_approval(&self, tool_name: &str, paths: Vec<PathBuf>) -> PathApproval {
+    fn request_path_approval(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        paths: Vec<PathBuf>,
+    ) -> PathApproval {
         // 路径越界不在工具维度，AllowAndRemember 在外层把路径加进 workspace.allowed_paths，
         // 不通过 hitl learned 表，所以传 None。
         let (request_id, waiter) = self.hitl.open_approval(None, None);
@@ -1618,6 +1603,10 @@ impl ToolDispatcher {
         } else {
             format!("工具 {tool_name} 想访问 {} 个越界路径", path_strings.len())
         };
+        // AutoMode + 白名单时 judge 会接管这条路径审批（judge ALLOW 自动放行低风险目标、
+        // ASK 才弹人工）——与 ToolCall 链对称，surface 据 auto_handled 决定先压住框等
+        // judge，避免闪现（架构 §4.4.4）。
+        let auto_handled = self.automode_will_handle();
         self.emit(EventPayload::PermissionRequested {
             request_id: request_id.clone(),
             kind: PermissionKind::PathAccess {
@@ -1626,9 +1615,8 @@ impl ToolDispatcher {
             },
             summary,
             risk: RiskLevel::Medium,
-            // 路径越界审批不走 AutoMode judge，正常弹框。
-            auto_handled: false,
-            call_id: String::new(),
+            auto_handled,
+            call_id: call_id.to_string(),
         });
         PathApproval {
             request_id,
@@ -1777,6 +1765,160 @@ async fn await_permission_decision(
         }
     }
 }
+
+/// 模型不在 AutoMode 白名单时 emit 一条降级 toast。ToolCall / PathAccess 共用。
+/// dedup_key 让前端对同一模型的多次提示只显示一个 toast，避免刷屏。
+fn emit_automode_unsupported_toast(
+    sink: &EventSink,
+    state: &Arc<RunState>,
+    tool_name: &str,
+    model_id: &str,
+    automode_models: &[String],
+) {
+    sink(state.event(protocol::EventPayload::Notice {
+        level: protocol::LogLevel::Warn,
+        message: format!(
+            "当前模型「{model_id}」不在自动模式名单里，本次已转手动审批。可在「设置 → 自动模式」里把它加进去。"
+        ),
+        dedup_key: Some(format!("automode-unsupported:{model_id}")),
+    }));
+    info!(
+        target: "permission",
+        tool = %tool_name,
+        model = model_id,
+        allowlist = ?automode_models,
+        "[AutoMode] 模型不在白名单 → 弹 toast + 降级手动审批，不调判官"
+    );
+}
+
+/// AutoMode judge 判定一次审批请求（ToolCall 与 PathAccess 两条链共用）的入参。
+/// 所有依赖以值 / `Arc` 传入，便于在 `'static` future 内调用。
+struct AutoModeJudgeRequest<'a> {
+    sink: &'a EventSink,
+    state: &'a Arc<RunState>,
+    judge_client: &'a Arc<dyn model_gateway::client::ModelClient>,
+    model_id: &'a str,
+    tool_name: &'a str,
+    tool_input: &'a Value,
+    effects: &'a Effects,
+    transcript: &'a [model_gateway::types::TranscriptEntry],
+    hitl: &'a Arc<HitlGate>,
+    model_io_dump: Option<&'a ModelIoDump>,
+    request_id: &'a PermissionRequestId,
+    force_automode: bool,
+    /// 这条审批是否走路径越界链（PathAccess）。`true` 时 DENY 直接拒不保留人工
+    /// （路径就是不让碰）；`false`（ToolCall）时命令类 DENY 保留用户最终拍板权。
+    is_path_access: bool,
+    automode_models: &'a [String],
+    language: crate::storage::settings::AppLanguage,
+    cancel: CancelFlag,
+}
+
+/// 调 AutoMode judge 判定一次审批，emit `PermissionAutoJudged` + 落 model_io。
+///
+/// 返回 judge 的最终决策（已按 `force_automode` 折叠 Ask→Deny）。调用方据此决定
+/// resolve 还是保留人工弹框——ToolCall 与 PathAccess 的差异只在这一步，判定本身一致。
+/// 模型不在白名单已在 [`ToolDispatcher::automode_will_handle`] 侧拦下（emit toast），
+/// 不进入本函数。
+async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecision {
+    // judge 必须看到 hebbian 静态分析的全量 effects（segments / write_targets /
+    // dangerous_kinds），不重复解析 shell。Bash 段前缀分类只对命令类生效。
+    let judge_start = Instant::now();
+    let prefix_outcome = crate::automode::classify_bash_prefixes_for_automode(
+        req.judge_client,
+        req.model_id,
+        req.tool_name,
+        req.tool_input,
+        req.effects,
+        req.cancel.clone(),
+    )
+    .await;
+    let judge_effects = prefix_outcome.effects;
+    // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官让它对「用户先前
+    // 已批准过」的命令放心 ALLOW（架构 §4.4.4）。
+    let whitelisted_fingerprints: Vec<String> = req
+        .hitl
+        .approval_segments(req.tool_name, &judge_effects)
+        .into_iter()
+        .filter(|s| matches!(s.status, protocol::ApprovalSegmentStatus::Whitelisted))
+        .map(|s| s.fingerprint)
+        .collect();
+    let raw_decision = crate::automode::judge_auto_mode(
+        req.judge_client,
+        req.model_id,
+        req.tool_name,
+        req.tool_input,
+        &judge_effects,
+        req.transcript,
+        &whitelisted_fingerprints,
+        req.language,
+        req.cancel.clone(),
+    )
+    .await;
+    let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
+    let raw_label = raw_decision.as_label();
+    // force_automode 子开关：把 ASK 收紧为 Deny；普通 AutoMode 保留 ASK 走人工审批。
+    let decision = if req.force_automode {
+        raw_decision.collapse_ask_to_deny()
+    } else {
+        raw_decision
+    };
+    info!(
+        target: "permission",
+        tool = %req.tool_name,
+        model = req.model_id,
+        raw = raw_label,
+        final = decision.as_label(),
+        force_automode = req.force_automode,
+        reason = decision.reason().unwrap_or(""),
+        "[AutoMode] LLM 判官结果：{} → {}（{}）",
+        raw_label,
+        decision.as_label(),
+        decision.reason().unwrap_or("无理由")
+    );
+    // judge 出结果后这条审批是否仍需用户拍板（surface 据此把被接管的框显形）：
+    // ASK 永远要人工；ToolCall 链命令类被判 DENY 时保留用户推翻权（普通 AutoMode，
+    // 非 force）；其余（ALLOW、自动拒）不需要。与下方调用点的 resolve 策略严格对齐。
+    let requires_human = match &decision {
+        AutoModeDecision::Ask(_) => true,
+        AutoModeDecision::Deny(_) => {
+            !req.is_path_access
+                && matches!(req.tool_name, "Bash" | "PowerShell")
+                && !req.force_automode
+        }
+        AutoModeDecision::Allow => false,
+    };
+    (req.sink)(req.state.event(protocol::EventPayload::PermissionAutoJudged {
+        request_id: Some(req.request_id.clone()),
+        tool_name: req.tool_name.to_string(),
+        decision: decision.as_label().to_string(),
+        reason: decision.reason().map(str::to_string),
+        requires_human,
+    }));
+    // 判官请求记入 model_io.jsonl（kind="judge"），前端蓝色标签渲染。
+    if let Some(dump) = req.model_io_dump {
+        dump.record(DumpEntry {
+            ts: model_io_dump::iso_now(),
+            run_id: req.state.run_id.to_string(),
+            turn: 0,
+            model: req.model_id.to_string(),
+            request: serde_json::json!({
+                "tool": req.tool_name,
+                "input": req.tool_input,
+                "language": req.language,
+            }),
+            response: serde_json::json!({
+                "raw": raw_label,
+                "final": decision.as_label(),
+                "reason": decision.reason(),
+            }),
+            duration_ms: judge_duration_ms,
+            kind: "judge".to_string(),
+        });
+    }
+    decision
+}
+
 
 fn record_tool_outcome(
     outcome: &str,

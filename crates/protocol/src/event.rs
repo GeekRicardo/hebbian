@@ -205,6 +205,12 @@ pub enum EventPayload {
         /// 模型给的简短理由。`Allow` 时通常为空。
         #[serde(default)]
         reason: Option<String>,
+        /// judge 出结果后这条审批是否仍需用户最终拍板。`true` = surface 应把此前被
+        /// judge 接管（auto_handled）而未显示的审批框**显形**，带上 `reason`：ASK，
+        /// 或普通 AutoMode 下命令类被判 DENY（保留用户推翻权）。`false` = judge 已
+        /// 自动放行 / 自动拒，surface 只清黄色呼吸，不弹框（架构 §4.4.4）。
+        #[serde(default)]
+        requires_human: bool,
     },
 
     /// 给用户的一次性轻量通知（surface 端渲染成 toast，不进 transcript / 不落审计）。

@@ -2075,6 +2075,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             tool_name,
             decision,
             reason,
+            requires_human,
         } => Some(EngineEvent::PermissionAutoJudged {
             request_id: request_id
                 .as_ref()
@@ -2083,6 +2084,7 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             tool_name: tool_name.clone(),
             decision: decision.clone(),
             reason: reason.clone(),
+            requires_human: *requires_human,
         }),
         Notice {
             level,
