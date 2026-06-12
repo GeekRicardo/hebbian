@@ -1,6 +1,7 @@
 mod browser;
 pub mod chat;
 mod engine;
+mod terminal;
 mod error;
 mod force_automode;
 mod hebisland_client;
@@ -153,6 +154,41 @@ mod tests {
         ));
 
         cancellation::unregister(&request_id);
+    }
+
+    #[test]
+    fn attach_path_references_file_without_reading_content() {
+        let dir = temp_data_dir("attach-path");
+        let file = dir.join("note.md");
+        std::fs::write(&file, "敏感内容不该进上下文").unwrap();
+
+        // 文件路径 = 引用：回 File { path }，绝不读内容（结果里没有 content / data 字段）。
+        let res = attach_path(file.to_string_lossy().into_owned()).unwrap();
+        match &res {
+            AttachPathResult::File { path } => assert!(path.ends_with("note.md")),
+            other => panic!("文件路径应回 File，实际 {other:?}"),
+        }
+        let json = serde_json::to_value(&res).unwrap();
+        assert_eq!(json["kind"], "file");
+        assert!(json.get("content").is_none() && json.get("data").is_none());
+        assert!(!json.to_string().contains("敏感内容"));
+
+        // file:// URI 同样按文件引用。
+        let uri = format!("file://{}", file.to_string_lossy());
+        assert!(matches!(
+            attach_path(uri).unwrap(),
+            AttachPathResult::File { .. }
+        ));
+
+        // 目录回 Dir，缺失回 Missing。
+        assert!(matches!(
+            attach_path(dir.to_string_lossy().into_owned()).unwrap(),
+            AttachPathResult::Dir { .. }
+        ));
+        assert!(matches!(
+            attach_path(dir.join("nope.txt").to_string_lossy().into_owned()).unwrap(),
+            AttachPathResult::Missing { .. }
+        ));
     }
 }
 
@@ -2285,34 +2321,19 @@ fn discover_all_rules(
 
 // ========== Path attach (粘贴/拖拽路径) ==========
 
-/// 前端粘贴/拖拽路径时的探测结果。前端只调一次 RPC 就能拿到全部信息：
-/// 是文件就直接返回 `MessageAttachment`，是目录就告诉前端把它加到 allowed_paths。
-#[derive(serde::Serialize)]
+/// 前端粘贴/拖拽路径时的探测结果。粘贴路径 = **引用**而非上传：只回路径形态，
+/// 文件 / 目录都让前端加进 allowed_paths，由 agent 按需 Read，不把内容塞进上下文。
+/// （真正的「上传」走 addFiles —— 复制文件对象 / 截图时才发生。）
+#[derive(serde::Serialize, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AttachPathResult {
-    Dir {
-        path: String,
-        name: String,
-    },
-    File {
-        attachment: common::attachments::MessageAttachment,
-    },
-    Missing {
-        path: String,
-    },
-    Unsupported {
-        path: String,
-        reason: String,
-    },
+    File { path: String },
+    Dir { path: String },
+    Missing { path: String },
 }
-
-/// 路径附件的兜底大小限制，与前端 ChatInput 中的 MAX_* 常量保持一致。
-const MAX_TEXT_FILE_BYTES: u64 = 1024 * 1024;
-const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 
 #[tauri::command]
 fn attach_path(path: String) -> AppResult<AttachPathResult> {
-    use base64::Engine as _;
     let raw = path.trim();
     if raw.is_empty() {
         return Ok(AttachPathResult::Missing { path });
@@ -2320,73 +2341,19 @@ fn attach_path(path: String) -> AppResult<AttachPathResult> {
     // 接受 file:// URI（macOS Finder / GTK 拖拽常见格式）
     let cleaned = raw
         .strip_prefix("file://")
-        .map(|s| {
-            // 把 %20 等百分号编码还原成原样路径
-            percent_decode(s)
-        })
+        .map(percent_decode)
         .unwrap_or_else(|| raw.to_string());
     let p = std::path::Path::new(&cleaned);
     let meta = match std::fs::metadata(p) {
         Ok(m) => m,
-        Err(_) => {
-            return Ok(AttachPathResult::Missing { path });
-        }
+        Err(_) => return Ok(AttachPathResult::Missing { path }),
     };
-    let name = p
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| cleaned.clone());
-
+    let resolved = p.to_string_lossy().into_owned();
     if meta.is_dir() {
-        return Ok(AttachPathResult::Dir {
-            path: p.to_string_lossy().into_owned(),
-            name,
-        });
+        Ok(AttachPathResult::Dir { path: resolved })
+    } else {
+        Ok(AttachPathResult::File { path: resolved })
     }
-
-    let size = meta.len();
-    let media_type = guess_media_type(p);
-    let is_image = media_type.starts_with("image/");
-
-    if is_image {
-        if size > MAX_IMAGE_BYTES {
-            return Ok(AttachPathResult::Unsupported {
-                path,
-                reason: format!("{name} 超过 12MB"),
-            });
-        }
-        let bytes = std::fs::read(p)?;
-        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        return Ok(AttachPathResult::File {
-            attachment: common::attachments::MessageAttachment::Image {
-                name,
-                media_type,
-                data,
-            },
-        });
-    }
-
-    if !looks_like_text(&media_type, p) {
-        return Ok(AttachPathResult::Unsupported {
-            path,
-            reason: format!("{name} 不是支持的文本或图片文件"),
-        });
-    }
-    if size > MAX_TEXT_FILE_BYTES {
-        return Ok(AttachPathResult::Unsupported {
-            path,
-            reason: format!("{name} 超过 1MB"),
-        });
-    }
-    let content =
-        std::fs::read_to_string(p).map_err(|e| AppError::msg(format!("{name} 读取失败：{e}")))?;
-    Ok(AttachPathResult::File {
-        attachment: common::attachments::MessageAttachment::TextFile {
-            name,
-            media_type,
-            content,
-        },
-    })
 }
 
 fn percent_decode(s: &str) -> String {
@@ -2415,73 +2382,6 @@ fn hex_val(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
-}
-
-fn guess_media_type(p: &std::path::Path) -> String {
-    let ext = p
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("png") => "image/png".into(),
-        Some("jpg") | Some("jpeg") => "image/jpeg".into(),
-        Some("gif") => "image/gif".into(),
-        Some("webp") => "image/webp".into(),
-        Some("bmp") => "image/bmp".into(),
-        Some("svg") => "image/svg+xml".into(),
-        Some("json") => "application/json".into(),
-        Some("xml") => "application/xml".into(),
-        Some("html") | Some("htm") => "text/html".into(),
-        Some("css") => "text/css".into(),
-        Some("csv") => "text/csv".into(),
-        Some("md") | Some("markdown") => "text/markdown".into(),
-        Some(_) => "text/plain".into(),
-        None => "text/plain".into(),
-    }
-}
-
-fn looks_like_text(media_type: &str, p: &std::path::Path) -> bool {
-    if media_type.starts_with("text/") {
-        return true;
-    }
-    if matches!(media_type, "application/json" | "application/xml") {
-        return true;
-    }
-    let ext = p
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    matches!(
-        ext.as_deref(),
-        Some(
-            "txt"
-                | "md"
-                | "markdown"
-                | "json"
-                | "jsonl"
-                | "csv"
-                | "ts"
-                | "tsx"
-                | "js"
-                | "jsx"
-                | "rs"
-                | "py"
-                | "go"
-                | "java"
-                | "c"
-                | "cpp"
-                | "h"
-                | "hpp"
-                | "css"
-                | "html"
-                | "htm"
-                | "xml"
-                | "yaml"
-                | "yml"
-                | "toml"
-                | "sql"
-        )
-    )
 }
 
 // ========== OAuth ==========
@@ -2718,6 +2618,7 @@ pub fn run() {
         .manage(Arc::new(HitlState::default()))
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(browser::BrowserState::default())
+        .manage(terminal::TerminalState::default())
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
@@ -2926,6 +2827,14 @@ pub fn run() {
             browser::browser_clear_selection,
             browser::browser_popout,
             browser::browser_close_popout,
+            terminal::terminal_open,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
+            terminal::terminal_attach,
+            terminal::terminal_list,
+            terminal::terminal_popout,
+            terminal::terminal_close_popout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

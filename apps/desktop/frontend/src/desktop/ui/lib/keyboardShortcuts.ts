@@ -1,3 +1,8 @@
+// ⚠️ 规矩：任何走 hasPrimaryModifier（含 ctrlKey）的全局快捷键，handler 入口都必须先
+// `if (isTerminalFocusTarget(document.activeElement)) return;` 豁免——否则终端聚焦时
+// Ctrl+F（readline 前移）/ Ctrl+N（下一条历史）等会被应用快捷键截胡。详见
+// 内置终端-spec.md §5.1。
+
 export interface KeyboardShortcutEvent {
   key: string;
   metaKey?: boolean;
@@ -5,6 +10,13 @@ export interface KeyboardShortcutEvent {
   shiftKey?: boolean;
   altKey?: boolean;
   defaultPrevented?: boolean;
+}
+
+/** activeElement 是否落在内置终端里（xterm 隐藏输入框，或 host 的 data-terminal-root）。 */
+export function isTerminalFocusTarget(el: Element | null | undefined): boolean {
+  if (!el) return false;
+  if (el.classList?.contains("xterm-helper-textarea")) return true;
+  return Boolean(el.closest?.("[data-terminal-root]"));
 }
 
 export interface KeyboardFocusTarget {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Sparkles, ChevronDown, Share, RotateCw, Scissors } from "lucide-react";
+import { Sparkles, ChevronDown, RotateCw, Scissors } from "lucide-react";
 import { MessageBubble, formatCompactDuration } from "./MessageBubble";
 import { MessageList } from "./MessageList";
 import { MemoryWriteSummary } from "./MemoryWriteSummary";
@@ -16,11 +16,10 @@ import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
 import { runModeLabel } from "./RunModeChip";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
-import { ExportClaudeDialog } from "./ExportClaudeDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted } from "@/desktop/ui/lib/utils";
-import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
+import { isLocalFindShortcut, isTerminalFocusTarget } from "@/desktop/ui/lib/keyboardShortcuts";
 import { stickyBottomScrollTop } from "@/desktop/ui/lib/chatScrollPosition";
 import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
 import type { MessageAttachment } from "@/desktop/ui/types";
@@ -122,7 +121,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   const [findQuery, setFindQuery] = useState("");
   const [findRegex, setFindRegex] = useState(false);
   const [findCase, setFindCase] = useState(false);
-  const [exportClaudeOpen, setExportClaudeOpen] = useState(false);
 
   const isStreaming = !!streamingMessageId;
   const rawMessages = currentSession?.messages ?? [];
@@ -379,6 +377,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   // Cmd/Ctrl+F 拉起查找
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 终端聚焦时 Ctrl+F 是 readline 前移，不能被查找截胡（内置终端-spec.md §5）
+      if (isTerminalFocusTarget(document.activeElement)) return;
       if (isLocalFindShortcut(e) && currentSession) {
         e.preventDefault();
         setFindOpen(true);
@@ -398,6 +398,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || e.isComposing) return;
+      // 终端聚焦时 Enter 是命令换行，不抢去聊天输入框
+      if (isTerminalFocusTarget(document.activeElement)) return;
       // 弹窗打开时不干预
       const state = useStore.getState();
       if (state.pendingApproval || state.pendingQuestion) return;
@@ -737,17 +739,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             ) : null /* session 已锁定 prompt 后不再显示其名字——位置让给 header 右侧的 debug session id（debug off 时整行空） */}
           </div>
         </div>
-        {/* 把这段对话导出成一个 Claude 会话，终端里 `claude --resume` 接着聊 */}
-        {currentSession?.id && hasSessionStarted(currentSession) ? (
-          <button
-            onClick={() => setExportClaudeOpen(true)}
-            className="ml-auto shrink-0 p-1.5 rounded hover:bg-accent text-muted-foreground no-drag"
-            title="导出到 Claude（终端里继续这段对话）"
-          >
-            <Share className="w-4 h-4" />
-          </button>
-        ) : null}
-
         {/* debug 开启时在 header 右侧显示当前对话的 session 文件夹 id
             （~/.hebbian/sessions/<id>），方便对照 jsonl */}
         {debugEnabled && currentSession?.id ? (
@@ -759,14 +750,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
           </span>
         ) : null}
       </header>
-
-      {currentSession?.id ? (
-        <ExportClaudeDialog
-          open={exportClaudeOpen}
-          onOpenChange={setExportClaudeOpen}
-          sessionId={currentSession.id}
-        />
-      ) : null}
 
       <FindBar
         open={findOpen}

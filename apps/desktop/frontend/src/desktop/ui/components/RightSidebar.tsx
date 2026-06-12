@@ -84,16 +84,12 @@ export function RightSidebar({
   const storageTabKey = `${storagePrefix}.tab`;
 
   const clampWidthForTab = useCallback(
-    (id: TabId, value: number) => {
-      const tabDefaultWidth = TAB_DEFAULT_WIDTH[id] ?? defaultWidth;
-      const tabMinWidth = Math.min(minWidth, tabDefaultWidth);
-      return Math.min(maxWidth, Math.max(tabMinWidth, value));
-    },
-    [defaultWidth, minWidth, maxWidth],
+    (_id: TabId, value: number) => Math.min(maxWidth, Math.max(minWidth, value)),
+    [minWidth, maxWidth],
   );
   const loadWidthForTab = useCallback(
     (id: TabId) => {
-      const tabDefaultWidth = TAB_DEFAULT_WIDTH[id] ?? defaultWidth;
+      const tabDefaultWidth = clampWidthForTab(id, TAB_DEFAULT_WIDTH[id] ?? defaultWidth);
       return loadInitial(storageWidthForTabKey(id), tabDefaultWidth, (s) => {
         const n = Number(s);
         return Number.isFinite(n) ? clampWidthForTab(id, n) : tabDefaultWidth;
@@ -113,6 +109,7 @@ export function RightSidebar({
     )
   );
   const [width, setWidth] = useState(() => loadWidthForTab(tab));
+  const [resizing, setResizing] = useState(false);
 
   // 用户主动停在浏览器/终端 tab 时，agent 更新（todos/edits）不该抢走焦点——否则原生子
   // webview 被切走隐藏，正在加载的慢页面（如 baidu）会黑屏。tabRef 供下面不依赖 tab 的
@@ -242,25 +239,27 @@ export function RightSidebar({
     localStorage.setItem(storageTabKey, tab);
   }, [storageTabKey, tab]);
 
-  // 拖拽逻辑：mousedown 在左边缘 → 进入 dragging 模式 → mousemove 更新宽度
+  // 拖拽逻辑：mousedown 在左边缘 → 固定右边缘，只移动左边缘更新宽度。
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {
       if (collapsed) return;
       e.preventDefault();
       dragRef.current = { startX: e.clientX, startWidth: width };
+      setResizing(true);
       document.body.style.cursor = "ew-resize";
       document.body.style.userSelect = "none";
 
       const onMove = (ev: MouseEvent) => {
-        if (!dragRef.current) return;
-        // 拖向左 = 增宽；拖向右 = 减宽
-        const delta = dragRef.current.startX - ev.clientX;
-        const next = clampWidthForTab(tab, dragRef.current.startWidth + delta);
+        const drag = dragRef.current;
+        if (!drag) return;
+        const deltaX = ev.clientX - drag.startX;
+        const next = clampWidthForTab(tab, drag.startWidth - deltaX);
         setWidth(next);
       };
       const onUp = () => {
         dragRef.current = null;
+        setResizing(false);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         window.removeEventListener("mousemove", onMove);
@@ -357,7 +356,10 @@ export function RightSidebar({
         各自固定宽度，靠外壳 overflow-hidden 裁切，宽度收缩时内容不被挤压变形。
       */}
       <aside
-        className="relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border bg-muted/40 transition-[width] duration-700 ease-in-out"
+        className={cn(
+          "relative flex h-full shrink-0 justify-self-end flex-col overflow-hidden border-l border-border bg-muted/40",
+          resizing ? "" : "transition-[width] duration-700 ease-in-out"
+        )}
         style={{ width: `${collapsed ? COLLAPSED_WIDTH : width}px` }}
       >
         {collapsed ? (

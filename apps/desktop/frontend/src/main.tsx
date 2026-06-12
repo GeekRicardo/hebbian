@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { Toaster } from "sonner";
 import App from "./App";
 import LogViewerApp from "./desktop/ui/components/LogViewerApp";
+import { TerminalSurface } from "./desktop/ui/components/TerminalSurface";
 import { ErrorBoundary } from "./desktop/ui/components/ErrorBoundary";
 import "./index.css";
 
@@ -14,6 +15,16 @@ if (params.has("log-viewer")) {
         <LogViewerApp />
       </ErrorBoundary>
       <Toaster position="top-center" richColors closeButton toastOptions={{ className: "text-sm" }} />
+    </React.StrictMode>
+  );
+} else if (params.has("terminal-popout")) {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <div className="h-screen w-screen">
+          <TerminalSurface variant="popout" />
+        </div>
+      </ErrorBoundary>
     </React.StrictMode>
   );
 } else {

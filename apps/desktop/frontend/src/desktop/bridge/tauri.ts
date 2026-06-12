@@ -457,15 +457,14 @@ export const api = {
   },
 
   /**
-   * 探测剪切板/拖拽过来的路径：是文件就读出来当 attachment，是目录就提示前端
-   * 加到 allowed_paths。前端只发一次 RPC，避免来回 stat 磁盘。
+   * 探测粘贴/拖拽过来的路径形态：文件或目录都让前端加进 allowed_paths（引用语义，
+   * 由 agent 按需 Read），找不到则回 missing 让前端当普通文本插入。不读文件内容。
    */
   attachPath: (path: string) =>
     invoke<
-      | { kind: "dir"; path: string; name: string }
-      | { kind: "file"; attachment: MessageAttachment }
+      | { kind: "file"; path: string }
+      | { kind: "dir"; path: string }
       | { kind: "missing"; path: string }
-      | { kind: "unsupported"; path: string; reason: string }
     >("attach_path", { path }),
 
   /**
@@ -649,6 +648,25 @@ export const api = {
   browserClearSelection: (sessionId: string) => invoke<void>("browser_clear_selection", { sessionId }),
   browserPopout: (sessionId: string) => invoke<void>("browser_popout", { sessionId }),
   browserClosePopout: () => invoke<void>("browser_close_popout"),
+
+  // 内置终端（架构 §8 内置终端）。全局单例，不绑 session。
+  terminalOpen: (cwd: string | null, cols: number, rows: number) =>
+    invoke<string>("terminal_open", { cwd, cols, rows }),
+  terminalWrite: (id: string, data: string) =>
+    invoke<void>("terminal_write", { id, data }),
+  terminalResize: (id: string, cols: number, rows: number) =>
+    invoke<void>("terminal_resize", { id, cols, rows }),
+  terminalClose: (id: string) => invoke<void>("terminal_close", { id }),
+  terminalAttach: (id: string) =>
+    invoke<{ scrollback_b64: string; alive: boolean }>("terminal_attach", { id }),
+  terminalList: () =>
+    invoke<{
+      terminals: { id: string; cwd: string; alive: boolean }[];
+      order: string[];
+      active_view: "embedded" | "popout";
+    }>("terminal_list"),
+  terminalPopout: () => invoke<void>("terminal_popout"),
+  terminalClosePopout: () => invoke<void>("terminal_close_popout"),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */
