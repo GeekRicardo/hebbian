@@ -37,6 +37,7 @@ pub mod sessions_dir;
 pub mod settings;
 pub mod skill_collections;
 pub mod skills;
+pub mod nested;
 pub mod subagents;
 pub mod subagents_builtin;
 pub mod tool_results;

@@ -171,6 +171,7 @@ mod tests {
             system_prompt: format!("You are {name}."),
             enabled: true,
             source: crate::storage::subagents::SubagentSource::Global,
+            permission: None,
         }
     }
 

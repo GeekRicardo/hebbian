@@ -34,6 +34,8 @@ pub struct SubagentRunner {
     pub parent_run_id: RunId,
     /// 父 model id；subagent 定义里没指定 `model` 时跟父。
     pub parent_model_id: Option<String>,
+    /// 父 Run 当前 RunMode；`permission=Inherit` 时子跟它（架构 §4.4.11.4）。
+    pub parent_run_mode: crate::run_mode::RunMode,
     /// 父 Task 工具调用的 call_id——所有子事件经装饰器填上此字段后转发到父 sink。
     pub parent_task_call_id: String,
     /// 父 Transcript 在「触发 turn 之前」的 entries 快照（架构 §4.4.11.3）。
@@ -124,6 +126,7 @@ impl SubagentRunner {
         let parent_edits_worktree = self.parent_edits_worktree.clone();
         let parent_run_id = self.parent_run_id.clone();
         let parent_model_id = self.parent_model_id.clone();
+        let parent_run_mode = self.parent_run_mode;
         let parent_task_call_id = self.parent_task_call_id.clone();
         let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
 
@@ -138,6 +141,7 @@ impl SubagentRunner {
                 parent_edits_worktree,
                 parent_run_id,
                 parent_model_id,
+                parent_run_mode,
                 parent_task_call_id,
                 parent_transcript_snapshot: parent_transcript_snapshot.clone(),
             };
@@ -217,6 +221,9 @@ impl SubagentRunner {
         // 子 client 与 model（架构 §4.4.11.4）：def.model = provider id 时用该 provider 建专属
         // client、model 取该 provider 的 default_model；缺省复用父 client 与父 model。
         let (child_client, model_id) = self.resolve_child_client(&def);
+        // 子权限（架构 §4.4.11.4）：按 def.permission 解析子 RunMode 与 bypass 信任放行。
+        let (child_run_mode, subagent_bypass) =
+            resolve_permission(def.permission, self.parent_run_mode);
         let max_iter = def.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
 
         let params = LoopParams {
@@ -237,7 +244,7 @@ impl SubagentRunner {
             pending_inputs: None,
             consumed_pending_inputs: None,
             pending_inputs_accepting: None,
-            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+            run_mode: Arc::new(std::sync::Mutex::new(child_run_mode)),
             model_id,
             judge_client: Some(child_client.clone()),
             // 子 agent 不参与 hands-off（始终走父继承的审批策略）。
@@ -250,6 +257,7 @@ impl SubagentRunner {
             max_tool_iterations: Some(max_iter),
             system_rules: None,
             subagent_ctx: None,
+            subagent_bypass,
         };
 
         let output = agent_loop::run_loop(params, child_sink).await?;
@@ -338,6 +346,23 @@ impl SubagentRunner {
     }
 }
 
+/// 解析子 NestedRun 的 `(RunMode, bypass)`（架构 §4.4.11.4 权限维度）。
+/// - `Inherit`（缺省）→ 跟父 RunMode，不 bypass
+/// - `AcceptEdits` → 强制 `Default`（界内编辑 + 只读自主），不 bypass
+/// - `Bypass` → `Default` + bypass（白名单内免审、仅危险红线拦）
+fn resolve_permission(
+    permission: Option<crate::storage::subagents::SubagentPermission>,
+    parent: crate::run_mode::RunMode,
+) -> (crate::run_mode::RunMode, bool) {
+    use crate::run_mode::RunMode;
+    use crate::storage::subagents::SubagentPermission;
+    match permission.unwrap_or_default() {
+        SubagentPermission::Inherit => (parent, false),
+        SubagentPermission::AcceptEdits => (RunMode::Default, false),
+        SubagentPermission::Bypass => (RunMode::Default, true),
+    }
+}
+
 /// 计算并落盘子 session 的目录骨架（架构 §4.4.11.2）。
 ///
 /// 返回 `Some(child_session_id)` 形如 `<parent_sid>/subagents/<child_sid>`，
@@ -413,6 +438,7 @@ mod tests {
             system_prompt: format!("You are {name}."),
             enabled: true,
             source: crate::storage::subagents::SubagentSource::Global,
+            permission: None,
         }
     }
 

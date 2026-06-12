@@ -35,6 +35,20 @@ pub enum SubagentSource {
     Global,
 }
 
+/// Subagent 权限维度（架构 §4.4.11.4），对齐 CC 的 subagent `permissionMode`——
+/// 控制子 NestedRun 的工具调用如何审批。frontmatter `permission` 字段；缺省 `Inherit`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SubagentPermission {
+    /// 子用**父 Run 的 RunMode** 跑审批（父 AutoMode→judge；父 Default→子会写工具弹审批）。
+    #[default]
+    Inherit,
+    /// 子强制 `Default` 语义（界内编辑 + 只读自主免审；会写 Bash / 越界编辑仍审批），不随父 Plan / Auto 浮动。
+    AcceptEdits,
+    /// 子在 `tools` 白名单内全放行、不弹审批，仅危险红线（`rm -rf` / 覆盖重定向）拦截。
+    Bypass,
+}
+
 /// 单个 subagent 的完整定义（架构 §4.4.11.4）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentDefinition {
@@ -62,6 +76,9 @@ pub struct SubagentDefinition {
     /// 前端据此区分「内置」（只读 + 可禁用 + 复制为自定义）与「自定义」（可编辑/删除）。
     #[serde(default)]
     pub source: SubagentSource,
+    /// 权限维度（架构 §4.4.11.4，对齐 CC `permissionMode`）。`None` = `Inherit`（跟父 RunMode）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<SubagentPermission>,
 }
 
 /// settings.json 全局形态：`{ "enabled": { ... } }`。
@@ -315,6 +332,7 @@ fn parse_definition(name: &str, content: &str) -> AppResult<SubagentDefinition> 
     let mut tools: Option<Vec<String>> = None;
     let mut model: Option<String> = None;
     let mut max_iterations: Option<u32> = None;
+    let mut permission: Option<SubagentPermission> = None;
     if let Some(fm) = fm {
         for line in fm.lines() {
             let trimmed = line.trim();
@@ -342,6 +360,14 @@ fn parse_definition(name: &str, content: &str) -> AppResult<SubagentDefinition> 
                         max_iterations = Some(n);
                     }
                 }
+                "permission" => {
+                    permission = match strip_quotes(val).to_ascii_lowercase().as_str() {
+                        "inherit" => Some(SubagentPermission::Inherit),
+                        "acceptedits" | "accept_edits" => Some(SubagentPermission::AcceptEdits),
+                        "bypass" | "bypasspermissions" => Some(SubagentPermission::Bypass),
+                        _ => None, // 未知值忽略，按缺省 Inherit 处理
+                    };
+                }
                 _ => {}
             }
         }
@@ -366,6 +392,7 @@ fn parse_definition(name: &str, content: &str) -> AppResult<SubagentDefinition> 
         system_prompt,
         enabled: true,
         source: SubagentSource::Global,
+        permission,
     })
 }
 

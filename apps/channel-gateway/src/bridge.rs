@@ -534,6 +534,7 @@ impl TurnObserver for ChannelObserver {
                         input: input.clone(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        nested: Vec::new(),
                     };
                     self.tool_calls.push(tool_call);
                     self.parts.push(sessions::MessagePart::ToolCall {

@@ -320,6 +320,7 @@ impl Harness {
                 max_tool_iterations,
                 system_rules,
                 subagent_ctx,
+                subagent_bypass: false,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

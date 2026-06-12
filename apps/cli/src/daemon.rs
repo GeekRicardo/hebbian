@@ -19,6 +19,7 @@ use agent_core::{
     read_state::ReadStateTracker,
     run_mode::RunMode,
     storage::{
+        nested::NestedAccumulator,
         sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role},
         sessions_dir, settings as settings_store,
     },
@@ -153,6 +154,8 @@ struct TurnData {
     parts: Vec<MessagePart>,
     // 当前正在收集的工具调用（call_id → (name, input)）
     pending_tools: HashMap<String, (String, Value)>,
+    /// 子 NestedRun 过程累积（架构 §4.4.11.8），build_message 落盘前同步进 tool_calls 的 nested。
+    nested: NestedAccumulator,
 }
 
 impl TurnData {
@@ -162,6 +165,7 @@ impl TurnData {
             tool_calls: Vec::new(),
             parts: Vec::new(),
             pending_tools: HashMap::new(),
+            nested: NestedAccumulator::default(),
         }
     }
 
@@ -202,6 +206,7 @@ impl TurnData {
                         input: input.clone(),
                         result: Some(result.clone()),
                         duration_ms: Some(*duration_ms),
+                        nested: Vec::new(),
                     };
                     self.tool_calls.push(tc.clone());
                     self.parts.push(MessagePart::ToolCall {
@@ -218,10 +223,12 @@ impl TurnData {
         }
     }
 
-    fn build_message(self) -> Option<Message> {
+    fn build_message(mut self) -> Option<Message> {
         if self.full_text.is_empty() && self.tool_calls.is_empty() {
             return None;
         }
+        // 落盘前把累积的子过程同步进对应 Task call 的 nested（架构 §4.4.11.8）。
+        self.nested.sync_into(&mut self.tool_calls);
         Some(Message {
             id: sessions::new_id(),
             role: Role::Assistant,
@@ -256,7 +263,10 @@ impl TurnObserver for DaemonObserver {
         // 子 subagent NestedRun 事件不进父 turn 聚合，仅转发到 daemon stdout 让 UI 嵌套渲染
         // （架构 §4.4.11.8）。父 transcript / 父 jsonl 不被串入子内容；子事件落到子 session.jsonl
         // 由 P3.1c 单独接上。
-        if event.subagent_call_id.is_some() {
+        if let Some(call_id) = event.subagent_call_id.as_deref() {
+            // 子 NestedRun 过程累积进对应 Task call 的 nested，随父 message 落主 session.jsonl
+            // （架构 §4.4.11.8）。子事件仍转发 stdout 供 UI 嵌套渲染。
+            self.turn.nested.record(call_id, &event.payload);
             if let Some(ev) = translate_event(event) {
                 self.state.emit(&ev);
             }

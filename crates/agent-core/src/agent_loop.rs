@@ -262,6 +262,10 @@ pub struct LoopParams<'a> {
     /// 路由 `Task` 工具到 [`crate::subagent::SubagentRunner`]；`None` → Task 调用
     /// 落到兜底错误（CLI 单跑 / 单测路径）。
     pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
+    /// 子 NestedRun 的 `permission=Bypass`（架构 §4.4.11.4）：子在 tools 白名单内自主放行、
+    /// 不弹审批，仅危险红线仍拦。父 Run 恒 `false`；由 [`crate::subagent::SubagentRunner`]
+    /// 按 `def.permission` 计算后传入。
+    pub subagent_bypass: bool,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -373,6 +377,7 @@ pub async fn run_loop(
         max_tool_iterations,
         system_rules,
         subagent_ctx,
+        subagent_bypass,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -984,6 +989,7 @@ pub async fn run_loop(
                     subagent_ctx: subagent_ctx.clone(),
                     parent_transcript_snapshot,
                     model_io_dump: model_io_dump.clone(),
+                    subagent_bypass,
                 };
 
                 let tools_span = tracing::info_span!(
@@ -1438,6 +1444,7 @@ mod tests {
                 system_rules: None,
 
                 subagent_ctx: None,
+                subagent_bypass: false,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1499,6 +1506,7 @@ mod tests {
                 system_rules: None,
 
                 subagent_ctx: None,
+                subagent_bypass: false,
             },
             Arc::new(|_| {}),
         )
@@ -1572,6 +1580,7 @@ mod tests {
                 system_rules: None,
 
                 subagent_ctx: None,
+                subagent_bypass: false,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -1699,6 +1708,7 @@ mod tests {
                 system_rules: None,
 
                 subagent_ctx: None,
+                subagent_bypass: false,
             },
             Arc::new(|_| {}),
         )

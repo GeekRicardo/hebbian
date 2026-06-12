@@ -215,6 +215,11 @@ export interface MessageToolCall {
   input: unknown;
   result?: string | null;
   duration_ms?: number | null;
+  /**
+   * 子 NestedRun（subagent）过程：子文本 / 子推理 / 子工具调用（架构 §4.4.11.8）。
+   * 仅 name=="Task" 可能非空。随父 message 落主 session.jsonl，重建后从此渲染嵌套区。
+   */
+  nested?: MessagePart[];
 }
 
 export type ToolCallStatus = "streaming" | "running" | "done";
@@ -1133,6 +1138,8 @@ export interface SubagentDefinition {
   enabled: boolean;
   /** 来源：`builtin` = 内置（只读 + 可禁用 + 复制为自定义）；`global` = 用户自定义（可编辑/删除）。 */
   source?: "builtin" | "global";
+  /** 权限维度（架构 §4.4.11.4，对齐 CC permissionMode）。缺省 inherit（跟父 RunMode）。 */
+  permission?: "inherit" | "acceptEdits" | "bypass" | null;
 }
 
 /** Subagent 启用 scope（对应 Rust SubagentScope）。 */

@@ -7,7 +7,7 @@
 //! 与磁盘来源并列，归属 storage::subagents 的多来源合并职责；storage 自给自足、不反向依赖
 //! 上层 subagent 运行时模块（与 §6.1 providers.json 避免反向依赖同一原则）。
 
-use super::subagents::{SubagentDefinition, SubagentSource};
+use super::subagents::{SubagentDefinition, SubagentPermission, SubagentSource};
 
 /// 内置 subagent 列表。`enabled` 一律 `true`——真实启用状态由 [`super::subagents::load_for_workdir`]
 /// 合并两层 settings 后覆写。
@@ -39,6 +39,8 @@ pub fn builtin_subagents() -> Vec<SubagentDefinition> {
             system_prompt: GENERAL_PROMPT.to_string(),
             enabled: true,
             source: SubagentSource::Builtin,
+            // 全工具自主执行：配 Bypass 让它在白名单内不弹审批打断用户，仅危险红线拦（架构 §4.4.11.4）。
+            permission: Some(SubagentPermission::Bypass),
         },
     ]
 }
@@ -59,6 +61,8 @@ fn readonly(name: &str, description: &str, system_prompt: &str) -> SubagentDefin
         system_prompt: system_prompt.to_string(),
         enabled: true,
         source: SubagentSource::Builtin,
+        // 只读 agent：permission=None(Inherit)，跟父 RunMode；只读工具本就不弹审批（架构 §4.4.11.4）。
+        permission: None,
     }
 }
 

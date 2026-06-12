@@ -179,6 +179,9 @@ pub struct ToolDispatcher {
     pub parent_transcript_snapshot: Option<Arc<Vec<TranscriptEntry>>>,
     /// 模型 IO dump 句柄。AutoMode 判官请求记入 model_io.jsonl（`kind: "judge"`）。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 子 NestedRun 的 `permission=Bypass`（架构 §4.4.11.4）：子在 tools 白名单内自主放行、
+    /// 不弹审批，仅危险红线（dangerous pattern）仍走 hitl。父 dispatcher 恒 `false`。
+    pub subagent_bypass: bool,
 }
 
 /// 文件编辑免审判定（架构 §4.4.3 Default 模式）。
@@ -471,6 +474,16 @@ impl ToolDispatcher {
                 tool = %call.name,
                 call_id = %call.id,
                 "[Permission:ToolCall] in-workspace file edit auto-allowed (Default mode, worktree-backed)"
+            );
+            PermissionDecision::Approved
+        } else if self.subagent_bypass && !effects.has_dangerous_pattern() {
+            // 子 NestedRun permission=Bypass（架构 §4.4.11.4）：父调 Task + tools 白名单
+            // 即整体授权，子在白名单内自主跑、不弹审批打断用户。危险红线（rm -rf / 覆盖
+            // 重定向等）走下面 else，仍交父 hitl，免审 ≠ 免红线。
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                "[Permission:ToolCall] subagent bypass auto-approved (白名单内自主，非危险红线)"
             );
             PermissionDecision::Approved
         } else {
@@ -1490,6 +1503,7 @@ impl ToolDispatcher {
         let cancel = self.cancel.clone();
         let edits_worktree = self.edits_worktree.clone();
         let parent_model_id = self.model_id.clone();
+        let parent_run_mode = *self.run_mode.lock().unwrap();
         let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
 
         let tool_span = tracing::info_span!(
@@ -1572,6 +1586,7 @@ impl ToolDispatcher {
                     parent_edits_worktree: edits_worktree,
                     parent_run_id: state.run_id.clone(),
                     parent_model_id: parent_model_id.clone(),
+                    parent_run_mode,
                     parent_task_call_id: call.id.clone(),
                     parent_transcript_snapshot,
                 };
@@ -2332,6 +2347,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
         (dispatcher, rx)
     }
@@ -2457,6 +2473,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
         (dispatcher, rx)
     }
@@ -2628,6 +2645,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -2693,6 +2711,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -2766,6 +2785,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -2841,6 +2861,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -2901,6 +2922,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -2992,6 +3014,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let calls = vec![
@@ -3107,6 +3130,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {
@@ -3224,6 +3248,7 @@ mod tests {
             subagent_ctx: None,
             parent_transcript_snapshot: None,
             model_io_dump: None,
+            subagent_bypass: false,
         };
 
         let call = ToolCall {

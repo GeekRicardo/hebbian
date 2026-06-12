@@ -22,6 +22,7 @@ import {
   Pencil,
   Undo2,
   X,
+  Trash2,
   Terminal,
   SquareTerminal,
   CircleStop,
@@ -53,7 +54,7 @@ import type {
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
 const EMPTY_STR_ARR: string[] = [];
-import { cn } from "@/desktop/ui/lib/utils";
+import { cn, formatTime } from "@/desktop/ui/lib/utils";
 import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
 import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
@@ -103,6 +104,11 @@ interface Props {
    * 附件复用原消息的附件（编辑只动文本）。
    */
   onEdit?: (id: string, nextContent: string) => void | Promise<void>;
+  /**
+   * 删除尾部消息（点三点菜单「删除」）。assistant → 删本轮回复全部输出；
+   * user → 仅尾部无回复时删这一条。父层只在可删的消息上传入。
+   */
+  onDelete?: (id: string, role: string) => void;
   streamingParts?: StreamingAssistantPart[];
   /** 若提供则进入"查找模式"，以纯文本 + 高亮渲染 */
   find?: {
@@ -153,6 +159,8 @@ interface ToolCallItem {
    * 这里透传给渲染层，在 Task 卡片内嵌套显示子工具调用 / 子文本 / 子推理。
    */
   nestedParts?: StreamingAssistantPart[];
+  /** Task 工具调用的子 agent 名（subagent_type）；卡片标题展示它而非 "Task"（架构 §4.4.11.8）。 */
+  subagentType?: string;
   /** AutoMode judge 正在评估这次调用（架构 §4.4.4）：卡片渲染黄色呼吸。 */
   isJudging?: boolean;
 }
@@ -186,6 +194,39 @@ function formatJsonLike(value: unknown): string {
   }
 }
 
+/** 持久化的 nested（MessagePart[]）转成渲染用的 StreamingAssistantPart[]（架构 §4.4.11.8）。 */
+function savedNestedToStreaming(
+  nested?: MessagePart[] | null
+): StreamingAssistantPart[] | undefined {
+  if (!nested || nested.length === 0) return undefined;
+  return nested.map((p, i): StreamingAssistantPart => {
+    if (p.type === "text") return { type: "text", text: p.text };
+    if (p.type === "reasoning")
+      return { type: "reasoning", text: p.text, duration_ms: p.duration_ms };
+    return {
+      type: "tool_call",
+      index: i,
+      id: p.id,
+      name: p.name,
+      arguments: p.arguments ?? "",
+      input: p.input,
+      result: p.result,
+      duration_ms: p.duration_ms,
+      status: p.result ? "done" : "running",
+      artifact_path: p.artifact_path,
+    };
+  });
+}
+
+/** Task 工具调用的子 agent 名（subagent_type）；卡片标题展示它而非通用 "Task"。 */
+function extractSubagentType(input: unknown): string | undefined {
+  if (input && typeof input === "object" && "subagent_type" in input) {
+    const v = (input as { subagent_type?: unknown }).subagent_type;
+    if (typeof v === "string" && v) return v;
+  }
+  return undefined;
+}
+
 function normalizeStreamingToolPart(
   part: Extract<StreamingAssistantPart, { type: "tool_call" }>,
   index: number
@@ -205,13 +246,15 @@ function normalizeStreamingToolPart(
     artifactPath: part.artifact_path,
     liveOutput: part.live_output,
     nestedParts: part.nested_parts,
+    subagentType: extractSubagentType(part.input),
     isJudging: part.isJudging,
   };
 }
 
 function normalizeSavedToolPart(
   part: Extract<MessagePart, { type: "tool_call" }>,
-  index: number
+  index: number,
+  nestedByCallId?: Map<string, StreamingAssistantPart[]>
 ): ToolCallItem {
   return {
     key: `saved-part-${index}-${part.id}`,
@@ -223,6 +266,9 @@ function normalizeSavedToolPart(
     durationMs: part.duration_ms,
     status: part.result ? "done" : "running",
     artifactPath: part.artifact_path,
+    // 子过程在 MessageToolCall.nested（落 message.tool_calls），按 id 关联回这条 part。
+    nestedParts: part.id ? nestedByCallId?.get(part.id) : undefined,
+    subagentType: extractSubagentType(part.input),
   };
 }
 
@@ -239,6 +285,8 @@ function normalizeLegacyToolCall(
     result: call.result,
     durationMs: call.duration_ms,
     status: call.result ? "done" : "running",
+    nestedParts: savedNestedToStreaming(call.nested),
+    subagentType: extractSubagentType(call.input),
   };
 }
 
@@ -289,6 +337,12 @@ function buildAssistantRenderParts(
   }
 
   if (message.parts?.length) {
+    // 子过程持久化在 message.tool_calls[].nested（架构 §4.4.11.8）；按 call id 关联回 parts 里的 tool_call。
+    const nestedByCallId = new Map<string, StreamingAssistantPart[]>();
+    for (const c of message.tool_calls ?? []) {
+      const ns = savedNestedToStreaming(c.nested);
+      if (c.id && ns) nestedByCallId.set(c.id, ns);
+    }
     message.parts.forEach((part, index) => {
       if (part.type === "text") {
         pushToolGroup(out, pendingTools);
@@ -303,7 +357,7 @@ function buildAssistantRenderParts(
           durationMs: part.duration_ms,
         });
       } else {
-        pendingTools.push(normalizeSavedToolPart(part, index));
+        pendingTools.push(normalizeSavedToolPart(part, index, nestedByCallId));
       }
     });
     pushToolGroup(out, pendingTools);
@@ -1482,7 +1536,7 @@ function NestedTaskContent({
   if (renderParts.length === 0) return null;
 
   return (
-    <div className="ml-3 border-l-2 border-primary/20 pl-3 py-1 space-y-1">
+    <div className="ml-3 border-l-2 border-primary/20 pl-3 py-1 space-y-1 max-h-96 overflow-y-auto">
       {renderParts.map((part) => {
         if (part.type === "text") {
           return (
@@ -1672,7 +1726,9 @@ function ToolCallTimeline({
                   </span>
                   <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
                     <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
-                      {call.name || "工具调用"}
+                      {call.name === "Task" && call.subagentType
+                        ? call.subagentType
+                        : call.name || "工具调用"}
                     </span>
                     <span className="mr-[2ch] shrink-0">{callDescription(call)}</span>
                     <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
@@ -1903,6 +1959,7 @@ export const MessageBubble = memo(function MessageBubble({
   onFork,
   onRegenerate,
   onEdit,
+  onDelete,
   streamingParts,
   find,
   archived,
@@ -2107,6 +2164,9 @@ export const MessageBubble = memo(function MessageBubble({
     streamingParts,
     streaming
   );
+  const hasAskToolCall = assistantParts.some(
+    (part) => part.type === "tool_group" && part.calls.some((call) => call.name === "Ask")
+  );
   const rawText = getMessageRawText(message);
   const canToggleRawText = !streaming && canShowRawMessage(message);
 
@@ -2241,6 +2301,7 @@ export const MessageBubble = memo(function MessageBubble({
       title={archived ? "已被压缩，模型不再读取此消息（点击右上角圆环可再次压缩）" : undefined}
       className={cn(
         "group relative flex gap-3 px-6 py-4",
+        !isUser && hasAskToolCall && "mb-[320px]",
         archived && "opacity-50 hover:opacity-100 transition-opacity"
       )}
     >
@@ -2279,6 +2340,19 @@ export const MessageBubble = memo(function MessageBubble({
               >
                 <FileText className="h-3.5 w-3.5" />
                 <span>{showRawText ? "显示渲染" : "显示原文"}</span>
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActionMenuOpen(false);
+                  onDelete(message.id, message.role);
+                }}
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>删除</span>
               </button>
             )}
           </div>
@@ -2331,6 +2405,9 @@ export const MessageBubble = memo(function MessageBubble({
         />
         {!streaming && !editing && (
           <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-2 -ml-1.5 text-[10px]">
+            <span className="px-1.5 py-1 text-muted-foreground/70">
+              {formatTime(message.created_at)}
+            </span>
             <button
               onClick={handleCopy}
               className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"

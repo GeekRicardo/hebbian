@@ -107,6 +107,12 @@ pub struct MessageToolCall {
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// 子 NestedRun（subagent）的过程：子文本 / 子 reasoning / 子工具调用，按时序（架构 §4.4.11.8）。
+    /// 仅 `name=="Task"` 的调用可能非空。run 结束时 surface 把累积的子事件（带
+    /// `subagent_call_id == 本 call id`）写进这里，随父 message 落**主** session.jsonl，
+    /// 前端 streaming / 重建都从此渲染嵌套区。老 jsonl 无此字段，serde default 给空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested: Vec<MessagePart>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1513,6 +1519,7 @@ fn partial_to_interrupted_message(
                 input: serde_json::from_str(args).unwrap_or_else(|_| json!({})),
                 result,
                 duration_ms,
+                nested: Vec::new(),
             }
         })
         .collect();

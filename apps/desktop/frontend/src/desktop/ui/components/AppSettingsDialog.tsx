@@ -1462,6 +1462,7 @@ function ModelsPane({
 
 const SUBAGENT_TEMPLATE = `---
 description: "描述这个 agent 的用途"
+# permission: bypass   # 可选，留空=跟当前对话审批；bypass=子任务自己跑、不打断你审批
 ---
 你是一个专注于...的助手。
 `;
@@ -1472,6 +1473,7 @@ function buildSubagentContent(def: SubagentDefinition): string {
     fm += `\ntools: [${def.tools.join(", ")}]`;
   }
   if (def.model) fm += `\nmodel: ${def.model}`;
+  if (def.permission) fm += `\npermission: ${def.permission}`;
   if (def.max_iterations != null) fm += `\nmax_iterations: ${def.max_iterations}`;
   fm += `\n---\n${def.system_prompt}`;
   return fm;

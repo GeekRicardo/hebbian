@@ -300,6 +300,7 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
                         input,
                         result: None,
                         duration_ms: None,
+                        nested: Vec::new(),
                     });
                     tool_ids.push(id);
                 }
