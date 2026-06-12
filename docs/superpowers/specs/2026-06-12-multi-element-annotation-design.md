@@ -191,7 +191,11 @@ pub struct PreviewActInput {
 
 **安全**：交互只作用于目标预览页（用户自己的页面），旁支会话 `restrict_tools` 白名单加 `PreviewAct`（与其他 preview 工具并列，绝不暴露 Bash/Edit）。
 
-### 5.9 让助手「看见」（功能 F）—— 新增工具 PreviewCapture
+### 5.9 让助手「看见」（功能 F）—— 新增工具 PreviewCapture【推迟，单独立项】
+
+> **实施状态（2026-06-12 决策）**：本功能从首期实现计划中拆出，推迟单独做。原因：截图回传的协调跨 agent-core / Desktop 边界——`ToolCtx` 不含 app handle（架构铁律：agent-core 不依赖 tauri），工具 `execute_rich` 拿不到 webview，没法在同一次工具调用里 await 截图。需要给 agent-core 加一个「截图通道」async trait 抽象（由 Desktop 侧实现），这在交互链路（功能 E）跑通验证前硬上风险高。等 A/B/①/C/D/E/G 落地后，基于稳定的旁支会话交互链路单独设计 F。
+>
+> 以下为原始设计，留作 F 立项时的输入。
 
 新增信号工具 `crates/agent-core/src/tools/preview_capture.rs`。**与前面工具的关键不同：它要等截图回传才能返回工具结果**（前面的工具 `execute` 立即返回确认即可）。
 
