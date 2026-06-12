@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Wallet, Zap } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
+import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 import { api } from "@/desktop/bridge/tauri";
 import type {
   ClaudeUsageInfo,
@@ -175,9 +176,10 @@ interface Props {
   tokenStats: TokenStats | null;
   model: string;
   className?: string;
+  compact?: boolean;
 }
 
-export function ProviderUsageIndicator({ provider, tokenStats, model, className }: Props) {
+export function ProviderUsageIndicator({ provider, tokenStats, model, className, compact = false }: Props) {
   const [result, setResult] = useState<ProviderUsageResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -245,7 +247,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           tabIndex={-1}
           onClick={() => void doFetch()}
           title="点击刷新用量"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
+          className={cn(
+            compact
+              ? COMPACT_TOOLBAR_BUTTON_CLASS
+              : "inline-flex items-center justify-center rounded-md border border-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer h-8 gap-1 px-1.5"
+          )}
           aria-label={`Claude 用量 ${label}${result.plan ? ` · ${result.plan}` : ""}`}
         >
           {loading ? (
@@ -253,8 +259,10 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           ) : (
             <Zap className={cn("w-3 h-3", color)} />
           )}
-          <span className={cn("text-[10px] tabular-nums leading-none", color)}>{label}</span>
-          {result.plan && (
+          {!compact && (
+            <span className={cn("text-[10px] tabular-nums leading-none", color)}>{label}</span>
+          )}
+          {!compact && result.plan && (
             <span className="text-[10px] leading-none text-muted-foreground/70">
               {result.plan}
             </span>
@@ -290,7 +298,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className 
           tabIndex={-1}
           onClick={() => void doFetch()}
           title="点击刷新余额"
-          className="inline-flex h-7 items-center rounded-md border border-transparent px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer"
+          className={cn(
+            compact
+              ? COMPACT_TOOLBAR_BUTTON_CLASS
+              : "inline-flex items-center justify-center rounded-md border border-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors cursor-pointer h-8 px-1.5"
+          )}
           aria-label="DeepSeek 账户"
         >
           {loading ? (

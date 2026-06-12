@@ -954,6 +954,7 @@
 
 .dsp-sidebar-card {
   display: flex;
+  margin-top: 5px;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -1919,6 +1920,7 @@
 
 .dsp-sidebar-card {
   display: flex;
+  margin-top: 5px;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -2108,24 +2110,6 @@
 .dsp-project-heading-wrap:hover .dsp-project-add,
 .dsp-session-row-wrap:hover .dsp-session-delete {
   opacity: 1;
-}
-
-.chat-input-streaming .dark.\-mt-6 .relative > button:not(.token-stats-trigger) span,
-.chat-input-streaming .dark.\-mt-6 .relative > button:not(.token-stats-trigger) .font-medium,
-.chat-input-streaming .dark.\-mt-6 .relative > button:not(.token-stats-trigger) > svg:last-child,
-.chat-input-streaming .dark.\-mt-6 .token-stats-trigger .token-stats-label {
-  display: none;
-}
-
-.chat-input-streaming .dark.\-mt-6 .relative > button {
-  width: 32px;
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.chat-input-streaming .dark.\-mt-6 .token-stats-trigger > span:first-child {
-  display: inline-flex;
 }
 
 /* Fix project row clipping in the floating rounded sidebar card. */

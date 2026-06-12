@@ -573,10 +573,12 @@ export function ChatInput({
   }
 
   /**
-   * 粘贴时按 [文件 → 路径文本] 顺序处理：
-   * 1. 剪切板里有 File（截图、Finder 复制图片）→ 直接走 addFiles，原样支持图片预览
-   * 2. 文本是文件路径列表（按行拆，支持 file:// URI）→ 调 attach_path 让后端
-   *    判断是文件还是目录，文件追加到 attachments，目录追加到 pendingAllowedPaths
+   * 粘贴时按 [文件对象 → 路径文本] 顺序处理：
+   * 1. 剪贴板里有 File（截图、Finder 复制图片/文件）→ 走 addFiles **上传内容**
+   *    （web 沙箱只能拿到内容、拿不到磁盘路径，上传是唯一选择）
+   * 2. 文本是文件路径列表（按行拆，支持 file:// URI）→ 走 attachPathCandidates
+   *    **只引用路径**：路径原文由浏览器默认插入 textarea，再把存在的路径加进
+   *    allowed_paths，让 agent 自己按需 Read，不把文件内容塞进上下文
    * 3. 普通文本 → 不拦截，让浏览器按默认行为插入到 textarea
    */
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -589,71 +591,38 @@ export function ChatInput({
     const text = e.clipboardData.getData("text/plain");
     const candidates = parsePathCandidates(text);
     const nonEmptyLines = text.split(/\r?\n/).filter((l) => l.trim()).length;
-    // 只有粘贴内容全部由路径行组成才拦截；混有普通文本（日志、代码等）时放行
+    // 只有粘贴内容全部由路径行组成才当引用处理；混有普通文本（日志、代码等）时放行。
+    // 不 preventDefault：路径原文照常插入 textarea，仅额外把路径加进 allowed_paths。
     if (candidates.length === 0 || candidates.length < nonEmptyLines) return;
-    e.preventDefault();
     await attachPathCandidates(candidates);
   }
 
-  /** 把每行（或 file:// 列表）当作潜在路径，全部丢给后端探测；UI 同步刷新 chip / attachments。 */
+  /**
+   * 把粘贴/拖拽的路径当**引用**：文件和目录都加进 allowed_paths，agent 按需 Read。
+   * 与 `@` 对话引用、加号菜单选路径走同一条授权通道。
+   */
   async function attachPathCandidates(paths: string[]) {
-    const newAttachments: MessageAttachment[] = [];
-    const newDirs: string[] = [];
-    const missingPaths: string[] = [];
+    const newPaths: string[] = [];
     for (const p of paths) {
       try {
         const res = await api.attachPath(p);
-        switch (res.kind) {
-          case "file":
-            newAttachments.push(res.attachment);
-            break;
-          case "dir":
-            if (
-              !activeAllowedPaths.includes(res.path) &&
-              !newDirs.includes(res.path)
-            ) {
-              newDirs.push(res.path);
-            }
-            break;
-          case "missing":
-            missingPaths.push(p);
-            break;
-          case "unsupported":
-            toast.error(res.reason);
-            break;
+        if (res.kind === "missing") continue;
+        if (
+          !activeAllowedPaths.includes(res.path) &&
+          !newPaths.includes(res.path)
+        ) {
+          newPaths.push(res.path);
         }
       } catch (e: any) {
         toast.error(e?.message ?? String(e));
       }
     }
-    if (newAttachments.length > 0) {
-      setAttachments((current) => [...current, ...newAttachments]);
-    }
-    if (newDirs.length > 0) {
-      try {
-        await setPendingAllowedPaths([...activeAllowedPaths, ...newDirs]);
-        toast.success(`已添加 ${newDirs.length} 个目录`);
-      } catch (e: any) {
-        toast.error(e?.message ?? String(e));
-      }
-    }
-    // 找不到的路径当普通文本插入 textarea
-    if (missingPaths.length > 0) {
-      const insertText = missingPaths.join("\n");
-      const el = textareaRef.current;
-      if (el) {
-        const start = el.selectionStart;
-        const end = el.selectionEnd;
-        const before = value.slice(0, start);
-        const after = value.slice(end);
-        const next = before + insertText + after;
-        setValue(next);
-        requestAnimationFrame(() => {
-          const cursor = start + insertText.length;
-          el.setSelectionRange(cursor, cursor);
-          el.focus();
-        });
-      }
+    if (newPaths.length === 0) return;
+    try {
+      await setPendingAllowedPaths([...activeAllowedPaths, ...newPaths]);
+      toast.success(`已引用 ${newPaths.length} 个路径`);
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
     }
   }
 
@@ -1256,7 +1225,7 @@ export function ChatInput({
                 sessionId={currentSession?.id ?? null}
                 compact={isStreaming}
               />
-              <ReasoningEffortPill />
+              <ReasoningEffortPill compact={isStreaming} />
             </>
           }
           right={
@@ -1268,12 +1237,14 @@ export function ChatInput({
                       ? (providersFile.providers.find((p) => p.id === currentSession.provider_id) ?? null)
                       : null
                   }
+                  compact={isStreaming}
                   tokenStats={tokenStats}
                   model={currentSession?.model ?? ""}
                 />
                 <TokenStatsPanel
                   stats={tokenStats}
                   contextUsage={contextUsage}
+                  compact={isStreaming}
                   onCompact={contextUsage ? () => {
                     if (compacting) return;
                     void runCompact("");

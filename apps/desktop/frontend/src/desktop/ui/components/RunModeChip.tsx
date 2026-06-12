@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { ChevronDown, Gauge, Map, Sparkles, Check } from "lucide-react";
+import { Check, ChevronDown, Gauge, Map, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
+import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 
 /** 与后端 `agent_core::run_mode::RunMode::as_str()` 一一对应。 */
 type RunMode = "Default" | "PlanMode" | "AutoMode";
@@ -143,10 +144,9 @@ export function RunModeChip({ sessionId, compact }: Props) {
       onClick={() => setOpen((v) => !v)}
       disabled={buttonDisabled}
       className={cn(
-        "h-8 rounded-md inline-flex items-center justify-center bg-transparent hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors",
-        // compact（跑 run 中）只剩图标，用 foreground 保证在深色抽屉上清晰可见；
-        // 非 compact 有文字陪衬，用 muted 更克制。
-        compact ? "w-8 text-foreground" : "gap-1 px-2 text-[11px] leading-none text-muted-foreground",
+        compact
+          ? COMPACT_TOOLBAR_BUTTON_CLASS
+          : "h-8 rounded-md inline-flex items-center justify-center bg-transparent hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors gap-1 px-2 text-[11px] leading-none text-muted-foreground",
         open && "bg-muted text-foreground"
       )}
       title={compact ? undefined : "切换运行模式"}

@@ -11,6 +11,7 @@ import {
   modelSupportsReasoning,
 } from "@/desktop/ui/lib/reasoning";
 import { cn } from "@/desktop/ui/lib/utils";
+import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 import type { ReasoningEffort } from "@/desktop/ui/types";
 
 /**
@@ -19,7 +20,7 @@ import type { ReasoningEffort } from "@/desktop/ui/types";
  * 与 ModelPicker popup 里的 ReasoningControls 共享同一份 store 数据（SSoT 不冲突）。
  * 不支持 reasoning 的模型 / thinking 已关闭时，分别按情况隐藏或 disabled。
  */
-export function ReasoningEffortPill() {
+export function ReasoningEffortPill({ compact = false }: { compact?: boolean }) {
   const session = useStore((s) => s.currentSession);
   const providers = useStore((s) => s.providersFile.providers);
   const setReasoning = useStore((s) => s.setReasoning);
@@ -65,8 +66,9 @@ export function ReasoningEffortPill() {
         onClick={() => setOpen((v) => !v)}
         disabled={!enabled}
         className={cn(
-          "h-7 inline-flex items-center gap-1 rounded-md px-2 text-[11px] leading-none",
-          "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors",
+          compact
+            ? COMPACT_TOOLBAR_BUTTON_CLASS
+            : "h-8 inline-flex items-center justify-center rounded-md bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors gap-1 px-2 text-[11px] leading-none",
           "disabled:opacity-40 disabled:pointer-events-none",
           open && "bg-muted text-foreground"
         )}
@@ -76,9 +78,13 @@ export function ReasoningEffortPill() {
             : "thinking 已关闭，可在模型菜单里开启"
         }
       >
-        <Flame className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-medium leading-none">{REASONING_EFFORT_LABEL[effort]}</span>
-        <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+        <Flame className="h-4 w-4 shrink-0" />
+        {!compact && (
+          <>
+            <span className="font-medium leading-none">{REASONING_EFFORT_LABEL[effort]}</span>
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+          </>
+        )}
       </button>
       {open && (
         <div

@@ -1,5 +1,6 @@
 import { ArrowDownToLine, ArrowUpFromLine, Database, Layers } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
+import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 import type { ContextUsage, TokenStats } from "@/desktop/ui/types";
 
 interface Props {
@@ -7,13 +8,14 @@ interface Props {
   contextUsage?: ContextUsage | null;
   size?: number;
   className?: string;
+  compact?: boolean;
   onCompact?: () => void;
 }
 
 /**
  * 输入框右侧的合并状态：用上下文进度圆环承载 context 百分比，旁边显示 cache 命中率。
  */
-export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onCompact }: Props) {
+export function TokenStatsPanel({ stats, contextUsage, size = 18, className, compact = false, onCompact }: Props) {
   const empty = !stats || stats.run_count === 0;
   // 主显示：整个对话平均命中率（累计 cache_read / 累计 input）
   const avgHitRate =
@@ -52,8 +54,9 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onC
         tabIndex={-1}
         onClick={onCompact}
         className={cn(
-          "token-stats-trigger inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-1.5",
-          "text-muted-foreground hover:bg-muted hover:text-foreground transition-colors leading-none",
+          compact
+            ? cn("token-stats-trigger leading-none", COMPACT_TOOLBAR_BUTTON_CLASS)
+            : "token-stats-trigger inline-flex items-center justify-center rounded-md border border-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors leading-none h-8 gap-1.5 px-1.5",
           onCompact ? "cursor-pointer" : "cursor-default",
           empty && !contextUsage && "opacity-60"
         )}
@@ -89,11 +92,13 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, onC
             {contextUsage ? contextPct : "–"}
           </span>
         </span>
-        <span className="token-stats-label inline-flex items-center gap-1 text-[10px] tabular-nums leading-none">
-          <span>cache {avgHitRate}%</span>
-          <span className="text-muted-foreground/50">/</span>
-          <span>ctx {contextUsage ? contextPct : 0}%</span>
-        </span>
+        {!compact && (
+          <span className="token-stats-label inline-flex items-center gap-1 text-[10px] tabular-nums leading-none">
+            <span>cache {avgHitRate}%</span>
+            <span className="text-muted-foreground/50">/</span>
+            <span>ctx {contextUsage ? contextPct : 0}%</span>
+          </span>
+        )}
       </button>
 
       <div
