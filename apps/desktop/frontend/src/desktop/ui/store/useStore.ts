@@ -13,6 +13,7 @@ import type {
   MessageAttachment,
   MessageMeta,
   MemoryWriteItem,
+  JudgingEntry,
   PendingApproval,
   PendingQuestion,
   PlanComment,
@@ -382,8 +383,13 @@ type SessionStream = {
   autoJudgedNotes: AutoJudgedNote[];
   /** 当前对话的 RunMode 字符串（由 run_mode_changed event 维护）。 */
   currentRunMode: string | null;
-  /** AutoMode judge 评估中的审批：request_id → call_id，用于 resolve/judged 时清呼吸。 */
-  judgingRequests: Record<string, string>;
+  /**
+   * AutoMode judge 评估中的审批：request_id → { callId（清呼吸用）, approval（judge
+   * 判 ASK 时从这里取出显形成人工弹框）}。judge 接管期间审批数据暂存在这、不进
+   * pendingApproval（不显示框）；ALLOW/DENY 由 permission_resolved 清掉，ASK 由
+   * permission_auto_judged 移入 pendingApproval（架构 §4.4.4）。
+   */
+  judgingRequests: Record<string, JudgingEntry>;
   /** 架构 §4.12：Run 当前是否处于挂起态。`null` = active；非空 = 已挂起。 */
   suspended: SuspendedInfo | null;
   /**
@@ -437,7 +443,7 @@ const EMPTY_MIRROR = {
   autoJudgedNotes: [] as AutoJudgedNote[],
   currentRunMode: null as string | null,
   /** AutoMode judge 评估中的审批：request_id → call_id，用于 resolve/judged 时清呼吸。 */
-  judgingRequests: {} as Record<string, string>,
+  judgingRequests: {} as Record<string, JudgingEntry>,
   suspended: null as SuspendedInfo | null,
   todos: [] as TodoItem[],
   activePlan: null as SessionStream["activePlan"],
@@ -568,21 +574,6 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     return { ...slot, suspended: null };
   }
   if (e.type === "permission_requested") {
-    // AutoMode judge 会接管这条审批时（后端判定：AutoMode + 模型在白名单），**不弹
-    // 审批框**——judge 异步出结果后紧跟 permission_auto_judged / permission_resolved，
-    // 避免审批框闪现（架构 §4.4.4）。改用后端权威的 `auto_handled`，不再靠前端
-    // currentRunMode 推断（它初始为 null、且模型不在白名单时该弹却被压住）。
-    // 同时给触发审批的工具卡片挂「judge 评估中」黄色呼吸（按 call_id 定位）。
-    if (e.auto_handled) {
-      const callId = e.call_id ?? "";
-      return {
-        ...slot,
-        streamingParts: setPartJudging(slot.streamingParts, callId, true),
-        judgingRequests: callId
-          ? { ...slot.judgingRequests, [e.request_id]: callId }
-          : slot.judgingRequests,
-      };
-    }
     const approval: PendingApproval = {
       requestId: e.request_id,
       toolName: e.tool_name,
@@ -597,18 +588,37 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
       refuseRemember: e.refuse_remember ?? false,
       plan: e.plan ?? null,
     };
+    // AutoMode judge 会接管这条审批时（后端判定：AutoMode + 模型在白名单），**先不弹
+    // 审批框**——只给触发审批的工具卡片挂「judge 评估中」黄色呼吸，审批数据暂存进
+    // judgingRequests。judge 异步出结果：ALLOW/DENY 由 permission_resolved 清掉（从不
+    // 显示框），ASK 由 permission_auto_judged 把 approval 取出转入 pendingApproval 显形
+    // （架构 §4.4.4）。改用后端权威的 `auto_handled`，不靠前端 currentRunMode 推断。
+    if (e.auto_handled) {
+      const callId = e.call_id ?? "";
+      return {
+        ...slot,
+        streamingParts: callId
+          ? setPartJudging(slot.streamingParts, callId, true)
+          : slot.streamingParts,
+        judgingRequests: {
+          ...slot.judgingRequests,
+          [e.request_id]: { callId, approval },
+        },
+      };
+    }
     if (slot.pendingApproval) {
       return { ...slot, pendingApprovalQueue: [...slot.pendingApprovalQueue, approval] };
     }
     return { ...slot, pendingApproval: approval };
   }
   if (e.type === "permission_resolved") {
-    // 若这条审批曾被 judge 接管（黄色呼吸），先清掉呼吸 + 映射。
-    const judgingCallId = slot.judgingRequests[e.request_id];
-    const baseParts = judgingCallId
-      ? setPartJudging(slot.streamingParts, judgingCallId, false)
+    // 若这条审批曾被 judge 接管（黄色呼吸），先清掉呼吸 + 暂存。judge ALLOW/DENY
+    // 自动 resolve 时走这里，审批数据从 judgingRequests 丢弃，从不显示框。
+    const judging = slot.judgingRequests[e.request_id];
+    const baseParts = judging
+      ? setPartJudging(slot.streamingParts, judging.callId, false)
       : slot.streamingParts;
-    const baseJudging = judgingCallId
+    const baseJudging = judging
       ? dropKey(slot.judgingRequests, e.request_id)
       : slot.judgingRequests;
     if (slot.pendingApproval?.requestId === e.request_id) {
@@ -637,34 +647,43 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
         duration: 5000,
       });
     }
-    // judge 出结果（allow / deny / ask）→ 清掉这条审批的黄色呼吸：allow 工具紧接执行、
-    // deny/ask 也已定论，呼吸都该停（架构 §4.4.4）。
-    const judgingCallId = e.request_id
-      ? slot.judgingRequests[e.request_id]
-      : undefined;
-    const clearedParts = judgingCallId
-      ? setPartJudging(slot.streamingParts, judgingCallId, false)
+    // judge 出结果 → 先清掉这条审批暂存的黄色呼吸（无论后续显形与否，judge 已定论）。
+    const judging = e.request_id ? slot.judgingRequests[e.request_id] : undefined;
+    const clearedParts = judging
+      ? setPartJudging(slot.streamingParts, judging.callId, false)
       : slot.streamingParts;
-    const clearedJudging = judgingCallId
-      ? dropKey(slot.judgingRequests, e.request_id!)
-      : slot.judgingRequests;
-    if (e.decision !== "deny" && e.decision !== "ask") {
+    // requires_human=false（judge 自动放行 / 自动拒）：只清呼吸，最终 resolve 由
+    // permission_resolved 兜底，这里不动 pendingApproval。
+    if (!e.requires_human) {
+      return { ...slot, streamingParts: clearedParts };
+    }
+    // requires_human=true（ASK / 普通 AutoMode 命令类 DENY）：把被 judge 接管而未显示、
+    // 暂存在 judgingRequests 的审批框显形——带上 judge 的 reason 转入 pendingApproval
+    // （已有框则排队），交用户最终拍板（架构 §4.4.4）。
+    const clearedJudging =
+      judging && e.request_id
+        ? dropKey(slot.judgingRequests, e.request_id)
+        : slot.judgingRequests;
+    const revealed: PendingApproval | null = judging
+      ? { ...judging.approval, autoJudgeReason: e.reason ?? null }
+      : null;
+    if (!revealed) {
+      // 容错：judgingRequests 里没暂存（理论上 auto_handled 必有），只清呼吸。
       return { ...slot, streamingParts: clearedParts, judgingRequests: clearedJudging };
     }
-    const attachReason = (approval: PendingApproval | null) =>
-      approval?.requestId === e.request_id
-        ? { ...approval, autoJudgeReason: e.reason ?? null }
-        : approval;
+    if (slot.pendingApproval) {
+      return {
+        ...slot,
+        streamingParts: clearedParts,
+        judgingRequests: clearedJudging,
+        pendingApprovalQueue: [...slot.pendingApprovalQueue, revealed],
+      };
+    }
     return {
       ...slot,
       streamingParts: clearedParts,
       judgingRequests: clearedJudging,
-      pendingApproval: attachReason(slot.pendingApproval),
-      pendingApprovalQueue: slot.pendingApprovalQueue.map((approval) =>
-        approval.requestId === e.request_id
-          ? { ...approval, autoJudgeReason: e.reason ?? null }
-          : approval
-      ),
+      pendingApproval: revealed,
     };
   }
   if (e.type === "step_started" || e.type === "step_finished") {

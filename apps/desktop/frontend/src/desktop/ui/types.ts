@@ -691,6 +691,13 @@ export type EngineEvent =
       tool_name: string;
       decision: "allow" | "deny" | "ask";
       reason?: string;
+      /**
+       * judge 出结果后这条审批是否仍需用户最终拍板。`true`（ASK / 普通 AutoMode
+       * 命令类 DENY）→ 前端把此前被 judge 接管（auto_handled）而未显示、暂存在
+       * judgingRequests 的审批框显形进 pendingApproval，带上 reason；`false`（自动
+       * 放行 / 自动拒）→ 只清黄色呼吸，resolve 由 permission_resolved 兜底。
+       */
+      requires_human?: boolean;
     }
   | {
       // 一次性轻量通知（架构 §4.4.4）。前端渲染成 toast，不进 transcript。

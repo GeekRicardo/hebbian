@@ -7435,3 +7435,14 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: agent-core（runner 一处）+ Desktop/hebweb 前端（ModelIoInspector 标签）。取舍：子目录不再单独存 model_io.jsonl（子对话视图读 session.jsonl 不依赖它，无损）；换主对话面板一处看全父 + 所有子的模型交互。
 - **验证**: `cargo check -p agent-core --tests` 绿；`cargo test -p agent-core --lib -- subagent` 29 passed；`tsc --noEmit` ModelIoInspector 零错误（唯一报错 `useStore.ts:656` 是别人 pre-existing 问题）。
 - **留尾巴**: 真实端到端（跑一个 Task 看父 model_io.jsonl 出现 `kind=subagent` 行）需 provider，没跑；机制与已上线的 aside 完全对称，逻辑等价。
+
+### 2026-06-12 — 修 AutoMode judge 判 ASK/命令 DENY 后被接管的审批框无法显形
+
+- **Why**: 权限审批重构的前端收尾。后端 `PermissionAutoJudged` 已加 `requires_human` 字段（dispatch.rs:1882：ASK 永远 true、普通 AutoMode 命令类 DENY 保留用户推翻权为 true、其余 false），但前端 `permission_auto_judged` 分支从未消费它——被 judge 接管（`auto_handled`）暂存进 `judgingRequests` 的审批框，judge 判 ASK / 命令 DENY 时本该「显形」转入 `pendingApproval`，前端却只对**已在** `pendingApproval` 里的框 attach reason（被接管的框根本不在那），导致后续审批框出不来、用户没法拍板。同时 `useStore.ts:656` 把 `JudgingEntry` 对象当 `string` 传给 `setPartJudging`，是一处遗留 tsc 类型错误（上条 changelog 末尾标注的「别人 pre-existing 问题」即此）。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `permission_auto_judged` 事件类型补 `requires_human?: boolean`，对齐 protocol `event.rs` 同名字段。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 重写 `permission_auto_judged` 分支——以后端权威 `requires_human` 为唯一依据。`false`（自动放行/自动拒）只清黄色呼吸，最终 resolve 交 `permission_resolved` 兜底；`true` 从 `judgingRequests` 取出暂存的完整 approval，清呼吸、attach judge reason、显形进 `pendingApproval`（已有框则排队）。顺带修掉 `JudgingEntry`/`string` 类型错误（取 `.callId`），补 `JudgingEntry` import。
+- **影响范围**: Desktop / hebweb 前端 store reducer（纯函数 `applyEventToSlot`）。协议无变更（`requires_human` 后端已落地、向后兼容；老事件无此字段时按 `false` 走只清呼吸路径，与改前自动放行/拒行为一致）。
+- **验证**: `apps/desktop` 下 `pnpm exec tsc --noEmit` 绿（改前唯一报错 `useStore.ts:656` 消失）。
+- **留尾巴**: 端到端显形（AutoMode 跑并发审批，judge 判 ASK 看框弹出）需起 Desktop + 白名单模型实跑，本次未做 surface 级复现（heb CLI NDJSON 不渲染审批框）；逻辑已对齐架构 §4.4.4 与 protocol 注释。后续可把 `applyEventToSlot` 导出做 reducer 单测固化「auto_handled→requires_human=true→显形」这条回归。
+- **关联**: 架构 §4.4.4；protocol `event.rs` `PermissionAutoJudged.requires_human`
