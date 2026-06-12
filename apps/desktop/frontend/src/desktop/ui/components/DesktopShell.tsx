@@ -35,7 +35,7 @@ function shiftedRgba(
   return `rgba(${clampColor(base.r + delta.r)}, ${clampColor(base.g + delta.g)}, ${clampColor(base.b + delta.b)}, ${alpha})`;
 }
 
-function hueStyle(hue: number): CSSProperties {
+function hueStyle(hue: number, themeId: string): CSSProperties {
   const accent = `hsl(${hue} 92% 55%)`;
   const accent2 = `hsl(${(hue + 28) % 360} 92% 64%)`;
   const baseMain = hslToRgb(208, 0.92, 0.58);
@@ -45,6 +45,55 @@ function hueStyle(hue: number): CSSProperties {
     g: currentMain.g - baseMain.g,
     b: currentMain.b - baseMain.b,
   };
+
+  if (themeId === "abyss") {
+    return {
+      "--dsp-bg": "#07111c",
+      "--dsp-canvas": "#091522",
+      "--dsp-sidebar": "rgb(7 15 25 / 0.9)",
+      "--dsp-card": "rgb(17 31 48 / 0.72)",
+      "--dsp-card-strong": "rgb(16 29 45 / 0.94)",
+      "--dsp-line": "rgb(142 180 218 / 0.14)",
+      "--dsp-line-strong": "rgb(151 196 237 / 0.24)",
+      "--dsp-text": "#e8f2ff",
+      "--dsp-muted": "#93a8bf",
+      "--dsp-faint": "#61748a",
+      "--dsp-accent": `hsl(${hue} 94% 66%)`,
+      "--dsp-accent-2": `hsl(${(hue + 42) % 360} 86% 72%)`,
+      "--dsp-accent-soft": `hsl(${hue} 94% 66% / 0.18)`,
+      "--dsp-chat-wash": `hsl(${hue} 92% 64% / 0.08)`,
+      "--dsp-chat-bubble-a": `hsl(${hue} 90% 66% / 0.16)`,
+      "--dsp-chat-bubble-b": `hsl(${(hue + 42) % 360} 82% 70% / 0.13)`,
+      "--dsp-chat-bubble-c": `hsl(${(hue + 142) % 360} 58% 64% / 0.1)`,
+      "--dsp-chat-bubble-d": `hsl(${(hue + 308) % 360} 72% 68% / 0.1)`,
+      "--dsp-chat-panel": "rgb(8 18 29 / 0.72)",
+      "--dsp-right-bg": "linear-gradient(180deg, rgb(9 20 32 / 0.92), rgb(6 14 23 / 0.82))",
+      "--dsp-right-card": "rgb(15 29 45 / 0.9)",
+      "--dsp-user-bubble": `linear-gradient(135deg, hsl(${hue} 92% 62% / 0.2), rgb(14 28 44 / 0.95))`,
+      "--dsp-user-line": `hsl(${hue} 92% 66% / 0.26)`,
+      "--dsp-orb-shadow": `0 24px 70px hsl(${hue} 92% 62% / 0.22)`,
+      "--dsp-hero-strip": "rgb(42 93 137 / 0.5)",
+      "--dsp-hero-orb": `hsl(${hue} 92% 62% / 0.2)`,
+      "--dsp-hero-panel-a": "rgb(14 29 46 / 0.96)",
+      "--dsp-hero-panel-b": "rgb(15 38 61 / 0.88)",
+      "--dsp-hero-panel-c": "rgb(21 31 58 / 0.78)",
+      "--primary": `${hue} 94% 64%`,
+      "--ring": `${hue} 94% 64%`,
+      "--dsp-green": "#48c78e",
+      "--dsp-amber": "#d6a44c",
+      "--dsp-danger": "#f06f72",
+      "--dsp-shadow": "0 22px 70px rgb(0 0 0 / 0.42)",
+      "--dsp-shadow-soft": "0 12px 34px rgb(0 0 0 / 0.28)",
+      "--dsp-shell-bg": `radial-gradient(circle at 20% 0%, hsl(${hue} 92% 62% / 0.16), transparent 32%), radial-gradient(circle at 78% 12%, hsl(${(hue + 52) % 360} 86% 70% / 0.12), transparent 30%), linear-gradient(135deg, #050b13 0%, var(--dsp-bg) 48%, #0a1320 100%)`,
+      "--dsp-sidebar-fade": "rgb(6 13 22 / 0.5)",
+      "--dsp-chat-panel-end": "rgb(6 14 23 / 0.38)",
+      "--dsp-hue-popover-bg": "rgb(10 21 34 / 0.96)",
+      "--dsp-hue-button-bg": "rgb(18 33 50 / 0.72)",
+      "--dsp-theme-preset-bg": "rgb(18 33 50 / 0.66)",
+      "--dsp-ring-core": "rgb(10 21 34 / 0.96)",
+    } as CSSProperties;
+  }
+
   return {
     "--dsp-accent": accent,
     "--dsp-accent-2": accent2,
@@ -112,9 +161,10 @@ function DesktopChat() {
 
 export function DesktopShell() {
   const [hue, setHue] = useState(208);
+  const [themeId, setThemeId] = useState("glacier");
   return (
-    <div className="dsp-shell" style={hueStyle(hue)}>
-      <DesktopSidebar hue={hue} setHue={setHue} />
+    <div className="dsp-shell" data-dsp-theme={themeId} style={hueStyle(hue, themeId)}>
+      <DesktopSidebar hue={hue} setHue={setHue} themeId={themeId} setThemeId={setThemeId} />
       <DesktopChat />
       <RightSidebar
         defaultWidth={640}

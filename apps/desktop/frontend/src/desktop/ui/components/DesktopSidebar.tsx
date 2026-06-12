@@ -36,11 +36,19 @@ interface ProjectBucket {
 
 /* ── Theme presets ── */
 
-const THEME_PRESETS = [
+type ThemePreset = {
+  id: string;
+  name: string;
+  hue: number;
+  colors: string[];
+};
+
+const THEME_PRESETS: ThemePreset[] = [
   { id: "glacier", name: "冰湖蓝绿", hue: 208, colors: ["#EAF4FF", "#EEF0FF", "#E8FFF5"] },
   { id: "mist", name: "雾蓝灰", hue: 214, colors: ["#EEF4FA", "#F3F6FA", "#E8F0F7"] },
   { id: "porcelain", name: "青瓷灰", hue: 190, colors: ["#EEF8F8", "#F4F8F6", "#E7F1F2"] },
   { id: "moon", name: "月白灰", hue: 204, colors: ["#F6F8FA", "#EEF5F7", "#F9FAFB"] },
+  { id: "abyss", name: "深海墨蓝", hue: 206, colors: ["#07111C", "#102033", "#4DB8FF"] },
 ];
 
 /* ── Helpers ── */
@@ -125,7 +133,17 @@ function buildProjectBuckets(
 
 /* ── DesktopHueControl ── */
 
-function DesktopHueControl({ hue, setHue }: { hue: number; setHue: (hue: number) => void }) {
+function DesktopHueControl({
+  hue,
+  setHue,
+  themeId,
+  setThemeId,
+}: {
+  hue: number;
+  setHue: (hue: number) => void;
+  themeId: string;
+  setThemeId: (themeId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const angle = (hue - 90) * (Math.PI / 180);
   const dotX = 48 + Math.cos(angle) * 34;
@@ -152,8 +170,11 @@ function DesktopHueControl({ hue, setHue }: { hue: number; setHue: (hue: number)
               <button
                 key={preset.id}
                 type="button"
-                className={cn("dsp-theme-preset", Math.abs(preset.hue - hue) < 3 && "is-active")}
-                onClick={() => setHue(preset.hue)}
+                className={cn("dsp-theme-preset", preset.id === themeId && "is-active")}
+                onClick={() => {
+                  setThemeId(preset.id);
+                  setHue(preset.hue);
+                }}
                 title={preset.name}
               >
                 <span className="dsp-theme-preset-swatch" style={{ background: `linear-gradient(135deg, ${preset.colors.join(", ")})` }} />
@@ -185,7 +206,17 @@ function DesktopHueControl({ hue, setHue }: { hue: number; setHue: (hue: number)
 
 /* ── DesktopSidebar ── */
 
-export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: number) => void }) {
+export function DesktopSidebar({
+  hue,
+  setHue,
+  themeId,
+  setThemeId,
+}: {
+  hue: number;
+  setHue: (hue: number) => void;
+  themeId: string;
+  setThemeId: (themeId: string) => void;
+}) {
   const {
     sessions,
     projects,
@@ -556,7 +587,7 @@ export function DesktopSidebar({ hue, setHue }: { hue: number; setHue: (hue: num
 
         <div className="dsp-sidebar-footer">
           <button type="button" onClick={() => setAppSettingsOpen(true)}><Settings size={14} />设置</button>
-          <DesktopHueControl hue={hue} setHue={setHue} />
+          <DesktopHueControl hue={hue} setHue={setHue} themeId={themeId} setThemeId={setThemeId} />
         </div>
       </div>
 

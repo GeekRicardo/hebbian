@@ -7653,3 +7653,20 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
   - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：把 shell 背景、侧边栏渐变、聊天面板和调色盘浮层的浅色硬编码收敛为可覆盖变量，让暗色主题真正覆盖整体视觉。
 - **影响范围**：仅 Desktop 前端视觉主题；不改协议、agent-core、CoreClient、storage 或持久化格式。
 - **留尾巴**：需要在 `pnpm tauri dev` 里人工切到「深海墨蓝」确认实际屏幕观感，如有过亮/过暗再微调 token。
+
+### 2026-06-12 · 修复深海墨蓝暗色主题覆盖不完整
+
+- **Why**：用户实测截图显示主聊天区已变暗，但左侧栏、底部输入框和右侧工作台仍残留大面积浅色，整体像浅色组件叠在深色画布上。根因是 `desktopShell.css` 后半段「极浅冷灰」规则用硬编码白色覆盖了前面新增的暗色变量。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/DesktopShell.tsx`：给 shell 增加 `data-dsp-theme` 标记，方便主题级精准覆盖。
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：仅针对 `data-dsp-theme="abyss"` 覆盖侧边栏卡片、会话行 hover、输入框、右侧工作台、模型选择器等浅色残留；同步设置 shadcn/Tailwind 主题 token，避免右栏和输入区继续吃亮色 token。
+- **影响范围**：仅 Desktop 前端视觉主题；不改协议、agent-core、CoreClient、storage 或持久化格式；亮色 preset 不受影响。
+- **留尾巴**：仍需在 `pnpm tauri dev` 里人工看一次真实屏幕效果，若某个具体面板过亮/过暗再按截图局部微调。
+
+### 2026-06-12 · 调暗深海墨蓝主题选中会话行
+
+- **Why**：用户确认深海墨蓝主题整体可用，但左侧当前选中的对话行仍偏亮，希望再暗一点以减少视觉突兀。
+- **改动**：
+  - `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：拆分深海墨蓝主题下会话行 hover 与选中态背景，单独调暗选中会话行。
+- **影响范围**：仅 Desktop 前端视觉主题；不改协议、agent-core、CoreClient、storage 或持久化格式；亮色 preset 不受影响。
+- **留尾巴**：无。
