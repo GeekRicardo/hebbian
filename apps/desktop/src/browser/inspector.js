@@ -588,6 +588,61 @@
 
   var cardEl = null;
   var cardSnapshot = null;
+  // 多元素注释 draft：一个注释框选中 N 个元素（@1=elements[0]）。
+  // selectedTarget/cardSnapshot/styleDiff 三个旧全局是"激活元素"的视图——
+  // setActiveElement 切换指向，currentTarget/styleSet/盒模型等存量代码零改动。
+  var draft = null; // { elements: [{key, el, snapshot, styleDiff}], activeIndex, structuralChanges: [] }
+
+  function newDraft(el, snapshot) {
+    return {
+      elements: [{ key: elementKeyOf(el), el: el, snapshot: snapshot, styleDiff: {} }],
+      activeIndex: 0,
+      structuralChanges: [],
+    };
+  }
+
+  // 把旧全局视图指到 draft.elements[i]（styleDiff 引用同一对象，改动直接落到该元素）
+  function setActiveElement(i) {
+    if (!draft || i < 0 || i >= draft.elements.length) return;
+    draft.activeIndex = i;
+    var item = draft.elements[i];
+    selectedTarget = item.el;
+    cardSnapshot = item.snapshot;
+    styleDiff = item.styleDiff;
+  }
+
+  // @N → 元素（detach 时用 snapshot 的 selector/xpath 找回）；非法/越界回退激活元素
+  function elementForRef(ref) {
+    if (!draft) return currentTarget();
+    var idx = refToIndex(ref);
+    if (idx < 0 || idx >= draft.elements.length) idx = draft.activeIndex;
+    var item = draft.elements[idx];
+    if (item.el && item.el.isConnected) return item.el;
+    var el = null;
+    try { if (item.snapshot.selectorPath) el = document.querySelector(item.snapshot.selectorPath); } catch (e) {}
+    if (!el && item.snapshot.xpath) {
+      try { el = document.evaluate(item.snapshot.xpath, document, null, 9, null).singleNodeValue; } catch (e) {}
+    }
+    if (el) item.el = el;
+    return item.el;
+  }
+
+  // 对指定元素改样式并记进它自己的 styleDiff（heb:aside:apply 按 target 路由用）
+  function styleSetOn(item, prop, value) {
+    if (!item || !item.el) return;
+    try {
+      if (!(prop in item.styleDiff)) {
+        item.styleDiff[prop] = { before: item.el.style.getPropertyValue(prop), after: value };
+      } else {
+        item.styleDiff[prop].after = value;
+      }
+      item.el.style.setProperty(prop, value);
+      if ((/border.*width/.test(prop) || prop === "border-color") &&
+          window.getComputedStyle(item.el).borderStyle === "none") {
+        item.el.style.setProperty("border-style", "solid");
+      }
+    } catch (e) { /* 静默 */ }
+  }
   // 元素对话（旁支会话）状态：按元素 key 存会话 + 历史，页面没刷新就一直在
   var asideKeyCounter = 0;
   var asideConvos = {}; // elementKey -> { sessionId, messages: [{role,text}] }
@@ -1057,9 +1112,18 @@
     return row;
   }
 
-  function showAnnotationCard(snap) {
+  // existingDraft：切换激活元素 / 从注释列表展开时复用既有 draft 重建卡片；
+  // 缺省为「新选中一个元素」→ 新建单元素 draft。
+  function showAnnotationCard(snap, existingDraft) {
     removeCard();
-    cardSnapshot = snap;
+    if (existingDraft) {
+      draft = existingDraft;
+      setActiveElement(draft.activeIndex);
+      snap = cardSnapshot;
+    } else {
+      draft = newDraft(selectedTarget, snap);
+      setActiveElement(0);
+    }
     var card = document.createElement("div");
     card.setAttribute(OVERLAY_ATTR, "card");
     var cardTop = 16;
@@ -1080,13 +1144,66 @@
     var badge = document.createElement("span");
     badge.textContent = elementBadge(snap);
     badge.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px ui-monospace,monospace;";
+    // ➕ 追加选取：再选一个元素进当前注释框（不新建框）
+    var addBtn = document.createElement("button");
+    addBtn.textContent = "+";
+    addBtn.title = "再选一个元素，加进这条注释（对话里可用 @2 引用）";
+    addBtn.style.cssText = "border:1px solid #d9dde3;background:#f6f8fa;color:#57606a;font-size:14px;line-height:1;cursor:pointer;border-radius:5px;width:20px;height:20px;flex:none;";
+    addBtn.addEventListener("click", function () {
+      pickerMode = "append";
+      startPicker();
+    });
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
     closeBtn.style.cssText = "border:none;background:none;color:#57606a;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;";
     closeBtn.addEventListener("click", function () { styleRevert(); removeCard(); });
-    head.appendChild(badge); head.appendChild(closeBtn);
+    head.appendChild(badge); head.appendChild(addBtn); head.appendChild(closeBtn);
     // 拖动：按住头部移动卡片（改 left/top，避开 right 定位），避免遮住元素
     makeCardDraggable(card, head);
+
+    // ── 元素小方块行：[1][2][3]…（hover 高亮页面元素，点击切换激活）──
+    var chipsRow = null;
+    if (draft.elements.length > 1) {
+      chipsRow = document.createElement("div");
+      chipsRow.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid #eaedf0;flex-wrap:wrap;";
+      draft.elements.forEach(function (item, i) {
+        var chip = document.createElement("span");
+        chip.style.cssText = "position:relative;display:inline-flex;";
+        var num = document.createElement("button");
+        num.textContent = String(i + 1);
+        num.title = elementBadge(item.snapshot);
+        num.style.cssText = i === draft.activeIndex
+          ? "width:22px;height:22px;border:none;background:#2f81f7;color:#fff;border-radius:6px;font-size:11px;cursor:pointer;"
+          : "width:22px;height:22px;border:1px solid #d9dde3;background:#f1f3f5;color:#57606a;border-radius:6px;font-size:11px;cursor:pointer;";
+        num.addEventListener("mouseenter", function () {
+          ensureOverlayLoop();
+          hoverTarget = item.el && item.el.isConnected ? item.el : null;
+        });
+        num.addEventListener("mouseleave", function () { hoverTarget = null; });
+        num.addEventListener("click", function () {
+          setActiveElement(i);
+          showAnnotationCard(item.snapshot, draft); // 重建卡片，样式编辑器切到该元素
+        });
+        chip.appendChild(num);
+        if (draft.elements.length > 1) {
+          var del = document.createElement("button");
+          del.textContent = "×";
+          del.title = "移除这个元素";
+          del.style.cssText = "position:absolute;top:-5px;right:-5px;width:13px;height:13px;border:none;background:#8c949e;color:#fff;border-radius:50%;font-size:9px;line-height:13px;padding:0;cursor:pointer;display:none;";
+          chip.addEventListener("mouseenter", function () { del.style.display = "block"; });
+          chip.addEventListener("mouseleave", function () { del.style.display = "none"; });
+          del.addEventListener("click", function (e) {
+            e.stopPropagation();
+            draft.elements.splice(i, 1);
+            if (draft.activeIndex >= draft.elements.length) draft.activeIndex = draft.elements.length - 1;
+            setActiveElement(draft.activeIndex);
+            showAnnotationCard(cardSnapshot, draft);
+          });
+          chip.appendChild(del);
+        }
+        chipsRow.appendChild(chip);
+      });
+    }
 
     var elementKey = elementKeyOf(selectedTarget);
 
@@ -1210,6 +1327,7 @@
     send("heb:aside:models:request", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded" });
 
     card.appendChild(head);
+    if (chipsRow) card.appendChild(chipsRow);
     card.appendChild(styleCard);
     card.appendChild(chatCard);
     document.documentElement.appendChild(card);
@@ -1261,6 +1379,8 @@
   /* ───────────────────────── picker 状态机 ───────────────────────── */
 
   var pickerActive = false;
+  // "new" = 选中新建注释框；"append" = 选中追加进当前 draft（➕ 按钮触发，用完即还原）
+  var pickerMode = "new";
 
   function isOurNode(node) {
     var el = node;
@@ -1331,13 +1451,22 @@
     // 优先用当前 hover（可能被滚轮选成了父/子），否则回退到鼠标点下的元素
     var el = (hoverTarget && hoverTarget.isConnected) ? hoverTarget : pickableAt(e.clientX, e.clientY);
     if (!el || isOurNode(el)) return;
-    selectedTarget = el;
     hoverTarget = null;
-    styleDiff = {};
     flashSelect(el); // 点中瞬间闪一下，给「按下选中」的反馈
     stopPicker(false);
     // 通知宿主 picker 已结束（选中成功也算结束）→ embedded 模式 React 按钮恢复非激活态
     send("heb:picker:cancelled", {});
+    if (pickerMode === "append" && draft) {
+      // 追加进当前注释框：新元素入列并激活，重建卡片（不新建 draft）
+      pickerMode = "new";
+      selectedTarget = el;
+      draft.elements.push({ key: elementKeyOf(el), el: el, snapshot: collectSnapshot(el), styleDiff: {} });
+      draft.activeIndex = draft.elements.length - 1;
+      showAnnotationCard(null, draft);
+      return;
+    }
+    selectedTarget = el;
+    styleDiff = {};
     showAnnotationCard(collectSnapshot(el));
   }
 
@@ -1394,7 +1523,10 @@
     document.removeEventListener("mouseup", swallow, true);
     document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("wheel", onWheel, { capture: true });
-    if (cancelled) send("heb:picker:cancelled", {});
+    if (cancelled) {
+      pickerMode = "new";
+      send("heb:picker:cancelled", {});
+    }
   }
 
   function clearSelection() {
