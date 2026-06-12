@@ -19,6 +19,7 @@
 - **D. 统一汇总浮窗**：一个浮窗收集多条注释（每条 = N 元素 + 样式 diff + 对话 + 结构改动，任意非空即可加入），可逐条展开、一键全部提交到主对话由助手一起总结。
 - **E. 浏览器交互**：助手能在预览里真实操作页面——点击、输入文字、滚动、hover、按键——触发弹窗 / 菜单 / 表单等交互态。
 - **F. 让助手「看见」**：助手能截取交互后的页面渲染图，回传作为视觉输入，自己判断效果对不对（复用现有 Image 附件 + VisionBridge 管线）。
+- **G. 未提交防丢失**：汇总浮窗里有未提交注释时刷新 / 离开页面，弹窗警告，避免草稿白丢。
 
 ## 3. 非目标
 
@@ -226,6 +227,25 @@ Ok(ToolOutput {
 
 **超时与失败**：截图 10s 没回（页面卡 / html2canvas 异常）→ execute 返回文字「截图超时，无法查看当前渲染」，不挂死会话。
 
+### 5.10 未提交防丢失（功能 G）
+
+汇总浮窗 `annotationList` 非空（有未提交注释）时，拦截"页面要离开"——刷新 / 导航 / 点链接都会让草稿白丢。
+
+**根因**：会丢草稿的入口分两类，拦法不同。关键是**避免双重弹窗**（先自定义框、navigate 又触发 beforeunload 原生框，用户连点两次）。两者各管不重叠的入口：
+
+**① 工具栏入口（React 发起）→ 自定义中文美观弹窗**：
+- 刷新按钮 / 后退 / 前进 / 地址栏回车这几个 React handler，调 `browser_reload` / `browser_navigate` 等命令**前**先查当前对话浏览器有没有未提交注释
+- 有 → 弹自定义确认 dialog（中文、可写「你有 N 条注释没提交，刷新就没了，确定吗？」、配项目设计语言），用户确认才继续执行命令
+- "未提交注释数"怎么拿到：inspector 在 `annotationList` 变化时上行 `heb:annotation:dirty {count}`，mod.rs emit `browser://annotation-dirty` → 前端按对话存一份 dirty count（类似现有 pickerActive 等状态）。React 弹窗读它，不必每次现问 inspector
+- 用户确认后，React 给 inspector 下发 `heb:unload:allow`（置一个一次性放行标志），再执行 reload/navigate——这样接下来 navigate 触发的 beforeunload 看到放行标志直接跳过，**不二次弹**
+
+**② 页面自身入口（React 不知情）→ beforeunload 兜底**：
+- inspector 监听 `beforeunload`：`annotationList` 非空**且**没有一次性放行标志时，`e.preventDefault()` + `e.returnValue=""` → 浏览器原生确认框（文案不可定制，浏览器安全限制）
+- 兜住页面里的 `location.reload()`、点 `<a>` 跳转、表单提交跳转——这些 React 完全不知情，只能靠页面内的 beforeunload
+- 放行标志用完即清（一次性），避免误放后续真正的页面自发跳转
+
+**为什么这样分**：自定义框体验好但只能拦 React 发起的入口；beforeunload 能拦页面自身但文案丑。各管各的入口 + 一次性放行标志去重，既覆盖全、又不双弹。「关对话 / 关 App」超出"刷新页面"范畴，本期不做（用户已确认"其他都可以"）。
+
 ## 6. 数据流时序
 
 ```
@@ -252,12 +272,15 @@ Ok(ToolOutput {
 - **append 的 html 非法**：inspector try/catch 静默，对话流提示「新增失败：HTML 不合法」
 - **浮窗为空**：N=0 时浮窗自动隐藏（沿用现有 `renderQueuePanel` 空态逻辑）
 - **draft 至少 1 个元素**：最后一个元素禁止移除
+- **未提交防丢失去重**：自定义弹窗确认后下发的一次性放行标志必须用完即清，否则会误放后续真正的页面自发跳转
+- **提交成功后队列清空**：「全部提交到主对话」成功 → `annotationList` 清空 → dirty count 归零 → beforeunload 自动解除
 
 ## 8. 测试策略
 
 - **inspector.js 纯函数核心**（`__hebCore`，node 可测）：新增 `@N` 解析（contenteditable → locator 还原）、draft 序列化/反序列化（浮窗存取）、`target` 解析（@N → element index）写单测，落 `annotation.test.ts` 同级
 - **preview_mutate.rs / preview_act.rs / preview_capture.rs**：`execute` / `execute_rich` 返回 + 参数解析单测（`cargo test -p agent-core --lib`）；capture 的 oneshot 超时路径单测
 - **复现验证**（按 CLAUDE.md 修 bug 流程）：hebweb + Playwright 跑全链路——选多元素 → 小方块 hover 高亮 → @N 对话 → 助手 PreviewAct 点击触发弹窗 → PreviewCapture 截图回传 → append → 加入列表 → 展开 → 全部提交，DOM/截图核对
+- **未提交防丢失**：队列非空时点工具栏刷新 → 断言弹自定义中文框；确认后只刷一次（不双弹）；队列空时刷新无拦截；提交成功后 dirty 归零
 - **回归**：`PreviewStyle` 无 target 时默认主元素（向后兼容旧旁支会话）
 
 ## 9. 架构.md 同步（实施时必做）
@@ -278,4 +301,5 @@ Ok(ToolOutput {
 5. agent-core + mod.rs + inspector.js：PreviewAct 交互动作集（功能 E）
 6. agent-core + mod.rs + inspector.js：PreviewCapture + html2canvas 截图回传链路（功能 F，最复杂——含 oneshot 等待 + Image 工具结果）
 7. inspector.js + mod.rs + App.tsx：统一浮窗 + 合并总结（功能 D）
-8. 架构.md + changelog + 端到端复现验证
+8. inspector.js + 工具栏 React + mod.rs：未提交防丢失（功能 G——dirty 上行 + 自定义弹窗 + beforeunload 兜底 + 一次性放行去重）
+9. 架构.md + changelog + 端到端复现验证
