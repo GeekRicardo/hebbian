@@ -8,6 +8,7 @@ import {
   FolderOpen,
   GitBranch,
   Maximize2,
+  MessageCircle,
   Package,
   Palette,
   Plug,
@@ -33,6 +34,7 @@ import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
 import { PluginsPane } from "@/desktop/ui/components/PluginsPane";
 import { HooksPane } from "@/desktop/ui/components/HooksPane";
 import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
+import { WeChatPane } from "@/desktop/ui/components/WeChatPane";
 import { AvatarField } from "@/desktop/ui/components/AvatarField";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -57,7 +59,7 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "appearance" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "logs";
+type TabKey = "general" | "conversation" | "appearance" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "wechat" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: string }[] = [
   { key: "general", label: "通用", icon: SettingsIcon, group: "基础" },
@@ -72,6 +74,7 @@ const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: stri
   { key: "plugins", label: "插件", icon: Package, group: "扩展" },
   { key: "hooks", label: "Hooks", icon: GitBranch, group: "扩展" },
   { key: "mcp", label: "MCP", icon: Plug, group: "扩展" },
+  { key: "wechat", label: "微信", icon: MessageCircle, group: "扩展" },
   { key: "logs", label: "日志", icon: ScrollText, group: "调试" },
 ];
 
@@ -291,6 +294,7 @@ export function AppSettingsDialog() {
               {tab === "plugins" && <PluginsPane />}
               {tab === "hooks" && <HooksPane />}
               {tab === "mcp" && <McpPane />}
+              {tab === "wechat" && <WeChatPane active={tab === "wechat"} />}
             </div>
           )}
         </div>

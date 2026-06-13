@@ -669,6 +669,23 @@ export const api = {
     }>("terminal_list"),
   terminalPopout: () => invoke<void>("terminal_popout"),
   terminalClosePopout: () => invoke<void>("terminal_close_popout"),
+
+  // ── 微信渠道（架构 §7.5.1，Desktop 内嵌运行）──
+  /** 申请登录二维码，返回 SVG（直接 inline 显示）+ 轮询用的 qrcode_id。 */
+  wechatLoginStart: () =>
+    invoke<WeChatQrCode>("wechat_login_start"),
+  /** 轮询一次扫码状态；confirmed 时后端已存凭证并启动后台运行。 */
+  wechatLoginPoll: (qrcodeId: string) =>
+    invoke<WeChatLoginPoll>("wechat_login_poll", { qrcodeId }),
+  /** 查询登录 / 运行状态。 */
+  wechatStatus: () =>
+    invoke<WeChatStatus>("wechat_status"),
+  /** 用已存凭证启动后台运行（进程重启后重新拉起）。 */
+  wechatStart: (botId: string) =>
+    invoke<void>("wechat_start", { botId }),
+  /** 停止后台运行（不删凭证）。 */
+  wechatStop: () =>
+    invoke<void>("wechat_stop"),
 };
 
 /** 导出为 Claude 会话的结果：`claude --resume <uuid>` 可直接恢复。 */
@@ -699,4 +716,24 @@ export interface DeepseekLoginInput {
 export interface DeepseekLoginToken {
   token: string;
   login: string;
+}
+
+/** 微信登录二维码：svg 直接 inline 显示，qrcode_id 用于轮询。 */
+export interface WeChatQrCode {
+  svg: string;
+  qrcode_id: string;
+}
+
+/** 微信扫码轮询结果。confirmed 时后端已存凭证并启动后台运行。 */
+export type WeChatLoginPoll =
+  | { status: "waiting" }
+  | { status: "scanned" }
+  | { status: "confirmed"; bot_id: string }
+  | { status: "expired" };
+
+/** 微信渠道状态。 */
+export interface WeChatStatus {
+  logged_in: boolean;
+  running: boolean;
+  bot_id: string | null;
 }

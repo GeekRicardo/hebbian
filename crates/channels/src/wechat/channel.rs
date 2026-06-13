@@ -1,5 +1,6 @@
 //! 微信渠道实现。
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -13,21 +14,38 @@ pub struct WeChatChannel {
     client: ILinkClient,
     account_id: String,
     cursor: Mutex<String>,
+    cursor_path: PathBuf,
     context_store: Mutex<ContextStore>,
 }
 
 impl WeChatChannel {
     pub fn new(token: String, account_id: String, data_dir: &std::path::Path) -> Self {
+        let cursor_path = data_dir
+            .join("channels")
+            .join("wechat")
+            .join(&account_id)
+            .join("cursor");
+        let cursor = std::fs::read_to_string(&cursor_path)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         Self {
             client: ILinkClient::new(token),
             context_store: Mutex::new(ContextStore::open(data_dir, &account_id)),
             account_id,
-            cursor: Mutex::new(String::new()),
+            cursor: Mutex::new(cursor),
+            cursor_path,
         }
     }
 
     pub fn account_id(&self) -> &str {
         &self.account_id
+    }
+
+    fn save_cursor(&self, cursor: &str) {
+        if let Some(parent) = self.cursor_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&self.cursor_path, cursor);
     }
 }
 
@@ -44,7 +62,10 @@ impl Channel for WeChatChannel {
     async fn poll(&self) -> anyhow::Result<Vec<InboundMessage>> {
         let cursor = self.cursor.lock().unwrap().clone();
         let response = self.client.get_updates(&cursor).await?;
-        *self.cursor.lock().unwrap() = response.get_updates_buf;
+        if !response.get_updates_buf.is_empty() && response.get_updates_buf != cursor {
+            self.save_cursor(&response.get_updates_buf);
+            *self.cursor.lock().unwrap() = response.get_updates_buf;
+        }
 
         let mut messages = Vec::new();
         for msg in response.msgs {

@@ -70,14 +70,30 @@ impl ILinkClient {
     }
 
     pub async fn get_updates(&self, cursor: &str) -> anyhow::Result<GetUpdatesResponse> {
-        self.post_bot(
-            "getupdates",
-            &GetUpdatesRequest {
-                get_updates_buf: cursor.to_string(),
-                base_info: BaseInfo::default(),
-            },
-        )
-        .await
+        // 长轮询：服务端 hold 住连接直到有消息或超时，超时是正常现象而非错误。
+        // 命中超时就返回空批次 + 保持原 cursor，让上层继续下一轮 poll。
+        match self
+            .post_bot::<GetUpdatesResponse>(
+                "getupdates",
+                &GetUpdatesRequest {
+                    get_updates_buf: cursor.to_string(),
+                    base_info: BaseInfo::default(),
+                },
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(err) => {
+                if is_timeout(&err) {
+                    Ok(GetUpdatesResponse {
+                        msgs: Vec::new(),
+                        get_updates_buf: cursor.to_string(),
+                    })
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     pub async fn send_message(
@@ -132,4 +148,11 @@ impl ILinkClient {
         let _: serde_json::Value = self.post_bot("sendtyping", &request).await?;
         Ok(())
     }
+}
+
+/// 判断错误链里是否为 HTTP 超时（reqwest timeout 经 anyhow 包装后需 downcast 回原类型）。
+fn is_timeout(err: &anyhow::Error) -> bool {
+    err.chain()
+        .filter_map(|cause| cause.downcast_ref::<reqwest::Error>())
+        .any(reqwest::Error::is_timeout)
 }

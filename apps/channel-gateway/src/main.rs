@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-mod bridge;
+use channel_core::bridge::ChannelBridge;
 
 #[derive(Parser)]
 #[command(name = "heb-channel", about = "Hebbian 渠道网关")]
@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
                 "wechat",
                 &credentials.bot_id,
             );
-            let bridge = bridge::ChannelBridge::new(data_dir.clone());
+            let bridge = ChannelBridge::new(data_dir.clone());
             bridge
                 .run_loop(channel, &mut state, &credentials.bot_id)
                 .await

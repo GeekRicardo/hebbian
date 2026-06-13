@@ -26,6 +26,19 @@ pub struct BotCredentials {
     pub user_id: String,
 }
 
+/// 扫码登录的单次轮询结果。GUI 每隔几秒调一次 `poll_qrcode_status` 推进状态机。
+#[derive(Debug, Clone)]
+pub enum QrLoginStatus {
+    /// 等待扫码。
+    Waiting,
+    /// 已扫码，等手机确认。
+    Scanned,
+    /// 已确认，拿到凭证。
+    Confirmed(BotCredentials),
+    /// 二维码过期，需重新申请。
+    Expired,
+}
+
 #[derive(Debug, Serialize)]
 pub struct GetUpdatesRequest {
     pub get_updates_buf: String,

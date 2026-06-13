@@ -7763,3 +7763,21 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
   - markdown 渲染：hebweb（同 Desktop 前端）+ Playwright 实测——含 Task nested 的会话里，nested 容器（`border-l-2 max-h-96`）内 `p.whitespace-pre-wrap` 归零、`markdown-segment` 接管，code-reviewer 子过程区渲染出 `h2:1 ul:1 strong:6 code:46` 真实 DOM 元素；`tsc --noEmit`（apps/desktop）通过。
 - **留尾巴**: ① 前端 streaming 软状态路径 `applyNestedEvent`（useStore.ts）仍按 `p.id===callId` 把子事件挂父 Task tool_call，并发场景下若子事件先于父 Task 的 tool_start 到达前端会静默丢（streaming 软状态，不影响落盘与重建渲染）——本次未动，非用户所报问题；② cli/hebweb/channel-gateway 三个 surface 的 nested 文本渲染未逐一核对是否也需 markdown 化（CLI 是纯文本流不涉及；hebweb 复用 desktop 同一份 MessageBubble，已随本次一起好）。
 
+
+## 2026-06-13 — 微信渠道收尾：二维码扫码登录搬进 Desktop + 内嵌运行 + ChannelBridge 下沉
+
+- **Why**: 微信渠道（iLink Bot 协议复刻）此前停在「能编译但跑不通」的半成品：①`login.rs` 只 `println!` 一个 URL、不渲染二维码，用户**根本扫不了码**，登录这一步直接断；②轮询游标 `get_updates_buf` 只存内存，重启丢失会重复拉旧消息→重复触发 agent；③长轮询 35s 超时被当 error 抛、刷 warn 日志+白等 5s 重试。用户要求把扫码登录做成 Desktop GUI 二维码图片（终端那套先不验证），且登录后的收发运行用 Desktop 托盘后台常驻承载（内嵌，不再靠独立进程）。
+- **改动**:
+  - `crates/channels/src/wechat/login.rs`: 拆出可复用纯协议函数 `request_qrcode`（拿 qrcode_id+content）/ `poll_qrcode_status`（单次轮询，返回 `QrLoginStatus` 状态机）；CLI 的 `login()` 复用它们保持原终端阻塞行为；新增 `render_qr_svg`（qrcode crate svg 渲染，给 GUI inline 显示，前端零二维码依赖）；终端 ASCII 渲染走 unicode Dense1x2 反色（深色终端可扫）。
+  - `crates/channels/src/wechat/channel.rs`: cursor 持久化到 `~/.hebbian/channels/wechat/<account>/cursor`，只在变化时落盘；`new()` 时读回初值。
+  - `crates/channels/src/wechat/client.rs`: `get_updates` 把 HTTP 超时识别为「无新消息」返回空批次+保持原 cursor，长轮询超时不再报错（`is_timeout` downcast reqwest::Error）。
+  - `crates/channels/src/wechat/types.rs`: 新增 `QrLoginStatus` 枚举。
+  - `crates/channels/Cargo.toml`: 加 `qrcode`（`default-features=false, features=["svg"]`，砍掉 image 重依赖）。
+  - **`bridge.rs` 从 `apps/channel-gateway/src/` 下沉到 `crates/channel-core/src/`**（git mv 保历史）：它只依赖 agent-core/channel-core/model-gateway/protocol/common，与具体 surface 无关，下沉后 Desktop 与 channel-gateway 共用同一份 `ChannelBridge`，消除重复。`channel-core/Cargo.toml` 补 tokio sync/rt/macros/time + tracing + dirs；gateway main.rs 改为 `use channel_core::bridge::ChannelBridge`。
+  - `apps/desktop/src/wechat.rs`（新）: `WeChatState`（持后台 run_loop JoinHandle）+ 5 个 Tauri 命令（`wechat_login_start` 返回 SVG / `wechat_login_poll` confirmed 时存凭证并 spawn 运行 / `wechat_status` / `wechat_start` / `wechat_stop`）；登录成功在 Desktop 进程内 `tauri::async_runtime::spawn` 跑 `ChannelBridge::run_loop`，托盘后台常驻不随主窗关闭而断。
+  - `apps/desktop/src/lib.rs`: mod wechat + manage WeChatState + 注册 5 命令；`apps/desktop/Cargo.toml` 加 channel-core/channels 依赖。
+  - 前端: `bridge/tauri.ts` 加 5 个 api 封装 + WeChatQrCode/WeChatLoginPoll/WeChatStatus 类型；`WeChatPane.tsx`（新）扫码登录 UI（SVG inline + 2s 轮询状态机 + 启停开关）；`AppSettingsDialog.tsx` 设置弹窗「扩展」组加「微信」页签。
+  - `docs/架构.md §7.5.1`: 重写——渠道运行载体改为 Desktop 内嵌、二维码登录走 GUI、ChannelBridge 归位 channel-core、cursor 持久化、长轮询超时正常化、媒体上站暂不做的边界。
+- **影响范围**: channels / channel-core / channel-gateway / desktop（Rust+前端）。新增 Tauri 命令纯 additive，不破坏现有 surface。channel-gateway 保留为 headless 调试 surface。无协议字段改动。
+- **验证**: `cargo check --workspace` 通过；`cargo test -p channels` 通过（含新回归测试 `render_qr_produces_scannable_block_art` 钉住二维码必须真渲染）；`tsc --noEmit`(apps/desktop) 通过；二维码渲染肉眼确认（临时 example 输出三定位角+quiet zone 完整的可扫图案，已清理）。
+- **留尾巴**: ① **真扫码端到端未验**——AES/CDN 不涉及，但扫码登录+收发链路需机主拿手机扫真实微信码跑一遍（`pnpm tauri dev` → 设置→微信→扫码→微信发消息看 agent 回复），这是交付前最后一步；② 入站收图（微信发图给 agent 接 vision）按用户要求列为下一阶段，未实现；③ 出站发图（hebbian 发图到微信，需 AES-128-ECB+CDN 上传）暂不做；④ 多账号：`wechat_status` 只取第一个已登录账号，首版单账号。

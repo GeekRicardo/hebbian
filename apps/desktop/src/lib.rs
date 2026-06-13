@@ -6,6 +6,7 @@ mod error;
 mod force_automode;
 mod hebisland_client;
 mod hitl;
+mod wechat;
 mod window_control;
 
 pub use engine::EngineEvent;
@@ -2619,6 +2620,7 @@ pub fn run() {
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(browser::BrowserState::default())
         .manage(terminal::TerminalState::default())
+        .manage(Arc::new(wechat::WeChatState::default()))
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
@@ -2836,6 +2838,11 @@ pub fn run() {
             terminal::terminal_list,
             terminal::terminal_popout,
             terminal::terminal_close_popout,
+            wechat::wechat_login_start,
+            wechat::wechat_login_poll,
+            wechat::wechat_status,
+            wechat::wechat_start,
+            wechat::wechat_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
