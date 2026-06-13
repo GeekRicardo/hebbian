@@ -1074,9 +1074,10 @@
 }
 
 .dsp-project-session-list .dsp-session-row {
-  min-height: 42px;
+  min-height: 30px;
   border-radius: 13px;
-  padding-block: 7px;
+  padding-block: 4px;
+  line-height: 1.15;
 }
 
 .dsp-overflow-hint {
@@ -2835,9 +2836,10 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  padding: 2px 30px 2px 8px !important;
+  padding: 4px 30px 4px 8px !important;
   border-radius: 8px;
   background: transparent !important;
+  line-height: 1.15;
   transition: background 120ms ease, box-shadow 120ms ease;
 }
 

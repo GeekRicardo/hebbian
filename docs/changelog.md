@@ -7781,3 +7781,14 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: channels / channel-core / channel-gateway / desktop（Rust+前端）。新增 Tauri 命令纯 additive，不破坏现有 surface。channel-gateway 保留为 headless 调试 surface。无协议字段改动。
 - **验证**: `cargo check --workspace` 通过；`cargo test -p channels` 通过（含新回归测试 `render_qr_produces_scannable_block_art` 钉住二维码必须真渲染）；`tsc --noEmit`(apps/desktop) 通过；二维码渲染肉眼确认（临时 example 输出三定位角+quiet zone 完整的可扫图案，已清理）。
 - **留尾巴**: ① **真扫码端到端未验**——AES/CDN 不涉及，但扫码登录+收发链路需机主拿手机扫真实微信码跑一遍（`pnpm tauri dev` → 设置→微信→扫码→微信发消息看 agent 回复），这是交付前最后一步；② 入站收图（微信发图给 agent 接 vision）按用户要求列为下一阶段，未实现；③ 出站发图（hebbian 发图到微信，需 AES-128-ECB+CDN 上传）暂不做；④ 多账号：`wechat_status` 只取第一个已登录账号，首版单账号。
+
+## 2026-06-13 — 调整 Desktop 会话列表行的垂直密度
+
+**Why**：用户在内置浏览器预览里把左侧会话列表项调得更紧凑，希望把预览效果固化到前端源码，减少会话行之间和文字之间的垂直空白。
+
+**改动**：
+- `apps/desktop/frontend/src/desktop/ui/components/desktopShell.css`：将 `.dsp-session-row` 的上下 padding 固化为 4px、line-height 固化为 1.15；同步压缩项目会话列表项的 min-height / padding-block，避免旧覆盖规则抵消紧凑效果。
+
+**影响范围**：仅 Desktop 前端样式；不改 React DOM、不改协议、不影响 agent-core / storage。
+
+**留尾巴**：无。
