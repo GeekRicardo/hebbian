@@ -1547,9 +1547,14 @@ function NestedTaskContent({
       {renderParts.map((part) => {
         if (part.type === "text") {
           return (
-            <p key={part.key} className="text-[13px] text-muted-foreground whitespace-pre-wrap">
-              {part.text}
-            </p>
+            <div
+              key={part.key}
+              className="markdown-segment text-[13px] leading-relaxed text-muted-foreground"
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {part.text}
+              </ReactMarkdown>
+            </div>
           );
         }
         if (part.type === "reasoning") {

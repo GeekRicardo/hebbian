@@ -7748,4 +7748,18 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **Subagent**：经用户确认「子 agent 也跟随」——子 NestedRun 的 dispatcher 在审批时同样走 `resolve_judge_for_call`，按 judge client 的 provider_id 查 judge 配置；子用专属 provider 时按该 provider 的 judge 配置解析，自然继承本机制，无需额外改 runner.rs。
 - **影响范围**：agent-core（automode / dispatch / settings）、model-gateway（Provider 结构）、Desktop 前端（设置两个面板）。providers.json / settings.json 均向后兼容（新字段 default、旧字段忽略）。行为变化：原先不在白名单的模型切 AutoMode 会 toast + 转手动审批，现在任何模型都直接调判官（未配置时用模型自己）——这是有意的语义放宽。
 - **验证**：`cargo check --workspace`、`cargo test -p agent-core --lib`（504 passed）、`cargo test -p hebbian --lib`（34 passed，顺手补了既有测试缺 `is_error` 字段的编译错）、`pnpm exec tsc --noEmit` 全绿。
-- **留尾巴**：① 未跑 desktop dev 手动验证 ProvidersPane 新下拉的实际交互；② `model_io.jsonl` 的 judge 条目现在记录的是 judge 模型而非会话模型，分析脚本如有按模型过滤需注意；③ 旧 settings.json 的 `automode_models` 字段成为死数据（无害）。
+- **留尾巴**：① 未跑 desktop dev 手动验证 ProvidersPane 新下拉的实际交互；② `model_io.jsonl` 的 judge 条目现在记录的是 judge 模型而非会话模型，分析脚本如有按模型过滤需注意；③ 旧 settings.json 的 `automode_models` 字段成为死数据（无害）。### 2026-06-13 — 修复 subagent 并发「一停全停」+ nested 区文本不渲染 markdown
+
+- **Why**: 用户报 Desktop 两个现象——① 同步并行多个 subagent 时，**一个子正常跑完，其它并发子和主 agent_loop 也跟着停了**；② Task 卡片内部 nested 子过程区域的文本是纯文本直出、不渲染 markdown（标题/列表/加粗/行内代码都显示成原始符号）。落盘本身正常（2026-06-12 D9.2 已修），问题在 driver 终态判定与前端渲染两处。
+- **根因**:
+  - **一停全停**：子 NestedRun 跑完会 emit 自己的 `RunFinished`，经 `SubagentRunner::wrap_sink_with_decorator` 重写 run_id 为父、带上 `subagent_call_id=Some(parent_task_call_id)` 转发进父 sink。`RunHandle::drive` 的终态 `match` 只看 `event.payload`、**不看 `subagent_call_id`**，于是第一个并发子的 `RunFinished` 被误当成父 Run 结束 → 提前 `break` → 其它并发子 + 父 agent_loop 全被丢弃。CLI 之前「看着正常」是 race 巧合（子比父慢、父 RunFinished 恰好先进 channel），不是真没 bug。`drive` 是全 5 surface（desktop/cli/hebweb/channel-gateway/cli-session）共享的唯一 driver，修在根上一处全好。
+  - **markdown 不渲染**：`MessageBubble.tsx` 的 `NestedTaskContent` 里 text part 用 `<p className="whitespace-pre-wrap">{part.text}</p>` 纯文本直出，没接顶层 assistant 文本同款的 `ReactMarkdown` 管线。
+- **改动**:
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs) `drive`: `observer.on_event` 之后、终态 `match` 之前加一道 `if event.subagent_call_id.is_some() { continue; }`——子事件已交 observer 做 nested 累积/渲染，但对父 turn 的终态判定透明，只认顶层（`subagent_call_id=None`）的 RunFinished/RunCancelled/RunFailed/RunSuspended 收 turn。新增回归测试 `drive_ignores_subagent_run_finished_and_waits_for_parent`（子 RunFinished input=1 先到、父 input=42 后到，断言收到的是父的 usage）。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx) `NestedTaskContent`: nested text part 改用 `<div className="markdown-segment text-[13px] leading-relaxed text-muted-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>` ——与顶层 assistant 文本同一套已验证渲染管线，仅靠外层 class 保留 nested 小字号 + muted 视觉层级。
+- **影响范围**: agent-core（`drive` 终态判定，全 5 surface 受益）+ desktop 前端（nested 渲染）。无协议改动、无破坏兼容。其它 surface（cli/hebweb/channel-gateway）的 nested 文本渲染各自独立，本次只动 desktop MessageBubble（用户报的 surface）。
+- **验证**:
+  - 一停全停：新回归测试 A/B 翻转——修前 FAIL（`left:1 right:42`，drive 在第一个子 RunFinished 处提前收尾）、修后 PASS（拿到父的 input=42）；`cargo test -p agent-core --lib` 510 passed 0 failed；`cargo check --workspace` 通过；heb CLI 同步并行 echo-agent+coder 连跑 3 次稳定 `run_started=3 run_finished=3 cancelled/failed=0`。
+  - markdown 渲染：hebweb（同 Desktop 前端）+ Playwright 实测——含 Task nested 的会话里，nested 容器（`border-l-2 max-h-96`）内 `p.whitespace-pre-wrap` 归零、`markdown-segment` 接管，code-reviewer 子过程区渲染出 `h2:1 ul:1 strong:6 code:46` 真实 DOM 元素；`tsc --noEmit`（apps/desktop）通过。
+- **留尾巴**: ① 前端 streaming 软状态路径 `applyNestedEvent`（useStore.ts）仍按 `p.id===callId` 把子事件挂父 Task tool_call，并发场景下若子事件先于父 Task 的 tool_start 到达前端会静默丢（streaming 软状态，不影响落盘与重建渲染）——本次未动，非用户所报问题；② cli/hebweb/channel-gateway 三个 surface 的 nested 文本渲染未逐一核对是否也需 markdown 化（CLI 是纯文本流不涉及；hebweb 复用 desktop 同一份 MessageBubble，已随本次一起好）。
+

@@ -416,6 +416,15 @@ impl RunHandle {
             }
             observer.on_event(&event);
 
+            // 子 NestedRun（subagent）的事件经装饰器转发进父 sink，带
+            // subagent_call_id=Some(parent_task_call_id)。这些事件已交给 observer 做
+            // nested 累积 / 渲染，但**不能**参与父 turn 的终态判定——否则第一个并发子
+            // emit 的 RunFinished 会被误当成父 Run 结束，提前 break，把其它并发子和父
+            // agent_loop 一起丢掉（架构 §4.4.11.8）。子的生命周期对父 driver 透明。
+            if event.subagent_call_id.is_some() {
+                continue;
+            }
+
             match &event.payload {
                 EventPayload::PermissionRequested {
                     request_id,
@@ -825,6 +834,65 @@ mod tests {
             self.questions.fetch_add(1, Ordering::SeqCst);
             None
         }
+    }
+
+    /// 回归（subagent 一停全停，架构 §4.4.11.8）：父 Run 内并发跑子 NestedRun 时，
+    /// 子 agent_loop 结束会 emit 自己的 `RunFinished`，经装饰器重写 run_id 为父、
+    /// 带上 `subagent_call_id=Some(parent_task_call_id)` 转发进父 sink。`drive` 的终态
+    /// 判定若只看 `payload` 不看 `subagent_call_id`，就会把**第一个子的 RunFinished**
+    /// 误当成父 Run 结束 → 提前 break → 其它并发子 + 父 agent_loop 全被丢弃（用户报的
+    /// 「一个 subagent 跑完，其它和主 loop 也停了」）。
+    ///
+    /// 正确语义：带 `subagent_call_id` 的 Run* 终态事件是子的，drive 必须忽略，只认
+    /// 顶层（`subagent_call_id=None`）的 RunFinished 收 turn。
+    #[tokio::test]
+    async fn drive_ignores_subagent_run_finished_and_waits_for_parent() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        let mut handle = make_handle(rx);
+        let rid = handle.run_id.clone();
+
+        // 子 NestedRun 结束：装饰器已把 run_id 重写为父、带 subagent_call_id。
+        tx.send(Event::now_subagent(
+            rid.clone(),
+            0,
+            "call-task-1",
+            EventPayload::RunFinished {
+                total_input_tokens: 1,
+                total_output_tokens: 1,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                duration_ms: 5,
+            },
+        ))
+        .await
+        .unwrap();
+        // 父 Run 真正结束：顶层事件，subagent_call_id=None，带可识别的 token 数。
+        tx.send(ev(
+            &rid,
+            1,
+            EventPayload::RunFinished {
+                total_input_tokens: 42,
+                total_output_tokens: 7,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                duration_ms: 100,
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let summary = handle.drive(&mut NoopObserver).await;
+        match summary.outcome {
+            TurnOutcome::Done => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        // 必须是父的 usage（input=42），不是子的（input=1）——证明没在子 RunFinished 处提前收尾。
+        assert_eq!(
+            summary.usage.expect("usage").input,
+            42,
+            "drive 收到的应是父 Run 的 RunFinished，而非第一个子的"
+        );
     }
 
     #[tokio::test]
