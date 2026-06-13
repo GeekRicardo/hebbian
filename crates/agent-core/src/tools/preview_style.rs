@@ -23,9 +23,13 @@ pub struct PreviewStyleInput {
     pub prop: String,
     /// CSS 值，如 `12px` / `#1f2328` / `600`。
     pub value: String,
-    /// 改哪个选中元素（`@2`）；缺省主元素 `@1`。多元素注释框里指定目标用。
+    /// 改哪个元素：`@N`（选中元素）或任意 CSS selector（如 `.card-list > li`，
+    /// 配合 allMatches 批量改一类元素）。缺省主元素 `@1`。
     #[serde(default)]
     pub target: Option<String>,
+    /// target 为 selector 时：true = 应用到所有匹配元素（改「一类」而非「一个」）。
+    #[serde(default, rename = "allMatches")]
+    pub all_matches: bool,
 }
 
 pub struct PreviewStyleTool;
@@ -37,13 +41,13 @@ impl Tool for PreviewStyleTool {
     }
 
     fn description(&self) -> &str {
-        "Apply a CSS style change to a selected web element, live in the page preview. \
-         Use this to iteratively adjust the element's look (color, size, spacing, \
-         border, font, etc.) while talking with the user. The change is applied \
-         immediately and the user sees it. Call it once per property; call again to \
-         tweak. Both `prop` (a CSS property name like `border-radius`) and `value` \
-         (a CSS value like `12px`) are required. When multiple elements are selected, \
-         pass `target` like @2 to style a specific one; defaults to @1."
+        "Apply a CSS style change to elements in the live page preview. `target` is \
+         either @N (a user-selected element, defaults to @1) or any CSS selector like \
+         `.card-list > li`. When the user's intent covers a class of elements (list \
+         items, cards, all buttons of a kind), use a selector with allMatches=true so \
+         every matching element changes together — changing only one of several \
+         identical siblings looks broken. Call once per property; call again to tweak. \
+         The change is applied immediately and the user sees it."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -53,7 +57,8 @@ impl Tool for PreviewStyleTool {
             "properties": {
                 "prop": { "type": "string", "description": "CSS property name, e.g. border-radius, color, font-size" },
                 "value": { "type": "string", "description": "CSS value, e.g. 12px, #1f2328, 600" },
-                "target": { "type": "string", "description": "Which selected element to style, like @2. Defaults to the primary element @1." }
+                "target": { "type": "string", "description": "@N for a selected element, or a CSS selector. Defaults to @1." },
+                "allMatches": { "type": "boolean", "description": "When target is a selector: apply to all matching elements (default false = first match only)" }
             }
         })
     }
@@ -63,8 +68,13 @@ impl Tool for PreviewStyleTool {
         let parsed: PreviewStyleInput = serde_json::from_value(input)
             .map_err(|e| AppError::msg(format!("invalid PreviewStyle input: {e}")))?;
         let target = parsed.target.as_deref().unwrap_or("@1");
+        let scope = if parsed.all_matches {
+            "（全部匹配元素）"
+        } else {
+            ""
+        };
         Ok(format!(
-            "已实时应用到预览元素 {target}：{} = {}",
+            "已实时应用到预览元素 {target}{scope}：{} = {}",
             parsed.prop, parsed.value
         ))
     }

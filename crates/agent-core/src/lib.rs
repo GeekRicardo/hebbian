@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod memory_extract;
 pub mod model_io_dump;
 pub mod permissions;
+pub mod preview_bridge;
 pub mod read_state;
 pub mod recorder;
 pub mod rules;

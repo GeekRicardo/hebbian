@@ -20,7 +20,8 @@ pub const PREVIEW_ACT_TOOL_NAME: &str = "PreviewAct";
 pub struct PreviewActInput {
     /// 动作：`click` / `type` / `scroll` / `hover` / `press`。
     pub action: String,
-    /// 操作哪个选中元素（`@2`）；缺省主元素 `@1`。
+    /// 操作哪个元素：`@N`（选中元素）或任意 CSS selector（可操作页面上任何元素，
+    /// 不限于圈选的）。缺省主元素 `@1`。
     #[serde(default)]
     pub target: Option<String>,
     /// `action=type` 时：要输入的文字。
@@ -47,8 +48,10 @@ impl Tool for PreviewActTool {
          menus, form validation) that pure CSS tweaks can't reach. action=click clicks \
          the target; action=type focuses it and types `text`; action=hover dispatches \
          hover; action=press sends a `key` like Enter or Escape; action=scroll scrolls \
-         by `delta` px. target is @N (defaults to @1). Effects happen live in the \
-         preview so the user sees them."
+         by `delta` px. `target` is @N (a selected element, defaults to @1) or any CSS \
+         selector — you can act on elements the user did not select, e.g. open a \
+         dropdown to inspect its menu. Effects happen live in the preview so the user \
+         sees them."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -57,7 +60,7 @@ impl Tool for PreviewActTool {
             "required": ["action"],
             "properties": {
                 "action": { "type": "string", "enum": ["click", "type", "scroll", "hover", "press"], "description": "click | type | scroll | hover | press" },
-                "target": { "type": "string", "description": "Which selected element, like @2. Defaults to @1." },
+                "target": { "type": "string", "description": "@N for a selected element, or a CSS selector. Defaults to @1." },
                 "text": { "type": "string", "description": "Text to type (action=type)" },
                 "key": { "type": "string", "description": "Key name like Enter, Escape, ArrowDown (action=press)" },
                 "delta": { "type": "integer", "description": "Scroll amount in px, positive = down (action=scroll)" }

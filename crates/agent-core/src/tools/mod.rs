@@ -10,6 +10,8 @@ pub mod hitl;
 pub mod kill_shell;
 pub mod mcp;
 pub mod preview_act;
+pub mod preview_capture;
+pub mod preview_inspect;
 pub mod preview_mutate;
 pub mod preview_style;
 pub use mcp::McpToolReport;

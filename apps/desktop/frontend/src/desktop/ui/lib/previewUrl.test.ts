@@ -100,6 +100,27 @@ expectEqual(
   []
 );
 expectEqual(
+  "CDP devtools 端点不进检测",
+  extractPreviewUrls(
+    [
+      {
+        kind: "assistant",
+        text: "现在打开浏览器 tab 访问 http://127.0.0.1:9229/devtools/browser/1de09720-cc00-4d31-8ff1-17544fabe2be 看看",
+      },
+    ],
+    "card"
+  ),
+  []
+);
+expectEqual(
+  "json/version 发现端点不进检测",
+  extractPreviewUrls(
+    [{ kind: "tool_output", text: "listening on http://127.0.0.1:9229/json/version" }],
+    "card"
+  ),
+  []
+);
+expectEqual(
   "dev 命令触发 card",
   extractPreviewUrls(
     [{ kind: "tool_command", text: "pnpm dev --port 4321 # http://localhost:4321" }],

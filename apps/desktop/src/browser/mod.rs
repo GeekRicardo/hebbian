@@ -11,6 +11,9 @@
 //!
 //! 安全边界：`on_navigation` 对真实导航跑两档校验（§8.5-4），页面内跳转同样拦截。
 
+pub mod cdp;
+#[cfg(feature = "cef-preview")]
+pub mod cef;
 mod url_policy;
 
 use std::collections::HashMap;
@@ -114,6 +117,10 @@ pub struct BrowserState {
     /// token 用，按 elementKey 索引），value = 多轮历史。按主对话分组让 `browser_close`
     /// 能随实例一并清理。模型 IO 仍写进主对话的 model_io.jsonl（kind=aside），供面板查看。
     asides: Mutex<HashMap<String, HashMap<String, Vec<Message>>>>,
+    /// CEF 承载实例表（feature cef-preview）：CEF 就绪时 browser_* 命令优先走它，
+    /// 否则落 wry instances。两路并存按 cef::cef_ready() 分流（架构 §8.5 M2）。
+    #[cfg(feature = "cef-preview")]
+    cef: cef::CefHost,
 }
 
 #[derive(Serialize, Clone)]
@@ -169,6 +176,13 @@ pub fn browser_open(
     let target = validate_preview_url(&url, origin)?;
     let target_str = target.to_string();
 
+    // CEF 承载分流（架构 §8.5 M2）：CEF 就绪时预览走 CEF 子视图，挂进主窗 contentView。
+    // ⚠️ dev 验证点：NSView 取法 / 子视图坐标 / 句柄回传需 pnpm tauri dev 真机确认。
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        return browser_open_cef(&app, &state, &session_id, &target_str, x, y, width, height);
+    }
+
     // 已有该对话的实例：直接导航（保留每对话独立的页面 / 历史，不重建）
     {
         let mut guard = state.instances.lock().unwrap();
@@ -223,6 +237,58 @@ pub fn browser_open(
     };
     state.instances.lock().unwrap().insert(session_id, inst);
     Ok(target_str)
+}
+
+/// CEF 承载的 browser_open（架构 §8.5 M2）。从主窗 NSWindow 取 contentView 作父视图，
+/// 创建 CEF 子视图实例。已有实例则 navigate 复用。
+///
+/// ⚠️ dev 验证点：① ns_window→contentView 取法 ② set_as_child 坐标系（CEF 用左下原点
+/// 还是左上）③ browser 句柄是否同步回传。任一不对会黑屏，需 pnpm tauri dev 真机调。
+#[cfg(all(feature = "cef-preview", target_os = "macos"))]
+fn browser_open_cef(
+    app: &AppHandle,
+    state: &BrowserState,
+    session_id: &str,
+    url: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<String, String> {
+    use cef::Rect as CefRect;
+
+    // 已有实例 → 导航复用
+    if state.cef.has(session_id) {
+        let u = url.to_string();
+        state.cef.with(session_id, move |b| b.navigate(&u));
+        return Ok(url.to_string());
+    }
+
+    let window = app
+        .get_window("main")
+        .ok_or_else(|| "主窗口不存在".to_string())?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
+    // NSWindow.contentView（CEF set_as_child 的父 NSView）
+    let parent_view: *mut std::ffi::c_void = unsafe {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        let win = ns_window as *mut AnyObject;
+        let view: *mut AnyObject = msg_send![&*win, contentView];
+        view as *mut std::ffi::c_void
+    };
+
+    let bounds = CefRect {
+        x: x as i32,
+        y: y as i32,
+        width: (width.max(1.0)) as i32,
+        height: (height.max(1.0)) as i32,
+    };
+    let init = std::sync::Arc::new(init_script());
+    let browser = cef::CefBrowser::create(parent_view, url, bounds, init)
+        .ok_or_else(|| "CEF 浏览器创建失败".to_string())?;
+    state.cef.insert(session_id.to_string(), browser);
+    let _ = app; // emit_state 走 CDP/前端轮询，CEF 实例状态事件后续接
+    Ok(url.to_string())
 }
 
 /// on_navigation 回调：bridge 消息转发给前端；真实导航做安全校验 + 历史维护。
@@ -302,7 +368,6 @@ fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json:
         }
         // 元素对话（旁支会话，机制 B）——session_id 即主对话
         "heb:aside:send" => handle_aside_send(app, session_id, &payload),
-        "heb:aside:submit" => handle_aside_submit(app, session_id, &payload),
         "heb:aside:models:request" => {
             let surface = payload
                 .get("surface")
@@ -366,6 +431,12 @@ pub fn browser_navigate(
 ) -> Result<String, String> {
     // 地址栏输入 = user 档
     let target = validate_preview_url(&url, PreviewOrigin::User)?;
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        let t = target.to_string();
+        state.cef.with(&session_id, move |b| b.navigate(&t));
+        return Ok(target.to_string());
+    }
     let mut guard = state.instances.lock().unwrap();
     let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     inst.history.truncate(inst.cursor + 1);
@@ -385,6 +456,11 @@ pub fn browser_back(
     state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        state.cef.with(&session_id, |b| b.back());
+        return Ok(());
+    }
     let mut guard = state.instances.lock().unwrap();
     let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor == 0 {
@@ -406,6 +482,11 @@ pub fn browser_forward(
     state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        state.cef.with(&session_id, |b| b.forward());
+        return Ok(());
+    }
     let mut guard = state.instances.lock().unwrap();
     let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     if inst.cursor + 1 >= inst.history.len() {
@@ -426,6 +507,11 @@ pub fn browser_reload(
     state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        state.cef.with(&session_id, |b| b.reload());
+        return Ok(());
+    }
     let mut guard = state.instances.lock().unwrap();
     let inst = guard.get_mut(&session_id).ok_or_else(|| "浏览器未打开".to_string())?;
     let url: Url = inst
@@ -446,6 +532,12 @@ pub fn browser_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        let b = cef::Rect { x: x as i32, y: y as i32, width: (width.max(1.0)) as i32, height: (height.max(1.0)) as i32 };
+        state.cef.with(&session_id, |inst| inst.set_bounds(b));
+        return Ok(());
+    }
     let guard = state.instances.lock().unwrap();
     let inst = match guard.get(&session_id) {
         Some(i) => i,
@@ -496,6 +588,12 @@ pub fn browser_close(
     state: tauri::State<'_, BrowserState>,
     session_id: String,
 ) -> Result<(), String> {
+    #[cfg(feature = "cef-preview")]
+    if cef::cef_ready() {
+        state.cef.remove(&session_id);
+        state.asides.lock().unwrap().remove(&session_id);
+        return Ok(());
+    }
     if let Some(inst) = state.instances.lock().unwrap().remove(&session_id) {
         inst.webview.close().map_err(|e| e.to_string())?;
     }
@@ -923,17 +1021,29 @@ fn aside_system_prompt() -> String {
     "你是网页预览里的「样式调整助手」。用户在页面上圈了一个或多个元素（按 1、2、3… 编号），\
      你帮他在预览上**临时**调整看效果。每轮用户消息前会附上 <selected_elements> 块：每个 \
      <element index=\"N\"> 是一个选中元素的定位信息。用户会用自然语言说「1」「第二个」指代它们。\n\n\
-     你的工具（target 参数填 @N，如 @2 对应 index=2 的元素，缺省 @1）：\n\
-     • PreviewStyle(prop, value, target) —— 实时改某个元素的内联样式（color / font-size / \
-     padding / border-radius / background-color 等），用户立刻看到效果。\
+     你的工具（target 参数填 @N 或任意 CSS selector）：\n\
+     • PreviewStyle(prop, value, target, allMatches) —— 实时改元素内联样式。target 可以是 \
+     @N，也可以是 CSS selector；selector + allMatches=true 时同时改所有匹配元素。\
      一次改一个属性，想微调再调一次。\n\
      • PreviewMutate(op, target, …) —— 改 DOM 结构：op=append（target 内追加 html 片段）/ \
      remove（移除 target）/ setText（改 target 文本为 text）。同样是预览草稿，刷新即消失。\n\
      • PreviewAct(action, target, …) —— 和页面交互：click / type(text) / hover / press(key) / \
-     scroll(delta)，用来触发弹窗、hover 菜单、表单校验等交互态。\n\n\
+     scroll(delta)。target 支持任意 selector——可以操作用户没圈选的元素（如点开下拉菜单）。\n\
+     • PreviewInspect(selector, what) —— 动手前先看清楚：what=rules 查该元素生效的 CSS 规则链\
+     （样式「改了没反应」十有八九是被更高优先级规则覆盖，先查再改）；what=siblings 查同级结构\
+     （sameStructureCount > 1 说明它是重复结构中的一个）；what=tree 查子树。\n\
+     • PreviewCapture(selector?) —— 截图亲眼确认效果。改完关键样式后截一张验证是否真的生效；\
+     用户描述「看起来不对」时先截图看现场。\n\n\
+     ⚠️ 改一个还是改一类——动手前必须判断：\n\
+     用户圈的元素若是列表项/卡片/重复按钮这类同构结构中的一个（<selected_elements> 的同级信息\
+     或 PreviewInspect siblings 可判断），用户说「改这个」通常意味着**改整组**——只改一个会让\
+     页面看起来坏了。这时用 selector + allMatches=true 整组应用；拿不准就先问一句「只改这个，\
+     还是所有同类一起改？」。\n\n\
+     建议工作流：先 Inspect 看清现状 → 改 → Capture 验证 → 不对就调整。\n\n\
      重要——理解你的定位：\n\
      • 你做的都是**临时预览效果**，不是最终实现。用户满意后，会由「主对话」**修改源代码**真正落地。\n\
-     • 所以你心里要清楚「这个效果对应到源码该怎么改」，过程中可以简短点一下。\n\
+     • 所以你心里要清楚「这个效果对应到源码该怎么改」，过程中可以简短点一下。\
+     整组改动对应的源码改动是共享组件/共享 class，不是给单个实例加特例。\n\
      • 删除元素用 PreviewMutate remove（预览态），并说明真正删除要在源码里移除该元素/组件。\n\
      • 别假设源码怎么存放。你只负责把效果调好，并说清楚改了什么、对应什么源码改动。\n\n\
      先理解用户要的效果，再动手。保持简洁。"
@@ -958,6 +1068,12 @@ fn eval_aside_down(
             }
         }
     } else if let Some(st) = app.try_state::<BrowserState>() {
+        // CEF 承载：旁支工具下行（PreviewStyle/Act/Mutate）走 CEF frame.execute_java_script
+        #[cfg(feature = "cef-preview")]
+        if cef::cef_ready() {
+            st.cef.with(host_session, |b| b.eval(&js));
+            return;
+        }
         if let Some(inst) = st.instances.lock().unwrap().get(host_session) {
             let _ = inst.webview.eval(&js);
         }
@@ -999,13 +1115,17 @@ fn route_aside_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("@1")
                 .to_string();
+            let all_matches = input
+                .get("allMatches")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             // 实时应用到页面 + 在聊天里显示这一步
             eval_aside_down(
                 app,
                 host_session,
                 surface,
                 "heb:aside:apply",
-                serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value, "target": target }),
+                serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value, "target": target, "allMatches": all_matches }),
             );
         }
         EngineEvent::ToolStart { name, mut input, .. } if name == "PreviewMutate" => {
@@ -1196,6 +1316,7 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
             user_content,
             attachments,
             fresh_cancel(),
+            cdp::CdpBridge::shared(),
             move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
         )
         .await;
@@ -1217,108 +1338,6 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
                     &surface,
                     "heb:aside:error",
                     serde_json::json!({ "message": format!("助手出错：{e}") }),
-                );
-            }
-        }
-    });
-}
-
-/// 处理 heb:aside:submit：让旁支总结改动，注入主对话（复用 App 级 aside-result 监听）。
-fn handle_aside_submit(app: &AppHandle, main_session_id: &str, payload: &serde_json::Value) {
-    let surface = payload
-        .get("surface")
-        .and_then(|v| v.as_str())
-        .unwrap_or("embedded")
-        .to_string();
-    let main_sid = main_session_id.to_string();
-    let aside_id = payload
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let element_desc = payload
-        .get("element")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if aside_id.is_empty() {
-        return;
-    }
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let dd = agent_core::storage::default_data_dir();
-        let (provider_id, model) = agent_core::storage::sessions::load(&dd, &main_sid)
-            .map(|s| (s.provider_id, s.model))
-            .unwrap_or_default();
-        let history = match app2.try_state::<BrowserState>() {
-            Some(st) => st
-                .asides
-                .lock()
-                .unwrap()
-                .get(&main_sid)
-                .and_then(|m| m.get(&aside_id))
-                .cloned(),
-            None => None,
-        };
-        let Some(history) = history else {
-            return; // 没有这段旁支历史（浏览器已关 / 从没对话过）
-        };
-        if provider_id.is_empty() {
-            eval_aside_down(
-                &app2,
-                &main_sid,
-                &surface,
-                "heb:aside:error",
-                serde_json::json!({ "message": "这个对话还没配置模型，没法总结" }),
-            );
-            return;
-        }
-        let prompt = format!(
-            "现在把这次调整总结成一段给「主对话」看的话，让它去改源代码真正实现这些效果。\n\n\
-             元素定位信息（务必带进总结，让主对话能精确找到源码）：\n{element_desc}\n\n\
-             总结要包含：\n\
-             ① 改了什么视觉效果——逐条列「CSS 属性 → 目标值」，或结构改动如「隐藏/移除」；\n\
-             ② 对应到源码怎么改——结合上面的源码位置（file:line）/ 组件名 / 元素文本，明确指出该改哪个文件里的哪个元素，\
-             给的定位锚点要足够让人 grep 到（别只说 div+class，要带文本内容或组件名）；\n\
-             ③ 若是删除类操作，说明要在源码里移除该元素，而不是加 display:none。\n\n\
-             只输出这段总结，不要再调工具。"
-        );
-        // 总结轮不需要把结果回写历史（旁支即将提交完结），事件流也不下发（纯文本总结）。
-        let result = chat::send_aside(
-            &dd,
-            &main_sid,
-            &provider_id,
-            &model,
-            aside_system_prompt(),
-            history,
-            prompt,
-            Vec::new(),
-            fresh_cancel(),
-            |_event| {},
-        )
-        .await;
-        match result {
-            Ok((_, msg)) => {
-                // 发到浏览器绑定的对话（main_sid），不串到当前打开的别的对话
-                let _ = app2.emit(
-                    "browser://aside-result",
-                    serde_json::json!({ "summary": msg.content, "element": element_desc, "boundSessionId": main_sid.clone() }),
-                );
-                eval_aside_down(
-                    &app2,
-                    &main_sid,
-                    &surface,
-                    "heb:aside:submitted",
-                    serde_json::json!({ "sessionId": aside_id }),
-                );
-            }
-            Err(e) => {
-                eval_aside_down(
-                    &app2,
-                    &main_sid,
-                    &surface,
-                    "heb:aside:error",
-                    serde_json::json!({ "message": format!("总结失败：{e}") }),
                 );
             }
         }
@@ -1358,13 +1377,16 @@ fn handle_annotation_submit_all(app: &AppHandle, main_session_id: &str, payload:
         let prompt = format!(
             "下面是用户在网页预览里收集的若干条注释（JSON）。每条含：选中元素的定位快照（elements，\
              含 selectorPath / xpath / react 组件链 / 文本）、与样式助手的对话原文（conversation）、\
-             实际调过的样式（styleDiffs，prop: before → after）、结构改动（structuralChanges）。\n\n\
+             实际调过的样式（styleDiffs，prop: before → after）、整组 selector 改动（selectorStyleChanges）、\
+             结构改动（structuralChanges）。\n\n\
              {items_json}\n\n\
              把它们合并总结成**一段给「主对话」看的话**，让它去修改源代码真正实现这些效果。要求：\n\
              ① 按元素分组，逐条列「CSS 属性 → 目标值」和结构改动；\n\
              ② 结合 react 组件链 / 元素文本给出足够 grep 的源码定位锚点（别只说 div+class）；\n\
              ③ 对话里用户表达的意图（如「要再醒目一点」）要保留为上下文；\n\
-             ④ 删除类操作说明要在源码里移除元素，而不是 display:none。\n\n\
+             ④ selectorStyleChanges 里的条目是作用于一类元素的整组改动（selector + 命中数），\
+             必须说「改共享组件/共享 class」，不要给单个实例加特例；\n\
+             ⑤ 删除类操作说明要在源码里移除元素，而不是 display:none。\n\n\
              只输出这段总结，不要再调工具。"
         );
         let result = chat::send_aside(
@@ -1377,6 +1399,7 @@ fn handle_annotation_submit_all(app: &AppHandle, main_session_id: &str, payload:
             prompt,
             Vec::new(),
             fresh_cancel(),
+            None,
             |_event| {},
         )
         .await;

@@ -120,7 +120,7 @@ const ASSISTANT_STATUS_RE =
   /\b(?:served|serving|running|started|available|reachable|live\s+at|running\s+at|available\s+at|listening\s+on)\b|(?:运行在|启动于|已启动|可访问|可预览|本地服务)/i;
 
 const NON_PREVIEW_CONTEXT_RE =
-  /\b(?:health check|bearer token|model_io|otlp|telemetry)\b|\/(?:health|v\d+\/|metrics|readyz?|livez?)(?:\b|\/|\?)/i;
+  /\b(?:health check|bearer token|model_io|otlp|telemetry)\b|\/(?:health|v\d+\/|metrics|readyz?|livez?|devtools|json\/(?:version|list))(?:\b|\/|\?)/i;
 
 /** 检测输入：发消息后由调用方从消息流里抽出来的纯文本片段。 */
 export interface PreviewDetectSource {
@@ -135,6 +135,8 @@ function pathLooksLikePage(normalized: string): boolean {
     const pathname = decodeURIComponent(new URL(normalized).pathname).toLowerCase();
     if (/^\/(?:health|metrics|readyz?|livez?|v\d+)(?:\/|$)/.test(pathname)) return false;
     if (/\/(?:health|metrics|readyz?|livez?)(?:\/|$)/.test(pathname)) return false;
+    // CDP/调试端点不是给人浏览的页面（devtools/browser/<uuid>、/json/version|list）
+    if (/^\/(?:devtools|json)(?:\/|$)/.test(pathname)) return false;
     return true;
   } catch {
     return false;

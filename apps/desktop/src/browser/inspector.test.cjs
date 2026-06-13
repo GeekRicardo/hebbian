@@ -141,4 +141,42 @@ assert.strictEqual(
   "「元素2」"
 );
 assert.strictEqual(core.composeAsideText([]), "");
+
+// ── draftChatKey：对话恒定锚在 1 号元素，切激活元素不漂移 ──
+// 回归：曾经 chat 区用激活元素 key、syncDraftToList 用 elements[0] key，两套不一致，
+// 切到 2 号聊天后历史读不回。现在统一走 draftChatKey。
+const multiDraft = {
+  elements: [{ key: "el-1" }, { key: "el-2" }, { key: "el-3" }],
+  activeIndex: 2, // 激活在 3 号
+};
+assert.strictEqual(core.draftChatKey(multiDraft), "el-1"); // 仍取 1 号，不随 activeIndex 变
+assert.strictEqual(core.draftChatKey({ elements: [{ key: "only" }], activeIndex: 0 }), "only");
+assert.strictEqual(core.draftChatKey({ elements: [] }), null);
+assert.strictEqual(core.draftChatKey(null), null);
+
+// ── findDraftElementIndex：去重比 DOM 引用 + selectorPath（React 重渲染兜底）──
+const nodeA = { tag: "a" }, nodeB = { tag: "b" };
+const draftEls = {
+  elements: [
+    { el: nodeA, snapshot: { selectorPath: "div#root > a:nth-child(1)" } },
+    { el: nodeB, snapshot: { selectorPath: "div#root > b:nth-child(2)" } },
+  ],
+};
+// 同一 DOM 引用 → 命中
+assert.strictEqual(core.findDraftElementIndex(draftEls, nodeB, { selectorPath: "whatever" }), 1);
+// DOM 引用变了（React 换节点）但 selectorPath 相同 → 仍命中，不重复加入
+const nodeAReplaced = { tag: "a2" };
+assert.strictEqual(
+  core.findDraftElementIndex(draftEls, nodeAReplaced, { selectorPath: "div#root > a:nth-child(1)" }),
+  0
+);
+// 全新元素 → -1
+assert.strictEqual(
+  core.findDraftElementIndex(draftEls, { tag: "c" }, { selectorPath: "div#root > c:nth-child(3)" }),
+  -1
+);
+// 无 snapshot 也不崩
+assert.strictEqual(core.findDraftElementIndex(draftEls, { tag: "x" }, null), -1);
+assert.strictEqual(core.findDraftElementIndex(null, nodeA, null), -1);
+
 console.log("inspector.test.cjs: all assertions passed");

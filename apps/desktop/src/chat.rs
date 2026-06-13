@@ -1541,6 +1541,7 @@ pub async fn send_aside(
     user_content: String,
     attachments: Vec<common::attachments::MessageAttachment>,
     cancel_flag: CancelFlag,
+    preview_bridge: Option<std::sync::Arc<dyn agent_core::preview_bridge::PreviewBridge>>,
     emit_event: impl Fn(EngineEvent) + Send + Sync,
 ) -> AppResult<(Vec<Message>, Message)> {
     let provider = model_gateway::config::get(data_dir, provider_id)?;
@@ -1572,12 +1573,19 @@ pub async fn send_aside(
     };
     history.push(user_msg);
 
-    // 极简 harness：只暴露三个 Preview 信号工具（无副作用），无外部 hook。
+    // 极简 harness：三个信号工具（写路径，经 inspector）+ 两个观察工具
+    // （读路径，经 PreviewBridge/CDP；bridge 不可用时工具自带降级提示）。
     let harness = Arc::new(Harness::new(
         vec![
             Box::new(agent_core::tools::preview_style::PreviewStyleTool),
             Box::new(agent_core::tools::preview_mutate::PreviewMutateTool),
             Box::new(agent_core::tools::preview_act::PreviewActTool),
+            Box::new(agent_core::tools::preview_capture::PreviewCaptureTool::new(
+                preview_bridge.clone(),
+            )),
+            Box::new(agent_core::tools::preview_inspect::PreviewInspectTool::new(
+                preview_bridge,
+            )),
         ],
         HookManager::new(vec![]),
     ));
@@ -1597,6 +1605,8 @@ pub async fn send_aside(
                 "PreviewStyle".to_string(),
                 "PreviewMutate".to_string(),
                 "PreviewAct".to_string(),
+                "PreviewCapture".to_string(),
+                "PreviewInspect".to_string(),
             ],
             initial_transcript: transcript,
             recorder: None,

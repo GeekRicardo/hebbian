@@ -7,6 +7,16 @@ edition = "2021"
 name = "hebbian_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "hebbian"
+path = "src/main.rs"
+
+# CEF helper 子进程（feature cef-preview）：CEF 多进程的 GPU/Renderer 等子进程入口。
+# 不开 feature 时编译成空 main（占位）。
+[[bin]]
+name = "hebbian-cef-helper"
+path = "src/bin/cef_helper.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -31,10 +41,24 @@ anyhow = "1"
 base64 = "0.22"
 portable-pty = "0.8"
 tracing = "0.1"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "net", "time", "rt"] }
+# CDP 客户端（browser/cdp.rs，PreviewBridge 实现）：连预览页 DevTools 端口。
+# 0.24 与 lock 中 soketto 生态对齐（其他 crate 已锁定该版本树）。
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
+# 内置浏览器 CEF 承载（架构 §8.5 M2）：feature gate，开启时预览用 CEF 子视图（真
+# Chromium + 自带 CDP，旁支工具截图/查规则连的就是用户看的同一实例），关闭时走
+# 现状 wry 子 webview 路径。build-util 供打包脚本组 helper bundle 用。
+cef = { version = "148", optional = true, features = ["build-util"] }
+
+# CEF 承载从 Tauri NSWindow 取 contentView 作 CEF 子视图父级（仅 cef-preview + macOS）
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# 开启 CEF 承载预览（需先 export CEF 二进制到 CEF_PATH，详见 docs/内置浏览器-CDP-能力-spec.md）
+cef-preview = ["dep:cef", "dep:objc2"]

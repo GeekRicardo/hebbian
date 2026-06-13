@@ -7748,7 +7748,9 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **Subagent**：经用户确认「子 agent 也跟随」——子 NestedRun 的 dispatcher 在审批时同样走 `resolve_judge_for_call`，按 judge client 的 provider_id 查 judge 配置；子用专属 provider 时按该 provider 的 judge 配置解析，自然继承本机制，无需额外改 runner.rs。
 - **影响范围**：agent-core（automode / dispatch / settings）、model-gateway（Provider 结构）、Desktop 前端（设置两个面板）。providers.json / settings.json 均向后兼容（新字段 default、旧字段忽略）。行为变化：原先不在白名单的模型切 AutoMode 会 toast + 转手动审批，现在任何模型都直接调判官（未配置时用模型自己）——这是有意的语义放宽。
 - **验证**：`cargo check --workspace`、`cargo test -p agent-core --lib`（504 passed）、`cargo test -p hebbian --lib`（34 passed，顺手补了既有测试缺 `is_error` 字段的编译错）、`pnpm exec tsc --noEmit` 全绿。
-- **留尾巴**：① 未跑 desktop dev 手动验证 ProvidersPane 新下拉的实际交互；② `model_io.jsonl` 的 judge 条目现在记录的是 judge 模型而非会话模型，分析脚本如有按模型过滤需注意；③ 旧 settings.json 的 `automode_models` 字段成为死数据（无害）。### 2026-06-13 — 修复 subagent 并发「一停全停」+ nested 区文本不渲染 markdown
+- **留尾巴**：① 未跑 desktop dev 手动验证 ProvidersPane 新下拉的实际交互；② `model_io.jsonl` 的 judge 条目现在记录的是 judge 模型而非会话模型，分析脚本如有按模型过滤需注意；③ 旧 settings.json 的 `automode_models` 字段成为死数据（无害）。
+
+### 2026-06-13 — 修复 subagent 并发「一停全停」+ nested 区文本不渲染 markdown
 
 - **Why**: 用户报 Desktop 两个现象——① 同步并行多个 subagent 时，**一个子正常跑完，其它并发子和主 agent_loop 也跟着停了**；② Task 卡片内部 nested 子过程区域的文本是纯文本直出、不渲染 markdown（标题/列表/加粗/行内代码都显示成原始符号）。落盘本身正常（2026-06-12 D9.2 已修），问题在 driver 终态判定与前端渲染两处。
 - **根因**:
@@ -7792,3 +7794,138 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 **影响范围**：仅 Desktop 前端样式；不改 React DOM、不改协议、不影响 agent-core / storage。
 
 **留尾巴**：无。
+
+## 2026-06-13 — 新增预览观察通道（PreviewBridge/CDP）+ 旁支工具升级：注释功能"眼睛 + 手 + 类意识"
+
+**Why**：用户验收注释功能时指出三痛点——① 解不了复杂样式问题（模型瞎调：信号工具无回执，WKWebView 无法查 matched rules）；② 不能自主操作元素（target 只能 @N 圈选元素）；③ 不理解元素关系，「改一个 list item」应泛化为「改整组」却只改单个。前置调研结论：完整 CDP 必须 Chromium 内核，CEF × Tauri PoC 三阶段全绿（独立窗口 / winit 嵌入 / 真实 Tauri v2 同窗共存，Playwright connectOverCDP 7 项全过，详见项目记忆 cef-embed-poc，产物在 ~/code/ricardo/rust/cef-poc/）。本条是 M1：能力层全量落地，CDP 端点先用 attach 模式（HEBBIAN_PREVIEW_CDP 环境变量），CEF 承载留 M2。
+
+**改动**：
+- `crates/agent-core/src/preview_bridge.rs`（新）：PreviewBridge trait（capture / matched_rules / eval），agent-core 不碰 webview 的边界由它维持；desktop 实现它
+- `crates/agent-core/src/tools/preview_capture.rs`（新）：截图工具，PNG 走 ToolOutput.attachments 进模型上下文（弱模型经 VisionBridge 转文字）；无 bridge 时降级提示
+- `crates/agent-core/src/tools/preview_inspect.rs`（新）：what=rules（生效 CSS 规则链）/ siblings（同构兄弟分析，sameStructureCount 判断"是不是一类"）/ tree（子树）
+- `preview_style.rs` / `preview_act.rs`：target 升级为 @N 或任意 CSS selector；PreviewStyle 加 allMatches 批量整组应用
+- `apps/desktop/src/browser/cdp.rs`（新）：薄 CDP 客户端（tokio-tungstenite），实现 PreviewBridge。坑①：Chrome DevTools HTTP 端点不理 Connection: close，必须按 Content-Length 读否则永久 hang；坑②：CSS.enable 要求 DOM agent 先启用；坑③：nodeId 仅在产生它的 ws 连接内有效，一次工具调用全程单连接
+- `apps/desktop/src/chat.rs` send_aside：注入 preview_bridge 参数 + 注册两个新工具进 harness/enabled_tools
+- `apps/desktop/src/browser/mod.rs`：aside_system_prompt 重写（新增"改一个还是改一类"必判段 + Inspect→改→Capture 工作流引导）；两个提交总结 prompt 加"整组改动改共享组件/类，不给单实例加特例"要求；route_aside_event 透传 allMatches
+- `apps/desktop/src/browser/inspector.js`：elementForRef 接受 CSS selector（模型可触达未圈选元素）；heb:aside:apply 的 selector 分支批量应用并记 selectorStyleChanges 账本（随注释提交，主对话据此按共享组件落地）
+- `docs/内置浏览器-CDP-能力-spec.md`（新）：完整 spec（痛点→根因→解法映射、终态架构、M1/M2/M3 里程碑）
+
+**验证**：cargo check --workspace ✅；cargo test -p agent-core --lib 509 过 ✅；cargo test -p hebbian --lib 36 过 ✅；live 集成测试 live_bridge_against_real_chromium（#[ignore]，需 9444 端口跑 headless Chrome）现象级三能力全过：eval 数 DOM、matched_rules 看到 color:blue 规则、整页/局部截图 ✅；node --check inspector.js ✅。
+
+**影响范围**：agent-core（新模块 + 工具升级，新增 base64 依赖）、desktop（新增 tokio-tungstenite / futures-util 依赖）、inspector.js。协议零改动；非旁支会话完全不受影响（新工具不进 BUILTIN_TOOL_NAMES）。
+
+**留尾巴**：
+- M2：CEF 承载进 hebbian（dev 模式 helper bundle 结构需单独 PoC：裸二进制 + browser_subprocess_path 显式指定）；届时 CdpBridge::shared() 从环境变量改读 CEF 内嵌端口——只改这一个函数
+- M1 attach 模式下 CDP 连的是镜像实例（同 URL 另一浏览器），写读不同实例；M2 CEF 后即同一实例
+- PreviewAct 的 type 对 React 受控组件无效（el.value 赋值被 value tracker 吞，需 native setter hack）——既有问题，本次未修
+- handle_annotation_submit_all 的 prompt 已声明 selectorStyleChanges 字段；desktop 端 annotationPayload 已带上，但 hebweb 路径未验证
+
+## 2026-06-13 — 修复注释框多元素 chat 绑定漂移 + 子选择器去重；Desktop CDP 端到端自测通过
+
+**Why**：用户验收发现两个注释框 bug——① 旁支对话以第一个选中元素为主题，但在元素切换框里选别的元素后，chat 所属元素发生漂移（对话历史读不回）；② 「+追加选取」去重只认 DOM 引用，React 重渲染换节点后同一逻辑元素被重复加入。同时验收上一条 M1 的 CDP 能力是否真的解了三痛点。
+
+**根因**：
+- Bug1：旁支会话的 asideConvos key 有两套不一致取法——chat 区用 `elementKeyOf(selectedTarget)`（激活元素，切换会变），syncDraftToList 用 `draft.elements[0].key`（恒第一个）。切到 2 号聊天 → 存进 el-2、列表从 el-1 读 → 会话漂移。设计意图本是「一条注释一个对话，锚在 1 号元素」，实现没贯彻。
+- Bug2：append 去重 `draft.elements[di].el === el` 只比 DOM 引用，React 重渲染后引用失配。
+
+**改动**（apps/desktop/src/browser/inspector.js）：
+- 新增纯函数 `draftChatKey(draft)`：恒返回 elements[0].key，chat 区与 syncDraftToList 统一走它——对话锚定整条注释、切激活元素不漂移
+- 新增纯函数 `findDraftElementIndex(draft, el, snapshot)`：先比 DOM 引用、再比 selectorPath（React 重渲染兜底）；append 去重改用它，命中时刷新 detach 的节点引用
+- 两函数导出进 `__hebCore`，inspector.test.cjs 加回归断言（A/B 翻转验证：把 draftChatKey 改回激活元素即 fail）
+
+**Desktop CDP 自测**（apps/desktop/src/browser/cdp.rs，#[ignore] 现象级测试）：
+- `live_bridge_against_real_chromium`：CdpBridge 三能力打真实 headless Chrome（eval 数 DOM / matched_rules / 整页+局部截图）
+- 新增 `live_tools_through_bridge`：端到端——真 CdpBridge 装进 PreviewInspectTool/PreviewCaptureTool，验证 P1（看到 `.item.highlight { color: red !important }` 覆盖关系）、P3（siblings 数出 sameStructureCount:2 同构）、截图产出真实附件非降级。两条都需 9444 端口测试页，跑前在 changelog/测试注释里给了起 Chrome 的命令
+
+**验证**：inspector.test.cjs 全过（含新回归）；node --check OK；agent-core 509 过；hebbian 36 过；两条 live 测试在真实 Chrome 上全过。
+
+**影响范围**：仅 inspector.js（前端注入脚本）+ cdp.rs 测试。无协议/接口改动。
+
+**留尾巴**：
+- 「看不了」根因确认：M1 attach 模式必须设 `HEBBIAN_PREVIEW_CDP=<port>` 才有 bridge，否则工具走降级提示——这是 M1 已知形态，M2 CEF 内嵌后免配置。Desktop 实跑闭环命令：起 `--remote-debugging-port=N` 的 Chrome 开 dev 页 → `HEBBIAN_PREVIEW_CDP=N pnpm tauri dev`
+- hebweb 内置浏览器（preview-proxy 反代 + iframe + aside）确认从未实现（架构 §8.5 标注 P2.5），crates/preview-proxy 不存在、apps/web-server 无 browser 代码。hebweb 复现样式需先建这条地基，是独立工程，本次未做
+
+## 2026-06-13 — 内置浏览器聊天流 URL 检测：剔除 CDP/devtools 调试端点
+
+**Why**：用户打开内置浏览器 tab，地址栏自动填了 `http://127.0.0.1:9229/devtools/browser/<uuid>`、下方还列出一串候选。根因：聊天流 URL 检测（previewUrl.ts，架构 §8.5）会把对话里出现的 localhost 地址抽成预览候选；而本次会话反复讨论 CDP，贴了大量 `127.0.0.1:9229/devtools/...`、`/json/version` 调试地址 + 「打开浏览器」动作词，命中 LOCAL_URL_CANDIDATE_RE + ASSISTANT_ACTION_RE 被误收。这类 CDP/WebSocket 调试端点不是给人浏览的页面，与 /health /metrics /model_io 同属"技术端点非预览页"，黑名单漏了它们。
+
+**改动**（apps/desktop/frontend/src/desktop/ui/lib/previewUrl.ts）：
+- NON_PREVIEW_CONTEXT_RE 黑名单增加 `devtools` 与 `json/(version|list)` 路径段（上下文过滤）
+- pathLooksLikePage 增加 `^/(devtools|json)(/|$)` 拦截（路径过滤，双保险——card/autoOpen 两模式都过它）
+- previewUrl.test.ts 加两条回归用例：CDP devtools 地址 + json/version 发现端点均不进检测
+
+**验证**：A/B 翻转确认——旧正则放行 CDP 地址（复现 bug），新正则拦截；正常页面 /login 仍放行无误伤。tsc --noEmit 通过。
+
+**影响范围**：仅前端 previewUrl 检测逻辑（UX 层）。注意此规则与 Rust 侧 url_policy.rs 是"两档安全校验"共享清单，但本次改的是"检测剔除"（card/autoOpen 候选过滤），非安全校验档位，url_policy.rs 无对应逻辑、无需同步。
+
+**留尾巴**：无。
+
+## 2026-06-13 — 注释卡片生产可用打磨：type 受控输入修复 + 提交路径统一 + append 语义/卡片避让/隐藏元素同构
+
+**Why**：CDP 能力补全后系统性把注释卡片打磨到生产可用，清掉一批可用性/语义问题。
+
+**改动**：
+- A 受控输入（inspector.js handleAsideAct type）: el.value= 被 React value tracker 吞掉导致 PreviewAct type 对受控表单无效。新增 setNativeInputValue 走原型原生 setter 绕过拦截器再派发 input/change，框架能感知
+- B append 语义（inspector.js handleAsideMutate）: append 的新元素不再自动 push 进 draft.elements——那是"用户选中元素"集合（@N 编号 + 提交账本主体），append 产物混入会让编号膨胀、把用户没选的元素带进提交。改为只记进 structuralChanges（含 html），主对话据此在源码加元素
+- C 提交路径统一（inspector.js + mod.rs）: 卡片底部「提交到主对话」原走已废弃的单条直提 heb:aside:submit，与「注释列表→全部提交」体系并存易混淆。改为「提交这条」复用 submit-all 体系（只提交当前 draft 项）；提交成功不再删列表项（markSubmitted 记水位，UI 灰显「已提交↑」可继续改）。删除后端死代码 handle_aside_submit 函数 + heb:aside:submit 分发分支
+- D 卡片避让（inspector.js showAnnotationCard）: 卡片原固定 right:16px 会盖住右侧选中元素。改为按选中元素位置自动靠左/靠右；用户拖动后记 cardPos 保持位置（切元素/追加不跳回），全新选中时重置重新避让
+- E 隐藏元素同构（preview_inspect.rs siblings eval）: PreviewMutate remove 用 display:none 草稿态隐藏，但 siblings 的 sameStructureCount 仍数到它，会误导模型把"已删"算进"要一起改的一类"。eval 加 visible 过滤，隐藏元素不计入同构数、siblings 列表标 [hidden]
+
+**验证**：node --check + inspector.test.cjs 过；agent-core 509 + hebbian 36 单测过；tsc 过；E 现象级验证（真实 Chrome，3 个 .item 隐藏 1 个 → sameStructureCount=2、隐藏项标 [hidden]）；两条 live CDP 测试全过。
+
+**影响范围**：仅内置浏览器（inspector.js / browser/mod.rs / preview_inspect.rs）。无协议改动。
+
+**留尾巴**：A/D 是 DOM 薄壳逻辑，按项目惯例（inspector 纯函数才单测）靠手动验收；bounds 跟随修复（上一批 BrowserPanel rAF）仍需 Desktop dev 肉眼确认。
+
+## 2026-06-13 — 内置浏览器子 webview bounds 跟随侧边栏宽度过渡
+
+**Why**：用户反馈侧边栏自动调宽（切 tab 记忆宽度 / Run 完自动展开，走 700ms CSS width 过渡）时，原生子 webview 不跟随、停在旧宽度；手动拖拽能跟。根因：子 webview 是 Rust 侧绝对定位的独立层、不参与 CSS 布局动画，必须显式下发坐标；而占位区被外层 aside 裁切（自身 width 固定），过渡期间它的布局尺寸不变 → ResizeObserver 不触发 → 不下发 bounds。拖拽能跟是因为 width 是 JS 逐帧 setState、RO 稳定触发。
+
+**改动**（BrowserPanel.tsx）：bounds 同步从"纯 RO 回调"改为"RO/resize 触发边沿 + 封顶 rAF 跟随"——每次 RO/resize 报点启动 rAF 循环，逐帧比对 rect 变化就下发，连续 5 帧静止自停（不常驻空转），把过渡中间帧补齐，终值帧必然捕获。
+
+**验证**：tsc 过；前端 build 过。原生子 webview 视觉跟随无法用工具截取，需 Desktop dev 肉眼确认（留尾巴）。
+
+**影响范围**：仅 BrowserPanel bounds 同步。无接口改动。
+
+## 2026-06-13 — M2 CEF 承载层骨架进主仓（feature cef-preview，组件层完成、承载实例层待 dev 真机验收）
+
+**Why**：内置浏览器旁支工具的截图 / matched-rules 是解"复杂样式问题"的刚需，但 wry 内核（WKWebView）不讲 CDP（只有 Apple 私有 Web Inspector）。M1 attach 模式连的是另起的镜像 Chromium（非用户所见实例）。M2 把 Desktop 预览内核换成 CEF（真 Chromium + 自带 CDP）——CDP 连内嵌端口即用户看的同一实例，所见即所得。前置 PoC 四阶段全验（含 dev 模式裸二进制，记忆 cef-embed-poc）。
+
+**改动**（feature `cef-preview`，关闭时 wry 路径字节级不变）：
+- `apps/desktop/Cargo.toml`：加 cef=148（optional）+ objc2（macOS，从 NSWindow 取 contentView）；feature cef-preview。验证：cef 进 hebbian 统一 workspace 无 time 冲突（hebbian 锁 0.3.47，无 git-cliff 不触发 cef-rs 那个 0.3.48 冲突）
+- `apps/desktop/src/browser/cef/`（新）：mod.rs 进程模型（init_cef 在 Tauri 前 execute_process 分流子进程 + initialize；framework/helper dev 用 HEBBIAN_CEF_DIR/HEBBIAN_CEF_HELPER 指路、release 用 .app 约定；no-startup-window 防死锁；pump 给 RunEvent 调）；app_handler.rs（命令行开关）；client.rs（HebClient + LifeSpanHandler 拿 browser 句柄 + LoadHandler on_load_end 注入 inspector.js）；browser.rs（CefBrowser 导航/eval/bounds/close + CefHost per-session 表）
+- `apps/desktop/src/lib.rs`：run() 开头 init_cef（Tauri 前）；.run 改 build+run 接 RunEvent pump
+- `apps/desktop/src/browser/mod.rs`：BrowserState 加 cef: CefHost 字段；browser_open/navigate/back/forward/reload/set_bounds/close + eval_aside_down（旁支下行命脉）按 cef_ready() 分流；browser_open_cef 从主窗 contentView 创建 CEF 子视图
+- `apps/desktop/src/browser/cdp.rs`：CdpBridge::shared() 优先用 CEF 内嵌端口（cef_ready 时）> 环境变量 > None
+- 架构.md §8.5 第 3 条 + §13 行 8.5-3：记录 CEF 承载决策
+
+**验证**：feature 开/关双路 cargo check 全绿、0 dead_code（组件全接活）；cargo check --workspace 过；agent-core 510 单测过；hebbian 单测单线程 36 全过（多线程下 chat::pending_* 2 个因测试并发污染失败——既有问题，非本次引入，单跑均过）；inspector.test.cjs 过。
+
+**影响范围**：仅 desktop（feature gate 隔离，默认关闭对现状零影响）+ 架构文档。agent-core/protocol 零改动。
+
+**留尾巴（必须 dev 真机验收，本环境无法验证原生窗口 + CEF 多进程交互）**：
+- 承载实例层三个待验点（架构.md 标注）：① ns_window→contentView 取法 ② set_as_child 子视图坐标系（CEF 左下原点 vs 左上）③ browser 句柄是否同步回传（异步则改轮询）
+- 验证入口：export CEF 二进制到 CEF_PATH → `pnpm tauri dev --features cef-preview`（dev 需设 HEBBIAN_CEF_DIR/HEBBIAN_CEF_HELPER）
+- browser_set_visible/hide_others 的 CEF 子视图显隐、popout 的 CEF 化未做（仍 wry）；打包链（bundle helper.app 进 Hebbian.app）未做
+- hebbian 测试并发污染（chat::pending_*）是独立既有问题，未在本次处理
+
+## 2026-06-13 — M2 补全 CEF helper bin + 打包链（让 build 能起 CEF）
+
+**Why**：上一条 M2 承载层漏了 helper 子进程实体——只在注释引用 `hebbian-cef-helper` 没建文件，Cargo.toml 无 [[bin]]，helper_path() 找空路径 → init_cef 必降级回 wry，build 起不了 CEF。本条补全 helper bin + 打包脚本。
+
+**改动**：
+- `apps/desktop/src/bin/cef_helper.rs`（新）：CEF helper 子进程入口，只跑 execute_process（不链接 Tauri/agent_core）。framework 加载：dev 用 HEBBIAN_CEF_DIR 绝对路径、release 用 LibraryLoader(helper=true) 相对 ../../../..。无 cef-preview feature 时编译成空 main
+- `apps/desktop/Cargo.toml`：显式声明两个 [[bin]]（hebbian 主 + hebbian-cef-helper）
+- `apps/desktop/cef-bundle.sh`（新）：tauri build 后处理——复制 CEF framework 进 Contents/Frameworks/、用 helper bin 组 5 个 helper.app（GPU/Renderer/Plugin/Alerts/默认，LSUIElement 后台进程）、嵌套 ad-hoc 签名（helper→framework→外层）
+- `browser/cef/mod.rs`：helper_path() 改找 "Hebbian Helper.app"（与 cef-bundle.sh 组的名字对齐）
+
+**验证**：
+- helper bin 现象级验证：`HEBBIAN_CEF_DIR=... ./hebbian-cef-helper --type=gpu-process` 成功加载 CEF framework 并进到 CEF 内部 ICU 初始化（证明绝对路径加载 + execute_process 分流正确；裸跑缺 resources 的 icudtl 报错不影响结论）
+- 双路 cargo check 全绿；workspace check 过；hebbian 单测单线程 36 全过；inspector.test.cjs 过；cef-bundle.sh bash -n 语法过
+
+**影响范围**：仅 desktop（feature gate）。
+
+**留尾巴（必须真机 build + dev 验收）**：
+- cef-bundle.sh 整套产物正确性（bundle 结构 / rpath / 嵌套签名顺序 / helper 进程能否被主进程拉起）需真机 `tauri build` 验
+- cef-bundle.sh 尚未接进 tauri.conf.json 的 afterBuild hook（避免误触发未验证的打包流程，手动调用：`bash apps/desktop/cef-bundle.sh <Hebbian.app> <helper 二进制>`）
+- 承载实例层 3 个待验点（contentView/坐标系/句柄回传）仍需 dev 验，见上条 changelog

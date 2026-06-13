@@ -160,6 +160,33 @@
     return out;
   }
 
+  // 一条注释（draft）的旁支对话只有一个会话，恒定锚在 1 号元素上——切换激活元素
+  // （看样式/改参数）不改变对话归属。返回 elements[0] 的 key 作为 asideConvos 索引。
+  // 关键修复：曾经 chat 区用激活元素 key、syncDraftToList 用 elements[0] key，
+  // 两套不一致 → 切到 2 号聊天后对话历史读不回、会话漂移。
+  function draftChatKey(draft) {
+    if (!draft || !draft.elements || !draft.elements.length) return null;
+    return draft.elements[0].key;
+  }
+
+  // 在 draft 里找元素的下标：先比 DOM 引用（同一节点），再比 selectorPath
+  // （React 重渲染换了 DOM 节点但还是同一逻辑元素 → 引用失配但 selector 相同）。
+  // 找不到返回 -1。append 去重用它，避免同一逻辑元素被重复加入。
+  function findDraftElementIndex(draft, el, snapshot) {
+    if (!draft || !draft.elements) return -1;
+    for (var i = 0; i < draft.elements.length; i++) {
+      if (draft.elements[i].el === el) return i;
+    }
+    var sp = snapshot && snapshot.selectorPath;
+    if (sp) {
+      for (var j = 0; j < draft.elements.length; j++) {
+        var es = draft.elements[j].snapshot;
+        if (es && es.selectorPath && es.selectorPath === sp) return j;
+      }
+    }
+    return -1;
+  }
+
   var __hebCore = {
     truncate: truncate,
     buildSelectorPath: buildSelectorPath,
@@ -171,6 +198,8 @@
     parseInMsg: parseInMsg,
     refToIndex: refToIndex,
     composeAsideText: composeAsideText,
+    draftChatKey: draftChatKey,
+    findDraftElementIndex: findDraftElementIndex,
     MAX_SNAPSHOT_BYTES: MAX_SNAPSHOT_BYTES,
   };
 
@@ -627,6 +656,7 @@
      经上行通道发回宿主，由主窗口 React 组装成 user message 发进对话。 */
 
   var cardEl = null;
+  var cardPos = null; // 用户拖动后记住的位置 {x,y}；非空则不再自动避让
   var cardSnapshot = null;
   // 多元素注释 draft：一个注释框选中 N 个元素（@1=elements[0]）。
   // selectedTarget/cardSnapshot/styleDiff 三个旧全局是"激活元素"的视图——
@@ -651,8 +681,14 @@
     styleDiff = item.styleDiff;
   }
 
-  // @N → 元素（detach 时用 snapshot 的 selector/xpath 找回）；非法/越界回退激活元素
+  // @N → 元素（detach 时用 snapshot 的 selector/xpath 找回）；
+  // 非 @N 格式当 CSS selector 直接在页面上找（模型可触达未圈选元素）；
+  // 非法/越界回退激活元素
   function elementForRef(ref) {
+    var raw = String(ref || "").trim();
+    if (raw && !/^@\d+$/.test(raw)) {
+      try { var bySel = document.querySelector(raw); if (bySel) return bySel; } catch (e) {}
+    }
     if (!draft) return currentTarget();
     var idx = refToIndex(ref);
     if (idx < 0 || idx >= draft.elements.length) idx = draft.activeIndex;
@@ -684,7 +720,7 @@
     } catch (e) { /* 静默 */ }
     syncDraftToList();
   }
-  // heb:aside:mutate：结构改动（草稿态，刷新即消失）。append 的新元素自动入 draft.elements。
+  // heb:aside:mutate：结构改动（草稿态，刷新即消失）。
   function handleAsideMutate(p) {
     var el = elementForRef(p.target || "@1");
     if (!el) return;
@@ -692,13 +728,10 @@
     try {
       if (p.op === "append" && p.html) {
         el.insertAdjacentHTML("beforeend", p.html);
-        var added = el.lastElementChild;
+        // 追加的新元素不塞进 draft.elements——那是"用户选中元素"集合（@N 编号、
+        // 提交账本的主体），append 产物混进去会让编号膨胀、把用户没选的元素也带进
+        // 提交。它已记进 structuralChanges（含 html），主对话据此在源码里加元素即可。
         desc = "在 " + (p.target || "@1") + " 内追加了元素";
-        if (added && draft) {
-          draft.elements.push({ key: elementKeyOf(added), el: added, snapshot: collectSnapshot(added), styleDiff: {} });
-          desc += "（已编为 @" + draft.elements.length + "）";
-          showAnnotationCard(null, draft); // 重建卡片让小方块行出现新编号
-        }
       } else if (p.op === "remove") {
         el.style.display = "none"; // 草稿态用隐藏代替真删，撤销/找回都还在
         desc = "移除了 " + (p.target || "@1") + "（预览态隐藏）";
@@ -714,6 +747,18 @@
     if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🔧 " + desc);
   }
 
+  // <input>/<textarea> 受控写入：React 等框架用原型上的 value setter 装了拦截器追踪
+  // 内部状态，直接 el.value= 会被它"吞掉"（值看着变了但框架状态没更新，re-render 时回滚）。
+  // 必须调原型原生 setter 绕过拦截器，再派发 input 让框架感知。
+  function setNativeInputValue(el, value) {
+    var proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, "value");
+    if (setter && setter.set) setter.set.call(el, value);
+    else el.value = value;
+  }
+
   // heb:aside:act：页面交互（点击/输入/hover/按键/滚动），触发交互态给用户看
   function handleAsideAct(p) {
     var el = elementForRef(p.target || "@1");
@@ -724,7 +769,7 @@
       } else if (p.action === "type") {
         el.focus();
         if ("value" in el) {
-          el.value = p.text || "";
+          setNativeInputValue(el, p.text || "");
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         } else {
@@ -902,6 +947,7 @@
         var t = Math.max(0, Math.min(window.innerHeight - 24, baseT + ev.clientY - startY));
         card.style.left = l + "px";
         card.style.top = t + "px";
+        cardPos = { x: l, y: t }; // 记住，重建卡片（切元素/追加）时保持位置不跳回
       };
       var onUp = function () {
         document.removeEventListener("mousemove", onMove, true);
@@ -937,7 +983,7 @@
   function syncDraftToList() {
     if (!draft) return;
     var styleDiffs = draftStyleDiffs(draft);
-    var conv = (asideConvos[draft.elements[0].key] && asideConvos[draft.elements[0].key].messages) || [];
+    var conv = (asideConvos[draftChatKey(draft)] && asideConvos[draftChatKey(draft)].messages) || [];
     var hasContent = styleDiffs.length || draft.structuralChanges.length || conv.length;
     var idx = -1;
     if (draft.listId) {
@@ -1028,6 +1074,8 @@
       conversation: delta.conversation,
       styleDiffs: delta.styleDiffs,
       structuralChanges: delta.structuralChanges,
+      // selector 整组改动（PreviewStyle target=selector）：主对话要按"共享组件/类"落地
+      selectorStyleChanges: item.draft.selectorStyleChanges || [],
     };
   }
 
@@ -1409,13 +1457,25 @@
     var card = document.createElement("div");
     card.setAttribute(OVERLAY_ATTR, "card");
     var cardTop = 16;
+    // 自动避让：选中元素在屏幕右半 → 卡片靠左；否则靠右。避免卡片盖住正在改的元素。
+    // 用户拖动过卡片后记住位置（cardPos），不再自动避让。
+    var sideRight = true;
+    try {
+      if (!cardPos && selectedTarget && selectedTarget.getBoundingClientRect) {
+        var tr = selectedTarget.getBoundingClientRect();
+        if (tr.left + tr.width / 2 > window.innerWidth / 2) sideRight = false;
+      }
+    } catch (e) {}
+    var horiz = cardPos
+      ? "left:" + cardPos.x + "px;"
+      : (sideRight ? "right:16px;" : "left:16px;");
     card.style.cssText = [
-      "position:fixed", "top:" + cardTop + "px", "right:16px", "width:300px", "height:min(760px, calc(100vh - 32px))",
+      "position:fixed", "top:" + (cardPos ? cardPos.y : cardTop) + "px", "width:300px", "height:min(760px, calc(100vh - 32px))",
       "display:flex", "flex-direction:column", "z-index:2147483647",
       "background:#ffffff", "color:#1f2328", "border:1px solid #d9dde3",
       "border-radius:10px", "box-shadow:0 8px 30px rgba(15,23,42,0.16)",
       "font-family:-apple-system,system-ui,sans-serif", "overflow:hidden",
-    ].join(";");
+    ].join(";") + ";" + horiz;
     // 卡片内的点击/输入不冒泡到页面（冒泡阶段拦截——按钮自己的 handler 先触发，
     // 再在这里阻止继续冒泡到页面 document；不能用捕获阶段，否则会先于按钮 stopPropagation 把点击吃掉）
     card.addEventListener("click", function (e) { e.stopPropagation(); }, false);
@@ -1493,7 +1553,7 @@
       });
     }
 
-    var elementKey = elementKeyOf(selectedTarget);
+    var elementKey = draftChatKey(draft);
 
     // ══ 子卡片 1：样式参数（可折叠）══
     var styleCard = document.createElement("div");
@@ -1716,14 +1776,34 @@
     inputLine.appendChild(chatInput); inputLine.appendChild(chatSend);
     chatInputRow.appendChild(refsRow); chatInputRow.appendChild(imagesRow); chatInputRow.appendChild(inputLine);
     var chatFoot = document.createElement("div");
-    chatFoot.style.cssText = "display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
-    var submitMain = mkPrimaryBtn("提交到主对话");
+    chatFoot.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
+    var footHint = document.createElement("span");
+    footHint.style.cssText = "flex:1;min-width:0;font-size:10px;color:#8c949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    footHint.textContent = "改动自动进左下注释列表";
+    // 提交当前这条注释：复用「全部提交」体系（只提交本 draft 对应项），不再走已废弃的
+    // 单条直提路径——两套提交并存只会让用户困惑哪个生效。
+    var submitMain = mkPrimaryBtn("提交这条");
+    submitMain.title = "把这条注释交给助手总结成一条消息，发进主对话";
     submitMain.addEventListener("click", function () {
-      var conv = asideConvos[elementKey];
-      if (!conv || !conv.sessionId) { appendChatMsg(msgList, "assistant", "（还没开始对话）"); return; }
+      syncDraftToList(); // 确保最新改动已落进列表项
+      var item = null;
+      for (var qi = 0; qi < editQueue.length; qi++) {
+        if (editQueue[qi].id === (draft && draft.listId)) { item = editQueue[qi]; break; }
+      }
+      if (!item || !annotationHasDelta(item)) {
+        appendChatMsg(msgList, "assistant", "（还没有可提交的改动）");
+        return;
+      }
       appendChatMsg(msgList, "assistant", "正在总结并提交到主对话…");
-      send("heb:aside:submit", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded", sessionId: conv.sessionId, element: elementLocator(cardSnapshot) });
+      send("heb:annotation:submit-all", {
+        surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
+        items: [annotationPayload(item)],
+      });
+      markSubmitted(item);
+      renderQueuePanel();
+      notifyDirty();
     });
+    footHint && chatFoot.appendChild(footHint);
     chatFoot.appendChild(submitMain);
     chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
 
@@ -1872,17 +1952,17 @@
     // 通知宿主 picker 已结束（选中成功也算结束）→ embedded 模式 React 按钮恢复非激活态
     send("heb:picker:cancelled", {});
     if (pickerMode === "append" && draft) {
-      // 追加进当前注释框：去重（同一元素已在列表就只切激活）；重建卡片（不新建 draft）
+      // 追加进当前注释框：去重（同一元素已在列表就只切激活——比 DOM 引用 +
+      // selectorPath，React 重渲染换节点也能认出是同一逻辑元素）；重建卡片（不新建 draft）
       pickerMode = "new";
       selectedTarget = el;
-      var dup = -1;
-      for (var di = 0; di < draft.elements.length; di++) {
-        if (draft.elements[di].el === el) { dup = di; break; }
-      }
+      var snap = collectSnapshot(el);
+      var dup = findDraftElementIndex(draft, el, snap);
       if (dup >= 0) {
+        draft.elements[dup].el = el; // 刷新可能已 detach 的节点引用
         draft.activeIndex = dup;
       } else {
-        draft.elements.push({ key: elementKeyOf(el), el: el, snapshot: collectSnapshot(el), styleDiff: {} });
+        draft.elements.push({ key: elementKeyOf(el), el: el, snapshot: snap, styleDiff: {} });
         draft.activeIndex = draft.elements.length - 1;
       }
       showAnnotationCard(null, draft);
@@ -1890,6 +1970,7 @@
     }
     selectedTarget = el;
     styleDiff = {};
+    cardPos = null; // 全新选中：让卡片按新元素位置重新自动避让
     showAnnotationCard(collectSnapshot(el));
   }
 
@@ -2042,16 +2123,37 @@
         break;
       case "heb:aside:apply":
         if (msg.payload) {
-          // 按 @N 路由到 draft 里的对应元素；无 draft（旧单元素路径）退回激活元素
           var apTarget = msg.payload.target || "@1";
-          if (draft) {
-            var apIdx = refToIndex(apTarget);
-            if (apIdx < 0 || apIdx >= draft.elements.length) apIdx = draft.activeIndex;
-            styleSetOn(draft.elements[apIdx], msg.payload.prop, msg.payload.value);
+          var apLabel = apTarget;
+          if (/^@\d+$/.test(apTarget)) {
+            // @N 路由到 draft 里的对应元素；无 draft（旧单元素路径）退回激活元素
+            if (draft) {
+              var apIdx = refToIndex(apTarget);
+              if (apIdx < 0 || apIdx >= draft.elements.length) apIdx = draft.activeIndex;
+              styleSetOn(draft.elements[apIdx], msg.payload.prop, msg.payload.value);
+            } else {
+              styleApply(msg.payload.prop, msg.payload.value);
+            }
           } else {
-            styleApply(msg.payload.prop, msg.payload.value);
+            // CSS selector：批量/单个直接应用，并记进 draft 的 selector 改动账本
+            // （selectorStyleChanges 随注释一起提交，主对话知道这是组级改动）
+            var apEls = [];
+            try {
+              apEls = msg.payload.allMatches
+                ? Array.prototype.slice.call(document.querySelectorAll(apTarget))
+                : (document.querySelector(apTarget) ? [document.querySelector(apTarget)] : []);
+            } catch (e) {}
+            for (var ai = 0; ai < apEls.length; ai++) {
+              try { apEls[ai].style.setProperty(msg.payload.prop, msg.payload.value); } catch (e) {}
+            }
+            if (draft) {
+              draft.selectorStyleChanges = draft.selectorStyleChanges || [];
+              draft.selectorStyleChanges.push({ selector: apTarget, allMatches: !!msg.payload.allMatches, count: apEls.length, prop: msg.payload.prop, value: msg.payload.value });
+            }
+            apLabel = apTarget + "（" + apEls.length + " 个元素）";
+            syncDraftToList();
           }
-          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + apTarget + " " + msg.payload.prop + " → " + msg.payload.value);
+          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + apLabel + " " + msg.payload.prop + " → " + msg.payload.value);
         }
         break;
       case "heb:aside:mutate":
@@ -2071,8 +2173,8 @@
         break;
       case "heb:aside:submitted":
         if (cardChat) appendChatMsg(cardChat.msgList, "assistant", "✅ 已提交到主对话，主对话会据此改源码");
-        // 这条注释已单独提交落地，从注释列表删掉对应项
-        if (draft && draft.listId) removeQueueItem(draft.listId);
+        // 提交成功不删列表项——markSubmitted 已记水位（UI 灰显「已提交↑」），
+        // 用户可继续改再提交；要清掉点列表的「清空」。
         break;
       case "heb:aside:error":
         if (cardChat && msg.payload) appendChatMsg(cardChat.msgList, "assistant", "⚠️ " + (msg.payload.message || "出错了"));
