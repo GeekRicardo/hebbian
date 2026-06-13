@@ -7929,3 +7929,36 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - cef-bundle.sh 整套产物正确性（bundle 结构 / rpath / 嵌套签名顺序 / helper 进程能否被主进程拉起）需真机 `tauri build` 验
 - cef-bundle.sh 尚未接进 tauri.conf.json 的 afterBuild hook（避免误触发未验证的打包流程，手动调用：`bash apps/desktop/cef-bundle.sh <Hebbian.app> <helper 二进制>`）
 - 承载实例层 3 个待验点（contentView/坐标系/句柄回传）仍需 dev 验，见上条 changelog
+
+### 2026-06-13 — 新增「旁支对话」（branch / aside session）：右侧工作台多子 tab 的只读分支讨论
+
+- **Why**: 用户想要类似 Claude Code `/btw` 的能力——基于当前对话临时分一条岔出去讨论，但不污染主对话、不动文件。此前只有内置浏览器「元素对话」用了旁支引擎（[内置浏览器与临时对话框-spec.md](内置浏览器与临时对话框-spec.md) §3 QuickChat 的 `branch` 维度），现在把它做成右侧工作台的一等公民 tab，并支持一个主对话下挂多条子旁支。
+- **改动**:
+  - `apps/desktop/src/chat.rs`: 把 `send_aside` 的引擎骨架抽成参数化的 `run_aside(RunAsideArgs)`——工具集 / workspace / enabled_tools 由调用方注入。`send_aside`（元素对话）行为不变，仍传 Preview 信号工具 + home workspace；新引擎让代码旁支复用同一套「纯内存、不落盘、emit 回调、模型 IO 落主对话 model_io.jsonl(kind=aside)」机制。
+  - `apps/desktop/src/branch.rs`（新增）: `BranchState`（Tauri managed，`Mutex<HashMap<branch_id, (bound_session, history)>>`）+ 三个命令 `branch_create` / `branch_send` / `branch_discard`。`branch_create` 从主对话当前消息 fork 一段历史（`fork_history` 纯函数，截到分叉点为止）；`branch_send` 用主对话 workspace + 只读 Read/Grep 工具跑一轮，事件走与主对话同款 `EngineEvent` channel。system prompt 追加只读身份说明。
+  - `apps/desktop/src/lib.rs`: 注册模块 / managed state / 三命令；`delete_session` 连带 `drop_for_session` 清理旁支历史，防内存泄漏。
+  - 前端 `useBranchStore.ts`（新增）: 独立 zustand store 管多条旁支（各自消息流 + streaming + busy/error），actions 走 bridge api；旁支不进会话列表、不持久化。
+  - 前端 `BranchChatTab.tsx`（新增）: 顶部子 tab 横条（多旁支切换 / 新建 / 关闭）+ 消息流（user/assistant 气泡 + 折叠只读工具卡片）+ 输入框，复用 MarkdownRenderer。
+  - 前端 `RightSidebar.tsx`: 新增 `branches` tab（图标 GitBranch，排在「计划」与「浏览器」之间）。
+  - 前端 `bridge/tauri.ts` + `types.ts`: 加 `branchCreate/branchSend/branchDiscard` api 与 `BranchInfo` 类型。
+- **安全属性**: 旁支物理上改不了文件——harness 只挂 ReadTool + GrepTool，agent_loop 的 `registry.definitions()` 只返回实际注册的工具，Bash/Edit 即便在 `BUILTIN_TOOL_NAMES` 白名单里也因未注册而不暴露给模型。与元素对话同一套隔离机制。
+- **影响范围**: 仅 Desktop surface（branch_* 是 Tauri 专属命令，CLI/hebweb 不挂载）。agent-core / protocol / model-gateway 零改动。`chat::send_aside` 签名不变（内部委托给 `run_aside`），元素对话路径不受影响。`delete_session` 命令多了个 managed state 参数（同 crate 内部，无协议影响）。
+- **验证**: `cargo check --workspace` 全绿；`cargo test -p hebbian --lib branch::` 4 个单测过（fork 截断含分叉点 / 缺分叉点保全量 / drop_for_session 只清绑定旁支）；`pnpm exec tsc --noEmit`（apps/desktop）全绿。
+- **留尾巴**:
+  - 端到端 GUI 交互（点 + 建旁支 → 发消息 → 看 Read/Grep 流式 → 关 tab）需 `pnpm tauri dev` 手动验，本次未跑。
+  - 暂未做 spec §3.7 的 returnToChat（旁支结论回灌主对话）——当前旁支是纯讨论，结论靠用户自己带回主对话。
+  - 暂未做模型选择器（旁支固定继承主对话 provider/model，`branch_send` 已留 providerId/model 入参，前端接选择器即可启用）。
+  - 旁支历史纯内存，应用重启即丢（符合「临时」语义）；spec §3.3 的「保留升级进列表」未做。
+
+## 2026-06-13 — 注释卡片三个 bug：切元素丢 chat 草稿 + 已提交后可再次提交
+
+- **Why**: 用户报三现象——① 在注释框里切换/追加选中元素后，chat 输入框里**还没发送的内容**没了；② 一个元素 chat 提交到主对话后出现「已提交」分割线，之后**没法再提交**了（卡片「提交这条」报「还没有可提交的改动」）；③ 希望分割线上加按钮重新提交分割线上方那次对话。
+- **根因**:
+  - **草稿丢失**：切元素（chips 行 / refsRow 数字按钮）和追加选取都走 `showAnnotationCard` **完全重建卡片**，新建的 `chatInput` textarea 是空的，用户已输入未发送的草稿随旧 DOM 销毁。`asideConvos` 只存已发送消息（msgList 能恢复），没存输入框草稿。
+  - **不能再提交**：提交后 `markSubmitted` 记水位，`annotationDelta` 算出「无新增量」→ `annotationHasDelta` 返回 false → 卡片「提交这条」直接拦截报「没有可提交改动」。设计上只支持「增量提交」，缺「重发已提交内容」入口。
+- **改动**（apps/desktop/src/browser/inspector.js）:
+  - 草稿：`chatInput` 监听 input 把值存进 `draft.chatDraft`（draft 是注释稳定载体，跨重建存活），重建卡片时回填；`sendChat` 发送后清空 `draft.chatDraft`，避免回填旧文本。`chatDraft` 只读写 textarea，不进 `annotationPayload`（不污染提交载荷）。
+  - 再次提交：新增 `fullAnnotationPayload`（全量载荷，忽略增量水位）+ `resubmitAnnotation`（重发整条已提交内容到主对话）。注释列表浮窗的「已提交↑」分割线上加「再次提交」小按钮（stopPropagation 不触发展开编辑）；卡片底部「提交这条」按钮改逻辑——有新增量走增量提交+记水位，无增量但提过则走 `resubmitAnnotation` 重发（不再报「没有可提交改动」）。
+- **影响范围**: 仅 inspector.js（注释卡片 DOM 薄壳）。无协议 / agent-core 改动。
+- **验证**: node --check + inspector.test.cjs 纯函数单测过；逻辑自检（chatDraft 不污染提交载荷、resubmitAnnotation 函数提升两处调用可解析）。**DOM 交互（切元素草稿回填 / 分割线按钮 / 重复提交）需 `pnpm tauri dev` 真机验**——hebweb 内置浏览器是未实现的降级路径（P2.5），出不来注释卡片，无法用 hebweb 验证；本环境起不了 GUI。
+- **留尾巴**: 真机交互验证待用户在 Desktop 跑（选元素→注释卡片→输入→切元素看草稿是否还在；提交→分割线→点「再次提交」看是否重发）。

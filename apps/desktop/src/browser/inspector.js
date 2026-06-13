@@ -1079,6 +1079,27 @@
     };
   }
 
+  // 全量载荷（忽略增量水位）：再次提交用——把该注释已提交过的内容重新发一遍主对话。
+  function fullAnnotationPayload(item) {
+    return {
+      elements: item.draft.elements.map(function (e, i) {
+        return { ref: "@" + (i + 1), snapshot: e.snapshot };
+      }),
+      conversation: item.conversation.slice(),
+      styleDiffs: item.styleDiffs,
+      structuralChanges: item.structuralChanges.slice(),
+      selectorStyleChanges: item.draft.selectorStyleChanges || [],
+    };
+  }
+
+  // 再次提交一条已提交的注释（bug 修复：分割线上方内容此前无法重发）。
+  function resubmitAnnotation(item) {
+    send("heb:annotation:submit-all", {
+      surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
+      items: [fullAnnotationPayload(item)],
+    });
+  }
+
   function makeQueueDraggable(panel, handle) {
     handle.addEventListener("mousedown", function (e) {
       if (e.target && e.target.tagName === "BUTTON") return;
@@ -1191,7 +1212,24 @@
         summary.appendChild(doneEl);
         var sep = document.createElement("div");
         sep.style.cssText = "display:flex;align-items:center;gap:6px;color:#a8b0b9;margin:3px 0;";
-        sep.innerHTML = "<span style='flex:1;border-top:1px dashed #d9dde3;'></span><span style='flex:none;font-size:9px;'>已提交 ↑</span><span style='flex:1;border-top:1px dashed #d9dde3;'></span>";
+        var sepL = document.createElement("span");
+        sepL.style.cssText = "flex:1;border-top:1px dashed #d9dde3;";
+        var sepT = document.createElement("span");
+        sepT.style.cssText = "flex:none;font-size:9px;";
+        sepT.textContent = "已提交 ↑";
+        // 再次提交：把分割线上方这次已提交内容重新发一遍主对话（忽略增量水位）。
+        // 用户场景：主对话没按预期改、或想让主对话再处理一次同样的注释。
+        var resend = document.createElement("button");
+        resend.textContent = "再次提交";
+        resend.title = "把上方已提交的改动重新发一次主对话";
+        resend.style.cssText = "flex:none;border:1px solid #d0d7de;background:#f6f8fa;color:#0969da;font-size:9px;line-height:1;cursor:pointer;border-radius:4px;padding:2px 6px;";
+        resend.addEventListener("click", function (e) {
+          e.stopPropagation(); // 不触发 row 的「展开编辑」
+          resubmitAnnotation(item);
+        });
+        var sepR = document.createElement("span");
+        sepR.style.cssText = "flex:1;border-top:1px dashed #d9dde3;";
+        sep.appendChild(sepL); sep.appendChild(sepT); sep.appendChild(resend); sep.appendChild(sepR);
         summary.appendChild(sep);
       }
       var newEl = document.createElement("div");
@@ -1661,7 +1699,10 @@
       ? "让它改这些元素，说 1、2 指代上方标签（⌘↵ 发送）"
       : "让它改这个元素（⌘↵ 发送）";
     chatInput.style.cssText = "flex:1;min-height:36px;max-height:96px;resize:none;background:#f6f8fa;color:#1f2328;border:1px solid #d9dde3;border-radius:6px;font-size:12px;padding:6px;outline:none;font-family:inherit;";
-
+    // 未发送草稿存进 draft：切元素 / 追加选取会重建整张卡片（chatInput 是新 textarea），
+    // 不存就丢。draft 是注释的稳定载体，重建时回填，输入不随切元素消失。
+    if (draft.chatDraft) chatInput.value = draft.chatDraft;
+    chatInput.addEventListener("input", function () { draft.chatDraft = chatInput.value; });
     // 粘贴截图：贴进输入框 → 缩略图行预览，发送时随消息带给助手。
     // 上行通道是 URL 导航（wry heb-bridge），过大的 base64 会撑爆 URL——
     // canvas 等比缩到 ≤1280px 并转 JPEG 压体积。
@@ -1748,6 +1789,7 @@
       if (!t && !pendingImages.length) return;
       if (chatSend.disabled) return;
       chatInput.value = "";
+      if (draft) draft.chatDraft = ""; // 已发送，清掉草稿（避免重建卡片又回填旧文本）
       appendChatMsg(msgList, "user", t + (pendingImages.length ? "（含 " + pendingImages.length + " 张截图）" : ""));
       asideConvos[elementKey] = asideConvos[elementKey] || { sessionId: null, messages: [] };
       asideConvos[elementKey].messages.push({ role: "user", text: t });
@@ -1790,16 +1832,22 @@
       for (var qi = 0; qi < editQueue.length; qi++) {
         if (editQueue[qi].id === (draft && draft.listId)) { item = editQueue[qi]; break; }
       }
-      if (!item || !annotationHasDelta(item)) {
+      if (!item) {
         appendChatMsg(msgList, "assistant", "（还没有可提交的改动）");
         return;
       }
       appendChatMsg(msgList, "assistant", "正在总结并提交到主对话…");
-      send("heb:annotation:submit-all", {
-        surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
-        items: [annotationPayload(item)],
-      });
-      markSubmitted(item);
+      if (annotationHasDelta(item)) {
+        // 有新增量：发增量并记水位
+        send("heb:annotation:submit-all", {
+          surface: window.__HEB_POPOUT__ ? "popout" : "embedded",
+          items: [annotationPayload(item)],
+        });
+        markSubmitted(item);
+      } else {
+        // 无新增量但之前提过：重新发全量（用户想再让主对话处理一次）
+        resubmitAnnotation(item);
+      }
       renderQueuePanel();
       notifyDirty();
     });
