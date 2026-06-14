@@ -416,12 +416,17 @@ impl RunHandle {
             }
             observer.on_event(&event);
 
-            // 子 NestedRun（subagent）的事件经装饰器转发进父 sink，带
+            // 子 NestedRun（subagent）的 Run* 生命周期事件经装饰器转发进父 sink，带
             // subagent_call_id=Some(parent_task_call_id)。这些事件已交给 observer 做
             // nested 累积 / 渲染，但**不能**参与父 turn 的终态判定——否则第一个并发子
             // emit 的 RunFinished 会被误当成父 Run 结束，提前 break，把其它并发子和父
             // agent_loop 一起丢掉（架构 §4.4.11.8）。子的生命周期对父 driver 透明。
-            if event.subagent_call_id.is_some() {
+            //
+            // 注意只跳过子的 Run* 事件：子的 HITL 事件（PermissionRequested /
+            // UserQuestionRequested）也带 subagent_call_id，但它们必须走下面的 match →
+            // on_permission_request / on_question，让 surface 把 request_id 注册进 HitlState，
+            // 否则前端审批回流时按 request_id 找不到 gate → 报「审批回应失败」。
+            if event.subagent_call_id.is_some() && is_run_lifecycle_event(&event.payload) {
                 continue;
             }
 
@@ -680,6 +685,21 @@ pub enum HarnessError {
 
 /// 区分事件是否必须送达。生命周期 / HITL / Turn 边界 / 上下文压缩通知是关键事件，
 /// surface 漏掉会卡死或状态不一致；流式增量类的事件丢弃后影响仅限于渲染。
+/// 子 NestedRun 的 Run* 生命周期事件——对父 driver 的 turn 终态判定透明（架构 §4.4.11.8）。
+/// `drive` 用它把子的这些事件挡在父 turn 状态机之外，避免子结束被误当父结束；
+/// 子的非生命周期事件（HITL / 工具 / 文本）仍正常进 match。
+fn is_run_lifecycle_event(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::RunStarted { .. }
+            | EventPayload::RunFinished { .. }
+            | EventPayload::RunFailed { .. }
+            | EventPayload::RunCancelled
+            | EventPayload::RunSuspended { .. }
+            | EventPayload::RunResumed { .. }
+    )
+}
+
 fn is_critical_event(payload: &EventPayload) -> bool {
     matches!(
         payload,
@@ -892,6 +912,82 @@ mod tests {
             summary.usage.expect("usage").input,
             42,
             "drive 收到的应是父 Run 的 RunFinished，而非第一个子的"
+        );
+    }
+
+    /// 回归（subagent 审批「回应失败」）：子 NestedRun 触发的 HITL 事件
+    /// （`PermissionRequested` / `UserQuestionRequested`）也带 `subagent_call_id`，
+    /// 但它们**必须**走 drive 的 match → `on_permission_request` / `on_question`，
+    /// 让 surface 的 HitlState 把 `request_id → gate` 注册进表，否则前端审批回流时
+    /// 按 request_id 找不到 gate → 报「审批回应失败」。
+    ///
+    /// 即：`subagent_call_id.is_some()` 不能无差别跳过——只能跳过子的 Run* 生命周期
+    /// 终态事件（避免误终止父），子的 HITL 事件要放行。
+    #[tokio::test]
+    async fn drive_routes_subagent_permission_request_to_observer() {
+        let (tx, rx) = mpsc::channel::<Event>(8);
+        // 子审批走父 HitlGate（runner 复用 parent_hitl）：dispatcher 已 open_approval，
+        // gate 里有此 pending，drive 的 is_stale 过滤才不会误判它 stale。
+        let hitl = Arc::new(HitlGate::default());
+        let (request_id, _waiter) = hitl.open_approval(Some("Bash"), Some("rm x"));
+        let mut handle = make_handle_with_hitl(rx, hitl);
+        let rid = handle.run_id.clone();
+
+        // 子 NestedRun 里会写工具触发审批：装饰器已打上 subagent_call_id。
+        tx.send(Event::now_subagent(
+            rid.clone(),
+            0,
+            "call-task-1",
+            EventPayload::PermissionRequested {
+                request_id: request_id.clone(),
+                kind: PermissionKind::ToolCall {
+                    tool_name: "Bash".to_string(),
+                    input: serde_json::json!({ "command": "rm x" }),
+                    fingerprint: Some("rm x".to_string()),
+                    command_segments: vec!["rm x".to_string()],
+                    segments: Vec::new(),
+                    refuse_remember: false,
+                },
+                summary: "[subagent: coder] 工具 Bash 请求执行".to_string(),
+                risk: protocol::RiskLevel::Medium,
+                auto_handled: false,
+                call_id: "call-sub-tool".to_string(),
+            },
+        ))
+        .await
+        .unwrap();
+        // 父 Run 结束收 turn。
+        tx.send(ev(
+            &rid,
+            1,
+            EventPayload::RunFinished {
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                total_cache_read_tokens: 0,
+                total_cache_creation_tokens: 0,
+                duration_ms: 0,
+            },
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        let permission_requests = Arc::new(AtomicUsize::new(0));
+        let questions = Arc::new(AtomicUsize::new(0));
+        let mut observer = CountingObserver {
+            permission_requests: permission_requests.clone(),
+            questions,
+        };
+        let summary = handle.drive(&mut observer).await;
+        match summary.outcome {
+            TurnOutcome::Done => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+        // 子审批必须被路由给 observer（surface 据此 track request_id），否则前端无从回应。
+        assert_eq!(
+            permission_requests.load(Ordering::SeqCst),
+            1,
+            "子 NestedRun 的 PermissionRequested 必须走 on_permission_request"
         );
     }
 

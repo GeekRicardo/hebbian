@@ -66,7 +66,7 @@ const BLANK_INST: Inst = {
   dirtyCount: 0,
 };
 
-export function BrowserPanel({ active }: { active: boolean }) {
+export function BrowserPanel({ active, obscured = false }: { active: boolean; obscured?: boolean }) {
   const host = getBrowserHost();
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -191,6 +191,37 @@ export function BrowserPanel({ active }: { active: boolean }) {
     };
   }, [syncBounds]);
 
+  // 卸载兜底：侧边栏折叠时 RightSidebar 把整个展开面板（含本组件）从 DOM 卸载，
+  // 但原生子 webview 是 Rust 侧独立层、不随 React 卸载消失，会残留在屏幕上盖住其它
+  // 内容。本组件 unmount 时无条件 hideOthers("") 把所有实例收起（""=不保留任何）。
+  // 重新展开时 mount 回来，下面的可见性 effect 会按当前 tab/对话重新 setVisible。
+  useEffect(() => {
+    return () => {
+      void host.hideOthers("");
+    };
+  }, [host]);
+
+  // 挂载恢复：insts 是组件内 state，折叠卸载会丢，重挂载后变空 → cur.opened=false →
+  // 以为"没开"不 setVisible，webview 在后端还活着却显示不出来（用户报的"内嵌打不开"）。
+  // mount 时向后端查实际还开着的实例，恢复 opened + url。
+  useEffect(() => {
+    let alive = true;
+    void host.listOpen().then((list) => {
+      if (!alive || !list.length) return;
+      setInsts((prev) => {
+        const next = { ...prev };
+        for (const [sid, url] of list) {
+          const base = next[sid] ?? BLANK_INST;
+          next[sid] = { ...base, opened: true, state: { ...base.state, url } };
+        }
+        return next;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [host]);
+
   // 切对话 / 切 tab / 实例懒创建后：收起别的对话的 webview，按可见性显示当前对话的那个。
   useEffect(() => {
     if (!currentSessionId) {
@@ -198,16 +229,18 @@ export function BrowserPanel({ active }: { active: boolean }) {
       return;
     }
     void host.hideOthers(currentSessionId); // 切对话先把别的对话的 webview 收起
-    const visible = active && cur.opened && !cur.poppedOut;
+    // obscured：全屏覆盖层（Model I/O / 设置）打开时，子视图是独立 OS 层、z-order
+    // 永远盖在覆盖层之上，必须显式隐藏，否则网页压在覆盖层上。覆盖层关闭后恢复。
+    const visible = active && cur.opened && !cur.poppedOut && !obscured;
     void host.setVisible(currentSessionId, visible);
     if (visible) {
       // 等 DOM 完成布局再取 rect（hidden→显示这一帧 rect 才有效）
       const raf = requestAnimationFrame(() => syncBounds());
       return () => cancelAnimationFrame(raf);
     }
-    void host.clearSelection(currentSessionId); // 切走 / 弹出时收起页面内注释卡片
+    if (!obscured) void host.clearSelection(currentSessionId); // 切走/弹出时收注释卡片（obscured 只是临时遮挡，不清选中）
     return undefined;
-  }, [active, currentSessionId, cur.opened, cur.poppedOut, host, syncBounds]);
+  }, [active, currentSessionId, cur.opened, cur.poppedOut, obscured, host, syncBounds]);
 
   // 地址栏跟随当前对话实例的 url（用户聚焦编辑时不抢）；切到没开浏览器的对话则清空。
   const addrFocusedRef = useRef(false);

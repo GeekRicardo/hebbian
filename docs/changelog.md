@@ -7962,3 +7962,51 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 - **影响范围**: 仅 inspector.js（注释卡片 DOM 薄壳）。无协议 / agent-core 改动。
 - **验证**: node --check + inspector.test.cjs 纯函数单测过；逻辑自检（chatDraft 不污染提交载荷、resubmitAnnotation 函数提升两处调用可解析）。**DOM 交互（切元素草稿回填 / 分割线按钮 / 重复提交）需 `pnpm tauri dev` 真机验**——hebweb 内置浏览器是未实现的降级路径（P2.5），出不来注释卡片，无法用 hebweb 验证；本环境起不了 GUI。
 - **留尾巴**: 真机交互验证待用户在 Desktop 跑（选元素→注释卡片→输入→切元素看草稿是否还在；提交→分割线→点「再次提交」看是否重发）。
+
+### 2026-06-13 — 旁支对话补齐：修 Claude 4.6 prefill 400 + IME 回车 + 模型选择器 + 图标
+
+- **Why**: 上一版旁支对话偏 demo，用户反馈四点：① 输入法组合期回车直接提交（应只上屏）；② 没有模型选择器；③ 报 `HTTP 400 ... does not support assistant message prefill. The conversation must end with a user message.`（request_id 与用户截图一致）；④ tab 用了 git 分支图标，要换成「消息」类。
+- **根因（400）**: `Transcript::from_session`（crates/agent-core/src/context/transcript.rs）在历史最近一条是 `CompactBoundary` 时会注入 `User("[前情概要]…")` + `Assistant("已收到前情概要，将基于此继续。")` 占位对。当 boundary 落在历史末尾，重建出的 transcript 就以这条占位 assistant 结尾。`run_aside` 原本是 `history.push(user_msg)` 后一次性 `from_session(history)`，在这种历史上会让请求以 assistant 结尾——Claude Opus/Sonnet 4.6+ 不再支持 assistant prefill，直接 400。用 model_io.jsonl 里 `jq 'select(.response|tostring|test("prefill"))'` 抓到真实失败请求体（末尾 `assistant` content="已收到前情概要…"），request_id `req_011Cc1ZmvkTNrrqchCUoTKDK` 与用户报告完全一致，坐实根因。
+- **改动**:
+  - `apps/desktop/src/chat.rs` `run_aside`: 改为 `from_session(fork历史) + transcript.push_user(本轮内容)`——与主对话 `from_session(messages) + append_user` 对称，保证 transcript 末尾永远是 user，天生免疫末尾 boundary。这是干净的根因修复，不是末尾打补丁判断。
+  - `crates/agent-core/src/context/transcript.rs`: 加回归测试 `from_session_with_trailing_compact_boundary_ends_with_assistant`，锁定「末尾 boundary → from_session 产出 assistant 结尾」这个危险属性 + push_user 修正后末尾为 user，提醒任何「from_session 重建后直接发请求」的路径都要自己补 user。
+  - 前端 `BranchChatTab.tsx`: 输入框复用主对话的 `shouldSubmitChatInput` + composition 事件（IME 组合期/刚结束的回车不提交）；右下角加受控模型选择器 `BranchModelPicker`（默认继承主对话，可临时切换，**不动主对话**——故意不复用 ModelPickerButton，那个绑定 currentSession、点选即改主对话，语义不符）；tab/标题图标 GitBranch → MessagesSquare。
+  - 前端 `useBranchStore.ts`: Branch 加 `providerId`/`model` 字段 + `setBranchModel`；`createBranch` 接收主对话默认模型；`sendBranchMessage` 改用 branch 自身模型透传给 `branch_send`。
+  - 前端 `RightSidebar.tsx`: 旁支 tab 图标 GitBranch → MessagesSquare（折叠图标列 + tab 横条两处）。
+- **影响范围**: `run_aside` 的改动同时惠及「内置浏览器元素对话」（同一引擎）——它此前也潜在受这个 boundary 末尾问题影响，只是 Preview 工具 + OpenAI 格式没暴露。agent-core / protocol / model-gateway 无对外 API 变化（仅 transcript 加测试）。旁支仍是 Desktop 专属。
+- **验证**: `cargo check -p hebbian` + `pnpm exec tsc --noEmit` 全绿；`cargo test -p hebbian --lib branch::`（4 个）+ `cargo test -p agent-core --lib from_session`（2 个，含新回归）全过。400 根因用 ground truth（model_io.jsonl 失败记录 request_id 匹配）+ diag 测试复现，修复方向用回归测试锁定。
+- **留尾巴**:
+  - **端到端真机验证未做**：branch_* 是 Tauri 专属命令，hebweb（Playwright surface）的命令分发是独立手写的（apps/web-server/src/server.rs），没挂 branch，所以无法用 Playwright 脚本化跑通 branch_send 真实模型链路。需 `pnpm tauri dev` 手动验：开旁支 → 选末尾刚压缩过的对话 fork → 发消息确认不再 400 + 输入法回车不误提交 + 切模型生效。
+  - reasoning/thinking 强度旁支暂未透传（继承模型默认）；如需在旁支调 thinking 强度，后续在 BranchModelPicker 接 ReasoningControls。
+  - 旁支结论回灌主对话（spec §3.7 returnToChat）仍未做。
+
+### 2026-06-14 — 修复 subagent 内审批「审批回应失败」（修正前一条 drive 改动用力过猛）
+
+- **Why**: 用户报 Desktop 上 subagent 内触发审批、点了之后报「审批回应失败」。根因是**前一条（2026-06-13）修「一停全停」时引入的回归**：那次在 `RunHandle::drive` 里加了 `if event.subagent_call_id.is_some() { continue; }`，本意是让子 NestedRun 的 `RunFinished` 不被误当父 turn 结束，但**一刀切**把子的**所有**带 `subagent_call_id` 的事件都跳过了 match——包括子的 `PermissionRequested` / `UserQuestionRequested`。这两个 HITL 事件必须走 match → `observer.on_permission_request` / `on_question`，surface 才会把 `request_id → HitlGate` 注册进 `HitlState`（desktop）/ `pending_approvals`（CLI）。被 continue 跳过后 request_id 从未注册，前端审批回流时按 request_id 找不到 gate → `resolve_approval` 返回「找不到 request_id」→ 前端 toast「审批回应失败」。
+- **根因**: drive 的 match 本质是「父 turn 状态机」。只有子的 **Run\* 生命周期事件**（RunStarted/RunFinished/RunCancelled/RunFailed/RunSuspended/RunResumed）会被它误判为父 turn 终态需要拦；子的 HITL / 工具 / 文本事件本就该正常流过 match（match 里只有 HITL 分支会处理它们，其余落 `_ => {}` 无害）。前一条把判断写成「任何子事件都 continue」，范围过宽。
+- **改动**:
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): 新增自由函数 `is_run_lifecycle_event(payload)`（只认 6 个 Run\* variant）；drive 的跳过条件从 `event.subagent_call_id.is_some()` 收窄为 `event.subagent_call_id.is_some() && is_run_lifecycle_event(&event.payload)`——只拦子的生命周期事件，放行子的 HITL 事件。新增回归测试 `drive_routes_subagent_permission_request_to_observer`（子 PermissionRequested 带 subagent_call_id + gate 里有该 pending，断言 observer 的 on_permission_request 被调用一次）。
+- **影响范围**: agent-core（drive 终态判定，全 5 surface 受益）。无协议改动、无破坏兼容。前一条修的「一停全停」回归测试（`drive_ignores_subagent_run_finished_and_waits_for_parent`）仍 PASS——RunFinished 属 Run\* 生命周期，照旧被拦，两个修复不冲突。
+- **验证**:
+  - 单测 A/B：`drive_routes_subagent_permission_request_to_observer` 修前 FAIL（`left:0 right:1`，子审批被 continue 跳过没到 observer）、修后 PASS；`drive_` 全 8 个测试并行 + 单线程均绿；`cargo test -p agent-core --lib` 512 passed 0 failed。
+  - CLI 端到端：临时建 inherit 权限测试 subagent，让它越界写 `/tmp/heb-outside-xyz.txt` 触发 PathAccess 子审批 → `heb allow` 回应 exit 0（**不再「找不到 request_id」**）→ 事件流出现 `permission_resolved AllowOnce` → 子 Bash 成功执行、越界文件被写入。完整闭环通过。
+  - `tsc --noEmit`（apps/desktop）通过；`cargo check -p agent-core / -p hebbian-cli / -p hebbian-web-server` 均通过。
+- **留尾巴**: ① `cargo check --workspace` 在 `tauri 2.10.3` crate 自身源码报 E0308（new_window_handler 的 Send vs Send+Sync 不匹配），与本次改动无关，是依赖版本问题，desktop 这条链未受本次影响；② 工作区另有他人未完成改动（apps/desktop/src/browser/mod.rs、chat.rs、lib.rs、tauri.conf.json、transcript.rs 等，约 1082 insertions），本次未触碰、原样保留。
+
+## 2026-06-14 — wry 查样式（eval_with_callback）+ CEF 隔离成 example 让纯 wry build 通过
+
+**Why**：CEF 承载（M2）反复在「集成进真实 Tauri app 后 CDP /json 僵死」卡住（external_message_pump 泵时机 / mach_port_rendezvous / DevTools server 需 page target 等，均未根治，已开 GitHub issue 征集方案），退回 wry 主路径。但 wry 无 CDP，注释 LLM 看不见页面——用 tauri 2.11 的 `eval_with_callback` 让 wry 也能查样式。
+
+**改动**：
+- 升级 tauri 2.10.3→2.11.2（拿 `Webview::eval_with_callback`，wry eval 拿返回值的唯一手段）+ `@tauri-apps/api` 2.10.1→2.11.0 对齐
+- `apps/desktop/src/browser/wry_bridge.rs`（新）：`WryEvalBridge` 实现 `PreviewBridge`——eval 用 eval_with_callback + oneshot 桥接成 async；matched_rules 遍历 document.styleSheets 找作用于元素的规则 + computed 值（CDP getMatchedStylesForNode 的近似，算不准 specificity 但能列规则来源）；capture wry 无截图 API → 降级提示。已用真实 Chrome 验证 matched_rules JS 逻辑正确（被 !important 覆盖的元素正确列出全部规则+computed）
+- `browser/mod.rs` `preview_bridge_for`：CEF 就绪→CDP；否则 wry→该对话 webview 的 WryEvalBridge；无实例→None
+- CEF 隔离：`hebbian-cef-helper` 从 `[[bin]]` 改 `[[example]]`（`examples/cef_helper.rs`）——tauri bundle 会把所有 [[bin]] 当 app 二进制强制打包（无视 required-features），纯 wry build 找不到 helper 而失败；改 example 后 `tauri build` 出纯 wry 包零 CEF 残留。CEF build 用 `cargo build --example cef_helper --features cef-preview`
+- `tauri.conf.json` 加 mainBinaryName=hebbian
+- CEF 承载代码全部 feature gate（cef-preview，默认关）冰冻保留
+
+**验证**：默认 `cargo check --workspace` 过；`cargo check -p hebbian --features cef-preview` 过；tsc 过；`pnpm tauri build` 出纯 wry Hebbian.app + DMG（验证无 CEF framework/helper/代码残留）；matched_rules JS 真实浏览器验证通过。
+
+**留尾巴（已知）**：① tauri 2.11 疑似引入内置浏览器 dev 页面跨域 fetch 后台数据的回归（未完全定位，见 GitHub issue #2）——eval_with_callback（查样式）与 dev 后台请求当前是 2.11/2.10 取舍关系；② CEF 承载 CDP /json 僵死未解，方案征集中（issue #2）；③ wry 查样式只在工作区，未真机起 desktop 验证注释 LLM 实际调用效果。
+
+Note：本次工作区混入他人未完成的 branch（旁支对话）改动——crates/agent-core/src/{harness.rs（subagent 修复后续追加）, context/transcript.rs}、apps/desktop/src/{chat.rs, branch.rs, lib.rs 的 branch 命令注册}、apps/desktop/frontend/src/desktop/{ui/types.ts, ui/components/BranchChatTab.tsx, ui/store/useBranchStore.ts}、RightSidebar.tsx/tauri.ts 的 branch 部分。这些非本次 CEF/wry 任务，因共享文件耦合 + 编译依赖一并提交，不属本次改动。

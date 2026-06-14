@@ -1754,13 +1754,15 @@
     });
 
     var chatSend = mkPrimaryBtn("发送");
-    // 运行中态：消息区末尾跳动点 + 发送按钮转圈禁用；heb:aside:done/error 解除
+    // 运行中态：消息区末尾跳动点 + 发送按钮变「停止」；heb:aside:done/error 解除。
+    // 停止（C6）：点击发 heb:aside:stop，后端置位 cancel flag 中断 agent loop。
     var spinnerRow = null;
     function setAsideBusy(busy) {
       if (busy) {
-        chatSend.disabled = true;
-        chatSend.textContent = "⋯";
-        chatSend.style.opacity = "0.6";
+        chatSend.disabled = false; // 不再禁用——run 中它是「停止」按钮
+        chatSend.textContent = "停止";
+        chatSend.style.opacity = "";
+        chatSend.__busy__ = true;
         if (!spinnerRow) {
           spinnerRow = document.createElement("div");
           spinnerRow.style.cssText = "align-self:flex-start;padding:2px 6px;color:#57606a;font-size:14px;";
@@ -1777,6 +1779,7 @@
         chatSend.disabled = false;
         chatSend.textContent = "发送";
         chatSend.style.opacity = "";
+        chatSend.__busy__ = false;
         if (spinnerRow) {
           clearInterval(spinnerRow.__hebTimer__);
           if (spinnerRow.parentNode) spinnerRow.parentNode.removeChild(spinnerRow);
@@ -1785,6 +1788,12 @@
       }
     }
     var sendChat = function () {
+      // run 中点击 = 停止（C6）：发 heb:aside:stop 中断当前 run
+      if (chatSend.__busy__) {
+        var sid = asideConvos[elementKey] && asideConvos[elementKey].sessionId;
+        if (sid) send("heb:aside:stop", { surface: window.__HEB_POPOUT__ ? "popout" : "embedded", sessionId: sid });
+        return;
+      }
       var t = chatInput.value.trim();
       if (!t && !pendingImages.length) return;
       if (chatSend.disabled) return;
@@ -1905,6 +1914,8 @@
   }
 
   function appendChatMsg(msgList, role, text) {
+    // 非样式消息打断连续样式组（user/assistant/tool 文字进来 → 后续样式改动另起外框）
+    if (role !== "style") closeStyleGroup(msgList);
     var row = document.createElement("div");
     if (role === "user") {
       row.style.cssText = "align-self:flex-end;max-width:85%;background:#2f81f7;color:#fff;border-radius:10px;padding:6px 9px;font-size:12px;white-space:pre-wrap;word-break:break-word;";
@@ -1917,6 +1928,110 @@
     msgList.appendChild(row);
     msgList.scrollTop = msgList.scrollHeight;
     return row;
+  }
+
+  // 观察工具调用块（C5）：PreviewInspect/PreviewCapture，hover 显示完整入参 JSON。
+  // 与样式块不同——它不改页面、无还原，纯展示"调过这个工具"。
+  function appendToolCall(msgList, name, input) {
+    closeStyleGroup(msgList);
+    var icon = name === "PreviewCapture" ? "📷" : "🔍";
+    var brief = "";
+    if (input) {
+      if (input.what) brief = input.what + (input.selector ? " " + input.selector : "");
+      else if (input.selector) brief = input.selector;
+    }
+    var row = document.createElement("div");
+    row.style.cssText = "align-self:flex-start;max-width:90%;display:flex;align-items:center;gap:5px;background:#eef3fb;color:#0b62c4;border-radius:8px;padding:4px 8px;font:11px ui-monospace,monospace;cursor:help;";
+    var label = document.createElement("span");
+    label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    label.textContent = icon + " " + name + (brief ? " · " + brief : "");
+    // hover 详情：完整入参 JSON（原生 title，简单可靠）
+    var detail = "";
+    try { detail = JSON.stringify(input || {}, null, 2); } catch (e) { detail = String(input); }
+    row.title = name + "\n" + detail;
+    row.appendChild(label);
+    msgList.appendChild(row);
+    msgList.scrollTop = msgList.scrollHeight;
+    return row;
+  }
+
+  // 样式改动块（C7）：每次 PreviewStyle 渲染一个可还原/重做的块；连续多个改动归入
+  // 同一外框，外框带统一还原/重做（P 图软件 before/after 对比）。状态机：
+  // applied（已应用 after）⇄ reverted（已还原 before）。还原/重做直接操作元素内联样式。
+  // msgList.__styleGroup__ 持当前活跃外框；非样式消息进来时（下方 appendChatMsg/其它
+  // 渲染）调 closeStyleGroup 收尾，保证"连续"语义。
+  function closeStyleGroup(msgList) {
+    msgList.__styleGroup__ = null;
+  }
+  function applyStyleState(change, toAfter) {
+    for (var i = 0; i < change.els.length; i++) {
+      var el = change.els[i];
+      if (!el) continue;
+      try {
+        if (toAfter) {
+          el.style.setProperty(change.prop, change.value);
+        } else if (change.before[i]) {
+          el.style.setProperty(change.prop, change.before[i]);
+        } else {
+          el.style.removeProperty(change.prop);
+        }
+      } catch (e) { /* 静默 */ }
+    }
+    change.reverted = !toAfter;
+  }
+  function appendStyleChange(msgList, change) {
+    change.reverted = false; // 初始为已应用
+    // 取/建当前样式外框（连续样式改动共用一个，便于统一还原对比）
+    var group = msgList.__styleGroup__;
+    if (!group) {
+      group = document.createElement("div");
+      group.style.cssText = "align-self:flex-start;max-width:92%;border:1px solid #cfe8d6;border-radius:10px;padding:4px;display:flex;flex-direction:column;gap:3px;background:#f4fbf6;";
+      group.__changes__ = [];
+      var body = document.createElement("div");
+      body.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+      group.__body__ = body;
+      group.appendChild(body);
+      // 外框统一还原/重做条（≥2 个改动才显示，单个用块内按钮就够）
+      var foot = document.createElement("div");
+      foot.style.cssText = "display:none;justify-content:flex-end;gap:8px;padding:2px 4px 0;border-top:1px dashed #cfe8d6;";
+      var allBtn = document.createElement("button");
+      allBtn.style.cssText = "border:none;background:none;color:#0969da;font-size:10px;cursor:pointer;padding:0;";
+      var allReverted = false;
+      allBtn.textContent = "全部还原";
+      allBtn.addEventListener("click", function () {
+        allReverted = !allReverted;
+        group.__changes__.forEach(function (c) { applyStyleState(c, !allReverted); if (c.__sync__) c.__sync__(); });
+        allBtn.textContent = allReverted ? "全部重做" : "全部还原";
+      });
+      foot.appendChild(allBtn);
+      group.__foot__ = foot;
+      group.appendChild(foot);
+      msgList.appendChild(group);
+      msgList.__styleGroup__ = group;
+    }
+    group.__changes__.push(change);
+    if (group.__changes__.length >= 2) group.__foot__.style.display = "flex";
+
+    // 单个改动块
+    var block = document.createElement("div");
+    block.style.cssText = "display:flex;align-items:center;gap:6px;font:11px ui-monospace,monospace;color:#1a7f4b;background:#eafaf0;border-radius:6px;padding:3px 7px;";
+    var txt = document.createElement("span");
+    txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    txt.textContent = "🎨 " + change.label + " " + change.prop + " → " + change.value;
+    txt.title = change.prop + ": " + (change.before[0] || "(无)") + " → " + change.value
+      + "（作用 " + change.els.length + " 个元素）";
+    var btn = document.createElement("button");
+    btn.style.cssText = "flex:none;border:1px solid #b7e0c4;background:#fff;color:#0969da;font-size:10px;cursor:pointer;border-radius:4px;padding:1px 6px;";
+    btn.textContent = "还原";
+    change.__sync__ = function () { btn.textContent = change.reverted ? "重做" : "还原"; };
+    btn.addEventListener("click", function () {
+      applyStyleState(change, change.reverted); // reverted 时点=重做(toAfter=true)
+      change.__sync__();
+    });
+    block.appendChild(txt); block.appendChild(btn);
+    group.__body__.appendChild(block);
+    msgList.scrollTop = msgList.scrollHeight;
+    return block;
   }
 
   /* ───────────────────────── picker 状态机 ───────────────────────── */
@@ -2173,26 +2288,38 @@
         if (msg.payload) {
           var apTarget = msg.payload.target || "@1";
           var apLabel = apTarget;
+          var apEls = []; // 本次改动作用的元素集合（还原/重做按钮要操作它们）
+          var apBefore = []; // 与 apEls 一一对应的改前内联值（"" = 原本无此内联属性）
           if (/^@\d+$/.test(apTarget)) {
             // @N 路由到 draft 里的对应元素；无 draft（旧单元素路径）退回激活元素
+            var apItem = null;
             if (draft) {
               var apIdx = refToIndex(apTarget);
               if (apIdx < 0 || apIdx >= draft.elements.length) apIdx = draft.activeIndex;
-              styleSetOn(draft.elements[apIdx], msg.payload.prop, msg.payload.value);
+              apItem = draft.elements[apIdx];
+              if (apItem && apItem.el) {
+                apEls = [apItem.el];
+                apBefore = [apItem.el.style.getPropertyValue(msg.payload.prop)];
+              }
+              styleSetOn(apItem, msg.payload.prop, msg.payload.value);
             } else {
+              var ct = currentTarget();
+              if (ct) { apEls = [ct]; apBefore = [ct.style.getPropertyValue(msg.payload.prop)]; }
               styleApply(msg.payload.prop, msg.payload.value);
             }
           } else {
             // CSS selector：批量/单个直接应用，并记进 draft 的 selector 改动账本
             // （selectorStyleChanges 随注释一起提交，主对话知道这是组级改动）
-            var apEls = [];
             try {
               apEls = msg.payload.allMatches
                 ? Array.prototype.slice.call(document.querySelectorAll(apTarget))
                 : (document.querySelector(apTarget) ? [document.querySelector(apTarget)] : []);
             } catch (e) {}
             for (var ai = 0; ai < apEls.length; ai++) {
-              try { apEls[ai].style.setProperty(msg.payload.prop, msg.payload.value); } catch (e) {}
+              try {
+                apBefore.push(apEls[ai].style.getPropertyValue(msg.payload.prop));
+                apEls[ai].style.setProperty(msg.payload.prop, msg.payload.value);
+              } catch (e) { apBefore.push(""); }
             }
             if (draft) {
               draft.selectorStyleChanges = draft.selectorStyleChanges || [];
@@ -2201,7 +2328,12 @@
             apLabel = apTarget + "（" + apEls.length + " 个元素）";
             syncDraftToList();
           }
-          if (cardChat) appendChatMsg(cardChat.msgList, "tool", "🎨 " + apLabel + " " + msg.payload.prop + " → " + msg.payload.value);
+          if (cardChat) {
+            appendStyleChange(cardChat.msgList, {
+              label: apLabel, prop: msg.payload.prop, value: msg.payload.value,
+              els: apEls, before: apBefore,
+            });
+          }
         }
         break;
       case "heb:aside:mutate":
@@ -2209,6 +2341,10 @@
         break;
       case "heb:aside:act":
         if (msg.payload) handleAsideAct(msg.payload);
+        break;
+      case "heb:aside:tool":
+        // 观察工具（PreviewInspect/PreviewCapture）调用块，hover 看完整入参（C5）
+        if (cardChat && msg.payload) appendToolCall(cardChat.msgList, msg.payload.name, msg.payload.input);
         break;
       case "heb:aside:done":
         if (cardChat && cardChat.assistantRow) {

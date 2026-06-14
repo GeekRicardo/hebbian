@@ -11,11 +11,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "hebbian"
 path = "src/main.rs"
 
-# CEF helper 子进程（feature cef-preview）：CEF 多进程的 GPU/Renderer 等子进程入口。
-# 不开 feature 时编译成空 main（占位）。
-[[bin]]
-name = "hebbian-cef-helper"
-path = "src/bin/cef_helper.rs"
+# CEF helper 子进程（CEF 多进程的 GPU/Renderer 等子进程入口）。放 example 而非 bin——
+# tauri bundle 会把所有 [[bin]] 当 app 二进制强制打包（无视 required-features），导致纯
+# wry build 找不到 helper 而失败。example 不进 bundle 清单，CEF build 用
+# `cargo build --example cef_helper --features cef-preview` 单独产出。
+[[example]]
+name = "cef_helper"
+path = "examples/cef_helper.rs"
+required-features = ["cef-preview"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

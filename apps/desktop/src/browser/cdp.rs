@@ -115,7 +115,12 @@ impl CdpBridge {
     }
 
     async fn open(&self) -> AppResult<CdpSession> {
-        let list: Value = get_json_local(&format!("{}/json/list", self.endpoint)).await?;
+        let list: Value = get_json_local(&format!("{}/json/list", self.endpoint))
+            .await
+            .map_err(|e| {
+                tracing::warn!(target: "cef", endpoint = %self.endpoint, error = %e, "CDP 发现端点连不上");
+                e
+            })?;
         let ws_url = list
             .as_array()
             .and_then(|arr| {
@@ -124,10 +129,16 @@ impl CdpBridge {
             })
             .and_then(|t| t.get("webSocketDebuggerUrl").and_then(|v| v.as_str()))
             .map(|s| s.to_string())
-            .ok_or_else(|| AppError::msg("预览 CDP 端口上没有可用页面"))?;
+            .ok_or_else(|| {
+                tracing::warn!(target: "cef", endpoint = %self.endpoint, "CDP 端口上没有 page target（页面还没创建？）");
+                AppError::msg("预览 CDP 端口上没有可用页面")
+            })?;
         let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
             .await
-            .map_err(|e| AppError::msg(format!("CDP 连接失败: {e}")))?;
+            .map_err(|e| {
+                tracing::warn!(target: "cef", error = %e, "CDP ws 连接失败");
+                AppError::msg(format!("CDP 连接失败: {e}"))
+            })?;
         let (tx, rx) = ws.split();
         Ok(CdpSession { tx, rx })
     }

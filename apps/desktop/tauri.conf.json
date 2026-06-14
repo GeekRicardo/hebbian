@@ -3,6 +3,7 @@
   "productName": "Hebbian",
   "version": "0.1.0",
   "identifier": "dev.ricardo.hebbian",
+  "mainBinaryName": "hebbian",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "bash ../island-mac/build-app.sh release && pnpm build",

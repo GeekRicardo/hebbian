@@ -58,6 +58,8 @@ export interface BrowserHost {
   setVisible(sessionId: string, visible: boolean): Promise<void>;
   /** 切对话时隐藏除 keepSession 外的所有实例，避免叠在面板上。 */
   hideOthers(keepSession: string): Promise<void>;
+  /** 列出后端还活着的实例（[sessionId, url][]）——组件重挂载后恢复 opened 状态。 */
+  listOpen(): Promise<Array<[string, string]>>;
   close(sessionId: string): Promise<void>;
   setPicker(sessionId: string, active: boolean): Promise<void>;
   clearSelection(sessionId: string): Promise<void>;
@@ -105,6 +107,9 @@ class TauriBrowserHost implements BrowserHost {
   }
   hideOthers(keepSession: string) {
     return api.browserHideOthers(keepSession);
+  }
+  listOpen() {
+    return api.browserListOpen();
   }
   close(sessionId: string) {
     return api.browserClose(sessionId);

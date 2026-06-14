@@ -1,4 +1,5 @@
 mod browser;
+mod branch;
 pub mod chat;
 mod engine;
 mod terminal;
@@ -530,7 +531,12 @@ fn rename_session(app: AppHandle, id: String, title: String) -> AppResult<Sessio
 }
 
 #[tauri::command]
-fn delete_session(app: AppHandle, id: String) -> AppResult<()> {
+fn delete_session(
+    app: AppHandle,
+    branch_state: State<'_, branch::BranchState>,
+    id: String,
+) -> AppResult<()> {
+    branch_state.drop_for_session(&id);
     core(&app)?.delete_session(&id).map_err(map_core_err)
 }
 
@@ -2584,6 +2590,12 @@ fn read_log_file() -> AppResult<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // CEF 承载初始化（feature cef-preview）：必须在 Tauri 启动 / 任何 NSApp 访问之前，
+    // execute_process 要最早判定本进程是不是 CEF 拉起的子进程（是则直接 exit 不进 Tauri）。
+    // 未开 feature / 初始化失败时静默降级到 wry 预览。
+    #[cfg(feature = "cef-preview")]
+    browser::cef::init_cef();
+
     // 从 CWD 向上递归找 `.env` 并加载到进程环境。已有的 shell env 不会被覆盖
     // （shell > .env 优先级符合 12-factor 直觉）。dev 模式 CWD 在 apps/desktop，向上找命中
     // workspace 根的 .env；release 包从可执行文件所在目录向上找，需要时再加 from_path 兜底。
@@ -2591,7 +2603,7 @@ pub fn run() {
 
     // memory=info：记忆系统动作日志（target="memory"，带 [Memory] 前缀）默认放行到 info，
     // 让「查/写/抽取/注入」始终可见且可一键 grep。
-    observability::init("agent_core=debug,model_gateway=info,memory=info,cache=info,warn");
+    observability::init("agent_core=debug,model_gateway=info,memory=info,cache=info,cef=info,warn");
 
     // 全局唯一 PermissionStore：从 ~/.hebbian/permissions.json 加载 Global 规则到内存，
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
@@ -2619,11 +2631,14 @@ pub fn run() {
         .manage(Arc::new(HitlState::default()))
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(browser::BrowserState::default())
+        .manage(branch::BranchState::new())
         .manage(terminal::TerminalState::default())
         .manage(Arc::new(wechat::WeChatState::default()))
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
+            // CEF 泵改在 .run 的 RunEvent 回调里（主线程直接泵，见 pump_on_run_event），
+            // 不在 setup 起后台 run_on_main_thread 循环——那条投递队列在主线程没消费时不执行。
             // hebisland socket client 初始化（独立 Tauri 二进制，不持有 agent_core）
             app.handle().manage(hebisland_client::init_hebisland_client(
                 app.handle().clone(),
@@ -2713,6 +2728,9 @@ pub fn run() {
             list_claude_sessions,
             import_claude_session,
             fork_session,
+            branch::branch_create,
+            branch::branch_send,
+            branch::branch_discard,
             truncate_after,
             truncate_inclusive,
             undo_compaction,
@@ -2821,6 +2839,7 @@ pub fn run() {
             browser::browser_set_bounds,
             browser::browser_set_visible,
             browser::browser_hide_others,
+            browser::browser_list_open,
             browser::browser_close,
             browser::browser_picker,
             browser::browser_style_apply,
@@ -2844,6 +2863,11 @@ pub fn run() {
             wechat::wechat_start,
             wechat::wechat_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, _event| {
+            // CEF external_message_pump：每轮事件循环泵一次 CEF 消息处理（主线程，可靠）。
+            #[cfg(feature = "cef-preview")]
+            browser::cef::pump_on_run_event(app);
+        });
 }

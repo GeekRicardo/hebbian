@@ -15,6 +15,7 @@ pub mod cdp;
 #[cfg(feature = "cef-preview")]
 pub mod cef;
 mod url_policy;
+mod wry_bridge;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -117,6 +118,9 @@ pub struct BrowserState {
     /// token 用，按 elementKey 索引），value = 多轮历史。按主对话分组让 `browser_close`
     /// 能随实例一并清理。模型 IO 仍写进主对话的 model_io.jsonl（kind=aside），供面板查看。
     asides: Mutex<HashMap<String, HashMap<String, Vec<Message>>>>,
+    /// 旁支会话正在跑的 run 的取消标志（key = 旁支 id）。停止按钮（heb:aside:stop）置位它，
+    /// send_aside 的 agent loop 检测到即中断。run 结束后移除。
+    aside_cancels: Mutex<HashMap<String, common::CancelFlag>>,
     /// CEF 承载实例表（feature cef-preview）：CEF 就绪时 browser_* 命令优先走它，
     /// 否则落 wry instances。两路并存按 cef::cef_ready() 分流（架构 §8.5 M2）。
     #[cfg(feature = "cef-preview")]
@@ -239,11 +243,42 @@ pub fn browser_open(
     Ok(target_str)
 }
 
+/// 取主窗口 NSWindow.contentView（CEF set_as_child 的父 NSView）。
+#[cfg(all(feature = "cef-preview", target_os = "macos"))]
+fn main_window_content_view(window: &tauri::Window) -> Result<*mut std::ffi::c_void, String> {
+    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
+    let view: *mut std::ffi::c_void = unsafe {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        let win = ns_window as *mut AnyObject;
+        let v: *mut AnyObject = msg_send![&*win, contentView];
+        v as *mut std::ffi::c_void
+    };
+    Ok(view)
+}
+
+/// cef 模块用：暴露 contentView 取法（keep-alive 在 RunEvent 里建时取主窗 NSView）。
+#[cfg(all(feature = "cef-preview", target_os = "macos"))]
+pub fn main_window_content_view_pub(window: &tauri::Window) -> Result<*mut std::ffi::c_void, String> {
+    main_window_content_view(window)
+}
+
+/// 建 CDP keep-alive page。由 pump loop 在主线程（事件循环稳定后）调用——此时调
+/// create_keepalive 安全（CEF 操作在主线程、pump 已在转，回调能触发）。
+#[cfg(all(feature = "cef-preview", target_os = "macos"))]
+pub fn init_cef_keepalive(app: &AppHandle) {
+    let Some(window) = app.get_window("main") else {
+        tracing::warn!(target: "cef", "keep-alive：主窗口不存在，跳过");
+        return;
+    };
+    match main_window_content_view(&window) {
+        Ok(view) => cef::create_keepalive(view),
+        Err(e) => tracing::warn!(target: "cef", error = %e, "keep-alive：取 contentView 失败"),
+    }
+}
+
 /// CEF 承载的 browser_open（架构 §8.5 M2）。从主窗 NSWindow 取 contentView 作父视图，
 /// 创建 CEF 子视图实例。已有实例则 navigate 复用。
-///
-/// ⚠️ dev 验证点：① ns_window→contentView 取法 ② set_as_child 坐标系（CEF 用左下原点
-/// 还是左上）③ browser 句柄是否同步回传。任一不对会黑屏，需 pnpm tauri dev 真机调。
 #[cfg(all(feature = "cef-preview", target_os = "macos"))]
 fn browser_open_cef(
     app: &AppHandle,
@@ -267,15 +302,7 @@ fn browser_open_cef(
     let window = app
         .get_window("main")
         .ok_or_else(|| "主窗口不存在".to_string())?;
-    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
-    // NSWindow.contentView（CEF set_as_child 的父 NSView）
-    let parent_view: *mut std::ffi::c_void = unsafe {
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-        let win = ns_window as *mut AnyObject;
-        let view: *mut AnyObject = msg_send![&*win, contentView];
-        view as *mut std::ffi::c_void
-    };
+    let parent_view = main_window_content_view(&window)?;
 
     let bounds = CefRect {
         x: x as i32,
@@ -284,7 +311,40 @@ fn browser_open_cef(
         height: (height.max(1.0)) as i32,
     };
     let init = std::sync::Arc::new(init_script());
-    let browser = cef::CefBrowser::create(parent_view, url, bounds, init)
+
+    // 导航事件回调：CEF 的 DisplayHandler/LoadHandler 经它上抛 URL/标题/加载态，
+    // emit 成 browser://state / browser://title（与 wry 同事件名），前端地址栏/历史
+    // 才能跟随 302 跳转、页面内导航更新。
+    let app_nav = app.clone();
+    let sid_nav = session_id.to_string();
+    let nav: cef::NavCb = std::sync::Arc::new(move |u: cef::NavUpdate| match u {
+        cef::NavUpdate::Url(url) => {
+            let _ = app_nav.emit(
+                "browser://state",
+                serde_json::json!({
+                    "session_id": sid_nav, "url": url,
+                    "can_go_back": false, "can_go_forward": false, "loading": false,
+                }),
+            );
+        }
+        cef::NavUpdate::Title(title) => {
+            let _ = app_nav.emit(
+                "browser://title",
+                serde_json::json!({ "sessionId": sid_nav, "url": "", "title": title }),
+            );
+        }
+        cef::NavUpdate::Loading(loading) => {
+            let _ = app_nav.emit(
+                "browser://state",
+                serde_json::json!({
+                    "session_id": sid_nav, "url": "",
+                    "can_go_back": false, "can_go_forward": false, "loading": loading,
+                }),
+            );
+        }
+    });
+
+    let browser = cef::CefBrowser::create(parent_view, url, bounds, init, nav)
         .ok_or_else(|| "CEF 浏览器创建失败".to_string())?;
     state.cef.insert(session_id.to_string(), browser);
     let _ = app; // emit_state 走 CDP/前端轮询，CEF 实例状态事件后续接
@@ -368,6 +428,17 @@ fn forward_inspector_message(app: &AppHandle, session_id: &str, msg: serde_json:
         }
         // 元素对话（旁支会话，机制 B）——session_id 即主对话
         "heb:aside:send" => handle_aside_send(app, session_id, &payload),
+        "heb:aside:stop" => {
+            // 停止按钮（C6）：置位对应旁支 run 的 cancel flag，agent loop 检测到即中断。
+            if let (Some(aside_id), Some(st)) = (
+                payload.get("sessionId").and_then(|v| v.as_str()),
+                app.try_state::<BrowserState>(),
+            ) {
+                if let Some(flag) = st.aside_cancels.lock().unwrap().get(aside_id) {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
         "heb:aside:models:request" => {
             let surface = payload
                 .get("surface")
@@ -581,6 +652,23 @@ pub fn browser_hide_others(
         }
     }
     Ok(())
+}
+
+/// 列出当前后端还活着的浏览器实例（session_id → 当前 url）。
+/// 前端 BrowserPanel 重新挂载时（如侧边栏折叠卸载后再展开）用它恢复 opened 状态——
+/// webview 在后端常驻，但组件内 insts 随卸载丢失，不恢复会以为"没开"打不开。
+#[tauri::command]
+pub fn browser_list_open(
+    state: tauri::State<'_, BrowserState>,
+) -> Result<Vec<(String, String)>, String> {
+    let guard = state.instances.lock().unwrap();
+    Ok(guard
+        .iter()
+        .map(|(sid, inst)| {
+            let url = inst.history.get(inst.cursor).cloned().unwrap_or_default();
+            (sid.clone(), url)
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1142,6 +1230,24 @@ fn route_aside_event(
             input["sessionId"] = serde_json::json!(aside_session);
             eval_aside_down(app, host_session, surface, "heb:aside:act", input);
         }
+        // PreviewInspect / PreviewCapture 是观察工具（走 CDP，不改页面），inspector 收不到
+        // 实际效果，但要在 chat 里显示"调用了哪个工具"的 tool 块（带 hover 详情），否则
+        // 用户看到 LLM 两次发言中间凭空多了一段、不知道中间调过工具（C5）。
+        EngineEvent::ToolStart { name, input, .. }
+            if name == "PreviewInspect" || name == "PreviewCapture" =>
+        {
+            eval_aside_down(
+                app,
+                host_session,
+                surface,
+                "heb:aside:tool",
+                serde_json::json!({
+                    "sessionId": aside_session,
+                    "name": name,
+                    "input": input,
+                }),
+            );
+        }
         EngineEvent::RunFinished { .. } => {
             eval_aside_down(
                 app,
@@ -1157,6 +1263,29 @@ fn route_aside_event(
 
 fn fresh_cancel() -> common::CancelFlag {
     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+}
+
+/// 旁支工具的预览观察通道（架构 §8.5）：
+/// - CEF 就绪（feature cef-preview）→ CDP bridge（连用户看的同一实例）；
+/// - 否则 wry 内核 → 取该对话预览 webview 的 WryEvalBridge（eval_with_callback 查样式/DOM）；
+/// - 无预览实例 → None（工具走降级提示）。
+fn preview_bridge_for(
+    app: &AppHandle,
+    session_id: &str,
+    surface: &str,
+) -> Option<std::sync::Arc<dyn agent_core::preview_bridge::PreviewBridge>> {
+    // CEF 优先（冰冻时 cef_ready=false，不触发）
+    if let Some(b) = cdp::CdpBridge::shared() {
+        return Some(b);
+    }
+    // wry：取当前对话预览 webview。popout 用 page 子 webview，embedded 用主实例 webview。
+    let st = app.try_state::<BrowserState>()?;
+    let webview = if surface == "popout" {
+        st.popout.lock().unwrap().get(session_id).map(|p| p.page.clone())
+    } else {
+        st.instances.lock().unwrap().get(session_id).map(|i| i.webview.clone())
+    }?;
+    Some(wry_bridge::WryEvalBridge::shared(webview))
 }
 
 
@@ -1300,6 +1429,14 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         let surface2 = surface.clone();
         let host = main_sid.clone();
         let aside_for_event = aside_id.clone();
+        // 停止按钮用：把本次 run 的 cancel flag 存进 state，heb:aside:stop 置位它。
+        let cancel = fresh_cancel();
+        if let Some(st) = app2.try_state::<BrowserState>() {
+            st.aside_cancels
+                .lock()
+                .unwrap()
+                .insert(aside_id.clone(), cancel.clone());
+        }
         // 元素定位放每轮 user content 前缀（非 system prompt）
         let user_content = if elements_block.is_empty() {
             text
@@ -1315,11 +1452,15 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
             history,
             user_content,
             attachments,
-            fresh_cancel(),
-            cdp::CdpBridge::shared(),
+            cancel,
+            preview_bridge_for(&app2, &main_sid, &surface),
             move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
         )
         .await;
+        // run 结束移除 cancel flag（无论成功/失败/取消）
+        if let Some(st) = app2.try_state::<BrowserState>() {
+            st.aside_cancels.lock().unwrap().remove(&aside_id);
+        }
         match result {
             Ok((updated_history, _)) => {
                 if let Some(st) = app2.try_state::<BrowserState>() {

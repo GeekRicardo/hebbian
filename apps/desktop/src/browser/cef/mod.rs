@@ -30,8 +30,9 @@ mod app_handler;
 mod browser;
 mod client;
 
-pub use browser::{CefBrowser, CefHost};
+pub use browser::{create_keepalive, CefBrowser, CefHost};
 pub use cef::Rect;
+pub use client::{NavCb, NavUpdate};
 
 /// CEF 是否已成功初始化（承载层据此决定走 CEF 还是 wry）。
 static CEF_READY: AtomicBool = AtomicBool::new(false);
@@ -111,6 +112,8 @@ pub fn init_cef() -> bool {
     let settings = Settings {
         no_sandbox: 1,
         external_message_pump: 1,
+        // CDP 端口：用 settings 字段（PoC embed_dev 验证过 Playwright 可连的方式）。
+        // 命令行开关在 app_handler 也加了（双保险，只对 browser 进程）。
         remote_debugging_port: CEF_CDP_PORT as i32,
         framework_dir_path: CefString::from(fw_framework.to_string_lossy().as_ref()),
         browser_subprocess_path: CefString::from(helper.to_string_lossy().as_ref()),
@@ -131,6 +134,29 @@ pub fn init_cef() -> bool {
     if ok == 1 {
         CEF_READY.store(true, Ordering::Relaxed);
         tracing::info!(port = CEF_CDP_PORT, "CEF runtime 初始化成功，预览走 CEF");
+        // 诊断：CDP server 异步绑端口，延迟自检 9222 是否真的在监听 + 能否拿到 page。
+        // 日志 target=cef，build 后看控制台/日志即可定位「检查通道连不上」卡在哪。
+        std::thread::spawn(|| {
+            for delay in [2u64, 5, 10] {
+                std::thread::sleep(std::time::Duration::from_secs(delay));
+                let addr = format!("127.0.0.1:{CEF_CDP_PORT}");
+                match std::net::TcpStream::connect(&addr) {
+                    Ok(_) => {
+                        tracing::info!(target: "cef", port = CEF_CDP_PORT, "CDP 端口自检：TCP 可连 ✓");
+                        return;
+                    }
+                    Err(e) => tracing::warn!(
+                        target: "cef", port = CEF_CDP_PORT, delay, error = %e,
+                        "CDP 端口自检：连不上（{delay}s 后重试）"
+                    ),
+                }
+            }
+            tracing::error!(
+                target: "cef", port = CEF_CDP_PORT,
+                "CDP 端口自检：10s 内始终连不上 → 检查/截图工具会降级。\
+                 排查：是否子进程抢端口 / settings 与命令行开关冲突 / 端口被占"
+            );
+        });
         true
     } else {
         tracing::warn!("CEF initialize 失败，降级 wry 预览");
@@ -143,9 +169,72 @@ pub fn init_cef() -> bool {
     false
 }
 
-/// Tauri RunEvent::MainEventsCleared 每轮调，驱动 CEF 消息循环（external pump）。
+/// Tauri RunEvent 每轮调，驱动 CEF 消息循环（external pump）。但 RunEvent 只在有
+/// UI 事件时触发，app 空闲时不调 → CEF 消息循环停转、DevTools server 僵死、create
+/// 回调不来。故另用 start_pump_loop 定时泵兜底，本函数保留给 RunEvent 顺带多泵几次。
 pub fn pump() {
     if cef_ready() {
         cef::do_message_loop_work();
+    }
+}
+
+/// 启动定时泵循环：后台线程每 ~8ms 经 run_on_main_thread 调度一次 do_message_loop_work
+/// （CEF 要求在 UI 主线程泵）。不依赖 Tauri RunEvent 频率，保证 app 空闲时 CEF 消息
+/// 循环仍持续转——DevTools server 才能响应、browser create 回调才会触发。
+///
+/// 首次泵几轮后（事件循环确认转起来），在主线程建 CDP keep-alive page——DevTools /json
+/// server 需至少一个 target 才响应，预览懒创建启动无 page，靠它保活。`make_keepalive`
+/// 由 mod 外提供（在主窗口 contentView 上建 1×1 隐藏 about:blank browser）。
+#[cfg(target_os = "macos")]
+pub fn start_pump_loop(app: tauri::AppHandle, make_keepalive: impl Fn() + Send + 'static) {
+    if !cef_ready() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut ticks: u32 = 0;
+        let keepalive = std::sync::Arc::new(std::sync::Mutex::new(Some(make_keepalive)));
+        tracing::info!(target: "cef", "pump loop 已启动");
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            ticks += 1;
+            // 第 ~60 轮（~0.5s，事件循环已稳定转）在主线程建一次 keep-alive
+            let ka = if ticks == 60 { keepalive.lock().unwrap().take() } else { None };
+            if ticks == 60 {
+                tracing::info!(target: "cef", "pump loop 第 60 轮，触发 keep-alive");
+            }
+            let _ = app.run_on_main_thread(move || {
+                cef::do_message_loop_work();
+                if let Some(f) = ka {
+                    tracing::info!(target: "cef", "keep-alive 闭包在主线程执行");
+                    f();
+                }
+            });
+        }
+    });
+}
+
+/// 在 Tauri RunEvent 回调里（主线程）直接泵 CEF + 适时建 keep-alive。
+/// RunEvent 闭包本就在主线程跑，比 run_on_main_thread 投递可靠（不依赖队列消费）。
+/// 缺点是 RunEvent 只在有事件时触发，空闲时不转——但 CEF DevTools server / 已建
+/// browser 的渲染会持续产生事件，足够维持泵。keep-alive 在第 N 次 RunEvent 建（此时
+/// 主窗口已就绪）。
+#[cfg(target_os = "macos")]
+pub fn pump_on_run_event(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    if !cef_ready() {
+        return;
+    }
+    cef::do_message_loop_work();
+    static TICKS: AtomicU32 = AtomicU32::new(0);
+    let n = TICKS.fetch_add(1, Ordering::Relaxed);
+    if n == 30 {
+        // 第 30 次 RunEvent（主窗口 + 事件循环已稳定）建 keep-alive page
+        tracing::info!(target: "cef", "RunEvent 第 30 次，建 keep-alive");
+        use tauri::Manager;
+        if let Some(window) = app.get_window("main") {
+            if let Ok(view) = crate::browser::main_window_content_view_pub(&window) {
+                create_keepalive(view);
+            }
+        }
     }
 }

@@ -1537,13 +1537,109 @@ pub async fn send_aside(
     provider_id: &str,
     model: &str,
     system_prompt: String,
-    mut history: Vec<Message>,
+    history: Vec<Message>,
     user_content: String,
     attachments: Vec<common::attachments::MessageAttachment>,
     cancel_flag: CancelFlag,
     preview_bridge: Option<std::sync::Arc<dyn agent_core::preview_bridge::PreviewBridge>>,
     emit_event: impl Fn(EngineEvent) + Send + Sync,
 ) -> AppResult<(Vec<Message>, Message)> {
+    // 极简 harness：三个信号工具（写路径，经 inspector）+ 两个观察工具
+    // （读路径，经 PreviewBridge/CDP；bridge 不可用时工具自带降级提示）。
+    let harness = Arc::new(Harness::new(
+        vec![
+            Box::new(agent_core::tools::preview_style::PreviewStyleTool),
+            Box::new(agent_core::tools::preview_mutate::PreviewMutateTool),
+            Box::new(agent_core::tools::preview_act::PreviewActTool),
+            Box::new(agent_core::tools::preview_capture::PreviewCaptureTool::new(
+                preview_bridge.clone(),
+            )),
+            Box::new(agent_core::tools::preview_inspect::PreviewInspectTool::new(
+                preview_bridge,
+            )),
+        ],
+        HookManager::new(vec![]),
+    ));
+    let workspace = Workspace::new(
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+        Vec::new(),
+    );
+    let enabled_tools = vec![
+        "PreviewStyle".to_string(),
+        "PreviewMutate".to_string(),
+        "PreviewAct".to_string(),
+        "PreviewCapture".to_string(),
+        "PreviewInspect".to_string(),
+    ];
+    run_aside(RunAsideArgs {
+        data_dir,
+        bound_session_id,
+        provider_id,
+        model,
+        system_prompt,
+        history,
+        user_content,
+        attachments,
+        harness,
+        workspace,
+        enabled_tools,
+        cancel_flag,
+        emit_event,
+    })
+    .await
+}
+
+/// [`run_aside`] 的入参集合——纯内存旁支引擎的所有可变参数。
+pub struct RunAsideArgs<'a, F: Fn(EngineEvent) + Send + Sync> {
+    pub data_dir: &'a Path,
+    /// 模型 IO 落盘归属的主对话 id（旁支自己不建 session、不落 transcript）。
+    pub bound_session_id: &'a str,
+    pub provider_id: &'a str,
+    pub model: &'a str,
+    pub system_prompt: String,
+    /// 调用方持有的多轮内存历史（首轮为空 / fork 的主对话历史）。
+    pub history: Vec<Message>,
+    pub user_content: String,
+    pub attachments: Vec<common::attachments::MessageAttachment>,
+    /// 本场景暴露的工具集（元素对话=Preview 信号工具；代码旁支=只读 Read/Grep）。
+    pub harness: Arc<Harness>,
+    pub workspace: Arc<Workspace>,
+    pub enabled_tools: Vec<String>,
+    pub cancel_flag: CancelFlag,
+    pub emit_event: F,
+}
+
+/// 旁支会话一轮的通用引擎：纯内存、不落盘、走 `emit_event` 回调下发事件流。
+///
+/// 工具集 / workspace / enabled_tools 由调用方按场景注入（见 [`RunAsideArgs`]）：
+/// - 元素对话（[`send_aside`]）：Preview 信号工具 + home workspace
+/// - 代码旁支（旁支对话 tab）：只读 Read/Grep + 主对话 workspace
+///
+/// 与主对话最大的不同：**旁支不落盘**（`session_id`/`recorder`/`permission_store` 全 `None`
+/// → CoreSession 短路所有持久化与后台 task）。多轮历史由调用方持有，每轮把 user + 重建的
+/// assistant 追加，下一轮用 [`Transcript::from_session`] 重建。
+///
+/// 模型 IO 写进 `bound_session_id` 的 model_io.jsonl（`kind="aside"`），供主对话调试面板查看。
+/// 返回更新后的内存历史（含本轮 user + assistant）+ 本轮 assistant message。
+pub async fn run_aside<F: Fn(EngineEvent) + Send + Sync>(
+    args: RunAsideArgs<'_, F>,
+) -> AppResult<(Vec<Message>, Message)> {
+    let RunAsideArgs {
+        data_dir,
+        bound_session_id,
+        provider_id,
+        model,
+        system_prompt,
+        mut history,
+        user_content,
+        attachments,
+        harness,
+        workspace,
+        enabled_tools,
+        cancel_flag,
+        emit_event,
+    } = args;
+
     let provider = model_gateway::config::get(data_dir, provider_id)?;
     let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
         .await
@@ -1571,29 +1667,16 @@ pub async fn send_aside(
         meta: None,
         subagent_call_id: None,
     };
-    history.push(user_msg);
 
-    // 极简 harness：三个信号工具（写路径，经 inspector）+ 两个观察工具
-    // （读路径，经 PreviewBridge/CDP；bridge 不可用时工具自带降级提示）。
-    let harness = Arc::new(Harness::new(
-        vec![
-            Box::new(agent_core::tools::preview_style::PreviewStyleTool),
-            Box::new(agent_core::tools::preview_mutate::PreviewMutateTool),
-            Box::new(agent_core::tools::preview_act::PreviewActTool),
-            Box::new(agent_core::tools::preview_capture::PreviewCaptureTool::new(
-                preview_bridge.clone(),
-            )),
-            Box::new(agent_core::tools::preview_inspect::PreviewInspectTool::new(
-                preview_bridge,
-            )),
-        ],
-        HookManager::new(vec![]),
-    ));
-    let workspace = Workspace::new(
-        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-        Vec::new(),
-    );
-    let transcript = Transcript::from_session(Some(system_prompt), &history);
+    // 先用 fork 的历史重建 transcript，再显式把本轮 user 追加到末尾——与主对话
+    // `from_session(历史) + append_user` 对称。不能把 user_msg 先塞进 history 再
+    // 一次性 from_session：当 fork 的历史以 CompactBoundary 结尾时，from_session 会
+    // 注入一条「已收到前情概要」占位 assistant，若它落在末尾，请求就以 assistant
+    // 结尾——Claude Opus/Sonnet 4.6+ 不再支持 assistant prefill，直接 400
+    // （"conversation must end with a user message"）。显式 push_user 保证末尾永远是 user。
+    let mut transcript = Transcript::from_session(Some(system_prompt), &history);
+    transcript.push_user(user_msg.content.clone(), user_msg.attachments.clone());
+    history.push(user_msg);
 
     let core_session = CoreSession::new(
         harness,
@@ -1601,13 +1684,7 @@ pub async fn send_aside(
             definition: AgentDefinition::default(),
             workspace,
             client,
-            enabled_tools: vec![
-                "PreviewStyle".to_string(),
-                "PreviewMutate".to_string(),
-                "PreviewAct".to_string(),
-                "PreviewCapture".to_string(),
-                "PreviewInspect".to_string(),
-            ],
+            enabled_tools,
             initial_transcript: transcript,
             recorder: None,
             model_io_dump,

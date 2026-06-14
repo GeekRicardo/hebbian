@@ -576,6 +576,14 @@ export interface SearchHit extends SessionMeta {
   matched_in: "" | "title" | "content";
 }
 
+/** 旁支对话元信息（branch_create 返回，架构 §8.5）。 */
+export interface BranchInfo {
+  branch_id: string;
+  bound_session_id: string;
+  /** fork 时从主对话继承了多少条消息（仅供 UI 显示）。 */
+  inherited_count: number;
+}
+
 /**
  * 引擎事件——后端通过 Tauri Channel 流式推送给前端。
  *

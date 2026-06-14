@@ -258,8 +258,51 @@ fn flush_assistant_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::sessions::{MessagePart, MessageToolCall};
+    use crate::storage::sessions::{MessageMeta, MessagePart, MessageToolCall};
     use serde_json::json;
+
+    fn user_msg(id: &str, text: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            role: Role::User,
+            content: text.to_string(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: 0,
+            meta: None,
+            subagent_call_id: None,
+        }
+    }
+
+    /// 回归：历史以 CompactBoundary 结尾时，`from_session` 会注入「已收到前情概要」
+    /// 占位 assistant，使 transcript 以 assistant 结尾。Claude Opus/Sonnet 4.6+ 拒绝
+    /// assistant prefill（400 "conversation must end with a user message"）。旁支引擎
+    /// `run_aside` 据此改为 `from_session(历史) + push_user`，保证末尾永远是 user。
+    /// 本测试锁定「末尾 boundary → assistant 结尾」这个危险属性，提醒任何复用 from_session
+    /// 重建后直接发请求的路径必须自己补 user。
+    #[test]
+    fn from_session_with_trailing_compact_boundary_ends_with_assistant() {
+        let mut boundary = user_msg("b", "");
+        boundary.meta = Some(MessageMeta::CompactBoundary {
+            summary: "前情提要内容".to_string(),
+            before_tokens: 100,
+            after_tokens: 10,
+        });
+        let history = vec![user_msg("u1", "hi"), boundary];
+
+        let t = Transcript::from_session(Some("sys".to_string()), &history);
+        // 末尾是占位 assistant —— 直接发请求会 400
+        assert!(matches!(
+            t.entries.last(),
+            Some(TranscriptEntry::Assistant(_))
+        ));
+
+        // 修复手法：再 push 一条 user，末尾恢复为 user
+        let mut fixed = t;
+        fixed.push_user("新问题".to_string(), Vec::new());
+        assert!(matches!(fixed.entries.last(), Some(TranscriptEntry::User(_))));
+    }
 
     fn assistant(parts: Vec<MessagePart>, tool_calls: Vec<MessageToolCall>) -> Message {
         Message {

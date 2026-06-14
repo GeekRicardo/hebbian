@@ -6,6 +6,7 @@ import {
   FilePenLine,
   FileJson,
   Globe2,
+  MessagesSquare,
   ListChecks,
   ClipboardList,
   SquareTerminal,
@@ -22,6 +23,7 @@ import { TodoTab } from "./TodoTab";
 import { PlanTab } from "./PlanTab";
 import { BrowserPanel } from "./BrowserPanel";
 import { TerminalSurface } from "./TerminalSurface";
+import { BranchChatTab } from "./BranchChatTab";
 
 /**
  * 右侧工作台：固定列布局（被 ChatView 的 grid 让位），承载「后台任务 / 修改文件」两个 tab。
@@ -36,9 +38,9 @@ import { TerminalSurface } from "./TerminalSurface";
  * sidebar 不持有业务数据，仅管布局。
  */
 
-type TabId = "tasks" | "edits" | "todos" | "plans" | "browser" | "terminal";
+type TabId = "tasks" | "edits" | "todos" | "plans" | "branches" | "browser" | "terminal";
 
-const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "browser", "terminal"];
+const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "branches", "browser", "terminal"];
 
 const STORAGE_PREFIX = "hebbian.rightSidebar";
 
@@ -52,6 +54,7 @@ const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
   edits: DEFAULT_WIDTH * 2,
   todos: Math.round(DEFAULT_WIDTH / 2),
   plans: DEFAULT_WIDTH,
+  branches: Math.round(DEFAULT_WIDTH * 5 / 4),
   browser: Math.round(DEFAULT_WIDTH * 5 / 4),
   terminal: 480,
 };
@@ -136,6 +139,7 @@ export function RightSidebar({
   // 不放进 tab 内嵌是因为 Inspector 信息密度极大（RequestDetail/N 条 MessageRow/嵌套 PrettyJson），
   // 320px tab 容不下。
   const debugEnabled = useStore((s) => s.debugEnabled);
+  const settingsOpen = useStore((s) => s.settingsOpen);
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const sessionWorkdir = useStore((s) => s.currentSession?.workdir ?? null);
   const todos = useStore((s) => s.todos);
@@ -222,8 +226,9 @@ export function RightSidebar({
   useEffect(() => {
     if (collapseTick === prevCollapseTickRef.current) return;
     prevCollapseTickRef.current = collapseTick;
-    // 用户停在终端 tab 时不自动折叠——终端是用户主动盯着的工作区，收起会打断他
-    if (tabRef.current === "terminal") return;
+    // 用户停在终端 / 浏览器 tab 时不自动折叠——这俩是用户主动盯着的工作区（终端在跑、
+    // 网页在看），自动收起会打断他，且浏览器原生子 webview 折叠后还要额外收可见性。
+    if (tabRef.current === "terminal" || tabRef.current === "browser") return;
     setCollapsed(true);
   }, [collapseTick]);
 
@@ -323,6 +328,15 @@ export function RightSidebar({
         active={tab === "plans"}
       />
       <SidebarIconButton
+        icon={<MessagesSquare className="h-4 w-4" />}
+        label="旁支对话"
+        onClick={() => {
+          setTab("branches");
+          setCollapsed(false);
+        }}
+        active={tab === "branches"}
+      />
+      <SidebarIconButton
         icon={<Globe2 className="h-4 w-4" />}
         label="内置浏览器"
         onClick={() => {
@@ -415,6 +429,13 @@ export function RightSidebar({
                   label="计划"
                 />
                 <SidebarTab
+                  id="branches"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<MessagesSquare className="h-3.5 w-3.5" />}
+                  label="旁支对话"
+                />
+                <SidebarTab
                   id="browser"
                   current={tab}
                   onClick={setTab}
@@ -466,10 +487,11 @@ export function RightSidebar({
                 {tab === "edits" && <EditTreeTab />}
                 {tab === "todos" && <TodoTab />}
                 {tab === "plans" && <PlanTab />}
+                {tab === "branches" && <BranchChatTab />}
               </div>
               {browserMounted && (
                 <div className={cn("absolute inset-0", tab !== "browser" && "hidden")}>
-                  <BrowserPanel active={tab === "browser"} />
+                  <BrowserPanel active={tab === "browser"} obscured={modelIoOpen || settingsOpen} />
                 </div>
               )}
               {terminalMounted && (

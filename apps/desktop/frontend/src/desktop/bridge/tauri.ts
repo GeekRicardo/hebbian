@@ -2,6 +2,7 @@ import { invoke, Channel } from "./transport";
 import type {
   AppSettings,
   AuthUrlResult,
+  BranchInfo,
   CatalogCache,
   CodexTokenInfo,
   ContextUsage,
@@ -122,6 +123,36 @@ export const api = {
       sessionId,
       upToMessageId,
     }),
+
+  // ---- 旁支对话（branch / aside session，架构 §8.5）----
+  /** 从主对话 fork 一条只读旁支讨论；upToMessageId 为分叉点（含），null = 继承全部历史。 */
+  branchCreate: (sessionId: string, upToMessageId?: string | null) =>
+    invoke<BranchInfo>("branch_create", {
+      sessionId,
+      upToMessageId: upToMessageId ?? null,
+    }),
+  /** 向旁支发一轮消息，事件流走 EngineEvent channel（与主对话同款渲染）。 */
+  branchSend: (
+    branchId: string,
+    content: string,
+    providerId: string | null,
+    model: string | null,
+    onEvent: (e: EngineEvent) => void
+  ) => {
+    const channel = new Channel<EngineEvent>();
+    channel.onmessage = onEvent;
+    return invoke<Message>("branch_send", {
+      branchId,
+      content,
+      providerId,
+      model,
+      onEvent: channel,
+    });
+  },
+  /** 关闭一条旁支（丢弃内存历史）。 */
+  branchDiscard: (branchId: string) =>
+    invoke<void>("branch_discard", { branchId }),
+
   truncateAfter: (id: string, messageId: string) =>
     invoke<Session>("truncate_after", { id, messageId }),
   truncateInclusive: (id: string, messageId: string) =>
@@ -639,6 +670,7 @@ export const api = {
     invoke<void>("browser_set_visible", { sessionId, visible }),
   browserHideOthers: (keepSession: string) =>
     invoke<void>("browser_hide_others", { keepSession }),
+  browserListOpen: () => invoke<Array<[string, string]>>("browser_list_open"),
   browserClose: (sessionId: string) => invoke<void>("browser_close", { sessionId }),
   browserPicker: (sessionId: string, active: boolean) =>
     invoke<void>("browser_picker", { sessionId, active }),
