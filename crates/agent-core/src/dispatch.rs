@@ -822,7 +822,14 @@ impl ToolDispatcher {
                     current_run_id_for_snapshot.as_deref(),
                 ) {
                     let touched = analyze_effects(&call.name, &effective_input).paths;
+                    // 同 path 去重：本循环用 _edit_locks 累积持有每把 per-path 锁不释放，
+                    // 同一 path 第二次 lock_file 会在已持有的 async Mutex 上自死锁。effects
+                    // 层已去重，这里再兜一道，让锁的使用方自洽、不依赖上游不变量。
+                    let mut snapshotted = std::collections::HashSet::new();
                     for path in touched {
+                        if !snapshotted.insert(path.clone()) {
+                            continue;
+                        }
                         if !workspace_for_snapshot.allows(&path) {
                             continue; // 越界路径由 PathAccess 审批把关，未授权不快照
                         }

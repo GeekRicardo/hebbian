@@ -8107,3 +8107,12 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 给弹层使用 `box-sizing: border-box`，并在侧栏 footer 内用左右内边距同时约束宽度，确保弹层不越出侧栏。
 - **影响范围**: 仅 Desktop 前端调色盘弹层布局；不改组件结构、不改协议。
 - **留尾巴**: 已经由内置浏览器预览确认左右不越界；后续如 sidebar 宽度再变，仍需保持弹层由容器两侧约束而不是按钮偏移量。
+
+### 2026-06-15 — 修复 effects.paths 含重复/设备路径导致 edits 快照循环自死锁
+
+- **Why**: 用户报某 session（202606150845-33f9fbd8）的 Bash 工具审批已被判官 allow，但工具几十分钟不执行、run 永久挂起。复盘日志（run_89b98fa7）定位：模型发的 playwright 命令含 5 个 `2>&1 >/dev/null` 重定向，`analyze_shell` 把每个 `>/dev/null` 当写目标推进 `effects.paths`，得到 5 个完全相同的 `/dev/null` 且未去重。审批通过后 dispatch 的 edits 快照循环对 `effects.paths` 逐个 `lock_file().await`，而 `lock_file` 用 per-path async Mutex + `lock_owned()`、guard 又被 `_edit_locks` 累积持有不释放——同一 path 第二次拿同一把锁永久阻塞，经典自死锁。`/dev/null ×5` 只是触发器，任何命令对同一真实文件重复写（`echo a>x; echo b>x`）同样会触发。
+- **改动**:
+  - [crates/agent-core/src/effects.rs](../crates/agent-core/src/effects.rs): `analyze_shell` 收尾对 `paths` 过滤特殊设备路径（`/dev/*`，git 无法快照、无需越界把关与审批展示）+ 保序去重（拔掉死锁的污染源头）；新增 `is_device_path` / `dedup_preserve_order` 两个辅助函数；补两条回归测试 `bash_device_paths_filtered_from_effects`、`bash_duplicate_write_targets_deduped`（A/B 翻转已验：注释掉修复即 fail，paths=["/dev/null"] / ["/tmp/dup","/tmp/dup"]）。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): edits 快照循环加同 path 去重防御（HashSet），让「重复 lock 同 path 必死锁」的唯一发生点自洽，不依赖 effects 层去重这个上游不变量。
+- **影响范围**: agent-core（effects 分析 + dispatch 快照）。行为变化：`/dev/null` 等设备路径不再进 effects.paths，审批弹窗 / 越界检查 / edits 快照都不再出现它们；重复写目标只快照/审批一次。不破坏协议，不动架构.md（§4.13.4 per-path 锁是有意设计，本次修的是调用方违背锁使用假设的 bug，非锁本身）。
+- **留尾巴**: 卡死的 session 进程（PID 92382）仍在运行、该 run 已永久阻塞，需重启 Desktop 让其脱困。死锁发生在 dispatch 异步锁循环、单元测试覆盖不到锁层，本次靠 effects 层 A/B 单测 + dispatch 去重逻辑直白性兜底；如需端到端复现可用 heb 跑含重复 `>/dev/null` 的命令在 AutoMode 下走判官放行路径。

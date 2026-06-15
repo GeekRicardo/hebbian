@@ -15,7 +15,7 @@
 //! 路径解析失败、未知工具一律降级为 `Mutating(Medium)` 兜底——HITL 会按
 //! "需要审批" 处理，比误判 ReadOnly 安全。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use protocol::RiskLevel;
 use serde_json::Value;
@@ -220,6 +220,19 @@ fn file_path_paths(input: &Value, field: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// 特殊设备路径：`/dev/null`、`/dev/stdout`、`/dev/stderr`、`/dev/fd/*` 等。
+/// 这些不是用户工作区文件，重定向到它们无副作用可回退，不该进 effects.paths
+/// 参与越界检查 / 审批展示 / edits 快照。
+fn is_device_path(p: &Path) -> bool {
+    p.starts_with("/dev/")
+}
+
+/// 原地保序去重：保留首次出现，剔除后续重复，顺序不变。
+fn dedup_preserve_order(paths: &mut Vec<PathBuf>) {
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|p| seen.insert(p.clone()));
+}
+
 /// Bash / PowerShell 分析（架构 §4.4.2 段级判定）：
 /// - segments：按 `&&` `||` `;` `|` 拆段，每段独立产 `fingerprint` + `write_targets`
 /// - paths = cwd ∪ ⋃ segments[i].write_targets（write_targets 也走越界检查 +
@@ -305,6 +318,13 @@ fn analyze_shell(input: &Value) -> Effects {
     if first_fingerprint.is_none() {
         first_fingerprint = Some(raw.to_string());
     }
+
+    // paths 收尾：丢弃特殊设备路径（/dev/null 等），再保序去重。
+    // 设备文件 git 无法做有意义的快照、也无需越界把关与审批展示；去重则保证
+    // 下游 edits-worktree 快照循环不会对同一 path 重复加锁（同 path 第二次拿
+    // per-path 锁会自死锁——`2>&1 >/dev/null` 重复出现即触发）。
+    paths.retain(|p| !is_device_path(p));
+    dedup_preserve_order(&mut paths);
 
     // —— [Permission:Bash:Extract] 解析日志：逐段展示 fingerprint + 分类标记，
     //    并标出「哪些段会写、需走审批」。每段格式 `fp{ro|WRITE}[w:目标][!danger]`。——
@@ -485,6 +505,37 @@ mod tests {
         // segments 第一段含写目标
         assert_eq!(e.segments.len(), 1);
         assert_eq!(e.segments[0].write_targets, vec!["/tmp/x".to_string()]);
+    }
+
+    #[test]
+    fn bash_device_paths_filtered_from_effects() {
+        // /dev/null 等设备路径不进 paths：它们不是工作区文件，无需越界检查 /
+        // 审批展示 / 快照，留着会污染审批弹窗并触发快照层对同 path 重复加锁。
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "foo 2>&1 >/dev/null; bar 2>/dev/null"}),
+        );
+        assert!(
+            !e.paths.iter().any(|p| p.starts_with("/dev/")),
+            "设备路径应被过滤，实际 paths={:?}",
+            e.paths
+        );
+    }
+
+    #[test]
+    fn bash_duplicate_write_targets_deduped() {
+        // 同一文件被多段重复写 → paths 去重，保证 edits 快照循环不会对同 path
+        // 第二次加 per-path 锁（会自死锁）。这是 partial sidecar 卡死的回归。
+        let e = analyze_effects(
+            "Bash",
+            &json!({"command": "echo a > /tmp/dup; echo b > /tmp/dup"}),
+        );
+        let dup_count = e
+            .paths
+            .iter()
+            .filter(|p| *p == &PathBuf::from("/tmp/dup"))
+            .count();
+        assert_eq!(dup_count, 1, "重复写目标应去重，实际 paths={:?}", e.paths);
     }
 
     #[test]
