@@ -8010,3 +8010,100 @@ Note: lib.rs 的 popout 命令注册被并发任务的 git add -A 扫进了它�
 **留尾巴（已知）**：① tauri 2.11 疑似引入内置浏览器 dev 页面跨域 fetch 后台数据的回归（未完全定位，见 GitHub issue #2）——eval_with_callback（查样式）与 dev 后台请求当前是 2.11/2.10 取舍关系；② CEF 承载 CDP /json 僵死未解，方案征集中（issue #2）；③ wry 查样式只在工作区，未真机起 desktop 验证注释 LLM 实际调用效果。
 
 Note：本次工作区混入他人未完成的 branch（旁支对话）改动——crates/agent-core/src/{harness.rs（subagent 修复后续追加）, context/transcript.rs}、apps/desktop/src/{chat.rs, branch.rs, lib.rs 的 branch 命令注册}、apps/desktop/frontend/src/desktop/{ui/types.ts, ui/components/BranchChatTab.tsx, ui/store/useBranchStore.ts}、RightSidebar.tsx/tauri.ts 的 branch 部分。这些非本次 CEF/wry 任务，因共享文件耦合 + 编译依赖一并提交，不属本次改动。
+
+### 2026-06-15 — 调整供应商设置保存按钮为按需浮动显示
+
+- **Why**: 供应商设置内容较长，底部固定在文档流里的保存按钮需要滚到页面末尾才能点；用户希望有修改时按钮始终在可见区域，下方居中显示，未修改时不打扰。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx): 增加保存中状态和未保存变更判断；移除页面底部常驻保存区，改为仅在供应商配置与已保存状态不一致时显示底部居中的浮动保存按钮。
+- **影响范围**: 仅 Desktop 前端设置页供应商 tab；不改 providers.json 格式、不改 CoreClient 同步 API、不影响 CLI / hebweb 协议。
+- **留尾巴**: 未做 Desktop dev 真机视觉验收；已做 TypeScript 类型检查。
+
+### 2026-06-15 — 铺开供应商设置页并让 Claude OAuth 先展示授权链接
+
+- **Why**: 供应商设置已经在全屏设置页里，内嵌卡片会让页面显得被框住；Claude OAuth 直接打开默认浏览器不方便用户复制链接到其他浏览器或环境里授权。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): 供应商 tab 不再套用设置页通用卡片边框、背景和内边距，内容直接铺在设置页区域里。
+  - [apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/OAuthDialog.tsx): Claude OAuth 点击后只生成授权链接并展示复制按钮；生成后提供「打开授权链接」按钮，用户可自行决定复制或打开。顺手把本地凭据导入文案改成人话，不暴露本机路径。
+- **影响范围**: 仅 Desktop 前端设置页和 OAuth 弹窗交互；不改 OAuth 后端流程、不改供应商配置格式、不改协议。
+- **留尾巴**: 未做 Desktop dev 真机视觉验收；已做 TypeScript 类型检查。
+
+### 2026-06-15 — 调整供应商浮动保存按钮为橙色
+
+- **Why**: 用户希望有未保存修改时，保存按钮用更醒目的橙色提示当前存在待保存变更。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/ProvidersPane.tsx): 为供应商设置的浮动保存按钮增加橙色背景、悬停和禁用态颜色。
+- **影响范围**: 仅 Desktop 前端供应商设置页视觉样式；不改保存逻辑、不改配置格式。
+- **留尾巴**: 未做 Desktop dev 真机视觉验收；已做 TypeScript 类型检查。
+
+### 2026-06-15 — 新增「主助手」persona 预设（FABLE-5 人格价值观提炼）
+
+- **Why**: 用户想给 hebbian 加一个「主 agent 角色」，参考官方 Claude Fable 5 的 system prompt。对齐后确认：FABLE-5 是 chat 产品的完整 prompt，约 2/3 是产品专属内容（product_information、memory_system、persistent_storage、mcp_app_suggestions、computer_use，以及一整套 hebbian 不存在的工具定义 create_file/recipe_display/places_map/web_search…）。把它整段塞进来当主角色等于用 chat 产品 prompt 凌驾 hebbian 的 coding harness——既违反架构 §9（base_system.md 唯一不可改、保 prompt cache），又给模型灌一堆它没有的工具，反而把 agent 搞坏。最终方案落在架构 §9 既有的 persona 机制内：只提炼 FABLE-5 的人格价值观，作为一条 persona 预设，base 一字不动。
+- **改动**:
+  - [crates/agent-core/prompts/persona_fable.md](../crates/agent-core/prompts/persona_fable.md): 新建。从 FABLE-5 提炼语气与表达 / 安全边界 / 用户福祉 / 客观中立 / 认错与尊严 / 谦逊六块，译成中文 persona；丢弃全部 chat 产品工具定义与产品信息（refusal_handling / tone_and_formatting / user_wellbeing / evenhandedness / responding_to_mistakes / legal_and_financial_advice / knowledge_cutoff 的价值观部分）。
+  - [crates/agent-core/src/storage/prompts.rs](../crates/agent-core/src/storage/prompts.rs): `default_presets()` 头部新增一条「主助手」（🌟），content 用 `include_str!` 引 persona_fable.md。新用户首次启动 / 重置时即得，排在预设第一位。
+  - `~/.hebbian/prompts.json`（用户实时配置，非仓库文件）: 幂等追加一条「主助手」，default_prompt_id 不变（仍是用户原有的「Hebbian」角色），让本机当下即可在角色列表选到。
+- **影响范围**: 仅 agent-core persona 数据层 + 内置 prompt 资源。base_system.md 不动，prompt cache 不受影响；persona 走 `compose_system_prompt` 的 `# 用户角色` 段（system_prompt.rs:32），完全符合架构 §9.1「用户只能覆盖 persona」。不破坏兼容：default_presets 只在 prompts 为空时注入，老用户既有配置不被覆盖。
+- **留尾巴**: 用户需在角色切换 UI 里手动选「主助手」才生效（未改默认角色，避免擅自变更用户设置）。已跑 `cargo check -p agent-core` + `cargo test -p agent-core --lib prompts` 通过；未做 Desktop dev 真机选角色验收。
+
+### 2026-06-15 — 设置页第四项「模型」改为「角色」，统一默认角色真相源 + 兜底 Hebbian
+
+- **Why**: 用户要求设置页第四项能展示并管理「角色」（persona），改 Agent 名称，且去掉「无」选项、默认兜底到 Hebbian。排查发现一个真实问题：设置页第四项的 `ModelsPane`「默认 Prompt」下拉写的是 `settings.agents.default_prompt_id`，而新建会话实际取的是 `promptsFile.default_prompt_id`（useStore.ts:2081）——两者是不同的值，前者全代码库无人消费，是个**死设置（选了不生效）**。继续在死字段上加功能等于治标，故治本：第四项直接读写真正生效的 `promptsFile.default_prompt_id`，与「Agent 管理」弹窗的星标默认归一到同一个真相源。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): TabKey `models`→`roles`，label「模型」→「角色」，icon 换 `UserCog`。删除死的 `ModelsPane`，新增 `RolePane`：左侧角色列表（无「无」选项，星标=默认）、右侧改名称（inline 保存走 `upsertPrompt`）、只读展示选中角色系统指令、「设为默认」按钮（走 `setDefaultPrompt`，即 `promptsFile.default_prompt_id`）。指令/头像完整编辑仍引导到「Agent 管理」弹窗，避免重复造编辑器。移除主体里不再用的 `promptsFile` 解构。
+  - [crates/agent-core/src/storage/prompts.rs](../crates/agent-core/src/storage/prompts.rs): `normalize_default_prompt` 的 fallback 从「退第一个」改为「优先名为 Hebbian 的角色，缺失才退第一个」，实现硬兜底。加回归测试 `normalize_prefers_hebbian_when_default_invalid`。
+- **影响范围**: Desktop 前端设置页 + agent-core prompts 兜底策略。不改对外协议/存储格式；`promptsFile` 是既有真相源，会话创建链路天然消费，本次只是让设置页 UI 写对地方。
+- **留尾巴**:
+  - `settings.agents.default_prompt_id`（后端 `AgentDefaults`，settings.rs:174）现确认为纯死字段——无人消费。本次未删（跨持久化兼容，且与本任务无关），前端 `AppSettings.agents` 字段定义一并保留以维持前后端 serde 对称；可单列一次清理。
+  - 「兜底 Hebbian」用 name 字符串匹配，用户把该角色改名后兜底失效（magic string 固有脆性，权衡后接受——此兜底仅在删除默认角色的极端路径触发）。`default_presets` 无叫 Hebbian 的预设，新用户触发时降级到第一个（Fable5），无害。
+  - 已跑 `cargo test -p agent-core --lib prompts`（4 passed）+ `pnpm exec tsc --noEmit`（apps/desktop，通过）；未做 Desktop dev 真机点选验收。
+
+### 2026-06-15 — 设置页「角色」补头像编辑，移除指向孤儿弹窗的死引导
+
+- **Why**: 上一条把「角色」Pane 的指令/头像编辑引导到「Agent 管理」弹窗（PromptsDialog）。复查发现 PromptsDialog 虽挂载在 App.tsx:237，但全代码库无任何入口调 `setPromptsDialogOpen(true)`——是个**永远打不开的孤儿组件**，那句「修改指令或头像请到 Agent 管理」指向不存在的界面。用户要求：去掉该死引导，并让「角色」Pane 直接支持改头像（参考外观 tab 改用户头像的做法）。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): RolePane 加 `AvatarField`（label「角色头像」，复用外观 tab 同款 `cropImage` 能力 + 新增 `AGENT_AVATAR_SUGGESTIONS` emoji 建议），改头像即时走 `upsertPrompt` 落盘；左侧角色列表加 `AvatarPreview` 头像；删除指向「Agent 管理」的死引导文案，空状态文案同步去掉该引用；导入补 `AvatarPreview`。
+- **影响范围**: 仅 Desktop 设置页「角色」Pane。指令仍只读（按既定边界），头像/名称/默认可在此直接管理。
+- **留尾巴**:
+  - `PromptsDialog`（标题「Agent 管理」）确认为孤儿组件——无入口可打开，功能与「角色」Pane 高度重叠（改名/头像/指令/默认）。本次未删（超出本任务范围），建议后续要么删除、要么补一个打开入口，二选一。
+  - 已跑 `pnpm exec tsc --noEmit`（apps/desktop，通过）；未做 Desktop dev 真机改头像验收。
+
+---
+
+### 2026-06-15 — 修复内嵌 hebisland 自动拉起被 stale socket 文件骗过导致审批不弹
+
+- **Why**: 2026-06-12 加的 Desktop 启动自动拉起 hebisland 逻辑用 `!sock_path.exists()` 判断是否需要拉起 daemon。但 daemon 进程退出后 `~/.hebbian/island.sock` 文件会残留（Unix domain socket 文件不随进程死亡自动删除），`path.exists()` 返回 true → 跳过拉起 → `UnixStream::connect` 到一个没人 listen 的死 socket 拿 `Connection refused (os error 61)` → 进 `for _ in rx {}` 永久吞掉所有审批/问答推送。线上现象：装好的 Hebbian 权限审批不再唤起 hebisland 通知。日志铁证：`WARN hebbian_lib::hebisland_client: hebisland daemon 未运行 (Connection refused (os error 61))`。**根因是「用文件存在性判断进程存活」这一类经典错误**。
+- **改动**:
+  - `apps/desktop/src/hebisland_client.rs`: 把 `spawn_bundled_daemon` + `wait_for_socket`（基于 `path.exists()`）重构为 `connect_or_spawn`——先 `UnixStream::connect`，连不上才拉起内嵌 daemon 再轮询重连（最多 ~2s）。**用「能否 connect」而非「socket 文件是否存在」判断 daemon 存活**，stale socket 文件不再误导判断。`spawn_bundled_daemon` 改为返回 bool（成功 spawn / 找不到内嵌资源）。
+  - 加回归单测 `stale_socket_file_exists_but_connect_fails`: bind UnixListener 建出 socket 文件 → drop 模拟 daemon 退出 → 断言 `path.exists()` 为真但 `connect` 失败，凝固「connect 才是 daemon 存活唯一可信判据」。
+- **影响范围**: 仅 Desktop 的 hebisland 客户端连接逻辑；不动 agent-core / 协议 / storage / hebisland Swift 端。
+- **验证**:
+  - 阶段A复现：从真实安装路径 `/Applications/Hebbian.app/.../hebisland daemon` 起 daemon 再 `kill -9`，socket 文件残留（stale）；旧逻辑 `!exists()==false` 跳过拉起 → connect 死 socket 拿 ECONNREFUSED（与线上日志 os error 61 吻合）。
+  - 阶段B验证：对 stale socket connect 失败（Errno 61）→ 触发拉起 → 第 100ms 重连成功。
+  - 回归单测 `cargo test -p hebbian --lib stale_socket` pass。
+- **留尾巴**: 连上后若 daemon 中途崩溃，当前 writer 循环写失败即 break、不自动重连——本次只修「启动时拉起」这一段。运行期重连留作后续（低频场景）。用户当前在跑的 `/Applications/Hebbian.app` 是修复前版本，需重新打包安装才生效。
+
+### 2026-06-15 — 调整调色盘主题预设为两列单行名称
+
+- **Why**: 内置浏览器预览里发现调色盘主题预设按钮过窄，`冰湖蓝绿`、`深海墨蓝` 等主题名会在按钮内断成两行；用户希望源码层面落地为每个按钮内单行显示，且保持两列布局，不把 5 个主题横向塞满。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx): 给主题名文本补充语义 class，避免用脆弱的子元素序号选择器控制文字换行。
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 扩宽调色盘弹层并右对齐，主题预设列表保持两列 grid，按钮使用共享样式撑满列宽，主题名单行不收缩。
+- **影响范围**: 仅 Desktop 前端视觉样式；不改 React 状态、不改协议、不影响持久化。
+- **留尾巴**: 未做 Desktop dev 真机视觉验收；已做 TypeScript 类型检查。
+
+### 2026-06-15 — 修正调色盘弹层越过侧栏左边界
+
+- **Why**: 上一条调整把调色盘弹层改成右对齐，但弹层是相对 30px 调色盘按钮定位，不是相对整个 sidebar 定位；232px 宽度右对齐后会向左展开，导致弹层挤出左侧栏左边界。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 改为以按钮中心定位并向左偏移，让 232px 弹层保持在侧栏内部，同时保留两列主题名单行布局。
+- **影响范围**: 仅 Desktop 前端调色盘弹层定位；不改组件结构、不改协议。
+- **留尾巴**: 未做 Desktop dev 真机视觉验收；已做 TypeScript 类型检查。
+
+### 2026-06-15 — 修正调色盘弹层宽度盒模型与侧栏内约束
+
+- **Why**: 预览验证发现仅调整左右锚点仍会左右越界；根因是调色盘弹层默认 content-box 下 `width: 232px` 不包含 `padding` 和边框，实际外宽更大，贴左或贴右都会挤出侧栏。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): 给弹层使用 `box-sizing: border-box`，并在侧栏 footer 内用左右内边距同时约束宽度，确保弹层不越出侧栏。
+- **影响范围**: 仅 Desktop 前端调色盘弹层布局；不改组件结构、不改协议。
+- **留尾巴**: 已经由内置浏览器预览确认左右不越界；后续如 sidebar 宽度再变，仍需保持弹层由容器两侧约束而不是按钮偏移量。

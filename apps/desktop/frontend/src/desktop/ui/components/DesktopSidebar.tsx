@@ -178,7 +178,7 @@ function DesktopHueControl({
                 title={preset.name}
               >
                 <span className="dsp-theme-preset-swatch" style={{ background: `linear-gradient(135deg, ${preset.colors.join(", ")})` }} />
-                <span>{preset.name}</span>
+                <span className="dsp-theme-preset-name">{preset.name}</span>
               </button>
             ))}
           </div>
