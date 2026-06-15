@@ -8068,6 +8068,16 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `PromptsDialog`（标题「Agent 管理」）确认为孤儿组件——无入口可打开，功能与「角色」Pane 高度重叠（改名/头像/指令/默认）。本次未删（超出本任务范围），建议后续要么删除、要么补一个打开入口，二选一。
   - 已跑 `pnpm exec tsc --noEmit`（apps/desktop，通过）；未做 Desktop dev 真机改头像验收。
 
+### 2026-06-15 — 删除孤儿组件 PromptsDialog
+
+- **Why**: 上一条确认 PromptsDialog（「Agent 管理」弹窗）是孤儿组件——无任何入口能打开它，且其全部能力（改名/头像/指令/默认）已被设置页「角色」Pane 覆盖。死代码留着只会让人误以为有这个界面，故删除。
+- **改动**:
+  - 删除 [apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/PromptsDialog.tsx) 整个文件。
+  - [apps/desktop/frontend/src/App.tsx](../apps/desktop/frontend/src/App.tsx): 移除 import 与 `<PromptsDialog />` 挂载。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 移除仅服务于该弹窗的 `promptsDialogOpen` state、`setPromptsDialogOpen` action 类型/初始值/实现共 4 处。
+- **影响范围**: 仅 Desktop 前端。`upsertPrompt` / `deletePrompt` / `setDefaultPrompt` / `userAvatar` 等公共 store 能力不动（RolePane 与外观 tab 仍在用）。
+- **留尾巴**: 无。已跑 `pnpm exec tsc --noEmit`（apps/desktop，通过，无残留引用）。
+
 ---
 
 ### 2026-06-15 — 修复内嵌 hebisland 自动拉起被 stale socket 文件骗过导致审批不弹
@@ -8116,3 +8126,11 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): edits 快照循环加同 path 去重防御（HashSet），让「重复 lock 同 path 必死锁」的唯一发生点自洽，不依赖 effects 层去重这个上游不变量。
 - **影响范围**: agent-core（effects 分析 + dispatch 快照）。行为变化：`/dev/null` 等设备路径不再进 effects.paths，审批弹窗 / 越界检查 / edits 快照都不再出现它们；重复写目标只快照/审批一次。不破坏协议，不动架构.md（§4.13.4 per-path 锁是有意设计，本次修的是调用方违背锁使用假设的 bug，非锁本身）。
 - **留尾巴**: 卡死的 session 进程（PID 92382）仍在运行、该 run 已永久阻塞，需重启 Desktop 让其脱困。死锁发生在 dispatch 异步锁循环、单元测试覆盖不到锁层，本次靠 effects 层 A/B 单测 + dispatch 去重逻辑直白性兜底；如需端到端复现可用 heb 跑含重复 `>/dev/null` 的命令在 AutoMode 下走判官放行路径。
+
+### 2026-06-15 — 调整聊天流 tool 卡片为「下边缘圆角、上边缘直角」
+
+- **Why**: 用户希望 tool 展示卡片下边缘两角圆角、上边缘两角直角，与上方消息内容衔接更紧凑；内部子元素（图标、状态点、嵌套块）不受影响。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `ToolCallTimeline` 外层容器 `rounded-md` → `rounded-b-md`。该组件是主流与子 agent 嵌套两处 tool 展示的唯一渲染入口，改一处即覆盖全部 tool 卡片。内部图标 `rounded-[2px]` / 状态点 `rounded-full` / focus 高亮 wrapper `rounded-[5px]` 均为功能性小圆角，未动。
+- **影响范围**: desktop 前端纯样式，仅 tool 卡片外框圆角；无协议 / 数据格式变化。
+- **留尾巴**: 无。BranchChatTab 的旁支 tool 是 `rounded-full` 胶囊，属另一种形态，不在本次调整范围。

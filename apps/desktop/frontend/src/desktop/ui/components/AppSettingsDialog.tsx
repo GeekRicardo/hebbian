@@ -18,8 +18,10 @@ import {
   Settings as SettingsIcon,
   Shield,
   Sparkles,
+  Star,
   Trash2,
   User,
+  UserCog,
   X,
 } from "lucide-react";
 import { Dialog } from "@/desktop/ui/components/ui/dialog";
@@ -35,7 +37,7 @@ import { PluginsPane } from "@/desktop/ui/components/PluginsPane";
 import { HooksPane } from "@/desktop/ui/components/HooksPane";
 import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
 import { WeChatPane } from "@/desktop/ui/components/WeChatPane";
-import { AvatarField } from "@/desktop/ui/components/AvatarField";
+import { AvatarField, AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import type {
@@ -59,13 +61,13 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "appearance" | "models" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "wechat" | "logs";
+type TabKey = "general" | "conversation" | "appearance" | "roles" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "wechat" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: string }[] = [
   { key: "general", label: "通用", icon: SettingsIcon, group: "基础" },
   { key: "conversation", label: "对话", icon: FolderOpen, group: "基础" },
   { key: "appearance", label: "外观", icon: Palette, group: "基础" },
-  { key: "models", label: "模型", icon: Bot, group: "基础" },
+  { key: "roles", label: "角色", icon: UserCog, group: "基础" },
   { key: "providers", label: "供应商", icon: Server, group: "基础" },
   { key: "agents", label: "Agents", icon: Bot, group: "Agent" },
   { key: "memory", label: "记忆", icon: Brain, group: "Agent" },
@@ -118,7 +120,6 @@ export function AppSettingsDialog() {
     refreshAppSettings,
     saveAppSettings,
     availableTools,
-    promptsFile,
     pendingAppSettingsTab,
     setPendingAppSettingsTab,
     userAvatar,
@@ -253,7 +254,13 @@ export function AppSettingsDialog() {
           {tab === "logs" ? (
             <LogPane draft={visibleDraft} setDraft={setDraft} />
           ) : (
-            <div className="mx-auto max-w-[1120px] space-y-6 rounded-3xl border border-slate-200/70 bg-[#fbfdff] p-6 shadow-[0_18px_46px_rgba(45,61,83,0.06)]">
+            <div
+              className={cn(
+                "mx-auto max-w-[1120px] space-y-6",
+                tab !== "providers" &&
+                  "rounded-3xl border border-slate-200/70 bg-[#fbfdff] p-6 shadow-[0_18px_46px_rgba(45,61,83,0.06)]"
+              )}
+            >
               {tab === "general" && (
                 <GeneralPane draft={visibleDraft} setDraft={setDraft} />
               )}
@@ -267,13 +274,7 @@ export function AppSettingsDialog() {
               {tab === "appearance" && (
                 <AppearancePane userAvatar={userAvatar} setUserAvatar={setUserAvatar} />
               )}
-              {tab === "models" && (
-                <ModelsPane
-                  draft={visibleDraft}
-                  setDraft={setDraft}
-                  prompts={promptsFile.prompts}
-                />
-              )}
+              {tab === "roles" && <RolePane />}
               {tab === "providers" && (
                 <ProvidersPane active={tab === "providers"} />
               )}
@@ -666,6 +667,11 @@ type PaneProps = {
 
 const USER_AVATAR_SUGGESTIONS = [
   "🙂", "😎", "🧑", "👩", "👨", "🧑‍💻", "🧑‍🎨", "🧑‍🔬", "🧑‍🏫", "✨",
+];
+
+const AGENT_AVATAR_SUGGESTIONS = [
+  "🤖", "💻", "🌐", "✍️", "📚", "🎨", "🧠", "🔬", "💡", "🎯",
+  "🧑‍🏫", "🧑‍💼", "🧑‍🎨", "🧑‍💻", "👨‍🔬", "👩‍⚕️", "📝", "🔍", "⚡", "🪄",
 ];
 
 function AppearancePane({
@@ -1385,34 +1391,143 @@ function splitArgs(text: string): string[] {
 }
 
 
-function ModelsPane({
-  draft,
-  setDraft,
-  prompts,
-}: PaneProps & { prompts: { id: string; name: string }[] }) {
+function RolePane() {
+  const { prompts, promptsFile, setDefaultPrompt, upsertPrompt } = useStore();
+  const defaultId = promptsFile.default_prompt_id ?? prompts[0]?.id ?? null;
+
+  const [selectedId, setSelectedId] = useState<string | null>(defaultId);
+  const selected =
+    prompts.find((p) => p.id === selectedId) ??
+    prompts.find((p) => p.id === defaultId) ??
+    prompts[0] ??
+    null;
+
+  const [nameDraft, setNameDraft] = useState(selected?.name ?? "");
+  useEffect(() => {
+    setNameDraft(selected?.name ?? "");
+  }, [selected?.id, selected?.name]);
+
+  if (!selected) {
+    return (
+      <p className="text-sm text-muted-foreground py-4">
+        还没有任何角色。
+      </p>
+    );
+  }
+
+  const isDefault = selected.id === defaultId;
+  const nameChanged = nameDraft.trim() !== "" && nameDraft !== selected.name;
+
+  async function makeDefault(id: string) {
+    try {
+      await setDefaultPrompt(id);
+    } catch (e: any) {
+      toast.error(e.message ?? String(e));
+    }
+  }
+
+  async function saveName() {
+    if (!selected || !nameChanged) return;
+    try {
+      await upsertPrompt({ ...selected, name: nameDraft.trim() });
+      toast.success("名称已更新");
+    } catch (e: any) {
+      toast.error(e.message ?? String(e));
+    }
+  }
+
+  async function saveAvatar(avatar: string) {
+    if (!selected) return;
+    try {
+      await upsertPrompt({ ...selected, avatar });
+    } catch (e: any) {
+      toast.error(e.message ?? String(e));
+    }
+  }
+
   return (
-    <div className="space-y-1">
-      <FieldRow label="默认 Prompt" description="新建对话自动使用的 system prompt">
-        <Select
-          value={draft.agents.default_prompt_id ?? ""}
-          onChange={(e) =>
-            setDraft({
-              ...draft,
-              agents: {
-                ...draft.agents,
-                default_prompt_id: e.target.value || null,
-              },
-            })
-          }
-        >
-          <option value="">（无）</option>
+    <div className="flex gap-4 min-h-[360px]">
+      <div className="w-52 shrink-0 border-r border-border pr-3">
+        <p className="text-xs text-muted-foreground mb-2">
+          新建对话默认使用的角色
+        </p>
+        <ul className="space-y-0.5">
           {prompts.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
+            <li
+              key={p.id}
+              onClick={() => setSelectedId(p.id)}
+              className={cn(
+                "px-3 py-2 rounded-md cursor-pointer flex items-center gap-2",
+                selected.id === p.id
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-accent/50"
+              )}
+            >
+              <AvatarPreview
+                value={p.avatar}
+                fallback={<Bot className="h-3.5 w-3.5" />}
+                className="h-6 w-6 shrink-0 text-sm"
+                title={p.name}
+              />
+              <span className="text-sm truncate flex-1">{p.name}</span>
+              {p.id === defaultId && (
+                <span className="text-[10px] text-amber-500 shrink-0">默认</span>
+              )}
+            </li>
           ))}
-        </Select>
-      </FieldRow>
+        </ul>
+      </div>
+
+      <div className="flex-1 min-w-0 space-y-4">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+          <div className="space-y-1.5">
+            <Label>名称</Label>
+            <Input
+              value={nameDraft}
+              spellCheck={false}
+              autoCorrect="off"
+              onChange={(e) => setNameDraft(e.target.value)}
+            />
+          </div>
+          <Button variant="outline" onClick={saveName} disabled={!nameChanged}>
+            保存名称
+          </Button>
+        </div>
+
+        <div>
+          {isDefault ? (
+            <span className="inline-flex items-center gap-1.5 text-sm text-amber-500">
+              <Star className="h-3.5 w-3.5 fill-current" />
+              当前默认角色
+            </span>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => makeDefault(selected.id)}
+            >
+              <Star className="h-3.5 w-3.5" />
+              设为默认
+            </Button>
+          )}
+        </div>
+
+        <AvatarField
+          label="角色头像"
+          value={selected.avatar}
+          onChange={saveAvatar}
+          suggestions={AGENT_AVATAR_SUGGESTIONS}
+          previewFallback={<Bot className="h-5 w-5" />}
+          cropImage
+        />
+
+        <div className="space-y-1.5">
+          <Label>系统指令</Label>
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap max-h-[200px] overflow-y-auto text-muted-foreground">
+            {selected.content.trim() || "（空）"}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

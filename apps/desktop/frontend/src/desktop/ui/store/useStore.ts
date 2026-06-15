@@ -1098,7 +1098,6 @@ interface AppState {
 
   // UI
   settingsOpen: boolean;
-  promptsDialogOpen: boolean;
   /**
    * 应用级设置打开时默认显示的 tab。外部调 `openAppSettingsAt(tab)` 时设置；
    * AppSettingsDialog 打开时消费后清空（回到 null = 默认 tab）。
@@ -1296,7 +1295,6 @@ interface AppState {
   setReasoning: (reasoning: ReasoningConfig | null) => Promise<void>;
 
   setSettingsOpen: (v: boolean) => void;
-  setPromptsDialogOpen: (v: boolean) => void;
   /** 一次性「请折叠右侧工作台」信号：每次自增。用户发送消息时触发，
    *  RightSidebar 监听其变化 → 缓慢折叠（与「Run 跑完自动展开」配对）。 */
   collapseRightSidebarTick: number;
@@ -1402,7 +1400,6 @@ export const useStore = create<AppState>((set, get) => ({
   lastRunError: null,
   settingsOpen: false,
   pendingAppSettingsTab: null,
-  promptsDialogOpen: false,
   searchQuery: "",
   searchResults: null,
   searchCaseSensitive: false,
@@ -2699,9 +2696,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setSettingsOpen(v) {
     set({ settingsOpen: v });
-  },
-  setPromptsDialogOpen(v) {
-    set({ promptsDialogOpen: v });
   },
 
   appSettingsOpen: false,

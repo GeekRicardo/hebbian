@@ -4,7 +4,6 @@ import { listen } from "@/desktop/bridge/transport";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { DesktopShell } from "@/desktop/ui/components/DesktopShell";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
-import { PromptsDialog } from "@/desktop/ui/components/PromptsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { getBrowserHost } from "@/desktop/ui/lib/browserHost";
@@ -234,7 +233,6 @@ export default function App() {
     <div className="h-screen w-screen flex overflow-hidden bg-muted/40 text-foreground">
       <DesktopShell />
       <SessionSettingsDialog />
-      <PromptsDialog />
       <AppSettingsDialog />
       <Toaster
         theme={theme}

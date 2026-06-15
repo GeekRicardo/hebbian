@@ -101,7 +101,13 @@ fn normalize_default_prompt(file: &mut PromptsFile) -> bool {
         return false;
     }
 
-    let next = file.prompts.first().map(|prompt| prompt.id.clone());
+    // 兜底优先名为 Hebbian 的角色，缺失才退回第一个。
+    let next = file
+        .prompts
+        .iter()
+        .find(|prompt| prompt.name == "Hebbian")
+        .or_else(|| file.prompts.first())
+        .map(|prompt| prompt.id.clone());
     if file.default_prompt_id == next {
         return false;
     }
@@ -109,9 +115,22 @@ fn normalize_default_prompt(file: &mut PromptsFile) -> bool {
     true
 }
 
+/// 主助手人格：在 base_system 的工程 harness 之上叠一层温暖、克制、守边界的
+/// 价值观（语气 / 安全 / 用户福祉 / 中立 / 认错 / 谦逊）。编译进二进制，作为
+/// 默认 persona 第一条。
+const PERSONA_FABLE: &str = include_str!("../../prompts/persona_fable.md");
+
 fn default_presets() -> Vec<Prompt> {
     let now = Utc::now().timestamp_millis();
     vec![
+        Prompt {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Fable5".into(),
+            avatar: "🌟".into(),
+            content: PERSONA_FABLE.into(),
+            created_at: now,
+            updated_at: now,
+        },
         Prompt {
             id: uuid::Uuid::new_v4().to_string(),
             name: "通用助手".into(),
@@ -204,5 +223,32 @@ mod tests {
             .expect_err("unknown default prompt id should fail");
 
         assert!(err.to_string().contains("prompt missing not found"));
+    }
+
+    #[test]
+    fn normalize_prefers_hebbian_when_default_invalid() {
+        let mut file = PromptsFile {
+            default_prompt_id: Some("gone".into()),
+            prompts: vec![
+                Prompt {
+                    id: "a".into(),
+                    name: "Fable5".into(),
+                    avatar: "🌟".into(),
+                    content: "x".into(),
+                    created_at: 0,
+                    updated_at: 0,
+                },
+                Prompt {
+                    id: "b".into(),
+                    name: "Hebbian".into(),
+                    avatar: "🤖".into(),
+                    content: "y".into(),
+                    created_at: 0,
+                    updated_at: 0,
+                },
+            ],
+        };
+        normalize_default_prompt(&mut file);
+        assert_eq!(file.default_prompt_id.as_deref(), Some("b"));
     }
 }
