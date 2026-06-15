@@ -148,16 +148,42 @@ pub fn init_hebisland_client(app: AppHandle) -> HebislandClient {
     HebislandClient { tx }
 }
 
-/// 拉起随 Hebbian.app 内嵌的 hebisland daemon。
+/// 连接 hebisland daemon；连不上则拉起随包内嵌的 daemon 再重试。
+///
+/// **必须用「能否 connect」判断 daemon 存活，而非 socket 文件是否存在**：
+/// daemon 进程退出后 `~/.hebbian/island.sock` 文件会残留（stale），
+/// 用 `path.exists()` 判断会误以为 daemon 还在，跳过拉起、connect 到死 socket 拿 ECONNREFUSED。
+///
+/// 拉起的是 `resource_dir/HebIsland.app/Contents/MacOS/hebisland`（daemon 自带单例，
+/// 重复拉起安全）。找不到内嵌资源（如 dev 模式）或拉起后仍连不上 → 返回 None，通知静默跳过。
+fn connect_or_spawn(app: &AppHandle, sock_path: &std::path::Path) -> Option<UnixStream> {
+    if let Ok(s) = UnixStream::connect(sock_path) {
+        return Some(s);
+    }
+
+    if !spawn_bundled_daemon(app) {
+        return None;
+    }
+
+    // 轮询等 daemon 把 socket listen 起来，最多 ~2s。
+    for _ in 0..40 {
+        if let Ok(s) = UnixStream::connect(sock_path) {
+            return Some(s);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    None
+}
+
+/// 拉起随 Hebbian.app 内嵌的 hebisland daemon。成功 spawn 返回 true。
 ///
 /// release 包里 HebIsland.app 被 Tauri 放在 `resource_dir/HebIsland.app`，
-/// 可执行文件在 `.../Contents/MacOS/hebisland`。daemon 自带单例（已在跑就复用），
-/// 重复拉起安全。找不到内嵌资源（如 dev 模式）时不报错，交由后续 socket 连接逻辑兜底。
-fn spawn_bundled_daemon(app: &AppHandle) {
+/// 可执行文件在 `.../Contents/MacOS/hebisland`。找不到内嵌资源（如 dev 模式）返回 false。
+fn spawn_bundled_daemon(app: &AppHandle) -> bool {
     use tauri::Manager;
 
     let Ok(resource_dir) = app.path().resource_dir() else {
-        return;
+        return false;
     };
     let bin = resource_dir
         .join("HebIsland.app")
@@ -166,22 +192,18 @@ fn spawn_bundled_daemon(app: &AppHandle) {
         .join("hebisland");
     if !bin.exists() {
         tracing::info!("未找到内嵌 hebisland（{}），跳过自动拉起", bin.display());
-        return;
+        return false;
     }
 
     match std::process::Command::new(&bin).arg("daemon").spawn() {
-        Ok(_) => tracing::info!("已拉起内嵌 hebisland daemon: {}", bin.display()),
-        Err(e) => tracing::warn!("拉起 hebisland daemon 失败: {e}"),
-    }
-}
-
-/// 轮询等待 daemon 把 socket 建好，最多等 ~2s。
-fn wait_for_socket(sock_path: &std::path::Path) {
-    for _ in 0..40 {
-        if sock_path.exists() {
-            return;
+        Ok(_) => {
+            tracing::info!("已拉起内嵌 hebisland daemon: {}", bin.display());
+            true
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        Err(e) => {
+            tracing::warn!("拉起 hebisland daemon 失败: {e}");
+            false
+        }
     }
 }
 
@@ -191,17 +213,10 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
         .join(".hebbian")
         .join("island.sock");
 
-    // socket 不在 → 尝试拉起随包内嵌的 hebisland daemon（自带单例，重复拉起安全），
-    // 再轮询等它把 socket 建好。dev 环境没有内嵌资源时静默跳过，依赖手动启动。
-    if !sock_path.exists() {
-        spawn_bundled_daemon(&app);
-        wait_for_socket(&sock_path);
-    }
-
-    let mut stream = match UnixStream::connect(&sock_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("hebisland daemon 未运行 ({e})，通知将不弹出");
+    let mut stream = match connect_or_spawn(&app, &sock_path) {
+        Some(s) => s,
+        None => {
+            tracing::warn!("hebisland daemon 未运行，通知将不弹出");
             for _ in rx {}
             return;
         }
@@ -290,5 +305,34 @@ fn client_loop(app: AppHandle, rx: mpsc::Receiver<ClientMsg>) {
             tracing::warn!("hebisland socket 写失败，停止推送 ({label})");
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    /// 回归：daemon 退出后 socket 文件残留（stale），`path.exists()` 仍为真，
+    /// 但 `connect` 必失败。这正是「审批不唤起 hebisland」的根因——
+    /// 旧逻辑用 `!sock_path.exists()` 判断是否拉起 daemon，被 stale 文件骗过去跳过拉起，
+    /// connect 到死 socket 拿 ECONNREFUSED 后永久躺平。必须用 connect 结果判断 daemon 存活。
+    #[test]
+    fn stale_socket_file_exists_but_connect_fails() {
+        let sock = std::env::temp_dir().join(format!("heb-stale-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&sock);
+
+        // 起 listener 建出 socket 文件，再 drop 模拟 daemon 退出。
+        let listener = UnixListener::bind(&sock).expect("bind");
+        assert!(UnixStream::connect(&sock).is_ok(), "daemon 活着时应能连上");
+        drop(listener);
+
+        // socket 文件在 macOS 上不会随 listener drop 自动删除 → stale。
+        assert!(sock.exists(), "stale socket 文件应残留（旧逻辑据此误判 daemon 还活着）");
+        assert!(
+            UnixStream::connect(&sock).is_err(),
+            "stale socket connect 必须失败——connect 才是 daemon 存活的唯一可信判据"
+        );
+
+        let _ = std::fs::remove_file(&sock);
     }
 }
