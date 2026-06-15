@@ -1458,7 +1458,7 @@ function ToolCallDetail({
   if (name === "Ask") {
     const args = callArgs(call);
     return (
-      <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2 text-[14px] text-muted-foreground">
+      <div className="space-y-2 bg-muted/30 p-2 text-[14px] text-muted-foreground">
         <div className="font-medium text-foreground">
           {argString(args, "question") || "用户提问"}
         </div>
@@ -1678,7 +1678,10 @@ function ToolCallTimeline({
             />
             <div
               className={cn(
-                "overflow-hidden",
+                // translateZ(0)：把容器提成独立合成层，让 overflow 裁剪圆角的抗锯齿在
+                // 层内一次完成。否则底部异色子背景（如 DefaultToolDetail 的 bg-muted/30
+                // Input 列）直角顶到圆弧，会和父圆角抗锯齿叠加，在圆弧竖直段露出 1px 台阶。
+                "overflow-hidden rounded-b-md [transform:translateZ(0)]",
                 active && "bg-background"
               )}
             >

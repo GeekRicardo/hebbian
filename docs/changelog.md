@@ -8134,3 +8134,42 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `ToolCallTimeline` 外层容器 `rounded-md` → `rounded-b-md`。该组件是主流与子 agent 嵌套两处 tool 展示的唯一渲染入口，改一处即覆盖全部 tool 卡片。内部图标 `rounded-[2px]` / 状态点 `rounded-full` / focus 高亮 wrapper `rounded-[5px]` 均为功能性小圆角，未动。
 - **影响范围**: desktop 前端纯样式，仅 tool 卡片外框圆角；无协议 / 数据格式变化。
 - **留尾巴**: 无。BranchChatTab 的旁支 tool 是 `rounded-full` 胶囊，属另一种形态，不在本次调整范围。
+
+### 2026-06-15 — 侧栏项目支持拖拽排序、列表高度可拖动、chat 栏对话全展开
+
+- **Why**: 用户希望左侧 code 栏项目能自定义顺序、每个项目对话列表高度能拖动调整、底部项目自动撑满到「设置」上沿；chat 栏对话列表不再固定高度而是全部直接展开。顺序与折叠态要本机记忆、列表高度每次重启回默认值。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx):
+    - 新增 localStorage 偏好：项目顺序（`hebbian.sidebar.projectOrder`）、折叠态（`hebbian.sidebar.collapsed`）；`filteredBuckets` 按 order 重排，新项目排末尾。
+    - 项目标题行加专用拖拽手柄 `GripVertical`（hover 显出）。**根因**：HTML5 拖拽里整行用 `draggable` 时，从内部原生 `<button>` 按下不触发父级 `dragstart`（被当按钮交互），故必须用独立非交互手柄发起拖拽，整行作放置目标。
+    - 拖拽过程态用 `dragIdRef`（ref）作真相源、`dragId` state 仅驱动视觉。**根因**：`dragstart` 里 `setDragId` 是异步 re-render，同批同步事件里 `drop` 的闭包仍读到旧值（null），快速拖拽会丢失拖起项；ref 同步可读修掉这个时序陷阱。
+    - 每个展开列表底部加 resize 手柄（pointer 拖动改高度，下限 = 默认 180px），高度存内存 Map、不持久化，重启回默认。
+    - 最底部展开且未被手动拖过的项目标 `is-fill`，吃掉到「设置」上沿的剩余空间；手动拖小后退出 fill、保留底部留白。
+    - chat 栏列表去掉 `has-overflow`、改 `is-chat`，自然撑开全部对话，滚动交给外层 `.dsp-project-groups`。
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css): `.dsp-project-groups` 改 flex column 容器；新增 `.dsp-project-group.is-fill` / `.dsp-project-session-list.is-fill`（撑满）、`.dsp-list-resize-grip`（高度手柄）、`.dsp-project-drag-handle`（排序手柄，让出 heading 左侧 18px 槽位）、`.dsp-project-session-list.is-chat`（不固定高度）、`.is-dragging` / `.is-drop-target` 拖拽反馈。
+- **影响范围**: 仅 Desktop / hebweb 前端（同一份 React 代码）。纯交互 + 样式，不动协议、不动 agent-core、不改 WorkspaceProject 数据结构（顺序/折叠是纯前端本机偏好）。
+- **留尾巴**: 偏好仅存浏览器 localStorage，换设备/清缓存不保留（符合用户「本机记住即可」选择）。顺序按项目 id 持久化，删除项目后其 id 残留在 order 数组里但因 `rank.get` 容错不影响渲染。已用 hebweb + Playwright 验证：拖拽排序生效并落盘、刷新后顺序保持、chat 列表全展开（198 条无截断）、高度拖动退出 fill 保留留白、折叠态持久化。
+
+### 2026-06-15 — 修正：tool 卡圆角应落在「展开内容区」而非外层容器
+
+- **Why**: 上一条改的是 `ToolCallTimeline` 外层整组灰底容器（line 1619），但它本就是 `rounded-md` 四角全圆，用户在底部看不到任何变化。澄清后确认：用户要的是单个工具卡**展开后**那块白底内容区（`active` 时 `bg-background`）的下两角圆角，上两角与折叠态保持直角。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 还原外层容器为 `rounded-md`；给展开内容容器（原有 `overflow-hidden`、`active` 时 `bg-background` 的 div）加 `rounded-b-md`。该 div 已有 `overflow-hidden`，会把内部 header / detail / 嵌套 Task / artifact 等子元素溢出的角裁掉，所以内部不会冒圆角、上两角维持直角。
+- **影响范围**: desktop 前端纯样式，仅工具卡展开内容区下边缘圆角；无协议 / 数据变化。
+- **留尾巴**: 无。
+
+### 2026-06-15 — 修掉 tool 卡展开区下圆角的抗锯齿台阶
+
+- **Why**: 用户反馈展开内容区左下角圆弧「水平段丝滑、竖直段有小台阶」。根因：`overflow-hidden rounded-b-md` 裁剪圆角时，底部异色子背景（`DefaultToolDetail` Input 列 `bg-muted/30`，直角顶到圆弧）与父圆角的抗锯齿叠加，在圆弧竖直段露出约 1px 台阶。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 给展开内容容器加 `[transform:translateZ(0)]`，提成独立合成层，让圆角裁剪的抗锯齿在层内一次完成，不再与子元素背景叠加。对任意异色子背景通用，不动布局与各 tool detail 子组件。
+- **影响范围**: desktop 前端纯样式，仅消除展开区下圆角的锯齿台阶；无协议 / 数据变化。
+- **留尾巴**: 无。
+
+### 2026-06-15 — tool 卡展开区只保留下两角圆角，去掉 Ask 内部自带的上圆角
+
+- **Why**: 用户发现 Ask 工具展开后内部主体有「上两角圆角」的瑕疵。复核 `ToolCallDetail` 全部分支：展开内容区容器（line 1684）已是 `overflow-hidden rounded-b-md`，能裁子元素溢出到边缘的圆角，但裁不掉子元素「在容器内部自带的圆角」。绝大多数 detail 平铺贴边无圆角（`ToolPre` rounded-none / `SearchResults` / `DefaultToolDetail` / 各 Header 仅 border-b / `DiffViewer` flex 无圆角），唯独 Ask 分支把 detail 主体做成 `rounded-md border` 独立圆角卡，紧贴 header 下方露出上两角。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Ask detail 主体去掉 `rounded-md border`，与其它 detail 一致平铺贴边。整张卡圆角统一只由最外层 `rounded-b-md` 容器负责，内部子元素一律不自带圆角。
+- **影响范围**: desktop 前端纯样式，仅 Ask 工具展开区外观；无协议 / 数据变化。
+- **留尾巴**: 无。已逐一复核 Bash/Read/Skill/Grep/Glob/WebSearch/Fetch/Write/Edit/image_generation/TaskList/Default 所有 detail 分支，无第二处内部自带圆角。
