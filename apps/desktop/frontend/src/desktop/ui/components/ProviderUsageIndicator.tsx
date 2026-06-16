@@ -211,11 +211,11 @@ export function ProviderUsageIndicator({ provider, tokenStats, model, className,
   }
 
   useEffect(() => {
-    if (!provider) {
-      setResult(null);
-      setError(null);
-      return;
-    }
+    // 切换供应商：立即作废上一个供应商的数据，否则新请求返回前会一直显示旧账号的
+    // 用量/邮箱/额度（"切换后才串"的根因）。
+    setResult(null);
+    setError(null);
+    if (!provider) return;
     void doFetch();
     timerRef.current = setInterval(doFetch, REFRESH_MS);
     return () => {
