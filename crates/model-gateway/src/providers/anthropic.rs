@@ -145,7 +145,13 @@ impl AnthropicClient {
         let url = self.messages_url();
 
         let body = proto::build_body(req, stream, oauth, self.provider.account_id.as_deref())?;
+        // 诊断「模型请求串账号」：每次请求打出实际用的 provider / account / token 末 4 位。
+        // 复现「切换后才串」时 grep 这行——切到 B 后若仍出现 A 的 provider_id/account，即串。
+        let key = &self.provider.api_key;
         tracing::info!(
+            provider_id = %self.provider.id,
+            account = self.provider.account_id.as_deref().unwrap_or("-"),
+            token_tail = %&key[key.len().saturating_sub(4)..],
             model = %req.model,
             stream,
             thinking = %body.get("thinking").map(|v| v.to_string()).unwrap_or_else(|| "(none)".into()),
