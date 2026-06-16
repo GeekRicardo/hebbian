@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ChevronsRight,
   ChevronsLeft,
+  FolderTree,
   Terminal,
   FilePenLine,
   FileJson,
@@ -19,6 +20,7 @@ import type { RunEditEntry } from "@/desktop/ui/types";
 const EMPTY_EDIT_RUNS: RunEditEntry[] = [];
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
+import { FileTreeTab } from "./FileTreePanel";
 import { ModelIoInspector } from "./ModelIoInspector";
 import { TodoTab } from "./TodoTab";
 import { PlanTab } from "./PlanTab";
@@ -27,21 +29,21 @@ import { TerminalSurface } from "./TerminalSurface";
 import { BranchChatTab } from "./BranchChatTab";
 
 /**
- * 右侧工作台：固定列布局（被 ChatView 的 grid 让位），承载「后台任务 / 修改文件」两个 tab。
+ * 右侧工作台：固定列布局（被 ChatView 的 grid 让位），承载多个 tab。
  *
  * 设计要点：
  * - **不浮动**：作为 ChatView 的 grid 第三列存在，挤压 chat 区域（不是 overlay）
- * - **可折叠**：右上角箭头按钮收起到 32px 宽，只剩 tab 图标列；再点恢复
- * - **左边缘可拖**：用户拖动左侧 4px 抓手改 sidebar 宽度（240-600 范围）
- * - **状态持久化**：宽度 / 折叠态 / 当前 tab 全部走 localStorage，跨会话刷新保留
+ * - **可折叠**：右上角箭头按钮收起到 36px 宽，只剩 tab 图标列；再点恢复
+ * - **左边缘可拖**：用户拖动左侧 4px 抓手改 sidebar 宽度
+ * - **宽度不持久化**：拖动宽度只在本次运行内记忆（模块级 Map），重启回各 tab 默认；
+ *   折叠态 / 当前 tab 走 localStorage 跨会话保留
  *
- * 内容数据全部走对应 tab 组件自己 fetch（BackgroundTaskTab / EditTreeTab）；
- * sidebar 不持有业务数据，仅管布局。
+ * 内容数据全部走对应 tab 组件自己 fetch；sidebar 不持有业务数据，仅管布局。
  */
 
-type TabId = "tasks" | "edits" | "todos" | "plans" | "branches" | "browser" | "terminal";
+type TabId = "files" | "tasks" | "edits" | "todos" | "plans" | "branches" | "browser" | "terminal";
 
-const TAB_IDS: TabId[] = ["tasks", "edits", "todos", "plans", "branches", "browser", "terminal"];
+const TAB_IDS: TabId[] = ["files", "tasks", "edits", "todos", "plans", "branches", "browser", "terminal"];
 
 const STORAGE_PREFIX = "hebbian.rightSidebar";
 
@@ -50,14 +52,17 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 720;
 const COLLAPSED_WIDTH = 36;
 
+// 各 tab 打开时的默认宽度（px）。注意：实际生效值会被外部传入的 [minWidth, maxWidth]
+// clamp——DesktopShell 传 minWidth=200，故这里所有值需 ≥200 才能原样生效。
 const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
-  tasks: Math.round(DEFAULT_WIDTH * 2 / 3),
-  edits: DEFAULT_WIDTH * 2,
-  todos: Math.round(DEFAULT_WIDTH / 2),
-  plans: DEFAULT_WIDTH,
-  branches: Math.round(DEFAULT_WIDTH * 5 / 4),
-  browser: Math.round(DEFAULT_WIDTH * 5 / 4),
-  terminal: 480,
+  files: 250,
+  tasks: 250,
+  edits: 640,
+  todos: 250,
+  plans: 250,
+  branches: 500,
+  browser: 750,
+  terminal: 500,
 };
 
 // 拖动宽度只在本次 App 运行内记忆（模块级内存）；重启回各 tab 默认宽度。
@@ -298,6 +303,15 @@ export function RightSidebar({
         <ChevronsLeft className="h-4 w-4" />
       </button>
       <SidebarIconButton
+        icon={<FolderTree className="h-4 w-4" />}
+        label="文件目录"
+        onClick={() => {
+          setTab("files");
+          setCollapsed(false);
+        }}
+        active={tab === "files"}
+      />
+      <SidebarIconButton
         icon={<Terminal className="h-4 w-4" />}
         label="后台任务"
         onClick={() => {
@@ -413,6 +427,13 @@ export function RightSidebar({
             <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-background/50">
               <TabScroller>
                 <SidebarTab
+                  id="files"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<FolderTree className="h-3.5 w-3.5" />}
+                  label="文件目录"
+                />
+                <SidebarTab
                   id="tasks"
                   current={tab}
                   onClick={setTab}
@@ -495,6 +516,7 @@ export function RightSidebar({
                   (tab === "browser" || tab === "terminal") && "hidden",
                 )}
               >
+                {tab === "files" && <FileTreeTab />}
                 {tab === "tasks" && <BackgroundTaskTab />}
                 {tab === "edits" && <EditTreeTab />}
                 {tab === "todos" && <TodoTab />}

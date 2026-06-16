@@ -8,6 +8,7 @@ import type {
   ContextUsage,
   DeviceCodeInfo,
   DiffPayload,
+  DirEntry,
   RunEditEntry,
   EditsWorktreeStatus,
   EngineEvent,
@@ -499,6 +500,21 @@ export const api = {
     >("attach_path", { path }),
 
   /**
+   * Desktop 原生拖拽分流：后端按每个磁盘路径判定——支持的小图片 / 文本读成附件
+   * （kind 与 MessageAttachment 对齐），其余（目录 / 大文件 / 二进制 / 未知类型）回
+   * reference 只引用路径，由前端加进 allowed_paths。missing = 路径不存在。
+   */
+  dropPaths: (paths: string[]) =>
+    invoke<
+      (
+        | { kind: "image"; name: string; media_type: string; data: string }
+        | { kind: "text_file"; name: string; media_type: string; content: string }
+        | { kind: "reference"; path: string }
+        | { kind: "missing"; path: string }
+      )[]
+    >("drop_paths", { paths }),
+
+  /**
    * PathAccess 审批专用：scope 决定持久化到哪（架构 §4.5.3）：
    * - `"once"`：只放行本次
    * - `"this_session"`：当前 session 的 allowed_paths
@@ -579,6 +595,19 @@ export const api = {
    * 上限 8MiB；不是目录 / 不存在会抛错，调用方需 catch fallback。
    */
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
+
+  /**
+   * 列目录直接子项（非递归）——文件树面板按需展开一层。
+   * dir-first 排序，隐藏项靠后；非目录 / 不存在会抛错。
+   */
+  readDir: (path: string) => invoke<DirEntry[]>("read_dir", { path }),
+
+  /**
+   * 把编辑器内容写回磁盘——文件查看器 Ctrl/Cmd+S 落盘。
+   * 仅覆盖已存在的常规文件；新建 / 目录会抛错。
+   */
+  writeTextFile: (path: string, content: string) =>
+    invoke<void>("write_text_file", { path, content }),
 
   /** 回退整个 Run 的 Edit。返回 `{ success, error? }`。 */
   revertEdit: (sessionId: string, runId: string) =>

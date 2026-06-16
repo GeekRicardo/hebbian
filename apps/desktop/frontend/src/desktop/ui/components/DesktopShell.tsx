@@ -1,8 +1,13 @@
-import { useState, type CSSProperties } from "react";
+import { Suspense, lazy, useCallback, useRef, useState, type CSSProperties } from "react";
 import { ChatView } from "@/desktop/ui/components/ChatView";
 import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
 import { DesktopSidebar } from "@/desktop/ui/components/DesktopSidebar";
+import { useStore } from "@/desktop/ui/store/useStore";
+import { cn } from "@/desktop/ui/lib/utils";
 import "./desktopShell.css";
+
+// Monaco 体量大：文件查看器整列懒加载，没人打开文件就不进主 bundle 路径。
+const FileViewer = lazy(() => import("@/desktop/ui/components/FileViewer"));
 
 function clampColor(value: number) {
   return Math.max(0, Math.min(255, Math.round(value)));
@@ -159,6 +164,74 @@ function DesktopChat() {
   );
 }
 
+const VIEWER_DEFAULT_WIDTH = 700;
+const VIEWER_MIN_WIDTH = 360;
+const VIEWER_MAX_WIDTH = 1100;
+
+/**
+ * 文件查看器列：夹在 chat 与右侧工作台之间，仅在打开文件时出现，把 chat 挤窄。
+ *
+ * 左边缘可拖改宽度；宽度只在本次运行内记忆（模块外不存），刷新/重启回默认——
+ * 与右侧工作台的「宽度不持久化」一致。
+ */
+function FileViewerColumn() {
+  const hasOpenFiles = useStore((s) => s.openFiles.length > 0 && s.activeFilePath !== null);
+  const [width, setWidth] = useState(VIEWER_DEFAULT_WIDTH);
+  const [resizing, setResizing] = useState(false);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const clamp = useCallback(
+    (v: number) => Math.min(VIEWER_MAX_WIDTH, Math.max(VIEWER_MIN_WIDTH, v)),
+    [],
+  );
+
+  const onDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragRef.current = { startX: e.clientX, startWidth: width };
+      setResizing(true);
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      const onMove = (ev: MouseEvent) => {
+        const drag = dragRef.current;
+        if (!drag) return;
+        // 左边缘拖动：右边缘固定，往左拖变宽。
+        setWidth(clamp(drag.startWidth - (ev.clientX - drag.startX)));
+      };
+      const onUp = () => {
+        dragRef.current = null;
+        setResizing(false);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [width, clamp],
+  );
+
+  if (!hasOpenFiles) return null;
+
+  return (
+    <div className="relative h-full shrink-0" style={{ width: `${width}px` }}>
+      <div
+        onMouseDown={onDragStart}
+        className={cn(
+          "absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize hover:bg-primary/30",
+          resizing && "bg-primary/40",
+        )}
+        title="拖动改宽度"
+        aria-label="调整文件查看器宽度"
+      />
+      <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted-foreground">加载编辑器…</div>}>
+        <FileViewer />
+      </Suspense>
+    </div>
+  );
+}
+
 export function DesktopShell() {
   const [hue, setHue] = useState(208);
   const [themeId, setThemeId] = useState("glacier");
@@ -166,9 +239,10 @@ export function DesktopShell() {
     <div className="dsp-shell" data-dsp-theme={themeId} style={hueStyle(hue, themeId)}>
       <DesktopSidebar hue={hue} setHue={setHue} themeId={themeId} setThemeId={setThemeId} />
       <DesktopChat />
+      <FileViewerColumn />
       <RightSidebar
         defaultWidth={640}
-        minWidth={500}
+        minWidth={200}
         maxWidth={960}
         storagePrefix="hebbian.desktopShell.rightSidebar.wide"
       />

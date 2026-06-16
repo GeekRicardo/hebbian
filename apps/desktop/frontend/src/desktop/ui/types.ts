@@ -211,6 +211,9 @@ export interface Message {
   meta?: MessageMeta | null;
   /** 子 NestedRun 事件来源标识（架构 §4.4.11.8）。`存在` 时前端按此字段嵌套渲染到父 Task 卡片内部。 */
   subagent_call_id?: string | null;
+  /** 本 Run 总耗时（毫秒）。仅落在「一个 Run 结束时写盘的最后一条 assistant message」上，
+   *  渲染层据此在该气泡操作行显示「· 1.8s」。随 session.jsonl 持久化，重启后仍可见。 */
+  run_duration_ms?: number | null;
 }
 
 export interface MessageToolCall {
@@ -1132,6 +1135,13 @@ export interface DiffPayload {
   after_sha: string;
   file_path: string;
   action: string;
+}
+
+/** 文件树里一个目录项（后端 read_dir 返回）。 */
+export interface DirEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
 }
 
 export interface RevertResult {

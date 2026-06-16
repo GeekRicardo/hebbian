@@ -1087,9 +1087,6 @@ interface AppState {
    */
   sessionMemoryWrites: Record<string, MemoryWriteItem[]>;
 
-  /** 当前对话最后一次 agent_loop 完整用时。 */
-  sessionLastRunDurationMs: Record<string, number>;
-
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
   /** 后台跑完但用户尚未查看的会话 id 集合，用于 Sidebar 静态点。 */
@@ -1301,6 +1298,16 @@ interface AppState {
    *  RightSidebar 监听其变化 → 缓慢折叠（与「Run 跑完自动展开」配对）。 */
   collapseRightSidebarTick: number;
   triggerCollapseRightSidebar: () => void;
+
+  /** 文件查看器（中间列）：当前打开的文件 tab 列表 + 当前激活路径。纯 UI 态，不持久化。 */
+  openFiles: string[];
+  activeFilePath: string | null;
+  /** 在查看器里打开一个文件（已打开则只激活）；同时让查看器列出现。 */
+  openFile: (path: string) => void;
+  /** 关闭一个文件 tab；关掉当前激活项时落到相邻 tab。 */
+  closeFile: (path: string) => void;
+  /** 切换当前激活的文件 tab。 */
+  setActiveFile: (path: string) => void;
   /** 应用级设置窗口（通用 / 对话 / 供应商 / agent 等多个 tab） */
   appSettingsOpen: boolean;
   setAppSettingsOpen: (v: boolean) => void;
@@ -1466,7 +1473,6 @@ export const useStore = create<AppState>((set, get) => ({
   compactingSessionId: null,
   sessionEditSnapshots: {},
   sessionMemoryWrites: {},
-  sessionLastRunDurationMs: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -2406,14 +2412,6 @@ export const useStore = create<AppState>((set, get) => ({
               });
               return;
             }
-            if (e.type === "run_finished") {
-              set((state) => ({
-                sessionLastRunDurationMs: {
-                  ...state.sessionLastRunDurationMs,
-                  [sessionId]: e.duration_ms,
-                },
-              }));
-            }
             // turn 级 usage：run 进行中每次模型请求完成就累加 token_stats，前台实时刷新
             // cache 指示器。后端已 per-turn 落盘，切回来 getSession 取到的值一致。
             if (e.type === "usage") {
@@ -2720,6 +2718,30 @@ export const useStore = create<AppState>((set, get) => ({
   collapseRightSidebarTick: 0,
   triggerCollapseRightSidebar() {
     set((s) => ({ collapseRightSidebarTick: s.collapseRightSidebarTick + 1 }));
+  },
+  openFiles: [],
+  activeFilePath: null,
+  openFile(path) {
+    set((s) => ({
+      openFiles: s.openFiles.includes(path) ? s.openFiles : [...s.openFiles, path],
+      activeFilePath: path,
+    }));
+  },
+  closeFile(path) {
+    set((s) => {
+      const idx = s.openFiles.indexOf(path);
+      if (idx === -1) return s;
+      const openFiles = s.openFiles.filter((p) => p !== path);
+      let activeFilePath = s.activeFilePath;
+      if (activeFilePath === path) {
+        // 关掉激活项 → 落到右邻，没有再落到左邻，全空则 null（查看器列消失）
+        activeFilePath = openFiles[idx] ?? openFiles[idx - 1] ?? null;
+      }
+      return { openFiles, activeFilePath };
+    });
+  },
+  setActiveFile(path) {
+    set({ activeFilePath: path });
   },
   setPendingAppSettingsTab(tab) {
     set({ pendingAppSettingsTab: tab });

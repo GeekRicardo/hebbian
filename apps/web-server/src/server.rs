@@ -377,6 +377,8 @@ async fn dispatch_invoke(
         "list_edits" => cmd_list_edits(state, args).await.map(Some),
         "diff_edit" => cmd_diff_edit(state, args).await.map(Some),
         "read_text_file" => cmd_read_text_file(args).await.map(Some),
+        "read_dir" => cmd_read_dir(args).await.map(Some),
+        "write_text_file" => cmd_write_text_file(args).await.map(|_| None),
         "revert_edit" => cmd_revert_edit(state, args).await.map(Some),
         "edits_worktree_status" => cmd_edits_worktree_status(state, args).await.map(Some),
         // 其余 desktop Tauri command（OAuth 14 / preview_payload / file dialog / ...）
@@ -1796,6 +1798,62 @@ async fn cmd_read_text_file(args: Value) -> Result<Value> {
     }
     let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}"))?;
     Ok(Value::String(text))
+}
+
+/// 列目录直接子项（语义同 desktop `read_dir`）：dir-first，再按名字排序，隐藏项靠后。
+async fn cmd_read_dir(args: Value) -> Result<Value> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `path`"))?;
+    let path = std::path::PathBuf::from(path);
+    let meta = std::fs::metadata(&path).map_err(|e| anyhow!("{e}"))?;
+    if !meta.is_dir() {
+        return Err(anyhow!("not a directory"));
+    }
+    let mut entries: Vec<Value> = Vec::new();
+    let mut rows: Vec<(String, String, bool)> = std::fs::read_dir(&path)
+        .map_err(|e| anyhow!("{e}"))?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                e.path().to_string_lossy().into_owned(),
+                is_dir,
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        let a_hidden = a.0.starts_with('.');
+        let b_hidden = b.0.starts_with('.');
+        b.2.cmp(&a.2)
+            .then(a_hidden.cmp(&b_hidden))
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
+    for (name, p, is_dir) in rows {
+        entries.push(serde_json::json!({ "name": name, "path": p, "is_dir": is_dir }));
+    }
+    Ok(Value::Array(entries))
+}
+
+/// 把编辑器内容写回磁盘（语义同 desktop `write_text_file`）：仅覆盖已存在的常规文件。
+async fn cmd_write_text_file(args: Value) -> Result<()> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `path`"))?;
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `content`"))?;
+    let path = std::path::PathBuf::from(path);
+    let meta = std::fs::metadata(&path).map_err(|e| anyhow!("{e}"))?;
+    if !meta.is_file() {
+        return Err(anyhow!("not a regular file"));
+    }
+    std::fs::write(&path, content).map_err(|e| anyhow!("{e}"))?;
+    Ok(())
 }
 
 async fn cmd_revert_edit(state: &ServerState, args: Value) -> Result<Value> {

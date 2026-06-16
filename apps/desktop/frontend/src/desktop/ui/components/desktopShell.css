@@ -32,7 +32,7 @@
   --dsp-ring-core: rgba(250, 253, 255, 0.96);
 
   display: grid;
-  grid-template-columns: 304px 1fr auto;
+  grid-template-columns: 304px minmax(0, 1fr) auto auto;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
@@ -812,7 +812,7 @@
 
 /* 用户反馈版：左栏回到单张圆角卡片；右侧工作区交回原组件。 */
 .dsp-shell {
-  grid-template-columns: 280px minmax(520px, 1fr) auto;
+  grid-template-columns: 280px minmax(0, 1fr) auto auto;
 }
 
 .dsp-sidebar {
@@ -1183,7 +1183,7 @@
 
 @media (max-width: 1120px) {
   .dsp-shell {
-    grid-template-columns: 280px minmax(0, 1fr) auto;
+    grid-template-columns: 280px minmax(0, 1fr) auto auto;
   }
 }
 
@@ -1397,7 +1397,7 @@
   --dsp-accent-soft: rgba(63, 155, 255, 0.08);
   --dsp-shadow: 0 14px 38px rgba(45, 61, 83, 0.08);
   --dsp-shadow-soft: 0 8px 20px rgba(45, 61, 83, 0.045);
-  grid-template-columns: 252px minmax(520px, 1fr) auto;
+  grid-template-columns: 252px minmax(0, 1fr) auto auto;
   background:
     radial-gradient(circle at 58% 7%, var(--dsp-chat-wash), transparent 26%),
     radial-gradient(circle at 70% 19%, var(--dsp-accent-soft), transparent 20%),

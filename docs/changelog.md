@@ -8394,3 +8394,79 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **设计决策（用户拍板）**：① 选 Lexical 而非手写 contenteditable——IME / 光标序列化 / 撤销栈深坑由框架兜底；② `@` 与拖拽引用统一成同一个 `ReferenceNode` chip；③ chip 发送时序列化成路径纯文本嵌入消息原位，同时把路径并入 `allowed_paths`（agent 才有权 Read 外部拖入的文件）——与 `attach_path` 语义一致，只是入口从底部授权行挪进输入框；④ 底部 `allowed_paths` chip 行保留（承载「+菜单显式授权目录 / 项目 workdir」语义，与「这条消息提到某文件」是两件事）。
 - **影响范围**: 仅 Desktop 前端 + `apps/desktop/src/lib.rs` 一个 additive command；新增 `lexical` / `@lexical/react` 0.45.0 两个依赖（peer react>=17，与项目 React 18 兼容）。不动 agent_core 协议、不动 `MessageAttachment` 类型、不动 EventPayload、不动 storage 格式；hebweb 走 HTML5 路径不受影响（本次只改 Desktop 主对话输入框）。tsc / vite build / `cargo check -p hebbian` / `drop_paths_classifies_by_type` 单测全过。
 - **留尾巴**: **IME（中文输入法）/ chip 整块删除光标行为 / typeahead 弹窗定位的最终手感未在真机验证**——本环境无法亲自敲中文、看画面，需用户在 `pnpm tauri dev` 实测验收。已知风险点：`useTextBeforeCursor` 只在光标落在 TextNode 时取触发词（空段落返回空串，对 `//`/`@` 检测无影响）；连续上键历史导航靠 `chat-input-programmatic` update tag 防自身更新冲掉索引（已实现，待真机确认）。hebweb 浏览器拖拽路径（只有内容没有磁盘路径）仍走 HTML5 onDrop 上传，未统一到 chip——按用户「Desktop 为主」的选择暂缓。
+
+### 2026-06-16 — 修复「单独发一张图片立即误触发 L2 压缩」
+
+- **Why**: 用户报 session `202606161155-d9dd9efe` / `202606161315-0215d97b` 一发图片就压缩，而 `202606161316-19edeff2`（图片在首条 user）不会。复现根因：三处缺陷叠加。① 这俩 session 都是**先发一条短文字**（采到校准样本 `last_estimated=3466 / last_real=31782`，比值钉死 ~9.17——因为只发短文字时本地估值趋近 0，而服务端真值里含 system+tool 定义约一万 token 恒定开销）；② 下一轮**单独发一张 2MB 图片**，`entry_tokens` 把图片按 `base64字节/1024*85` 估成 ~17.8 万 token；③ 再被 9.17 的畸形比值放大成 ~163 万，碾过 80k 阈值 → 立即压缩。而图片其实经 VisionBridge 转成 ≤900 token 的文字描述才入模型（该 provider 不支持图片，model_io 里请求只有 80KB），真实占用极小，纯属虚惊。`19edeff2` 因图片在首条、没有「先采到畸形比值」这步，比值正常（0.235），所以不触发。
+- **改动**:
+  - `crates/agent-core/src/context/budget.rs`:
+    - 图片估算从 `base64字节/1024*85+128` 改为固定 `IMAGE_TOKENS_ESTIMATE=2000`——图片 token 与 base64 长度无关，原生编码按分辨率（数百~两千），VisionBridge 转文字 ≤900，取覆盖两条路径的保守上界
+    - `estimate_transcript_tokens` 加 `BASE_OVERHEAD_TOKENS=10000` 基线（system+tool 定义 schema 的恒定开销近似），让短对话估值不趋近 0、根治「分母极小→校准比值爆炸」
+    - `calibrated_transcript_tokens` 的真值/估值比值钳到 `MAX_CALIBRATION_RATIO=3.0` 上界兜底，防任何异常比值放大
+  - `crates/agent-core/src/context/compaction.rs`: 加回归测试 `single_image_message_does_not_trigger_compaction`（修前 FAIL：误触发；修后 PASS）
+  - `docs/架构.md` §4.7: 校准段补一句图片估算口径 + 比值钳制约束
+- **影响范围**: 仅 agent-core 内部估算逻辑。`needs_compaction` 与 surface 的 `context_usage` 同口径自动跟随（估值更接近真值、指示器更准）。不动协议、不动 EventPayload、不动 storage 格式、不动对外 API。原有压缩路径未误伤——`calibration_triggers_compaction_when_raw_estimate_underreports`（该压的还是压）仍 PASS。
+- **留尾巴**: `IMAGE_TOKENS_ESTIMATE=2000` 是保守常量，未按图片分辨率 / 是否走 VisionBridge 区分两条路径分别精算（首期不过度设计；若将来要发多图且原生编码模型，可能略低估，但有 `MAX_CALIBRATION_RATIO` 与服务端真值校准兜底）。本次走纯函数层回归测试复现（A/B 翻转稳定），未在真机 heb 跑「先文字后单发图」全链路——复现需真实 opus API + 手动两步，纯函数测试已覆盖根因属性。
+
+### 2026-06-16 — 新增 VSCode 风格文件目录树 + 中间文件查看器列（Monaco）
+
+- **Why**: 用户参考 nezha 的页面，希望在右侧工作台加文件目录树（图标排第一位），点文件能打开；打开后像 nezha 的文件查看器那样在**中间新增一列**多 tab 浏览/编辑，把 chat 往左挤；要求 VSCode 同源渲染（语法高亮），并预留以后的 LSP/autocomplete；中间列宽可拖但不持久化
+- **改动**:
+  - 后端两端镜像新增命令（纯 surface 能力，§7.3 同类，不进 agent-core）：
+    - `apps/desktop/src/lib.rs`: `read_dir(path)` 列目录直接子项（dir-first、隐藏项靠后，非递归）、`write_text_file(path, content)` 仅覆盖已存在的常规文件；注册进 `generate_handler!`
+    - `apps/web-server/src/server.rs`: 同语义 `cmd_read_dir` / `cmd_write_text_file`，接进 hebweb 命令分发
+  - 前端 bridge：`bridge/tauri.ts` 暴露 `readDir` / `writeTextFile`；`ui/types.ts` 加 `DirEntry`
+  - `ui/store/useStore.ts`: 新增文件查看器 UI 状态 `openFiles` / `activeFilePath` + `openFile` / `closeFile` / `setActiveFile`（纯 UI 态、不持久化，解耦不相邻的文件树与查看器）
+  - `ui/components/FileTreePanel.tsx`（新）: 右侧工作台「文件目录」tab，多根（workdir + allowed_paths + runtime_allowed_paths）懒加载目录树
+  - `ui/components/FileViewer.tsx`（新）: 中间列多 tab 文件页签 + Monaco 编辑器 + Ctrl/Cmd+S 写盘；`DesktopShell` 里 `React.lazy` 懒加载
+  - `ui/lib/monacoSetup.ts`（新）: Monaco 离线接线——vite `?worker` 打包各语言 worker，不走 CDN；`ui/lib/fileLanguage.ts`（新）: 扩展名 → Monaco language id
+  - `ui/components/RightSidebar.tsx`: 加 `files` tab（图标 `FolderTree` 排第一位），同步顶部注释（宽度其实早已改成不持久化）
+  - `ui/components/DesktopShell.tsx` + `desktopShell.css`: grid 列从 `304px 1fr auto` 改为 `304px minmax(0,1fr) auto auto`，插入 `FileViewerColumn`（左边缘可拖、宽度仅运行内记忆不持久化，无打开文件时返回 null 不占 track）
+- **影响范围**: desktop + hebweb 两 surface（共享同一份前端）。新增 2 个后端命令均为 additive（旧客户端无感）。新增前端依赖 `monaco-editor@0.52` + `@monaco-editor/react@4.7`；Monaco 被隔离进 FileViewer lazy chunk（~3.35MB），不进主 bundle。架构.md 追加 §4.12.12。不动协议 / EventPayload / storage 格式
+- **留尾巴**: ①LSP/autocomplete 仅留了 Monaco 接线口子，未接任何 language server；②`write_text_file` 不走 edits-worktree（§4.13），用户手改的文件不进「修改文件」回退记录——与 agent 改动的回退体系分离，符合「用户自己的改动自己负责」语义，但若将来要统一可在此挂钩；③大文件（>8MiB）查看器读不了（复用 read_text_file 上限）会 toast 报错，未做分页；④本次走 cargo check + tsc + vite build 验证编译链路与 Monaco worker 离线打包成功，未在真机 tauri dev 手验事件流——建议跑一次 `pnpm tauri dev` 点开文件树→打开文件→编辑→Ctrl+S 确认写盘
+
+### 2026-06-16 — 本轮耗时持久化：从会话级内存态搬进 message 字段，重启可见 + 移进气泡操作行
+
+- **Why**: 用户在内置浏览器预览圈选反馈——「本轮完成 · 1.8s」原本是 ChatView 顶层一条独立居中行，且只活在会话内存态（store `sessionLastRunDurationMs[sessionId]`），只存最后一轮、刷新即丢、不挂任何 message。用户要：①把耗时挪进每条 assistant 气泡的 hover 操作行（紧跟时间戳后）；②持久化，重启仍能看见每轮自己的耗时；③顺带把「本轮写入 N 条记忆」摘要从会话末尾独立行挪到最后一条 assistant 气泡操作行的正上方，字体统一到操作行的 10px。
+- **根因**: 耗时是 run 级量（agent_loop `run_start.elapsed()`），经 `RunFinished` 事件透出，但 `TurnSummary` 把 `duration_ms` 丢弃了；assistant message 由各 surface 自己在 run 结束时落盘（desktop/cli/hebweb/channel 四处 surface），而前端 run 结束后 `getSession` 重新从 session.jsonl 加载整个会话——所以只要把耗时写进「本轮最后一条 assistant message」的字段并落盘，「run 结束当下可见」+「重启可见」就由同一份数据一并满足，旧的整套内存态可彻底删除。架构.md §4.9.2 的 AssistantMessage schema 早已预留 `duration` 字段，本次是把这个设计真正落地。
+- **改动**:
+  - `crates/agent-core/src/storage/sessions.rs`: `Message` 加 `run_duration_ms: Option<u64>`（serde default None，向下兼容老 jsonl）。仅落在「一个 Run 结束时写盘的最后一条 assistant message」上
+  - `crates/agent-core/src/harness.rs`: `TurnSummary` 加 `duration_ms: Option<u64>`，drive 的 `RunFinished` 分支把事件里的 duration 带出来（其余 outcome 为 None）
+  - 四个 surface 落盘点回填：`apps/desktop/src/chat.rs`（单段 / 分段两条路径，耗时落在本轮最后一条会落盘的 assistant）、`apps/cli/src/session.rs` + `apps/cli/src/daemon.rs`、`apps/web-server/src/session.rs`、`crates/channel-core/src/bridge.rs`
+  - 其余所有非「正常完成的最后一条 assistant」构造点（user / marker / interrupted / failed / 子段 / 测试桩）统一填 None
+  - 前端 `types.ts`: `Message` 加 `run_duration_ms?`；`MessageBubble.tsx`: 操作行时间戳 span 之后 inline 渲染「· 1.8s」（复用已有 `formatCompactDuration`）；新增 `memoryWrites` prop，在操作行 div 之前渲染 `MemoryWriteSummary`
+  - `MessageList.tsx`: 计算 `lastAssistantIdx`（非 streaming 时的最后一条 assistant），把 `memoryWrites` 只传给那一条 bubble
+  - `MemoryWriteSummary.tsx`: 从居中 `mx-auto`+11px 改成左对齐+10px（与操作行一致）
+  - `ChatView.tsx`: 删掉顶层独立耗时行 + 独立 MemoryWriteSummary，改为给 MessageList 传 `memoryWrites`
+  - `store/useStore.ts`: 删除整套 `sessionLastRunDurationMs`（state 声明 / init / `run_finished` reducer）
+- **影响范围**: 数据模型 additive 改动——session.jsonl 多一个可选字段，老 jsonl serde default None，新老互相兼容。动了 agent-core（Message / TurnSummary）+ desktop / cli / hebweb / channel 四 surface 落盘 + desktop 前端。不改 protocol EventPayload（`RunFinished` 事件本就带 duration，前端不再用它写内存态，但事件结构不变）。`formatCompactDuration` 仍在 MessageBubble 用，保留导出
+- **验证**: heb CLI 端到端复现——发「请只回复两个字：你好」→ `run_finished` 事件 `duration_ms:1425` → `~/.hebbian/sessions/<sid>/session.jsonl` 最后一条 assistant（content="你好"）带 `run_duration_ms=1425`，即重启可见（重启 = 重读 jsonl，serde default 还原字段）。`cargo check --workspace` + `cargo test -p agent-core --lib`（531+2 通过，2 个偶发 flaky 与本改动无关，单独重跑均 pass）+ `tsc --noEmit` 全绿
+- **留尾巴**: ①desktop 分段落盘的极罕见边界——当 `flushed_segments == segment_messages.len()` 且无补段（全部 assistant 段都在 PendingInputs drain 边界已落盘、尾段为空）时，耗时无处可写会丢失；这种情况需要 run 内多次插队且尾段恰好为空，实际几乎不触发，已在代码注释标注；②本次未在真机 `pnpm tauri dev` 手验前端渲染（耗时 inline 显示 / 记忆汇总移位 / hover 行布局），建议跑一次确认视觉效果
+
+### 2026-06-16 — 调整右侧工作台各 tab 默认宽度 + Monaco 主题跟随调色盘
+
+- **Why**: 文件目录 / 后台任务 / 任务清单 / 计划 tab 打开时太宽，浏览器太窄；文件编辑器写死 `vs-dark`，在亮色界面下突兀
+- **改动**:
+  - `ui/components/RightSidebar.tsx`: `TAB_DEFAULT_WIDTH` 调整——files / tasks / todos / plans 砍半（DEFAULT_WIDTH 的 1/2、1/3、1/4、1/2），browser 加大一半（5/4 → 15/8）
+  - `ui/components/DesktopShell.tsx`: RightSidebar 的 `minWidth` 从 500 降到 80——根因：原 minWidth=500 会把所有砍半后的默认宽度 clamp 回 500，砍半看不出效果；降下限后默认值才真正生效，也允许用户把窄 tab 拖得更窄
+  - `ui/components/FileViewer.tsx`: 新增 `useEditorTheme` hook，读 `.dsp-shell` 的 `data-dsp-theme` 判断调色盘预设——暗色预设（abyss）用 `vs-dark`、4 个亮色预设（glacier/mist/porcelain/moon）用 `vs`，MutationObserver 响应切换；`<Editor theme>` 从写死 `vs-dark` 改为跟随
+- **影响范围**: 仅 desktop 前端布局 + 编辑器主题。Monaco 主题判定依据是调色盘预设（`data-dsp-theme`）而非全局明暗模式（`store.theme` / `html.dark`）——按用户原话「调色盘预设的 4 个亮色用亮编辑器，暗色用暗色编辑器」。架构.md §4.12.12 补主题跟随描述
+- **留尾巴**: ①todos tab 砍半后默认 80px 偏窄，若实测太挤可单独上调；②若将来新增暗色调色盘预设，需把 id 加进 FileViewer 的 `DARK_PRESETS` 集合；③Monaco 主题只跟调色盘预设，不跟 store.theme 的明暗切换——如果用户期望两者联动需再确认
+
+### 2026-06-16 — 更正右侧 tab 默认宽度基准（上一条算错了）
+
+- **Why**: 上一条「砍半」用 `DEFAULT_WIDTH(320)/2` 当基准，但 sidebar 之前每个 tab 打开**实际都是 500px**（被 DesktopShell 的 minWidth=500 顶上去的，代码里 320/213/160 那些设定值从没生效过）。用户要的是「之前固定宽度的一半」= 500/2，不是 320/2
+- **改动**:
+  - `ui/components/RightSidebar.tsx`: `TAB_DEFAULT_WIDTH` 改用绝对像素值（files/tasks/todos/plans=250、browser=750、edits=640、branches/terminal=500），不再用会被 clamp 误伤的 `DEFAULT_WIDTH` 表达式；加注释说明值需 ≥minWidth 才生效
+  - `ui/components/DesktopShell.tsx`: minWidth 80 → 200（让 250 原样生效，同时保留拖窄余地）
+- **影响范围**: 仅 desktop 前端布局。文件目录/后台任务/任务清单/计划默认 250px，浏览器 750px
+- **留尾巴**: 无
+
+### 2026-06-16 — 文件编辑器列加宽 1/4 + Monaco 行号列减半
+
+- **Why**: 用户希望编辑器更宽、行号区少占空间
+- **改动**:
+  - `ui/components/DesktopShell.tsx`: `VIEWER_DEFAULT_WIDTH` 560 → 700（+1/4）
+  - `ui/components/FileViewer.tsx`: Monaco `lineNumbersMinChars` 默认 5 → 3（行号列宽减半）
+- **影响范围**: 仅 desktop 文件查看器
+- **留尾巴**: 无
