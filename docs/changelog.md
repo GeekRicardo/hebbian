@@ -8173,3 +8173,67 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): Ask detail 主体去掉 `rounded-md border`，与其它 detail 一致平铺贴边。整张卡圆角统一只由最外层 `rounded-b-md` 容器负责，内部子元素一律不自带圆角。
 - **影响范围**: desktop 前端纯样式，仅 Ask 工具展开区外观；无协议 / 数据变化。
 - **留尾巴**: 无。已逐一复核 Bash/Read/Skill/Grep/Glob/WebSearch/Fetch/Write/Edit/image_generation/TaskList/Default 所有 detail 分支，无第二处内部自带圆角。
+
+### 2026-06-15 — 侧栏项目排序改用 pointer 拖拽（整块跟手 + 补位预览），修手柄与箭头重合
+
+- **Why**: 上一版用 HTML5 原生 `draggable` 实现项目排序，在 Tauri/WebKit webview 下拖拽起不来（"拖动无效"），且原生拖拽只有系统级半透明 ghost，做不到用户要的「整个项目连同对话列表框跟随鼠标移动 + 插入位有预览 + 其他项自动补位」。同时拖拽手柄图标与折叠箭头水平重合。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx):
+    - 移除 HTML5 `draggable` / `onDragStart` / `onDrop` 整套，改为 pointer 事件手写排序拖拽。`onDragHandleDown` 按下时一次性测量所有项目中心 Y 存入 `dragRef`（过程态真相源），`onDragHandleMove` 按拖动位置与各中心比较算出 `targetIndex`，`onDragHandleUp` 落位并 `commitOrder` 写 localStorage。
+    - `dragShift(index)` 计算每项的 `translateY`：被拖项跟手（`dy`），插入区间内的其他项让位 ±（项高+间距）——补位本身即插入预览。
+    - 被拖项整个 `<section>`（含对话列表框）随 transform 移动；`groupRefs` 收集各项 DOM 用于测量。
+    - 删除不再使用的 `moveInOrder` helper、`dragId`/`overId`/`dragIdRef` 旧状态；新增常量 `PROJECT_GROUP_GAP`（=4，与卡片 margin-bottom 对齐，用于补位距离）。
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css):
+    - 手柄左移 + 加宽 heading 左 padding 到 28px 拉开与折叠箭头间距。**踩坑**：heading 的 padding 被多条规则层叠覆盖，最终生效的是文件靠后那条 `min-height:34px; padding:2px 58px 2px 8px`（行号最大者胜），改前两处都无效；定位到这条权威规则改其左 padding 才生效。教训：改 `.dsp-project-heading` 这类被反复重定义的选择器，要找文件中最靠后的那条。
+    - 新增 `.is-reordering`（未被拖项 `transition: transform` 平滑补位）、`.is-dragging`（被拖项抬 z-index、阴影强调、关 transition 跟手）；删除原 `is-drop-target` / opacity 方案。
+- **影响范围**: 仅 Desktop / hebweb 前端。纯交互 + 样式，不动协议、agent-core、数据结构。
+- **留尾巴**: 拖拽中心点在 `pointerdown` 时一次性测量，拖拽过程中若列表高度变化（不会发生，拖拽时已关 is-fill）测量不会刷新——当前用 `!drag` 关掉撑满规避。已用 hebweb + Playwright 真实 mouse 事件验证：拖动中途被拖项 `translateY(183)` 跟手、跨过项 `translateY(-55)` 补位、释放后顺序正确变更并落盘、手柄与箭头间距 18px 不重合。
+
+### 2026-06-15 — 修侧栏项目缩进层级 + 撑满项目高度自适应（basis 0 纯 grow）
+
+- **Why**: 上一版拖拽落地后两个观感问题：① 给手柄让位时 heading 左 padding 加到 28px 加过头，项目箭头(35px)缩进比下面对话行(41px)还浅、几乎对齐，没有父子层级感；② 最底部「撑满」项目（is-fill）用 `flex:1 1 auto`，basis=auto 按内容高度撑，对话多时撑出 462px 让整个 groups 溢出滚动、设置栏被推走，对话少时又被 flex 压扁到 6px——两头都不对。用户要的是「有空白则自适应到 sidebar 底部、内容多则内部滚动、拖到前面回归默认高度」。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/desktopShell.css](../apps/desktop/frontend/src/desktop/ui/components/desktopShell.css):
+    - heading 左 padding 28px→16px（箭头回到合理位置）；对话列表缩进 `.dsp-project-session-list` padding-left 14px→32px，让对话文字(59px)明显深于项目箭头(35px)，层级差 24px。**踩坑续**：list 缩进的权威规则是文件最末尾那条带注释「项目列表缩进」的 `padding-left`，同 heading 一样要找最靠后的定义。
+    - `is-fill`（group + list 两层）`flex:1 1 auto`→`flex:1 1 0`：basis 归零让它纯靠 grow 占据剩余空间而非按内容撑高；list 保留 `min-height:180px` 锁默认下限 + 复用 `has-overflow` 的 `overflow:auto` 做内部滚动。效果：空白多→grow 吃满到设置栏上沿；内容多→占满剩余空间、列表内部滚动、外层 groups 不溢出（实测 groupsOverflow=0）。
+  - 「拖到前面回归默认高度」无需额外代码：`lastExpandedId` 动态算最后展开项，gaval 拖走后 fill 转给新的末位展开项，旧项 fill=false 即回 180px 默认（实测验证）。
+- **影响范围**: 仅 Desktop / hebweb 前端 CSS。不动 TSX 逻辑、协议、agent-core。
+- **留尾巴**: 无。hebweb + Playwright 实测：缩进层级差 24px；撑满项内容多时 groups 不溢出、列表内部滚 234px；拖最后项到前面后该项 fill=false/listH=180、新末位项接管 fill。
+
+### 2026-06-15 — 用服务端真值校准本地 token 估算，修指示器偏低 + 自动压缩漏触发撞 1M
+
+- **Why**: 用户报一条对话最后一次请求 `HTTP 400: prompt is too long: 1000024 tokens > 1000000 maximum`，但输入框右下角 context 指示器才显示 71%。根因是一个估算器低估引发两处症状：本地 `estimate_transcript_tokens`（~4 字符/token 启发式）对代码 / JSON 工具结果系统性低估，且完全没算 system prompt 全文 + 几十个 tool 定义 schema 这块约一万 token 的恒定开销——heb 端实测第一轮服务端真值 10280 token、本地裸估算仅 166（差 62 倍）。指示器分子（`context_usage`）用裸估算→显示 71%；`needs_compaction` 也用裸估算判 0.75 阈值（1M 模型=75 万）→ 服务端真实已 998k 却估成 71 万、判「不用压」→ 下一轮请求直接撞 1M 报 400。指示器偏低和该压没压是同一个低估的两张脸。
+- **改动**:
+  - `context/budget.rs`: 新增 `calibrated_transcript_tokens(system, entries, last_real, last_estimated)` 纯函数——`当前估算 × (last_real / last_estimated)`。关键是采样与应用同口径（都走 `estimate_transcript_tokens`），比值一次性吸收 tokenizer 偏差 + 恒定开销；压缩后当前估算立刻降、比值稳定，校准值实时跟随不滞后。任一样本为 0（新会话没采样）退化为裸估算。加 3 个单测覆盖退化 / 放大 / 压缩跟随。
+  - `storage/sessions.rs`: `TokenStats` 加 `last_estimated_tokens` 字段（serde default，旧会话读回 0），`accumulate` 一并覆盖；新增轻量 `load_token_stats()`（跳过 message 解析）供 agent_loop 启动播种。加往返回归测试。
+  - `agent_loop.rs`: 请求构建处采样 `request_estimated_tokens`，与 `usage.input_tokens` 真值一起落进 token_stats；`needs_compaction` 传入校准样本；loop 启动时从持久化 token_stats 播种校准比值（已加载的长会话首轮就能用上次真值校准，否则恢复一个逼近上限的会话首请求仍会 400），每轮请求后用新样本覆盖内存变量。
+  - `apps/desktop/src/chat.rs`、`apps/web-server/src/chat_helpers.rs`: `context_usage` 改用 `calibrated_transcript_tokens`，读 session.token_stats 的配对样本。
+  - `docs/架构.md` §4.7.1: 补「budget 估算用服务端真值校准」说明。
+- **影响范围**: agent-core（budget / compaction / agent_loop / sessions 持久化）+ desktop / web-server 两个持久化 surface 的 context_usage。`ContextUsageDto` 字段（used_tokens / budget_tokens）不变，前端无改动、协议无破坏。`TokenStats` 加字段是 additive，老 session.jsonl 缺该字段时 serde default 回 0，校准退化为裸估算=历史行为，向前向后兼容。CLI tui 走 in-memory `Session::context_usage()`、无持久化配对样本，保持裸估算（次要 surface，不在 400 触发路径，引入事件回灌或周期读 7MB 文件属过度设计）。
+- **留尾巴**: 校准比值在对话早期偏大（恒定开销占比高，实测首轮 62 倍），随对话变长收敛到真实的 ~1.3，是预期行为——宁可早期略高估也不再让 998k 被当 71k。CLI tui 指示器仍裸估算未校准，如需统一可让 Session 持有最近真值（本次未做）。
+
+### 2026-06-16 — 修内置浏览器自举：release 下 ACL 拦自定义命令 + 嵌套套娃 hideOthers 报错
+
+- **Why**: 用户报「内置浏览器打开 dev 前端（localhost:1420）只出空壳、加载不了后台数据，且报 `Command browser_hide_others not allowed by ACL`」。用户一句「动 CEF 之前能用」点破方向——不是 CEF 的锅。`git log -L` Cargo.lock 追出：tauri 版本变迁只有两次（初始 2.10.3 → commit 10161bf 升 2.11.2，那次为拿 wry 查样式的 `eval_with_callback`）。diff 两版 `webview/mod.rs` ACL 段，回归点是**唯一一行**：2.11 在拦截条件里加了 `|| !is_local`（安全收紧，防 remote 页面触达自定义命令）。release 下子 webview 加载 localhost:1420 时 `is_local=false`（release `get_app_url` 返回 `frontend_dist`=`tauri://localhost`，`make_relative` 不匹配 localhost），自定义命令(list_sessions/chat/browser_*)全被拦。这是两个独立问题：B=ACL 拦数据；A=内置浏览器开 hebbian 自己→嵌套前端又渲染 BrowserPanel→mount 调 hideOthers 套娃报错。
+- **改动**:
+  - **问题 B（tauri fork patch）**: 新建 `../tauri-fork`（从 registry 2.11.2 源码整拷，与 Cargo.lock 锁定版本一致），仅改 `src/webview/mod.rs` 一处 ACL 判定：加 `is_loopback_origin`（remote 且 host ∈ {localhost,127.0.0.1,[::1]} 时为 true），把拦截条件 `!is_local` 改成 `!is_local && !is_loopback_origin`。**只豁免本机回环地址，第三方远端站点仍按上游拦死，不放开攻击面**（内置浏览器主用途就是开外部站，绝不能裸删那行）。根 `Cargo.toml` 加 `[patch.crates-io] tauri = { path = "../tauri-fork" }`，只 patch tauri 本体、不连锁 tauri-runtime/utils/wry。
+  - **问题 A（嵌套检测）**: `apps/desktop/src/browser/mod.rs` 给子 webview init script 注入 `window.__HEB_EMBEDDED__=true`（`init_script()` + popout 页面两处）；`transport.ts` 加 `isEmbeddedPreview()` 读该标志；`RightSidebar.tsx` 据此三层防护——浏览器/终端 tab 按钮不渲染、初始 tab 残留 browser/terminal 值纠正为 tasks、面板随 browserMounted 恒 false 不挂。自举页面里不再出现内置浏览器/终端这类宿主专属功能。
+- **影响范围**: Desktop（browser 模块 + 前端 RightSidebar/transport）+ workspace 根 Cargo.toml 引入 tauri fork。不动协议、agent-core、数据结构。tauri fork 与官方 2.11.2 仅差这一处 patch，eval_with_callback（wry 查样式）等 2.11 能力全保留——两个功能（自举 + 查样式）兼得。url crate 实测确认 `[::1]` 的 `host_str()` 带方括号（初版误写 `::1` 会让 IPv6 自举静默失效，已修）。
+- **留尾巴**: ① 最终验证需 GUI 真机：release build .app 用内置浏览器打开 localhost:1420，确认数据加载 + 浏览器 tab 消失 + 无 ACL 报错——无头环境跑不了，待用户真机验。② tauri fork 是本地路径依赖，别人 clone 仓库需自备 `../tauri-fork`（或后续改 GitHub fork + git rev 提升可移植性）。③ tauri 升级到 >2.11.2 时需重新 review 这处 patch 是否还适用（上游那行注释里写了「TODO: Remove this special check in v3」，v3 可能整体重构 ACL）。
+- **关联**: 回归源 commit 10161bf（升 2.11.2）；CEF 僵死另见 GitHub issue #2（与本次无关，CEF 仍冰冻）。
+
+### 2026-06-15 — 压缩态按会话隔离：修「一个对话主动压缩时其他对话不能发送」
+
+- **Why**: 用户报「某个对话主动 /compact 时，切到其他对话发现输入框/发送被禁用，压缩完才恢复」。压缩要调一次 LLM、耗时数秒到数十秒，期间不该阻塞别的对话。根因双层叠加：① 前端 store 的压缩态是**全局单布尔** `compacting`，所有对话的 ChatInput 都 `useStore(s=>s.compacting)` 读同一个标志；② `runCompact` 借用了输入框的本地 `sending` 态（`setSending(true)` 开始、finally 复位），而 `<ChatInput>` 在 ChatView 里**没有 key、切换 session 不重新挂载**，于是残留的 `sending=true` 被带到切过去的对话，让它的发送按钮 `canSubmit=!sending` 判 false 而禁用。此外 `compactCurrentSession` 完成时无脑 `set({currentSession: fresh})`，压缩耗时里切走会把这个对话的数据错误回填覆盖到当前显示的另一个对话（同根因的第三个面）。
+- **改动**:
+  - `store/useStore.ts`: `compacting: boolean` → `compactingSessionId: string | null`（按会话承载压缩态）。`compactCurrentSession` 锁定发起时的 sessionId 做重入守卫与回填判断；回填前检查仍停留在发起会话（`shouldApplyCompactionResult`）才 `set`，否则不串台。
+  - `components/compactingState.ts`（新）: 抽出 `isSessionCompacting(compactingSessionId, currentSessionId)` 与 `shouldApplyCompactionResult(startedSessionId, currentSessionId)` 两个纯函数，store 与 ChatInput 共用，逻辑单点可测。
+  - `components/ChatInput.tsx`: `compacting` 改为 `isSessionCompacting(compactingSessionId, currentSessionId)` 派生——只关心「当前这个会话是否在压缩」。`runCompact` 不再 `setSending`（压缩态已由 store 按会话承载，发送按钮的 sending 回归纯粹「这一次 send 在途」）。
+  - `components/TokenStatsPanel.tsx`: 加 `compacting` prop，压缩中环圈 `animate-pulse` + 禁用点击 + aria「正在压缩上下文…」，替代原先借 `sending` 让发送按钮转圈的反馈。
+  - `components/compactingState.test.ts`（新）: standalone 回归，覆盖「压缩A切到B不禁用B」「发起会话自身 compacting」「切走后不回填」等 7 条。
+- **影响范围**: 仅 Desktop / hebweb 前端 store + 三个组件。不动协议、不动 agent_core、不动后端 compact_session。`ContextUsageDto` 等无变化。
+- **验证**:
+  - 阶段A 红测：把纯函数临时换成旧全局逻辑（忽略 currentSessionId），`node --experimental-strip-types compactingState.test.ts` 立刻报 `压缩A切到B不禁用B: expected false, got true`——精确复现用户现象。修复版全绿。A/B 翻转稳定。
+  - 阶段B hebweb + Playwright 实测：真实会话触发压缩，连续 6 次轮询捕获压缩按钮 `disabled=true`+`animate-pulse`+aria「正在压缩上下文…」、同时本会话 `textarea.disabled=false`；压缩在途切到第二会话，第二会话 `textarea.disabled=false`、无 pulse、按钮正常——压缩态按会话正确隔离。
+  - `pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 无。最小补丁（给 ChatInput 加 `key={session.id}` 强制重挂）能解直接症状但会丢输入框草稿/高度本地态、且不解决全局 compacting 的并发缺陷，已弃用。

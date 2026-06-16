@@ -38,6 +38,7 @@ import { ReasoningEffortPill } from "@/desktop/ui/components/ReasoningEffortPill
 import { RunModeChip } from "@/desktop/ui/components/RunModeChip";
 import { SlashCommandButton } from "@/desktop/ui/components/SlashCommandButton";
 import { TokenStatsPanel } from "@/desktop/ui/components/TokenStatsPanel";
+import { isSessionCompacting } from "@/desktop/ui/components/compactingState";
 import { ProviderUsageIndicator } from "@/desktop/ui/components/ProviderUsageIndicator";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { PathTypeIcon } from "@/desktop/ui/components/workspaceFields";
@@ -99,7 +100,10 @@ export function ChatInput({
     lastCompositionEndAt: 0,
   });
 
-  const compacting = useStore((s) => s.compacting);
+  const compactingSessionId = useStore((s) => s.compactingSessionId);
+  const currentSessionId = useStore((s) => s.currentSession?.id ?? null);
+  // 按会话隔离：只有「当前这个会话正在压缩」才算 compacting，别的会话压缩不影响本输入框。
+  const compacting = isSessionCompacting(compactingSessionId, currentSessionId);
   const compactCurrentSession = useStore((s) => s.compactCurrentSession);
   const enqueueInput = useStore((s) => s.enqueueInput);
   const flushQueuedItem = useStore((s) => s.flushQueuedItem);
@@ -355,7 +359,8 @@ export function ChatInput({
 
   async function runCompact(customInstructions: string) {
     if (compacting) return;
-    setSending(true);
+    // 压缩态由 store 的 compactingSessionId 按会话承载，不写发送按钮的本地 sending——
+    // 否则压缩耗时里切到别的会话，残留的 sending 会禁用那个会话的发送。
     setValue("");
     setHistoryState({ index: null });
     try {
@@ -363,8 +368,6 @@ export function ChatInput({
       toast.success("上下文已压缩");
     } catch (e: any) {
       toast.error(e?.message || "压缩失败");
-    } finally {
-      setSending(false);
     }
   }
 
@@ -1262,6 +1265,7 @@ export function ChatInput({
                   stats={tokenStats}
                   contextUsage={contextUsage}
                   compact={isStreaming}
+                  compacting={compacting}
                   onCompact={contextUsage ? () => {
                     if (compacting) return;
                     void runCompact("");

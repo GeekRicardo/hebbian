@@ -39,6 +39,7 @@ import { useToastStore } from "@/desktop/ui/store/useToastStore";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
 import { appendInjectedMessageAfterCurrentAssistant } from "@/desktop/ui/components/liveTimelineOrder";
+import { shouldApplyCompactionResult } from "@/desktop/ui/components/compactingState";
 
 const LAST_PROMPT_ID_KEY = "lastPromptId";
 const LAST_PROVIDER_ID_KEY = "lastProviderId";
@@ -1122,8 +1123,9 @@ interface AppState {
 
   // 上下文用量（输入框旁环形进度条数据）
   contextUsage: ContextUsage | null;
-  /** 是否正在执行 /compact */
-  compacting: boolean;
+  /** 正在执行 /compact 的会话 id（按会话隔离；null = 没有会话在压缩）。
+   *  压缩要调一次 LLM、耗时数秒到数十秒，期间不该阻塞其它会话的发送。 */
+  compactingSessionId: string | null;
   refreshContextUsage: () => Promise<void>;
   compactCurrentSession: (customInstructions?: string) => Promise<void>;
 
@@ -1461,7 +1463,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   contextUsage: null,
-  compacting: false,
+  compactingSessionId: null,
   sessionEditSnapshots: {},
   sessionMemoryWrites: {},
   sessionLastRunDurationMs: {},
@@ -1480,14 +1482,27 @@ export const useStore = create<AppState>((set, get) => ({
   },
   async compactCurrentSession(customInstructions?: string) {
     const cur = get().currentSession;
-    if (!cur || get().compacting) return;
-    set({ compacting: true });
+    // 同一会话已在压缩则忽略重入；别的会话在压缩不阻塞本会话。
+    if (!cur || get().compactingSessionId === cur.id) return;
+    const sessionId = cur.id;
+    set({ compactingSessionId: sessionId });
     try {
-      const usage = await api.compactSession(cur.id, customInstructions);
-      const fresh = await api.getSession(cur.id, activeRequestForSession(get(), cur.id));
-      set({ contextUsage: usage, currentSession: fresh });
+      const usage = await api.compactSession(sessionId, customInstructions);
+      const fresh = await api.getSession(
+        sessionId,
+        activeRequestForSession(get(), sessionId),
+      );
+      // 压缩耗时里用户可能已切到别的会话；只有仍停留在发起压缩的会话时才回填，
+      // 否则会把这个会话的数据错误覆盖到当前显示的另一个会话上。
+      if (shouldApplyCompactionResult(sessionId, get().currentSession?.id ?? null)) {
+        set({ contextUsage: usage, currentSession: fresh });
+      }
     } finally {
-      set({ compacting: false });
+      set((state) =>
+        state.compactingSessionId === sessionId
+          ? { compactingSessionId: null }
+          : state,
+      );
     }
   },
 

@@ -10,12 +10,14 @@ interface Props {
   className?: string;
   compact?: boolean;
   onCompact?: () => void;
+  /** 本会话正在压缩：环圈脉动提示 + 禁用重复点击。 */
+  compacting?: boolean;
 }
 
 /**
  * 输入框右侧的合并状态：用上下文进度圆环承载 context 百分比，旁边显示 cache 命中率。
  */
-export function TokenStatsPanel({ stats, contextUsage, size = 18, className, compact = false, onCompact }: Props) {
+export function TokenStatsPanel({ stats, contextUsage, size = 18, className, compact = false, onCompact, compacting = false }: Props) {
   const empty = !stats || stats.run_count === 0;
   // 主显示：整个对话平均命中率（累计 cache_read / 累计 input）
   const avgHitRate =
@@ -46,23 +48,31 @@ export function TokenStatsPanel({ stats, contextUsage, size = 18, className, com
   const title = contextUsage
     ? `缓存平均 ${avgHitRate}% · 上下文 ${contextPct}%`
     : `缓存平均 ${avgHitRate}%`;
+  const canCompact = !!onCompact && !compacting;
 
   return (
     <div className={cn("relative group/token", className)}>
       <button
         type="button"
         tabIndex={-1}
-        onClick={onCompact}
+        onClick={canCompact ? onCompact : undefined}
+        disabled={compacting}
         className={cn(
           compact
             ? cn("token-stats-trigger leading-none", COMPACT_TOOLBAR_BUTTON_CLASS)
             : "token-stats-trigger inline-flex items-center justify-center rounded-md border border-transparent text-muted-foreground hover:bg-muted hover:text-foreground transition-colors leading-none h-8 gap-1.5 px-1.5",
-          onCompact ? "cursor-pointer" : "cursor-default",
+          canCompact ? "cursor-pointer" : "cursor-default",
           empty && !contextUsage && "opacity-60"
         )}
-        aria-label={title}
+        aria-label={compacting ? "正在压缩上下文…" : title}
       >
-        <span className="relative inline-flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
+        <span
+          className={cn(
+            "relative inline-flex shrink-0 items-center justify-center",
+            compacting && "animate-pulse"
+          )}
+          style={{ width: size, height: size }}
+        >
           <svg
             width={size}
             height={size}
