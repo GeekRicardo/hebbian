@@ -369,6 +369,7 @@ async fn dispatch_invoke(
         "discover_rules_files" => cmd_discover_rules_files(args).await.map(Some),
         "list_background_tasks" => cmd_list_background_tasks_local(args).await.map(Some),
         "kill_background_task" => cmd_kill_background_task_local(args).await.map(Some),
+        "read_background_task_output" => cmd_read_background_task_output_local(args).await.map(Some),
         "update_session_settings" => cmd_update_session_settings(state, args).await.map(Some),
         "list_session_model_io" => cmd_list_session_model_io(state, args).await.map(Some),
         "get_session_model_io_entry" => cmd_get_session_model_io_entry(state, args).await.map(Some),
@@ -1576,6 +1577,37 @@ async fn cmd_kill_background_task_local(args: Value) -> Result<Value> {
         Some(state) => Ok(Value::String(state.label().to_string())),
         None => Err(anyhow!("未找到 task_id={task_id}（可能已被清理）")),
     }
+}
+
+/// 读某个后台 task 的增量输出（语义同 desktop `read_background_task_output`）：
+/// 按调用方传入的 cursor 取，用 `read_at` 不动 shell 内部 read_cursor，多读者互不干扰。
+/// task 已不在注册表 → 空 chunk + state="exited"，让前端回落到 message.tool_call.result。
+async fn cmd_read_background_task_output_local(args: Value) -> Result<Value> {
+    let sid = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let task_id = args
+        .get("taskId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `taskId`"))?;
+    let cursor = args.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0);
+    let shells = agent_core::tools::background::registry_for_session(sid);
+    let Some(shell) = shells.get(task_id) else {
+        return Ok(json!({
+            "total_bytes": cursor,
+            "chunk": "",
+            "state": "exited",
+            "bytes_dropped": 0,
+        }));
+    };
+    let snap = shell.read_at(cursor);
+    Ok(json!({
+        "total_bytes": snap.total_bytes,
+        "chunk": snap.content,
+        "state": snap.state.label().to_string(),
+        "bytes_dropped": snap.bytes_dropped,
+    }))
 }
 
 /// 读 session 的 `model_io.jsonl`，返回 `Vec<DumpEntry-as-Value>`。

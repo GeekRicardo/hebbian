@@ -14,11 +14,11 @@ import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { focusToolCall } from "@/desktop/ui/lib/focusToolCall";
 import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
-import type {
-  BackgroundTaskInfo,
-  Message,
-  SessionBackgroundReport,
-} from "@/desktop/ui/types";
+import {
+  deriveBackgroundTasks,
+  type TaskItem,
+} from "@/desktop/ui/lib/backgroundTasks";
+import type { Message, SessionBackgroundReport } from "@/desktop/ui/types";
 
 /**
  * 旧版本浮动框——已被 RightSidebar 内的 `BackgroundTaskTab` 替代（架构 §4.12.9 修订）。
@@ -159,30 +159,7 @@ export function BackgroundTaskTab() {
         </div>
       )}
 
-      {/* cron 待唤醒 */}
-      {pendingCrons.length > 0 && (
-        <div className="mx-2 mt-2">
-          <SectionLabel>定时唤醒</SectionLabel>
-          {pendingCrons.map((c) => (
-            <div
-              key={`${c.run_id}-${c.fire_at_ms}`}
-              className="mt-1 flex items-start gap-1.5 rounded-md border border-border bg-muted/20 px-2 py-1 text-[11px]"
-            >
-              <Clock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate" title={c.reason}>
-                  {c.reason || "(无说明)"}
-                </div>
-                <div className="mt-0.5 text-[10px] text-muted-foreground">
-                  {c.seconds_remaining}s 后唤醒
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 任务列表 */}
+      {/* 任务列表（Bash 后台 + ScheduleWakeup 定时唤醒，按时序混排） */}
       {items.length === 0 ? (
         <EmptyHint icon={<Terminal />}>
           还没有后台任务。
@@ -195,6 +172,7 @@ export function BackgroundTaskTab() {
               key={item.task_id ?? item.tool_call_id}
               item={item}
               sessionId={sessionId}
+              now={now}
               expanded={expanded.has(item.task_id ?? item.tool_call_id)}
               onToggle={() =>
                 setExpanded((prev) => {
@@ -214,123 +192,29 @@ export function BackgroundTaskTab() {
   );
 }
 
-interface TaskItem {
-  /** 注册表 task_id；某些异常 case 模型 result 还没 parse 出来时为 null */
-  task_id: string | null;
-  /** 对应 tool_call.id，用于在 chat 区滚动定位 */
-  tool_call_id: string;
-  /** 对应 message.id，用于 `[data-message-id="..."]` 锚点跳转 */
-  message_id: string;
-  command: string;
-  status: "running" | "exited" | "killed" | "failed" | "unknown";
-  /** 注册表里的实时元信息（如果还在） */
-  shell?: BackgroundTaskInfo;
-  /** 最终 tool result 文本 */
-  result?: string | null;
-  duration_ms?: number | null;
-}
-
-/**
- * 从 session.messages 派生历史 + 用注册表 join 实时状态。
- * messages 是 source of truth：完成的 task 永远在 messages 里，不依赖注册表保留。
- */
-function deriveBackgroundTasks(
-  messages: Message[],
-  report: SessionBackgroundReport | null
-): TaskItem[] {
-  const shellsByTaskId = new Map<string, BackgroundTaskInfo>();
-  for (const s of report?.shells ?? []) {
-    // BackgroundTaskPanel 只展示真后台任务（is_background=true）。
-    // 前台运行中的 Bash 由 Bash 工具卡片的 kill 按钮处理，不在此面板显示。
-    if (!s.is_background) continue;
-    shellsByTaskId.set(s.task_id, s);
-  }
-  const consumed = new Set<string>();
-  const items: TaskItem[] = [];
-
-  // 1. 从 messages 找历史 Bash bg task（含前台超时转后台的）
-  for (const m of messages) {
-    for (const tc of m.tool_calls ?? []) {
-      if (tc.name !== "Bash") continue;
-      const input = (tc.input as Record<string, any> | undefined) ?? {};
-      const explicit = input.run_in_background === true;
-      const result = tc.result ?? "";
-      const taskId = extractTaskId(result);
-      // 仅前台正常结束的 Bash 不该出现（没 task_id 且 explicit=false）
-      if (!explicit && !taskId) continue;
-      const shell = taskId ? shellsByTaskId.get(taskId) : undefined;
-      if (taskId) consumed.add(taskId);
-      const status: TaskItem["status"] = shell
-        ? (shell.state as TaskItem["status"])
-        : tc.result
-          ? "exited"
-          : "running";
-      items.push({
-        task_id: taskId,
-        tool_call_id: tc.id,
-        message_id: m.id,
-        command: typeof input.command === "string" ? input.command : "(无命令)",
-        status,
-        shell,
-        result: tc.result,
-        duration_ms: tc.duration_ms,
-      });
-    }
-  }
-  // 2. 注册表有但 messages 还没记到的（task 刚启动 / tool_result 还没回来 / 上次会话残留）
-  for (const s of report?.shells ?? []) {
-    // 同样只展示真后台
-    if (!s.is_background) continue;
-    if (consumed.has(s.task_id)) continue;
-    items.push({
-      task_id: s.task_id,
-      tool_call_id: `pending-${s.task_id}`,
-      message_id: "",
-      command: s.command,
-      status: s.state as TaskItem["status"],
-      shell: s,
-    });
-  }
-  // 3. 排序：running 优先（按 elapsed_secs 升序新的在前）；其他保持 messages 时序
-  const runningItems = items.filter((it) => it.status === "running");
-  const otherItems = items.filter((it) => it.status !== "running");
-  runningItems.sort((a, b) => {
-    const ae = a.shell?.elapsed_secs ?? 0;
-    const be = b.shell?.elapsed_secs ?? 0;
-    return ae - be;
-  });
-  return [...runningItems, ...otherItems];
-}
-
-// 兼容新旧两种格式：
-// 新（2026-05-22 精简文案后）：`[bash_001] 已在后台启动` / `[bash_001] 60s 内未结束，已转后台`
-// 旧：`task_id=bash_001 cmd=...`
-const TASK_ID_RE = /(?:task_id=|\[)(bash_\d+)/;
-function extractTaskId(result: string): string | null {
-  const m = result.match(TASK_ID_RE);
-  return m ? m[1] : null;
-}
-
 function TaskCard({
   item,
   sessionId,
+  now,
   expanded,
   onToggle,
   onKill,
 }: {
   item: TaskItem;
   sessionId: string;
+  now: number;
   expanded: boolean;
   onToggle: () => void;
   onKill?: () => void;
 }) {
+  const isCron = item.kind === "cron";
   const isRunning = item.status === "running";
   const [liveOutput, setLiveOutput] = useState<string>("");
   const cursorRef = useRef<number>(0);
 
-  // 卡片展开 + 任务运行中：polling 实时输出（~600ms 一次）
+  // 卡片展开 + 任务运行中：polling 实时输出（~600ms 一次）。cron 无输出可拉，跳过。
   useEffect(() => {
-    if (!expanded || !isRunning || !item.task_id) return;
+    if (isCron || !expanded || !isRunning || !item.task_id) return;
     cursorRef.current = 0;
     setLiveOutput("");
     let cancelled = false;
@@ -389,21 +273,34 @@ function TaskCard({
       >
         <div className="flex items-center gap-1.5">
           <StatusDot status={item.status} />
-          <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
-            {item.task_id ?? "pending"}
-          </code>
-          {item.shell ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {item.shell.elapsed_secs}s
-            </span>
-          ) : item.duration_ms != null ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {Math.round(item.duration_ms / 1000)}s
-            </span>
-          ) : null}
+          {isCron ? (
+            <>
+              <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {item.cron!.pending
+                  ? `${cronCountdown(item.cron!.fireAtMs, now)} 后唤醒`
+                  : `已于 ${formatClock(item.cron!.fireAtMs)} 唤醒`}
+              </span>
+            </>
+          ) : (
+            <>
+              <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                {item.task_id ?? "pending"}
+              </code>
+              {item.shell ? (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {item.shell.elapsed_secs}s
+                </span>
+              ) : item.duration_ms != null ? (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {Math.round(item.duration_ms / 1000)}s
+                </span>
+              ) : null}
+            </>
+          )}
           {!isRunning && (
             <span className="ml-1 rounded bg-muted px-1 text-[9px] uppercase text-muted-foreground">
-              {item.status}
+              {isCron ? "已唤醒" : item.status}
             </span>
           )}
           <span className="ml-auto text-muted-foreground">
@@ -418,34 +315,54 @@ function TaskCard({
           className="mt-1 truncate font-mono text-[11px] text-foreground/85"
           title={item.command}
         >
-          $ {item.command}
+          {isCron ? `⏰ ${item.command}` : `$ ${item.command}`}
         </div>
       </button>
       {expanded && (
         <div className="border-t border-border/60 bg-background/40 px-3 py-2">
-          {isRunning && onKill && (
-            <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-              <button
-                type="button"
-                onClick={onKill}
-                className="ml-auto inline-flex items-center gap-1 text-destructive hover:underline"
-                title="停止该任务"
-              >
-                <Square className="h-3 w-3" />
-                停止
-              </button>
+          {isCron ? (
+            <div className="space-y-1 text-[11px] leading-relaxed text-foreground/85">
+              <div>
+                <span className="text-muted-foreground">原因：</span>
+                {item.cron!.reason}
+              </div>
+              <div>
+                <span className="text-muted-foreground">唤醒时刻：</span>
+                {formatClock(item.cron!.fireAtMs)}
+                {item.cron!.pending && (
+                  <span className="ml-1 text-muted-foreground">
+                    （{cronCountdown(item.cron!.fireAtMs, now)} 后）
+                  </span>
+                )}
+              </div>
             </div>
+          ) : (
+            <>
+              {isRunning && onKill && (
+                <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={onKill}
+                    className="ml-auto inline-flex items-center gap-1 text-destructive hover:underline"
+                    title="停止该任务"
+                  >
+                    <Square className="h-3 w-3" />
+                    停止
+                  </button>
+                </div>
+              )}
+              <pre
+                className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200"
+                dangerouslySetInnerHTML={{
+                  __html: ansiToHtml(
+                    isRunning
+                      ? liveOutput || "等待输出…"
+                      : item.result || "(无输出)"
+                  ),
+                }}
+              />
+            </>
           )}
-          <pre
-            className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded border border-border bg-zinc-900 px-2 py-1.5 font-mono text-[10px] leading-[1.45] text-zinc-200"
-            dangerouslySetInnerHTML={{
-              __html: ansiToHtml(
-                isRunning
-                  ? liveOutput || "等待输出…"
-                  : item.result || "(无输出)"
-              ),
-            }}
-          />
         </div>
       )}
     </div>
@@ -464,12 +381,21 @@ function StatusDot({ status }: { status: TaskItem["status"] }) {
   return <span className={cn("h-2 w-2 shrink-0 rounded-full", color)} />;
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-      {children}
-    </div>
-  );
+// 倒计时：fireAt - now，向下取整到秒，最小 0。
+function cronCountdown(fireAtMs: number, now: number): string {
+  return `${Math.max(0, Math.round((fireAtMs - now) / 1000))}s`;
+}
+
+// 唤醒时刻：HH:MM（同一天）/ MM-DD HH:MM（跨天）。
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const sameDay = new Date().toDateString() === d.toDateString();
+  if (sameDay) return `${hh}:${mm}`;
+  const MM = String(d.getMonth() + 1).padStart(2, "0");
+  const DD = String(d.getDate()).padStart(2, "0");
+  return `${MM}-${DD} ${hh}:${mm}`;
 }
 
 function EmptyHint({
