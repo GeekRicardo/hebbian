@@ -5080,6 +5080,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tauri"
 version = "2.11.2"
+source = "git+https://github.com/GeekRicardo/tauri-fork?rev=71bbc3f7e0e1587d3fb8d5656ae468ceddc3c9af#71bbc3f7e0e1587d3fb8d5656ae468ceddc3c9af"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6483,7 +6484,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

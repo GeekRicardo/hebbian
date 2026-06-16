@@ -17,5 +17,6 @@ resolver = "2"
 # tauri fork：仅 patch webview/mod.rs 一处 ACL 判定，让内置浏览器自举页面
 # (本机 localhost dev server) 的自定义命令 invoke 不被 2.11 的 `!is_local` 拦掉。
 # 第三方远端站点仍按上游拦死，不放开攻击面。其余与官方 2.11.2 完全一致。
+# 用 rev 锁死 commit 保证可复现；升级 tauri 时需在 fork 重打 patch 再更新 rev。
 [patch.crates-io]
-tauri = { path = "../tauri-fork" }
+tauri = { git = "https://github.com/GeekRicardo/tauri-fork", rev = "71bbc3f7e0e1587d3fb8d5656ae468ceddc3c9af" }
