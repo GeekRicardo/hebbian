@@ -2361,11 +2361,105 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 默认不被 flex 压缩；只有标记 is-fill 的项目吃掉底部空白 */
+.dsp-project-group {
+  flex: 0 0 auto;
+}
+
+/* 撑满项目：basis 0 纯靠 grow 占据剩余空间（不按内容撑高导致溢出），
+   group 不设 min-height:0，让内部 list 的 min-height 成为收缩下限 */
+.dsp-project-group.is-fill {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .dsp-project-session-list.has-overflow {
   max-height: 180px;
   overflow-y: auto;
+}
+
+/* chat 栏列表不固定高度：自然撑开，滚动交给外层 .dsp-project-groups */
+.dsp-project-session-list.is-chat {
+  max-height: none;
+  overflow: visible;
+}
+
+/* 项目拖拽手柄：贴 heading 最左侧窄槽，常态隐形，hover 整行时显出 */
+.dsp-project-drag-handle {
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 32px;
+  transform: translateY(-50%);
+  color: var(--dsp-faint, #9aa7b8);
+  opacity: 0;
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 0.15s;
+}
+
+.dsp-project-drag-handle:active {
+  cursor: grabbing;
+}
+
+.dsp-project-heading-wrap:hover .dsp-project-drag-handle {
+  opacity: 0.7;
+}
+
+.dsp-project-heading-wrap:has(.dsp-project-drag-handle:hover) .dsp-project-drag-handle {
+  opacity: 1;
+}
+
+/* 撑满项目的列表占据到「设置」上沿的剩余空间：
+   basis 0 + grow 吃满剩余高度；min-height 锁默认下限；内容多则内部滚动（has-overflow 的 overflow:auto） */
+.dsp-project-session-list.is-fill {
+  flex: 1 1 0;
+  max-height: none;
+  min-height: 180px;
+}
+
+/* 列表底边拖动手柄：常态隐形，hover 时显出一根细线 */
+.dsp-list-resize-grip {
+  flex: 0 0 auto;
+  height: 7px;
+  margin: 1px 8px 3px;
+  border-radius: 3px;
+  cursor: ns-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.dsp-list-resize-grip:hover,
+.dsp-list-resize-grip:active {
+  background: var(--dsp-accent-soft, rgba(32, 54, 78, 0.16));
+}
+
+/* 拖拽排序：未被拖的项目平滑补位让位 */
+.dsp-project-group.is-reordering {
+  transition: transform 0.18s ease;
+}
+
+/* 被拖项跟手、抬到最上层、轻微强调，且不参与补位过渡 */
+.dsp-project-group.is-dragging {
+  position: relative;
+  z-index: 5;
+  transition: none;
+  cursor: grabbing;
+}
+
+.dsp-project-group.is-dragging .dsp-project-heading-wrap {
+  background: var(--dsp-right-card, rgba(255, 255, 255, 0.92));
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(15, 28, 44, 0.18);
 }
 
 .dsp-chat-host .dark.\-mt-6 {
@@ -2780,7 +2874,7 @@
 
 .dsp-project-heading {
   min-height: 34px;
-  padding: 2px 58px 2px 8px;
+  padding: 2px 58px 2px 16px;
 }
 
 .dsp-project-heading em {
@@ -2987,10 +3081,10 @@
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ── 项目列表缩进 ── */
+/* ── 项目列表缩进（比项目标题箭头更深一级，体现父子层级）── */
 
 .dsp-project-session-list {
-  padding-left: 14px;
+  padding-left: 32px;
 }
 
 /* ── 滚动条极淡 ── */

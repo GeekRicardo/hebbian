@@ -50,6 +50,8 @@ import type {
   StreamingAssistantPart,
   ToolCallStatus,
   AppSettings,
+  QuestionOption,
+  AskQuestion,
 } from "@/desktop/ui/types";
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
@@ -1253,6 +1255,87 @@ function EditDiffDetail({ call }: { call: ToolCallItem }) {
   );
 }
 
+/**
+ * Ask 工具回放：展示模型当时给出的候选选项（含 description），并把用户
+ * 实际选中的选项高亮。选项数据来自 args（单题 options / 多题 questions[].options），
+ * 选中态从 result 文本解析——result 形如「用户选择：X」「用户选择（多选）：A、B」
+ * 「用户输入：X」，多题则每行「- 标题: 选择：X」。把所有出现的 label 收进 Set
+ * 做按文本匹配的高亮；匹配不上不打勾，不影响展示。自由输入单独列出。
+ */
+function AskDetail({ call }: { call: ToolCallItem }) {
+  const args = callArgs(call);
+  const result = call.result || "";
+
+  const sections: { title: string; description: string; options: QuestionOption[] }[] = [];
+  const rawQuestions = args.questions;
+  if (Array.isArray(rawQuestions) && rawQuestions.length > 0) {
+    for (const q of rawQuestions as AskQuestion[]) {
+      sections.push({
+        title: q.title ?? "",
+        description: q.description ?? "",
+        options: Array.isArray(q.options) ? q.options : [],
+      });
+    }
+  } else {
+    sections.push({
+      title: argString(args, "question") || "用户提问",
+      description: "",
+      options: Array.isArray(args.options) ? (args.options as QuestionOption[]) : [],
+    });
+  }
+
+  // result 里所有「选择：/多选：/输入：」后面的文本都算用户的回答；多选用「、」再拆。
+  const chosen = new Set<string>();
+  for (const m of result.matchAll(/(?:选择|多选|输入)[：:]\s*(.+)/g)) {
+    for (const part of m[1].split("、")) {
+      const t = part.trim();
+      if (t) chosen.add(t);
+    }
+  }
+
+  return (
+    <div className="space-y-3 bg-muted/30 p-2 text-[14px] text-muted-foreground">
+      {sections.map((section, si) => (
+        <div key={si} className="space-y-1.5">
+          <div className="font-medium text-foreground">{section.title}</div>
+          {section.description && (
+            <div className="text-[13px] text-muted-foreground">{section.description}</div>
+          )}
+          <div className="space-y-1">
+            {section.options.map((opt, oi) => {
+              const picked = chosen.has(opt.label.trim());
+              return (
+                <div
+                  key={oi}
+                  className={cn(
+                    "flex items-start gap-2 rounded-[5px] border px-2 py-1 text-[13px]",
+                    picked
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border bg-background/40"
+                  )}
+                >
+                  <span className="mt-[2px] grid h-3.5 w-3.5 shrink-0 place-items-center">
+                    {picked && <Check className="h-3.5 w-3.5 text-primary" strokeWidth={3} />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className={cn("font-medium", picked && "text-foreground")}>
+                      {opt.label}
+                    </span>
+                    {opt.description && (
+                      <span className="ml-1.5 text-muted-foreground">{opt.description}</span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <ToolPre>{result}</ToolPre>
+    </div>
+  );
+}
+
 function ToolCallDetail({
   call,
   appSettings,
@@ -1456,15 +1539,7 @@ function ToolCallDetail({
     );
   }
   if (name === "Ask") {
-    const args = callArgs(call);
-    return (
-      <div className="space-y-2 bg-muted/30 p-2 text-[14px] text-muted-foreground">
-        <div className="font-medium text-foreground">
-          {argString(args, "question") || "用户提问"}
-        </div>
-        <ToolPre>{result}</ToolPre>
-      </div>
-    );
+    return <AskDetail call={call} />;
   }
   if (name === "ExitPlanMode") {
     return (

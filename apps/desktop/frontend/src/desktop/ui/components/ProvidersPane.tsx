@@ -156,6 +156,7 @@ export function ProvidersPane({ active }: { active: boolean }) {
   const [headersText, setHeadersText] = useState("");
   const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null);
   const draggingProviderIdRef = useRef<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [testingModel, setTestingModel] = useState(false);
   const [modelTest, setModelTest] = useState<{
     providerId: string;
@@ -308,11 +309,14 @@ export function ProvidersPane({ active }: { active: boolean }) {
   }
 
   async function handleSave() {
+    setSaving(true);
     try {
       await saveProviders(draft);
       toast.success("已保存供应商配置");
     } catch (e: any) {
       toast.error(e.message || String(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -530,6 +534,7 @@ export function ProvidersPane({ active }: { active: boolean }) {
           ? "DeepSeek 网页"
           : "Gemini";
   const modelForTest = current ? getModelForTest(current) : "";
+  const hasUnsavedChanges = JSON.stringify(draft) !== JSON.stringify(providersFile);
 
   return (
     <>
@@ -1179,12 +1184,18 @@ export function ProvidersPane({ active }: { active: boolean }) {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 pt-3 mt-3 border-t border-border">
-        <Button onClick={handleSave}>
-          <Save className="w-3.5 h-3.5" />
-          保存供应商配置
-        </Button>
-      </div>
+      {hasUnsavedChanges && (
+        <div className="fixed bottom-6 left-[calc(50vw+126px)] z-[120] -translate-x-1/2 rounded-2xl border border-border/70 bg-background/95 px-3 py-2 shadow-[0_18px_46px_rgba(15,23,42,0.18)] backdrop-blur">
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-orange-500 text-white hover:bg-orange-600 disabled:bg-orange-400"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {saving ? "保存中…" : "保存供应商配置"}
+          </Button>
+        </div>
+      )}
 
       <OAuthDialog
         open={oauthOpen}

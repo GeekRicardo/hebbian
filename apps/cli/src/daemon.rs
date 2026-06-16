@@ -156,6 +156,11 @@ struct TurnData {
     pending_tools: HashMap<String, (String, Value)>,
     /// 子 NestedRun 过程累积（架构 §4.4.11.8），build_message 落盘前同步进 tool_calls 的 nested。
     nested: NestedAccumulator,
+    /// assistant 内容的「真实产出起始时刻」（首个内容事件到达时间）。build_message
+    /// 用它做 created_at——**不能用落盘时的 now()**：run 结束才落盘的 assistant，时刻会
+    /// 晚于 `heb input` / wakeup 流式途中即写即落的插队 user，时间戳倒挂会让加载排序错位
+    /// （架构 §4.9.5 消息顺序契约）。
+    started_at: Option<i64>,
 }
 
 impl TurnData {
@@ -166,10 +171,25 @@ impl TurnData {
             parts: Vec::new(),
             pending_tools: HashMap::new(),
             nested: NestedAccumulator::default(),
+            started_at: None,
         }
     }
 
     fn handle_event(&mut self, payload: &EventPayload) {
+        // 首个内容事件到达即记产出起始时刻（架构 §4.9.5）。Reasoning / TextDelta /
+        // TextDone / ToolCall 任一到来都算内容产出。
+        if self.started_at.is_none()
+            && matches!(
+                payload,
+                EventPayload::Reasoning { .. }
+                    | EventPayload::TextDelta { .. }
+                    | EventPayload::TextDone { .. }
+                    | EventPayload::ToolCallStarted { .. }
+                    | EventPayload::ToolCallFinished { .. }
+            )
+        {
+            self.started_at = Some(Utc::now().timestamp_millis());
+        }
         match payload {
             EventPayload::Reasoning { text } => {
                 self.parts
@@ -239,7 +259,7 @@ impl TurnData {
             attachments: Vec::new(),
             tool_calls: self.tool_calls,
             parts: self.parts,
-            created_at: Utc::now().timestamp_millis(),
+            created_at: self.started_at.unwrap_or_else(|| Utc::now().timestamp_millis()),
             meta: None,
             subagent_call_id: None,
         })

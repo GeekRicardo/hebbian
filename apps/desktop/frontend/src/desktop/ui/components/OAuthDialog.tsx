@@ -119,7 +119,9 @@ function PkceFlow({
           ? await api.oauthClaudeStart()
           : await api.oauthGeminiStart();
       setAuth(res);
-      await openSystemBrowser(res.auth_url);
+      if (kind !== "claude") {
+        await openSystemBrowser(res.auth_url);
+      }
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
@@ -184,7 +186,11 @@ function PkceFlow({
       <div className="rounded-lg border border-border p-3 bg-accent/30 text-sm">
         <div className="font-medium mb-1">流程</div>
         <ol className="list-decimal pl-5 space-y-1 text-muted-foreground">
-          <li>点击「打开授权页」并在浏览器中登录、同意授权</li>
+          <li>
+            {kind === "claude"
+              ? "点击「生成授权链接」，复制链接或手动打开后登录、同意授权"
+              : "点击「打开授权页」并在浏览器中登录、同意授权"}
+          </li>
           <li>{redirectHint}</li>
           <li>将 code 粘贴到下方输入框，点击「完成登录」</li>
         </ol>
@@ -197,7 +203,7 @@ function PkceFlow({
           ) : (
             <ExternalLink className="w-4 h-4" />
           )}
-          打开授权页
+          {kind === "claude" ? "生成授权链接" : "打开授权页"}
         </Button>
       )}
 
@@ -231,7 +237,7 @@ function PkceFlow({
               className="flex-1"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              重新打开授权页
+              {kind === "claude" ? "打开授权链接" : "重新打开授权页"}
             </Button>
           </div>
 
@@ -284,8 +290,8 @@ function PkceFlow({
               <Download className="w-4 h-4" />
             )}
             {kind === "claude"
-              ? "从 ~/.claude/.credentials.json 导入"
-              : "从 ~/.gemini/oauth_creds.json 导入"}
+              ? "从本机 Claude Code 导入"
+              : "从本机 Gemini CLI 导入"}
           </Button>
         </div>
       )}
