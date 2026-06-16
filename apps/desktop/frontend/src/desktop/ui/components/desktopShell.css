@@ -2149,7 +2149,7 @@
 .dsp-project-heading {
   min-height: 58px;
   width: 100%;
-  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   padding: 9px 62px 9px 8px;
   background: transparent !important;
@@ -2874,6 +2874,7 @@
 
 .dsp-project-heading {
   min-height: 34px;
+  gap: 5px;
   padding: 2px 58px 2px 16px;
 }
 
@@ -3081,10 +3082,10 @@
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ── 项目列表缩进（比项目标题箭头更深一级，体现父子层级）── */
+/* ── 项目列表缩进（比项目标题图标更深一级，体现父子层级）── */
 
 .dsp-project-session-list {
-  padding-left: 32px;
+  padding-left: 16px;
 }
 
 /* ── 滚动条极淡 ── */

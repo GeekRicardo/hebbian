@@ -3,10 +3,9 @@ import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import {
   ArrowUpFromLine,
-  ChevronDown,
-  ChevronRight,
   Code2,
   Edit3,
+  Folder,
   FolderOpen,
   GripVertical,
   Import,
@@ -691,8 +690,7 @@ export function DesktopSidebar({
                         <GripVertical size={13} />
                       </span>
                       <button className="dsp-project-heading" type="button" onClick={() => toggleBucket(bucket.id)}>
-                        {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-                        <FolderOpen size={15} />
+                        {isCollapsed ? <Folder size={15} /> : <FolderOpen size={15} />}
                         <span>
                           <strong>{bucket.name}</strong>
                         </span>
