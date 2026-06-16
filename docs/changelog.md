@@ -8340,3 +8340,44 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - **手法**：把 gap 调整集中写到最末那条权威规则里，而非去改中间「恰好最后定义 gap」的断点规则——后者脆弱，若以后有人在中间再插一条 gap 就失效；写在终值规则处一处即定。
 - **影响范围**: 仅 Desktop / hebweb 前端 CSS，作用于共享 `.dsp-project-heading`（全部 6 个项目分组标题），无单实例特例；不动结构、协议、逻辑。
 - **留尾巴**: 无。hebweb + Playwright 实测：padLeft=16px、gap=5px 生效，把手→图标 6px（不再重叠）、图标→文本 6px。
+
+### 2026-06-16 — 工具调用 XML 漏进正文的自愈：自我强化被根治
+
+- **Why**: 用户实测 `202606160757-eeb33d38` 出现「正文里冒出游离 `court` + 残缺 `<invoke name="Edit">`」，且越靠后概率越大；issue [anthropics/claude-code#68354](https://github.com/anthropics/claude-code/issues/68354) 也确认了这是模型侧的偶发幻觉（长会话 + 工具密集时把工具调用幻觉成纯文本 XML，跨 Anthropic 第一方/中转都发），官方未给修复。我们之前只加了「继续」判定，没拦住自我强化——下一轮模型看到历史里的脏 XML 当成范例继续模仿，雪球越滚越大。本次根治。
+- **改动**:
+  - [crates/agent-core/src/context/tool_xml_leak.rs](../crates/agent-core/src/context/tool_xml_leak.rs): 新增纯函数模块 `sanitize_tool_xml_leak`。检测「残骸起点」（`<invoke` / `<function_calls` / 紧贴标签前的游离 `call`/`court`），命中则从首个起点截到结尾。带 6 条单测覆盖真实样本、完整闭合包、残缺截断、重复块、误伤防护。
+    - **为什么不去匹配「整块闭合」**：现实里这种残骸只有「漏出后再不会恢复正常正文」一种形态（嵌套 wrapper / 重复块 / 截断三种变体），起点截尾比逐块匹配闭合标签稳健得多——之前试 `(?is)...?(?:</invoke>|\z)` 在 `<function_calls><invoke>` 嵌套下停在内层闭合，留下外层尾巴；改成「定位首个起点 + 截到结尾」一刀全清。
+  - [crates/agent-core/src/context/mod.rs](../crates/agent-core/src/context/mod.rs): 注册 `tool_xml_leak` 模块。
+  - [crates/agent-core/src/agent_loop.rs](../crates/agent-core/src/agent_loop.rs):
+    - 新增 `MAX_TOOL_XML_LEAK_RECOVERIES = 2` 上限常量 + run 内计数器 `tool_xml_leak_recoveries`，复用 `MAX_STOP_INJECTIONS` 同样的「续跑次数封顶」范式。
+    - `ModelResponse::Done` 分支主入口：拿到 text 立刻 sanitize。命中且未超限 → 进 transcript 用清洗版（**自我强化的燃料被掐断**）、push `[SYSTEM NOTIFICATION - NOT USER INPUT]<tool-format-error>` user message、`continue` 进下一轮（不 emit TurnFinished、不跑 Stop hook，这一轮不算自然结束）。
+    - **关键不变量**：进 transcript / 返回 `AssistantOutput.text` 的文本永远清洗版；emit `TextDelta`/`TextDone` 用原始 text——按用户取舍展示层留脏，让用户一眼看出模型抽风。
+    - 续跑上限耗尽仍漏：照常收尾走 Stop hook，但 transcript 和返回值仍清洗，杜绝沉淀。
+    - 新增回归 `leaked_tool_xml_is_sanitized_and_turn_resumes`：mock client 第 0 次返 `finish=Other("tool_use")` + 含 `court + <invoke>` 的 Done，第 1 次断言「续跑请求带 tool-format-error 提示 + 历史里 assistant 已清洗无 `<invoke>`」、回正常文本；最终断言 `AssistantOutput.text` 干净、transcript 任意 assistant 都不含 `<invoke>`。固化「修前 fail / 修后 pass」。
+  - [crates/agent-core/src/context/transcript.rs](../crates/agent-core/src/context/transcript.rs): 兜底入口。`from_session` 重启续聊读历史时，无 tool_call 的纯文本 assistant 也跑一遍 sanitize（`push_assistant_message` 的 `msg.content` 分支 + `push_assistant_parts` 的纯文本收尾分支）——之前流式路径已落盘的脏样本不会再被喂模型。带 tool_call 的前导文本不动（不可能是残骸场景，避免误伤）。
+  - [docs/架构.md](架构.md) §4.3.3 新增「工具调用 XML 漏进正文的自愈」：描述现象、根因、不变量、两个 sanitize 调用点、展示层留脏的取舍依据。
+- **设计取舍**（架构.md §4.3.3 5 题评估）:
+  - 与 §0 / §4.3 / §13 任何原则不冲突；属于在已有 Done 分支 + Transcript 加载入口两处加纯函数过滤，不引入新协议字段 / 新模块大变 / 新工具。
+  - 选择「只清内存」而非「清落盘 + 清流式 UI」：核心不变量是「**喂给模型的请求里不得含残骸**」，自我强化的唯一燃料是内存 transcript（下一轮请求是内存重建，不是从 jsonl 读）；清落盘要改三个 observer（desktop/CLI/hebweb）+ 发协调事件，清流式 UI 还要改前端 store 状态机，改动面大、收益微。落盘留脏的唯一长尾副作用是「重启续聊读回」——已由 `from_session` 兜底入口覆盖。
+  - 不引入新协议字段 / 新工具 / 新事件类型；展示层保持不变（架构 §3 不动）；observer / 前端 0 改动。
+- **影响范围**: 仅 `crates/agent-core`；不破坏兼容（纯函数 + 行为收紧，旧 session 加载时多跑一次清洗，干净文本零副作用）。`cargo test -p agent-core --lib leaked_tool_xml_is_sanitized_and_turn_resumes` + 6 条 sanitize 单测 7/7 pass；`cargo check --workspace` 通过。lib 全测有 4 条 dispatch/bash 用例并发跑偶发 fail，单独跑全过——是预存的测试间共享状态/时序敏感问题，与本次改动无关。
+- **留尾巴**:
+  - 展示层（UI 流式渲染 + session.jsonl 落盘）按既定取舍仍会留脏 XML，用户能看到模型抽风但能直接续跑——这是设计决策不是 bug。
+  - `MAX_TOOL_XML_LEAK_RECOVERIES = 2` 是经验值，如果实测发现模型在续跑后还有较高概率二次漏，可以调到 3；调上去之前先看几个真实 session 验证一次续跑就能恢复。
+
+### 2026-06-16 — 修复 chat 区后台任务卡片「无输出」+ ScheduleWakeup 卡片完成后消失
+
+- **Why**: 用户报「展开 chat 区工具卡片看到的是『无输出』，但右侧 sidebar 同一任务有实时输出」，以及「ScheduleWakeup 运行时 sidebar 后台任务列表可见，完成计时后就消失了，要保留」。两个都是前端渲染层 bug，agent_core / BashOutput 工具本身正常（已在 Desktop 正式版实测 BashOutput 增量读取 + 超时转后台续读均正确）。
+- **根因**:
+  - 问题1（双根因）：① `MessageBubble` 的 task_id 提取正则 `\]\s+(?:background|后台)` 要求 `]` 后空格紧跟「后台」二字，但实际文案是 `[bash_007] 已在后台启动`（中间隔着「已在」），node 实测对当前所有后台返回文案全部 NO MATCH → chat 卡片提不到 task_id → 真后台 polling useEffect 直接 return → 卡片永远只显示静态 result（启动提示）；② 即便提取到，polling 也只取 `output.state`、丢弃 `output.chunk`，从不显示真实输出。而 sidebar 用的是另一套正则 `(?:task_id=|\[)(bash_\d+)`（匹配得上）+ 完整累加 chunk——两套正则 + 两套数据源分裂是病根。
+  - 问题2：`scan_cron` 到点时把 cron 从 `inner.crons` drain 移除，而 sidebar「定时唤醒」区只读 `list_pending_crons`(=`inner.crons`)，移除后即消失。对比 Bash 任务不消失是因为它从 `session.messages` 派生（永久留存），cron 没走这条路径。
+- **改动**:
+  - 新增 [bgTaskId.ts](../apps/desktop/frontend/src/desktop/ui/lib/bgTaskId.ts)：统一的 `extractBgTaskId` helper（兼容 `[bash_NNN]...` 与旧 `task_id=` 两种文案），chat 卡片与 sidebar 共用一份正则，消除分裂。
+  - 新增 [backgroundTasks.ts](../apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.ts)：从 `BackgroundTaskPanel` 抽出 `TaskItem` 类型 + `deriveBackgroundTasks` 纯逻辑（React 组件不再内嵌业务派生），便于单测。新增 ScheduleWakeup 派生分支：从 `session.messages` 的 ScheduleWakeup tool_call 派生 cron 卡片，与 Bash 后台任务混排进同一列表（用户选「混在一个列表」）；实时倒计时按 reason join `pending_crons`（前端 Message 不带 run_id，cron 串行通常 0/1 条 pending，按 reason 区分「还在等 vs 已唤醒」足够）；已唤醒的 cron 用 `created_at + delay_secs` 推算唤醒时刻。
+  - [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx)：task_id 提取改用统一 helper；真后台任务的 polling useEffect 改成带 cursor 累加 `chunk` 灌进 `bgOutput`（与 sidebar TaskCard 同款 600ms 增量）；渲染分支让后台任务显示 `bgOutput`（终态后回落到聚合 result）。
+  - [BackgroundTaskPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BackgroundTaskPanel.tsx)：删掉本地重复的 `TASK_ID_RE`/`extractTaskId` 和顶部独立「定时唤醒」区（并入主列表）；`TaskCard` 支持 cron 类型渲染（⏰ 图标 + 倒计时/已唤醒时刻 + reason，展开区显示「原因 + 唤醒时刻 + 剩余倒计时」，状态徽章「已唤醒」）；新增 `cronCountdown`/`formatClock` 工具函数，`TaskCard` 接 `now` prop 做 1Hz 倒计时。
+  - [server.rs](../apps/web-server/src/server.rs)：补 hebweb 的 `read_background_task_output` 命令（之前未镜像），调 `read_at(cursor)` 与 desktop 同语义——让 hebweb 也能验证 chat 卡片增量输出，且补齐 surface 能力缺口。
+  - 新增回归测试 [bgTaskId.test.ts](../apps/desktop/frontend/src/desktop/ui/lib/bgTaskId.test.ts)（固化旧正则漏匹配、新 helper 命中）+ [backgroundTasks.test.ts](../apps/desktop/frontend/src/desktop/ui/lib/backgroundTasks.test.ts)（10 条断言，含「pending_crons 为空时已唤醒 cron 卡片仍保留」这条问题2核心回归）。配套 [_register-ts.mjs](../apps/desktop/frontend/src/desktop/ui/lib/_register-ts.mjs) + [_resolve-ts.mjs](../apps/desktop/frontend/src/desktop/ui/lib/_resolve-ts.mjs)：给 `node --experimental-strip-types` 补 `.ts` 扩展名的 ESM resolve hook，让带相对 import 的纯模块测试能跑（项目无 vitest，此前的 `.test.ts` 惯例只支持无运行时 import 的纯函数）。
+- **影响范围**: 前端 MessageBubble / BackgroundTaskPanel 两处渲染 + 新增 3 个 lib 模块；hebweb server 补 1 个 additive 命令。不动 agent_core 协议、不动 EventPayload、不动 storage 格式；不破坏兼容。tsc / 前端 build / cargo check -p hebbian-web-server / 两个回归测试全过。
+- **留尾巴**: 未能在 hebweb + Playwright 做修复后渲染的实地截图——后台任务瞬态性 + 免费 provider(deepseek) 不遵守 run_in_background=true + chat 卡片实时刷新干扰 Playwright 元素定位，三重因素使实地截图成本过高。已用的替代验证：① 问题1根因用 node 实测旧正则全 NO MATCH；② Desktop 正式版实测 BashOutput / 超时转后台数据通道正常；③ 端到端确认 cron 触发后 pending_crons 确实清空（问题2根因）；④ 两个 lib 模块回归测试覆盖核心逻辑分支。建议后续在 Desktop dev 模式跑一条「后台 Bash + ScheduleWakeup」对照看渲染。
+- **关联**: 本条同时记录工作区中并存的他人未完成改动（见提交 Note）。

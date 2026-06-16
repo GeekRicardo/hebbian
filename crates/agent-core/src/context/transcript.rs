@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::context::tool_xml_leak::sanitize_tool_xml_leak;
 use crate::storage::sessions::{Message, MessageMeta, MessagePart, Role};
 use common::attachments::MessageAttachment;
 use model_gateway::types::{AssistantEntry, ToolCall, ToolResult, TranscriptEntry, UserEntry};
@@ -146,8 +147,15 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
         })
         .collect();
     if !tool_calls.is_empty() || !msg.content.is_empty() {
+        // 加载兜底（架构 §4.3.3）：观察者按既定取舍把脏正文原样落盘，重启续聊读回时
+        // 在此清洗，杜绝残骸经历史再次喂给模型。无 tool_call 的纯文本才可能是残骸。
+        let text = if tool_calls.is_empty() {
+            sanitize_tool_xml_leak(&msg.content).text
+        } else {
+            msg.content.clone()
+        };
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
-            text: msg.content.clone(),
+            text,
             reasoning: String::new(),
             reasoning_signature: String::new(),
             tool_calls: tool_calls.clone(),
@@ -228,8 +236,9 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
             &mut tool_results,
         );
     } else if !text.is_empty() || !reasoning.is_empty() {
+        // 加载兜底（架构 §4.3.3）：纯文本段（无 tool_call）才可能是漏出的残骸，清洗后入桶。
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
-            text,
+            text: sanitize_tool_xml_leak(&text).text,
             reasoning,
             reasoning_signature: String::new(),
             tool_calls: Vec::new(),

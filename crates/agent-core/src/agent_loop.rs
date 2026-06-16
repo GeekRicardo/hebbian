@@ -13,6 +13,7 @@ use crate::{
         budget,
         compaction::{build_compaction_request, compact_request_with_llm, needs_compaction},
         microcompact::{microcompact, MicrocompactPolicy},
+        tool_xml_leak::sanitize_tool_xml_leak,
         transcript::Transcript,
     },
     definition::CompactionPolicy,
@@ -42,6 +43,10 @@ use protocol::ResumeCause;
 /// Stop hook 在一个 Run 内最多注入多少次 reminder（架构 §4.8.3）。超过即放弃注入正常出 turn。
 /// 防 cargo check 永远修不好把 loop 跑爆。
 const MAX_STOP_INJECTIONS: u32 = 3;
+
+/// 工具调用 XML 漏进正文（架构 §4.3.3）的自愈续跑上限。命中残骸时清洗 + 注入纠错
+/// 提示续跑一次；连续 N 次仍漏说明模型这轮陷得深，停止续跑让残骸照常收尾、交回用户。
+const MAX_TOOL_XML_LEAK_RECOVERIES: u32 = 2;
 
 /// 单次 ModelStep 非正常退出后的自动重试上限（架构 §4.3）。指数退避，每次 emit toast。
 /// 与 model-gateway 的 `retry_request`（包初始 HTTP 发送的快速瞬时重试）正交：这一层
@@ -464,6 +469,9 @@ pub async fn run_loop(
     // Stop hook 已经在本 Run 注入了几次（架构 §4.8.3 防死循环），上限
     // `MAX_STOP_INJECTIONS` 后即使脚本继续 inject 也忽略，turn 正常出。
     let mut stop_hook_injections: u32 = 0;
+    // 工具调用 XML 漏进正文（架构 §4.3.3）的自愈续跑次数。上限到了就不再续跑、
+    // 让残骸文本照常收尾（surface 会弹「继续」让用户接管），防模型一直抽风把 loop 跑爆。
+    let mut tool_xml_leak_recoveries: u32 = 0;
     // 最后一个 ModelStep 的归一结束原因（架构 §4.11.4）。run 正常收尾后据此判断
     // 是否要在 surface 弹 toast + 写 pending_continue（架构 §4.3）。
     let mut last_finish = FinishReason::Stop;
@@ -867,6 +875,35 @@ pub async fn run_loop(
                 total_cache_read_tokens += usage.cache_read_tokens;
                 total_cache_creation_tokens += usage.cache_creation_tokens;
 
+                // 工具调用 XML 漏进正文的自愈（架构 §4.3.3）。展示层按既定取舍可留脏，
+                // 但**进 transcript（下一轮喂模型）的文本必须干净**，否则模型把残骸当范例
+                // 模仿，雪球越滚越大。检测到残骸且未超续跑上限：清洗后注入纠错 user 续跑，
+                // 不 emit TextDone / TurnFinished、不跑 Stop hook（这一轮不算自然结束）。
+                let leak = sanitize_tool_xml_leak(&text);
+                if leak.detected && tool_xml_leak_recoveries < MAX_TOOL_XML_LEAK_RECOVERIES {
+                    tool_xml_leak_recoveries += 1;
+                    info!(
+                        attempt = tool_xml_leak_recoveries,
+                        max = MAX_TOOL_XML_LEAK_RECOVERIES,
+                        "tool-call XML leaked into content; sanitized and resuming turn",
+                    );
+                    // UI 仍收到原始（脏）文本——用户能一眼看出模型抽风；进 transcript 的是
+                    // 清洗版，模型下一轮看不到残骸。
+                    if !used_stream_path && !text.is_empty() {
+                        emit(EventPayload::TextDelta { text: text.clone() });
+                    }
+                    transcript.push_assistant_with_reasoning(leak.text, reasoning, Vec::new());
+                    transcript.push_user(
+                        "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<tool-format-error>\n\
+                         上一条回复里出现了未被执行的工具调用文本（`<invoke>` / `<function_calls>` XML）。\
+                         工具调用必须走结构化 function-calling 通道，绝不能把这种 XML 写进正文。\
+                         请用正确的工具调用方式重新执行刚才想做的操作。\n</tool-format-error>"
+                            .to_string(),
+                        Vec::new(),
+                    );
+                    continue;
+                }
+
                 // 非流式路径：reasoning 一次性带回，需要补发一个 Reasoning 事件让 UI 渲染。
                 // 流式路径下 stream provider 已经分段 emit 过 ReasoningDelta，这里 reasoning
                 // 通常是空字符串，跳过即可。
@@ -885,7 +922,9 @@ pub async fn run_loop(
                     stop_reason: StopReason::EndTurn,
                 });
 
-                transcript.push_assistant_with_reasoning(text.clone(), reasoning, Vec::new());
+                // 续跑上限耗尽仍漏：残骸照常收尾（UI 留脏），但进 transcript / 返回上层的
+                // 文本仍清洗，杜绝残骸沉淀进历史继续污染。
+                transcript.push_assistant_with_reasoning(leak.text.clone(), reasoning, Vec::new());
                 let mut all_attachments = output_attachments;
                 all_attachments.extend(attachments);
                 set_pending_inputs_accepting(pending_inputs_accepting.as_ref(), false);
@@ -937,7 +976,7 @@ pub async fn run_loop(
                     }
                 }
                 break Ok(AssistantOutput {
-                    text,
+                    text: leak.text,
                     attachments: all_attachments,
                 });
             }
@@ -1365,6 +1404,71 @@ mod tests {
         }
     }
 
+    /// 复现 issue #68354 / session 202606160757-eeb33d38：模型把工具调用 XML 漏进正文。
+    /// 第 0 次回 Done 但 text 是「游离 court + <invoke> 残骸」，第 1 次回干净回答。
+    struct LeakedToolXmlClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for LeakedToolXmlClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            _cancel: CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(ModelResponse::Done {
+                    finish: model_gateway::types::FinishReason::Other("tool_use".to_string()),
+                    text: "现在改文件。\ncourt\n<invoke name=\"Edit\">\n<parameter name=\"file_path\">/tmp/a.ts</parameter>\n</invoke>"
+                        .to_string(),
+                    reasoning: String::new(),
+                    attachments: Vec::new(),
+                    usage: Usage::default(),
+                    reasoning_signature: String::new(),
+                }),
+                1 => {
+                    // 续跑请求里必须能看到纠错提示，且历史里那条 assistant 已被清洗——
+                    // 不含任何 <invoke> 残骸（自我强化的燃料被掐断）。
+                    let saw_correction = req.entries.iter().any(|entry| {
+                        matches!(entry, TranscriptEntry::User(u) if u.text.contains("tool-format-error"))
+                    });
+                    assert!(saw_correction, "续跑请求应注入 tool-format-error 纠错提示");
+                    let leaked_in_history = req.entries.iter().any(|entry| {
+                        matches!(entry, TranscriptEntry::Assistant(a) if a.text.contains("<invoke"))
+                    });
+                    assert!(!leaked_in_history, "历史里的 assistant 文本必须已清洗，不得残留 <invoke>");
+                    Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
+                        text: "已用正确方式改好文件。".to_string(),
+                        reasoning: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                        reasoning_signature: String::new(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
     struct PendingInputAfterTurnFinishedClient {
         calls: AtomicUsize,
     }
@@ -1567,6 +1671,73 @@ mod tests {
                 && user.text == "插队消息"
                 && second.text == "引导后的回答"
         ));
+    }
+
+    /// 回归（架构 §4.3.3 / issue #68354）：模型把工具调用 XML 漏进正文时，agent_loop
+    /// 自动清洗 + 注入纠错续跑；下一轮请求看不到残骸（自我强化被根治），最终返回干净文本。
+    #[tokio::test]
+    async fn leaked_tool_xml_is_sanitized_and_turn_resumes() {
+        let mut transcript = Transcript::new(None);
+        transcript.push_user("改个文件".to_string(), Vec::new());
+
+        let client = LeakedToolXmlClient {
+            calls: AtomicUsize::new(0),
+        };
+        let state = Arc::new(RunState::new(RunId::new()));
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path().to_path_buf(), Vec::new());
+
+        let result = run_loop(
+            LoopParams {
+                client: &client,
+                registry: Arc::new(ToolRegistry::new(Vec::new())),
+                hitl: Arc::new(HitlGate::default()),
+                hooks: Arc::new(HookManager::empty()),
+                transcript: &mut transcript,
+                enabled_tools: &[],
+                compaction_policy: &CompactionPolicy::default(),
+                workspace,
+                stream: true,
+                cancel: Arc::new(AtomicBool::new(false)),
+                state,
+                agent: AgentRef::new("test"),
+                parent: None,
+                model_io_dump: None,
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Default)),
+                model_id: None,
+                judge_client: None,
+                force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                data_dir: None,
+                session_id: None,
+                phase: None,
+                resume_from: None,
+                edits_worktree: None,
+                max_tool_iterations: None,
+                system_rules: None,
+                subagent_ctx: None,
+                subagent_bypass: false,
+            },
+            Arc::new(|_| {}),
+        )
+        .await
+        .expect("run should recover from leaked tool xml");
+
+        assert_eq!(result.text, "已用正确方式改好文件。");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        // 返回上层的文本不含残骸。
+        assert!(!result.text.contains("<invoke"));
+        // 历史里那条漏出残骸的 assistant 已被清洗成纯净前导文本。
+        let cleaned = transcript.entries.iter().any(|entry| {
+            matches!(entry, TranscriptEntry::Assistant(a) if a.text == "现在改文件。")
+        });
+        assert!(cleaned, "漏出残骸的 assistant 文本应被清洗为「现在改文件。」");
+        let any_leak = transcript.entries.iter().any(|entry| {
+            matches!(entry, TranscriptEntry::Assistant(a) if a.text.contains("<invoke"))
+        });
+        assert!(!any_leak, "transcript 任何 assistant 文本都不得残留 <invoke>");
     }
 
     #[tokio::test]
