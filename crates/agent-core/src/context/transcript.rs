@@ -448,4 +448,50 @@ mod tests {
             _ => false,
         }));
     }
+
+    /// 加载兜底回归：还原真实 session 202606160757-eeb33d38 的脏 message 形态——
+    /// 「干净 Text + 已完成 ToolCall + 末尾 Text 含 court+<invoke> 残骸」。
+    /// `push_assistant_parts` 末尾走「else if !text.is_empty()」分支，必须经 sanitize。
+    /// 修前会留 <invoke> 残骸继续喂模型；修后该 assistant 文本被截到「现在调度器：...」。
+    #[test]
+    fn from_session_sanitizes_trailing_dirty_text_in_part_stream() {
+        let msg = assistant(
+            vec![
+                MessagePart::Text {
+                    text: "现在让某某工具看一下。".to_string(),
+                },
+                MessagePart::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "Read".to_string(),
+                    input: json!({"file_path": "a.ts"}),
+                    arguments: "{}".to_string(),
+                    result: Some("ok".to_string()),
+                    duration_ms: None,
+                    is_error: false,
+                },
+                MessagePart::Text {
+                    text: "现在调度器：周期性运行优化。\n\ncourt\n<invoke name=\"Edit\">\n<parameter name=\"file_path\">/tmp/a.ts</parameter>\n</invoke>".to_string(),
+                },
+            ],
+            Vec::new(),
+        );
+
+        let transcript = Transcript::from_session(None, &[msg]);
+        // 任何 assistant 文本都不得残留 <invoke>——自我强化的燃料被掐断。
+        for entry in &transcript.entries {
+            if let TranscriptEntry::Assistant(a) = entry {
+                assert!(
+                    !a.text.contains("<invoke") && !a.text.contains("court"),
+                    "脏文本未被清洗，仍含残骸: {:?}",
+                    a.text
+                );
+            }
+        }
+        // 干净前导文本要保留。
+        let saw_clean_tail = transcript.entries.iter().any(|entry| matches!(
+            entry,
+            TranscriptEntry::Assistant(a) if a.text == "现在调度器：周期性运行优化。"
+        ));
+        assert!(saw_clean_tail, "末尾 Text 应被清洗为「现在调度器：周期性运行优化。」");
+    }
 }
