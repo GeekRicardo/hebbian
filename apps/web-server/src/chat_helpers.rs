@@ -65,9 +65,15 @@ pub struct ContextUsageDto {
 pub async fn context_usage(data_dir: &Path, session_id: &str) -> Result<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id).map_err(|e| anyhow!("{e}"))?;
     let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
-    let used = agent_core::context::budget::estimate_transcript_tokens(
+    let (last_real, last_estimated) = session
+        .token_stats
+        .map(|s| (s.last_input_tokens, s.last_estimated_tokens))
+        .unwrap_or((0, 0));
+    let used = agent_core::context::budget::calibrated_transcript_tokens(
         transcript.system.as_deref(),
         &transcript.entries,
+        last_real,
+        last_estimated,
     );
     let budget = match model_gateway::config::get(data_dir, &session.provider_id) {
         Ok(p) => model_gateway::context_window::resolve_context_window(&p, &session.model).await,

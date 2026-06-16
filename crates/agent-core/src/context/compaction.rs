@@ -72,13 +72,22 @@ pub fn compact_structural(
     }
 }
 
-/// 检查是否需要压缩
+/// 检查是否需要压缩。
+///
+/// 用 [`budget::calibrated_transcript_tokens`] 而非裸估算判断阈值：本地估算对
+/// 代码 / JSON 工具结果系统性低估约 30%，裸估算会让 0.75 阈值（如 1M 模型 = 75 万）
+/// 在服务端真实已逼近 100 万时仍判定「不用压」，下一轮请求直接撞 context 上限 400。
+/// `last_real` / `last_estimated` 来自最近一次请求的服务端真值与配对估算，任一为 0
+/// （新会话还没采样）时退化为裸估算，行为与历史一致。
 pub fn needs_compaction(
     system: Option<&str>,
     entries: &[TranscriptEntry],
     policy: &CompactionPolicy,
+    last_real: u64,
+    last_estimated: u64,
 ) -> bool {
-    budget::estimate_transcript_tokens(system, entries) > policy.token_budget
+    budget::calibrated_transcript_tokens(system, entries, last_real, last_estimated)
+        > policy.token_budget
 }
 
 /// 构造 LLM 摘要压缩请求。调用方需要日志 / model_io dump 时可以先拿到真实 request，
@@ -366,5 +375,49 @@ mod tests {
         );
         // 应该保留最后 24 条（raw_start = 77）
         assert_eq!(result.entries.len(), 24);
+    }
+
+    /// 回归：本地估算系统性低估时，裸估算会让该压的没压（下一轮请求撞 context
+    /// 上限 400）；校准后用「最近真值/估值」比值放大，正确触发压缩。
+    /// 对应 bug：指示器显示 71% 但服务端真实 998k/1M、自动压缩没触发。
+    #[test]
+    fn calibration_triggers_compaction_when_raw_estimate_underreports() {
+        use model_gateway::types::{ToolResult, UserEntry};
+
+        // 构造一段估算约 5 万 token 的历史。
+        let big = "x".repeat(200_000); // ~5 万 token（4 字符/token）
+        let entries = vec![
+            TranscriptEntry::User(UserEntry::text("task")),
+            TranscriptEntry::ToolResults(vec![ToolResult {
+                call_id: "c1".to_string(),
+                name: "Read".to_string(),
+                content: big,
+                artifact: None,
+                attachments: Vec::new(),
+            }]),
+        ];
+        let policy = crate::definition::CompactionPolicy {
+            token_budget: 75_000, // 1M 模型的 0.75 阈值量级
+            keep_recent_turns: 8,
+            strategy: crate::definition::CompactionStrategy::LlmSummary,
+        };
+
+        let raw = budget::estimate_transcript_tokens(None, &entries) as u64;
+        assert!(raw < policy.token_budget as u64, "裸估算应低于阈值");
+
+        // 无样本：退化为裸估算，不触发（与历史行为一致）。
+        assert!(!needs_compaction(None, &entries, &policy, 0, 0));
+
+        // 最近一次服务端真值是估值的 1.6 倍（典型代码/JSON 低估）。
+        // 校准后 raw * 1.6 越过阈值 → 触发。
+        let last_real = raw * 16 / 10;
+        let last_estimated = raw;
+        assert!(needs_compaction(
+            None,
+            &entries,
+            &policy,
+            last_real,
+            last_estimated
+        ));
     }
 }

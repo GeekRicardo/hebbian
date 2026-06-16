@@ -684,6 +684,11 @@ struct DesktopObserver<'a> {
     segment_messages: Vec<Message>,
     /// segment_messages 中已在 drain 边界即时落盘的前缀长度；run 结束只补写其余。
     flushed_segments: usize,
+    /// 当前正在累积的 segment 的「真实产出起始时刻」（首个内容事件到达时间）。
+    /// finish_current_segment 用它做 Message.created_at——**不能用落盘时的 now()**：
+    /// 一段早就流式输出的 assistant，drain 落盘时刻会晚于「流式途中插队的 user」，
+    /// 时间戳倒挂会让加载排序把 assistant 排到插队 user 之后（架构 §4.9.5 消息顺序契约）。
+    segment_started_at: Option<i64>,
     consumed_pending_inputs: Option<ConsumedPendingInputs>,
     consumed_pending_seen: usize,
     output_attachments: Vec<MessageAttachment>,
@@ -720,6 +725,7 @@ impl<'a> DesktopObserver<'a> {
             segment_tool_calls: Vec::new(),
             segment_messages: Vec::new(),
             flushed_segments: 0,
+            segment_started_at: None,
             consumed_pending_inputs,
             consumed_pending_seen,
             output_attachments: Vec::new(),
@@ -743,13 +749,28 @@ impl<'a> DesktopObserver<'a> {
         let parts = std::mem::take(&mut self.segment_parts);
         let partial_output = std::mem::take(&mut self.segment_partial_output);
         let tool_calls = std::mem::take(&mut self.segment_tool_calls);
-        self.segment_messages
-            .push(assistant_message_from_recorded_parts(
-                parts,
-                partial_output,
-                tool_calls,
-                Vec::new(),
-            ));
+        let mut msg =
+            assistant_message_from_recorded_parts(parts, partial_output, tool_calls, Vec::new());
+        // created_at 用段的「真实产出起始时刻」覆盖默认的落盘时刻（架构 §4.9.5 消息顺序契约）。
+        // 段落盘发生在下一个 drain 边界，晚于流式途中插队的 user；不覆盖就会时间戳倒挂。
+        if let Some(started_at) = self.segment_started_at.take() {
+            msg.created_at = started_at;
+        }
+        self.segment_messages.push(msg);
+    }
+
+    /// 段一旦累积到首个内容，记下产出起始时刻。finish_current_segment 据此设
+    /// Message.created_at（架构 §4.9.5）。已记录则不动——保留首事件时刻。
+    fn mark_segment_start_if_needed(&mut self) {
+        if self.segment_started_at.is_some() {
+            return;
+        }
+        let has_content = !self.segment_parts.parts.is_empty()
+            || !self.segment_partial_output.is_empty()
+            || !self.segment_tool_calls.is_empty();
+        if has_content {
+            self.segment_started_at = Some(chrono::Utc::now().timestamp_millis());
+        }
     }
 
     fn finish_segment_if_pending_was_consumed(&mut self) {
@@ -860,6 +881,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         record_assistant_part_event(&mut self.segment_parts, event);
         record_tool_event(&mut self.tool_calls, event);
         record_tool_event(&mut self.segment_tool_calls, event);
+        self.mark_segment_start_if_needed();
         if let Some(ev) = agent_event_to_engine_event(event) {
             (self.emit)(ev);
         }
@@ -1392,9 +1414,15 @@ fn persist_workspace_runtime_dirs(
 pub async fn context_usage(data_dir: &Path, session_id: &str) -> AppResult<ContextUsageDto> {
     let session = sessions::load(data_dir, session_id)?;
     let transcript = Transcript::from_session(session.system_prompt.clone(), &session.messages);
-    let used = agent_core::context::budget::estimate_transcript_tokens(
+    let (last_real, last_estimated) = session
+        .token_stats
+        .map(|s| (s.last_input_tokens, s.last_estimated_tokens))
+        .unwrap_or((0, 0));
+    let used = agent_core::context::budget::calibrated_transcript_tokens(
         transcript.system.as_deref(),
         &transcript.entries,
+        last_real,
+        last_estimated,
     );
     let budget = match model_gateway::config::get(data_dir, &session.provider_id) {
         Ok(p) => model_gateway::context_window::resolve_context_window(&p, &session.model).await,

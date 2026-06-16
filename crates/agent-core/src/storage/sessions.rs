@@ -295,6 +295,11 @@ pub struct TokenStats {
     pub last_cache_read_tokens: u64,
     #[serde(default)]
     pub last_cache_creation_tokens: u64,
+    /// 与 `last_input_tokens` 配对的本地估算值：采到那次服务端真值时，
+    /// 同一份 transcript 用 [`crate::context::budget::estimate_transcript_tokens`]
+    /// 估出的 token 数。两者的比值用来校准本地估算（见 `calibrated_transcript_tokens`）。
+    #[serde(default)]
+    pub last_estimated_tokens: u64,
 }
 
 impl TokenStats {
@@ -309,6 +314,7 @@ impl TokenStats {
         self.last_output_tokens = delta.output_tokens;
         self.last_cache_read_tokens = delta.cache_read_tokens;
         self.last_cache_creation_tokens = delta.cache_creation_tokens;
+        self.last_estimated_tokens = delta.last_estimated_tokens;
     }
 }
 
@@ -1049,6 +1055,12 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
             path.display()
         )));
     }
+    // 逻辑顺序 = created_at 升序，不是物理 append 顺序（架构 §4.9.5 消息顺序契约）。
+    // 插队场景下两者背离：插队 user 即写即落（§4.12.5），而它前面那段 assistant 要
+    // 等下一个 drain 边界才落盘，物理上 user 反在前。stable sort 只纠正时间戳倒挂的
+    // 插队消息，相等保持物理序——同一时刻的多条消息、assistant 内嵌的 tool 配对都不乱。
+    // 三个 surface 共用 read_jsonl 这一个入口，下游 from_session / UI / list 全信任此序。
+    session.messages.sort_by_key(|m| m.created_at);
     session.updated_at = latest_ts.max(session.created_at);
     Ok(session)
 }
@@ -1399,6 +1411,15 @@ pub fn load(data_dir: &Path, id: &str) -> AppResult<Session> {
         return common::storage::read_json_required(&p);
     }
     Err(AppError::msg(format!("session {id} not found")))
+}
+
+/// 轻量读取 session 的累计 token 用量，跳过 message/event 行的反序列化（同 `list()`）。
+/// agent_loop 启动时用它播种估算校准比值——已加载的长会话首轮就能拿到上次的服务端真值。
+/// 找不到 / 解析失败 / 还没采过样都返回 `None`，调用方退化为裸估算。
+pub fn load_token_stats(data_dir: &Path, id: &str) -> Option<TokenStats> {
+    let path = find_jsonl(data_dir, id).ok()??;
+    let (session, _) = read_jsonl_meta_only(&path).ok()?;
+    session.token_stats
 }
 
 /// Surface 入口语义：恢复 partial 残留后再加载 session。
@@ -2278,6 +2299,7 @@ mod tests {
             cache_read_tokens: 70,
             cache_creation_tokens: 2,
             run_count: 1,
+            last_estimated_tokens: 64,
             ..Default::default()
         });
         // 累计字段累加
@@ -2290,6 +2312,36 @@ mod tests {
         assert_eq!(s.last_output_tokens, 8);
         assert_eq!(s.last_cache_read_tokens, 70);
         assert_eq!(s.last_cache_creation_tokens, 2);
+        // 估算校准的配对值同样覆盖为最新一次
+        assert_eq!(s.last_estimated_tokens, 64);
+    }
+
+    /// 回归：估算校准样本（last_input + last_estimated）经 jsonl 往返后能被
+    /// `load_token_stats` 轻量读回——agent_loop 启动时据此给已加载的长会话播种
+    /// 校准比值。旧会话没有 last_estimated_tokens 字段时 serde default 回 0，
+    /// 校准退化为裸估算，与历史行为一致。
+    #[test]
+    fn load_token_stats_roundtrips_calibration_sample() {
+        let dir = temp_data_dir("calib-roundtrip");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        bump_token_stats(
+            &dir,
+            &s.id,
+            TokenStats {
+                input_tokens: 998_850,
+                output_tokens: 100,
+                run_count: 1,
+                last_estimated_tokens: 710_000,
+                ..Default::default()
+            },
+        );
+        let stats = load_token_stats(&dir, &s.id).expect("token_stats 应已落盘");
+        assert_eq!(stats.last_input_tokens, 998_850);
+        assert_eq!(stats.last_estimated_tokens, 710_000);
+        // 没采过样的会话返回 last_estimated_tokens=0 → 校准退化。
+        let fresh = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let none = load_token_stats(&dir, &fresh.id);
+        assert!(none.map(|s| s.last_estimated_tokens).unwrap_or(0) == 0);
     }
 
     /// write_jsonl_full 把 meta + messages 重写，把累积的 meta_update 行抹掉，
@@ -2613,6 +2665,81 @@ mod tests {
         let loaded = load(&dir, &s.id).unwrap();
         assert_eq!(loaded.messages.len(), 1);
         assert_eq!(loaded.messages[0].content, "hi");
+    }
+
+    /// 回归（架构 §4.9.5 消息顺序契约）：插队场景下物理 append 顺序会出现
+    /// `user_orig → 插队 user(早) → assistant 段(晚)` 的时间戳倒挂——assistant 段
+    /// 内容更早产出但 drain 落盘时刻更晚，物理上排在插队 user 之后。load 必须按
+    /// created_at stable sort 把它纠正回 `user_orig → assistant → 插队 user`。
+    ///
+    /// A/B 翻转：去掉 read_jsonl 末尾的 sort_by_key，本测试必 fail（物理顺序里
+    /// 插队 user 在 assistant 之前）。
+    #[test]
+    fn load_reorders_messages_by_created_at_not_physical_order() {
+        let dir = temp_data_dir("reorder");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+
+        let mk = |role: Role, content: &str, ts: i64| Message {
+            id: new_id(),
+            role,
+            content: content.into(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: ts,
+            meta: None,
+            subagent_call_id: None,
+        };
+
+        // 物理 append 顺序 = 落盘顺序，模拟插队 race：
+        //   1) 原始 user（t=100，最早输入）
+        //   2) 插队 user（t=200，流式途中即写即落）
+        //   3) assistant 段（t=150，内容早就在流式输出，但 drain 落盘晚于插队 user）
+        append_message(&dir, &s.id, mk(Role::User, "原始问题", 100)).unwrap();
+        append_message(&dir, &s.id, mk(Role::User, "插队消息", 200)).unwrap();
+        append_message(&dir, &s.id, mk(Role::Assistant, "助手回答", 150)).unwrap();
+
+        let loaded = load(&dir, &s.id).unwrap();
+        let order: Vec<&str> = loaded
+            .messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["原始问题", "助手回答", "插队消息"],
+            "load 应按 created_at 升序纠正时间戳倒挂的插队顺序"
+        );
+    }
+
+    /// created_at 相等时 stable sort 必须保持物理 append 顺序——不能打乱同一时刻
+    /// 落盘的 assistant↔后续消息配对（架构 §4.9.5）。
+    #[test]
+    fn load_keeps_physical_order_for_equal_created_at() {
+        let dir = temp_data_dir("reorder-stable");
+        let s = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let mk = |role: Role, content: &str, ts: i64| Message {
+            id: new_id(),
+            role,
+            content: content.into(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: ts,
+            meta: None,
+            subagent_call_id: None,
+        };
+        append_message(&dir, &s.id, mk(Role::User, "a", 100)).unwrap();
+        append_message(&dir, &s.id, mk(Role::Assistant, "b", 100)).unwrap();
+        append_message(&dir, &s.id, mk(Role::User, "c", 100)).unwrap();
+
+        let loaded = load(&dir, &s.id).unwrap();
+        let order: Vec<&str> = loaded
+            .messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert_eq!(order, vec!["a", "b", "c"], "相等时刻保持物理序");
     }
 
     #[test]

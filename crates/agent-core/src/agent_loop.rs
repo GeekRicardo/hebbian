@@ -10,6 +10,7 @@ use tracing::{debug, field::Empty, info, Instrument};
 
 use crate::{
     context::{
+        budget,
         compaction::{build_compaction_request, compact_request_with_llm, needs_compaction},
         microcompact::{microcompact, MicrocompactPolicy},
         transcript::Transcript,
@@ -55,6 +56,7 @@ const MAX_MODEL_RETRIES: u32 = 5;
 /// 3. per-turn 落盘到 session.token_stats（run 进行中就累加，崩溃/取消也保住已扣费部分）。
 fn record_request_usage<F: Fn(EventPayload)>(
     usage: &model_gateway::types::Usage,
+    estimated_tokens: u64,
     emit: &F,
     data_dir: Option<&std::path::Path>,
     session_id: Option<&str>,
@@ -91,6 +93,7 @@ fn record_request_usage<F: Fn(EventPayload)>(
                 cache_read_tokens: usage.cache_read_tokens,
                 cache_creation_tokens: usage.cache_creation_tokens,
                 run_count: 1,
+                last_estimated_tokens: estimated_tokens,
                 ..Default::default()
             },
         );
@@ -436,6 +439,17 @@ pub async fn run_loop(
         }
     }
 
+    // 估算校准样本：最近一次请求的服务端真值 input_tokens 与其配对的本地估算。
+    // 启动时从持久化 token_stats 播种——已加载的长会话首轮就能用上次真值校准，
+    // 不必等本会话采到第一个样本（否则恢复一个已逼近上限的会话，首请求仍会 400）。
+    // 每轮请求后用本轮新样本覆盖，供下一轮 needs_compaction 使用。
+    let (mut calib_real, mut calib_estimated) = match (data_dir.as_deref(), session_id.as_deref()) {
+        (Some(dd), Some(sid)) => crate::storage::sessions::load_token_stats(dd, sid)
+            .map(|s| (s.last_input_tokens, s.last_estimated_tokens))
+            .unwrap_or((0, 0)),
+        _ => (0, 0),
+    };
+
     // 登记本 Run 的 edits 跟踪（架构 §4.13）：整个 agent_loop 生命周期内（含插队、
     // 多 turn、resume）触达的文件，Run 结束时统一对比净变化。resume 用同一 run_id 续跑。
     // 嵌套子 Run 不另开 active run（归属父 Run）。
@@ -524,6 +538,8 @@ pub async fn run_loop(
             transcript.system.as_deref(),
             &transcript.entries,
             compaction_policy,
+            calib_real,
+            calib_estimated,
         ) {
             let compaction_span = tracing::info_span!(
                 "compaction",
@@ -704,6 +720,14 @@ pub async fn run_loop(
             reasoning: None,
         };
 
+        // 与本轮请求配对的本地估算值（surface `context_usage` 同款口径）。采样点紧贴
+        // 请求构建：此后到拿 usage 之间 transcript 不变。它与服务端 `usage.input_tokens`
+        // 真值一起落进 token_stats，比值用于校准估算（见 `calibrated_transcript_tokens`）。
+        let request_estimated_tokens = budget::estimate_transcript_tokens(
+            transcript.system.as_deref(),
+            &transcript.entries,
+        ) as u64;
+
         debug!(iteration, "calling model");
         hooks
             .trigger(&HookPoint::BeforeModelCall { turn: turn_index })
@@ -830,7 +854,14 @@ pub async fn run_loop(
                     text_len = text.len(),
                     "model done"
                 );
-                record_request_usage(&usage, &emit, data_dir.as_deref(), session_id.as_deref());
+                record_request_usage(
+                    &usage,
+                    request_estimated_tokens,
+                    &emit,
+                    data_dir.as_deref(),
+                    session_id.as_deref(),
+                );
+                (calib_real, calib_estimated) = (usage.input_tokens, request_estimated_tokens);
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
                 total_cache_read_tokens += usage.cache_read_tokens;
@@ -923,7 +954,14 @@ pub async fn run_loop(
                     calls_count = calls.len(),
                     "model requested tool calls"
                 );
-                record_request_usage(&usage, &emit, data_dir.as_deref(), session_id.as_deref());
+                record_request_usage(
+                    &usage,
+                    request_estimated_tokens,
+                    &emit,
+                    data_dir.as_deref(),
+                    session_id.as_deref(),
+                );
+                (calib_real, calib_estimated) = (usage.input_tokens, request_estimated_tokens);
                 total_input_tokens += usage.input_tokens;
                 total_output_tokens += usage.output_tokens;
                 total_cache_read_tokens += usage.cache_read_tokens;
