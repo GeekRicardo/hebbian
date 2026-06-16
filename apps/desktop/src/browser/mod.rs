@@ -76,11 +76,15 @@ fn webview_label(session_id: &str) -> String {
     format!("heb-preview-{session_id}")
 }
 
-/// 注入到子 webview 的引导脚本：先装 inspector.js，再安装上行 bridge。
+/// 注入到子 webview 的引导脚本：先打嵌套标记，再装 inspector.js。
 /// inspector.js 内部检测到非 iframe 环境（子 webview）时，上行走 heb-bridge 导航，
 /// 由本模块在 webview 创建时通过 init script 提供（inspector 自身已实现，无需重复）。
+///
+/// `__HEB_EMBEDDED__`：标记"本页面跑在内置浏览器子 webview 内"。自举（内置浏览器
+/// 打开 hebbian 自己的前端）时，被嵌的前端据此隐藏浏览器/终端这类宿主专属面板，
+/// 避免无意义套娃 + BrowserPanel mount 即调 browser_hide_others 的连锁。
 fn init_script() -> String {
-    INSPECTOR_JS.to_string()
+    format!("window.__HEB_EMBEDDED__=true;\n{INSPECTOR_JS}")
 }
 
 /// 子 webview 实例 + 自维护导航历史（Webview API 未暴露 go_back/forward）。
@@ -772,7 +776,7 @@ pub fn browser_popout(
         .add_child(
             tauri::webview::WebviewBuilder::new(&page_label, WebviewUrl::External(page_url))
                 .user_agent(BROWSER_UA)
-                .initialization_script(format!("window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"))
+                .initialization_script(format!("window.__HEB_EMBEDDED__=true;window.__HEB_POPOUT__=true;\n{INSPECTOR_JS}"))
                 .on_navigation(move |url: &Url| handle_popout_page_nav(&app_pg, &sid_pg, url)),
             LogicalPosition::new(0.0, POPOUT_TOOLBAR_H),
             LogicalSize::new(1280.0, (800.0 - POPOUT_TOOLBAR_H).max(1.0)),

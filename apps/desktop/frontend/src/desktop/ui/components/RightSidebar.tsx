@@ -12,6 +12,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
+import { isEmbeddedPreview } from "@/desktop/bridge/transport";
 import { useStore } from "@/desktop/ui/store/useStore";
 import type { RunEditEntry } from "@/desktop/ui/types";
 
@@ -108,9 +109,14 @@ export function RightSidebar({
     loadInitial(storageCollapsedKey, true, (s) => s === "1")
   );
   const [tab, setTab] = useState<TabId>(() =>
-    loadInitial<TabId>(storageTabKey, "tasks", (s) =>
-      (TAB_IDS as string[]).includes(s) ? (s as TabId) : "tasks"
-    )
+    loadInitial<TabId>(storageTabKey, "tasks", (s) => {
+      const valid = (TAB_IDS as string[]).includes(s) ? (s as TabId) : "tasks";
+      // 自举时浏览器/终端 tab 不存在，纠正存储里残留的旧值，否则会挂出套娃面板。
+      if (isEmbeddedPreview() && (valid === "browser" || valid === "terminal")) {
+        return "tasks";
+      }
+      return valid;
+    })
   );
   const [width, setWidth] = useState(() => loadWidthForTab(tab));
   const [resizing, setResizing] = useState(false);
@@ -336,24 +342,30 @@ export function RightSidebar({
         }}
         active={tab === "branches"}
       />
-      <SidebarIconButton
-        icon={<Globe2 className="h-4 w-4" />}
-        label="内置浏览器"
-        onClick={() => {
-          setTab("browser");
-          setCollapsed(false);
-        }}
-        active={tab === "browser"}
-      />
-      <SidebarIconButton
-        icon={<SquareTerminal className="h-4 w-4" />}
-        label="终端"
-        onClick={() => {
-          setTab("terminal");
-          setCollapsed(false);
-        }}
-        active={tab === "terminal"}
-      />
+      {/* 浏览器 / 终端是宿主专属功能：自举（本前端被内置浏览器嵌套加载）时隐藏，
+         避免套娃 + BrowserPanel mount 触发 browser_hide_others 的 ACL 报错。 */}
+      {!isEmbeddedPreview() && (
+        <>
+          <SidebarIconButton
+            icon={<Globe2 className="h-4 w-4" />}
+            label="内置浏览器"
+            onClick={() => {
+              setTab("browser");
+              setCollapsed(false);
+            }}
+            active={tab === "browser"}
+          />
+          <SidebarIconButton
+            icon={<SquareTerminal className="h-4 w-4" />}
+            label="终端"
+            onClick={() => {
+              setTab("terminal");
+              setCollapsed(false);
+            }}
+            active={tab === "terminal"}
+          />
+        </>
+      )}
       {debugEnabled && sessionId && (
         <SidebarIconButton
           icon={<FileJson className="h-4 w-4" />}

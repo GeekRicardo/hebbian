@@ -28,6 +28,21 @@ export function isTauri(): boolean {
   return IS_TAURI;
 }
 
+/**
+ * 本页面是否跑在内置浏览器子 webview 内（自举 / popout）。
+ *
+ * 后端 browser 模块给子 webview 注入 `window.__HEB_EMBEDDED__=true`。内置浏览器
+ * 打开 hebbian 自己的前端（自举）时，被嵌前端据此隐藏浏览器/终端这类宿主专属功能——
+ * 否则会无意义套娃，且 BrowserPanel mount 即调 browser_hide_others 触发 ACL 报错。
+ */
+const IS_EMBEDDED =
+  typeof window !== "undefined" &&
+  (window as { __HEB_EMBEDDED__?: boolean }).__HEB_EMBEDDED__ === true;
+
+export function isEmbeddedPreview(): boolean {
+  return IS_EMBEDDED;
+}
+
 // ─── WS client (web mode only) ────────────────────────────────────────────
 
 type PendingInvoke = {

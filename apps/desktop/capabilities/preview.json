@@ -1,8 +1,8 @@
 {
   "identifier": "preview-surface",
-  "description": "内置浏览器子 webview（heb-preview）与弹出窗口（preview-popout）：放行其中加载的前端用到的插件命令（event/dialog/opener），消除 plugin:event|listen 等 ACL 报错。app 自定义命令本不受 ACL 管，故无需在此列出。",
-  "windows": ["preview-popout"],
-  "webviews": ["heb-preview"],
+  "description": "内置浏览器子 webview（heb-preview-* / preview-popout-page-*）与弹出窗口（preview-popout-*）：放行其中加载页面用到的插件命令（event/dialog/opener）。app 自定义命令对本地 URL（== devUrl，is_local）天然放行，无需也不要加 remote 块——加 remote 会让该 capability 进 ACL 严格模式，反而把本地自举页面（内置浏览器打开 localhost:1420 = hebbian 自己）的自定义命令一起拦掉。label 用 glob 匹配 per-session 实例。",
+  "windows": ["preview-popout-*"],
+  "webviews": ["heb-preview-*", "preview-popout-page-*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
