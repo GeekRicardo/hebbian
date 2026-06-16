@@ -190,6 +190,14 @@ pub struct MemorySettings {
     pub models: Vec<MemoryModelRef>,
 }
 
+impl MemorySettings {
+    /// 记忆系统是否生效：注入 `<memory-index>` 与后台抽取共用这一判定，
+    /// 避免两侧门控漂移（架构 §4.14.6：`enabled=false` 或 `models` 空 → 既不注入也不抽取）。
+    pub fn active(&self) -> bool {
+        self.enabled && !self.models.is_empty()
+    }
+}
+
 /// 一个 fallback 链节点：复用现有 provider，绑定具体 model id。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryModelRef {

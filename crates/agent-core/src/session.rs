@@ -591,11 +591,18 @@ fn prepend_workspace_update(text: String, pending: &[PathBuf]) -> String {
 /// 拼出首条 user message 的 `<memory-index>` 注入清单：global 在前，当前项目（若是
 /// 真实项目目录而非 home / 根）在后。任何一边读失败仅 warn 不阻塞主路径——记忆系统
 /// 是增强、不能拖垮对话。
+///
+/// 记忆系统关闭（`MemorySettings::active()` 为 false）时返回空——与后台抽取共用同一
+/// 门控，保证「关闭后既不注入也不抽取」（架构 §4.14.6）。
 fn collect_memory_index(
     data_dir: &std::path::Path,
     workdir: &std::path::Path,
 ) -> Vec<crate::storage::memory::MemoryL0> {
     use crate::storage::memory::{list_l0, mem_log, mem_warn, MemoryScope};
+
+    if !crate::storage::settings::load(data_dir).memory.active() {
+        return Vec::new();
+    }
 
     let mut out = match list_l0(data_dir, None, MemoryScope::Global) {
         Ok(v) => v,
@@ -634,5 +641,41 @@ mod tests {
         assert!(out.contains("- /a"));
         assert!(out.contains("- /b"));
         assert!(out.ends_with("hi"));
+    }
+
+    /// 架构 §4.14.6：记忆系统关闭时既不注入也不抽取。这里盯住注入侧——
+    /// 即使磁盘上有记忆，`memory.active()` 为 false 时 `collect_memory_index`
+    /// 必须返回空，与后台抽取门控对称。A/B：默认 settings（enabled=false）应空，
+    /// 显式开启 + 配模型后应注入到那条记忆。
+    #[test]
+    fn collect_memory_index_gated_by_active() {
+        use crate::storage::memory::{write, MemoryScope};
+        use crate::storage::settings::{self, MemoryModelRef};
+
+        let dd =
+            std::env::temp_dir().join(format!("heb-sess-mem-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dd).unwrap();
+        write(&dd, None, MemoryScope::Global, "k", "c", "记得这件事", "正文").unwrap();
+
+        // 关闭（默认 enabled=false）→ 不注入。
+        let workdir = std::path::Path::new("/");
+        assert!(
+            collect_memory_index(&dd, workdir).is_empty(),
+            "记忆关闭时不应注入 memory-index"
+        );
+
+        // 开启 + 配 fallback 模型 → 注入磁盘上的记忆。
+        let mut s = settings::load(&dd);
+        s.memory.enabled = true;
+        s.memory.models = vec![MemoryModelRef {
+            provider_id: "p".into(),
+            model: "m".into(),
+        }];
+        settings::save(&dd, &s).unwrap();
+        assert_eq!(
+            collect_memory_index(&dd, workdir).len(),
+            1,
+            "记忆开启时应注入磁盘上的记忆"
+        );
     }
 }

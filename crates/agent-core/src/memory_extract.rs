@@ -68,7 +68,7 @@ pub async fn extract_for_session(
     session_id: &str,
 ) -> Result<Option<ExtractionResult>, ExtractError> {
     let app_settings = settings::load(data_dir);
-    if !app_settings.memory.enabled || app_settings.memory.models.is_empty() {
+    if !app_settings.memory.active() {
         return Ok(None);
     }
 
