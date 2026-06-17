@@ -1381,6 +1381,38 @@ fn set_run_mode(app: AppHandle, session_id: String, mode: String) -> AppResult<S
     Ok(parsed.as_str().to_string())
 }
 
+// `//goal <条件>` 给会话挂一个完成条件，由 agent_loop 的 goal 裁决：
+// 在模型想结束 turn 时判 transcript 是否达成。这三个 command 是前端 `//goal` 命令的后端入口。
+
+#[tauri::command]
+fn get_active_goal(
+    app: AppHandle,
+    session_id: String,
+) -> AppResult<Option<agent_core::storage::sessions::ActiveGoal>> {
+    let dd = data_dir(&app)?;
+    Ok(sessions::load(&dd, &session_id)?.active_goal)
+}
+
+#[tauri::command]
+fn set_active_goal(app: AppHandle, session_id: String, condition: String) -> AppResult<()> {
+    let dd = data_dir(&app)?;
+    let goal = agent_core::storage::sessions::ActiveGoal {
+        condition,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        iterations: 0,
+        last_reason: None,
+    };
+    sessions::set_active_goal(&dd, &session_id, Some(goal))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_active_goal(app: AppHandle, session_id: String) -> AppResult<()> {
+    let dd = data_dir(&app)?;
+    sessions::set_active_goal(&dd, &session_id, None)?;
+    Ok(())
+}
+
 /// 「重新生成标题」入口（前端 sidebar 右键 / chat header 按钮触发）。
 /// 自动生成已下沉到 [`agent_core::session_titler`]，由 Harness::spawn_run 在首轮
 /// TurnFinished 后异步触发并通过 `EngineEvent::SessionTitleChanged` 推到前端。
@@ -2960,6 +2992,9 @@ pub fn run() {
             set_force_automode,
             get_run_mode,
             set_run_mode,
+            get_active_goal,
+            set_active_goal,
+            clear_active_goal,
             generate_session_title,
             list_tools,
             list_todos,

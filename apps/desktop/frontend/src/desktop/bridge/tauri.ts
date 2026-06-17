@@ -1,6 +1,7 @@
 import { invoke, Channel } from "./transport";
 import type {
   AppSettings,
+  ActiveGoal,
   AuthUrlResult,
   BranchInfo,
   CatalogCache,
@@ -369,6 +370,20 @@ export const api = {
   /** 设置当前 session 的 [`RunMode`]；mode 接受 PascalCase 或 kebab-case。 */
   setRunMode: (sessionId: string, mode: string) =>
     invoke<string>("set_run_mode", { sessionId, mode }),
+
+  /**
+   * 架构 §4.8.3 / §8：读取当前 session 的 //goal 目标（无目标返回 null）。
+   */
+  getActiveGoal: (sessionId: string) =>
+    invoke<ActiveGoal | null>("get_active_goal", { sessionId }),
+
+  /** 设置 //goal 目标条件（覆盖已有）。 */
+  setActiveGoal: (sessionId: string, condition: string) =>
+    invoke<void>("set_active_goal", { sessionId, condition }),
+
+  /** 清除 //goal 目标。 */
+  clearActiveGoal: (sessionId: string) =>
+    invoke<void>("clear_active_goal", { sessionId }),
 
   /** 获取所有可用工具的元信息（用于前端渲染工具开关） */
   listTools: () => invoke<ToolInfo[]>("list_tools"),

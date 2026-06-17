@@ -2605,6 +2605,18 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
                 reason: reason.clone(),
             })
         }
+        GoalAchieved { condition, reason } => Some(EngineEvent::GoalAchieved {
+            condition: condition.clone(),
+            reason: reason.clone(),
+        }),
+        GoalImpossible { condition, reason } => Some(EngineEvent::GoalImpossible {
+            condition: condition.clone(),
+            reason: reason.clone(),
+        }),
+        GoalProgress { iteration, reason } => Some(EngineEvent::GoalProgress {
+            iteration: *iteration,
+            reason: reason.clone(),
+        }),
         _ => None,
     }
 }

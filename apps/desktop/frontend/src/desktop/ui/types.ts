@@ -854,7 +854,33 @@ export type EngineEvent =
       type: "memory_extraction_failed";
       session_id: string;
       reason: string;
+    }
+  | {
+      /** //goal 目标判定：本轮未达成，自动续跑。前端弹 toast 提示进度。 */
+      type: "goal_progress";
+      iteration: number;
+      reason: string;
+    }
+  | {
+      /** //goal 目标已达成，turn 正常结束。前端弹成功 toast。 */
+      type: "goal_achieved";
+      condition: string;
+      reason: string;
+    }
+  | {
+      /** //goal 目标被判定为无法达成，停止续跑。前端弹错误 toast。 */
+      type: "goal_impossible";
+      condition: string;
+      reason: string;
     };
+
+/** 当前 session 的 //goal 目标（无目标时 get 返回 null）。 */
+export interface ActiveGoal {
+  condition: string;
+  created_at: number;
+  iterations: number;
+  last_reason?: string;
+}
 
 /** 后台记忆抽取写入的单条记忆（架构 §4.14）。随 memory_extracted 事件下发。 */
 export interface MemoryWriteItem {

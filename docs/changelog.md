@@ -8677,3 +8677,35 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 纯 desktop 前端 streaming 渲染状态机。不动后端/协议/数据格式。hebweb 复用同一 store，自动受益。session.jsonl 本就完整（所以 run 完 reload 能恢复），本次只修「流式中」的内存累积。
 - **验证**: ①`node --experimental-strip-types streamingParts.test.ts` 全绿（两 bug A/B 翻转：修前复现脚本 streamingText len 32→11 被覆盖、3 工具塌成 1；修后保留）。②端到端——heb 起 anthropic auto-mode session（030ec9c0）发「分3轮各调1个Bash」真实跑出 `tool_start/tool_done index=None`、末轮只 text_done 的事件流，喂进修复后状态机：streamingText 完整保留 4 轮文本(189字)、tool_call part=3。③我的改动符号 `tsc --noEmit`(apps/desktop) 零报错；liveTimelineOrder.test.ts 无回归。
 - **留尾巴**: ①未真机 `pnpm tauri dev` 肉眼确认流式中工具卡片不再塌缩、长 run 文本不闪退——逻辑层+真实事件流已闭环验证。②`StreamingAssistantPart.tool_call.index` 类型仍声明 `number`（实际运行时可能 undefined，是后端事件的类型谎报）；本次靠 `toolPartIndex` 运行时防御兜住，未改类型声明避免连锁 tsc 改动，后续可考虑改 `index?: number` 让类型诚实。③工作区混有他人未完成改动（streamingParts.ts 本身是他人正在做的「从 useStore 抽流式累积纯函数」重构、browser/mod.rs、chat.rs、lib.rs 等），本次只在 streamingParts.ts 上叠加 bug 修复 + 新建测试 + 改 useStore text_done 一处；提交时只 add 本次相关文件并在 message 用 Note 标注 streamingParts.ts 里哪些是他人重构、哪些是本次修复。
+### 2026-06-16 — 新增 `//goal` 命令（不达目标不停的会话目标，后端完成、前端待接）
+
+- **Why**: 给 hebbian 加 Claude Code 那种 `/goal`——给会话挂一个「完成条件」，模型每次想结束 turn 时由一个 judge LLM 判对话历史是否满足条件，没满足就自动注入「还差什么」续跑、无人值守把长任务推进到底。逆向了真 CC 2.1.177 native binary 的实现（Stop-hook + 独立 judge 模型裁决，判 `{"ok":true/false,impossible?}`），选 CC 路线而非 codex 的重型 sqlite 状态机，因 hebbian 已有 Stop 注入回路（agent_loop.rs:949）+ judge 范式（automode.rs）+ active_plan 式可清空 meta 字段，拼装即可。设计见 docs/superpowers/specs/2026-06-16-goal-command-design.md，计划见 docs/superpowers/plans/2026-06-16-goal-command.md。
+- **改动**（worktree `feature/goal-command`，6 个 commit）:
+  - `crates/agent-core/src/storage/sessions.rs`: 新增 `ActiveGoal{condition,created_at,iterations,last_reason}` + Session/RolloutMeta/MetaUpdate 三处字段 + fold + `set_active_goal()` setter（仿 active_plan 范式，跨重启持久化）
+  - `crates/agent-core/src/goal.rs` + `prompts/goal_judge.md`: 新增 goal judge 模块。`GoalVerdict{Achieved,Impossible,NotYet}` + `judge_goal()`（用会话主 client+主模型）+ JSON 解析（容错抠 `{...}`，解析失败/出错 fail-safe 为 NotYet，绝不误判达成；impossible 前置于 ok 防矛盾输入误判）
+  - `crates/agent-core/src/agent_loop.rs`: Stop 自然结束分支接入 goal 裁决。排在外部 Stop hook 之后；`goal_iterations` 独立计数**不受 MAX_STOP_INJECTIONS=3 约束**（无上限）；三道熔断：judge 判 impossible / turn 出错(break Err 不裁决保留目标) / cancel（NotYet 入口再拦一道防末轮副作用）；judge_client=None 只 warn 不续跑保留目标。含真集成测试 goal_notyet_then_achieved_drives_resume_and_clear（mock judge 先 NotYet 后 Achieved，验证续跑→注入 `<goal-feedback>`→清目标全闭环）
+  - `crates/protocol/src/event.rs` + `apps/desktop/src/engine/mod.rs` + `apps/desktop/src/chat.rs`: 新增 `Goal{Achieved,Impossible,Progress}` EventPayload + EngineEvent + 翻译（additive）
+  - `apps/desktop/src/lib.rs`: 新增 `get/set/clear_active_goal` 三个 Tauri command（仿 get/set_run_mode）+ generate_handler 注册
+  - `docs/架构.md`: §4.8.3 补 goal 裁决与 Stop hook 关系（同点位、独立无上限、三道熔断），§8.2 表 A 加 `//goal` 行
+- **影响范围**: agent-core（新增 goal.rs + 改 sessions/agent_loop）+ protocol（3 additive event）+ desktop 后端（3 command + 翻译）。纯 additive，无目标会话行为不变。`cargo test -p agent-core --lib` 539 passed（含 goal 集成测试 + active_goal roundtrip + 6 个 parse_verdict）
+- **留尾巴**:
+  - **Task 6（前端 //goal 命令注册 + 状态条渲染）未做**：需在 slashCommands.ts 注册内置命令、tauri.ts 加 invoke 绑定、监听 goal_progress/achieved/impossible 事件渲染。计划见 plan Task 6
+  - **Task 7（heb CLI 端到端 A/B 验证）未做**：验证「不创建目标文件→GoalProgress 反复续跑 / 创建后→GoalAchieved 清目标」
+  - **desktop 包基线编不过**（与本特性无关）：`apps/desktop/src/lib.rs:1153` 用了 agent-core `Message` 结构里不存在的 `run_duration_ms` 字段，是上游 commit 78022c5 引入的在途半成品。导致 Task 5 的 command 无法整包编译验证（靠对照范式 + agent-core 符号存在性佐证），且 `pnpm tauri dev` 起不来。要解锁 desktop 需给 `Message` 加该字段（属别人在途工作，未擅自代劳）
+  - **read_jsonl_meta_only 未解析 active_goal**：导致每个 end_turn 全量 load session（代价相对模型调用可忽略），后续可优化
+  - 工作分支 `feature/goal-command`（worktree `.worktrees/goal-command`），未合并 main、未 push
+
+### 2026-06-17 — `//goal` 前端命令完成 + heb CLI 端到端验证通过
+
+- **Why**: 接上一条，补完 Task 6（前端）+ 端到端验证（计划 Task 7）。
+- **改动**:
+  - 前端（commit 5a21185）：`tauri.ts` 加 getActiveGoal/setActiveGoal/clearActiveGoal 绑定 + ActiveGoal 类型；`slashCommands.ts` 注册 `//goal` 内置命令（无参查看 / clear 清除 / 其余设条件）；`useStore.ts` + `types.ts` 加 goal_progress/achieved/impossible 事件的 toast 提示
+- **端到端验证（heb CLI + 真实 DeepSeek provider）**: 用临时 example 给 session 落 goal「创建 done.txt」，发不相关输入（问天气）。model_io.jsonl 实证完整闭环：
+  - **阶段 A（未达成续跑）**: turn1/turn2 judge 判 NotYet → 注入 `<goal-feedback> 目标尚未达成…` → 模型持续尝试创建文件（连注入 4 次，**>MAX_STOP_INJECTIONS=3，证明 goal 续跑无上限解耦成立**）
+  - **阶段 B（达成清空）**: 文件创建后 turn3/turn4 不再注入 goal-feedback（judge 判 Achieved）+ session.jsonl 末尾出现 `clear_active_goal`（目标落盘清空）
+  - **无 goal 会话不变**: 注入 goal 前的首轮正常 end_turn，无额外行为
+- **影响范围**: desktop 前端 additive；验证脚手架（apps/cli/examples/set_goal.rs）已删除，worktree 干净
+- **留尾巴**:
+  - **heb CLI 未透传 goal 事件**：`goal_progress`/`goal_achieved`/`goal_impossible` 三个 EngineEvent 在 heb 的 NDJSON stdout 没出现（裁决/续跑/清空的实质行为已由 model_io + session.jsonl 确认，但 heb 的 ipc 事件翻译层 apps/cli 未把这 3 个新事件透传到 DaemonEvent）。要在 heb 看到 goal 事件需补 apps/cli 的事件映射。Desktop 前端的事件监听已做（Task 6），但 desktop 包因 run_duration_ms 未编译验证
+  - **desktop 整包仍编不过**：run_duration_ms 字段（main 工作区未提交的在途改动正在加，lib.rs 那半已提交、agent-core 那半在工作区）。合并本分支到 main 后、配合那份在途改动，desktop 才能编译跑 `pnpm tauri dev` 验证前端 UI
+  - 工作分支 feature/goal-command，10 commit，未合并未 push

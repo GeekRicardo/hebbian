@@ -241,6 +241,12 @@ pub enum EngineEvent {
         file_path: String,
         error: String,
     },
+    /// `//goal` 目标达成。
+    GoalAchieved { condition: String, reason: String },
+    /// `//goal` 目标判定无法达成。
+    GoalImpossible { condition: String, reason: String },
+    /// `//goal` 一次自动续跑进度。
+    GoalProgress { iteration: u32, reason: String },
     /// 新会话首轮跑完后，agent_core 后台 task 异步生成的标题已落盘 jsonl。
     /// 前端用它更新 sidebar / chat header；落盘已由 agent_core 完成，前端只需 setState。
     SessionTitleChanged {

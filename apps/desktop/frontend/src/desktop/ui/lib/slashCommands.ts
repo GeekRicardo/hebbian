@@ -79,6 +79,12 @@ export const builtinSlashCommands: SlashCommandMeta[] = [
     desc: "插件管理：install / uninstall / list / marketplace",
     kind: "builtin",
   },
+  {
+    name: "goal",
+    args: "<条件> | clear",
+    desc: "设一个完成条件，达成前 AI 不停；//goal clear 清除",
+    kind: "builtin",
+  },
 ];
 
 const builtinRegistry: Record<string, BuiltinHandler> = {
@@ -103,6 +109,35 @@ const builtinRegistry: Record<string, BuiltinHandler> = {
 
   plugin: async (args, ctx) => {
     await handlePluginCommand(args, ctx);
+  },
+
+  goal: async (args, ctx) => {
+    if (!ctx.sessionId) {
+      throw new Error("当前没有打开的对话");
+    }
+    // 无参 → 查看当前目标
+    if (args.length === 0) {
+      const goal = await api.getActiveGoal(ctx.sessionId);
+      if (!goal) {
+        ctx.toast.success("当前没有目标，用 //goal <条件> 设一个");
+        return;
+      }
+      const last = goal.last_reason ? `\n上次判定：${goal.last_reason}` : "";
+      ctx.toast.success(
+        `当前目标：${goal.condition}\n已续跑 ${goal.iterations} 轮${last}`
+      );
+      return;
+    }
+    // //goal clear → 清除
+    if (args.length === 1 && args[0].toLowerCase() === "clear") {
+      await api.clearActiveGoal(ctx.sessionId);
+      ctx.toast.success("已清除目标");
+      return;
+    }
+    // 其余整串作为完成条件
+    const condition = args.join(" ");
+    await api.setActiveGoal(ctx.sessionId, condition);
+    ctx.toast.success(`目标已设：${condition}\nAI 会持续推进直到达成，达成后自动结束`);
   },
 };
 
