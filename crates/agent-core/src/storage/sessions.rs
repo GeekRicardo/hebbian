@@ -339,7 +339,7 @@ fn default_stream() -> bool {
 
 /// 会话当前的「完成条件」目标（架构 §4.8.3 / §8）。模型每次想结束 turn 时
 /// 由 judge LLM 判 transcript 是否满足 `condition`，没满足就注入续跑。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveGoal {
     /// 用户用 `//goal <条件>` 设的完成条件原文。
     pub condition: String,
@@ -2591,6 +2591,16 @@ mod tests {
 
         let s2 = load(&dir, &id).unwrap();
         assert_eq!(s2.active_goal, Some(goal));
+
+        // 覆盖更新：set 一个带 last_reason/iterations 的新目标，load 应 last-wins 读回全字段
+        let goal_b = ActiveGoal {
+            condition: "PR 已合并".to_string(),
+            created_at: 2,
+            iterations: 3,
+            last_reason: Some("还差 review 通过".to_string()),
+        };
+        let _ = set_active_goal(&dir, &id, Some(goal_b.clone())).unwrap();
+        assert_eq!(load(&dir, &id).unwrap().active_goal, Some(goal_b));
 
         let s3 = set_active_goal(&dir, &id, None).unwrap();
         assert_eq!(s3.active_goal, None);
