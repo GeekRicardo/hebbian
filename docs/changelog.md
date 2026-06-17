@@ -8470,3 +8470,21 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `ui/components/FileViewer.tsx`: Monaco `lineNumbersMinChars` 默认 5 → 3（行号列宽减半）
 - **影响范围**: 仅 desktop 文件查看器
 - **留尾巴**: 无
+
+### 2026-06-17 — 空状态 Hero Logo 从文字「H」换成品牌动图
+
+- **Why**: 用户在内置浏览器预览里圈中空状态欢迎区的 logo，想用「发送按钮动效图同目录里那张没被引用的动图」替换占位文字「H」
+- **改动**:
+  - `ui/components/DesktopShell.tsx` `DesktopEmptyState`: `dsp-hero-logo` 从 `<span>H</span>` 改为 `<img src={animations.brandMark}>`；补 `@/assets/animations` import。`brandMark`（`assets/animations/brand-mark-alpha.png`）与发送按钮用的 `sendInterrupt` 同目录、同为 160×160 alpha 动图，此前零引用，命名即「品牌标记」
+  - `ui/components/desktopShell.css` `.dsp-hero-logo`: 从「文字 + 渐变背景 + 阴影 + 字体」样式改为图片容器（`display:block` + `object-fit:contain`，保留 46×46 与 16px 圆角），渲染方式与同批 alpha 动图一致
+- **影响范围**: 仅 desktop 前端空状态欢迎区，无协议 / 后端改动；tsc 通过
+- **留尾巴**: 无
+
+### 2026-06-17 — HoverHint 从空壳恢复为可交互浮层 + 项目 pill 升级为项目信息卡片
+
+- **Why**: 用户在内置浏览器预览里圈中聊天输入区的项目标签 pill，要求 hover 浮层从「只显示项目名」升级为「项目信息卡片」——展示 workdir + allowed_paths，并能就地删除 allowed_paths 条目（真实写回，非前端隐藏）。排查发现根因更深：`HoverHint` 在某次提交里被改成只 `return <>{children}</>` 的空壳，完全忽略 `hint`，导致 6 处（项目 pill / PathHint / ModelPicker / 附件预览 / RunModeChip）hover 浮层全部失效——这是个回归
+- **改动**:
+  - `ui/components/HoverHint.tsx`: 从空壳恢复为可交互浮层。`createPortal` 到 body + `position:fixed`（避开祖先 `overflow:hidden` 裁切，含被滚动祖先裁出视口时自动关闭）；浮层自身监听 mouseenter/leave + `keepOpenDelayMs` 延迟关闭 + `pointer-events-auto`，使鼠标可移入浮层、点击其中的删除按钮。`hint` 为纯文本的 5 处行为如旧 tooltip，无副作用
+  - `ui/components/chatInput/index.tsx`: 项目 pill 的 `HoverHint` hint 内，allowed_paths 每行加 `group` + hover 出现的 lucide `X`；新增 `removeProjectAllowedPath(path)`——按 `folders[0]=workdir / folders.slice(1)=allowed_paths` 约定从 `activeProject.folders` 推导，移除该条后调 `saveProject` 写回项目模板（持久化，影响该项目以后新建会话），同时同步移除当前会话 pending 路径做即时反馈
+- **影响范围**: 仅 desktop 前端。HoverHint 是 6 处共用组件，恢复后全部 hover 提示重新生效；项目 pill 删除作用于项目模板配置（经 `saveProject` → `save_project` 持久化）。无协议 / 后端改动；tsc 通过
+- **留尾巴**: 项目 pill 的删除逻辑落在别人正在重构的 `chatInput/` 新目录（untracked）内，本次未随该目录提交，留在工作区

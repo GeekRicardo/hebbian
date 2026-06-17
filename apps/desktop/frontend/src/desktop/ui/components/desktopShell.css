@@ -1763,17 +1763,11 @@
 }
 
 .dsp-hero-logo {
-  display: grid;
+  display: block;
   width: 46px;
   height: 46px;
-  place-items: center;
   border-radius: 16px;
-  color: white;
-  background: linear-gradient(135deg, var(--dsp-accent), var(--dsp-accent-2));
-  box-shadow: 0 12px 28px rgba(57, 77, 102, 0.12);
-  font-size: 23px;
-  font-weight: 820;
-  letter-spacing: -0.06em;
+  object-fit: contain;
 }
 
 .dsp-hero-line {

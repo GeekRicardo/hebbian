@@ -4,6 +4,7 @@ import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
 import { DesktopSidebar } from "@/desktop/ui/components/DesktopSidebar";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
+import { animations } from "@/assets/animations";
 import "./desktopShell.css";
 
 // Monaco 体量大：文件查看器整列懒加载，没人打开文件就不进主 bundle 路径。
@@ -142,7 +143,7 @@ function DesktopEmptyState() {
           <span className="dsp-hero-sidebar" aria-hidden="true" />
           <span className="dsp-hero-grid" aria-hidden="true" />
           <span className="dsp-hero-cardlet" aria-hidden="true">
-            <span className="dsp-hero-logo">H</span>
+            <img className="dsp-hero-logo" src={animations.brandMark} alt="" draggable={false} />
           </span>
           <span className="dsp-hero-line is-one" aria-hidden="true" />
           <span className="dsp-hero-line is-two" aria-hidden="true" />
