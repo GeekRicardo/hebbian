@@ -38,15 +38,17 @@ struct RawVerdict {
 /// 解析失败 fail-safe 为 `NotYet`——绝不误判达成，宁可多续跑一轮。
 fn parse_verdict(raw: &str) -> GoalVerdict {
     // 容错：从文本里抠出第一个 {...} JSON 片段（judge 可能裹了多余文字）。
-    let json_slice = raw
-        .find('{')
-        .and_then(|start| raw.rfind('}').map(|end| &raw[start..=end]));
+    let json_slice = raw.find('{').and_then(|start| {
+        raw.rfind('}')
+            .filter(|&end| end > start)
+            .map(|end| &raw[start..=end])
+    });
     let Some(slice) = json_slice else {
         return GoalVerdict::NotYet(format!("judge 返回无法解析：{}", trim(raw, 120)));
     };
     match serde_json::from_str::<RawVerdict>(slice) {
-        Ok(v) if v.ok => GoalVerdict::Achieved(v.reason),
         Ok(v) if v.impossible => GoalVerdict::Impossible(v.reason),
+        Ok(v) if v.ok => GoalVerdict::Achieved(v.reason),
         Ok(v) => GoalVerdict::NotYet(v.reason),
         Err(e) => GoalVerdict::NotYet(format!("judge JSON 解析失败：{e}")),
     }
@@ -155,6 +157,19 @@ mod tests {
     fn parse_garbage_falls_back_to_not_yet() {
         assert!(matches!(parse_verdict("我觉得差不多了"), GoalVerdict::NotYet(_)));
         assert!(matches!(parse_verdict(""), GoalVerdict::NotYet(_)));
+        // `}` 先于 `{`：切片边界倒置，必须 fail-safe 而非 panic
+        assert!(matches!(parse_verdict("} x {"), GoalVerdict::NotYet(_)));
+        // JSON 存在但类型不符：解析失败分支
+        assert!(matches!(parse_verdict(r#"{"ok": "yes"}"#), GoalVerdict::NotYet(_)));
+    }
+
+    #[test]
+    fn parse_contradictory_prefers_impossible() {
+        // ok 与 impossible 同时为 true（模型抽风）→ 落到更保守的 Impossible，绝不误判达成
+        assert!(matches!(
+            parse_verdict(r#"{"ok": true, "impossible": true}"#),
+            GoalVerdict::Impossible(_)
+        ));
     }
 
     #[test]

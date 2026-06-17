@@ -1,4 +1,4 @@
-你在评估 Claude Code 的一个「停止条件」。仔细读对话记录（transcript），判断用户给定的完成条件是否已经满足。
+你在评估一个 AI 编码 agent（Hebbian）的一个「停止条件」。仔细读对话记录（transcript），判断用户给定的完成条件是否已经满足。
 
 只输出一行 JSON，三选一：
 - `{"ok": true, "reason": "<引用 transcript 里证明条件已满足的具体内容>"}`
