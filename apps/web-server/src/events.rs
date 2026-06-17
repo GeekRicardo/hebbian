@@ -142,6 +142,11 @@ pub enum EngineEvent {
         session_id: String,
         title: String,
     },
+    /// 新会话首轮的后台自动标题生成失败。前端弹 toast 告知、引导手动重试。
+    SessionTitleGenerationFailed {
+        session_id: String,
+        reason: String,
+    },
     Error {
         message: String,
     },
@@ -415,6 +420,12 @@ pub fn translate(event: &AgentEvent) -> Option<EngineEvent> {
             session_id: session_id.clone(),
             title: title.clone(),
         },
+        SessionTitleGenerationFailed { session_id, reason } => {
+            EngineEvent::SessionTitleGenerationFailed {
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+            }
+        }
         _ => return None,
     })
 }

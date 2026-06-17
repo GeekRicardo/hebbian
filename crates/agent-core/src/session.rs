@@ -96,6 +96,9 @@ pub struct SessionConfig {
     pub rules_files: Option<Vec<crate::rules::RuleFileState>>,
     /// Edit 工具快照仓库（架构 §4.13）。`None` 时跳过快照，不阻塞 Edit。
     pub edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
+    /// 派生事件旁路（架构 §4.14.7）。标题 / 记忆等 detached task 的事件改走它，
+    /// 绕过随 run 关闭的 mpsc。surface 接到自身 long-lived 出口；`None` 回退 run 级 sink。
+    pub derived_sink: Option<crate::agent_loop::EventSink>,
 }
 
 /// 一次会话。持有 transcript、workspace、agent definition、provider client、可选 recorder。
@@ -122,6 +125,7 @@ pub struct Session {
     global_rules: Vec<PathBuf>,
     rules_files: Option<Vec<crate::rules::RuleFileState>>,
     edits_worktree: Option<Arc<crate::edits::EditsWorktree>>,
+    derived_sink: Option<crate::agent_loop::EventSink>,
 }
 
 impl Session {
@@ -147,6 +151,7 @@ impl Session {
             global_rules: config.global_rules,
             rules_files: config.rules_files,
             edits_worktree: config.edits_worktree,
+            derived_sink: config.derived_sink,
         };
         // SessionStart hook（架构 §4.8.1）：fire-and-forget，hook 失败不影响主流程。
         if !session.hooks.is_empty() {
@@ -503,6 +508,7 @@ impl Session {
                 max_tool_iterations: None,
                 system_rules: self.resolve_system_rules(),
                 subagent_ctx: self.build_subagent_ctx_snapshot(),
+                derived_sink: self.derived_sink.clone(),
             },
         )
     }
@@ -567,6 +573,7 @@ impl Session {
                 max_tool_iterations: None,
                 system_rules: self.resolve_system_rules(),
                 subagent_ctx: self.build_subagent_ctx_snapshot(),
+                derived_sink: self.derived_sink.clone(),
             },
         )
     }

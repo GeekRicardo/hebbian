@@ -281,6 +281,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         }
     }
 
@@ -324,6 +325,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         }
     }
 
@@ -339,6 +341,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         let child_user = Message {
             id: "u2".to_string(),
@@ -350,6 +353,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: Some("task-call-1".to_string()),
+            run_duration_ms: None,
         };
         let child_assistant = Message {
             id: "a1".to_string(),
@@ -361,6 +365,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: Some("task-call-1".to_string()),
+            run_duration_ms: None,
         };
         let parent_assistant = Message {
             id: "a2".to_string(),
@@ -372,6 +377,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
 
         let t = Transcript::from_session(

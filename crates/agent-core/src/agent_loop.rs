@@ -633,6 +633,7 @@ pub async fn run_loop(
                                 after_tokens,
                             }),
                             subagent_call_id: None,
+                            run_duration_ms: None,
                         };
                         if let Err(e) = sess_store::append_message(dd, sid, marker) {
                             tracing::warn!(error = %e, "L2 压缩：写 compact_boundary marker 失败，忽略");

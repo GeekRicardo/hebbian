@@ -231,6 +231,7 @@ impl TurnData {
             created_at: Utc::now().timestamp_millis(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         })
     }
 }
@@ -370,6 +371,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         created_at: Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     };
     sessions::append_message(data_dir, session_id, user_msg)?;
 
@@ -511,6 +513,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             global_rules,
             rules_files,
             edits_worktree: Some(edits_worktree),
+            derived_sink: None,
         },
     );
     core_session.append_user(user_text, Vec::new());
@@ -544,7 +547,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         // （§4.12.3），本轮 assistant 段和 pending drained 的 user message 都要持久化；
         // 不发 Error event 让 web 前端正常显示挂起态，等 wakeup resume。
         TurnOutcome::Done | TurnOutcome::Suspended => {
-            if let Some(msg) = observer.turn.build_message() {
+            if let Some(mut msg) = observer.turn.build_message() {
+                msg.run_duration_ms = summary.duration_ms;
                 sessions::append_message(data_dir, session_id, msg)?;
             }
             for input in consumed {
@@ -561,6 +565,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
                         created_at: Utc::now().timestamp_millis(),
                         meta: None,
                         subagent_call_id: None,
+                        run_duration_ms: None,
                     },
                 )?;
             }

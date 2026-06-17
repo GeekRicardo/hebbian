@@ -229,6 +229,7 @@ impl ChannelBridge {
             created_at: Utc::now().timestamp_millis(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         sessions::append_message(&self.data_dir, session_id, user_msg)?;
 
@@ -365,6 +366,7 @@ impl ChannelBridge {
                 global_rules,
                 rules_files: prior.rules_files.clone(),
                 edits_worktree: Some(edits_worktree),
+                derived_sink: None,
             },
         );
         core_session.append_user(message.text.clone(), Vec::new());
@@ -390,7 +392,8 @@ impl ChannelBridge {
         match summary.outcome {
             TurnOutcome::Done | TurnOutcome::Suspended => {
                 observer.flush().await;
-                if let Some(msg) = observer.build_message() {
+                if let Some(mut msg) = observer.build_message() {
+                    msg.run_duration_ms = summary.duration_ms;
                     sessions::append_message(&self.data_dir, session_id, msg)?;
                 }
             }
@@ -472,6 +475,7 @@ impl ChannelObserver {
             created_at: Utc::now().timestamp_millis(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         })
     }
 }

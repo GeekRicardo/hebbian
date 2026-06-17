@@ -72,7 +72,12 @@ pub async fn extract_for_session(
         return Ok(None);
     }
 
-    let session = sessions::load(data_dir, session_id).map_err(ExtractError::other)?;
+    // 抽取由 `RunFinished` 触发，但本轮 assistant 是 surface 在 drive() 返回**之后**才
+    // append 到 jsonl 的——两条路径并发。若不等待就读 session，会出现：①抽取漏看本轮
+    // 回复（cursor 只推进到 user）；②抽取产出的 marker 物理上落在 assistant 之前，
+    // 渲染顺序错乱。故先轮询等到「游标之后出现 assistant」再抽取，带超时兜底避免
+    // assistant 真的没产生（纯工具轮 / 失败轮）时死等。
+    let session = wait_for_round_assistant(data_dir, session_id).await?;
 
     // 游标之后的新消息——这是本轮要抽取的增量。
     let cursor = memory::read_cursor(data_dir, session_id);
@@ -142,6 +147,39 @@ pub async fn extract_for_session(
         written,
         model: raw.model,
     }))
+}
+
+/// 等待本轮 assistant 落盘后再返回 session（架构 §4.14）。
+///
+/// 抽取由 `RunFinished` 触发，此刻 surface 往往还没把本轮 assistant append 到 jsonl。
+/// 轮询 load，直到「游标之后出现 assistant」或超时——保证抽取读到完整本轮、且产出的
+/// marker 物理上落在 assistant 之后。超时兜底：纯工具轮 / 失败轮可能真的没有新
+/// assistant，不能死等，到点就用最后一次快照继续（靠游标下轮补抽）。
+async fn wait_for_round_assistant(
+    data_dir: &Path,
+    session_id: &str,
+) -> Result<Session, ExtractError> {
+    use std::time::Duration;
+    const MAX_WAIT: Duration = Duration::from_secs(5);
+    const STEP: Duration = Duration::from_millis(150);
+
+    let cursor = memory::read_cursor(data_dir, session_id);
+    let started = std::time::Instant::now();
+    let mut last = sessions::load(data_dir, session_id).map_err(ExtractError::other)?;
+    loop {
+        let after = messages_after_cursor(&last, cursor.as_deref());
+        if after.iter().any(|m| matches!(m.role, Role::Assistant)) {
+            return Ok(last);
+        }
+        if started.elapsed() >= MAX_WAIT {
+            return Ok(last);
+        }
+        tokio::time::sleep(STEP).await;
+        // 轮询期间 load 偶发失败不致命：保留上一次成功快照继续等。
+        if let Ok(fresh) = sessions::load(data_dir, session_id) {
+            last = fresh;
+        }
+    }
 }
 
 /// 截取游标之后的消息。游标为 `None`（从未抽过）时返回全部；游标 message 不在

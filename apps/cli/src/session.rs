@@ -113,6 +113,8 @@ impl CliSession {
                 parts: Vec::new(),
                 created_at: chrono::Utc::now().timestamp_millis(),
                 meta: None,
+                subagent_call_id: None,
+                run_duration_ms: None,
             };
             if let Err(e) = sessions::append_message(&p.data_dir, &p.session_id, msg) {
                 eprintln!("{} 保存 user 消息失败：{e}", "warn:".yellow());
@@ -120,7 +122,7 @@ impl CliSession {
         }
     }
 
-    fn persist_assistant(&self, content: &str) {
+    fn persist_assistant(&self, content: &str, run_duration_ms: Option<u64>) {
         if content.is_empty() {
             return;
         }
@@ -134,6 +136,8 @@ impl CliSession {
                 parts: Vec::new(),
                 created_at: chrono::Utc::now().timestamp_millis(),
                 meta: None,
+                subagent_call_id: None,
+                run_duration_ms,
             };
             if let Err(e) = sessions::append_message(&p.data_dir, &p.session_id, msg) {
                 eprintln!("{} 保存 assistant 消息失败：{e}", "warn:".yellow());
@@ -305,7 +309,7 @@ impl CliSession {
                 let text = observer.renderer.take_final_text();
                 if !text.is_empty() {
                     self.inner.commit_assistant(text.clone(), Vec::new());
-                    self.persist_assistant(&text);
+                    self.persist_assistant(&text, summary.duration_ms);
                 }
                 Ok(())
             }

@@ -38,7 +38,19 @@ import { toast } from "sonner";
 import { useToastStore } from "@/desktop/ui/store/useToastStore";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
-import { appendInjectedMessageAfterCurrentAssistant } from "@/desktop/ui/components/liveTimelineOrder";
+import {
+  applyReasoningDelta,
+  applyTextDelta,
+  applyTextDone,
+  applyToolCallDelta,
+  applyToolDone,
+  applyToolOutputDelta,
+  applyToolStart,
+  cloneStreamingParts,
+  ensureToolPart,
+  finalizeOpenReasoning,
+} from "@/desktop/ui/store/streamingParts";
+import { type LiveTimelineItem } from "@/desktop/ui/components/liveTimelineOrder";
 import { shouldApplyCompactionResult } from "@/desktop/ui/components/compactingState";
 
 const LAST_PROMPT_ID_KEY = "lastPromptId";
@@ -136,26 +148,6 @@ function persistLastSessionConfig(config: {
   }
 }
 
-function cloneStreamingParts(
-  parts: StreamingAssistantPart[]
-): StreamingAssistantPart[] {
-  return parts.map((part) => ({ ...part }));
-}
-
-function finalizeOpenReasoning(
-  parts: StreamingAssistantPart[],
-  now = Date.now()
-): StreamingAssistantPart[] {
-  const last = parts[parts.length - 1];
-  if (last?.type !== "reasoning" || last.duration_ms != null) return parts;
-  const next = cloneStreamingParts(parts);
-  const reasoning = next[next.length - 1];
-  if (reasoning.type === "reasoning") {
-    reasoning.duration_ms = Math.max(0, now - (reasoning.started_at_ms ?? now));
-  }
-  return next;
-}
-
 function attachReasoningDurations(
   session: Session,
   liveParts: StreamingAssistantPart[]
@@ -182,116 +174,6 @@ function attachReasoningDurations(
   return durationIndex < durations.length - 1 ? { ...session, messages } : session;
 }
 
-function applyTextDelta(
-  parts: StreamingAssistantPart[],
-  text: string
-): StreamingAssistantPart[] {
-  if (!text) return parts;
-  const base = finalizeOpenReasoning(parts);
-  const next = cloneStreamingParts(base);
-  const last = next[next.length - 1];
-  if (last?.type === "text") {
-    last.text += text;
-  } else {
-    next.push({ type: "text", text });
-  }
-  return next;
-}
-
-/**
- * 推理（thinking）增量：贴在最近一段 reasoning 上；如果末尾不是
- * reasoning 就开新段，让正文段不会被推理打断顺序。
- */
-function applyReasoningDelta(
-  parts: StreamingAssistantPart[],
-  text: string
-): StreamingAssistantPart[] {
-  if (!text) return parts;
-  const next = cloneStreamingParts(parts);
-  const last = next[next.length - 1];
-  if (last?.type === "reasoning" && last.duration_ms == null) {
-    last.text += text;
-  } else {
-    next.push({ type: "reasoning", text, started_at_ms: Date.now() });
-  }
-  return next;
-}
-
-function toolPartIndex(
-  parts: StreamingAssistantPart[],
-  index: number,
-  id?: string | null
-) {
-  if (id) {
-    const byId = parts.findIndex(
-      (part) => part.type === "tool_call" && part.id === id
-    );
-    if (byId >= 0) return byId;
-  }
-  return parts.findIndex(
-    (part) => part.type === "tool_call" && part.index === index
-  );
-}
-
-function ensureToolPart(
-  parts: StreamingAssistantPart[],
-  index: number,
-  id?: string | null,
-  name?: string | null
-): [StreamingAssistantPart[], number] {
-  const next = cloneStreamingParts(finalizeOpenReasoning(parts));
-  const existing = toolPartIndex(next, index, id);
-  if (existing >= 0) return [next, existing];
-
-  next.push({
-    type: "tool_call",
-    index,
-    id,
-    name,
-    arguments: "",
-    status: "streaming",
-  });
-  return [next, next.length - 1];
-}
-
-function applyToolCallDelta(
-  parts: StreamingAssistantPart[],
-  event: Extract<EngineEvent, { type: "tool_call_delta" }>
-): StreamingAssistantPart[] {
-  const [next, pos] = ensureToolPart(
-    parts,
-    event.index,
-    event.id,
-    event.name
-  );
-  const call = next[pos];
-  if (call.type !== "tool_call") return next;
-  next[pos] = {
-    ...call,
-    id: event.id ?? call.id,
-    name: event.name ?? call.name,
-    arguments: call.arguments + (event.arguments_delta ?? ""),
-    status: call.status === "done" ? "done" : "streaming",
-  };
-  return next;
-}
-
-function applyToolStart(
-  parts: StreamingAssistantPart[],
-  event: Extract<EngineEvent, { type: "tool_start" }>
-): StreamingAssistantPart[] {
-  const [next, pos] = ensureToolPart(parts, event.index, event.id, event.name);
-  const call = next[pos];
-  if (call.type !== "tool_call") return next;
-  next[pos] = {
-    ...call,
-    id: event.id,
-    name: event.name,
-    input: event.input,
-    status: "running",
-  };
-  return next;
-}
 
 function removeFromSet<T>(s: Set<T>, item: T): Set<T> {
   if (!s.has(item)) return s;
@@ -327,33 +209,6 @@ function setPartJudging(
   });
   return changed ? next : parts;
 }
-
-/**
- * Run 内时间线条目（架构 §4.2 + §4.12.5）。run 跑到一半时把"已完成 turn 快照"
- * 和"streaming 中插队的 user message"按真实发生顺序穿插起来，避免插队消息被
- * 错乱地黏在下一轮 assistant 输出之后。
- *
- * - `assistant_frozen`：一次 turn 的 TurnFinished 事件触发——把当时的
- *   streamingText / streamingParts 原样冻结，渲染走标准 MessageBubble
- *   （`streaming=false`，仍喂 streamingParts 复用渲染路径）
- * - `user_injected`：streaming 期间调 inject_user_message 即写即落后，
- *   后端返回的持久化 Message 直接放进来
- *
- * run 结束 reload session 时 slot 被清掉，由 session.messages 接管最终顺序。
- */
-type LiveTimelineItem =
-  | {
-      kind: "assistant_frozen";
-      /** 冻结时的临时 id；reload 后会被真正的 message id 替代 */
-      id: string;
-      text: string;
-      parts: StreamingAssistantPart[];
-      created_at: number;
-    }
-  | {
-      kind: "user_injected";
-      message: Message;
-    };
 
 /**
  * 单个 session 在跑时的所有"软状态"（流式正文 / 推理 / 工具 / HITL）。
@@ -518,17 +373,15 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     };
   }
   if (e.type === "text_done") {
-    if (!slot.streamingText || !e.full_text.endsWith(slot.streamingText)) {
-      const delta = slot.streamingText ? "" : e.full_text;
-      return {
-        ...slot,
-        streamingText: e.full_text,
-        streamingParts: delta
-          ? applyTextDelta(slot.streamingParts, delta)
-          : slot.streamingParts,
-      };
+    const { streamingText, streamingParts } = applyTextDone(
+      slot.streamingText,
+      slot.streamingParts,
+      e.full_text
+    );
+    if (streamingText === slot.streamingText && streamingParts === slot.streamingParts) {
+      return slot;
     }
-    return slot;
+    return { ...slot, streamingText, streamingParts };
   }
   if (e.type === "reasoning") {
     const hadRetry = slot.modelRetry !== null;
@@ -700,11 +553,17 @@ function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
     // bubble——与 chat.rs `had_pending_during_run` 落盘语义对齐：
     //   - 无插队：整个 Run 累积成一条 assistant message（多 Turn 共用一个 bubble）
     //   - 有插队：按 Turn 分段落盘，每段对应一个 assistant message
-    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过 user_injected → 切；
+    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过**用户插队** → 切；
     // 否则维持当前 streamingText / streamingParts 累积，下个 Turn 接着 stream。
+    // 系统通知（system_notification）不算插队——它是某 tool_call 的异步回应，由
+    // wakeup 排序钉到对应 assistant 段之后，不该触发 assistant 分段。
     const hasPendingInjection = slot.liveTimeline
       .slice(slot.assistantInsertPos)
-      .some((item) => item.kind === "user_injected");
+      .some(
+        (item) =>
+          item.kind === "user_injected" &&
+          item.message.meta?.type !== "system_notification"
+      );
     if (!hasPendingInjection) return slot;
     if (slot.streamingText.length === 0 && slot.streamingParts.length === 0) {
       // 插队消息已挂在末尾但当前 Turn 没产出（罕见，例如审批拒绝直接终止）——
@@ -922,70 +781,6 @@ function appendUserInjectedMessage(
   };
 }
 
-function insertSystemNotificationBeforeNextAssistant(
-  slot: SessionStream,
-  message: Message
-): SessionStream {
-  const next = appendInjectedMessageAfterCurrentAssistant<
-    LiveTimelineItem,
-    StreamingAssistantPart
-  >(
-    {
-      liveTimeline: slot.liveTimeline,
-      assistantInsertPos: slot.assistantInsertPos,
-      streamingText: slot.streamingText,
-      streamingParts: slot.streamingParts,
-    },
-    { kind: "user_injected", message }
-  );
-
-  return {
-    ...slot,
-    liveTimeline: next.liveTimeline,
-    assistantInsertPos: next.assistantInsertPos,
-    streamingText: next.streamingText,
-    streamingParts: next.streamingParts,
-  };
-}
-
-function applyToolDone(
-  parts: StreamingAssistantPart[],
-  event: Extract<EngineEvent, { type: "tool_done" }>
-): StreamingAssistantPart[] {
-  const [next, pos] = ensureToolPart(parts, event.index, event.id);
-  const call = next[pos];
-  if (call.type !== "tool_call") return next;
-  next[pos] = {
-    ...call,
-    id: event.id,
-    result: event.result,
-    duration_ms: event.duration_ms,
-    status: "done",
-    is_error: event.is_error ?? false,
-    artifact_path: event.artifact_path ?? null,
-  };
-  return next;
-}
-
-/**
- * 工具执行期间的流式输出片段——把 chunk 累加到对应 tool_call part 的 live_output。
- * 顺序保证：dispatcher 先 emit tool_start，本事件之后；finished 前都可能来多次。
- */
-function applyToolOutputDelta(
-  parts: StreamingAssistantPart[],
-  event: Extract<EngineEvent, { type: "tool_output_delta" }>
-): StreamingAssistantPart[] {
-  if (!event.chunk) return parts;
-  const [next, pos] = ensureToolPart(parts, event.index, event.id);
-  const call = next[pos];
-  if (call.type !== "tool_call") return next;
-  next[pos] = {
-    ...call,
-    live_output: (call.live_output ?? "") + event.chunk,
-  };
-  return next;
-}
-
 /**
  * 子 agent 事件路由（架构 §4.4.11.8 / P7）：把带 `subagent_call_id` 的事件
  * 追加到对应 Task tool call 的 `nested_parts` 里，而不是顶层 streamingParts。
@@ -1016,6 +811,43 @@ function applyNestedEvent(
     if (newNested === nested) return p;
     return { ...p, nested_parts: newNested };
   });
+}
+
+/** 文件查看器里一个打开的文件：路径 + 是否固定。 */
+export interface OpenFileEntry {
+  path: string;
+  pinned: boolean;
+}
+
+/**
+ * 离开某对话时清理它的未固定文件：只留 pinned 的；若激活项被清掉，落到剩余首个。
+ * 返回新的 (openFilesBySession, activeFileBySession)，无变化则原样返回以免触发重渲染。
+ */
+function pruneUnpinnedFiles(
+  openFilesBySession: Record<string, OpenFileEntry[]>,
+  activeFileBySession: Record<string, string | null>,
+  sid: string,
+): {
+  openFilesBySession: Record<string, OpenFileEntry[]>;
+  activeFileBySession: Record<string, string | null>;
+} {
+  const list = openFilesBySession[sid];
+  if (!list || list.length === 0) return { openFilesBySession, activeFileBySession };
+  const kept = list.filter((e) => e.pinned);
+  if (kept.length === list.length) return { openFilesBySession, activeFileBySession };
+  const active = activeFileBySession[sid] ?? null;
+  const nextActive = kept.some((e) => e.path === active) ? active : (kept[0]?.path ?? null);
+  return {
+    openFilesBySession: { ...openFilesBySession, [sid]: kept },
+    activeFileBySession: { ...activeFileBySession, [sid]: nextActive },
+  };
+}
+
+/** 编辑器实时选区引用：选中的文本段所在文件 + 起止行号（1-based，闭区间）。 */
+export interface EditorSelectionRef {
+  path: string;
+  startLine: number;
+  endLine: number;
 }
 
 interface AppState {
@@ -1078,14 +910,6 @@ interface AppState {
    * - **session-scoped**：跟 run 生命周期解耦（run 结束 slot 删除时不会跟着清掉）
    */
   sessionEditSnapshots: Record<string, RunEditEntry[]>;
-
-  /**
-   * 架构 §4.14：每个 session「最近一个 Run 后台抽取写入的记忆」。
-   * - 由 `memory_extracted` 事件维护，下一个 Run 开始时清空（只展示「本轮」）。
-   * - **session-scoped**：run 结束 slot 删除时不跟着清掉，故单列在顶层而非 slot 内。
-   * - 空数组 / 不存在 = 不渲染摘要行。
-   */
-  sessionMemoryWrites: Record<string, MemoryWriteItem[]>;
 
   /** 后端正在跑（含前台 + 后台）的会话 id 集合，用于 Sidebar 呼吸点。 */
   runningSessions: Set<string>;
@@ -1249,6 +1073,10 @@ interface AppState {
   deleteSession: (id: string) => Promise<void>;
   forkSession: (msgId: string) => Promise<void>;
   regenerateTitle: () => Promise<void>;
+  /** 处理后台派生任务（标题 / 记忆）的事件。这类事件走 app 级全局总线
+   *  `engine-derived-event`（架构 §4.14.7），不走 per-message Channel——后者 invoke
+   *  返回即废弃，活不过 detached task。全局 listener 收到后统一调本方法。 */
+  handleDerivedEvent: (e: EngineEvent) => void;
 
   /**
    * 发送 user message 并触发 run。`meta` 可选——为 wakeup notification 等系统注入
@@ -1261,6 +1089,17 @@ interface AppState {
     options?: { skipOptimisticUser?: boolean; continueRun?: boolean },
     /** 发到指定对话（内置浏览器绑定的对话），默认当前对话 */
     targetSessionId?: string | null
+  ) => Promise<void>;
+  /**
+   * 把一条用户消息送进指定对话——内置浏览器「提交到主对话」等外部入口用它。
+   * 目标对话有 run 在跑：注入当前 run 的 PendingInputs（即写即落 + 下个 boundary
+   * drain），不打断、不另起 run。run 已 idle：走 sendUserMessage 正常发送。
+   * 这样消除「run 在跑时盲目开新 run 导致双 run 打架 / 旧输出被吞」。
+   */
+  injectOrSend: (
+    sessionId: string,
+    content: string,
+    attachments?: MessageAttachment[]
   ) => Promise<void>;
   cancelStreaming: () => Promise<void>;
   regenerateFrom: (assistantMsgId: string) => Promise<void>;
@@ -1298,16 +1137,35 @@ interface AppState {
    *  RightSidebar 监听其变化 → 缓慢折叠（与「Run 跑完自动展开」配对）。 */
   collapseRightSidebarTick: number;
   triggerCollapseRightSidebar: () => void;
+  /** 一次性「请展开右侧工作台到修改文件 tab 并聚焦该 run」信号：模型完成、
+   *  run_edits_committed 落到当前会话那一下设为对应 run_id。RightSidebar 监听其
+   *  变化 → 展开 + 滚动高亮。只由实时事件驱动，打开历史对话 / 回退都不设置，
+   *  从根上避免「重启后打开任意对话误弹」。 */
+  expandEditsRunId: string | null;
 
-  /** 文件查看器（中间列）：当前打开的文件 tab 列表 + 当前激活路径。纯 UI 态，不持久化。 */
-  openFiles: string[];
-  activeFilePath: string | null;
-  /** 在查看器里打开一个文件（已打开则只激活）；同时让查看器列出现。 */
+  /**
+   * 文件查看器（中间列）：按对话隔离的打开文件。纯 UI 态，不持久化（重启清空）。
+   *
+   * - 文件默认绑定打开它的那个对话；切到别的对话 → 该对话**未固定**的文件被清掉
+   * - 「固定」（pinned）的文件在本对话内常驻：切走再切回仍在
+   * - 渲染用 `currentOpenFiles` / `currentActiveFilePath` selector 取当前对话的视图
+   */
+  openFilesBySession: Record<string, OpenFileEntry[]>;
+  activeFileBySession: Record<string, string | null>;
+  /** 在当前对话的查看器里打开一个文件（已打开则只激活）。 */
   openFile: (path: string) => void;
-  /** 关闭一个文件 tab；关掉当前激活项时落到相邻 tab。 */
+  /** 关闭当前对话的一个文件 tab；关掉激活项时落到相邻 tab。 */
   closeFile: (path: string) => void;
-  /** 切换当前激活的文件 tab。 */
+  /** 切换当前对话激活的文件 tab。 */
   setActiveFile: (path: string) => void;
+  /** 翻转某文件的固定态（固定后切走再回来仍保留）。 */
+  toggleFilePin: (path: string) => void;
+  /**
+   * 编辑器实时选区引用：用户在文件查看器里选中一段文本时写入，取消选中置 null。
+   * ChatInput 订阅它在引用区渲染一条 `path:line` 引用，发送时并入。
+   */
+  editorSelectionRef: EditorSelectionRef | null;
+  setEditorSelectionRef: (ref: EditorSelectionRef | null) => void;
   /** 应用级设置窗口（通用 / 对话 / 供应商 / agent 等多个 tab） */
   appSettingsOpen: boolean;
   setAppSettingsOpen: (v: boolean) => void;
@@ -1375,6 +1233,20 @@ function applyTheme(t: "light" | "dark") {
 }
 
 const LOG_CAPACITY = 5000;
+
+const EMPTY_OPEN_FILES: OpenFileEntry[] = [];
+
+/** 当前对话打开的文件列表（引用稳定：仅该对话的列表变化时才变）。 */
+export function selectCurrentOpenFiles(s: AppState): OpenFileEntry[] {
+  const sid = s.currentSession?.id;
+  return (sid ? s.openFilesBySession[sid] : undefined) ?? EMPTY_OPEN_FILES;
+}
+
+/** 当前对话激活的文件路径。 */
+export function selectCurrentActiveFile(s: AppState): string | null {
+  const sid = s.currentSession?.id;
+  return (sid ? s.activeFileBySession[sid] : undefined) ?? null;
+}
 
 export const useStore = create<AppState>((set, get) => ({
   providersFile: { providers: [], default_provider_id: null },
@@ -1472,7 +1344,6 @@ export const useStore = create<AppState>((set, get) => ({
   contextUsage: null,
   compactingSessionId: null,
   sessionEditSnapshots: {},
-  sessionMemoryWrites: {},
   async refreshContextUsage() {
     const cur = get().currentSession;
     if (!cur) {
@@ -1679,10 +1550,10 @@ export const useStore = create<AppState>((set, get) => ({
         set((state) => {
           const slot = state.sessionStreams[sessionId];
           if (!slot) return state;
-          const updated =
-            result.message.meta?.type === "system_notification"
-              ? insertSystemNotificationBeforeNextAssistant(slot, result.message)
-              : appendUserInjectedMessage(slot, result.message);
+          // 通知和普通插队都只是把 user_injected 项加进 liveTimeline；视觉顺序由
+          // 渲染层的 wakeup projector 统一钉位（system_notification 钉到对应 tool_call
+          // 的 assistant 段后），不再需要注入时特殊摆位。
+          const updated = appendUserInjectedMessage(slot, result.message);
           const isForeground = state.currentSession?.id === sessionId;
           return {
             ...state,
@@ -1708,6 +1579,44 @@ export const useStore = create<AppState>((set, get) => ({
     }
     // 非前台：暂存（含 meta），切回时由 openSession 调 triggerWakeupResume 消费
     get().queueWakeupForSession(sessionId, wakeupXml, meta);
+  },
+
+  async injectOrSend(sessionId, content, attachments = []) {
+    const slot = get().sessionStreams[sessionId];
+    const activeRequestId = slot?.requestId;
+
+    // run 在跑：注入当前 run 的 PendingInputs，不另起 run。
+    if (activeRequestId) {
+      try {
+        const result = await api.injectUserMessage(
+          sessionId,
+          activeRequestId,
+          content,
+          attachments
+        );
+        if (result.injected) {
+          set((state) => {
+            const slot = state.sessionStreams[sessionId];
+            if (!slot) return state;
+            const updated = appendUserInjectedMessage(slot, result.message);
+            const isForeground = state.currentSession?.id === sessionId;
+            return {
+              ...state,
+              sessionStreams: { ...state.sessionStreams, [sessionId]: updated },
+              ...(isForeground ? mirrorFromSlot(updated) : {}),
+            };
+          });
+          return;
+        }
+        // injected=false：run 在落盘后的边界 race 里刚结束——消息已落盘，回落到
+        // 正常发送让它起新 run（避免这条用户内容石沉大海）。
+      } catch (e) {
+        console.warn("[injectOrSend] inject failed, falling back to sendUserMessage:", e);
+      }
+    }
+
+    // run 已 idle（或 inject race 回落）：正常发送到目标对话。
+    await get().sendUserMessage(content, attachments, null, {}, sessionId);
   },
 
   inputQueues: {},
@@ -2054,6 +1963,15 @@ export const useStore = create<AppState>((set, get) => ({
     const pendingWakeup = get().pendingWakeups[id];
     set((state) => {
       const { [id]: _drop, ...rest } = state.pendingWakeups;
+      // 离开旧对话：清掉它未固定的文件（pinned 的保留，切回还在）。
+      const prevSid = state.currentSession?.id;
+      const pruned =
+        prevSid && prevSid !== id
+          ? pruneUnpinnedFiles(state.openFilesBySession, state.activeFileBySession, prevSid)
+          : {
+              openFilesBySession: state.openFilesBySession,
+              activeFileBySession: state.activeFileBySession,
+            };
       return {
         currentSession: s,
         pendingPromptId: s.prompt_id ?? "",
@@ -2062,6 +1980,9 @@ export const useStore = create<AppState>((set, get) => ({
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
         currentInputQueue: state.inputQueues[id] ?? [],
         pendingWakeups: rest,
+        openFilesBySession: pruned.openFilesBySession,
+        activeFileBySession: pruned.activeFileBySession,
+        editorSelectionRef: null,
         ...mirrorFromSlot(state.sessionStreams[id]),
       };
     });
@@ -2201,6 +2122,44 @@ export const useStore = create<AppState>((set, get) => ({
     await get().refreshSessions();
   },
 
+  handleDerivedEvent(e) {
+    if (e.type === "session_title_changed") {
+      set((state) =>
+        state.currentSession?.id === e.session_id
+          ? { currentSession: { ...state.currentSession, title: e.title } }
+          : state
+      );
+      void get().refreshSessions();
+      return;
+    }
+    if (e.type === "session_title_generation_failed") {
+      toast.error("没能自动生成标题", {
+        description: "点标题旁的 ✨ 可以重新生成一次",
+      });
+      return;
+    }
+    // 记忆抽取（架构 §4.14）：抽取在 RunFinished 之后异步完成，已落盘一条 MemoryWrites
+    // marker；前台正看着这个会话就 reload，从落盘 marker 重建渲染。
+    if (e.type === "memory_extracted") {
+      if (e.items.length > 0 && get().currentSession?.id === e.session_id) {
+        void api
+          .getSession(e.session_id, activeRequestForSession(get(), e.session_id))
+          .then((fresh) => {
+            set((state) =>
+              state.currentSession?.id === e.session_id
+                ? { currentSession: fresh }
+                : state
+            );
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+    if (e.type === "memory_extraction_failed") {
+      toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
+    }
+  },
+
   async sendUserMessage(content, attachments = [], meta = null, options = {}, targetSessionId = null) {
     // targetSessionId：发到指定对话（内置浏览器绑定的对话），不随当前打开的对话变——
     // 否则切到别的对话时提交注释会串到那个对话。非当前对话时后台落盘，切回时显示。
@@ -2316,8 +2275,6 @@ export const useStore = create<AppState>((set, get) => ({
           sessionStreams: { ...state.sessionStreams, [sessionId]: initialSlot },
           runningSessions: new Set(state.runningSessions).add(sessionId),
           lastRunError: null,
-          // 新 Run 开始 → 清掉上一轮的「本轮写入 N 条记忆」摘要（只展示当前轮）。
-          sessionMemoryWrites: dropKey(state.sessionMemoryWrites, sessionId),
           ...(isForeground ? mirrorFromSlot(initialSlot) : {}),
         };
       });
@@ -2332,33 +2289,19 @@ export const useStore = create<AppState>((set, get) => ({
           [],
           requestId,
           (e: EngineEvent) => {
-            // 标题是 session 级状态（不属于 slot）：agent_core 首轮跑完后异步落盘，
-            // 通过 EngineEvent 通知。这里独立处理：直接更新 currentSession.title +
-            // refreshSessions 让 sidebar 同步。
-            if (e.type === "session_title_changed") {
-              set((state) =>
-                state.currentSession?.id === e.session_id
-                  ? { currentSession: { ...state.currentSession, title: e.title } }
-                  : state
-              );
-              void get().refreshSessions();
-              return;
-            }
-            // 记忆抽取事件（架构 §4.14）：session 级，不进 slot——抽取在 RunFinished
-            // 之后异步到达，那时 slot 可能已被清掉，故跟标题一样独立处理。
-            if (e.type === "memory_extracted") {
-              if (e.items.length > 0) {
-                set((state) => ({
-                  sessionMemoryWrites: {
-                    ...state.sessionMemoryWrites,
-                    [e.session_id]: e.items,
-                  },
-                }));
-              }
-              return;
-            }
-            if (e.type === "memory_extraction_failed") {
-              toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
+            // 后台派生任务（标题 / 记忆）事件的双路径兼容：
+            // - Desktop（Tauri）：agent-core 走 derived_sink 旁路 → app 级全局总线
+            //   `engine-derived-event`，由 App.tsx 全局 listener 调 handleDerivedEvent；
+            //   本 per-message 回调收不到（不会重复）。
+            // - hebweb（Web）：本回调即 ws `engine-event` 的 onmessage，派生事件随 ws
+            //   广播到这里，委托同一份 handleDerivedEvent 兜住（架构 §4.14.7）。
+            if (
+              e.type === "session_title_changed" ||
+              e.type === "session_title_generation_failed" ||
+              e.type === "memory_extracted" ||
+              e.type === "memory_extraction_failed"
+            ) {
+              get().handleDerivedEvent(e);
               return;
             }
             // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。
@@ -2408,7 +2351,16 @@ export const useStore = create<AppState>((set, get) => ({
             if (e.type === "run_edits_committed" || e.type === "run_edits_reverted") {
               set((state) => {
                 const next = applyEditEvent(state.sessionEditSnapshots, sessionId, e);
-                return next === null ? state : { sessionEditSnapshots: next };
+                if (next === null) return state;
+                // 仅「模型刚提交修改」且属于当前会话时，发一次性展开信号让
+                // RightSidebar 跳到修改文件 tab。回退不触发；加载历史走 refreshEdits
+                // 不经此路径，故打开旧对话不会误弹。
+                const shouldExpand =
+                  e.type === "run_edits_committed" &&
+                  state.currentSession?.id === sessionId;
+                return shouldExpand
+                  ? { sessionEditSnapshots: next, expandEditsRunId: e.run_id }
+                  : { sessionEditSnapshots: next };
               });
               return;
             }
@@ -2719,29 +2671,63 @@ export const useStore = create<AppState>((set, get) => ({
   triggerCollapseRightSidebar() {
     set((s) => ({ collapseRightSidebarTick: s.collapseRightSidebarTick + 1 }));
   },
-  openFiles: [],
-  activeFilePath: null,
+  expandEditsRunId: null,
+  openFilesBySession: {},
+  activeFileBySession: {},
+  editorSelectionRef: null,
   openFile(path) {
-    set((s) => ({
-      openFiles: s.openFiles.includes(path) ? s.openFiles : [...s.openFiles, path],
-      activeFilePath: path,
-    }));
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    set((s) => {
+      const list = s.openFilesBySession[sid] ?? [];
+      const nextList = list.some((e) => e.path === path)
+        ? list
+        : [...list, { path, pinned: false }];
+      return {
+        openFilesBySession: { ...s.openFilesBySession, [sid]: nextList },
+        activeFileBySession: { ...s.activeFileBySession, [sid]: path },
+      };
+    });
   },
   closeFile(path) {
+    const sid = get().currentSession?.id;
+    if (!sid) return;
     set((s) => {
-      const idx = s.openFiles.indexOf(path);
+      const list = s.openFilesBySession[sid] ?? [];
+      const idx = list.findIndex((e) => e.path === path);
       if (idx === -1) return s;
-      const openFiles = s.openFiles.filter((p) => p !== path);
-      let activeFilePath = s.activeFilePath;
-      if (activeFilePath === path) {
+      const nextList = list.filter((e) => e.path !== path);
+      let active = s.activeFileBySession[sid] ?? null;
+      if (active === path) {
         // 关掉激活项 → 落到右邻，没有再落到左邻，全空则 null（查看器列消失）
-        activeFilePath = openFiles[idx] ?? openFiles[idx - 1] ?? null;
+        active = nextList[idx]?.path ?? nextList[idx - 1]?.path ?? null;
       }
-      return { openFiles, activeFilePath };
+      return {
+        openFilesBySession: { ...s.openFilesBySession, [sid]: nextList },
+        activeFileBySession: { ...s.activeFileBySession, [sid]: active },
+      };
     });
   },
   setActiveFile(path) {
-    set({ activeFilePath: path });
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    set((s) => ({
+      activeFileBySession: { ...s.activeFileBySession, [sid]: path },
+    }));
+  },
+  toggleFilePin(path) {
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    set((s) => {
+      const list = s.openFilesBySession[sid] ?? [];
+      const nextList = list.map((e) =>
+        e.path === path ? { ...e, pinned: !e.pinned } : e,
+      );
+      return { openFilesBySession: { ...s.openFilesBySession, [sid]: nextList } };
+    });
+  },
+  setEditorSelectionRef(ref) {
+    set({ editorSelectionRef: ref });
   },
   setPendingAppSettingsTab(tab) {
     set({ pendingAppSettingsTab: tab });

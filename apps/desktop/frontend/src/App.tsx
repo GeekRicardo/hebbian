@@ -6,6 +6,7 @@ import { DesktopShell } from "@/desktop/ui/components/DesktopShell";
 import { SessionSettingsDialog } from "@/desktop/ui/components/SessionSettingsDialog";
 import { AppSettingsDialog } from "@/desktop/ui/components/AppSettingsDialog";
 import { useStore } from "@/desktop/ui/store/useStore";
+import type { EngineEvent } from "@/desktop/ui/types";
 import { getBrowserHost } from "@/desktop/ui/lib/browserHost";
 import { buildAnnotationMessage, buildBatchAnnotationMessage } from "@/desktop/ui/lib/annotation";
 
@@ -81,7 +82,25 @@ export default function App() {
     };
   }, []);
 
-  // 内置浏览器页面内注释提交（架构 §8.5）：embedded 子 webview 或 popout 独立窗口里
+  // 架构 §4.14.7：后台派生任务（标题 / 记忆）事件走 app 级全局总线 `engine-derived-event`
+  // ——它们在 run 收尾后才完成，per-message Channel 已废弃接不住。这里全局常驻订阅，
+  // 委托 store.handleDerivedEvent 统一处理（与 hebweb ws 路径同一份逻辑）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<EngineEvent>("engine-derived-event", (e) => {
+      useStore.getState().handleDerivedEvent(e.payload);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.warn("engine-derived-event listener failed:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
   // 的注释卡片提交 → 主进程 emit browser://annotation → 这里组装成 user message 发进
   // 当前对话。放 App 级（常驻）而非 BrowserPanel——popout 注释时浏览器 tab 可能没在前台。
   useEffect(() => {
@@ -128,7 +147,7 @@ export default function App() {
         }
         if (!items.length) return;
         const { content, attachments } = buildBatchAnnotationMessage(items);
-        void store.sendUserMessage(content, attachments, null, {}, target);
+        void store.injectOrSend(target, content, attachments);
         toast.success(`已把 ${items.length} 个元素的改动提交到对话`);
       })
       .then((fn) => {
@@ -161,7 +180,7 @@ export default function App() {
         const content =
           `我在内置浏览器预览里和助手一起调整了一个页面元素，下面是这次调整的总结，` +
           `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${summary}`;
-        void store.sendUserMessage(content, [], null, {}, target);
+        void store.injectOrSend(target, content, []);
         toast.success("元素改动已提交到对话");
       }
     )
@@ -193,7 +212,7 @@ export default function App() {
         const content =
           `我在内置浏览器预览里圈了一批元素并做了调整，下面是这批注释的合并总结，` +
           `请据此修改对应的前端源码把效果真正实现（不要只在预览里改）：\n\n${e.payload.summary}`;
-        void store.sendUserMessage(content, [], null, {}, target);
+        void store.injectOrSend(target, content, []);
         toast.success("注释列表已提交到对话");
       }
     )

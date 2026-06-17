@@ -206,6 +206,12 @@ pub enum DaemonEvent {
         session_id: String,
         title: String,
     },
+    /// 新会话首轮的后台自动标题生成失败（模型连不上 / 鉴权过期 / 返回空等）。
+    /// 与 `SessionTitleChanged` 互斥。自动化脚本可据此判定标题没生成、提示手动重试。
+    SessionTitleGenerationFailed {
+        session_id: String,
+        reason: String,
+    },
     /// 本 Run（整个 agent_loop）结束后汇总的文件净变化（架构 §4.13）。
     /// `files[]` 每项含 real_path / action（create|modify|overwrite|delete）/ before_bytes / after_bytes。
     /// 无文件变化的 Run 不发本事件。旧脚本忽略未知 event。

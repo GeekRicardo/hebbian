@@ -262,6 +262,7 @@ impl TurnData {
             created_at: self.started_at.unwrap_or_else(|| Utc::now().timestamp_millis()),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         })
     }
 }
@@ -498,6 +499,12 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 title: title.clone(),
             })
         }
+        EventPayload::SessionTitleGenerationFailed { session_id, reason } => {
+            Some(DaemonEvent::SessionTitleGenerationFailed {
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+            })
+        }
         EventPayload::MemoryExtracted { session_id, items } => Some(DaemonEvent::MemoryExtracted {
             session_id: session_id.clone(),
             items: items.clone(),
@@ -623,6 +630,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
                 created_at: Utc::now().timestamp_millis(),
                 meta: None,
                 subagent_call_id: None,
+                run_duration_ms: None,
             };
             sessions::append_message(data_dir, session_id, user_msg)?;
         }
@@ -774,6 +782,17 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
             global_rules,
             rules_files,
             edits_worktree: Some(edits_worktree),
+            // 派生事件旁路（架构 §4.14.7）：标题 / 记忆在 run 收尾后才完成，走 run 级
+            // sink 会被 trailing window 关掉的通道丢弃。heb 的 stdout 是进程级 long-lived
+            // 出口——捕获 state 翻译成 DaemonEvent 直接 emit，绕过 run channel。
+            derived_sink: {
+                let state = state.clone();
+                Some(std::sync::Arc::new(move |event: AgentEvent| {
+                    if let Some(ev) = translate_event(&event) {
+                        state.emit(&ev);
+                    }
+                }))
+            },
         },
     );
     if let TurnInput::User(user_text) = &input {
@@ -810,7 +829,8 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
         // 架构 §4.12.1：Suspended 是 Run 的合法中间态，落 assistant 段跟 Done 一致——
         // transcript 不进 checkpoint（§4.12.3），resume 时从 jsonl 重建本轮 assistant。
         TurnOutcome::Done | TurnOutcome::Suspended => {
-            if let Some(msg) = observer.turn.build_message() {
+            if let Some(mut msg) = observer.turn.build_message() {
+                msg.run_duration_ms = summary.duration_ms;
                 sessions::append_message(data_dir, session_id, msg)?;
             }
         }
@@ -1102,6 +1122,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
                 created_at: chrono::Utc::now().timestamp_millis(),
                 meta: Some(meta),
                 subagent_call_id: None,
+                run_duration_ms: None,
             };
             // 1) 即写即落 jsonl（崩溃 / cancel 都不丢）
             if let Err(e) = sessions::append_message(

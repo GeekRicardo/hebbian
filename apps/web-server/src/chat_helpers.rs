@@ -181,6 +181,7 @@ pub async fn compact_session(
             after_tokens: result.after_tokens,
         }),
         subagent_call_id: None,
+        run_duration_ms: None,
     };
     sessions::append_message(data_dir, session_id, marker).map_err(|e| anyhow!("{e}"))?;
 

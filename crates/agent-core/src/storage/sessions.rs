@@ -88,6 +88,13 @@ pub enum MessageMeta {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_use_id: Option<String>,
     },
+    /// 本轮后台记忆抽取写入的记忆摘要（架构 §4.14）。抽取在 `RunFinished` 之后异步
+    /// 完成，那时本轮 assistant 早已落盘——故这条摘要单独作为 `Role::Marker` 消息
+    /// append 到 session.jsonl 末尾，随会话持久化，重启后从同一条 marker 重建渲染。
+    /// transcript rebuild 对 `Role::Marker` 走 `_ => {}` 天然跳过，模型看不到它。
+    MemoryWrites {
+        items: Vec<protocol::MemoryWriteItem>,
+    },
 }
 
 impl MessageMeta {
@@ -168,6 +175,12 @@ pub struct Message {
     /// 老 jsonl 没这个字段，serde default 给 None，不破坏向下兼容。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_call_id: Option<String>,
+    /// 本 Run 总耗时（毫秒）。仅落在「一个 Run 结束时写盘的最后一条 assistant
+    /// message」上，其余消息（user / marker / 子段 assistant）为 `None`。
+    /// 渲染层据此在该气泡操作行显示「· 1.8s」。随 jsonl 持久化，重启后仍可见。
+    /// 老 jsonl 无此字段，serde default 给 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_duration_ms: Option<u64>,
 }
 
 impl Message {
@@ -1464,6 +1477,7 @@ pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> App
                     created_at: now(),
                     meta: Some(MessageMeta::Interrupted),
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 }),
             )?;
             appended += 1;
@@ -1566,6 +1580,7 @@ fn partial_to_interrupted_message(
         created_at: now(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     })
 }
 
@@ -1843,6 +1858,7 @@ pub fn insert_switch_marker(data_dir: &Path, id: &str, meta: MessageMeta) -> App
             created_at: now(),
             meta: Some(meta),
             subagent_call_id: None,
+            run_duration_ms: None,
         },
     )
 }
@@ -2274,6 +2290,7 @@ mod tests {
                 created_at: now(),
                 meta: None,
                 subagent_call_id: None,
+            run_duration_ms: None,
             },
         )
         .expect("append message")
@@ -2395,6 +2412,7 @@ mod tests {
                     created_at: now(),
                     meta: None,
                     subagent_call_id: None,
+            run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -2555,6 +2573,7 @@ mod tests {
                 tool_use_id: Some("call_xyz".into()),
             }),
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         assert!(
             wakeup.is_system_notification(),
@@ -2597,6 +2616,7 @@ mod tests {
             created_at: 0,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         assert!(
             !plain.is_system_notification(),
@@ -2660,6 +2680,7 @@ mod tests {
             created_at: now(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         append_message(&dir, &s.id, msg.clone()).unwrap();
         let loaded = load(&dir, &s.id).unwrap();
@@ -2689,6 +2710,7 @@ mod tests {
             created_at: ts,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
 
         // 物理 append 顺序 = 落盘顺序，模拟插队 race：
@@ -2728,6 +2750,7 @@ mod tests {
             created_at: ts,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         append_message(&dir, &s.id, mk(Role::User, "a", 100)).unwrap();
         append_message(&dir, &s.id, mk(Role::Assistant, "b", 100)).unwrap();
@@ -2797,6 +2820,7 @@ mod tests {
                 created_at: now_ts,
                 meta: None,
                 subagent_call_id: None,
+            run_duration_ms: None,
             }],
             workdir: None,
             allowed_paths: None,
@@ -2865,6 +2889,7 @@ mod tests {
                 created_at: now(),
                 meta: None,
                 subagent_call_id: None,
+            run_duration_ms: None,
             },
         )
         .unwrap();
@@ -2888,6 +2913,7 @@ mod tests {
             created_at: now(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         append_message(&dir, &s.id, m2.clone()).unwrap();
         let m3 = Message {
@@ -2900,6 +2926,7 @@ mod tests {
             created_at: now(),
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         append_message(&dir, &s.id, m3).unwrap();
 

@@ -359,6 +359,7 @@ fn plain_message(role: Role, content: String, ts: i64) -> Message {
         created_at: ts,
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     }
 }
 

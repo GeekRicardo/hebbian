@@ -265,6 +265,15 @@ pub enum EventPayload {
         title: String,
     },
 
+    /// 新会话首轮的后台自动标题生成**失败**（模型连不上 / 鉴权过期 / 返回空等）。
+    /// 与 `SessionTitleChanged` 互斥：成功发前者、失败发后者、正常跳过（title 已被
+    /// 用户改过）则两者都不发。surface 端弹一个轻量 toast 告诉用户标题没生成出来、
+    /// 可手动重试——否则失败完全静默，用户只会困惑「为什么还是新对话」。
+    SessionTitleGenerationFailed {
+        session_id: String,
+        reason: String,
+    },
+
     /// 一个 Run 跑完后，后台记忆抽取写入了若干条记忆（架构 §4.14）。
     /// surface 端在该 Run 末尾渲染一行「本轮写入 N 条记忆」摘要，可展开看明细。
     /// 携带 `session_id` 与标题事件同理——记忆属 session 级长期状态。

@@ -73,8 +73,14 @@ pub async fn generate_title(
 ///
 /// 不读 `session.title`、不写 jsonl——纯计算。选 provider 的策略：
 /// `providers.json` 里 `title_gen_enabled=true` 的优先，否则回退到 session 自己的 provider/model。
-/// 任何环节失败（OAuth 刷新失败、模型调用失败、返回空标题）都返回 `None`。
-async fn try_generate_for_session(data_dir: &Path, session: &Session) -> Option<String> {
+/// 任何环节失败（OAuth 刷新失败、模型调用失败、返回空标题）都返回 `None`，并各打一条带
+/// `session_id` 的 `tracing::warn` —— 这条短调用全程 detached、不进 transcript，没有日志就
+/// 完全无从诊断「标题为什么没生成」。日志可用 `grep <session_id> ~/.hebbian/logs/` 定位失败阶段。
+async fn try_generate_for_session(
+    data_dir: &Path,
+    session_id: &str,
+    session: &Session,
+) -> TitleOutcome {
     let first_user = session
         .messages
         .iter()
@@ -82,11 +88,18 @@ async fn try_generate_for_session(data_dir: &Path, session: &Session) -> Option<
         .map(|m| m.content.trim().to_string())
         .unwrap_or_default();
     if first_user.is_empty() {
-        return None;
+        tracing::warn!(session_id, "标题生成跳过：session 无 user 消息");
+        return TitleOutcome::Skipped;
     }
 
-    let providers_file = model_gateway::config::load(data_dir).ok()?;
-    let (provider, model) = providers_file
+    let providers_file = match model_gateway::config::load(data_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "标题生成失败：读取 providers 配置出错");
+            return TitleOutcome::Failed(format!("读取模型配置失败：{e}"));
+        }
+    };
+    let picked = providers_file
         .providers
         .into_iter()
         .find(|p| {
@@ -97,38 +110,95 @@ async fn try_generate_for_session(data_dir: &Path, session: &Session) -> Option<
         .map(|p| {
             let m = p.title_gen_model.clone().unwrap_or_default();
             (p, m)
-        })
-        .or_else(|| {
-            let p = model_gateway::config::get(data_dir, &session.provider_id).ok()?;
-            Some((p, session.model.clone()))
-        })?;
+        });
+    let (provider, model) = match picked {
+        Some(pm) => pm,
+        None => match model_gateway::config::get(data_dir, &session.provider_id) {
+            Ok(p) => (p, session.model.clone()),
+            Err(e) => {
+                tracing::warn!(
+                    session_id,
+                    provider_id = %session.provider_id,
+                    error = %e,
+                    "标题生成失败：无专用标题 provider，回退 session provider 也取不到"
+                );
+                return TitleOutcome::Failed(format!("找不到可用的模型供应商：{e}"));
+            }
+        },
+    };
 
-    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-        .await
-        .ok()?;
-    let client = model_gateway::build_client(provider).ok()?;
+    let provider =
+        match model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(session_id, error = %e, "标题生成失败：刷新 provider token 出错");
+                return TitleOutcome::Failed(format!("刷新登录状态失败：{e}"));
+            }
+        };
+    let client = match model_gateway::build_client(provider) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "标题生成失败：构建 model client 出错");
+            return TitleOutcome::Failed(format!("初始化模型客户端失败：{e}"));
+        }
+    };
 
-    let title = generate_title(client.as_ref(), &model, &first_user)
-        .await
-        .ok()?;
+    let title = match generate_title(client.as_ref(), &model, &first_user).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(session_id, model = %model, error = %e, "标题生成失败：模型调用出错");
+            return TitleOutcome::Failed(format!("调用模型 {model} 失败：{e}"));
+        }
+    };
     if title.is_empty() {
-        None
+        tracing::warn!(session_id, model = %model, "标题生成失败：模型返回空标题");
+        TitleOutcome::Failed(format!("模型 {model} 返回了空标题"))
     } else {
-        Some(title)
+        tracing::info!(session_id, model = %model, title = %title, "标题生成成功");
+        TitleOutcome::Generated(title)
     }
+}
+
+/// 自动标题生成的结果三态。harness 据此决定：成功 emit `SessionTitleChanged`、
+/// 失败 emit `SessionTitleGenerationFailed`（surface 弹 toast）、跳过则什么都不做。
+/// 区分「失败」与「跳过」是为了避免切回老对话（title 已改）误弹 toast。
+pub enum TitleOutcome {
+    /// 成功生成并已落盘。
+    Generated(String),
+    /// 正常跳过：title 已非默认值（用户重命名 / fork / resume）或 session 无 user 消息。
+    Skipped,
+    /// 真失败：选 provider / 刷 token / 建 client / 模型调用 / 落盘任一环节出错。
+    /// 携带一句给用户看的简短原因。
+    Failed(String),
 }
 
 /// 自动入口（Harness::spawn_run 首轮挂钩调用）：
 /// 仅当当前 `session.title == DEFAULT_TITLE` 时才执行模型短调用 + rename 落盘。
-/// 模型失败 / 用户已重命名 / 无 user message 等情况都返回 `None`，不动 jsonl。
-pub async fn generate_for_session(data_dir: &Path, session_id: &str) -> Option<String> {
-    let session = sessions::load(data_dir, session_id).ok()?;
+pub async fn generate_for_session(data_dir: &Path, session_id: &str) -> TitleOutcome {
+    let session = match sessions::load(data_dir, session_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "标题生成失败：加载 session 出错");
+            return TitleOutcome::Failed(format!("加载会话失败：{e}"));
+        }
+    };
     if session.title != sessions::DEFAULT_TITLE {
-        return None;
+        tracing::debug!(
+            session_id,
+            title = %session.title,
+            "标题生成跳过：title 已非默认值（用户已重命名 / fork / resume）"
+        );
+        return TitleOutcome::Skipped;
     }
-    let title = try_generate_for_session(data_dir, &session).await?;
-    sessions::rename(data_dir, session_id, title.clone()).ok()?;
-    Some(title)
+    let title = match try_generate_for_session(data_dir, session_id, &session).await {
+        TitleOutcome::Generated(t) => t,
+        other => return other,
+    };
+    if let Err(e) = sessions::rename(data_dir, session_id, title.clone()) {
+        tracing::warn!(session_id, error = %e, "标题生成失败：rename 落盘出错");
+        return TitleOutcome::Failed(format!("保存标题失败：{e}"));
+    }
+    TitleOutcome::Generated(title)
 }
 
 /// 手动重生成（surface 「重新生成标题」入口）：
@@ -136,9 +206,12 @@ pub async fn generate_for_session(data_dir: &Path, session_id: &str) -> Option<S
 /// 唯一可能的失败：session 文件本身 load/rename 失败。
 pub async fn regenerate_session_title(data_dir: &Path, session_id: &str) -> AppResult<Session> {
     let session = sessions::load(data_dir, session_id)?;
-    let title = try_generate_for_session(data_dir, &session)
-        .await
-        .unwrap_or_else(|| fallback_from_messages(&session.messages));
+    let title = match try_generate_for_session(data_dir, session_id, &session).await {
+        TitleOutcome::Generated(t) => t,
+        TitleOutcome::Skipped | TitleOutcome::Failed(_) => {
+            fallback_from_messages(&session.messages)
+        }
+    };
     sessions::rename(data_dir, session_id, title)
 }
 

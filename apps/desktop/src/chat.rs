@@ -36,7 +36,7 @@ use std::{
     sync::Arc,
 };
 use tauri::Manager;
-use tauri::{ipc::Channel, AppHandle};
+use tauri::{ipc::Channel, AppHandle, Emitter};
 
 pub struct SendArgs {
     pub session_id: String,
@@ -115,12 +115,28 @@ pub async fn send_and_save(
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
     let app_for_island = app.clone();
-    let result = send_and_save_in_data_dir(&dd, args, move |event| {
-        if let Some(client) = app_for_island.try_state::<HebislandClient>() {
-            push_engine_event_to_island(&client, &event);
+    // 派生事件旁路（架构 §4.14.7）：标题 / 记忆在 run 收尾后才完成，走 per-message
+    // Channel（invoke 返回即废弃）会丢。改走 app 级全局事件总线 `engine-derived-event`
+    // ——与 `wakeup-fired` 同款 long-lived 出口，前端 listen 全局订阅。
+    let app_for_derived = app.clone();
+    let derived_sink: agent_core::agent_loop::EventSink = Arc::new(move |event: AgentEvent| {
+        if let Some(ev) = agent_event_to_engine_event(&event) {
+            if let Err(e) = app_for_derived.emit("engine-derived-event", ev) {
+                tracing::warn!(error = %e, "failed to emit engine-derived-event");
+            }
         }
-        let _ = on_event.send(event);
-    })
+    });
+    let result = send_and_save_in_data_dir(
+        &dd,
+        args,
+        move |event| {
+            if let Some(client) = app_for_island.try_state::<HebislandClient>() {
+                push_engine_event_to_island(&client, &event);
+            }
+            let _ = on_event.send(event);
+        },
+        Some(derived_sink),
+    )
     .await;
     // 整轮 run 真正结束才弹一次「回答完成」（多回合只弹一次；取消 / 失败不弹）。
     if result.is_ok() {
@@ -140,6 +156,7 @@ pub async fn send_and_save_in_data_dir(
     data_dir: &Path,
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
+    derived_sink: Option<agent_core::agent_loop::EventSink>,
 ) -> AppResult<Message> {
     // 预构建 vision client（async：需要刷新 OAuth token）。
     // 未配置 vision provider 时为 None，闭包里跳过包装。
@@ -152,6 +169,7 @@ pub async fn send_and_save_in_data_dir(
         data_dir,
         args,
         emit_event,
+        derived_sink,
         move |provider, model, reasoning| {
             // 带 data_dir：启用 401 自愈刷新（长 HITL 审批后 token 失效会自动续期重试）。
             let client = model_gateway::build_client_with_data_dir(provider, dd.clone())
@@ -171,6 +189,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     data_dir: &Path,
     args: SendArgs,
     emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
+    derived_sink: Option<agent_core::agent_loop::EventSink>,
     build_client: impl Fn(Provider, String, Option<common::ReasoningConfig>) -> AppResult<Arc<dyn ModelClient>>
         + Send
         + Sync,
@@ -222,6 +241,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             created_at: chrono::Utc::now().timestamp_millis(),
             meta: args.user_meta.clone(),
             subagent_call_id: None,
+            run_duration_ms: None,
         };
         sessions::append_message(data_dir, &args.session_id, user_msg)?
     };
@@ -380,6 +400,7 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             global_rules: used_global_rules,
             rules_files: used_rules_files,
             edits_worktree: Some(edits_worktree),
+            derived_sink,
         },
     );
     if is_system_notification {
@@ -533,6 +554,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     //   这里只补写 flushed_segments 之后的尾段。
     // - had_pending_during_run=false：用全 run 累积的 parts 拼成单段 assistant 落盘，
     //   保持原有"一次 run = 一条 assistant message"语义（多 turn 但无插队的常态）。
+    // 本轮总耗时只写在本轮最后一条会落盘的 assistant 上（渲染层据此显示「· 1.8s」）。
+    let run_duration_ms = summary.duration_ms;
     let assistant_msg = if had_pending_during_run {
         if segment_messages.is_empty() {
             segment_messages.push(assistant_message_from_recorded_parts(
@@ -554,6 +577,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         } else if let Some(last) = segment_messages.last_mut() {
             last.attachments = output_attachments;
         }
+        // 耗时落在最后一段（本轮最后落盘的 assistant）。若该段已在 drain 时落盘
+        // （flushed_segments == len 且无补段），耗时无处可写——极罕见，可接受丢失。
+        if flushed_segments < segment_messages.len() {
+            if let Some(last) = segment_messages.last_mut() {
+                last.run_duration_ms = run_duration_ms;
+            }
+        }
         for assistant in segment_messages.iter().skip(flushed_segments) {
             sessions::append_message(data_dir, &args.session_id, assistant.clone())?;
         }
@@ -562,12 +592,13 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             .cloned()
             .unwrap_or_else(empty_assistant_message)
     } else {
-        let m = assistant_message_from_recorded_parts(
+        let mut m = assistant_message_from_recorded_parts(
             parts,
             partial_output,
             tool_calls,
             output_attachments,
         );
+        m.run_duration_ms = run_duration_ms;
         sessions::append_message(data_dir, &args.session_id, m.clone())?;
         m
     };
@@ -607,6 +638,7 @@ fn assistant_message_from_recorded_parts(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     }
 }
 
@@ -1000,6 +1032,7 @@ fn persist_interrupted_assistant_output(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: Some(MessageMeta::Interrupted),
         subagent_call_id: None,
+        run_duration_ms: None,
     });
     sessions::save(data_dir, session)
 }
@@ -1046,6 +1079,7 @@ fn assistant_message_from_partial(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     })
 }
 
@@ -1080,6 +1114,7 @@ fn failed_assistant_message(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     }
 }
 
@@ -1531,6 +1566,7 @@ pub async fn compact_session(
             after_tokens: result.after_tokens,
         }),
         subagent_call_id: None,
+        run_duration_ms: None,
     };
     sessions::append_message(data_dir, session_id, marker)?;
 
@@ -1694,6 +1730,7 @@ pub async fn run_aside<F: Fn(EngineEvent) + Send + Sync>(
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
+        run_duration_ms: None,
     };
 
     // 先用 fork 的历史重建 transcript，再显式把本轮 user 追加到末尾——与主对话
@@ -1726,6 +1763,7 @@ pub async fn run_aside<F: Fn(EngineEvent) + Send + Sync>(
             global_rules: Vec::new(),
             rules_files: None,
             edits_worktree: None,
+            derived_sink: None,
         },
     );
 
@@ -2533,6 +2571,12 @@ fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
             session_id: session_id.clone(),
             title: title.clone(),
         }),
+        SessionTitleGenerationFailed { session_id, reason } => {
+            Some(EngineEvent::SessionTitleGenerationFailed {
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+            })
+        }
         TodoListUpdated { todos } => Some(EngineEvent::TodoListUpdated {
             todos: todos.iter().cloned().map(Into::into).collect(),
         }),
@@ -2944,6 +2988,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -2960,6 +3005,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -2987,6 +3033,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 move |_provider, _model, _reasoning| {
                     Ok(Arc::new(ContinueRunProbeClient {
                         seen_messages: seen_for_client.clone(),
@@ -3740,6 +3787,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 |_provider, _model, _reasoning| {
                     Ok(Arc::new(OrderedPartsClient {
                         calls: AtomicUsize::new(0),
@@ -3807,6 +3855,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 |_provider, _model, _reasoning| {
                     Ok(Arc::new(RepeatedLocalIndexClient {
                         calls: AtomicUsize::new(0),
@@ -3884,6 +3933,7 @@ mod tests {
                     move |event| {
                         events_for_emit.lock().unwrap().push(event);
                     },
+                    None,
                     move |_provider, _model, _reasoning| {
                         Ok(Arc::new(AutoModeProbeClient {
                             calls: AtomicUsize::new(0),
@@ -3963,6 +4013,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 move |_provider, _model, _reasoning| {
                     Ok(Arc::new(PendingInputOrderClient {
                         calls: AtomicUsize::new(0),
@@ -4037,6 +4088,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 move |_provider, _model, _reasoning| {
                     Ok(Arc::new(PendingInputDuringDoneClient {
                         calls: AtomicUsize::new(0),
@@ -4108,6 +4160,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 move |_provider, _model, _reasoning| {
                     Ok(Arc::new(PendingInputThenToolLoopClient {
                         calls: AtomicUsize::new(0),
@@ -4164,6 +4217,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -4180,6 +4234,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -4210,6 +4265,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 |_provider, _model, _reasoning| {
                     Ok(Arc::new(IdleWakeupClient) as Arc<dyn ModelClient>)
                 },
@@ -4259,6 +4315,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -4275,6 +4332,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: Some(wakeup_meta.clone()),
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -4291,6 +4349,7 @@ mod tests {
                     created_at: chrono::Utc::now().timestamp_millis(),
                     meta: None,
                     subagent_call_id: None,
+                    run_duration_ms: None,
                 },
             )
             .unwrap();
@@ -4316,6 +4375,7 @@ mod tests {
                     restrict_tools: None,
                 },
                 |_| {},
+                None,
                 |_provider, _model, _reasoning| {
                     Ok(Arc::new(IdleWakeupClient) as Arc<dyn ModelClient>)
                 },

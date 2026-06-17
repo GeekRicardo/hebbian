@@ -263,6 +263,7 @@ mod tests {
             created_at: 1_780_000_000_000,
             meta: None,
             subagent_call_id: None,
+            run_duration_ms: None,
         }
     }
 

@@ -365,6 +365,7 @@ async fn dispatch_invoke(
         // ─── 复刻 desktop chat / title_gen 的 standalone helpers
         "compact_session" => cmd_compact_session(state, args).await.map(Some),
         "get_context_usage" => cmd_get_context_usage(state, args).await.map(Some),
+        "get_models_catalog" => cmd_get_models_catalog(state).await.map(Some),
         "generate_session_title" => cmd_generate_session_title(state, args).await.map(Some),
         "discover_rules_files" => cmd_discover_rules_files(args).await.map(Some),
         "list_background_tasks" => cmd_list_background_tasks_local(args).await.map(Some),
@@ -728,6 +729,11 @@ async fn cmd_list_prompts(state: &ServerState) -> Result<Value> {
 async fn cmd_list_projects(state: &ServerState) -> Result<Value> {
     let projects = projects_store::list(&state.data_dir).map_err(|e| anyhow!("{e}"))?;
     Ok(serde_json::to_value(projects)?)
+}
+
+async fn cmd_get_models_catalog(state: &ServerState) -> Result<Value> {
+    let cache = agent_core::storage::models_catalog::read_catalog(&state.data_dir);
+    Ok(serde_json::to_value(cache)?)
 }
 
 async fn cmd_get_settings(state: &ServerState) -> Result<Value> {

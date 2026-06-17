@@ -93,6 +93,12 @@ pub struct RunParams {
     /// `Task` 工具路由到 [`crate::subagent::SubagentRunner`]。Session 在 spawn_run
     /// 前按当前 workspace 加载可用 subagent 定义构造；CLI 单跑 / 单测填 None。
     pub subagent_ctx: Option<Arc<crate::subagent::SubagentCtx>>,
+    /// 派生事件旁路（架构 §4.14.7）。标题 / 记忆等 detached task 在 `RunFinished`
+    /// **之后**才完成，其事件若走 run 级 mpsc 会被 `drain_trailing_events` 的 trailing
+    /// window 卡死丢失。给定后这些事件改走本 sink——一条独立于单个 run 生命周期、由
+    /// surface 接到自身 long-lived 出口（Desktop 的 `app.emit` 全局总线）的通道。
+    /// `None` 时回退 run 级 sink（未接入的 surface 行为不变）。
+    pub derived_sink: Option<EventSink>,
 }
 
 /// Core 对外门面。
@@ -184,7 +190,11 @@ impl Harness {
         let title_data_dir = params.data_dir.clone();
         let title_session_id = params.session_id.clone();
         let title_state = state.clone();
-        let title_sink = core_sink.clone();
+        // 派生事件优先走旁路 sink（§4.14.7）：标题 / 记忆在 run 收尾后才完成，走 run 级
+        // sink 会被 trailing window 关掉的通道丢弃。derived_sink 由 surface 接到 long-lived
+        // 出口；缺省回退 core_sink（run 级，未接入 surface 行为不变）。
+        let derived_sink = params.derived_sink.clone().unwrap_or_else(|| core_sink.clone());
+        let title_sink = derived_sink.clone();
         // 记忆抽取挂钩（架构 §4.14）：本 Run 的 agent_loop 跑完（RunFinished）后异步 spawn
         // 一个 task 调 memory_extract::extract_for_session。一个 Run = 用户语义的「一个 turn
         // 结束」，故用 RunFinished 而非 TurnFinished（后者一个 Run 内会出现多次）。
@@ -193,7 +203,7 @@ impl Harness {
         let mem_data_dir = params.data_dir.clone();
         let mem_session_id = params.session_id.clone();
         let mem_state = state.clone();
-        let mem_sink = core_sink.clone();
+        let mem_sink = derived_sink.clone();
         let sink: EventSink = Arc::new(move |event: Event| {
             let trigger_title = matches!(event.payload, EventPayload::TurnFinished { .. })
                 && title_data_dir.is_some()
@@ -209,14 +219,24 @@ impl Harness {
                 let task_state = title_state.clone();
                 let task_sink = title_sink.clone();
                 tokio::spawn(async move {
-                    if let Some(title) =
-                        crate::session_titler::generate_for_session(&dd, &sid).await
-                    {
-                        let ev = task_state.event(EventPayload::SessionTitleChanged {
-                            session_id: sid,
-                            title,
-                        });
-                        task_sink(ev);
+                    use crate::session_titler::TitleOutcome;
+                    match crate::session_titler::generate_for_session(&dd, &sid).await {
+                        TitleOutcome::Generated(title) => {
+                            let ev = task_state.event(EventPayload::SessionTitleChanged {
+                                session_id: sid,
+                                title,
+                            });
+                            task_sink(ev);
+                        }
+                        TitleOutcome::Failed(reason) => {
+                            let ev =
+                                task_state.event(EventPayload::SessionTitleGenerationFailed {
+                                    session_id: sid,
+                                    reason,
+                                });
+                            task_sink(ev);
+                        }
+                        TitleOutcome::Skipped => {}
                     }
                 });
             }
@@ -273,6 +293,7 @@ impl Harness {
             max_tool_iterations,
             system_rules,
             subagent_ctx,
+            derived_sink: _,
         } = params;
 
         let hitl_for_handle = hitl.clone();
@@ -463,7 +484,7 @@ impl RunHandle {
                     total_output_tokens,
                     total_cache_read_tokens,
                     total_cache_creation_tokens,
-                    ..
+                    duration_ms,
                 } => {
                     break TurnSummary {
                         outcome: TurnOutcome::Done,
@@ -473,6 +494,7 @@ impl RunHandle {
                             cache_read: *total_cache_read_tokens,
                             cache_creation: *total_cache_creation_tokens,
                         }),
+                        duration_ms: Some(*duration_ms),
                     };
                 }
                 EventPayload::RunFailed { error } => {
@@ -482,6 +504,7 @@ impl RunHandle {
                     break TurnSummary {
                         outcome: TurnOutcome::Cancelled,
                         usage: None,
+                        duration_ms: None,
                     };
                 }
                 // 架构 §4.12.1 / §4.12.5：Suspended 是 Run 的合法中间态——agent_loop
@@ -496,6 +519,7 @@ impl RunHandle {
                     break TurnSummary {
                         outcome: TurnOutcome::Suspended,
                         usage: None,
+                        duration_ms: None,
                     };
                 }
                 _ => {}
@@ -584,6 +608,9 @@ pub trait TurnObserver: Send {
 pub struct TurnSummary {
     pub outcome: TurnOutcome,
     pub usage: Option<UsageTotals>,
+    /// 本 Run 总耗时（毫秒），取自 `RunFinished`。surface 落盘时写进本轮最后一条
+    /// assistant message 的 `run_duration_ms`。仅 `Done` 有值；其它 outcome 为 `None`。
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -611,6 +638,7 @@ impl TurnSummary {
         Self {
             outcome: TurnOutcome::Failed(msg.to_string()),
             usage: None,
+            duration_ms: None,
         }
     }
 }
@@ -720,6 +748,7 @@ fn is_critical_event(payload: &EventPayload) -> bool {
             | EventPayload::ContextCompacted { .. }
             | EventPayload::TextDone { .. }
             | EventPayload::SessionTitleChanged { .. }
+            | EventPayload::SessionTitleGenerationFailed { .. }
             | EventPayload::MemoryExtracted { .. }
             | EventPayload::MemoryExtractionFailed { .. }
     )
@@ -737,7 +766,7 @@ async fn emit_memory_extraction(
     use crate::memory_extract::{self, ExtractError};
     match memory_extract::extract_for_session(data_dir, session_id).await {
         Ok(Some(result)) => {
-            let items = result
+            let items: Vec<protocol::MemoryWriteItem> = result
                 .written
                 .into_iter()
                 .map(|w| protocol::MemoryWriteItem {
@@ -749,6 +778,30 @@ async fn emit_memory_extraction(
                     },
                 })
                 .collect();
+            // 写入 >0 条才落 marker——抽取在 RunFinished 之后异步完成，本轮 assistant
+            // 早已落盘，故把摘要单独作为一条 Role::Marker 消息 append 到 jsonl 末尾，
+            // 随会话持久化，重启后从同一条 marker 重建。0 条不落盘（无摘要可显示）。
+            if !items.is_empty() {
+                let marker = crate::storage::sessions::Message {
+                    id: crate::storage::sessions::new_id(),
+                    role: crate::storage::sessions::Role::Marker,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_calls: Vec::new(),
+                    parts: Vec::new(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    meta: Some(crate::storage::sessions::MessageMeta::MemoryWrites {
+                        items: items.clone(),
+                    }),
+                    subagent_call_id: None,
+                    run_duration_ms: None,
+                };
+                if let Err(e) =
+                    crate::storage::sessions::append_message(data_dir, session_id, marker)
+                {
+                    tracing::warn!(error = %e, "记忆摘要 marker 落盘失败，仅内存态可见");
+                }
+            }
             sink(state.event(EventPayload::MemoryExtracted {
                 session_id: session_id.to_string(),
                 items,

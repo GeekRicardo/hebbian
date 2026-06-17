@@ -178,6 +178,12 @@ export type MessageMeta =
       task_id?: string | null;
       /** 触发该通知的 tool_call.id；surface 用它把通知关联回 tool_call 卡片。 */
       tool_use_id?: string | null;
+    }
+  // 架构 §4.14：本轮后台记忆抽取写入的记忆摘要。抽取在 RunFinished 之后异步完成，
+  // 单独作为一条 marker 落盘，重启后从同一条 marker 渲染「本轮写入 N 条记忆」。
+  | {
+      type: "memory_writes";
+      items: MemoryWriteItem[];
     };
 
 /** 当前 session 的上下文用量（来自 get_context_usage / compact_session） */
@@ -810,6 +816,12 @@ export type EngineEvent =
       type: "session_title_changed";
       session_id: string;
       title: string;
+    }
+  | {
+      /** 新会话首轮的后台自动标题生成失败。前端弹 toast 告知、引导手动重试。 */
+      type: "session_title_generation_failed";
+      session_id: string;
+      reason: string;
     }
   | {
       /** TodoWrite 工具更新了 todo 列表（架构 §4.4.6）。整列表覆盖。 */

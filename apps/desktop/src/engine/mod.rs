@@ -247,6 +247,11 @@ pub enum EngineEvent {
         session_id: String,
         title: String,
     },
+    /// 新会话首轮的后台自动标题生成失败。前端弹 toast 告知用户、引导手动重试。
+    SessionTitleGenerationFailed {
+        session_id: String,
+        reason: String,
+    },
     /// TodoWrite 工具更新了 todo 列表（架构 §4.4.6）。前端用整列表覆盖右
     /// sidebar 的 Todos tab。落盘由 agent_core 完成，前端只需刷视图。
     TodoListUpdated {

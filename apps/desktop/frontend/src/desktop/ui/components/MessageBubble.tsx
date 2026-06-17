@@ -52,18 +52,21 @@ import type {
   AppSettings,
   QuestionOption,
   AskQuestion,
+  MemoryWriteItem,
 } from "@/desktop/ui/types";
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
 const EMPTY_STR_ARR: string[] = [];
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
 import { ansiToHtml } from "@/desktop/ui/lib/ansiToHtml";
+import { extractBgTaskId } from "@/desktop/ui/lib/bgTaskId";
 import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
 import { CodeBlock } from "@/desktop/ui/components/CodeBlock";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
+import { MemoryWriteSummary } from "@/desktop/ui/components/MemoryWriteSummary";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import {
   DiffViewer,
@@ -137,6 +140,9 @@ interface Props {
   canUndoCompaction?: boolean;
   /** 仅 compact_boundary：点击「撤销压缩」。参数为本 boundary 消息 id。 */
   onUndoCompaction?: (messageId: string) => void;
+  /** 本轮后台抽取写入的记忆（架构 §4.14）。由 MessageList 把紧跟其后的 memory_writes
+   *  marker"提"进所属 assistant 气泡，渲染在正文下方、操作行上方。 */
+  memoryWrites?: MemoryWriteItem[];
 }
 
 interface ToolCallItem {
@@ -981,7 +987,7 @@ function ExpandButton({
             onClick={() => setOpen(false)}
           />
           <div
-            className="pointer-events-auto absolute inset-3 grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+            className="pointer-events-auto absolute inset-3 grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl bg-background shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-muted/30 px-3">
@@ -995,7 +1001,7 @@ function ExpandButton({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="min-h-0 overflow-auto p-4">
+            <div className="flex min-h-0 min-w-0 flex-col overflow-auto">
               <ToolDetailExpandedContext.Provider value={true}>
                 {children}
               </ToolDetailExpandedContext.Provider>
@@ -1012,8 +1018,10 @@ function ToolPre({ children, dark = false }: { children: string; dark?: boolean 
   return (
     <pre
       className={cn(
-        "tool-pre m-0 overflow-auto rounded-none p-2 pr-10 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
-        !expanded && "max-h-48",
+        "tool-pre m-0 overflow-auto rounded-none p-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
+        // 全屏放大态：铺满内容区（纵向 flex 撑满、左右对称内边距）；
+        // 普通态：限高 max-h-48，右侧 pr-10 给右上角折叠按钮让位
+        expanded ? "min-h-0 min-w-0 flex-1" : "max-h-48 pr-10",
         dark
           ? "bg-slate-950 text-slate-100 font-['JetBrains_Mono',ui-monospace,SFMono-Regular,Menlo,monospace]"
           : "text-foreground font-mono"
@@ -1349,13 +1357,14 @@ function ToolCallDetail({
   const result = call.result || "等待返回…";
   const title = `${name} · ${callSummary(call)}`;
 
-  // 提取 Bash 后台任务的 task_id（从 result 文本匹配，适用于真后台任务）
-  const taskIdFromResult = result?.match(/\[([a-z0-9-]+)\]\s+(?:background|后台)/i)?.[1];
+  // 提取 Bash 后台任务的 task_id（与 sidebar 共用一份正则，兼容当前 / 旧版文案）
+  const taskIdFromResult = extractBgTaskId(call.result);
 
   // 对于前台 Bash，需要从注册表匹配 task_id
   const cmd = name === "Bash" || name === "PowerShell" ? argString(callArgs(call), "command") : "";
   const [matchedTaskId, setMatchedTaskId] = useState<string | null>(null);
   const [bgTaskState, setBgTaskState] = useState<string | null>(null);
+  const [bgOutput, setBgOutput] = useState<string>("");
   const [killedLocally, setKilledLocally] = useState(false);
 
   // 前台 Bash 运行中时，轮询 listBackgroundTasks 按 command 匹配 task_id
@@ -1391,24 +1400,34 @@ function ToolCallDetail({
     };
   }, [sessionId, killedLocally, taskIdFromResult, name, call.status, cmd]);
 
-  // 真后台任务：轮询状态
+  // 真后台任务：轮询状态 + 增量输出（与 sidebar TaskCard 同款带 cursor 累加）。
+  // 后台 Bash 的 tool_call 一启动就返回 `[bash_NNN] 已在后台启动`、status 立刻变 done，
+  // 真实输出只进 tail buffer 不写回 result——所以 chat 卡片必须自己 polling 才看得到。
+  const bgCursorRef = useRef<number>(0);
   useEffect(() => {
     if (!taskIdFromResult || !sessionId || killedLocally) return;
 
     let cancelled = false;
+    bgCursorRef.current = 0;
+    setBgOutput("");
     const poll = async () => {
       try {
-        const output = await api.readBackgroundTaskOutput(sessionId, taskIdFromResult, 0);
-        if (!cancelled) {
-          setBgTaskState(output.state);
-        }
+        const out = await api.readBackgroundTaskOutput(
+          sessionId,
+          taskIdFromResult,
+          bgCursorRef.current
+        );
+        if (cancelled) return;
+        setBgTaskState(out.state);
+        if (out.chunk) setBgOutput((prev) => prev + out.chunk);
+        bgCursorRef.current = out.total_bytes;
       } catch {
         // 静默失败
       }
     };
-
     poll();
-    const interval = setInterval(poll, 3000);
+    // 运行中 600ms 刷新（同 sidebar）；终态后由下方判断停轮询
+    const interval = setInterval(poll, 600);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -1444,15 +1463,26 @@ function ToolCallDetail({
     // status=running 且收到过 ToolOutputDelta：实时控制台展示，命令仍在跑。
     // status=done 后 result 已是聚合后的完整文本，覆盖掉 liveOutput。
     const live = call.liveOutput ?? "";
-    let stream = isRunning ? (live || "等待输出…") : result;
+    // 真后台任务：tool_call 早已 done（result 只是启动提示），真实输出靠 bgOutput
+    // polling 累加；终态后注册表 GC 会让增量取空，此时回落到 result（聚合文本）。
+    const isBgTask = !!taskIdFromResult;
+    const bgRunning = isBgTask && bgTaskState !== null && bgTaskState !== "exited";
+    let stream: string;
+    if (isBgTask) {
+      stream = bgOutput || (bgRunning ? "等待输出…" : result);
+    } else {
+      stream = isRunning ? live || "等待输出…" : result;
+    }
 
     // 如果用户本地 kill 了，追加提示
     if (killedLocally) {
       stream = stream + "\n\n[用户已结束进程]";
     }
 
+    const showCursor =
+      ((isRunning && live) || (bgRunning && bgOutput)) && !killedLocally;
     const body = cmd
-      ? `$ ${cmd}\n\n${stream}${isRunning && live && !killedLocally ? "\n▍" : ""}`
+      ? `$ ${cmd}\n\n${stream}${showCursor ? "\n▍" : ""}`
       : stream;
 
     return (
@@ -1691,11 +1721,11 @@ function ToolCallTimeline({
 
   if (calls.length === 0) return null;
   return (
-    <div className="relative mt-1.5 space-y-px rounded-md bg-muted/70 py-0.5 pl-6 pr-2">
+    <div className="relative mt-1.5 space-y-1 rounded-md bg-muted/70 py-0.5 pl-6 pr-2">
       {calls.map((call, index) => {
         // 未 done 时（streaming / running / failed）默认展开，让运行中的 tool
-        // 边输出边看；done 后立即折叠，靠用户手动 toggle 展开看 detail。
-        // 这跟 ReasoningBlock 的"流完立即折叠"是一致语义。
+        // 边输出边看；done 后折叠（带退场动画，见 ToolCallRow），靠用户手动 toggle 展开看 detail。
+        // 这跟 ReasoningBlock 的"流完折叠"是一致语义。
         //
         // 例外：Read / Grep / Glob / Ask 等「查询类」工具运行中默认不展开——
         // 输出量大但用户多半不关心实时进度（Read 输出文件全文滚屏、Grep 输出大堆
@@ -1704,153 +1734,213 @@ function ToolCallTimeline({
         const autoExpand = !READ_LIKE.has(call.name ?? "");
         // `expandedKeys` 语义 = 「相对默认值的显式翻转」。默认展开的 running tool
         // 点击 → 命中 expandedKeys → 折叠成功；再点击 → 移出 expandedKeys → 回到默认。
-        // 旧实现把它当「显式展开集合」用 OR 拼起来，在 autoExpand 路径下用户怎么点
-        // active 都是 true（OR 的右分支恒真），折不下去——这就是 bug。
         const defaultExpanded = autoExpand && call.status !== "done";
         const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
-        // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
-        // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / 未来若新增 failed=红。
-        // 点击仍触发展开/折叠；ToolCallStatus 目前只有 streaming|running|done 三态，
-        // failed 分支预留，等后端加枚举时自然激活。
-        const statusDot =
-          call.isJudging
-            ? "animate-breathe bg-amber-400"
-            : call.status === "done"
-            ? call.isError
-              ? "bg-rose-400"
-              : "bg-green-400"
-            : call.status === "running"
-              ? "animate-breathe bg-primary"
-              : "bg-muted-foreground/40";
         return (
-          <div
+          <ToolCallRow
             key={call.key}
-            data-tool-call-id={call.id}
-            // rounded-md：跟外层 tool_group 容器（line 1494 也是 rounded-md）保持一致——
-            // focus-flash 闪烁时 box-shadow 沿这个 wrapper 自身的 border-radius 绘制，
-            // 视觉上贴着卡片本身边缘的圆角，不再"小一圈"。平时 wrapper 无背景 / 边框，
-            // 圆角不可见——仅 focus-flash 期间 box-shadow 才显示。
-            className={cn(
-              "relative rounded-[5px]",
-              index === calls.length - 1 && "pb-0",
-              // AutoMode judge 评估中：黄色边框呼吸（架构 §4.4.4）。
-              call.isJudging && "judge-breathe",
-            )}
-          >
-            {index !== calls.length - 1 && (
-              <div className="absolute -left-[15px] top-6 bottom-[-8px] w-px bg-border" />
-            )}
-            <button
-              type="button"
-              onClick={() => onToggle(call.key)}
-              aria-label={active ? "折叠工具调用" : "展开工具调用"}
-              // 竖线在 -left-[15px] w-px，中心 -14.5；让 button 本身就是圆点，
-              // 中心 = -17.5 + 3 = -14.5，精确对齐竖线
-              className={cn(
-                "absolute -left-[17.5px] top-[11px] h-1.5 w-1.5 cursor-pointer rounded-full",
-                statusDot
-              )}
-            />
-            <div
-              className={cn(
-                // translateZ(0)：把容器提成独立合成层，让 overflow 裁剪圆角的抗锯齿在
-                // 层内一次完成。否则底部异色子背景（如 DefaultToolDetail 的 bg-muted/30
-                // Input 列）直角顶到圆弧，会和父圆角抗锯齿叠加，在圆弧竖直段露出 1px 台阶。
-                "overflow-hidden rounded-b-md [transform:translateZ(0)]",
-                active && "bg-background"
-              )}
-            >
-              {call.name === "Read" ? (
-                <button
-                  type="button"
-                  onClick={() => onToggle(call.key)}
-                  className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
-                    active && "border-b border-border bg-muted/30"
-                  )}
-                >
-                  {(() => {
-                    const args = callArgs(call);
-                    const path = argString(args, "file_path") || "读取文件";
-                    const offset = argString(args, "offset");
-                    const limit = argString(args, "limit");
-                    const range = offset
-                      ? limit
-                        ? `${offset}-${Number(offset) + Number(limit) - 1}`
-                        : `${offset}+`
-                      : "";
-                    const display = relativizeReadPath(path, workdir, allowedPaths);
-                    // 行号合并到路径后面，`:#xx-xx` 形式——选中复制粘到外部工具
-                    // 是「path:#100-150」一体的 vscode 风格 anchor，不再拆成两列
-                    const displayWithRange = range ? `${display}:#${range}` : display;
-                    return (
-                      <>
-                        <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
-                          <ScrollText className="h-3.5 w-3.5" />
-                        </span>
-                        <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
-                          <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
-                            Read
-                          </span>
-                          <span className="mr-[2ch] shrink-0">读取文件</span>
-                          <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
-                            {displayWithRange}
-                          </code>
-                        </span>
-                      </>
-                    );
-                  })()}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onToggle(call.key)}
-                  className={cn(
-                    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
-                    active && "border-b border-border bg-muted/30"
-                  )}
-                >
+            call={call}
+            index={index}
+            total={calls.length}
+            active={active}
+            onToggle={onToggle}
+            workdir={workdir}
+            allowedPaths={allowedPaths}
+            appSettings={appSettings}
+            sessionId={sessionId}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function ToolCallRow({
+  call,
+  index,
+  total,
+  active,
+  onToggle,
+  workdir,
+  allowedPaths,
+  appSettings,
+  sessionId,
+}: {
+  call: ToolCallItem;
+  index: number;
+  total: number;
+  active: boolean;
+  onToggle: (key: string) => void;
+  workdir: string | null;
+  allowedPaths: string[];
+  appSettings?: AppSettings;
+  sessionId?: string;
+}) {
+  // detail 的退场时序：active 翻 false 时不立即卸载内容，先播完高度收起动画再卸载。
+  // 否则 status→done 当帧 active 变 false、detail 直接 unmount，就是"执行完啪一下消失"。
+  // mounted 跟随 active 置真；active 转 false 后等过渡结束（onTransitionEnd / 兜底 timer）再置假。
+  const [mounted, setMounted] = useState(active);
+  useEffect(() => {
+    if (active) {
+      setMounted(true);
+      return;
+    }
+    // grid-rows 过渡时长 300ms，留 50ms 余量兜底——onTransitionEnd 正常会先触发，
+    // 这个 timer 只在过渡事件因元素被遮挡 / 浏览器抖动漏发时收尾。
+    const t = window.setTimeout(() => setMounted(false), 350);
+    return () => window.clearTimeout(t);
+  }, [active]);
+
+  // 左侧时间轴上的"状态点"取代原 ChevronRight：颜色编码状态——
+  // done=绿 / running=蓝呼吸 / streaming(生成参数中)=灰 / failed=红。
+  // ToolCallStatus 目前只有 streaming|running|done 三态，failed 分支预留。
+  const statusDot = call.isJudging
+    ? "animate-breathe bg-amber-400"
+    : call.status === "done"
+      ? call.isError
+        ? "bg-rose-400"
+        : "bg-green-400"
+      : call.status === "running"
+        ? "animate-breathe bg-primary"
+        : "bg-muted-foreground/40";
+
+  const titleClass = cn(
+    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
+    // 分隔线用 inset 阴影而非 border-b：border 会参与盒模型，在 min-h-8
+    // 锁死外高 32px 时把内容盒压成 31px，items-center 重新居中导致文本上跳；
+    // inset 阴影零布局影响，展开/折叠文本不再抖动。
+    active && "bg-muted/30 shadow-[inset_0_-1px_0_0_hsl(var(--border))]",
+  );
+
+  return (
+    <div
+      data-tool-call-id={call.id}
+      // rounded-md：跟外层 tool_group 容器保持一致——focus-flash 闪烁时 box-shadow
+      // 沿这个 wrapper 自身的 border-radius 绘制，视觉上贴着卡片本身边缘的圆角。
+      // 平时 wrapper 无背景 / 边框，圆角不可见——仅 focus-flash 期间 box-shadow 才显示。
+      className={cn(
+        "relative rounded-[5px]",
+        index === total - 1 && "pb-0",
+        // AutoMode judge 评估中：黄色边框呼吸（架构 §4.4.4）。
+        call.isJudging && "judge-breathe",
+      )}
+    >
+      {/* 竖线从本行点中心(16px)向下连到下一行点中心：行高 32 + space-y-1 4 + 16 = 52，
+          相对本 wrapper 即 top-[16px] 到 bottom-[-20px]（32-52）。展开时 wrapper 变高也成立——
+          两端都相对各自 wrapper 定位，间距恒为 space-y-1。最后一行不画线。 */}
+      {index !== total - 1 && (
+        <div className="absolute -left-[15px] top-[16px] bottom-[-20px] w-px bg-border" />
+      )}
+      <button
+        type="button"
+        onClick={() => onToggle(call.key)}
+        aria-label={active ? "折叠工具调用" : "展开工具调用"}
+        // 竖线在 -left-[15px] w-px，中心 -14.5；让 button 本身就是圆点，
+        // 中心 = -17.5 + 3 = -14.5，精确对齐竖线。top-[13px]+半径3 = 16，
+        // 让圆点中心落在内容行(min-h-8=32px)的垂直中心。
+        className={cn(
+          "absolute -left-[17.5px] top-[13px] h-1.5 w-1.5 cursor-pointer rounded-full",
+          statusDot,
+        )}
+      />
+      <div
+        className={cn(
+          // translateZ(0)：把容器提成独立合成层，让 overflow 裁剪圆角的抗锯齿在
+          // 层内一次完成。否则底部异色子背景（如 DefaultToolDetail 的 bg-muted/30
+          // Input 列）直角顶到圆弧，会和父圆角抗锯齿叠加，在圆弧竖直段露出 1px 台阶。
+          "overflow-hidden rounded-b-md [transform:translateZ(0)]",
+          active && "bg-background",
+        )}
+      >
+        {call.name === "Read" ? (
+          <button type="button" onClick={() => onToggle(call.key)} className={titleClass}>
+            {(() => {
+              const args = callArgs(call);
+              const path = argString(args, "file_path") || "读取文件";
+              const offset = argString(args, "offset");
+              const limit = argString(args, "limit");
+              const range = offset
+                ? limit
+                  ? `${offset}-${Number(offset) + Number(limit) - 1}`
+                  : `${offset}+`
+                : "";
+              const display = relativizeReadPath(path, workdir, allowedPaths);
+              // 行号合并到路径后面，`:#xx-xx` 形式——选中复制粘到外部工具
+              // 是「path:#100-150」一体的 vscode 风格 anchor，不再拆成两列
+              const displayWithRange = range ? `${display}:#${range}` : display;
+              return (
+                <>
                   <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
-                    <ToolIcon name={call.name} />
+                    <ScrollText className="h-3.5 w-3.5" />
                   </span>
                   <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
                     <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
-                      {call.name === "Task" && call.subagentType
-                        ? call.subagentType
-                        : call.name || "工具调用"}
+                      Read
                     </span>
-                    <span className="mr-[2ch] shrink-0">{callDescription(call)}</span>
+                    <span className="mr-[2ch] shrink-0">读取文件</span>
                     <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
-                      {callSummary(call)}
+                      {displayWithRange}
                     </code>
                   </span>
-                </button>
-              )}
-              {active && (
-                <>
-                  <ToolCallDetail call={call} appSettings={appSettings} sessionId={sessionId} />
-                  {call.name === "Task" &&
-                    call.nestedParts &&
-                    call.nestedParts.length > 0 && (
-                      <div className="border-t border-border">
-                        <NestedTaskContent
-                          nestedParts={call.nestedParts}
-                          appSettings={appSettings}
-                          sessionId={sessionId}
-                        />
-                      </div>
-                    )}
-                  {call.artifactPath && (
-                    <div className="border-t border-border p-2">
-                      <ArtifactBadge path={call.artifactPath} />
+                </>
+              );
+            })()}
+          </button>
+        ) : (
+          <button type="button" onClick={() => onToggle(call.key)} className={titleClass}>
+            <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+              <ToolIcon name={call.name} />
+            </span>
+            <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
+              <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
+                {call.name === "Task" && call.subagentType
+                  ? call.subagentType
+                  : call.name || "工具调用"}
+              </span>
+              <span className="mr-[2ch] shrink-0">{callDescription(call)}</span>
+              <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
+                {callSummary(call)}
+              </code>
+            </span>
+          </button>
+        )}
+        {/* 退场动画：grid-rows fr 单位插值（复用 ChatInput chips 同款模式，WKWebView 实测可插值）。
+            active 控制目标高度 0fr↔1fr，过渡 300ms；mounted 决定 detail 是否还在树上——
+            收起动画播完才卸载，避免 done 当帧内容直接消失。内层 overflow-hidden 裁掉收起中的溢出。 */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows] duration-300 ease-out",
+            active ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+          )}
+          onTransitionEnd={() => {
+            if (!active) setMounted(false);
+          }}
+        >
+          <div className="overflow-hidden">
+            {mounted && (
+              <>
+                <ToolCallDetail call={call} appSettings={appSettings} sessionId={sessionId} />
+                {call.name === "Task" &&
+                  call.nestedParts &&
+                  call.nestedParts.length > 0 && (
+                    <div className="border-t border-border">
+                      <NestedTaskContent
+                        nestedParts={call.nestedParts}
+                        appSettings={appSettings}
+                        sessionId={sessionId}
+                      />
                     </div>
                   )}
-                </>
-              )}
-            </div>
+                {call.artifactPath && (
+                  <div className="border-t border-border p-2">
+                    <ArtifactBadge path={call.artifactPath} />
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        );
-      })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2061,6 +2151,7 @@ export const MessageBubble = memo(function MessageBubble({
   canUndoCompaction,
   onUndoCompaction,
   appSettings,
+  memoryWrites,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
@@ -2175,6 +2266,14 @@ export const MessageBubble = memo(function MessageBubble({
           </span>
         </div>
         <div className="flex-1 h-px bg-border" />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "memory_writes") {
+    return (
+      <div className="px-6 py-1 select-none">
+        <MemoryWriteSummary items={message.meta.items} />
       </div>
     );
   }
@@ -2495,11 +2594,21 @@ export const MessageBubble = memo(function MessageBubble({
           variant={isUser ? "compact" : "gallery"}
           className="mt-2"
         />
+        {!streaming && !editing && memoryWrites && memoryWrites.length > 0 && (
+          <div className="mt-2">
+            <MemoryWriteSummary items={memoryWrites} />
+          </div>
+        )}
         {!streaming && !editing && (
           <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mt-2 -ml-1.5 text-[10px]">
             <span className="px-1.5 py-1 text-muted-foreground/70">
               {formatTime(message.created_at)}
             </span>
+            {message.run_duration_ms != null && (
+              <span className="px-1 py-1 text-muted-foreground/60 tabular-nums">
+                · {formatCompactDuration(message.run_duration_ms)}
+              </span>
+            )}
             <button
               onClick={handleCopy}
               className="px-1.5 py-1 rounded hover:bg-accent text-muted-foreground inline-flex items-center gap-1 text-[10px]"

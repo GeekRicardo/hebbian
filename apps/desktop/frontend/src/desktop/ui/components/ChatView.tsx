@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Sparkles, ChevronDown, RotateCw, Scissors } from "lucide-react";
-import { MessageBubble, formatCompactDuration } from "./MessageBubble";
+import { MessageBubble } from "./MessageBubble";
 import { MessageList } from "./MessageList";
-import { MemoryWriteSummary } from "./MemoryWriteSummary";
-import { ChatInput } from "./ChatInput";
+import { ChatInput } from "./chatInput";
 import { InputQueuePanel } from "./InputQueuePanel";
 import { ToastRegion } from "./ToastRegion";
 import { ContinueBar } from "./ContinueBar";
 import {
   filterMessagesDuplicatedInLiveTimeline,
+  liveTimelineWakeupProjector,
   runningTimelineRenderItems,
 } from "./liveTimelineOrder";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
@@ -50,6 +50,7 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     regenerateFromUser,
     editAndRerun,
     regenerateTitle,
+    renameSession,
     openAppSettingsAt,
     newSession,
     pendingPromptId,
@@ -61,8 +62,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     contextCompacted,
     undoCompaction,
     deleteTrailingMessage,
-    sessionMemoryWrites,
-    sessionLastRunDurationMs,
   } = useStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -74,6 +73,10 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
    */
   const stickToBottomRef = useRef(true);
   const [titleLoading, setTitleLoading] = useState(false);
+  // ==== 标题就地编辑 ====
+  // 点击标题 → 变输入框（titleDraft 非 null 即编辑态）；回车 / 失焦保存，Esc 取消。
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   // ==== 浮动 user 消息（sticky header）====
   // 当某条 user 消息顶部滚出 chat 视口上方时，在 chat 顶部浮动它的截断副本。
   // 点击浮动条 → 滚动到该 user 消息真实位置，让真实顶边与浮动区下边缘重合，
@@ -123,6 +126,19 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   const [findQuery, setFindQuery] = useState("");
   const [findRegex, setFindRegex] = useState(false);
   const [findCase, setFindCase] = useState(false);
+
+  // 进入标题编辑态时聚焦并全选，方便直接覆盖输入。
+  useEffect(() => {
+    if (titleDraft !== null) {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }
+  }, [titleDraft !== null]);
+
+  // 切换会话时退出标题编辑态，避免草稿串到别的对话。
+  useEffect(() => {
+    setTitleDraft(null);
+  }, [currentSession?.id]);
 
   const isStreaming = !!streamingMessageId;
   const rawMessages = currentSession?.messages ?? [];
@@ -687,6 +703,24 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       setTitleLoading(false);
     }
   }
+
+  function startTitleEdit() {
+    if (!currentSession) return;
+    setTitleDraft(currentSession.title);
+  }
+
+  async function commitTitleEdit() {
+    if (titleDraft === null || !currentSession) return;
+    const next = titleDraft.trim();
+    const sessionId = currentSession.id;
+    setTitleDraft(null);
+    if (!next || next === currentSession.title) return;
+    try {
+      await renameSession(sessionId, next);
+    } catch (e: any) {
+      toast.error(e.message || String(e));
+    }
+  }
   async function handlePromptChange(nextPromptId: string) {
     setPendingPromptId(nextPromptId);
     if (sessionStarted) return;
@@ -710,13 +744,34 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       >
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
-            <h1
-              className="text-sm font-medium truncate max-w-[260px] drag-region"
-              title={currentSession.title}
-              data-tauri-drag-region
-            >
-              {currentSession.title}
-            </h1>
+            {titleDraft !== null ? (
+              <input
+                ref={titleInputRef}
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitleEdit}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitTitleEdit();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setTitleDraft(null);
+                  }
+                }}
+                maxLength={64}
+                aria-label="对话标题"
+                className="h-7 max-w-[260px] rounded-md border border-input bg-background px-2 text-sm font-medium outline-none focus:ring-2 focus:ring-ring no-drag"
+              />
+            ) : (
+              <h1
+                className="text-sm font-medium truncate max-w-[260px] rounded px-1 -mx-1 hover:bg-accent cursor-text no-drag"
+                title="点击修改标题"
+                onClick={startTitleEdit}
+              >
+                {currentSession.title}
+              </h1>
+            )}
             <button
               onClick={handleRegenTitle}
               disabled={titleLoading}
@@ -847,7 +902,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             runningTimelineRenderItems(
               liveTimeline,
               assistantInsertPos,
-              isStreaming
+              isStreaming,
+              liveTimelineWakeupProjector(streamingParts)
             ).map((renderItem) => {
               if (renderItem.kind === "streaming") {
                 return (
@@ -903,16 +959,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             <div className="mx-auto my-1 text-[11px] tracking-wide text-muted-foreground/80">
               当前模式：{runModeLabel(currentRunMode)}
             </div>
-          ) : null}
-          {currentSession && sessionLastRunDurationMs[currentSession.id] != null && !isStreaming ? (
-            <div className="mx-auto my-1 text-center text-[11px] text-muted-foreground/80">
-              本轮完成 · {formatCompactDuration(sessionLastRunDurationMs[currentSession.id])}
-            </div>
-          ) : null}
-          {/* 本轮后台记忆抽取写入的记忆（架构 §4.14）：会话末尾一行低调摘要，可展开。
-              run 结束后异步到达，故不依赖 isStreaming。 */}
-          {currentSession && sessionMemoryWrites[currentSession.id]?.length ? (
-            <MemoryWriteSummary items={sessionMemoryWrites[currentSession.id]} />
           ) : null}
 
         </div>

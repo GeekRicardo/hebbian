@@ -15,62 +15,8 @@
 
 import { memo, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
-import type { Message, Prompt } from "@/desktop/ui/types";
-
-/**
- * 计算消息渲染顺序（架构 §4.12.5 修订）。
- *
- * 物理 jsonl 顺序可能出现 wakeup 在 assistant 之前——因为 wakeup 是即写即落
- * （bash 后台任务完成的瞬间），而 assistant 等 stream 完成才落盘。view 上把
- * wakeup 卡片排在 tool_call 卡片之前是反直觉的（wakeup 是该 tool_call 的回应）。
- *
- * 重排策略：
- * - 普通消息按物理顺序
- * - `meta.system_notification` 的 user message 带 `tool_use_id`，找它之后第一个
- *   `tool_calls` 含该 id 的 assistant：把 wakeup **推迟到该 assistant 之后**
- * - 找不到（wakeup 物理位置已在 assistant 之后 / 或 tool_call 已经不存在）→
- *   保留原位，兜底
- *
- * 返回值是原 index 序列。所有按物理 index 索引的字段（find / boundary /
- * archived 等）都拿原 index 取值，保持正确。
- */
-export function reorderForWakeupView(messages: Message[]): number[] {
-  // 1. 标记需要"推迟"的 wakeup：找它后面的目标 assistant 原 index
-  const deferTo = new Map<number, number>(); // wakeupIdx -> targetAssistantIdx
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.role !== "user" || m.meta?.type !== "system_notification") continue;
-    const toolUseId = m.meta.tool_use_id;
-    if (!toolUseId) continue;
-    for (let j = i + 1; j < messages.length; j++) {
-      const target = messages[j];
-      if (target.role === "assistant" && target.tool_calls?.some((tc) => tc.id === toolUseId)) {
-        deferTo.set(i, j);
-        break;
-      }
-    }
-  }
-
-  // 2. 按 target 反向索引：assistantIdx -> wakeupIdx[]
-  const pendingByAssistant = new Map<number, number[]>();
-  for (const [wakeupIdx, assistantIdx] of deferTo) {
-    const list = pendingByAssistant.get(assistantIdx) ?? [];
-    list.push(wakeupIdx);
-    pendingByAssistant.set(assistantIdx, list);
-  }
-
-  // 3. 渲染顺序：跳过被 defer 的 wakeup，在 target assistant 之后插入
-  const order: number[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    if (deferTo.has(i)) continue; // wakeup 跳过原位
-    order.push(i);
-    const pending = pendingByAssistant.get(i);
-    if (pending) {
-      for (const wakeupIdx of pending) order.push(wakeupIdx);
-    }
-  }
-  return order;
-}
+import { reorderForWakeupView } from "./liveTimelineOrder";
+import type { Message, Prompt, MemoryWriteItem } from "@/desktop/ui/types";
 
 interface FindCtx {
   query: string;
@@ -159,6 +105,28 @@ export const MessageList = memo(function MessageList({
   // find activeLocation / matchBase）仍按原 i 取值，**仅渲染顺序**调整。
   const viewOrder = useMemo(() => reorderForWakeupView(messages), [messages]);
 
+  // 记忆汇总 marker（架构 §4.14）落盘时是独立一条 Role::Marker，但渲染要"提"回它
+  // 所属的那条 assistant 气泡里（正文下方、操作行上方），不单独占行。这里建
+  // 「assistant 消息 id → 紧跟其后的 memory_writes marker items」映射，并收集需在
+  // 渲染时跳过的 marker id（避免它再独立渲染一行）。
+  const { memoryWritesByAssistant, hiddenMemoryMarkerIds } = useMemo(() => {
+    const byAssistant: Record<string, MemoryWriteItem[]> = {};
+    const hidden = new Set<string>();
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== "marker" || m.meta?.type !== "memory_writes") continue;
+      // 往前找最近一条 assistant 挂上去；找不到就保留 marker 独立渲染兜底。
+      for (let j = i - 1; j >= 0; j--) {
+        if (messages[j].role === "assistant") {
+          byAssistant[messages[j].id] = m.meta.items;
+          hidden.add(m.id);
+          break;
+        }
+      }
+    }
+    return { memoryWritesByAssistant: byAssistant, hiddenMemoryMarkerIds: hidden };
+  }, [messages]);
+
   // 可删消息集合（删除只允许从后往前）：
   // - 最后一条真实 user 之后的 assistant（= 最后一个 run 的输出）
   // - 最后一条真实 user 自身，仅当其后已无 assistant
@@ -189,6 +157,8 @@ export const MessageList = memo(function MessageList({
     <div>
       {viewOrder.map((i) => {
         const m = messages[i];
+        // 被"提"进 assistant 气泡的记忆 marker 不再独立渲染（见 memoryWritesByAssistant）。
+        if (hiddenMemoryMarkerIds.has(m.id)) return null;
         const isBoundary = m.meta?.type === "compact_boundary";
         if (!isBoundary) {
           const owner = ownerBoundaryByIndex[i];
@@ -227,6 +197,7 @@ export const MessageList = memo(function MessageList({
             archivedCount={isBoundary ? boundaryArchivedCounts[m.id] : undefined}
             canUndoCompaction={isBoundary && undoableCompactionIds?.has(m.id)}
             onUndoCompaction={isBoundary ? onUndoCompaction : undefined}
+            memoryWrites={memoryWritesByAssistant[m.id]}
             find={
               find
                 ? {
