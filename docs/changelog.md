@@ -8488,3 +8488,192 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `ui/components/chatInput/index.tsx`: 项目 pill 的 `HoverHint` hint 内，allowed_paths 每行加 `group` + hover 出现的 lucide `X`；新增 `removeProjectAllowedPath(path)`——按 `folders[0]=workdir / folders.slice(1)=allowed_paths` 约定从 `activeProject.folders` 推导，移除该条后调 `saveProject` 写回项目模板（持久化，影响该项目以后新建会话），同时同步移除当前会话 pending 路径做即时反馈
 - **影响范围**: 仅 desktop 前端。HoverHint 是 6 处共用组件，恢复后全部 hover 提示重新生效；项目 pill 删除作用于项目模板配置（经 `saveProject` → `save_project` 持久化）。无协议 / 后端改动；tsc 通过
 - **留尾巴**: 项目 pill 的删除逻辑落在别人正在重构的 `chatInput/` 新目录（untracked）内，本次未随该目录提交，留在工作区
+
+### 2026-06-17 — 记忆汇总持久化：从内存态改为落 MemoryWrites marker，字体对齐操作行
+
+- **Why**: 接上一条（2026-06-16 耗时持久化）。用户反馈记忆汇总「本轮写入 N 条记忆」两个问题：①字体偏大，要跟操作行「复制/分叉/重新生成」一样大；②没持久化——刷新/重启后摘要就没了。根因：记忆本身早已存进记忆库，没持久化的只是这条 UI 摘要；它走 `MemoryExtracted` 事件进 store 的 `sessionMemoryWrites`（纯内存态、下个 Run 清空、重启即丢），而 `MemoryExtracted` 事件从不落 session.jsonl，reload 无从重建。
+- **决策**: 跟用户确认「落盘方式」——选了「作为独立 marker 落盘」（而非回填到最后一条 assistant message）。原因：记忆抽取是 `RunFinished` 之后异步完成的，那时本轮 assistant 早已落盘，没法像耗时那样在落 message 时顺手带上；独立 marker 是时序上最自然的落点。代价：摘要从「贴在最后一条回复气泡内」变成「最后一条回复下方独立一行」，已在询问选项里说明并经用户确认。
+- **改动**:
+  - `crates/agent-core/src/storage/sessions.rs`: `MessageMeta` 加 `MemoryWrites { items: Vec<protocol::MemoryWriteItem> }` variant
+  - `crates/agent-core/src/harness.rs`: `emit_memory_extraction` 写入 >0 条时，append 一条 `Role::Marker` + `MessageMeta::MemoryWrites` 到 session.jsonl，再 emit 事件（0 条不落盘）
+  - 前端 `types.ts`: `MessageMeta` 加 `memory_writes` variant；`MessageBubble.tsx`: 加 `message.meta.type === "memory_writes"` 渲染分支（复用 `MemoryWriteSummary`），删掉上一条临时挂在 assistant 气泡内的 `memoryWrites` prop + 渲染
+  - `MemoryWriteSummary.tsx`: 图标 `h-3 w-3`(12px) → `h-3.5 w-3.5`(14px) 对齐操作行图标，文字保持 `text-[10px]`，去掉 `mx-auto`/`my-1`（marker 容器自己控制布局）
+  - `store/useStore.ts`: `memory_extracted` 事件从「写 `sessionMemoryWrites` 内存态」改为「前台 reload `getSession`」，从落盘 marker 重建；删除整套 `sessionMemoryWrites`（state 声明 / init / 新 Run 开始时的 dropKey 清空）
+  - `MessageList.tsx` + `ChatView.tsx`: 删掉上一条加的 `memoryWrites` 传参链路 + `lastAssistantIdx` 计算
+  - `docs/架构.md` §4.14.5: 更新摘要行持久化语义（落 marker / 单一数据源 / 历史轮不被清空）
+- **影响范围**: 数据模型 additive——session.jsonl 多一种 marker meta，老 jsonl serde default 兼容，新老互通。三个 surface（desktop/cli/hebweb）共享 agent-core 的 `emit_memory_extraction`，自动都落盘。不改 protocol `EventPayload`（`MemoryExtracted` 事件结构不变，前端只是改用它触发 reload）。transcript rebuild 对 `Role::Marker` 走 `_ => {}` 跳过，模型看不到 marker，不污染对话
+- **验证**: heb CLI 端到端——发偏好声明「请记住：我叫张伟…偏好 Rust/PostgreSQL 手写 SQL」→ `memory_extracted` 写入 1 条 → `~/.hebbian/sessions/<sid>/session.jsonl` 出现一条 `role=marker` / `meta.type=memory_writes` / 带完整 items 的消息（重启 = 重读 jsonl，`getSession` 反序列化该 marker，前端从 `memory_writes` 分支渲染）。`cargo check --workspace` + `cargo test -p agent-core --lib`（531 通过，2 个偶发 flaky 与本改动无关）+ `tsc --noEmit` 全绿
+- **留尾巴**: ①run 中实时显示依赖 `MemoryExtracted` 事件触发 reload——若该事件被 drive 的 5s trailing window 丢掉（极少，§4.14.4 已说明 best-effort），本轮摘要要等下次 reload/重启才出现，但 marker 已落盘不丢；②未在真机 `pnpm tauri dev` 手验前端渲染（marker 位置 / 字体对齐 / 展开明细），建议跑一次确认视觉
+
+### 2026-06-17 — 修复 HoverHint 空壳回归 + Hero Logo 换品牌动图 + 项目标签浮层可删允许路径
+
+- **Why**: 用户在内置浏览器预览里圈选两处需求——①空状态 Hero Logo 的文字「H」换成品牌动图；②输入框项目标签 pill 的 hover 浮层从「只展示项目名」升级为「项目信息卡片」（workdir + 允许路径全貌 + 就地删除允许路径）。落地时发现一个被并发任务误伤的回归：`HoverHint` 在 commit 36c5a92（"各组件 UI 调整"，commit message 自承是代为提交的并发改动）里被从完整 portal tooltip 砍成 `return <>{children}</>` 空壳，`hint` 整个被丢弃——导致**全 app 所有 hover 提示失效**，项目 pill 浮层根本不渲染。不先修这个空壳，需求②无从谈起
+- **改动**:
+  - `components/HoverHint.tsx`: 恢复完整实现——React state + mouseenter/leave + `createPortal` 到 body + `position:fixed` 定位（避免被祖先 `overflow:hidden` 裁切），浮层自身也监听 mouseenter/leave 并延迟关闭，使鼠标可移入 hint 内选中文本 / 点击交互元素（删除按钮）。这是恢复 36c5a92 之前的版本，非新设计
+  - `components/DesktopShell.tsx` + `desktopShell.css`: Hero Logo 的 `.dsp-hero-logo` 从渲染文本「H」改为 `<img src={animations.brandMark}>`；CSS 从「文字渐变底（color/font-size/place-items）」改为 `object-fit:contain` 的图片显示（46×46 / border-radius 16px）。资源选定 `assets/animations/brand-mark-alpha.png`——它是 `animations.ts` 导出为 `brandMark` 但全代码零引用的那张，与发送区动效图同目录，命名即"品牌标识"，经字节级确认是 APNG（`<img>` 自动循环播放，无需额外播放器）。注：注释里把它称作"GIF"，实际同目录无 GIF，只有 APNG(.png) + .webm；此处 JSX+CSS 的图片化由内置浏览器 inspector 在探索期间写回了源码，本次确认其正确性（JSX/CSS 一致、APNG 自动播放）
+  - `components/chatInput/index.tsx`: 项目标签（`activeProject` 分支）的 HoverHint 浮层升级——workdir 一行 + 分割线 + 每条允许路径一行；行级 `group-hover` 控制右侧 `X` 删除按钮显隐。新增 `removeProjectAllowedPath`：删除**同时写回两处**——`setPendingAllowedPaths` 改当前对话（立即生效）+ `saveProject` 改项目配置（永久，影响该项目以后新建的对话）。用户明确选「两者都改」（blast radius 取最彻底）
+  - `lib/projectFolders.ts`（新）+ `projectFolders.test.ts`（新）: 把「从项目 folders 移除某允许路径 → 构造 saveProject 入参」的纯逻辑抽成 `projectInputWithoutAllowedPath`，组件只调它。folders[0]=workdir / slice(1)=allowed_paths 的约定固化在此函数；即使待删 path 恰等于 workdir 也不会误删主目录。配手写断言测试（覆盖删中间项 / 不误删 workdir / 删不存在项 / source 缺省落 null）
+- **影响范围**: 纯 desktop 前端（hebweb 共享同一份 React 代码，自动生效）。不动 protocol / EventPayload / Rust。HoverHint 恢复是 additive 修复，受益的是全 app 所有 hover 提示。删除写回复用既有 store action（`setPendingAllowedPaths` / `saveProject`），未新增 IPC
+- **验证**: `tsc --noEmit` 全绿；`projectFolders.test.ts` 经 `npx tsx` 全过，并做 A/B 翻转固化——把纯函数 `slice(1)` 故意改成 `slice(0)`（workdir 被误并进 allowed_paths）测试立即 FAIL、恢复后 PASS，证明测试有效。Hero Logo 经字节级确认 brand-mark-alpha.png 是 APNG（acTL 存在）
+- **留尾巴**: hebweb 端的浏览器真实验证（进对话 → hover 项目 pill → 看浮层 → 点删除看写回）**未做**——hebweb 缺 `get_models_catalog` 命令镜像（server.rs:386 的 "not implemented in hebweb" 兜底），前端 `init()` 在 `getModelsCatalog()` 处 reject 导致整个 UI 卡在初始化、对话区/输入区不渲染。这是 hebweb 已知能力缺口（与本次改动无关），用户决定本次不补、不扩大 Rust 改动范围。后续若要在 hebweb 验证此类前端交互，需先按 server.rs:384 注释模式照搬 desktop 的 `get_models_catalog`（实现极简，just `models_catalog::read_catalog`）。建议本次改动在 Desktop dev 模式手验一次浮层视觉 + 删除写回
+
+### 2026-06-17 — 修复重启后打开任意对话「修改文件」sidebar 误自动展开
+
+- **Why**: 用户报「修改文件 sidebar 应只在模型完成那一下自动展开，其他情况都不该展开；现在 app 重启后打开任何有历史修改的对话都会重新展开一次」。根因是时序竞态：原自动展开 effect 靠 diff `editRuns` 数组（用 `seenRunIdsBySessionRef` 找「新 run」）来判断该不该弹，但 `openSession` 是先切 `currentSession`、再 `await refreshEdits()` 异步回填修改记录——第一拍 sessionId 已变但 editRuns 仍空 → 把「空集合」记为基线；第二拍历史修改全量灌进 editRuns → effect 误判这些 run 为「刚跑完」→ 误弹。之前那版「按 session 隔离 seen 集合」只修了切对话的一半竞态，没治「基线建立在数据到达之前」这个根本问题
+- **改动**:
+  - `store/useStore.ts`: 新增一次性信号 `expandEditsRunId`（与既有 `collapseRightSidebarTick` 完全对称）。仅在事件分发处理 `run_edits_committed` 且事件属于当前会话时设为对应 run_id；`refreshEdits` / `revertEdit` / `openSession` 加载历史一律不设。把「自动展开」从「editRuns 数组从空变满」的反推，改成「模型实时提交修改」的正向事件驱动，数据加载与自动展开彻底解耦
+  - `components/RightSidebar.tsx`: 删除整套 `seenRunIdsBySessionRef` Map hack + 依赖 `[sessionId, editRuns]` 的 effect，改为监听 `expandEditsRunId` 变化触发展开 + 滚动高亮。连带删掉不再使用的 `editRuns` selector、`EMPTY_EDIT_RUNS` 常量与 `RunEditEntry` import
+- **影响范围**: 纯 desktop 前端（hebweb 共享同一份 React，自动生效）。不动 protocol / EventPayload / Rust / storage。回退（`run_edits_reverted`）不再触发展开（符合「只有跑完那一下才弹」）；浏览器/终端 tab 防抢焦点逻辑保留
+- **验证**: `pnpm exec tsc --noEmit` 全绿
+- **留尾巴**: 未在 Desktop dev / hebweb 做端到端手动复现验证（重启 → 打开有历史修改的对话看不弹 / 模型修改文件那一下看弹）。逻辑上：展开唯一入口现在只剩实时 `run_edits_committed` 事件，打开历史对话走的 `refreshEdits` 不经此路径，从源头杜绝误弹
+
+### 2026-06-17 — 修复：标题生成失败完全无日志可查，补全分阶段诊断埋点
+
+- **Why**: 用户报某会话（`202606170627-fc224f4f`）标题一直停在「新对话」没自动生成，去日志里查却**一行相关记录都没有**。根因：`session_titler` 整条链路 `generate_for_session → try_generate_for_session → generate_title` 全程用 `.ok()?` / `?` 把每一步的 `Err` 静默吞成 `None`，没有任何 `tracing` 埋点。这条短调用是 detached task、不进 transcript、失败不影响主流程——一旦没生成，外部完全无从判断卡在哪一步（选 provider？刷 token？模型 400？返回空？）
+- **改动**:
+  - `crates/agent-core/src/session_titler.rs`:
+    - `try_generate_for_session` 签名加 `session_id: &str`，把原来一条 `.ok()?` 链拆成显式 `match`，每个失败阶段（无 user 消息 / 读 providers 配置 / 选 provider 全失败 / 刷新 token / 构建 client / 模型调用 / 返回空标题）各打一条带 `session_id` 字段的 `tracing::warn`；成功打一条 `tracing::info`（带 model + title）
+    - `generate_for_session` 入口的 `load` 失败、`title 已非默认值` 早退、`rename` 落盘失败也各补一条日志（早退用 `debug`，失败用 `warn`）
+    - `regenerate_session_title` 调用点同步传 `session_id`
+  - 全部日志带结构化 `session_id` 字段，可 `grep <session_id> ~/.hebbian/logs/hebbian.log.*` 直接定位失败阶段
+- **影响范围**: 仅 agent-core 内部实现细节，不改对外 API / 协议 / storage 格式。纯 additive 日志，不动架构.md。三 surface（Desktop / heb / hebweb）共享同一份 agent-core，自动生效
+- **验证**: `cargo check -p agent-core` 通过；`cargo test -p agent-core --lib session_titler` 3 个单测全过（`generate_title` 本身签名未变，单测无需改）
+- **留尾巴**: 未对 `202606170627-fc224f4f` 这个具体 case 做端到端复现（该 session title 已停在「新对话」，重跑会因 `title != DEFAULT_TITLE` 之外的真实原因再触发，届时日志即可显示根因）。下次该会话或新会话标题没出来时，日志会直接告诉是哪一步——那时可据日志定位真正的失败原因（疑似 provider 未开 title_gen 或 OAuth 刷新）
+
+### 2026-06-17 — 旁支对话统一：sidebar 接入富文本输入框（贴图/chip/停止）+ 注释框卡死兜底 + 三个 UI 调整
+
+- **Why**: 两个旁支对话（右侧 sidebar 的「旁支对话」tab + 内置浏览器注释「和助手一起改」）体验跟主 chat 脱节——sidebar 旁支只有裸 textarea，不能贴图、没有引用 chip、不能停止；注释 chat 偶发「请求卡住不动」。用户要求把旁支做得跟主 chat 一样（systemprompt/tools 可不同，但前端三件套对齐），并修两个 bug、全链路加日志。本条记录在前序会话已铺好后端引擎 + 通用组件基础上，补完前端接通 + 卡死兜底 + UI 调整。
+- **背景（前序会话已完成、本条之前已在工作区）**: `branch.rs` 已把 sidebar 旁支工具集从「只读 Read/Grep」扩成「Read/Grep/WebSearch/Fetch/ReadMemory + MCP 动态发现」（用户确认保留只读全套+MCP）；已揪出 sidebar「直接报错」真根因——fork 主对话历史带着 Bash/Edit 等 tool_use block，旁支工具集不声明这些工具 → provider 以「tool_use 工具名未声明」直接 400，用 `flatten_tool_calls` 把历史里工具调用折叠成 `[调用 X: 入参摘要]` 正文、清空 tool_calls/parts 修掉（7 个 fork 单测）；`AsideComposer.tsx` 已写好（复用主 chat 的 `chatInput/EditorSurface` Lexical 内核，贴图/路径 chip/停止/leftSlot）；注释卡死已加 180s 看门狗（超时置 cancel → run_aside 返回 Cancelled → Err 分支发 heb:aside:error 解除 spinner）。
+- **本条补完的缺口**:
+  - **attachments 全链路接通**: `branch.rs` `branch_send` 此前收了 `attachments` 参数却在 `run_aside` 调用处传 `Vec::new()` 丢弃 → 改传真值；`tauri.ts` `branchSend` 加 `attachments` 参数；`useBranchStore` `Branch` 加 `attachments` 字段、`BranchMessage(user)` 加 `attachments`、`sendBranchMessage(branchId,text,attachments)` 带附件、新增 `setBranchAttachments`、user 气泡渲染附件缩略图（`AttachmentPreviewStrip`）
+  - **BranchChatTab 切到 AsideComposer**: 删掉旧 `BranchComposer`(textarea)，换 `AsideComposer`；模型选择器 `BranchModelPicker` 进 `leftSlot`；顶部说明从「只读（Read / Grep）」改为「只读（不改文件、不跑命令）」
+  - **sidebar 旁支加停止**: `BranchState` 加 `cancels: Mutex<HashMap<branch_id, CancelFlag>>`（与注释旁支 `aside_cancels` 对称）；新增 `branch_cancel` 命令（lib.rs 注册）；`branch_send` 跑前存 cancel flag、跑完移除；store 加 `cancelBranch` action；catch 里对「请求已中断」特判不飘红
+  - **注释卡死再加一层兜底**: `route_aside_event` 此前把 `EngineEvent::Error` 落进 `_ => {}` 吞掉 → 补 `Error` 分支直接下发 `heb:aside:error` 解除 spinner。现在三层覆盖：①180s 看门狗（卡死）②run Err 分支（失败返回）③流式 Error 事件（软错误）
+  - **注释框三个 UI 调整**（inspector.js）: ①「样式参数」默认折叠成一条长条（`styleCollapsed=true`，chevron 默认 ▸）②盒模型图移出可折叠体、常驻显示（折叠样式参数也不收起它）③「和助手一起改」对话区与输入框之间加可上下拖动的分割线（`chatResizer`，ns-resize，拖动改 `msgList` 高度、解除 34vh 上限、clamp 120px~70vh）
+- **影响范围**: 仅 Desktop（hebweb/cli 无旁支命令）。后端 `apps/desktop/src/branch.rs`（+cancels/branch_cancel/attachments 接通）、`lib.rs`（注册命令）、`browser/mod.rs`（Error 下行）。前端 `bridge/tauri.ts`、`store/useBranchStore.ts`、`components/BranchChatTab.tsx`、`browser/inspector.js`。不改 protocol / agent-core / storage 格式；`run_aside` 引擎本身未动。`branch_cancel` 是 additive 新命令，旧客户端无感
+- **验证**: `cargo check -p hebbian` 无 error；`cargo test -p hebbian --lib branch` 7 个单测全过（含 `fork_flattens_assistant_tool_calls` / `fork_flattens_tool_call_parts` 守住 400 根因）；`apps/desktop` 下 `pnpm exec tsc --noEmit` 退出 0；`node --check inspector.js` 语法 OK + `inspector.test.cjs` all assertions passed
+- **留尾巴**: ①两个 bug 的 Desktop GUI 端到端实测**未做**——sidebar 旁支 + 注释 chat 都依赖 `pnpm tauri dev` 手动交互（开旁支发消息看是否报错、贴图、点停止；注释框选元素跟助手对话看是否卡死、拖分割线、看样式参数折叠态），逻辑层已闭环（fork flatten 单测 + 三层卡死兜底 + tsc/编译全绿），但视觉与真实模型链路需手验一次 ②工作区混入多个并发任务的未提交改动（MessageBubble / PermissionApprovalPopup / web_search / web_fetch / context(budget/compaction) / harness / useStore / chatInput 重构 / projectFolders 等），本次提交只 add 旁支相关文件（branch.rs / lib.rs / browser/mod.rs / inspector.js / tauri.ts / useBranchStore.ts / BranchChatTab.tsx / AsideComposer.tsx），其余留工作区、commit message Note 说明
+
+### 2026-06-17 — 发送消息时右侧 sidebar 折叠改为与输入框同步（500ms）
+
+- **Why**: 用户要求把之前「sidebar 700ms 折叠 + 输入框延迟 700ms 才舒展」的分离动画合并——sidebar 与输入框同时走 500ms 过渡，一起过去，不再先后分离
+- **改动**:
+  - `components/RightSidebar.tsx`: 外壳 `<aside>` width 过渡 `duration-700` → `duration-500`，注释同步
+  - `components/desktopShell.css`: `.chat-input-shell` 的 width 过渡从 `360ms ease-out 700ms`（延迟 700ms 等 sidebar 收完）改为 `width 500ms ease-in-out`（与 sidebar 同曲线同步舒展）；margin / transform 仍 300ms
+  - `components/BrowserPanel.tsx`: bounds 补帧注释里的「700ms」对齐成「500ms」（该补帧逻辑依赖 sidebar 过渡时长，仅注释 rot 修正，逻辑不变）
+- **影响范围**: 纯 desktop 前端视觉（hebweb 共享同一份 React/CSS，自动生效）。不动 protocol / Rust / store 逻辑；触发点 `triggerCollapseRightSidebar` 不变
+- **验证**: `pnpm exec tsc --noEmit` 全绿
+- **留尾巴**: 未在 dev 模式手验动画观感（发消息 → 看 sidebar 与输入框是否同步 500ms 过去）。BrowserPanel 的 rAF 补帧有封顶，500ms < 原 700ms 不影响其「连续两帧不变即停」的收敛
+
+### 2026-06-17 — 旁支对话渲染同源主对话：复用 MessageBubble + 抽 streamingParts 共享纯函数
+
+- **Why**: 接上一条（旁支输入框对齐主 chat）。用户进一步要求「右侧旁支对话的对话渲染也要像主对话一样」。此前旁支用自写的简化渲染 `BranchBubble`（user 纯文本气泡 + assistant 走 MarkdownRenderer + 折叠的工具卡片摘要 `BranchToolChip`），数据结构是自定义 `BranchMessage`/`BranchToolCall`，跟主对话 `MessageBubble`（reasoning 折叠块、工具卡片展开/实时输出/产物、附件、代码高亮）两套分裂——旁支看不到 reasoning、工具卡片点不开、没有实时输出。
+- **根因 + 彻底方案**: 旁支后端 `branch_send` 其实返回 storage `Message`（含完整 parts），是前端 store 把它降级成了简化 `BranchMessage`。而 `MessageBubble`（2656 行）跟 useStore 耦合极浅——只 2 处读 `currentSession.workdir/allowed_paths` 用于 Read 工具路径显示（旁支绑定主对话 workspace，语义一致），Props 除 `message` 外全可选。所以最干净的彻底改法是**让旁支 store 直接持有 storage `Message[]` + 流式态 `StreamingAssistantPart[]`，前端直接复用 MessageBubble**，删掉自写那套。以后主对话渲染升级旁支自动跟上。
+- **改动**:
+  - **新增 `store/streamingParts.ts`**: 把主对话 useStore 里的流式累积纯函数（`cloneStreamingParts` / `finalizeOpenReasoning` / `applyTextDelta` / `applyReasoningDelta` / `ensureToolPart` / `applyToolCallDelta` / `applyToolStart` / `applyToolDone` / `applyToolOutputDelta`）抽成共享模块导出。主对话 nested（Task 子事件路由）/ judge（黄色呼吸）/ reasoning duration 回填是主对话专属，留在 useStore。
+  - **`store/useStore.ts`**: 删掉这 9 个本地定义，改 `import` 共享模块。`applyNestedEvent` 内部调用的 apply* 系列也改用 import（行为不变）。**纯重构、零行为变化**。
+  - **`store/useBranchStore.ts`**: 删 `BranchMessage`/`BranchToolCall` 类型；`Branch.messages` 从 `BranchMessage[]` 改 `Message[]`、流式态 `liveText`+`liveReasoning`+`liveTools` 收敛成 `liveText`+`liveParts: StreamingAssistantPart[]`；`sendBranchMessage` 事件处理改用共享 apply* 累积 liveParts，成功用后端返回的 assistant `Message` 入列、失败/中断用新 `liveToMessage()` 把 liveParts 落定成 `Message`（StreamingAssistantPart → MessagePart 转换，丢弃 index/status/live_output 等流式专属字段）。
+  - **`components/BranchChatTab.tsx`**: 删 `BranchBubble`/`BranchToolChip`（~71 行）；历史消息 + 流式态都改用 `MessageBubble`（流式态喂 `streaming` + `message={{id:"streaming",role:"assistant",content:liveText}}` + `streamingParts={liveParts}`，与主对话 ChatView 同一形态）；旁支不挂 fork/编辑/重生成/删除等重交互回调。删掉不再用的 MarkdownRenderer/AttachmentPreviewStrip/Wrench import。
+- **影响范围**: 仅 Desktop 前端（hebweb 共享同一份 React，自动生效，但 hebweb 无旁支命令）。后端零改动。`streamingParts.ts` 抽取是 useStore 内部重构，主对话渲染行为字节级不变（同一组纯函数，只是挪了位置）。旁支 store 数据模型换血，但旁支纯内存、不持久化，无迁移问题。
+- **验证**: `apps/desktop` 下 `pnpm exec tsc --noEmit` 退出 0；`npx vite build` 成功（运行时打包无 import 问题）；`cargo test -p hebbian --lib branch` 7 个单测仍全过（后端未动）；主对话 store 抽取后 tsc 全绿证明引用无遗漏。
+- **留尾巴**: ①Desktop GUI 端到端实测未做——需 `pnpm tauri dev` 开旁支发消息，确认 reasoning 折叠 / 工具卡片可展开 / 实时输出 / 附件渲染都跟主对话一致，流式中途停止后已流式内容正确落定。逻辑层已闭环（tsc + vite build + 单测全绿，数据形态与主对话同构）。②MessageBubble 在旁支里读的 `currentSession.workdir` 是主对话的 workdir（旁支继承主对话 workspace，语义一致，仅影响 Read 工具卡片路径的相对/绝对显示，非功能问题）。③工作区仍混入多个并发任务未提交改动，提交时只 add 本任务相关文件（useStore.ts / streamingParts.ts / useBranchStore.ts / BranchChatTab.tsx），其余留工作区 + commit message Note 说明。
+
+### 2026-06-17 — 记忆 marker 根因修：抽取等 assistant 落盘后再写，渲染提回气泡内操作行上方
+
+- **Why**: 接前一条（记忆汇总落 MemoryWrites marker 持久化）。用户反馈两点：①记忆摘要要显示在最后一条回复气泡内、正文下方、操作行（时间戳/分叉/重新生成）上方，字体同操作行——而上一条把它做成了操作行**下方**单独一行；②实测发现摘要还落在了回复**上方/外面**。
+- **根因（比表象更深）**: 抽取由 `RunFinished` 触发（架构 §4.14.4），但本轮 assistant 是 surface 在 `drive()` 返回**之后**才 append 到 jsonl 的——两条路径并发。便宜抽取模型跑得快，导致：①marker 物理上落在 assistant **之前**（jsonl 顺序 `user→marker→assistant`），任何按物理序的渲染都把摘要顶到回复上方；②更严重的隐藏 bug——抽取 `messages_after_cursor` 读 session 时本轮 assistant 还没落盘，**抽取漏看了本轮回复**，且 cursor 错误推进到 user（下轮才补抽 assistant）。实测 created_at 证据：assistant 先产生（…745606）但 append 晚，marker 后产生（…750982）却 append 早；cursor 停在 user id。
+- **决策**: 跟用户确认「前端兼容乱序」vs「后端修落盘顺序」——选后端根因修。理由：前端兼容只治标，jsonl 物理乱序会让未来任何按序处理 marker 的逻辑都得带特例；且后端修能一并解决「抽取漏看本轮回复」这个更严重的问题。
+- **改动**:
+  - `crates/agent-core/src/memory_extract.rs`: 新增 `wait_for_round_assistant`——抽取入口轮询 load session（150ms 步进，5s 超时兜底），直到「游标之后出现 assistant」再继续。超时兜底应对纯工具轮/失败轮真的没有新 assistant 的情况（靠游标下轮补抽）。`extract_for_session` 开头的 `sessions::load` 换成它。
+  - `components/MessageList.tsx`: 建「assistant id → 紧跟其后的 memory_writes marker items」映射（往前找最近 assistant 挂靠），渲染时跳过被吸收的 marker（不再独立占行），把 items 作为 `memoryWrites` prop 传给所属 assistant 的 MessageBubble。
+  - `components/MessageBubble.tsx`: 加回 `memoryWrites` prop，在正文/附件之后、操作行 div 之前渲染 `MemoryWriteSummary`（红框位置）。保留 `memory_writes` marker 的独立渲染分支作兜底（历史乱序数据 / 找不到 assistant 时）。
+  - `components/MemoryWriteSummary.tsx`: 图标 14px（`h-3.5 w-3.5`）对齐操作行，文字 `text-[10px]`，去掉居中样式。
+  - `components/ChatView.tsx` + `store/useStore.ts`: 上一条已删 `sessionMemoryWrites` 内存态、`memory_extracted` 事件改触发 reload，本条不再动。
+- **影响范围**: agent-core 抽取时序（三 surface 共享，自动生效）+ desktop 前端渲染位置。抽取多等≤5s 不影响用户（异步、不阻塞对话）。不改协议 / 数据格式。`wait_for_round_assistant` 顺带修复了「记忆抽取漏看本轮 assistant + cursor 错误推进」——之前每轮回复要到下一轮才被抽取，现在当轮即抽。
+- **验证**: heb CLI 复现——A（修前数据 `e60cba4f`）：`user→marker→assistant`、cursor 停在 user；B（修后 `15627d53`，输入「生日3月14日/橘猫咪咪/花生过敏」）：落盘顺序 `user→assistant→marker(memory_writes)`、cursor 正确推进到 assistant id。assistant_idx=1 < marker_idx=2 ✓。`cargo check -p agent-core` 通过；我改的前端文件 `tsc` 无错（工作区另有 FileViewer 等他人未完成改动导致的 tsc 报错，不在本次范围）。
+- **留尾巴**: ①未真机 `pnpm tauri dev` 手验前端视觉（marker 提进气泡内、操作行上方、字体对齐）——逻辑层已闭环；②5s 超时是经验值，极慢的 assistant 落盘（超大附件/磁盘卡）可能仍超时落回 marker 独立渲染兜底，但 marker 不丢、下次 reload 归位；③工作区混入多个并发任务未提交改动（FileViewer / 旁支等），提交时只 add 本任务文件（memory_extract.rs / MessageList.tsx / MessageBubble.tsx / MemoryWriteSummary.tsx），其余留工作区 + commit message Note 说明。
+
+### 2026-06-17 — 修复主对话插队三症状：实时渲染与 reload 排序真同源 + 浏览器提交统一注入入口
+
+- **Why**: 用户报「插队又坏了」（此前修过一次 session.jsonl 落盘顺序）。全局排查发现这次不是落盘顺序问题，而是**实时渲染层和 reload 后用了两套独立的消息排序模型**，加上三条注入路径各自为政：
+  1. **后台任务通知**：assistant 输出完才突然冒出 system_notification，且 run 结束 reload 位置跳变。根因——通知作为 `user_injected` 走"排在 streaming 之后"逻辑（实时层 `liveTimeline + assistantInsertPos` 数组位置模型），而 reload 走 `reorderForWakeupView` 把通知按 `tool_use_id` 钉到目标 assistant 之后（`created_at` 关联模型）。两套模型对同一组消息给出不同顺序 → reload 跳变；且通知到达被误判为"用户插队"触发 assistant 分段。
+  2. **内置浏览器「提交到主对话」**：App.tsx 三处监听（`onAnnotationBatch` / `browser://aside-result` / `browser://annotation-summary`）直接调 `sendUserMessage`，run 在跑时**无 active 判断**盲目开新 run——前端 slot 被新 initialSlot 覆盖、旧 run 事件因 requestId 不匹配被静默丢弃，造成双 run 打架 / 旧输出被吞。
+  3. 上一次（流式中输入框队列插队）已正确，但它和上面两条没共用同一套排序/注入抽象。
+- **改动**:
+  - [components/liveTimelineOrder.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.ts): 新增 `reorderWakeupOrder<T>` 作为**唯一排序核心**——纯函数，调用方用两个投影函数描述每项语义（是不是带 tool_use_id 的通知 / 是不是持有 tool_call 的 assistant 段）。**双向查找**：通知先向后找、找不到再向前找最近持有该 tool_call 的 assistant（reload 场景通知物理常在 assistant 前、实时场景 assistant 段已冻结在通知前，双向覆盖两种）。`reorderForWakeupView`（reload，从 MessageList.tsx 抽来）和 `runningTimelineRenderItems`（实时，新增可选 `WakeupOrderProjector` 参数）都走它。新增 `LiveTimelineItem` 类型（从 useStore 迁来）+ `liveTimelineWakeupProjector`（从 frozen 段 parts / streamingParts 提 tool_call id）。删冗余 `appendInjectedMessageAfterCurrentAssistant` / `TimelineSplitState`。
+  - [components/MessageList.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx): `reorderForWakeupView` 本地定义删除，改 import（它带 React 依赖跑不了单测，抽出去后排序逻辑独立可测）。
+  - [components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): `runningTimelineRenderItems` 调用传入 `liveTimelineWakeupProjector(streamingParts)` —— 实时渲染从此与 reload 同源。
+  - [store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): ①`LiveTimelineItem` 类型迁到 liveTimelineOrder.ts；②`turn_finished` 分段判定排除 `system_notification`（通知不是用户插队，不触发 assistant 分段）；③新增 `injectOrSend(sessionId, content, attachments)` action——run 在跑→注入当前 run 的 PendingInputs（即写即落 + 下个 boundary drain，不另起 run），idle→走 sendUserMessage；④删冗余 `insertSystemNotificationBeforeNextAssistant`，`triggerWakeupResume` 的 active 分支统一用 `appendUserInjectedMessage`（排序由 projector 接管，不再注入时特殊摆位）。
+  - [App.tsx](../apps/desktop/frontend/src/App.tsx): 浏览器提交三处从 `sendUserMessage(content, ..., target)` 改为 `injectOrSend(target, content, attachments)`。
+  - [components/liveTimelineOrder.test.ts](../apps/desktop/frontend/src/desktop/ui/components/liveTimelineOrder.test.ts): 新增复现单测——构造「后台 Bash(call_bg)→assistant-A→通知(tool_use_id=call_bg)→assistant-B」场景，断言实时渲染顺序 == reload 后 `reorderForWakeupView` 顺序。修前 FAIL（实时 `[A, B, notification]` vs reload `[A, notification, B]`），修后 PASS。补 `reorderForWakeupView` 自身的 defer 单测。
+- **影响范围**: 纯 desktop 前端渲染层 + 注入入口收敛。不动后端 / 协议 / 数据格式（涉及架构 §4.12.5 插队时机 + §4.9.5 消息顺序契约，属实现层收敛，无决策变更）。hebweb 复用同一份 React 代码，自动受益。
+- **验证**: `node --experimental-strip-types liveTimelineOrder.test.ts` 全绿（复现单测 A/B 翻转：修前 FAIL、修后 PASS）。我改动涉及的符号 `tsc` 零报错（工作区另有 FileViewer/openFiles 重构等他人未完成改动导致 20 个 pre-existing tsc 报错，全在 `openFile*`/`EditorSelectionRef`/`FileViewer`/`FileTree`/`DesktopShell` 代码块，不在本次范围）。
+- **留尾巴**: ①未真机 `pnpm tauri dev` 手验视觉——逻辑层已闭环（单测覆盖排序、tsc 覆盖类型），但实时流式中通知插入瞬间的动画/滚动行为、浏览器提交 toast 后的渲染需肉眼确认；②`injectOrSend` 的 inject race 回落（`injected=false` 时走 send 开新 run）依赖后端即写即落，与 wakeup 同款路径，风险低；③工作区混入多个并发任务未提交改动（FileViewer / ChatInput 拆分 / 旁支等），提交时只 add 本任务文件（liveTimelineOrder.ts/.test.ts、MessageList.tsx、ChatView.tsx、App.tsx、useStore.ts 中本次相关 hunk），其余留工作区 + commit message Note 说明哪些 hunk 是别人的。
+
+### 2026-06-16 — 文件查看器三项增强：Markdown 预览 / 选区引用 / 按对话隔离+固定
+
+- **Why**: 用户要 ① md 文件能在同 tab 内切「源码 ↔ 渲染预览」；② 在编辑器里选中文本段自动在输入框上方生成 `路径:行号` 引用（取消选中即删、重选即更新）；③ 打开的文件绑定当前对话、切对话即消失，加「固定」按钮固定后切对话仍保留
+- **改动**:
+  - `ui/store/useStore.ts`: 文件查看器状态从全局 `openFiles: string[]` / `activeFilePath` 重构为**按对话隔离**——`openFilesBySession: Record<sid, OpenFileEntry{path,pinned}[]>` + `activeFileBySession`；新增 `toggleFilePin`、`editorSelectionRef` + `setEditorSelectionRef`；新增 `selectCurrentOpenFiles` / `selectCurrentActiveFile` selector（引用稳定）；`openSession` 切换时 `pruneUnpinnedFiles` 清掉离开对话的未固定文件 + 清 editorSelectionRef
+  - `ui/components/FileViewer.tsx`: 工具栏加「固定」+「源码/预览」按钮；md 预览复用 `MarkdownRenderer`；Monaco `onDidChangeCursorSelection` → 实时写 editorSelectionRef（空选区置 null，终点落行首不算该行）；tab 显示 pin 标记；切文件/卸载清选区引用
+  - `ui/components/chatInput/index.tsx`: 订阅 editorSelectionRef，引用区渲染一条独立的实时 `路径:行号` chip（带 × 手动清除）；`drainEditor` 把选区引用 path 并入 allowed_paths、`path:line` 文本前置进消息；submit 空判断算上选区引用；clearEditor 清选区引用
+  - `ui/components/FileTreePanel.tsx` / `DesktopShell.tsx`: 消费点改用 selector
+- **影响范围**: 仅 desktop 前端（store + 4 组件）。复用已有 react-markdown / remark-gfm，无新依赖。架构.md §4.12.12 同步更新
+- **留尾巴**: ①选区引用是「单条、随选区变」语义，不是「可累积多条」——如果用户想一次引用多段需再设计；②选区引用文本以 `path:start-end` 纯文本进消息，模型靠 Read 工具按行号取，不内联文本内容；③固定态不持久化（重启清空），与「纯 UI 态」一致；④未真机 tauri dev 手验，建议跑一遍验证选区引用实时性 + 切对话清理 + md 预览
+
+### 2026-06-16 — 设计 `//goal` 命令（不达目标不停的会话目标，spec 落盘待实现）
+
+- **Why**: 用户要给 hebbian 加 Claude Code 那种 `/goal`——给会话挂一个完成条件，模型每次想停时由 judge LLM 判 transcript 是否达成，没达成就自动续跑，无人值守把长任务推进到底。逆向了 CC 2.1.177 native binary 的实现（Stop-hook + 独立 judge 模型裁决，判 `{"ok":true/false, impossible?}`）+ 对照了 codex `/goal`（重型 sqlite 状态机），选 CC 路线因 hebbian 已有 Stop 注入回路（agent_loop.rs:949）和 judge 范式（automode.rs），拼装即可，不需要 codex 那种独立 crate。
+- **改动**:
+  - `docs/superpowers/specs/2026-06-16-goal-command-design.md`: 新增设计文档。核心：①裁决复用现有 Stop 点位，排在外部 Stop hook 之后（先让 cargo check 等 verify 修干净再判整体目标）；②无迭代/token 上限但保留三道熔断（judge 判 impossible / turn 出错 / 用户 cancel）；③goal 落 session meta 跨重启；④judge 始终用会话主 client+主模型；⑤命令走 §8 内置 `//goal <条件>` / `//goal clear`
+  - **关键设计取舍**（待实现时落代码）：现有 `MAX_STOP_INJECTIONS=3` 是所有 Stop 注入共享的硬上限，goal 续跑必须解耦出独立计数器不受此约束（否则 3 轮被砍），外部 verify hook 注入仍守 3 次
+- **影响范围**: 设计阶段，暂未改代码。实现将动 agent-core（新增 goal.rs + prompts/goal_judge.md、改 agent_loop.rs Stop 分支、meta 加 active_goal）+ 协议（3 个 additive EventPayload）+ desktop（3 个 Tauri command + 渲染）。纯 additive，无目标会话行为与现状一致
+- **留尾巴**: ①judge 每轮一次额外 LLM 调用，长跑累积 token 成本，靠熔断兜底；②「慢但有进展」任务理论可能被误判 impossible，靠 prompt「谨慎判 impossible」缓解，未加无进展软熔断（用户确认不要）；③heb CLI / hebweb 的 `//goal` 命令对称注册首版可只做 Desktop，CLI 用 IPC 直接设 goal 验证；④下一步转 writing-plans 出实现计划
+- **关联**: docs/superpowers/specs/2026-06-16-goal-command-design.md
+
+### 2026-06-17 — 派生事件 session 级旁路：根治"标题/记忆事件在 run 收尾后丢失"+ 标题失败可见化
+
+- **承接同日两条**：① "标题生成失败完全无日志"（已加分阶段 `session_id` 埋点）；② 这条用埋点定位到真根因后，做的彻底重构。
+- **根因（heb mock 复现实锤）**：标题生成是 detached task，在首个 `TurnFinished` 后 spawn，内部要等一次完整模型往返（实测 ~8s）才完成；而它 emit 事件用的是 **run 级 mpsc**——`RunHandle::drive` 跑完主循环后只 `drain_trailing_events` 5s 就关掉接收端。8s > 5s → 标题任务 emit 时 `channel closed`，**成功（`SessionTitleChanged`）+ 失败事件全丢**。用户两次报"标题没生成"，一次是 provider 连不上（localhost:17785 没起服务），一次就是这个事件丢失。Desktop / heb / hebweb 都走同一套 `drive` 机制，三端同病。
+- **关键事实（查清后修正了初版方案）**：Desktop 的 `Channel<EngineEvent>` 是 **per-message 临时通道**（每次 invoke 新建、返回即废弃），活不过 detached task——这正是 trailing window 必须在 invoke 内同步等的根因。但 Desktop 另有 **app 级全局事件总线 `app.emit` / 前端 `listen`**（`wakeup-fired` 已用它处理"run 后异步触发"），它才是真正的 session 级 long-lived 出口。
+- **方案：派生事件旁路 `derived_sink`**（架构 §4.14.7 新增）：
+  - `RunParams` / `SessionConfig` / `Session` 加 `derived_sink: Option<EventSink>`；harness 里标题 / 记忆 detached task 优先走它，`None` 回退 `core_sink`（run 级，未接入 surface 行为不变）。run 主循环事件**不动**。
+  - `session_titler::generate_for_session` 返回类型从 `Option<String>` 改为三态 `TitleOutcome { Generated / Skipped / Failed(reason) }`——区分"真失败"与"正常跳过（title 已被用户改过）"，避免切回老对话误弹 toast。harness 据此 emit `SessionTitleChanged`（成功）/ 新增的 `SessionTitleGenerationFailed { session_id, reason }`（失败）/ 不发（跳过）。
+  - **Desktop 接入**：`chat::send_and_save` 构造捕获 `AppHandle` 的 derived_sink 闭包，把 agent-core Event 翻译成 `EngineEvent` 后 `app.emit("engine-derived-event", ev)`；前端 `App.tsx` 全局 `listen("engine-derived-event")` → `store.handleDerivedEvent`。把 store 里原本散在 per-message 回调的 title/memory 处理提取成 `handleDerivedEvent`，Desktop（全局总线）与 hebweb（ws `engine-event` → per-message 回调委托同一函数）共用一份逻辑，无重复无遗漏。
+  - **heb 接入**：daemon 的 derived_sink 捕获 `Arc<DaemonState>`，翻译后 `state.emit`（stdout 进程级 long-lived）。
+- **新增事件全链路 6 处映射**：protocol `EventPayload::SessionTitleGenerationFailed` → desktop `engine/mod.rs` + `chat.rs` / cli `ipc.rs` + `daemon.rs` / web `events.rs` → 前端 `types.ts` + `useStore`。
+- **影响范围**：agent-core（harness / session / session_titler / protocol）、desktop（chat.rs / engine / App.tsx / store）、cli（ipc / daemon）、web-server（events，加事件 variant；附带补了 `get_models_catalog` 命令——hebweb 进会话时 init 缺它崩 ErrorBoundary 的预存缺口）、channel-core（补 `derived_sink: None`）。**不破坏兼容**：新事件 additive；旧字段语义不变。
+- **验证**：
+  - 生产代码 `cargo check --workspace` 全过；前端 `tsc --noEmit` 全绿；agent-core 全单测 531 passed（session_titler 3 个含其中；2 个 flaky 失败 `dispatch::remember_first_compound_bash` / `bash::run_in_background` 单跑均 ok，与本次无关、未碰 dispatch/bash）。
+  - **端到端复现（heb + mock OpenAI server）**：失败路径——title 模型返 500 → 事件流在 `run_finished` 之后出现 `session_title_generation_failed`（改动前此处 `channel closed` 丢事件）；成功路径——title 模型返正常 → `session_title_changed {title:"杭州天气"}` 经旁路送达 + `session.jsonl` 落 `meta_update title='杭州天气'`。A/B 对照证明旁路绕过了已关闭的 run 通道。
+- **留尾巴**：
+  1. **trailing window 仍为 5s 未缩短**——heb 已接 derived_sink，但 hebweb 仍传 `None`（其派生事件走 core_sink + trailing）。待 hebweb 也接 derived_sink 后，可把 `drain_trailing_events` 缩到 ~500ms。架构.md §4.14.7 已注明此约束。
+  2. **Desktop 旁路未做 GUI 手测**——Tauri 原生窗口 Playwright 连不上，旁路逻辑靠 heb（同一 agent-core 主路径）端到端验证 + 代码对称性保证。建议下次开 Desktop 时发首条消息观察：title 模型不可用时是否弹"没能自动生成标题"toast。
+  3. 工作区内 `model-gateway/tests/thinking_integration.rs`（`ReasoningSignature` 变体未覆盖等）是**他人未完成改动**遗留的测试编译错误，不在本次范围、未触碰。
+
+### 2026-06-14 — subagent `permission=inherit` 继承父 hands-off 全自动（D9.3）
+
+- **Why**: 用户报「父 agent 是 AutoMode + hands-off 全自动，subagent 还要人工审，不对」。根因：`dispatch::spawn_task` 构造 `SubagentRunner` 时只传了 `parent_run_mode`、**没传父的 `force_automode` 句柄**，`runner` 给子 LoopParams 写死 `force_automode: false`（注释"子不参与 hands-off"）。于是子 NestedRun 虽然 RunMode 跟父=AutoMode、judge 短路生效，但 judge 判 ASK/DENY 时因 `force_automode=false` 仍保留人工审批弹窗——父放手跑了，子却把用户拦下来。
+- **设计取舍**: hands-off 语义是「我放手跑、判官说了算、别打断我」，父开了却在子任务被打断违背本意；`permission=inherit` 本就是「完全跟父 RunMode」，`force_automode` 作为 AutoMode 的子开关理应一起继承。推翻 D9.2 落地时「子不参与 hands-off」的保守决策（架构 §13 D9.3）。安全性不降：hands-off 下 judge ASK/DENY 是**自动拒**（把 reason 回灌 agent 换思路），不是放行，危险红线照拦。
+- **改动**:
+  - [crates/agent-core/src/subagent/runner.rs](../crates/agent-core/src/subagent/runner.rs): `SubagentRunner` 加 `parent_force_automode: SharedForceAutomode` 字段；`resolve_permission` 签名从 `(permission, parent) -> (RunMode, bool)` 改为 `(permission, parent, &parent_force_automode) -> (RunMode, SharedForceAutomode, bool)`——`inherit` 返回**父同一个 Arc 句柄**（共享，父中途切换实时跟随）、`acceptEdits`/`bypass` 返回独立 `false` 句柄（脱离父 AutoMode 档）；`run_nested_inner` 用解析出的句柄替换写死的 `false`；`spawn_background` 同步克隆传递该字段。新增回归测试 `inherit_subagent_shares_parent_force_automode_handle`（含 `Arc::ptr_eq` 共享校验 + 父改子实时可见 + 三档分别验证）。
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `spawn_task` 克隆 `self.force_automode` 并传入 `SubagentRunner.parent_force_automode`。
+  - [docs/架构.md](../docs/架构.md): §4.4.11.4 `inherit`/`acceptEdits` 两档补 force_automode 继承说明；§13 决策表加 D9.3。
+- **影响范围**: agent-core 内部（SubagentRunner 字段 + resolve_permission 签名，均为内部 API）。无协议改动、无破坏兼容。决策点收口在 `runner::resolve_permission` 单一函数。
+- **验证**:
+  - 单测 A/B：`inherit_subagent_shares_parent_force_automode_handle` 修前 FAIL（临时把 inherit 分支改回 `detached()` → `inherit 子应读到父 hands-off=true` 断言失败）、修后 PASS；`cargo test -p agent-core --lib` 532 passed（另 2 个 `bash::run_in_background_returns_immediately` / `dispatch::remember_first_compound_bash` 是时间敏感 flaky，单独重跑均 PASS，与本次无关）。
+  - `cargo check -p agent-core / -p hebbian-cli / -p hebbian-web-server` 通过；`tsc --noEmit`（apps/desktop）通过。
+- **留尾巴**: ① 端到端（真实 hands-off + inherit 子触发 judge ASK→自动拒不弹）未在 surface 跑通——本地 provider（localhost:17785）验证中途连接失败（HTTP 000），改用单测 A/B + 代码链路审查锁根因；provider 恢复后可补一次 CLI/Desktop 端到端。② CLI daemon 仍写死 `force_automode: false`、无 `//hands-off` 入口，CLI surface 本身复现不了 hands-off 场景（Desktop 才有 `//hands-off` 命令）；如需 CLI 调试 hands-off，可后续给 daemon 加设开关的 IPC 命令。③ 工作区另有他人未完成改动（apps/desktop/src/browser/mod.rs、chat.rs、lib.rs、tauri.conf.json、transcript.rs 等），本次未触碰、原样保留。
+
+### 2026-06-17 — 修复多轮 run 前端 streaming 状态机两个潜伏 bug：text_done 覆盖累积 + tool part index 缺失互相覆盖
+
+- **Why**: 用户报「编译过的新代码，正常跑的长对话，assistant 已输出的内容跑着跑着突然消失，run 完成后又出现」。三个样例 session 排查（202606160757-6831e055 run_c723d2cb 跑了 28 轮 / 202606170927 / 202606160757）现象同源——都是**多轮 agentic run（一个 run 多个 ModelStep）流式中前面输出消失、reload 恢复**。逐层扒到前端 `applyEventToSlot` 状态机两个独立 bug，二者都是 HEAD 就存在的潜伏老 bug，与近期「插队顺序统一」「streamingParts 抽取重构」改动都无关（对这两处逻辑都是纯平移）：
+  - **Bug A（文本整段消失，主因）**: `text_done` 分支用 `!full_text.endsWith(streamingText)` 判定。多轮 run 里 `streamingText` 是全 run 累积（text_delta 跨 ModelStep 持续追加），远长于单轮 `full_text`，该判定恒 false → 进分支把累积 `streamingText` 覆盖成**单轮** full_text，前面 N 轮输出瞬间消失。后端非流式 end_turn 路径（anthropic 带工具，`used_stream_path=false`）只 emit TextDone 不发 TextDelta，full_text 只含末轮 → 必触发。
+  - **Bug B（工具卡片消失/塌缩）**: `toolPartIndex` 按 id 找不到时回退 `part.index === index` 匹配。非流式 provider 的 tool_start/tool_done 事件 `index` 全是 `undefined`，回退匹配 `undefined === undefined` 命中上一轮工具 part → 多轮工具全塌进同一卡片互相覆盖（实测 3 个 Bash 塌成 1 个）。
+- **改动**（纯前端，`apps/desktop/frontend/src/desktop/ui/store/`）:
+  - `streamingParts.ts`: ①`toolPartIndex` index 参数放宽为 `number|null|undefined`，`index == null` 时不按 index 回退匹配（无法定位则当新 part 返回 -1），保留「有效 index 回退」给流式 delta「同一工具首 chunk 无 id、后续 chunk 带 id」的认领场景（不分裂）。②`ensureToolPart` 入参同步放宽，新建 part 时 `index: index ?? next.length` 给缺失 index 一个唯一值（避免渲染 key 重复）。③新增导出 `applyTextDone(streamingText, parts, fullText)`：流式已发过（`streamingText.endsWith(fullText)`）则不动，否则**追加**本轮 full_text 到累积（替代原「覆盖」语义）。
+  - `useStore.ts`: `text_done` 分支改调 `applyTextDone`，引用相等时返回原 slot（省重渲染）。
+  - `streamingParts.test.ts`（新建）: 固化两 bug 回归——非流式多轮 index=undefined 工具各自独立(3)、流式 delta id 后到不分裂(1)、并行工具 index 0/1/2 独立(3)、text_done 多轮追加不覆盖、流式不重复、空累积补全。
+- **影响范围**: 纯 desktop 前端 streaming 渲染状态机。不动后端/协议/数据格式。hebweb 复用同一 store，自动受益。session.jsonl 本就完整（所以 run 完 reload 能恢复），本次只修「流式中」的内存累积。
+- **验证**: ①`node --experimental-strip-types streamingParts.test.ts` 全绿（两 bug A/B 翻转：修前复现脚本 streamingText len 32→11 被覆盖、3 工具塌成 1；修后保留）。②端到端——heb 起 anthropic auto-mode session（030ec9c0）发「分3轮各调1个Bash」真实跑出 `tool_start/tool_done index=None`、末轮只 text_done 的事件流，喂进修复后状态机：streamingText 完整保留 4 轮文本(189字)、tool_call part=3。③我的改动符号 `tsc --noEmit`(apps/desktop) 零报错；liveTimelineOrder.test.ts 无回归。
+- **留尾巴**: ①未真机 `pnpm tauri dev` 肉眼确认流式中工具卡片不再塌缩、长 run 文本不闪退——逻辑层+真实事件流已闭环验证。②`StreamingAssistantPart.tool_call.index` 类型仍声明 `number`（实际运行时可能 undefined，是后端事件的类型谎报）；本次靠 `toolPartIndex` 运行时防御兜住，未改类型声明避免连锁 tsc 改动，后续可考虑改 `index?: number` 让类型诚实。③工作区混有他人未完成改动（streamingParts.ts 本身是他人正在做的「从 useStore 抽流式累积纯函数」重构、browser/mod.rs、chat.rs、lib.rs 等），本次只在 streamingParts.ts 上叠加 bug 修复 + 新建测试 + 改 useStore text_done 一处；提交时只 add 本次相关文件并在 message 用 Note 标注 streamingParts.ts 里哪些是他人重构、哪些是本次修复。
