@@ -229,26 +229,22 @@ async fn search_duckduckgo_instant_answer(
     let source = json["AbstractSource"].as_str().unwrap_or("").trim();
     let source_url = json["AbstractURL"].as_str().unwrap_or("").trim();
 
-    let mut result = format!(
-        "Web search results for query: \"{}\"\nDuration: {:.2}s\n\n",
-        input.query,
-        start.elapsed().as_secs_f64()
-    );
+    let mut body = String::new();
     if !answer.is_empty() {
-        result.push_str(&format!("Answer: {answer}\n\n"));
+        body.push_str(&format!("Answer: {answer}\n\n"));
     }
     if !abstract_text.is_empty() {
         if source.is_empty() {
-            result.push_str(abstract_text);
-            result.push_str("\n\n");
+            body.push_str(abstract_text);
+            body.push_str("\n\n");
         } else {
-            result.push_str(&format!("{source}: {abstract_text}\n\n"));
+            body.push_str(&format!("{source}: {abstract_text}\n\n"));
         }
     }
     if !source_url.is_empty() {
-        result.push_str("Sources:\n");
-        result.push_str(&format!(
-            "- [{}]({})\n\n",
+        body.push_str("Sources:\n");
+        body.push_str(&format!(
+            "- [{}]({})\n",
             if source.is_empty() {
                 source_url
             } else {
@@ -257,14 +253,22 @@ async fn search_duckduckgo_instant_answer(
             source_url
         ));
     } else {
-        result.push_str("Sources:\n");
-        result.push_str(&format!(
-            "- [DuckDuckGo results](https://duckduckgo.com/?q={})\n\n",
+        body.push_str("Sources:\n");
+        body.push_str(&format!(
+            "- [DuckDuckGo results](https://duckduckgo.com/?q={})\n",
             urlencoding::encode(&input.query)
         ));
     }
-    result.push_str("REMINDER: 必须在回答中引用这些来源，并使用 markdown 链接。");
-    Ok(result.trim().to_string())
+
+    let result = format!(
+        "Web search results for query: \"{}\"\nDuration: {:.2}s\n\n\
+         <external-content source=\"web_search\">\n{}</external-content>\n\n\
+         REMINDER: 必须在回答中引用这些来源，并使用 markdown 链接。",
+        input.query,
+        start.elapsed().as_secs_f64(),
+        body
+    );
+    Ok(result)
 }
 
 fn collect_instant_answer_topics(topics: &[Value], hits: &mut Vec<SearchHit>) {
@@ -384,24 +388,24 @@ fn url_matches_domain(url: &str, domain: &str) -> bool {
 }
 
 fn format_search_results(input: &SearchInput, hits: &[SearchHit], duration_seconds: f64) -> String {
-    let mut result = format!(
-        "Web search results for query: \"{}\"\nDuration: {:.2}s\n\nSources:\n",
-        input.query, duration_seconds
-    );
-
+    let mut sources = String::from("Sources:\n");
     if hits.is_empty() {
-        result.push_str(&format!(
+        sources.push_str(&format!(
             "- [DuckDuckGo results](https://duckduckgo.com/?q={})\n",
             urlencoding::encode(&input.query)
         ));
     } else {
         for hit in hits {
-            result.push_str(&format!("- [{}]({})\n", hit.title, hit.url));
+            sources.push_str(&format!("- [{}]({})\n", hit.title, hit.url));
         }
     }
 
-    result.push_str("\nREMINDER: 必须在回答中引用这些来源，并使用 markdown 链接。");
-    result
+    format!(
+        "Web search results for query: \"{}\"\nDuration: {:.2}s\n\n\
+         <external-content source=\"web_search\">\n{}</external-content>\n\n\
+         REMINDER: 必须在回答中引用这些来源，并使用 markdown 链接。",
+        input.query, duration_seconds, sources
+    )
 }
 
 fn dedupe_hits(hits: Vec<SearchHit>) -> Vec<SearchHit> {
@@ -527,5 +531,15 @@ mod tests {
         assert!(formatted.contains("Sources:"));
         assert!(formatted.contains("[Rust Book](https://doc.rust-lang.org/book/)"));
         assert!(formatted.contains("必须在回答中引用这些来源"));
+
+        // 外部结果必须被信任边界标签包裹，REMINDER 等 harness 指令留在标签外，
+        // 注入文本无法伪造出标签外的指令。
+        assert!(formatted.contains("<external-content source=\"web_search\">"));
+        assert!(formatted.contains("</external-content>"));
+        let after_close = formatted
+            .split("</external-content>")
+            .nth(1)
+            .expect("标签必须闭合");
+        assert!(after_close.contains("必须在回答中引用这些来源"));
     }
 }
