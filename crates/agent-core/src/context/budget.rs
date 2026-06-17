@@ -1,5 +1,19 @@
 use model_gateway::types::{AssistantEntry, TranscriptEntry};
 
+/// system prompt（BASE + persona + rules）+ 全部 tool 定义 schema 的恒定开销近似。
+/// 这块每轮请求都在、与对话长度无关，服务端真值约一万 token；本地估算若漏掉它，
+/// 在对话很短时估值趋近 0，会让 `calibrated` 的「真值/估值」比值爆炸成巨大乘数。
+const BASE_OVERHEAD_TOKENS: usize = 10_000;
+
+/// 单张图片的 token 估算。**与 base64 字节数无关**：目标模型原生支持图片时按分辨率
+/// 编码（量级数百~两千 token），不支持时经 VisionBridge 转成 ≤900 token 的文字描述
+/// 再入上下文。取一个覆盖两条路径的保守上界，避免按 base64 长度估出十几万的虚高值。
+const IMAGE_TOKENS_ESTIMATE: usize = 2_000;
+
+/// 校准比值（真值/估值）的上界。比值本意是吸收 tokenizer 偏差与恒定开销，正常在 1~2；
+/// 一旦因估值异常偏小被放大成巨大乘数，会把后续估算整体抬爆。钳到此上界兜底。
+const MAX_CALIBRATION_RATIO: f64 = 3.0;
+
 /// 粗略 token 估算（约 4 字符/token）
 pub fn estimate_tokens(text: &str) -> usize {
     // 中文约 1.5 字符/token，英文约 4 字符/token，取平均
@@ -36,12 +50,14 @@ pub fn calibrated_transcript_tokens(
     if last_real == 0 || last_estimated == 0 {
         return raw;
     }
-    ((raw as f64) * (last_real as f64 / last_estimated as f64)).round() as usize
+    let ratio = (last_real as f64 / last_estimated as f64).min(MAX_CALIBRATION_RATIO);
+    ((raw as f64) * ratio).round() as usize
 }
 
-/// 计算整个 transcript 的估算 token 数
+/// 计算整个 transcript 的估算 token 数。含 system + tool 定义 schema 的恒定开销近似
+/// （[`BASE_OVERHEAD_TOKENS`]），让短对话的估值不至于趋近 0、把校准比值带爆。
 pub fn estimate_transcript_tokens(system: Option<&str>, entries: &[TranscriptEntry]) -> usize {
-    let mut total = 0;
+    let mut total = BASE_OVERHEAD_TOKENS;
 
     if let Some(s) = system {
         total += estimate_tokens(s) + 4; // role overhead
@@ -64,8 +80,8 @@ fn entry_tokens(entry: &TranscriptEntry) -> usize {
                     common::attachments::MessageAttachment::TextFile { content, .. } => {
                         estimate_tokens(content) + 16
                     }
-                    common::attachments::MessageAttachment::Image { data, .. } => {
-                        (data.len() / 1024) * 85 + 128
+                    common::attachments::MessageAttachment::Image { .. } => {
+                        IMAGE_TOKENS_ESTIMATE
                     }
                 })
                 .sum();

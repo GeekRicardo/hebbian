@@ -420,4 +420,48 @@ mod tests {
             last_estimated
         ));
     }
+
+    /// 回归：先发一条短文字（采到含恒定开销的服务端真值 / 极小估值 → 畸形校准比值），
+    /// 再单独发一张图片，不应立即触发压缩。
+    ///
+    /// 修复前三处缺陷叠加必然误触发：① 图片按 base64 字节估成 ~17.8 万 token（实际原生
+    /// 编码或 VisionBridge 转文字后 token 量级极小）；② estimate_transcript_tokens 不含
+    /// system + tool 定义的恒定开销，只发短文字时估值趋近 0；③ 真值/估值比值无上界，被
+    /// 钉成 ~9 倍乘数。图片估值再被这个乘数放大到百万级，碾过 80k 阈值。
+    #[test]
+    fn single_image_message_does_not_trigger_compaction() {
+        use common::attachments::MessageAttachment;
+        use model_gateway::types::UserEntry;
+
+        let prompt = "参考这个页面给 sidebar 加文件目录树";
+
+        // 第一轮只发短文字，采到这一刻的本地估值与服务端真值。
+        let first_turn = vec![TranscriptEntry::User(UserEntry::text(prompt))];
+        let last_estimated = budget::estimate_transcript_tokens(None, &first_turn) as u64;
+        let last_real = 31_782; // 服务端真值：含 system + 全部 tool 定义的恒定开销。
+
+        // 第二轮：用户单独发一张 ~2MB base64 截图。
+        let with_image = vec![
+            TranscriptEntry::User(UserEntry::text(prompt)),
+            TranscriptEntry::User(UserEntry {
+                text: String::new(),
+                attachments: vec![MessageAttachment::Image {
+                    name: "image.png".to_string(),
+                    media_type: "image/png".to_string(),
+                    data: "A".repeat(2_140_744),
+                }],
+            }),
+        ];
+
+        let policy = crate::definition::CompactionPolicy {
+            token_budget: 80_000,
+            keep_recent_turns: 8,
+            strategy: crate::definition::CompactionStrategy::LlmSummary,
+        };
+
+        assert!(
+            !needs_compaction(None, &with_image, &policy, last_real, last_estimated),
+            "单发一张图片不应触发压缩"
+        );
+    }
 }
