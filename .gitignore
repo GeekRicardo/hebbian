@@ -58,3 +58,4 @@ image/
 .playwright-cli/
 .codegraph/
 apps/island-mac/.build/
+.worktrees/
