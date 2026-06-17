@@ -6,6 +6,7 @@ pub mod definition;
 pub mod dispatch;
 pub mod edits;
 pub mod effects;
+pub mod goal;
 pub mod harness;
 pub mod hooks;
 pub mod mcp;
