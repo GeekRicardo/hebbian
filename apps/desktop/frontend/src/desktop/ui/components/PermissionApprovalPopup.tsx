@@ -115,6 +115,82 @@ const RISK_STYLE: Record<
   },
 };
 
+type JudgeSegment = { index: string; fingerprint: string; detail: string };
+
+/**
+ * 把 AutoMode judge 的单行 reason 拆成「结论 + 逐段影响」。
+ *
+ * judge prompt 强制单行输出（上游 regex 解析多行会判失败），格式固定为
+ * `<一句话结论>. Segments: [1] <指纹>: <影响>；[2] ...`。这里按 `[N]` 边界切段，
+ * 给人看的换行/层级全在前端做。没有 `Segments:` 段（如 DENY 的单句）时整段当结论。
+ */
+function parseAutoJudgeReason(raw: string): {
+  headline: string;
+  segments: JudgeSegment[];
+} {
+  const text = raw.trim();
+  const marker = text.match(/\bSegments\s*[:：]\s*/i);
+  if (!marker || marker.index === undefined) {
+    return { headline: text, segments: [] };
+  }
+  const headline = text.slice(0, marker.index).trim();
+  const body = text.slice(marker.index + marker[0].length);
+  const segments: JudgeSegment[] = [];
+  const re = /\[(\d+)\]\s*([\s\S]*?)(?=\s*[;；]\s*\[\d+\]|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const chunk = m[2].trim().replace(/[;；]\s*$/, "").trim();
+    if (!chunk) continue;
+    // 指纹与影响以首个「：」或「: 」分隔——避免命中 `https://` 这类无空格冒号。
+    const sep = chunk.search(/：|:\s/);
+    const fingerprint = sep >= 0 ? chunk.slice(0, sep).trim() : chunk;
+    const detail = sep >= 0 ? chunk.slice(sep + 1).trim() : "";
+    segments.push({ index: m[1], fingerprint, detail });
+  }
+  if (segments.length === 0) return { headline: text, segments: [] };
+  return { headline, segments };
+}
+
+/** AutoMode judge 危险原因展示：结论一行、逐段缩进列表，整体限高可滚动。 */
+function AutoJudgeReason({ reason }: { reason: string }) {
+  const { headline, segments } = useMemo(
+    () => parseAutoJudgeReason(reason),
+    [reason]
+  );
+  return (
+    <div className="border-t border-border/60 text-[12px] text-amber-700 dark:text-amber-400">
+      <div className="px-3 py-2 max-h-48 overflow-y-auto space-y-1.5">
+        <div className="flex items-start gap-1.5">
+          <MessageSquareWarning className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span className="font-medium leading-relaxed">{headline}</span>
+        </div>
+        {segments.length > 0 && (
+          <ul className="pl-5 space-y-1">
+            {segments.map((seg) => (
+              <li key={seg.index} className="flex gap-1.5 leading-relaxed">
+                <span className="shrink-0 font-mono text-amber-600/70 dark:text-amber-500/70">
+                  {seg.index}.
+                </span>
+                <span className="min-w-0">
+                  <code className="font-mono break-all text-amber-800 dark:text-amber-300">
+                    {seg.fingerprint}
+                  </code>
+                  {seg.detail && (
+                    <span className="text-amber-700/90 dark:text-amber-400/90">
+                      {" — "}
+                      {seg.detail}
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * HITL 审批弹窗。挂在 ChatInput 上方。
  *
@@ -338,10 +414,7 @@ export function PermissionApprovalPopup() {
         )}
 
         {pending.autoJudgeReason && !feedbackOpen && (
-          <div className="px-3 py-2 border-t border-border/60 text-[12px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
-            <MessageSquareWarning className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>{pending.autoJudgeReason}</span>
-          </div>
+          <AutoJudgeReason reason={pending.autoJudgeReason} />
         )}
 
         {/* 反馈输入框（按需展开，仅 tool_call 有） */}
