@@ -36,6 +36,10 @@ pub struct SubagentRunner {
     pub parent_model_id: Option<String>,
     /// 父 Run 当前 RunMode；`permission=Inherit` 时子跟它（架构 §4.4.11.4）。
     pub parent_run_mode: crate::run_mode::RunMode,
+    /// 父 Run 的 `force_automode`（hands-off 全自动）共享句柄。`permission=Inherit` 时子
+    /// **共享同一个 Arc**——父开 hands-off 子也全自动不弹审批，父 run 中途切换子实时跟随
+    /// （架构 §4.4.11.4）。acceptEdits/bypass 子脱离父档，runner 内另建独立 `false` 句柄。
+    pub parent_force_automode: crate::run_mode::SharedForceAutomode,
     /// 父 Task 工具调用的 call_id——所有子事件经装饰器填上此字段后转发到父 sink。
     pub parent_task_call_id: String,
     /// 父 Transcript 在「触发 turn 之前」的 entries 快照（架构 §4.4.11.3）。
@@ -127,6 +131,7 @@ impl SubagentRunner {
         let parent_run_id = self.parent_run_id.clone();
         let parent_model_id = self.parent_model_id.clone();
         let parent_run_mode = self.parent_run_mode;
+        let parent_force_automode = self.parent_force_automode.clone();
         let parent_task_call_id = self.parent_task_call_id.clone();
         let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
 
@@ -142,6 +147,7 @@ impl SubagentRunner {
                 parent_run_id,
                 parent_model_id,
                 parent_run_mode,
+                parent_force_automode,
                 parent_task_call_id,
                 parent_transcript_snapshot: parent_transcript_snapshot.clone(),
             };
@@ -221,9 +227,9 @@ impl SubagentRunner {
         // 子 client 与 model（架构 §4.4.11.4）：def.model = provider id 时用该 provider 建专属
         // client、model 取该 provider 的 default_model；缺省复用父 client 与父 model。
         let (child_client, model_id) = self.resolve_child_client(&def);
-        // 子权限（架构 §4.4.11.4）：按 def.permission 解析子 RunMode 与 bypass 信任放行。
-        let (child_run_mode, subagent_bypass) =
-            resolve_permission(def.permission, self.parent_run_mode);
+        // 子权限（架构 §4.4.11.4）：按 def.permission 解析子 RunMode、force_automode 与 bypass。
+        let (child_run_mode, child_force_automode, subagent_bypass) =
+            resolve_permission(def.permission, self.parent_run_mode, &self.parent_force_automode);
         let max_iter = def.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
 
         let params = LoopParams {
@@ -247,8 +253,9 @@ impl SubagentRunner {
             run_mode: Arc::new(std::sync::Mutex::new(child_run_mode)),
             model_id,
             judge_client: Some(child_client.clone()),
-            // 子 agent 不参与 hands-off（始终走父继承的审批策略）。
-            force_automode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // 子 force_automode（架构 §4.4.11.4）：inherit 时 = 父共享句柄（完全跟父，含
+            // hands-off 全自动）；acceptEdits/bypass 时 = 独立 false（脱离父 AutoMode 档）。
+            force_automode: child_force_automode,
             data_dir: self.ctx.data_dir.clone(),
             session_id: child_session_id,
             phase: None,
@@ -346,20 +353,31 @@ impl SubagentRunner {
     }
 }
 
-/// 解析子 NestedRun 的 `(RunMode, bypass)`（架构 §4.4.11.4 权限维度）。
-/// - `Inherit`（缺省）→ 跟父 RunMode，不 bypass
-/// - `AcceptEdits` → 强制 `Default`（界内编辑 + 只读自主），不 bypass
-/// - `Bypass` → `Default` + bypass（白名单内免审、仅危险红线拦）
+/// 解析子 NestedRun 的 `(RunMode, force_automode, bypass)`（架构 §4.4.11.4 权限维度）。
+/// - `Inherit`（缺省）→ 跟父 RunMode + **共享父 force_automode 句柄**（完全跟父，含 hands-off
+///   全自动：父开 hands-off 时子也全自动不弹审批；父 run 中途切换子实时跟随），不 bypass
+/// - `AcceptEdits` → 强制 `Default`（界内编辑 + 只读自主），force_automode 仅 AutoMode 下生效、
+///   脱离父档故新建 `false`，不 bypass
+/// - `Bypass` → `Default` + bypass（白名单内免审、仅危险红线拦），force_automode 同上新建 `false`
 fn resolve_permission(
     permission: Option<crate::storage::subagents::SubagentPermission>,
     parent: crate::run_mode::RunMode,
-) -> (crate::run_mode::RunMode, bool) {
+    parent_force_automode: &crate::run_mode::SharedForceAutomode,
+) -> (
+    crate::run_mode::RunMode,
+    crate::run_mode::SharedForceAutomode,
+    bool,
+) {
     use crate::run_mode::RunMode;
     use crate::storage::subagents::SubagentPermission;
+    let detached = || {
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
+            as crate::run_mode::SharedForceAutomode
+    };
     match permission.unwrap_or_default() {
-        SubagentPermission::Inherit => (parent, false),
-        SubagentPermission::AcceptEdits => (RunMode::Default, false),
-        SubagentPermission::Bypass => (RunMode::Default, true),
+        SubagentPermission::Inherit => (parent, parent_force_automode.clone(), false),
+        SubagentPermission::AcceptEdits => (RunMode::Default, detached(), false),
+        SubagentPermission::Bypass => (RunMode::Default, detached(), true),
     }
 }
 
@@ -440,6 +458,55 @@ mod tests {
             source: crate::storage::subagents::SubagentSource::Global,
             permission: None,
         }
+    }
+
+    /// 回归（subagent 不继承父 hands-off）：`permission=Inherit` 的子必须**共享父的
+    /// force_automode 句柄**——父开 hands-off 全自动时子也全自动（judge ASK/DENY 自动拒不
+    /// 弹人工审），父 run 中途切换子实时跟随。acceptEdits/bypass 子脱离父 AutoMode 档，
+    /// 用独立 false 句柄（架构 §4.4.11.4）。
+    #[test]
+    fn inherit_subagent_shares_parent_force_automode_handle() {
+        use crate::run_mode::RunMode;
+        use crate::storage::subagents::SubagentPermission;
+        use std::sync::atomic::Ordering;
+
+        // 父 hands-off=true。
+        let parent_fa: crate::run_mode::SharedForceAutomode =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+        // inherit：跟父 RunMode + 共享同一句柄（同一 Arc）。
+        let (mode, fa, bypass) =
+            resolve_permission(Some(SubagentPermission::Inherit), RunMode::AutoMode, &parent_fa);
+        assert_eq!(mode, RunMode::AutoMode);
+        assert!(!bypass);
+        assert!(fa.load(Ordering::Relaxed), "inherit 子应读到父 hands-off=true");
+        assert!(
+            std::sync::Arc::ptr_eq(&fa, &parent_fa),
+            "inherit 子必须共享父同一个 force_automode Arc（父中途切换实时跟随）"
+        );
+        // 父中途关 hands-off，子共享句柄实时跟随。
+        parent_fa.store(false, Ordering::Relaxed);
+        assert!(!fa.load(Ordering::Relaxed), "共享句柄：父改了子立即可见");
+        parent_fa.store(true, Ordering::Relaxed);
+
+        // acceptEdits：强制 Default，独立 false 句柄（不跟父 hands-off）。
+        let (mode, fa, bypass) = resolve_permission(
+            Some(SubagentPermission::AcceptEdits),
+            RunMode::AutoMode,
+            &parent_fa,
+        );
+        assert_eq!(mode, RunMode::Default);
+        assert!(!bypass);
+        assert!(!fa.load(Ordering::Relaxed), "acceptEdits 子不跟父 hands-off");
+        assert!(!std::sync::Arc::ptr_eq(&fa, &parent_fa));
+
+        // bypass：Default + bypass，独立 false 句柄。
+        let (mode, fa, bypass) =
+            resolve_permission(Some(SubagentPermission::Bypass), RunMode::AutoMode, &parent_fa);
+        assert_eq!(mode, RunMode::Default);
+        assert!(bypass);
+        assert!(!fa.load(Ordering::Relaxed));
+        assert!(!std::sync::Arc::ptr_eq(&fa, &parent_fa));
     }
 
     #[test]

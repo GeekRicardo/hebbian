@@ -1521,6 +1521,7 @@ impl ToolDispatcher {
         let edits_worktree = self.edits_worktree.clone();
         let parent_model_id = self.model_id.clone();
         let parent_run_mode = *self.run_mode.lock().unwrap();
+        let parent_force_automode = self.force_automode.clone();
         let parent_transcript_snapshot = self.parent_transcript_snapshot.clone();
 
         let tool_span = tracing::info_span!(
@@ -1605,6 +1606,7 @@ impl ToolDispatcher {
                     parent_run_id: state.run_id.clone(),
                     parent_model_id: parent_model_id.clone(),
                     parent_run_mode,
+                    parent_force_automode,
                     parent_task_call_id: call.id.clone(),
                     parent_transcript_snapshot,
                 };
