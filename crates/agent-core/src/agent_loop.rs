@@ -982,76 +982,98 @@ pub async fn run_loop(
                 // 若会话挂了 //goal 目标，跑 judge 判 transcript 是否满足完成条件。
                 // judge 用会话主 client+主模型（judge_client 在 AutoMode 未配置时可能为
                 // None，此时无法裁决——保留目标但本 run 不再自动续跑，避免静默放行）。
-                if let (Some(dd), Some(sid)) = (data_dir.as_ref(), session_id.as_deref()) {
-                    if let Ok(sess) = crate::storage::sessions::load(dd, sid) {
-                        if let Some(goal) = sess.active_goal.clone() {
-                            match judge_client.as_ref() {
-                                None => {
-                                    tracing::warn!(
-                                        "active_goal 存在但 judge client 未配置，无法裁决，本 run 不续跑"
-                                    );
-                                }
-                                Some(jc) => {
-                                    let model = model_id.clone().unwrap_or_default();
-                                    let verdict = crate::goal::judge_goal(
-                                        jc,
-                                        &model,
-                                        &goal.condition,
-                                        &transcript.entries,
-                                        cancel.clone(),
-                                    )
-                                    .await;
-                                    match verdict {
-                                        crate::goal::GoalVerdict::Achieved(reason) => {
-                                            let _ = crate::storage::sessions::set_active_goal(
-                                                dd, sid, None,
-                                            );
-                                            emit(EventPayload::GoalAchieved {
-                                                condition: goal.condition.clone(),
-                                                reason,
-                                            });
-                                            // 目标达成 → 正常出 turn（落到下方 break）。
-                                        }
-                                        crate::goal::GoalVerdict::Impossible(reason) => {
-                                            let _ = crate::storage::sessions::set_active_goal(
-                                                dd, sid, None,
-                                            );
-                                            emit(EventPayload::GoalImpossible {
-                                                condition: goal.condition.clone(),
-                                                reason,
-                                            });
-                                            // 熔断1：判不可能 → 清目标、正常出 turn。
-                                        }
-                                        crate::goal::GoalVerdict::NotYet(reason) => {
-                                            goal_iterations += 1;
-                                            // 落盘更新 iterations + last_reason（跨重启可见）。
-                                            let updated = crate::storage::sessions::ActiveGoal {
-                                                condition: goal.condition.clone(),
-                                                created_at: goal.created_at,
-                                                iterations: goal_iterations,
-                                                last_reason: Some(reason.clone()),
-                                            };
-                                            let _ = crate::storage::sessions::set_active_goal(
-                                                dd,
-                                                sid,
-                                                Some(updated),
-                                            );
-                                            emit(EventPayload::GoalProgress {
-                                                iteration: goal_iterations,
-                                                reason: reason.clone(),
-                                            });
-                                            let wrapped = format!(
-                                                "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<goal-feedback>\n目标尚未达成。{reason}\n继续推进，达成后会自动结束。\n</goal-feedback>"
-                                            );
-                                            transcript.push_user(wrapped, Vec::new());
-                                            set_pending_inputs_accepting(
-                                                pending_inputs_accepting.as_ref(),
-                                                true,
-                                            );
-                                            output_attachments = all_attachments;
-                                            continue;
-                                        }
+                // 前三步只是取 (dd, sid, goal) 三元组，任一步缺失/失败都按"跳过裁决、
+                // 正常收尾"处理——压平成单个表达式，避免深层嵌套（dd/sid 是借用，goal owned）。
+                let goal_ctx = data_dir
+                    .as_ref()
+                    .zip(session_id.as_deref())
+                    .and_then(|(dd, sid)| {
+                        crate::storage::sessions::load(dd, sid)
+                            .ok()
+                            .map(|s| (dd, sid, s))
+                    })
+                    .and_then(|(dd, sid, s)| s.active_goal.map(|g| (dd, sid, g)));
+                if let Some((dd, sid, goal)) = goal_ctx {
+                    match judge_client.as_ref() {
+                        None => {
+                            tracing::warn!(
+                                "active_goal 存在但 judge client 未配置，无法裁决，本 run 不续跑"
+                            );
+                        }
+                        Some(jc) => {
+                            let model = model_id.clone().unwrap_or_default();
+                            let verdict = crate::goal::judge_goal(
+                                jc,
+                                &model,
+                                &goal.condition,
+                                &transcript.entries,
+                                cancel.clone(),
+                            )
+                            .await;
+                            match verdict {
+                                crate::goal::GoalVerdict::Achieved(reason) => {
+                                    if let Err(e) =
+                                        crate::storage::sessions::set_active_goal(dd, sid, None)
+                                    {
+                                        tracing::warn!(error = %e, "goal 达成后清目标落盘失败");
                                     }
+                                    emit(EventPayload::GoalAchieved {
+                                        condition: goal.condition.clone(),
+                                        reason,
+                                    });
+                                    // 目标达成 → 正常出 turn（落到下方 break）。
+                                }
+                                crate::goal::GoalVerdict::Impossible(reason) => {
+                                    if let Err(e) =
+                                        crate::storage::sessions::set_active_goal(dd, sid, None)
+                                    {
+                                        tracing::warn!(error = %e, "goal 判定不可达后清目标落盘失败");
+                                    }
+                                    emit(EventPayload::GoalImpossible {
+                                        condition: goal.condition.clone(),
+                                        reason,
+                                    });
+                                    // 熔断1：判不可能 → 清目标、正常出 turn。
+                                }
+                                crate::goal::GoalVerdict::NotYet(reason) => {
+                                    // 用户在 turn 末尾 cancel 会被 judge 归一成 NotYet——这里先拦掉，
+                                    // 避免虚增计数 / 注入无用 feedback / 多发 GoalProgress。
+                                    if cancellation::is_cancelled(&cancel) {
+                                        break Ok(AssistantOutput {
+                                            text: leak.text,
+                                            attachments: all_attachments,
+                                        });
+                                    }
+                                    goal_iterations += 1;
+                                    // 落盘更新 iterations + last_reason（跨重启可见）。
+                                    let updated = crate::storage::sessions::ActiveGoal {
+                                        condition: goal.condition.clone(),
+                                        created_at: goal.created_at,
+                                        iterations: goal_iterations,
+                                        last_reason: Some(reason.clone()),
+                                    };
+                                    if let Err(e) = crate::storage::sessions::set_active_goal(
+                                        dd,
+                                        sid,
+                                        Some(updated),
+                                    ) {
+                                        tracing::warn!(error = %e, "goal 续跑进度落盘失败");
+                                    }
+                                    emit(EventPayload::GoalProgress {
+                                        iteration: goal_iterations,
+                                        reason: reason.clone(),
+                                    });
+                                    info!(iteration = goal_iterations, "goal 尚未达成，续跑");
+                                    let wrapped = format!(
+                                        "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<goal-feedback>\n目标尚未达成。{reason}\n继续推进，达成后会自动结束。\n</goal-feedback>"
+                                    );
+                                    transcript.push_user(wrapped, Vec::new());
+                                    set_pending_inputs_accepting(
+                                        pending_inputs_accepting.as_ref(),
+                                        true,
+                                    );
+                                    output_attachments = all_attachments;
+                                    continue;
                                 }
                             }
                         }
@@ -2059,8 +2081,9 @@ mod tests {
         }
 
         // judge client：第 1 次 NotYet，第 2 次 Achieved。走 complete（goal judge 用 complete）。
+        // calls 用 Arc 共享，run 结束后可在外部断言裁决被调了几次。
         struct JudgeClient {
-            calls: AtomicUsize,
+            calls: Arc<AtomicUsize>,
         }
         #[async_trait]
         impl ModelClient for JudgeClient {
@@ -2125,8 +2148,9 @@ mod tests {
         let client = DoneEachTurnClient {
             calls: AtomicUsize::new(0),
         };
+        let judge_calls = Arc::new(AtomicUsize::new(0));
         let judge: Arc<dyn ModelClient> = Arc::new(JudgeClient {
-            calls: AtomicUsize::new(0),
+            calls: Arc::clone(&judge_calls),
         });
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_for_sink = Arc::clone(&events);
@@ -2177,6 +2201,19 @@ mod tests {
         assert!(result.is_ok(), "goal achieved 应正常出 turn: {result:?}");
         // 主 client 跑两轮：turn1 → NotYet 续跑 → turn2 → Achieved 收尾。
         assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        // judge 恰好裁决两次：turn1 末判 NotYet、turn2 末判 Achieved。
+        assert_eq!(
+            judge_calls.load(Ordering::SeqCst),
+            2,
+            "judge 应被调用 2 次（每轮 turn 末各一次）"
+        );
+
+        let result = result.unwrap();
+        // 最终返回的是第 2 轮（n=1）收尾文本。
+        assert_eq!(
+            result.text, "第 1 轮收尾",
+            "应返回第 2 轮的收尾文本，而非首轮"
+        );
 
         let events = events.lock().unwrap();
         assert!(
@@ -2199,14 +2236,21 @@ mod tests {
             "不应 emit GoalImpossible"
         );
 
-        // NotYet 注入了一条 <goal-feedback> user message。
-        assert!(
-            transcript.entries.iter().any(|e| matches!(
-                e,
-                TranscriptEntry::User(u) if u.text.contains("<goal-feedback>")
-                    && u.text.contains("还差一个测试没过")
-            )),
-            "transcript 应含注入的 goal-feedback 续跑提示"
+        // NotYet 只注入一条 <goal-feedback> user message（恰好一次，不多不少）。
+        let feedback_count = transcript
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    TranscriptEntry::User(u) if u.text.contains("<goal-feedback>")
+                        && u.text.contains("还差一个测试没过")
+                )
+            })
+            .count();
+        assert_eq!(
+            feedback_count, 1,
+            "transcript 应恰好含一条注入的 goal-feedback 续跑提示"
         );
 
         // Achieved 后目标被清空（落盘可见）。
