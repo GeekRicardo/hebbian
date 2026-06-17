@@ -8488,3 +8488,21 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `ui/components/chatInput/index.tsx`: 项目 pill 的 `HoverHint` hint 内，allowed_paths 每行加 `group` + hover 出现的 lucide `X`；新增 `removeProjectAllowedPath(path)`——按 `folders[0]=workdir / folders.slice(1)=allowed_paths` 约定从 `activeProject.folders` 推导，移除该条后调 `saveProject` 写回项目模板（持久化，影响该项目以后新建会话），同时同步移除当前会话 pending 路径做即时反馈
 - **影响范围**: 仅 desktop 前端。HoverHint 是 6 处共用组件，恢复后全部 hover 提示重新生效；项目 pill 删除作用于项目模板配置（经 `saveProject` → `save_project` 持久化）。无协议 / 后端改动；tsc 通过
 - **留尾巴**: 项目 pill 的删除逻辑落在别人正在重构的 `chatInput/` 新目录（untracked）内，本次未随该目录提交，留在工作区
+
+### 2026-06-16 — 新增 `//goal` 命令（不达目标不停的会话目标，后端完成、前端待接）
+
+- **Why**: 给 hebbian 加 Claude Code 那种 `/goal`——给会话挂一个「完成条件」，模型每次想结束 turn 时由一个 judge LLM 判对话历史是否满足条件，没满足就自动注入「还差什么」续跑、无人值守把长任务推进到底。逆向了真 CC 2.1.177 native binary 的实现（Stop-hook + 独立 judge 模型裁决，判 `{"ok":true/false,impossible?}`），选 CC 路线而非 codex 的重型 sqlite 状态机，因 hebbian 已有 Stop 注入回路（agent_loop.rs:949）+ judge 范式（automode.rs）+ active_plan 式可清空 meta 字段，拼装即可。设计见 docs/superpowers/specs/2026-06-16-goal-command-design.md，计划见 docs/superpowers/plans/2026-06-16-goal-command.md。
+- **改动**（worktree `feature/goal-command`，6 个 commit）:
+  - `crates/agent-core/src/storage/sessions.rs`: 新增 `ActiveGoal{condition,created_at,iterations,last_reason}` + Session/RolloutMeta/MetaUpdate 三处字段 + fold + `set_active_goal()` setter（仿 active_plan 范式，跨重启持久化）
+  - `crates/agent-core/src/goal.rs` + `prompts/goal_judge.md`: 新增 goal judge 模块。`GoalVerdict{Achieved,Impossible,NotYet}` + `judge_goal()`（用会话主 client+主模型）+ JSON 解析（容错抠 `{...}`，解析失败/出错 fail-safe 为 NotYet，绝不误判达成；impossible 前置于 ok 防矛盾输入误判）
+  - `crates/agent-core/src/agent_loop.rs`: Stop 自然结束分支接入 goal 裁决。排在外部 Stop hook 之后；`goal_iterations` 独立计数**不受 MAX_STOP_INJECTIONS=3 约束**（无上限）；三道熔断：judge 判 impossible / turn 出错(break Err 不裁决保留目标) / cancel（NotYet 入口再拦一道防末轮副作用）；judge_client=None 只 warn 不续跑保留目标。含真集成测试 goal_notyet_then_achieved_drives_resume_and_clear（mock judge 先 NotYet 后 Achieved，验证续跑→注入 `<goal-feedback>`→清目标全闭环）
+  - `crates/protocol/src/event.rs` + `apps/desktop/src/engine/mod.rs` + `apps/desktop/src/chat.rs`: 新增 `Goal{Achieved,Impossible,Progress}` EventPayload + EngineEvent + 翻译（additive）
+  - `apps/desktop/src/lib.rs`: 新增 `get/set/clear_active_goal` 三个 Tauri command（仿 get/set_run_mode）+ generate_handler 注册
+  - `docs/架构.md`: §4.8.3 补 goal 裁决与 Stop hook 关系（同点位、独立无上限、三道熔断），§8.2 表 A 加 `//goal` 行
+- **影响范围**: agent-core（新增 goal.rs + 改 sessions/agent_loop）+ protocol（3 additive event）+ desktop 后端（3 command + 翻译）。纯 additive，无目标会话行为不变。`cargo test -p agent-core --lib` 539 passed（含 goal 集成测试 + active_goal roundtrip + 6 个 parse_verdict）
+- **留尾巴**:
+  - **Task 6（前端 //goal 命令注册 + 状态条渲染）未做**：需在 slashCommands.ts 注册内置命令、tauri.ts 加 invoke 绑定、监听 goal_progress/achieved/impossible 事件渲染。计划见 plan Task 6
+  - **Task 7（heb CLI 端到端 A/B 验证）未做**：验证「不创建目标文件→GoalProgress 反复续跑 / 创建后→GoalAchieved 清目标」
+  - **desktop 包基线编不过**（与本特性无关）：`apps/desktop/src/lib.rs:1153` 用了 agent-core `Message` 结构里不存在的 `run_duration_ms` 字段，是上游 commit 78022c5 引入的在途半成品。导致 Task 5 的 command 无法整包编译验证（靠对照范式 + agent-core 符号存在性佐证），且 `pnpm tauri dev` 起不来。要解锁 desktop 需给 `Message` 加该字段（属别人在途工作，未擅自代劳）
+  - **read_jsonl_meta_only 未解析 active_goal**：导致每个 end_turn 全量 load session（代价相对模型调用可忽略），后续可优化
+  - 工作分支 `feature/goal-command`（worktree `.worktrees/goal-command`），未合并 main、未 push
