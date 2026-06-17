@@ -477,6 +477,12 @@ function mirrorFromSlot(slot: SessionStream | undefined) {
   };
 }
 
+/** 截断过长的 toast 描述文本，避免 judge 给的长理由撑爆提示框。 */
+function trimToastText(s: string, limit = 160): string {
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  return oneLine.length <= limit ? oneLine : oneLine.slice(0, limit) + "…";
+}
+
 function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
   // 子 agent 事件：路由到对应 Task tool call 的 nested_parts（架构 §4.4.11.8）
   const nestedCallId = "subagent_call_id" in e ? e.subagent_call_id : undefined;
@@ -2359,6 +2365,28 @@ export const useStore = create<AppState>((set, get) => ({
             }
             if (e.type === "memory_extraction_failed") {
               toast.error("记忆提取失败了", { description: "这轮对话会在下次自动补抽" });
+              return;
+            }
+            // //goal 目标判定事件：session 级提示，不进 slot——判定在 turn 收尾时到达。
+            if (e.type === "goal_progress") {
+              toast.info(`目标推进中（第 ${e.iteration} 轮）`, {
+                description: e.reason,
+                duration: 5000,
+              });
+              return;
+            }
+            if (e.type === "goal_achieved") {
+              toast.success("目标达成 ✓", {
+                description: trimToastText(e.reason),
+                duration: 6000,
+              });
+              return;
+            }
+            if (e.type === "goal_impossible") {
+              toast.error("目标无法达成", {
+                description: trimToastText(e.reason),
+                duration: 8000,
+              });
               return;
             }
             // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。
