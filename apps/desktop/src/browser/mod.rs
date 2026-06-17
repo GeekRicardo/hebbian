@@ -1253,12 +1253,36 @@ fn route_aside_event(
             );
         }
         EngineEvent::RunFinished { .. } => {
+            tracing::info!(
+                target: "browser_aside",
+                host = %host_session,
+                aside = %aside_session,
+                "[Aside:Event] RunFinished → 下发 done 解除 spinner"
+            );
             eval_aside_down(
                 app,
                 host_session,
                 surface,
                 "heb:aside:done",
                 serde_json::json!({ "sessionId": aside_session }),
+            );
+        }
+        // 流式途中的软错误事件：run 不一定走 Err 返回（也就不一定有 handle_aside_send 的
+        // error 兜底），必须在这里直接下发 error 解除 spinner，否则前端一直转（卡死根因之一）。
+        EngineEvent::Error { message } => {
+            tracing::warn!(
+                target: "browser_aside",
+                host = %host_session,
+                aside = %aside_session,
+                %message,
+                "[Aside:Event] Error → 下发 error 解除 spinner"
+            );
+            eval_aside_down(
+                app,
+                host_session,
+                surface,
+                "heb:aside:error",
+                serde_json::json!({ "sessionId": aside_session, "message": message }),
             );
         }
         _ => {}
@@ -1447,6 +1471,35 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
         } else {
             format!("<selected_elements>\n{elements_block}\n</selected_elements>\n\n{text}")
         };
+        tracing::info!(
+            target: "browser_aside",
+            host = %main_sid,
+            aside = %aside_id,
+            %surface,
+            %provider_id,
+            %model,
+            history_len = history.len(),
+            has_images = !attachments.is_empty(),
+            "[Aside:Send] 元素对话开跑"
+        );
+        let bridge = preview_bridge_for(&app2, &main_sid, &surface);
+        if bridge.is_none() {
+            tracing::warn!(
+                target: "browser_aside",
+                host = %main_sid,
+                aside = %aside_id,
+                "[Aside:Send] 没拿到预览观察通道（PreviewInspect/Capture 会走降级提示）"
+            );
+        }
+        // 看门狗：元素对话一轮极限时长。超过则置位 cancel 让 agent loop 优雅中断，
+        // 避免模型流 / webview eval 永久 hang 时前端 spinner 一直转（根因：spinner
+        // 解除只依赖 done/error 事件，run 卡死时两者都不来）。180s 足够长输出跑完，
+        // 又能兜住真卡死。cancel 置位后 run_aside 返回 Cancelled → 下方 Err 分支发 error。
+        let watchdog_cancel = cancel.clone();
+        let watchdog = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+            watchdog_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
         let result = chat::send_aside(
             &dd,
             &main_sid,
@@ -1457,13 +1510,34 @@ fn handle_aside_send(app: &AppHandle, main_session_id: &str, payload: &serde_jso
             user_content,
             attachments,
             cancel,
-            preview_bridge_for(&app2, &main_sid, &surface),
+            bridge,
             move |event| route_aside_event(&app3, &host, &surface2, &aside_for_event, event),
         )
         .await;
+        watchdog.abort(); // run 已结束（成功/失败/取消），撤掉看门狗
         // run 结束移除 cancel flag（无论成功/失败/取消）
         if let Some(st) = app2.try_state::<BrowserState>() {
             st.aside_cancels.lock().unwrap().remove(&aside_id);
+        }
+        match &result {
+            Ok((updated_history, _)) => {
+                tracing::info!(
+                    target: "browser_aside",
+                    host = %main_sid,
+                    aside = %aside_id,
+                    turns = updated_history.len(),
+                    "[Aside:Send] 元素对话一轮完成"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "browser_aside",
+                    host = %main_sid,
+                    aside = %aside_id,
+                    error = %e,
+                    "[Aside:Send] 元素对话一轮失败"
+                );
+            }
         }
         match result {
             Ok((updated_history, _)) => {

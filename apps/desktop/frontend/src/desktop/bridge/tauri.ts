@@ -136,6 +136,7 @@ export const api = {
   branchSend: (
     branchId: string,
     content: string,
+    attachments: MessageAttachment[],
     providerId: string | null,
     model: string | null,
     onEvent: (e: EngineEvent) => void
@@ -145,6 +146,7 @@ export const api = {
     return invoke<Message>("branch_send", {
       branchId,
       content,
+      attachments,
       providerId,
       model,
       onEvent: channel,
@@ -153,6 +155,9 @@ export const api = {
   /** 关闭一条旁支（丢弃内存历史）。 */
   branchDiscard: (branchId: string) =>
     invoke<void>("branch_discard", { branchId }),
+  /** 停止一条旁支正在跑的 run（置位 cancel flag 中断 agent loop）。 */
+  branchCancel: (branchId: string) =>
+    invoke<void>("branch_cancel", { branchId }),
 
   truncateAfter: (id: string, messageId: string) =>
     invoke<Session>("truncate_after", { id, messageId }),

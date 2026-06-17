@@ -2939,6 +2939,7 @@ pub fn run() {
             branch::branch_create,
             branch::branch_send,
             branch::branch_discard,
+            branch::branch_cancel,
             truncate_after,
             truncate_inclusive,
             undo_compaction,

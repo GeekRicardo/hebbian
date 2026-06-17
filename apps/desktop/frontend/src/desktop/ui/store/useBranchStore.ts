@@ -1,36 +1,34 @@
 import { create } from "zustand";
 import { api } from "@/desktop/bridge/tauri";
-import type { EngineEvent } from "@/desktop/ui/types";
+import type {
+  EngineEvent,
+  Message,
+  MessageAttachment,
+  MessagePart,
+  StreamingAssistantPart,
+} from "@/desktop/ui/types";
+import {
+  applyReasoningDelta,
+  applyTextDelta,
+  applyToolCallDelta,
+  applyToolDone,
+  applyToolOutputDelta,
+  applyToolStart,
+  finalizeOpenReasoning,
+} from "@/desktop/ui/store/streamingParts";
 
 /**
  * 旁支对话 store（branch / aside session，架构 §8.5）。
  *
- * 旁支是从主对话 fork 出来的临时只读讨论：继承主对话此刻的聊天记录作上下文，只挂
- * Read / Grep，读代码、查实现、解释调用，但改不了任何文件。后端纯内存、不落盘，关掉即消失。
+ * 旁支是从主对话 fork 出来的临时只读讨论：继承主对话此刻的聊天记录作上下文，挂只读工具
+ * （Read / Grep / WebSearch / Fetch / ReadMemory + MCP），读代码、查实现、查资料，但改不了
+ * 任何文件、跑不了命令。后端纯内存、不落盘，关掉即消失。
  *
  * 本 store 独立于主对话 useStore：旁支不进会话列表、不持久化，状态全在内存，跟着右侧 tab
- * 生死。多个旁支按 branchId 索引，每个一条独立消息流。前端只渲染 user/assistant 气泡 +
- * 折叠的工具卡片摘要（旁支不需要主对话那套 fork/rollback/审批重交互）。
+ * 生死。多个旁支按 branchId 索引，每个一条独立消息流。**渲染与主对话同源**——messages 直接
+ * 持 storage `Message`、流式态用 `StreamingAssistantPart[]`，前端复用 `MessageBubble` 渲染，
+ * 跟主对话完全一致（reasoning 折叠、工具卡片展开 / 实时输出、附件等都自动有）。
  */
-
-/** 旁支消息流里的一个工具调用摘要（只读工具，折叠展示）。 */
-export type BranchToolCall = {
-  id: string;
-  name: string;
-  /** 入参摘要（首行/截断）。 */
-  argsPreview: string;
-  status: "running" | "done" | "error";
-};
-
-export type BranchMessage =
-  | { kind: "user"; id: string; text: string }
-  | {
-      kind: "assistant";
-      id: string;
-      text: string;
-      reasoning: string;
-      tools: BranchToolCall[];
-    };
 
 export type Branch = {
   branchId: string;
@@ -42,15 +40,18 @@ export type Branch = {
   /** 本旁支用的供应商 / 模型（默认继承主对话，可在输入框旁切换；不影响主对话）。 */
   providerId: string | null;
   model: string | null;
-  messages: BranchMessage[];
+  /** 已落定的消息流（storage Message，与主对话同构，喂给 MessageBubble 渲染）。 */
+  messages: Message[];
   /** 当前输入框草稿。 */
   input: string;
+  /** 当前待发附件（贴图 / 拖入，发送后清空）。 */
+  attachments: MessageAttachment[];
   /** 正在跑一轮（streaming 中）。 */
   busy: boolean;
-  /** streaming 中的实时 assistant（未落定）。 */
+  /** streaming 中的实时 assistant 正文（喂 MessageBubble 的 message.content）。 */
   liveText: string;
-  liveReasoning: string;
-  liveTools: BranchToolCall[];
+  /** streaming 中的实时 assistant 片段（文本 / 推理 / 工具卡片，喂 MessageBubble 的 streamingParts）。 */
+  liveParts: StreamingAssistantPart[];
   error: string | null;
 };
 
@@ -75,10 +76,21 @@ type BranchState = {
   discardBranch: (branchId: string) => Promise<void>;
   /** 设置输入框草稿。 */
   setBranchInput: (branchId: string, value: string) => void;
+  /** 设置当前待发附件。 */
+  setBranchAttachments: (
+    branchId: string,
+    attachments: MessageAttachment[]
+  ) => void;
   /** 切换本旁支的供应商 / 模型。 */
   setBranchModel: (branchId: string, providerId: string, model: string) => void;
-  /** 发一轮消息（用 branch 自身的 provider/model；为空时后端回落主对话默认）。 */
-  sendBranchMessage: (branchId: string, text: string) => Promise<void>;
+  /** 发一轮消息（正文 + 附件；用 branch 自身的 provider/model，为空时后端回落主对话默认）。 */
+  sendBranchMessage: (
+    branchId: string,
+    text: string,
+    attachments: MessageAttachment[]
+  ) => Promise<void>;
+  /** 停止正在跑的一轮（置位后端 cancel flag）。 */
+  cancelBranch: (branchId: string) => Promise<void>;
 };
 
 function titleFromText(text: string): string {
@@ -86,13 +98,43 @@ function titleFromText(text: string): string {
   return t.length > 16 ? `${t.slice(0, 16)}…` : t || "新旁支";
 }
 
-function argsPreview(input: unknown): string {
-  try {
-    const s = typeof input === "string" ? input : JSON.stringify(input);
-    return s.length > 60 ? `${s.slice(0, 60)}…` : s;
-  } catch {
-    return "";
-  }
+/**
+ * 失败 / 中断兜底：把已流式出来的 liveParts 落定成一条 assistant `Message`，
+ * 避免用户已经看到的内容丢失（正常成功路径直接用后端返回的 Message，不走这里）。
+ * 返回 null 表示这一轮还没产出任何东西，无需落定。
+ */
+function liveToMessage(
+  liveText: string,
+  liveParts: StreamingAssistantPart[]
+): Message | null {
+  const finalized = finalizeOpenReasoning(liveParts);
+  const parts: MessagePart[] = finalized.flatMap((p): MessagePart[] => {
+    if (p.type === "text") return p.text ? [{ type: "text", text: p.text }] : [];
+    if (p.type === "reasoning")
+      return [{ type: "reasoning", text: p.text, duration_ms: p.duration_ms ?? null }];
+    // tool_call：丢掉流式专属字段（index/status/live_output），转成持久化形态。
+    return [
+      {
+        type: "tool_call",
+        id: p.id ?? "",
+        name: p.name ?? "",
+        input: p.input,
+        arguments: p.arguments,
+        result: p.result ?? null,
+        duration_ms: p.duration_ms ?? null,
+        is_error: p.is_error ?? false,
+        artifact_path: p.artifact_path ?? null,
+      },
+    ];
+  });
+  if (parts.length === 0 && !liveText) return null;
+  return {
+    id: `a-${Date.now()}`,
+    role: "assistant",
+    content: liveText,
+    parts,
+    created_at: Date.now(),
+  };
 }
 
 export const useBranchStore = create<BranchState>((set, get) => ({
@@ -117,10 +159,10 @@ export const useBranchStore = create<BranchState>((set, get) => ({
       model: defaultModel,
       messages: [],
       input: "",
+      attachments: [],
       busy: false,
       liveText: "",
-      liveReasoning: "",
-      liveTools: [],
+      liveParts: [],
       error: null,
     };
     set((s) => ({
@@ -159,6 +201,16 @@ export const useBranchStore = create<BranchState>((set, get) => ({
     });
   },
 
+  setBranchAttachments(branchId, attachments) {
+    set((s) => {
+      const b = s.branches[branchId];
+      if (!b) return s;
+      return {
+        branches: { ...s.branches, [branchId]: { ...b, attachments } },
+      };
+    });
+  },
+
   setBranchModel(branchId, providerId, model) {
     set((s) => {
       const b = s.branches[branchId];
@@ -169,17 +221,20 @@ export const useBranchStore = create<BranchState>((set, get) => ({
     });
   },
 
-  async sendBranchMessage(branchId, text) {
+  async sendBranchMessage(branchId, text, attachments) {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && attachments.length === 0) return;
     const cur = get().branches[branchId];
     if (!cur || cur.busy) return;
     const { providerId, model } = cur;
 
-    const userMsg: BranchMessage = {
-      kind: "user",
-      id: `u-${Date.now()}`,
-      text: trimmed,
+    const now = Date.now();
+    const userMsg: Message = {
+      id: `u-${now}`,
+      role: "user",
+      content: trimmed,
+      attachments,
+      created_at: now,
     };
     const patch = (fn: (b: Branch) => Branch) =>
       set((s) => {
@@ -190,47 +245,52 @@ export const useBranchStore = create<BranchState>((set, get) => ({
 
     patch((b) => ({
       ...b,
-      title: b.messages.length === 0 ? titleFromText(trimmed) : b.title,
+      title:
+        b.messages.length === 0
+          ? titleFromText(trimmed || "（附件）")
+          : b.title,
       messages: [...b.messages, userMsg],
       input: "",
+      attachments: [],
       busy: true,
       liveText: "",
-      liveReasoning: "",
-      liveTools: [],
+      liveParts: [],
       error: null,
     }));
 
+    // 事件流累积进 liveText / liveParts，与主对话同一套折叠逻辑（MessageBubble 直接渲染）。
     const onEvent = (e: EngineEvent) => {
       switch (e.type) {
         case "text_delta":
-          patch((b) => ({ ...b, liveText: b.liveText + e.text }));
+          patch((b) => ({
+            ...b,
+            liveText: b.liveText + e.text,
+            liveParts: applyTextDelta(b.liveParts, e.text),
+          }));
+          break;
+        case "text_done":
+          patch((b) => ({
+            ...b,
+            liveText: e.full_text || b.liveText,
+          }));
           break;
         case "reasoning":
-          patch((b) => ({ ...b, liveReasoning: b.liveReasoning + e.text }));
+          patch((b) => ({
+            ...b,
+            liveParts: applyReasoningDelta(b.liveParts, e.text),
+          }));
+          break;
+        case "tool_call_delta":
+          patch((b) => ({ ...b, liveParts: applyToolCallDelta(b.liveParts, e) }));
           break;
         case "tool_start":
-          patch((b) => ({
-            ...b,
-            liveTools: [
-              ...b.liveTools,
-              {
-                id: e.id,
-                name: e.name,
-                argsPreview: argsPreview(e.input),
-                status: "running",
-              },
-            ],
-          }));
+          patch((b) => ({ ...b, liveParts: applyToolStart(b.liveParts, e) }));
           break;
         case "tool_done":
-          patch((b) => ({
-            ...b,
-            liveTools: b.liveTools.map((t) =>
-              t.id === e.id
-                ? { ...t, status: e.is_error ? "error" : "done" }
-                : t
-            ),
-          }));
+          patch((b) => ({ ...b, liveParts: applyToolDone(b.liveParts, e) }));
+          break;
+        case "tool_output_delta":
+          patch((b) => ({ ...b, liveParts: applyToolOutputDelta(b.liveParts, e) }));
           break;
         default:
           break;
@@ -238,48 +298,46 @@ export const useBranchStore = create<BranchState>((set, get) => ({
     };
 
     try {
-      await api.branchSend(branchId, trimmed, providerId, model, onEvent);
-      patch((b) => {
-        const assistant: BranchMessage = {
-          kind: "assistant",
-          id: `a-${Date.now()}`,
-          text: b.liveText,
-          reasoning: b.liveReasoning,
-          tools: b.liveTools,
-        };
-        return {
-          ...b,
-          messages: [...b.messages, assistant],
-          busy: false,
-          liveText: "",
-          liveReasoning: "",
-          liveTools: [],
-        };
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // 后端返回本轮落定的 assistant Message（含完整 parts），用它入 messages 最准确。
+      const assistant = await api.branchSend(
+        branchId,
+        trimmed || "（见附件）",
+        attachments,
+        providerId,
+        model,
+        onEvent
+      );
       patch((b) => ({
         ...b,
+        messages: [...b.messages, assistant],
         busy: false,
-        error: message,
-        // 把已流式出来的 assistant 部分也落定，避免丢失
-        messages:
-          b.liveText || b.liveTools.length > 0
-            ? [
-                ...b.messages,
-                {
-                  kind: "assistant" as const,
-                  id: `a-${Date.now()}`,
-                  text: b.liveText,
-                  reasoning: b.liveReasoning,
-                  tools: b.liveTools,
-                },
-              ]
-            : b.messages,
         liveText: "",
-        liveReasoning: "",
-        liveTools: [],
+        liveParts: [],
       }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // 用户主动停止（branch_cancel → run_aside 返回「请求已中断」）不算错误，不飘红。
+      const interrupted = message.includes("请求已中断");
+      patch((b) => {
+        // 后端没返回 message（失败 / 中断）→ 用已流式出来的 liveParts 落定成一条 assistant，
+        // 避免已经显示给用户的内容丢失。
+        const salvaged = liveToMessage(b.liveText, b.liveParts);
+        return {
+          ...b,
+          busy: false,
+          error: interrupted ? null : message,
+          messages: salvaged ? [...b.messages, salvaged] : b.messages,
+          liveText: "",
+          liveParts: [],
+        };
+      });
     }
+  },
+
+  async cancelBranch(branchId) {
+    const cur = get().branches[branchId];
+    if (!cur || !cur.busy) return;
+    // 只发取消信号；run_aside 落定后 branchSend 的 catch 会统一清 busy / 落定已流式内容。
+    await api.branchCancel(branchId).catch(() => {});
   },
 }));

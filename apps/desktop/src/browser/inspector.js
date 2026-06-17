@@ -187,6 +187,33 @@
     return -1;
   }
 
+  // 样式改动块（对话流绿卡片）的可持久化定位信息：从 PreviewStyle 的 target 与作用
+  // 元素算出一个 CSS selector，重建卡片时据此重新查 DOM 找回元素。
+  // - selector 来源（target 非 @N）：直接用 target 本身 + allMatches
+  // - @N 来源（单/多元素）：用该元素的 selectorPath 当 selector（allMatches=false）
+  // 找不到 selectorPath 时返回 null —— 该改动无法重建定位，回填时降级为纯文本展示。
+  function styleChangeLocate(target, allMatches, activeSnapshot) {
+    var isRef = /^@\d+$/.test(String(target || "").trim());
+    if (!isRef) return { selector: target, allMatches: !!allMatches };
+    var sp = activeSnapshot && activeSnapshot.selectorPath;
+    return sp ? { selector: sp, allMatches: false } : null;
+  }
+
+  // 按 locate 在 doc 里重新解析样式改动作用的元素集合（卡片重建时还原 change.els）。
+  // doc 参数供单测注入；运行时传 document。解析失败/无匹配返回 []。
+  function resolveStyleEls(locate, doc) {
+    if (!locate || !locate.selector || !doc) return [];
+    try {
+      if (locate.allMatches) {
+        return Array.prototype.slice.call(doc.querySelectorAll(locate.selector));
+      }
+      var one = doc.querySelector(locate.selector);
+      return one ? [one] : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   var __hebCore = {
     truncate: truncate,
     buildSelectorPath: buildSelectorPath,
@@ -200,6 +227,8 @@
     composeAsideText: composeAsideText,
     draftChatKey: draftChatKey,
     findDraftElementIndex: findDraftElementIndex,
+    styleChangeLocate: styleChangeLocate,
+    resolveStyleEls: resolveStyleEls,
     MAX_SNAPSHOT_BYTES: MAX_SNAPSHOT_BYTES,
   };
 
@@ -1593,21 +1622,23 @@
 
     var elementKey = draftChatKey(draft);
 
-    // ══ 子卡片 1：样式参数（可折叠）══
+    // ══ 子卡片 1：样式参数（默认折叠成一条；盒模型图常驻不折叠）══
     var styleCard = document.createElement("div");
     styleCard.style.cssText = "border-bottom:1px solid #d9dde3;display:flex;flex-direction:column;flex:none;min-height:0;";
     var styleHead = document.createElement("div");
     styleHead.style.cssText = "display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;user-select:none;font-size:12px;color:#1f2328;";
     var chevron = document.createElement("span");
-    chevron.textContent = "▾";
+    chevron.textContent = "▸";
     chevron.style.cssText = "color:#8c949e;font-size:10px;";
     var styleTitle = document.createElement("span");
     styleTitle.textContent = "样式参数";
     styleTitle.style.cssText = "flex:1;font-weight:500;";
     styleHead.appendChild(chevron); styleHead.appendChild(styleTitle);
-    var styleBody = document.createElement("div");
-    styleBody.style.cssText = "display:flex;flex-direction:column;flex:none;";
+    // 盒模型图：常驻显示，不随「样式参数」折叠收起——它是最常看的，折进去反而费一次点击。
     var boxModel = buildBoxModel(); // Chrome F12 式盒模型图
+    // 可折叠体：字段（margin/padding 之外的视觉属性）+ 全部 CSS 列表 + 两个重置按钮。
+    var styleBody = document.createElement("div");
+    styleBody.style.cssText = "display:none;flex-direction:column;flex:none;";
     var fields = document.createElement("div");
     fields.style.cssText = "padding:8px 10px;";
     for (var i = 0; i < CARD_FIELDS.length; i++) fields.appendChild(cardRow(CARD_FIELDS[i]));
@@ -1626,14 +1657,15 @@
     crBtn.title = "还原盒模型图与全部 CSS 里刚才的修改；两边都重置后这条会从注释列表消失";
     crBtn.addEventListener("click", function () { styleRevertSrc("css"); showAnnotationCard(null, draft); });
     cssReset.appendChild(crBtn);
-    styleBody.appendChild(boxModel); styleBody.appendChild(fields); styleBody.appendChild(fieldsReset); styleBody.appendChild(cssList); styleBody.appendChild(cssReset);
-    var styleCollapsed = false;
+    styleBody.appendChild(fields); styleBody.appendChild(fieldsReset); styleBody.appendChild(cssList); styleBody.appendChild(cssReset);
+    var styleCollapsed = true; // 默认折叠成一条长条，只露标题 + 常驻盒模型
     styleHead.addEventListener("click", function () {
       styleCollapsed = !styleCollapsed;
       styleBody.style.display = styleCollapsed ? "none" : "flex";
       chevron.textContent = styleCollapsed ? "▸" : "▾";
     });
-    styleCard.appendChild(styleHead); styleCard.appendChild(styleBody);
+    // 顺序：标题条 → 常驻盒模型 → 可折叠体
+    styleCard.appendChild(styleHead); styleCard.appendChild(boxModel); styleCard.appendChild(styleBody);
 
     // ══ 子卡片 2：和助手一起改（LLM 对话面板 + 模型选择器）══
     var chatCard = document.createElement("div");
@@ -1757,8 +1789,24 @@
     // 运行中态：消息区末尾跳动点 + 发送按钮变「停止」；heb:aside:done/error 解除。
     // 停止（C6）：点击发 heb:aside:stop，后端置位 cancel flag 中断 agent loop。
     var spinnerRow = null;
+    // 前端看门狗：spinner 解除只依赖后端 done/error 事件，万一事件通道断了（eval 下行
+    // 失败 / 后端 spawn 异常没回传），spinner 会永转。这里兜底——开跑时起一个超时，
+    // 到点还在转就强制解除并提示。后端也有 180s 看门狗，这里设更长（200s）只兜「事件
+    // 根本没来」的极端情况，正常路径由 done/error 提前清掉它。
+    var asideWatchdog = null;
+    function clearAsideWatchdog() {
+      if (asideWatchdog) { clearTimeout(asideWatchdog); asideWatchdog = null; }
+    }
     function setAsideBusy(busy) {
       if (busy) {
+        clearAsideWatchdog();
+        asideWatchdog = setTimeout(function () {
+          asideWatchdog = null;
+          if (chatSend.__busy__) {
+            appendChatMsg(msgList, "assistant", "⚠️ 助手好像卡住了，已停止等待。再发一次试试。");
+            setAsideBusy(false);
+          }
+        }, 200000);
         chatSend.disabled = false; // 不再禁用——run 中它是「停止」按钮
         chatSend.textContent = "停止";
         chatSend.style.opacity = "";
@@ -1776,6 +1824,7 @@
         msgList.appendChild(spinnerRow); // 始终挪到末尾
         msgList.scrollTop = msgList.scrollHeight;
       } else {
+        clearAsideWatchdog();
         chatSend.disabled = false;
         chatSend.textContent = "发送";
         chatSend.style.opacity = "";
@@ -1826,6 +1875,34 @@
     chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendChat(); } });
     inputLine.appendChild(chatInput); inputLine.appendChild(chatSend);
     chatInputRow.appendChild(refsRow); chatInputRow.appendChild(imagesRow); chatInputRow.appendChild(inputLine);
+    // 对话区与输入框之间的可拖动分割线：上下拖改 msgList 高度（扩大/缩小 chat 区）。
+    var chatResizer = document.createElement("div");
+    chatResizer.style.cssText = "height:7px;flex:none;cursor:ns-resize;background:#f0f2f5;border-top:1px solid #d9dde3;border-bottom:1px solid #d9dde3;display:flex;align-items:center;justify-content:center;";
+    var grip = document.createElement("div");
+    grip.style.cssText = "width:28px;height:3px;border-radius:2px;background:#c2c8d0;";
+    chatResizer.appendChild(grip);
+    chatResizer.title = "拖动调整对话区高度";
+    chatResizer.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      var startY = e.clientY;
+      var startH = msgList.getBoundingClientRect().height;
+      // 拖动期间解除 34vh 上限，让对话区能拉高；松手后保留显式高度。
+      msgList.style.maxHeight = "none";
+      var onMove = function (ev) {
+        var next = startH + (ev.clientY - startY);
+        next = Math.max(120, Math.min(next, window.innerHeight * 0.7));
+        msgList.style.height = next + "px";
+        msgList.scrollTop = msgList.scrollHeight;
+      };
+      var onUp = function () {
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+        document.body.style.userSelect = "";
+      };
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    });
     var chatFoot = document.createElement("div");
     chatFoot.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid #d9dde3;flex:none;";
     var footHint = document.createElement("span");
@@ -1862,12 +1939,24 @@
     });
     footHint && chatFoot.appendChild(footHint);
     chatFoot.appendChild(submitMain);
-    chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
+    chatCard.appendChild(chatHead); chatCard.appendChild(msgList); chatCard.appendChild(chatResizer); chatCard.appendChild(chatInputRow); chatCard.appendChild(chatFoot);
 
     cardChat = { elementKey: elementKey, sessionId: (asideConvos[elementKey] && asideConvos[elementKey].sessionId) || null, msgList: msgList, assistantRow: null, modelSelect: modelSelect, setBusy: setAsideBusy };
     if (asideConvos[elementKey]) {
       for (var m = 0; m < asideConvos[elementKey].messages.length; m++) {
-        appendChatMsg(msgList, asideConvos[elementKey].messages[m].role, asideConvos[elementKey].messages[m].text);
+        var hm = asideConvos[elementKey].messages[m];
+        if (hm.role === "style" && hm.style) {
+          // 重建对话流里的样式改动块：按 locate 重新查 DOM 找回元素（卡片重建/React
+          // 重渲染后旧 DOM 引用已失效），还原/重做按钮才能真正作用到当前页面元素。
+          var rEls = resolveStyleEls(hm.style.locate, document);
+          appendStyleChange(msgList, {
+            label: hm.style.label, prop: hm.style.prop, value: hm.style.value,
+            els: rEls, before: hm.style.before ? hm.style.before.slice() : [],
+            locate: hm.style.locate,
+          });
+        } else {
+          appendChatMsg(msgList, hm.role, hm.text);
+        }
       }
     }
     // 请求模型列表填充选择器
@@ -1963,7 +2052,10 @@
   function closeStyleGroup(msgList) {
     msgList.__styleGroup__ = null;
   }
-  function applyStyleState(change, toAfter) {
+  // 把 change 作用的元素设到 after（改后值）或 before（改前值）。toAfter=false 时
+  // 用 before[i]，无记录则 removeProperty（回到无内联）。重建后 els 数量可能与 before
+  // 不齐——越界取 undefined 走 removeProperty 降级，安全。纯设样式，不动持久状态标志。
+  function setChangeEls(change, toAfter) {
     for (var i = 0; i < change.els.length; i++) {
       var el = change.els[i];
       if (!el) continue;
@@ -1977,6 +2069,13 @@
         }
       } catch (e) { /* 静默 */ }
     }
+  }
+  // hover 临时预览：只改样式不动 change.reverted（移开后按真实状态恢复）。
+  function previewStyleState(change, toAfter) {
+    setChangeEls(change, toAfter);
+  }
+  function applyStyleState(change, toAfter) {
+    setChangeEls(change, toAfter);
     change.reverted = !toAfter;
   }
   function appendStyleChange(msgList, change) {
@@ -1998,6 +2097,13 @@
       allBtn.style.cssText = "border:none;background:none;color:#0969da;font-size:10px;cursor:pointer;padding:0;";
       var allReverted = false;
       allBtn.textContent = "全部还原";
+      // hover 预览整组翻到对侧；移开按各 change 的真实状态逐个恢复（单条可能被单独点过）。
+      allBtn.addEventListener("mouseenter", function () {
+        group.__changes__.forEach(function (c) { previewStyleState(c, allReverted); });
+      });
+      allBtn.addEventListener("mouseleave", function () {
+        group.__changes__.forEach(function (c) { previewStyleState(c, !c.reverted); });
+      });
       allBtn.addEventListener("click", function () {
         allReverted = !allReverted;
         group.__changes__.forEach(function (c) { applyStyleState(c, !allReverted); if (c.__sync__) c.__sync__(); });
@@ -2024,6 +2130,15 @@
     btn.style.cssText = "flex:none;border:1px solid #b7e0c4;background:#fff;color:#0969da;font-size:10px;cursor:pointer;border-radius:4px;padding:1px 6px;";
     btn.textContent = "还原";
     change.__sync__ = function () { btn.textContent = change.reverted ? "重做" : "还原"; };
+    // hover 即时预览：悬停时把样式临时翻到对侧（已应用→显示改前 / 已还原→显示改后），
+    // 肉眼对比；移开恢复到当前真实状态。只视觉切换，不动 change.reverted 持久标志。
+    // 点击才永久翻转。让用户 hover 一眼看出"这条改动改了什么"再决定要不要还原。
+    btn.addEventListener("mouseenter", function () {
+      previewStyleState(change, change.reverted); // reverted 时预览=改后(toAfter=true)，反之预览改前
+    });
+    btn.addEventListener("mouseleave", function () {
+      previewStyleState(change, !change.reverted); // 恢复到真实状态对应的样式
+    });
     btn.addEventListener("click", function () {
       applyStyleState(change, change.reverted); // reverted 时点=重做(toAfter=true)
       change.__sync__();
@@ -2290,6 +2405,7 @@
           var apLabel = apTarget;
           var apEls = []; // 本次改动作用的元素集合（还原/重做按钮要操作它们）
           var apBefore = []; // 与 apEls 一一对应的改前内联值（"" = 原本无此内联属性）
+          var apLocateSnap = null; // @N 来源：作用元素的 snapshot，用于算可重建的定位
           if (/^@\d+$/.test(apTarget)) {
             // @N 路由到 draft 里的对应元素；无 draft（旧单元素路径）退回激活元素
             var apItem = null;
@@ -2301,10 +2417,12 @@
                 apEls = [apItem.el];
                 apBefore = [apItem.el.style.getPropertyValue(msg.payload.prop)];
               }
+              if (apItem) apLocateSnap = apItem.snapshot;
               styleSetOn(apItem, msg.payload.prop, msg.payload.value);
             } else {
               var ct = currentTarget();
               if (ct) { apEls = [ct]; apBefore = [ct.style.getPropertyValue(msg.payload.prop)]; }
+              apLocateSnap = cardSnapshot;
               styleApply(msg.payload.prop, msg.payload.value);
             }
           } else {
@@ -2329,10 +2447,23 @@
             syncDraftToList();
           }
           if (cardChat) {
-            appendStyleChange(cardChat.msgList, {
+            // locate：可持久化的元素定位，重建卡片时据此找回 els（修复切元素后样式块丢失）
+            var apLocate = styleChangeLocate(apTarget, msg.payload.allMatches, apLocateSnap);
+            var styleChange = {
               label: apLabel, prop: msg.payload.prop, value: msg.payload.value,
-              els: apEls, before: apBefore,
-            });
+              els: apEls, before: apBefore, locate: apLocate,
+            };
+            appendStyleChange(cardChat.msgList, styleChange);
+            // 持久化进对话消息序列：切元素 / 重建卡片时回填能重建这个样式块（含还原入口）。
+            // 无 locate（拿不到 selectorPath）的不存——重建时无从找回元素，避免渲染出点了没反应的还原按钮。
+            if (apLocate) {
+              var styleEk = cardChat.elementKey;
+              asideConvos[styleEk] = asideConvos[styleEk] || { sessionId: null, messages: [] };
+              asideConvos[styleEk].messages.push({
+                role: "style",
+                style: { label: apLabel, prop: msg.payload.prop, value: msg.payload.value, before: apBefore.slice(), locate: apLocate },
+              });
+            }
           }
         }
         break;

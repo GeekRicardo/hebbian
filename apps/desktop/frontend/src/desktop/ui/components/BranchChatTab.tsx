@@ -1,31 +1,21 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
-  CornerDownLeft,
   Loader2,
   MessageSquarePlus,
   MessagesSquare,
   Plus,
-  Wrench,
   X,
 } from "lucide-react";
 import { useStore } from "@/desktop/ui/store/useStore";
 import {
   useBranchStore,
   type Branch,
-  type BranchMessage,
-  type BranchToolCall,
 } from "@/desktop/ui/store/useBranchStore";
-import { MarkdownRenderer } from "./MarkdownRenderer";
-import { shouldSubmitChatInput } from "./chatInputKeyboard";
+import { MessageBubble } from "./MessageBubble";
+import { AsideComposer } from "./AsideComposer";
 import { cn } from "@/desktop/ui/lib/utils";
-import type { Provider } from "@/desktop/ui/types";
+import type { MessageAttachment, Provider } from "@/desktop/ui/types";
 
 /**
  * 右侧工作台「旁支对话」tab（架构 §8.5 QuickChat）。
@@ -48,8 +38,10 @@ export function BranchChatTab() {
   const selectBranch = useBranchStore((s) => s.selectBranch);
   const discardBranch = useBranchStore((s) => s.discardBranch);
   const setBranchInput = useBranchStore((s) => s.setBranchInput);
+  const setBranchAttachments = useBranchStore((s) => s.setBranchAttachments);
   const setBranchModel = useBranchStore((s) => s.setBranchModel);
   const sendBranchMessage = useBranchStore((s) => s.sendBranchMessage);
+  const cancelBranch = useBranchStore((s) => s.cancelBranch);
 
   const sessionBranches = useMemo(
     () =>
@@ -112,8 +104,12 @@ export function BranchChatTab() {
           key={active.branchId}
           branch={active}
           onInput={(v) => setBranchInput(active.branchId, v)}
+          onAttachments={(a) => setBranchAttachments(active.branchId, a)}
           onPickModel={(pid, m) => setBranchModel(active.branchId, pid, m)}
-          onSend={() => void sendBranchMessage(active.branchId, active.input)}
+          onSend={(text, atts) =>
+            void sendBranchMessage(active.branchId, text, atts)
+          }
+          onStop={() => void cancelBranch(active.branchId)}
         />
       ) : (
         <EmptyHint
@@ -183,13 +179,17 @@ function BranchSubTab({
 function BranchConversation({
   branch,
   onInput,
+  onAttachments,
   onPickModel,
   onSend,
+  onStop,
 }: {
   branch: Branch;
   onInput: (value: string) => void;
+  onAttachments: (attachments: MessageAttachment[]) => void;
   onPickModel: (providerId: string, model: string) => void;
-  onSend: () => void;
+  onSend: (text: string, attachments: MessageAttachment[]) => void;
+  onStop: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -199,8 +199,7 @@ function BranchConversation({
   }, [
     branch.messages,
     branch.liveText,
-    branch.liveReasoning,
-    branch.liveTools,
+    branch.liveParts,
     branch.busy,
   ]);
 
@@ -208,12 +207,12 @@ function BranchConversation({
     branch.messages.length === 0 &&
     !branch.busy &&
     !branch.liveText &&
-    branch.liveTools.length === 0;
+    branch.liveParts.length === 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-border/40 px-3 py-1.5 text-[11px] text-muted-foreground">
-        基于主对话 {branch.inheritedCount} 条记录 · 只读（Read / Grep）
+        基于主对话 {branch.inheritedCount} 条记录 · 只读（不改文件、不跑命令）
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
@@ -224,20 +223,23 @@ function BranchConversation({
           />
         ) : null}
 
+        {/* 与主对话同源：直接复用 MessageBubble 渲染 storage Message（reasoning 折叠、
+            工具卡片展开 / 实时输出、附件全自动）。旁支不挂 fork/编辑/重生成等重交互回调。 */}
         {branch.messages.map((m) => (
-          <BranchBubble key={m.id} message={m} />
+          <MessageBubble key={m.id} message={m} />
         ))}
 
         {branch.busy ? (
-          <BranchBubble
-            message={{
-              kind: "assistant",
-              id: "live",
-              text: branch.liveText,
-              reasoning: branch.liveReasoning,
-              tools: branch.liveTools,
-            }}
+          <MessageBubble
+            key="live"
             streaming
+            message={{
+              id: "live",
+              role: "assistant",
+              content: branch.liveText,
+              created_at: Date.now(),
+            }}
+            streamingParts={branch.liveParts}
           />
         ) : null}
 
@@ -248,159 +250,23 @@ function BranchConversation({
         ) : null}
       </div>
 
-      <BranchComposer
+      <AsideComposer
         value={branch.input}
-        busy={branch.busy}
-        providerId={branch.providerId}
-        model={branch.model}
         onChange={onInput}
-        onPickModel={onPickModel}
+        attachments={branch.attachments}
+        onAttachmentsChange={onAttachments}
+        busy={branch.busy}
         onSend={onSend}
-      />
-    </div>
-  );
-}
-
-function BranchBubble({
-  message,
-  streaming = false,
-}: {
-  message: BranchMessage;
-  streaming?: boolean;
-}) {
-  if (message.kind === "user") {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-xl bg-primary/10 px-3 py-2 text-[13px] leading-5 text-foreground">
-          {message.text}
-        </div>
-      </div>
-    );
-  }
-
-  const hasBody = message.text.length > 0;
-  return (
-    <div className="space-y-1.5">
-      {message.reasoning ? (
-        <div className="rounded-lg border border-border/60 bg-muted/40 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
-          <MarkdownRenderer markdown={message.reasoning} className="markdown-body" />
-        </div>
-      ) : null}
-
-      {message.tools.map((t) => (
-        <BranchToolChip key={t.id} tool={t} />
-      ))}
-
-      {hasBody ? (
-        <MarkdownRenderer
-          markdown={message.text}
-          className="markdown-body text-[13px] leading-6 text-foreground"
-        />
-      ) : streaming && message.tools.length === 0 ? (
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          思考中…
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function BranchToolChip({ tool }: { tool: BranchToolCall }) {
-  return (
-    <div className="flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-[12px] text-muted-foreground">
-      <Wrench className="h-3 w-3 shrink-0" />
-      <span className="font-medium text-foreground/80">{tool.name}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] opacity-70">
-        {tool.argsPreview}
-      </span>
-      {tool.status === "running" ? (
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-      ) : tool.status === "error" ? (
-        <span className="shrink-0 text-destructive">失败</span>
-      ) : null}
-    </div>
-  );
-}
-
-function BranchComposer({
-  value,
-  busy,
-  providerId,
-  model,
-  onChange,
-  onPickModel,
-  onSend,
-}: {
-  value: string;
-  busy: boolean;
-  providerId: string | null;
-  model: string | null;
-  onChange: (value: string) => void;
-  onPickModel: (providerId: string, model: string) => void;
-  onSend: () => void;
-}) {
-  // 与主对话输入框同款 IME 合成判断：输入法组合期间回车只上屏，组合刚结束的回车也不误提交。
-  const compositionRef = useRef({ isComposing: false, lastCompositionEndAt: 0 });
-
-  const sendDisabled = busy || value.trim().length === 0;
-  const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    const submit = shouldSubmitChatInput(
-      {
-        key: e.key,
-        shiftKey: e.shiftKey,
-        isComposing: e.nativeEvent.isComposing,
-        keyCode: e.nativeEvent.keyCode,
-        timeStamp: e.timeStamp,
-      },
-      compositionRef.current
-    );
-    if (!submit) return;
-    e.preventDefault();
-    if (!sendDisabled) onSend();
-  };
-
-  return (
-    <div className="shrink-0 border-t border-border px-2.5 pb-2 pt-2">
-      <div className="rounded-lg border border-border bg-background px-2 py-1.5">
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onCompositionStart={() => {
-            compositionRef.current.isComposing = true;
-          }}
-          onCompositionEnd={(e) => {
-            compositionRef.current.isComposing = false;
-            compositionRef.current.lastCompositionEndAt = e.timeStamp;
-          }}
-          disabled={busy}
-          rows={1}
-          placeholder="问点什么（旁支只读，不改文件）"
-          className="max-h-28 min-h-[30px] w-full resize-none bg-transparent px-1 py-1 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
-        />
-        <div className="flex items-center justify-between gap-2 pt-0.5">
+        onStop={onStop}
+        placeholder="问点什么（旁支只读，不改文件）"
+        leftSlot={
           <BranchModelPicker
-            providerId={providerId}
-            model={model}
+            providerId={branch.providerId}
+            model={branch.model}
             onPick={onPickModel}
           />
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={sendDisabled}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
-            title="发送（Enter）"
-            aria-label="发送"
-          >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <CornerDownLeft className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
-      </div>
+        }
+      />
     </div>
   );
 }

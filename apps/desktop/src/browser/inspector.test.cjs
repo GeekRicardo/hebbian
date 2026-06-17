@@ -179,4 +179,42 @@ assert.strictEqual(
 assert.strictEqual(core.findDraftElementIndex(draftEls, { tag: "x" }, null), -1);
 assert.strictEqual(core.findDraftElementIndex(null, nodeA, null), -1);
 
+// ── styleChangeLocate：对话流样式块的可持久化定位 ──
+// 回归：样式改动块（PreviewStyle 渲染的绿卡片）曾经只是一次性 DOM，没存进对话消息
+// 序列，切元素 / 重建卡片后整组消失、还原入口丢失。现在存 locate，重建时据此找回元素。
+// selector 来源（target 非 @N）：直接用 target + allMatches
+assert.deepStrictEqual(
+  core.styleChangeLocate(".btn", true, null),
+  { selector: ".btn", allMatches: true }
+);
+assert.deepStrictEqual(
+  core.styleChangeLocate("div#root > a", false, null),
+  { selector: "div#root > a", allMatches: false }
+);
+// @N 来源：用激活元素的 selectorPath 当 selector，allMatches 恒 false
+assert.deepStrictEqual(
+  core.styleChangeLocate("@1", false, { selectorPath: "div#root > button:nth-child(2)" }),
+  { selector: "div#root > button:nth-child(2)", allMatches: false }
+);
+// @N 但拿不到 selectorPath → null（重建时无从定位，回填降级不渲染还原按钮）
+assert.strictEqual(core.styleChangeLocate("@2", false, null), null);
+assert.strictEqual(core.styleChangeLocate("@1", false, { selectorPath: "" }), null);
+
+// ── resolveStyleEls：重建卡片时按 locate 重新查 DOM 找回元素 ──
+// 用假 doc 注入（node 无 document）。allMatches → querySelectorAll；否则 querySelector。
+const elX = { tag: "x" }, elY = { tag: "y" }, elZ = { tag: "z" };
+const fakeDoc = {
+  querySelector: function (sel) { return sel === ".one" ? elX : null; },
+  querySelectorAll: function (sel) { return sel === ".many" ? [elX, elY, elZ] : []; },
+};
+assert.deepStrictEqual(core.resolveStyleEls({ selector: ".one", allMatches: false }, fakeDoc), [elX]);
+assert.deepStrictEqual(core.resolveStyleEls({ selector: ".many", allMatches: true }, fakeDoc), [elX, elY, elZ]);
+// 无匹配 → []
+assert.deepStrictEqual(core.resolveStyleEls({ selector: ".nope", allMatches: false }, fakeDoc), []);
+// locate 为 null / doc 缺失 / querySelector 抛错 → [] 不崩
+assert.deepStrictEqual(core.resolveStyleEls(null, fakeDoc), []);
+assert.deepStrictEqual(core.resolveStyleEls({ selector: ".one", allMatches: false }, null), []);
+const throwDoc = { querySelector: function () { throw new Error("bad selector"); } };
+assert.deepStrictEqual(core.resolveStyleEls({ selector: ":::", allMatches: false }, throwDoc), []);
+
 console.log("inspector.test.cjs: all assertions passed");
