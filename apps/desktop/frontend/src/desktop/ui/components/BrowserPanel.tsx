@@ -151,7 +151,7 @@ export function BrowserPanel({ active, obscured = false }: { active: boolean; ob
   // bounds 同步：占位区尺寸/位置变化时把原生子 webview 跟过去。
   //
   // 子 webview 是 Rust 侧绝对定位的独立层，不参与 CSS 布局/动画，必须显式下发坐标。
-  // 难点：侧边栏折叠/自动调宽走外层 <aside> 的 700ms width 过渡，占位区被外壳裁切
+  // 难点：侧边栏折叠/自动调宽走外层 <aside> 的 500ms width 过渡，占位区被外壳裁切
   // （自身 width 固定），动画期间它的布局尺寸不变 → ResizeObserver 不触发，webview
   // 停在旧位置。解法：RO/resize 负责"边沿"（拖拽、窗口缩放、动画起止会报点），每次
   // 报点后启动一段封顶 rAF 跟随，把过渡中间帧补上；rect 连续两帧不变即停，不常驻空转。

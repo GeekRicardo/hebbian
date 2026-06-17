@@ -15,9 +15,6 @@ import {
 import { cn } from "@/desktop/ui/lib/utils";
 import { isEmbeddedPreview } from "@/desktop/bridge/transport";
 import { useStore } from "@/desktop/ui/store/useStore";
-import type { RunEditEntry } from "@/desktop/ui/types";
-
-const EMPTY_EDIT_RUNS: RunEditEntry[] = [];
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
 import { FileTreeTab } from "./FileTreePanel";
@@ -154,10 +151,6 @@ export function RightSidebar({
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const sessionWorkdir = useStore((s) => s.currentSession?.workdir ?? null);
   const todos = useStore((s) => s.todos);
-  const editRuns = useStore((s) => {
-    const id = s.currentSession?.id;
-    return id ? (s.sessionEditSnapshots[id] ?? EMPTY_EDIT_RUNS) : EMPTY_EDIT_RUNS;
-  });
   const [modelIoOpen, setModelIoOpen] = useState(false);
   const closeModelIo = useCallback(() => setModelIoOpen(false), []);
 
@@ -191,44 +184,28 @@ export function RightSidebar({
     setTab("todos");
   }, [sessionId, todosKey, todos.length]);
 
-  // 自动聚焦只在「某个 Run 刚跑完、首次出现修改记录」那一下触发一次：
-  // 用已见过的 run_id 集合判断，避免回退（reverted 翻转）或切 tab 时又抢焦点。
+  // 自动聚焦只在「模型刚提交一次修改」那一下触发——由 store 的一次性
+  // expandEditsRunId 信号驱动（store 仅在 run_edits_committed 落到当前会话时设值）。
+  // 加载历史 / 回退 / 切对话都不会设这个信号，故重启后打开任意对话不会误弹。
   // 用户原话："只有跑完那一下会自动跳到修改文件 sidebar，后面切换都不会自动了"。
-  //
-  // **按 session 隔离 seen 集合**（修「切对话误弹」bug）：sessionId 与 editRuns 是两个
-  // 独立 selector，切对话时二者更新不同步——若用「单 Set + 切换时重置」会出现「新
-  // sessionId 配旧 editRuns 先重置基线 return，下一拍新 editRuns 进来又被当 fresh 误弹」
-  // 的竞态。改用 Map<sessionId, Set<runId>>，effect 始终查当前 session 自己的已见集合，
-  // 不依赖渲染时序：某对话首次见到的 run 集合直接记为「已见、不弹」，只有该对话内**之后**
-  // 新增的 run（=刚跑完一次）才弹。
-  const seenRunIdsBySessionRef = useRef<Map<string, Set<string>>>(new Map());
+  const expandEditsRunId = useStore((s) => s.expandEditsRunId);
+  const prevExpandRunIdRef = useRef(expandEditsRunId);
   useEffect(() => {
-    if (!sessionId) return;
-    const seen = seenRunIdsBySessionRef.current.get(sessionId);
-    if (!seen) {
-      // 本对话首次进入：当前所有 run 记为已见（历史记录不触发跳转），不弹
-      seenRunIdsBySessionRef.current.set(
-        sessionId,
-        new Set(editRuns.map((r) => r.run_id)),
-      );
-      return;
-    }
-    const fresh = editRuns.filter((r) => !seen.has(r.run_id));
-    if (fresh.length === 0) return;
-    for (const r of editRuns) seen.add(r.run_id);
+    if (expandEditsRunId === prevExpandRunIdRef.current) return;
+    prevExpandRunIdRef.current = expandEditsRunId;
+    if (!expandEditsRunId) return;
     if (autoSwitchBlocked()) return; // 用户在浏览器/终端 tab，不抢焦点
     setCollapsed(false);
     setTab("edits");
-    const latest = [...fresh].sort((a, b) => b.finished_at_ms - a.finished_at_ms)[0];
     window.setTimeout(() => {
-      const node = document.getElementById(`run-edits-${latest.run_id}`);
+      const node = document.getElementById(`run-edits-${expandEditsRunId}`);
       node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       node?.classList.add("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
       window.setTimeout(() => {
         node?.classList.remove("ring-2", "ring-emerald-400", "ring-offset-2", "ring-offset-background");
       }, 1500);
     }, 50);
-  }, [sessionId, editRuns]);
+  }, [expandEditsRunId]);
 
   // 用户发送消息 → 缓慢折叠工作台（store 一次性 tick 信号驱动；与上面「Run 跑完
   // 自动展开」配对）。首帧不折叠，只对真实的 tick 自增响应。
@@ -394,14 +371,14 @@ export function RightSidebar({
   return (
     <>
       {/*
-        单 aside 外壳：width 在 36px（折叠）↔ width px（展开）之间走 700ms 过渡，
+        单 aside 外壳：width 在 36px（折叠）↔ width px（展开）之间走 500ms 过渡，
         实现「缓慢折叠」。内部两套内容（折叠图标列 / 展开完整面板）按 collapsed 切换并
         各自固定宽度，靠外壳 overflow-hidden 裁切，宽度收缩时内容不被挤压变形。
       */}
       <aside
         className={cn(
           "relative flex h-full shrink-0 justify-self-end flex-col overflow-hidden border-l border-border bg-muted/40",
-          resizing ? "" : "transition-[width] duration-700 ease-in-out"
+          resizing ? "" : "transition-[width] duration-500 ease-in-out"
         )}
         style={{ width: `${collapsed ? COLLAPSED_WIDTH : width}px` }}
       >

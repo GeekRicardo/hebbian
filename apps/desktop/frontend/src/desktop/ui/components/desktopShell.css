@@ -2729,12 +2729,11 @@
 .dsp-chat-host .chat-input-shell {
   width: min(70%, 760px) !important;
   min-width: min(520px, calc(100% - 48px));
-  /* 与 RightSidebar 折叠联动（用户原话「先折叠 sidebar，输入框再变化过去」）：
-     右侧工作台收起时 chat 列瞬间变宽，输入框的 width 用 700ms 延迟过渡，等
-     sidebar 折叠动画基本走完再舒展；margin / transform 仍由 tailwind 的
-     transition-all duration-300 负责，故这里显式列出 width 单独给 delay。 */
+  /* 与 RightSidebar 折叠联动：sidebar 收起时 chat 列同步变宽，输入框 width 与
+     sidebar 外壳走同一条 500ms 曲线一起舒展（不再延迟到 sidebar 收完后才动）；
+     margin / transform 仍由 tailwind 的 transition-all duration-300 负责。 */
   transition:
-    width 360ms ease-out 700ms,
+    width 500ms ease-in-out,
     margin 300ms ease-out,
     transform 300ms ease-out !important;
 }
