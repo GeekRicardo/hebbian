@@ -2,7 +2,11 @@ import { Suspense, lazy, useCallback, useRef, useState, type CSSProperties } fro
 import { ChatView } from "@/desktop/ui/components/ChatView";
 import { RightSidebar } from "@/desktop/ui/components/RightSidebar";
 import { DesktopSidebar } from "@/desktop/ui/components/DesktopSidebar";
-import { useStore } from "@/desktop/ui/store/useStore";
+import {
+  useStore,
+  selectCurrentOpenFiles,
+  selectCurrentActiveFile,
+} from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
 import { animations } from "@/assets/animations";
 import "./desktopShell.css";
@@ -176,7 +180,9 @@ const VIEWER_MAX_WIDTH = 1100;
  * 与右侧工作台的「宽度不持久化」一致。
  */
 function FileViewerColumn() {
-  const hasOpenFiles = useStore((s) => s.openFiles.length > 0 && s.activeFilePath !== null);
+  const hasOpenFiles = useStore(
+    (s) => selectCurrentActiveFile(s) !== null && selectCurrentOpenFiles(s).length > 0,
+  );
   const [width, setWidth] = useState(VIEWER_DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);

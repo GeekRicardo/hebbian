@@ -2,17 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { toast } from "sonner";
-import { X, Circle } from "lucide-react";
-import { useStore } from "@/desktop/ui/store/useStore";
+import { X, Circle, Pin, Eye, Code2 } from "lucide-react";
+import {
+  useStore,
+  selectCurrentOpenFiles,
+  selectCurrentActiveFile,
+} from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import { detectLanguage, fileName } from "@/desktop/ui/lib/fileLanguage";
+import { MarkdownRenderer } from "@/desktop/ui/components/MarkdownRenderer";
 import "@/desktop/ui/lib/monacoSetup";
 
 /**
  * 文件查看器（中间列）：多 tab 文件页签 + Monaco 编辑器。
  *
- * - 每个打开的文件一个 tab；点 tab 切换，× 关闭，全关后列消失（store.openFiles 为空）
+ * - 文件按对话隔离（store per-session）；每个文件一个 tab，× 关闭、📌 固定、脏标记小圆点
+ * - Markdown 文件可在「源码 ↔ 预览」间切换（预览复用 chat 同款 MarkdownRenderer）
+ * - 选中编辑器里的文本 → 实时写入 store 的 editorSelectionRef，输入框上方出现一条
+ *   `path:line` 引用；取消选中即清除（ChatInput 订阅渲染）
  * - Monaco 提供语法高亮，为以后接 LSP/autocomplete 留口
  * - Ctrl/Cmd+S 把当前文件写回磁盘（`api.writeTextFile`），仅覆盖已存在文件
  * - 列宽由 DesktopShell 控制（可拖、不持久化）；本组件只负责内容
@@ -51,20 +59,31 @@ function useEditorTheme(): "vs" | "vs-dark" {
   return theme;
 }
 
+function isMarkdown(path: string): boolean {
+  return /\.(md|markdown)$/i.test(path);
+}
+
 export default function FileViewer() {
-  const openFiles = useStore((s) => s.openFiles);
-  const activeFilePath = useStore((s) => s.activeFilePath);
+  const openFiles = useStore(selectCurrentOpenFiles);
+  const activeFilePath = useStore(selectCurrentActiveFile);
   const setActiveFile = useStore((s) => s.setActiveFile);
   const closeFile = useStore((s) => s.closeFile);
+  const toggleFilePin = useStore((s) => s.toggleFilePin);
+  const setEditorSelectionRef = useStore((s) => s.setEditorSelectionRef);
   const editorTheme = useEditorTheme();
 
   // 各文件内容缓存：path → FileState。切 tab 不丢草稿。
   const [files, setFiles] = useState<Record<string, FileState>>({});
+  // 处于 markdown 预览态的文件路径集合（默认源码态）。
+  const [previewing, setPreviewing] = useState<Set<string>>(new Set());
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+  const openPaths = openFiles.map((e) => e.path).join("\n");
 
   // 打开新文件时拉内容（已有缓存不重拉）。
   useEffect(() => {
-    for (const path of openFiles) {
+    const paths = openPaths ? openPaths.split("\n") : [];
+    for (const path of paths) {
       if (files[path]) continue;
       setFiles((prev) => ({
         ...prev,
@@ -88,13 +107,15 @@ export default function FileViewer() {
     // 关掉的文件清出缓存
     setFiles((prev) => {
       const next: Record<string, FileState> = {};
-      for (const path of openFiles) if (prev[path]) next[path] = prev[path];
+      for (const path of paths) if (prev[path]) next[path] = prev[path];
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
-  }, [openFiles]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openPaths]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = activeFilePath ? files[activeFilePath] : undefined;
   const dirty = active ? active.draft !== active.diskText : false;
+  const activePinned = openFiles.find((e) => e.path === activeFilePath)?.pinned ?? false;
+  const showPreview = activeFilePath ? previewing.has(activeFilePath) : false;
 
   const save = useCallback(async () => {
     const path = activeFilePath;
@@ -110,16 +131,41 @@ export default function FileViewer() {
     }
   }, [activeFilePath, files]);
 
-  // 用 ref 让 Monaco 的 onMount 里注册的快捷键始终调到最新 save。
+  // 用 ref 让 Monaco 的 onMount 里注册的快捷键 / 选区回调始终调到最新值。
   const saveRef = useRef(save);
   saveRef.current = save;
+  const activePathRef = useRef(activeFilePath);
+  activePathRef.current = activeFilePath;
 
-  const handleMount = useCallback<OnMount>((ed, monaco) => {
-    editorRef.current = ed;
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void saveRef.current();
-    });
-  }, []);
+  const handleMount = useCallback<OnMount>(
+    (ed, monaco) => {
+      editorRef.current = ed;
+      ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+        void saveRef.current();
+      });
+      // 选区变化 → 实时写入 store：非空选区写 path:line(-endLine)，空选区清 null。
+      ed.onDidChangeCursorSelection((e) => {
+        const path = activePathRef.current;
+        const sel = e.selection;
+        if (!path || sel.isEmpty()) {
+          setEditorSelectionRef(null);
+          return;
+        }
+        // 选区终点落在某行行首时不把该行算进去（更符合直觉）。
+        const endLine =
+          sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber
+            ? sel.endLineNumber - 1
+            : sel.endLineNumber;
+        setEditorSelectionRef({ path, startLine: sel.startLineNumber, endLine });
+      });
+    },
+    [setEditorSelectionRef],
+  );
+
+  // 切走当前文件 / 卸载时清掉残留的选区引用（旧选区对新文件无意义）。
+  useEffect(() => {
+    return () => setEditorSelectionRef(null);
+  }, [activeFilePath, setEditorSelectionRef]);
 
   const onChange = useCallback(
     (value: string | undefined) => {
@@ -132,13 +178,25 @@ export default function FileViewer() {
     [activeFilePath],
   );
 
+  const togglePreview = useCallback(() => {
+    const path = activeFilePath;
+    if (!path) return;
+    setPreviewing((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, [activeFilePath]);
+
   if (openFiles.length === 0 || !activeFilePath) return null;
 
   return (
     <div className="flex h-full min-w-0 flex-col border-l border-border bg-background">
       {/* 文件 tab 页签栏 */}
       <div className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border bg-muted/40 [scrollbar-width:thin]">
-        {openFiles.map((path) => {
+        {openFiles.map((entry) => {
+          const path = entry.path;
           const isActive = path === activeFilePath;
           const isDirty = files[path] ? files[path].draft !== files[path].diskText : false;
           return (
@@ -153,6 +211,7 @@ export default function FileViewer() {
                   : "text-muted-foreground hover:bg-accent/40",
               )}
             >
+              {entry.pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-primary" />}
               <span className="truncate">{fileName(path)}</span>
               {isDirty ? (
                 <Circle className="h-2 w-2 shrink-0 fill-current text-amber-500 group-hover/tab:hidden" />
@@ -177,7 +236,25 @@ export default function FileViewer() {
         })}
       </div>
 
-      {/* 编辑器 / 状态 */}
+      {/* 工具栏：固定 / markdown 预览切换 */}
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-muted/20 px-2">
+        <ToolbarButton
+          active={activePinned}
+          title={activePinned ? "取消固定（切换对话后不再保留）" : "固定（切换对话后仍保留）"}
+          onClick={() => toggleFilePin(activeFilePath)}
+        >
+          <Pin className={cn("h-3.5 w-3.5", activePinned && "fill-current")} />
+          <span>{activePinned ? "已固定" : "固定"}</span>
+        </ToolbarButton>
+        {isMarkdown(activeFilePath) && (
+          <ToolbarButton active={showPreview} title="源码 / 预览切换" onClick={togglePreview}>
+            {showPreview ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            <span>{showPreview ? "源码" : "预览"}</span>
+          </ToolbarButton>
+        )}
+      </div>
+
+      {/* 编辑器 / 预览 / 状态 */}
       <div className="relative min-h-0 flex-1">
         {active?.loading && (
           <div className="grid h-full place-items-center text-[13px] text-muted-foreground">
@@ -189,7 +266,12 @@ export default function FileViewer() {
             {active.error}
           </div>
         )}
-        {active && !active.loading && !active.error && (
+        {active && !active.loading && !active.error && showPreview && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <MarkdownRenderer markdown={active.draft} className="markdown-body" />
+          </div>
+        )}
+        {active && !active.loading && !active.error && !showPreview && (
           <Editor
             key={activeFilePath}
             height="100%"
@@ -219,5 +301,33 @@ export default function FileViewer() {
         {dirty && <span className="shrink-0 text-amber-500">● 未保存 · ⌘/Ctrl+S</span>}
       </div>
     </div>
+  );
+}
+
+function ToolbarButton({
+  active,
+  title,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-6 items-center gap-1 rounded px-2 text-[12px] transition-colors",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
   );
 }
