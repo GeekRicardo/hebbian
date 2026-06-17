@@ -256,6 +256,9 @@ pub struct Session {
     /// 目录里列出，这里只标当前活跃那份（架构 §4.4.5）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_plan: Option<String>,
+    /// 会话当前的完成条件目标（架构 §4.8.3）。None = 无目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_goal: Option<ActiveGoal>,
     /// 进入 PlanMode 之前的 [`RunMode`]，用于 ExitPlanMode 审批通过后切回去
     /// （架构 §4.4.5）。默认 `None`——表示从未进过 PlanMode；如果未来切到
     /// PlanMode 时找不到 pre_plan_mode 则回落到 `Default`。
@@ -332,6 +335,21 @@ pub fn bump_token_stats(data_dir: &Path, session_id: &str, delta: TokenStats) {
 
 fn default_stream() -> bool {
     true
+}
+
+/// 会话当前的「完成条件」目标（架构 §4.8.3 / §8）。模型每次想结束 turn 时
+/// 由 judge LLM 判 transcript 是否满足 `condition`，没满足就注入续跑。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveGoal {
+    /// 用户用 `//goal <条件>` 设的完成条件原文。
+    pub condition: String,
+    /// 设目标的时间戳（ms）。
+    pub created_at: i64,
+    /// 已自动续跑轮数（展示 / 日志用，不做上限）。
+    pub iterations: u32,
+    /// judge 上次判定「还差什么」；首次设目标时为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
 }
 
 /// 一次「非正常结束」留下的续作入口（架构 §4.3 / §7.3）。落在 session 状态里，
@@ -491,6 +509,8 @@ pub struct RolloutMeta {
     /// PlanMode 下当前活跃 plan 的绝对路径（架构 §4.4.5）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_goal: Option<ActiveGoal>,
     /// 进入 PlanMode 之前的 RunMode；ExitPlanMode 审批通过后切回去用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_plan_mode: Option<RunMode>,
@@ -553,6 +573,12 @@ pub struct MetaUpdate {
     /// 显式清空 `active_plan`（plan revert / session reset 等场景）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_active_plan: bool,
+    /// 设置 / 更新会话目标。`None` = 本次更新不动；要清空走 `clear_active_goal`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_goal: Option<ActiveGoal>,
+    /// 显式清空 `active_goal`（达成 / 判不可能 / 用户 //goal clear）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_active_goal: bool,
     /// 进入 PlanMode 时记录的"切换前 RunMode"。审批通过后据此切回去。
     /// `None` = 本次更新不动；要清空走 [`clear_pre_plan_mode`]。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -836,6 +862,7 @@ fn meta_from_session(s: &Session, source: String, forked_from: Option<String>) -
         rules_files: s.rules_files.clone(),
         todos: s.todos.clone(),
         active_plan: s.active_plan.clone(),
+        active_goal: s.active_goal.clone(),
         pre_plan_mode: s.pre_plan_mode,
         pending_continue: s.pending_continue.clone(),
     }
@@ -864,6 +891,7 @@ fn apply_meta(s: &mut Session, m: RolloutMeta) {
     s.rules_files = m.rules_files;
     s.todos = m.todos;
     s.active_plan = m.active_plan;
+    s.active_goal = m.active_goal;
     s.pre_plan_mode = m.pre_plan_mode;
     s.pending_continue = m.pending_continue;
     s.created_at = m.created_at;
@@ -934,6 +962,12 @@ fn apply_update(s: &mut Session, u: MetaUpdate) {
     if let Some(v) = u.active_plan {
         s.active_plan = Some(v);
     }
+    if u.clear_active_goal {
+        s.active_goal = None;
+    }
+    if let Some(v) = u.active_goal {
+        s.active_goal = Some(v);
+    }
     if u.clear_pre_plan_mode {
         s.pre_plan_mode = None;
     }
@@ -1001,6 +1035,7 @@ fn read_jsonl(path: &Path) -> AppResult<Session> {
         rules_files: None,
         todos: Vec::new(),
         active_plan: None,
+        active_goal: None,
         pre_plan_mode: None,
         pending_continue: None,
         created_at: 0,
@@ -1197,6 +1232,7 @@ fn read_jsonl_meta_only(path: &Path) -> AppResult<(Session, usize)> {
         rules_files: None,
         todos: Vec::new(),
         active_plan: None,
+        active_goal: None,
         pre_plan_mode: None,
         pending_continue: None,
         created_at: 0,
@@ -1675,6 +1711,7 @@ pub fn update_meta(
             rules_files: session.rules_files.clone(),
             todos: Some(session.todos.clone()),
             active_plan: session.active_plan.clone(),
+            active_goal: session.active_goal.clone(),
             pre_plan_mode: session.pre_plan_mode,
             pending_continue: session.pending_continue.clone(),
             ..Default::default()
@@ -1765,6 +1802,7 @@ pub fn create_with_source(
         rules_files: None,
         todos: Vec::new(),
         active_plan: None,
+        active_goal: None,
         pre_plan_mode: None,
         pending_continue: None,
         created_at: now_ts,
@@ -1893,6 +1931,7 @@ pub fn fork(data_dir: &Path, session_id: &str, up_to_message_id: &str) -> AppRes
         rules_files: src.rules_files.clone(),
         todos: src.todos.clone(),
         active_plan: src.active_plan.clone(),
+        active_goal: src.active_goal.clone(),
         pre_plan_mode: src.pre_plan_mode,
         pending_continue: src.pending_continue.clone(),
         created_at: now_ts,
@@ -1989,6 +2028,30 @@ pub fn set_active_plan(data_dir: &Path, id: &str, plan_path: Option<String>) -> 
             at: now(),
             active_plan: set,
             clear_active_plan: clear,
+            ..Default::default()
+        }),
+    )?;
+    load(data_dir, id)
+}
+
+/// 设置 / 清空会话目标（架构 §4.8.3 / §8）。
+/// `Some(goal)` 写入或覆盖；`None` 清空。沿用 [`set_active_plan`] 的 append-only 模式。
+pub fn set_active_goal(
+    data_dir: &Path,
+    id: &str,
+    goal: Option<ActiveGoal>,
+) -> AppResult<Session> {
+    let path = ensure_jsonl(data_dir, id)?;
+    let (set, clear) = match goal {
+        Some(g) => (Some(g), false),
+        None => (None, true),
+    };
+    append_line(
+        &path,
+        &RolloutLine::MetaUpdate(MetaUpdate {
+            at: now(),
+            active_goal: set,
+            clear_active_goal: clear,
             ..Default::default()
         }),
     )?;
@@ -2511,6 +2574,30 @@ mod tests {
     }
 
     #[test]
+    fn active_goal_set_clear_roundtrip() {
+        let dir = temp_data_dir("active-goal");
+        let id = create(&dir, "openai".into(), "gpt-x".into(), None, None)
+            .unwrap()
+            .id;
+
+        let goal = ActiveGoal {
+            condition: "所有测试通过".to_string(),
+            created_at: 1,
+            iterations: 0,
+            last_reason: None,
+        };
+        let s = set_active_goal(&dir, &id, Some(goal.clone())).unwrap();
+        assert_eq!(s.active_goal.as_ref().unwrap().condition, "所有测试通过");
+
+        let s2 = load(&dir, &id).unwrap();
+        assert_eq!(s2.active_goal, Some(goal));
+
+        let s3 = set_active_goal(&dir, &id, None).unwrap();
+        assert_eq!(s3.active_goal, None);
+        assert_eq!(load(&dir, &id).unwrap().active_goal, None);
+    }
+
+    #[test]
     fn create_with_workspace_persists_project_defaults() {
         let dir = temp_data_dir("workspace-create");
         let session = create_with_workspace(
@@ -2813,6 +2900,7 @@ mod tests {
             rules_files: None,
             todos: Vec::new(),
             active_plan: None,
+            active_goal: None,
             pre_plan_mode: None,
             pending_continue: None,
             created_at: now_ts,
