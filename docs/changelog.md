@@ -8506,3 +8506,18 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - **desktop 包基线编不过**（与本特性无关）：`apps/desktop/src/lib.rs:1153` 用了 agent-core `Message` 结构里不存在的 `run_duration_ms` 字段，是上游 commit 78022c5 引入的在途半成品。导致 Task 5 的 command 无法整包编译验证（靠对照范式 + agent-core 符号存在性佐证），且 `pnpm tauri dev` 起不来。要解锁 desktop 需给 `Message` 加该字段（属别人在途工作，未擅自代劳）
   - **read_jsonl_meta_only 未解析 active_goal**：导致每个 end_turn 全量 load session（代价相对模型调用可忽略），后续可优化
   - 工作分支 `feature/goal-command`（worktree `.worktrees/goal-command`），未合并 main、未 push
+
+### 2026-06-17 — `//goal` 前端命令完成 + heb CLI 端到端验证通过
+
+- **Why**: 接上一条，补完 Task 6（前端）+ 端到端验证（计划 Task 7）。
+- **改动**:
+  - 前端（commit 5a21185）：`tauri.ts` 加 getActiveGoal/setActiveGoal/clearActiveGoal 绑定 + ActiveGoal 类型；`slashCommands.ts` 注册 `//goal` 内置命令（无参查看 / clear 清除 / 其余设条件）；`useStore.ts` + `types.ts` 加 goal_progress/achieved/impossible 事件的 toast 提示
+- **端到端验证（heb CLI + 真实 DeepSeek provider）**: 用临时 example 给 session 落 goal「创建 done.txt」，发不相关输入（问天气）。model_io.jsonl 实证完整闭环：
+  - **阶段 A（未达成续跑）**: turn1/turn2 judge 判 NotYet → 注入 `<goal-feedback> 目标尚未达成…` → 模型持续尝试创建文件（连注入 4 次，**>MAX_STOP_INJECTIONS=3，证明 goal 续跑无上限解耦成立**）
+  - **阶段 B（达成清空）**: 文件创建后 turn3/turn4 不再注入 goal-feedback（judge 判 Achieved）+ session.jsonl 末尾出现 `clear_active_goal`（目标落盘清空）
+  - **无 goal 会话不变**: 注入 goal 前的首轮正常 end_turn，无额外行为
+- **影响范围**: desktop 前端 additive；验证脚手架（apps/cli/examples/set_goal.rs）已删除，worktree 干净
+- **留尾巴**:
+  - **heb CLI 未透传 goal 事件**：`goal_progress`/`goal_achieved`/`goal_impossible` 三个 EngineEvent 在 heb 的 NDJSON stdout 没出现（裁决/续跑/清空的实质行为已由 model_io + session.jsonl 确认，但 heb 的 ipc 事件翻译层 apps/cli 未把这 3 个新事件透传到 DaemonEvent）。要在 heb 看到 goal 事件需补 apps/cli 的事件映射。Desktop 前端的事件监听已做（Task 6），但 desktop 包因 run_duration_ms 未编译验证
+  - **desktop 整包仍编不过**：run_duration_ms 字段（main 工作区未提交的在途改动正在加，lib.rs 那半已提交、agent-core 那半在工作区）。合并本分支到 main 后、配合那份在途改动，desktop 才能编译跑 `pnpm tauri dev` 验证前端 UI
+  - 工作分支 feature/goal-command，10 commit，未合并未 push
