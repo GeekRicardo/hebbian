@@ -315,6 +315,23 @@ pub enum EventPayload {
         error: String,
     },
 
+    // —— `//goal` 目标裁决 ——
+    /// `//goal` 目标达成（judge 判 ok:true）。
+    GoalAchieved {
+        condition: String,
+        reason: String,
+    },
+    /// `//goal` 目标被 judge 判定无法达成（熔断）。
+    GoalImpossible {
+        condition: String,
+        reason: String,
+    },
+    /// `//goal` 一次自动续跑（judge 判 NotYet，注入续跑前 emit）。
+    GoalProgress {
+        iteration: u32,
+        reason: String,
+    },
+
     // —— 调试 ——
     Log {
         level: LogLevel,
