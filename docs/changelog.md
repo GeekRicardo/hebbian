@@ -8709,3 +8709,29 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - **heb CLI 未透传 goal 事件**：`goal_progress`/`goal_achieved`/`goal_impossible` 三个 EngineEvent 在 heb 的 NDJSON stdout 没出现（裁决/续跑/清空的实质行为已由 model_io + session.jsonl 确认，但 heb 的 ipc 事件翻译层 apps/cli 未把这 3 个新事件透传到 DaemonEvent）。要在 heb 看到 goal 事件需补 apps/cli 的事件映射。Desktop 前端的事件监听已做（Task 6），但 desktop 包因 run_duration_ms 未编译验证
   - **desktop 整包仍编不过**：run_duration_ms 字段（main 工作区未提交的在途改动正在加，lib.rs 那半已提交、agent-core 那半在工作区）。合并本分支到 main 后、配合那份在途改动，desktop 才能编译跑 `pnpm tauri dev` 验证前端 UI
   - 工作分支 feature/goal-command，10 commit，未合并未 push
+
+### 2026-06-16 — 修复 continue_run 400 + 强化 transcript 层 tool_use input 归一
+
+- **Why**: 会话 202606160757-eeb33d38 末尾是 assistant message，continue_run
+  不追加 user message 直接把 transcript 发给 Anthropic → 400 "conversation must
+  end with a user message"。另外上次修复只在 anthropic 协议层兜 input 非 object，
+  transcript 构建层没有防线，换 OpenAI 兼容 provider 同样可能 400。
+
+- **改动**:
+  - crates/agent-core/src/context/transcript.rs:
+    - 新增 `normalize_tool_input()`：字符串先 JSON re-parse（还原双重编码），
+      仍非 object → 空 object；null / array / number 等 → 空 object。
+      同时应用在 `push_assistant_message`（legacy tool_calls 路径）和
+      `push_assistant_parts`（parts 路径）两处 ToolCall 构建点
+    - `from_session` 末尾自动保证 user 结尾：遍历历史后，若末尾是 assistant
+      或 ToolResults，注入一条"继续" user message。这样所有重用 from_session
+      的路径（continue_run / resume / compaction 后续跑等）都自动合法，
+      不需要各调用点各自手动补
+    - 更新并新增回归测试：`from_session_always_ends_with_user`、
+      `normalize_tool_input_handles_non_object`、
+      `from_session_normalizes_bad_tool_input_in_parts`
+  - apps/desktop/src/chat.rs: 更新对应测试 `continue_run_injects_continue_user_message_when_transcript_ends_with_assistant`
+    反映新语义（user_texts.len()==2，第二条是"继续"）
+
+- **影响范围**: agent-core transcript 层；所有 surface 透明受益，无协议变更
+- **留尾巴**: anthropic 协议层的双重归一保留（两层防御纵深），不删

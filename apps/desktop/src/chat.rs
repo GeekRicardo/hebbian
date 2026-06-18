@@ -2975,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_run_does_not_append_empty_user_message_to_model_request() {
+    fn continue_run_injects_continue_user_message_when_transcript_ends_with_assistant() {
         tauri::async_runtime::block_on(async {
             let data_dir = temp_data_dir();
             save_test_provider(&data_dir);
@@ -3064,8 +3064,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(user_texts.len(), 1);
+            // transcript: [user "上一轮问题"] [assistant "上一轮回答到一半"]
+            // from_session 看到末尾是 assistant，自动补一条 "继续" user → 共 2 条
+            assert_eq!(user_texts.len(), 2, "user_texts={user_texts:?}");
             assert!(user_texts[0].contains("上一轮问题"));
+            assert_eq!(user_texts[1], "继续", "第二条应是自动注入的"继续"");
+            // 不该在 DB 写空 user message
             assert!(!user_texts.iter().any(|text| text.is_empty()));
 
             let saved = sessions::load(&data_dir, &session.id).unwrap();
