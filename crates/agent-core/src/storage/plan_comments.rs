@@ -30,14 +30,20 @@ enum PlanCommentLine {
     MarkConsumed { ids: Vec<String> },
 }
 
-fn comments_path(data_dir: &Path, session_id: &str, plan_id: &str) -> PathBuf {
-    plans::dir_for_session(data_dir, session_id).join(format!("{plan_id}.comments.jsonl"))
+fn comments_path(
+    data_dir: &Path,
+    workdir: Option<&Path>,
+    session_id: &str,
+    plan_id: &str,
+) -> PathBuf {
+    plans::dir_for_session(data_dir, workdir, session_id).join(format!("{plan_id}.comments.jsonl"))
 }
 
 /// 给 plan 加一条评论。`comment.id` 调用方负责生成（ulid 推荐）。
 /// 函数会强制 `consumed=false`、补 `created_at_ms`。
 pub fn append_comment(
     data_dir: &Path,
+    workdir: Option<&Path>,
     session_id: &str,
     plan_id: &str,
     mut comment: PlanComment,
@@ -47,7 +53,7 @@ pub fn append_comment(
     if comment.created_at_ms == 0 {
         comment.created_at_ms = Utc::now().timestamp_millis();
     }
-    let path = comments_path(data_dir, session_id, plan_id);
+    let path = comments_path(data_dir, workdir, session_id, plan_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -60,10 +66,11 @@ pub fn append_comment(
 /// 文件不存在视为空。
 pub fn list_comments(
     data_dir: &Path,
+    workdir: Option<&Path>,
     session_id: &str,
     plan_id: &str,
 ) -> AppResult<Vec<PlanComment>> {
-    let path = comments_path(data_dir, session_id, plan_id);
+    let path = comments_path(data_dir, workdir, session_id, plan_id);
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -101,6 +108,7 @@ pub fn list_comments(
 /// 批量把指定评论 id 标记为已消费（已注入下一轮 user message）。
 pub fn mark_consumed(
     data_dir: &Path,
+    workdir: Option<&Path>,
     session_id: &str,
     plan_id: &str,
     ids: Vec<String>,
@@ -108,7 +116,7 @@ pub fn mark_consumed(
     if ids.is_empty() {
         return Ok(());
     }
-    let path = comments_path(data_dir, session_id, plan_id);
+    let path = comments_path(data_dir, workdir, session_id, plan_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -120,10 +128,11 @@ pub fn mark_consumed(
 /// 取出所有未消费的评论。返回顺序 = 写入序。
 pub fn list_unconsumed(
     data_dir: &Path,
+    workdir: Option<&Path>,
     session_id: &str,
     plan_id: &str,
 ) -> AppResult<Vec<PlanComment>> {
-    Ok(list_comments(data_dir, session_id, plan_id)?
+    Ok(list_comments(data_dir, workdir, session_id, plan_id)?
         .into_iter()
         .filter(|c| !c.consumed)
         .collect())
@@ -152,26 +161,26 @@ mod tests {
         let sid = "sid-1";
         let plan_id = "plan-20260525";
 
-        let c1 = append_comment(data_dir, sid, plan_id, comment("c1", "first")).unwrap();
-        let c2 = append_comment(data_dir, sid, plan_id, comment("c2", "second")).unwrap();
+        let c1 = append_comment(data_dir, None, sid, plan_id, comment("c1", "first")).unwrap();
+        let c2 = append_comment(data_dir, None, sid, plan_id, comment("c2", "second")).unwrap();
         assert_eq!(c1.plan_id, plan_id);
         assert!(c1.created_at_ms > 0);
 
-        let all = list_comments(data_dir, sid, plan_id).unwrap();
+        let all = list_comments(data_dir, None, sid, plan_id).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().all(|c| !c.consumed));
 
-        let unconsumed = list_unconsumed(data_dir, sid, plan_id).unwrap();
+        let unconsumed = list_unconsumed(data_dir, None, sid, plan_id).unwrap();
         assert_eq!(unconsumed.len(), 2);
 
-        mark_consumed(data_dir, sid, plan_id, vec![c1.id.clone()]).unwrap();
-        let after = list_comments(data_dir, sid, plan_id).unwrap();
+        mark_consumed(data_dir, None, sid, plan_id, vec![c1.id.clone()]).unwrap();
+        let after = list_comments(data_dir, None, sid, plan_id).unwrap();
         assert_eq!(after.len(), 2);
         assert!(after[0].consumed);
         assert!(!after[1].consumed);
         assert_eq!(c2.id, after[1].id);
 
-        let unconsumed = list_unconsumed(data_dir, sid, plan_id).unwrap();
+        let unconsumed = list_unconsumed(data_dir, None, sid, plan_id).unwrap();
         assert_eq!(unconsumed.len(), 1);
         assert_eq!(unconsumed[0].id, "c2");
     }
@@ -179,7 +188,7 @@ mod tests {
     #[test]
     fn missing_file_returns_empty() {
         let dir = tempdir().unwrap();
-        let out = list_comments(dir.path(), "sid", "plan-x").unwrap();
+        let out = list_comments(dir.path(), None, "sid", "plan-x").unwrap();
         assert!(out.is_empty());
     }
 }

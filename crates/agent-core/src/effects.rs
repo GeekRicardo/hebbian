@@ -184,7 +184,7 @@ pub fn analyze_effects(tool_name: &str, input: &Value) -> Effects {
             Effects::network(domain)
         }
 
-        "Skill" | "TodoWrite" | "ExitPlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
+        "Skill" | "TodoWrite" | "PlanMode" | "BashOutput" | "KillShell" => Effects::read_only(),
 
         // PreviewStyle 只改内置浏览器预览元素的内联样式（不碰用户文件 / 不跑命令 / 不联网）——
         // 免审批。否则旁支会话每改一个样式都要审批，而旁支跑时无 HITL observer 会直接挂死。
@@ -475,14 +475,8 @@ mod tests {
     }
 
     #[test]
-    fn skill_todo_exit_plan_are_readonly() {
-        for t in [
-            "Skill",
-            "TodoWrite",
-            "ExitPlanMode",
-            "BashOutput",
-            "KillShell",
-        ] {
+    fn skill_todo_plan_mode_are_readonly() {
+        for t in ["Skill", "TodoWrite", "PlanMode", "BashOutput", "KillShell"] {
             assert!(matches!(
                 analyze_effects(t, &json!({})).class,
                 EffectClass::ReadOnly

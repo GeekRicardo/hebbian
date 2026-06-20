@@ -2,7 +2,8 @@
 //!
 //! - `Default`：文件编辑写工作区内的文件直接放行（edits-worktree 整 Run 可回退兜底）；
 //!   写工作区外走 PathAccess 审批；改 git 元数据走工具审批；命令类走 §4.4.2 既有审批链
-//! - `PlanMode`：工具列表过滤删除 Edit/Write/Bash/PowerShell，注入 ExitPlanMode（本期占位 TODO）
+//! - `PlanMode`：工具列表过滤删除 Edit/Write/Bash/PowerShell，只读探索 + 注入 PlanMode 工具
+//!   （`action: enter|update|submit`，agent 自主进出计划模式，见架构 §4.4.5）
 //! - `AutoMode`：调一次轻量 LLM judge 决定 Allow / Deny / Ask（仅模型白名单内启用）
 
 use serde::{Deserialize, Serialize};

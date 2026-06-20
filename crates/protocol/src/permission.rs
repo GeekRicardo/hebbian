@@ -106,8 +106,8 @@ pub enum PermissionKind {
         tool_name: String,
         paths: Vec<String>,
     },
-    /// 计划审批（"按这个计划继续吗？"）。PlanMode 下 agent 调 ExitPlanMode 时
-    /// 触发；surface 端用 plan_markdown 渲染完整预览，配合三按钮（通过 /
+    /// 计划审批（"按这个计划继续吗？"）。PlanMode 下 agent 调 PlanMode(action=submit)
+    /// 时触发；surface 端用 plan_markdown 渲染完整预览，配合三按钮（通过 /
     /// 编辑后通过 / 重新规划带反馈）。
     ///
     /// - `plan_id` 与同 session 下 `plans/<plan_id>.md` 文件名对齐

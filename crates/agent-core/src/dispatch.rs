@@ -41,8 +41,8 @@ use crate::{
     run_state::RunState,
     storage::{plan_comments, plans, sessions as session_store},
     tools::{
-        exit_plan_mode::{self, EXIT_PLAN_MODE_TOOL_NAME},
         hitl::{HitlGate, PermissionDecision},
+        plan_mode::{self, PLAN_MODE_TOOL_NAME},
         registry::ToolRegistry,
         todo_write::{self, TODO_WRITE_TOOL_NAME},
         ToolCtx, ToolProgress, ASK_TOOL_NAME,
@@ -240,8 +240,8 @@ impl ToolDispatcher {
                 self.spawn_ask(call.clone(), call_index, dispatch_index)
             } else if call.name == TODO_WRITE_TOOL_NAME {
                 self.spawn_todo_write(call.clone(), call_index, dispatch_index)
-            } else if call.name == EXIT_PLAN_MODE_TOOL_NAME {
-                self.spawn_exit_plan_mode(call.clone(), call_index, dispatch_index)
+            } else if call.name == PLAN_MODE_TOOL_NAME {
+                self.spawn_plan_mode(call.clone(), call_index, dispatch_index)
             } else if call.name == crate::tools::task::TASK_TOOL_NAME {
                 self.spawn_task(call.clone(), call_index, dispatch_index)
             } else {
@@ -1237,20 +1237,19 @@ impl ToolDispatcher {
         )
     }
 
-    /// ExitPlanMode short-circuit（架构 §4.4.5）。
+    /// PlanMode short-circuit（架构 §4.4.5）：处理 `enter` / `update` / `submit` 三个 action。
     ///
-    /// 流程：
-    /// 1. 解析 input → 落 `plans/plan-<ts>.md` → 持久化 active_plan
-    /// 2. emit `ToolCallStarted` + `PlanReady`
-    /// 3. 开 HITL approval + emit `PermissionRequested { kind: Plan { ... } }`
-    /// 4. 等用户 `ApprovalDecision`：
-    ///    - `AllowOnce` / `AllowAndRemember` → 切回 pre_plan_mode（+ emit
-    ///      `RunModeChanged`）；tool result = "[Plan approved] ..." + 未消费评论
-    ///    - `Deny` → 留 PlanMode；result = "[Plan rejected]"
-    ///    - `DenyWithFeedback { feedback }` → 留 PlanMode；result 含反馈让
-    ///       模型按反馈改 plan
-    /// 5. 不论批/拒，emit `ToolCallFinished` 让 transcript 一致
-    fn spawn_exit_plan_mode(
+    /// - `enter`：切到 PlanMode（落盘 + 更新运行中 Arc）、建 plan 草稿、emit `PlanReady`
+    /// - `update`：覆盖写当前 plan，刷新 UI，不走审批
+    /// - `submit`：落盘定稿 + 走 HITL 审批：
+    ///   - `AllowOnce` / `AllowAndRemember` → 切回 pre_plan_mode（落盘 + Arc）；
+    ///     result = "[Plan approved] ..." + 未消费评论
+    ///   - `Deny` → 留 PlanMode；result = "[Plan rejected]"
+    ///   - `DenyWithFeedback { feedback }` → 留 PlanMode；result 含反馈让模型按反馈改 plan
+    ///
+    /// plan 落盘路径的归属真源是 `Session.workdir`（有项目 → 项目级，无 → 全局），
+    /// 与 surface 的 plan 命令读同一字段，保证两端路径一致。
+    fn spawn_plan_mode(
         &self,
         call: ToolCall,
         call_index: usize,
@@ -1264,9 +1263,9 @@ impl ToolDispatcher {
 
         let tool_span = tracing::info_span!(
             "tool.call",
-            otel.name = "tool.ExitPlanMode",
+            otel.name = "tool.PlanMode",
             otel.kind = "internal",
-            hebbian.tool.name = EXIT_PLAN_MODE_TOOL_NAME,
+            hebbian.tool.name = PLAN_MODE_TOOL_NAME,
             hebbian.tool.call_id = %call.id,
             hebbian.tool.class = "needs_human_input",
             hebbian.tool.outcome = Empty,
@@ -1281,220 +1280,384 @@ impl ToolDispatcher {
                     input: call.input.clone(),
                 }));
 
-                let parsed = match exit_plan_mode::parse_input(call.input.clone()) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let msg = format!("ExitPlanMode 入参解析失败: {e}");
-                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
-                        sink(state.event(EventPayload::ToolCallFinished {
-                            index: dispatch_index,
+                // 统一的错误出口：emit ToolCallFinished(is_error) + 返回 ToolResult。
+                let finish_err = |msg: String| {
+                    record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
+                    sink(state.event(EventPayload::ToolCallFinished {
+                        index: dispatch_index,
+                        call_id: call.id.clone(),
+                        result: msg.clone(),
+                        duration_ms: 0,
+                        truncated: false,
+                        artifact_path: None,
+                        is_error: true,
+                    }));
+                    Ok((
+                        call_index,
+                        ToolResult {
                             call_id: call.id.clone(),
-                            result: msg.clone(),
-                            duration_ms: 0,
-                            truncated: false,
-                            artifact_path: None,
-                            is_error: true,
-                        }));
-                        return Ok((
-                            call_index,
-                            ToolResult {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                content: msg,
-                                artifact: None,
-                                attachments: Vec::new(),
-                            },
-                        ));
-                    }
+                            name: call.name.clone(),
+                            content: msg,
+                            artifact: None,
+                            attachments: Vec::new(),
+                        },
+                    ))
                 };
 
+                let parsed = match plan_mode::parse_input(call.input.clone()) {
+                    Ok(p) => p,
+                    Err(e) => return finish_err(format!("PlanMode 入参解析失败: {e}")),
+                };
                 let (dd, sid) = match (data_dir.as_deref(), session_id.as_deref()) {
                     (Some(d), Some(s)) => (d, s),
                     _ => {
-                        let msg =
-                            "ExitPlanMode 需要 data_dir + session_id 才能落盘 / 审批".to_string();
-                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
-                        sink(state.event(EventPayload::ToolCallFinished {
-                            index: dispatch_index,
-                            call_id: call.id.clone(),
-                            result: msg.clone(),
-                            duration_ms: 0,
-                            truncated: false,
-                            artifact_path: None,
-                            is_error: true,
-                        }));
-                        return Ok((
-                            call_index,
-                            ToolResult {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                content: msg,
-                                artifact: None,
-                                attachments: Vec::new(),
-                            },
-                        ));
+                        return finish_err(
+                            "PlanMode 需要 data_dir + session_id 才能落盘 / 审批".to_string(),
+                        )
                     }
                 };
-
-                // 落盘 plan markdown
-                let plan_path = match plans::save_plan(dd, sid, &parsed.plan_markdown) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let msg = format!("ExitPlanMode 落盘失败: {e}");
-                        warn!(error = %e, "ExitPlanMode save_plan failed");
-                        record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
-                        sink(state.event(EventPayload::ToolCallFinished {
-                            index: dispatch_index,
-                            call_id: call.id.clone(),
-                            result: msg.clone(),
-                            duration_ms: 0,
-                            truncated: false,
-                            artifact_path: None,
-                            is_error: true,
-                        }));
-                        return Ok((
-                            call_index,
-                            ToolResult {
-                                call_id: call.id.clone(),
-                                name: call.name.clone(),
-                                content: msg,
-                                artifact: None,
-                                attachments: Vec::new(),
-                            },
-                        ));
-                    }
+                let session = match session_store::load(dd, sid) {
+                    Ok(s) => s,
+                    Err(e) => return finish_err(format!("PlanMode 读取会话失败: {e}")),
                 };
-                let plan_id = exit_plan_mode::plan_id_from_path(&plan_path);
-                let plan_path_str = plan_path.display().to_string();
+                let workdir = session.workdir.clone();
 
-                // 持久化 active_plan
-                if let Err(e) = session_store::set_active_plan(dd, sid, Some(plan_path_str.clone()))
-                {
-                    warn!(error = %e, "ExitPlanMode set_active_plan failed");
-                }
-
-                sink(state.event(EventPayload::PlanReady {
-                    plan_id: plan_id.clone(),
-                    plan_path: plan_path_str.clone(),
-                    plan_markdown: parsed.plan_markdown.clone(),
-                    summary: parsed.summary.clone(),
-                }));
-
-                // 开 HITL approval；workspace 维度（hitl 学习指纹不持久化 plan 审批）。
-                let (request_id, waiter) = hitl.open_approval(None, None);
-                sink(state.event(EventPayload::PermissionRequested {
-                    request_id: request_id.clone(),
-                    kind: PermissionKind::Plan {
-                        plan_id: plan_id.clone(),
-                        plan_path: plan_path_str.clone(),
-                        plan_markdown: parsed.plan_markdown.clone(),
-                        summary: parsed.summary.clone(),
-                        steps: Vec::new(),
-                    },
-                    summary: if parsed.summary.is_empty() {
-                        "计划待审批".to_string()
-                    } else {
-                        parsed.summary.clone()
-                    },
-                    risk: RiskLevel::Low,
-                    // 计划审批走 PlanMode 流程，不被 AutoMode judge 接管。
-                    auto_handled: false,
-                    call_id: String::new(),
-                }));
-
-                let permission_span = tracing::info_span!(
-                    "permission.check",
-                    hebbian.permission.kind = "plan",
-                    hebbian.permission.request_id = %request_id,
-                    hebbian.permission.decision = Empty,
-                );
-                let decision = waiter
-                    .instrument(permission_span.clone())
-                    .await
-                    .unwrap_or(ApprovalDecision::Deny);
-                let decision_label = approval_decision_label(&decision);
-                permission_span.record(attr::PERMISSION_DECISION, decision_label);
-
-                sink(state.event(EventPayload::PermissionResolved {
-                    request_id,
-                    decision: decision.clone(),
-                }));
-
-                // 拼未消费 plan_comments（不论通过/拒绝都拼——拒绝路径让模型也看到用户评论）
-                let mut content = String::new();
-                let unconsumed =
-                    plan_comments::list_unconsumed(dd, sid, &plan_id).unwrap_or_default();
-
-                match decision {
-                    ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => {
-                        // 切回 pre_plan_mode（从 session 当前快照里读）
-                        if let Ok(s) = session_store::load(dd, sid) {
-                            let target_mode =
-                                s.pre_plan_mode.unwrap_or(crate::run_mode::RunMode::Default);
-                            if let Err(e) = session_store::set_run_mode(dd, sid, target_mode) {
-                                warn!(error = %e, "ExitPlanMode: set_run_mode 失败");
-                            } else {
-                                sink(state.event(EventPayload::RunModeChanged {
-                                    from: format!("{:?}", crate::run_mode::RunMode::PlanMode),
-                                    to: format!("{:?}", target_mode),
-                                }));
-                            }
-                            // 清空 pre_plan_mode（已消费）
-                            let _ = session_store::set_pre_plan_mode(dd, sid, None);
+                use plan_mode::PlanAction;
+                match parsed.action {
+                    PlanAction::Enter => {
+                        // 切 PlanMode：落盘（自动记 pre_plan_mode）+ 更新运行中 Arc，让下一轮
+                        // agent_loop 立即收缩工具集。
+                        let from_mode = session.run_mode;
+                        if let Err(e) = session_store::set_run_mode(
+                            dd,
+                            sid,
+                            crate::run_mode::RunMode::PlanMode,
+                        ) {
+                            return finish_err(format!("PlanMode 进入失败: {e}"));
                         }
-                        content.push_str("[Plan approved] Proceeding with implementation.\n\n");
-                        content.push_str(&parsed.plan_markdown);
+                        crate::run_mode::LiveRunModeRegistry::global()
+                            .set(sid, crate::run_mode::RunMode::PlanMode);
+                        sink(state.event(EventPayload::RunModeChanged {
+                            from: format!("{from_mode:?}"),
+                            to: format!("{:?}", crate::run_mode::RunMode::PlanMode),
+                        }));
+
+                        let initial = if parsed.plan_markdown.trim().is_empty() {
+                            "# Plan\n\n_(drafting…)_\n".to_string()
+                        } else {
+                            parsed.plan_markdown.clone()
+                        };
+                        let plan_path = match plans::save_plan(
+                            dd,
+                            workdir.as_deref(),
+                            sid,
+                            &initial,
+                        ) {
+                            Ok(p) => p,
+                            Err(e) => return finish_err(format!("PlanMode 草稿落盘失败: {e}")),
+                        };
+                        let plan_id = plan_mode::plan_id_from_path(&plan_path);
+                        let plan_path_str = plan_path.display().to_string();
+                        if let Err(e) =
+                            session_store::set_active_plan(dd, sid, Some(plan_path_str.clone()))
+                        {
+                            warn!(error = %e, "PlanMode enter set_active_plan failed");
+                        }
+                        sink(state.event(EventPayload::PlanReady {
+                            plan_id,
+                            plan_path: plan_path_str,
+                            plan_markdown: initial,
+                            summary: parsed.summary.clone(),
+                        }));
+
+                        let content = "[Entered Plan Mode] You are now in read-only \
+                             investigation. Editing files and running commands are \
+                             disabled. Use PlanMode `action:\"update\"` to refine the \
+                             plan, and `action:\"submit\"` to submit it for the user's \
+                             approval."
+                            .to_string();
+                        record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: content.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                            is_error: false,
+                        }));
+                        Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content,
+                                artifact: None,
+                                attachments: Vec::new(),
+                            },
+                        ))
                     }
-                    ApprovalDecision::Deny => {
-                        content.push_str(
-                            "[Plan rejected by user] Stay in PlanMode and revise the plan.",
-                        );
+                    PlanAction::Update => {
+                        if parsed.plan_markdown.trim().is_empty() {
+                            return finish_err(
+                                "PlanMode update 需要非空 plan_markdown".to_string(),
+                            );
+                        }
+                        // 覆盖当前 active_plan；无则新建一份。
+                        let plan_path = if let Some(ap) = session.active_plan.as_deref() {
+                            let pid = plan_mode::plan_id_from_path(Path::new(ap));
+                            plans::update_plan(dd, workdir.as_deref(), sid, &pid, &parsed.plan_markdown)
+                        } else {
+                            plans::save_plan(dd, workdir.as_deref(), sid, &parsed.plan_markdown)
+                        };
+                        let plan_path = match plan_path {
+                            Ok(p) => p,
+                            Err(e) => return finish_err(format!("PlanMode 更新落盘失败: {e}")),
+                        };
+                        let plan_id = plan_mode::plan_id_from_path(&plan_path);
+                        let plan_path_str = plan_path.display().to_string();
+                        if let Err(e) =
+                            session_store::set_active_plan(dd, sid, Some(plan_path_str.clone()))
+                        {
+                            warn!(error = %e, "PlanMode update set_active_plan failed");
+                        }
+                        sink(state.event(EventPayload::PlanReady {
+                            plan_id,
+                            plan_path: plan_path_str,
+                            plan_markdown: parsed.plan_markdown.clone(),
+                            summary: parsed.summary.clone(),
+                        }));
+                        let content =
+                            "[Plan updated] The plan has been saved. Keep refining with \
+                             `action:\"update\"`, or submit it with `action:\"submit\"`."
+                                .to_string();
+                        record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+                        sink(state.event(EventPayload::ToolCallFinished {
+                            index: dispatch_index,
+                            call_id: call.id.clone(),
+                            result: content.clone(),
+                            duration_ms: 0,
+                            truncated: false,
+                            artifact_path: None,
+                            is_error: false,
+                        }));
+                        Ok((
+                            call_index,
+                            ToolResult {
+                                call_id: call.id.clone(),
+                                name: call.name.clone(),
+                                content,
+                                artifact: None,
+                                attachments: Vec::new(),
+                            },
+                        ))
                     }
-                    ApprovalDecision::DenyWithFeedback { ref feedback } => {
-                        content.push_str(
-                            "[Plan rejected by user — please revise]\n\nUser feedback:\n",
-                        );
-                        content.push_str(feedback);
+                    PlanAction::Submit => {
+                        Self::run_plan_submit(
+                            call,
+                            call_index,
+                            dispatch_index,
+                            dd,
+                            sid,
+                            workdir.as_deref(),
+                            &session,
+                            parsed,
+                            &state,
+                            &sink,
+                            &hitl,
+                        )
+                        .await
                     }
                 }
+            }
+            .instrument(tool_span),
+        )
+    }
 
-                // 评论拼接 + mark consumed
-                if !unconsumed.is_empty() {
-                    content.push_str("\n\n<plan_comments>\n");
-                    for c in &unconsumed {
-                        content.push_str(&format!("- [{}] {}\n", c.anchor, c.body));
-                    }
-                    content.push_str("</plan_comments>");
-                    let ids: Vec<String> = unconsumed.iter().map(|c| c.id.clone()).collect();
-                    if let Err(e) = plan_comments::mark_consumed(dd, sid, &plan_id, ids) {
-                        warn!(error = %e, "ExitPlanMode: mark_consumed failed");
-                    }
-                }
+    /// PlanMode `submit` 分支：落盘定稿 → emit `PlanReady` → 走 HITL 审批 → 据决定切回
+    /// pre_plan_mode 或留在 PlanMode，最后拼未消费的 plan_comments。
+    #[allow(clippy::too_many_arguments)]
+    async fn run_plan_submit(
+        call: ToolCall,
+        call_index: usize,
+        dispatch_index: usize,
+        dd: &Path,
+        sid: &str,
+        workdir: Option<&Path>,
+        session: &session_store::Session,
+        parsed: plan_mode::PlanInput,
+        state: &Arc<RunState>,
+        sink: &EventSink,
+        hitl: &Arc<HitlGate>,
+    ) -> Result<(usize, ToolResult), ModelError> {
+        // 定稿内容：给了就用 input，否则读现有 active_plan 文件。
+        let plan_markdown = if !parsed.plan_markdown.trim().is_empty() {
+            parsed.plan_markdown.clone()
+        } else {
+            session
+                .active_plan
+                .as_deref()
+                .and_then(|ap| std::fs::read_to_string(ap).ok())
+                .unwrap_or_default()
+        };
 
-                record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+        // 落盘：有 active_plan 覆盖它，否则新建。
+        let plan_path = if let Some(ap) = session.active_plan.as_deref() {
+            let pid = plan_mode::plan_id_from_path(Path::new(ap));
+            plans::update_plan(dd, workdir, sid, &pid, &plan_markdown)
+        } else {
+            plans::save_plan(dd, workdir, sid, &plan_markdown)
+        };
+        let plan_path = match plan_path {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = format!("PlanMode 定稿落盘失败: {e}");
+                warn!(error = %e, "PlanMode submit save failed");
+                record_tool_outcome(attr::outcome::FAILED, &call.name, 0.0, false, 0);
                 sink(state.event(EventPayload::ToolCallFinished {
                     index: dispatch_index,
                     call_id: call.id.clone(),
-                    result: content.clone(),
+                    result: msg.clone(),
                     duration_ms: 0,
                     truncated: false,
                     artifact_path: None,
-                    is_error: false,
+                    is_error: true,
                 }));
-
-                Ok((
+                return Ok((
                     call_index,
                     ToolResult {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
-                        content,
+                        content: msg,
                         artifact: None,
                         attachments: Vec::new(),
                     },
-                ))
+                ));
             }
-            .instrument(tool_span),
-        )
+        };
+        let plan_id = plan_mode::plan_id_from_path(&plan_path);
+        let plan_path_str = plan_path.display().to_string();
+
+        if let Err(e) = session_store::set_active_plan(dd, sid, Some(plan_path_str.clone())) {
+            warn!(error = %e, "PlanMode submit set_active_plan failed");
+        }
+
+        sink(state.event(EventPayload::PlanReady {
+            plan_id: plan_id.clone(),
+            plan_path: plan_path_str.clone(),
+            plan_markdown: plan_markdown.clone(),
+            summary: parsed.summary.clone(),
+        }));
+
+        // 开 HITL approval；workspace 维度（hitl 学习指纹不持久化 plan 审批）。
+        let (request_id, waiter) = hitl.open_approval(None, None);
+        sink(state.event(EventPayload::PermissionRequested {
+            request_id: request_id.clone(),
+            kind: PermissionKind::Plan {
+                plan_id: plan_id.clone(),
+                plan_path: plan_path_str.clone(),
+                plan_markdown: plan_markdown.clone(),
+                summary: parsed.summary.clone(),
+                steps: Vec::new(),
+            },
+            summary: if parsed.summary.is_empty() {
+                "计划待审批".to_string()
+            } else {
+                parsed.summary.clone()
+            },
+            risk: RiskLevel::Low,
+            // 计划审批走 PlanMode 流程，不被 AutoMode judge 接管。
+            auto_handled: false,
+            call_id: String::new(),
+        }));
+
+        let permission_span = tracing::info_span!(
+            "permission.check",
+            hebbian.permission.kind = "plan",
+            hebbian.permission.request_id = %request_id,
+            hebbian.permission.decision = Empty,
+        );
+        let decision = waiter
+            .instrument(permission_span.clone())
+            .await
+            .unwrap_or(ApprovalDecision::Deny);
+        let decision_label = approval_decision_label(&decision);
+        permission_span.record(attr::PERMISSION_DECISION, decision_label);
+
+        sink(state.event(EventPayload::PermissionResolved {
+            request_id,
+            decision: decision.clone(),
+        }));
+
+        // 拼未消费 plan_comments（不论通过/拒绝都拼——拒绝路径让模型也看到用户评论）
+        let mut content = String::new();
+        let unconsumed =
+            plan_comments::list_unconsumed(dd, workdir, sid, &plan_id).unwrap_or_default();
+
+        match decision {
+            ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => {
+                // 切回 pre_plan_mode：落盘 + 更新运行中 Arc，让下一轮 agent_loop 恢复工具集。
+                let target_mode = session
+                    .pre_plan_mode
+                    .unwrap_or(crate::run_mode::RunMode::Default);
+                if let Err(e) = session_store::set_run_mode(dd, sid, target_mode) {
+                    warn!(error = %e, "PlanMode submit: set_run_mode 失败");
+                } else {
+                    crate::run_mode::LiveRunModeRegistry::global().set(sid, target_mode);
+                    sink(state.event(EventPayload::RunModeChanged {
+                        from: format!("{:?}", crate::run_mode::RunMode::PlanMode),
+                        to: format!("{target_mode:?}"),
+                    }));
+                }
+                // 清空 pre_plan_mode（已消费）
+                let _ = session_store::set_pre_plan_mode(dd, sid, None);
+                content.push_str("[Plan approved] Proceeding with implementation.\n\n");
+                content.push_str(&plan_markdown);
+            }
+            ApprovalDecision::Deny => {
+                content
+                    .push_str("[Plan rejected by user] Stay in PlanMode and revise the plan.");
+            }
+            ApprovalDecision::DenyWithFeedback { ref feedback } => {
+                content.push_str("[Plan rejected by user — please revise]\n\nUser feedback:\n");
+                content.push_str(feedback);
+            }
+        }
+
+        // 评论拼接 + mark consumed
+        if !unconsumed.is_empty() {
+            content.push_str("\n\n<plan_comments>\n");
+            for c in &unconsumed {
+                content.push_str(&format!("- [{}] {}\n", c.anchor, c.body));
+            }
+            content.push_str("</plan_comments>");
+            let ids: Vec<String> = unconsumed.iter().map(|c| c.id.clone()).collect();
+            if let Err(e) = plan_comments::mark_consumed(dd, workdir, sid, &plan_id, ids) {
+                warn!(error = %e, "PlanMode submit: mark_consumed failed");
+            }
+        }
+
+        record_tool_outcome(attr::outcome::OK, &call.name, 0.0, false, content.len());
+        sink(state.event(EventPayload::ToolCallFinished {
+            index: dispatch_index,
+            call_id: call.id.clone(),
+            result: content.clone(),
+            duration_ms: 0,
+            truncated: false,
+            artifact_path: None,
+            is_error: false,
+        }));
+
+        Ok((
+            call_index,
+            ToolResult {
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                content,
+                artifact: None,
+                attachments: Vec::new(),
+            },
+        ))
     }
 
     /// Task short-circuit（架构 §4.4.11）：把子 NestedRun 委托给 [`SubagentRunner`]。

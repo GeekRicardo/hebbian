@@ -8843,3 +8843,55 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   PASS；前端纯函数 node 验证 + tsc noEmit 通过
 - **留尾巴**: invoke 漏出后端自愈机制（清洗+注入纠错+续跑，上限 MAX_TOOL_XML_LEAK_RECOVERIES）
   早已存在，本次只补前端展示。Playwright 截图因本机浏览器卡住未取，UI 效果待本地 tauri dev 目检
+
+### 2026-06-21 — PlanMode 改为 agent 自主进出的单工具三 action，plan 落盘挪到项目/全局级
+
+- **Why**: 用户要求三点——(1) 加一个工具让 agent 自己进入/退出 PlanMode（原来只能用户在 UI 下拉
+  手动切）；(2) PlanMode 下从「完全禁写」放宽到「只允许写/更新计划」，允许 agent 中途反复打磨 plan
+  （原来只能一次性 ExitPlanMode 提交完整 markdown，中途不能编辑）；(3) plan 从会话级落盘挪到按项目/
+  全局归属——code 栏有项目的存 `projects/<encode(workdir)>/plans/`，chat 栏无项目的存 `~/.hebbian/plans/`
+- **改动**:
+  - `tools/exit_plan_mode.rs` → `tools/plan_mode.rs`（git mv）：工具 `ExitPlanMode` 改名 `PlanMode`，
+    入参从 `{plan_markdown, summary?}` 变 `{action: enter|update|submit, plan_markdown?, summary?}`。
+    提供 enter/active 两套 description + schema 生成函数供 agent_loop 按模式注入
+  - `agent_loop.rs`：PlanMode 工具常驻注入（进 BUILTIN_TOOL_NAMES），按当前 RunMode 定制 description
+    + schema——非 PlanMode 只暴露 `action=enter`，PlanMode 删 Edit/Bash/PowerShell 并把工具收为
+    `update`/`submit`。靠 schema enum 收窄，模型看不到当前不可用的 action
+  - `dispatch.rs`：`spawn_exit_plan_mode` 改造为 `spawn_plan_mode`，拆三分支。enter/update inline 处理，
+    submit 抽成关联函数 `run_plan_submit`（不带 `&self`，避免 BoxFuture `'static` 借用冲突）。
+    enter/submit 切 mode 时除落盘还调 `LiveRunModeRegistry::global().set` 更新运行中 Arc，让下一轮
+    agent_loop 立即收缩/恢复工具集（agent_loop 持有的 run_mode Arc 与 registry 注册的是同一个）
+  - `storage/plans.rs`：`dir_for_session` 加 `workdir: Option<&Path>` 参数——Some 走
+    `projects::project_dir(data_dir, wd)/plans/<sid>/`，None 走 `data_dir/plans/<sid>/`。会话用子目录
+    隔离（比文件名前缀干净：list 读子目录、删会话整目录删）。新增 `update_plan` 覆盖写已存在 plan
+  - `storage/plan_comments.rs`：`comments_path` 及 4 个公开函数透传 workdir，保证 comments 与 plan 同目录
+  - `session.rs append_user`：plan_comments 调用补 `s.workdir` 参数
+  - `apps/desktop/src/lib.rs`：list/read/update plan + list/add comment 共 5 个命令先 load session 拿
+    `workdir` 再解析路径，与 dispatcher 落盘路径对齐
+  - `effects.rs`：read_only 工具名 `ExitPlanMode` → `PlanMode`
+  - `prompts/base_system.md`：PlanMode 段重写为新工具语义（会让 prompt cache 失效一次，一次性可接受）
+  - 架构.md §4.4.3 / §4.4.5 / §4.4.6 / §6.1 全面更新；protocol 注释（permission.rs / event.rs）同步
+- **设计取舍**:
+  - 为什么用专用 `PlanMode(update)` 而非放开通用 Edit 写 plan：后者要给 Edit 在 dispatcher 插
+    PlanMode 专属路径白名单（只准写某绝对路径），既暴露 plan 路径给模型又在审批链插特殊分支，脏。
+    专用 action 让「写 plan」与「写代码」天然两条路，plan 路径对模型透明，dispatcher 不特判 Edit
+  - 为什么会话子目录而非文件名前缀：list 直接读 `<sid>/` 目录、删会话连目录删，比扫前缀干净
+  - plan 归属真源用 `Session.workdir`（不是 dispatcher 的 `workspace.workdir()`，后者对无项目对话会
+    fallback 到 home）——dispatcher 落盘与 surface 命令读同一字段，两端路径保证一致
+- **影响范围**: agent-core（工具 / dispatch / storage / agent_loop / session / effects / prompt）+
+  protocol 注释 + desktop plan 命令。**破坏兼容**：早期 `sessions/<sid>/plans/` 旧 plan 不迁移、不再
+  显示（按用户「忽略旧的」决策）；工具改名 ExitPlanMode→PlanMode，老 session 重启后看不到旧工具名
+  （PlanMode 工具不持久化在 transcript 的 tool 定义里，无影响）。cli/web-server 无 plan 命令，无需改
+- **验证**:
+  - cargo check --workspace 通过（仅 2 个预存在 warning，与本次无关）；cargo test -p agent-core --lib
+    550 passed（唯一失败 `bash::run_in_background_returns_immediately` 是负载导致的时间断言 flaky，
+    单独重跑 PASS）；tsc --noEmit 通过
+  - 新增单测：plans 的 workdir 路由（global / project）+ update 覆盖、plan_comments roundtrip、
+    plan_mode action 解析、effects read_only
+  - **heb CLI 端到端复现**（workdir=/tmp/plan-repro）：agent 自主 `enter`（事件 run_mode_changed
+    Default→PlanMode）→ `update`（写 plan）→ `submit`（permission_requested kind=plan）→ allow
+    （run_mode_changed PlanMode→Default + tool result "[Plan approved]"）；plan 落到
+    `~/.hebbian/projects/-tmp-plan-repro/plans/<sid>/plan-<ts>.md`，update 与 submit 复用同一 plan_id
+    （覆盖而非新建），sessions/<sid>/plans 无目录。session.jsonl 最终 run_mode=Default 落盘正确
+- **留尾巴**: 前端 PlanTab 命令签名未变（仍按 session_id 拉），UI 渲染已有逻辑沿用，未做 Playwright
+  目检；PlanMode enter 的草稿骨架文案 `# Plan\n\n_(drafting…)_` 较粗糙，后续可优化

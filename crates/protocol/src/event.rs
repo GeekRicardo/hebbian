@@ -294,8 +294,8 @@ pub enum EventPayload {
     TodoListUpdated {
         todos: Vec<TodoItem>,
     },
-    /// PlanMode 下 agent 调 ExitPlanMode 后，plan markdown 落盘完成。
-    /// 紧接着会 emit `PermissionRequested { kind: Plan { .. } }` 等用户审批。
+    /// PlanMode 下 plan markdown 落盘完成（enter 建草稿 / update 打磨 / submit 定稿都会 emit）。
+    /// submit 之后紧接着会 emit `PermissionRequested { kind: Plan { .. } }` 等用户审批。
     PlanReady {
         plan_id: String,
         plan_path: String,

@@ -294,15 +294,19 @@ impl Session {
         // 的反馈，并把它们标记为 consumed（不会被注入第二次）。
         if let (Some(dd), Some(sid)) = (self.data_dir.as_deref(), self.session_id.as_deref()) {
             if let Ok(s) = crate::storage::sessions::load(dd, sid) {
+                let workdir = s.workdir.clone();
                 if let Some(plan_path) = s.active_plan.as_deref() {
                     let plan_id = std::path::Path::new(plan_path)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("");
                     if !plan_id.is_empty() {
-                        if let Ok(unconsumed) =
-                            crate::storage::plan_comments::list_unconsumed(dd, sid, plan_id)
-                        {
+                        if let Ok(unconsumed) = crate::storage::plan_comments::list_unconsumed(
+                            dd,
+                            workdir.as_deref(),
+                            sid,
+                            plan_id,
+                        ) {
                             if !unconsumed.is_empty() {
                                 final_text = crate::system_prompt::prepend_plan_comments(
                                     final_text,
@@ -311,7 +315,11 @@ impl Session {
                                 let ids: Vec<String> =
                                     unconsumed.iter().map(|c| c.id.clone()).collect();
                                 if let Err(e) = crate::storage::plan_comments::mark_consumed(
-                                    dd, sid, plan_id, ids,
+                                    dd,
+                                    workdir.as_deref(),
+                                    sid,
+                                    plan_id,
+                                    ids,
                                 ) {
                                     tracing::warn!(error = %e, "plan_comments::mark_consumed failed");
                                 }

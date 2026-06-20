@@ -695,17 +695,26 @@ pub async fn run_loop(
         if !enabled_tools.is_empty() {
             tool_defs.extend(hosted_tool_definitions(enabled_tools));
         }
-        // PlanMode 工具过滤（架构 §4.4.3 / §4.4.5）：删除会改外界的工具，强制 agent 走
-        // 只读探索路径；同时注入 ExitPlanMode 工具让 agent 主动结束规划。
+        // PlanMode 工具集（架构 §4.4.3 / §4.4.5）。PlanMode 工具常驻注入，但按当前
+        // 运行模式定制 description/schema、暴露不同 action：
+        // - 非 PlanMode：只暴露 `enter`，让 agent 能自主进入计划模式
+        // - PlanMode：删除会改外界的工具（强制只读探索），PlanMode 工具收为 `update`/`submit`
         let current_run_mode = *run_mode.lock().unwrap();
-        if current_run_mode == crate::run_mode::RunMode::PlanMode {
+        let plan_active = current_run_mode == crate::run_mode::RunMode::PlanMode;
+        if plan_active {
             let mutating = ["Bash", "PowerShell", "Edit"];
             tool_defs.retain(|t| !mutating.contains(&t.name.as_str()));
-            let extra = registry.definitions(&["ExitPlanMode".to_string()]);
-            tool_defs.extend(extra);
-        } else {
-            // 其他模式不暴露 ExitPlanMode，避免误调用
-            tool_defs.retain(|t| t.name != "ExitPlanMode");
+        }
+        for def in tool_defs.iter_mut() {
+            if def.name == crate::tools::plan_mode::PLAN_MODE_TOOL_NAME {
+                if plan_active {
+                    def.description = crate::tools::plan_mode::active_description().to_string();
+                    def.parameters = crate::tools::plan_mode::active_schema();
+                } else {
+                    def.description = crate::tools::plan_mode::enter_description().to_string();
+                    def.parameters = crate::tools::plan_mode::enter_schema();
+                }
+            }
         }
         let has_tools = !tool_defs.is_empty();
 

@@ -4,11 +4,11 @@ pub mod bash_output;
 pub mod bash_prefix;
 pub mod edit;
 pub mod edit_hashline;
-pub mod exit_plan_mode;
 pub mod grep;
 pub mod hitl;
 pub mod kill_shell;
 pub mod mcp;
+pub mod plan_mode;
 pub mod preview_act;
 pub mod preview_capture;
 pub mod preview_inspect;
@@ -250,7 +250,7 @@ pub fn default_tools(
         Box::new(todo_write::TodoWriteTool),
         Box::new(web_search::WebSearchTool),
         Box::new(web_fetch::WebFetchTool),
-        Box::new(exit_plan_mode::ExitPlanModeTool),
+        Box::new(plan_mode::PlanModeTool),
         // 仅内置浏览器「元素对话」旁支会话用（enabled_tools 含 PreviewStyle 才暴露，
         // 不进 BUILTIN_TOOL_NAMES，普通会话看不到）。
         Box::new(preview_style::PreviewStyleTool),
@@ -316,6 +316,7 @@ pub const BUILTIN_TOOL_NAMES: &[&str] = &[
     "Grep",
     "Skill",
     "TodoWrite",
+    "PlanMode",
     "ReadMemory",
     "WriteMemory",
 ];

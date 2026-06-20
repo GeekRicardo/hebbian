@@ -1458,7 +1458,11 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
     let dd = data_dir(&app)?;
     let session = sessions::load(&dd, &session_id)?;
     let active = session.active_plan.clone();
-    let dir = agent_core::storage::plans::dir_for_session(&dd, &session_id);
+    let dir = agent_core::storage::plans::dir_for_session(
+        &dd,
+        session.workdir.as_deref(),
+        &session_id,
+    );
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -1514,8 +1518,13 @@ fn list_session_plans(app: AppHandle, session_id: String) -> AppResult<Vec<PlanM
 #[tauri::command]
 fn read_plan_markdown(app: AppHandle, session_id: String, plan_id: String) -> AppResult<String> {
     let dd = data_dir(&app)?;
-    let path =
-        agent_core::storage::plans::dir_for_session(&dd, &session_id).join(format!("{plan_id}.md"));
+    let session = sessions::load(&dd, &session_id)?;
+    let path = agent_core::storage::plans::dir_for_session(
+        &dd,
+        session.workdir.as_deref(),
+        &session_id,
+    )
+    .join(format!("{plan_id}.md"));
     let bytes = agent_core::storage::lock::read_locked(&path)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
@@ -1530,8 +1539,13 @@ fn update_plan_markdown(
     markdown: String,
 ) -> AppResult<()> {
     let dd = data_dir(&app)?;
-    let path =
-        agent_core::storage::plans::dir_for_session(&dd, &session_id).join(format!("{plan_id}.md"));
+    let session = sessions::load(&dd, &session_id)?;
+    let path = agent_core::storage::plans::dir_for_session(
+        &dd,
+        session.workdir.as_deref(),
+        &session_id,
+    )
+    .join(format!("{plan_id}.md"));
     agent_core::storage::lock::write_atomic(&path, markdown.as_bytes())?;
     Ok(())
 }
@@ -1544,7 +1558,13 @@ fn list_plan_comments(
     plan_id: String,
 ) -> AppResult<Vec<engine::PlanCommentDto>> {
     let dd = data_dir(&app)?;
-    let comments = agent_core::storage::plan_comments::list_comments(&dd, &session_id, &plan_id)?;
+    let session = sessions::load(&dd, &session_id)?;
+    let comments = agent_core::storage::plan_comments::list_comments(
+        &dd,
+        session.workdir.as_deref(),
+        &session_id,
+        &plan_id,
+    )?;
     Ok(comments.into_iter().map(Into::into).collect())
 }
 
@@ -1558,6 +1578,7 @@ fn add_plan_comment(
     body: String,
 ) -> AppResult<engine::PlanCommentDto> {
     let dd = data_dir(&app)?;
+    let session = sessions::load(&dd, &session_id)?;
     let comment = protocol::todo::PlanComment {
         // 进程内单调 id：epoch ms + counter 已经够，避免引入 ulid 依赖
         id: new_comment_id(),
@@ -1567,8 +1588,13 @@ fn add_plan_comment(
         created_at_ms: 0, // append_comment 会补
         consumed: false,
     };
-    let saved =
-        agent_core::storage::plan_comments::append_comment(&dd, &session_id, &plan_id, comment)?;
+    let saved = agent_core::storage::plan_comments::append_comment(
+        &dd,
+        session.workdir.as_deref(),
+        &session_id,
+        &plan_id,
+        comment,
+    )?;
     Ok(saved.into())
 }
 
