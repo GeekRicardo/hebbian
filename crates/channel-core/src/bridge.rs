@@ -36,9 +36,45 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
+/// 把机主在渠道里的回复落地为 HITL 决定。
+///
+/// 渠道转发的审批/问题可能来自两类发起方：① 渠道自己跑的 agent run（本地 oneshot）；
+/// ② 其他 surface（如 Desktop 主对话）在机主离开电脑时转发过来的请求。后者的落地点
+/// 在 surface 侧（如 Desktop 的 `HitlState`），channel-core 不依赖 surface，故用 trait 注入。
+pub trait RemoteHitlResolver: Send + Sync {
+    fn resolve_approval(&self, request_id: &str, decision: ApprovalDecision);
+    fn answer_question(&self, request_id: &str, answer: UserAnswer);
+}
+
+/// 审批待办的落地出口。
+enum ApprovalSink {
+    /// 渠道自身 run 的 HITL：直接唤醒 await 中的 observer。
+    Local(oneshot::Sender<ApprovalDecision>),
+    /// 外部 surface 转发来的审批：回落给注入的 resolver。
+    Remote(Arc<dyn RemoteHitlResolver>),
+}
+
+/// 问题待办：携带选项上下文，机主回数字时映射为对应 label。
+struct PendingQuestion {
+    options: Vec<QuestionOption>,
+    multi: bool,
+    sink: QuestionSink,
+}
+
+enum QuestionSink {
+    Local(oneshot::Sender<UserAnswer>),
+    Remote(Arc<dyn RemoteHitlResolver>),
+}
+
+#[derive(Clone)]
+struct OwnerTarget {
+    to: String,
+    channel_context: Value,
+}
+
 struct PendingInteractions {
-    approvals: HashMap<String, oneshot::Sender<ApprovalDecision>>,
-    questions: HashMap<String, oneshot::Sender<UserAnswer>>,
+    approvals: HashMap<String, ApprovalSink>,
+    questions: HashMap<String, PendingQuestion>,
 }
 
 impl PendingInteractions {
@@ -55,6 +91,13 @@ pub struct ChannelBridge {
     pub data_dir: PathBuf,
     pending: Arc<Mutex<PendingInteractions>>,
     active_run: Arc<AtomicBool>,
+    /// 当前 agent run 的取消标志，供渠道 `/cancel` 命令打断。
+    current_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    /// run_loop 启动后持有的渠道句柄，供外部转发审批/问题时发消息。
+    channel: Arc<Mutex<Option<Arc<dyn Channel>>>>,
+    /// 最近一次收到机主消息的回复目标（to + context_token）。
+    /// iLink 协议要求机主先发过消息才有 context_token，故转发前必有此值。
+    last_owner_target: Arc<Mutex<Option<OwnerTarget>>>,
 }
 
 impl ChannelBridge {
@@ -63,7 +106,80 @@ impl ChannelBridge {
             data_dir,
             pending: Arc::new(Mutex::new(PendingInteractions::new())),
             active_run: Arc::new(AtomicBool::new(false)),
+            current_cancel: Arc::new(Mutex::new(None)),
+            channel: Arc::new(Mutex::new(None)),
+            last_owner_target: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 外部 surface 转发一条审批到机主渠道。已组装好的 `text` 直接发出，
+    /// 机主回 y/n/deny 经 poll loop 解析后回落给 `resolver`。
+    /// 渠道未就绪或机主从未发过消息（无回复目标）时返回 false，调用方应回退本地通知。
+    pub fn forward_approval(
+        &self,
+        request_id: &str,
+        text: &str,
+        resolver: Arc<dyn RemoteHitlResolver>,
+    ) -> bool {
+        let Some((channel, target)) = self.forward_target() else {
+            return false;
+        };
+        self.pending
+            .lock()
+            .unwrap()
+            .approvals
+            .insert(request_id.to_string(), ApprovalSink::Remote(resolver));
+        self.spawn_send(channel, target, text.to_string());
+        true
+    }
+
+    /// 外部 surface 转发一条提问到机主渠道。`options` 用于把机主回的数字映射回 label。
+    pub fn forward_question(
+        &self,
+        request_id: &str,
+        text: &str,
+        options: Vec<QuestionOption>,
+        multi: bool,
+        resolver: Arc<dyn RemoteHitlResolver>,
+    ) -> bool {
+        let Some((channel, target)) = self.forward_target() else {
+            return false;
+        };
+        self.pending.lock().unwrap().questions.insert(
+            request_id.to_string(),
+            PendingQuestion {
+                options,
+                multi,
+                sink: QuestionSink::Remote(resolver),
+            },
+        );
+        self.spawn_send(channel, target, text.to_string());
+        true
+    }
+
+    /// 撤销一条尚未被机主回复的转发待办（如审批已在 Desktop 端处理）。
+    pub fn cancel_forwarded(&self, request_id: &str) {
+        let mut pending = self.pending.lock().unwrap();
+        pending.approvals.remove(request_id);
+        pending.questions.remove(request_id);
+    }
+
+    fn forward_target(&self) -> Option<(Arc<dyn Channel>, OwnerTarget)> {
+        let channel = self.channel.lock().unwrap().clone()?;
+        let target = self.last_owner_target.lock().unwrap().clone()?;
+        Some((channel, target))
+    }
+
+    fn spawn_send(&self, channel: Arc<dyn Channel>, target: OwnerTarget, text: String) {
+        tokio::spawn(async move {
+            let _ = channel
+                .send_text(&OutboundMessage {
+                    to: target.to,
+                    text,
+                    channel_context: target.channel_context,
+                })
+                .await;
+        });
     }
 
     pub async fn run_loop(
@@ -73,6 +189,7 @@ impl ChannelBridge {
         account_id: &str,
     ) -> anyhow::Result<()> {
         info!(channel = channel.id(), account_id, "渠道网关启动");
+        *self.channel.lock().unwrap() = Some(channel.clone());
         loop {
             let messages = match channel.poll().await {
                 Ok(messages) => messages,
@@ -101,7 +218,40 @@ impl ChannelBridge {
         account_id: &str,
         message: InboundMessage,
     ) -> anyhow::Result<()> {
+        // 记录机主回复目标：转发外部审批/问题时据此发到机主微信。
+        *self.last_owner_target.lock().unwrap() = Some(OwnerTarget {
+            to: message.from.clone(),
+            channel_context: message.channel_context.clone(),
+        });
+
         if self.try_resolve_pending(&message).await? {
+            return Ok(());
+        }
+
+        // /cancel 是运行时控制命令，需打断当前 run 的 cancel_flag，不走纯查询的 commands::dispatch。
+        if message.text.trim().eq_ignore_ascii_case("/cancel") {
+            let cancelled = self
+                .current_cancel
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|flag| {
+                    flag.store(true, Ordering::SeqCst);
+                    true
+                })
+                .unwrap_or(false);
+            let reply = if cancelled {
+                "🛑 已发送停止信号，当前对话即将中断。"
+            } else {
+                "当前没有正在运行的对话。"
+            };
+            channel
+                .send_text(&OutboundMessage {
+                    to: message.from,
+                    text: reply.into(),
+                    channel_context: message.channel_context,
+                })
+                .await?;
             return Ok(());
         }
 
@@ -163,40 +313,54 @@ impl ChannelBridge {
     async fn try_resolve_pending(&self, message: &InboundMessage) -> anyhow::Result<bool> {
         let text = message.text.trim();
         let lower = text.to_ascii_lowercase();
-        let mut pending = self.pending.lock().unwrap();
 
-        if let Some((request_id, tx)) = pending.approvals.drain().next() {
-            let decision = match lower.as_str() {
-                "y" | "yes" | "允许" | "通过" => ApprovalDecision::AllowOnce,
-                other if other.starts_with("deny ") || other.starts_with("拒绝 ") => {
-                    ApprovalDecision::DenyWithFeedback {
-                        feedback: text
-                            .split_once(char::is_whitespace)
-                            .map(|(_, rest)| rest.to_string())
-                            .unwrap_or_else(|| "用户拒绝".to_string()),
+        // 取出一条待办（审批优先）。锁内只取 sink，发送/落地在锁外做。
+        enum Resolved {
+            Approval(String, ApprovalSink),
+            Question(String, PendingQuestion),
+        }
+        let resolved = {
+            let mut pending = self.pending.lock().unwrap();
+            if let Some(request_id) = pending.approvals.keys().next().cloned() {
+                let sink = pending.approvals.remove(&request_id).unwrap();
+                Some(Resolved::Approval(request_id, sink))
+            } else if let Some(request_id) = pending.questions.keys().next().cloned() {
+                let question = pending.questions.remove(&request_id).unwrap();
+                Some(Resolved::Question(request_id, question))
+            } else {
+                None
+            }
+        };
+
+        match resolved {
+            Some(Resolved::Approval(request_id, sink)) => {
+                let decision = parse_approval(text, &lower);
+                match sink {
+                    ApprovalSink::Local(tx) => {
+                        let _ = tx.send(decision);
+                    }
+                    ApprovalSink::Remote(resolver) => {
+                        resolver.resolve_approval(&request_id, decision);
                     }
                 }
-                _ => ApprovalDecision::Deny,
-            };
-            let _ = tx.send(decision);
-            info!(request_id, "已从渠道文本解析审批回复");
-            return Ok(true);
-        }
-
-        if let Some((request_id, tx)) = pending.questions.drain().next() {
-            let answer = if lower == "cancel" || lower == "取消" {
-                UserAnswer::Cancelled
-            } else {
-                UserAnswer::Custom {
-                    text: text.to_string(),
+                info!(request_id, "已从渠道文本解析审批回复");
+                Ok(true)
+            }
+            Some(Resolved::Question(request_id, question)) => {
+                let answer = parse_answer(text, &lower, &question.options, question.multi);
+                match question.sink {
+                    QuestionSink::Local(tx) => {
+                        let _ = tx.send(answer);
+                    }
+                    QuestionSink::Remote(resolver) => {
+                        resolver.answer_question(&request_id, answer);
+                    }
                 }
-            };
-            let _ = tx.send(answer);
-            info!(request_id, "已从渠道文本解析问题回复");
-            return Ok(true);
+                info!(request_id, "已从渠道文本解析问题回复");
+                Ok(true)
+            }
+            None => Ok(false),
         }
-
-        Ok(false)
     }
 
     async fn run_agent_turn(
@@ -372,6 +536,7 @@ impl ChannelBridge {
         core_session.append_user(message.text.clone(), Vec::new());
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        *self.current_cancel.lock().unwrap() = Some(cancel_flag.clone());
         let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
         let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
         let mut handle = core_session.run_with_runtime_inputs(
@@ -389,6 +554,7 @@ impl ChannelBridge {
         let summary = handle.drive(&mut observer).await;
 
         consumed_inputs.lock().unwrap().clear();
+        *self.current_cancel.lock().unwrap() = None;
         match summary.outcome {
             TurnOutcome::Done | TurnOutcome::Suspended => {
                 observer.flush().await;
@@ -569,7 +735,7 @@ impl TurnObserver for ChannelObserver {
             .lock()
             .unwrap()
             .approvals
-            .insert(request_id.as_str().to_string(), tx);
+            .insert(request_id.as_str().to_string(), ApprovalSink::Local(tx));
         self.send(&format!(
             "⚠️ 需要审批：{summary}\n回复 y/yes/允许 通过；回复 n/no/拒绝 拒绝；回复 deny <原因> 拒绝并反馈。"
         ))
@@ -582,15 +748,18 @@ impl TurnObserver for ChannelObserver {
         request_id: &PermissionRequestId,
         question: &str,
         options: &[QuestionOption],
-        _multi: bool,
+        multi: bool,
         questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
         let (tx, rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .unwrap()
-            .questions
-            .insert(request_id.as_str().to_string(), tx);
+        self.pending.lock().unwrap().questions.insert(
+            request_id.as_str().to_string(),
+            PendingQuestion {
+                options: options.to_vec(),
+                multi,
+                sink: QuestionSink::Local(tx),
+            },
+        );
         if !questions.is_empty() {
             let body = questions
                 .iter()
@@ -621,6 +790,73 @@ impl TurnObserver for ChannelObserver {
             .await;
         }
         rx.await.ok()
+    }
+}
+
+/// 把机主在渠道里的回复解析为审批决定。
+///
+/// `y/yes/允许/通过/1` → 允许一次；`deny <原因>` / `拒绝 <原因>` → 拒绝并反馈；其余 → 拒绝。
+fn parse_approval(text: &str, lower: &str) -> ApprovalDecision {
+    match lower {
+        "y" | "yes" | "允许" | "通过" | "1" => ApprovalDecision::AllowOnce,
+        other if other.starts_with("deny ") || other.starts_with("拒绝 ") => {
+            ApprovalDecision::DenyWithFeedback {
+                feedback: text
+                    .split_once(char::is_whitespace)
+                    .map(|(_, rest)| rest.trim().to_string())
+                    .filter(|rest| !rest.is_empty())
+                    .unwrap_or_else(|| "用户拒绝".to_string()),
+            }
+        }
+        _ => ApprovalDecision::Deny,
+    }
+}
+
+/// 把机主在渠道里的回复解析为问题答案。
+///
+/// 选项解析（需求「ask 的选项走解析」）：机主回数字时映射为对应选项 label——
+/// 单选回 `2`（1-based）取第 2 个选项；多选回 `1,3` 或 `1 3` 取多个。回 `取消/cancel`
+/// 取消整轮；其余文本作为自由输入 [`UserAnswer::Custom`]。
+fn parse_answer(text: &str, lower: &str, options: &[QuestionOption], multi: bool) -> UserAnswer {
+    if lower == "cancel" || lower == "取消" {
+        return UserAnswer::Cancelled;
+    }
+
+    if !options.is_empty() {
+        let indices: Vec<usize> = text
+            .split(|c: char| c == ',' || c == '，' || c.is_whitespace())
+            .filter(|token| !token.is_empty())
+            .filter_map(|token| token.parse::<usize>().ok())
+            .filter(|n| *n >= 1 && *n <= options.len())
+            .map(|n| n - 1)
+            .collect();
+
+        if !indices.is_empty() {
+            if multi {
+                let mut labels = Vec::new();
+                for index in indices {
+                    let label = options[index].label.clone();
+                    if !labels.contains(&label) {
+                        labels.push(label);
+                    }
+                }
+                return UserAnswer::SelectedMulti { labels };
+            }
+            return UserAnswer::Selected {
+                label: options[indices[0]].label.clone(),
+            };
+        }
+
+        // 机主直接回了选项原文（而非编号）也认。
+        if let Some(option) = options.iter().find(|option| option.label == text.trim()) {
+            return UserAnswer::Selected {
+                label: option.label.clone(),
+            };
+        }
+    }
+
+    UserAnswer::Custom {
+        text: text.to_string(),
     }
 }
 
@@ -710,5 +946,85 @@ impl ModelClient for NamedModelClient {
         self.inner
             .stream(self.patch(request), cancel, on_event)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(labels: &[&str]) -> Vec<QuestionOption> {
+        labels
+            .iter()
+            .map(|label| QuestionOption {
+                label: label.to_string(),
+                description: String::new(),
+            })
+            .collect()
+    }
+
+    fn answer(text: &str, options: &[QuestionOption], multi: bool) -> UserAnswer {
+        parse_answer(text, &text.to_ascii_lowercase(), options, multi)
+    }
+
+    #[test]
+    fn single_choice_by_number_maps_to_label() {
+        let options = opts(&["系统空闲", "窗口隐藏", "锁屏"]);
+        assert!(matches!(
+            answer("2", &options, false),
+            UserAnswer::Selected { label } if label == "窗口隐藏"
+        ));
+    }
+
+    #[test]
+    fn multi_choice_by_numbers_dedup_and_order() {
+        let options = opts(&["切换对话", "删除对话", "压缩"]);
+        match answer("1，3 1", &options, true) {
+            UserAnswer::SelectedMulti { labels } => {
+                assert_eq!(labels, vec!["切换对话".to_string(), "压缩".to_string()]);
+            }
+            other => panic!("期望 SelectedMulti，得到 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_range_number_falls_back_to_custom() {
+        let options = opts(&["A", "B"]);
+        assert!(matches!(
+            answer("9", &options, false),
+            UserAnswer::Custom { text } if text == "9"
+        ));
+    }
+
+    #[test]
+    fn label_text_matches_selected() {
+        let options = opts(&["锁屏", "息屏"]);
+        assert!(matches!(
+            answer("息屏", &options, false),
+            UserAnswer::Selected { label } if label == "息屏"
+        ));
+    }
+
+    #[test]
+    fn cancel_keyword_cancels() {
+        let options = opts(&["A", "B"]);
+        assert!(matches!(answer("取消", &options, false), UserAnswer::Cancelled));
+    }
+
+    #[test]
+    fn approval_keywords() {
+        assert!(matches!(
+            parse_approval("1", "1"),
+            ApprovalDecision::AllowOnce
+        ));
+        assert!(matches!(
+            parse_approval("允许", "允许"),
+            ApprovalDecision::AllowOnce
+        ));
+        assert!(matches!(
+            parse_approval("deny 太危险", "deny 太危险"),
+            ApprovalDecision::DenyWithFeedback { feedback } if feedback == "太危险"
+        ));
+        assert!(matches!(parse_approval("n", "n"), ApprovalDecision::Deny));
     }
 }

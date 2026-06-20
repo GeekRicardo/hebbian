@@ -22,6 +22,8 @@ use tauri::{AppHandle, Manager};
 struct RunningChannel {
     bot_id: String,
     handle: JoinHandle<()>,
+    /// run_loop 共用的 bridge（内部全 Arc），供主对话不活跃时转发审批/问题到微信。
+    bridge: ChannelBridge,
 }
 
 #[derive(Default)]
@@ -38,18 +40,27 @@ impl WeChatState {
             .map(|r| r.bot_id.clone())
     }
 
+    /// 取当前运行中的 bridge（供 HITL 转发）。未运行返回 None。
+    pub fn bridge(&self) -> Option<ChannelBridge> {
+        self.running.lock().unwrap().as_ref().map(|r| r.bridge.clone())
+    }
+
     fn stop(&self) {
         if let Some(running) = self.running.lock().unwrap().take() {
             running.handle.abort();
         }
     }
 
-    fn set(&self, bot_id: String, handle: JoinHandle<()>) {
+    fn set(&self, bot_id: String, handle: JoinHandle<()>, bridge: ChannelBridge) {
         let mut slot = self.running.lock().unwrap();
         if let Some(prev) = slot.take() {
             prev.handle.abort();
         }
-        *slot = Some(RunningChannel { bot_id, handle });
+        *slot = Some(RunningChannel {
+            bot_id,
+            handle,
+            bridge,
+        });
     }
 }
 
@@ -151,6 +162,24 @@ pub fn wechat_stop(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+/// 启动时自动拉起已登录的微信渠道（架构 §7.5.1，2026-06-20）。
+///
+/// 扫码登录是一次性动作：凭证存在 `~/.hebbian/channels/wechat/<bot>/credentials.json`，
+/// 进程重启后无需用户再点「启动」，setup 阶段直接用已存凭证 spawn run_loop。
+/// 没有凭证（从未登录）则静默跳过。
+pub fn autostart(app: &AppHandle) {
+    let Some(bot_id) = latest_credentials_bot_id() else {
+        return;
+    };
+    match login::load_credentials(&data_dir(), &bot_id) {
+        Ok(credentials) => {
+            spawn_channel(app, credentials.bot_token, bot_id.clone());
+            tracing::info!(bot_id, "微信渠道已自动接入");
+        }
+        Err(err) => tracing::warn!(bot_id, error = %err, "微信渠道自动接入失败，需重新扫码"),
+    }
+}
+
 /// 在 Desktop 进程内 spawn 渠道运行循环，句柄存进 WeChatState。
 fn spawn_channel(app: &AppHandle, bot_token: String, bot_id: String) {
     let Some(state) = app.try_state::<Arc<WeChatState>>() else {
@@ -158,6 +187,8 @@ fn spawn_channel(app: &AppHandle, bot_token: String, bot_id: String) {
     };
     let state = state.inner().clone();
     let dir = data_dir();
+    let bridge = ChannelBridge::new(dir.clone());
+    let bridge_for_task = bridge.clone();
     let bot_id_for_task = bot_id.clone();
     let handle = spawn(async move {
         let channel = Arc::new(WeChatChannel::new(
@@ -166,15 +197,14 @@ fn spawn_channel(app: &AppHandle, bot_token: String, bot_id: String) {
             &dir,
         ));
         let mut owner_state = OwnerState::load(&dir, "wechat", &bot_id_for_task);
-        let bridge = ChannelBridge::new(dir.clone());
-        if let Err(err) = bridge
+        if let Err(err) = bridge_for_task
             .run_loop(channel, &mut owner_state, &bot_id_for_task)
             .await
         {
             tracing::error!(error = %err, "微信渠道运行循环退出");
         }
     });
-    state.set(bot_id, handle);
+    state.set(bot_id, handle, bridge);
 }
 
 /// 扫已存凭证目录，返回任一已登录账号的 bot_id（首版只支持单账号）。

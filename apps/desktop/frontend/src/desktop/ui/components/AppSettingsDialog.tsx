@@ -36,7 +36,7 @@ import { SkillsPane } from "@/desktop/ui/components/SkillsPane";
 import { PluginsPane } from "@/desktop/ui/components/PluginsPane";
 import { HooksPane } from "@/desktop/ui/components/HooksPane";
 import { ProvidersPane } from "@/desktop/ui/components/ProvidersPane";
-import { WeChatPane } from "@/desktop/ui/components/WeChatPane";
+import { ChannelsPane } from "@/desktop/ui/components/ChannelsPane";
 import { AvatarField, AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -61,7 +61,7 @@ import {
   toCamelMcpConfig,
 } from "@/desktop/ui/lib/mcpSettings";
 
-type TabKey = "general" | "conversation" | "appearance" | "roles" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "wechat" | "logs";
+type TabKey = "general" | "conversation" | "appearance" | "roles" | "providers" | "agents" | "memory" | "permissions" | "skills" | "plugins" | "hooks" | "mcp" | "channels" | "logs";
 
 const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: string }[] = [
   { key: "general", label: "通用", icon: SettingsIcon, group: "基础" },
@@ -76,7 +76,7 @@ const TABS: { key: TabKey; label: string; icon: typeof SettingsIcon; group: stri
   { key: "plugins", label: "插件", icon: Package, group: "扩展" },
   { key: "hooks", label: "Hooks", icon: GitBranch, group: "扩展" },
   { key: "mcp", label: "MCP", icon: Plug, group: "扩展" },
-  { key: "wechat", label: "微信", icon: MessageCircle, group: "扩展" },
+  { key: "channels", label: "连接器", icon: MessageCircle, group: "扩展" },
   { key: "logs", label: "日志", icon: ScrollText, group: "调试" },
 ];
 
@@ -91,6 +91,7 @@ const PREVIEW_SETTINGS_FALLBACK: AppSettings = {
     log_enabled: false,
     edit_backend: "string-replace",
     continue_strategy: "resume_loop",
+    channel_idle_forward_minutes: 5,
   },
   conversation: {
     workdir: null,
@@ -295,7 +296,7 @@ export function AppSettingsDialog() {
               {tab === "plugins" && <PluginsPane />}
               {tab === "hooks" && <HooksPane />}
               {tab === "mcp" && <McpPane />}
-              {tab === "wechat" && <WeChatPane active={tab === "wechat"} />}
+              {tab === "channels" && <ChannelsPane active={tab === "channels"} />}
             </div>
           )}
         </div>
@@ -829,6 +830,34 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
           <option value="send_continue">发一条「继续」消息</option>
           <option value="manual">手动续（聚焦输入框）</option>
         </select>
+      </FieldRow>
+
+      <FieldRow
+        label="离开电脑后转发到微信"
+        description="连了微信时，你离开电脑超过这个时长，桌面对话里需要审批或回答的事会自动发到微信，直接回复就能远程处理。设为 0 关闭"
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={120}
+            value={draft.general.channel_idle_forward_minutes ?? 5}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                general: {
+                  ...draft.general,
+                  channel_idle_forward_minutes: Math.max(
+                    0,
+                    Math.min(120, Math.floor(Number(e.target.value) || 0)),
+                  ),
+                },
+              })
+            }
+            className="w-20 rounded-md border border-border bg-background px-2 py-1 text-sm"
+          />
+          <span className="text-sm text-muted-foreground">分钟</span>
+        </div>
       </FieldRow>
     </div>
   );

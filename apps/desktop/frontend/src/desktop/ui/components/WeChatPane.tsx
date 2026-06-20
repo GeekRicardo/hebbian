@@ -101,13 +101,13 @@ export function WeChatPane({ active }: { active: boolean }) {
   const running = status?.running ?? false;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
       <header className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-sm font-medium text-zinc-100">微信</h3>
           <p className="mt-1 text-xs leading-relaxed text-zinc-400">
             扫码把微信连到 hebbian，之后在微信里发消息就能直接跟 AI 对话。
-            关闭主窗口后仍在后台收发，退出 App 才会断开。
+            登录一次就好，下次开 App 会自动接上；关掉主窗口也仍在后台收发。
           </p>
         </div>
         <span
@@ -172,9 +172,12 @@ export function WeChatPane({ active }: { active: boolean }) {
 
       <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/20 p-4 text-xs leading-relaxed text-zinc-400">
         <p className="mb-1.5 font-medium text-zinc-300">在微信里能做什么</p>
-        <p>直接发文字 → 跟当前对话的 AI 聊天。也能用斜杠命令：</p>
+        <p>直接发文字 → 跟当前对话的 AI 聊天。也能用斜杠命令管理对话：</p>
         <p className="mt-1 font-mono text-[11px] text-zinc-500">
-          /new 新建对话 · /threads 切换对话 · /providers 供应商 · /models 模型 · /status 当前状态 · /help 帮助
+          /new 新建 · /threads 列表 · /use 切换 · /history 最近消息 · /cancel 停止当前 · /status 状态 · /help 帮助
+        </p>
+        <p className="mt-2.5">
+          当你离开电脑时，桌面对话里需要你审批或回答的事会自动发到微信，直接回复即可远程处理。
         </p>
       </div>
     </div>

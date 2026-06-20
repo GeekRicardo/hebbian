@@ -115,6 +115,7 @@ pub async fn send_and_save(
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
     let app_for_island = app.clone();
+    let session_id_for_forward = args.session_id.clone();
     // 派生事件旁路（架构 §4.14.7）：标题 / 记忆在 run 收尾后才完成，走 per-message
     // Channel（invoke 返回即废弃）会丢。改走 app 级全局事件总线 `engine-derived-event`
     // ——与 `wakeup-fired` 同款 long-lived 出口，前端 listen 全局订阅。
@@ -133,6 +134,8 @@ pub async fn send_and_save(
             if let Some(client) = app_for_island.try_state::<HebislandClient>() {
                 push_engine_event_to_island(&client, &event);
             }
+            // 机主离开电脑时把审批/问题转发到聊天渠道（微信）；在线且空闲才触发。
+            crate::channel_forward::maybe_forward(&app_for_island, &session_id_for_forward, &event);
             let _ = on_event.send(event);
         },
         Some(derived_sink),

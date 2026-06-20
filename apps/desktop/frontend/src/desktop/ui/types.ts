@@ -510,6 +510,8 @@ export interface AppSettings {
     edit_backend: "string-replace" | "hashline";
     /** Run 非正常结束后点「继续」的恢复方式（架构 §7.3）。 */
     continue_strategy?: "resume_loop" | "send_continue" | "manual";
+    /** 离开电脑多少分钟后把待审批/待回答转发到渠道（微信）；0 = 关闭。 */
+    channel_idle_forward_minutes?: number;
   };
   conversation: {
     workdir?: string | null;
@@ -601,7 +603,7 @@ export interface BranchInfo {
  * 1. protocol::event::EventPayload（crates/protocol/src/event.rs）
  * 2. engine/mod.rs EngineEvent
  * 3. chat.rs agent_event_to_engine_event 翻译函数
- * 4. 本文件 EngineEvent 类型 + useStore.ts applyEventToSlot 处理函数
+ * 4. 本文件 EngineEvent 类型 + store/slotReducer.ts applyEventToSlot 处理函数
  */
 export type EngineEvent =
   | { type: "text_delta"; text: string; subagent_call_id?: string | null }

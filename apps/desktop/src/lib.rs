@@ -1,12 +1,14 @@
 mod browser;
 mod branch;
 pub mod chat;
+mod channel_forward;
 mod engine;
 mod terminal;
 mod error;
 mod force_automode;
 mod hebisland_client;
 mod hitl;
+mod idle;
 mod wechat;
 mod window_control;
 
@@ -2883,6 +2885,8 @@ pub fn run() {
             app.handle().manage(hebisland_client::init_hebisland_client(
                 app.handle().clone(),
             ));
+            // 微信渠道自动接入：已扫码登录过就直接拉起后台 run_loop，无需用户再点启动。
+            wechat::autostart(app.handle());
             // macOS 在进程启动时会自动把 Regular 应用 activate 到前台，
             // dev 每次改代码重编译都会重启进程 → 抢走当前焦点。
             // 在进入 NSApplicationDidFinishLaunching 后立刻降级为 Accessory，

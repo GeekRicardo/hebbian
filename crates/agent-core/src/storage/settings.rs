@@ -55,6 +55,14 @@ pub struct GeneralSettings {
     /// 启动时自动打开浏览器 DevTools（F12）。手动改配置文件开启，默认关闭。
     #[serde(default)]
     pub open_devtools: bool,
+    /// 离开电脑多少分钟后，把桌面对话里待审批/待回答的 HITL 转发到已连接的渠道（如微信）。
+    /// 0 = 关闭转发。默认 5 分钟。
+    #[serde(default = "default_channel_idle_forward_minutes")]
+    pub channel_idle_forward_minutes: u32,
+}
+
+fn default_channel_idle_forward_minutes() -> u32 {
+    5
 }
 
 /// 应用语言偏好。当前只影响 AutoMode 判官原因；不做整套 UI i18n。
@@ -101,6 +109,7 @@ impl Default for GeneralSettings {
             edit_backend: EditBackend::default(),
             continue_strategy: ContinueStrategy::default(),
             open_devtools: false,
+            channel_idle_forward_minutes: default_channel_idle_forward_minutes(),
         }
     }
 }
