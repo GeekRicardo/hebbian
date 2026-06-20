@@ -8735,3 +8735,111 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 
 - **影响范围**: agent-core transcript 层；所有 surface 透明受益，无协议变更
 - **留尾巴**: anthropic 协议层的双重归一保留（两层防御纵深），不删
+
+### 2026-06-20 — 修复模型重试时多 Turn 已输出内容被清空（消息闪烁消失）
+
+- **Why**: 用户报「前端已输出的消息突然消失，然后渲染后面的消息，完成后又重新渲染」。
+  根因：多 Turn 无插队时共用同一个 streaming bubble（与 chat.rs `had_pending_during_run`
+  分段落盘语义对齐），applyEventToSlot 的 model_retry 用 `slot.modelRetry !== null`
+  （hadRetry）当标志、把清理推迟到新 attempt 的首个 delta；那个 delta 分支命中 hadRetry
+  时用 `applyTextDelta([], …)` 把**整个 slot 累积**清空，本意只想丢失败 attempt 的残片，
+  却连前几个 Turn 已输出的文本与已执行的工具卡一起抹掉 → run 结束 reload 才从 jsonl
+  恢复，肉眼就是「消失 → 渲染后续 → 重渲染」。streamingParts 的 applyTextDone 早有注释
+  警惕过这同一类「把多轮累积覆盖成单轮（前面输出消失）」的坑，retry 分支当时漏防。
+
+- **改动**:
+  - apps/desktop/frontend/src/desktop/ui/store/slotReducer.ts（新文件，从 useStore 抽出）:
+    - applyEventToSlot / applyNestedEvent / setPartJudging / dropKey 抽成纯 reducer 作单一源，
+      使其可被 standalone 单测覆盖（useStore 顶层有 zustand / tauri 运行时 import，整文件
+      进不了 `node --experimental-strip-types`，无法直接测）
+    - 唯一运行时 import `./streamingParts` 显式带 `.ts` 扩展名——node 原生 ESM 不补全
+      无扩展名相对路径，带上才能跑 standalone 测试；tsconfig allowImportingTsExtensions=true
+      + Vite 都接受，故与项目其余「无扩展名」约定的这处偏离是有意为之
+    - model_retry：从「只设进度、把清理推迟到下个 delta」改为**回退到本 ModelStep 起点的
+      快照 retryBase**——立即丢失败 attempt 残片、但保留 step 之前的一切（含多 Turn 共用
+      bubble 里前几轮的输出与工具卡）
+    - text_delta / reasoning / tool_call_delta：删掉 hadRetry 清空分支，只正常追加
+    - step_started{model}：快照当前 streaming 累积进 retryBase（每个 Turn 的模型请求都发一次
+      StepStarted{Model}、覆盖上个快照，多 Turn 共用 bubble 时基线自然含前几轮累积；tool step
+      不快照）
+  - apps/desktop/frontend/src/desktop/ui/store/useStore.ts:
+    - SessionStream 加 `retryBaseText?` / `retryBaseParts?` 内部字段（不入 mirrorFromSlot、
+      不渲染，纯 reducer 内部状态）
+    - 删除自带的 applyEventToSlot / applyNestedEvent / setPartJudging / dropKey 副本，改为
+      import slotReducer（单一源，消除两份会漂移的副本）；streamingParts 系列 import 随之清掉
+    - permission_auto_judged 的 deny toast 从 reducer 移到事件分发调用层（保 reducer 纯净可测）
+  - apps/desktop/frontend/src/desktop/ui/store/slotReducer.test.ts（新文件）:
+    - 两条回归断言——多 Turn retry 不丢前 Turn 文本/工具卡（续写而非覆盖）、单 Turn retry 仍
+      丢弃失败残片；`node --experimental-strip-types slotReducer.test.ts` 直接跑
+  - apps/desktop/frontend/src/desktop/ui/types.ts: EngineEvent 维护清单第 4 点指向 slotReducer
+
+- **影响范围**: 仅 desktop 前端 store（主对话 useStore）；useBranchStore 不处理 model_retry、
+  不受影响；无协议 / 后端 / 落盘 / agent_loop 事件序列变更
+- **留尾巴**: 无
+
+### 2026-06-20 — 微信渠道四项增强：连接器设置页 + 自动接入 + 对话管理命令 + 不活跃转发审批
+
+- **Why**: 微信渠道目前只能扫码后手动点启动、命令仅 `/new` 一类只能新建不能管理已有对话、
+  且机主离开电脑后桌面主对话的审批/问题没法远程处理。用户要：① 设置页改叫「连接器」为
+  未来接飞书等留位；② 启动即自动接入（已扫码时）；③ 加管理对话的命令；④ 电脑不活跃时
+  把主对话待审批/待回答发到微信，回复里 ask 选项支持编号解析。
+- **改动**:
+  - 设置页（前端）: `AppSettingsDialog` tab `wechat`→`channels`、label「微信」→「连接器」；
+    新建 `ChannelsPane`（连接器容器，渲染微信卡片，未来加飞书只需加卡）；`WeChatPane` 改为
+    卡片样式 + 更新命令帮助文案 + 远程审批说明。
+  - 自动接入: `wechat.rs` 新增 `autostart`，`lib.rs` `.setup` 调用——有凭证就直接 spawn
+    run_loop，无需手点启动；`WeChatPane` 启停按钮保留为手动覆盖。
+  - 对话管理命令: `channel-core/commands.rs` 加 `/use <序号|id>`（切对话、同步
+    provider/model/project）、`/history [n]`（最近 n 条）；抽 `filtered_sessions` 共享序号
+    语义。`/cancel`（停当前 run）由 `bridge::handle_message` 直接拦截，`ChannelBridge` 新增
+    `current_cancel` 维护当前 run 的 cancel_flag。
+  - 不活跃转发: 新增 `apps/desktop/src/idle.rs`（macOS CoreGraphics
+    `CGEventSourceSecondsSinceLastEventType` 测系统空闲，零新依赖）；`ChannelBridge` 新增
+    `RemoteHitlResolver` trait + `forward_approval`/`forward_question`/`cancel_forwarded`
+    + `last_owner_target`/`channel` 句柄；`PendingInteractions` 从裸 oneshot 重构为
+    `ApprovalSink`/`PendingQuestion`（Local/Remote 两路落地），`try_resolve_pending` 加
+    `parse_approval`/`parse_answer`（编号→label 选项解析）纯函数 + 6 单测；新增
+    `apps/desktop/src/channel_forward.rs`（`DesktopHitlResolver` 回落 `HitlState` + 组装
+    「会话标题 + 最近 AI 输出 + 待办」文案）；`chat.rs` emit 闭包并联 `maybe_forward`；
+    `settings.rs` 加 `channel_idle_forward_minutes`（默认 5，0=关）+ 前端通用页数字输入。
+- **影响范围**: channel-core（bridge/commands，新增 pub trait + 接口，纯 additive）、
+  agent-core（settings 加字段，serde default 兼容老配置）、desktop（新增 idle/channel_forward
+  两模块 + chat.rs/wechat.rs/lib.rs 接入）、前端（设置页 + types）。无协议字段变更；
+  EngineEvent 未动。HITL 落地仍走 HitlState，本地灵动岛弹窗与微信转发两端并存先回先赢。
+- **留尾巴**:
+  - 系统空闲检测仅 macOS 实测；非 macOS 返回 0（视为活跃，永不转发），Windows 需后续补
+    `GetLastInputInfo`。
+  - 转发的「最近 AI 输出」取 session.jsonl 最后一条 assistant 消息；若审批发生在本轮
+    assistant 尚未落盘时，机主看到的是上一轮输出 + 当前工具摘要，足够判断但非实时。
+  - 真扫码端到端未验（需机主拿手机扫码 → 离开电脑触发桌面审批 → 微信回编号验证落地）。
+  - 多题 ask（questions 非空）转发时退化为铺开展示 + 收自由文本，未做逐题编号解析。
+- **关联**: 架构.md §7.5.1
+
+### 2026-06-20 — 根治 [请求失败] 错误文本污染历史 + 修前端报错竖排 + invoke 漏出警示
+
+- **Why**: 会话 202606180734-87c643bd 复现链——失败时 surface 把 `[请求失败：HTTP 400 ...]`
+  作为 assistant message 正文落盘，重建 transcript 时当正常内容喂回模型，造成：
+  ① 错误体污染上下文、雪球式叠加；② 这段超长无空格 JSON 在前端逐字竖排（一字一行）；
+  ③ 模型 judge 限流时把工具调用误写成 `<invoke>` XML 文本漏进正文，用户看到一坨裸 XML。
+
+- **改动**:
+  - crates/agent-core/src/context/transcript.rs:
+    - 新增 `strip_request_failure_marker()`：从首个 `[请求失败：` 截断到结尾。挂在
+      `push_assistant_parts`（逐 Text part 剥）和 `push_assistant_message`（legacy
+      content 路径，含 tool_call 时也剥——失败可能发生在工具调用轮）两处入口
+    - 新增 `sanitize_loaded_assistant_text()`：合并「剥错误 marker + 清工具 XML 残骸」，
+      统一在历史重建入口掐断两类「非模型正文、回喂会自我污染」的脏数据
+    - 新增 3 条单测 + 1 条 ignore 的真实 session 复现（repro_real_session_must_end_with_user）
+  - apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx:
+    - `isRequestFailureText` 从 `startsWith` 改 `includes`——marker 常附在 partial 正文
+      之后（非开头），旧判断漏掉导致长 JSON 走普通容器逐字竖排；改后套用
+      overflow-wrap:anywhere 正常横向折断
+    - 新增 `splitToolXmlLeak()` + `ToolXmlLeakNotice` 组件：把 `<invoke>` / `<function_calls>`
+      残骸从正文切出，折叠成「模型把一次工具调用误写成了文本，已忽略未执行」琥珀色警示，
+      正文照常 markdown 渲染
+
+- **影响范围**: agent-core transcript 层 + desktop 前端渲染；无协议变更，所有 surface 受益
+- **验证**: cargo test -p agent-core --lib 546/0；A/B 翻转确认 marker 剥离单测修前 FAIL 修后
+  PASS；前端纯函数 node 验证 + tsc noEmit 通过
+- **留尾巴**: invoke 漏出后端自愈机制（清洗+注入纠错+续跑，上限 MAX_TOOL_XML_LEAK_RECOVERIES）
+  早已存在，本次只补前端展示。Playwright 截图因本机浏览器卡住未取，UI 效果待本地 tauri dev 目检

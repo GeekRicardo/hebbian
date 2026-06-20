@@ -147,6 +147,25 @@ fn normalize_tool_input(input: &Value) -> Value {
     }
 }
 
+/// 剥掉 surface 在请求失败时注入的 `[请求失败：...]` marker。
+///
+/// 失败时 surface 把错误文本作为 assistant message 落盘（供 UI 展示「继续」入口），
+/// 但这段文本不是模型产出，一旦经历史喂回模型就会自我污染：模型把上一轮的 HTTP 400
+/// 错误体当成对话内容，越滚越偏。从首个 marker 起截断到结尾——marker 永远在 assistant
+/// 文本末尾（partial 内容在前、错误在后），其后不会有真实正文。
+fn strip_request_failure_marker(text: &str) -> String {
+    match text.find("[请求失败：") {
+        Some(pos) => text[..pos].trim_end().to_string(),
+        None => text.to_string(),
+    }
+}
+
+/// 清洗加载回来的 assistant 文本：先剥错误 marker，再清工具 XML 残骸。
+/// 两者都是「非模型正文、回喂会自我污染」的脏数据，统一在历史重建入口掐断。
+fn sanitize_loaded_assistant_text(text: &str) -> String {
+    sanitize_tool_xml_leak(&strip_request_failure_marker(text)).text
+}
+
 fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
     if !msg.parts.is_empty() {
         push_assistant_parts(entries, &msg.parts);
@@ -179,11 +198,13 @@ fn push_assistant_message(entries: &mut Vec<TranscriptEntry>, msg: &Message) {
         .collect();
     if !tool_calls.is_empty() || !msg.content.is_empty() {
         // 加载兜底（架构 §4.3.3）：观察者按既定取舍把脏正文原样落盘，重启续聊读回时
-        // 在此清洗，杜绝残骸经历史再次喂给模型。无 tool_call 的纯文本才可能是残骸。
+        // 在此清洗，杜绝错误 marker / 工具 XML 残骸经历史再次喂给模型。
+        // 有 tool_call 时正文不会是 XML 残骸（那是「退化成纯文本回答」才有的），但
+        // 仍可能带 [请求失败] marker（失败发生在工具调用轮），故 marker 始终剥。
         let text = if tool_calls.is_empty() {
-            sanitize_tool_xml_leak(&msg.content).text
+            sanitize_loaded_assistant_text(&msg.content)
         } else {
-            msg.content.clone()
+            strip_request_failure_marker(&msg.content)
         };
         entries.push(TranscriptEntry::Assistant(AssistantEntry {
             text,
@@ -217,7 +238,9 @@ fn push_assistant_parts(entries: &mut Vec<TranscriptEntry>, parts: &[MessagePart
                         &mut tool_results,
                     );
                 }
-                text.push_str(next_text);
+                // 剥错误 marker：失败时 surface 注入的 `[请求失败：...]` 常单独成一个
+                // 末尾 Text part，回喂会自我污染（架构 §4.3.3）。剥完为空则等价于跳过。
+                text.push_str(&strip_request_failure_marker(next_text));
             }
             MessagePart::Reasoning {
                 text: next_reasoning,
@@ -542,6 +565,35 @@ mod tests {
         assert!(saw_clean_tail, "末尾 Text 应被清洗为「现在调度器：周期性运行优化。」");
     }
 
+    /// 复现真实 session 202606180734-87c643bd 的 400（依赖本机 ~/.hebbian，故 ignore）：
+    /// 末尾 assistant message 含 `... TC✓ Text Text`，重建后末尾必须是 user，
+    /// 且任何 assistant 文本都不得残留 `[请求失败` / `<invoke`。
+    /// 跑法：`cargo test -p agent-core --lib repro_real_session_must_end_with_user -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn repro_real_session_must_end_with_user() {
+        let data_dir = std::path::Path::new(&std::env::var("HOME").unwrap()).join(".hebbian");
+        let s = crate::storage::sessions::load_with_partial_recovery(
+            &data_dir,
+            "202606180734-87c643bd",
+        )
+        .expect("加载真实 session");
+        let t = Transcript::from_session(s.system_prompt.clone(), &s.messages);
+        eprintln!("entries={} last_is_user={}", t.entries.len(),
+            matches!(t.entries.last(), Some(TranscriptEntry::User(_))));
+        assert!(
+            matches!(t.entries.last(), Some(TranscriptEntry::User(_))),
+            "末尾必须是 user，实际: {:?}",
+            t.entries.last()
+        );
+        for entry in &t.entries {
+            if let TranscriptEntry::Assistant(a) = entry {
+                assert!(!a.text.contains("[请求失败"), "assistant 含[请求失败]残骸");
+                assert!(!a.text.contains("<invoke"), "assistant 含<invoke>残骸");
+            }
+        }
+    }
+
     /// input 归一：字符串 / null / 非法字符串都必须在 transcript 层归一成 object，
     /// 不依赖协议层兜底——两层都有防线，最早的层最先命中。
     #[test]
@@ -565,6 +617,81 @@ mod tests {
         );
         // 字符串但 JSON 不是 object（是 array）→ {}
         assert_eq!(normalize_tool_input(&json!("[1,2,3]")), json!({}));
+    }
+
+    /// 错误 marker 剥离：失败时 surface 注入的 `[请求失败：...]` 不能回喂模型。
+    #[test]
+    fn strip_request_failure_marker_removes_trailing_error() {
+        // 单独成段
+        assert_eq!(
+            strip_request_failure_marker("\n\n[请求失败：HTTP 400: {\"foo\":1}]"),
+            ""
+        );
+        // 附在正文末尾：保留正文，剥错误
+        assert_eq!(
+            strip_request_failure_marker("正文内容\n\n[请求失败：HTTP 500]"),
+            "正文内容"
+        );
+        // 无 marker：原样
+        assert_eq!(strip_request_failure_marker("正常回答"), "正常回答");
+    }
+
+    /// 回归 session 202606180734-87c643bd：末尾 assistant message 形如
+    /// `... ToolCall(result) Text Text(含[请求失败])`，重建后 assistant 文本不得残留
+    /// 错误 marker（修前会带 [请求失败] 进模型历史，雪球式 400）。
+    #[test]
+    fn from_session_strips_request_failure_marker_in_part_stream() {
+        use crate::storage::sessions::{MessagePart, MessageToolCall};
+        use serde_json::json;
+
+        let msg = assistant(
+            vec![
+                MessagePart::Text {
+                    text: "我先改一下文件。".to_string(),
+                },
+                MessagePart::ToolCall {
+                    id: "c1".to_string(),
+                    name: "Edit".to_string(),
+                    input: json!({"file_path": "a.ts"}),
+                    arguments: String::new(),
+                    result: Some("ok".to_string()),
+                    duration_ms: Some(5),
+                    is_error: false,
+                },
+                MessagePart::Text {
+                    text: "改完了，继续下一步。".to_string(),
+                },
+                MessagePart::Text {
+                    text: "\n\n[请求失败：HTTP 400: {\"type\":\"error\",\"error\":{\"message\":\"prefill not supported\"}}]".to_string(),
+                },
+            ],
+            vec![MessageToolCall {
+                id: "c1".to_string(),
+                name: "Edit".to_string(),
+                input: json!({"file_path": "a.ts"}),
+                result: Some("ok".to_string()),
+                duration_ms: Some(5),
+                is_error: false,
+                nested: Vec::new(),
+            }],
+        );
+        let t = Transcript::from_session(None, &[user_msg("u", "do"), msg]);
+        for entry in &t.entries {
+            if let TranscriptEntry::Assistant(a) = entry {
+                assert!(
+                    !a.text.contains("[请求失败"),
+                    "assistant 文本残留错误 marker: {:?}",
+                    a.text
+                );
+            }
+        }
+        // 真实正文「改完了，继续下一步。」必须保留
+        assert!(
+            t.entries.iter().any(|e| matches!(e, TranscriptEntry::Assistant(a) if a.text.contains("改完了"))),
+            "正文被误删"
+        );
+        // 末尾补 user
+        assert!(matches!(t.entries.last(), Some(TranscriptEntry::User(_))));
     }
 
     /// 从 session 重建时 tool_call input 为非 object 的情况下，transcript 里的 ToolCall.input

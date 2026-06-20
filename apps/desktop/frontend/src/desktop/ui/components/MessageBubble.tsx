@@ -1952,11 +1952,58 @@ const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
 >["components"];
 
 function isRequestFailureText(text: string) {
-  return text.trimStart().startsWith("[请求失败：");
+  // 失败 marker 可能附在 partial 正文之后（`正文\n\n[请求失败：...]`），不止开头。
+  // 只要这段文本含 marker 就套用宽松折行类——marker 里的超长无空格 JSON 在普通
+  // markdown 容器里会逐字竖排，必须靠 overflow-wrap:anywhere 横向折断。
+  return text.includes("[请求失败：");
 }
 
 const requestFailureMarkdownClass =
   "block w-full max-w-full box-border whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-[1.45]";
+
+// 工具调用 XML 漏进正文的检测（与后端 sanitize_tool_xml_leak 同一现象，架构 §4.3.3）：
+// 模型偶发把本该走结构化 function-calling 的 `<invoke>` / `<function_calls>` 整块
+// 写进正文。后端已把它从「喂模型的历史」剥掉，但落盘的展示文本仍留着——直接渲染会是
+// 一坨吓人的裸 XML。这里把残骸切出来，正文照常 markdown，残骸折叠成一句警示。
+const TOOL_XML_LEAK_RE =
+  /\n?[ \t]*(?:call|court)?[ \t]*\n?[ \t]*<\s*(?:function_calls|invoke)\b/i;
+
+function splitToolXmlLeak(text: string): { clean: string; leaked: string | null } {
+  const m = TOOL_XML_LEAK_RE.exec(text);
+  if (!m) return { clean: text, leaked: null };
+  return {
+    clean: text.slice(0, m.index).trimEnd(),
+    leaked: text.slice(m.index).trim(),
+  };
+}
+
+function ToolXmlLeakNotice({ leaked }: { leaked: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="my-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[12px] leading-relaxed text-amber-700 dark:text-amber-300">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-left font-medium"
+      >
+        <Ban className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1">
+          模型把一次工具调用误写成了文本，已忽略未执行
+        </span>
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+        )}
+      </button>
+      {open && (
+        <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded bg-background/60 p-2 font-mono text-[11px] text-muted-foreground">
+          {leaked}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function ReasoningBlock({
   text,
@@ -2087,20 +2134,26 @@ function AssistantParts({
     <div className="space-y-2">
       {parts.map((part) => {
         if (part.type === "text") {
+          // 工具调用 XML 漏进正文时，把残骸切出来折叠成警示，正文照常渲染。
+          const { clean, leaked } = splitToolXmlLeak(part.text);
           return (
-            <div
-              key={part.key}
-              className={cn(
-                "markdown-segment",
-                isRequestFailureText(part.text) && requestFailureMarkdownClass
+            <div key={part.key}>
+              {(clean || !leaked) && (
+                <div
+                  className={cn(
+                    "markdown-segment",
+                    isRequestFailureText(clean) && requestFailureMarkdownClass
+                  )}
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {clean || (streaming ? "▍" : "")}
+                  </ReactMarkdown>
+                </div>
               )}
-            >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {part.text || (streaming ? "▍" : "")}
-              </ReactMarkdown>
+              {leaked && <ToolXmlLeakNotice leaked={leaked} />}
             </div>
           );
         }
