@@ -960,7 +960,7 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
                 IpcResponse::ok()
             }
             None => IpcResponse::err(format!(
-                "无效 mode：{mode}（ask-before-edits | edit-automatically | plan-mode | auto-mode）"
+                "无效 mode：{mode}（default | plan-mode | auto-mode | yolo）"
             )),
         },
         IpcCommand::Ping => {

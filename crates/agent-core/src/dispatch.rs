@@ -185,7 +185,7 @@ pub struct ToolDispatcher {
     pub subagent_bypass: bool,
 }
 
-/// 文件编辑免审判定（架构 §4.4.3 Default 模式）。
+/// 文件编辑免审判定（架构 §4.4.3 Default / Yolo 模式）。
 ///
 /// `Edit`/`Write` 写「工作区内、非 git 元数据」的文件直接放行——edits-worktree 在执行前
 /// 拍 before 快照，整个 Run 的界内写入都能一键回退，免审是安全的。三类不可还原写入不在
@@ -194,7 +194,8 @@ pub struct ToolDispatcher {
 /// - git 元数据（改 `.git/hooks` 后下次 git 操作即执行，worktree 兜不住 → 走工具审批）
 /// - 命令副作用（Bash/PowerShell 不是文件编辑，直接 false）
 ///
-/// AutoMode 不免审：界内编辑也交判官把关，所以仅 `Default` 命中。
+/// AutoMode 不免审：界内编辑也交判官把关。`Default` 与 `Yolo` 同档命中（Yolo 的命令/越界
+/// 红线在审批主分支单独处理，不走本函数）。
 ///
 /// 抽成纯函数让生产派发路径与历史重放测试共用同一份判定，杜绝复现偏差。
 pub(crate) fn edit_auto_allowed(
@@ -204,9 +205,58 @@ pub(crate) fn edit_auto_allowed(
     touches_git_meta: bool,
 ) -> bool {
     matches!(tool_name, "Edit" | "Write")
-        && run_mode == crate::run_mode::RunMode::Default
+        && matches!(
+            run_mode,
+            crate::run_mode::RunMode::Default | crate::run_mode::RunMode::Yolo
+        )
         && paths_in_bounds
         && !touches_git_meta
+}
+
+/// Yolo 模式（架构 §4.4.3）的工具决策：界内 + 非危险 → 放行；命中红线 → 自动拒。
+///
+/// Yolo 是无人值守模式，红线**不弹审批等人**（现场没人点批准），而是直接拒 + reason
+/// 回灌 agent。红线 = 危险复合模式（§4.4.2.2）∪ 写界外路径 ∪ 触 git 元数据。返回
+/// `None` 表示当前不是 Yolo（调用方走原有审批链）。
+///
+/// 与 `edit_auto_allowed` 互补：界内 Edit/Write 已被前者放行，本函数兜命令类与一切红线。
+fn yolo_decision(
+    run_mode: crate::run_mode::RunMode,
+    has_dangerous_pattern: bool,
+    paths_in_bounds: bool,
+    touches_git_meta: bool,
+    dangerous_kinds: &[String],
+) -> Option<PermissionDecision> {
+    if run_mode != crate::run_mode::RunMode::Yolo {
+        return None;
+    }
+    if !paths_in_bounds {
+        return Some(PermissionDecision::Denied {
+            reason: "全速模式拦截：该操作要写工作区外的路径，无人值守下不放行。\
+                     如需访问，请把目标目录加入项目允许路径，或用 --workdir 纳入工作区。"
+                .to_string(),
+        });
+    }
+    if touches_git_meta {
+        return Some(PermissionDecision::Denied {
+            reason: "全速模式拦截：该操作要改 git 元数据（.git/hooks、.git/config 等），\
+                     不可逆且 worktree 兜不住，无人值守下不放行。"
+                .to_string(),
+        });
+    }
+    if has_dangerous_pattern {
+        let kinds = if dangerous_kinds.is_empty() {
+            "危险操作".to_string()
+        } else {
+            dangerous_kinds.join(", ")
+        };
+        return Some(PermissionDecision::Denied {
+            reason: format!(
+                "全速模式拦截不可逆 / 跨界操作（{kinds}）。换一个工作区内的安全做法。"
+            ),
+        });
+    }
+    Some(PermissionDecision::Approved)
 }
 
 impl ToolDispatcher {
@@ -432,12 +482,32 @@ impl ToolDispatcher {
             out_of_scope.push(p.clone());
         }
 
-        let path_pending = if out_of_scope.is_empty() {
+        let current_run_mode = *self.run_mode.lock().unwrap();
+        let is_yolo = current_run_mode == crate::run_mode::RunMode::Yolo;
+        let paths_in_bounds = out_of_scope.is_empty();
+
+        // path_pending：越界路径要走 PathAccess 审批闸口。Yolo 模式（无人值守）下越界由
+        // yolo_decision 直接自动拒，**不能**调 request_path_approval——那会 emit
+        // PermissionRequested 弹审批，无人在场会永久挂起（架构 §4.4.3）。
+        let path_pending = if paths_in_bounds {
             info!(
                 tool = %call.name,
                 call_id = %call.id,
                 total = effects.paths.len(),
                 "[Permission:Path] all paths in bounds"
+            );
+            None
+        } else if is_yolo {
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                out_of_scope = out_of_scope
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                result = "yolo_auto_deny",
+                "[Permission:Path] out of bounds under yolo, auto-deny (no prompt)"
             );
             None
         } else {
@@ -456,21 +526,47 @@ impl ToolDispatcher {
             Some(self.request_path_approval(&call.name, &call.id, out_of_scope))
         };
 
-        // 文件编辑免审判定（架构 §4.4.3 Default 模式）：见 [`edit_auto_allowed`]。
-        let current_run_mode = *self.run_mode.lock().unwrap();
+        // 文件编辑免审判定（架构 §4.4.3 Default / Yolo 模式）：见 [`edit_auto_allowed`]。
         let touches_git_meta = effects
             .paths
             .iter()
             .any(|p| crate::tools::shell_parse::is_git_meta_path(&p.to_string_lossy()));
+
+        // Yolo 模式（架构 §4.4.3）：无人值守，红线自动拒不弹审批。界内非危险 → 放行；
+        // 越界 / git-meta / 危险复合模式 → Denied + reason 回灌 agent（不挂起）。
+        let yolo = yolo_decision(
+            current_run_mode,
+            effects.has_dangerous_pattern(),
+            paths_in_bounds,
+            touches_git_meta,
+            &effects.dangerous_kinds,
+        );
+
         let edit_allowed = edit_auto_allowed(
             &call.name,
             current_run_mode,
-            path_pending.is_none(),
+            paths_in_bounds,
             touches_git_meta,
         );
 
         // 工具审批
-        let permission = if edit_allowed {
+        let permission = if let Some(decision) = yolo {
+            match &decision {
+                PermissionDecision::Approved => info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    "[Permission:ToolCall] yolo auto-allowed (界内非危险，无人值守)"
+                ),
+                PermissionDecision::Denied { reason } => info!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    %reason,
+                    "[Permission:ToolCall] yolo redline auto-denied"
+                ),
+                PermissionDecision::NeedsApproval { .. } => {}
+            }
+            decision
+        } else if edit_allowed {
             info!(
                 tool = %call.name,
                 call_id = %call.id,
@@ -2761,6 +2857,185 @@ mod tests {
             saw_prompt.load(std::sync::atomic::Ordering::SeqCst),
             "写 .git/config 必须 emit PermissionRequested"
         );
+    }
+
+    // ── Yolo 模式（架构 §4.4.3）─────────────────────────────────────────────
+
+    /// 纯函数判定（架构 §4.4.3）：非 Yolo 返回 None；Yolo 界内非危险 → Approved；
+    /// 越界 / git-meta / 危险复合模式 → Denied。dispatcher 集成测试与本表共用一份逻辑。
+    #[test]
+    fn yolo_decision_table() {
+        use crate::run_mode::RunMode;
+        // 非 Yolo：本函数不接管
+        assert!(yolo_decision(RunMode::Default, false, true, false, &[]).is_none());
+        assert!(yolo_decision(RunMode::AutoMode, true, false, true, &[]).is_none());
+        // Yolo 界内非危险 → 放行
+        assert!(matches!(
+            yolo_decision(RunMode::Yolo, false, true, false, &[]),
+            Some(PermissionDecision::Approved)
+        ));
+        // 越界 → 拒（优先于其它）
+        assert!(matches!(
+            yolo_decision(RunMode::Yolo, false, false, false, &[]),
+            Some(PermissionDecision::Denied { .. })
+        ));
+        // git-meta → 拒
+        assert!(matches!(
+            yolo_decision(RunMode::Yolo, false, true, true, &[]),
+            Some(PermissionDecision::Denied { .. })
+        ));
+        // 危险复合模式 → 拒，reason 带 kind
+        match yolo_decision(
+            RunMode::Yolo,
+            true,
+            true,
+            false,
+            &["rm-rf-root".to_string()],
+        ) {
+            Some(PermissionDecision::Denied { reason }) => {
+                assert!(reason.contains("rm-rf-root"), "reason 应带 dangerous_kind: {reason}")
+            }
+            other => panic!("危险模式应 Denied，实际 {other:?}"),
+        }
+    }
+
+    /// 造一个指定 run_mode 的 dispatcher，挂 NoopEditTool（Edit）+ DestructiveNoopTool（Bash）。
+    fn mode_dispatcher(
+        workspace: Arc<Workspace>,
+        run_mode: crate::run_mode::RunMode,
+    ) -> (ToolDispatcher, tokio::sync::mpsc::Receiver<protocol::Event>) {
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(NoopEditTool) as Box<dyn crate::tools::Tool>,
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>,
+        ]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(run_mode)),
+            model_id: None,
+            judge_client: None,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+            subagent_bypass: false,
+        };
+        (dispatcher, rx)
+    }
+
+    /// Yolo（架构 §4.4.3）：界内普通命令（`ls`）直接执行，不弹审批——无人值守一气呵成。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn yolo_in_workspace_command_auto_allowed() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = mode_dispatcher(workspace, crate::run_mode::RunMode::Yolo);
+
+        let call = ToolCall {
+            id: "call_yolo_ls".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "ls -la" }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("Yolo 界内命令不应卡在审批")
+            .expect("dispatch 不应返回错误");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "executed");
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("Yolo 界内命令不应 emit PermissionRequested");
+            }
+        }
+    }
+
+    /// Yolo 红线（架构 §4.4.3）：`rm -rf` 命中危险复合模式 → **自动拒、不挂起、不弹审批**，
+    /// reason 作为 tool_result 回灌 agent。这是 Yolo 与 Default 的本质区别（Default 会弹审批
+    /// 等人，无人值守下会永久挂起）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn yolo_redline_command_auto_denied_without_prompt() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = mode_dispatcher(workspace, crate::run_mode::RunMode::Yolo);
+
+        let call = ToolCall {
+            id: "call_yolo_rmrf".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "rm -rf /" }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("Yolo 红线应自动拒、不挂起")
+            .expect("dispatch 不应返回错误");
+        assert_eq!(result.len(), 1);
+        assert!(
+            result[0].content.contains("被拒绝") && result[0].content.contains("全速模式"),
+            "tool_result 应回灌拦截原因：{}",
+            result[0].content
+        );
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("Yolo 红线必须自动拒，不应 emit PermissionRequested");
+            }
+        }
+    }
+
+    /// Yolo 红线：写工作区外的文件 → 自动拒、不挂起、不弹审批（无人值守不放界外）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn yolo_out_of_workspace_edit_auto_denied_without_prompt() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let (dispatcher, mut rx) = mode_dispatcher(workspace, crate::run_mode::RunMode::Yolo);
+
+        let target = outside.path().join("evil.rs");
+        let call = ToolCall {
+            id: "call_yolo_edit_out".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": target.to_string_lossy() }),
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("Yolo 界外编辑应自动拒、不挂起")
+            .expect("dispatch 不应返回错误");
+        assert_eq!(result.len(), 1);
+        assert!(
+            result[0].content.contains("被拒绝") && result[0].content.contains("全速模式"),
+            "界外编辑应回灌拦截原因：{}",
+            result[0].content
+        );
+
+        while let Ok(event) = rx.try_recv() {
+            if let EventPayload::PermissionRequested { .. } = event.payload {
+                panic!("Yolo 界外编辑必须自动拒，不应 emit PermissionRequested");
+            }
+        }
     }
 
     /// 端到端复现 desktop 路径：dispatch 一个 Bash destructive 调用 → emit 收到

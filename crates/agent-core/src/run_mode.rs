@@ -5,6 +5,8 @@
 //! - `PlanMode`：工具列表过滤删除 Edit/Write/Bash/PowerShell，只读探索 + 注入 PlanMode 工具
 //!   （`action: enter|update|submit`，agent 自主进出计划模式，见架构 §4.4.5）
 //! - `AutoMode`：调一次轻量 LLM judge 决定 Allow / Deny / Ask（仅模型白名单内启用）
+//! - `Yolo`：工作区内编辑 + 命令全放，仅 catastrophic 红线（危险复合模式 / 界外路径 /
+//!   git-meta）自动拒 + reason 回灌 agent，绝不弹审批——无人值守场景（heb run / 评测）
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +21,8 @@ pub enum RunMode {
     Default,
     PlanMode,
     AutoMode,
+    /// 全速 / 无人值守（架构 §4.4.3）：界内编辑 + 命令全放，仅 catastrophic 红线自动拒。
+    Yolo,
 }
 
 impl RunMode {
@@ -27,6 +31,7 @@ impl RunMode {
             RunMode::Default => "Default",
             RunMode::PlanMode => "PlanMode",
             RunMode::AutoMode => "AutoMode",
+            RunMode::Yolo => "Yolo",
         }
     }
 
@@ -39,6 +44,7 @@ impl RunMode {
             | "editautomatically" | "edit-auto" | "auto-edit" => Some(RunMode::Default),
             "plan-mode" | "planmode" | "plan" => Some(RunMode::PlanMode),
             "auto-mode" | "automode" | "auto" => Some(RunMode::AutoMode),
+            "yolo" => Some(RunMode::Yolo),
             _ => None,
         }
     }
@@ -192,6 +198,10 @@ mod tests {
             serde_json::from_str::<RunMode>("\"AutoMode\"").unwrap(),
             RunMode::AutoMode
         );
+        assert_eq!(
+            serde_json::from_str::<RunMode>("\"Yolo\"").unwrap(),
+            RunMode::Yolo
+        );
     }
 
     /// serde 序列化只写当前合法值（`Default` 而非老名字），避免新写的 jsonl 再含废弃枚举。
@@ -217,6 +227,7 @@ mod tests {
         }
         assert_eq!(RunMode::parse("plan"), Some(RunMode::PlanMode));
         assert_eq!(RunMode::parse("auto"), Some(RunMode::AutoMode));
+        assert_eq!(RunMode::parse("yolo"), Some(RunMode::Yolo));
         assert_eq!(RunMode::parse("nope"), None);
     }
 }

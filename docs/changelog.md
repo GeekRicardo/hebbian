@@ -8950,3 +8950,34 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   tsc noEmit + pnpm build 通过
 - **留尾巴**: `send_continue` 走普通 sendUserMessage，末尾天然是 user 属结构性保证，未用活
   模型端到端复跑（Playwright 本机卡住）；UI 效果待本地 tauri dev 目检
+
+### 2026-06-21 — 新增 RunMode::Yolo（全速 / 无人值守模式）
+
+- **Why**: 需要一个「全部放行、不打断」的模式跑无人值守任务（heb run / 评测集）。现有
+  AutoMode + hands-off 语义是「判官拦下的就真拦（拒）」，方向相反；Default 的红线是
+  「弹审批等人」，无人值守下会在第一条越界操作上永久挂起。缺一个「界内全放、红线自动拒
+  回灌」的模式。
+- **改动**:
+  - crates/agent-core/src/run_mode.rs: `RunMode` 加 `Yolo` variant + `as_str`/`parse("yolo")` + 测试
+  - crates/agent-core/src/dispatch.rs: `edit_auto_allowed` 让 Yolo 与 Default 同档（界内编辑免审）；
+    新增纯函数 `yolo_decision`（界内非危险→Approved；越界/git-meta/危险复合模式→Denied+reason）；
+    path_pending 计算处加 `is_yolo` 分支——越界路径**不调 request_path_approval**（那会 emit
+    PermissionRequested 弹审批，无人在场永久挂起），直接交 yolo_decision 自动拒；审批主分支
+    最前插 yolo 短路。复用 §4.4.2 已解析的 effects（has_dangerous_pattern / dangerous_kinds），
+    零新增静态分析，不调 LLM（区别于 AutoMode）。加 4 个回归测试（决策表 + 界内放行 + rm-rf 红线
+    自动拒 + 界外编辑自动拒，均断言不 emit PermissionRequested）
+  - crates/agent-core/prompts/base_system.md: `# Run modes` 段修正文档 rot（原写已删除的
+    AskBeforeEdits/EditAutomatically），改为 Default/PlanMode/AutoMode/Yolo 四态现状描述
+  - apps/cli/src/{main.rs,daemon.rs}: `--mode` / `heb mode` 帮助与错误文案加 yolo
+  - 前端 RunModeChip.tsx: RunMode 类型加 "Yolo"，下拉加「全速模式」选项（Zap 图标，人话 desc）
+  - docs/架构.md §4.4.3（标题改「四种」+ 新增 Yolo 段 + 两条 why）；§13 加 3 条决策行
+- **影响范围**: agent-core(run_mode + dispatch)、cli(文案)、desktop 前端(RunModeChip)、prompt。
+  RunMode 是 additive 新值，老 jsonl 无影响（serde 直接序列化为 "Yolo"，老兼容逻辑不变）。
+  STABLE system prompt 字节不变（Yolo 名只进 SEMI 段 `<run_mode>`），prompt cache 不受影响。
+- **验证**: cargo check --workspace 过；cargo test -p agent-core --lib 556/0（含 4 Yolo 回归）；
+  tsc --noEmit 过。heb 真实复现（阶段 B，隔离 data-dir + 空 allowed_paths）：yolo 模式下
+  permission_requested=0，界内 Write 直接成功，界外 Write 被「全速模式拦截：写工作区外的路径」
+  自动拒（文件未创建）+ reason 回灌让 agent 改道写界内。A/B 翻转可复现（Default 模式同样越界会弹审批挂起）。
+- **留尾巴**: 界外安全路径（/tmp 等）yolo 也一律拒——静态层无法可靠区分界外是否危险，无人值守
+  宁可拒不可错放；需写界外请预先把目录加进 permissions.json 的 paths 白名单或用 --workdir 纳入。
+  这是 heb run（第二段）/ 评测框架（第三段）的前置依赖。

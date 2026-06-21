@@ -62,7 +62,7 @@ enum Command {
         #[arg(long)]
         workdir: Option<PathBuf>,
 
-        /// 运行模式：default | plan-mode | auto-mode
+        /// 运行模式：default | plan-mode | auto-mode | yolo
         #[arg(long = "mode", default_value = "default")]
         run_mode: String,
 
@@ -124,7 +124,7 @@ enum Command {
     /// 切换 run mode
     Mode {
         session_id: String,
-        /// default | plan-mode | auto-mode
+        /// default | plan-mode | auto-mode | yolo
         mode: String,
     },
 

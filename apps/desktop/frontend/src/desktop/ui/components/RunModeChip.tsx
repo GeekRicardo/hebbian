@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { Check, ChevronDown, Gauge, Map, Sparkles } from "lucide-react";
+import { Check, ChevronDown, Gauge, Map, Sparkles, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 import { api } from "@/desktop/bridge/tauri";
@@ -8,7 +8,7 @@ import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 
 /** 与后端 `agent_core::run_mode::RunMode::as_str()` 一一对应。 */
-type RunMode = "Default" | "PlanMode" | "AutoMode";
+type RunMode = "Default" | "PlanMode" | "AutoMode" | "Yolo";
 
 const MODE_OPTIONS: {
   value: RunMode;
@@ -33,6 +33,12 @@ const MODE_OPTIONS: {
     label: "自动模式",
     desc: "让 AI 自己判断哪些操作可以放行",
     icon: Sparkles,
+  },
+  {
+    value: "Yolo",
+    label: "全速模式",
+    desc: "全部自动执行、不打断，只拦最危险的不可逆操作",
+    icon: Zap,
   },
 ];
 
