@@ -9111,3 +9111,35 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: 5 条是冒烟级样本，结论方向可信但样本量小；完整 SWE-bench Verified（500 条）+
   pass@k 需容器化环境矩阵 + 更稳定的强 provider；6202/7982 这类「探索后不收尾」可探索 prompt
   引导或换更强模型改善。
+
+### 2026-06-21 — 跑通真正的 DeepSWE 数据集（R2E-Gym docker 任务）+ 铁证结论
+
+- **Why**: 之前跑的是 SWE-bench Verified（DeepSWE 评测会报的分数之一），但 DeepSWE 实际训练/
+  评测用的数据集是 **R2E-Gym**。补上真正的 DeepSWE 数据集端到端验证，并用 gold patch 排除
+  「判分链路本身有 bug」，给铁证结论。
+- **R2E-Gym 与 SWE-bench 的关键区别**: R2E-Gym 每个任务自带预构建 docker 镜像（环境装好、
+  /testbed 是 base commit、/r2e_tests 是隐藏测试），expected_output_json 是判分标准。这是
+  R2E-Gym 用 Docker 解决「环境矩阵」难点的方式——不像 SWE-bench 本地裸装受工具链版本折磨。
+- **改动**:
+  - apps/eval/src/{task.rs,runner.rs}: 新增 `r2e` 任务类型（docker 模式）。runner 流程：
+    docker run 起长驻容器 → cp /testbed 到宿主 workdir → heb run 让 agent 改 → 改动 cp 回
+    容器 → 容器内跑 run_tests.sh（xvfb-run pytest -rA /r2e_tests）→ parse_pytest_ra 解析
+    PASSED/FAILED → judge_r2e 与 expected_output 全部吻合才 PASS。加 docker/docker_capture 辅助
+  - apps/eval/scripts/fetch_r2e.py: 从 HF R2E-Gym-Subset 拉任意任务转 r2e 格式（仅 stdlib）
+  - apps/eval/samples/DEEPSWE-REPORT.md: 完整结果 + 三条证据的「是 bug 还是效果不好」结论
+  - apps/eval/samples/{RESULTS-r2e-deepswe.json, r2e-gym-orange3-sample.json}: 真实数据存档
+  - docs/架构.md §17.2: 两种格式 → 三种（加 r2e docker 格式描述）
+- **真实运行结果**（任务 orange3-2d9617bd，deepseek-v4-pro）:
+  - base 状态：9 passed / 1 FAILED（目标测试 test_migrates_settings_removes_incompatible
+    抛 IncompatibleContext）
+  - agent 修复后：9 passed / 1 FAILED 不变——agent 只 Grep×4+Read×4 探索、**0 次 Edit**
+  - 官方 gold patch：**10 passed 全过** → 证明判分链路正确、PASS 可达
+- **铁证结论「是 bug 还是效果不好」= 效果不好（agent 模型），不是框架 bug**:
+  ① 判分链路正确——gold patch 让 10 测试全 PASS，排除判分 bug；
+  ② agent 探索后模型返回空 Done（finish=Stop）没进 Edit 阶段，loop 正确重试 3 次仍空，
+     agent_outcome=done、src 零改动——是模型过早收尾，非框架缺陷；
+  ③ 跨数据集一致——同模式在 SWE-bench 6202/7982 也出现，而 deepseek 在 5262/5809/7205 能改对
+     （修复与 gold patch 逻辑一致），是任务相关 + 有方差的模型能力问题。
+- **影响范围**: apps/eval（加 r2e 类型，纯 additive，不影响 general/swe）+ 文档。
+- **留尾巴**: R2E 镜像 ~2.4GB/任务，批量需镜像缓存/清理策略；arm64 Mac 上 amd64 镜像走
+  Rosetta 模拟偏慢；改善 agent 通过率方向同上（更强模型 / prompt 引导坚持修复 / pass@k）。

@@ -13,6 +13,8 @@ pub enum Task {
     General(GeneralTask),
     /// SWE-bench 风格：repo + base_commit + 隐藏测试。
     Swe(SweTask),
+    /// R2E-Gym / DeepSWE 风格：docker 镜像内 /testbed 改代码，run_tests.sh 判分。
+    R2e(R2eTask),
 }
 
 impl Task {
@@ -21,8 +23,25 @@ impl Task {
         match self {
             Task::General(t) => &t.id,
             Task::Swe(t) => &t.instance_id,
+            Task::R2e(t) => &t.instance_id,
         }
     }
+}
+
+/// R2E-Gym / DeepSWE 任务（架构 §17.2）：每个任务有预构建 docker 镜像，环境已装好。
+///
+/// 流程：从镜像导出 `/testbed`（base commit 状态）到宿主 workdir → `heb run` 让 agent 改 →
+/// 改动 patch 回容器 → 跑 `/testbed/run_tests.sh`（pytest /r2e_tests）→ 比对
+/// `expected_output_json`（一组测试名→PASSED）。这是 DeepSWE 官方用 Docker 解决环境矩阵的方式。
+#[derive(Debug, Clone, Deserialize)]
+pub struct R2eTask {
+    pub instance_id: String,
+    /// 预构建的 docker 镜像（含 /testbed 仓库 + 装好的环境 + /r2e_tests 测试）。
+    pub docker_image: String,
+    /// 喂给 `heb run` 的问题描述（GitHub issue）。
+    pub problem_statement: String,
+    /// 期望的测试结果：测试名 → "PASSED"/"FAILED"。判分时实际结果须与之全部吻合。
+    pub expected_output: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

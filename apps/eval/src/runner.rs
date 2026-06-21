@@ -6,7 +6,7 @@ use std::process::Stdio;
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
-use crate::task::{GeneralTask, SweTask, Task};
+use crate::task::{GeneralTask, R2eTask, SweTask, Task};
 
 /// 单个任务的评测结果（进报告）。
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +45,7 @@ pub async fn run_task(cfg: &RunnerConfig, task: &Task) -> TaskResult {
     let outcome = match task {
         Task::General(t) => run_general(cfg, t).await,
         Task::Swe(t) => run_swe(cfg, t).await,
+        Task::R2e(t) => run_r2e(cfg, t).await,
     };
     match outcome {
         Ok((pass, agent_outcome, detail)) => TaskResult {
@@ -183,6 +184,157 @@ async fn run_swe(cfg: &RunnerConfig, task: &SweTask) -> Result<(bool, String, St
     Ok((true, agent.outcome, detail))
 }
 
+// ─── R2E-Gym / DeepSWE docker 任务 ───────────────────────────────────────────
+
+/// 跑一个 R2E-Gym/DeepSWE docker 任务（架构 §17.2）。
+///
+/// 流程：`docker create` 起一个长驻容器 → cp /testbed 到宿主 workdir → `heb run` 让 agent 改 →
+/// 改动 cp 回容器 /testbed → 容器内跑 run_tests.sh → 解析 pytest `-rA` 的 PASSED/FAILED，
+/// 与 `expected_output` 全部吻合才 PASS。环境由镜像保证，无需本地装依赖。
+async fn run_r2e(cfg: &RunnerConfig, task: &R2eTask) -> Result<(bool, String, String)> {
+    let workdir = cfg.work_root.join(sanitize(&task.instance_id));
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir)?;
+    let cname = format!("heb-eval-{}", sanitize(&task.instance_id));
+
+    // 起一个长驻容器（sleep 保活），失败直接返回。
+    let _ = docker(&["rm", "-f", &cname]).await; // 清理同名残留
+    let create = docker_capture(&[
+        "run", "-d", "--name", &cname, "--platform", "linux/amd64",
+        &task.docker_image, "sleep", "infinity",
+    ])
+    .await?;
+    if !create.code.map(|c| c == 0).unwrap_or(false) {
+        return Ok((
+            false,
+            "skipped".to_string(),
+            format!("docker run 失败：{}", truncate(&create.merged, 200)),
+        ));
+    }
+    // 用闭包保证无论判分成败都清理容器。
+    let result = run_r2e_inner(cfg, task, &cname, &workdir).await;
+    let _ = docker(&["rm", "-f", &cname]).await;
+    result
+}
+
+async fn run_r2e_inner(
+    cfg: &RunnerConfig,
+    task: &R2eTask,
+    cname: &str,
+    workdir: &Path,
+) -> Result<(bool, String, String)> {
+    // 1. 导出容器 /testbed 到宿主 workdir（agent 在宿主改）。
+    let cp_out = docker_capture(&["cp", &format!("{cname}:/testbed/."), &workdir.to_string_lossy()])
+        .await?;
+    if !cp_out.code.map(|c| c == 0).unwrap_or(false) {
+        return Ok((
+            false,
+            "skipped".to_string(),
+            format!("docker cp 导出 /testbed 失败：{}", truncate(&cp_out.merged, 200)),
+        ));
+    }
+
+    // 2. agent 改代码（带 R2E 上下文提示：测试在容器跑，改 /testbed 对应的本地文件即可）。
+    let prompt = format!(
+        "{}\n\n（这是 {} 仓库的源码。请定位并修复上述 issue，直接 Edit 工作目录里的源文件。\
+         不要跑测试——测试会由评测器在隔离环境里执行。）",
+        task.problem_statement, /* repo hint */ "Python"
+    );
+    let agent = run_heb(cfg, &prompt, workdir).await?;
+
+    // 3. 把 agent 改动 cp 回容器 /testbed。
+    let cp_in = docker_capture(&[
+        "cp",
+        &format!("{}/.", workdir.to_string_lossy()),
+        &format!("{cname}:/testbed/"),
+    ])
+    .await?;
+    if !cp_in.code.map(|c| c == 0).unwrap_or(false) {
+        return Ok((
+            false,
+            agent.outcome,
+            format!("docker cp 回写 /testbed 失败：{}", truncate(&cp_in.merged, 200)),
+        ));
+    }
+
+    // 4. 容器内跑测试（run_tests.sh 用相对 r2e_tests，需 cwd=/testbed；测试目录在 /r2e_tests）。
+    let test = docker_capture(&[
+        "exec", "-w", "/testbed", cname, "bash", "-lc",
+        "QT_QPA_PLATFORM=minimal PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning' \
+         xvfb-run --auto-servernum .venv/bin/python -W ignore -m pytest -rA /r2e_tests 2>&1 | tail -200",
+    ])
+    .await?;
+
+    // 5. 解析 pytest -rA 输出的 PASSED/FAILED，与 expected 比对。
+    let actual = parse_pytest_ra(&test.merged);
+    let (pass, detail) = judge_r2e(&task.expected_output, &actual);
+    Ok((pass, agent.outcome, detail))
+}
+
+/// 解析 pytest `-rA` 输出：每行 `PASSED <nodeid>` / `FAILED <nodeid>`，取测试方法名做 key。
+fn parse_pytest_ra(output: &str) -> std::collections::BTreeMap<String, String> {
+    let mut map = std::collections::BTreeMap::new();
+    for line in output.lines() {
+        let line = line.trim();
+        let status = if line.starts_with("PASSED") {
+            "PASSED"
+        } else if line.starts_with("FAILED") {
+            "FAILED"
+        } else if line.starts_with("ERROR") {
+            "FAILED"
+        } else {
+            continue;
+        };
+        // 取 `::Class::method` 尾部作 key（与 expected_output 的 `Class.method` 对齐）。
+        if let Some(node) = line.split_whitespace().nth(1) {
+            let key = node
+                .rsplit("::")
+                .take(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(".");
+            map.insert(key, status.to_string());
+        }
+    }
+    map
+}
+
+/// 判分：expected 里每个测试都必须在 actual 里有同名（或后缀匹配）且状态吻合。
+fn judge_r2e(
+    expected: &std::collections::BTreeMap<String, String>,
+    actual: &std::collections::BTreeMap<String, String>,
+) -> (bool, String) {
+    let mut matched = 0usize;
+    let mut mismatched: Vec<String> = Vec::new();
+    for (name, exp_status) in expected {
+        // actual 的 key 是 Class.method；expected 也可能带或不带 Class。后缀匹配兜底。
+        let got = actual
+            .iter()
+            .find(|(k, _)| k.ends_with(name.as_str()) || name.ends_with(k.as_str()))
+            .map(|(_, v)| v.as_str());
+        match got {
+            Some(s) if s == exp_status => matched += 1,
+            Some(s) => mismatched.push(format!("{name}: 期望{exp_status} 实际{s}")),
+            None => mismatched.push(format!("{name}: 期望{exp_status} 实际(未跑到)")),
+        }
+    }
+    let total = expected.len();
+    if mismatched.is_empty() {
+        (true, format!("{matched}/{total} 测试结果全部吻合 expected"))
+    } else {
+        (
+            false,
+            format!(
+                "{matched}/{total} 吻合；不符 {} 项：{}",
+                mismatched.len(),
+                truncate(&mismatched.join("; "), 280)
+            ),
+        )
+    }
+}
+
 // ─── heb run 调用 ────────────────────────────────────────────────────────────
 
 struct AgentRun {
@@ -283,6 +435,27 @@ async fn sh_capture(cmd: &str, cwd: &Path) -> Result<ShOut> {
         .current_dir(cwd)
         .output()
         .await?;
+    let mut merged = String::from_utf8_lossy(&out.stdout).into_owned();
+    merged.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok(ShOut {
+        code: out.status.code(),
+        merged,
+    })
+}
+
+/// 跑一条 docker 命令（只取退出状态，丢输出）。
+async fn docker(args: &[&str]) -> Result<std::process::ExitStatus> {
+    Ok(tokio::process::Command::new("docker")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?)
+}
+
+/// 跑一条 docker 命令，捕获 stdout+stderr 与退出码。
+async fn docker_capture(args: &[&str]) -> Result<ShOut> {
+    let out = tokio::process::Command::new("docker").args(args).output().await?;
     let mut merged = String::from_utf8_lossy(&out.stdout).into_owned();
     merged.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok(ShOut {

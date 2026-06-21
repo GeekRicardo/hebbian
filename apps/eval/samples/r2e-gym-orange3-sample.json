@@ -1,0 +1,20 @@
+[
+  {
+    "type": "r2e",
+    "instance_id": "orange3-2d9617bd",
+    "docker_image": "namanjain12/orange3_final:2d9617bd0cb1f0ba61771258410ab8fae8e7e24d",
+    "problem_statement": "[ISSUE]\n**Title:** Context migration fails to remove incompatible contexts, causing initialization errors\n\n**Description:**\nWhen initializing the `ContextHandler` with a mix of compatible and incompatible contexts, the migration process does not remove the incompatible contexts as expected. Instead, it raises an `IncompatibleContext` error, preventing successful initialization.\n\n**Example Code:**\n```python\nhandler = ContextHandler()\nhandler.bind(SimpleWidget)\n\nwidget = SimpleWidget()\ncontexts = [Context(foo=i) for i in (13, 13, 0, 1, 13, 2, 13)]\n\ndef migrate_context(context, _):\n    if context.foo == 13:\n        raise IncompatibleContext()\n\nhandler.initialize(widget, dict(context_settings=contexts))\n# Expected: Incompatible contexts with foo=13 should be removed\n# Actual: IncompatibleContext error is raised, and contexts are not removed\n```\n\n**Expected Behavior:**\nDuring initialization, contexts that are incompatible (e.g., those that cause `IncompatibleContext` to be raised) should be automatically removed, allowing the `ContextHandler` to proceed with only the compatible contexts.\n\n**Actual Behavior:**\nThe `ContextHandler` does not remove incompatible contexts, resulting in an `IncompatibleContext` error being raised and preventing successful initialization.\n\n[/ISSUE]",
+    "expected_output": {
+      "TestContextHandler.test_close_context": "PASSED",
+      "TestContextHandler.test_fast_save": "PASSED",
+      "TestContextHandler.test_find_or_create_context": "PASSED",
+      "TestContextHandler.test_initialize": "PASSED",
+      "TestContextHandler.test_initialize_migrates_contexts": "PASSED",
+      "TestContextHandler.test_migrates_settings_removes_incompatible": "PASSED",
+      "TestContextHandler.test_pack_settings_stores_version": "PASSED",
+      "TestContextHandler.test_read_defaults": "PASSED",
+      "TestContextHandler.test_write_defaults_stores_version": "PASSED",
+      "TestSettingsPrinter.test_formats_contexts": "PASSED"
+    }
+  }
+]
