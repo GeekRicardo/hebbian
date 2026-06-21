@@ -51,6 +51,9 @@ pub struct SweTask {
     pub base_commit: String,
     /// 喂给 `heb run` 的问题描述。
     pub problem_statement: String,
+    /// clone + checkout 后、跑 agent 前的环境准备命令（建 venv / pip install 等）。
+    #[serde(default)]
+    pub setup_cmd: Option<String>,
     /// 隐藏测试 patch（git apply），跑 agent 后应用。
     #[serde(default)]
     pub test_patch: Option<String>,

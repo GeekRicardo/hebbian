@@ -121,6 +121,22 @@ async fn run_swe(cfg: &RunnerConfig, task: &SweTask) -> Result<(bool, String, St
         ));
     }
 
+    // 环境准备（建 venv / pip install）。SWE 任务装依赖慢，给宽松超时。
+    if let Some(setup) = &task.setup_cmd {
+        let setup_out = sh_capture(setup, &workdir).await?;
+        if !setup_out.code.map(|c| c == 0).unwrap_or(false) {
+            return Ok((
+                false,
+                "skipped".to_string(),
+                format!(
+                    "setup_cmd 失败（exit {:?}）：{}",
+                    setup_out.code,
+                    truncate(&setup_out.merged, 300)
+                ),
+            ));
+        }
+    }
+
     let agent = run_heb(cfg, &task.problem_statement, &workdir).await?;
 
     // 应用隐藏测试 patch

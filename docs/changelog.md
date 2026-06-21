@@ -9044,3 +9044,39 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: 真实 SWE-bench/DeepSWE 数据集需 git + 网络 + 目标仓库语言工具链（python/node/...），
   本期 sample 用本地最小 repo 验证判分链路；真实数据集接入（下载 / 镜像 / 工具链容器化）留后续。
   三段式任务（Yolo + heb run + eval）至此全部交付。
+
+### 2026-06-21 — 真实跑通 SWE-bench Verified 任务 + 数据集接入工具 + swe setup_cmd
+
+- **Why**: 上一条只验证了本地 sample，未真正拉公开数据集跑真实任务。本条补上「真拉 SWE-bench
+  Verified → 跑一个真实 GitHub issue 任务 → 分析结果」的端到端验收，这才是评测框架的意义。
+- **改动**:
+  - apps/eval/scripts/fetch_swebench.py: 从 HuggingFace datasets-server REST API 拉任意
+    SWE-bench/DeepSWE instance，转成 heb-eval 的 swe.json 格式（repo→github url、FAIL_TO_PASS
+    的 pytest node id→`pytest '<node>'` 命令、生成 venv setup_cmd）。只用 python stdlib，
+    不依赖 `datasets` 库
+  - apps/eval/src/{task.rs,runner.rs}: SweTask 加 `setup_cmd` 字段（clone+checkout 后、跑
+    agent 前执行环境准备：建 venv / pip install），runner 在 run_swe 里执行并把失败标 skipped
+  - apps/eval/samples/swebench-verified-pytest-5262.json: 一条已跑通的真实任务存档
+  - apps/eval/samples/README.md: 真实数据集接入用法 + 环境坑经验 + 验收记录
+- **验收结果（真实跑通）**: `pytest-dev__pytest-5262`（SWE-bench Verified，难度「<15 min fix」）：
+  heb-eval clone pytest@58e6a09 → 建 venv 装依赖 → `heb run --yolo` 让 agent 修 bug → git apply
+  隐藏测试 → 判分。**agent（deepseek-v4-pro）自主定位 `_pytest/capture.py` 的 EncodedFile 类、
+  加 `mode` property 去掉 'b' 二进制标志——与官方 gold patch 逻辑完全一致**，FAIL_TO_PASS 转 pass、
+  PASS_TO_PASS 5 条无回归，判 PASS（1/1，100%）。
+- **过程中的真实发现（结果分析）**:
+  1. **provider 稳定性直接决定评测结果**：同一任务先用某 opus 中转 provider（KESv）跑 → 模型
+     在大 context（pytest 仓库 + 58 工具 + 18KB system）下返回**空响应**（input_tokens=0、
+     finish=Stop、text 空），agent 空转判 FAIL；换 deepseek-v4-pro 正常完成。诊断靠 model_io.jsonl
+     逐条看 usage。评测结果反映「agent 能力 × provider 稳定性」两维，不能只看分数
+  2. **真实 SWE-bench 的环境矩阵是主要难点**：2019 年的 pytest 4.5 在 Python 3.9 上装失败——
+     旧 setup.py 的 build isolation 拉不到 setuptools_scm；装上后又因新 setuptools 移除了
+     `pkg_resources` 而 import 失败。setup_cmd 固化为：升级 pip + 预装 setuptools_scm +
+     `pip install "setuptools<81"`。官方用 Docker 镜像锁版本解决，本地裸跑需逐库调
+  3. **macOS 无 `timeout` 命令**：调试时误用 `timeout` 包 heb run 导致 exit 127 伪失败，
+     与 agent 无关——记此坑（macOS 用 gtimeout 或靠 heb run 自带 --timeout）
+- **影响范围**: 仅 apps/eval（脚本 + swe setup_cmd 扩展 + sample/README）。setup_cmd 是
+  additive 字段，老 swe.json 无 setup_cmd 仍可跑。
+- **留尾巴**: 单条真实任务跑通，批量跑整个 SWE-bench Verified（500 条）需要每个 repo 的环境
+  矩阵（最好容器化）+ 稳定的强模型 provider；KESv 类 provider 的空响应问题需单独排查（疑似
+  中转层对大 context 的限制）。DeepSWE 官方榜用的也是 Docker harness，本地版定位为「能跑单条
+  真实任务做冒烟 / 调试」，大规模评测仍建议接官方容器化 harness。
