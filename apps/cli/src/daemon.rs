@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 
 use agent_core::{
     context::transcript::Transcript,
@@ -95,6 +96,19 @@ struct DaemonState {
     input_tx: mpsc::UnboundedSender<TurnInput>,
 
     permission_store: Option<Arc<PermissionStore>>,
+
+    /// 无人值守自动结算（`heb run` 一次性命令用）。`Some` 时 observer 不挂 pending、
+    /// 不等交互回应：审批一律自动拒 + 把 reason 回灌 agent、提问一律自动取消，并计数。
+    /// `None`（普通 daemon）保持原交互行为——挂 pending 等 `heb allow/answer`。
+    auto_resolve: Option<Arc<AutoResolveStats>>,
+}
+
+/// `heb run` 无人值守跑任务时，被自动结算掉的 HITL 计数（架构 §4.4.3 Yolo 配套）。
+/// 结尾 summary 把它报给用户/评测框架，说明「N 次审批被自动拒、M 个提问被自动取消」。
+#[derive(Default)]
+struct AutoResolveStats {
+    denied_approvals: std::sync::atomic::AtomicU64,
+    cancelled_questions: std::sync::atomic::AtomicU64,
 }
 
 impl DaemonState {
@@ -308,6 +322,19 @@ impl TurnObserver for DaemonObserver {
         _kind: &PermissionKind,
         _summary: &str,
     ) -> Option<ApprovalDecision> {
+        // 无人值守（heb run）：不挂 pending、不等交互，直接自动拒 + 计数。把「为什么拒」
+        // 回灌 agent 让它换路子（与 Yolo 红线同理）。Yolo 模式下 dispatcher 已自行处置
+        // 红线、不会走到这里；这条兜的是非 Yolo 模式 / 越过 Yolo 放行面的审批。
+        if let Some(stats) = &self.state.auto_resolve {
+            stats
+                .denied_approvals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(ApprovalDecision::DenyWithFeedback {
+                feedback: "无人值守模式：该操作需要人工审批，但当前没有人能批准，已自动拒绝。\
+                           请改用工作区内的安全做法，或换一种不需要审批的方式。"
+                    .to_string(),
+            });
+        }
         let (tx, rx) = oneshot::channel();
         self.state
             .pending_approvals
@@ -326,6 +353,13 @@ impl TurnObserver for DaemonObserver {
         _multi: bool,
         _questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
+        // 无人值守：提问无人可答，自动取消 + 计数。
+        if let Some(stats) = &self.state.auto_resolve {
+            stats
+                .cancelled_questions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(UserAnswer::Cancelled);
+        }
         let (tx, rx) = oneshot::channel();
         self.state
             .pending_questions
@@ -606,8 +640,11 @@ impl ModelClient for NamedModelClient {
 
 // ─── run_turn ──────────────────────────────────────────────────────────────
 
-/// 一次完整的用户输入 → agent run → assistant 持久化流程
-async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
+/// 一次完整的用户输入 → agent run → assistant 持久化流程。
+///
+/// 返回本轮 [`TurnOutcome`]——daemon 主循环忽略它（行为不变），`heb run` 一次性命令
+/// 据它决定退出码。
+async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutcome> {
     let data_dir = &state.data_dir;
     let session_id = &state.session_id;
 
@@ -825,7 +862,7 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
     // 避免 jsonl 出现重复条目（跟 desktop chat.rs 的修订对齐）。drain 干净避免 leak。
     consumed_inputs.lock().unwrap().clear();
 
-    match summary.outcome {
+    match &summary.outcome {
         // 架构 §4.12.1：Suspended 是 Run 的合法中间态，落 assistant 段跟 Done 一致——
         // transcript 不进 checkpoint（§4.12.3），resume 时从 jsonl 重建本轮 assistant。
         TurnOutcome::Done | TurnOutcome::Suspended => {
@@ -840,11 +877,13 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<()> {
             });
         }
         TurnOutcome::Failed(err) => {
-            state.emit(&DaemonEvent::Error { message: err });
+            state.emit(&DaemonEvent::Error {
+                message: err.clone(),
+            });
         }
     }
 
-    Ok(())
+    Ok(summary.outcome)
 }
 
 // ─── IPC 命令处理 ──────────────────────────────────────────────────────────
@@ -1004,7 +1043,18 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) {
 
 // ─── 入口 ──────────────────────────────────────────────────────────────────
 
-pub async fn run(args: DaemonArgs) -> Result<()> {
+/// `run` 与 `run_once` 共用的前置装配结果：解析好 provider/model、建好（或连上）session。
+struct PreparedSession {
+    data_dir: PathBuf,
+    provider_id: String,
+    model: String,
+    session_id: String,
+    run_mode: RunMode,
+}
+
+/// 解析 data_dir / provider / model，建新 session 或连已有 session（架构 §7 CoreClient）。
+/// `run`（daemon）与 `run_once`（heb run 一次性）走同一份装配，避免逻辑漂移。
+fn prepare_session(args: &DaemonArgs) -> Result<PreparedSession> {
     let data_dir = args
         .data_dir
         .clone()
@@ -1020,7 +1070,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     )?;
 
     // ── session ──
-    let session_id = match args.session_id {
+    let session_id = match args.session_id.clone() {
         Some(id) => {
             // 验证 session 存在
             sessions::load(&data_dir, &id).map_err(|e| anyhow!("session {id} 不存在：{e}"))?;
@@ -1059,8 +1109,25 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         }
     };
 
-    // ── run mode ──
     let run_mode = RunMode::parse(&args.run_mode).unwrap_or(RunMode::Default);
+
+    Ok(PreparedSession {
+        data_dir,
+        provider_id,
+        model,
+        session_id,
+        run_mode,
+    })
+}
+
+pub async fn run(args: DaemonArgs) -> Result<()> {
+    let PreparedSession {
+        data_dir,
+        provider_id,
+        model,
+        session_id,
+        run_mode,
+    } = prepare_session(&args)?;
 
     // ── permission store ──
     let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
@@ -1090,6 +1157,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         run_mode: Mutex::new(run_mode),
         input_tx,
         permission_store,
+        auto_resolve: None,
     });
 
     // ── 宣告启动 ──
@@ -1189,6 +1257,181 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
     // 清理 socket 文件
     let _ = std::fs::remove_file(&sock_path);
     Ok(())
+}
+
+// ─── heb run：一次性无人值守跑一个完整任务 ──────────────────────────────────
+
+/// `heb run` 的启动参数：在 [`DaemonArgs`] 基础上加任务文本 / 超时 / 输出形态。
+pub struct RunOnceArgs {
+    pub base: DaemonArgs,
+    /// 要跑的任务（作为首条 user message）。
+    pub task: String,
+    /// 整个 run 的墙钟超时（秒）；`None` 不限时。超时 → cancel + 退出码 2。
+    pub timeout_secs: Option<u64>,
+    /// `true` 时结尾额外打一行结构化结果 JSON（给评测框架 `tail -n1 | jq`）。
+    pub json: bool,
+}
+
+/// 一次性跑完一个 agent 任务并退出（架构 §4.4.3 Yolo 配套 / 评测 surface）。
+///
+/// 与 daemon 的区别：**不监听 socket、不持久**——起 in-process、跑一个 run_turn、终态即退。
+/// 审批 / 提问无人值守（`auto_resolve = Some`）：审批自动拒 + reason 回灌 agent，提问自动
+/// 取消。事件流照常吐 NDJSON 到 stdout（与 daemon 一致），`--json` 时结尾多一行结果对象。
+///
+/// 返回进程退出码：Done/Suspended→0、Failed→1、超时→2、Cancelled→130。
+pub async fn run_once(args: RunOnceArgs) -> Result<i32> {
+    let RunOnceArgs {
+        base,
+        task,
+        timeout_secs,
+        json,
+    } = args;
+
+    let prepared = prepare_session(&base)?;
+    let data_dir = prepared.data_dir.clone();
+    let session_id = prepared.session_id.clone();
+    let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
+    let auto_resolve = Arc::new(AutoResolveStats::default());
+
+    let (input_tx, _input_rx) = mpsc::unbounded_channel::<TurnInput>();
+    let state = Arc::new(DaemonState {
+        session_id: session_id.clone(),
+        data_dir: data_dir.clone(),
+        provider_id: prepared.provider_id,
+        model: prepared.model.clone(),
+        reasoning: None,
+        pending_approvals: Mutex::new(HashMap::new()),
+        pending_questions: Mutex::new(HashMap::new()),
+        active_run: AtomicBool::new(false),
+        cancel_flag: Mutex::new(None),
+        pending_inputs: Mutex::new(None),
+        run_mode: Mutex::new(prepared.run_mode),
+        input_tx,
+        permission_store,
+        auto_resolve: Some(auto_resolve.clone()),
+    });
+
+    state.emit(&DaemonEvent::Started {
+        session_id: session_id.clone(),
+    });
+
+    let started = std::time::Instant::now();
+    let turn = run_turn(state.clone(), TurnInput::User(task));
+    let outcome = match timeout_secs {
+        Some(secs) => match tokio::time::timeout(Duration::from_secs(secs), turn).await {
+            Ok(res) => res?,
+            Err(_) => {
+                // 超时：设 cancel flag 让正在跑的 run 尽快停（已 detach，下一个检查点退出）。
+                state.stop();
+                TurnOutcome::Cancelled
+            }
+        },
+        None => turn.await?,
+    };
+    let timed_out = timeout_secs.is_some() && matches!(outcome, TurnOutcome::Cancelled);
+
+    let exit_code = match &outcome {
+        TurnOutcome::Done | TurnOutcome::Suspended => 0,
+        TurnOutcome::Failed(_) => 1,
+        TurnOutcome::Cancelled if timed_out => 2,
+        TurnOutcome::Cancelled => 130,
+    };
+
+    if json {
+        let summary = build_run_summary(
+            &data_dir,
+            &session_id,
+            &outcome,
+            &auto_resolve,
+            started.elapsed().as_millis() as u64,
+            exit_code,
+        );
+        println!("{summary}");
+    } else {
+        let denied = auto_resolve
+            .denied_approvals
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let cancelled = auto_resolve
+            .cancelled_questions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let outcome_label = match &outcome {
+            TurnOutcome::Done => "完成",
+            TurnOutcome::Suspended => "挂起（等待后台任务）",
+            TurnOutcome::Failed(_) => "失败",
+            TurnOutcome::Cancelled if timed_out => "超时中断",
+            TurnOutcome::Cancelled => "已取消",
+        };
+        eprintln!(
+            "\n[heb run] {outcome_label}；自动拒审批 {denied} 次、自动取消提问 {cancelled} 次（exit {exit_code}）"
+        );
+    }
+
+    Ok(exit_code)
+}
+
+/// 跑完后从 session.jsonl 读最终 assistant 段 + edits-worktree metadata，拼成单行结果 JSON。
+fn build_run_summary(
+    data_dir: &std::path::Path,
+    session_id: &str,
+    outcome: &TurnOutcome,
+    auto_resolve: &AutoResolveStats,
+    duration_ms: u64,
+    exit_code: i32,
+) -> String {
+    let (final_text, tool_calls) = sessions::load(data_dir, session_id)
+        .ok()
+        .and_then(|s| {
+            s.messages
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Assistant))
+                .map(|m| (m.content.clone(), m.tool_calls.len()))
+        })
+        .unwrap_or_default();
+
+    let files_changed = read_run_edits_files(data_dir, session_id);
+
+    let outcome_label = match outcome {
+        TurnOutcome::Done => "done",
+        TurnOutcome::Suspended => "suspended",
+        TurnOutcome::Failed(_) => "failed",
+        TurnOutcome::Cancelled => "cancelled",
+    };
+    let error = match outcome {
+        TurnOutcome::Failed(e) => Some(e.clone()),
+        _ => None,
+    };
+
+    serde_json::json!({
+        "session_id": session_id,
+        "outcome": outcome_label,
+        "exit_code": exit_code,
+        "final_text": final_text,
+        "tool_calls": tool_calls,
+        "files_changed": files_changed,
+        "denied_approvals": auto_resolve.denied_approvals.load(std::sync::atomic::Ordering::Relaxed),
+        "cancelled_questions": auto_resolve.cancelled_questions.load(std::sync::atomic::Ordering::Relaxed),
+        "duration_ms": duration_ms,
+        "error": error,
+    })
+    .to_string()
+}
+
+/// 读 edits-worktree metadata，汇总本 session 所有 Run 触达的真实文件路径（去重）。
+/// 评测框架据此核对「agent 改了哪些文件」。无 git / 无改动时返回空。
+fn read_run_edits_files(data_dir: &std::path::Path, session_id: &str) -> Vec<String> {
+    use agent_core::edits::metadata;
+    let worktree = metadata::worktree_dir(data_dir, session_id);
+    let Ok(meta) = metadata::load_metadata(&worktree) else {
+        return Vec::new();
+    };
+    let mut files = std::collections::BTreeSet::new();
+    for run in &meta.runs {
+        for f in &run.files {
+            files.insert(f.real_path.clone());
+        }
+    }
+    files.into_iter().collect()
 }
 
 // ─── 辅助：解析 provider/model ─────────────────────────────────────────────

@@ -8981,3 +8981,36 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: 界外安全路径（/tmp 等）yolo 也一律拒——静态层无法可靠区分界外是否危险，无人值守
   宁可拒不可错放；需写界外请预先把目录加进 permissions.json 的 paths 白名单或用 --workdir 纳入。
   这是 heb run（第二段）/ 评测框架（第三段）的前置依赖。
+
+### 2026-06-21 — 新增 `heb run` 一次性无人值守命令（评测 surface 基础）
+
+- **Why**: 评测 / 脚本化批量跑任务需要「一条命令阻塞跑完、直接拿结果 + 退出码」的非交互形态。
+  现有 `heb new` 是持久 daemon，靠 socket + `heb input/allow/answer` 交互驱动，无人值守跑不了。
+- **改动**:
+  - apps/cli/src/daemon.rs:
+    - 抽 `prepare_session(args)` 共用前置装配（provider/model 解析 + 建/连 session），`run`
+      与 `run_once` 共享，避免逻辑漂移
+    - `DaemonState` 加 `auto_resolve: Option<Arc<AutoResolveStats>>`（None=daemon 交互行为
+      不变；Some=无人值守）。`DaemonObserver::on_permission_request`/`on_question` 在 Some 时
+      不挂 pending、直接自动拒（reason 回灌 agent）/自动取消并计数
+    - `run_turn` 返回值 `Result<()>` → `Result<TurnOutcome>`（daemon 主循环忽略，行为不变）
+    - 新增 `run_once(RunOnceArgs)`：构造 state（auto_resolve=Some）→ 不起 socket → 跑一个
+      run_turn → 读 session.jsonl 末条 assistant + edits-worktree metadata 拼结果 → 退出码。
+      `--json` 时 stdout 末行打结构化结果对象（session_id/outcome/final_text/tool_calls/
+      files_changed/denied_approvals/cancelled_questions/duration_ms/error/exit_code）
+  - apps/cli/src/main.rs: 加 `Command::Run`（task + provider/model/workdir/mode/--yolo/
+    session-id/timeout/json/data-dir）。`--yolo` = `--mode yolo` 语法糖（conflicts_with mode）。
+    退出码 std::process::exit：完成 0 / 失败 1 / 超时 2 / 取消 130
+  - docs/heb-cli-debug.md: §2 命令表加 `heb run` + 与 `heb new` 区别 + `--json` schema；
+    修正 `heb mode` 过时文案（→ default/plan-mode/auto-mode/yolo）
+- **影响范围**: 仅 apps/cli（daemon + main + 文档）。`run_turn` 返回值改动对 daemon 主循环
+  透明（仍 `if let Err` 忽略 Ok 值）。`DaemonState` 加字段，纯 additive，IPC 协议无变化。
+- **验证**: cargo build -p hebbian-cli 无 warning；heb run 端到端（阶段 B）：① --yolo --json
+  跑「Write 创建文件」→ exit 0、末行 JSON outcome=done/files_changed 正确、文件真生成；
+  ② default 模式跑「rm -rf 删除命令」→ permission_requested emit 2 次但 denied_approvals=2
+  自动拒不卡死、exit 0、final_text 显示 agent 理解「无人值守 rm 被拦」改用 test 探测；
+  ③ 无效 provider → exit 1；④ sleep 30 + --timeout 5 → exit 2 outcome=cancelled；
+  ⑤ 回归 heb new + heb input 基础链路仍正常（run_turn 改返回值没破坏 daemon）。
+- **留尾巴**: run_once 暂不注册 wakeup resume_handler——一次性任务若用 Task(run_in_background=true)
+  挂起后不会被后台完成唤醒（outcome=Suspended 即退，exit 0）。评测任务应在单 run 内完成，
+  暂不需要；后续若要支持长跑后台子任务再补。是第三段评测框架（shell out heb run --json）的依赖。

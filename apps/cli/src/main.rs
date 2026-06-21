@@ -71,6 +71,49 @@ enum Command {
         data_dir: Option<PathBuf>,
     },
 
+    /// 一次性跑完一个 agent 任务并退出（无人值守：不监听 socket、审批自动拒、提问自动取消）。
+    /// 退出码：完成 0 / 失败 1 / 超时 2 / 取消 130。`--json` 时结尾打一行结构化结果。
+    Run {
+        /// 任务文本（作为首条 user message）
+        task: String,
+
+        /// provider id 或 name，支持 name/model_id 格式
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// model id（也可写在 --provider name/model_id 里）
+        #[arg(long, short = 'm')]
+        model: Option<String>,
+
+        /// 工作目录
+        #[arg(long)]
+        workdir: Option<PathBuf>,
+
+        /// 运行模式：default | plan-mode | auto-mode | yolo（无人值守建议 yolo）
+        #[arg(long = "mode", default_value = "default")]
+        run_mode: String,
+
+        /// `--yolo` = `--mode yolo` 的简写（与 --mode 互斥）
+        #[arg(long, conflicts_with = "run_mode")]
+        yolo: bool,
+
+        /// 连接已有 session（不填则新建）
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// 整个 run 的墙钟超时（秒），不填不限时
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        /// 结尾额外打一行结构化结果 JSON（给评测框架解析）
+        #[arg(long)]
+        json: bool,
+
+        /// 数据目录（默认 ~/.hebbian）
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+
     /// 发送用户输入（有活跃 run 时自动注入，无则开新 run）
     Input { session_id: String, text: String },
 
@@ -166,6 +209,36 @@ async fn main() -> Result<()> {
                 data_dir,
             })
             .await
+        }
+
+        Command::Run {
+            task,
+            provider,
+            model,
+            workdir,
+            run_mode,
+            yolo,
+            session_id,
+            timeout,
+            json,
+            data_dir,
+        } => {
+            let run_mode = if yolo { "yolo".to_string() } else { run_mode };
+            let code = daemon::run_once(daemon::RunOnceArgs {
+                base: daemon::DaemonArgs {
+                    session_id,
+                    provider,
+                    model,
+                    workdir,
+                    run_mode,
+                    data_dir,
+                },
+                task,
+                timeout_secs: timeout,
+                json,
+            })
+            .await?;
+            std::process::exit(code);
         }
 
         Command::Input { session_id, text } => {

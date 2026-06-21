@@ -53,15 +53,38 @@ heb deny-feedback $SID perm_xxx "改用 Edit 工具"   # 拒绝并把反馈塞�
 | 命令 | 作用 | 何时用 |
 |------|------|--------|
 | `heb new [--session-id SID] [--provider P] [--model M] [--workdir DIR] [--mode MODE] [--data-dir DIR]` | 起 daemon，新建或连接 session | 一切的入口 |
+| `heb run "<task>" [--provider P] [--model M] [--workdir DIR] [--mode MODE \| --yolo] [--session-id SID] [--timeout SECS] [--json] [--data-dir DIR]` | **一次性无人值守**跑完一个完整任务即退出（不监听 socket）。审批自动拒 + reason 回灌 agent、提问自动取消。退出码：完成 0 / 失败 1 / 超时 2 / 取消 130 | 评测 / 脚本化批量跑任务，无需交互 |
 | `heb input <SID> "<text>"` | 发用户输入。**自动判定**：无 active run 时开新 run；有 active run 时注入 pending 队列 | 提问、回答、补充上下文、流式中插队 |
 | `heb allow <SID> <RID> [scope]` | 批准权限审批。`scope ∈ {once,session,project,global}`，默认 `once` | 收到 `permission_requested` 后 |
 | `heb deny <SID> <RID>` | 拒绝审批（agent 收到工具失败结果） | 同上 |
 | `heb deny-feedback <SID> <RID> "<反馈>"` | 拒绝 + 把反馈作为工具结果回灌给 agent，引导改用别的方案 | 想纠正而不是终止 |
 | `heb answer <SID> <RID> "<value>" [--custom] [--cancel]` | 回答 agent 用 `AskFollowup` 工具问的问题 | 收到 `question_requested` 后 |
 | `heb stop <SID>` | 设 cancel flag，立刻中断当前 run | 跑飞了 / 死循环 |
-| `heb mode <SID> <MODE>` | 切换 run mode：`ask-before-edits / edit-automatically / plan-mode / auto-mode` | 下一轮起生效 |
+| `heb mode <SID> <MODE>` | 切换 run mode：`default / plan-mode / auto-mode / yolo` | 下一轮起生效 |
 | `heb ping <SID>` | 检测 daemon 存活，返回 `{"session_id":...}` | 写守护脚本 |
 | `heb list-sessions` | 扫 `~/.hebbian/cli-sockets/` 列出所有存活 daemon，自动清理死 socket | 多 AI 并发调试时发现其他 AI 起的 daemon |
+
+**`heb run` 与 `heb new` 的区别**：`heb new` 起一个**持久 daemon**（监听 socket，靠 `heb input/allow/answer` 交互驱动，适合调试 / 多轮）。`heb run` 是**一次性、无人值守**——起 in-process、跑一个 run、终态即退，没有 socket、不接交互审批。审批一律自动拒（reason 回灌 agent 让它换路子）、提问一律自动取消。配 `--yolo`（= `--mode yolo`）让界内编辑 + 命令全放、只拦 catastrophic 红线，无人值守一气呵成。
+
+**`heb run --json` 结果 schema**（stdout **最后一行**，前面是与 daemon 一致的 NDJSON 事件流）：
+
+```json
+{
+  "session_id": "...",
+  "outcome": "done | suspended | failed | cancelled",
+  "exit_code": 0,
+  "final_text": "最后一条 assistant 文本",
+  "tool_calls": 2,
+  "files_changed": ["/abs/path/changed.txt"],
+  "denied_approvals": 0,
+  "cancelled_questions": 0,
+  "duration_ms": 6698,
+  "error": null
+}
+```
+
+评测 / 脚本只需 `heb run ... --json | tail -n1 | jq` 抓最后一行。中间 NDJSON 事件可一并 tail 看实时进度。
+
 
 **`heb answer` 三种形态**：
 
