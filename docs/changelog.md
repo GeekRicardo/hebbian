@@ -9080,3 +9080,34 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   矩阵（最好容器化）+ 稳定的强模型 provider；KESv 类 provider 的空响应问题需单独排查（疑似
   中转层对大 context 的限制）。DeepSWE 官方榜用的也是 Docker harness，本地版定位为「能跑单条
   真实任务做冒烟 / 调试」，大规模评测仍建议接官方容器化 harness。
+
+### 2026-06-21 — SWE-bench Verified 批量评测：5 条真实任务 + 完整结果分析
+
+- **Why**: 单条任务不足以分析 agent「是 bug 还是效果不好」。跑一个 5 条的真实 mini 批次，
+  保留完整结果数据，逐条分析失败根因，给出有证据的结论。
+- **做了什么**: 用 fetch_swebench.py 拉 5 条 pytest 任务（v4.5~v6.2，`<15 min fix`），
+  deepseek-v4-pro 跑两轮（并发 c=2 与串行 c=1），完整保留报告 + agent 修复 diff。
+  产物：apps/eval/samples/EVAL-REPORT.md（结果表 + 逐条分析）、RESULTS-concurrent.json、
+  RESULTS-serial.json。
+- **真实结果数据**:
+  - 并发批次 c=2：**1/5 通过（20%）**（仅 5809 PASS）
+  - 串行批次 c=1：**3/5 通过（60%）**（5262 / 5809 / 7205 PASS）
+- **结果分析（是 bug 还是效果不好）**:
+  1. **3 个 PASS 的修复与官方 gold patch 逻辑完全一致**——5262 给 EncodedFile 加 mode
+     property 去 'b'、5809 把 bpaste lexer 改 'text'、7205 引入 saferepr 安全表示 fixture
+     参数（10 个 FAIL_TO_PASS 全过）。证明 agent + yolo + heb run 执行链完全跑通、改对了真实 bug。
+  2. **2 个 FAIL（6202/7982）是 agent 效果问题，不是框架 bug**：逐条看 model_io 的
+     `response.calls`，agent 用 Bash/Read 探索了（7982 跑 git log/show/diff 研究引入 bug 的
+     commit），但探索后**模型返回空 Done（finish=Stop）没进入 Edit 阶段**；agent loop 正确
+     重试 3 次仍空 Done，最终放弃。agent_outcome=done（正常结束，非崩溃/超时），src 零改动。
+  3. **单次运行方差大**：5262/7205 并发批次没改(FAIL)、串行批次改对(PASS)——同任务同 provider
+     仅批次不同结果差 3 倍，是 LLM agent 本质方差，严肃评测需 pass@k 多次采样。
+- **诚实纠正上一条**: 上一条把 KESv provider 的失败归因「空响应/限流」——那是分析时**把
+  `response.calls` 误当 `tool_calls` 字段找**导致的误判。本次用正确字段（type:"ToolCalls" +
+  calls[]）复核：所谓「空响应」多数是工具调用被漏读，真实失败是「模型探索后过早 Stop 不产出
+  Edit」。usage 的 output_tokens=0 是该 provider 中转层不回传 usage，不代表模型没输出。这是
+  评测数据分析的真实教训——字段解析错会得出完全相反的结论。
+- **影响范围**: 仅 apps/eval/samples（文档 + 报告数据），无代码改动。
+- **留尾巴**: 5 条是冒烟级样本，结论方向可信但样本量小；完整 SWE-bench Verified（500 条）+
+  pass@k 需容器化环境矩阵 + 更稳定的强 provider；6202/7982 这类「探索后不收尾」可探索 prompt
+  引导或换更强模型改善。
