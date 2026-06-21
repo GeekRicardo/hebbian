@@ -3,6 +3,7 @@ members = [
     "apps/desktop",
     "apps/cli",
     "apps/web-server",
+    "apps/eval",
     "crates/agent-core",
     "crates/model-gateway",
     "crates/observability",

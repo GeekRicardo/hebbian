@@ -1,0 +1,17 @@
+[
+  {
+    "type": "general",
+    "id": "write-hello-file",
+    "prompt": "用 Write 工具在当前工作目录创建一个文件 hello.txt，内容恰好是一行：hello hebbian。创建完简短说一句。",
+    "verify_cmd": "test \"$(cat hello.txt)\" = 'hello hebbian'",
+    "expect_exit": 0
+  },
+  {
+    "type": "general",
+    "id": "fix-add-function",
+    "prompt": "当前目录有个 add.py，里面的 add 函数实现错了（返回 a-b）。请把它改成正确的加法 a+b。",
+    "setup_cmd": "printf 'def add(a, b):\\n    return a - b\\n' > add.py && printf 'from add import add\\nassert add(2, 3) == 5\\nassert add(10, 7) == 17\\nprint(\"ok\")\\n' > test_add.py",
+    "verify_cmd": "python3 test_add.py",
+    "expect_exit": 0
+  }
+]

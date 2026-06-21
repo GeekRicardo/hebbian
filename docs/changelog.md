@@ -9014,3 +9014,33 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: run_once 暂不注册 wakeup resume_handler——一次性任务若用 Task(run_in_background=true)
   挂起后不会被后台完成唤醒（outcome=Suspended 即退，exit 0）。评测任务应在单 run 内完成，
   暂不需要；后续若要支持长跑后台子任务再补。是第三段评测框架（shell out heb run --json）的依赖。
+
+### 2026-06-21 — 新增评测框架 apps/eval（heb-eval，跑 SWE-bench/DeepSWE + 通用任务集）
+
+- **Why**: 需要一个能跑「任务集 → 批量执行 → 自动判分」的评测工具，用于 DeepSWE / SWE-bench
+  这类「给定代码库 + 问题 + 隐藏测试，让 agent 改代码使测试通过」的测评，量化 hebbian agent 能力。
+- **改动**:
+  - 新建 crate `hebbian-eval`（bin `heb-eval`），workspace 成员。**完全解耦**：shell out
+    `heb run --json`（第二段）跑每个任务、解析末行结果 JSON，**不直接依赖 agent_core**——
+    只依赖 clap/serde/serde_json/tokio/anyhow
+  - src/task.rs: 两种任务集格式（serde tag 区分）——`general`（prompt + verify_cmd + setup_cmd?）
+    / `swe`（repo + base_commit + problem_statement + test_patch + FAIL_TO_PASS + PASS_TO_PASS）
+  - src/runner.rs: 隔离 workdir（general 临时目录 / swe git clone+checkout）→ `heb run --yolo
+    --json --timeout` → 判分（general 跑 verify_cmd 比对退出码；swe 应用 test_patch + FAIL_TO_PASS
+    全转 pass + PASS_TO_PASS 全保持）
+  - src/report.rs: 汇总 { total, passed, pass_rate, by_instance[] } → 终端表格 + 可选 JSON 文件
+  - src/main.rs: clap `run --suite --provider --concurrency --timeout --heb-bin --work-root --out`；
+    Semaphore 控并发 + JoinSet 收集（零额外依赖，不引 futures）；有失败任务退出码 1（CI 友好）
+  - apps/eval/samples/: general.json（创建文件 + 修 add bug 两条）、swe.json（修 multiply bug）
+    + make-swe-repo.sh（运行前生成本地最小 git repo，base_commit 用 HEAD，不嵌套 git 进主仓库）
+  - 根 Cargo.toml workspace members 加 apps/eval
+  - docs/架构.md 新增 §17 评测框架（定位 / shell out 解耦 / 两格式 / 执行判分 / 隔离并发 /
+    边界）+ §13 决策行
+- **影响范围**: 新增独立 crate，不碰任何现有 crate（仅根 Cargo.toml 加成员）。零侵入。
+- **验证**: cargo check --workspace 过（eval 无 warning）；端到端（阶段 B，用真实 provider）：
+  ① general sample 2/2 pass（创建文件 + 修 add bug，并发 2、JSON 报告 + 终端表格正常）；
+  ② swe sample 1/1 pass（clone 本地 repo + agent 修 multiply bug + git apply 隐藏测试 +
+  FAIL_TO_PASS 转 pass）；③ 失败路径 sample → 正确报 FAIL + 退出码 1（判分不是永远 PASS）。
+- **留尾巴**: 真实 SWE-bench/DeepSWE 数据集需 git + 网络 + 目标仓库语言工具链（python/node/...），
+  本期 sample 用本地最小 repo 验证判分链路；真实数据集接入（下载 / 镜像 / 工具链容器化）留后续。
+  三段式任务（Yolo + heb run + eval）至此全部交付。

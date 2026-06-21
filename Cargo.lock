@@ -2170,6 +2170,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hebbian-eval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hebbian-web-server"
 version = "0.1.0"
 dependencies = [

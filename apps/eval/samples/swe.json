@@ -1,0 +1,12 @@
+[
+  {
+    "type": "swe",
+    "instance_id": "calc-multiply-bug",
+    "repo": "/tmp/heb-eval-swe-repo",
+    "base_commit": "HEAD",
+    "problem_statement": "calc.py 里的 multiply 函数实现错了：它返回 a + b，但应该返回 a * b（乘法）。请修复 multiply 函数，让它正确做乘法。",
+    "test_patch": "diff --git a/test_calc.py b/test_calc.py\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/test_calc.py\n@@ -0,0 +1,4 @@\n+from calc import multiply\n+assert multiply(3, 4) == 12\n+assert multiply(5, 6) == 30\n+print(\"ok\")\n",
+    "FAIL_TO_PASS": ["python3 test_calc.py"],
+    "PASS_TO_PASS": []
+  }
+]
