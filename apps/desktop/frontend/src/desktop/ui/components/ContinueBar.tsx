@@ -8,8 +8,9 @@ import { InputSuggestions } from "./InputSuggestions";
  * 上一轮正常完成后 agent_loop 清空它，本组件自然消失。
  *
  * 点击行为由全局设置 `continue_strategy` 决定：
- * - `resume_loop`（默认）：不加任何消息，原样再起一次 agent_loop（失败重发 / 截断续写）。
- * - `send_continue`：发一条「继续」消息再跑。
+ * - `send_continue`（默认）：发一条 user「继续」消息再跑。末尾天然是 user，
+ *   彻底避免 assistant prefill 400。
+ * - `resume_loop`：不加任何消息，原样再起一次 agent_loop（失败重发 / 截断续写）。
  * - `manual`：只把光标聚焦输入框，让用户改 prompt 再发。
  */
 export function ContinueBar({
@@ -22,7 +23,7 @@ export function ContinueBar({
   const pending = useStore((s) => s.currentSession?.pending_continue);
   const streamingMessageId = useStore((s) => s.streamingMessageId);
   const strategy = useStore(
-    (s) => s.appSettings?.general.continue_strategy ?? "resume_loop",
+    (s) => s.appSettings?.general.continue_strategy ?? "send_continue",
   );
   const sendUserMessage = useStore((s) => s.sendUserMessage);
 
@@ -39,12 +40,13 @@ export function ContinueBar({
       onFocusInput?.();
       return;
     }
-    if (strategy === "send_continue") {
-      onSend("继续");
+    if (strategy === "resume_loop") {
+      // 原样再起 agent_loop，不追加任何消息（末尾若是 assistant 靠重建层补 user）。
+      void sendUserMessage("", [], null, { skipOptimisticUser: true, continueRun: true });
       return;
     }
-    // resume_loop（默认）：原样再起 agent_loop，不追加任何消息。
-    void sendUserMessage("", [], null, { skipOptimisticUser: true, continueRun: true });
+    // send_continue（默认）：发一条真实「继续」user message——末尾天然是 user。
+    onSend("继续");
   };
 
   return (

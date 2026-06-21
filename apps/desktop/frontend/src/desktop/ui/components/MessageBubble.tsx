@@ -41,6 +41,7 @@ import {
   BookOpen,
   NotebookPen,
   Square,
+  Smartphone,
 } from "lucide-react";
 import type {
   Message,
@@ -1961,48 +1962,16 @@ function isRequestFailureText(text: string) {
 const requestFailureMarkdownClass =
   "block w-full max-w-full box-border whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-[1.45]";
 
-// 工具调用 XML 漏进正文的检测（与后端 sanitize_tool_xml_leak 同一现象，架构 §4.3.3）：
+// 工具调用 XML 漏进正文的清洗（与后端 sanitize_tool_xml_leak 同一现象，架构 §4.3.3）：
 // 模型偶发把本该走结构化 function-calling 的 `<invoke>` / `<function_calls>` 整块
-// 写进正文。后端已把它从「喂模型的历史」剥掉，但落盘的展示文本仍留着——直接渲染会是
-// 一坨吓人的裸 XML。这里把残骸切出来，正文照常 markdown，残骸折叠成一句警示。
+// 写进正文。后端已把它从「喂模型的历史」剥掉，展示层也直接丢弃残骸——不渲染、不提示，
+// 当作这段不存在（残骸对用户没有任何信息价值）。
 const TOOL_XML_LEAK_RE =
   /\n?[ \t]*(?:call|court)?[ \t]*\n?[ \t]*<\s*(?:function_calls|invoke)\b/i;
 
-function splitToolXmlLeak(text: string): { clean: string; leaked: string | null } {
+function stripToolXmlLeak(text: string): string {
   const m = TOOL_XML_LEAK_RE.exec(text);
-  if (!m) return { clean: text, leaked: null };
-  return {
-    clean: text.slice(0, m.index).trimEnd(),
-    leaked: text.slice(m.index).trim(),
-  };
-}
-
-function ToolXmlLeakNotice({ leaked }: { leaked: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="my-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[12px] leading-relaxed text-amber-700 dark:text-amber-300">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 text-left font-medium"
-      >
-        <Ban className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1">
-          模型把一次工具调用误写成了文本，已忽略未执行
-        </span>
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-      </button>
-      {open && (
-        <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded bg-background/60 p-2 font-mono text-[11px] text-muted-foreground">
-          {leaked}
-        </pre>
-      )}
-    </div>
-  );
+  return m ? text.slice(0, m.index).trimEnd() : text;
 }
 
 function ReasoningBlock({
@@ -2134,26 +2103,24 @@ function AssistantParts({
     <div className="space-y-2">
       {parts.map((part) => {
         if (part.type === "text") {
-          // 工具调用 XML 漏进正文时，把残骸切出来折叠成警示，正文照常渲染。
-          const { clean, leaked } = splitToolXmlLeak(part.text);
+          // 工具调用 XML 残骸直接丢弃——不渲染、不提示。清洗后若整段为空则跳过
+          // （流式中仍显示光标）。
+          const clean = stripToolXmlLeak(part.text);
+          if (!clean && !streaming) return null;
           return (
-            <div key={part.key}>
-              {(clean || !leaked) && (
-                <div
-                  className={cn(
-                    "markdown-segment",
-                    isRequestFailureText(clean) && requestFailureMarkdownClass
-                  )}
-                >
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={markdownComponents}
-                  >
-                    {clean || (streaming ? "▍" : "")}
-                  </ReactMarkdown>
-                </div>
+            <div
+              key={part.key}
+              className={cn(
+                "markdown-segment",
+                isRequestFailureText(clean) && requestFailureMarkdownClass
               )}
-              {leaked && <ToolXmlLeakNotice leaked={leaked} />}
+            >
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {clean || (streaming ? "▍" : "")}
+              </ReactMarkdown>
             </div>
           );
         }
@@ -2327,6 +2294,25 @@ export const MessageBubble = memo(function MessageBubble({
     return (
       <div className="px-6 py-1 select-none">
         <MemoryWriteSummary items={message.meta.items} />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "channel_forward") {
+    const { kind, status } = message.meta;
+    const what = kind === "approval" ? "审批" : "问题";
+    const label =
+      status.state === "resolved"
+        ? `${what}已转发到微信 · ${status.outcome}`
+        : `${what}已转发到微信，等待回复`;
+    return (
+      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+        <div className="flex-1 h-px bg-border" />
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
+          <Smartphone className="w-3 h-3" />
+          <span className="font-medium text-foreground/70">{label}</span>
+        </div>
+        <div className="flex-1 h-px bg-border" />
       </div>
     );
   }

@@ -8895,3 +8895,58 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
     （覆盖而非新建），sessions/<sid>/plans 无目录。session.jsonl 最终 run_mode=Default 落盘正确
 - **留尾巴**: 前端 PlanTab 命令签名未变（仍按 session_id 拉），UI 渲染已有逻辑沿用，未做 Playwright
   目检；PlanMode enter 的草稿骨架文案 `# Plan\n\n_(drafting…)_` 较粗糙，后续可优化
+
+### 2026-06-20 — 微信转发审批「即写即落」：转发与回复都落进主对话 session.jsonl
+
+- **Why**: 上一条（微信不活跃转发审批）的转发是纯旁路——主对话 session.jsonl 完全不知道
+  「曾把一条审批/问题转发到微信」「机主在微信回了什么」。机主回到电脑只看到审批凭空通过/
+  被拒，没有痕迹，违背架构反复强调的「即写即落」。用户要求：转发出去的消息、以及微信回复
+  结果，都要作为主对话消息落盘，desktop 原有渲染照旧、只多一条「已转发到微信」痕迹。
+- **改动**:
+  - 存储模型: `sessions.rs` 新增 `MessageMeta::ChannelForward{channel,kind,status}` +
+    `ChannelForwardKind`(Approval/Question) + `ChannelForwardStatus`(Pending/Resolved{outcome})；
+    新增 `append_channel_forward_marker`（落 Pending marker 返回 id）+
+    `resolve_channel_forward_marker`（按 id 原地改 Resolved，全量 save 重写）。marker 是
+    `Role::Marker`，不进 model transcript（rebuild `_ => {}` 跳过），仅 surface 渲染。
+  - 转发落盘: `channel_forward.rs` 转发前先 `append_channel_forward_marker` 落痕迹（仅
+    `bridge.can_forward()` 在线时），`DesktopHitlResolver` 带 session_id/marker_id，机主回复
+    落地 HitlState 后调 `resolve_channel_forward_marker` 写人话结论（已通过/已拒绝/选了：X）。
+  - 双端结算: 新增 `ChannelForwardState`（manage 进 app，`request_id→(session,marker)` 表）。
+    渠道回复 vs 电脑本地处理两端竞争，谁先到谁结算 marker 并移除表项，另一端跳过——只结算
+    一次；本地先处理结论记「已在电脑处理」。`bridge` 加 `can_forward()` 查询接口。
+  - 渲染: 前端 `types.ts` 加 channel_forward meta union；`MessageBubble.tsx` 加分隔线小条
+    （Smartphone 图标 +「审批/问题已转发到微信 · 结论」），样式同 reasoning_switch。
+- **影响范围**: agent-core(sessions 加 meta variant + 2 函数，serde tag 兼容)、channel-core
+  (bridge 加 can_forward)、desktop(channel_forward + lib manage + MessageBubble)、前端 types。
+  meta 走 serde 直接序列化无 DTO 层，desktop/hebweb 共用渲染。无破坏兼容。
+- **验证**: cargo test -p agent-core channel_forward_marker（落盘+原地resolve+不新增消息，
+  A/B 可翻转）；cargo check -p hebbian + channel-core 全过；tsc 全过。
+- **留尾巴**: 转发 marker 物理顺序依赖「审批在 ToolStep、assistant 段已 drain 落盘」前提
+  （§4.9.5），若未来审批时机前移到 assistant 流式途中需重新评估倒挂；真扫码端到端未验
+  （需机主离开电脑触发审批→微信回复→回电脑看 session.jsonl 痕迹更新为 Resolved）。
+- **关联**: 架构.md §7.5.1「即写即落」要点
+
+### 2026-06-20 — 续跑默认改「发继续消息」根治 prefill 400 + 删 invoke 漏出警示条
+
+- **Why**: 会话 202606180734-87c643bd 反复 400（"This model does not support assistant
+  message prefill. The conversation must end with a user message."）。根因：默认续跑策略
+  `resume_loop` 是「空 user + continue_run」，靠 transcript 重建层"偷偷补一条继续 user"
+  保证末尾是 user——这个兜底脆弱，任何重建边角漏掉就 400，且补的 user 不落盘、UI 看不到。
+  用户要求：重试就实实在在发一条 user message；另外上一条加的 invoke 漏出黄色警示条不要。
+- **改动**:
+  - crates/agent-core/src/storage/settings.rs: `ContinueStrategy` 默认从 `ResumeLoop`
+    改 `SendContinue`——发一条真实「继续」user message，末尾天然是 user，结构性根除
+    prefill 400，不依赖任何重建层兜底。新增 2 单测锁定默认值 + 老用户 resume_loop 保留
+  - apps/desktop/frontend/.../ContinueBar.tsx: 默认分支改走 `onSend("继续")`（发真实消息）；
+    `resume_loop` 降级为可选项（仍走 continueRun 空 user）
+  - apps/desktop/frontend/.../AppSettingsDialog.tsx: 下拉默认值 + 选项顺序更新，
+    「发一条继续消息（默认）」置顶，文案改为「默认发一条继续消息最稳」
+  - apps/desktop/frontend/.../MessageBubble.tsx: 删 `ToolXmlLeakNotice` 警示组件，
+    `splitToolXmlLeak` 改 `stripToolXmlLeak`——invoke/function_calls 残骸直接丢弃不渲染、
+    不提示（残骸对用户无信息价值）；清洗后整段为空则跳过（流式仍显示光标）
+- **影响范围**: agent-core settings 默认值（向下兼容，老配置保留）+ desktop 前端渲染；
+  无协议变更。注：transcript 层「末尾补 user」兜底（上次提交）保留作 resume_loop 的二道防线
+- **验证**: cargo test -p agent-core --lib 558/0（含新增 2 条 continue_strategy 测试）；
+  tsc noEmit + pnpm build 通过
+- **留尾巴**: `send_continue` 走普通 sendUserMessage，末尾天然是 user 属结构性保证，未用活
+  模型端到端复跑（Playwright 本机卡住）；UI 效果待本地 tauri dev 目检

@@ -88,12 +88,15 @@ impl AppLanguage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContinueStrategy {
-    /// 默认：直接用当前 transcript 原样再起一次 agent_loop，不追加任何隐式消息。
-    /// 失败请求→天然重发；截断→模型接着写。
+    /// 默认：主动发一条 user「继续」消息再跑。末尾天然是 user message，
+    /// 不依赖任何"重建时偷偷补 user"的兜底——是唯一能根除 assistant prefill
+    /// 400（"conversation must end with a user message"）的策略。
     #[default]
-    ResumeLoop,
-    /// 主动发一条 user「继续」消息再跑（明确推一把）。
     SendContinue,
+    /// 用当前 transcript 原样再起一次 agent_loop，不追加任何显式消息。
+    /// 失败请求→天然重发；截断→模型接着写。注意：末尾若是 assistant，
+    /// 靠 transcript 重建层补 user 兜底，不如 SendContinue 稳。
+    ResumeLoop,
     /// 不自动跑，只把光标聚焦输入框，让用户改 prompt 再发。
     Manual,
 }
@@ -416,6 +419,24 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.general.edit_backend, EditBackend::StringReplace);
         assert!(s.general.launch_at_login);
+    }
+
+    /// 续跑策略默认 = SendContinue：发一条真实「继续」user message，末尾天然是 user，
+    /// 是唯一能根除 assistant prefill 400 的策略。没存过该字段的老用户也用这个默认。
+    #[test]
+    fn continue_strategy_defaults_to_send_continue() {
+        assert_eq!(ContinueStrategy::default(), ContinueStrategy::SendContinue);
+        let json = r#"{"general":{"launch_at_login":false}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.general.continue_strategy, ContinueStrategy::SendContinue);
+    }
+
+    /// 存过 resume_loop 的用户保留原选择——默认值变更不覆盖已有配置。
+    #[test]
+    fn continue_strategy_respects_persisted_resume_loop() {
+        let json = r#"{"general":{"continue_strategy":"resume_loop"}}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.general.continue_strategy, ContinueStrategy::ResumeLoop);
     }
 
     #[test]
