@@ -38,18 +38,7 @@ import { toast } from "sonner";
 import { useToastStore } from "@/desktop/ui/store/useToastStore";
 import { api } from "@/desktop/bridge/tauri";
 import { appendOptimisticUserMessage } from "@/desktop/ui/store/sessionOptimism";
-import {
-  applyReasoningDelta,
-  applyTextDelta,
-  applyTextDone,
-  applyToolCallDelta,
-  applyToolDone,
-  applyToolOutputDelta,
-  applyToolStart,
-  cloneStreamingParts,
-  ensureToolPart,
-  finalizeOpenReasoning,
-} from "@/desktop/ui/store/streamingParts";
+import { applyEventToSlot } from "@/desktop/ui/store/slotReducer";
 import { type LiveTimelineItem } from "@/desktop/ui/components/liveTimelineOrder";
 import { shouldApplyCompactionResult } from "@/desktop/ui/components/compactingState";
 
@@ -182,41 +171,13 @@ function removeFromSet<T>(s: Set<T>, item: T): Set<T> {
   return next;
 }
 
-/** 从 record 删一个 key，返回新对象（key 不存在则原样返回）。 */
-function dropKey<V>(rec: Record<string, V>, key: string): Record<string, V> {
-  if (!(key in rec)) return rec;
-  const { [key]: _drop, ...rest } = rec;
-  return rest;
-}
-
-/**
- * 给 streamingParts 里 id===callId 的 tool_call part 设/清 `isJudging`
- * （AutoMode judge 评估中的黄色呼吸，架构 §4.4.4）。callId 空或找不到则原样返回。
- */
-function setPartJudging(
-  parts: StreamingAssistantPart[],
-  callId: string,
-  on: boolean
-): StreamingAssistantPart[] {
-  if (!callId) return parts;
-  let changed = false;
-  const next = parts.map((p) => {
-    if (p.type === "tool_call" && p.id === callId && Boolean(p.isJudging) !== on) {
-      changed = true;
-      return { ...p, isJudging: on };
-    }
-    return p;
-  });
-  return changed ? next : parts;
-}
-
 /**
  * 单个 session 在跑时的所有"软状态"（流式正文 / 推理 / 工具 / HITL）。
  * 全局字段（`streamingText` 等）只是 currentSession 这个槽的只读镜像。
  * 这样切到别的会话时，当前会话的状态不会被新会话的流冲掉，
  * 切回来还能看到原来的进度。
  */
-type SessionStream = {
+export type SessionStream = {
   requestId: string;
   streamingMessageId: string | null;
   streamingText: string;
@@ -265,6 +226,13 @@ type SessionStream = {
   modelRetry: { attempt: number; max: number; reason: string } | null;
   /** 自动压缩触发提示（L2）。`null` = 无提示。before/after_tokens 仅供显示。 */
   contextCompacted: { before_tokens: number; after_tokens: number } | null;
+  /**
+   * 本 ModelStep 起点（step_started{model}）时的 streaming 快照，供 model_retry 回退：
+   * 重试只丢失败 attempt 流出的残片、回到本 step 起点，保留多 Turn 共用 bubble 里之前
+   * 几轮已输出的文本与已执行的工具卡。纯 reducer 内部状态——不镜像到 UI、不参与渲染。
+   */
+  retryBaseText?: string;
+  retryBaseParts?: StreamingAssistantPart[];
 };
 
 export type SuspendedInfo = {
@@ -338,319 +306,8 @@ function trimToastText(s: string, limit = 160): string {
   return oneLine.length <= limit ? oneLine : oneLine.slice(0, limit) + "…";
 }
 
-function applyEventToSlot(slot: SessionStream, e: EngineEvent): SessionStream {
-  // 子 agent 事件：路由到对应 Task tool call 的 nested_parts（架构 §4.4.11.8）
-  const nestedCallId = "subagent_call_id" in e ? e.subagent_call_id : undefined;
-  if (nestedCallId) {
-    return {
-      ...slot,
-      streamingParts: applyNestedEvent(slot.streamingParts, nestedCallId, e),
-    };
-  }
-  if (e.type === "run_finished") {
-    return { ...slot, streamingParts: finalizeOpenReasoning(slot.streamingParts) };
-  }
-  if (e.type === "model_retry") {
-    // 重试中：保留已展示内容不变（用户仍能看到），仅设进度指示。
-    // 旧内容在新 attempt 的首个 delta 到达时由对应 handler 清掉再替换，
-    // 避免叠加；如果用户在重试间隙点了暂停，旧内容仍在 slot 里可供保存。
-    return {
-      ...slot,
-      modelRetry: { attempt: e.attempt, max: e.max, reason: e.reason },
-    };
-  }
-  if (e.type === "context_compacted") {
-    return {
-      ...slot,
-      contextCompacted: { before_tokens: e.before_tokens, after_tokens: e.after_tokens },
-    };
-  }
-  if (e.type === "text_delta") {
-    if (!e.text) return slot;
-    // 重试后首个 delta：从干净状态开始，不追加到旧 attempt 的残片后面。
-    const hadRetry = slot.modelRetry !== null;
-    return {
-      ...slot,
-      modelRetry: null,
-      streamingText: hadRetry ? e.text : slot.streamingText + e.text,
-      streamingParts: hadRetry
-        ? applyTextDelta([], e.text)
-        : applyTextDelta(slot.streamingParts, e.text),
-    };
-  }
-  if (e.type === "text_done") {
-    const { streamingText, streamingParts } = applyTextDone(
-      slot.streamingText,
-      slot.streamingParts,
-      e.full_text
-    );
-    if (streamingText === slot.streamingText && streamingParts === slot.streamingParts) {
-      return slot;
-    }
-    return { ...slot, streamingText, streamingParts };
-  }
-  if (e.type === "reasoning") {
-    const hadRetry = slot.modelRetry !== null;
-    return {
-      ...slot,
-      modelRetry: null,
-      streamingParts: hadRetry
-        ? applyReasoningDelta([], e.text)
-        : applyReasoningDelta(slot.streamingParts, e.text),
-    };
-  }
-  if (e.type === "tool_call_delta") {
-    const hadRetry = slot.modelRetry !== null;
-    return {
-      ...slot,
-      modelRetry: null,
-      streamingParts: applyToolCallDelta(
-        hadRetry ? [] : slot.streamingParts,
-        e,
-      ),
-    };
-  }
-  if (e.type === "tool_start") {
-    return { ...slot, streamingParts: applyToolStart(slot.streamingParts, e) };
-  }
-  if (e.type === "tool_done") {
-    return { ...slot, streamingParts: applyToolDone(slot.streamingParts, e) };
-  }
-  if (e.type === "tool_output_delta") {
-    return { ...slot, streamingParts: applyToolOutputDelta(slot.streamingParts, e) };
-  }
-  if (e.type === "run_suspended") {
-    return {
-      ...slot,
-      suspended: {
-        reason: e.reason,
-        resumesAtMs: e.resumes_at_ms ?? null,
-        waitingForTaskIds: e.waiting_for_task_ids ?? [],
-        suspendedAtMs: Date.now(),
-      },
-    };
-  }
-  if (e.type === "run_resumed") {
-    return { ...slot, suspended: null };
-  }
-  if (e.type === "permission_requested") {
-    const approval: PendingApproval = {
-      requestId: e.request_id,
-      toolName: e.tool_name,
-      input: e.input,
-      summary: e.summary,
-      risk: e.risk,
-      paths: e.paths ?? [],
-      kind: e.kind ?? "tool_call",
-      fingerprint: e.fingerprint ?? null,
-      commandSegments: e.command_segments ?? [],
-      segments: e.segments ?? [],
-      refuseRemember: e.refuse_remember ?? false,
-      plan: e.plan ?? null,
-    };
-    // AutoMode judge 会接管这条审批时（后端判定：AutoMode + 模型在白名单），**先不弹
-    // 审批框**——只给触发审批的工具卡片挂「judge 评估中」黄色呼吸，审批数据暂存进
-    // judgingRequests。judge 异步出结果：ALLOW/DENY 由 permission_resolved 清掉（从不
-    // 显示框），ASK 由 permission_auto_judged 把 approval 取出转入 pendingApproval 显形
-    // （架构 §4.4.4）。改用后端权威的 `auto_handled`，不靠前端 currentRunMode 推断。
-    if (e.auto_handled) {
-      const callId = e.call_id ?? "";
-      return {
-        ...slot,
-        streamingParts: callId
-          ? setPartJudging(slot.streamingParts, callId, true)
-          : slot.streamingParts,
-        judgingRequests: {
-          ...slot.judgingRequests,
-          [e.request_id]: { callId, approval },
-        },
-      };
-    }
-    if (slot.pendingApproval) {
-      return { ...slot, pendingApprovalQueue: [...slot.pendingApprovalQueue, approval] };
-    }
-    return { ...slot, pendingApproval: approval };
-  }
-  if (e.type === "permission_resolved") {
-    // 若这条审批曾被 judge 接管（黄色呼吸），先清掉呼吸 + 暂存。judge ALLOW/DENY
-    // 自动 resolve 时走这里，审批数据从 judgingRequests 丢弃，从不显示框。
-    const judging = slot.judgingRequests[e.request_id];
-    const baseParts = judging
-      ? setPartJudging(slot.streamingParts, judging.callId, false)
-      : slot.streamingParts;
-    const baseJudging = judging
-      ? dropKey(slot.judgingRequests, e.request_id)
-      : slot.judgingRequests;
-    if (slot.pendingApproval?.requestId === e.request_id) {
-      const next = slot.pendingApprovalQueue[0] ?? null;
-      return {
-        ...slot,
-        streamingParts: baseParts,
-        judgingRequests: baseJudging,
-        pendingApproval: next,
-        pendingApprovalQueue: slot.pendingApprovalQueue.slice(1),
-      };
-    }
-    return {
-      ...slot,
-      streamingParts: baseParts,
-      judgingRequests: baseJudging,
-      pendingApprovalQueue: slot.pendingApprovalQueue.filter(
-        (it) => it.requestId !== e.request_id
-      ),
-    };
-  }
-  if (e.type === "permission_auto_judged") {
-    if (e.decision === "deny" && (e.tool_name === "Edit" || e.tool_name === "Write")) {
-      toast.info(`自动拒绝：${e.tool_name}`, {
-        description: e.reason ?? undefined,
-        duration: 5000,
-      });
-    }
-    // judge 出结果 → 先清掉这条审批暂存的黄色呼吸（无论后续显形与否，judge 已定论）。
-    const judging = e.request_id ? slot.judgingRequests[e.request_id] : undefined;
-    const clearedParts = judging
-      ? setPartJudging(slot.streamingParts, judging.callId, false)
-      : slot.streamingParts;
-    // requires_human=false（judge 自动放行 / 自动拒）：只清呼吸，最终 resolve 由
-    // permission_resolved 兜底，这里不动 pendingApproval。
-    if (!e.requires_human) {
-      return { ...slot, streamingParts: clearedParts };
-    }
-    // requires_human=true（ASK / 普通 AutoMode 命令类 DENY）：把被 judge 接管而未显示、
-    // 暂存在 judgingRequests 的审批框显形——带上 judge 的 reason 转入 pendingApproval
-    // （已有框则排队），交用户最终拍板（架构 §4.4.4）。
-    const clearedJudging =
-      judging && e.request_id
-        ? dropKey(slot.judgingRequests, e.request_id)
-        : slot.judgingRequests;
-    const revealed: PendingApproval | null = judging
-      ? { ...judging.approval, autoJudgeReason: e.reason ?? null }
-      : null;
-    if (!revealed) {
-      // 容错：judgingRequests 里没暂存（理论上 auto_handled 必有），只清呼吸。
-      return { ...slot, streamingParts: clearedParts, judgingRequests: clearedJudging };
-    }
-    if (slot.pendingApproval) {
-      return {
-        ...slot,
-        streamingParts: clearedParts,
-        judgingRequests: clearedJudging,
-        pendingApprovalQueue: [...slot.pendingApprovalQueue, revealed],
-      };
-    }
-    return {
-      ...slot,
-      streamingParts: clearedParts,
-      judgingRequests: clearedJudging,
-      pendingApproval: revealed,
-    };
-  }
-  if (e.type === "step_started" || e.type === "step_finished") {
-    // Step 边界事件（架构 §4.2）：当前用于 metrics / 调试，UI 暂不渲染。
-    return slot;
-  }
-  if (e.type === "run_mode_changed") {
-    // 运行模式切换通知（架构 §10.2）：更新当前 RunMode 标签，状态栏 / 顶栏可消费。
-    return { ...slot, currentRunMode: e.to };
-  }
-  if (e.type === "turn_finished") {
-    // Turn 边界（架构 §3 / §4.2）：**只在本 Turn 期间真的发生过 user 插队**时才切
-    // bubble——与 chat.rs `had_pending_during_run` 落盘语义对齐：
-    //   - 无插队：整个 Run 累积成一条 assistant message（多 Turn 共用一个 bubble）
-    //   - 有插队：按 Turn 分段落盘，每段对应一个 assistant message
-    // 判定：assistantInsertPos 之后的 liveTimeline 里出现过**用户插队** → 切；
-    // 否则维持当前 streamingText / streamingParts 累积，下个 Turn 接着 stream。
-    // 系统通知（system_notification）不算插队——它是某 tool_call 的异步回应，由
-    // wakeup 排序钉到对应 assistant 段之后，不该触发 assistant 分段。
-    const hasPendingInjection = slot.liveTimeline
-      .slice(slot.assistantInsertPos)
-      .some(
-        (item) =>
-          item.kind === "user_injected" &&
-          item.message.meta?.type !== "system_notification"
-      );
-    if (!hasPendingInjection) return slot;
-    if (slot.streamingText.length === 0 && slot.streamingParts.length === 0) {
-      // 插队消息已挂在末尾但当前 Turn 没产出（罕见，例如审批拒绝直接终止）——
-      // 不冻结空 bubble，只把游标推过 timeline 末尾，下个 Turn 起新 streaming。
-      return { ...slot, assistantInsertPos: slot.liveTimeline.length };
-    }
-    const frozen: LiveTimelineItem = {
-      kind: "assistant_frozen",
-      id: `frozen-${slot.requestId}-${slot.liveTimeline.length}`,
-      text: slot.streamingText,
-      parts: slot.streamingParts,
-      created_at: Date.now(),
-    };
-    const next = [...slot.liveTimeline];
-    next.splice(slot.assistantInsertPos, 0, frozen);
-    return {
-      ...slot,
-      streamingText: "",
-      streamingParts: [],
-      liveTimeline: next,
-      assistantInsertPos: next.length,
-    };
-  }
-  if (e.type === "user_question_requested") {
-    const q: PendingQuestion = {
-      requestId: e.request_id,
-      question: e.question,
-      options: e.options,
-      multi: e.multi ?? false,
-      questions: e.questions ?? [],
-    };
-    if (slot.pendingQuestion) {
-      return { ...slot, pendingQuestionQueue: [...slot.pendingQuestionQueue, q] };
-    }
-    return { ...slot, pendingQuestion: q };
-  }
-  if (e.type === "user_question_answered") {
-    if (slot.pendingQuestion?.requestId === e.request_id) {
-      const next = slot.pendingQuestionQueue[0] ?? null;
-      return {
-        ...slot,
-        pendingQuestion: next,
-        pendingQuestionQueue: slot.pendingQuestionQueue.slice(1),
-      };
-    }
-    return {
-      ...slot,
-      pendingQuestionQueue: slot.pendingQuestionQueue.filter(
-        (it) => it.requestId !== e.request_id
-      ),
-    };
-  }
-  if (e.type === "todo_list_updated") {
-    // 整列表覆盖（架构 §4.4.6）
-    return { ...slot, todos: e.todos };
-  }
-  if (e.type === "plan_ready") {
-    // ExitPlanMode 落盘了一份新 plan；记下当前活跃 plan。后续 permission_requested
-    // 携带同一 plan 内容由 popup 直接消费。
-    return {
-      ...slot,
-      activePlan: {
-        plan_id: e.plan_id,
-        plan_path: e.plan_path,
-        markdown: e.plan_markdown,
-        summary: e.summary,
-      },
-    };
-  }
-  if (e.type === "plan_comment_added") {
-    const existing = slot.planComments[e.plan_id] ?? [];
-    return {
-      ...slot,
-      planComments: { ...slot.planComments, [e.plan_id]: [...existing, e.comment] },
-    };
-  }
-  // edit_snapshot_created / edit_reverted / edit_revert_failed 不挂 slot——
-  // editSnapshots 是 session-scoped 的持久化镜像（架构 §4.13），跟 run 生命周期
-  // 解耦。这三类事件在事件分发的上层另行写入 sessionEditSnapshots。
-  return slot;
-}
+// applyEventToSlot / applyNestedEvent / setPartJudging / dropKey 已抽到 slotReducer.ts
+// （单一源 + standalone 单测覆盖），useStore 直接 import 复用。
 
 /**
  * 从 session.active_plan 绝对路径反推前端 store 用的 activePlan 形状。
@@ -785,38 +442,6 @@ function appendUserInjectedMessage(
     ...slot,
     liveTimeline: [...slot.liveTimeline, { kind: "user_injected", message }],
   };
-}
-
-/**
- * 子 agent 事件路由（架构 §4.4.11.8 / P7）：把带 `subagent_call_id` 的事件
- * 追加到对应 Task tool call 的 `nested_parts` 里，而不是顶层 streamingParts。
- * 这样 Task 卡片能在展开时渲染子工具调用 / 子文本 / 子推理。
- */
-function applyNestedEvent(
-  parts: StreamingAssistantPart[],
-  callId: string,
-  event: EngineEvent
-): StreamingAssistantPart[] {
-  return parts.map((p) => {
-    if (p.type !== "tool_call" || p.id !== callId) return p;
-    const nested = p.nested_parts ?? [];
-    let newNested = nested;
-    if (event.type === "text_delta" && event.text) {
-      newNested = applyTextDelta(nested, event.text);
-    } else if (event.type === "reasoning") {
-      newNested = applyReasoningDelta(nested, event.text);
-    } else if (event.type === "tool_call_delta") {
-      newNested = applyToolCallDelta(nested, event);
-    } else if (event.type === "tool_start") {
-      newNested = applyToolStart(nested, event);
-    } else if (event.type === "tool_done") {
-      newNested = applyToolDone(nested, event);
-    } else if (event.type === "tool_output_delta") {
-      newNested = applyToolOutputDelta(nested, event);
-    }
-    if (newNested === nested) return p;
-    return { ...p, nested_parts: newNested };
-  });
 }
 
 /** 文件查看器里一个打开的文件：路径 + 是否固定。 */
@@ -2420,6 +2045,17 @@ export const useStore = create<AppState>((set, get) => ({
               const slot = state.sessionStreams[sessionId];
               // 槽已被替换（用户在同一会话又发了一条）或被清掉（run 已结束）→ 丢弃事件
               if (!slot || slot.requestId !== requestId) return state;
+              // judge 自动拒 Edit/Write 的提示 toast：reducer 保持纯净，副作用留在调用层。
+              if (
+                e.type === "permission_auto_judged" &&
+                e.decision === "deny" &&
+                (e.tool_name === "Edit" || e.tool_name === "Write")
+              ) {
+                toast.info(`自动拒绝：${e.tool_name}`, {
+                  description: e.reason ?? undefined,
+                  duration: 5000,
+                });
+              }
               const updated = applyEventToSlot(slot, e);
               if (updated === slot) return state;
               const isForeground = state.currentSession?.id === sessionId;

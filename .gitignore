@@ -59,3 +59,7 @@ image/
 .codegraph/
 apps/island-mac/.build/
 .worktrees/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
