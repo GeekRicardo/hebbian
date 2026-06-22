@@ -44,9 +44,10 @@ export function GoalResultSummary({
   }[kind];
 
   return (
-    <div className="flex w-fit max-w-full gap-2 text-[12px]">
-      {/* 彩色竖线：类似 markdown blockquote 的 |，只有它带色 */}
-      <div className={cn("w-0.5 shrink-0 rounded-full", style.bar)} />
+    <div className="flex w-fit max-w-full items-stretch gap-2 text-[12px]">
+      {/* 彩色竖线：类似 markdown blockquote 的 |，只有它带色。
+          self-stretch 保证它一根贯穿整块高度（标题 + reason + 目标小字），而非一行一截。 */}
+      <div className={cn("w-0.5 shrink-0 self-stretch rounded-sm", style.bar)} />
       <div className="min-w-0 py-0.5">
         <div className={cn("flex items-center gap-1.5 font-medium", style.titleColor)}>
           {style.icon}
