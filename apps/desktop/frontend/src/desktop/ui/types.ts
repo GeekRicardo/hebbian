@@ -184,6 +184,17 @@ export type MessageMeta =
   | {
       type: "memory_writes";
       items: MemoryWriteItem[];
+    }
+  // 架构 §7.5.1：机主不活跃时，这条审批/问题被转发到了聊天渠道（微信）。落一条 marker，
+  // 让机主回到电脑能看到「当时转发出去了、在渠道侧的结论是什么」。
+  | {
+      type: "channel_forward";
+      /** 渠道 id（wechat 等）。 */
+      channel: string;
+      /** 转发的是审批还是提问。 */
+      kind: "approval" | "question";
+      /** 处置状态：pending=已转发待回复；resolved=已处置，outcome 是人话结论。 */
+      status: { state: "pending" } | { state: "resolved"; outcome: string };
     };
 
 /** 当前 session 的上下文用量（来自 get_context_usage / compact_session） */
@@ -510,6 +521,8 @@ export interface AppSettings {
     edit_backend: "string-replace" | "hashline";
     /** Run 非正常结束后点「继续」的恢复方式（架构 §7.3）。 */
     continue_strategy?: "resume_loop" | "send_continue" | "manual";
+    /** 超链接点击去向：系统默认浏览器 / 内置浏览器（架构 §8.5）。 */
+    link_open_target?: "system" | "builtin";
     /** 离开电脑多少分钟后把待审批/待回答转发到渠道（微信）；0 = 关闭。 */
     channel_idle_forward_minutes?: number;
   };

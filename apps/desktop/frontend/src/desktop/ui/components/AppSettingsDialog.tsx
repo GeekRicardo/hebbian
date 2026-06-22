@@ -91,6 +91,7 @@ const PREVIEW_SETTINGS_FALLBACK: AppSettings = {
     log_enabled: false,
     edit_backend: "string-replace",
     continue_strategy: "resume_loop",
+    link_open_target: "system",
     channel_idle_forward_minutes: 5,
   },
   conversation: {
@@ -829,6 +830,28 @@ function GeneralPane({ draft, setDraft }: PaneProps) {
           <option value="send_continue">发一条「继续」消息（默认）</option>
           <option value="resume_loop">自动续跑</option>
           <option value="manual">手动续（聚焦输入框）</option>
+        </select>
+      </FieldRow>
+
+      <FieldRow
+        label="链接打开方式"
+        description="点击对话里的网页链接时，用系统默认浏览器打开，还是留在 Hebbian 的内置浏览器里打开"
+      >
+        <select
+          value={draft.general.link_open_target ?? "system"}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              general: {
+                ...draft.general,
+                link_open_target: e.target.value as "system" | "builtin",
+              },
+            })
+          }
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="system">默认浏览器</option>
+          <option value="builtin">内置浏览器</option>
         </select>
       </FieldRow>
 

@@ -9185,3 +9185,42 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   确认出口兜底两测修前 FAIL 修后 PASS；前端拆分逻辑 node 验证 + tsc + pnpm build 通过
 - **留尾巴**: stream 路径（providers/anthropic.rs:406）的 `!tools.is_empty()` 与 calls 非空等价
   （SSE 累积的是模型返回的 tool blocks），未改；UI 竖排修复待本地 tauri dev 目检
+
+### 2026-06-22 — 修复内置终端 vim/htop 全屏报 `Can't find variable: n`：弃用 WebGL renderer 改用 DOM renderer
+
+- **Why**: 用户反馈内置终端用 vim 打开文件报未捕获错误 `Can't find variable: n`。根因：组件用 WebGL renderer（`@xterm/addon-webgl`），其 try/catch 只兜住 addon 构造期与 `onContextLoss`，但 vim/htop 全屏重绘（alternate screen）是在后续渲染帧（RAF 循环）里抛异常，逃逸出 try，冒泡成 WKWebView 的 uncaught ReferenceError（minify 后变量名 `n`）。WKWebView（Tauri 在 macOS 的 webview）的 WebGL2 实现不可靠是业界共识。
+- **方案抉择**: 先试 `@xterm/addon-canvas`（Canvas 2D，不依赖 WebGL2），但发现 xterm 6.0.0 已移除 canvas renderer（upstream #5105），canvas addon 仅剩 xterm 5 的旧包（peer `^5.0.0`），硬塞进 6 会挂私有 `_core` API 崩。xterm 6 只剩两个渲染器：内建 DOM renderer（默认）+ WebGL addon。故最干净彻底的方案是直接用内建 DOM renderer——不 load 任何 renderer addon。DOM renderer 不依赖 GPU、绝对稳定，性能对终端日常使用（命令/日志/vim）足够；WebGL 那点加速对终端是边际收益，不值得拿稳定性赌 WKWebView 的 WebGL2。
+- **改动**:
+  - [apps/desktop/package.json](../apps/desktop/package.json): 移除 `@xterm/addon-webgl` 依赖。
+  - [apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx](../apps/desktop/frontend/src/desktop/ui/components/TerminalSurface.tsx): 删除 WebglAddon import、`TermView.webgl` 字段、mountTerm 里的 webgl 加载块与 unmountTerm 里的 `webgl?.dispose()`；改用 xterm 6 内建 DOM renderer（term.dispose 自动释放 addon）。
+  - [docs/内置终端-spec.md](内置终端-spec.md): §1.1/§6.3 的 addon 组合改为「FitAddon + Unicode11Addon + DOM renderer」，注明弃用 WebGL 的原因。
+- **影响范围**: 仅 apps/desktop 内置终端渲染层；不碰协议 / agent-core / storage。非破坏性。`pnpm exec tsc --noEmit` + `pnpm build` 通过。
+- **留尾巴**: 极重 IO 场景（大量高频输出刷屏）DOM renderer 理论上比 WebGL 慢，实测如出现卡顿可考虑收口为「DOM 默认 + 用户可选开 WebGL」。当前默认稳定优先，不预先做。
+
+### 2026-06-22 — 修复导入 Claude Code 对话时一次 run 的多次模型调用碎成多个 assistant 块
+
+- **Why**: 用户反馈导入 Claude Code 对话后，一次 run（一轮用户输入触发的完整 agent loop）里的每次模型调用都被渲染成一个独立的 assistant 气泡，没有合并。根因：Claude Code 的 jsonl 把一次 run 拆成多行 `assistant` 记录（每次模型调用一行，thinking / text / tool_use 还各占一行），中间夹 `tool_result` 的 user 行；而旧的 `parse_claude_jsonl` 对每一行 assistant 都 `messages.push` 成独立 Message。这违反了原生侧「一次 run = 一条 assistant message」语义（见 apps/desktop/src/chat.rs:558），所以导入后碎成一堆小块。
+- **改动**:
+  - [crates/agent-core/src/storage/import_claude.rs](../crates/agent-core/src/storage/import_claude.rs): 解析主循环引入 `current_assistant: Option<usize>` 游标记录当前 run 正在累积的 assistant 下标；连续 assistant 行合并进同一条 Message（新增 `merge_assistant`：parts / tool_calls 按序追加、content 以空行衔接、created_at 保留 run 首行），只有真正的用户输入行（非 tool_result）才把游标清空、切断 run 另起一条。tool_result 回填逻辑不变，但不再切断 run。补一条 `merges_one_run_into_single_assistant` 单测固化「一个 run 多行 assistant + 中间 tool_result → 合并成一条；真用户输入 → 另起一条」。
+- **影响范围**: 仅 agent-core 导入侧解析（storage §6.2），不碰协议 / 前端 / 导出。导入产物形态对齐原生 session.jsonl，与导出 `export_claude` 保持对称（导出本就把一条 assistant 的多 tool_call 拆成多行，导入现在把多行合回一条）。非破坏性。
+- **验证**: 单测 4 个全过；真实文件端到端验证（含 26 行 assistant、2 次真实用户输入的会话）从碎成 26 条 Message 合并为 2 条 assistant（第二条聚合 14 parts / 11 tool_calls），现象消失。
+- **留尾巴**: 无。
+
+### 2026-06-22 — 新增「链接打开方式」设置，统一拦截聊天里所有超链接点击
+
+- **Why**: 用户痛点——聊天正文里的 Markdown 超链接在 Tauri webview 里被点击会把整个桌面 app 自身导航走（白屏，需重启），裸 `<a target=_blank>` 在 webview 里行为不可控。需要把所有可点击链接劫持，统一用「系统默认浏览器 / 内置浏览器」打开，并在设置里给一个下拉让用户选去向。
+- **根因与方案**: Markdown 链接渲染散落两处——公共 `MarkdownRenderer` 与 `MessageBubble` 各维护一份 `markdownComponents`，后者只配了 `pre: CodeBlock` 没有 `<a>` 拦截，所以聊天正文链接根本没被管。最干净的彻底改法是让 `markdownComponents` 唯一化：`MarkdownRenderer` 导出它（内含 `MarkdownAnchor` 拦截），`MessageBubble` 删本地副本改 import 复用，从根上杜绝「配置分叉漏掉拦截」。去向是 UI 偏好，与 `continue_strategy` 同类——后端只存 `general.link_open_target` 字段，由 surface 分流，不碰 agent_loop / 协议。
+- **改动**:
+  - [crates/agent-core/src/storage/settings.rs](../crates/agent-core/src/storage/settings.rs): `GeneralSettings` 加 `link_open_target` 字段 + 新枚举 `LinkOpenTarget { System(默认) | Builtin }`（snake_case 序列化）。
+  - [apps/desktop/frontend/src/desktop/ui/lib/openLink.ts](../apps/desktop/frontend/src/desktop/ui/lib/openLink.ts)（新增）: 公共 `openLink(url, target?)`——target 省略时读全局设置；system 档走 `@tauri-apps/plugin-opener`（非 Tauri 回退 `window.open`），builtin 档经 store 信号 `requestBrowserNavigate` 驱动内置浏览器。
+  - [MarkdownRenderer.tsx](../apps/desktop/frontend/src/desktop/ui/components/MarkdownRenderer.tsx): 加 `MarkdownAnchor`（preventDefault → openLink），导出 `markdownComponents`。
+  - [MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 删本地 `markdownComponents` 与本地 `openSystemBrowser`，改复用 MarkdownRenderer 导出 + openLink；FetchHeader / Web 搜索结果链接一并走配置。
+  - [store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 加 `browserNavigateRequest { url, tick }` 信号通道 + `requestBrowserNavigate`；normalizeAppSettings 补 `link_open_target` 默认 system。
+  - [RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 监听导航信号 → 展开工作台并切到 browser tab。
+  - [BrowserPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/BrowserPanel.tsx): 监听导航信号 → `loadUrl(url, "user")`；prevRef 初值 0 解决「面板懒挂载、首次点链接才 mount，会错过首个信号」的时序问题。
+  - [AppSettingsDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/AppSettingsDialog.tsx): 通用页加「链接打开方式」下拉（默认浏览器 / 内置浏览器）+ fallback 默认。
+  - [types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): `AppSettings.general` 加 `link_open_target`。
+  - [docs/架构.md](架构.md): §8.5 追加第 6 条记录链接去向收口的设计。
+- **影响范围**: agent-core settings（加字段，向后兼容——老 settings.json 缺该 key 时 serde default = System）+ Desktop/hebweb 前端链接渲染层。`path:line` 代码引用语义是「打开文件」走内置编辑器，不在本次拦截范围。OAuthDialog 仍走自己独立的 `openSystemBrowser`（OAuth 授权必须系统浏览器，刻意不接入下拉）。非破坏性。
+- **验证**: `cargo check -p agent-core` + `cargo check -p hebbian` 通过；`pnpm exec tsc --noEmit` 零报错；`pnpm build` 通过。端到端：hebweb 的 WebSocket 长连接会让 playwright 每条命令末尾 snapshot 等不到 networkidle 而超时，UI 点击链路未能在本环境跑通；待本地 `pnpm tauri dev` 目检：①设置通用页下拉可切换并落盘；②聊天链接点击在两档下分别走系统/内置浏览器、且不再把 app 导航走。
+- **留尾巴**: 内置浏览器导航的 E2E 未在 hebweb 跑通（surface 限制，非功能缺陷），需 Desktop dev 模式手动验证两档行为与设置落盘。

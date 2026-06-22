@@ -52,6 +52,10 @@ pub struct GeneralSettings {
     /// Run 非正常结束后，ContinueBar 上点 continue 的恢复方式（架构 §7.3）。
     #[serde(default)]
     pub continue_strategy: ContinueStrategy,
+    /// 聊天正文 / 工具卡片里的超链接点击去向（架构 §8.5）。`System`（默认）= 系统默认
+    /// 浏览器；`Builtin` = 内置浏览器 tab。纯 UI 偏好，后端只存储，由 surface 据此分流。
+    #[serde(default)]
+    pub link_open_target: LinkOpenTarget,
     /// 启动时自动打开浏览器 DevTools（F12）。手动改配置文件开启，默认关闭。
     #[serde(default)]
     pub open_devtools: bool,
@@ -101,6 +105,17 @@ pub enum ContinueStrategy {
     Manual,
 }
 
+/// 超链接点击去向（架构 §8.5）。纯 UI 偏好——后端只存储，由 surface 据此分流。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkOpenTarget {
+    /// 默认：交给系统默认浏览器打开。
+    #[default]
+    System,
+    /// 在内置浏览器 tab 里打开。
+    Builtin,
+}
+
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
@@ -111,6 +126,7 @@ impl Default for GeneralSettings {
             log_enabled: false,
             edit_backend: EditBackend::default(),
             continue_strategy: ContinueStrategy::default(),
+            link_open_target: LinkOpenTarget::default(),
             open_devtools: false,
             channel_idle_forward_minutes: default_channel_idle_forward_minutes(),
         }

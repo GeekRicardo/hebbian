@@ -308,6 +308,18 @@ export function BrowserPanel({ active, obscured = false }: { active: boolean; ob
     loadUrl(autoOpenUrl, "auto");
   }, [currentSessionId, cur.autoFollow, cur.followed, autoOpenUrl, patchInst, loadUrl]);
 
+  // 点链接选了「内置浏览器」打开（架构 §8.5）：openLink 经 store 信号把 url 送来，
+  // 这里当 user 档导航（与手动输地址同语义）。prevRef 初始为 0：本组件懒挂载，首次
+  // 点链接才 mount，mount 时 tick 已自增到 ≥1，prev=0 ≠ tick 故首帧立即消费这次请求；
+  // 切走只隐藏不卸载，不会重放历史请求。
+  const browserNavReq = useStore((s) => s.browserNavigateRequest);
+  const prevNavTickRef = useRef(0);
+  useEffect(() => {
+    if (browserNavReq.tick === prevNavTickRef.current) return;
+    prevNavTickRef.current = browserNavReq.tick;
+    if (browserNavReq.url) loadUrl(browserNavReq.url, "user");
+  }, [browserNavReq, loadUrl]);
+
   const submitUrl = (e: FormEvent) => {
     e.preventDefault();
     loadUrl(draftUrl, "user");

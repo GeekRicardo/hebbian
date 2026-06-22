@@ -117,6 +117,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       shell: settings.general.shell ?? null,
       edit_backend: settings.general.edit_backend ?? "string-replace",
       continue_strategy: settings.general.continue_strategy ?? "resume_loop",
+      link_open_target: settings.general.link_open_target ?? "system",
     },
   };
 }
@@ -773,6 +774,12 @@ interface AppState {
    *  变化 → 展开 + 滚动高亮。只由实时事件驱动，打开历史对话 / 回退都不设置，
    *  从根上避免「重启后打开任意对话误弹」。 */
   expandEditsRunId: string | null;
+
+  /** 一次性「请在内置浏览器打开这个 url」信号（架构 §8.5）。openLink 的内置档点击时
+   *  自增 tick 并带上 url；RightSidebar 监听 tick 变化 → 切到 browser tab，BrowserPanel
+   *  监听 → loadUrl 导航。tick 保证同一 url 也能重复触发。 */
+  browserNavigateRequest: { url: string; tick: number };
+  requestBrowserNavigate: (url: string) => void;
 
   /**
    * 文件查看器（中间列）：按对话隔离的打开文件。纯 UI 态，不持久化（重启清空）。
@@ -2336,6 +2343,10 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ collapseRightSidebarTick: s.collapseRightSidebarTick + 1 }));
   },
   expandEditsRunId: null,
+  browserNavigateRequest: { url: "", tick: 0 },
+  requestBrowserNavigate(url) {
+    set((s) => ({ browserNavigateRequest: { url, tick: s.browserNavigateRequest.tick + 1 } }));
+  },
   openFilesBySession: {},
   activeFileBySession: {},
   editorSelectionRef: null,

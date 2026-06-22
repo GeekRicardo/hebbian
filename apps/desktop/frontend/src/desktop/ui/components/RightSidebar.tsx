@@ -220,6 +220,17 @@ export function RightSidebar({
     setCollapsed(true);
   }, [collapseTick]);
 
+  // 点链接选了「内置浏览器」打开（架构 §8.5）→ 切到 browser tab 并展开。实际导航由
+  // BrowserPanel 监听同一信号执行；这里只负责把 tab 露出来，否则用户看不到打开了哪。
+  const browserNavTick = useStore((s) => s.browserNavigateRequest.tick);
+  const prevBrowserNavTickRef = useRef(browserNavTick);
+  useEffect(() => {
+    if (browserNavTick === prevBrowserNavTickRef.current) return;
+    prevBrowserNavTickRef.current = browserNavTick;
+    setCollapsed(false);
+    setTab("browser");
+  }, [browserNavTick]);
+
   useEffect(() => {
     setWidth(loadWidthForTab(tab));
   }, [tab, loadWidthForTab]);

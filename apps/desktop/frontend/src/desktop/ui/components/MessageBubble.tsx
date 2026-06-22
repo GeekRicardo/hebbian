@@ -1,6 +1,4 @@
 import { createContext, memo, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { isTauri } from "@/desktop/bridge/transport";
-import { openUrl as openExternalUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -65,7 +63,8 @@ import { FOCUS_TOOL_CALL_EVENT } from "@/desktop/ui/lib/focusToolCall";
 import { toast } from "sonner";
 import { animations } from "@/assets/animations";
 import { LoopingWebm } from "@/desktop/ui/components/LoopingWebm";
-import { CodeBlock } from "@/desktop/ui/components/CodeBlock";
+import { markdownComponents } from "@/desktop/ui/components/MarkdownRenderer";
+import { openLink } from "@/desktop/ui/lib/openLink";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { MemoryWriteSummary } from "@/desktop/ui/components/MemoryWriteSummary";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
@@ -403,18 +402,6 @@ function statusLabel(status: ToolCallItem["status"]) {
   if (status === "done") return "完成";
   if (status === "running") return "执行中";
   return "生成参数";
-}
-
-async function openSystemBrowser(url: string) {
-  try {
-    await openExternalUrl(url);
-    return;
-  } catch (error) {
-    if (isTauri()) {
-      throw error;
-    }
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function formatReasoningLabel(
@@ -923,7 +910,7 @@ function FetchHeader({ call }: { call: ToolCallItem }) {
   const open = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    void openSystemBrowser(url).catch(() => toast.error("打开链接失败"));
+    void openLink(url).catch(() => toast.error("打开链接失败"));
   };
   return (
     <div className="flex min-h-8 items-center gap-2 border-b border-border bg-muted/30 px-2 text-[13px] text-muted-foreground">
@@ -1089,7 +1076,7 @@ function SearchResults({
           if (!maybeUrl) return;
           event.preventDefault();
           event.stopPropagation();
-          void openSystemBrowser(maybeUrl).catch(() =>
+          void openLink(maybeUrl).catch(() =>
             toast.error("打开链接失败")
           );
         };
@@ -1946,11 +1933,8 @@ function ToolCallRow({
   );
 }
 
-// CodeBlock / extractText 已抽到 ./CodeBlock 共享给 PlanTab / MarkdownRenderer 等。
-// markdownComponents 也复用一份配置，避免本文件再单独维护。
-const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
-  typeof ReactMarkdown
->["components"];
+// CodeBlock / extractText 已抽到 ./CodeBlock；markdownComponents（含链接拦截）抽到
+// ./MarkdownRenderer 唯一维护，本文件直接复用，避免配置分叉漏掉 <a> 拦截。
 
 // 把文本拆成「正文 + 末尾错误 marker」。失败时后端把 `[请求失败：HTTP 400 {...}]`
 // 附在 assistant 正文之后落盘。marker 里是超长无空格的 JSON——丢给 ReactMarkdown 会
