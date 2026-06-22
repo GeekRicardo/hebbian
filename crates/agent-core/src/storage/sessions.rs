@@ -95,6 +95,35 @@ pub enum MessageMeta {
     MemoryWrites {
         items: Vec<protocol::MemoryWriteItem>,
     },
+    /// 机主不活跃时，主对话的某条 HITL（审批 / 提问）被转发到聊天渠道（微信等）的痕迹
+    /// （架构 §7.5.1，2026-06-20）。物理 `Role::Marker`，不进 model transcript，仅供
+    /// surface 渲染一条「已转发到微信」分隔线小条，让机主回到电脑后知道这条审批/问题
+    /// 当时被转发出去、以及在渠道侧的最终处置。`status` 落盘后随渠道回复更新（pending →
+    /// resolved），让一条 marker 同时承载「转发」与「回复结果」两个事实。
+    ChannelForward {
+        /// 渠道 id（`wechat` 等）。
+        channel: String,
+        /// 转发的是审批还是提问。
+        kind: ChannelForwardKind,
+        /// 处置状态：转发即落 `Pending`，渠道回复到达后原地更新为 `Resolved`。
+        status: ChannelForwardStatus,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelForwardKind {
+    Approval,
+    Question,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ChannelForwardStatus {
+    /// 已转发，等待机主在渠道侧回复。
+    Pending,
+    /// 机主在渠道侧已处置，`outcome` 是人话结论（如「已通过」「已拒绝」「选了：右上角」）。
+    Resolved { outcome: String },
 }
 
 impl MessageMeta {
@@ -1901,6 +1930,65 @@ pub fn insert_switch_marker(data_dir: &Path, id: &str, meta: MessageMeta) -> App
     )
 }
 
+/// 落一条「已转发到渠道」的 marker（status=Pending），返回它的消息 id。
+/// 机主在渠道侧回复后，用这个 id 调 [`resolve_channel_forward_marker`] 把 status 改成
+/// Resolved（即写即落：转发与回复都成为 session.jsonl 的可回溯事实，架构 §7.5.1）。
+pub fn append_channel_forward_marker(
+    data_dir: &Path,
+    id: &str,
+    channel: String,
+    kind: ChannelForwardKind,
+) -> AppResult<String> {
+    let marker_id = new_id();
+    append_message(
+        data_dir,
+        id,
+        Message {
+            id: marker_id.clone(),
+            role: Role::Marker,
+            content: String::new(),
+            attachments: Vec::new(),
+            tool_calls: Vec::new(),
+            parts: Vec::new(),
+            created_at: now(),
+            meta: Some(MessageMeta::ChannelForward {
+                channel,
+                kind,
+                status: ChannelForwardStatus::Pending,
+            }),
+            subagent_call_id: None,
+            run_duration_ms: None,
+        },
+    )?;
+    Ok(marker_id)
+}
+
+/// 把某条 ChannelForward marker 的 status 从 Pending 更新为 Resolved（机主在渠道侧已处置）。
+/// 找不到该 marker（被压缩归档 / 截断）时静默返回 Ok——回复落地不应因痕迹丢失而失败。
+pub fn resolve_channel_forward_marker(
+    data_dir: &Path,
+    id: &str,
+    marker_id: &str,
+    outcome: String,
+) -> AppResult<()> {
+    let mut session = load(data_dir, id)?;
+    let mut changed = false;
+    for message in &mut session.messages {
+        if message.id != marker_id {
+            continue;
+        }
+        if let Some(MessageMeta::ChannelForward { status, .. }) = &mut message.meta {
+            *status = ChannelForwardStatus::Resolved { outcome };
+            changed = true;
+        }
+        break;
+    }
+    if changed {
+        save(data_dir, session)?;
+    }
+    Ok(())
+}
+
 /// 推理参数切换的 marker（thinking on/off / effort / 1M context）。
 /// 仅当 `from != to` 才该调用——上层负责对比并决定是否插入。
 pub fn insert_reasoning_switch_marker(
@@ -3289,5 +3377,56 @@ mod tests {
 
         let sensitive = search(&dir, "error \\d+", true, true).expect("search sensitive");
         assert!(sensitive.is_empty());
+    }
+
+    /// 转发痕迹即写即落（架构 §7.5.1）：转发时落 Pending marker，机主回复后原地
+    /// 更新为 Resolved——两个事实都成为 session.jsonl 可回溯内容，且重启后仍在。
+    #[test]
+    fn channel_forward_marker_persists_and_resolves() {
+        let dir = temp_data_dir("channel-forward-marker");
+        let session = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+
+        let marker_id = append_channel_forward_marker(
+            &dir,
+            &session.id,
+            "wechat".into(),
+            ChannelForwardKind::Approval,
+        )
+        .unwrap();
+
+        // 转发后：marker 落盘且为 Pending。
+        let after_forward = load(&dir, &session.id).unwrap();
+        let marker = after_forward
+            .messages
+            .iter()
+            .find(|m| m.id == marker_id)
+            .expect("转发 marker 必须落盘");
+        assert!(matches!(marker.role, Role::Marker));
+        assert!(matches!(
+            &marker.meta,
+            Some(MessageMeta::ChannelForward {
+                status: ChannelForwardStatus::Pending,
+                kind: ChannelForwardKind::Approval,
+                ..
+            })
+        ));
+
+        // 机主回复后：同一条 marker 原地更新为 Resolved，结论可读回。
+        resolve_channel_forward_marker(&dir, &session.id, &marker_id, "已通过".into()).unwrap();
+        let reloaded = load(&dir, &session.id).unwrap();
+        let resolved = reloaded
+            .messages
+            .iter()
+            .find(|m| m.id == marker_id)
+            .expect("更新后 marker 仍在");
+        match &resolved.meta {
+            Some(MessageMeta::ChannelForward {
+                status: ChannelForwardStatus::Resolved { outcome },
+                ..
+            }) => assert_eq!(outcome, "已通过"),
+            other => panic!("期望 Resolved，实际 {other:?}"),
+        }
+        // 不应新增消息——是原地更新而非追加。
+        assert_eq!(after_forward.messages.len(), reloaded.messages.len());
     }
 }

@@ -2902,6 +2902,7 @@ pub fn run() {
         .manage(branch::BranchState::new())
         .manage(terminal::TerminalState::default())
         .manage(Arc::new(wechat::WeChatState::default()))
+        .manage(Arc::new(channel_forward::ChannelForwardState::default()))
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {

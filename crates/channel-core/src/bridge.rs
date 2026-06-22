@@ -164,6 +164,13 @@ impl ChannelBridge {
         pending.questions.remove(request_id);
     }
 
+    /// 渠道是否就绪可转发（已登录运行 + 机主发过消息有回复目标）。
+    /// 调用方据此决定是否落「已转发」痕迹——避免渠道离线却落假痕迹。
+    pub fn can_forward(&self) -> bool {
+        self.channel.lock().unwrap().is_some()
+            && self.last_owner_target.lock().unwrap().is_some()
+    }
+
     fn forward_target(&self) -> Option<(Arc<dyn Channel>, OwnerTarget)> {
         let channel = self.channel.lock().unwrap().clone()?;
         let target = self.last_owner_target.lock().unwrap().clone()?;
