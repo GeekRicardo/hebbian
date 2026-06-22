@@ -1,9 +1,17 @@
 //! 反向：读 Claude Code 的会话文件，重建成本侧 Session（导入后可在本侧继续聊）。
 //!
-//! 与 [`super::export_claude`] 对称。难点同样在工具调用：Claude 把 `tool_use`（assistant）
-//! 与 `tool_result`（紧跟的 user）分成两行，本侧则把结果内联在 assistant 的工具调用里——
-//! 这里负责按 `tool_use_id` 把 result 回填到对应 assistant 消息，tool_result 行本身不产生
-//! 独立消息。
+//! 与 [`super::export_claude`] 对称。两处形态差异在这里抹平：
+//!
+//! 1. **工具结果内联**：Claude 把 `tool_use`（assistant）与 `tool_result`（紧跟的 user）
+//!    分成两行，本侧则把结果内联在 assistant 的工具调用里——这里按 `tool_use_id` 把 result
+//!    回填到对应 assistant 消息，tool_result 行本身不产生独立消息。
+//!
+//! 2. **一次 run 合并成一条 assistant**：Claude 把一轮用户输入触发的整段 agent loop 拆成
+//!    多行 assistant（每次模型调用一行，thinking / text / tool_use 还会各占一行），中间夹
+//!    `tool_result` 的 user 行。本侧语义是「一次 run = 一条 assistant message」，run 内所有
+//!    reasoning / text / tool_call 按序铺进同一条的 `parts`。故这里把同一 run 内的连续
+//!    assistant 行合并进同一条 Message，只有真正的用户输入行（非 tool_result）才切断 run、
+//!    另起一条 assistant。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -137,6 +145,9 @@ pub fn parse_claude_jsonl(content: &str) -> AppResult<ParsedClaudeSession> {
     let mut model = String::new();
     // tool_use_id → 它所属 assistant 消息在 messages 里的下标，用于回填 result。
     let mut owner: HashMap<String, usize> = HashMap::new();
+    // 当前 run 正在累积的 assistant 消息下标。遇到真用户输入行清空（切断 run），
+    // 连续的 assistant 行合并进它；None 时下一行 assistant 新建一条。
+    let mut current_assistant: Option<usize> = None;
     let mut seq = 0i64; // 无 timestamp 时的单调兜底
 
     for line in content.lines() {
@@ -189,6 +200,8 @@ pub fn parse_claude_jsonl(content: &str) -> AppResult<ParsedClaudeSession> {
                 if text.trim().is_empty() {
                     continue;
                 }
+                // 真正的用户输入：切断当前 run，下一条 assistant 另起一条消息。
+                current_assistant = None;
                 if first_user_title.is_none() {
                     first_user_title = Some(truncate_title(&text));
                 }
@@ -204,11 +217,23 @@ pub fn parse_claude_jsonl(content: &str) -> AppResult<ParsedClaudeSession> {
                 if msg.content.is_empty() && msg.parts.is_empty() && msg.tool_calls.is_empty() {
                     continue;
                 }
-                let idx = messages.len();
+                // 同一 run 内的后续 assistant 行：并入正在累积的那条消息，保持
+                // 「一次 run = 一条 assistant message」；否则新建一条并记为当前 run 锚点。
+                let idx = match current_assistant {
+                    Some(idx) => {
+                        merge_assistant(&mut messages[idx], msg);
+                        idx
+                    }
+                    None => {
+                        let idx = messages.len();
+                        messages.push(msg);
+                        current_assistant = Some(idx);
+                        idx
+                    }
+                };
                 for id in tool_ids {
                     owner.insert(id, idx);
                 }
-                messages.push(msg);
             }
             _ => {} // system / attachment / mode / file-history-snapshot 等不进上下文
         }
@@ -315,6 +340,21 @@ fn assistant_message(v: &Value, ts: i64) -> (Message, Vec<String>) {
     msg.parts = parts;
     msg.tool_calls = tool_calls;
     (msg, tool_ids)
+}
+
+/// 把同一 run 内后续 assistant 行并入正在累积的消息：parts / tool_calls 按序追加，
+/// content（正文文本）以空行衔接。created_at 保留首行（run 起始时间）。
+fn merge_assistant(into: &mut Message, next: Message) {
+    if !next.content.is_empty() {
+        if into.content.is_empty() {
+            into.content = next.content;
+        } else {
+            into.content.push_str("\n\n");
+            into.content.push_str(&next.content);
+        }
+    }
+    into.parts.extend(next.parts);
+    into.tool_calls.extend(next.tool_calls);
 }
 
 /// 把工具结果回填到 assistant 消息里对应 id 的 tool_call 与 part。
@@ -428,5 +468,47 @@ mod tests {
         let long = "中".repeat(50);
         let out = truncate_title(&long);
         assert_eq!(out.chars().count(), TITLE_MAX + 1); // 40 + 省略号
+    }
+
+    // 一次 run 被 Claude 拆成多行 assistant（thinking / text / tool_use 各占一行，
+    // 不同模型调用 requestId 不同），中间夹 tool_result 的 user 行。导入须合并成一条。
+    const MULTI_TURN: &str = r#"{"type":"user","cwd":"/tmp/p","message":{"role":"user","content":[{"type":"text","text":"重构这个函数"}]},"timestamp":"2026-05-29T08:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"先读文件"}]},"timestamp":"2026-05-29T08:00:01.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我先看一下"}]},"timestamp":"2026-05-29T08:00:02.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"a.rs"}}]},"timestamp":"2026-05-29T08:00:03.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"fn a(){}"}]},"timestamp":"2026-05-29T08:00:04.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"改完了"},{"type":"tool_use","id":"toolu_2","name":"Edit","input":{"path":"a.rs"}}]},"timestamp":"2026-05-29T08:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"ok"}]},"timestamp":"2026-05-29T08:00:06.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"再加个测试"}]},"timestamp":"2026-05-29T08:00:07.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"}]},"timestamp":"2026-05-29T08:00:08.000Z"}"#;
+
+    #[test]
+    fn merges_one_run_into_single_assistant() {
+        let p = parse_claude_jsonl(MULTI_TURN).unwrap();
+        // user / assistant(run1) / user / assistant(run2) = 4 条。
+        assert_eq!(p.messages.len(), 4);
+        assert_eq!(p.messages[0].role, Role::User);
+        assert_eq!(p.messages[1].role, Role::Assistant);
+        assert_eq!(p.messages[2].role, Role::User);
+        assert_eq!(p.messages[3].role, Role::Assistant);
+
+        // run1：4 行 assistant 合并——thinking / text / tool_use / text / tool_use。
+        let run1 = &p.messages[1];
+        assert_eq!(run1.parts.len(), 5);
+        assert!(matches!(run1.parts[0], MessagePart::Reasoning { .. }));
+        assert!(matches!(run1.parts[1], MessagePart::Text { .. }));
+        assert!(matches!(run1.parts[2], MessagePart::ToolCall { .. }));
+        assert!(matches!(run1.parts[3], MessagePart::Text { .. }));
+        assert!(matches!(run1.parts[4], MessagePart::ToolCall { .. }));
+        // 两次工具调用的结果都已回填。
+        assert_eq!(run1.tool_calls.len(), 2);
+        assert_eq!(run1.tool_calls[0].result.as_deref(), Some("fn a(){}"));
+        assert_eq!(run1.tool_calls[1].result.as_deref(), Some("ok"));
+        // created_at 取 run 首行时间。
+        assert_eq!(run1.created_at, parse_iso_millis("2026-05-29T08:00:01.000Z").unwrap());
+
+        // run2：真用户输入后另起一条，不与 run1 混。
+        assert_eq!(p.messages[3].content, "好");
+        assert_eq!(p.messages[3].parts.len(), 1);
     }
 }
