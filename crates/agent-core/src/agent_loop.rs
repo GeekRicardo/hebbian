@@ -339,6 +339,40 @@ fn set_pending_inputs_accepting(flag: Option<&Arc<AtomicBool>>, accepting: bool)
     }
 }
 
+/// 把一次 `//goal` 裁决结果作为 `Role::Marker` append 到 session.jsonl（架构 §4.8.3）。
+/// 随会话持久化、重启可重建渲染；transcript rebuild 跳过 Marker，模型看不到。
+/// 落盘失败仅 warn，不阻断 goal 续跑 / 出 turn。
+fn append_goal_outcome_marker(
+    data_dir: &std::path::Path,
+    session_id: &str,
+    kind: &str,
+    condition: &str,
+    reason: &str,
+    iteration: u32,
+) {
+    use crate::storage::sessions::{self as sess_store, Message, MessageMeta, Role};
+    let marker = Message {
+        id: sess_store::new_id(),
+        role: Role::Marker,
+        content: String::new(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: Some(MessageMeta::GoalOutcome {
+            kind: kind.to_string(),
+            condition: condition.to_string(),
+            reason: reason.to_string(),
+            iteration,
+        }),
+        subagent_call_id: None,
+        run_duration_ms: None,
+    };
+    if let Err(e) = sess_store::append_message(data_dir, session_id, marker) {
+        tracing::warn!(error = %e, kind, "goal 裁决 marker 落盘失败，仅事件态可见");
+    }
+}
+
 #[tracing::instrument(
     name = "run",
     level = "info",
@@ -1027,6 +1061,14 @@ pub async fn run_loop(
                                     {
                                         tracing::warn!(error = %e, "goal 达成后清目标落盘失败");
                                     }
+                                    append_goal_outcome_marker(
+                                        dd,
+                                        sid,
+                                        "achieved",
+                                        &goal.condition,
+                                        &reason,
+                                        goal_iterations,
+                                    );
                                     emit(EventPayload::GoalAchieved {
                                         condition: goal.condition.clone(),
                                         reason,
@@ -1039,6 +1081,14 @@ pub async fn run_loop(
                                     {
                                         tracing::warn!(error = %e, "goal 判定不可达后清目标落盘失败");
                                     }
+                                    append_goal_outcome_marker(
+                                        dd,
+                                        sid,
+                                        "impossible",
+                                        &goal.condition,
+                                        &reason,
+                                        goal_iterations,
+                                    );
                                     emit(EventPayload::GoalImpossible {
                                         condition: goal.condition.clone(),
                                         reason,
@@ -1073,6 +1123,14 @@ pub async fn run_loop(
                                         iteration: goal_iterations,
                                         reason: reason.clone(),
                                     });
+                                    append_goal_outcome_marker(
+                                        dd,
+                                        sid,
+                                        "progress",
+                                        &goal.condition,
+                                        &reason,
+                                        goal_iterations,
+                                    );
                                     info!(iteration = goal_iterations, "goal 尚未达成，续跑");
                                     let wrapped = format!(
                                         "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<goal-feedback>\n目标尚未达成。{reason}\n继续推进，达成后会自动结束。\n</goal-feedback>"
@@ -2266,5 +2324,23 @@ mod tests {
         // Achieved 后目标被清空（落盘可见）。
         let reloaded = crate::storage::sessions::load(data_dir.path(), &session_id).unwrap();
         assert_eq!(reloaded.active_goal, None, "Achieved 后 active_goal 应清空");
+
+        // 每次裁决都落了一条 GoalOutcome marker（progress 一条 + achieved 一条），
+        // 供 UI 渲染成彩色竖线结果块、随会话持久化、重启可重建。
+        let goal_markers: Vec<&str> = reloaded
+            .messages
+            .iter()
+            .filter_map(|m| match &m.meta {
+                Some(crate::storage::sessions::MessageMeta::GoalOutcome { kind, .. }) => {
+                    Some(kind.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            goal_markers,
+            vec!["progress", "achieved"],
+            "应按序落 progress 与 achieved 两条 GoalOutcome marker"
+        );
     }
 }

@@ -67,6 +67,7 @@ import { markdownComponents } from "@/desktop/ui/components/MarkdownRenderer";
 import { openLink } from "@/desktop/ui/lib/openLink";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { MemoryWriteSummary } from "@/desktop/ui/components/MemoryWriteSummary";
+import { GoalResultSummary } from "@/desktop/ui/components/GoalResultSummary";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import {
   DiffViewer,
@@ -2283,6 +2284,20 @@ export const MessageBubble = memo(function MessageBubble({
     return (
       <div className="px-6 py-1 select-none">
         <MemoryWriteSummary items={message.meta.items} />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "goal_outcome") {
+    const { kind, condition, reason, iteration } = message.meta;
+    return (
+      <div className="px-6 py-1 select-none">
+        <GoalResultSummary
+          kind={kind}
+          condition={condition}
+          reason={reason}
+          iteration={iteration}
+        />
       </div>
     );
   }

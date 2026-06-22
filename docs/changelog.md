@@ -9236,3 +9236,17 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): 按钮文案改"拒绝并说明"；工具审批 + 计划审批两处反馈 textarea 加 onKeyDown ⌘/Ctrl+Enter 提交。
 - **影响范围**: agent-core dispatch（被拒回传文本，不改协议字段）+ permission_probe example + desktop 前端审批弹窗。回传文本是给模型看的内容，非协议结构，无兼容性破坏。
 - **留尾巴**: 未跑 CLI/desktop 端到端复现验证（用户要求直接提交）。
+
+### 2026-06-17 — `//goal` 裁决结果从 toast 改为落盘 marker（彩色竖线结果块）
+
+- **Why**: 用户要 goal 裁决结果像「本轮写入 N 条记忆」那样进消息流、可持久化，而非转瞬即逝的 toast。样式上要彩色竖线（类 markdown blockquote 的 `|`，只竖线带色）+ 一行小字标明是哪个 goal。排在记忆摘要之前。
+- **改动**:
+  - `crates/agent-core/src/storage/sessions.rs`: `MessageMeta` 加 `GoalOutcome { kind, condition, reason, iteration }` variant（仿 `MemoryWrites` 的 marker 范式）
+  - `crates/agent-core/src/agent_loop.rs`: goal 裁决三个分支（achieved/impossible/progress）在 emit 事件的同时 append 一条 `Role::Marker` + `GoalOutcome`；抽 `append_goal_outcome_marker` helper。集成测试补断言：reload 后按序有 progress+achieved 两条 marker
+  - 前端 `types.ts`: `MessageMeta` 加 `goal_outcome` variant
+  - 前端 `GoalResultSummary.tsx`（新建）: 彩色竖线结果块——achieved=绿/impossible=橙/progress=蓝，粗体标题 + judge reason + 底部「目标：<condition>」小字
+  - 前端 `MessageBubble.tsx`: 加 `goal_outcome` marker 渲染分支
+  - 前端 `useStore.ts`: 删掉 goal_progress/achieved/impossible 的 3 个 toast，改为 reload session（从落盘 marker 重建渲染，与 memory_extracted 同款）
+- **排序「goal 在记忆前」**: 无需额外逻辑——goal 裁决在 turn 收尾瞬间落盘、记忆抽取在 RunFinished 之后异步落盘，append 先后即渲染先后，goal 天然在前
+- **影响范围**: agent-core（meta + agent_loop）+ desktop 前端（4 文件 + 1 新组件）。纯 additive，desktop 整包编译通过、前端 tsc 0 error、goal 8 测试全过（含新 marker 断言）
+- **留尾巴**: heb CLI 仍未透传 goal 事件（同前条）；progress 每续跑一轮落一条 marker，长 goal 会有多条结果块（已与用户确认要完整可追溯）

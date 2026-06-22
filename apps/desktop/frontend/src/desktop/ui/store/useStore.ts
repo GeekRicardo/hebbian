@@ -1942,26 +1942,26 @@ export const useStore = create<AppState>((set, get) => ({
               get().handleDerivedEvent(e);
               return;
             }
-            // //goal 目标判定事件：session 级提示，不进 slot——判定在 turn 收尾时到达。
-            if (e.type === "goal_progress") {
-              toast.info(`目标推进中（第 ${e.iteration} 轮）`, {
-                description: e.reason,
-                duration: 5000,
-              });
-              return;
-            }
-            if (e.type === "goal_achieved") {
-              toast.success("目标达成 ✓", {
-                description: trimToastText(e.reason),
-                duration: 6000,
-              });
-              return;
-            }
-            if (e.type === "goal_impossible") {
-              toast.error("目标无法达成", {
-                description: trimToastText(e.reason),
-                duration: 8000,
-              });
+            // //goal 目标判定事件（架构 §4.8.3）：裁决在 turn 收尾时已落一条 GoalOutcome
+            // marker；前台正看着这个会话就 reload，从落盘 marker 重建成彩色竖线结果块（不弹 toast）。
+            if (
+              e.type === "goal_progress" ||
+              e.type === "goal_achieved" ||
+              e.type === "goal_impossible"
+            ) {
+              const sid = get().currentSession?.id;
+              if (sid) {
+                void api
+                  .getSession(sid, activeRequestForSession(get(), sid))
+                  .then((fresh) => {
+                    set((state) =>
+                      state.currentSession?.id === sid
+                        ? { currentSession: fresh }
+                        : state
+                    );
+                  })
+                  .catch(() => {});
+              }
               return;
             }
             // 轻量通知（架构 §4.4.4）：渲染成 toast，不进 slot。

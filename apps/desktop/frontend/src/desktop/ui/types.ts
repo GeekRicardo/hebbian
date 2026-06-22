@@ -185,6 +185,19 @@ export type MessageMeta =
       type: "memory_writes";
       items: MemoryWriteItem[];
     }
+  // 架构 §4.8.3：一次 //goal 裁决结果。goal judge 在 turn 收尾判 transcript 是否达成后
+  // 落一条 marker，渲染成带彩色竖线的结果块。落在记忆摘要之前。
+  | {
+      type: "goal_outcome";
+      /** achieved=达成 / impossible=判不可达 / progress=续跑一轮。 */
+      kind: "achieved" | "impossible" | "progress";
+      /** 该目标的完成条件原文，UI 标明是哪个 goal。 */
+      condition: string;
+      /** judge 给出的理由 / 还差什么。 */
+      reason: string;
+      /** 续跑轮次（progress 有意义）。 */
+      iteration: number;
+    }
   // 架构 §7.5.1：机主不活跃时，这条审批/问题被转发到了聊天渠道（微信）。落一条 marker，
   // 让机主回到电脑能看到「当时转发出去了、在渠道侧的结论是什么」。
   | {

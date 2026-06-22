@@ -95,6 +95,20 @@ pub enum MessageMeta {
     MemoryWrites {
         items: Vec<protocol::MemoryWriteItem>,
     },
+    /// `//goal` 一次裁决结果（架构 §4.8.3）。goal judge 在 turn 收尾判 transcript 是否
+    /// 满足完成条件后，把这条结果作为 `Role::Marker` append 到 session.jsonl，随会话持久化、
+    /// 重启可重建。落在记忆摘要之前（goal 裁决在 turn 结束瞬间、记忆抽取在 RunFinished 之后）。
+    /// transcript rebuild 对 `Role::Marker` 走 `_ => {}` 天然跳过，模型看不到它。
+    GoalOutcome {
+        /// 裁决类型：`achieved`（达成）/ `impossible`（判不可达）/ `progress`（续跑一轮）。
+        kind: String,
+        /// 该目标的完成条件原文，供 UI 标明是哪个 goal。
+        condition: String,
+        /// judge 给出的理由 / 还差什么。
+        reason: String,
+        /// 续跑轮次（仅 `progress` 有意义；终态恒为已累计的最终轮数）。
+        iteration: u32,
+    },
     /// 机主不活跃时，主对话的某条 HITL（审批 / 提问）被转发到聊天渠道（微信等）的痕迹
     /// （架构 §7.5.1，2026-06-20）。物理 `Role::Marker`，不进 model transcript，仅供
     /// surface 渲染一条「已转发到微信」分隔线小条，让机主回到电脑后知道这条审批/问题
