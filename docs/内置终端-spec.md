@@ -26,8 +26,8 @@ fanbox 的终端 = `@xterm/xterm 5.5` + `node-pty`，Electron IPC 通信。架�
 |---|---|---|
 | IPC 协议五件套：spawn / input / resize / kill + data / exit 推流 | `electron/main.js:260-310` | Tauri 命令 + 事件，§4 |
 | spawn env 兜底：`TERM=xterm-256color` + locale 非 UTF-8 时强设 `LANG=zh_CN.UTF-8`（GUI app 不继承 shell locale，中文路径变 `\M-^@` 乱码） | `electron/main.js:264-266` | 同款，Tauri app 同样不继承 |
-| shell 选择：`$SHELL` 兜底 `/bin/zsh`，不传 args（interactive 非 login） | `electron/main.js:262` | 同款 |
-| addon 组合：fit（自适应）+ unicode11（CJK 宽字符，必配 `unicode.activeVersion = '11'`）+ webgl（加速，contextLoss 时 dispose 回退 DOM） | `app.js:~250-295` | 同款 |
+| shell 选择：`$SHELL` 兜底 `/bin/zsh`，起 **login shell**（`-l`） | `electron/main.js:262` | **此处刻意与 fanbox 不同**：GUI app 进程只继承贫瘠的 launchd 环境，non-login shell 不跑 `/etc/zprofile`(`path_helper`) 与 `~/.zprofile`，会丢掉 Homebrew (`/opt/homebrew/bin`) 等 PATH，导致 brew 装的命令全 not found。起 login shell 才与系统终端（iTerm/Terminal.app 默认 login）一致。PTY 的 stdin 是 tty，shell 在 tty 上自动 interactive，故只加 `-l` 即 login+interactive（2026-06-22 changelog） |
+| addon 组合：fit（自适应）+ unicode11（CJK 宽字符，必配 `unicode.activeVersion = '11'`）+ **内建 DOM renderer**（不 load 任何 renderer addon） | `app.js:~250-295` | **此处刻意与 fanbox 不同**：原设计用 WebGL addon，但 WKWebView 的 WebGL2 在 vim/htop 全屏重绘时抛逃逸出 try 的渲染帧异常，整屏崩成 uncaught ReferenceError。xterm 6 已移除 canvas renderer，只剩 DOM(默认)+WebGL，故改用稳定的内建 DOM renderer（2026-06-22 changelog） |
 | `display:none` 期间滚动区算矮一屏（xterm 5.x upstream #5339）：切回时 `viewport.syncScrollArea(true)` + `scrollToBottom()` | `app.js:~430` | 我们 sidebar 切 tab 正是 display:none，必踩 |
 | 多行粘贴用 bracketed paste 包裹（`\x1b[200~…\x1b[201~`），防 shell 逐行执行 | `app.js:~133` | 同款 |
 | 字体读 CSS 变量 `--font-mono`，主题对象随应用皮肤切换 | `app.js:~252` | 同款 |
@@ -65,7 +65,7 @@ stagewise（AGPL-3.0，仅借鉴设计思路不抄代码）2026-05 发布了内�
 - **全局单例终端**：整个 app 一组终端，不随会话切换、不绑 session（§3）
 - RightSidebar 第「终端」tab 作为内嵌视图，内部多子终端 tab（新建 / 切换 / 关闭）
 - **popout 独立窗口**：像内置浏览器一样把终端弹出成独立可缩放窗口；PTY 单一真理源，内嵌与 popout 共享同一组终端（§4.5 / §6.5）
-- 真实 PTY shell（用户的 `$SHELL`，interactive），新建子终端时 cwd 默认当前会话 workdir（无则 `$HOME`）
+- 真实 PTY shell（用户的 `$SHELL`，**login shell** `-l`，保证 PATH 等环境与系统终端一致），新建子终端时 cwd 默认当前会话 workdir（无则 `$HOME`）
 - 终端键盘焦点策略（§5，本 spec 核心）
 - 选中自动复制、粘贴安全（bracketed paste）
 - Rust 端 raw 输出 ring buffer，前端重挂载 / webview reload / popout 切换后回放恢复画面
@@ -309,7 +309,8 @@ new Terminal({
   minimumContrastRatio: 4.5,
   theme: 跟应用深色主题的 ANSI 16 色映射,
 })
-// addons: FitAddon + Unicode11Addon(activeVersion='11') + WebglAddon(try/contextLoss 回退)
+// addons: FitAddon + Unicode11Addon(activeVersion='11')；renderer 用 xterm 6 内建 DOM
+// （不 load WebGL：WKWebView 的 WebGL2 全屏重绘崩，详见 §1.1）
 ```
 
 - resize：host 容器挂 `ResizeObserver` → `fit()` → `terminal_resize`（sidebar 拖宽时跟手）

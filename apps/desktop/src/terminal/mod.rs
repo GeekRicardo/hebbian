@@ -121,6 +121,24 @@ fn resolve_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
 }
 
+/// 该 shell 是否认 `-l`（login）参数。
+///
+/// GUI 启动的 app 进程只继承一份贫瘠的 launchd 默认环境，由它 spawn 的 non-login
+/// shell 仅跑 `~/.zshrc`，不跑 `/etc/zprofile`（`path_helper`）与 `~/.zprofile`——
+/// 而 Homebrew 的 `/opt/homebrew/bin`、`path_helper` 注入的 `/usr/local/bin` 等正出自
+/// 后者，缺它们会让 brew 装的命令全部「command not found」。起 login shell 才能与用户
+/// 日常的系统终端（iTerm / Terminal.app 默认就是 login）环境一致。
+///
+/// zsh/bash/sh/fish 都认 `-l`；其它冷门 shell 保守不加，避免它不识别该参数直接启动失败。
+fn shell_supports_login_flag(shell: &str) -> bool {
+    matches!(
+        std::path::Path::new(shell)
+            .file_name()
+            .and_then(|n| n.to_str()),
+        Some("zsh" | "bash" | "sh" | "fish")
+    )
+}
+
 /// 当前进程 locale 是否已是 UTF-8。GUI 启动的 app 不继承 shell 的 locale，
 /// 若不是 UTF-8，中文路径会被 shell 按字节转义成 `\M-^@` 乱码——兜底强设。
 fn locale_is_utf8() -> bool {
@@ -208,6 +226,11 @@ pub fn terminal_open(
         .unwrap_or_else(|| "/".to_string());
 
     let mut cmd = CommandBuilder::new(&shell);
+    // login shell：跑用户完整的 profile 链，PATH 等环境与系统终端一致（见
+    // `shell_supports_login_flag` 注释）。
+    if shell_supports_login_flag(&shell) {
+        cmd.arg("-l");
+    }
     cmd.cwd(&workdir);
     cmd.env("TERM", "xterm-256color");
     if !locale_is_utf8() {

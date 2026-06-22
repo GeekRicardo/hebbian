@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { Plus, X, SquareTerminal, PanelRightClose } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "@/desktop/bridge/tauri";
@@ -27,7 +26,6 @@ interface TermMeta {
 interface TermView {
   term: Terminal;
   fit: FitAddon;
-  webgl: WebglAddon | null;
   resizeObserver: ResizeObserver;
 }
 
@@ -177,17 +175,10 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
       } catch {
         /* unicode11 不可用时回退默认宽度 */
       }
-      let webgl: WebglAddon | null = null;
-      try {
-        webgl = new WebglAddon();
-        webgl.onContextLoss(() => {
-          webgl?.dispose();
-          webgl = null;
-        });
-        term.loadAddon(webgl);
-      } catch {
-        webgl = null; // 回退 DOM renderer
-      }
+      // 渲染器：用 xterm 6 内建的 DOM renderer（不 load 任何 renderer addon）。
+      // 不用 WebGL：WKWebView 的 WebGL2 在全屏重绘（vim / htop）时会抛逃逸出
+      // mountTerm try 的渲染帧异常，整屏崩成 uncaught ReferenceError。DOM renderer
+      // 不依赖 GPU、绝对稳定，性能对终端日常使用足够。canvas renderer 已被 xterm 6 移除。
 
       term.open(host);
       installKeyHandler(term, termId);
@@ -231,7 +222,7 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
       });
       resizeObserver.observe(host);
 
-      viewsRef.current.set(termId, { term, fit, webgl, resizeObserver });
+      viewsRef.current.set(termId, { term, fit, resizeObserver });
     },
     [installKeyHandler],
   );
@@ -240,7 +231,6 @@ export function TerminalSurface({ variant, active = true, defaultCwd = null }: T
     const view = viewsRef.current.get(termId);
     if (!view) return;
     view.resizeObserver.disconnect();
-    view.webgl?.dispose();
     view.term.dispose();
     viewsRef.current.delete(termId);
   }, []);
