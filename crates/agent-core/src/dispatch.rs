@@ -1999,7 +1999,7 @@ async fn await_path_decision(
             }
             Ok(())
         }
-        ApprovalDecision::Deny => Err("用户拒绝路径访问".into()),
+        ApprovalDecision::Deny => Err("用户主动拒绝路径访问，未填写原因。".into()),
         ApprovalDecision::DenyWithFeedback { feedback } => Err(feedback),
     }
 }
@@ -2036,7 +2036,7 @@ async fn await_permission_decision(
             }));
             match outcome {
                 ApprovalDecision::AllowOnce | ApprovalDecision::AllowAndRemember { .. } => Ok(()),
-                ApprovalDecision::Deny => Err("用户拒绝".into()),
+                ApprovalDecision::Deny => Err("用户主动拒绝，未填写原因。".into()),
                 ApprovalDecision::DenyWithFeedback { feedback } => Err(feedback),
             }
         }

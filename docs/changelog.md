@@ -9224,3 +9224,15 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: agent-core settings（加字段，向后兼容——老 settings.json 缺该 key 时 serde default = System）+ Desktop/hebweb 前端链接渲染层。`path:line` 代码引用语义是「打开文件」走内置编辑器，不在本次拦截范围。OAuthDialog 仍走自己独立的 `openSystemBrowser`（OAuth 授权必须系统浏览器，刻意不接入下拉）。非破坏性。
 - **验证**: `cargo check -p agent-core` + `cargo check -p hebbian` 通过；`pnpm exec tsc --noEmit` 零报错；`pnpm build` 通过。端到端：hebweb 的 WebSocket 长连接会让 playwright 每条命令末尾 snapshot 等不到 networkidle 而超时，UI 点击链路未能在本环境跑通；待本地 `pnpm tauri dev` 目检：①设置通用页下拉可切换并落盘；②聊天链接点击在两档下分别走系统/内置浏览器、且不再把 app 导航走。
 - **留尾巴**: 内置浏览器导航的 E2E 未在 hebweb 跑通（surface 限制，非功能缺陷），需 Desktop dev 模式手动验证两档行为与设置落盘。
+
+### 2026-06-22 — 优化工具/路径审批被拒回传文案，反馈输入框加 ⌘/Ctrl+Enter 提交
+
+- **Why**: 用户反馈两点。其一，被拒回传给 agent 的文本是 `工具调用被拒绝: {reason}`，前缀无主语、`reason` 是用户输入裸文本，agent 收到一串没头没尾的字，"莫名其妙被拒"且不知所云。其二，"拒绝并反馈"按钮文案生硬，且填完反馈只能点按钮提交，缺 ⌘/Ctrl+Enter 快捷键。
+- **根因**: 回传文本由 `deny_tool` 统一拼 `工具调用被拒绝: {reason}`（无主语前缀），`reason` 在 `await_permission_decision` 汇聚——纯拒绝是 `用户拒绝`（拼起来"拒绝"重复两次），带反馈是用户输入原文（无语境）。注意 `DenyWithFeedback` 被「用户反馈」与「AutoMode 判官自动拒绝」两路复用，到汇聚点已分不清来源，故带反馈支不能写死"用户拒绝"否则判官自动拒绝会被谎报成用户干的。
+- **方案**: 前缀 `工具调用被拒绝: ` 不动（`permission_probe.rs` 仍靠它识别历史被拒；不改用 is_error，因其语义含"执行失败 exit≠0"会把放行但失败的命令误判为被拒），只改两处 `reason` 文案——纯拒绝（必是用户手动）：`用户拒绝` → 「用户主动拒绝，未填写原因。」（点明是人拒的、且没给原因，不再与前缀重复"拒绝"二字）；带反馈（用户/判官共用）：保持直拼裸 `feedback`（反馈本身就是原因/说明，可能是完整句，套"原因："反而别扭）。拼起来读作"工具调用被拒绝: 用户主动拒绝，未填写原因。" / "工具调用被拒绝: {用户的说明}"。路径越界审批同步。前端按钮"拒绝并反馈"→"拒绝并说明"，两处反馈 textarea 加 ⌘/Ctrl+Enter 提交（带 submitting / 空内容 guard）。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `await_permission_decision` / `await_path_decision` 两处 `Deny` 文案改为「用户主动拒绝…，未填写原因。」；`DenyWithFeedback` 与 `deny_tool` 前缀均不动。
+  - [crates/agent-core/examples/permission_probe.rs](../crates/agent-core/examples/permission_probe.rs): 仅更新 `hist_outcome` 注释（逻辑 `starts_with("工具调用被拒绝")` 不变）。
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): 按钮文案改"拒绝并说明"；工具审批 + 计划审批两处反馈 textarea 加 onKeyDown ⌘/Ctrl+Enter 提交。
+- **影响范围**: agent-core dispatch（被拒回传文本，不改协议字段）+ permission_probe example + desktop 前端审批弹窗。回传文本是给模型看的内容，非协议结构，无兼容性破坏。
+- **留尾巴**: 未跑 CLI/desktop 端到端复现验证（用户要求直接提交）。

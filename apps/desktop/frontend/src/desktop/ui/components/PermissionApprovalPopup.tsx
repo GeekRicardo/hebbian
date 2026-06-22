@@ -423,7 +423,15 @@ export function PermissionApprovalPopup() {
             <textarea
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              placeholder="告诉Hebbian如何改进"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  if (!submitting && feedback.trim()) {
+                    send({ kind: "deny_with_feedback", feedback: feedback.trim() });
+                  }
+                }
+              }}
+              placeholder="告诉Hebbian如何改进（⌘/Ctrl+Enter 提交）"
               rows={2}
               className="w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
               autoFocus
@@ -597,7 +605,7 @@ export function PermissionApprovalPopup() {
                 )}
               >
                 <MessageSquareWarning className="w-3.5 h-3.5" />
-                拒绝并反馈
+                拒绝并说明
               </button>
               <button
                 type="button"
@@ -1198,7 +1206,15 @@ function PlanApprovalPopup() {
               <textarea
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
-                placeholder="告诉 AI 你想怎么改这份计划（会作为下一轮的 user message 注入）"
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    if (!submitting && feedback.trim()) {
+                      rejectWithFeedback();
+                    }
+                  }
+                }}
+                placeholder="告诉 AI 你想怎么改这份计划（⌘/Ctrl+Enter 提交，会作为下一轮的 user message 注入）"
                 rows={3}
                 className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
               />

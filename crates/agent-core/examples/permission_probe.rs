@@ -885,8 +885,10 @@ const INTERPRETERS: &[&str] = &[
     "osascript",
 ];
 
-/// 从 tool_call 的 result 反推历史结局：被拒结果是 `"工具调用被拒绝: …"`，
-/// 其余有结果 = 实际执行了（=当时放行），无结果 = 取消/中断（未知）。
+/// 从 tool_call 的 result 反推历史结局：被拒结果由 deny_tool 统一拼成
+/// `工具调用被拒绝: …`（锚定开头避免误命中 Bash 输出里恰好含「拒绝」的行）；
+/// 其余有结果 = 实际执行了（=当时放行，含执行失败 exit≠0——历史选择仍是放行），
+/// 无结果 = 取消/中断（未知）。
 #[derive(Clone, Copy, PartialEq)]
 enum Hist {
     Approved,
