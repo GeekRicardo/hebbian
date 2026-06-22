@@ -57,11 +57,21 @@ pub fn build_body(
     account_uuid: Option<&str>,
 ) -> Result<Value, ModelError> {
     let dialect_deepseek = is_deepseek_v4_anthropic_dialect(&req.model);
-    let messages: Vec<Value> = req
+    let mut messages: Vec<Value> = req
         .entries
         .iter()
         .filter_map(|e| entry_to_message(e, dialect_deepseek))
         .collect();
+
+    // 出口兜底（所有请求的唯一收口）：Anthropic 及绝大多数兼容端点要求 messages
+    // 最后一条必须是 user（不支持 assistant prefill），否则 400
+    // "conversation must end with a user message" 且会话永久卡死（历史不变，重试还 400）。
+    // 末尾变成 assistant 的来源很杂——空 ToolResults 被上面 filter 掉、模型把工具调用
+    // 写成纯文本导致空轮、加载到截断历史等。与其在每个上游逐一堵，不如在这唯一出口
+    // 统一兜：末尾非 user 就补一条 user，把脏 transcript 永远挡在 400 之外。
+    if !ends_with_user_message(&messages) {
+        messages.push(json!({"role": "user", "content": "继续"}));
+    }
 
     // 三种 thinking schema 互不兼容，按模型家族走不同分支。
     // 见 common::reasoning::AnthropicThinkingMode。
@@ -367,6 +377,16 @@ fn stable_session_id(entries: &[TranscriptEntry]) -> String {
     uuid::Uuid::from_bytes(bytes).to_string()
 }
 
+/// 判断已构建的 messages 末尾是否是 user role。空列表视为「非 user」——
+/// 空 messages 发出去本身会被拒，补一条 user 兜底也无害。
+fn ends_with_user_message(messages: &[Value]) -> bool {
+    messages
+        .last()
+        .and_then(|m| m.get("role"))
+        .and_then(Value::as_str)
+        == Some("user")
+}
+
 fn entry_to_message(entry: &TranscriptEntry, inject_deepseek_thinking: bool) -> Option<Value> {
     match entry {
         TranscriptEntry::User(user) => Some(json!({"role": "user", "content": user_content(user)})),
@@ -592,7 +612,11 @@ pub fn parse_response(v: &Value) -> ModelResponse {
         }
     }
 
-    if stop_reason == "tool_use" {
+    // stop_reason=tool_use 但没解析出任何 tool_use block（calls 为空）：模型把工具调用
+    // 写成了纯文本（leaked XML），并没有真正发起结构化调用。绝不能返回空 ToolCalls——
+    // 那会让 agent_loop push 一条无 tool_use 的 assistant + 空 ToolResults，最终末尾退化
+    // 成 assistant 触发 prefill 400。降级成 Done，交给 agent_loop 的 leak-recovery 清洗续跑。
+    if stop_reason == "tool_use" && !calls.is_empty() {
         ModelResponse::ToolCalls {
             text,
             reasoning,
@@ -744,6 +768,20 @@ mod tests {
     use crate::types::{TranscriptEntry, UserEntry};
     use common::attachments::MessageAttachment;
 
+    /// 提取一条 message 的文本：content 既可能是裸字符串，也可能被
+    /// apply_cache_control 包成 `[{type:text,text,cache_control}]` block 数组。
+    fn message_text(msg: &Value) -> String {
+        match &msg["content"] {
+            Value::String(s) => s.clone(),
+            Value::Array(blocks) => blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(""),
+            _ => String::new(),
+        }
+    }
+
     #[test]
     fn tool_result_image_encoded_as_image_block() {
         let entry = TranscriptEntry::ToolResults(vec![ToolResult {
@@ -778,6 +816,45 @@ mod tests {
         let msg = entry_to_message(&entry, false).unwrap();
         // 无附件：content 仍是纯字符串，不退化成块数组。
         assert_eq!(msg["content"][0]["content"], "a.txt");
+    }
+
+    /// 源头修复：stop_reason=tool_use 但 content 里没有任何 tool_use block（模型把
+    /// 工具调用写成了纯文本），parse_response 必须降级成 Done 而非返回空 ToolCalls。
+    /// 否则 agent_loop 会 push 空轮 → 末尾退化 assistant → prefill 400。
+    #[test]
+    fn parse_response_tool_use_with_no_blocks_degrades_to_done() {
+        let v = json!({
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "我来读文件。call <invoke name=\"Read\">..."}
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        match parse_response(&v) {
+            ModelResponse::Done { text, .. } => {
+                assert!(text.contains("我来读文件"));
+            }
+            other => panic!("空 tool_use 应降级 Done，实际: {other:?}"),
+        }
+    }
+
+    /// 对照：有真实 tool_use block 时正常返回 ToolCalls。
+    #[test]
+    fn parse_response_with_real_tool_use_returns_tool_calls() {
+        let v = json!({
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "c1", "name": "Read", "input": {"file_path": "a.ts"}}
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        match parse_response(&v) {
+            ModelResponse::ToolCalls { calls, .. } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "Read");
+            }
+            other => panic!("应返回 ToolCalls，实际: {other:?}"),
+        }
     }
 
     /// 历史里 tool_use input 非 object（解析失败被退化成字符串 / null）时，
@@ -885,6 +962,81 @@ mod tests {
                 "data": "webpbytes"
             })
         );
+    }
+
+    /// 出口兜底：messages 末尾是 assistant（模型把工具调用写成纯文本→空轮，或加载到
+    /// 截断历史）时，build_body 必须补一条 user，否则 Anthropic 400 "must end with a
+    /// user message" 且会话永久卡死。
+    #[test]
+    fn build_body_appends_user_when_ending_with_assistant() {
+        let req = ModelRequest {
+            model: "claude-sonnet-4-5".into(),
+            system: None,
+            entries: vec![
+                TranscriptEntry::User(UserEntry::text("改个字体")),
+                TranscriptEntry::Assistant(AssistantEntry {
+                    text: "我来读文件。call <invoke name=\"Read\">...".into(),
+                    reasoning: String::new(),
+                    reasoning_signature: String::new(),
+                    tool_calls: Vec::new(),
+                }),
+            ],
+            tools: vec![],
+            max_tokens: 1024,
+            reasoning: None,
+        };
+        let body = build_body(&req, false, false, None).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        let last = msgs.last().unwrap();
+        assert_eq!(last["role"], "user", "末尾必须补成 user");
+        // content 经 apply_cache_control 可能被包成 block 数组，取出文本判断。
+        assert!(
+            message_text(last).contains("继续"),
+            "补的 user 内容应是「继续」，实际: {last:?}"
+        );
+    }
+
+    /// 出口兜底：空 ToolResults 被 entry_to_message 丢弃后，末尾退回 assistant，
+    /// 同样要补 user。这正是字体 session 202606180758 的 prefill 400 精确成因。
+    #[test]
+    fn build_body_appends_user_when_empty_tool_results_dropped() {
+        let req = ModelRequest {
+            model: "claude-sonnet-4-5".into(),
+            system: None,
+            entries: vec![
+                TranscriptEntry::User(UserEntry::text("做点事")),
+                TranscriptEntry::Assistant(AssistantEntry {
+                    text: "好的。".into(),
+                    reasoning: String::new(),
+                    reasoning_signature: String::new(),
+                    tool_calls: Vec::new(),
+                }),
+                TranscriptEntry::ToolResults(Vec::new()),
+            ],
+            tools: vec![],
+            max_tokens: 1024,
+            reasoning: None,
+        };
+        let body = build_body(&req, false, false, None).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.last().unwrap()["role"], "user");
+    }
+
+    /// 正常末尾是 user 时不画蛇添足。
+    #[test]
+    fn build_body_keeps_user_ending_intact() {
+        let req = ModelRequest {
+            model: "claude-sonnet-4-5".into(),
+            system: None,
+            entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+            tools: vec![],
+            max_tokens: 1024,
+            reasoning: None,
+        };
+        let body = build_body(&req, false, false, None).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1, "不该多补 user");
+        assert!(message_text(&msgs[0]).contains("hi"));
     }
 
     #[test]

@@ -9143,3 +9143,45 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: apps/eval（加 r2e 类型，纯 additive，不影响 general/swe）+ 文档。
 - **留尾巴**: R2E 镜像 ~2.4GB/任务，批量需镜像缓存/清理策略；arm64 Mac 上 amd64 镜像走
   Rosetta 模拟偏慢；改善 agent 通过率方向同上（更强模型 / prompt 引导坚持修复 / pass@k）。
+
+### 2026-06-22 — 修复内置终端缺 Homebrew 等 PATH：spawn 改起 login shell
+
+- **Why**: 用户反馈内置终端的 PATH 比自己的 iTerm/cmux 少了 `/opt/homebrew/bin` 等，brew 装的命令 not found。根因：GUI 启动的 app 进程只继承贫瘠的 launchd 默认环境，内置终端原先 spawn 的是 non-login shell（不传 args），只跑 `~/.zshrc`，不跑 `/etc/zprofile`(`path_helper`) 与 `~/.zprofile`——而 Homebrew 的 `/opt/homebrew/bin`（来自 `/etc/paths.d/homebrew` + `path_helper`）、`/usr/local/bin`、cryptexes 等恰好出自后两者。用户 `.zshrc` 里手动 export 的路径在、profile 链注入的全丢，与现象完全吻合。agent 的 Bash 工具不受影响（`bash.rs` 走 `resolve_shell_path` 用 `zsh -lic` 捕获完整 PATH），只有用户内置终端这条路漏了 login。
+- **改动**:
+  - [apps/desktop/src/terminal/mod.rs](../apps/desktop/src/terminal/mod.rs): 新增 `shell_supports_login_flag`，对 zsh/bash/sh/fish 在 `terminal_open` spawn 时加 `-l`；冷门 shell 保守不加避免启动失败。PTY 的 stdin 是 tty，shell 在 tty 上自动 interactive，只加 `-l` 即 login+interactive，无需叠 `-i`（与 iTerm2/Terminal.app 默认行为一致）。
+  - [docs/内置终端-spec.md](内置终端-spec.md): 修正 §1.1/§2 「不传 args（interactive 非 login）」的过时设计——这是当初照搬 fanbox（Electron，环境继承方式不同）留下的缺陷，hebbian 作为 Tauri GUI app 必须起 login shell 才能对齐系统终端环境。
+- **影响范围**: 仅 apps/desktop 内置终端 spawn 一处；不碰协议 / agent-core / 前端 / storage。非破坏性。
+- **留尾巴**: login shell 会多跑一次 profile 链，首屏可能出现用户 `.zprofile`/`.zlogin` 里的 banner、启动略慢——属预期（系统终端同样如此）。另：用户同时报「vim 打开文件报 `Can't find variable: n`」，经核 xterm 6.0.0 + addon-webgl 0.19.0 为官方配套版本、非版本错配，疑为 WKWebView 下 WebGL renderer 进 vim 全屏渲染时崩，需 Desktop dev 实测复现后另查（heb CLI 复现不了 webview 渲染问题）。
+
+### 2026-06-22 — 根治 prefill 400：协议层出口兜底 + parse_response 空 calls 降级 + 错误文本不再竖排
+
+- **Why**: 字体 session 202606180758 反复 prefill 400（"does not support assistant message
+  prefill / must end with a user message"）。前三次修复都没打中根因——查 model_io.jsonl 拿到
+  铁证：400 那次 messages_new = `[assistant(tool_calls=[], 含 leaked <invoke> 文本), tool(results=[])]`。
+  完整因果链：① 模型 stop_reason=tool_use 但把工具调用写成纯文本（leaked XML），content 里
+  0 个 tool_use block；② anthropic `parse_response` 仍返回 `ToolCalls{calls:[]}`（只判
+  stop_reason，没判 calls 空）；③ agent_loop ToolCalls 分支 push assistant(空 calls) + 空
+  ToolResults；④ 协议层 `entry_to_message` 把空 ToolResults 返回 None 被 filter 丢弃 →
+  messages 末尾退化成 assistant → 400。之前改的 from_session 兜底只在「加载历史」生效，
+  agent_loop 运行中的 transcript 从不过 from_session，所以没挡住。
+- **改动**:
+  - crates/model-gateway/src/protocols/anthropic.rs:
+    - **出口兜底（最后防线）**: `build_body` 构建完 messages 后，末尾非 user 就补一条
+      `{role:user, content:"继续"}`。这是所有 Anthropic 请求的唯一收口，无论上游 transcript
+      因何变脏（空轮、空 ToolResults 被丢、截断历史）都挡在 400 之外。+`ends_with_user_message`
+      helper +3 单测（A/B 翻转验证：回退后空轮/空 ToolResults 两测必 FAIL）
+    - **源头修复**: `parse_response` 改为 `stop_reason=="tool_use" && !calls.is_empty()` 才返
+      ToolCalls，calls 空时降级 Done——交给 agent_loop 的 leak-recovery 清洗 leaked XML 续跑，
+      不再产生空轮。+2 单测（空 block 降级 Done / 真实 block 返 ToolCalls）
+  - apps/desktop/frontend/.../MessageBubble.tsx:
+    - **竖排根治**: 错误 marker `[请求失败：...]` 里超长无空格 JSON 丢给 ReactMarkdown 会渲成
+      `<p>`，外层 overflow-wrap 不传导到 `<p>` 内部 → 逐字竖排。改为 `splitFailureMarker` 把
+      marker 从正文拆出，marker 单独走纯文本 div（`break-all`+`overflow-wrap:anywhere`，不经
+      markdown），正文照常 markdown。streaming 与落盘两条渲染路径共用此逻辑，统一生效。
+      删旧的 `isRequestFailureText`/`requestFailureMarkdownClass`（外层加 class 治标无效）
+- **影响范围**: model-gateway anthropic 协议层（出口兜底 + 源头）+ desktop 前端渲染；无协议
+  字段变更。OpenAI 协议不动（它允许 assistant 结尾，不报此错，加兜底反误伤 prefill 语义）
+- **验证**: cargo test -p model-gateway --lib 117/0（含新增 5 测）+ agent-core 558/0；A/B 翻转
+  确认出口兜底两测修前 FAIL 修后 PASS；前端拆分逻辑 node 验证 + tsc + pnpm build 通过
+- **留尾巴**: stream 路径（providers/anthropic.rs:406）的 `!tools.is_empty()` 与 calls 非空等价
+  （SSE 累积的是模型返回的 tool blocks），未改；UI 竖排修复待本地 tauri dev 目检

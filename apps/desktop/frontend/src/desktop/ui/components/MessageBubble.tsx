@@ -1952,15 +1952,19 @@ const markdownComponents = { pre: CodeBlock } satisfies React.ComponentProps<
   typeof ReactMarkdown
 >["components"];
 
-function isRequestFailureText(text: string) {
-  // 失败 marker 可能附在 partial 正文之后（`正文\n\n[请求失败：...]`），不止开头。
-  // 只要这段文本含 marker 就套用宽松折行类——marker 里的超长无空格 JSON 在普通
-  // markdown 容器里会逐字竖排，必须靠 overflow-wrap:anywhere 横向折断。
-  return text.includes("[请求失败：");
+// 把文本拆成「正文 + 末尾错误 marker」。失败时后端把 `[请求失败：HTTP 400 {...}]`
+// 附在 assistant 正文之后落盘。marker 里是超长无空格的 JSON——丢给 ReactMarkdown 会
+// 渲染成 <p>，外层 overflow-wrap 不传导到 <p> 内部，于是逐字竖排（一字一行）。
+// 根治：marker 不走 markdown，单独用纯文本块 + break-anywhere 折行。
+function splitFailureMarker(text: string): { body: string; marker: string | null } {
+  const idx = text.indexOf("[请求失败：");
+  if (idx < 0) return { body: text, marker: null };
+  return { body: text.slice(0, idx).trimEnd(), marker: text.slice(idx) };
 }
 
-const requestFailureMarkdownClass =
-  "block w-full max-w-full box-border whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-[1.45]";
+// 错误 marker 纯文本块的折行类：强制任意位置折断，杜绝竖排。
+const failureMarkerClass =
+  "mt-1 block w-full max-w-full whitespace-pre-wrap break-all [overflow-wrap:anywhere] text-[13px] leading-[1.5] text-destructive/90";
 
 // 工具调用 XML 漏进正文的清洗（与后端 sanitize_tool_xml_leak 同一现象，架构 §4.3.3）：
 // 模型偶发把本该走结构化 function-calling 的 `<invoke>` / `<function_calls>` 整块
@@ -2103,24 +2107,25 @@ function AssistantParts({
     <div className="space-y-2">
       {parts.map((part) => {
         if (part.type === "text") {
-          // 工具调用 XML 残骸直接丢弃——不渲染、不提示。清洗后若整段为空则跳过
-          // （流式中仍显示光标）。
-          const clean = stripToolXmlLeak(part.text);
-          if (!clean && !streaming) return null;
+          // 先拆末尾错误 marker（它在所有内容之后），正文再去掉工具 XML 残骸。
+          // marker 单独走纯文本折行块，杜绝 markdown <p> 里的逐字竖排；
+          // 残骸直接丢弃（不渲染、不提示）。清洗后整段空则跳过（流式仍显光标）。
+          const { body, marker } = splitFailureMarker(part.text);
+          const clean = stripToolXmlLeak(body);
+          if (!clean && !marker && !streaming) return null;
           return (
-            <div
-              key={part.key}
-              className={cn(
-                "markdown-segment",
-                isRequestFailureText(clean) && requestFailureMarkdownClass
+            <div key={part.key}>
+              {(clean || streaming) && (
+                <div className="markdown-segment">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {clean || (streaming ? "▍" : "")}
+                  </ReactMarkdown>
+                </div>
               )}
-            >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {clean || (streaming ? "▍" : "")}
-              </ReactMarkdown>
+              {marker && <div className={failureMarkerClass}>{marker}</div>}
             </div>
           );
         }
