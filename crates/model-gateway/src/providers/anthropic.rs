@@ -267,13 +267,20 @@ impl ModelClient for AnthropicClient {
         let mut thinking_deltas_seen: u64 = 0;
 
         // tool_use 累积：按 Anthropic content block index 跟踪每个 tool 的 id/name/args。
-        // 用 BTreeMap 保留 index 顺序；ToolCallStreamDelta.index 同时透给上层。
+        // 用 BTreeMap 保留 index 顺序。
         struct ToolAccum {
             id: String,
             name: String,
             args: String,
         }
         let mut tools: BTreeMap<usize, ToolAccum> = BTreeMap::new();
+        // Anthropic SSE 的 content block index 含 thinking / text 块（tool_use 可能落在
+        // block 0 / 1 / 2…，随前面有没有正文浮动）。但上层（agent_loop）期望
+        // ToolCallStreamDelta.index 是「本次响应内第几个 tool_use」（从 0 连续递增，
+        // 只数工具，与 OpenAI 协议一致），它会再叠加 dispatch_offset 还原全局序号。
+        // 直接透传 block index 会让相邻 turn 的 (offset + 浮动 block index) 撞号，
+        // 导致落盘 parts 丢 tool_call。这里把 block index 归一成 tool 序号再透出。
+        let mut block_to_ordinal: BTreeMap<usize, usize> = BTreeMap::new();
         let mut stop_reason: Option<String> = None;
         // Anthropic 流的 usage 分两次到：message_start 给输入 / 缓存命中 / 缓存写入，
         // message_delta 给最终 output_tokens。最后合并成完整 Usage 跟着 ModelResponse 回去。
@@ -342,6 +349,8 @@ impl ModelClient for AnthropicClient {
                                     tool_name = %name,
                                     "anthropic stream: ToolUseStart"
                                 );
+                                let ordinal = block_to_ordinal.len();
+                                block_to_ordinal.insert(index, ordinal);
                                 tools.insert(
                                     index,
                                     ToolAccum {
@@ -351,7 +360,7 @@ impl ModelClient for AnthropicClient {
                                     },
                                 );
                                 on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
-                                    index,
+                                    index: ordinal,
                                     id: Some(id),
                                     name: Some(name),
                                     arguments_delta: None,
@@ -364,12 +373,16 @@ impl ModelClient for AnthropicClient {
                                 if let Some(acc) = tools.get_mut(&index) {
                                     acc.args.push_str(&partial_json);
                                 }
-                                on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
-                                    index,
-                                    id: None,
-                                    name: None,
-                                    arguments_delta: Some(partial_json),
-                                }));
+                                // 用 ToolUseStart 时建立的 block→ordinal 映射透出归一序号，
+                                // 保证 start 与后续 delta 落在上层同一个 tool part 上。
+                                if let Some(&ordinal) = block_to_ordinal.get(&index) {
+                                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                                        index: ordinal,
+                                        id: None,
+                                        name: None,
+                                        arguments_delta: Some(partial_json),
+                                    }));
+                                }
                             }
                             proto::AnthropicStreamEvent::MessageStart { usage: u } => {
                                 usage = u;

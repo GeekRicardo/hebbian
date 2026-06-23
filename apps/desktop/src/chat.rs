@@ -3071,7 +3071,7 @@ mod tests {
             // from_session 看到末尾是 assistant，自动补一条 "继续" user → 共 2 条
             assert_eq!(user_texts.len(), 2, "user_texts={user_texts:?}");
             assert!(user_texts[0].contains("上一轮问题"));
-            assert_eq!(user_texts[1], "继续", "第二条应是自动注入的"继续"");
+            assert_eq!(user_texts[1], "继续", "第二条应是自动注入的「继续」");
             // 不该在 DB 写空 user message
             assert!(!user_texts.iter().any(|text| text.is_empty()));
 
@@ -3896,6 +3896,195 @@ mod tests {
                 })
                 .collect();
             assert_eq!(tool_names, vec!["missing_first", "missing_second"]);
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    /// 复现：Anthropic 透传 content block index（含 thinking/text 块）做 ToolCallDelta.index，
+    /// 与上层「每 turn +1」的 dispatch_offset 体系语义不一致 → 跨 turn 撞 index →
+    /// AssistantPartsRecorder.by_index 命中旧 part，新 tool_call 不新建 part 被丢，
+    /// 紧跟的 text 黏进上一段。模型每 turn 一个工具，但 block index 随是否含正文在 1/0 间浮动。
+    struct AnthropicBlockIndexClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModelClient for AnthropicBlockIndexClient {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        fn supports_streaming_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!("test uses streaming")
+        }
+
+        async fn stream(
+            &self,
+            _req: ModelRequest,
+            _cancel: CancelFlag,
+            on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, ModelError> {
+            // 每个 turn：先 emit 正文 TextDelta，再 emit 一个 tool_use。
+            // block_index 模拟 Anthropic：响应是 [text(0), tool_use(1)] → tool 在 block 1。
+            // dispatch_offset 第 0 turn=0、第 1 turn=1。两者相加：1、2，本不撞；
+            // 但若某 turn 无正文（[tool_use(0)]），block_index 回 0，offset+0 就会和
+            // 前一个含正文 turn 的 offset+? 撞上。这里第 2 turn 用 [tool_use(0)] 制造碰撞。
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            match n {
+                0 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第一段".to_string(),
+                    });
+                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                        index: 1,
+                        id: Some("call_a".to_string()),
+                        name: Some("tool_a".to_string()),
+                        arguments_delta: Some("{}".to_string()),
+                    }));
+                    Ok(ModelResponse::ToolCalls {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        reasoning_signature: String::new(),
+                        calls: vec![ToolCall {
+                            id: "call_a".to_string(),
+                            name: "tool_a".to_string(),
+                            input: serde_json::json!({}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                1 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第二段".to_string(),
+                    });
+                    // 本 turn 无 thinking/text 在 tool 之前的偏移差异：block_index=0。
+                    // offset 此时为 1，1+0=1 → 与上一个 turn (offset 0 + block 1 = 1) 撞！
+                    on_event(ModelStreamEvent::ToolCallDelta(ToolCallStreamDelta {
+                        index: 0,
+                        id: Some("call_b".to_string()),
+                        name: Some("tool_b".to_string()),
+                        arguments_delta: Some("{}".to_string()),
+                    }));
+                    Ok(ModelResponse::ToolCalls {
+                        text: String::new(),
+                        reasoning: String::new(),
+                        reasoning_signature: String::new(),
+                        calls: vec![ToolCall {
+                            id: "call_b".to_string(),
+                            name: "tool_b".to_string(),
+                            input: serde_json::json!({}),
+                        }],
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                2 => {
+                    on_event(ModelStreamEvent::TextDelta {
+                        text: "第三段结束".to_string(),
+                    });
+                    Ok(ModelResponse::Done {
+                        finish: model_gateway::types::FinishReason::Stop,
+                        text: "第三段结束".to_string(),
+                        reasoning: String::new(),
+                        reasoning_signature: String::new(),
+                        attachments: Vec::new(),
+                        usage: Usage::default(),
+                    })
+                }
+                _ => unreachable!("unexpected extra model call"),
+            }
+        }
+    }
+
+    #[test]
+    fn anthropic_block_index_does_not_drop_tool_parts() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+
+            let assistant = send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    continue_run: false,
+                    session_id: session.id,
+                    user_content: "run tools".to_string(),
+                    user_meta: None,
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: vec!["tool_a".to_string(), "tool_b".to_string()],
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: None,
+                    consumed_pending_inputs: None,
+                    pending_inputs_accepting: None,
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                    request_id: None,
+                    restrict_tools: None,
+                },
+                |_| {},
+                None,
+                |_provider, _model, _reasoning| {
+                    Ok(Arc::new(AnthropicBlockIndexClient {
+                        calls: AtomicUsize::new(0),
+                    }) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            // 两个 tool_call 必须都落进 parts，且按时间序交错：
+            // text(第一段) → tool_a → text(第二段) → tool_b → text(第三段结束)
+            let tool_names: Vec<&str> = assistant
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    agent_core::storage::sessions::MessagePart::ToolCall { name, .. } => {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                tool_names,
+                vec!["tool_a", "tool_b"],
+                "block index 碰撞不应丢 tool_call part"
+            );
+
+            // 两段正文不能被黏成一段：parts 里应有独立的「第二段」text part，
+            // 且它出现在 tool_a 之后、tool_b 之前。
+            let texts: Vec<&str> = assistant
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    agent_core::storage::sessions::MessagePart::Text { text } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                texts.iter().any(|t| t.contains("第一段") && !t.contains("第二段")),
+                "第一段不应吞并第二段，parts.texts={texts:?}"
+            );
 
             std::fs::remove_dir_all(data_dir).unwrap();
         });
