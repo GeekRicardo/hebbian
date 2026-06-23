@@ -9250,3 +9250,31 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **排序「goal 在记忆前」**: 无需额外逻辑——goal 裁决在 turn 收尾瞬间落盘、记忆抽取在 RunFinished 之后异步落盘，append 先后即渲染先后，goal 天然在前
 - **影响范围**: agent-core（meta + agent_loop）+ desktop 前端（4 文件 + 1 新组件）。纯 additive，desktop 整包编译通过、前端 tsc 0 error、goal 8 测试全过（含新 marker 断言）
 - **留尾巴**: heb CLI 仍未透传 goal 事件（同前条）；progress 每续跑一轮落一条 marker，长 goal 会有多条结果块（已与用户确认要完整可追溯）
+
+### 2026-06-23 — Ask 提问浮层（UserQuestionPopup）支持折叠
+
+- **Why**: ask 工具问题文案长 / 选项多时，浮层从输入框上沿向上展开会把上方聊天内容挡住，用户想先看上文再作答没办法腾地方
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx): header 右侧加「折叠/展开」按钮 + `collapsed` 状态；折叠时标题单行截断（`truncate`），隐藏选项区与底部按钮，只留一条标题栏；`requestId` 变化时复位为展开
+- **影响范围**: 仅 desktop 前端单组件，纯 UI 交互，不动协议 / store / 后端。tsc 0 error
+- **留尾巴**: 无
+
+### 2026-06-23 — Ask 提问浮层：输入框有焦点时 ESC 不取消回答
+
+- **Why**: `UserQuestionPopup` 注册全局 ESC 监听一律 `cancel()`，在「其他回答」框或聊天主输入框打字时误按 ESC 会取消整个 ask 回答
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/UserQuestionPopup.tsx): 全局 keydown 里判断 `e.target` 是否可编辑元素（input/textarea/contentEditable），是则放行交还输入框；新增 `isEditableTarget` 辅助函数。焦点不在输入框时 ESC 仍取消回答
+- **影响范围**: 仅 desktop 前端单组件，纯 UI 交互。tsc 0 error
+- **留尾巴**: 无
+
+### 2026-06-23 — 修复巨型内嵌头像拖死消息列表（缩小头像数据层解决 + avatarImageSrc 缓存优化）
+
+- **Why**: 用户报 release 打开约 1s 后整窗焊死、鼠标全挂、唯独能滚但不渲染、Console 空白；dev 正常，回退 commit / 重新 build / 重启电脑全无效。逐层排查定位：release（`tauri://localhost`）那套 WebKit localStorage 的 `userAvatar` 存了张 256×256 PNG（`data:image/png;base64,…`，UTF-16 存储 264KB）。
+- **两条关键认知**:
+  - WebView 的 localStorage **按 origin 隔离**，dev（`http://localhost:<port>`）与 release（`tauri://localhost`）**不共享**——所以只 release 卡；坏数据躺在 localStorage、与代码无关，故回退 / 重 build / 重启都没用。
+  - 真凶在**渲染层、不在计算**：该头像是合法 data URL，`avatarImageSrc` 命中快路径秒返回、并不慢；真正瓶颈是 `MessageList` 每条 user 消息都内联渲染一个 `<img src="264KB data url">`，海量历史消息 = 海量巨型 img，WebKit 逐个解析/解码 data URL → bmalloc 风暴焊死主线程（`sample` 实测 WebContent 91% CPU；bmalloc 是整个 WebKit 引擎的分配器，非仅 JS）。
+- **本次实际解决（数据层）**: 把那条 `userAvatar` 用 `sips` 从 256px/264KB 缩到 128px/27KB 写回，消息列表不再被巨图拖死。已验证：缩小后 release 重开流畅、头像与所有设置都在。原图留底于 `WebsiteData/userAvatar_orig.png` 与 `/tmp/hebbian_avatar_orig.png`。
+- **代码改动（附带优化，非此 bug 根治）**:
+  - [avatar.ts](../apps/desktop/frontend/src/desktop/ui/lib/avatar.ts): `avatarImageSrc` 抽出 `computeAvatarImageSrc` + 包模块级有界缓存（`Map`，上限 32 满则整清）。**它只去重计算，对本 bug 并非根治**（瓶颈在渲染层）；保留是因为对需走完整解析路径的头像（裸 base64 等）确有普适小优化价值、且无害。
+- **影响范围**: 仅 desktop 前端 `avatar.ts`，纯函数加缓存对调用方透明；不动协议 / store / 后端。tsc 0 error。
+- **留尾巴**: **真正的代码层根治未做**——应二选一或都做：① 源头限制/压缩头像大小（`AvatarField` 选/传图时缩到合理尺寸，从根上杜绝巨型 data URL 进 localStorage）；② 渲染层把 data URL 转 blob URL，让 N 个 `<img>` 共享一次解码。
