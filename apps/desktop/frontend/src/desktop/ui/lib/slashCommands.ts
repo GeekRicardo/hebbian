@@ -134,10 +134,11 @@ const builtinRegistry: Record<string, BuiltinHandler> = {
       ctx.toast.success("已清除目标");
       return;
     }
-    // 其余整串作为完成条件
+    // 其余整串作为完成条件：落盘 goal + set marker（后端 command 一并落），
+    // 再把目标作为一条 user message 发出去立即触发 run 开始推进。
     const condition = args.join(" ");
     await api.setActiveGoal(ctx.sessionId, condition);
-    ctx.toast.success(`目标已设：${condition}\nAI 会持续推进直到达成，达成后自动结束`);
+    await ctx.sendPrompt(`Goal set: ${condition}`);
   },
 };
 

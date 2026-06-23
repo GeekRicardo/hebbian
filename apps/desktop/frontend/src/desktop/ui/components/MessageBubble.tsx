@@ -2290,8 +2290,10 @@ export const MessageBubble = memo(function MessageBubble({
 
   if (message.role === "marker" && message.meta?.type === "goal_outcome") {
     const { kind, condition, reason, iteration } = message.meta;
+    // 左 padding 68px = px-6(24) + 头像 w-8(32) + gap-3(12)，让 goal 块左缘
+    // 对齐消息正文，而非贴在头像左缘。
     return (
-      <div className="px-6 py-1 select-none">
+      <div className="py-1 pl-[68px] pr-6 select-none">
         <GoalResultSummary
           kind={kind}
           condition={condition}

@@ -1119,10 +1119,10 @@ pub async fn run_loop(
                                     ) {
                                         tracing::warn!(error = %e, "goal 续跑进度落盘失败");
                                     }
-                                    emit(EventPayload::GoalProgress {
-                                        iteration: goal_iterations,
-                                        reason: reason.clone(),
-                                    });
+                                    // marker 必须在 emit 之前落盘：前端收到 GoalProgress
+                                    // 事件会立即 reload session，此刻 marker 须已在盘上，
+                                    // 否则 reload 读不到、marker 不显示（与 achieved/
+                                    // impossible 分支顺序保持一致）。
                                     append_goal_outcome_marker(
                                         dd,
                                         sid,
@@ -1131,6 +1131,10 @@ pub async fn run_loop(
                                         &reason,
                                         goal_iterations,
                                     );
+                                    emit(EventPayload::GoalProgress {
+                                        iteration: goal_iterations,
+                                        reason: reason.clone(),
+                                    });
                                     info!(iteration = goal_iterations, "goal 尚未达成，续跑");
                                     let wrapped = format!(
                                         "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<goal-feedback>\n目标尚未达成。{reason}\n继续推进，达成后会自动结束。\n</goal-feedback>"

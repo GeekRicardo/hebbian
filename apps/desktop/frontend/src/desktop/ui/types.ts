@@ -189,11 +189,11 @@ export type MessageMeta =
   // 落一条 marker，渲染成带彩色竖线的结果块。落在记忆摘要之前。
   | {
       type: "goal_outcome";
-      /** achieved=达成 / impossible=判不可达 / progress=续跑一轮。 */
-      kind: "achieved" | "impossible" | "progress";
+      /** set=刚设目标 / achieved=达成 / impossible=判不可达 / progress=续跑一轮。 */
+      kind: "set" | "achieved" | "impossible" | "progress";
       /** 该目标的完成条件原文，UI 标明是哪个 goal。 */
       condition: string;
-      /** judge 给出的理由 / 还差什么。 */
+      /** judge 给出的理由 / 还差什么（set 时为空）。 */
       reason: string;
       /** 续跑轮次（progress 有意义）。 */
       iteration: number;

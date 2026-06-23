@@ -1,4 +1,4 @@
-import { CircleCheck, CircleSlash, ArrowRightCircle } from "lucide-react";
+import { CircleCheck, CircleSlash, ArrowRightCircle, Target } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 
 /**
@@ -17,12 +17,18 @@ export function GoalResultSummary({
   reason,
   iteration,
 }: {
-  kind: "achieved" | "impossible" | "progress";
+  kind: "set" | "achieved" | "impossible" | "progress";
   condition: string;
   reason: string;
   iteration: number;
 }) {
   const style = {
+    set: {
+      bar: "bg-violet-500",
+      icon: <Target className="h-3.5 w-3.5 text-violet-500" />,
+      title: "目标已设",
+      titleColor: "text-violet-600 dark:text-violet-400",
+    },
     achieved: {
       bar: "bg-emerald-500",
       icon: <CircleCheck className="h-3.5 w-3.5 text-emerald-500" />,

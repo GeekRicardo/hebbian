@@ -100,7 +100,8 @@ pub enum MessageMeta {
     /// 重启可重建。落在记忆摘要之前（goal 裁决在 turn 结束瞬间、记忆抽取在 RunFinished 之后）。
     /// transcript rebuild 对 `Role::Marker` 走 `_ => {}` 天然跳过，模型看不到它。
     GoalOutcome {
-        /// 裁决类型：`achieved`（达成）/ `impossible`（判不可达）/ `progress`（续跑一轮）。
+        /// 裁决类型：`set`（刚设目标，由 surface 落）/ `achieved`（达成）/
+        /// `impossible`（判不可达）/ `progress`（续跑一轮）；后三者由 agent_loop 裁决时落。
         kind: String,
         /// 该目标的完成条件原文，供 UI 标明是哪个 goal。
         condition: String,

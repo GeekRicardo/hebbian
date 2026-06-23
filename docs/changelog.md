@@ -9300,3 +9300,70 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 仅 agent-core 权限判定（§4.4.3 / §4.4.4）；不改协议、不改 PermissionStore 文件格式、不改 session.jsonl。AutoMode 判官在编辑维度上不再介入，但仍管 Bash/PowerShell 命令、越界路径、git-meta——judge 链 / hands-off（force_automode）/ Classifier A 均不受影响。安全前提与 Default 一致：界内编辑由 edits-worktree 整 Run 可回退兜底（§4.13），免审是安全的。AutoMode 在文件编辑这个维度上现与 Yolo 等价（仅命令维度仍有判官 vs 全放的差别）。
 - **验证**: `cargo test -p agent-core --lib`（561 passed，含新增 `edit_auto_allowed_table`）、`cargo check --workspace` 通过。A/B：改动前 `edit_auto_allowed_table` 中 AutoMode 三条断言会 fail，改动后 pass，翻转可复现。AutoMode judge 需真实 provider judge 模型，未在 surface 端手动跑；行为由表测试 + 集成测试覆盖。
 - **留尾巴**: 无。
+
+### 2026-06-24 — 设计：对外统一为 dispatch 唯一入口 + 多 transport（对标 codex app-server），更新架构.md
+
+- **Why**: 用户提出让 hebbian 的 agent-core 真正"独立"——一套核心逻辑既能 IPC 也能 HTTP 调用，desktop / 未来 web 端都复用全部能力。调研 codex `app-server`（`message_processor` 大 match 唯一派发核心 + `app-server-transport` 多传输 + `app-server-client` 的 in_process 免序列化）与 cc extension（薄 UI 壳 + claude CLI 子进程为唯一大脑）后确认：hebbian 现状是 `CoreClient` trait 只收敛了"通路 B 同步 API"，"通路 A 对话主链路"（StartRun + 事件翻译）仍在 desktop chat.rs / cli daemon.rs / web events.rs **各写一遍且不一致**（cli 截 result 500 / desktop 丢 token / RunFailed 翻成不同 variant），是"逻辑写三遍"的真实成本。
+- **改动**（本条仅文档；代码分 4 阶段后续落地）:
+  - [docs/架构.md](架构.md) §2.1 顶层图: CoreClient 那一格改为「core-rpc：dispatch 唯一入口 + 三 transport + CoreClient 能力实现层」
+  - §2.2 workspace 布局: 新增 `crates/core-rpc`；§2.3 DAG 加 `core-rpc → agent-core, protocol, common`、`apps/* → core-rpc`
+  - §3.1.1（新增）: 明确 `EventPayload`（内部领域模型，嵌套 enum）vs `WireEvent`（对外线 DTO，拍平）的边界；定唯一无损 DTO `protocol::WireEvent` + 唯一转换 `to_wire(&Event)`，三 surface 共享；差异下沉各自 render.rs
+  - §7 全节重写: dispatch 大 match 为唯一 command 入口（= codex message_processor），CoreClient 退为能力实现层；§7.2 三 transport（in_process/unix-socket/ws）；§7.2.1 dispatch 边界（agent-core 业务进、surface native 命令不进）；§7.4 对比表对标 codex；§7.5 三 surface 拓扑改 transport 化；§7.7 HttpCoreClient 退化为第四种 transport
+  - §13 决策表: 追加 3 条（dispatch 唯一入口 / WireEvent 无损 DTO / 全面 ts-rs 生成 TS）
+- **影响范围**: 本次仅架构.md（设计层）。后续代码改动将触及 protocol（WireEvent + ts-rs）、新增 crates/core-rpc、agent-core（start_run/subscribe/dispatch）、三 surface 全部、前端 transport.ts + types.ts。协议变更原则：cli IpcCommand / web WS 只 additive 加 variant 不改现有字段语义；老 jsonl 不受影响（EventPayload schema 不变）。
+- **决策依据**（用户已逐一拍板）: ① 骨架甲——dispatch 唯一入口完全对标 codex（非"trait 为核心 + dispatch 薄路由"）；② 协议形态 JSON-RPC（codex 风格，可生成 TS）；③ desktop 仍 in-process（保 native 能力 + 零序列化）；④ 无损 DTO + 差异下沉渲染层；⑤ 全面上 ts-rs。
+- **留尾巴**: 代码未动。落地分 4 阶段、各自独立 PR：①阶段1 收敛对话主链路进 CoreClient（start_run/subscribe broadcast）+ 统一 WireEvent DTO + 转换，删两份重复 EngineEvent（与 transport 无关，独立可验，地基，先做）；②阶段2 新增 crates/core-rpc（CoreRequest/CoreNotification 复用 WireEvent + dispatch 大 match）；③阶段3 transport 化三 surface（in_process/unix-socket/ws + 前端 transport.ts 统一信封）；④阶段4 protocol 全面 #[derive(TS)]，types.ts 改自动生成。最大坑点：EventPayload→WireEvent 是语义降维非字段重命名，阶段1 已出完整三方映射表（见 proj 记忆 core-rpc-refactor）。
+- **关联**: docs/架构.md §2/§3.1.1/§7/§13；codex 参考 /Users/ricardo/code/ricardo/rust/codex/codex-rs/app-server*。
+
+### 2026-06-24 — 阶段1a：protocol 新增 WireEvent 无损线 DTO + 唯一 to_wire 转换
+
+- **Why**: 落地架构重构阶段1的地基（见上一条 2026-06-24 设计条 + 架构.md §3.1.1）。对话事件的「EventPayload→客户端格式」翻译历史上在 desktop chat.rs / cli daemon.rs / web events.rs 各写一遍且不一致。本条先把这层收敛成唯一一份，纯增量、不碰任何 surface 现有路径。
+- **改动**:
+  - [crates/protocol/src/wire.rs](../crates/protocol/src/wire.rs)（新增）: `WireEvent` enum（EventPayload 拍平后的无损 DTO，`tag="type"`+snake_case，线形态与早期 desktop EngineEvent 完全一致）+ `WirePlanPermission` / `WireTodoItem`（仅 `active_form`→camelCase `activeForm` 适配前端历史契约）+ 唯一转换 `to_wire(&Event)->Option<WireEvent>`（嵌套 enum PermissionKind/ResumeCause/UserAnswer 拍平集中在此，附 8 个单测）。无损原则：DTO 带全字段、转换层不精简（cli 的 result 截断等差异留给阶段1c 下沉 render.rs）。
+  - [crates/protocol/src/lib.rs](../crates/protocol/src/lib.rs): 导出 wire 模块。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 测试模块加对照测试 `wire_event_matches_legacy_engine_event_json`——对 8 个代表性 payload 断言 `to_wire` 与现有 `agent_event_to_engine_event` 序列化 JSON 逐字节一致，是阶段1c 替换「前端无感」的安全网。
+- **影响范围**: 仅 protocol（新增模块，零依赖变化）+ desktop 测试。**未改任何 surface 运行路径**——三处现有翻译函数仍在用，WireEvent 尚未接线。`cargo check --workspace` 通过；`cargo test -p protocol --lib wire`（8 passed）+ `cargo test -p hebbian --lib wire_event_matches_legacy`（1 passed）。
+- **留尾巴**: 阶段1b（start_run 升 CoreClient + subscribe broadcast）、阶段1c（三 surface observer 改用 to_wire、删 desktop/web 两份重复 EngineEvent、cli 截断下沉 render.rs）未做。WireEvent 暂未上 ts-rs（阶段4）。
+- **关联**: docs/架构.md §3.1.1；proj 记忆 core-rpc-refactor。
+
+### 2026-06-24 — 修复：hebweb（web surface）首屏白屏——ChatInput 无守卫调 Tauri API
+
+- **Why**: 实测三 surface 时发现 hebweb 在 chrome 里**首屏白屏**（ErrorBoundary 捕获 `TypeError: Cannot read properties of undefined (reading 'metadata')`）。这是 hebweb 此前根本无法在浏览器使用的拦路虎，也是验证「desktop 前端 chrome 可加载」的前置缺陷。
+- **根因**（用 vite dev + HEBWEB_PROXY 代理在未压缩源码下定位）: `apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx` 两处 effect 在 mount 时**无条件**调 Tauri 专属 API——① `getCurrentWebview().onDragDropEvent(...)`（原生文件拖拽）；② `listen("hebbian://focus-chat-input")`（窗口快捷键聚焦）。web surface 下 `window.__TAURI_INTERNALS__` 不存在，`getCurrentWebview()` 读其 `.metadata` 直接抛错冲垮整个 ChatInput → ErrorBoundary 白屏；`listen` 抛 `transformCallback` unhandled rejection。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): import `isTauri`；两段 Desktop 专属 effect 开头加 `if (!isTauri()) return;` 守卫。web 端原生拖拽由标准 HTML5 file drop 兜底（无需 Tauri 原生事件）、窗口聚焦事件 web 端本就无意义。最小且彻底：只 gate 真正 Tauri-only 的副作用，不动其它逻辑。
+  - [apps/desktop/vite.config.ts](../apps/desktop/vite.config.ts): 新增 dev-only WS 代理（`HEBWEB_PROXY=<端口>` 时把 `/ws` 代理到本地 hebweb），方便在未压缩源码下调试 web transport。不设环境变量时为 undefined，对 tauri dev / build 零影响。
+- **影响范围**: 前端 chatInput + vite 配置。desktop（tauri）行为不变（isTauri() 为 true，effect 照常注册）；hebweb（web）首屏不再崩。
+- **验证（A/B 实测，非仅编译）**:
+  - 修前：playwright 加载 hebweb，console 235 个 `metadata` 错误 + 477 个 ErrorBoundary，页面白屏。
+  - 修后：同一加载流程，`metadata` / `transformCallback` / ErrorBoundary 全 0；截图确认侧边栏 / 会话列表 / transcript / 输入框完整渲染（hebweb-fixed.png）。
+  - 端到端：hebweb 输入框真实发「2+2 等于几」，agent 经 WS transport 流式回「2+2 等于 4。」并渲染为 assistant 气泡（hebweb-reply.png）+ 服务端日志确认 run_xxx 完整跑通 anthropic。
+  - 同步实测另两 surface：heb CLI（unix-socket）`started→run_started→text_done→run_finished` 真实返回；heb run（in-process + Edit 工具 + yolo 放行）文件真写入、`--json` outcome=done。
+- **留尾巴**: hebweb 仍缺 `refresh_models_catalog` 等命令的 mirror（console 仅 warning、不崩，models 选择器降级）；ReferenceNode 缺 importDOM（Lexical 提示、不影响）。这两项属 §7.6 hebweb v1 已知未镜像命令，按需补。验证用 playwright 截图已删除（不入仓库），证据以上文事件流 / console 计数文字描述为准。
+- **关联**: docs/架构.md §7.6；proj 记忆 core-rpc-refactor。
+
+### 2026-06-24 — 修复：hebweb（web surface）首屏白屏——ChatInput 无条件调 Tauri 原生拖拽 API
+
+- **Why**: 实测 hebweb 时发现浏览器加载即白屏（ErrorBoundary 捕获 `TypeError: Cannot read properties of undefined (reading 'metadata')`）。复现路径：起 hebweb → chrome 打开 → React 渲染 ChatInput 时崩。根因定位（vite dev 未压缩源码 + 控制台栈）：`apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx` 的原生拖拽 useEffect 无条件调 `getCurrentWebview()`（`@tauri-apps/api/webview`），该 API 内部读 `window.__TAURI_INTERNALS__.metadata`；web surface 下 `__TAURI_INTERNALS__` 不存在 → 同步抛错 → 整个 ChatInput 挂掉、ErrorBoundary 白屏。属架构 §7.6「web transport 下调 Tauri 专属 API 要 guard」的遗漏。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): 原生拖拽 effect 开头加 `if (!isTauri()) return;` 守卫（import 自 bridge/transport）。web surface 本就用标准 HTML5 file drop，不需要也不能用 Tauri 原生 `onDragDropEvent`。
+  - [apps/desktop/vite.config.ts](../apps/desktop/vite.config.ts): 加 dev-only WS proxy（`HEBWEB_PROXY=<port>` 时把 `/ws` 代理到本地 hebweb），方便在未压缩源码下调试 web transport；不设环境变量时不启用，不影响 tauri/build。
+- **影响范围**: desktop 前端（仅 web/hebweb surface 行为，tauri surface 不受影响——守卫前后 Tauri 下都注册原生拖拽）。
+- **验证**:
+  - 修复前：chrome 加载 hebweb，console 反复抛 `reading 'metadata'` + ErrorBoundary，#root 白屏。
+  - 修复后（vite dev + HEBWEB_PROXY=38080 + Playwright chromium）：`reading 'metadata'` 错误数 0、ErrorBoundary 数 0，#root 渲染出 740418 chars 真实 DOM（侧边栏 + 会话列表正常），截图 .playwright-cli/hebweb-fixed.png 为证。
+  - 三 surface 主路径实测：heb CLI（unix-socket）`new→input` 事件流 `run_started→text_done→run_finished` 通；`heb run --yolo --json` 工具调用 `tool_start(Edit)→tool_done` + 文件真实写入通；hebweb（HTTP+WS）HTTP 200 + 前端渲染通。
+- **留尾巴**: hebweb 仍未 mirror `refresh_models_catalog` 等非核心命令（v1 已知限制，console 仅 warning 不阻塞）。vite.config 的 dev proxy 是调试设施，保留备用。本修复独立于 core-rpc 重构（阶段 1a 已完成），属实测中发现的既存 bug。
+
+### 2026-06-23 — //goal 设置即触发 run + set marker + 修 progress marker 显示竞态 + 缩进对齐
+
+- **Why**: 用户三点反馈——①`//goal <条件>` 设置时要在消息流展示 goal 块并立即触发 run（把目标当 user message 发出去开始推进）；②goal 块缩进要对齐消息正文而非贴头像左缘；③"每次 run 停止执行 goal hook 都要显示 marker，现在好像不是"。
+- **改动**:
+  - `apps/desktop/src/lib.rs`: `set_active_goal` command 落盘 active_goal 后，额外 append 一条 `GoalOutcome{kind:"set"}` marker——消息流即时出现紫色「目标已设」竖线块
+  - `slashCommands.ts`: goal handler 设条件分支改为 `setActiveGoal` + `ctx.sendPrompt("Goal set: <条件>")`——落 set marker 的同时把目标当 user message 发出去触发 run 推进
+  - `types.ts` + `GoalResultSummary.tsx`: `goal_outcome.kind` 增加 `set`（紫色 Target 图标「目标已设」，reason 空不显示理由行）
+  - `crates/agent-core/src/storage/sessions.rs`: `MessageMeta::GoalOutcome.kind` 注释补 `set` 语义
+  - `MessageBubble.tsx`: goal marker 容器左 padding 改 68px（= px-6 24 + 头像 w-8 32 + gap-3 12），左缘对齐消息正文
+  - `crates/agent-core/src/agent_loop.rs`: **修 progress marker 显示竞态**——progress 分支原先 `emit(GoalProgress)` 早于 `append_goal_outcome_marker`，前端收事件立即 reload 时 marker 尚未落盘、读不到导致不显示；改为 append 先于 emit，与 achieved/impossible 两分支顺序一致
+- **影响范围**: agent-core（顺序修复）+ desktop 前后端。纯行为修正，无协议破坏。agent-core 8 个 goal 测试全过（含 marker 落盘断言）、tsc 0 error
+- **留尾巴**: ①`goal_iterations` 每个 run 从 0 重置（跨 run 计数不累计），用户确认先不动；②老会话（本次修复前版本）的 jsonl 有大量 active_goal meta 更新但少 marker，是历史数据非当前代码问题；③set marker 缩进改了，memory_writes marker 缩进未动（保持原样，仅 goal 按反馈调整）
