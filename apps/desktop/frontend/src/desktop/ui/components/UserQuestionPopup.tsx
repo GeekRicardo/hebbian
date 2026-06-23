@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CircleHelp, Send, X } from "lucide-react";
+import { ChevronDown, CircleHelp, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import type { AskQuestion, QuestionAnswerItem } from "@/desktop/ui/types";
 import { cn } from "@/desktop/ui/lib/utils";
@@ -26,6 +26,7 @@ export function UserQuestionPopup() {
   const [singleState, setSingleState] = useState<SingleState>(() => emptySingleState());
   const [answers, setAnswers] = useState<Record<number, SingleState>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const otherInputRef = useRef<HTMLTextAreaElement>(null);
 
   const questions = useMemo<AskQuestion[]>(() => {
@@ -38,6 +39,7 @@ export function UserQuestionPopup() {
   useEffect(() => {
     setSingleState(emptySingleState());
     setAnswers({});
+    setCollapsed(false);
   }, [pending?.requestId]);
 
   useEffect(() => {
@@ -47,10 +49,11 @@ export function UserQuestionPopup() {
   useEffect(() => {
     if (!pending) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancel();
-      }
+      if (e.key !== "Escape") return;
+      // 焦点在输入框（「其他回答」框、聊天主输入框等）时，ESC 留给输入框自身，不取消整个回答
+      if (isEditableTarget(e.target)) return;
+      e.preventDefault();
+      cancel();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -109,7 +112,12 @@ export function UserQuestionPopup() {
         <div className="w-[calc(100%+42px)] -mr-[42px] rounded-lg border border-border bg-card text-card-foreground shadow-lg overflow-hidden pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150">
           <div className="flex items-start gap-2 px-3 py-1.5 border-b border-border bg-muted/40">
             <CircleHelp className="w-3.5 h-3.5 text-primary shrink-0 mt-1" />
-            <span className="text-sm font-medium flex-1 leading-5">
+            <span
+              className={cn(
+                "text-sm font-medium flex-1 leading-5",
+                collapsed && "truncate",
+              )}
+            >
               {isMultiQuestion ? `需要你回答 ${questions.length} 个问题` : pending.question}
             </span>
             {(isMultiQuestion || pending.multi) && (
@@ -117,47 +125,60 @@ export function UserQuestionPopup() {
                 {isMultiQuestion ? "多题" : "多选"}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setCollapsed((v) => !v)}
+              className="shrink-0 mt-0.5 h-5 px-1 inline-flex items-center gap-0.5 rounded text-[11px] text-muted-foreground/80 hover:bg-muted hover:text-foreground transition-colors"
+              title={collapsed ? "展开作答" : "折叠（先看上方内容）"}
+            >
+              <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", collapsed && "-rotate-90")} />
+              {collapsed ? "展开" : "折叠"}
+            </button>
             <span className="text-[11px] text-muted-foreground/80 shrink-0 mt-1">ESC 取消</span>
           </div>
 
-          <div className="max-h-[55vh] overflow-y-auto">
-            {questions.map((q, qIdx) => (
-              <QuestionBlock
-                key={`${qIdx}-${q.title}`}
-                index={qIdx}
-                question={q}
-                state={stateFor(qIdx)}
-                submitting={submitting}
-                otherInputRef={!isMultiQuestion && qIdx === 0 ? otherInputRef : undefined}
-                showQuestionHeader={isMultiQuestion}
-                onSelect={(label) => updateQuestion(qIdx, (prev) => ({ ...prev, selected: label }))}
-                onToggleMulti={(label) => updateQuestion(qIdx, (prev) => ({
-                  ...prev,
-                  multiSelected: prev.multiSelected.includes(label)
-                    ? prev.multiSelected.filter((l) => l !== label)
-                    : [...prev.multiSelected, label],
-                }))}
-                onOtherText={(text) => updateQuestion(qIdx, (prev) => ({ ...prev, selected: OTHER_KEY, otherText: text }))}
-                onSelectOther={() => updateQuestion(qIdx, (prev) => ({ ...prev, selected: OTHER_KEY }))}
-                onSubmit={submit}
-              />
-            ))}
-          </div>
+          {!collapsed && (
+            <>
+              <div className="max-h-[55vh] overflow-y-auto">
+                {questions.map((q, qIdx) => (
+                  <QuestionBlock
+                    key={`${qIdx}-${q.title}`}
+                    index={qIdx}
+                    question={q}
+                    state={stateFor(qIdx)}
+                    submitting={submitting}
+                    otherInputRef={!isMultiQuestion && qIdx === 0 ? otherInputRef : undefined}
+                    showQuestionHeader={isMultiQuestion}
+                    onSelect={(label) => updateQuestion(qIdx, (prev) => ({ ...prev, selected: label }))}
+                    onToggleMulti={(label) => updateQuestion(qIdx, (prev) => ({
+                      ...prev,
+                      multiSelected: prev.multiSelected.includes(label)
+                        ? prev.multiSelected.filter((l) => l !== label)
+                        : [...prev.multiSelected, label],
+                    }))}
+                    onOtherText={(text) => updateQuestion(qIdx, (prev) => ({ ...prev, selected: OTHER_KEY, otherText: text }))}
+                    onSelectOther={() => updateQuestion(qIdx, (prev) => ({ ...prev, selected: OTHER_KEY }))}
+                    onSubmit={submit}
+                  />
+                ))}
+              </div>
 
-          <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-border bg-background/60">
-            {isMultiQuestion && (
-              <span className="text-[11px] text-muted-foreground pl-1">
-                已回答 {questions.filter((q, idx) => isAnswered(q, stateFor(idx))).length} / {questions.length}
-              </span>
-            )}
-            <div className="flex-1" />
-            <button type="button" onClick={cancel} disabled={submitting} className="h-7 px-2.5 rounded-md text-[13px] inline-flex items-center gap-1 transition-colors text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
-              <X className="w-3.5 h-3.5" />取消
-            </button>
-            <button type="button" onClick={submit} disabled={!canSubmit} className="h-7 px-2.5 rounded-md text-[13px] font-medium inline-flex items-center gap-1 transition-colors bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40">
-              <Send className="w-3.5 h-3.5" />提交
-            </button>
-          </div>
+              <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-border bg-background/60">
+                {isMultiQuestion && (
+                  <span className="text-[11px] text-muted-foreground pl-1">
+                    已回答 {questions.filter((q, idx) => isAnswered(q, stateFor(idx))).length} / {questions.length}
+                  </span>
+                )}
+                <div className="flex-1" />
+                <button type="button" onClick={cancel} disabled={submitting} className="h-7 px-2.5 rounded-md text-[13px] inline-flex items-center gap-1 transition-colors text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+                  <X className="w-3.5 h-3.5" />取消
+                </button>
+                <button type="button" onClick={submit} disabled={!canSubmit} className="h-7 px-2.5 rounded-md text-[13px] font-medium inline-flex items-center gap-1 transition-colors bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40">
+                  <Send className="w-3.5 h-3.5" />提交
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -222,6 +243,13 @@ function QuestionBlock({ index, question, state, submitting, otherInputRef, show
       </div>
     </section>
   );
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || el.isContentEditable;
 }
 
 function isAnswered(question: AskQuestion, state: SingleState) {
