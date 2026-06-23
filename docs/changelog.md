@@ -9278,3 +9278,25 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [avatar.ts](../apps/desktop/frontend/src/desktop/ui/lib/avatar.ts): `avatarImageSrc` 抽出 `computeAvatarImageSrc` + 包模块级有界缓存（`Map`，上限 32 满则整清）。**它只去重计算，对本 bug 并非根治**（瓶颈在渲染层）；保留是因为对需走完整解析路径的头像（裸 base64 等）确有普适小优化价值、且无害。
 - **影响范围**: 仅 desktop 前端 `avatar.ts`，纯函数加缓存对调用方透明；不动协议 / store / 后端。tsc 0 error。
 - **留尾巴**: **真正的代码层根治未做**——应二选一或都做：① 源头限制/压缩头像大小（`AvatarField` 选/传图时缩到合理尺寸，从根上杜绝巨型 data URL 进 localStorage）；② 渲染层把 data URL 转 blob URL，让 N 个 `<img>` 共享一次解码。
+
+### 2026-06-23 — 修复多行只读 Bash 命令被误判 ast-too-complex 反复审批
+
+- **Why**: 用户报 session `202606230807-76761e74`——多行只读脚本（每行一条 `echo`/`tail`/`ls`/`grep`/`find`）每次都要审批，即使已审批过、即使全是只读。复现：对该命令跑 `analyze_effects`，10 段全部 `is_readonly=true`、`write_targets` 全空，整条却判 `Destructive`，`dangerous_kinds=["ast-too-complex"]`。
+- **根因**: `shell_parse.rs` 的 `collect_ast_commands` 里，当两条命令之间的分隔符**含裸换行但不含 `|`/`&`/`;`** 时，主动打 `ast-too-complex`（"newline plain command injection"）。而 `hitl.rs` 的 `has_dangerous_pattern()` 强制人工审批、覆盖一切 allow 规则与记忆——这就是「审过又审」。该检查是 2026-05-27 引入 tree-sitter 时参考外部做法加的换行注入防护，但在 hebbian 段级审批架构下是纯误伤：① 与架构 §4.4.2.2 对 `ast-too-complex`「无法精确解析的结构」的定义矛盾——多行命令恰是 tree-sitter 能精确拆成独立 `command` 节点、各自判 `is_readonly` 的形态；② 规则自身不自洽——换行与 `;` 顺序执行语义等价，却只拦换行放行 `;`；③ fallback 路径 `split_top_level` 里换行根本不参与分段，该 flag 只在 tree-sitter 成功（最不需要它）时触发。真正的注入防护由 `ast_node_contains_complex`（命令替换/子 shell）+ 段级只读白名单兜底，与换行无关。
+- **改动**:
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): 删除 `separator_contains_newline_without_operator` 函数及其调用；`collect_ast_commands` 去掉随之无用的 `previous_command_end` 参数链路（唯一用途就是这条检查）。原 `newline_plain_command_injection_marked_dangerous` 测试语义改正为 `newline_separated_commands_split_not_collapsed`（断言换行命令正确拆段、`curl` 段仍因不在只读名单需审批，但整条不再因换行本身判危险）+ 新增 `multiline_readonly_script_stays_safe`。
+  - [crates/agent-core/tests/bash_history_replay.rs](../crates/agent-core/tests/bash_history_replay.rs): 新增集成回归，固化真实历史的关键形态（多行只读放行 / 会写·命令替换·非白名单段仍审批）。
+- **验证**: 用 `~/.hebbian/sessions` 最近 25 个 session 的 model_io.jsonl 提取 691 条唯一真实 Bash 命令（含 280 条多行）回放 `analyze_effects`——「全段只读且无危险结构却判 Destructive」的误伤从修复前存在降到 **0**。仍判 Destructive 的 269 条多行命令归因全部合理：87 条含命令替换/子shell/敏感env（架构本就该审），182 条含真实会写/非白名单段（`cd`/`rm`/`mkdir`/`sed`/`cat >` 等）。`cargo test -p agent-core --lib`（560 passed）、shell_parse/safe_commands/effects 三组单测、`cargo check --workspace` 全过。
+- **影响范围**: 仅 agent-core Bash effects 段级判定（§4.4.2）；不改协议、不改 PermissionStore 文件格式、不改 session.jsonl。安全性不降级——会写与危险结构仍走审批，只是改用「段是否只读」这个正确理由，不再用「是否含换行」这个错误理由。架构 §4.4.2.2 对 `ast-too-complex` 的定义本就未含「换行裸命令」，与修复后实现一致，故架构.md 无需改字。
+- **留尾巴**: 回放还暴露 `sed`/`awk` 等不在 `SAFE_ROOTS` 白名单 → 多行只读 sed 脚本仍每次审批；这是白名单保守策略（sed 加 `-i` 即写），属独立话题，本次不动。
+- **关联**: 复现 session `202606230807-76761e74`；前置规则引入见本文件 2026-05-27「Bash effects 接入 tree-sitter AST」条。
+
+### 2026-06-23 — AutoMode 界内文件编辑改为免判官（与 Default 同档直接放行）
+
+- **Why**: 用户报「自动模式下编辑 workdir / allowed_paths 内的文件，本该免审批，现在却每次都被 LLM 判官审一遍」。这原本是 §4.4.3 的既定设计（`edit_auto_allowed` 故意只放行 `Default | Yolo`，AutoMode 界内编辑交判官把关），但用户希望 AutoMode 在编辑维度上与 Default 一致——界内可回退的编辑不值得每次烧一次 judge LLM 调用。已确认是设计取舍而非 bug，按用户决策调整。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `edit_auto_allowed` 的模式集合从 `Default | Yolo` 扩为 `Default | AutoMode | Yolo`；更新函数文档与免审日志文案（去掉「Default mode」字样）。新增纯函数表测试 `edit_auto_allowed_table`（四模式 × 界内/界外/git-meta/非编辑工具，钉死判定）。`automode_judge_respects_cancel_during_auto_approval` 的测试载体从界内 Edit 改为界内 Bash 命令——界内编辑已免判官，judge cancel 路径只能用仍走判官的命令类来验。
+  - [docs/架构.md](架构.md): §4.4.3 AutoMode 行为重写为「界内非 git-meta 编辑直接放行、不调判官；界外/git-meta/命令仍走原审批」；同步 Yolo 对比描述（界内编辑两者都放行，差异在命令）；§13 决策表追加 `4.4.3（2026-06-23）AutoMode 界内编辑免判官` 一行。
+- **影响范围**: 仅 agent-core 权限判定（§4.4.3 / §4.4.4）；不改协议、不改 PermissionStore 文件格式、不改 session.jsonl。AutoMode 判官在编辑维度上不再介入，但仍管 Bash/PowerShell 命令、越界路径、git-meta——judge 链 / hands-off（force_automode）/ Classifier A 均不受影响。安全前提与 Default 一致：界内编辑由 edits-worktree 整 Run 可回退兜底（§4.13），免审是安全的。AutoMode 在文件编辑这个维度上现与 Yolo 等价（仅命令维度仍有判官 vs 全放的差别）。
+- **验证**: `cargo test -p agent-core --lib`（561 passed，含新增 `edit_auto_allowed_table`）、`cargo check --workspace` 通过。A/B：改动前 `edit_auto_allowed_table` 中 AutoMode 三条断言会 fail，改动后 pass，翻转可复现。AutoMode judge 需真实 provider judge 模型，未在 surface 端手动跑；行为由表测试 + 集成测试覆盖。
+- **留尾巴**: 无。

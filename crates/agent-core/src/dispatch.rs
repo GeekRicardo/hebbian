@@ -194,8 +194,9 @@ pub struct ToolDispatcher {
 /// - git 元数据（改 `.git/hooks` 后下次 git 操作即执行，worktree 兜不住 → 走工具审批）
 /// - 命令副作用（Bash/PowerShell 不是文件编辑，直接 false）
 ///
-/// AutoMode 不免审：界内编辑也交判官把关。`Default` 与 `Yolo` 同档命中（Yolo 的命令/越界
-/// 红线在审批主分支单独处理，不走本函数）。
+/// `Default` / `AutoMode` / `Yolo` 同档命中：界内编辑能被整 Run 回退兜底，三种模式都
+/// 免审。AutoMode 的判官价值聚焦在不可回退的 Bash 命令副作用与越界路径，对能一键回退
+/// 的界内编辑不必每次多耗一次 LLM 调用。Yolo 的命令/越界红线在审批主分支单独处理。
 ///
 /// 抽成纯函数让生产派发路径与历史重放测试共用同一份判定，杜绝复现偏差。
 pub(crate) fn edit_auto_allowed(
@@ -207,7 +208,9 @@ pub(crate) fn edit_auto_allowed(
     matches!(tool_name, "Edit" | "Write")
         && matches!(
             run_mode,
-            crate::run_mode::RunMode::Default | crate::run_mode::RunMode::Yolo
+            crate::run_mode::RunMode::Default
+                | crate::run_mode::RunMode::AutoMode
+                | crate::run_mode::RunMode::Yolo
         )
         && paths_in_bounds
         && !touches_git_meta
@@ -570,7 +573,7 @@ impl ToolDispatcher {
             info!(
                 tool = %call.name,
                 call_id = %call.id,
-                "[Permission:ToolCall] in-workspace file edit auto-allowed (Default mode, worktree-backed)"
+                "[Permission:ToolCall] in-workspace file edit auto-allowed (worktree-backed)"
             );
             PermissionDecision::Approved
         } else if self.subagent_bypass && !effects.has_dangerous_pattern() {
@@ -2899,6 +2902,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn edit_auto_allowed_table() {
+        use crate::run_mode::RunMode;
+        // 界内非 git-meta 的 Edit/Write：Default / AutoMode / Yolo 三档都免审
+        for mode in [RunMode::Default, RunMode::AutoMode, RunMode::Yolo] {
+            assert!(
+                edit_auto_allowed("Edit", mode, true, false),
+                "{mode:?} 界内编辑应免审"
+            );
+            assert!(
+                edit_auto_allowed("Write", mode, true, false),
+                "{mode:?} 界内写入应免审"
+            );
+        }
+        // PlanMode 下不免审（编辑工具本就被过滤，纯函数也守住）
+        assert!(!edit_auto_allowed("Edit", RunMode::PlanMode, true, false));
+        // 界外 / git-meta：任何模式都不走本函数放行（交 PathAccess / 工具审批）
+        assert!(!edit_auto_allowed("Edit", RunMode::AutoMode, false, false));
+        assert!(!edit_auto_allowed("Edit", RunMode::AutoMode, true, true));
+        // 非编辑工具一律 false
+        assert!(!edit_auto_allowed("Bash", RunMode::AutoMode, true, false));
+    }
+
     /// 造一个指定 run_mode 的 dispatcher，挂 NoopEditTool（Edit）+ DestructiveNoopTool（Bash）。
     fn mode_dispatcher(
         workspace: Arc<Workspace>,
@@ -3262,12 +3288,13 @@ mod tests {
     /// dispatcher 的 cancel 预先置位 → judge 的 LLM 调用应收到**真实** cancel 并返回
     /// Cancelled → dispatch 整体返回 `ModelError::Cancelled`，工具不执行、不弹审批。
     /// 修前 judge 用独立假 flag（`AtomicBool::new(false)`），收不到中断，judge 照跑完。
+    /// 载体用界内 Bash 命令：界内 Edit/Write 已免判官（§4.4.3），只有命令类仍进 judge。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn automode_judge_respects_cancel_during_auto_approval() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = Workspace::new(tmp.path(), Vec::new());
         let registry = Arc::new(ToolRegistry::new(vec![
-            Box::new(NoopEditTool) as Box<dyn crate::tools::Tool>
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>
         ]));
         let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
         let run_state = Arc::new(RunState::new(RunId::new()));
@@ -3302,8 +3329,9 @@ mod tests {
 
         let call = ToolCall {
             id: "call_cancel".into(),
-            input: serde_json::json!({ "file_path": tmp.path().join("src/x.rs").to_string_lossy() }),
-            name: "Edit".into(),
+            // 界内会写命令：judge 仍接管命令类（界内编辑已免判官）；cwd 界内避免先卡 PathAccess。
+            input: serde_json::json!({ "command": "touch cancel-probe", "cwd": tmp.path() }),
+            name: "Bash".into(),
         };
 
         let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))

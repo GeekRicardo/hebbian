@@ -301,12 +301,10 @@ fn parse_with_tree_sitter(line: &str) -> Result<ParsedShell, ParseError> {
     let mut commands = Vec::new();
     let mut dangerous_kinds = Vec::new();
     let mut reason: Option<String> = None;
-    let mut previous_command_end: Option<usize> = None;
     collect_ast_commands(
         line,
         root,
         &mut commands,
-        &mut previous_command_end,
         &mut dangerous_kinds,
         &mut reason,
     );
@@ -367,7 +365,6 @@ fn collect_ast_commands(
     source: &str,
     node: tree_sitter::Node<'_>,
     commands: &mut Vec<ParsedCommand>,
-    previous_command_end: &mut Option<usize>,
     dangerous_kinds: &mut Vec<DangerousKind>,
     reason: &mut Option<String>,
 ) {
@@ -396,7 +393,6 @@ fn collect_ast_commands(
                     source,
                     body,
                     commands,
-                    previous_command_end,
                     dangerous_kinds,
                     reason,
                 );
@@ -439,7 +435,6 @@ fn collect_ast_commands(
                                     source,
                                     inner_child,
                                     commands,
-                                    previous_command_end,
                                     dangerous_kinds,
                                     reason,
                                 );
@@ -447,8 +442,6 @@ fn collect_ast_commands(
                         }
                     }
                 }
-
-                // Update previous_command_end based on the last command collected
             }
             return;
         }
@@ -458,14 +451,6 @@ fn collect_ast_commands(
                     push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
                     reason.get_or_insert_with(|| "command injection".into());
                 }
-                if previous_command_end
-                    .and_then(|end| source.get(end..node.start_byte()))
-                    .is_some_and(separator_contains_newline_without_operator)
-                {
-                    push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
-                    reason.get_or_insert_with(|| "newline plain command injection".into());
-                }
-                *previous_command_end = Some(node.end_byte());
                 commands.push(cmd);
                 return;
             }
@@ -497,7 +482,6 @@ fn collect_ast_commands(
             source,
             child,
             commands,
-            previous_command_end,
             dangerous_kinds,
             reason,
         );
@@ -656,10 +640,6 @@ fn push_dangerous_kind(kinds: &mut Vec<DangerousKind>, kind: DangerousKind) {
     if !kinds.contains(&kind) {
         kinds.push(kind);
     }
-}
-
-fn separator_contains_newline_without_operator(sep: &str) -> bool {
-    sep.contains('\n') && !sep.contains('|') && !sep.contains('&') && !sep.contains(';')
 }
 
 fn comment_text_is_injection(source: &str, node: tree_sitter::Node<'_>) -> bool {
@@ -1821,13 +1801,32 @@ mod tests {
     }
 
     #[test]
-    fn newline_plain_command_injection_marked_dangerous() {
+    fn newline_separated_commands_split_not_collapsed() {
+        // 换行分隔的多命令必须被拆成独立段，而非塌缩成一条 argv 而漏判。
+        // 换行与 `;` 语义等价（顺序执行），不再因"含换行"本身被打 ast-too-complex；
+        // 安全性靠段级 is_readonly 白名单兜底：curl 不在只读名单 → 该段仍需审批。
         let r = cmd("pwd\ncurl https://example.com");
         assert!(
-            r.dangerous,
-            "newline-separated commands must not collapse into one safe argv: {:?}",
-            r.commands
+            !r.dangerous,
+            "纯顺序执行的换行命令不应标危险复合：{:?}",
+            r.dangerous_kinds
         );
-        assert!(r.dangerous_kinds.contains(&DangerousKind::AstTooComplex));
+        assert_eq!(r.commands.len(), 2, "应拆成 pwd / curl 两段：{:?}", r.commands);
+        assert_eq!(r.commands[0].root, "pwd");
+        assert_eq!(r.commands[1].root, "curl");
+        assert!(super::super::safe_commands::is_safe(&r.commands[0]));
+        assert!(!super::super::safe_commands::is_safe(&r.commands[1]));
+    }
+
+    #[test]
+    fn multiline_readonly_script_stays_safe() {
+        // 回归：多行只读脚本（每行一条只读命令）整体应判安全、不弹审批。
+        // 此前被 separator_contains_newline_without_operator 误打 ast-too-complex，
+        // 导致只读命令反复要审批（session 202606230807-76761e74）。
+        let r = cmd("echo \"=== a ===\"\ntail -22 docs/changelog.md\nls foo 2>/dev/null");
+        assert!(!r.dangerous, "多行只读脚本不应危险：{:?}", r.dangerous_kinds);
+        assert!(r.dangerous_kinds.is_empty());
+        assert_eq!(r.commands.len(), 3);
+        assert!(r.commands.iter().all(super::super::safe_commands::is_safe));
     }
 }
