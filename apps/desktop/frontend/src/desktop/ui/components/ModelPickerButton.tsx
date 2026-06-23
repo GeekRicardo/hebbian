@@ -206,7 +206,7 @@ function ReasoningControls({
             <div className="flex items-center justify-between gap-2 text-[11px]">
               <span
                 className="text-muted-foreground shrink-0"
-                title={`实际发送：${effortDisplay(providerKind, model, effort)}`}
+                title={`${effortDisplay(providerKind, model, effort)}`}
               >
                 思考强度
               </span>
@@ -219,7 +219,7 @@ function ReasoningControls({
                       type="button"
                       disabled={!enabled}
                       onClick={() => onChange({ ...reasoning, effort: level })}
-                      title={`实际发送：${effortDisplay(providerKind, model, level)}`}
+                      title={`${effortDisplay(providerKind, model, level)}`}
                       className={cn(
                         "px-2 py-0.5 text-[10px] transition-colors",
                         active
