@@ -1,0 +1,225 @@
+<section class="module" id="module-2">
+
+<!-- SCREEN 1: Opening Metaphor -->
+<div class="screen animate-in">
+  <h1 class="module-title">Agent 大脑的无限循环</h1>
+  <p class="module-subtitle">run_loop 是 Hebbian 的心脏。它在一个巨大的 <code>loop {}</code> 里反复执行「调模型 → 跑工具 → 再调模型 → 再跑工具」，直到模型说「好了，完成了」。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🧠</span>
+    <div class="callout-text">
+      <strong>比喻：就像你跟一个工程师结对编程</strong>
+      <p>你说「帮我修这个 bug」，他看了看代码说「让我先读一下这个文件」（Read 工具），读了之后说「我需要改第 42 行」（Edit 工具），改完后说「让我跑一下测试」（Bash 工具）——每一步都是「想 → 做 → 看结果 → 再想」。agent_loop 就是把这个循环自动化的引擎。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: The Big Picture -->
+<div class="screen animate-in">
+  <h2 class="section-title">Turn、Step、Run：三层时间结构</h2>
+
+  <p>agent_loop 内部有三个层级的时间概念，理解它们是读懂整个系统的前提：</p>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔄</div>
+      <div class="pattern-card-body">
+        <h3>Run</h3>
+        <p>一次「用户消息 → 全部完成」的完整过程。一个 Run 可能包含多个 Turn。RunFinished 事件标志 Run 结束。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔁</div>
+      <div class="pattern-card-body">
+        <h3>Turn</h3>
+        <p>一次「问模型 → 执行工具 → 出结果」的循环。TurnFinished 事件标志 Turn 结束。如果模型调了工具，当前 Turn 还没结束——下一轮模型调用仍在同一 Turn 内。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">👣</div>
+      <div class="pattern-card-body">
+        <h3>Step</h3>
+        <p>最小的粒度。ModelStep = 一次模型调用。ToolStep = 一批工具并发执行。StepStarted / StepFinished 是调试用的边界事件。</p>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-6);">举个具体例子：你说「帮我修个 bug」，模型回复「我先用 Read 读一下 main.rs」，然后调了 Read 工具。这就是 <strong>一个 Turn</strong>——包含一个 ModelStep（调模型）和一个 ToolStep（执行 Read）。如果模型读完又说「再用 Bash 跑测试」，那就是 <strong>同一个 Run 里的第二个 Turn</strong>。</p>
+</div>
+
+<!-- SCREEN 3: Stream vs Complete -->
+<div class="screen animate-in">
+  <h2 class="section-title">两条路：流式 vs 非流式</h2>
+
+  <p>agent_loop 发送模型请求时有两条路径：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/agent-core/src/agent_loop.rs:758</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">let</span> used_stream_path = stream</span>
+<span class="code-line">    && (!has_tools</span>
+<span class="code-line">        || client.<span class="code-function">supports_streaming_tools</span>());</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">走流式路径的条件：用户开了 stream 开关，并且...</p>
+        <p class="tl">要么本轮没有工具调用（纯文本回复），</p>
+        <p class="tl">要么当前模型提供商支持「流式工具调用」</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="pattern-cards stagger-children" style="margin-top:var(--space-6);">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🌊</div>
+      <div class="pattern-card-body">
+        <h3>Stream（流式路径）</h3>
+        <p>模型一边生成一边推事件：<code>TextDelta</code> 逐段到达、<code>ToolCallDelta</code> 逐字段填充。前端能看到文字「长出来」的过程。</p>
+        <p style="font-size:var(--text-xs);color:var(--color-text-muted);">OpenAI 的 GPT-4 支持流式工具调用。Anthropic 的 Claude 不支持——带工具时必须走 complete 路径。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📦</div>
+      <div class="pattern-card-body">
+        <h3>Complete（非流式路径）</h3>
+        <p>模型一次性返回完整结果。后端收到后 emit <code>TextDelta</code>（全文）和 <code>ToolCallStarted</code>（每个工具一次性到达）。前端仍然按事件处理，但不是「逐字生长」而是「一次出现」。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box warning" style="margin-top:var(--space-6);">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-text">
+      <strong>这是理解 Bug 的关键</strong>
+      <p>Anthropic + 工具 = 走 complete 路径。complete 路径下，每轮 Turn 的文本通过 <strong>一个 TextDelta</strong>（整段）emit，然后每轮 TurnFinished。多轮 Turn 会 emit 多个 TextDelta，每个都是那一轮的完整文本。前端把它们拼接起来——但如果拼接逻辑出错，前面轮次的输出就「消失」了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: Model Response Types -->
+<div class="screen animate-in">
+  <h2 class="section-title">模型回复的两种形态</h2>
+
+  <p>每次模型调用的返回值是 <code>ModelResponse</code>，它有两种 variant：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/model-gateway/src/types.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">pub enum</span> ModelResponse {</span>
+<span class="code-line">    Done {</span>
+<span class="code-line">        text: String,</span>
+<span class="code-line">        reasoning: String,</span>
+<span class="code-line">        usage: Usage,</span>
+<span class="code-line">        finish: FinishReason,</span>
+<span class="code-line">    },</span>
+<span class="code-line">    ToolCalls {</span>
+<span class="code-line">        text: String,</span>
+<span class="code-line">        reasoning: String,</span>
+<span class="code-line">        calls: Vec&lt;ToolCall&gt;,</span>
+<span class="code-line">        usage: Usage,</span>
+<span class="code-line">    },</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">模型返回结果是一个枚举——要么「完成」要么「要调工具」</p>
+        <p class="tl">Done：模型觉得任务做完了，不需要再调工具</p>
+        <p class="tl">  附带最终的文本回复</p>
+        <p class="tl">  附带给用户看的推理过程（如果有）</p>
+        <p class="tl">  附带 token 用量统计</p>
+        <p class="tl">  附带结束原因（正常停止 / 达到上限 / 被过滤）</p>
+        <p class="tl">ToolCalls：模型想调工具——「我要读文件」「我要跑命令」</p>
+        <p class="tl">  附带工具调用前的文本（比如「让我先看一下代码」）</p>
+        <p class="tl">  附带推理过程</p>
+        <p class="tl">  附带具体要调的工具列表（可能多个，并发执行）</p>
+        <p class="tl">  附带 token 用量</p>
+      </div>
+    </div>
+  </div>
+
+  <p>关键在于：<strong>ToolCalls 的 text 字段</strong>。这是模型在调工具之前说的那段话——比如「让我读一下 foo.rs 看看问题在哪」。这段话也会作为 TextDelta 发给前端。如果模型连续调了三次工具，前端会收到三个 TextDelta，每个是那一轮的文本。</p>
+</div>
+
+<!-- SCREEN 5: Chat Simulation -->
+<div class="screen animate-in">
+  <h2 class="section-title">对话模拟：agent_loop 内部发生了什么</h2>
+
+  <p>下面模拟一次真实的 agent_loop 内部对话——模型（🤖）、工具调度器（🔧）、前端（🖥️）三方怎么协作。</p>
+
+  <div class="chat-window" id="chat-loop">
+    <div class="chat-message" data-sender="🖥️ 前端" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-5);">🖥</span>
+      <div class="chat-bubble">用户说：「帮我看看为什么编译不过」</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 1 ModelStep】发请求给 Claude...它说「让我读一下 Cargo.toml」【ToolCalls: Read】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 1 ToolStep】执行 Read(Cargo.toml)...读到了内容，ok。emit TurnFinished。</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 2 ModelStep】把 Read 的结果喂给模型...模型说「依赖版本太老，让我改一下」【ToolCalls: Edit】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 2 ToolStep】执行 Edit(Cargo.toml)...修改成功。</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 3 ModelStep】再问模型...它说「改好了，试试 cargo build」【ToolCalls: Bash】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 3 ToolStep】执行 Bash(cargo build)...编译通过！</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 4 ModelStep】模型说「编译通过了！问题已修复。」【Done】→ emit RunFinished → 退出 loop</div>
+    </div>
+    <div class="chat-typing" style="display:none;">
+      <span class="chat-avatar" id="chat-loop-typing-avatar">...</span>
+      <div class="chat-bubble typing-dots"><span></span><span></span><span></span></div>
+    </div>
+    <div class="chat-controls" style="margin-top:var(--space-3);text-align:center;">
+      <button class="chat-next-btn quiz-check-btn">Next</button>
+      <button class="chat-all-btn quiz-check-btn">Play All</button>
+      <button class="chat-reset-btn quiz-reset-btn">Reset</button>
+      <span class="chat-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-4);">注意：这是 <strong>一个 Run，四个 Turn</strong>。前端在整个 Run 期间维持一个 streaming slot，TextDelta 一直往里累积——除非用户中途插话（下个模块讲）。</p>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module2">
+    <div class="quiz-question-block"
+         data-correct="false"
+         data-explanation-right="对！Anthropic Claude 不支持流式工具调用。当请求包含工具且使用 Anthropic 时，自动走 complete 路径——模型一次性返回完整结果，而不是逐段流。"
+         data-explanation-wrong="你再想想——Anthropic 的 API 目前确实不支持在工具调用期间流式传输。所以带工具的请求必须走 complete 路径。">
+      <h3 class="quiz-question">Anthropic Claude + 工具调用 = 走流式路径？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="true" onclick="selectOption(this)">是，Anthropic 支持流式工具</button>
+        <button class="quiz-option" data-value="false" onclick="selectOption(this)">不是，Anthropic 带工具走 complete 路径</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module2')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module2')">Try Again</button>
+  </div>
+</div>
+
+</section>

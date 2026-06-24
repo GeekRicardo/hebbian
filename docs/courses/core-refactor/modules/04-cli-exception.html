@@ -1,0 +1,169 @@
+<section class="module" id="module-4">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">广播室 vs. 调度电台</h2>
+
+  <p>前面说 to_wire 像机场广播室。但命令行这个壳，更像消防队的<strong>调度电台</strong>——它不只转发广播室的信息，还夹带自己专属的调度指令（"3 号车出动""收到完毕"），而且为了让无线电不卡，长消息会被<strong>故意截短</strong>。</p>
+
+  <p>如果硬把调度电台也换成普通广播室，那些专属调度信号和"截短"的习惯就没了——所有依赖这套电台的设备（自动化脚本）全得重写。这不是统一，是破坏。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🧭</div>
+    <div class="callout-content">
+      <strong class="callout-title">这一节讲的是"分寸"</strong>
+      <p>重构里最难的不是"怎么改"，而是"改到哪儿为止"。命令行就是那条线：它该统一的地方统一，不该动的地方坚决不动。看懂这个判断，比看懂任何代码都值钱。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Why CLI is a superset -->
+<div class="screen animate-in">
+  <h2 class="section-title">命令行的事件，是个"超集"</h2>
+
+  <p>命令行的事件类型叫 <code>DaemonEvent</code>。它不是 WireEvent 的"另一种写法"——它是 WireEvent 的<span class="term" data-definition="超集（superset）指一个集合包含了另一个集合的全部，外加更多。这里指 DaemonEvent 含有 WireEvent 的所有业务事件，外加一些 WireEvent 没有的专属内容。所以不能用 WireEvent 简单替换它。">超集</span>：业务事件它都有，外加 WireEvent 根本没有的东西。</p>
+
+  <div class="badge-list">
+    <div class="badge-item">
+      <code class="badge-code">Started</code>
+      <span class="badge-desc">命令行专属：守护进程刚启动、报告自己的会话 ID。这是"调度指令"，agent 大脑里压根没有这种事件</span>
+    </div>
+    <div class="badge-item">
+      <code class="badge-code">result 截断 500</code>
+      <span class="badge-desc">工具输出再长，也只留前 500 字——因为命令行是一行一行往外吐的，超长行会撑爆解析脚本</span>
+    </div>
+    <div class="badge-item">
+      <code class="badge-code">扁平化字段</code>
+      <span class="badge-desc">把嵌套的权限信息拍平成一层，方便脚本用 jq 这类工具直接挑字段</span>
+    </div>
+  </div>
+
+  <div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-content">
+      <strong class="callout-title">这些不是 bug，是有意设计</strong>
+      <p>命令行的读者是<strong>自动化脚本</strong>，不是人。脚本要逐行解析 <span class="term" data-definition="NDJSON = Newline-Delimited JSON。每行是一个独立的 JSON 对象，一行一条。特别适合流式输出和脚本逐行读取——读一行、解析一行、处理一行。">NDJSON</span>，所以截断防爆行、扁平好挑字段，都是为脚本量身定做的。强行换成 WireEvent，等于把这些贴心设计全删了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Form vs Type -->
+<div class="screen animate-in">
+  <h2 class="section-title">关键区分：统一"形态"≠ 替换"类型"</h2>
+
+  <p>用户当时的要求是"把命令行也统一"。但"统一"有两种截然不同的理解，代价天差地别——这是必须先讲清、再动手的岔路：</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin:var(--space-6) 0;">
+    <div class="pattern-card" style="border-top:3px solid var(--color-success)">
+      <div class="pattern-icon" style="background:var(--color-success)">✅</div>
+      <h4 class="pattern-title">统一形态（做了）</h4>
+      <p>保留 DaemonEvent 这个类型，但让它内部那几个字段的<strong>写法</strong>复用 to_wire 的规范。改动小、不破坏脚本格式。</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-error)">
+      <div class="pattern-icon" style="background:var(--color-error)">🚫</div>
+      <h4 class="pattern-title">替换类型（没做）</h4>
+      <p>把 DaemonEvent 整个换成 WireEvent。破坏 NDJSON 格式、删掉专属信号和截断，所有脚本重写。</p>
+    </div>
+  </div>
+
+  <p>读透代码后发现：命令行那几个字段其实是<strong>翻译得不一致</strong>——它用了一种偷懒写法（直接 dump 内部值），导致同一个"危险等级"，命令行写成 <code>"Critical"</code>，而桌面/网页写成规范的 <code>"critical"</code>。这才是真正该统一的：<strong>字段值的形态</strong>，不是整个类型。</p>
+</div>
+
+<!-- SCREEN 4: The actual fix (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">真正的修法：复用同一套规范</h2>
+
+  <p>解法很优雅：把 to_wire 内部那几个"枚举转字符串"的小函数<span class="term" data-definition="公开（pub / public）指把一段代码标记为'别处也能调用'。原本只在自己文件里用的函数，标成公开后，其他模块就能引用同一份——实现'单一来源'。">公开</span>出来，让命令行直接复用。从此"危险等级怎么写成字符串"，全世界只有一个定义。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · daemon.rs（改动示意）</span>
+      <pre><code><span class="code-line"><span class="code-comment">// 改之前：命令行偷懒，直接 dump 内部值</span></span>
+<span class="code-line">risk: <span class="code-function">format!</span>(<span class="code-string">"{risk:?}"</span>),   <span class="code-comment">// → "Critical"</span></span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-comment">// 改之后：复用 to_wire 的同一套规范</span></span>
+<span class="code-line">risk: protocol::<span class="code-function">risk_str</span>(risk),  <span class="code-comment">// → "critical"</span></span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">原本：命令行自己随手把"危险等级"转成文字。</p>
+        <p class="tl">随手转的结果是首字母大写的 "Critical"——和别人不一样。</p>
+        <p class="tl"> </p>
+        <p class="tl">现在：调用 to_wire 用的同一个 <code>risk_str</code> 函数。</p>
+        <p class="tl">于是三个壳写出来的都是规范的 "critical"，逐字节一致。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">📋</div>
+    <div class="callout-content">
+      <strong class="callout-title">改了对外格式，就得改文档</strong>
+      <p>把 <code>"Critical"</code> 改成 <code>"critical"</code> 是<strong>对外可见的格式变更</strong>——依赖命令行的脚本可能在意。所以这次改动同步更新了命令行的调试文档，把字段的规范取值写清楚。改契约必须连文档一起改，这是纪律。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module4">
+    <div class="scenario-block">
+      <div class="scenario-context">
+        <span class="scenario-label">场景</span>
+        <p>你在指挥 AI 重构一个系统。AI 提议："把命令行的事件类型也换成统一的 WireEvent，彻底干净。"但你知道命令行有专属的启动信号、有意的输出截断。你该怎么回应？</p>
+      </div>
+      <div class="quiz-question-block"
+           data-correct="opt-b"
+           data-explanation-right="对。这就是'统一形态 vs 替换类型'的判断。专属信号和截断是有意设计，不能丢；但字段的写法可以复用同一套规范。让 AI 只统一形态，保留类型。"
+           data-explanation-wrong="再想想。'彻底干净'听起来很爽，但会删掉命令行为脚本量身定做的设计（专属信号、截断），让所有依赖它的脚本崩溃。干净不等于正确。">
+        <div class="quiz-options">
+          <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>同意，越统一越好，让 AI 直接换</span>
+          </button>
+          <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>喊停，区分"统一形态"和"替换类型"——保留命令行的类型和专属设计，只让字段值复用同一套规范</span>
+          </button>
+          <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>放弃统一，命令行完全不动</span>
+          </button>
+        </div>
+        <div class="quiz-feedback"></div>
+      </div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-a"
+         data-explanation-right="正确。命令行的截断是为脚本逐行解析服务的有意设计——它属于'这个壳怎么展示'，不属于'事件本身是什么'。各壳的展示偏好下沉到各自渲染层，翻译层保持无损。"
+         data-explanation-wrong="不太对。如果让 to_wire 也替命令行截断，翻译层就又开始替不同的壳做不同的事——正好回到'翻译分叉成多份'的老问题。截断该留在命令行自己那层。">
+      <h3 class="quiz-question">命令行把工具输出截断到 500 字。这个"截断"逻辑应该放在哪里？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放在命令行自己这层（各壳的展示偏好下沉到各壳），翻译层保持无损</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放进 to_wire，让翻译时就替命令行截断好</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放在 agent 大脑里，源头就截断</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">最后一站：改了这么多，怎么<strong>证明</strong>什么都没坏？</p>
+</div>
+
+</section>

@@ -391,10 +391,10 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
         }),
         EventPayload::RunCancelled => Some(DaemonEvent::RunCancelled),
         EventPayload::RunSuspended { reason, .. } => Some(DaemonEvent::RunSuspended {
-            reason: format!("{reason:?}"),
+            reason: protocol::suspend_reason_str(reason).to_string(),
         }),
         EventPayload::RunResumed { cause } => Some(DaemonEvent::RunResumed {
-            cause: format!("{cause:?}"),
+            cause: protocol::resume_cause_str(cause),
         }),
         EventPayload::TextDelta { text } => Some(DaemonEvent::TextDelta {
             text: text.clone(),
@@ -491,7 +491,7 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 kind: kind_str,
                 tool_name,
                 summary: summary.clone(),
-                risk: format!("{risk:?}"),
+                risk: protocol::risk_str(risk),
                 fingerprint,
                 command_segments,
                 input,
@@ -503,7 +503,7 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             decision,
         } => Some(DaemonEvent::PermissionResolved {
             request_id: request_id.as_str().to_string(),
-            decision: format!("{decision:?}"),
+            decision: protocol::approval_decision_str(decision).to_string(),
         }),
         EventPayload::UserQuestionRequested {
             request_id,
@@ -1468,4 +1468,72 @@ fn resolve_provider_model(
         })?;
 
     Ok((provider.id.clone(), model))
+}
+
+#[cfg(test)]
+mod translate_tests {
+    use super::*;
+    use protocol::{
+        Event as AgentEvent, EventPayload, PermissionKind, PermissionRequestId, RiskLevel, RunId,
+        SuspendReason,
+    };
+
+    /// 步骤4 收口回归（架构 §3.1.1）：cli 的 DaemonEvent 业务事件字段必须复用 protocol 的
+    /// 集中 mapper，与 desktop/web 的 to_wire 输出**逐字段一致**。改前 cli 用 `format!("{:?}")`
+    /// 产出 `"Critical"`/`"Cron"`（Debug 形态），与 WireEvent 的 `"critical"`/`"cron"` 不一致；
+    /// 本测试钉死统一后的小写规范形态，任一处退回 Debug format 立即 fail。
+    #[test]
+    fn daemon_event_risk_and_reason_match_wire_canonical_form() {
+        // risk: Critical → "critical"（不是 Debug 的 "Critical"）
+        let perm = AgentEvent::now(
+            RunId::new(),
+            0,
+            EventPayload::PermissionRequested {
+                request_id: PermissionRequestId("r1".into()),
+                kind: PermissionKind::ToolCall {
+                    tool_name: "Write".into(),
+                    input: serde_json::json!({"file_path": "/tmp/x"}),
+                    fingerprint: None,
+                    command_segments: vec![],
+                    segments: vec![],
+                    refuse_remember: false,
+                },
+                summary: "写文件".into(),
+                risk: RiskLevel::Critical,
+                auto_handled: false,
+                call_id: "c1".into(),
+            },
+        );
+        let de = translate_event(&perm).expect("permission_requested 应翻译");
+        let json = serde_json::to_value(&de).unwrap();
+        assert_eq!(json["risk"], "critical", "risk 必须是小写规范形态，与 to_wire 一致");
+        assert_eq!(json["event"], "permission_requested");
+
+        // suspend reason: Cron → "cron"（不是 Debug 的 "Cron"）
+        let susp = AgentEvent::now(
+            RunId::new(),
+            1,
+            EventPayload::RunSuspended {
+                reason: SuspendReason::Cron,
+                resumes_at_ms: None,
+                waiting_for_task_ids: vec![],
+            },
+        );
+        let de = translate_event(&susp).expect("run_suspended 应翻译");
+        let json = serde_json::to_value(&de).unwrap();
+        assert_eq!(json["reason"], "cron", "suspend reason 必须走 protocol mapper，与 to_wire 一致");
+
+        // 与 to_wire 交叉验证：同一 payload 两侧 risk 字段逐字节一致
+        let wire = protocol::to_wire(&perm).unwrap();
+        let wire_json = serde_json::to_value(&wire).unwrap();
+        assert_eq!(json_risk(&wire_json), "critical");
+        assert_eq!(
+            json_risk(&wire_json),
+            serde_json::to_value(&translate_event(&perm).unwrap()).unwrap()["risk"]
+        );
+    }
+
+    fn json_risk(v: &serde_json::Value) -> &str {
+        v["risk"].as_str().unwrap_or("")
+    }
 }

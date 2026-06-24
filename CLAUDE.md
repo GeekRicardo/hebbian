@@ -130,11 +130,13 @@ cargo test -p agent-core --lib
 # TS 类型检查
 pnpm exec tsc --noEmit
 
-# 桌面 dev 模式（唯一 surface）
-pnpm tauri dev
+# 三 surface 任选最快能复现的（行为对称，见「修 bug 必经流程」）
+pnpm tauri dev                                   # Desktop GUI
+./target/debug/heb new --provider=<id> ...       # heb CLI（NDJSON）
+./target/debug/hebweb --port 38080 ...           # hebweb（WS）
 ```
 
-修改 EventPayload 后必须跑 desktop dev 模式手动验证事件流完整（chat.rs 翻译 + 前端渲染两端都看一眼）。
+修改 EventPayload / WireEvent 后：事件翻译已统一到 `protocol::to_wire`（三 surface 共享，架构 §3.1.1），改协议字段须同步 `crates/protocol/src/wire.rs` 的 `to_wire` + 前端 `types.ts`，并在任一 surface 跑通验证事件流完整（前端渲染 / NDJSON 字段 / WS payload 看一眼）。
 
 ### 步骤 5：追加 changelog
 

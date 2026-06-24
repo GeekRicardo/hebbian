@@ -1,4 +1,3 @@
-use crate::engine::EngineEvent;
 use crate::error::{AppError, AppResult};
 use crate::hebisland_client::{HebislandClient, IslandCard, IslandOption, IslandQuestion};
 use crate::hitl::HitlState;
@@ -27,8 +26,8 @@ use common::{
 };
 use model_gateway::{self, config::Provider};
 use protocol::{
-    ApprovalDecision, AskQuestion, EventPayload, PermissionKind, PermissionRequestId,
-    QuestionOption, UserAnswer,
+    ApprovalDecision, EventPayload, PermissionKind, PermissionRequestId, QuestionOption,
+    UserAnswer,
 };
 use std::{
     collections::HashMap,
@@ -111,7 +110,7 @@ fn matches_injected_user_message(
 pub async fn send_and_save(
     app: &AppHandle,
     args: SendArgs,
-    on_event: Channel<EngineEvent>,
+    on_event: Channel<protocol::WireEvent>,
 ) -> AppResult<Message> {
     let dd = data_dir(app)?;
     let app_for_island = app.clone();
@@ -121,7 +120,7 @@ pub async fn send_and_save(
     // ——与 `wakeup-fired` 同款 long-lived 出口，前端 listen 全局订阅。
     let app_for_derived = app.clone();
     let derived_sink: agent_core::agent_loop::EventSink = Arc::new(move |event: AgentEvent| {
-        if let Some(ev) = agent_event_to_engine_event(&event) {
+        if let Some(ev) = protocol::to_wire(&event) {
             if let Err(e) = app_for_derived.emit("engine-derived-event", ev) {
                 tracing::warn!(error = %e, "failed to emit engine-derived-event");
             }
@@ -158,7 +157,7 @@ pub async fn send_and_save(
 pub async fn send_and_save_in_data_dir(
     data_dir: &Path,
     args: SendArgs,
-    emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
+    emit_event: impl Fn(protocol::WireEvent) + Send + Sync + 'static,
     derived_sink: Option<agent_core::agent_loop::EventSink>,
 ) -> AppResult<Message> {
     // 预构建 vision client（async：需要刷新 OAuth token）。
@@ -191,7 +190,7 @@ pub async fn send_and_save_in_data_dir(
 pub async fn send_and_save_in_data_dir_with_client_factory(
     data_dir: &Path,
     args: SendArgs,
-    emit_event: impl Fn(EngineEvent) + Send + Sync + 'static,
+    emit_event: impl Fn(protocol::WireEvent) + Send + Sync + 'static,
     derived_sink: Option<agent_core::agent_loop::EventSink>,
     build_client: impl Fn(Provider, String, Option<common::ReasoningConfig>) -> AppResult<Arc<dyn ModelClient>>
         + Send
@@ -708,7 +707,7 @@ impl PartialFileWriter {
 }
 
 /// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
-/// 把每个事件翻译成 `EngineEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
+/// 把每个事件翻译成 `protocol::WireEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
 struct DesktopObserver<'a> {
     parts: AssistantPartsRecorder,
     partial_output: String,
@@ -731,7 +730,7 @@ struct DesktopObserver<'a> {
     hitl: Arc<HitlGate>,
     data_dir: PathBuf,
     session_id: String,
-    emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+    emit: &'a (dyn Fn(protocol::WireEvent) + Send + Sync),
     partial_writer: Option<PartialFileWriter>,
     /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：按 subagent_call_id 累积子过程，
     /// 同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父 message 落**主** session.jsonl，
@@ -743,7 +742,7 @@ impl<'a> DesktopObserver<'a> {
     fn new(
         hitl_state: Option<Arc<HitlState>>,
         hitl: Arc<HitlGate>,
-        emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
+        emit: &'a (dyn Fn(protocol::WireEvent) + Send + Sync),
         data_dir: &Path,
         session_id: &str,
         consumed_pending_inputs: Option<ConsumedPendingInputs>,
@@ -858,7 +857,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
             self.nested.record(call_id, &event.payload);
             self.nested.sync_into(&mut self.tool_calls);
             self.nested.sync_into(&mut self.segment_tool_calls);
-            if let Some(ev) = agent_event_to_engine_event(event) {
+            if let Some(ev) = protocol::to_wire(event) {
                 (self.emit)(ev);
             }
             return;
@@ -917,7 +916,7 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         record_tool_event(&mut self.tool_calls, event);
         record_tool_event(&mut self.segment_tool_calls, event);
         self.mark_segment_start_if_needed();
-        if let Some(ev) = agent_event_to_engine_event(event) {
+        if let Some(ev) = protocol::to_wire(event) {
             (self.emit)(ev);
         }
 
@@ -1609,7 +1608,7 @@ pub async fn send_aside(
     attachments: Vec<common::attachments::MessageAttachment>,
     cancel_flag: CancelFlag,
     preview_bridge: Option<std::sync::Arc<dyn agent_core::preview_bridge::PreviewBridge>>,
-    emit_event: impl Fn(EngineEvent) + Send + Sync,
+    emit_event: impl Fn(protocol::WireEvent) + Send + Sync,
 ) -> AppResult<(Vec<Message>, Message)> {
     // 极简 harness：三个信号工具（写路径，经 inspector）+ 两个观察工具
     // （读路径，经 PreviewBridge/CDP；bridge 不可用时工具自带降级提示）。
@@ -1638,7 +1637,8 @@ pub async fn send_aside(
         "PreviewCapture".to_string(),
         "PreviewInspect".to_string(),
     ];
-    run_aside(RunAsideArgs {
+    // 旁支引擎已下沉 agent_core（事件出口为 protocol::WireEvent，三 surface 复用同一份）。
+    agent_core::aside::run_aside(agent_core::aside::RunAsideArgs {
         data_dir,
         bound_session_id,
         provider_id,
@@ -1654,201 +1654,7 @@ pub async fn send_aside(
         emit_event,
     })
     .await
-}
-
-/// [`run_aside`] 的入参集合——纯内存旁支引擎的所有可变参数。
-pub struct RunAsideArgs<'a, F: Fn(EngineEvent) + Send + Sync> {
-    pub data_dir: &'a Path,
-    /// 模型 IO 落盘归属的主对话 id（旁支自己不建 session、不落 transcript）。
-    pub bound_session_id: &'a str,
-    pub provider_id: &'a str,
-    pub model: &'a str,
-    pub system_prompt: String,
-    /// 调用方持有的多轮内存历史（首轮为空 / fork 的主对话历史）。
-    pub history: Vec<Message>,
-    pub user_content: String,
-    pub attachments: Vec<common::attachments::MessageAttachment>,
-    /// 本场景暴露的工具集（元素对话=Preview 信号工具；代码旁支=只读 Read/Grep）。
-    pub harness: Arc<Harness>,
-    pub workspace: Arc<Workspace>,
-    pub enabled_tools: Vec<String>,
-    pub cancel_flag: CancelFlag,
-    pub emit_event: F,
-}
-
-/// 旁支会话一轮的通用引擎：纯内存、不落盘、走 `emit_event` 回调下发事件流。
-///
-/// 工具集 / workspace / enabled_tools 由调用方按场景注入（见 [`RunAsideArgs`]）：
-/// - 元素对话（[`send_aside`]）：Preview 信号工具 + home workspace
-/// - 代码旁支（旁支对话 tab）：只读 Read/Grep + 主对话 workspace
-///
-/// 与主对话最大的不同：**旁支不落盘**（`session_id`/`recorder`/`permission_store` 全 `None`
-/// → CoreSession 短路所有持久化与后台 task）。多轮历史由调用方持有，每轮把 user + 重建的
-/// assistant 追加，下一轮用 [`Transcript::from_session`] 重建。
-///
-/// 模型 IO 写进 `bound_session_id` 的 model_io.jsonl（`kind="aside"`），供主对话调试面板查看。
-/// 返回更新后的内存历史（含本轮 user + assistant）+ 本轮 assistant message。
-pub async fn run_aside<F: Fn(EngineEvent) + Send + Sync>(
-    args: RunAsideArgs<'_, F>,
-) -> AppResult<(Vec<Message>, Message)> {
-    let RunAsideArgs {
-        data_dir,
-        bound_session_id,
-        provider_id,
-        model,
-        system_prompt,
-        mut history,
-        user_content,
-        attachments,
-        harness,
-        workspace,
-        enabled_tools,
-        cancel_flag,
-        emit_event,
-    } = args;
-
-    let provider = model_gateway::config::get(data_dir, provider_id)?;
-    let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(data_dir, provider)
-        .await
-        .map_err(|e| AppError::msg(format!("OAuth token 刷新失败: {e}")))?;
-    let client = model_gateway::build_client_with_data_dir(provider, data_dir.to_path_buf())
-        .map_err(|e| AppError::msg(format!("无法创建 ModelClient: {e}")))?;
-    let client: Arc<dyn ModelClient> = Arc::new(ModelWithName::new(client, model.to_string()));
-
-    // 旁支模型 IO 写进绑定主对话的面板（kind=aside），无需为旁支单独建 session。
-    let model_io_dump =
-        agent_core::model_io_dump::open_for_session_with_kind(data_dir, bound_session_id, "aside")
-            .await;
-    // 留一份句柄在 run 结束后 flush。主对话路径靠长驻进程让 actor 自然落盘，
-    // 但旁支可能由短命调用方触发——不显式 flush 会丢最后一条 entry。
-    let dump_for_flush = model_io_dump.clone();
-
-    let user_msg = Message {
-        id: sessions::new_id(),
-        role: Role::User,
-        content: user_content,
-        attachments,
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
-        subagent_call_id: None,
-        run_duration_ms: None,
-    };
-
-    // 先用 fork 的历史重建 transcript，再显式把本轮 user 追加到末尾——与主对话
-    // `from_session(历史) + append_user` 对称。不能把 user_msg 先塞进 history 再
-    // 一次性 from_session：当 fork 的历史以 CompactBoundary 结尾时，from_session 会
-    // 注入一条「已收到前情概要」占位 assistant，若它落在末尾，请求就以 assistant
-    // 结尾——Claude Opus/Sonnet 4.6+ 不再支持 assistant prefill，直接 400
-    // （"conversation must end with a user message"）。显式 push_user 保证末尾永远是 user。
-    let mut transcript = Transcript::from_session(Some(system_prompt), &history);
-    transcript.push_user(user_msg.content.clone(), user_msg.attachments.clone());
-    history.push(user_msg);
-
-    let core_session = CoreSession::new(
-        harness,
-        SessionConfig {
-            definition: AgentDefinition::default(),
-            workspace,
-            client,
-            enabled_tools,
-            initial_transcript: transcript,
-            recorder: None,
-            model_io_dump,
-            permission_store: None,
-            session_id: None,
-            run_mode: Default::default(),
-            model_id: Some(model.to_string()),
-            force_automode: false,
-            data_dir: None,
-            phase: None,
-            global_rules: Vec::new(),
-            rules_files: None,
-            edits_worktree: None,
-            derived_sink: None,
-        },
-    );
-
-    let mut handle = core_session.run_with(cancel_flag);
-    let mut observer = AsideObserver {
-        parts: AssistantPartsRecorder::default(),
-        partial_output: String::new(),
-        tool_calls: Vec::new(),
-        emit: &emit_event,
-    };
-    let summary = handle.drive(&mut observer).await;
-
-    // 确保旁支的 model_io entry 落盘后再返回（短命调用方不会等 actor 异步写完）。
-    if let Some(dump) = &dump_for_flush {
-        if let Err(e) = dump.flush().await {
-            tracing::warn!(error = %e, "aside model_io flush failed");
-        }
-    }
-
-    let AsideObserver {
-        parts,
-        partial_output,
-        tool_calls,
-        ..
-    } = observer;
-
-    match summary.outcome {
-        TurnOutcome::Done | TurnOutcome::Suspended => {}
-        TurnOutcome::Cancelled => return Err(AppError::msg("请求已中断")),
-        TurnOutcome::Failed(error) => return Err(AppError::msg(error)),
-    }
-
-    let assistant_msg =
-        assistant_message_from_recorded_parts(parts, partial_output, tool_calls, Vec::new());
-    history.push(assistant_msg.clone());
-    Ok((history, assistant_msg))
-}
-
-/// 旁支会话的轻量观察者：转发 EngineEvent + 累积本轮 assistant message。
-///
-/// 不做 partial sidecar / segment 切分 / 落盘——那些都是主对话持久化才需要的。旁支只关心
-/// 「实时把事件下发给 inspector」+「跑完拿回 assistant message 续接内存多轮」。
-struct AsideObserver<'a> {
-    parts: AssistantPartsRecorder,
-    partial_output: String,
-    tool_calls: Vec<MessageToolCall>,
-    emit: &'a (dyn Fn(EngineEvent) + Send + Sync),
-}
-
-#[async_trait]
-impl<'a> TurnObserver for AsideObserver<'a> {
-    fn on_event(&mut self, event: &AgentEvent) {
-        if let AgentEventPayload::TextDelta { text } = &event.payload {
-            self.partial_output.push_str(text);
-        }
-        record_assistant_part_event(&mut self.parts, event);
-        record_tool_event(&mut self.tool_calls, event);
-        if let Some(ev) = agent_event_to_engine_event(event) {
-            (self.emit)(ev);
-        }
-    }
-
-    async fn on_permission_request(
-        &mut self,
-        _request_id: &PermissionRequestId,
-        _kind: &PermissionKind,
-        _summary: &str,
-    ) -> Option<ApprovalDecision> {
-        // 旁支只有 PreviewStyle（只读信号工具），不会走到审批；真到这里直接放行一次。
-        Some(ApprovalDecision::AllowOnce)
-    }
-
-    async fn on_question(
-        &mut self,
-        _request_id: &PermissionRequestId,
-        _question: &str,
-        _options: &[QuestionOption],
-        _multi: bool,
-        _questions: &[AskQuestion],
-    ) -> Option<UserAnswer> {
-        None
-    }
+    .map_err(AppError::msg)
 }
 
 pub async fn send_once(
@@ -1894,733 +1700,6 @@ pub async fn send_once(
         .map_err(|e| AppError::msg(e.to_string()))?
     {
         ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => Ok(text),
-    }
-}
-
-/// 构造一份「真实发给模型的 payload」预览,用于桌面 UI 的「显示原始 JSON」。
-///
-/// 复刻 [`agent_loop`] 进入模型调用之前的所有拼装动作:workspace XML、内置工具、
-/// 用户启用的工具、session 历史 transcript,但**不真正发起请求、不修改 session**。
-/// 输出统一为 OpenAI 风格的 `{model, messages, tools, ...}`,前端用 JsonView 渲染。
-pub async fn build_preview_payload(
-    data_dir: &Path,
-    session_id: &str,
-    upto_message_id: Option<&str>,
-) -> AppResult<serde_json::Value> {
-    use agent_core::system_prompt::{compose_system_prompt, EnvironmentSnapshot};
-    use agent_core::tools::{
-        ask_only_definitions, hosted_tool_definitions, registry::ToolRegistry, BUILTIN_TOOL_NAMES,
-        CONDITIONAL_TOOL_NAMES,
-    };
-
-    let session = sessions::load(data_dir, session_id)?;
-    let settings = global_settings::load(data_dir);
-
-    let workdir = session
-        .workdir
-        .clone()
-        .or_else(|| settings.conversation.workdir.clone())
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let initial_allowed_paths = session
-        .allowed_paths
-        .clone()
-        .unwrap_or_else(|| settings.conversation.allowed_paths.clone());
-    let workspace = Workspace::with_runtime_state(
-        workdir.clone(),
-        initial_allowed_paths.clone(),
-        session.runtime_allowed_paths.clone(),
-        session.pending_runtime_allowed_paths.clone(),
-    );
-
-    let configured_skill_dirs = session
-        .skill_dirs
-        .clone()
-        .unwrap_or_else(|| settings.conversation.skill_dirs.clone());
-    let skill_dirs: Vec<(agent_core::tools::skill::SkillSource, std::path::PathBuf)> =
-        if configured_skill_dirs.is_empty() {
-            default_skill_dirs(data_dir, &workdir)
-        } else {
-            configured_skill_dirs
-                .into_iter()
-                .map(|p| (agent_core::tools::skill::SkillSource::Global, p))
-                .collect()
-        };
-
-    // preview 用同样的优先级链：session 非空 → session；否则全局
-    let session_enabled_tools = {
-        let s = session.enabled_tools.clone().unwrap_or_default();
-        if s.is_empty() {
-            settings.conversation.enabled_tools.clone()
-        } else {
-            s
-        }
-    };
-
-    // 工具定义:ask + 内置 + 用户开的本地工具 + provider hosted 工具。
-    // 预览路径不会真发命令,bg_log_dir + phase 都用占位 None / 空 channel。
-    // BgTaskRegistry 用临时本地实例（预览只生成 tool schema，不真跑命令）。
-    let registry = ToolRegistry::new(
-        agent_core::tools::default_tools_with_mcp(
-            workspace.clone(),
-            &skill_dirs,
-            None,
-            agent_core::wakeup::new_phase_channel(),
-            agent_core::tools::background::BgTaskRegistry::new(),
-            None,
-            None,
-            None,
-            settings.general.shell.clone(),
-            settings.general.edit_backend,
-            agent_core::storage::mcp::load(data_dir).with_cwd(workspace.workdir().to_path_buf()),
-        )
-        .await,
-    );
-    let mut tool_defs = ask_only_definitions();
-    let mut all_filter: Vec<String> = BUILTIN_TOOL_NAMES.iter().map(|s| s.to_string()).collect();
-    all_filter.extend(CONDITIONAL_TOOL_NAMES.iter().map(|s| s.to_string()));
-    all_filter.extend(session_enabled_tools.iter().cloned());
-    tool_defs.extend(registry.definitions(&all_filter));
-    tool_defs.extend(registry.mcp_definitions());
-    if !session_enabled_tools.is_empty() {
-        tool_defs.extend(hosted_tool_definitions(&session_enabled_tools));
-    }
-
-    // system = BASE prompt + 用户 persona + rules（与 agent_loop 一致）
-    let combined_system = {
-        let mut s = compose_system_prompt(session.system_prompt.as_deref());
-        let used_global_rules_for_system = session
-            .global_rules
-            .clone()
-            .unwrap_or_else(|| settings.conversation.global_rules.clone());
-        let rules_content_for_system = agent_core::rules::resolve_injection_files(
-            &used_global_rules_for_system,
-            session.rules_files.as_deref(),
-            &workdir,
-            &initial_allowed_paths,
-        );
-        let rules_block_for_system = agent_core::rules::format_injection(&rules_content_for_system);
-        if !rules_block_for_system.is_empty() {
-            s.push('\n');
-            s.push_str(&rules_block_for_system);
-        }
-        s
-    };
-
-    // 首条 user message 头部要追加 <environment> 块（与 Session::append_user 一致），
-    // preview 时按同一逻辑还原，确保「显示 JSON」与实际发给模型的 payload 一致。
-    let extra_paths_preview = PermissionStore::open(data_dir)
-        .map(|s| s.effective_paths(Some(&workdir)))
-        .unwrap_or_default();
-    let env_snapshot =
-        EnvironmentSnapshot::from_workspace(&workspace).with_extra_paths(extra_paths_preview);
-    let env_block = env_snapshot.render();
-
-    let mut first_user_pending = true;
-
-    let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
-        "role": "system",
-        "content": combined_system,
-    })];
-    for m in &session.messages {
-        match m.role {
-            Role::Marker | Role::System => {}
-            Role::User => {
-                let mut value = preview_user_content(m);
-                if first_user_pending {
-                    prepend_environment_to_preview(&mut value, &env_block);
-                    first_user_pending = false;
-                }
-                messages.push(serde_json::json!({
-                    "role": "user",
-                    "content": value,
-                }))
-            }
-            Role::Assistant => preview_push_assistant(&mut messages, m),
-        }
-        if upto_message_id.is_some_and(|id| m.id == id) {
-            break;
-        }
-    }
-
-    let tools: Vec<serde_json::Value> = tool_defs
-        .into_iter()
-        .map(|t| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                }
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({
-        "model": session.model,
-        "messages": messages,
-        "tools": tools,
-        "_workspace": {
-            "workdir": workdir.display().to_string(),
-            "initial_allowed_paths": initial_allowed_paths,
-            "runtime_allowed_paths": session.runtime_allowed_paths,
-            "pending_runtime_allowed_paths": session.pending_runtime_allowed_paths,
-            "skill_dirs": skill_dirs.iter().map(|(_, p)| p.display().to_string()).collect::<Vec<_>>(),
-        }
-    }))
-}
-
-/// 把 `<environment>` 块前置到 preview 的 user content 上。
-/// content 是 string 时直接拼前缀；是 array（含 attachments）时拼到首个 text block 前，
-/// 没有 text block 就插一个新的 text block 在最前。
-fn prepend_environment_to_preview(value: &mut serde_json::Value, env_block: &str) {
-    if env_block.is_empty() {
-        return;
-    }
-    match value {
-        serde_json::Value::String(s) => {
-            *s = format!("{env_block}{s}");
-        }
-        serde_json::Value::Array(blocks) => {
-            if let Some(first_text) = blocks
-                .iter_mut()
-                .find(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
-            {
-                if let Some(text) = first_text.get_mut("text").and_then(|v| v.as_str()) {
-                    let merged = format!("{env_block}{text}");
-                    first_text["text"] = serde_json::Value::String(merged);
-                }
-            } else {
-                blocks.insert(0, serde_json::json!({"type": "text", "text": env_block}));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn preview_user_content(m: &Message) -> serde_json::Value {
-    if m.attachments.is_empty() {
-        return serde_json::Value::String(m.content.clone());
-    }
-    let mut blocks: Vec<serde_json::Value> = Vec::new();
-    if !m.content.is_empty() {
-        blocks.push(serde_json::json!({"type": "text", "text": m.content}));
-    }
-    for a in &m.attachments {
-        match a {
-            MessageAttachment::Image {
-                media_type, data, ..
-            } => blocks.push(serde_json::json!({
-                "type": "image_url",
-                "image_url": { "url": format!("data:{};base64,{}", media_type, data) },
-            })),
-            MessageAttachment::TextFile {
-                name,
-                media_type,
-                content,
-            } => blocks.push(serde_json::json!({
-                "type": "text",
-                "text": format!(
-                    "<file name=\"{name}\" media_type=\"{media_type}\">\n{content}\n</file>"
-                ),
-            })),
-        }
-    }
-    serde_json::Value::Array(blocks)
-}
-
-fn preview_push_assistant(out: &mut Vec<serde_json::Value>, m: &Message) {
-    let mut text_parts: Vec<String> = Vec::new();
-    let mut reasoning_parts: Vec<String> = Vec::new();
-    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-    let mut tool_results: Vec<serde_json::Value> = Vec::new();
-
-    let push_call = |list: &mut Vec<serde_json::Value>, id: &str, name: &str, args: String| {
-        list.push(serde_json::json!({
-            "id": id,
-            "type": "function",
-            "function": { "name": name, "arguments": args },
-        }));
-    };
-
-    if !m.parts.is_empty() {
-        for p in &m.parts {
-            match p {
-                MessagePart::Text { text } => text_parts.push(text.clone()),
-                MessagePart::Reasoning { text } => reasoning_parts.push(text.clone()),
-                MessagePart::ToolCall {
-                    id,
-                    name,
-                    input,
-                    arguments,
-                    result,
-                    ..
-                } => {
-                    let args = if !arguments.is_empty() {
-                        arguments.clone()
-                    } else {
-                        serde_json::to_string(input).unwrap_or_else(|_| "{}".into())
-                    };
-                    push_call(&mut tool_calls, id, name, args);
-                    if let Some(res) = result {
-                        tool_results.push(serde_json::json!({
-                            "role": "tool",
-                            "tool_call_id": id,
-                            "content": res,
-                        }));
-                    }
-                }
-            }
-        }
-    } else if !m.tool_calls.is_empty() {
-        if !m.content.is_empty() {
-            text_parts.push(m.content.clone());
-        }
-        for tc in &m.tool_calls {
-            let args = serde_json::to_string(&tc.input).unwrap_or_else(|_| "{}".into());
-            push_call(&mut tool_calls, &tc.id, &tc.name, args);
-            if let Some(res) = &tc.result {
-                tool_results.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": res,
-                }));
-            }
-        }
-    } else if !m.content.is_empty() {
-        text_parts.push(m.content.clone());
-    }
-
-    let mut assistant = serde_json::json!({
-        "role": "assistant",
-        "content": text_parts.join(""),
-    });
-    let map = assistant.as_object_mut().expect("json object");
-    if !reasoning_parts.is_empty() {
-        map.insert(
-            "reasoning".into(),
-            serde_json::Value::String(reasoning_parts.join("")),
-        );
-    }
-    if !tool_calls.is_empty() {
-        map.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
-    }
-    out.push(assistant);
-    out.extend(tool_results);
-}
-
-fn agent_event_to_engine_event(event: &AgentEvent) -> Option<EngineEvent> {
-    use agent_core::types::AgentEventPayload::*;
-    let subagent = event.subagent_call_id.clone();
-    match &event.payload {
-        TextDelta { text } => Some(EngineEvent::TextDelta {
-            text: text.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        TextDone { full_text } => Some(EngineEvent::TextDone {
-            full_text: full_text.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        Reasoning { text } => Some(EngineEvent::Reasoning {
-            text: text.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        ToolCallDelta {
-            index,
-            id,
-            name,
-            arguments_delta,
-        } => Some(EngineEvent::ToolCallDelta {
-            index: *index,
-            id: id.clone(),
-            name: name.clone(),
-            arguments_delta: arguments_delta.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        ToolCallStarted {
-            index,
-            call_id,
-            name,
-            input,
-        } => Some(EngineEvent::ToolStart {
-            index: *index,
-            id: call_id.clone(),
-            name: name.clone(),
-            input: input.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        ToolCallFinished {
-            index,
-            call_id,
-            result,
-            duration_ms,
-            artifact_path,
-            is_error,
-            ..
-        } => Some(EngineEvent::ToolDone {
-            index: *index,
-            id: call_id.clone(),
-            result: result.clone(),
-            duration_ms: *duration_ms,
-            artifact_path: artifact_path.clone(),
-            is_error: *is_error,
-            subagent_call_id: subagent.clone(),
-        }),
-        ToolCallOutputDelta {
-            index,
-            call_id,
-            chunk,
-        } => Some(EngineEvent::ToolOutputDelta {
-            index: *index,
-            id: call_id.clone(),
-            chunk: chunk.clone(),
-            subagent_call_id: subagent.clone(),
-        }),
-        RunFinished { duration_ms, .. } => Some(EngineEvent::RunFinished {
-            duration_ms: *duration_ms,
-        }),
-        Usage {
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_creation_tokens,
-        } => Some(EngineEvent::Usage {
-            input_tokens: *input_tokens,
-            output_tokens: *output_tokens,
-            cache_read_tokens: *cache_read_tokens,
-            cache_creation_tokens: *cache_creation_tokens,
-        }),
-        RunFailed { error } => Some(EngineEvent::Error {
-            message: error.message.clone(),
-        }),
-        RunSuspended {
-            reason,
-            resumes_at_ms,
-            waiting_for_task_ids,
-        } => Some(EngineEvent::RunSuspended {
-            reason: match reason {
-                protocol::SuspendReason::BackgroundTask => "background_task".into(),
-                protocol::SuspendReason::Cron => "cron".into(),
-                protocol::SuspendReason::Manual => "manual".into(),
-            },
-            resumes_at_ms: *resumes_at_ms,
-            waiting_for_task_ids: waiting_for_task_ids.clone(),
-        }),
-        RunResumed { cause } => Some(EngineEvent::RunResumed {
-            cause: match cause {
-                protocol::ResumeCause::BgTaskFinished { task_id, .. } => {
-                    format!("bg_task_finished:{task_id}")
-                }
-                protocol::ResumeCause::CronFired { original_reason } => {
-                    format!("cron_fired:{original_reason}")
-                }
-                protocol::ResumeCause::UserMessageArrived => "user_message_arrived".into(),
-                protocol::ResumeCause::ManualResume => "manual_resume".into(),
-            },
-        }),
-        PermissionRequested {
-            request_id,
-            kind,
-            summary,
-            risk,
-            auto_handled,
-            call_id,
-        } => {
-            let (
-                kind_str,
-                tool_name,
-                tool_input,
-                paths,
-                fingerprint,
-                command_segments,
-                segments,
-                refuse_remember,
-                plan,
-            ) = match kind {
-                agent_core::types::PermissionKind::ToolCall {
-                    tool_name,
-                    input,
-                    fingerprint,
-                    command_segments,
-                    segments,
-                    refuse_remember,
-                } => (
-                    "tool_call",
-                    tool_name.clone(),
-                    input.clone(),
-                    Vec::<String>::new(),
-                    fingerprint.clone(),
-                    command_segments.clone(),
-                    segments.clone(),
-                    *refuse_remember,
-                    None,
-                ),
-                agent_core::types::PermissionKind::PathAccess { tool_name, paths } => (
-                    "path_access",
-                    tool_name.clone(),
-                    serde_json::Value::Null,
-                    paths.clone(),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    false,
-                    None,
-                ),
-                agent_core::types::PermissionKind::Plan {
-                    plan_id,
-                    plan_path,
-                    plan_markdown,
-                    summary: plan_summary,
-                    steps: _,
-                } => (
-                    "plan",
-                    String::new(),
-                    serde_json::Value::Null,
-                    Vec::new(),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    false,
-                    Some(crate::engine::PlanPermissionDto {
-                        plan_id: plan_id.clone(),
-                        plan_path: plan_path.clone(),
-                        plan_markdown: plan_markdown.clone(),
-                        summary: plan_summary.clone(),
-                    }),
-                ),
-                agent_core::types::PermissionKind::ContinueLongRun { .. } => (
-                    "continue_long_run",
-                    String::new(),
-                    serde_json::Value::Null,
-                    Vec::new(),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    false,
-                    None,
-                ),
-            };
-            Some(EngineEvent::PermissionRequested {
-                request_id: request_id.0.clone(),
-                kind: kind_str.into(),
-                tool_name,
-                input: tool_input,
-                summary: summary.clone(),
-                risk: format!("{risk:?}").to_lowercase(),
-                paths,
-                fingerprint,
-                command_segments,
-                segments,
-                refuse_remember,
-                plan,
-                auto_handled: *auto_handled,
-                call_id: call_id.clone(),
-            })
-        }
-        PermissionResolved {
-            request_id,
-            decision,
-        } => Some(EngineEvent::PermissionResolved {
-            request_id: request_id.0.clone(),
-            decision: match decision {
-                agent_core::types::ApprovalDecision::AllowOnce => "allow_once".into(),
-                agent_core::types::ApprovalDecision::AllowAndRemember { .. } => {
-                    "allow_and_remember".into()
-                }
-                agent_core::types::ApprovalDecision::Deny => "deny".into(),
-                agent_core::types::ApprovalDecision::DenyWithFeedback { .. } => {
-                    "deny_with_feedback".into()
-                }
-            },
-        }),
-        PermissionAutoJudged {
-            request_id,
-            tool_name,
-            decision,
-            reason,
-            requires_human,
-        } => Some(EngineEvent::PermissionAutoJudged {
-            request_id: request_id
-                .as_ref()
-                .map(|id| id.0.clone())
-                .unwrap_or_default(),
-            tool_name: tool_name.clone(),
-            decision: decision.clone(),
-            reason: reason.clone(),
-            requires_human: *requires_human,
-        }),
-        Notice {
-            level,
-            message,
-            dedup_key,
-        } => Some(EngineEvent::Notice {
-            level: match level {
-                protocol::LogLevel::Trace
-                | protocol::LogLevel::Debug
-                | protocol::LogLevel::Info => "info",
-                protocol::LogLevel::Warn => "warn",
-                protocol::LogLevel::Error => "error",
-            }
-            .to_string(),
-            message: message.clone(),
-            dedup_key: dedup_key.clone(),
-        }),
-        StepStarted {
-            step_kind,
-            step_index,
-        } => Some(EngineEvent::StepStarted {
-            step_kind: match step_kind {
-                protocol::StepKind::Model => "model".to_string(),
-                protocol::StepKind::Tool => "tool".to_string(),
-            },
-            step_index: *step_index,
-        }),
-        StepFinished {
-            step_kind,
-            step_index,
-        } => Some(EngineEvent::StepFinished {
-            step_kind: match step_kind {
-                protocol::StepKind::Model => "model".to_string(),
-                protocol::StepKind::Tool => "tool".to_string(),
-            },
-            step_index: *step_index,
-        }),
-        ModelRetry {
-            attempt,
-            max,
-            delay_ms,
-            reason,
-        } => Some(EngineEvent::ModelRetry {
-            attempt: *attempt,
-            max: *max,
-            delay_ms: *delay_ms,
-            reason: reason.clone(),
-        }),
-        ContextCompacted {
-            before_tokens,
-            after_tokens,
-        } => Some(EngineEvent::ContextCompacted {
-            before_tokens: *before_tokens,
-            after_tokens: *after_tokens,
-        }),
-        RunModeChanged { from, to } => Some(EngineEvent::RunModeChanged {
-            from: from.clone(),
-            to: to.clone(),
-        }),
-        TurnFinished { stop_reason, .. } => Some(EngineEvent::TurnFinished {
-            stop_reason: match stop_reason {
-                protocol::StopReason::EndTurn => "end_turn",
-                protocol::StopReason::MaxIterations => "max_iterations",
-                protocol::StopReason::PermissionDenied => "permission_denied",
-                protocol::StopReason::Cancelled => "cancelled",
-                protocol::StopReason::Failed => "failed",
-            }
-            .to_string(),
-        }),
-        UserQuestionRequested {
-            request_id,
-            question,
-            options,
-            multi,
-            questions,
-        } => Some(EngineEvent::UserQuestionRequested {
-            request_id: request_id.0.clone(),
-            question: question.clone(),
-            options: options.iter().cloned().map(Into::into).collect(),
-            multi: *multi,
-            questions: questions.iter().cloned().map(Into::into).collect(),
-        }),
-        UserQuestionAnswered { request_id, answer } => {
-            let (kind, text) = match answer {
-                protocol::UserAnswer::Selected { label } => ("selected", label.clone()),
-                protocol::UserAnswer::SelectedMulti { labels } => {
-                    ("selected_multi", labels.join("、"))
-                }
-                protocol::UserAnswer::Custom { text } => ("custom", text.clone()),
-                protocol::UserAnswer::Cancelled => ("cancelled", String::new()),
-                protocol::UserAnswer::Multi { items } => {
-                    let text = items
-                        .iter()
-                        .map(|item| format!("{}: {}", item.title, item.answer.to_agent_text()))
-                        .collect::<Vec<_>>()
-                        .join("；");
-                    ("multi", text)
-                }
-            };
-            Some(EngineEvent::UserQuestionAnswered {
-                request_id: request_id.0.clone(),
-                kind: kind.to_string(),
-                text,
-            })
-        }
-        RunEditsCommitted { run_id, files } => Some(EngineEvent::RunEditsCommitted {
-            run_id: run_id.0.clone(),
-            files: files.clone(),
-        }),
-        RunEditsReverted { run_id } => Some(EngineEvent::RunEditsReverted {
-            run_id: run_id.0.clone(),
-        }),
-        RunEditsRevertFailed {
-            run_id,
-            file_path,
-            error,
-        } => Some(EngineEvent::RunEditsRevertFailed {
-            run_id: run_id.0.clone(),
-            file_path: file_path.clone(),
-            error: error.clone(),
-        }),
-        SessionTitleChanged { session_id, title } => Some(EngineEvent::SessionTitleChanged {
-            session_id: session_id.clone(),
-            title: title.clone(),
-        }),
-        SessionTitleGenerationFailed { session_id, reason } => {
-            Some(EngineEvent::SessionTitleGenerationFailed {
-                session_id: session_id.clone(),
-                reason: reason.clone(),
-            })
-        }
-        TodoListUpdated { todos } => Some(EngineEvent::TodoListUpdated {
-            todos: todos.iter().cloned().map(Into::into).collect(),
-        }),
-        PlanReady {
-            plan_id,
-            plan_path,
-            plan_markdown,
-            summary,
-        } => Some(EngineEvent::PlanReady {
-            plan_id: plan_id.clone(),
-            plan_path: plan_path.clone(),
-            plan_markdown: plan_markdown.clone(),
-            summary: summary.clone(),
-        }),
-        PlanCommentAdded { plan_id, comment } => Some(EngineEvent::PlanCommentAdded {
-            plan_id: plan_id.clone(),
-            comment: comment.clone().into(),
-        }),
-        MemoryExtracted { session_id, items } => Some(EngineEvent::MemoryExtracted {
-            session_id: session_id.clone(),
-            items: items.clone(),
-        }),
-        MemoryExtractionFailed { session_id, reason } => {
-            Some(EngineEvent::MemoryExtractionFailed {
-                session_id: session_id.clone(),
-                reason: reason.clone(),
-            })
-        }
-        GoalAchieved { condition, reason } => Some(EngineEvent::GoalAchieved {
-            condition: condition.clone(),
-            reason: reason.clone(),
-        }),
-        GoalImpossible { condition, reason } => Some(EngineEvent::GoalImpossible {
-            condition: condition.clone(),
-            reason: reason.clone(),
-        }),
-        GoalProgress { iteration, reason } => Some(EngineEvent::GoalProgress {
-            iteration: *iteration,
-            reason: reason.clone(),
-        }),
-        _ => None,
     }
 }
 
@@ -2695,10 +1774,10 @@ impl ModelClient for ModelWithName {
 
 // ── hebisland 通知桥接 ──
 
-/// 将 agent_core EngineEvent 翻译为 hebisland 推送/撤销通知。
-fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
+/// 将 agent_core protocol::WireEvent 翻译为 hebisland 推送/撤销通知。
+fn push_engine_event_to_island(client: &HebislandClient, event: &protocol::WireEvent) {
     match event {
-        EngineEvent::PermissionRequested {
+        protocol::WireEvent::PermissionRequested {
             request_id,
             kind,
             tool_name,
@@ -2722,7 +1801,7 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
                 body,
             ));
         }
-        EngineEvent::PermissionAutoJudged {
+        protocol::WireEvent::PermissionAutoJudged {
             request_id,
             tool_name,
             reason,
@@ -2744,7 +1823,7 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
                 ));
             }
         }
-        EngineEvent::UserQuestionRequested {
+        protocol::WireEvent::UserQuestionRequested {
             request_id,
             question,
             options,
@@ -2785,8 +1864,8 @@ fn push_engine_event_to_island(client: &HebislandClient, event: &EngineEvent) {
             }
             client.show(card);
         }
-        EngineEvent::PermissionResolved { request_id, .. }
-        | EngineEvent::UserQuestionAnswered { request_id, .. } => {
+        protocol::WireEvent::PermissionResolved { request_id, .. }
+        | protocol::WireEvent::UserQuestionAnswered { request_id, .. } => {
             client.dismiss(&format!("perm-{request_id}"));
             client.dismiss(&format!("question-{request_id}"));
         }
@@ -3839,6 +2918,132 @@ mod tests {
         });
     }
 
+    /// 跑一个 desktop 主对话场景，返回它经 `DesktopObserver` → `protocol::to_wire` emit
+    /// 出去的**全部事件**序列化成的指纹（每行一个事件 JSON）。供改造前后逐字节对照。
+    async fn run_scenario_fingerprint(
+        label: &str,
+        enabled_tools: Vec<String>,
+        client_factory: impl Fn(Provider, String, Option<common::ReasoningConfig>) -> AppResult<Arc<dyn ModelClient>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> String {
+        let data_dir = temp_data_dir();
+        save_test_provider(&data_dir);
+        let session = sessions::create(
+            &data_dir,
+            "openai".to_string(),
+            "gpt-test".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let events = Arc::new(Mutex::new(Vec::<protocol::WireEvent>::new()));
+        let events_for_emit = events.clone();
+
+        send_and_save_in_data_dir_with_client_factory(
+            &data_dir,
+            SendArgs {
+                continue_run: false,
+                session_id: session.id,
+                user_content: "run tools".to_string(),
+                user_meta: None,
+                attachments: Vec::new(),
+                stream: true,
+                enabled_tools,
+                cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                pending_inputs: None,
+                consumed_pending_inputs: None,
+                pending_inputs_accepting: None,
+                hitl: None,
+                permission_store: None,
+                force_automode: false,
+                request_id: None,
+                restrict_tools: None,
+            },
+            move |event| {
+                events_for_emit.lock().unwrap().push(event);
+            },
+            None,
+            client_factory,
+        )
+        .await
+        .unwrap();
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "场景 {label} 必须 emit 事件");
+        let mut lines: Vec<String> = vec![format!("### SCENARIO: {label}")];
+        for ev in captured.iter() {
+            lines.push(serde_json::to_string(ev).unwrap());
+        }
+        std::fs::remove_dir_all(&data_dir).unwrap();
+        lines.join("\n")
+    }
+
+    /// 步骤4 收口的 desktop 本体回归证据：跑**多个真实主对话场景**（纯文本+工具、
+    /// Anthropic 块索引流式、重复本地工具索引），收集 `DesktopObserver` 经
+    /// `protocol::to_wire` emit 给前端的全部事件，拼成一份多场景指纹打印 + 落盘。
+    /// 改造前（emit 旧 `EngineEvent`）与改造后（emit `WireEvent`）各跑一次，归一化真实
+    /// 耗时后两份指纹必须逐字节相同——直接证明 desktop 发给前端的事件流零漂移。
+    /// 用 `cargo test ... -- --nocapture` 看指纹，落盘在 /tmp/desktop_event_fingerprint.txt。
+    #[test]
+    fn desktop_main_chat_event_stream_fingerprint() {
+        tauri::async_runtime::block_on(async {
+            let mut all = String::new();
+            // 场景 1：文字 + 两个工具调用 + 多轮（OrderedPartsClient）
+            all.push_str(
+                &run_scenario_fingerprint(
+                    "text+tools+multiround",
+                    vec!["missing_a".to_string(), "missing_b".to_string()],
+                    |_p, _m, _r| {
+                        Ok(Arc::new(OrderedPartsClient {
+                            calls: AtomicUsize::new(0),
+                        }) as Arc<dyn ModelClient>)
+                    },
+                )
+                .await,
+            );
+            all.push_str("\n");
+            // 场景 2：Anthropic content block index 流式（AnthropicBlockIndexClient）
+            all.push_str(
+                &run_scenario_fingerprint(
+                    "anthropic_block_index",
+                    vec!["tool_a".to_string(), "tool_b".to_string()],
+                    |_p, _m, _r| {
+                        Ok(Arc::new(AnthropicBlockIndexClient {
+                            calls: AtomicUsize::new(0),
+                        }) as Arc<dyn ModelClient>)
+                    },
+                )
+                .await,
+            );
+            all.push_str("\n");
+            // 场景 3：重复本地工具索引（RepeatedLocalIndexClient）
+            all.push_str(
+                &run_scenario_fingerprint(
+                    "repeated_local_index",
+                    vec!["missing_first".to_string(), "missing_second".to_string()],
+                    |_p, _m, _r| {
+                        Ok(Arc::new(RepeatedLocalIndexClient {
+                            calls: AtomicUsize::new(0),
+                        }) as Arc<dyn ModelClient>)
+                    },
+                )
+                .await,
+            );
+
+            println!("\n===DESKTOP_EVENT_FINGERPRINT_BEGIN===\n{all}\n===DESKTOP_EVENT_FINGERPRINT_END===");
+            let _ = std::fs::write("/tmp/desktop_event_fingerprint.txt", &all);
+
+            // 自身契约：三场景都得发出关键事件，防止 emit 整条断了还以为"指纹一致"。
+            assert!(all.contains("\"type\":\"text_delta\""), "应含 text_delta");
+            assert!(all.contains("\"type\":\"tool_start\""), "应含 tool_start");
+            assert!(all.contains("\"type\":\"run_finished\""), "应含 run_finished");
+            assert_eq!(all.matches("### SCENARIO").count(), 3, "应覆盖 3 个场景");
+        });
+    }
+
     #[test]
     fn saves_repeated_local_tool_indexes_as_distinct_dispatches() {
         tauri::async_runtime::block_on(async {
@@ -4111,7 +3316,7 @@ mod tests {
 
             let saw_auto_judge = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let seen_models = Arc::new(Mutex::new(Vec::new()));
-            let events = Arc::new(Mutex::new(Vec::<EngineEvent>::new()));
+            let events = Arc::new(Mutex::new(Vec::<protocol::WireEvent>::new()));
             let saw_auto_judge_for_factory = saw_auto_judge.clone();
             let seen_models_for_factory = seen_models.clone();
             let events_for_emit = events.clone();

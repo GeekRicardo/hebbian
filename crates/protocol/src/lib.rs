@@ -11,6 +11,7 @@ pub mod memory;
 pub mod permission;
 pub mod submission;
 pub mod todo;
+pub mod wire;
 
 pub use context::{ContextPolicy, TokenBudget, TurnOverrides};
 pub use error::ErrorReport;
@@ -26,3 +27,7 @@ pub use permission::{
 };
 pub use submission::{Op, Submission, UserInput};
 pub use todo::{PlanComment, TodoItem, TodoStatus};
+pub use wire::{
+    approval_decision_str, resume_cause_str, risk_str, suspend_reason_str, to_wire, WireEvent,
+    WirePlanPermission, WireTodoItem,
+};

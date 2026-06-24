@@ -118,8 +118,16 @@ export const api = {
     }),
   listClaudeSessions: () =>
     invoke<ClaudeSessionInfo[]>("list_claude_sessions"),
-  importClaudeSession: (path: string) =>
-    invoke<Session>("import_claude_session", { path }),
+  importClaudeSession: (
+    path: string,
+    projectId?: string | null,
+    workdir?: string | null,
+  ) =>
+    invoke<Session>("import_claude_session", {
+      path,
+      projectId: projectId ?? null,
+      workdir: workdir ?? null,
+    }),
   forkSession: (sessionId: string, upToMessageId: string) =>
     invoke<Session>("fork_session", {
       sessionId,

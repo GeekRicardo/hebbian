@@ -1,0 +1,160 @@
+<section class="module" id="module-1">
+
+<!-- SCREEN 1: Hero -->
+<div class="screen animate-in">
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[{"label":"你在输入框打了字，按了回车","highlight":"user-input"},{"label":"消息穿过 Electron/Tauri 桥，到达 Rust 后端","from":"user-input","to":"ipc-bridge","packet":true},{"label":"Harness 创建新 run，启动 agent_loop","from":"ipc-bridge","to":"harness","packet":true},{"label":"agent_loop 构造请求，调用模型 API","from":"harness","to":"model-api","packet":true},{"label":"模型回复逐段流回前端，渲染到屏幕上","from":"model-api","to":"screen","packet":true}]'>
+      <div class="flow-diagram" style="display:flex;align-items:center;justify-content:center;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-6) 0;">
+        <div id="flow-user-input" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">⌨️ 输入框</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-ipc-bridge" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🌉 IPC 桥</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-harness" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">⚙️ Harness</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-model-api" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🤖 模型 API</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-screen" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🖥️ 屏幕</div>
+      </div>
+      <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始追踪</div>
+      <div class="flow-packet" style="display:none;"></div>
+      <div style="text-align:center;margin-top:var(--space-4);">
+        <button class="flow-next-btn quiz-check-btn">Next Step</button>
+        <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+        <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+      </div>
+    </div>
+  </div>
+
+  <h1 class="module-title">你按下回车的瞬间</h1>
+  <p class="module-subtitle">一条消息从你的指尖出发，穿越前端、IPC 桥、Rust 后端、模型 API，再回到屏幕上的完整旅程。</p>
+
+  <p>你在 Hebbian 的输入框里打好字，按下 Enter。不到一秒，助手就开始回复了。但在这「不到一秒」里，发生了很多事情——整个过程像一场精心编排的接力赛。</p>
+
+  <p>这个课程会追踪每一条消息的完整旅程：从你按下回车的瞬间，到助手的文字逐字出现在屏幕上。你会理解每个环节在做什么、为什么这么设计，以及——当事情出了岔子——该从哪里下手排查。</p>
+</div>
+
+<!-- SCREEN 2: The IPC Bridge -->
+<div class="screen animate-in">
+  <h2 class="section-title">第一棒：前端 → IPC 桥</h2>
+
+  <p>当你按下回车，React 组件 <code>ChatInput</code> 把文本交给 store 的 <span class="term" data-definition="sendUserMessage 是前端 store 里最核心的方法之一——它创建流式槽位（slot），通过 Tauri invoke 把消息发给 Rust 后端，同时注册事件回调来处理后续的流式回复。">sendUserMessage</span>。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">await</span> api.<span class="code-function">sendMessage</span>(</span>
+<span class="code-line">  sessionId,</span>
+<span class="code-line">  runContent,</span>
+<span class="code-line">  runAttachments,</span>
+<span class="code-line">  baseSession.stream,</span>
+<span class="code-line">  [],</span>
+<span class="code-line">  requestId,</span>
+<span class="code-line">  (e: EngineEvent) => { ... }  <span class="code-comment">// 事件回调</span></span>
+<span class="code-line">);</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">调用后端 IPC 命令 "send_message"...</p>
+        <p class="tl">告诉后端是哪个对话</p>
+        <p class="tl">把用户输入的内容传过去</p>
+        <p class="tl">附带附件（图片、文件等）</p>
+        <p class="tl">是否启用流式传输</p>
+        <p class="tl">启用的工具列表（空 = 用默认）</p>
+        <p class="tl">本次请求的唯一 ID，用于区分并发 run</p>
+        <p class="tl">注册一个回调函数——后端每发一个事件，这个函数就会被调用一次</p>
+      </div>
+    </div>
+  </div>
+
+  <p><code>sendMessage</code> 是 <span class="term" data-definition="Tauri 是一个用 Rust 写桌面应用的框架。它让前端（React/Vue）通过 invoke() 调用 Rust 函数，就像调用本地 API 一样。架构上相当于 Electron 的替代品，但更轻量。">Tauri</span> 的 <code>invoke</code> 调用，底层通过 <code>Channel</code> 对象传递事件流。这个 Channel 很有意思——在 Tauri 桌面端，它是真正的 IPC channel；在 Web 端（hebweb），它退化为一个 WebSocket 监听器。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">💡</span>
+    <div class="callout-text">
+      <strong>为什么用 Channel 而不是轮询？</strong>
+      <p>如果前端每秒问一次「有新消息吗」，响应会延迟最多 1 秒，而且浪费 CPU。Channel 是「推送」模式——后端有事件就立刻推给前端，延迟是亚毫秒级的。这就是为什么你能看到助手逐字「流」出来。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: The IPC Command -->
+<div class="screen animate-in">
+  <h2 class="section-title">第二棒：Tauri 命令 → Harness</h2>
+
+  <p>Rust 端的 <code>send_message</code> 命令收到请求后，调用 <code>Harness::spawn_run</code>。Harness 是「总调度员」——它管理所有 session 的生命周期：谁在跑、谁挂起了、谁该被唤醒。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — apps/desktop/src/lib.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-function">async fn send_message</span>(</span>
+<span class="code-line">    app: AppHandle,</span>
+<span class="code-line">    session_id: String,</span>
+<span class="code-line">    content: String,</span>
+<span class="code-line">    ...</span>
+<span class="code-line">    on_event: Channel&lt;EngineEvent&gt;,</span>
+<span class="code-line">) -> AppResult&lt;()&gt; {</span>
+<span class="code-line">    <span class="code-keyword">let</span> core = core(&app)?;</span>
+<span class="code-line">    harness.<span class="code-function">spawn_run</span>(...)</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">Tauri 命令：前端 invoke("send_message") 最终调用这个 Rust 函数</p>
+        <p class="tl">Tauri 的全局应用句柄——可以访问文件系统、配置等</p>
+        <p class="tl">哪个对话（每个对话有唯一 ID）</p>
+        <p class="tl">用户输入的完整文本</p>
+        <p class="tl">...</p>
+        <p class="tl">事件通道——后端生成的事件通过它推回前端</p>
+        <p class="tl">Rust 的函数返回值类型——要么成功，要么带错误信息</p>
+        <p class="tl">拿到 core client（agent 的抽象接口）</p>
+        <p class="tl">创建一个新的后台任务，在里面跑 agent_loop</p>
+      </div>
+    </div>
+  </div>
+
+  <p>Harness 不自己跑模型。它只负责「调度」——把参数组装好，然后 <code>spawn</code> 一个异步任务，让 <span class="term" data-definition="agent_loop 是整个 Hebbian 的核心循环。它在一个 loop {} 里反复执行 ModelStep（调模型）→ ToolStep（执行工具），直到模型说「完成」或被取消。一个 run 可能包含多个 turn。">agent_loop</span> 在后台跑。</p>
+</div>
+
+<!-- SCREEN 4: Wrap-up Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测：你记住了吗？</h2>
+
+  <div class="quiz-container" id="quiz-module1">
+    <div class="quiz-question-block"
+         data-correct="sendMessage"
+         data-explanation-right="没错！sendMessage 通过 Tauri invoke 把消息发给 Rust 后端，同时注册事件回调来接收流式回复。"
+         data-explanation-wrong="不是这个。想想看：前端 store 里哪个方法负责调用 IPC 并注册事件回调？">
+      <h3 class="quiz-question">前端调用哪个方法把用户消息发给后端？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="run_loop" onclick="selectOption(this)">run_loop</button>
+        <button class="quiz-option" data-value="sendMessage" onclick="selectOption(this)">sendMessage</button>
+        <button class="quiz-option" data-value="spawn_run" onclick="selectOption(this)">spawn_run</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="channel"
+         data-explanation-right="对！Channel 是「推送」模式——后端有数据就立刻推，前端即时收到。比轮询快得多。"
+         data-explanation-wrong="不太对。如果是轮询，延迟会很大（至少几百毫秒），而且浪费资源。Tauri 用的是推送模式。">
+      <h3 class="quiz-question">后端事件流是如何从前端传到 UI 的？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="polling" onclick="selectOption(this)">前端每秒轮询一次</button>
+        <button class="quiz-option" data-value="channel" onclick="selectOption(this)">Tauri Channel 实时推送</button>
+        <button class="quiz-option" data-value="websocket" onclick="selectOption(this)">WebSocket（仅在浏览器模式）</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">Try Again</button>
+  </div>
+</div>
+
+</section>

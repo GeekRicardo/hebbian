@@ -1,0 +1,213 @@
+<section class="module" id="module-5">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">不是"我觉得没坏"，是"我证明没坏"</h2>
+
+  <p>翻新房子最怕的不是看得见的墙，而是看不见的水管——你以为只是换了个水龙头，结果三楼漏水。代码重构一模一样：删了 600 行、改了四个地方，<strong>怎么确定没有哪根"水管"被碰漏？</strong></p>
+
+  <p>这一节讲三种"证据"。它们的共同点是：都不靠"我觉得""应该没事""跑一下没报错"——而靠能<strong>反复重现的客观事实</strong>。这是普通改代码和专业重构的分水岭。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🎯</div>
+    <div class="callout-content">
+      <strong class="callout-title">这是你最该学会向 AI 索取的东西</strong>
+      <p>当 AI 说"我改完了，应该没问题"——这句话毫无价值。你要学会追问："拿出证据。怎么证明旧行为没变？"会逼 AI 给证据的人，交付质量天差地别。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Proof 1 - byte comparison -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据一：逐字节对照</h2>
+
+  <p>这是最硬的一种证据。在写新翻译 <code>to_wire</code> 的那天，就埋了一个<span class="term" data-definition="测试（test）是一小段专门用来检查'代码行为是否符合预期'的代码。它能自动跑，给出'通过/失败'。对照测试就是把'新做法'和'旧做法'的结果摆一起，断言两者必须相同。">测试</span>：拿一批典型事件，同时用新翻译和旧翻译各翻一遍，断言两份结果<strong>逐字节相同</strong>。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · 对照测试（示意）</span>
+      <pre><code><span class="code-line"><span class="code-keyword">let</span> legacy = <span class="code-function">agent_event_to_engine_event</span>(&ev);</span>
+<span class="code-line"><span class="code-keyword">let</span> wire  = protocol::<span class="code-function">to_wire</span>(&ev);</span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-function">assert_eq!</span>(</span>
+<span class="code-line">  legacy_json, wire_json,</span>
+<span class="code-line">  <span class="code-string">"新旧翻译 JSON 必须逐字节一致"</span></span>
+<span class="code-line">);</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">用旧翻译机翻一遍，得到结果 A。</p>
+        <p class="tl">用新翻译机翻同一个事件，得到结果 B。</p>
+        <p class="tl"> </p>
+        <p class="tl"><code>assert_eq!</code> 的意思是"断言这俩必须相等"。</p>
+        <p class="tl">把 A 和 B 摆一起比。</p>
+        <p class="tl">只要有一个字节不一样，测试立刻失败、报警。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🪜</div>
+    <div class="callout-content">
+      <strong class="callout-title">它是一架"脚手架"</strong>
+      <p>这个测试的使命就是保证替换那一刻新旧等价。等三个壳都搬完、旧翻译被删掉，它也完成了使命，随旧翻译一起拆掉——脚手架盖完楼就该撤。留着反而会变成"自己跟自己比"的废测试。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Proof 2 - worktree isolation -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据二：隔离一个"平行宇宙"来对照</h2>
+
+  <p>改完后跑测试，冒出来 2 个失败。慌不慌？关键问题是：<strong>这俩是我改坏的，还是本来就坏的？</strong>不查清就甩锅"无关失败"，是不负责任的。</p>
+
+  <p>查法很聪明：用 <span class="term" data-definition="worktree（工作树）是 Git 的一个功能，能从同一个仓库再'签出'一份独立的工作目录到别处。相当于开一个平行宇宙——保留你当前的改动不动，同时在旁边检出'没有你这次改动'的版本来对照。">git worktree</span> 在旁边开一个"没有这次改动"的平行版本，在那里跑同一个失败测试。</p>
+
+  <div class="flow-steps">
+    <div class="flow-step">
+      <div class="flow-step-num">1</div>
+      <p>开一个平行版本（不含本次改动）</p>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-step-num">2</div>
+      <p>在那里跑同一个失败的测试</p>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-step-num">3</div>
+      <p>它<strong>也</strong>失败 → 证明本来就坏，与我无关</p>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🔬</div>
+    <div class="callout-content">
+      <strong class="callout-title">这是科学方法：控制变量</strong>
+      <p>"在没有我改动的版本里也失败" = 失败和我的改动无关。另一个失败则是单独跑就过、一起跑才挂——典型的"机器太忙导致的偶发"。两个都查实了，才有资格说"与本次改动无关"。<strong>下结论前先排除自己</strong>，这是专业的底线。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: Proof 3 - real NDJSON -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据三：真刀真枪跑一遍</h2>
+
+  <p>测试证明了逻辑，但最有说服力的还是<strong>真实世界的输出</strong>。用一个真模型（deepseek-flash）起一个命令行会话，让 agent 真的去创建文件、触发审批，然后看吐出来的 NDJSON 里，那个字段到底是不是规范小写。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">真实 NDJSON 输出</span>
+      <pre><code><span class="code-line">{<span class="code-property">"event"</span>:<span class="code-string">"permission_requested"</span>,</span>
+<span class="code-line"> <span class="code-property">"tool_name"</span>:<span class="code-string">"Bash"</span>,</span>
+<span class="code-line"> <span class="code-property">"risk"</span>:<span class="code-string">"medium"</span>}   <span class="code-comment">← 规范小写！</span></span>
+<span class="code-line"></span>
+<span class="code-line">{<span class="code-property">"event"</span>:<span class="code-string">"permission_resolved"</span>,</span>
+<span class="code-line"> <span class="code-property">"decision"</span>:<span class="code-string">"allow_once"</span>}  <span class="code-comment">← 规范写法！</span></span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">agent 要跑一条命令，发出"请求审批"事件。</p>
+        <p class="tl">用的工具是 Bash。</p>
+        <p class="tl">危险等级是 <code>"medium"</code>——小写！正是这次改的。</p>
+        <p class="tl"> </p>
+        <p class="tl">人批准后，发出"审批已解决"事件。</p>
+        <p class="tl">决定是 <code>"allow_once"</code>——规范的 snake_case，不是偷懒的 Debug 写法。</p>
+      </div>
+    </div>
+  </div>
+
+  <p>而且实测还确认了命令行<strong>有意的设计没被破坏</strong>：工具输出依然被截断、专属的启动信号依然在。该统一的统一了，该保留的也保留了。</p>
+</div>
+
+<!-- SCREEN 5: The big picture + quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">三层证据，一个信念</h2>
+
+  <div class="icon-rows">
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-1)">🔬</div>
+      <div>
+        <strong>逐字节对照测试</strong>
+        <p>证明替换那一刻新旧完全等价——前端无感的底气</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-2)">🌀</div>
+      <div>
+        <strong>平行宇宙隔离验证</strong>
+        <p>证明那 2 个失败本来就坏，不是这次改的——下结论前先排除自己</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-3)">⌨️</div>
+      <div>
+        <strong>真模型真 NDJSON 实测</strong>
+        <p>证明改动在真实世界确实生效，且没破坏有意设计</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🏆</div>
+    <div class="callout-content">
+      <strong class="callout-title">你带走的一句话</strong>
+      <p>好的重构不是"改得对"，而是"<strong>能证明改得对</strong>"。每次让 AI 帮你改代码，多问一句"怎么证明旧行为没变"，你的软件就离"production 级可靠"近了一大步。</p>
+    </div>
+  </div>
+
+  <div class="quiz-container" id="quiz-module5">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="对极了。在'没有你改动'的平行版本里跑同一个测试——如果它也失败，就铁证如山地说明这个失败和你无关。这叫控制变量，是把'我觉得无关'变成'我证明无关'的唯一办法。"
+         data-explanation-wrong="再想想。'感觉无关''之前好像就这样'都是主观判断，会甩错锅。真正的做法是制造一个对照——在不含你改动的版本里复现，用客观结果说话。">
+      <h3 class="quiz-question">改完代码跑测试，冒出一个失败。怎么判断它是不是你改坏的？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>看一眼失败信息，感觉和我改的没关系就算了</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>开一个不含本次改动的平行版本，在那里跑同一个测试——如果也失败，证明与我无关</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>多跑几次，如果偶尔能过就当它没坏</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="正是。'应该没问题'是态度，不是证据。逐字节对照、隔离验证、真实实测——这些能反复重现的客观事实才是证据。学会向 AI 索要证据，是 vibe coder 进阶的关键一步。"
+         data-explanation-wrong="再想想。代码能编译、能跑，只说明它没语法错，完全不能说明'旧行为没变'。一个删了 600 行的重构，光'能跑'离'对'还很远。">
+      <h3 class="quiz-question">AI 帮你做完一个大重构，说"改完了，应该没问题"。下一句你最该说什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"能编译吗？能编译就行。"</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"好的，合并吧。"</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"拿出证据——怎么证明旧的行为没有改变？"</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">🎉 课程结束。你刚刚理解了一次真实的、有分寸、有证据的重构——从"三遍翻译"到"一遍"，以及为什么有一个壳故意留了例外。</p>
+</div>
+
+</section>

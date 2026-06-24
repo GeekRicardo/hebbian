@@ -1,0 +1,188 @@
+<section class="module" id="module-5">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">时间线魔法</h1>
+  <p class="module-subtitle">Run 跑到一半时，用户可能插话、后台任务可能完成、系统通知可能到达——如何在保持正确时序的同时，让一切看起来顺序自然？</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🪄</span>
+    <div class="callout-text">
+      <strong>比喻：就像现场直播的字幕编辑</strong>
+      <p>主持人正在说话（streaming），字幕实时打出来。导播说「插一条观众提问」（injectOrSend），字幕组需要：① 把当前这句冻结为一个完整的句子卡片；② 插上观众提问；③ 主持人继续回答——新的字幕从空白开始。liveTimeline 就是管理这些「冻结卡片」和「插队消息」的数据结构。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: LiveTimeline Data Structure -->
+<div class="screen animate-in">
+  <h2 class="section-title">LiveTimeline：Run 内的时间线条目</h2>
+
+  <p>LiveTimeline 只有两种条目类型：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — liveTimelineOrder.ts:17</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export type</span> LiveTimelineItem =</span>
+<span class="code-line">  | { kind: <span class="code-string">"assistant_frozen"</span>;    <span class="code-comment">// 冻结快照</span></span>
+<span class="code-line">      id: string;</span>
+<span class="code-line">      text: string;              <span class="code-comment">// 累积文本</span></span>
+<span class="code-line">      parts: StreamingAssistantPart[];</span>
+<span class="code-line">      created_at: number; }</span>
+<span class="code-line">  | { kind: <span class="code-string">"user_injected"</span>;      <span class="code-comment">// 插队消息</span></span>
+<span class="code-line">      message: Message; };</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">LiveTimeline 的条目类型——只有两种</p>
+        <p class="tl">assistant_frozen：TurnFinished 时把当前 streaming 冻结的快照</p>
+        <p class="tl">  临时 id（reload 后被真正的 message id 替代）</p>
+        <p class="tl">  冻结时刻的累积文本（来自 streamingText）</p>
+        <p class="tl">  冻结时刻的结构化 parts（来自 streamingParts）</p>
+        <p class="tl">  创建时间戳</p>
+        <p class="tl">user_injected：用户或系统在 Run 进行中注入的消息</p>
+        <p class="tl">  完整的 Message 对象（role、content、meta 等）</p>
+      </div>
+    </div>
+  </div>
+
+  <p>关键区别：<strong>assistant_frozen 存的是 LiveTimeline 内的临时快照，run 结束后由 session.jsonl 的 Message 替代；user_injected 存的是已经落盘的真实 Message。</strong></p>
+</div>
+
+<!-- SCREEN 3: Injection Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">插队三部曲：injectOrSend → freeze → restart</h2>
+
+  <p>用户在 Run 进行中通过浏览器注释、修改队列提交等方式「插话」——不会重启 Run，而是注入当前 Run 的 <code>PendingInputs</code>。</p>
+
+  <div class="numbered-steps stagger-children">
+    <div class="numbered-step">
+      <span class="numbered-step-num">1</span>
+      <div class="numbered-step-body">
+        <h3>前端：injectOrSend</h3>
+        <p>检查当前 slot 是否有 active requestId。有 → 调 <code>api.injectUserMessage</code>，后端把消息写入 PendingInputs + 落盘到 session.jsonl。前端在 liveTimeline 末尾追加 <code>user_injected</code> 条目。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">2</span>
+      <div class="numbered-step-body">
+        <h3>后端：drain_pending_inputs</h3>
+        <p>在下一个 Turn 边界（TurnFinished 之前），agent_loop 调用 <code>drain_pending_inputs</code>，把插队消息推进 transcript——模型下一轮请求会看到这些消息。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">3</span>
+      <div class="numbered-step-body">
+        <h3>前端：turn_finished freeze</h3>
+        <p>TurnFinished 事件到达时，前端检查 liveTimeline 中是否有非 system_notification 的 user_injected 条目。有 → 冻结当前 streaming 为 assistant_frozen，清空 streaming，下个 Turn 从空开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box accent" style="margin-top:var(--space-6);">
+    <span class="callout-icon">🔍</span>
+    <div class="callout-text">
+      <strong>system_notification 不算「插队」</strong>
+      <p>这是故意的设计。后台任务完成通知（BgTaskFinished）虽然也是通过 injectOrSend 注入的，但它带 <code>meta.type === "system_notification"</code>。turn_finished 检查时显式排除它——所以系统通知不会触发 assistant 冻结。它们由 wakeup 排序逻辑钉到对应 assistant 之后，视觉上自然。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: reorderWakeupOrder -->
+<div class="screen animate-in">
+  <h2 class="section-title">Wakeup 排序：让通知待在「对的」assistant 后面</h2>
+
+  <p>系统通知的物理落盘位置可能在 assistant 之前（通知是即写即落，assistant 要等 stream 完成才落）。但视觉上应该排在它回应的 tool_call 所属的那个 assistant 后面。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — liveTimelineOrder.ts:78</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export function</span> <span class="code-function">reorderWakeupOrder</span>&lt;T&gt;(</span>
+<span class="code-line">  items: T[],</span>
+<span class="code-line">  notificationToolUseId,  <span class="code-comment">// 通知→tool_use_id</span></span>
+<span class="code-line">  assistantToolCallIds    <span class="code-comment">// assistant→tool ids[]</span></span>
+<span class="code-line">): number[] {</span>
+<span class="code-line">  <span class="code-comment">// 1. 标记推迟：通知钉到含该 tool_call 的 assistant 后</span></span>
+<span class="code-line">  <span class="code-comment">//    (先向后找，找不到向前找)</span></span>
+<span class="code-line">  <span class="code-comment">// 2. 按 target 反向索引</span></span>
+<span class="code-line">  <span class="code-comment">// 3. 生成渲染顺序：跳过 defer 的通知，</span></span>
+<span class="code-line">  <span class="code-comment">//    在 target assistant 后插入</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">通用的 wakeup 排序核心——与具体数据类型无关</p>
+        <p class="tl">输入：任意类型的数组</p>
+        <p class="tl">投影函数1：从条目提取 tool_use_id（通知才有）</p>
+        <p class="tl">投影函数2：从条目提取持有的 tool_call id 列表</p>
+        <p class="tl">返回：重排后的原 index 序列</p>
+        <p class="tl">步骤1：每则通知找对应的 assistant（含该 tool_call）</p>
+        <p class="tl">双向查找：reload 时物理顺序通知在前 → 向后找...</p>
+        <p class="tl">...streaming 中 assistant 已冻结在前 → 向前找</p>
+        <p class="tl">步骤2：构建 assistant→通知 的映射</p>
+        <p class="tl">步骤3：遍历原数组，跳过被 defer 的通知...</p>
+        <p class="tl">在目标 assistant 之后插入被推迟的通知</p>
+      </div>
+    </div>
+  </div>
+
+  <p>这个算法同时用于两个场景：<strong>reload 后的 Message[] 渲染</strong>（reorderForWakeupView）和 <strong>Run 进行中的 liveTimeline 渲染</strong>（runningTimelineRenderItems）——保证流式中和 reload 后顺序一致，不跳变。</p>
+</div>
+
+<!-- SCREEN 5: Rendering Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">渲染流程：从数据到屏幕</h2>
+
+  <div class="flow-animation" id="flow-render" data-steps='[{"label":"ChatView 检查 isStreaming = !!streamingMessageId","highlight":"check"},{"label":"如果有 streaming：用 runningTimelineRenderItems 把 liveTimeline + streaming 占位符穿插起来","highlight":"timeline"},{"label":"对穿插结果跑 reorderWakeupOrder 排好系统通知","highlight":"reorder"},{"label":"逐项渲染：assistant_frozen → MessageBubble(streaming=false), user_injected → MessageBubble(message), streaming → MessageBubble(streaming=true)","highlight":"render"},{"label":"如果不在 streaming：直接渲染 session.messages（reload 后的最终数据）","highlight":"reload"}]
+'>
+    <div class="flow-diagram" style="display:flex;align-items:center;justify-content:center;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-6) 0;">
+      <div id="flow-check" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">isStreaming?</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-timeline" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">穿插 liveTimeline</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-reorder" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">wakeup 重排</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-render" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">逐项渲染</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-reload" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">reload 接管</div>
+    </div>
+    <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始</div>
+    <div class="flow-packet" style="display:none;"></div>
+    <div style="text-align:center;margin-top:var(--space-4);">
+      <button class="flow-next-btn quiz-check-btn">Next Step</button>
+      <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+      <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module5">
+    <div class="quiz-question-block"
+         data-correct="system_notification_excluded"
+         data-explanation-right="对！turn_finished 显式排除 system_notification 类型的消息——它们不触发冻结，而是由 wakeup 排序逻辑钉到对应 assistant 之后。"
+         data-explanation-wrong="你再看看 turn_finished 的逻辑：`item.message.meta?.type !== 'system_notification'`——系统通知被显式排除了。">
+      <h3 class="quiz-question">系统通知（BgTaskFinished）到达时，turn_finished 会冻结当前 streaming 吗？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="always" onclick="selectOption(this)">会，任何插队都触发冻结</button>
+        <button class="quiz-option" data-value="system_notification_excluded" onclick="selectOption(this)">不会，系统通知被显式排除</button>
+        <button class="quiz-option" data-value="random" onclick="selectOption(this)">看运气</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">Try Again</button>
+  </div>
+</div>
+
+</section>

@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>一套核心，四个壳：Hebbian 事件统一之路</title>
+
+  <!-- Google Fonts: Bricolage Grotesque · DM Sans · JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <style>
+    :root {
+      --color-accent:       #2A7B9B;
+      --color-accent-hover: #1F6280;
+      --color-accent-light: #E4F2F7;
+      --color-accent-muted: #5A9DB8;
+    }
+  </style>
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">一套核心，四个壳</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="module-1" data-tooltip="同一件事写了三遍" role="tab" aria-label="Module 1: 同一件事写了三遍"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="WireEvent 唯一的翻译" role="tab" aria-label="Module 2: WireEvent 唯一的翻译"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="三个壳一起收口" role="tab" aria-label="Module 3: 三个壳一起收口"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="为什么 CLI 是例外" role="tab" aria-label="Module 4: 为什么 CLI 是例外"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="怎么证明没改坏" role="tab" aria-label="Module 5: 怎么证明没改坏"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+    <!-- modules/*.html content is assembled here by build.sh -->
+<section class="module" id="module-1">
+
+<!-- SCREEN 1: Hero -->
+<div class="screen animate-in">
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[
+      {"label":"agent 大脑里发生了一件事：模型吐出一段文字","highlight":"flow-actor-1"},
+      {"label":"这件事要告诉桌面 App 的屏幕——但桌面有自己的一套翻译","highlight":"flow-actor-2","packet":true,"from":"actor-1","to":"actor-2"},
+      {"label":"同一件事又要告诉命令行——命令行另有一套翻译","highlight":"flow-actor-3","packet":true,"from":"actor-1","to":"actor-3"},
+      {"label":"同一件事还要告诉网页版——网页版第三套翻译","highlight":"flow-actor-4","packet":true,"from":"actor-1","to":"actor-4"},
+      {"label":"三套翻译各写各的，慢慢就对不上了——这就是我们要修的病","highlight":"flow-actor-1"}
+    ]'>
+      <div class="flow-actors">
+        <div class="flow-actor" id="flow-actor-1">
+          <div class="flow-actor-icon" style="background:var(--color-accent)">🧠</div>
+          <span>Agent 大脑</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-2">
+          <div class="flow-actor-icon" style="background:var(--color-actor-1)">🖥️</div>
+          <span>桌面 App</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-3">
+          <div class="flow-actor-icon" style="background:var(--color-actor-2)">⌨️</div>
+          <span>命令行</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-4">
+          <div class="flow-actor-icon" style="background:var(--color-actor-3)">🌐</div>
+          <span>网页版</span>
+        </div>
+      </div>
+      <div class="flow-packet" id="flow-packet"></div>
+      <div class="flow-step-label" id="flow-label">点击 "Next Step" 看问题长什么样</div>
+      <div class="flow-controls">
+        <button class="btn flow-next-btn">Next Step</button>
+        <button class="btn flow-reset-btn">Restart</button>
+        <span class="flow-progress"></span>
+      </div>
+    </div>
+  </div>
+
+  <h1 class="module-title">同一件事，写了三遍</h1>
+  <p class="module-subtitle">Hebbian 有一个 agent 大脑，四个外壳。大脑里发生的每一件事，都要"翻译"成各个外壳能看懂的话。问题是——这套翻译被写了三遍，三遍还慢慢对不上了。</p>
+
+  <p>这门课讲的是一次真实的代码重构：怎么发现"同一件事写了三遍"这个隐患，怎么把它收口成"只写一遍"，以及——怎么证明改完之后什么都没坏。</p>
+
+  <p>你不需要会写代码。你只需要理解一个软件工程里反复出现的核心矛盾：<strong>重复是怎么悄悄变成 bug 的</strong>。理解了它，你就能在指挥 AI 写代码时，提前闻到这种味道。</p>
+</div>
+
+<!-- SCREEN 2: One brain, four shells -->
+<div class="screen animate-in">
+  <h2 class="section-title">一个大脑，四个壳</h2>
+
+  <p>Hebbian 是个 AI <span class="term" data-definition="Agent（智能体）就是一个能自己调用工具、分步骤完成任务的 AI 程序。它不只是回答问题，还能读文件、跑命令、查资料——像一个会动手的助手。">agent</span> 框架。它的设计哲学叫"一套核心、多 <span class="term" data-definition="Surface（表层 / 外壳）指用户实际打交道的那一层界面。同一个程序可以有多个 surface——桌面窗口、命令行、网页，各是一个壳，但底下是同一套逻辑。">surface</span>"：真正干活的逻辑只有一份，放在中间叫 <code>agent-core</code> 的地方；外面套四个不同的壳，让不同的人用不同的方式接触它。</p>
+
+  <div class="icon-rows">
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-1)">🖥️</div>
+      <div>
+        <strong>Desktop（桌面 App）</strong>
+        <p>用 Tauri 做的桌面窗口，普通用户点点点用的图形界面</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-2)">⌨️</div>
+      <div>
+        <strong>heb CLI（命令行）</strong>
+        <p>给 AI 脚本用的纯文字接口，事件一行一行往外吐，方便程序解析</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-3)">🌐</div>
+      <div>
+        <strong>hebweb（网页版）</strong>
+        <p>浏览器里打开的版本，和桌面共用同一套界面代码</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-4)">💬</div>
+      <div>
+        <strong>channel-gateway（渠道网关）</strong>
+        <p>接微信这类聊天软件，让你在微信里直接和 agent 对话</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🎯</div>
+    <div class="callout-content">
+      <strong class="callout-title">为什么要分壳？</strong>
+      <p>因为不同的人用法不同：你想点窗口，AI 脚本想读纯文本，远程用户想开网页。但他们要的"agent 能力"是同一个。把能力做一份、壳做多个，就不用维护四套 agent。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: The translation problem -->
+<div class="screen animate-in">
+  <h2 class="section-title">麻烦出在"翻译"这一步</h2>
+
+  <p>大脑内部用的是一种"专业语言"——程序员叫它<span class="term" data-definition="领域模型（domain model）是程序内部用来表达业务概念的数据结构。它为了方便内部逻辑处理而设计，往往嵌套很深、类型很严格，不一定适合直接发给外面。">领域模型</span>，强类型、嵌套深，方便内部逻辑处理。但屏幕、命令行、网页这些壳看不懂这种语言，需要先翻译成它们各自能消费的"大白话"。</p>
+
+  <p>这层翻译本身是合理的。问题是——它被<strong>分别写了三遍</strong>：桌面写了一套，命令行写了一套，网页又写了一套。</p>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-1)">
+      <div class="pattern-icon" style="background:var(--color-actor-1)">🖥️</div>
+      <h4 class="pattern-title">桌面那套翻译</h4>
+      <p>把内部事件翻成 <code>EngineEvent</code>，丢了 token 用量字段</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-2)">
+      <div class="pattern-icon" style="background:var(--color-actor-2)">⌨️</div>
+      <h4 class="pattern-title">命令行那套翻译</h4>
+      <p>翻成 <code>DaemonEvent</code>，把工具结果截断到 500 字</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-3)">
+      <div class="pattern-icon" style="background:var(--color-actor-3)">🌐</div>
+      <h4 class="pattern-title">网页那套翻译</h4>
+      <p>翻成另一个 <code>EngineEvent</code>，"失败"事件翻成了不同的名字</p>
+    </div>
+  </div>
+
+  <div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-content">
+      <strong class="callout-title">这就是 bug 的温床</strong>
+      <p>三套翻译各写各的，今天有人给桌面加个字段，忘了同步给另外两套——三个壳收到的"同一件事"就长得不一样了。用户在桌面看到的和网页看到的对不上，排查起来还特别难，因为你得同时盯三个地方。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The DRY insight -->
+<div class="screen animate-in">
+  <h2 class="section-title">一个古老的工程原则</h2>
+
+  <p>这种"同一件事写多遍，迟早对不上"的隐患，工程师太熟悉了，专门给它起了个名字叫 <span class="term" data-definition="DRY = Don&apos;t Repeat Yourself（不要重复自己）。软件工程核心原则之一：同一份知识/逻辑只应该有一个权威来源。复制粘贴出来的多份副本迟早会各自演化、互相矛盾。">DRY 原则</span>——Don't Repeat Yourself，别重复你自己。</p>
+
+  <p>核心思想很朴素：<strong>同一份逻辑，世界上只应该存在一份权威版本。</strong>需要它的地方都去引用那一份，而不是各自抄一份。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">💡</div>
+    <div class="callout-content">
+      <strong class="callout-title">为什么这对你（指挥 AI 的人）重要</strong>
+      <p>当你让 AI 加功能时，它经常图省事——"复制一份现成的改改"。短期看很快，长期看你就攒了三份会互相矛盾的副本。学会闻到这种味道，你就能对 AI 说："别复制，抽出来做成共享的一份。"这一句话，就是高级工程师和新手的区别。</p>
+    </div>
+  </div>
+
+  <p>接下来四个模块，我们看 Hebbian 是怎么把"三遍翻译"收口成"一遍"的——以及为什么有一个壳，<strong>故意</strong>没有完全统一。</p>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module1">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="正是如此。重复本身不是 bug，但它是 bug 的温床——三份副本会各自演化，迟早对不上。真正的风险是'改了一份忘了改其他份'。"
+         data-explanation-wrong="再想想。这三套翻译现在可能都是对的，能跑通。问题不在'现在'，而在'未来'——当有人改其中一份时。">
+      <h3 class="quiz-question">"同一件事写了三遍"最大的风险是什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>代码变多了，占用更多硬盘空间</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>将来有人改其中一份、忘了改另外两份，三个壳就对不上了</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>程序会跑得更慢</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="对。'一套核心、多 surface'的精髓就是：能力只做一份（agent-core），壳做多个。这样加新功能只需改一处，四个壳自动受益。"
+         data-explanation-wrong="不太对。Hebbian 刻意不让每个壳各自实现 agent 能力——那又会变成重复。壳只负责'翻译输入、渲染输出'，真正的能力在中间那一份核心里。">
+      <h3 class="quiz-question">如果你要给 Hebbian 加个新的 agent 能力，理想情况下应该改几个地方？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>四个壳各改一遍，共四处</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>桌面和网页改，命令行不用</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>只改中间那一份核心（agent-core），四个壳自动受益</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：那份"唯一的翻译"长什么样——认识 <code>WireEvent</code>。</p>
+</div>
+
+</section>
+<section class="module" id="module-2">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">机场的广播室</h2>
+
+  <p>想象一个国际机场。塔台内部用专业术语沟通——航班号、跑道编号、风速参数，密密麻麻、严格精确。但候机厅里的乘客听不懂这些。中间需要一个<strong>广播室</strong>，把塔台的专业信息翻译成"CA1234 航班现在 8 号登机口开始登机"这种人人都懂的话。</p>
+
+  <p>关键是：这个广播室<strong>只有一间</strong>。无论信息要送到中文显示屏、英文显示屏，还是手机推送，都先经过这同一间广播室翻译，再分发出去。三块屏幕收到的内容必然一致，因为它们都来自同一次翻译。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">💡</div>
+    <div class="callout-content">
+      <strong class="callout-title">这正是 Hebbian 的解法</strong>
+      <p>塔台的专业术语 = agent 内部的<strong>领域模型</strong>（叫 <code>EventPayload</code>）。广播室翻译出的大白话 = <strong>线协议</strong>（叫 <code>WireEvent</code>）。而那"唯一的一间广播室" = 一个叫 <code>to_wire</code> 的函数。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Two languages -->
+<div class="screen animate-in">
+  <h2 class="section-title">两种语言，一道边界</h2>
+
+  <p>程序里有两种"语言"，它们的形态天然不同，中间这层翻译是<strong>合理的边界</strong>，不该硬抹掉：</p>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-accent)">
+      <div class="pattern-icon" style="background:var(--color-accent)">🧠</div>
+      <h4 class="pattern-title">EventPayload（对内）</h4>
+      <p>领域模型。<span class="term" data-definition="嵌套枚举（nested enum）指一个数据类型里又套着另一个数据类型的多种可能。比如'权限请求'里又分'工具调用/文件访问/计划审批'好几种，每种带不同字段。嵌套深、表达力强，但外面不好直接消费。">嵌套枚举</span>、强类型，方便 Rust 内部逻辑精确处理。给程序自己用。</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-3)">
+      <div class="pattern-icon" style="background:var(--color-actor-3)">📡</div>
+      <h4 class="pattern-title">WireEvent（对外）</h4>
+      <p>线协议 <span class="term" data-definition="DTO = Data Transfer Object（数据传输对象）。专门为'传出去'而设计的简化数据结构，字段拍平、好序列化，方便前端 JS 或脚本直接读。">DTO</span>。字段拍平、能被网页的 JavaScript 直接消费。给外面的壳用。</p>
+    </div>
+  </div>
+
+  <p><span class="term" data-definition="线协议（wire protocol）指数据在'线上'传输时的格式约定。这里特指 agent 发给各个壳的事件长什么样——字段名、结构、取值。一旦壳们依赖了它，就不能随便改。">线协议</span>这个词里的"线"，就是数据传输的那根线。WireEvent 就是规定"传出去的数据长什么样"的那份约定。</p>
+</div>
+
+<!-- SCREEN 3: The one translator (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">唯一的翻译函数：to_wire</h2>
+
+  <p>整个系统里，"内部事件 → 对外 WireEvent"的翻译，<strong>只有一个函数</strong>负责，叫 <code>to_wire</code>。它住在 <code>protocol</code> 这个所有人都依赖的共享地基里。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · wire.rs</span>
+      <pre><code><span class="code-line"><span class="code-keyword">pub fn</span> <span class="code-function">to_wire</span>(event: &Event) -> Option&lt;WireEvent&gt; {</span>
+<span class="code-line">  <span class="code-keyword">match</span> &event.payload {</span>
+<span class="code-line">    EventPayload::TextDelta { text } =></span>
+<span class="code-line">      WireEvent::TextDelta { text: text.clone() },</span>
+<span class="code-line">    EventPayload::RunFailed { error } =></span>
+<span class="code-line">      WireEvent::Error { message: ... },</span>
+<span class="code-line">    <span class="code-comment">// ... 37 种事件，每种一条翻译规则</span></span>
+<span class="code-line">  }</span>
+<span class="code-line">}</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">定义一个公开函数 <code>to_wire</code>，吃进一个内部事件，吐出一个对外的 WireEvent。</p>
+        <p class="tl"><code>match</code> 就是"看看这是哪种事件"，挨个对照。</p>
+        <p class="tl">如果是"模型吐了一段文字"，就翻成对外的"文字增量"。</p>
+        <p class="tl">如果是"这一轮失败了"，就翻成对外的"错误"。</p>
+        <p class="tl">一共 37 种事件，每种都在这里、且只在这里，规定怎么翻。</p>
+        <p class="tl">从此整个系统翻译事件，都来这一个地方——再没有第二份。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🔒</div>
+    <div class="callout-content">
+      <strong class="callout-title">"无损"是关键设计</strong>
+      <p>WireEvent 带<strong>全部</strong>字段，翻译时不做任何精简。各个壳想怎么省略、怎么截断，是各壳自己渲染时的事，不在这层动手。这样翻译层永远只有"完整版"一种产出，不会因为"桌面想省这个、命令行想省那个"又分叉成多份。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">收口后，事件这样流动</h2>
+
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[
+      {"label":"agent 大脑里发生一件事（EventPayload）","highlight":"flow-actor-1"},
+      {"label":"先经过唯一的广播室 to_wire，翻成 WireEvent","highlight":"flow-actor-2","packet":true,"from":"actor-1","to":"actor-2"},
+      {"label":"同一份 WireEvent 发给桌面——前端直接渲染","highlight":"flow-actor-3","packet":true,"from":"actor-2","to":"actor-3"},
+      {"label":"同一份 WireEvent 发给网页——共用前端代码，一样渲染","highlight":"flow-actor-4","packet":true,"from":"actor-2","to":"actor-4"},
+      {"label":"三个壳收到的是同一次翻译的结果，永远一致","highlight":"flow-actor-2"}
+    ]'>
+      <div class="flow-actors">
+        <div class="flow-actor" id="flow-actor-1">
+          <div class="flow-actor-icon" style="background:var(--color-accent)">🧠</div>
+          <span>EventPayload</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-2">
+          <div class="flow-actor-icon" style="background:var(--color-actor-4)">📡</div>
+          <span>to_wire</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-3">
+          <div class="flow-actor-icon" style="background:var(--color-actor-1)">🖥️</div>
+          <span>桌面</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-4">
+          <div class="flow-actor-icon" style="background:var(--color-actor-3)">🌐</div>
+          <span>网页</span>
+        </div>
+      </div>
+      <div class="flow-packet" id="flow-packet"></div>
+      <div class="flow-step-label" id="flow-label">点击 "Next Step" 看收口后的流动</div>
+      <div class="flow-controls">
+        <button class="btn flow-next-btn">Next Step</button>
+        <button class="btn flow-reset-btn">Restart</button>
+        <span class="flow-progress"></span>
+      </div>
+    </div>
+  </div>
+
+  <p>注意中间那个 <code>to_wire</code> 节点——所有事件都得过它。这就是"唯一权威来源"的物理体现：想改翻译规则，全世界只有这一个地方能改。</p>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module2">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="对。这正是'合理的边界'——内部要强类型方便逻辑处理，外部要拍平方便壳消费。两者形态不同是天然的，所以保留一层翻译，但只保留一份。"
+         data-explanation-wrong="不太对。如果内外用完全一样的格式，要么内部逻辑被迫用难处理的拍平结构，要么前端被迫解析复杂的嵌套类型。两边各有各的需要，中间这层翻译是有价值的。">
+      <h3 class="quiz-question">既然要统一，为什么不干脆让内部和外部用<strong>完全一样</strong>的数据格式，连翻译都省了？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为程序员喜欢多写代码</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>内部要强类型方便处理、外部要拍平方便消费，形态天然不同——翻译是合理边界，只是不该写多份</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为前端不支持 Rust</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-a"
+         data-explanation-right="正确。'无损'意味着翻译层产出唯一的完整版，绝不在这里做'桌面省这个、命令行省那个'的分叉。各壳的省略放到各自的渲染层，翻译层就永远只有一种产出。"
+         data-explanation-wrong="再想想。如果翻译时就替桌面省一点、替命令行省另一点，翻译层就又会分叉成多份——正好回到我们要消除的问题。">
+      <h3 class="quiz-question">WireEvent 坚持"无损"（带全部字段、翻译时不精简），最重要的好处是？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>翻译层永远只产出"完整版"一种结果，不会因为各壳的省略需求又分叉成多份</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>数据传得更快</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>前端代码可以更短</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module2')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module2')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：理论有了，怎么把三个壳真的搬过来——而且不弄坏任何东西。</p>
+</div>
+
+</section>
+<section class="module" id="module-3">
+
+<!-- SCREEN 1: The three moves -->
+<div class="screen animate-in">
+  <h2 class="section-title">三个壳，三种搬法</h2>
+
+  <p>收口的目标一样——都改用 <code>to_wire</code>。但三个壳的现状不同，搬过来的"动作"也不同。像三间老房子翻新：有的拆旧墙就行，有的整间推平重盖，有的得小心保留承重结构。</p>
+
+  <div class="step-cards">
+    <div class="step-card">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>桌面：拆掉旧翻译，接上 to_wire</strong>
+        <p>删掉它那套 280 行的翻译函数和自定义事件类型，所有出口直接调 to_wire。前端完全无感。</p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>网页：整个翻译文件删掉</strong>
+        <p>它那套翻译独占一个文件，连同自定义事件类型一起整文件删除，改用 to_wire。</p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>命令行：保留类型，只统一字段形态</strong>
+        <p>它的事件类型有"承重作用"不能拆（下个模块详解），但能让字段值复用同一套规范。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Group chat -->
+<div class="screen animate-in">
+  <h2 class="section-title">如果三个壳能开个会</h2>
+
+  <p>收口前，三个壳各自为政。我们把这次重构想象成一场群聊——看它们怎么达成"以后都听 to_wire 的"这个共识：</p>
+
+  <div class="chat-window" id="chat-module3">
+    <div class="chat-messages">
+      <div class="chat-message" data-msg="0" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire（新广播室）</span>
+          <p>各位，从今天起，事件翻译都来找我。你们别再各写各的了。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="1" data-sender="desktop" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-1)">🖥️</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-1)">桌面</span>
+          <p>我那套翻译写了 280 行……删了它，我的前端会不会崩？用户会不会看出来？</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="2" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>不会。早在我上线那天，就埋了一个对照测试，逐字节证明我翻出来的和你旧的一模一样。前端收到的 JSON 完全相同。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="3" data-sender="web" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-3)">🌐</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-3)">网页</span>
+          <p>我之前偷懒，只翻译了一部分事件。换成你以后，我会收到更多种类的事件，前端能扛住吗？</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="4" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>能。那些"多出来的"事件，桌面一直在发，你俩共用同一套前端代码——它早就会处理了。你反而是白捡了功能，向桌面看齐。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="5" data-sender="cli" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-2)">⌨️</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-2)">命令行</span>
+          <p>等等——我有些特殊设计（截断长输出、专属的启动信号），不能简单换成你。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="6" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>对，你是特例，留着你的类型。但你那些字段的"写法"可以复用我的规范——这样三家的字段值就一致了。细节下个模块讲。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-typing" id="chat-module3-typing" style="display:none">
+      <div class="chat-avatar">📡</div>
+      <div class="chat-typing-dots">
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+      </div>
+    </div>
+
+    <div class="chat-controls">
+      <button class="btn chat-next-btn">下一条</button>
+      <button class="btn chat-all-btn">全部播放</button>
+      <button class="btn chat-reset-btn">重播</button>
+      <span class="chat-progress"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Desktop's delete (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">桌面：一行替换，删掉一整套</h2>
+
+  <p>桌面的搬法干净利落。它的"观察者"原本在每个事件出口调旧翻译函数 <code>agent_event_to_engine_event</code>，现在统统换成 <code>to_wire</code>：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · chat.rs（改动示意）</span>
+      <pre><code><span class="code-line"><span class="code-comment">// 改之前：调桌面自己那套翻译</span></span>
+<span class="code-line"><span class="code-keyword">if let</span> Some(ev) = <span class="code-function">agent_event_to_engine_event</span>(event) {</span>
+<span class="code-line">  (self.emit)(ev);</span>
+<span class="code-line">}</span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-comment">// 改之后：调全局唯一的 to_wire</span></span>
+<span class="code-line"><span class="code-keyword">if let</span> Some(ev) = protocol::<span class="code-function">to_wire</span>(event) {</span>
+<span class="code-line">  (self.emit)(ev);</span>
+<span class="code-line">}</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">原本：把事件交给桌面自己写的翻译机。</p>
+        <p class="tl">如果翻得出来，就发给前端。</p>
+        <p class="tl"> </p>
+        <p class="tl">现在：把事件交给全世界唯一的翻译机 to_wire。</p>
+        <p class="tl">逻辑一模一样——只是换了翻译机的牌子。</p>
+        <p class="tl">那套 280 行的旧翻译机，从此可以整个删掉。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🎁</div>
+    <div class="callout-content">
+      <strong class="callout-title">顺手清掉的"僵尸代码"</strong>
+      <p>搬迁过程中还发现两个文件谁都没在用——其中一个甚至依赖另一个早被删掉的文件，<span class="term" data-definition="僵尸代码 / 死代码（dead code）指仓库里留着、但实际从没被调用执行的代码。它不影响运行，但会误导读代码的人，让人以为它还在起作用。">根本编译不过</span>的僵尸。重构常常顺带照出这种积灰角落。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The net result -->
+<div class="screen animate-in">
+  <h2 class="section-title">收口的净效果</h2>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-error)">
+      <div class="pattern-icon" style="background:var(--color-error)">🗑️</div>
+      <h4 class="pattern-title">删掉</h4>
+      <p>桌面 280 行翻译 + 自定义事件类型；网页整个翻译文件；2 个僵尸死文件</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-success)">
+      <div class="pattern-icon" style="background:var(--color-success)">✅</div>
+      <h4 class="pattern-title">留下</h4>
+      <p>一个 <code>to_wire</code>，三个壳共用。改翻译规则，全世界只有一处可改</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-accent)">
+      <div class="pattern-icon" style="background:var(--color-accent)">🎁</div>
+      <h4 class="pattern-title">白捡</h4>
+      <p>网页向桌面看齐，自动收到以前漏掉的 19 种事件，功能更全</p>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🔑</div>
+    <div class="callout-content">
+      <strong class="callout-title">"前端无感"是怎么做到的</strong>
+      <p>因为新翻译 <code>to_wire</code> 吐出的 JSON，和桌面旧翻译<strong>逐字节一致</strong>——这件事在写新翻译那天就用一个测试钉死了。所以删旧的、换新的，前端那边完全不知道发生过什么。这是安全重构的精髓：<strong>先证明等价，再替换。</strong></p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module3">
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="对。网页和桌面共用同一套前端代码，桌面一直在发那些事件，前端早就会处理。网页以前收不到只是因为它的旧翻译偷懒过滤掉了——换成 to_wire 后白捡功能。"
+         data-explanation-wrong="再想想。这些'多出来'的事件并不是新发明的——桌面一直在发，前端代码也一直在处理。网页和桌面共用前端，所以接得住。">
+      <h3 class="quiz-question">网页换成 to_wire 后会收到更多种类的事件。为什么前端不会因此出错？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为网页给每种新事件都现写了处理逻辑</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为浏览器会自动忽略看不懂的事件</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>网页和桌面共用同一套前端代码，桌面一直在发这些事件，前端早就会处理</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="正解。'先证明等价，再替换'——靠那个逐字节对照测试，保证新翻译和旧翻译产出完全相同，所以删旧换新前端毫无感知。这是安全重构最核心的纪律。"
+         data-explanation-wrong="不太对。重构的安全感不是来自'小心翼翼'或'测一测能跑'，而是来自一个能证明'新旧产出完全相同'的硬证据。没有这个证据，再小心也是赌。">
+      <h3 class="quiz-question">桌面删掉旧翻译、换成 to_wire，"前端无感"靠的是什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>改得很小心，没动太多代码</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>一个逐字节对照测试，提前证明新翻译和旧翻译产出完全相同</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>改完跑了一下，没报错</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：为什么命令行<strong>不能</strong>完全统一——一个关于"分寸"的工程判断。</p>
+</div>
+
+</section>
+<section class="module" id="module-4">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">广播室 vs. 调度电台</h2>
+
+  <p>前面说 to_wire 像机场广播室。但命令行这个壳，更像消防队的<strong>调度电台</strong>——它不只转发广播室的信息，还夹带自己专属的调度指令（"3 号车出动""收到完毕"），而且为了让无线电不卡，长消息会被<strong>故意截短</strong>。</p>
+
+  <p>如果硬把调度电台也换成普通广播室，那些专属调度信号和"截短"的习惯就没了——所有依赖这套电台的设备（自动化脚本）全得重写。这不是统一，是破坏。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🧭</div>
+    <div class="callout-content">
+      <strong class="callout-title">这一节讲的是"分寸"</strong>
+      <p>重构里最难的不是"怎么改"，而是"改到哪儿为止"。命令行就是那条线：它该统一的地方统一，不该动的地方坚决不动。看懂这个判断，比看懂任何代码都值钱。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Why CLI is a superset -->
+<div class="screen animate-in">
+  <h2 class="section-title">命令行的事件，是个"超集"</h2>
+
+  <p>命令行的事件类型叫 <code>DaemonEvent</code>。它不是 WireEvent 的"另一种写法"——它是 WireEvent 的<span class="term" data-definition="超集（superset）指一个集合包含了另一个集合的全部，外加更多。这里指 DaemonEvent 含有 WireEvent 的所有业务事件，外加一些 WireEvent 没有的专属内容。所以不能用 WireEvent 简单替换它。">超集</span>：业务事件它都有，外加 WireEvent 根本没有的东西。</p>
+
+  <div class="badge-list">
+    <div class="badge-item">
+      <code class="badge-code">Started</code>
+      <span class="badge-desc">命令行专属：守护进程刚启动、报告自己的会话 ID。这是"调度指令"，agent 大脑里压根没有这种事件</span>
+    </div>
+    <div class="badge-item">
+      <code class="badge-code">result 截断 500</code>
+      <span class="badge-desc">工具输出再长，也只留前 500 字——因为命令行是一行一行往外吐的，超长行会撑爆解析脚本</span>
+    </div>
+    <div class="badge-item">
+      <code class="badge-code">扁平化字段</code>
+      <span class="badge-desc">把嵌套的权限信息拍平成一层，方便脚本用 jq 这类工具直接挑字段</span>
+    </div>
+  </div>
+
+  <div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-content">
+      <strong class="callout-title">这些不是 bug，是有意设计</strong>
+      <p>命令行的读者是<strong>自动化脚本</strong>，不是人。脚本要逐行解析 <span class="term" data-definition="NDJSON = Newline-Delimited JSON。每行是一个独立的 JSON 对象，一行一条。特别适合流式输出和脚本逐行读取——读一行、解析一行、处理一行。">NDJSON</span>，所以截断防爆行、扁平好挑字段，都是为脚本量身定做的。强行换成 WireEvent，等于把这些贴心设计全删了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Form vs Type -->
+<div class="screen animate-in">
+  <h2 class="section-title">关键区分：统一"形态"≠ 替换"类型"</h2>
+
+  <p>用户当时的要求是"把命令行也统一"。但"统一"有两种截然不同的理解，代价天差地别——这是必须先讲清、再动手的岔路：</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin:var(--space-6) 0;">
+    <div class="pattern-card" style="border-top:3px solid var(--color-success)">
+      <div class="pattern-icon" style="background:var(--color-success)">✅</div>
+      <h4 class="pattern-title">统一形态（做了）</h4>
+      <p>保留 DaemonEvent 这个类型，但让它内部那几个字段的<strong>写法</strong>复用 to_wire 的规范。改动小、不破坏脚本格式。</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-error)">
+      <div class="pattern-icon" style="background:var(--color-error)">🚫</div>
+      <h4 class="pattern-title">替换类型（没做）</h4>
+      <p>把 DaemonEvent 整个换成 WireEvent。破坏 NDJSON 格式、删掉专属信号和截断，所有脚本重写。</p>
+    </div>
+  </div>
+
+  <p>读透代码后发现：命令行那几个字段其实是<strong>翻译得不一致</strong>——它用了一种偷懒写法（直接 dump 内部值），导致同一个"危险等级"，命令行写成 <code>"Critical"</code>，而桌面/网页写成规范的 <code>"critical"</code>。这才是真正该统一的：<strong>字段值的形态</strong>，不是整个类型。</p>
+</div>
+
+<!-- SCREEN 4: The actual fix (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">真正的修法：复用同一套规范</h2>
+
+  <p>解法很优雅：把 to_wire 内部那几个"枚举转字符串"的小函数<span class="term" data-definition="公开（pub / public）指把一段代码标记为'别处也能调用'。原本只在自己文件里用的函数，标成公开后，其他模块就能引用同一份——实现'单一来源'。">公开</span>出来，让命令行直接复用。从此"危险等级怎么写成字符串"，全世界只有一个定义。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · daemon.rs（改动示意）</span>
+      <pre><code><span class="code-line"><span class="code-comment">// 改之前：命令行偷懒，直接 dump 内部值</span></span>
+<span class="code-line">risk: <span class="code-function">format!</span>(<span class="code-string">"{risk:?}"</span>),   <span class="code-comment">// → "Critical"</span></span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-comment">// 改之后：复用 to_wire 的同一套规范</span></span>
+<span class="code-line">risk: protocol::<span class="code-function">risk_str</span>(risk),  <span class="code-comment">// → "critical"</span></span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">原本：命令行自己随手把"危险等级"转成文字。</p>
+        <p class="tl">随手转的结果是首字母大写的 "Critical"——和别人不一样。</p>
+        <p class="tl"> </p>
+        <p class="tl">现在：调用 to_wire 用的同一个 <code>risk_str</code> 函数。</p>
+        <p class="tl">于是三个壳写出来的都是规范的 "critical"，逐字节一致。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">📋</div>
+    <div class="callout-content">
+      <strong class="callout-title">改了对外格式，就得改文档</strong>
+      <p>把 <code>"Critical"</code> 改成 <code>"critical"</code> 是<strong>对外可见的格式变更</strong>——依赖命令行的脚本可能在意。所以这次改动同步更新了命令行的调试文档，把字段的规范取值写清楚。改契约必须连文档一起改，这是纪律。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module4">
+    <div class="scenario-block">
+      <div class="scenario-context">
+        <span class="scenario-label">场景</span>
+        <p>你在指挥 AI 重构一个系统。AI 提议："把命令行的事件类型也换成统一的 WireEvent，彻底干净。"但你知道命令行有专属的启动信号、有意的输出截断。你该怎么回应？</p>
+      </div>
+      <div class="quiz-question-block"
+           data-correct="opt-b"
+           data-explanation-right="对。这就是'统一形态 vs 替换类型'的判断。专属信号和截断是有意设计，不能丢；但字段的写法可以复用同一套规范。让 AI 只统一形态，保留类型。"
+           data-explanation-wrong="再想想。'彻底干净'听起来很爽，但会删掉命令行为脚本量身定做的设计（专属信号、截断），让所有依赖它的脚本崩溃。干净不等于正确。">
+        <div class="quiz-options">
+          <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>同意，越统一越好，让 AI 直接换</span>
+          </button>
+          <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>喊停，区分"统一形态"和"替换类型"——保留命令行的类型和专属设计，只让字段值复用同一套规范</span>
+          </button>
+          <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+            <div class="quiz-option-radio"></div>
+            <span>放弃统一，命令行完全不动</span>
+          </button>
+        </div>
+        <div class="quiz-feedback"></div>
+      </div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-a"
+         data-explanation-right="正确。命令行的截断是为脚本逐行解析服务的有意设计——它属于'这个壳怎么展示'，不属于'事件本身是什么'。各壳的展示偏好下沉到各自渲染层，翻译层保持无损。"
+         data-explanation-wrong="不太对。如果让 to_wire 也替命令行截断，翻译层就又开始替不同的壳做不同的事——正好回到'翻译分叉成多份'的老问题。截断该留在命令行自己那层。">
+      <h3 class="quiz-question">命令行把工具输出截断到 500 字。这个"截断"逻辑应该放在哪里？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放在命令行自己这层（各壳的展示偏好下沉到各壳），翻译层保持无损</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放进 to_wire，让翻译时就替命令行截断好</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>放在 agent 大脑里，源头就截断</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">最后一站：改了这么多，怎么<strong>证明</strong>什么都没坏？</p>
+</div>
+
+</section>
+<section class="module" id="module-5">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">不是"我觉得没坏"，是"我证明没坏"</h2>
+
+  <p>翻新房子最怕的不是看得见的墙，而是看不见的水管——你以为只是换了个水龙头，结果三楼漏水。代码重构一模一样：删了 600 行、改了四个地方，<strong>怎么确定没有哪根"水管"被碰漏？</strong></p>
+
+  <p>这一节讲三种"证据"。它们的共同点是：都不靠"我觉得""应该没事""跑一下没报错"——而靠能<strong>反复重现的客观事实</strong>。这是普通改代码和专业重构的分水岭。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🎯</div>
+    <div class="callout-content">
+      <strong class="callout-title">这是你最该学会向 AI 索取的东西</strong>
+      <p>当 AI 说"我改完了，应该没问题"——这句话毫无价值。你要学会追问："拿出证据。怎么证明旧行为没变？"会逼 AI 给证据的人，交付质量天差地别。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Proof 1 - byte comparison -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据一：逐字节对照</h2>
+
+  <p>这是最硬的一种证据。在写新翻译 <code>to_wire</code> 的那天，就埋了一个<span class="term" data-definition="测试（test）是一小段专门用来检查'代码行为是否符合预期'的代码。它能自动跑，给出'通过/失败'。对照测试就是把'新做法'和'旧做法'的结果摆一起，断言两者必须相同。">测试</span>：拿一批典型事件，同时用新翻译和旧翻译各翻一遍，断言两份结果<strong>逐字节相同</strong>。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · 对照测试（示意）</span>
+      <pre><code><span class="code-line"><span class="code-keyword">let</span> legacy = <span class="code-function">agent_event_to_engine_event</span>(&ev);</span>
+<span class="code-line"><span class="code-keyword">let</span> wire  = protocol::<span class="code-function">to_wire</span>(&ev);</span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-function">assert_eq!</span>(</span>
+<span class="code-line">  legacy_json, wire_json,</span>
+<span class="code-line">  <span class="code-string">"新旧翻译 JSON 必须逐字节一致"</span></span>
+<span class="code-line">);</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">用旧翻译机翻一遍，得到结果 A。</p>
+        <p class="tl">用新翻译机翻同一个事件，得到结果 B。</p>
+        <p class="tl"> </p>
+        <p class="tl"><code>assert_eq!</code> 的意思是"断言这俩必须相等"。</p>
+        <p class="tl">把 A 和 B 摆一起比。</p>
+        <p class="tl">只要有一个字节不一样，测试立刻失败、报警。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🪜</div>
+    <div class="callout-content">
+      <strong class="callout-title">它是一架"脚手架"</strong>
+      <p>这个测试的使命就是保证替换那一刻新旧等价。等三个壳都搬完、旧翻译被删掉，它也完成了使命，随旧翻译一起拆掉——脚手架盖完楼就该撤。留着反而会变成"自己跟自己比"的废测试。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Proof 2 - worktree isolation -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据二：隔离一个"平行宇宙"来对照</h2>
+
+  <p>改完后跑测试，冒出来 2 个失败。慌不慌？关键问题是：<strong>这俩是我改坏的，还是本来就坏的？</strong>不查清就甩锅"无关失败"，是不负责任的。</p>
+
+  <p>查法很聪明：用 <span class="term" data-definition="worktree（工作树）是 Git 的一个功能，能从同一个仓库再'签出'一份独立的工作目录到别处。相当于开一个平行宇宙——保留你当前的改动不动，同时在旁边检出'没有你这次改动'的版本来对照。">git worktree</span> 在旁边开一个"没有这次改动"的平行版本，在那里跑同一个失败测试。</p>
+
+  <div class="flow-steps">
+    <div class="flow-step">
+      <div class="flow-step-num">1</div>
+      <p>开一个平行版本（不含本次改动）</p>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-step-num">2</div>
+      <p>在那里跑同一个失败的测试</p>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-step-num">3</div>
+      <p>它<strong>也</strong>失败 → 证明本来就坏，与我无关</p>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🔬</div>
+    <div class="callout-content">
+      <strong class="callout-title">这是科学方法：控制变量</strong>
+      <p>"在没有我改动的版本里也失败" = 失败和我的改动无关。另一个失败则是单独跑就过、一起跑才挂——典型的"机器太忙导致的偶发"。两个都查实了，才有资格说"与本次改动无关"。<strong>下结论前先排除自己</strong>，这是专业的底线。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: Proof 3 - real NDJSON -->
+<div class="screen animate-in">
+  <h2 class="section-title">证据三：真刀真枪跑一遍</h2>
+
+  <p>测试证明了逻辑，但最有说服力的还是<strong>真实世界的输出</strong>。用一个真模型（deepseek-flash）起一个命令行会话，让 agent 真的去创建文件、触发审批，然后看吐出来的 NDJSON 里，那个字段到底是不是规范小写。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">真实 NDJSON 输出</span>
+      <pre><code><span class="code-line">{<span class="code-property">"event"</span>:<span class="code-string">"permission_requested"</span>,</span>
+<span class="code-line"> <span class="code-property">"tool_name"</span>:<span class="code-string">"Bash"</span>,</span>
+<span class="code-line"> <span class="code-property">"risk"</span>:<span class="code-string">"medium"</span>}   <span class="code-comment">← 规范小写！</span></span>
+<span class="code-line"></span>
+<span class="code-line">{<span class="code-property">"event"</span>:<span class="code-string">"permission_resolved"</span>,</span>
+<span class="code-line"> <span class="code-property">"decision"</span>:<span class="code-string">"allow_once"</span>}  <span class="code-comment">← 规范写法！</span></span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">agent 要跑一条命令，发出"请求审批"事件。</p>
+        <p class="tl">用的工具是 Bash。</p>
+        <p class="tl">危险等级是 <code>"medium"</code>——小写！正是这次改的。</p>
+        <p class="tl"> </p>
+        <p class="tl">人批准后，发出"审批已解决"事件。</p>
+        <p class="tl">决定是 <code>"allow_once"</code>——规范的 snake_case，不是偷懒的 Debug 写法。</p>
+      </div>
+    </div>
+  </div>
+
+  <p>而且实测还确认了命令行<strong>有意的设计没被破坏</strong>：工具输出依然被截断、专属的启动信号依然在。该统一的统一了，该保留的也保留了。</p>
+</div>
+
+<!-- SCREEN 5: The big picture + quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">三层证据，一个信念</h2>
+
+  <div class="icon-rows">
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-1)">🔬</div>
+      <div>
+        <strong>逐字节对照测试</strong>
+        <p>证明替换那一刻新旧完全等价——前端无感的底气</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-2)">🌀</div>
+      <div>
+        <strong>平行宇宙隔离验证</strong>
+        <p>证明那 2 个失败本来就坏，不是这次改的——下结论前先排除自己</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-3)">⌨️</div>
+      <div>
+        <strong>真模型真 NDJSON 实测</strong>
+        <p>证明改动在真实世界确实生效，且没破坏有意设计</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🏆</div>
+    <div class="callout-content">
+      <strong class="callout-title">你带走的一句话</strong>
+      <p>好的重构不是"改得对"，而是"<strong>能证明改得对</strong>"。每次让 AI 帮你改代码，多问一句"怎么证明旧行为没变"，你的软件就离"production 级可靠"近了一大步。</p>
+    </div>
+  </div>
+
+  <div class="quiz-container" id="quiz-module5">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="对极了。在'没有你改动'的平行版本里跑同一个测试——如果它也失败，就铁证如山地说明这个失败和你无关。这叫控制变量，是把'我觉得无关'变成'我证明无关'的唯一办法。"
+         data-explanation-wrong="再想想。'感觉无关''之前好像就这样'都是主观判断，会甩错锅。真正的做法是制造一个对照——在不含你改动的版本里复现，用客观结果说话。">
+      <h3 class="quiz-question">改完代码跑测试，冒出一个失败。怎么判断它是不是你改坏的？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>看一眼失败信息，感觉和我改的没关系就算了</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>开一个不含本次改动的平行版本，在那里跑同一个测试——如果也失败，证明与我无关</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>多跑几次，如果偶尔能过就当它没坏</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="正是。'应该没问题'是态度，不是证据。逐字节对照、隔离验证、真实实测——这些能反复重现的客观事实才是证据。学会向 AI 索要证据，是 vibe coder 进阶的关键一步。"
+         data-explanation-wrong="再想想。代码能编译、能跑，只说明它没语法错，完全不能说明'旧行为没变'。一个删了 600 行的重构，光'能跑'离'对'还很远。">
+      <h3 class="quiz-question">AI 帮你做完一个大重构，说"改完了，应该没问题"。下一句你最该说什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"能编译吗？能编译就行。"</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"好的，合并吧。"</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>"拿出证据——怎么证明旧的行为没有改变？"</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">🎉 课程结束。你刚刚理解了一次真实的、有分寸、有证据的重构——从"三遍翻译"到"一遍"，以及为什么有一个壳故意留了例外。</p>
+</div>
+
+</section>
+  </main>
+
+</body>
+</html>

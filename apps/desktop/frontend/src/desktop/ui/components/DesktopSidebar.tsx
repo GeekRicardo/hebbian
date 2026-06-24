@@ -279,6 +279,10 @@ export function DesktopSidebar({
 
   /* ── hover 浮出选项（0.3s 延迟显示，离开有宽限期，方便挪到浮窗上点击） ── */
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  // 记录从哪个项目入口发起的导入：决定对话框只展示该项目目录下的 Claude 会话、
+  // 且导入后归属该项目。null = 全局入口（展示全部、不绑定项目）。
+  const [importProject, setImportProject] =
+    useState<{ id: string; path: string; name: string } | null>(null);
   const [hoverPopup, setHoverPopup] = useState<string | null>(null);
   const [popupAnchor, setPopupAnchor] = useState<HTMLElement | null>(null);
   const [popupRect, setPopupRect] = useState<DOMRect | null>(null);
@@ -758,7 +762,11 @@ export function DesktopSidebar({
 
       <ImportClaudeDialog
         open={importDialogOpen}
-        onOpenChange={setImportDialogOpen}
+        onOpenChange={(v) => {
+          setImportDialogOpen(v);
+          if (!v) setImportProject(null);
+        }}
+        projectFilter={importProject}
         onImported={(sessionId) => {
           refreshSessions();
           openSession(sessionId);
@@ -792,6 +800,19 @@ export function DesktopSidebar({
                 type="button"
                 className="dsp-hover-popup-btn"
                 onClick={() => {
+                  // hoverPopup 形如 "import"（全局）或 "import:<bucket.id>"（项目入口）。
+                  // 项目入口且有真实 projectId + 目录时，限定到该项目。
+                  const bucketId = hoverPopup.startsWith("import:")
+                    ? hoverPopup.slice(7)
+                    : null;
+                  const bucket = bucketId
+                    ? buckets.find((b) => b.id === bucketId)
+                    : null;
+                  setImportProject(
+                    bucket && bucket.projectId
+                      ? { id: bucket.projectId, path: bucket.path, name: bucket.name }
+                      : null,
+                  );
                   closeHover();
                   setImportDialogOpen(true);
                 }}

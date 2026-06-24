@@ -13,7 +13,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
-import { isEmbeddedPreview } from "@/desktop/bridge/transport";
+import { isEmbeddedPreview, isTauri } from "@/desktop/bridge/transport";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
@@ -92,6 +92,10 @@ export function RightSidebar({
   const storageCollapsedKey = `${storagePrefix}.collapsed`;
   const storageTabKey = `${storagePrefix}.tab`;
 
+  // 浏览器 / 终端 tab 依赖 Tauri 原生窗口能力：web surface（hebweb）没有、自举（内置浏览器
+  // 嵌套加载本前端）时套娃。两种情况都不显示这两个 tab，避免点了触发 not implemented / ACL 报错。
+  const nativeTabsAvailable = isTauri() && !isEmbeddedPreview();
+
   const clampWidthForTab = useCallback(
     (_id: TabId, value: number) => Math.min(maxWidth, Math.max(minWidth, value)),
     [minWidth, maxWidth],
@@ -113,8 +117,9 @@ export function RightSidebar({
   const [tab, setTab] = useState<TabId>(() =>
     loadInitial<TabId>(storageTabKey, "tasks", (s) => {
       const valid = (TAB_IDS as string[]).includes(s) ? (s as TabId) : "tasks";
-      // 自举时浏览器/终端 tab 不存在，纠正存储里残留的旧值，否则会挂出套娃面板。
-      if (isEmbeddedPreview() && (valid === "browser" || valid === "terminal")) {
+      // 浏览器/终端是 Tauri 原生窗口能力：web surface（hebweb）无此能力、自举时套娃，
+      // 两种情况都纠正掉残留的旧 tab 值，否则会挂出不可用面板 / 触发命令报错。
+      if (!nativeTabsAvailable && (valid === "browser" || valid === "terminal")) {
         return "tasks";
       }
       return valid;
@@ -219,6 +224,24 @@ export function RightSidebar({
     if (tabRef.current === "terminal" || tabRef.current === "browser") return;
     setCollapsed(true);
   }, [collapseTick]);
+
+  // plan 待审批（架构 §4.4.5）：HITL 决策搬进计划栏后，待审批 plan 出现时自动展开
+  // sidebar + 切到计划 tab，确保用户看到决策入口。plan 审批是阻塞性的（agent 在等），
+  // 比 todos 更需要露出，故无视 autoSwitchBlocked。
+  const pendingApprovalKind = useStore((s) => s.pendingApproval?.kind ?? null);
+  const pendingPlanId = useStore((s) =>
+    s.pendingApproval?.kind === "plan" ? s.pendingApproval.plan?.plan_id ?? null : null,
+  );
+  const prevPendingPlanIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const isPlanPending = pendingApprovalKind === "plan" && pendingPlanId !== null;
+    if (isPlanPending && pendingPlanId !== prevPendingPlanIdRef.current) {
+      prevPendingPlanIdRef.current = pendingPlanId;
+      setCollapsed(false);
+      setTab("plans");
+    }
+    if (!isPlanPending) prevPendingPlanIdRef.current = null;
+  }, [pendingApprovalKind, pendingPlanId]);
 
   // 点链接选了「内置浏览器」打开（架构 §8.5）→ 切到 browser tab 并展开。实际导航由
   // BrowserPanel 监听同一信号执行；这里只负责把 tab 露出来，否则用户看不到打开了哪。
@@ -344,9 +367,9 @@ export function RightSidebar({
         }}
         active={tab === "branches"}
       />
-      {/* 浏览器 / 终端是宿主专属功能：自举（本前端被内置浏览器嵌套加载）时隐藏，
-         避免套娃 + BrowserPanel mount 触发 browser_hide_others 的 ACL 报错。 */}
-      {!isEmbeddedPreview() && (
+      {/* 浏览器 / 终端是 Tauri 原生窗口专属功能：web surface（hebweb）无此能力、自举
+         （本前端被内置浏览器嵌套加载）时套娃，两种情况都隐藏，避免触发命令报错 / ACL 报错。 */}
+      {nativeTabsAvailable && (
         <>
           <SidebarIconButton
             icon={<Globe2 className="h-4 w-4" />}

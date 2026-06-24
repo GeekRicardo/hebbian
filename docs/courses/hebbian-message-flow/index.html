@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hebbian 消息通路</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <style>
+    :root {
+      --color-accent:       #2A7B9B;
+      --color-accent-hover: #1F6280;
+      --color-accent-light: #E4F2F7;
+      --color-accent-muted: #5A9DB8;
+    }
+  </style>
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Hebbian 消息通路</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="module-1" data-tooltip="按下回车的瞬间" role="tab" aria-label="Module 1: 按下回车的瞬间"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="Agent 大脑的无限循环" role="tab" aria-label="Module 2: Agent 大脑的无限循环"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="事件高速公路" role="tab" aria-label="Module 3: 事件高速公路"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="前端状态机" role="tab" aria-label="Module 4: 前端状态机"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="时间线魔法" role="tab" aria-label="Module 5: 时间线魔法"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="Bug 解剖室" role="tab" aria-label="Module 6: Bug 解剖室"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+<section class="module" id="module-1">
+
+<!-- SCREEN 1: Hero -->
+<div class="screen animate-in">
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[{"label":"你在输入框打了字，按了回车","highlight":"user-input"},{"label":"消息穿过 Electron/Tauri 桥，到达 Rust 后端","from":"user-input","to":"ipc-bridge","packet":true},{"label":"Harness 创建新 run，启动 agent_loop","from":"ipc-bridge","to":"harness","packet":true},{"label":"agent_loop 构造请求，调用模型 API","from":"harness","to":"model-api","packet":true},{"label":"模型回复逐段流回前端，渲染到屏幕上","from":"model-api","to":"screen","packet":true}]'>
+      <div class="flow-diagram" style="display:flex;align-items:center;justify-content:center;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-6) 0;">
+        <div id="flow-user-input" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">⌨️ 输入框</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-ipc-bridge" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🌉 IPC 桥</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-harness" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">⚙️ Harness</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-model-api" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🤖 模型 API</div>
+        <span style="color:var(--color-text-muted);">→</span>
+        <div id="flow-screen" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-3) var(--space-5);border-radius:var(--radius-full);font-weight:600;">🖥️ 屏幕</div>
+      </div>
+      <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始追踪</div>
+      <div class="flow-packet" style="display:none;"></div>
+      <div style="text-align:center;margin-top:var(--space-4);">
+        <button class="flow-next-btn quiz-check-btn">Next Step</button>
+        <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+        <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+      </div>
+    </div>
+  </div>
+
+  <h1 class="module-title">你按下回车的瞬间</h1>
+  <p class="module-subtitle">一条消息从你的指尖出发，穿越前端、IPC 桥、Rust 后端、模型 API，再回到屏幕上的完整旅程。</p>
+
+  <p>你在 Hebbian 的输入框里打好字，按下 Enter。不到一秒，助手就开始回复了。但在这「不到一秒」里，发生了很多事情——整个过程像一场精心编排的接力赛。</p>
+
+  <p>这个课程会追踪每一条消息的完整旅程：从你按下回车的瞬间，到助手的文字逐字出现在屏幕上。你会理解每个环节在做什么、为什么这么设计，以及——当事情出了岔子——该从哪里下手排查。</p>
+</div>
+
+<!-- SCREEN 2: The IPC Bridge -->
+<div class="screen animate-in">
+  <h2 class="section-title">第一棒：前端 → IPC 桥</h2>
+
+  <p>当你按下回车，React 组件 <code>ChatInput</code> 把文本交给 store 的 <span class="term" data-definition="sendUserMessage 是前端 store 里最核心的方法之一——它创建流式槽位（slot），通过 Tauri invoke 把消息发给 Rust 后端，同时注册事件回调来处理后续的流式回复。">sendUserMessage</span>。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">await</span> api.<span class="code-function">sendMessage</span>(</span>
+<span class="code-line">  sessionId,</span>
+<span class="code-line">  runContent,</span>
+<span class="code-line">  runAttachments,</span>
+<span class="code-line">  baseSession.stream,</span>
+<span class="code-line">  [],</span>
+<span class="code-line">  requestId,</span>
+<span class="code-line">  (e: EngineEvent) => { ... }  <span class="code-comment">// 事件回调</span></span>
+<span class="code-line">);</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">调用后端 IPC 命令 "send_message"...</p>
+        <p class="tl">告诉后端是哪个对话</p>
+        <p class="tl">把用户输入的内容传过去</p>
+        <p class="tl">附带附件（图片、文件等）</p>
+        <p class="tl">是否启用流式传输</p>
+        <p class="tl">启用的工具列表（空 = 用默认）</p>
+        <p class="tl">本次请求的唯一 ID，用于区分并发 run</p>
+        <p class="tl">注册一个回调函数——后端每发一个事件，这个函数就会被调用一次</p>
+      </div>
+    </div>
+  </div>
+
+  <p><code>sendMessage</code> 是 <span class="term" data-definition="Tauri 是一个用 Rust 写桌面应用的框架。它让前端（React/Vue）通过 invoke() 调用 Rust 函数，就像调用本地 API 一样。架构上相当于 Electron 的替代品，但更轻量。">Tauri</span> 的 <code>invoke</code> 调用，底层通过 <code>Channel</code> 对象传递事件流。这个 Channel 很有意思——在 Tauri 桌面端，它是真正的 IPC channel；在 Web 端（hebweb），它退化为一个 WebSocket 监听器。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">💡</span>
+    <div class="callout-text">
+      <strong>为什么用 Channel 而不是轮询？</strong>
+      <p>如果前端每秒问一次「有新消息吗」，响应会延迟最多 1 秒，而且浪费 CPU。Channel 是「推送」模式——后端有事件就立刻推给前端，延迟是亚毫秒级的。这就是为什么你能看到助手逐字「流」出来。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: The IPC Command -->
+<div class="screen animate-in">
+  <h2 class="section-title">第二棒：Tauri 命令 → Harness</h2>
+
+  <p>Rust 端的 <code>send_message</code> 命令收到请求后，调用 <code>Harness::spawn_run</code>。Harness 是「总调度员」——它管理所有 session 的生命周期：谁在跑、谁挂起了、谁该被唤醒。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — apps/desktop/src/lib.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-function">async fn send_message</span>(</span>
+<span class="code-line">    app: AppHandle,</span>
+<span class="code-line">    session_id: String,</span>
+<span class="code-line">    content: String,</span>
+<span class="code-line">    ...</span>
+<span class="code-line">    on_event: Channel&lt;EngineEvent&gt;,</span>
+<span class="code-line">) -> AppResult&lt;()&gt; {</span>
+<span class="code-line">    <span class="code-keyword">let</span> core = core(&app)?;</span>
+<span class="code-line">    harness.<span class="code-function">spawn_run</span>(...)</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">Tauri 命令：前端 invoke("send_message") 最终调用这个 Rust 函数</p>
+        <p class="tl">Tauri 的全局应用句柄——可以访问文件系统、配置等</p>
+        <p class="tl">哪个对话（每个对话有唯一 ID）</p>
+        <p class="tl">用户输入的完整文本</p>
+        <p class="tl">...</p>
+        <p class="tl">事件通道——后端生成的事件通过它推回前端</p>
+        <p class="tl">Rust 的函数返回值类型——要么成功，要么带错误信息</p>
+        <p class="tl">拿到 core client（agent 的抽象接口）</p>
+        <p class="tl">创建一个新的后台任务，在里面跑 agent_loop</p>
+      </div>
+    </div>
+  </div>
+
+  <p>Harness 不自己跑模型。它只负责「调度」——把参数组装好，然后 <code>spawn</code> 一个异步任务，让 <span class="term" data-definition="agent_loop 是整个 Hebbian 的核心循环。它在一个 loop {} 里反复执行 ModelStep（调模型）→ ToolStep（执行工具），直到模型说「完成」或被取消。一个 run 可能包含多个 turn。">agent_loop</span> 在后台跑。</p>
+</div>
+
+<!-- SCREEN 4: Wrap-up Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测：你记住了吗？</h2>
+
+  <div class="quiz-container" id="quiz-module1">
+    <div class="quiz-question-block"
+         data-correct="sendMessage"
+         data-explanation-right="没错！sendMessage 通过 Tauri invoke 把消息发给 Rust 后端，同时注册事件回调来接收流式回复。"
+         data-explanation-wrong="不是这个。想想看：前端 store 里哪个方法负责调用 IPC 并注册事件回调？">
+      <h3 class="quiz-question">前端调用哪个方法把用户消息发给后端？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="run_loop" onclick="selectOption(this)">run_loop</button>
+        <button class="quiz-option" data-value="sendMessage" onclick="selectOption(this)">sendMessage</button>
+        <button class="quiz-option" data-value="spawn_run" onclick="selectOption(this)">spawn_run</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="channel"
+         data-explanation-right="对！Channel 是「推送」模式——后端有数据就立刻推，前端即时收到。比轮询快得多。"
+         data-explanation-wrong="不太对。如果是轮询，延迟会很大（至少几百毫秒），而且浪费资源。Tauri 用的是推送模式。">
+      <h3 class="quiz-question">后端事件流是如何从前端传到 UI 的？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="polling" onclick="selectOption(this)">前端每秒轮询一次</button>
+        <button class="quiz-option" data-value="channel" onclick="selectOption(this)">Tauri Channel 实时推送</button>
+        <button class="quiz-option" data-value="websocket" onclick="selectOption(this)">WebSocket（仅在浏览器模式）</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">Try Again</button>
+  </div>
+</div>
+
+</section>
+<section class="module" id="module-2">
+
+<!-- SCREEN 1: Opening Metaphor -->
+<div class="screen animate-in">
+  <h1 class="module-title">Agent 大脑的无限循环</h1>
+  <p class="module-subtitle">run_loop 是 Hebbian 的心脏。它在一个巨大的 <code>loop {}</code> 里反复执行「调模型 → 跑工具 → 再调模型 → 再跑工具」，直到模型说「好了，完成了」。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🧠</span>
+    <div class="callout-text">
+      <strong>比喻：就像你跟一个工程师结对编程</strong>
+      <p>你说「帮我修这个 bug」，他看了看代码说「让我先读一下这个文件」（Read 工具），读了之后说「我需要改第 42 行」（Edit 工具），改完后说「让我跑一下测试」（Bash 工具）——每一步都是「想 → 做 → 看结果 → 再想」。agent_loop 就是把这个循环自动化的引擎。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: The Big Picture -->
+<div class="screen animate-in">
+  <h2 class="section-title">Turn、Step、Run：三层时间结构</h2>
+
+  <p>agent_loop 内部有三个层级的时间概念，理解它们是读懂整个系统的前提：</p>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔄</div>
+      <div class="pattern-card-body">
+        <h3>Run</h3>
+        <p>一次「用户消息 → 全部完成」的完整过程。一个 Run 可能包含多个 Turn。RunFinished 事件标志 Run 结束。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔁</div>
+      <div class="pattern-card-body">
+        <h3>Turn</h3>
+        <p>一次「问模型 → 执行工具 → 出结果」的循环。TurnFinished 事件标志 Turn 结束。如果模型调了工具，当前 Turn 还没结束——下一轮模型调用仍在同一 Turn 内。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">👣</div>
+      <div class="pattern-card-body">
+        <h3>Step</h3>
+        <p>最小的粒度。ModelStep = 一次模型调用。ToolStep = 一批工具并发执行。StepStarted / StepFinished 是调试用的边界事件。</p>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-6);">举个具体例子：你说「帮我修个 bug」，模型回复「我先用 Read 读一下 main.rs」，然后调了 Read 工具。这就是 <strong>一个 Turn</strong>——包含一个 ModelStep（调模型）和一个 ToolStep（执行 Read）。如果模型读完又说「再用 Bash 跑测试」，那就是 <strong>同一个 Run 里的第二个 Turn</strong>。</p>
+</div>
+
+<!-- SCREEN 3: Stream vs Complete -->
+<div class="screen animate-in">
+  <h2 class="section-title">两条路：流式 vs 非流式</h2>
+
+  <p>agent_loop 发送模型请求时有两条路径：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/agent-core/src/agent_loop.rs:758</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">let</span> used_stream_path = stream</span>
+<span class="code-line">    && (!has_tools</span>
+<span class="code-line">        || client.<span class="code-function">supports_streaming_tools</span>());</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">走流式路径的条件：用户开了 stream 开关，并且...</p>
+        <p class="tl">要么本轮没有工具调用（纯文本回复），</p>
+        <p class="tl">要么当前模型提供商支持「流式工具调用」</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="pattern-cards stagger-children" style="margin-top:var(--space-6);">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🌊</div>
+      <div class="pattern-card-body">
+        <h3>Stream（流式路径）</h3>
+        <p>模型一边生成一边推事件：<code>TextDelta</code> 逐段到达、<code>ToolCallDelta</code> 逐字段填充。前端能看到文字「长出来」的过程。</p>
+        <p style="font-size:var(--text-xs);color:var(--color-text-muted);">OpenAI 的 GPT-4 支持流式工具调用。Anthropic 的 Claude 不支持——带工具时必须走 complete 路径。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📦</div>
+      <div class="pattern-card-body">
+        <h3>Complete（非流式路径）</h3>
+        <p>模型一次性返回完整结果。后端收到后 emit <code>TextDelta</code>（全文）和 <code>ToolCallStarted</code>（每个工具一次性到达）。前端仍然按事件处理，但不是「逐字生长」而是「一次出现」。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box warning" style="margin-top:var(--space-6);">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-text">
+      <strong>这是理解 Bug 的关键</strong>
+      <p>Anthropic + 工具 = 走 complete 路径。complete 路径下，每轮 Turn 的文本通过 <strong>一个 TextDelta</strong>（整段）emit，然后每轮 TurnFinished。多轮 Turn 会 emit 多个 TextDelta，每个都是那一轮的完整文本。前端把它们拼接起来——但如果拼接逻辑出错，前面轮次的输出就「消失」了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: Model Response Types -->
+<div class="screen animate-in">
+  <h2 class="section-title">模型回复的两种形态</h2>
+
+  <p>每次模型调用的返回值是 <code>ModelResponse</code>，它有两种 variant：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/model-gateway/src/types.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">pub enum</span> ModelResponse {</span>
+<span class="code-line">    Done {</span>
+<span class="code-line">        text: String,</span>
+<span class="code-line">        reasoning: String,</span>
+<span class="code-line">        usage: Usage,</span>
+<span class="code-line">        finish: FinishReason,</span>
+<span class="code-line">    },</span>
+<span class="code-line">    ToolCalls {</span>
+<span class="code-line">        text: String,</span>
+<span class="code-line">        reasoning: String,</span>
+<span class="code-line">        calls: Vec&lt;ToolCall&gt;,</span>
+<span class="code-line">        usage: Usage,</span>
+<span class="code-line">    },</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">模型返回结果是一个枚举——要么「完成」要么「要调工具」</p>
+        <p class="tl">Done：模型觉得任务做完了，不需要再调工具</p>
+        <p class="tl">  附带最终的文本回复</p>
+        <p class="tl">  附带给用户看的推理过程（如果有）</p>
+        <p class="tl">  附带 token 用量统计</p>
+        <p class="tl">  附带结束原因（正常停止 / 达到上限 / 被过滤）</p>
+        <p class="tl">ToolCalls：模型想调工具——「我要读文件」「我要跑命令」</p>
+        <p class="tl">  附带工具调用前的文本（比如「让我先看一下代码」）</p>
+        <p class="tl">  附带推理过程</p>
+        <p class="tl">  附带具体要调的工具列表（可能多个，并发执行）</p>
+        <p class="tl">  附带 token 用量</p>
+      </div>
+    </div>
+  </div>
+
+  <p>关键在于：<strong>ToolCalls 的 text 字段</strong>。这是模型在调工具之前说的那段话——比如「让我读一下 foo.rs 看看问题在哪」。这段话也会作为 TextDelta 发给前端。如果模型连续调了三次工具，前端会收到三个 TextDelta，每个是那一轮的文本。</p>
+</div>
+
+<!-- SCREEN 5: Chat Simulation -->
+<div class="screen animate-in">
+  <h2 class="section-title">对话模拟：agent_loop 内部发生了什么</h2>
+
+  <p>下面模拟一次真实的 agent_loop 内部对话——模型（🤖）、工具调度器（🔧）、前端（🖥️）三方怎么协作。</p>
+
+  <div class="chat-window" id="chat-loop">
+    <div class="chat-message" data-sender="🖥️ 前端" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-5);">🖥</span>
+      <div class="chat-bubble">用户说：「帮我看看为什么编译不过」</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 1 ModelStep】发请求给 Claude...它说「让我读一下 Cargo.toml」【ToolCalls: Read】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 1 ToolStep】执行 Read(Cargo.toml)...读到了内容，ok。emit TurnFinished。</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 2 ModelStep】把 Read 的结果喂给模型...模型说「依赖版本太老，让我改一下」【ToolCalls: Edit】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 2 ToolStep】执行 Edit(Cargo.toml)...修改成功。</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 3 ModelStep】再问模型...它说「改好了，试试 cargo build」【ToolCalls: Bash】</div>
+    </div>
+    <div class="chat-message" data-sender="🔧 ToolStep" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-3);">🔧</span>
+      <div class="chat-bubble">【Turn 3 ToolStep】执行 Bash(cargo build)...编译通过！</div>
+    </div>
+    <div class="chat-message" data-sender="🤖 agent_loop" style="display:none;">
+      <span class="chat-avatar" style="background:var(--color-actor-4);">🤖</span>
+      <div class="chat-bubble">【Turn 4 ModelStep】模型说「编译通过了！问题已修复。」【Done】→ emit RunFinished → 退出 loop</div>
+    </div>
+    <div class="chat-typing" style="display:none;">
+      <span class="chat-avatar" id="chat-loop-typing-avatar">...</span>
+      <div class="chat-bubble typing-dots"><span></span><span></span><span></span></div>
+    </div>
+    <div class="chat-controls" style="margin-top:var(--space-3);text-align:center;">
+      <button class="chat-next-btn quiz-check-btn">Next</button>
+      <button class="chat-all-btn quiz-check-btn">Play All</button>
+      <button class="chat-reset-btn quiz-reset-btn">Reset</button>
+      <span class="chat-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-4);">注意：这是 <strong>一个 Run，四个 Turn</strong>。前端在整个 Run 期间维持一个 streaming slot，TextDelta 一直往里累积——除非用户中途插话（下个模块讲）。</p>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module2">
+    <div class="quiz-question-block"
+         data-correct="false"
+         data-explanation-right="对！Anthropic Claude 不支持流式工具调用。当请求包含工具且使用 Anthropic 时，自动走 complete 路径——模型一次性返回完整结果，而不是逐段流。"
+         data-explanation-wrong="你再想想——Anthropic 的 API 目前确实不支持在工具调用期间流式传输。所以带工具的请求必须走 complete 路径。">
+      <h3 class="quiz-question">Anthropic Claude + 工具调用 = 走流式路径？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="true" onclick="selectOption(this)">是，Anthropic 支持流式工具</button>
+        <button class="quiz-option" data-value="false" onclick="selectOption(this)">不是，Anthropic 带工具走 complete 路径</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module2')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module2')">Try Again</button>
+  </div>
+</div>
+
+</section>
+<section class="module" id="module-3">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">事件高速公路</h1>
+  <p class="module-subtitle">agent_loop 产生的每个事件——TextDelta、ToolCallStarted、TurnFinished——都要经过三层翻译才能到达前端 UI。</p>
+
+  <p>想象你在北京寄一封信到上海。信的内容经过三个中转站：你写好信（<strong>agent_loop emit</strong>）→ 邮局分拣贴标签（<strong>chat.rs 翻译</strong>）→ 货车运到上海（<strong>Tauri Channel</strong>）→ 收件人拆开读（<strong>前端 useStore</strong>）。每一层都可能「翻译」或「过滤」信的内容。</p>
+</div>
+
+<!-- SCREEN 2: EventPayload -->
+<div class="screen animate-in">
+  <h2 class="section-title">第一层：EventPayload —— agent_loop 说出的「原子话」</h2>
+
+  <p>agent_loop 里 emit 的不是字符串，而是结构化的 <code>EventPayload</code> 枚举。这是整个系统的「统一语言」。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/protocol/src/event.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">pub enum</span> EventPayload {</span>
+<span class="code-line">    <span class="code-comment">// 模型流</span></span>
+<span class="code-line">    TextDelta { text: String },</span>
+<span class="code-line">    TextDone { full_text: String },</span>
+<span class="code-line">    Reasoning { text: String },</span>
+<span class="code-line">    <span class="code-comment">// 工具</span></span>
+<span class="code-line">    ToolCallDelta { index, id, name, arguments_delta },</span>
+<span class="code-line">    ToolCallStarted { index, call_id, name, input },</span>
+<span class="code-line">    ToolCallFinished { index, call_id, result, duration_ms, ... },</span>
+<span class="code-line">    <span class="code-comment">// 生命周期</span></span>
+<span class="code-line">    TurnFinished { turn_id, turn, stop_reason },</span>
+<span class="code-line">    RunFinished { total_input_tokens, duration_ms, ... },</span>
+<span class="code-line">    <span class="code-comment">// 审批</span></span>
+<span class="code-line">    PermissionRequested { request_id, kind, summary, ... },</span>
+<span class="code-line">    <span class="code-comment">// ... 还有 20+ 种事件</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">EventPayload 是枚举——每种事件是互斥的 variant</p>
+        <p class="tl">TextDelta：模型的文字正在流式到达——「逐字」的那个字</p>
+        <p class="tl">TextDone：完整文本——比如非流式路径下一次性给全文</p>
+        <p class="tl">Reasoning：模型的思考过程（如果开启了推理显示）</p>
+        <p class="tl">ToolCallDelta：工具调用参数在流式到达——流式路径才有</p>
+        <p class="tl">ToolCallStarted：工具调用参数接收完毕，开始执行</p>
+        <p class="tl">ToolCallFinished：工具执行结束，带结果和耗时</p>
+        <p class="tl">TurnFinished：一轮 Turn 结束——模型说完了，工具也跑完了</p>
+        <p class="tl">RunFinished：整个 Run 结束，带总 token 用量、总耗时</p>
+        <p class="tl">PermissionRequested：agent 想做危险操作，请求用户批准</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🔑</span>
+    <div class="callout-text">
+      <strong>这是 LLM Agent 的通用设计模式</strong>
+      <p>所有 LLM Agent 框架（LangChain、CrewAI 等）都有类似的结构化事件流。它们把模型的非结构化输出转成结构化的事件序列，让 UI 层能精确响应每一个状态变化，而不是解析自由文本。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: chat.rs Translation -->
+<div class="screen animate-in">
+  <h2 class="section-title">第二层：chat.rs —— 从 EventPayload 到 EngineEvent</h2>
+
+  <p>agent_loop emit 的是协议层事件（<code>Event</code>），但桌面端有自己的翻译层——<code>chat.rs</code> 的 <code>on_event</code> 方法。它做三件事：</p>
+
+  <div class="numbered-steps stagger-children" style="margin-top:var(--space-6);">
+    <div class="numbered-step">
+      <span class="numbered-step-num">1</span>
+      <div class="numbered-step-body">
+        <h3>累积 partial 文本</h3>
+        <p>TextDelta → <code>self.partial_output.push_str(text)</code>。这个 partial 文本用于：崩溃恢复时落盘、中继时保留残片。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">2</span>
+      <div class="numbered-step-body">
+        <h3>累积结构化 parts</h3>
+        <p>TextDelta → <code>parts.append_text(text)</code>；ToolCallStarted → <code>parts</code> 里加一条 tool_call 记录。这些 parts 用于：消息落盘到 session.jsonl。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">3</span>
+      <div class="numbered-step-body">
+        <h3>翻译并转发</h3>
+        <p>调用 <code>agent_event_to_engine_event(event)</code> 把协议 Event 转成 EngineEvent，然后 <code>(self.emit)(ev)</code> 推给 Tauri Channel → 前端。</p>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-6);">特别重要的细节：chat.rs 还会实时写 <strong>partial 文件</strong>——在 TextDelta/ToolCallStarted 等事件到达时立刻落盘到 <code>~/.hebbian/sessions/{sid}/partial/</code>。如果 Hebbian 进程崩溃，下次打开对话时会从 partial 文件恢复未保存的输出。</p>
+</div>
+
+<!-- SCREEN 4: Key Event Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">关键事件时序：一次多轮 Turn 的完整事件流</h2>
+
+  <p>下方展示 Anthropic + 工具（非流式路径）下，一次包含多个 ToolCalls 轮次的 Run 会 emit 哪些事件：</p>
+
+  <div class="flow-animation" id="flow-events" data-steps='[{"label":"Turn 1: emit RunStarted → TurnStarted → StepStarted(Model)","highlight":"run"},{"label":"Turn 1: 模型返回 ToolCalls → emit TextDelta(\"让我看看代码\")","highlight":"turn1"},{"label":"Turn 1: emit ToolCallStarted(Read) → ToolCallFinished(Read)","highlight":"tool1"},{"label":"Turn 1: emit StepFinished(Tool) → TurnFinished(EndTurn)","highlight":"turn1"},{"label":"Turn 2: emit StepStarted(Model) → 模型返回 ToolCalls → TextDelta(\"我来改\")","highlight":"turn2"},{"label":"Turn 2: ToolCallStarted(Edit) → ToolCallFinished(Edit) → TurnFinished","highlight":"tool2"},{"label":"Turn 3: 模型返回 Done → emit TextDone(\"修好了\") → TurnFinished","highlight":"turn3"},{"label":"RunFinished → 前端 reload session.jsonl","highlight":"run"}]
+'>
+    <div class="flow-diagram" style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-2);padding:var(--space-4) 0;">
+      <div id="flow-run" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Run 生命周期</div>
+      <div id="flow-turn1" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 1: Read 工具</div>
+      <div id="flow-turn2" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 2: Edit 工具</div>
+      <div id="flow-turn3" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 3: Done</div>
+    </div>
+    <div style="display:flex;gap:var(--space-4);align-items:center;justify-content:space-between;padding:var(--space-3) 0;">
+      <div id="flow-tool1" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);">Tool: Read</div>
+      <div id="flow-tool2" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);">Tool: Edit</div>
+    </div>
+    <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始追踪</div>
+    <div class="flow-packet" style="display:none;"></div>
+    <div style="text-align:center;margin-top:var(--space-4);">
+      <button class="flow-next-btn quiz-check-btn">Next Step</button>
+      <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+      <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+
+  <div class="callout-box warning" style="margin-top:var(--space-6);">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-text">
+      <strong>关键细节：TextDelta 的时机</strong>
+      <p>在非流式路径下，TextDelta 在 ModelResponse::ToolCalls 到达时 emit——<strong>先于</strong> ToolCallStarted。TextDone 在 ModelResponse::Done 到达时 emit。所以前端会先收到所有 Turn 的 TextDelta，最后才收到一个 TextDone。如果前端在 TextDone 处理时错误地覆盖了之前的累积文本，前面轮次的输出就会消失。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module3">
+    <div class="quiz-question-block"
+         data-correct="partial"
+         data-explanation-right="对！chat.rs 在收到每个 TextDelta 时就立刻把片段写到 partial/ 目录。如果 Hebbian 崩溃，下次打开对话时 load_with_partial_recovery 会从 partial 文件恢复未保存的输出。"
+         data-explanation-wrong="不是。session.jsonl 只在 RunFinished 时整段落盘。如果进程在 Run 中间崩溃，session.jsonl 还没有这段输出。答案是 partial 文件。">
+      <h3 class="quiz-question">Hebbian 崩溃时，未完成的输出靠什么恢复？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="session" onclick="selectOption(this)">session.jsonl</button>
+        <button class="quiz-option" data-value="partial" onclick="selectOption(this)">partial/ 目录的实时落盘</button>
+        <button class="quiz-option" data-value="memory" onclick="selectOption(this)">内存中的 slot 状态</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+  </div>
+</div>
+
+</section>
+<section class="module" id="module-4">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">前端状态机</h1>
+  <p class="module-subtitle">useStore 里的 <code>applyEventToSlot</code> 是前端最核心的纯函数。它把每一个后端事件「折叠」进 slot 状态，驱动整个 UI 的变化。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🎯</span>
+    <div class="callout-text">
+      <strong>比喻：就像快递分拣中心</strong>
+      <p>后端往传送带上放包裹（事件），每个包裹上贴着标签（event.type）。分拣员（applyEventToSlot）看一眼标签，然后把它放到正确的架子上：TextDelta 放 streamingText 架子，ToolCallStarted 放 streamingParts 架子，TurnFinished 检查要不要冻结当前架子的内容……</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: SessionStream -->
+<div class="screen animate-in">
+  <h2 class="section-title">SessionStream：每个 Run 的状态槽</h2>
+
+  <p>每次 <code>sendUserMessage</code> 被调用，前端创建一个新的 <code>SessionStream</code> slot。它包含 Run 进行中的所有实时状态：</p>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📝</div>
+      <div class="pattern-card-body">
+        <h3>streamingText</h3>
+        <p>当前 Run 累积的所有文本。每次 TextDelta 就追加。Run 结束 reload 后，由 session.jsonl 接管。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🧩</div>
+      <div class="pattern-card-body">
+        <h3>streamingParts</h3>
+        <p>结构化的输出段：文本、推理、工具调用卡片（按真实发生顺序穿插）。MessageBubble 直接吃这个结构渲染。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📋</div>
+      <div class="pattern-card-body">
+        <h3>liveTimeline</h3>
+        <p>Run 内的时间线：冻结的 assistant 快照 + 用户插队消息。Run 结束清空，由 session.messages 接管渲染。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📍</div>
+      <div class="pattern-card-body">
+        <h3>assistantInsertPos</h3>
+        <p>游标：当前 streaming 在 liveTimeline 里的插入位置。冻结后游标推进到末尾。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: applyEventToSlot -->
+<div class="screen animate-in">
+  <h2 class="section-title">applyEventToSlot：事件分发核心</h2>
+
+  <p>每个后端事件的 type 决定走哪个分支。这是纯函数——接收旧 slot + 事件，返回新 slot。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — useStore.ts:341</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">function</span> <span class="code-function">applyEventToSlot</span>(</span>
+<span class="code-line">  slot: SessionStream,</span>
+<span class="code-line">  e: EngineEvent</span>
+<span class="code-line">): SessionStream {</span>
+<span class="code-line">  <span class="code-keyword">if</span> (e.type === <span class="code-string">"text_delta"</span>) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { ...slot,</span>
+<span class="code-line">      streamingText: slot.streamingText + e.text,</span>
+<span class="code-line">      streamingParts: applyTextDelta(slot.streamingParts, e.text)</span>
+<span class="code-line">    };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-keyword">if</span> (e.type === <span class="code-string">"text_done"</span>) {</span>
+<span class="code-line">    <span class="code-keyword">const</span> r = <span class="code-function">applyTextDone</span>(</span>
+<span class="code-line">      slot.streamingText, slot.streamingParts, e.full_text);</span>
+<span class="code-line">    <span class="code-keyword">return</span> { ...slot, ...r };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-comment">// ... tool_start, tool_done, turn_finished ...</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">核心的事件处理函数——纯函数，接收旧状态+事件，返回新状态</p>
+        <p class="tl">SessionStream：当前 Run 的所有实时状态</p>
+        <p class="tl">EngineEvent：后端发来的结构化事件</p>
+        <p class="tl">返回新的 SessionStream（不可变更新）</p>
+        <p class="tl">TextDelta：把新文本追加到 streamingText 末尾...</p>
+        <p class="tl">并用 applyTextDelta 更新结构化 parts（贴到最后一个 text 段后面）</p>
+        <p class="tl">TextDone：用 applyTextDone 判定是否需要追加全文</p>
+        <p class="tl">  参数：当前累积文本、当前 parts、后端给的 fullText</p>
+        <p class="tl">把 applyTextDone 的结果合并回 slot</p>
+        <p class="tl">还有 tool_start、tool_done、turn_finished 等十几种分支</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: applyTextDone - The Critical Function -->
+<div class="screen animate-in">
+  <h2 class="section-title">applyTextDone：最容易出 Bug 的函数</h2>
+
+  <p>这是前端流式累积的核心逻辑，也是上一轮 Bug 修复的关键。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — streamingParts.ts:66</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export function</span> <span class="code-function">applyTextDone</span>(</span>
+<span class="code-line">  streamingText: string,</span>
+<span class="code-line">  parts: StreamingAssistantPart[],</span>
+<span class="code-line">  fullText: string</span>
+<span class="code-line">) {</span>
+<span class="code-line">  <span class="code-keyword">if</span> (!fullText</span>
+<span class="code-line">      || streamingText.<span class="code-function">endsWith</span>(fullText)) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { streamingText, streamingParts: parts };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-keyword">return</span> {</span>
+<span class="code-line">    streamingText: streamingText + fullText,</span>
+<span class="code-line">    streamingParts: <span class="code-function">applyTextDelta</span>(parts, fullText),</span>
+<span class="code-line">  };</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">TextDone 处理函数——一轮 ModelStep 文本结束</p>
+        <p class="tl">当前累积的所有文本（跨多轮 Turn）</p>
+        <p class="tl">当前累积的结构化 parts</p>
+        <p class="tl">本轮（最后一轮）的完整文本</p>
+        <p class="tl">如果 fullText 为空，或累积文本已经以 fullText 结尾...</p>
+        <p class="tl">（说明本轮文本已由 TextDelta 逐段到达），不重复</p>
+        <p class="tl">返回原样的 streamingText 和 parts——不追加</p>
+        <p class="tl">否则（非流式路径、Done 分支的全文还没追加）...</p>
+        <p class="tl">把 fullText 追加到 streamingText 末尾</p>
+        <p class="tl">同时把 fullText 作为新文本段追加到 parts 末尾</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box warning">
+    <span class="callout-icon">🐛</span>
+    <div class="callout-text">
+      <strong>Bug 根因（已修复）</strong>
+      <p>旧代码用 <code>fullText.endsWith(streamingText)</code> 判定——这是反的！多轮 Run 中 streamingText（全 Run 累积）远长于单轮 fullText，所以 <code>"短短的单轮文本".endsWith("多轮累积的长文本")</code> 永远 false → 每轮 TextDone 都把 streamingText <strong>覆盖成</strong> 最新单轮的 fullText → 前面轮次的输出全部消失。</p>
+      <p style="margin-top:var(--space-2);">修复：改成 <code>streamingText.endsWith(fullText)</code>——「累积文本的末尾是否是本轮全文」。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: toolPartIndex Fix -->
+<div class="screen animate-in">
+  <h2 class="section-title">toolPartIndex：另一个潜伏 Bug</h2>
+
+  <p>非流式路径下，工具事件的 index 字段可能是 undefined。旧代码在 index 匹配失败时回退到 <code>part.index === index</code>——当两者的 index 都是 undefined 时，会错误地匹配到上一轮的工具卡片。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — streamingParts.ts:96</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">function</span> <span class="code-function">toolPartIndex</span>(</span>
+<span class="code-line">  parts: StreamingAssistantPart[],</span>
+<span class="code-line">  index: number | null | undefined,</span>
+<span class="code-line">  id?: string | null</span>
+<span class="code-line">) {</span>
+<span class="code-line">  <span class="code-comment">// 有 id：优先按 id 匹配</span></span>
+<span class="code-line">  <span class="code-keyword">if</span> (id) { ... }</span>
+<span class="code-line">  <span class="code-comment">// ⚠️ index == null 时不回退!</span></span>
+<span class="code-line">  <span class="code-keyword">if</span> (index == null) <span class="code-keyword">return</span> -1;</span>
+<span class="code-line">  <span class="code-keyword">return</span> parts.<span class="code-function">findIndex</span>(</span>
+<span class="code-line">    part => part.type === <span class="code-string">"tool_call"</span></span>
+<span class="code-line">         && part.index === index);</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">在 parts 数组里找到对应工具卡片的位置</p>
+        <p class="tl">当前累积的所有 part 项</p>
+        <p class="tl">工具调用的序号（流式路径有值，非流式可能是 undefined）</p>
+        <p class="tl">工具调用的唯一 id（最可靠的匹配方式）</p>
+        <p class="tl">如果有 id，用它匹配——id 是唯一标识</p>
+        <p class="tl">如果没有 id 且 index 也是 null/undefined → 无法定位</p>
+        <p class="tl">返回 -1 表示「这是个新工具，需要创建新卡片」</p>
+        <p class="tl">有有效 index → 按 index 去 parts 数组里找</p>
+        <p class="tl">找 type 是 tool_call 且 index 值相同的项</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module4">
+    <div class="quiz-question-block"
+         data-correct="streamingText.endsWith"
+         data-explanation-right="正确！多轮 Run 中 streamingText 是全 Run 累积，fullText 是单轮文本。必须用 '累积文本的末尾是否已是本轮全文' 来判断，反过来会恒 false。"
+         data-explanation-wrong="反过来就错了。streamingText 在第二轮 Turn 时已经是 'Turn1文本Turn2文本'，而 fullText 只是 'Turn2文本'——用 fullText.endsWith(streamingText) 永远返回 false，会把累积文本覆盖成单轮文本。">
+      <h3 class="quiz-question">applyTextDone 中，正确的去重判定是？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="fullText.endsWith" onclick="selectOption(this)">fullText.endsWith(streamingText)</button>
+        <button class="quiz-option" data-value="streamingText.endsWith" onclick="selectOption(this)">streamingText.endsWith(fullText)</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">Try Again</button>
+  </div>
+</div>
+
+</section>
+<section class="module" id="module-5">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">时间线魔法</h1>
+  <p class="module-subtitle">Run 跑到一半时，用户可能插话、后台任务可能完成、系统通知可能到达——如何在保持正确时序的同时，让一切看起来顺序自然？</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🪄</span>
+    <div class="callout-text">
+      <strong>比喻：就像现场直播的字幕编辑</strong>
+      <p>主持人正在说话（streaming），字幕实时打出来。导播说「插一条观众提问」（injectOrSend），字幕组需要：① 把当前这句冻结为一个完整的句子卡片；② 插上观众提问；③ 主持人继续回答——新的字幕从空白开始。liveTimeline 就是管理这些「冻结卡片」和「插队消息」的数据结构。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: LiveTimeline Data Structure -->
+<div class="screen animate-in">
+  <h2 class="section-title">LiveTimeline：Run 内的时间线条目</h2>
+
+  <p>LiveTimeline 只有两种条目类型：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — liveTimelineOrder.ts:17</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export type</span> LiveTimelineItem =</span>
+<span class="code-line">  | { kind: <span class="code-string">"assistant_frozen"</span>;    <span class="code-comment">// 冻结快照</span></span>
+<span class="code-line">      id: string;</span>
+<span class="code-line">      text: string;              <span class="code-comment">// 累积文本</span></span>
+<span class="code-line">      parts: StreamingAssistantPart[];</span>
+<span class="code-line">      created_at: number; }</span>
+<span class="code-line">  | { kind: <span class="code-string">"user_injected"</span>;      <span class="code-comment">// 插队消息</span></span>
+<span class="code-line">      message: Message; };</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">LiveTimeline 的条目类型——只有两种</p>
+        <p class="tl">assistant_frozen：TurnFinished 时把当前 streaming 冻结的快照</p>
+        <p class="tl">  临时 id（reload 后被真正的 message id 替代）</p>
+        <p class="tl">  冻结时刻的累积文本（来自 streamingText）</p>
+        <p class="tl">  冻结时刻的结构化 parts（来自 streamingParts）</p>
+        <p class="tl">  创建时间戳</p>
+        <p class="tl">user_injected：用户或系统在 Run 进行中注入的消息</p>
+        <p class="tl">  完整的 Message 对象（role、content、meta 等）</p>
+      </div>
+    </div>
+  </div>
+
+  <p>关键区别：<strong>assistant_frozen 存的是 LiveTimeline 内的临时快照，run 结束后由 session.jsonl 的 Message 替代；user_injected 存的是已经落盘的真实 Message。</strong></p>
+</div>
+
+<!-- SCREEN 3: Injection Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">插队三部曲：injectOrSend → freeze → restart</h2>
+
+  <p>用户在 Run 进行中通过浏览器注释、修改队列提交等方式「插话」——不会重启 Run，而是注入当前 Run 的 <code>PendingInputs</code>。</p>
+
+  <div class="numbered-steps stagger-children">
+    <div class="numbered-step">
+      <span class="numbered-step-num">1</span>
+      <div class="numbered-step-body">
+        <h3>前端：injectOrSend</h3>
+        <p>检查当前 slot 是否有 active requestId。有 → 调 <code>api.injectUserMessage</code>，后端把消息写入 PendingInputs + 落盘到 session.jsonl。前端在 liveTimeline 末尾追加 <code>user_injected</code> 条目。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">2</span>
+      <div class="numbered-step-body">
+        <h3>后端：drain_pending_inputs</h3>
+        <p>在下一个 Turn 边界（TurnFinished 之前），agent_loop 调用 <code>drain_pending_inputs</code>，把插队消息推进 transcript——模型下一轮请求会看到这些消息。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">3</span>
+      <div class="numbered-step-body">
+        <h3>前端：turn_finished freeze</h3>
+        <p>TurnFinished 事件到达时，前端检查 liveTimeline 中是否有非 system_notification 的 user_injected 条目。有 → 冻结当前 streaming 为 assistant_frozen，清空 streaming，下个 Turn 从空开始。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box accent" style="margin-top:var(--space-6);">
+    <span class="callout-icon">🔍</span>
+    <div class="callout-text">
+      <strong>system_notification 不算「插队」</strong>
+      <p>这是故意的设计。后台任务完成通知（BgTaskFinished）虽然也是通过 injectOrSend 注入的，但它带 <code>meta.type === "system_notification"</code>。turn_finished 检查时显式排除它——所以系统通知不会触发 assistant 冻结。它们由 wakeup 排序逻辑钉到对应 assistant 之后，视觉上自然。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: reorderWakeupOrder -->
+<div class="screen animate-in">
+  <h2 class="section-title">Wakeup 排序：让通知待在「对的」assistant 后面</h2>
+
+  <p>系统通知的物理落盘位置可能在 assistant 之前（通知是即写即落，assistant 要等 stream 完成才落）。但视觉上应该排在它回应的 tool_call 所属的那个 assistant 后面。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — liveTimelineOrder.ts:78</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export function</span> <span class="code-function">reorderWakeupOrder</span>&lt;T&gt;(</span>
+<span class="code-line">  items: T[],</span>
+<span class="code-line">  notificationToolUseId,  <span class="code-comment">// 通知→tool_use_id</span></span>
+<span class="code-line">  assistantToolCallIds    <span class="code-comment">// assistant→tool ids[]</span></span>
+<span class="code-line">): number[] {</span>
+<span class="code-line">  <span class="code-comment">// 1. 标记推迟：通知钉到含该 tool_call 的 assistant 后</span></span>
+<span class="code-line">  <span class="code-comment">//    (先向后找，找不到向前找)</span></span>
+<span class="code-line">  <span class="code-comment">// 2. 按 target 反向索引</span></span>
+<span class="code-line">  <span class="code-comment">// 3. 生成渲染顺序：跳过 defer 的通知，</span></span>
+<span class="code-line">  <span class="code-comment">//    在 target assistant 后插入</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">通用的 wakeup 排序核心——与具体数据类型无关</p>
+        <p class="tl">输入：任意类型的数组</p>
+        <p class="tl">投影函数1：从条目提取 tool_use_id（通知才有）</p>
+        <p class="tl">投影函数2：从条目提取持有的 tool_call id 列表</p>
+        <p class="tl">返回：重排后的原 index 序列</p>
+        <p class="tl">步骤1：每则通知找对应的 assistant（含该 tool_call）</p>
+        <p class="tl">双向查找：reload 时物理顺序通知在前 → 向后找...</p>
+        <p class="tl">...streaming 中 assistant 已冻结在前 → 向前找</p>
+        <p class="tl">步骤2：构建 assistant→通知 的映射</p>
+        <p class="tl">步骤3：遍历原数组，跳过被 defer 的通知...</p>
+        <p class="tl">在目标 assistant 之后插入被推迟的通知</p>
+      </div>
+    </div>
+  </div>
+
+  <p>这个算法同时用于两个场景：<strong>reload 后的 Message[] 渲染</strong>（reorderForWakeupView）和 <strong>Run 进行中的 liveTimeline 渲染</strong>（runningTimelineRenderItems）——保证流式中和 reload 后顺序一致，不跳变。</p>
+</div>
+
+<!-- SCREEN 5: Rendering Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">渲染流程：从数据到屏幕</h2>
+
+  <div class="flow-animation" id="flow-render" data-steps='[{"label":"ChatView 检查 isStreaming = !!streamingMessageId","highlight":"check"},{"label":"如果有 streaming：用 runningTimelineRenderItems 把 liveTimeline + streaming 占位符穿插起来","highlight":"timeline"},{"label":"对穿插结果跑 reorderWakeupOrder 排好系统通知","highlight":"reorder"},{"label":"逐项渲染：assistant_frozen → MessageBubble(streaming=false), user_injected → MessageBubble(message), streaming → MessageBubble(streaming=true)","highlight":"render"},{"label":"如果不在 streaming：直接渲染 session.messages（reload 后的最终数据）","highlight":"reload"}]
+'>
+    <div class="flow-diagram" style="display:flex;align-items:center;justify-content:center;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-6) 0;">
+      <div id="flow-check" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">isStreaming?</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-timeline" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">穿插 liveTimeline</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-reorder" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">wakeup 重排</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-render" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">逐项渲染</div>
+      <span style="color:var(--color-text-muted);">→</span>
+      <div id="flow-reload" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-3) var(--space-4);border-radius:var(--radius-full);font-weight:600;font-size:var(--text-sm);">reload 接管</div>
+    </div>
+    <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始</div>
+    <div class="flow-packet" style="display:none;"></div>
+    <div style="text-align:center;margin-top:var(--space-4);">
+      <button class="flow-next-btn quiz-check-btn">Next Step</button>
+      <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+      <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module5">
+    <div class="quiz-question-block"
+         data-correct="system_notification_excluded"
+         data-explanation-right="对！turn_finished 显式排除 system_notification 类型的消息——它们不触发冻结，而是由 wakeup 排序逻辑钉到对应 assistant 之后。"
+         data-explanation-wrong="你再看看 turn_finished 的逻辑：`item.message.meta?.type !== 'system_notification'`——系统通知被显式排除了。">
+      <h3 class="quiz-question">系统通知（BgTaskFinished）到达时，turn_finished 会冻结当前 streaming 吗？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="always" onclick="selectOption(this)">会，任何插队都触发冻结</button>
+        <button class="quiz-option" data-value="system_notification_excluded" onclick="selectOption(this)">不会，系统通知被显式排除</button>
+        <button class="quiz-option" data-value="random" onclick="selectOption(this)">看运气</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">Try Again</button>
+  </div>
+</div>
+
+</section>
+<section class="module" id="module-6">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">Bug 解剖室</h1>
+  <p class="module-subtitle">两个已修复的流式渲染 Bug，以及一个仍潜伏的隐患。通过解剖它们，你能学会如何在前端状态机里排查「输出消失」类问题。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🔬</span>
+    <div class="callout-text">
+      <strong>比喻：就像法医解剖</strong>
+      <p>每个 Bug 都有自己的「死因」——一个错误的假设、一个时序的 race、一个方向反了的比较。学会解剖 Bug 比学会写正确代码更难，也更有价值。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Bug A - Text Disappearing -->
+<div class="screen animate-in">
+  <h2 class="section-title">Bug A：多轮 Run 中前面轮次的文本消失</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">现象</h3>
+    <p>长对话中（Anthropic + 工具），assistant 已经输出的内容跑着跑着消失了，Run 结束后 reload 恢复。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">死因</h3>
+    <p><strong>方向反了的字符串比较。</strong>旧代码：</p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ❌ 错误：fullText 是单轮文本，streamingText 是多轮累积
+if (fullText.endsWith(streamingText)) { return; }
+// Turn 1 后 streamingText = "Turn1内容"
+// Turn 2 fullText = "Turn2内容"
+// "Turn2内容".endsWith("Turn1内容Turn2内容") → 永远 false!
+// → 覆盖: streamingText = "Turn2内容"  ← Turn 1 消失!</code></pre>
+
+    <p style="margin-top:var(--space-4);"><strong>修复（streamingParts.ts:66）：</strong></p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ✅ 正确：streamingText（累积）的末尾是否已是 fullText（本轮）？
+if (!fullText || streamingText.endsWith(fullText)) { return; }
+// Turn 1 后 streamingText = "Turn1内容"
+// Turn 2 fullText = "Turn2内容"
+// "Turn1内容Turn2内容".endsWith("Turn2内容") → false → 追加
+// streamingText = "Turn1内容Turn2内容" ✅</code></pre>
+  </div>
+
+  <div class="callout-box accent" style="margin-top:var(--space-6);">
+    <span class="callout-icon">💡</span>
+    <div class="callout-text">
+      <strong>排查技巧</strong>
+      <p>这种 Bug 用 <code>console.log</code> 很难发现——文本积累是递增的，肉眼看不出来被覆盖。正确的方式是：在 applyTextDone 里加断点，看每次的 streamingText 长度——如果某次 TextDone 后长度 <strong>变短</strong> 了，那就是被覆盖了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Bug B - Tool Collapse -->
+<div class="screen animate-in">
+  <h2 class="section-title">Bug B：多轮 Run 中工具卡片塌缩</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">现象</h3>
+    <p>非流式路径下（Anthropic + 工具），多轮 Turn 的工具卡片数量不对——N 个工具塌成 1 个，互相覆盖。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">死因</h3>
+    <p><strong>undefined === undefined 的陷阱。</strong>非流式路径的 ToolCallStarted 事件 index 字段是 undefined。旧代码的 toolPartIndex 在按 id 找不到时，回退到按 index 匹配：</p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ❌ 旧代码：index 匹配无 guard
+parts.findIndex(part => part.index === index)
+// Turn 1 tool part: { index: undefined }
+// Turn 2 tool_start: { index: undefined, id: "call_2" }
+// 按 id 找 "call_2" → not found
+// 回退到 part.index===index → undefined===undefined → 找到 Turn 1 的 part!
+// → 覆盖！Turn 1 工具卡片变 Turn 2 的</code></pre>
+
+    <p style="margin-top:var(--space-4);"><strong>修复（streamingParts.ts:96）：</strong></p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ✅ 新代码：index == null 时绝不回退
+if (index == null) return -1;  // 找不到就是找不到
+return parts.findIndex(part => part.type === "tool_call" && part.index === index);</code></pre>
+  </div>
+</div>
+
+<!-- SCREEN 4: Potential Race Condition -->
+<div class="screen animate-in">
+  <h2 class="section-title">潜伏隐患：triggerWakeupResume 的 race condition</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">场景</h3>
+    <p>Run 进行中，后台任务完成 → WakeupScheduler 触发 wakeup-fired 事件 → 前端 triggerWakeupResume 调用 injectUserMessage。但如果此时 Run 刚好结束（race condition），injected 返回 false → 回落走 sendUserMessage → <strong>新建 slot，旧 slot 的 streaming 全部丢失</strong>。</p>
+
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;margin-top:var(--space-4);"><code>// useStore.ts:1581 — triggerWakeupResume 的回落路径
+if (isForeground) {
+    // ⚠️ 当 injectUserMessage 返回 injected=false 或抛异常时
+    // 直接调 sendUserMessage —— 这会创建新 slot，替换旧 slot
+    await get().sendUserMessage(wakeupXml, [], meta, { skipOptimisticUser: true });
+}</code></pre>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">触发条件</h3>
+    <p>需要同时满足：① Run 正在进行中（slot 存在）② 后台任务完成触发 wakeup ③ injectUserMessage 返回 false（通常是因为 Run 刚好在 inject 和 backend 处理之间结束了）。这个窗口极小，但在高频率工具调用中可能被撞到。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">最干净修法</h3>
+    <p>sendUserMessage 创建新 slot 前，应该先检查旧 slot 的 streaming 是否非空。如果非空，先把 streaming 冻结到 liveTimeline 再替换——或者直接用 <code>waitForRequestRelease</code> 等待旧 run 彻底结束再发新 run。</p>
+  </div>
+</div>
+
+<!-- SCREEN 5: Debugging Toolkit -->
+<div class="screen animate-in">
+  <h2 class="section-title">调试工具箱</h2>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📋</div>
+      <div class="pattern-card-body">
+        <h3>heb CLI 复现</h3>
+        <p>最快的 agent 行为复现方式。一行命令起 session，用 NDJSON 事件流看每一步的状态变化。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">heb new --provider=anthropic --workdir /tmp/repro</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔍</div>
+      <div class="pattern-card-body">
+        <h3>model_io.jsonl</h3>
+        <p>看后端实际发给模型什么、模型返了什么。排查「模型行为不对」类问题首选。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">~/.hebbian/sessions/{sid}/model_io.jsonl</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📝</div>
+      <div class="pattern-card-body">
+        <h3>session.jsonl</h3>
+        <p>对话历史的唯一真相。看 message 落盘情况、check partial 是否被正确恢复。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">~/.hebbian/sessions/{sid}/session.jsonl</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🧪</div>
+      <div class="pattern-card-body">
+        <h3>单元测试</h3>
+        <p>streamingParts.test.ts 固化了 Bug A 和 B 的回归——把模拟事件流喂给状态机，断言结果。新增此类 bug 先写测试复现，再修。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">node --experimental-strip-types streamingParts.test.ts</code>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Spot the Bug Challenge -->
+<div class="screen animate-in">
+  <h2 class="section-title">来找茬：这段代码有什么问题？</h2>
+
+  <div class="bug-challenge" style="margin-top:var(--space-4);">
+    <p>下面的代码模拟了非流式路径下，一个包含 2 轮 Turn 的 Run。找找看哪里有问题：</p>
+
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;margin-top:var(--space-4);"><code>// Turn 1: 模型返回 ToolCalls（Read 工具）
+<span class="bug-line" data-explanation="这里 emit 的 text 是 Turn 1 的全文，没问题。" onclick="checkBugLine(this, false)" data-hint="这一行看起来是对的...">emit(TextDelta { text: "我来读一下代码。" });     // ← 行 1</span>
+<span class="bug-line" data-explanation="这里 index=0，由 tool_call_dispatch_offset 保证唯一，没问题。" onclick="checkBugLine(this, false)" data-hint="不是这一行">emit(ToolCallStarted { index: 0, id: "call_1" });  // ← 行 2</span>
+<span class="bug-line" data-explanation="没问题。" onclick="checkBugLine(this, false)" data-hint="也不是这一行">emit(ToolCallFinished { index: 0, result: "..." }); // ← 行 3</span>
+<span class="bug-line" data-explanation="Aha！TurnFinished 在 Turn 1 结束时 emit——但如果此时 liveTimeline 里已经有 user_injected 条目（用户插了话），前端会把当前 streaming 冻结并清空。这不一定是 bug，但如果 user_injected 是被错误分类的 system_notification，就会错误触发冻结。实际代码已修复：检查时排除 system_notification。" onclick="checkBugLine(this, false)" data-hint="close... 但这不是最根本的问题">emit(TurnFinished { ... });                           // ← 行 4</span>
+
+// Turn 2: 模型返回 Done
+<span class="bug-line" data-explanation="没错！这就是 Bug A。TextDone 的 fullText 只有 Turn 2 的文本，但前端 applyTextDone 需要用 streamingText.endsWith(fullText) 判断——旧代码用 fullText.endsWith(streamingText)，方向反了，会把 Turn 1 的文本覆盖掉。已修复。" onclick="checkBugLine(this, true)" data-hint="Hint: 想想 applyTextDone 里的字符串比较方向">emit(TextDone { full_text: "改好了！" });           // ← 行 5 ⚡</span>
+<span class="bug-line" data-explanation="没问题，Run 正常收尾。" onclick="checkBugLine(this, false)" data-hint="Try line 5 instead">emit(RunFinished { ... });                           // ← 行 6</span></code></pre>
+
+    <div class="bug-feedback" style="margin-top:var(--space-3);min-height:1.5em;"></div>
+  </div>
+
+  <p style="margin-top:var(--space-4);"><strong>答案</strong>：行 5 是问题所在。TextDone 到达时 fullText 只是 Turn 2 的文本，但旧代码错误地把累积文本覆盖成了它——Turn 1 的输出就消失了。</p>
+</div>
+
+<!-- SCREEN 7: Final Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">终极大考</h2>
+
+  <div class="quiz-container" id="quiz-module6">
+    <div class="quiz-question-block"
+         data-correct="turn_finished"
+         data-explanation-right="正解！TurnFinished 检查 liveTimeline 中是否有非 system_notification 的 user_injected。如果有，就冻结当前 streaming 为 assistant_frozen 快照。"
+         data-explanation-wrong="不是。TextDone 和 RunFinished 都不管 liveTimeline。冻结助手快照是 turn_finished 的职责。">
+      <h3 class="quiz-question">哪个事件触发 assistant_frozen 冻结？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="text_done" onclick="selectOption(this)">TextDone</button>
+        <button class="quiz-option" data-value="turn_finished" onclick="selectOption(this)">TurnFinished（有用户插队时）</button>
+        <button class="quiz-option" data-value="run_finished" onclick="selectOption(this)">RunFinished</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="streamingText"
+         data-explanation-right="streamingText 是前端 Run 进行中的累积文本。reload 后由 session.messages 里的 content 字段接管。"
+         data-explanation-wrong="再想想。Run 结束后 slot 被清掉，streamingText 清空。持久化的文本在 session.jsonl → session.messages[].content。">
+      <h3 class="quiz-question">Run 结束后，对话文本存在哪里？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="streamingText" onclick="selectOption(this)">前端 slot 的 streamingText</button>
+        <button class="quiz-option" data-value="session_jsonl" onclick="selectOption(this)">session.jsonl 的 messages 数组</button>
+        <button class="quiz-option" data-value="partial" onclick="selectOption(this)">partial/ 目录</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+  </div>
+</div>
+
+</section>
+  </main>
+
+</body>
+</html>

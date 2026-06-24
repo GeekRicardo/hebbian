@@ -2,12 +2,16 @@
 
 一个轻量、本地优先的 AI agent 框架。**Agent = Model + Harness**，模型可换，harness 是产品本体。
 
-包含两个 surface：
+核心理念：**一套核心、多 surface**——业务逻辑全在 `crates/agent-core`（唯一大脑），surface 只翻译输入、渲染输出，共享同一个 `~/.hebbian/` 数据目录，行为对称。四个 surface：
 
-- **Desktop**：Tauri 2 + React 18 桌面客户端（macOS 原生标题栏 + HSL 主题）
-- **CLI**：Rust binary，配合 mock provider 与 NDJSON I/O，用于协议验证 / headless 跑模型
+- **Desktop**：Tauri 2 + React 18 桌面客户端（GUI surface，含内置浏览器 / 终端 / 微信渠道等 native 能力）
+- **heb CLI**：Rust binary，unix-socket + NDJSON 事件流，给 AI 脚本化自主调试用
+- **hebweb**：axum HTTP + WebSocket server，浏览器 surface，与 Desktop 共享同一份 React 代码（transport 运行时探测走 Tauri 还是 WS）
+- **channel-gateway**：渠道网关（微信，未来 QQ / 飞书）
 
-完整架构见 [docs/architecture.md](docs/architecture.md)。
+三 surface 的对话事件流统一消费 `protocol::WireEvent`：core 内部 `EventPayload → to_wire → WireEvent`，surface 只做投递差异（Desktop emit / heb NDJSON / hebweb WS broadcast），不再各自定义事件类型 + 各自翻译。
+
+完整架构见 [docs/架构.md](docs/架构.md)（唯一设计准则）。
 
 ---
 
@@ -142,10 +146,10 @@ hebbian/
 │   │   │           └── ui/       React 组件、store、lib、types
 │   │   ├── src/                  Tauri Rust 端
 │   │   │   ├── lib.rs            Tauri 命令注册（IPC 入口）
-│   │   │   ├── chat.rs           Harness 桥接，AgentEvent → EngineEvent
+│   │   │   ├── chat.rs           Harness 桥接，DesktopObserver 经 protocol::to_wire 推 WireEvent
 │   │   │   ├── hitl.rs           Desktop HITL request/response 桥接
 │   │   │   ├── title_gen.rs      会话标题自动生成
-│   │   │   ├── engine/mod.rs     EngineEvent（Tauri Channel）
+│   │   │   ├── engine/mod.rs     Tauri command 返回 Dto（TodoItemDto / PlanCommentDto）
 │   │   │   └── window_control.rs 窗口管理、全局快捷键
 │   │   ├── tauri.conf.json       Desktop 构建配置
 │   │   ├── package.json          Desktop 前端脚本与依赖
@@ -255,7 +259,13 @@ pub enum EventPayload {
 }
 ```
 
-desktop 通过 Tauri IPC `Channel<EngineEvent>` 把协议事件转译给前端；CLI 直接调 `Harness::spawn_run` 后订阅事件流渲染到终端。
+`EventPayload` 是 core 内部领域模型（嵌套 enum、强类型）。对外通过**唯一转换 `protocol::to_wire(&Event) → WireEvent`** 降成线协议 DTO（字段拍平、enum 降成 `tag + payload`），三 surface 共享这一份（架构 §3.1.1）：
+
+- **Desktop**：`Channel<WireEvent>` 经 Tauri IPC 推给前端
+- **heb CLI**：`DaemonEvent`（WireEvent 业务事件 + daemon 信令 + 终端截断的超集）写 NDJSON
+- **hebweb**：`WireEvent` 经 WS broadcast 推给浏览器
+
+> 历史上这层转换写过三遍且不一致（desktop / cli / web 各一套）；2026-06 的步骤4 收口到单一 `to_wire`，业务事件字段（risk / decision / reason 等）逐字节一致，差异（cli 的 result 截断等）下沉各 surface 渲染层。
 
 ---
 
@@ -307,7 +317,7 @@ data_dir/
 
 ## 当前进度（M1）
 
-参考 [docs/architecture.md §14](docs/architecture.md) 的 4 个里程碑：
+参考 [docs/架构.md](docs/架构.md) 的里程碑路线图：
 
 | # | M1 项 | 状态 |
 |---|------|------|

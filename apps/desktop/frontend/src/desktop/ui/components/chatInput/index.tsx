@@ -18,6 +18,7 @@ import {
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauri } from "@/desktop/bridge/transport";
 import { toast } from "sonner";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { animations } from "@/assets/animations";
@@ -129,6 +130,9 @@ function ChatInputInner({
   const projects = useStore((s) => s.projects);
   const saveProject = useStore((s) => s.saveProject);
   const providersFile = useStore((s) => s.providersFile);
+  // PlanMode 时输入框边框变琥珀色标识——订阅 RunMode 单一真源，agent 自主进/出
+  // PlanMode 时实时变色。
+  const isPlanMode = useStore((s) => s.currentRunMode) === "PlanMode";
 
   const activeWorkdir = pendingWorkdir;
   const activeAllowedPaths = pendingAllowedPaths;
@@ -602,8 +606,10 @@ function ChatInputInner({
     requestAnimationFrame(() => editorRef.current?.focus());
   }, [composerDraft, clearComposerDraft]);
 
-  // 窗口被快捷键唤起到前台时聚焦输入框。
+  // 窗口被快捷键唤起到前台时聚焦输入框。仅 Tauri surface——web 下 `listen`
+  // 会访问不存在的 Tauri 内部对象而抛 unhandled rejection。
   useEffect(() => {
+    if (!isTauri()) return;
     const unlisten = listen("hebbian://focus-chat-input", () => {
       editorRef.current?.focus();
     });
@@ -613,8 +619,12 @@ function ChatInputInner({
   }, []);
 
   // Desktop 原生拖拽：Tauri 默认拦截 webview HTML5 file drop 改发原生事件。
+  // 仅 Tauri surface 注册——web surface 下 `getCurrentWebview()` 会访问
+  // 不存在的 `window.__TAURI_INTERNALS__` 而抛错，且 web 端本就用标准 HTML5
+  // file drop（无需 Tauri 原生事件）。
   nativeDropRef.current = handleNativeDrop;
   useEffect(() => {
+    if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const hitInputCard = (x: number, y: number) => {
@@ -660,6 +670,7 @@ function ChatInputInner({
           ref={dropCardRef}
           className={cn(
             "relative z-10 w-full rounded-3xl border border-input bg-background shadow-[0_-10px_28px_-10px_rgba(0,0,0,0.28),0_0_12px_-6px_rgba(0,0,0,0.12)] focus-within:ring-2 focus-within:ring-ring transition",
+            isPlanMode && "border-amber-400/70 focus-within:ring-amber-400/40",
             draggingFiles && "border-primary ring-2 ring-primary/30",
             disabled && "opacity-60"
           )}

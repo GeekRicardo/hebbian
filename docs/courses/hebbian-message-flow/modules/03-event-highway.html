@@ -1,0 +1,157 @@
+<section class="module" id="module-3">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">事件高速公路</h1>
+  <p class="module-subtitle">agent_loop 产生的每个事件——TextDelta、ToolCallStarted、TurnFinished——都要经过三层翻译才能到达前端 UI。</p>
+
+  <p>想象你在北京寄一封信到上海。信的内容经过三个中转站：你写好信（<strong>agent_loop emit</strong>）→ 邮局分拣贴标签（<strong>chat.rs 翻译</strong>）→ 货车运到上海（<strong>Tauri Channel</strong>）→ 收件人拆开读（<strong>前端 useStore</strong>）。每一层都可能「翻译」或「过滤」信的内容。</p>
+</div>
+
+<!-- SCREEN 2: EventPayload -->
+<div class="screen animate-in">
+  <h2 class="section-title">第一层：EventPayload —— agent_loop 说出的「原子话」</h2>
+
+  <p>agent_loop 里 emit 的不是字符串，而是结构化的 <code>EventPayload</code> 枚举。这是整个系统的「统一语言」。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — crates/protocol/src/event.rs</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">pub enum</span> EventPayload {</span>
+<span class="code-line">    <span class="code-comment">// 模型流</span></span>
+<span class="code-line">    TextDelta { text: String },</span>
+<span class="code-line">    TextDone { full_text: String },</span>
+<span class="code-line">    Reasoning { text: String },</span>
+<span class="code-line">    <span class="code-comment">// 工具</span></span>
+<span class="code-line">    ToolCallDelta { index, id, name, arguments_delta },</span>
+<span class="code-line">    ToolCallStarted { index, call_id, name, input },</span>
+<span class="code-line">    ToolCallFinished { index, call_id, result, duration_ms, ... },</span>
+<span class="code-line">    <span class="code-comment">// 生命周期</span></span>
+<span class="code-line">    TurnFinished { turn_id, turn, stop_reason },</span>
+<span class="code-line">    RunFinished { total_input_tokens, duration_ms, ... },</span>
+<span class="code-line">    <span class="code-comment">// 审批</span></span>
+<span class="code-line">    PermissionRequested { request_id, kind, summary, ... },</span>
+<span class="code-line">    <span class="code-comment">// ... 还有 20+ 种事件</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">EventPayload 是枚举——每种事件是互斥的 variant</p>
+        <p class="tl">TextDelta：模型的文字正在流式到达——「逐字」的那个字</p>
+        <p class="tl">TextDone：完整文本——比如非流式路径下一次性给全文</p>
+        <p class="tl">Reasoning：模型的思考过程（如果开启了推理显示）</p>
+        <p class="tl">ToolCallDelta：工具调用参数在流式到达——流式路径才有</p>
+        <p class="tl">ToolCallStarted：工具调用参数接收完毕，开始执行</p>
+        <p class="tl">ToolCallFinished：工具执行结束，带结果和耗时</p>
+        <p class="tl">TurnFinished：一轮 Turn 结束——模型说完了，工具也跑完了</p>
+        <p class="tl">RunFinished：整个 Run 结束，带总 token 用量、总耗时</p>
+        <p class="tl">PermissionRequested：agent 想做危险操作，请求用户批准</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🔑</span>
+    <div class="callout-text">
+      <strong>这是 LLM Agent 的通用设计模式</strong>
+      <p>所有 LLM Agent 框架（LangChain、CrewAI 等）都有类似的结构化事件流。它们把模型的非结构化输出转成结构化的事件序列，让 UI 层能精确响应每一个状态变化，而不是解析自由文本。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: chat.rs Translation -->
+<div class="screen animate-in">
+  <h2 class="section-title">第二层：chat.rs —— 从 EventPayload 到 EngineEvent</h2>
+
+  <p>agent_loop emit 的是协议层事件（<code>Event</code>），但桌面端有自己的翻译层——<code>chat.rs</code> 的 <code>on_event</code> 方法。它做三件事：</p>
+
+  <div class="numbered-steps stagger-children" style="margin-top:var(--space-6);">
+    <div class="numbered-step">
+      <span class="numbered-step-num">1</span>
+      <div class="numbered-step-body">
+        <h3>累积 partial 文本</h3>
+        <p>TextDelta → <code>self.partial_output.push_str(text)</code>。这个 partial 文本用于：崩溃恢复时落盘、中继时保留残片。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">2</span>
+      <div class="numbered-step-body">
+        <h3>累积结构化 parts</h3>
+        <p>TextDelta → <code>parts.append_text(text)</code>；ToolCallStarted → <code>parts</code> 里加一条 tool_call 记录。这些 parts 用于：消息落盘到 session.jsonl。</p>
+      </div>
+    </div>
+    <div class="numbered-step">
+      <span class="numbered-step-num">3</span>
+      <div class="numbered-step-body">
+        <h3>翻译并转发</h3>
+        <p>调用 <code>agent_event_to_engine_event(event)</code> 把协议 Event 转成 EngineEvent，然后 <code>(self.emit)(ev)</code> 推给 Tauri Channel → 前端。</p>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:var(--space-6);">特别重要的细节：chat.rs 还会实时写 <strong>partial 文件</strong>——在 TextDelta/ToolCallStarted 等事件到达时立刻落盘到 <code>~/.hebbian/sessions/{sid}/partial/</code>。如果 Hebbian 进程崩溃，下次打开对话时会从 partial 文件恢复未保存的输出。</p>
+</div>
+
+<!-- SCREEN 4: Key Event Flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">关键事件时序：一次多轮 Turn 的完整事件流</h2>
+
+  <p>下方展示 Anthropic + 工具（非流式路径）下，一次包含多个 ToolCalls 轮次的 Run 会 emit 哪些事件：</p>
+
+  <div class="flow-animation" id="flow-events" data-steps='[{"label":"Turn 1: emit RunStarted → TurnStarted → StepStarted(Model)","highlight":"run"},{"label":"Turn 1: 模型返回 ToolCalls → emit TextDelta(\"让我看看代码\")","highlight":"turn1"},{"label":"Turn 1: emit ToolCallStarted(Read) → ToolCallFinished(Read)","highlight":"tool1"},{"label":"Turn 1: emit StepFinished(Tool) → TurnFinished(EndTurn)","highlight":"turn1"},{"label":"Turn 2: emit StepStarted(Model) → 模型返回 ToolCalls → TextDelta(\"我来改\")","highlight":"turn2"},{"label":"Turn 2: ToolCallStarted(Edit) → ToolCallFinished(Edit) → TurnFinished","highlight":"tool2"},{"label":"Turn 3: 模型返回 Done → emit TextDone(\"修好了\") → TurnFinished","highlight":"turn3"},{"label":"RunFinished → 前端 reload session.jsonl","highlight":"run"}]
+'>
+    <div class="flow-diagram" style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-2);padding:var(--space-4) 0;">
+      <div id="flow-run" class="flow-actor" style="background:var(--color-actor-1);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Run 生命周期</div>
+      <div id="flow-turn1" class="flow-actor" style="background:var(--color-actor-2);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 1: Read 工具</div>
+      <div id="flow-turn2" class="flow-actor" style="background:var(--color-actor-3);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 2: Edit 工具</div>
+      <div id="flow-turn3" class="flow-actor" style="background:var(--color-actor-4);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);text-align:center;">Turn 3: Done</div>
+    </div>
+    <div style="display:flex;gap:var(--space-4);align-items:center;justify-content:space-between;padding:var(--space-3) 0;">
+      <div id="flow-tool1" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);">Tool: Read</div>
+      <div id="flow-tool2" class="flow-actor" style="background:var(--color-actor-5);color:#fff;padding:var(--space-2);border-radius:var(--radius-sm);font-size:var(--text-xs);">Tool: Edit</div>
+    </div>
+    <div class="flow-step-label" style="text-align:center;color:var(--color-text-secondary);font-size:var(--text-sm);min-height:1.5em;">点击 "Next Step" 开始追踪</div>
+    <div class="flow-packet" style="display:none;"></div>
+    <div style="text-align:center;margin-top:var(--space-4);">
+      <button class="flow-next-btn quiz-check-btn">Next Step</button>
+      <button class="flow-reset-btn quiz-reset-btn">Reset</button>
+      <span class="flow-progress" style="margin-left:var(--space-3);font-size:var(--text-xs);color:var(--color-text-muted);"></span>
+    </div>
+  </div>
+
+  <div class="callout-box warning" style="margin-top:var(--space-6);">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-text">
+      <strong>关键细节：TextDelta 的时机</strong>
+      <p>在非流式路径下，TextDelta 在 ModelResponse::ToolCalls 到达时 emit——<strong>先于</strong> ToolCallStarted。TextDone 在 ModelResponse::Done 到达时 emit。所以前端会先收到所有 Turn 的 TextDelta，最后才收到一个 TextDone。如果前端在 TextDone 处理时错误地覆盖了之前的累积文本，前面轮次的输出就会消失。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module3">
+    <div class="quiz-question-block"
+         data-correct="partial"
+         data-explanation-right="对！chat.rs 在收到每个 TextDelta 时就立刻把片段写到 partial/ 目录。如果 Hebbian 崩溃，下次打开对话时 load_with_partial_recovery 会从 partial 文件恢复未保存的输出。"
+         data-explanation-wrong="不是。session.jsonl 只在 RunFinished 时整段落盘。如果进程在 Run 中间崩溃，session.jsonl 还没有这段输出。答案是 partial 文件。">
+      <h3 class="quiz-question">Hebbian 崩溃时，未完成的输出靠什么恢复？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="session" onclick="selectOption(this)">session.jsonl</button>
+        <button class="quiz-option" data-value="partial" onclick="selectOption(this)">partial/ 目录的实时落盘</button>
+        <button class="quiz-option" data-value="memory" onclick="selectOption(this)">内存中的 slot 状态</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+  </div>
+</div>
+
+</section>

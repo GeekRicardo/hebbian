@@ -12,7 +12,6 @@ mod idle;
 mod wechat;
 mod window_control;
 
-pub use engine::EngineEvent;
 pub use error::{AppError, AppResult};
 pub use force_automode::ForceAutomodeState;
 pub use hitl::HitlState;
@@ -158,71 +157,6 @@ mod tests {
         ));
 
         cancellation::unregister(&request_id);
-    }
-
-    #[test]
-    fn attach_path_references_file_without_reading_content() {
-        let dir = temp_data_dir("attach-path");
-        let file = dir.join("note.md");
-        std::fs::write(&file, "敏感内容不该进上下文").unwrap();
-
-        // 文件路径 = 引用：回 File { path }，绝不读内容（结果里没有 content / data 字段）。
-        let res = attach_path(file.to_string_lossy().into_owned()).unwrap();
-        match &res {
-            AttachPathResult::File { path } => assert!(path.ends_with("note.md")),
-            other => panic!("文件路径应回 File，实际 {other:?}"),
-        }
-        let json = serde_json::to_value(&res).unwrap();
-        assert_eq!(json["kind"], "file");
-        assert!(json.get("content").is_none() && json.get("data").is_none());
-        assert!(!json.to_string().contains("敏感内容"));
-
-        // file:// URI 同样按文件引用。
-        let uri = format!("file://{}", file.to_string_lossy());
-        assert!(matches!(
-            attach_path(uri).unwrap(),
-            AttachPathResult::File { .. }
-        ));
-
-        // 目录回 Dir，缺失回 Missing。
-        assert!(matches!(
-            attach_path(dir.to_string_lossy().into_owned()).unwrap(),
-            AttachPathResult::Dir { .. }
-        ));
-        assert!(matches!(
-            attach_path(dir.join("nope.txt").to_string_lossy().into_owned()).unwrap(),
-            AttachPathResult::Missing { .. }
-        ));
-    }
-
-    #[test]
-    fn drop_paths_classifies_by_type() {
-        let dir = temp_data_dir("drop-paths");
-        let text = dir.join("note.md");
-        std::fs::write(&text, "# 标题").unwrap();
-        let png = dir.join("shot.png");
-        // 最小合法 PNG 头即可，分流只看扩展名 + 大小。
-        std::fs::write(&png, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).unwrap();
-        let bin = dir.join("blob.unknownext");
-        std::fs::write(&bin, [0u8, 1, 2, 3]).unwrap();
-
-        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
-        let out = drop_paths(vec![
-            s(&text),
-            s(&png),
-            s(&bin),
-            s(&dir),              // 目录 → 引用
-            s(&dir.join("nope")), // 缺失 → missing
-        ])
-        .unwrap();
-
-        assert!(matches!(&out[0], DropOutcome::TextFile { content, .. } if content == "# 标题"));
-        assert!(
-            matches!(&out[1], DropOutcome::Image { media_type, .. } if media_type == "image/png")
-        );
-        assert!(matches!(&out[2], DropOutcome::Reference { .. }));
-        assert!(matches!(&out[3], DropOutcome::Reference { .. }));
-        assert!(matches!(&out[4], DropOutcome::Missing { .. }));
     }
 }
 
@@ -565,7 +499,7 @@ fn rename_session(app: AppHandle, id: String, title: String) -> AppResult<Sessio
 #[tauri::command]
 fn delete_session(
     app: AppHandle,
-    branch_state: State<'_, branch::BranchState>,
+    branch_state: State<'_, std::sync::Arc<agent_core::branch::BranchState>>,
     id: String,
 ) -> AppResult<()> {
     branch_state.drop_for_session(&id);
@@ -647,13 +581,21 @@ fn list_claude_sessions() -> AppResult<Vec<ClaudeSessionDto>> {
         .collect())
 }
 
-/// 导入一个 Claude 会话文件，重建成本侧 session（source="claude"，workdir 取原 cwd）。
+/// 导入一个 Claude 会话文件，重建成本侧 session（source="claude"）。
+/// `project_id` / `workdir` 由项目入口导入时传入，使会话显式归属该项目；
+/// 全局入口不传则回退 Claude 会话原始 cwd。
 #[tauri::command]
-fn import_claude_session(app: AppHandle, path: String) -> AppResult<Session> {
+fn import_claude_session(
+    app: AppHandle,
+    path: String,
+    project_id: Option<String>,
+    workdir: Option<String>,
+) -> AppResult<Session> {
     let data_dir = data_dir(&app)?;
     let content =
         std::fs::read_to_string(&path).map_err(|e| AppError::msg(format!("读取失败：{e}")))?;
     let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content)?;
+    let session_workdir = workdir.map(std::path::PathBuf::from).or(parsed.workdir);
     // provider_id 留空：导入的对话没有本侧 provider，用户继续聊前在会话设置里选。
     let mut session = sessions::create_with_workspace(
         &data_dir,
@@ -662,8 +604,8 @@ fn import_claude_session(app: AppHandle, path: String) -> AppResult<Session> {
         None,
         None,
         "claude".into(),
-        None,
-        parsed.workdir,
+        project_id,
+        session_workdir,
         Vec::new(),
     )?;
     session.title = parsed.title;
@@ -1061,7 +1003,8 @@ async fn preview_session_payload(
     upto_message_id: Option<String>,
 ) -> AppResult<serde_json::Value> {
     let dd = data_dir(&app)?;
-    chat::build_preview_payload(&dd, &session_id, upto_message_id.as_deref()).await
+    agent_core::preview_payload::build_preview_payload(&dd, &session_id, upto_message_id.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -1078,7 +1021,7 @@ async fn send_message(
     request_id: String,
     meta: Option<agent_core::storage::sessions::MessageMeta>,
     continue_run: Option<bool>,
-    on_event: Channel<EngineEvent>,
+    on_event: Channel<protocol::WireEvent>,
 ) -> AppResult<Message> {
     let runtime = cancellation::register_for_session(request_id.clone(), Some(session_id.clone()));
     let force_automode_enabled = force_automode.is_enabled(&session_id);
@@ -1437,7 +1380,7 @@ fn clear_active_goal(app: AppHandle, session_id: String) -> AppResult<()> {
 
 /// 「重新生成标题」入口（前端 sidebar 右键 / chat header 按钮触发）。
 /// 自动生成已下沉到 [`agent_core::session_titler`]，由 Harness::spawn_run 在首轮
-/// TurnFinished 后异步触发并通过 `EngineEvent::SessionTitleChanged` 推到前端。
+/// TurnFinished 后异步触发并通过 `WireEvent::SessionTitleChanged` 推到前端。
 /// 本 invoke 命令只是手动重生成入口——无视当前 title，强制走一次。
 #[tauri::command]
 async fn generate_session_title(app: AppHandle, id: String) -> AppResult<Session> {
@@ -2489,194 +2432,18 @@ fn discover_all_rules(
 }
 
 // ========== Path attach (粘贴/拖拽路径) ==========
+//
+// 探测/分流逻辑在 agent_core::attach（纯 fs，无 surface 依赖，与 hebweb 共用）。
+// Tauri command 仅做参数透传。
 
-/// 前端粘贴/拖拽路径时的探测结果。粘贴路径 = **引用**而非上传：只回路径形态，
-/// 文件 / 目录都让前端加进 allowed_paths，由 agent 按需 Read，不把内容塞进上下文。
-/// （真正的「上传」走 addFiles —— 复制文件对象 / 截图时才发生。）
-#[derive(serde::Serialize, Debug)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum AttachPathResult {
-    File { path: String },
-    Dir { path: String },
-    Missing { path: String },
+#[tauri::command]
+fn attach_path(path: String) -> AppResult<agent_core::attach::AttachPathResult> {
+    Ok(agent_core::attach::attach_path(&path))
 }
 
 #[tauri::command]
-fn attach_path(path: String) -> AppResult<AttachPathResult> {
-    let raw = path.trim();
-    if raw.is_empty() {
-        return Ok(AttachPathResult::Missing { path });
-    }
-    let cleaned = normalize_dropped_path(raw);
-    let p = std::path::Path::new(&cleaned);
-    let meta = match std::fs::metadata(p) {
-        Ok(m) => m,
-        Err(_) => return Ok(AttachPathResult::Missing { path }),
-    };
-    let resolved = p.to_string_lossy().into_owned();
-    if meta.is_dir() {
-        Ok(AttachPathResult::Dir { path: resolved })
-    } else {
-        Ok(AttachPathResult::File { path: resolved })
-    }
-}
-
-/// 接受 file:// URI（macOS Finder / GTK 拖拽常见格式）并 percent-decode。
-/// 非 file:// 路径原样返回。粘贴路径与原生拖拽都经此归一化。
-fn normalize_dropped_path(raw: &str) -> String {
-    raw.strip_prefix("file://")
-        .map(percent_decode)
-        .unwrap_or_else(|| raw.to_string())
-}
-
-// ========== File drop（Desktop 原生拖拽分流）==========
-
-const MAX_DROP_TEXT_BYTES: u64 = 1024 * 1024;
-const MAX_DROP_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
-
-/// 原生拖拽落到输入框时，每个磁盘路径的分流结果。
-/// 支持的小图片 / 文本 → 读成附件进上下文；其余（目录、大文件、二进制、未知类型）
-/// → 只回路径让前端加进 allowed_paths，由 agent 按需 Read，与 `attach_path` 同语义。
-/// tag/字段刻意对齐前端 `MessageAttachment`（image / text_file），分流后可直接入附件列表。
-#[derive(serde::Serialize, Debug)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum DropOutcome {
-    Image {
-        name: String,
-        media_type: String,
-        data: String,
-    },
-    TextFile {
-        name: String,
-        media_type: String,
-        content: String,
-    },
-    Reference {
-        path: String,
-    },
-    Missing {
-        path: String,
-    },
-}
-
-#[tauri::command]
-fn drop_paths(paths: Vec<String>) -> AppResult<Vec<DropOutcome>> {
-    Ok(paths.into_iter().map(classify_dropped_path).collect())
-}
-
-fn classify_dropped_path(raw: String) -> DropOutcome {
-    use base64::Engine;
-
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return DropOutcome::Missing { path: raw };
-    }
-    let cleaned = normalize_dropped_path(trimmed);
-    let p = std::path::Path::new(&cleaned);
-    let meta = match std::fs::metadata(p) {
-        Ok(m) => m,
-        Err(_) => return DropOutcome::Missing { path: raw },
-    };
-    let resolved = p.to_string_lossy().into_owned();
-    // 目录永远只引用：内容无从「读成附件」。
-    if meta.is_dir() {
-        return DropOutcome::Reference { path: resolved };
-    }
-    let name = p
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| resolved.clone());
-
-    if let Some(media_type) = image_media_type(p) {
-        if meta.len() <= MAX_DROP_IMAGE_BYTES {
-            if let Ok(bytes) = std::fs::read(p) {
-                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-                return DropOutcome::Image {
-                    name,
-                    media_type: media_type.to_string(),
-                    data,
-                };
-            }
-        }
-        // 超限或读失败 → 退回引用，不丢这个文件。
-        return DropOutcome::Reference { path: resolved };
-    }
-
-    if let Some(media_type) = text_media_type(p) {
-        if meta.len() <= MAX_DROP_TEXT_BYTES {
-            if let Ok(content) = std::fs::read_to_string(p) {
-                return DropOutcome::TextFile {
-                    name,
-                    media_type: media_type.to_string(),
-                    content,
-                };
-            }
-        }
-        return DropOutcome::Reference { path: resolved };
-    }
-
-    // 未知类型（二进制 / 无扩展名等）→ 引用兜底。
-    DropOutcome::Reference { path: resolved }
-}
-
-/// 按扩展名判图片附件类型；非图片返回 None。
-fn image_media_type(p: &std::path::Path) -> Option<&'static str> {
-    match path_ext_lower(p).as_deref() {
-        Some("png") => Some("image/png"),
-        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
-        Some("webp") => Some("image/webp"),
-        Some("gif") => Some("image/gif"),
-        _ => None,
-    }
-}
-
-/// 按扩展名判文本附件类型；非已知文本返回 None。扩展名集合与前端 `isTextFile` 对齐。
-fn text_media_type(p: &std::path::Path) -> Option<&'static str> {
-    match path_ext_lower(p).as_deref() {
-        Some("md") | Some("markdown") => Some("text/markdown"),
-        Some("json") | Some("jsonl") => Some("application/json"),
-        Some("xml") => Some("application/xml"),
-        Some("html") => Some("text/html"),
-        Some("css") => Some("text/css"),
-        Some("csv") => Some("text/csv"),
-        Some(
-            "txt" | "ts" | "tsx" | "js" | "jsx" | "rs" | "py" | "go" | "java" | "c" | "cpp" | "h"
-            | "hpp" | "yaml" | "yml" | "toml" | "sql",
-        ) => Some("text/plain"),
-        _ => None,
-    }
-}
-
-fn path_ext_lower(p: &std::path::Path) -> Option<String> {
-    p.extension().map(|e| e.to_string_lossy().to_lowercase())
-}
-
-fn percent_decode(s: &str) -> String {
-    // 简易 percent decode：只处理常见 %XX 的两位 hex；其余保持原样。
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
-                out.push(h * 16 + l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+fn drop_paths(paths: Vec<String>) -> AppResult<Vec<agent_core::attach::DropOutcome>> {
+    Ok(agent_core::attach::drop_paths(paths))
 }
 
 // ========== OAuth ==========
@@ -2919,7 +2686,7 @@ pub fn run() {
         .manage(Arc::new(HitlState::default()))
         .manage(Arc::new(ForceAutomodeState::default()))
         .manage(browser::BrowserState::default())
-        .manage(branch::BranchState::new())
+        .manage(std::sync::Arc::new(agent_core::branch::BranchState::new()))
         .manage(terminal::TerminalState::default())
         .manage(Arc::new(wechat::WeChatState::default()))
         .manage(Arc::new(channel_forward::ChannelForwardState::default()))

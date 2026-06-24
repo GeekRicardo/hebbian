@@ -49,7 +49,6 @@ use protocol::{
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::events::translate as translate_event;
 use crate::protocol::WsServerMessage;
 
 /// 每个 session 一份的运行时状态
@@ -123,7 +122,7 @@ impl SessionRuntime {
         let _ = self.event_tx.send(msg);
     }
 
-    pub fn emit_engine_event(&self, ev: crate::events::EngineEvent) {
+    pub fn emit_engine_event(&self, ev: protocol::WireEvent) {
         let payload = match serde_json::to_value(&ev) {
             Ok(v) => v,
             Err(_) => return,
@@ -252,13 +251,13 @@ impl TurnObserver for WebObserver {
             // 子 NestedRun 过程累积进对应 Task call 的 nested，随父 message 落主 session.jsonl
             // （架构 §4.4.11.8）。子事件仍推 WS 供前端嵌套渲染。
             self.turn.nested.record(call_id, &event.payload);
-            if let Some(ev) = translate_event(event) {
+            if let Some(ev) = protocol::to_wire(event) {
                 self.runtime.emit_engine_event(ev);
             }
             return;
         }
         self.turn.handle_event(&event.payload);
-        if let Some(ev) = translate_event(event) {
+        if let Some(ev) = protocol::to_wire(event) {
             self.runtime.emit_engine_event(ev);
         }
     }
@@ -571,12 +570,12 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             }
         }
         TurnOutcome::Cancelled => {
-            runtime.emit_engine_event(crate::events::EngineEvent::Error {
+            runtime.emit_engine_event(protocol::WireEvent::Error {
                 message: "run 已取消".to_string(),
             });
         }
         TurnOutcome::Failed(err) => {
-            runtime.emit_engine_event(crate::events::EngineEvent::Error { message: err });
+            runtime.emit_engine_event(protocol::WireEvent::Error { message: err });
         }
     }
 

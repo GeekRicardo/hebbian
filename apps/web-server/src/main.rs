@@ -24,7 +24,6 @@ use clap::Parser;
 use tracing::info;
 
 mod chat_helpers;
-mod events;
 mod protocol;
 mod server;
 mod session;

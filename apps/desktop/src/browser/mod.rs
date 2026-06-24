@@ -29,7 +29,6 @@ use tauri::{
 use url_policy::{validate_preview_url, PreviewOrigin};
 
 use crate::chat;
-use crate::engine::EngineEvent;
 use agent_core::storage::sessions::Message;
 
 /// 每个对话一个独立 popout 窗口，label 按 session_id 区分（与内置浏览器实例 per-session 一致）。
@@ -1179,10 +1178,10 @@ fn route_aside_event(
     host_session: &str,
     surface: &str,
     aside_session: &str,
-    event: EngineEvent,
+    event: protocol::WireEvent,
 ) {
     match event {
-        EngineEvent::TextDelta { text, .. } => {
+        protocol::WireEvent::TextDelta { text, .. } => {
             eval_aside_down(
                 app,
                 host_session,
@@ -1191,7 +1190,7 @@ fn route_aside_event(
                 serde_json::json!({ "sessionId": aside_session, "text": text }),
             );
         }
-        EngineEvent::ToolStart { name, input, .. } if name == "PreviewStyle" => {
+        protocol::WireEvent::ToolStart { name, input, .. } if name == "PreviewStyle" => {
             let prop = input
                 .get("prop")
                 .and_then(|v| v.as_str())
@@ -1220,14 +1219,14 @@ fn route_aside_event(
                 serde_json::json!({ "sessionId": aside_session, "prop": prop, "value": value, "target": target, "allMatches": all_matches }),
             );
         }
-        EngineEvent::ToolStart { name, mut input, .. } if name == "PreviewMutate" => {
+        protocol::WireEvent::ToolStart { name, mut input, .. } if name == "PreviewMutate" => {
             if input.get("target").and_then(|v| v.as_str()).is_none() {
                 input["target"] = serde_json::json!("@1");
             }
             input["sessionId"] = serde_json::json!(aside_session);
             eval_aside_down(app, host_session, surface, "heb:aside:mutate", input);
         }
-        EngineEvent::ToolStart { name, mut input, .. } if name == "PreviewAct" => {
+        protocol::WireEvent::ToolStart { name, mut input, .. } if name == "PreviewAct" => {
             if input.get("target").and_then(|v| v.as_str()).is_none() {
                 input["target"] = serde_json::json!("@1");
             }
@@ -1237,7 +1236,7 @@ fn route_aside_event(
         // PreviewInspect / PreviewCapture 是观察工具（走 CDP，不改页面），inspector 收不到
         // 实际效果，但要在 chat 里显示"调用了哪个工具"的 tool 块（带 hover 详情），否则
         // 用户看到 LLM 两次发言中间凭空多了一段、不知道中间调过工具（C5）。
-        EngineEvent::ToolStart { name, input, .. }
+        protocol::WireEvent::ToolStart { name, input, .. }
             if name == "PreviewInspect" || name == "PreviewCapture" =>
         {
             eval_aside_down(
@@ -1252,7 +1251,7 @@ fn route_aside_event(
                 }),
             );
         }
-        EngineEvent::RunFinished { .. } => {
+        protocol::WireEvent::RunFinished { .. } => {
             tracing::info!(
                 target: "browser_aside",
                 host = %host_session,
@@ -1269,7 +1268,7 @@ fn route_aside_event(
         }
         // 流式途中的软错误事件：run 不一定走 Err 返回（也就不一定有 handle_aside_send 的
         // error 兜底），必须在这里直接下发 error 解除 spinner，否则前端一直转（卡死根因之一）。
-        EngineEvent::Error { message } => {
+        protocol::WireEvent::Error { message } => {
             tracing::warn!(
                 target: "browser_aside",
                 host = %host_session,

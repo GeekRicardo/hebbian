@@ -1,0 +1,239 @@
+<section class="module" id="module-3">
+
+<!-- SCREEN 1: The three moves -->
+<div class="screen animate-in">
+  <h2 class="section-title">三个壳，三种搬法</h2>
+
+  <p>收口的目标一样——都改用 <code>to_wire</code>。但三个壳的现状不同，搬过来的"动作"也不同。像三间老房子翻新：有的拆旧墙就行，有的整间推平重盖，有的得小心保留承重结构。</p>
+
+  <div class="step-cards">
+    <div class="step-card">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>桌面：拆掉旧翻译，接上 to_wire</strong>
+        <p>删掉它那套 280 行的翻译函数和自定义事件类型，所有出口直接调 to_wire。前端完全无感。</p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>网页：整个翻译文件删掉</strong>
+        <p>它那套翻译独占一个文件，连同自定义事件类型一起整文件删除，改用 to_wire。</p>
+      </div>
+    </div>
+    <div class="step-card">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>命令行：保留类型，只统一字段形态</strong>
+        <p>它的事件类型有"承重作用"不能拆（下个模块详解），但能让字段值复用同一套规范。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Group chat -->
+<div class="screen animate-in">
+  <h2 class="section-title">如果三个壳能开个会</h2>
+
+  <p>收口前，三个壳各自为政。我们把这次重构想象成一场群聊——看它们怎么达成"以后都听 to_wire 的"这个共识：</p>
+
+  <div class="chat-window" id="chat-module3">
+    <div class="chat-messages">
+      <div class="chat-message" data-msg="0" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire（新广播室）</span>
+          <p>各位，从今天起，事件翻译都来找我。你们别再各写各的了。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="1" data-sender="desktop" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-1)">🖥️</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-1)">桌面</span>
+          <p>我那套翻译写了 280 行……删了它，我的前端会不会崩？用户会不会看出来？</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="2" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>不会。早在我上线那天，就埋了一个对照测试，逐字节证明我翻出来的和你旧的一模一样。前端收到的 JSON 完全相同。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="3" data-sender="web" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-3)">🌐</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-3)">网页</span>
+          <p>我之前偷懒，只翻译了一部分事件。换成你以后，我会收到更多种类的事件，前端能扛住吗？</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="4" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>能。那些"多出来的"事件，桌面一直在发，你俩共用同一套前端代码——它早就会处理了。你反而是白捡了功能，向桌面看齐。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="5" data-sender="cli" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-actor-2)">⌨️</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-actor-2)">命令行</span>
+          <p>等等——我有些特殊设计（截断长输出、专属的启动信号），不能简单换成你。</p>
+        </div>
+      </div>
+      <div class="chat-message" data-msg="6" data-sender="core" style="display:none">
+        <div class="chat-avatar" style="background:var(--color-accent)">📡</div>
+        <div class="chat-bubble">
+          <span class="chat-sender" style="color:var(--color-accent)">to_wire</span>
+          <p>对，你是特例，留着你的类型。但你那些字段的"写法"可以复用我的规范——这样三家的字段值就一致了。细节下个模块讲。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-typing" id="chat-module3-typing" style="display:none">
+      <div class="chat-avatar">📡</div>
+      <div class="chat-typing-dots">
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+      </div>
+    </div>
+
+    <div class="chat-controls">
+      <button class="btn chat-next-btn">下一条</button>
+      <button class="btn chat-all-btn">全部播放</button>
+      <button class="btn chat-reset-btn">重播</button>
+      <span class="chat-progress"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Desktop's delete (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">桌面：一行替换，删掉一整套</h2>
+
+  <p>桌面的搬法干净利落。它的"观察者"原本在每个事件出口调旧翻译函数 <code>agent_event_to_engine_event</code>，现在统统换成 <code>to_wire</code>：</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · chat.rs（改动示意）</span>
+      <pre><code><span class="code-line"><span class="code-comment">// 改之前：调桌面自己那套翻译</span></span>
+<span class="code-line"><span class="code-keyword">if let</span> Some(ev) = <span class="code-function">agent_event_to_engine_event</span>(event) {</span>
+<span class="code-line">  (self.emit)(ev);</span>
+<span class="code-line">}</span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-comment">// 改之后：调全局唯一的 to_wire</span></span>
+<span class="code-line"><span class="code-keyword">if let</span> Some(ev) = protocol::<span class="code-function">to_wire</span>(event) {</span>
+<span class="code-line">  (self.emit)(ev);</span>
+<span class="code-line">}</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">原本：把事件交给桌面自己写的翻译机。</p>
+        <p class="tl">如果翻得出来，就发给前端。</p>
+        <p class="tl"> </p>
+        <p class="tl">现在：把事件交给全世界唯一的翻译机 to_wire。</p>
+        <p class="tl">逻辑一模一样——只是换了翻译机的牌子。</p>
+        <p class="tl">那套 280 行的旧翻译机，从此可以整个删掉。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">🎁</div>
+    <div class="callout-content">
+      <strong class="callout-title">顺手清掉的"僵尸代码"</strong>
+      <p>搬迁过程中还发现两个文件谁都没在用——其中一个甚至依赖另一个早被删掉的文件，<span class="term" data-definition="僵尸代码 / 死代码（dead code）指仓库里留着、但实际从没被调用执行的代码。它不影响运行，但会误导读代码的人，让人以为它还在起作用。">根本编译不过</span>的僵尸。重构常常顺带照出这种积灰角落。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The net result -->
+<div class="screen animate-in">
+  <h2 class="section-title">收口的净效果</h2>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-error)">
+      <div class="pattern-icon" style="background:var(--color-error)">🗑️</div>
+      <h4 class="pattern-title">删掉</h4>
+      <p>桌面 280 行翻译 + 自定义事件类型；网页整个翻译文件；2 个僵尸死文件</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-success)">
+      <div class="pattern-icon" style="background:var(--color-success)">✅</div>
+      <h4 class="pattern-title">留下</h4>
+      <p>一个 <code>to_wire</code>，三个壳共用。改翻译规则，全世界只有一处可改</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-accent)">
+      <div class="pattern-icon" style="background:var(--color-accent)">🎁</div>
+      <h4 class="pattern-title">白捡</h4>
+      <p>网页向桌面看齐，自动收到以前漏掉的 19 种事件，功能更全</p>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🔑</div>
+    <div class="callout-content">
+      <strong class="callout-title">"前端无感"是怎么做到的</strong>
+      <p>因为新翻译 <code>to_wire</code> 吐出的 JSON，和桌面旧翻译<strong>逐字节一致</strong>——这件事在写新翻译那天就用一个测试钉死了。所以删旧的、换新的，前端那边完全不知道发生过什么。这是安全重构的精髓：<strong>先证明等价，再替换。</strong></p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module3">
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="对。网页和桌面共用同一套前端代码，桌面一直在发那些事件，前端早就会处理。网页以前收不到只是因为它的旧翻译偷懒过滤掉了——换成 to_wire 后白捡功能。"
+         data-explanation-wrong="再想想。这些'多出来'的事件并不是新发明的——桌面一直在发，前端代码也一直在处理。网页和桌面共用前端，所以接得住。">
+      <h3 class="quiz-question">网页换成 to_wire 后会收到更多种类的事件。为什么前端不会因此出错？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为网页给每种新事件都现写了处理逻辑</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为浏览器会自动忽略看不懂的事件</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>网页和桌面共用同一套前端代码，桌面一直在发这些事件，前端早就会处理</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="正解。'先证明等价，再替换'——靠那个逐字节对照测试，保证新翻译和旧翻译产出完全相同，所以删旧换新前端毫无感知。这是安全重构最核心的纪律。"
+         data-explanation-wrong="不太对。重构的安全感不是来自'小心翼翼'或'测一测能跑'，而是来自一个能证明'新旧产出完全相同'的硬证据。没有这个证据，再小心也是赌。">
+      <h3 class="quiz-question">桌面删掉旧翻译、换成 to_wire，"前端无感"靠的是什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>改得很小心，没动太多代码</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>一个逐字节对照测试，提前证明新翻译和旧翻译产出完全相同</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>改完跑了一下，没报错</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：为什么命令行<strong>不能</strong>完全统一——一个关于"分寸"的工程判断。</p>
+</div>
+
+</section>

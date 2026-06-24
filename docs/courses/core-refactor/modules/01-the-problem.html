@@ -1,0 +1,205 @@
+<section class="module" id="module-1">
+
+<!-- SCREEN 1: Hero -->
+<div class="screen animate-in">
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[
+      {"label":"agent 大脑里发生了一件事：模型吐出一段文字","highlight":"flow-actor-1"},
+      {"label":"这件事要告诉桌面 App 的屏幕——但桌面有自己的一套翻译","highlight":"flow-actor-2","packet":true,"from":"actor-1","to":"actor-2"},
+      {"label":"同一件事又要告诉命令行——命令行另有一套翻译","highlight":"flow-actor-3","packet":true,"from":"actor-1","to":"actor-3"},
+      {"label":"同一件事还要告诉网页版——网页版第三套翻译","highlight":"flow-actor-4","packet":true,"from":"actor-1","to":"actor-4"},
+      {"label":"三套翻译各写各的，慢慢就对不上了——这就是我们要修的病","highlight":"flow-actor-1"}
+    ]'>
+      <div class="flow-actors">
+        <div class="flow-actor" id="flow-actor-1">
+          <div class="flow-actor-icon" style="background:var(--color-accent)">🧠</div>
+          <span>Agent 大脑</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-2">
+          <div class="flow-actor-icon" style="background:var(--color-actor-1)">🖥️</div>
+          <span>桌面 App</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-3">
+          <div class="flow-actor-icon" style="background:var(--color-actor-2)">⌨️</div>
+          <span>命令行</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-4">
+          <div class="flow-actor-icon" style="background:var(--color-actor-3)">🌐</div>
+          <span>网页版</span>
+        </div>
+      </div>
+      <div class="flow-packet" id="flow-packet"></div>
+      <div class="flow-step-label" id="flow-label">点击 "Next Step" 看问题长什么样</div>
+      <div class="flow-controls">
+        <button class="btn flow-next-btn">Next Step</button>
+        <button class="btn flow-reset-btn">Restart</button>
+        <span class="flow-progress"></span>
+      </div>
+    </div>
+  </div>
+
+  <h1 class="module-title">同一件事，写了三遍</h1>
+  <p class="module-subtitle">Hebbian 有一个 agent 大脑，四个外壳。大脑里发生的每一件事，都要"翻译"成各个外壳能看懂的话。问题是——这套翻译被写了三遍，三遍还慢慢对不上了。</p>
+
+  <p>这门课讲的是一次真实的代码重构：怎么发现"同一件事写了三遍"这个隐患，怎么把它收口成"只写一遍"，以及——怎么证明改完之后什么都没坏。</p>
+
+  <p>你不需要会写代码。你只需要理解一个软件工程里反复出现的核心矛盾：<strong>重复是怎么悄悄变成 bug 的</strong>。理解了它，你就能在指挥 AI 写代码时，提前闻到这种味道。</p>
+</div>
+
+<!-- SCREEN 2: One brain, four shells -->
+<div class="screen animate-in">
+  <h2 class="section-title">一个大脑，四个壳</h2>
+
+  <p>Hebbian 是个 AI <span class="term" data-definition="Agent（智能体）就是一个能自己调用工具、分步骤完成任务的 AI 程序。它不只是回答问题，还能读文件、跑命令、查资料——像一个会动手的助手。">agent</span> 框架。它的设计哲学叫"一套核心、多 <span class="term" data-definition="Surface（表层 / 外壳）指用户实际打交道的那一层界面。同一个程序可以有多个 surface——桌面窗口、命令行、网页，各是一个壳，但底下是同一套逻辑。">surface</span>"：真正干活的逻辑只有一份，放在中间叫 <code>agent-core</code> 的地方；外面套四个不同的壳，让不同的人用不同的方式接触它。</p>
+
+  <div class="icon-rows">
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-1)">🖥️</div>
+      <div>
+        <strong>Desktop（桌面 App）</strong>
+        <p>用 Tauri 做的桌面窗口，普通用户点点点用的图形界面</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-2)">⌨️</div>
+      <div>
+        <strong>heb CLI（命令行）</strong>
+        <p>给 AI 脚本用的纯文字接口，事件一行一行往外吐，方便程序解析</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-3)">🌐</div>
+      <div>
+        <strong>hebweb（网页版）</strong>
+        <p>浏览器里打开的版本，和桌面共用同一套界面代码</p>
+      </div>
+    </div>
+    <div class="icon-row">
+      <div class="icon-circle" style="background:var(--color-actor-4)">💬</div>
+      <div>
+        <strong>channel-gateway（渠道网关）</strong>
+        <p>接微信这类聊天软件，让你在微信里直接和 agent 对话</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🎯</div>
+    <div class="callout-content">
+      <strong class="callout-title">为什么要分壳？</strong>
+      <p>因为不同的人用法不同：你想点窗口，AI 脚本想读纯文本，远程用户想开网页。但他们要的"agent 能力"是同一个。把能力做一份、壳做多个，就不用维护四套 agent。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: The translation problem -->
+<div class="screen animate-in">
+  <h2 class="section-title">麻烦出在"翻译"这一步</h2>
+
+  <p>大脑内部用的是一种"专业语言"——程序员叫它<span class="term" data-definition="领域模型（domain model）是程序内部用来表达业务概念的数据结构。它为了方便内部逻辑处理而设计，往往嵌套很深、类型很严格，不一定适合直接发给外面。">领域模型</span>，强类型、嵌套深，方便内部逻辑处理。但屏幕、命令行、网页这些壳看不懂这种语言，需要先翻译成它们各自能消费的"大白话"。</p>
+
+  <p>这层翻译本身是合理的。问题是——它被<strong>分别写了三遍</strong>：桌面写了一套，命令行写了一套，网页又写了一套。</p>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-1)">
+      <div class="pattern-icon" style="background:var(--color-actor-1)">🖥️</div>
+      <h4 class="pattern-title">桌面那套翻译</h4>
+      <p>把内部事件翻成 <code>EngineEvent</code>，丢了 token 用量字段</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-2)">
+      <div class="pattern-icon" style="background:var(--color-actor-2)">⌨️</div>
+      <h4 class="pattern-title">命令行那套翻译</h4>
+      <p>翻成 <code>DaemonEvent</code>，把工具结果截断到 500 字</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-3)">
+      <div class="pattern-icon" style="background:var(--color-actor-3)">🌐</div>
+      <h4 class="pattern-title">网页那套翻译</h4>
+      <p>翻成另一个 <code>EngineEvent</code>，"失败"事件翻成了不同的名字</p>
+    </div>
+  </div>
+
+  <div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-content">
+      <strong class="callout-title">这就是 bug 的温床</strong>
+      <p>三套翻译各写各的，今天有人给桌面加个字段，忘了同步给另外两套——三个壳收到的"同一件事"就长得不一样了。用户在桌面看到的和网页看到的对不上，排查起来还特别难，因为你得同时盯三个地方。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The DRY insight -->
+<div class="screen animate-in">
+  <h2 class="section-title">一个古老的工程原则</h2>
+
+  <p>这种"同一件事写多遍，迟早对不上"的隐患，工程师太熟悉了，专门给它起了个名字叫 <span class="term" data-definition="DRY = Don&apos;t Repeat Yourself（不要重复自己）。软件工程核心原则之一：同一份知识/逻辑只应该有一个权威来源。复制粘贴出来的多份副本迟早会各自演化、互相矛盾。">DRY 原则</span>——Don't Repeat Yourself，别重复你自己。</p>
+
+  <p>核心思想很朴素：<strong>同一份逻辑，世界上只应该存在一份权威版本。</strong>需要它的地方都去引用那一份，而不是各自抄一份。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">💡</div>
+    <div class="callout-content">
+      <strong class="callout-title">为什么这对你（指挥 AI 的人）重要</strong>
+      <p>当你让 AI 加功能时，它经常图省事——"复制一份现成的改改"。短期看很快，长期看你就攒了三份会互相矛盾的副本。学会闻到这种味道，你就能对 AI 说："别复制，抽出来做成共享的一份。"这一句话，就是高级工程师和新手的区别。</p>
+    </div>
+  </div>
+
+  <p>接下来四个模块，我们看 Hebbian 是怎么把"三遍翻译"收口成"一遍"的——以及为什么有一个壳，<strong>故意</strong>没有完全统一。</p>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module1">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="正是如此。重复本身不是 bug，但它是 bug 的温床——三份副本会各自演化，迟早对不上。真正的风险是'改了一份忘了改其他份'。"
+         data-explanation-wrong="再想想。这三套翻译现在可能都是对的，能跑通。问题不在'现在'，而在'未来'——当有人改其中一份时。">
+      <h3 class="quiz-question">"同一件事写了三遍"最大的风险是什么？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>代码变多了，占用更多硬盘空间</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>将来有人改其中一份、忘了改另外两份，三个壳就对不上了</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>程序会跑得更慢</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-c"
+         data-explanation-right="对。'一套核心、多 surface'的精髓就是：能力只做一份（agent-core），壳做多个。这样加新功能只需改一处，四个壳自动受益。"
+         data-explanation-wrong="不太对。Hebbian 刻意不让每个壳各自实现 agent 能力——那又会变成重复。壳只负责'翻译输入、渲染输出'，真正的能力在中间那一份核心里。">
+      <h3 class="quiz-question">如果你要给 Hebbian 加个新的 agent 能力，理想情况下应该改几个地方？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>四个壳各改一遍，共四处</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>桌面和网页改，命令行不用</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>只改中间那一份核心（agent-core），四个壳自动受益</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：那份"唯一的翻译"长什么样——认识 <code>WireEvent</code>。</p>
+</div>
+
+</section>

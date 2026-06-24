@@ -59,6 +59,8 @@ pub struct ServerState {
     /// 复用 desktop 同一个业务 facade。CoreClient trait 暴露的 25+ 方法
     /// 直接可用——无需 hebweb 自己再 wrap 一遍 storage / model_gateway API。
     pub core: Arc<LocalCoreClient>,
+    /// 旁支对话内存状态（与 desktop 共用 agent_core::branch 的 BranchEngine）。
+    pub branches: Arc<agent_core::branch::BranchState>,
 }
 
 impl ServerState {
@@ -76,6 +78,7 @@ impl ServerState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             permission_store,
             core,
+            branches: Arc::new(agent_core::branch::BranchState::new()),
         }
     }
 
@@ -122,7 +125,7 @@ impl ServerState {
         tokio::spawn(async move {
             while let Some(text) = input_rx.recv().await {
                 if let Err(e) = run_turn(rt_for_loop.clone(), text).await {
-                    rt_for_loop.emit_engine_event(crate::events::EngineEvent::Error {
+                    rt_for_loop.emit_engine_event(protocol::WireEvent::Error {
                         message: e.to_string(),
                     });
                 }
@@ -300,6 +303,84 @@ async fn dispatch_invoke(
             .await
             .map(|_| None),
         "cancel_message" => cmd_cancel_message(state, session_id).await.map(|_| None),
+        // 旁支对话（与 desktop 共用 agent_core::branch；事件经绑定主对话的 WS 推送）
+        "branch_create" => cmd_branch_create(state, args).await.map(Some),
+        "branch_send" => cmd_branch_send(state, args).await.map(Some),
+        "branch_discard" => {
+            cmd_branch_discard(state, args);
+            Ok(None)
+        }
+        "branch_cancel" => {
+            cmd_branch_cancel(state, args);
+            Ok(None)
+        }
+        // parity：subagent / mcp / hooks / skill_collection / plugin（全委托 state.core）
+        "list_subagents" => cmd_list_subagents(state, args).await.map(Some),
+        "get_subagent" => cmd_get_subagent(state, args).await.map(Some),
+        "save_subagent" => cmd_save_subagent(state, args).await.map(|_| None),
+        "delete_subagent" => cmd_delete_subagent(state, args).await.map(|_| None),
+        "set_subagent_enabled" => cmd_set_subagent_enabled(state, args).await.map(|_| None),
+        "load_subagent_run" => cmd_load_subagent_run(state, args).await.map(Some),
+        "get_mcp_config" => cmd_get_mcp_config(state).await.map(Some),
+        "save_mcp_config" => cmd_save_mcp_config(state, args).await.map(|_| None),
+        "discover_mcp_tools" => cmd_discover_mcp_tools(state).await.map(Some),
+        "get_hooks_raw" => cmd_get_hooks_raw(state).await.map(Some),
+        "save_hooks_raw" => cmd_save_hooks_raw(state, args).await.map(|_| None),
+        "list_skill_collections" => cmd_list_skill_collections(state).await.map(Some),
+        "delete_skill_collection" => cmd_delete_skill_collection(state, args).await.map(Some),
+        "plugin_marketplace_add" => cmd_plugin_marketplace_add(state, args).await.map(Some),
+        "plugin_marketplace_list" => cmd_plugin_marketplace_list(state).await.map(Some),
+        "plugin_marketplace_list_plugins" => {
+            cmd_plugin_marketplace_list_plugins(state, args).await.map(Some)
+        }
+        "plugin_marketplace_remove" => cmd_plugin_marketplace_remove(state, args).await.map(|_| None),
+        "plugin_install" => cmd_plugin_install(state, args).await.map(Some),
+        "plugin_uninstall" => cmd_plugin_uninstall(state, args).await.map(|_| None),
+        "plugin_list" => cmd_plugin_list(state).await.map(Some),
+        // parity：goal / todos / plan / model_io / import / 杂项（直接读 agent_core::storage）
+        "list_todos" => cmd_list_todos(state, args).await.map(Some),
+        "get_active_goal" => cmd_get_active_goal(state, args).await.map(Some),
+        "set_active_goal" => cmd_set_active_goal(state, args).await.map(|_| None),
+        "clear_active_goal" => cmd_clear_active_goal(state, args).await.map(|_| None),
+        "undo_compaction" => cmd_undo_compaction(state, args).await.map(Some),
+        "list_session_plans" => cmd_list_session_plans(state, args).await.map(Some),
+        "read_plan_markdown" => cmd_read_plan_markdown(state, args).await.map(Some),
+        "update_plan_markdown" => cmd_update_plan_markdown(state, args).await.map(|_| None),
+        "list_plan_comments" => cmd_list_plan_comments(state, args).await.map(Some),
+        "add_plan_comment" => cmd_add_plan_comment(state, args).await.map(Some),
+        "read_skill_md" => cmd_read_skill_md(state, args).await.map(Some),
+        "import_project_file" => cmd_import_project_file(state, args).await.map(Some),
+        "switch_provider_model" => cmd_switch_provider_model(state, args).await.map(Some),
+        "fetch_provider_usage" => cmd_fetch_provider_usage(state, args).await.map(Some),
+        "export_session_to_claude" => cmd_export_session_to_claude(state, args).await.map(Some),
+        "discover_all_rules" => cmd_discover_all_rules(state, args).await.map(Some),
+        // parity：路径访问审批 / 粘贴拖拽 / payload 预览（与 desktop 同实现，委托 agent_core）
+        "approve_path_access" => cmd_approve_path_access(state, args, session_id)
+            .await
+            .map(|_| None),
+        "attach_path" => cmd_attach_path(args).await.map(Some),
+        "drop_paths" => cmd_drop_paths(args).await.map(Some),
+        "preview_session_payload" => cmd_preview_session_payload(state, args).await.map(Some),
+        // parity：OAuth / deepseek 登录 / 日志（纯 model_gateway::auth + fs，浏览器 surface 天然支持）
+        "oauth_codex_start" => cmd_oauth_codex_start().await.map(Some),
+        "oauth_codex_poll" => cmd_oauth_codex_poll(args).await.map(Some),
+        "oauth_codex_refresh" => cmd_oauth_codex_refresh(args).await.map(Some),
+        "oauth_openai_start" => cmd_oauth_openai_start().await.map(Some),
+        "oauth_openai_exchange" => cmd_oauth_openai_exchange(args).await.map(Some),
+        "oauth_claude_start" => cmd_oauth_claude_start().await.map(Some),
+        "oauth_claude_exchange" => cmd_oauth_claude_exchange(args).await.map(Some),
+        "oauth_claude_refresh" => cmd_oauth_claude_refresh(args).await.map(Some),
+        "oauth_claude_code_import" => cmd_oauth_claude_code_import().await.map(Some),
+        "oauth_gemini_start" => cmd_oauth_gemini_start().await.map(Some),
+        "oauth_gemini_exchange" => cmd_oauth_gemini_exchange(args).await.map(Some),
+        "oauth_gemini_refresh" => cmd_oauth_gemini_refresh(args).await.map(Some),
+        "oauth_gemini_cli_import" => cmd_oauth_gemini_cli_import().await.map(Some),
+        "deepseek_login" => cmd_deepseek_login(args).await.map(Some),
+        "read_log_file" => cmd_read_log_file().await.map(Some),
+        "list_claude_sessions" => cmd_list_claude_sessions(state).await.map(Some),
+        "import_claude_session" => cmd_import_claude_session(state, args).await.map(Some),
+        "import_vscode_project" => cmd_import_vscode_project(state, args).await.map(Some),
+        "refresh_models_catalog" => cmd_refresh_models_catalog(state).await.map(Some),
         // 前端 init 必需的只读命令（直接读 ~/.hebbian/ 文件）
         "get_providers" => cmd_get_providers(state).await.map(Some),
         "list_provider_presets" => cmd_list_provider_presets().await.map(Some),
@@ -475,6 +556,91 @@ async fn cmd_send_message(
     // 此刻清理 sessionStreams 槽是安全的；否则 ws 推来的 permission_requested
     // 会因槽已被清而被丢弃，popup 渲染不出来。
     run_turn(runtime, text).await
+}
+
+// ─── 旁支对话（branch）────────────────────────────────────────────────────────
+//
+// 业务逻辑全在 agent_core::branch::BranchEngine（与 desktop 同一份）。hebweb 这层只做：
+// 解析 args、用 ServerState 的 data_dir + 共享 BranchState 组装 engine、把引擎产出的
+// WireEvent 经绑定主对话的 WS 广播推给订阅者（前端按 session_id 收 engine-event）。
+
+fn branch_engine(state: &ServerState) -> agent_core::branch::BranchEngine {
+    agent_core::branch::BranchEngine::with_state(state.data_dir.clone(), state.branches.clone())
+}
+
+async fn cmd_branch_create(state: &ServerState, args: Value) -> Result<Value> {
+    let session_id = args
+        .get("sessionId")
+        .or_else(|| args.get("session_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?
+        .to_string();
+    let up_to = args
+        .get("upToMessageId")
+        .or_else(|| args.get("up_to_message_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let info = branch_engine(state)
+        .create(session_id, up_to)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(info)?)
+}
+
+fn cmd_branch_discard(state: &ServerState, args: Value) {
+    if let Some(branch_id) = args.get("branchId").or_else(|| args.get("branch_id")).and_then(|v| v.as_str()) {
+        state.branches.discard(branch_id);
+    }
+}
+
+fn cmd_branch_cancel(state: &ServerState, args: Value) {
+    if let Some(branch_id) = args.get("branchId").or_else(|| args.get("branch_id")).and_then(|v| v.as_str()) {
+        state.branches.cancel(branch_id);
+    }
+}
+
+async fn cmd_branch_send(state: &ServerState, args: Value) -> Result<Value> {
+    let branch_id = args
+        .get("branchId")
+        .or_else(|| args.get("branch_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing `branchId`"))?
+        .to_string();
+    let content = pick_text(&args)?;
+    let attachments = args
+        .get("attachments")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let provider_id = args
+        .get("providerId")
+        .or_else(|| args.get("provider_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let model = args.get("model").and_then(|v| v.as_str()).map(str::to_string);
+
+    // 事件出口：把 WireEvent 经绑定主对话的 WS 广播推给前端（与主对话 engine-event 同通道）。
+    // branch_id 形如 "branch-<sid>"——但事件要落到绑定的主对话 session 上，故先建 create 时
+    // 已记住绑定关系；这里取 send 返回前需要的 bound session 由引擎内部持有，事件路由用
+    // bound_session_id。前端 subscribe 的是主对话 session_id，故这里需要拿到它。
+    let bound_session_id = state
+        .branches
+        .bound_session_of(&branch_id)
+        .ok_or_else(|| anyhow!("这条旁支对话已经关掉了"))?;
+    let runtime = state.ensure_runtime(&bound_session_id).await?;
+    let emit = move |wire: protocol::WireEvent| {
+        if let Ok(payload) = serde_json::to_value(&wire) {
+            runtime.broadcast(crate::protocol::WsServerMessage::Event {
+                session_id: bound_session_id.clone(),
+                name: "engine-event".to_string(),
+                payload,
+            });
+        }
+    };
+
+    let assistant = branch_engine(state)
+        .send(branch_id, content, attachments, provider_id, model, emit)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(assistant)?)
 }
 
 async fn cmd_inject_user_message(
@@ -1475,6 +1641,845 @@ fn _force_ordering_import(_: Ordering) {}
 // hebweb 是独立的 surface，所有命令都自己实现。未镜像的（OAuth / Edits / preview_payload
 // 等）按需照 desktop 实现照搬过来。
 
+// ─── parity 补齐：subagent / mcp / hooks / skill_collection / plugin ──────────
+// 全部委托 state.core（与 desktop 共用同一 LocalCoreClient facade），hebweb 只做参数解析。
+
+// ─── parity 补齐：goal / todos / plan / model_io / 杂项（直接读 agent_core::storage 纯函数）─
+// 与 desktop lib.rs 同名命令同实现，只是入口从 Tauri command 换成 WS dispatch。
+
+async fn cmd_list_todos(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(session.todos)?)
+}
+
+async fn cmd_get_active_goal(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(session.active_goal)?)
+}
+
+async fn cmd_set_active_goal(state: &ServerState, args: Value) -> Result<()> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let condition = arg_str(&args, &["condition"]).ok_or_else(|| anyhow!("missing `condition`"))?;
+    let goal = sessions_store::ActiveGoal {
+        condition: condition.clone(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        iterations: 0,
+        last_reason: None,
+    };
+    sessions_store::set_active_goal(&state.data_dir, &sid, Some(goal)).map_err(|e| anyhow!("{e}"))?;
+    let marker = sessions_store::Message {
+        id: sessions_store::new_id(),
+        role: sessions_store::Role::Marker,
+        content: String::new(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: Some(sessions_store::MessageMeta::GoalOutcome {
+            kind: "set".to_string(),
+            condition,
+            reason: String::new(),
+            iteration: 0,
+        }),
+        subagent_call_id: None,
+        run_duration_ms: None,
+    };
+    sessions_store::append_message(&state.data_dir, &sid, marker).map_err(|e| anyhow!("{e}"))?;
+    Ok(())
+}
+
+async fn cmd_clear_active_goal(state: &ServerState, args: Value) -> Result<()> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    sessions_store::set_active_goal(&state.data_dir, &sid, None)
+        .map(|_| ())
+        .map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_undo_compaction(state: &ServerState, args: Value) -> Result<Value> {
+    let id = arg_str(&args, &["id", "sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `id`"))?;
+    let marker_id = arg_str(&args, &["markerId", "marker_id"]).ok_or_else(|| anyhow!("missing `markerId`"))?;
+    let s = sessions_store::undo_compaction(&state.data_dir, &id, &marker_id).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(s)?)
+}
+
+async fn cmd_list_session_plans(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    let active = session.active_plan.clone();
+    let dir = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid);
+    if !dir.exists() {
+        return Ok(json!([]));
+    }
+    let mut out: Vec<Value> = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let plan_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        if plan_id.is_empty() {
+            continue;
+        }
+        let updated_at_ms = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let title = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.lines().next().map(|l| l.trim_start_matches('#').trim().to_string()))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| plan_id.clone());
+        let plan_path_str = path.display().to_string();
+        let is_active = active.as_deref() == Some(plan_path_str.as_str());
+        out.push(json!({
+            "plan_id": plan_id,
+            "plan_path": plan_path_str,
+            "title": title,
+            "updated_at_ms": updated_at_ms,
+            "is_active": is_active,
+        }));
+    }
+    out.sort_by(|a, b| b["updated_at_ms"].as_i64().cmp(&a["updated_at_ms"].as_i64()));
+    Ok(Value::Array(out))
+}
+
+async fn cmd_read_plan_markdown(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    let path = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid)
+        .join(format!("{plan_id}.md"));
+    let bytes = agent_core::storage::lock::read_locked(&path).map_err(|e| anyhow!("{e}"))?;
+    Ok(Value::String(String::from_utf8_lossy(&bytes).to_string()))
+}
+
+async fn cmd_update_plan_markdown(state: &ServerState, args: Value) -> Result<()> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let markdown = arg_str(&args, &["markdown"]).ok_or_else(|| anyhow!("missing `markdown`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    let path = agent_core::storage::plans::dir_for_session(&state.data_dir, session.workdir.as_deref(), &sid)
+        .join(format!("{plan_id}.md"));
+    agent_core::storage::lock::write_atomic(&path, markdown.as_bytes()).map_err(|e| anyhow!("{e}"))?;
+    Ok(())
+}
+
+async fn cmd_list_plan_comments(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    let comments = agent_core::storage::plan_comments::list_comments(
+        &state.data_dir,
+        session.workdir.as_deref(),
+        &sid,
+        &plan_id,
+    )
+    .map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(comments)?)
+}
+
+async fn cmd_list_claude_sessions(_state: &ServerState) -> Result<Value> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("找不到用户主目录"))?;
+    let dir = home.join(".claude").join("projects");
+    let list = agent_core::storage::import_claude::list_importable(&dir).map_err(|e| anyhow!("{e}"))?;
+    let out: Vec<Value> = list
+        .into_iter()
+        .map(|i| {
+            json!({
+                "path": i.path.to_string_lossy(),
+                "uuid": i.uuid,
+                "title": i.title,
+                "cwd": i.cwd,
+                "message_count": i.message_count,
+                "modified_ms": i.modified_ms,
+            })
+        })
+        .collect();
+    Ok(Value::Array(out))
+}
+
+async fn cmd_import_claude_session(state: &ServerState, args: Value) -> Result<Value> {
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let project_id = arg_str(&args, &["projectId", "project_id"]);
+    let workdir = arg_str(&args, &["workdir"]);
+    let content = std::fs::read_to_string(&path).map_err(|e| anyhow!("读取失败：{e}"))?;
+    let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content).map_err(|e| anyhow!("{e}"))?;
+    let session_workdir = workdir.map(std::path::PathBuf::from).or(parsed.workdir);
+    let mut session = sessions_store::create_with_workspace(
+        &state.data_dir,
+        String::new(),
+        parsed.model,
+        None,
+        None,
+        "claude".into(),
+        project_id,
+        session_workdir,
+        Vec::new(),
+    )
+    .map_err(|e| anyhow!("{e}"))?;
+    session.title = parsed.title;
+    session.messages = parsed.messages;
+    let saved = sessions_store::save(&state.data_dir, session).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(saved)?)
+}
+
+async fn cmd_import_vscode_project(state: &ServerState, args: Value) -> Result<Value> {
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let name = arg_str(&args, &["name"]);
+    let content = std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}"))?;
+    let project = agent_core::storage::projects::import_vscode_workspace(
+        &state.data_dir,
+        &content,
+        name,
+        Some(std::path::Path::new(&path)),
+    )
+    .map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(project)?)
+}
+
+async fn cmd_refresh_models_catalog(state: &ServerState) -> Result<Value> {
+    let updated = agent_core::storage::models_catalog::refresh_catalog(&state.data_dir).await;
+    Ok(Value::Bool(updated))
+}
+
+async fn cmd_add_plan_comment(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let plan_id = arg_str(&args, &["planId", "plan_id"]).ok_or_else(|| anyhow!("missing `planId`"))?;
+    let anchor = arg_str(&args, &["anchor"]).unwrap_or_default();
+    let body = arg_str(&args, &["body"]).ok_or_else(|| anyhow!("missing `body`"))?;
+    let session = sessions_store::load(&state.data_dir, &sid).map_err(|e| anyhow!("{e}"))?;
+    let comment = protocol::todo::PlanComment {
+        id: format!("pc-{}", sessions_store::new_id()),
+        plan_id: plan_id.clone(),
+        anchor,
+        body,
+        created_at_ms: 0,
+        consumed: false,
+    };
+    let saved = agent_core::storage::plan_comments::append_comment(
+        &state.data_dir,
+        session.workdir.as_deref(),
+        &sid,
+        &plan_id,
+        comment,
+    )
+    .map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(saved)?)
+}
+
+async fn cmd_read_skill_md(_state: &ServerState, args: Value) -> Result<Value> {
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let p = std::path::Path::new(&path);
+    let is_skill = p.file_name().map(|n| n == std::ffi::OsStr::new("SKILL.md")).unwrap_or(false);
+    if !is_skill {
+        return Err(anyhow!("仅允许读取 SKILL.md 文件"));
+    }
+    let content = std::fs::read_to_string(p).map_err(|e| anyhow!("读取 {} 失败：{e}", p.display()))?;
+    Ok(Value::String(content))
+}
+
+async fn cmd_import_project_file(state: &ServerState, args: Value) -> Result<Value> {
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}"))?;
+    let project: projects_store::WorkspaceProject =
+        serde_json::from_str(&content).map_err(|e| anyhow!("解析项目文件失败：{e}"))?;
+    let workdir = project.workdir().cloned().unwrap_or_default();
+    let allowed_paths = project.allowed_paths();
+    let input = projects_store::WorkspaceProjectInput {
+        id: Some(project.id.clone()),
+        name: project.name.clone(),
+        workdir,
+        allowed_paths,
+        source: project.source.clone(),
+    };
+    let saved = state.core.save_project(input).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(saved)?)
+}
+
+async fn cmd_switch_provider_model(state: &ServerState, args: Value) -> Result<Value> {
+    let id = arg_str(&args, &["id", "sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `id`"))?;
+    let new_provider_id = arg_str(&args, &["newProviderId", "new_provider_id"]).ok_or_else(|| anyhow!("missing `newProviderId`"))?;
+    let new_model = arg_str(&args, &["newModel", "new_model"]).ok_or_else(|| anyhow!("missing `newModel`"))?;
+    let dd = &state.data_dir;
+    let cur = sessions_store::load(dd, &id).map_err(|e| anyhow!("{e}"))?;
+    let cur_provider = model_gateway::config::get(dd, &cur.provider_id).ok();
+    let new_provider = model_gateway::config::get(dd, &new_provider_id).ok();
+    let from_provider = cur_provider.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| cur.provider_id.clone());
+    let to_provider = new_provider.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| new_provider_id.clone());
+    if cur.provider_id == new_provider_id && cur.model == new_model {
+        return Ok(serde_json::to_value(cur)?);
+    }
+    // 模型系列锁定：有真实对话后 DeepSeek 与其他系列不可互切（web 编码与协议不同）。
+    let has_real_turn = cur
+        .messages
+        .iter()
+        .any(|m| matches!(m.role, sessions_store::Role::User | sessions_store::Role::Assistant));
+    if has_real_turn {
+        if let (Some(c), Some(n)) = (cur_provider.as_ref(), new_provider.as_ref()) {
+            let cur_ds = matches!(c.kind, model_gateway::config::ProviderKind::Deepseek);
+            let new_ds = matches!(n.kind, model_gateway::config::ProviderKind::Deepseek);
+            if cur_ds != new_ds {
+                return Err(anyhow!("本会话已锁定模型系列：DeepSeek 与其他模型之间不可互相切换，请新建会话。"));
+            }
+        }
+    }
+    let meta = sessions_store::MessageMeta::Switch {
+        from_provider,
+        from_model: cur.model.clone(),
+        to_provider,
+        to_model: new_model.clone(),
+    };
+    sessions_store::insert_switch_marker(dd, &id, meta).map_err(|e| anyhow!("{e}"))?;
+    let mut updated = sessions_store::load(dd, &id).map_err(|e| anyhow!("{e}"))?;
+    updated.provider_id = new_provider_id;
+    updated.model = new_model;
+    let supports = common::reasoning::anthropic_supports_thinking(&updated.model)
+        || common::reasoning::openai_supports_reasoning(&updated.model);
+    if supports {
+        if updated.reasoning.is_none() {
+            updated.reasoning = Some(common::ReasoningConfig {
+                enabled: Some(true),
+                effort: Some(common::ReasoningEffort::Extra),
+                long_context: None,
+            });
+        }
+    } else {
+        updated.reasoning = None;
+    }
+    let saved = sessions_store::save(dd, updated).map_err(|e| anyhow!("{e}"))?;
+    Ok(serde_json::to_value(saved)?)
+}
+
+async fn cmd_fetch_provider_usage(state: &ServerState, args: Value) -> Result<Value> {
+    use model_gateway::config::AuthMode;
+    let provider_id = arg_str(&args, &["providerId", "provider_id"]).ok_or_else(|| anyhow!("missing `providerId`"))?;
+    let dir = &state.data_dir;
+    let file = model_gateway::config::load(dir).map_err(|e| anyhow!("read providers: {e}"))?;
+    let provider = file
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
+    if provider.auth_mode == AuthMode::OauthClaudeCode {
+        let provider = model_gateway::auth::refresh::ensure_fresh_provider_token(dir, provider.clone())
+            .await
+            .map_err(|e| anyhow!("refresh token: {e}"))?;
+        let info = model_gateway::usage::fetch_claude_usage(&provider.api_key)
+            .await
+            .map_err(|e| anyhow!("fetch claude usage: {e}"))?;
+        return Ok(json!({ "kind": "claude", "info": info }));
+    }
+    if provider.base_url.contains("api.deepseek.com") {
+        let balances = model_gateway::usage::fetch_deepseek_balance(&provider.api_key)
+            .await
+            .map_err(|e| anyhow!("fetch deepseek balance: {e}"))?;
+        return Ok(json!({ "kind": "deepseek", "balances": balances }));
+    }
+    Ok(json!({ "kind": "unsupported" }))
+}
+
+async fn cmd_export_session_to_claude(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let include_thinking = args.get("includeThinking").or_else(|| args.get("include_thinking")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("找不到用户主目录"))?;
+    let export = agent_core::storage::export_claude::build_claude_resume(&state.data_dir, &sid, include_thinking, &home)
+        .map_err(|e| anyhow!("{e}"))?;
+    let dir = home.join(".claude").join("projects").join(&export.dir_name);
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("创建目录失败：{e}"))?;
+    let path = dir.join(format!("{}.jsonl", export.session_uuid));
+    std::fs::write(&path, export.lines.join("\n")).map_err(|e| anyhow!("写入失败：{e}"))?;
+    let resume_command = format!("cd {} && claude --resume {}", shell_quote_min(&export.cwd), export.session_uuid);
+    Ok(json!({
+        "resume_command": resume_command,
+        "session_uuid": export.session_uuid,
+        "path": path.to_string_lossy(),
+    }))
+}
+
+/// 最小 shell 引用：路径含空格 / 特殊字符时用单引号包裹。
+fn shell_quote_min(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '/' | '.' | '_' | '-')) {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    } else {
+        s.to_string()
+    }
+}
+
+async fn cmd_discover_all_rules(_state: &ServerState, args: Value) -> Result<Value> {
+    use agent_core::rules::{RuleFileInfo, RuleSource};
+    let workdir = arg_str(&args, &["workdir"]).map(std::path::PathBuf::from);
+    let allowed_paths: Vec<std::path::PathBuf> = args
+        .get("allowedPaths")
+        .or_else(|| args.get("allowed_paths"))
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(std::path::PathBuf::from)).collect())
+        .unwrap_or_default();
+    let mut out: Vec<RuleFileInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for g in agent_core::rules::default_global_rules() {
+        if !g.exists() {
+            continue;
+        }
+        let key = g.display().to_string();
+        if seen.insert(key.clone()) {
+            out.push(RuleFileInfo { path: key, source: RuleSource::Global });
+        }
+    }
+    if let Some(wd) = workdir {
+        for f in agent_core::rules::discover(&wd, &allowed_paths) {
+            let key = f.path.display().to_string();
+            if seen.insert(key.clone()) {
+                out.push(RuleFileInfo { path: key, source: f.source });
+            }
+        }
+    }
+    Ok(serde_json::to_value(out)?)
+}
+
+/// 路径访问审批：按 scope 落 storage（this_session→session.allowed_paths /
+/// global→settings.conversation.allowed_paths / this_project,once→不持久化），
+/// 再把 ApprovalDecision 投回 run 的 pending_approvals oneshot（与 cmd_approve_permission 同链路）。
+async fn cmd_approve_path_access(
+    state: &ServerState,
+    args: Value,
+    session_id: Option<String>,
+) -> Result<()> {
+    let request_id =
+        arg_str(&args, &["requestId", "request_id"]).ok_or_else(|| anyhow!("missing `requestId`"))?;
+    let scope = arg_str(&args, &["scope"]).ok_or_else(|| anyhow!("missing `scope`"))?;
+    let paths: Vec<PathBuf> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(PathBuf::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // scope 命名（与 desktop 同步）：
+    //   once          → 仅本次，不持久化
+    //   this_session  → 仅当前对话（写 session.allowed_paths）
+    //   this_project  → 当前 workdir 所有对话（PermissionStore Project FilePath 规则，由 run 在 AllowAndRemember 时落）
+    //   global        → 任意对话（写 settings.conversation.allowed_paths）
+    let decision = match scope.as_str() {
+        "this_session" => {
+            let sid = session_id
+                .clone()
+                .ok_or_else(|| anyhow!("approve_path_access: this_session 需要 sessionId"))?;
+            sessions_store::update_meta(&state.data_dir, &sid, |s| {
+                let mut existing = s.allowed_paths.take().unwrap_or_default();
+                for p in &paths {
+                    if !existing.iter().any(|path| path == p) {
+                        existing.push(p.clone());
+                    }
+                }
+                s.allowed_paths = Some(existing);
+                Ok(())
+            })
+            .map_err(|e| anyhow!("{e}"))?;
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Session,
+                pattern: None,
+                extra_patterns: Vec::new(),
+            }
+        }
+        "global" => {
+            let mut settings = settings_store::load(&state.data_dir);
+            for p in &paths {
+                if !settings
+                    .conversation
+                    .allowed_paths
+                    .iter()
+                    .any(|path| path == p)
+                {
+                    settings.conversation.allowed_paths.push(p.clone());
+                }
+            }
+            settings_store::save(&state.data_dir, &settings).map_err(|e| anyhow!("{e}"))?;
+            ApprovalDecision::AllowAndRemember {
+                scope: PermissionScope::Global,
+                pattern: None,
+                extra_patterns: Vec::new(),
+            }
+        }
+        "this_project" => ApprovalDecision::AllowAndRemember {
+            scope: PermissionScope::Project,
+            pattern: None,
+            extra_patterns: Vec::new(),
+        },
+        "once" => ApprovalDecision::AllowOnce,
+        other => return Err(anyhow!("未知 scope: {other}")),
+    };
+
+    let sid = need_session(session_id)?;
+    info!(
+        session_id = %sid,
+        request_id = %request_id,
+        scope = %scope,
+        "permission.approval: web backend received path approval"
+    );
+    let runtime = state.ensure_runtime(&sid).await?;
+    let tx = runtime
+        .pending_approvals
+        .lock()
+        .unwrap()
+        .remove(&request_id);
+    match tx {
+        Some(tx) => {
+            let _ = tx.send(decision);
+            Ok(())
+        }
+        None => Err(anyhow!("unknown request_id: {request_id}")),
+    }
+}
+
+/// 探测单条粘贴路径形态（file/dir/missing）。委托 agent_core::attach（与 desktop 同实现）。
+async fn cmd_attach_path(args: Value) -> Result<Value> {
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    Ok(serde_json::to_value(agent_core::attach::attach_path(&path))?)
+}
+
+/// 批量分流拖拽路径（小图片/文本读成附件，其余引用）。委托 agent_core::attach。
+async fn cmd_drop_paths(args: Value) -> Result<Value> {
+    let paths: Vec<String> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_value(agent_core::attach::drop_paths(paths))?)
+}
+
+/// 「显示原始 JSON」预览：复刻 agent_loop 进入模型前的拼装，不发请求不改 session。
+/// 委托 agent_core::preview_payload（与 desktop 同实现）。
+async fn cmd_preview_session_payload(state: &ServerState, args: Value) -> Result<Value> {
+    let sid = arg_str(&args, &["sessionId", "session_id"])
+        .ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let upto = arg_str(&args, &["uptoMessageId", "upto_message_id"]);
+    agent_core::preview_payload::build_preview_payload(&state.data_dir, &sid, upto.as_deref())
+        .await
+        .map_err(|e| anyhow!("{e}"))
+}
+
+// ─── parity 补齐：OAuth 登录 / deepseek 登录 / 日志（纯 model_gateway::auth + fs，无 Tauri）─
+//
+// OAuth 全链路（start 取授权 URL / device code、exchange 用 code 换 token、refresh 刷新、
+// import 读本机 CLI 凭证）都在 model_gateway::auth，纯 reqwest 实现，零 Tauri 依赖。
+// 浏览器 surface 里 OAuth 反而更自然——前端本就在浏览器，能直接跳转授权页 + 回调拿 code。
+// desktop 只是借 Tauri shell 打开系统浏览器，那层壳与登录逻辑无关。
+
+async fn cmd_oauth_codex_start() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::codex_start().await.map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_codex_poll(args: Value) -> Result<Value> {
+    let device_code =
+        arg_str(&args, &["deviceCode", "device_code"]).ok_or_else(|| anyhow!("missing `deviceCode`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::codex_poll(&device_code)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_codex_refresh(args: Value) -> Result<Value> {
+    let refresh_token = arg_str(&args, &["refreshToken", "refresh_token"])
+        .ok_or_else(|| anyhow!("missing `refreshToken`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::codex_refresh(&refresh_token)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_openai_start() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::openai_oauth_start().map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_openai_exchange(args: Value) -> Result<Value> {
+    let session_id =
+        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
+    let state = arg_str(&args, &["state"]);
+    Ok(serde_json::to_value(
+        model_gateway::auth::openai_oauth_exchange(&session_id, &code, state.as_deref())
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_claude_start() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::claude_oauth_start().map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_claude_exchange(args: Value) -> Result<Value> {
+    let session_id =
+        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::claude_oauth_exchange(&session_id, &code)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_claude_refresh(args: Value) -> Result<Value> {
+    let refresh_token = arg_str(&args, &["refreshToken", "refresh_token"])
+        .ok_or_else(|| anyhow!("missing `refreshToken`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::claude_oauth_refresh(&refresh_token)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_claude_code_import() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::claude_code_import()
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_gemini_start() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::gemini_oauth_start().map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_gemini_exchange(args: Value) -> Result<Value> {
+    let session_id =
+        arg_str(&args, &["sessionId", "session_id"]).ok_or_else(|| anyhow!("missing `sessionId`"))?;
+    let code = arg_str(&args, &["code"]).ok_or_else(|| anyhow!("missing `code`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::gemini_oauth_exchange(&session_id, &code)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_gemini_refresh(args: Value) -> Result<Value> {
+    let refresh_token = arg_str(&args, &["refreshToken", "refresh_token"])
+        .ok_or_else(|| anyhow!("missing `refreshToken`"))?;
+    let client_id =
+        arg_str(&args, &["clientId", "client_id"]).ok_or_else(|| anyhow!("missing `clientId`"))?;
+    let client_secret = arg_str(&args, &["clientSecret", "client_secret"])
+        .ok_or_else(|| anyhow!("missing `clientSecret`"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::gemini_refresh(&refresh_token, &client_id, &client_secret)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_oauth_gemini_cli_import() -> Result<Value> {
+    Ok(serde_json::to_value(
+        model_gateway::auth::gemini_cli_import()
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_deepseek_login(args: Value) -> Result<Value> {
+    let input: model_gateway::auth::deepseek::DeepseekLoginInput = serde_json::from_value(
+        args.get("input").cloned().unwrap_or(Value::Null),
+    )
+    .map_err(|e| anyhow!("invalid `input`: {e}"))?;
+    Ok(serde_json::to_value(
+        model_gateway::auth::deepseek::deepseek_login(input)
+            .await
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+/// 读今天的日志文件内容（供 LogPane 历史展示）。文件不存在返回空串。纯 fs，无 Tauri。
+async fn cmd_read_log_file() -> Result<Value> {
+    let content = match observability::today_log_path() {
+        Some(p) if p.exists() => std::fs::read_to_string(&p).map_err(|e| anyhow!("{e}"))?,
+        _ => String::new(),
+    };
+    Ok(Value::String(content))
+}
+
+// ─── parity 补齐：subagent / mcp / hooks / skill_collection / plugin ──────────
+// 全部委托 state.core（与 desktop 共用同一 LocalCoreClient facade），hebweb 只做参数解析。
+
+fn arg_str(args: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|k| args.get(k).and_then(|v| v.as_str()))
+        .map(str::to_string)
+}
+
+async fn cmd_list_subagents(state: &ServerState, args: Value) -> Result<Value> {
+    let workdir = arg_str(&args, &["workdir"]).map(std::path::PathBuf::from);
+    Ok(serde_json::to_value(
+        state.core.list_subagents(workdir.as_deref()),
+    )?)
+}
+
+async fn cmd_get_subagent(state: &ServerState, args: Value) -> Result<Value> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    Ok(serde_json::to_value(
+        state.core.get_subagent(&name).map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_save_subagent(state: &ServerState, args: Value) -> Result<()> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    let content = arg_str(&args, &["content"]).ok_or_else(|| anyhow!("missing `content`"))?;
+    state
+        .core
+        .save_subagent(&name, &content)
+        .map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_delete_subagent(state: &ServerState, args: Value) -> Result<()> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    let workdir = arg_str(&args, &["workdir"]).map(std::path::PathBuf::from);
+    state
+        .core
+        .delete_subagent(&name, workdir.as_deref())
+        .map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_set_subagent_enabled(state: &ServerState, args: Value) -> Result<()> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    let enabled = args
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| anyhow!("missing `enabled`"))?;
+    // scope：{"Global"} 或 {"Project":"<path>"}（与 SubagentScope serde 一致）。
+    let scope = args
+        .get("scope")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| anyhow!("invalid `scope`: {e}"))?
+        .unwrap_or(agent_core::core_client::SubagentScope::Global);
+    state
+        .core
+        .set_subagent_enabled(&name, scope, enabled)
+        .map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_load_subagent_run(state: &ServerState, args: Value) -> Result<Value> {
+    let parent = arg_str(&args, &["parentSessionId", "parent_session_id"])
+        .ok_or_else(|| anyhow!("missing `parentSessionId`"))?;
+    let child = arg_str(&args, &["childSessionId", "child_session_id"])
+        .ok_or_else(|| anyhow!("missing `childSessionId`"))?;
+    Ok(serde_json::to_value(
+        state
+            .core
+            .load_subagent_run(&parent, &child)
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_get_mcp_config(state: &ServerState) -> Result<Value> {
+    Ok(serde_json::to_value(state.core.get_mcp_config())?)
+}
+
+async fn cmd_save_mcp_config(state: &ServerState, args: Value) -> Result<()> {
+    let config = serde_json::from_value(
+        args.get("config")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing `config`"))?,
+    )
+    .map_err(|e| anyhow!("invalid `config`: {e}"))?;
+    state.core.save_mcp_config(config).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_discover_mcp_tools(state: &ServerState) -> Result<Value> {
+    Ok(serde_json::to_value(state.core.discover_mcp_tools().await)?)
+}
+
+async fn cmd_get_hooks_raw(state: &ServerState) -> Result<Value> {
+    Ok(Value::String(state.core.get_hooks_raw()))
+}
+
+async fn cmd_save_hooks_raw(state: &ServerState, args: Value) -> Result<()> {
+    let raw = arg_str(&args, &["raw"]).ok_or_else(|| anyhow!("missing `raw`"))?;
+    state.core.save_hooks_raw(&raw).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_list_skill_collections(state: &ServerState) -> Result<Value> {
+    Ok(serde_json::to_value(state.core.list_skill_collections())?)
+}
+
+async fn cmd_delete_skill_collection(state: &ServerState, args: Value) -> Result<Value> {
+    let id = arg_str(&args, &["id"]).ok_or_else(|| anyhow!("missing `id`"))?;
+    Ok(serde_json::to_value(
+        state
+            .core
+            .delete_skill_collection(&id)
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_plugin_marketplace_add(state: &ServerState, args: Value) -> Result<Value> {
+    let source = arg_str(&args, &["source"]).ok_or_else(|| anyhow!("missing `source`"))?;
+    Ok(Value::String(
+        state
+            .core
+            .plugin_marketplace_add(&source)
+            .map_err(|e| anyhow!("{e}"))?,
+    ))
+}
+
+async fn cmd_plugin_marketplace_list(state: &ServerState) -> Result<Value> {
+    Ok(serde_json::to_value(state.core.plugin_marketplace_list())?)
+}
+
+async fn cmd_plugin_marketplace_list_plugins(state: &ServerState, args: Value) -> Result<Value> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    Ok(serde_json::to_value(
+        state
+            .core
+            .plugin_marketplace_list_plugins(&name)
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_plugin_marketplace_remove(state: &ServerState, args: Value) -> Result<()> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    state
+        .core
+        .plugin_marketplace_remove(&name)
+        .map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_plugin_install(state: &ServerState, args: Value) -> Result<Value> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    let marketplace = arg_str(&args, &["marketplace"]);
+    Ok(serde_json::to_value(
+        state
+            .core
+            .plugin_install(&name, marketplace.as_deref())
+            .map_err(|e| anyhow!("{e}"))?,
+    )?)
+}
+
+async fn cmd_plugin_uninstall(state: &ServerState, args: Value) -> Result<()> {
+    let name = arg_str(&args, &["name"]).ok_or_else(|| anyhow!("missing `name`"))?;
+    state.core.plugin_uninstall(&name).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_plugin_list(state: &ServerState) -> Result<Value> {
+    Ok(serde_json::to_value(state.core.plugin_list())?)
+}
+
 async fn cmd_get_context_usage(state: &ServerState, args: Value) -> Result<Value> {
     let sid = args
         .get("sessionId")
@@ -1498,7 +2503,7 @@ async fn cmd_compact_session(state: &ServerState, args: Value) -> Result<Value> 
 }
 
 /// 「重新生成标题」命令（手动入口）：自动生成已下沉到 agent_core，由 Harness::spawn_run
-/// 在首轮 TurnFinished 后异步触发并通过 `EngineEvent::SessionTitleChanged` 推到前端。
+/// 在首轮 TurnFinished 后异步触发并通过 `WireEvent::SessionTitleChanged` 推到前端。
 /// 本命令是手动重生成入口——无视当前 title，强制走一次。
 async fn cmd_generate_session_title(state: &ServerState, args: Value) -> Result<Value> {
     let id = args

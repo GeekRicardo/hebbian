@@ -1,0 +1,199 @@
+<section class="module" id="module-6">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">Bug 解剖室</h1>
+  <p class="module-subtitle">两个已修复的流式渲染 Bug，以及一个仍潜伏的隐患。通过解剖它们，你能学会如何在前端状态机里排查「输出消失」类问题。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🔬</span>
+    <div class="callout-text">
+      <strong>比喻：就像法医解剖</strong>
+      <p>每个 Bug 都有自己的「死因」——一个错误的假设、一个时序的 race、一个方向反了的比较。学会解剖 Bug 比学会写正确代码更难，也更有价值。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Bug A - Text Disappearing -->
+<div class="screen animate-in">
+  <h2 class="section-title">Bug A：多轮 Run 中前面轮次的文本消失</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">现象</h3>
+    <p>长对话中（Anthropic + 工具），assistant 已经输出的内容跑着跑着消失了，Run 结束后 reload 恢复。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">死因</h3>
+    <p><strong>方向反了的字符串比较。</strong>旧代码：</p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ❌ 错误：fullText 是单轮文本，streamingText 是多轮累积
+if (fullText.endsWith(streamingText)) { return; }
+// Turn 1 后 streamingText = "Turn1内容"
+// Turn 2 fullText = "Turn2内容"
+// "Turn2内容".endsWith("Turn1内容Turn2内容") → 永远 false!
+// → 覆盖: streamingText = "Turn2内容"  ← Turn 1 消失!</code></pre>
+
+    <p style="margin-top:var(--space-4);"><strong>修复（streamingParts.ts:66）：</strong></p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ✅ 正确：streamingText（累积）的末尾是否已是 fullText（本轮）？
+if (!fullText || streamingText.endsWith(fullText)) { return; }
+// Turn 1 后 streamingText = "Turn1内容"
+// Turn 2 fullText = "Turn2内容"
+// "Turn1内容Turn2内容".endsWith("Turn2内容") → false → 追加
+// streamingText = "Turn1内容Turn2内容" ✅</code></pre>
+  </div>
+
+  <div class="callout-box accent" style="margin-top:var(--space-6);">
+    <span class="callout-icon">💡</span>
+    <div class="callout-text">
+      <strong>排查技巧</strong>
+      <p>这种 Bug 用 <code>console.log</code> 很难发现——文本积累是递增的，肉眼看不出来被覆盖。正确的方式是：在 applyTextDone 里加断点，看每次的 streamingText 长度——如果某次 TextDone 后长度 <strong>变短</strong> 了，那就是被覆盖了。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Bug B - Tool Collapse -->
+<div class="screen animate-in">
+  <h2 class="section-title">Bug B：多轮 Run 中工具卡片塌缩</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">现象</h3>
+    <p>非流式路径下（Anthropic + 工具），多轮 Turn 的工具卡片数量不对——N 个工具塌成 1 个，互相覆盖。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">死因</h3>
+    <p><strong>undefined === undefined 的陷阱。</strong>非流式路径的 ToolCallStarted 事件 index 字段是 undefined。旧代码的 toolPartIndex 在按 id 找不到时，回退到按 index 匹配：</p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ❌ 旧代码：index 匹配无 guard
+parts.findIndex(part => part.index === index)
+// Turn 1 tool part: { index: undefined }
+// Turn 2 tool_start: { index: undefined, id: "call_2" }
+// 按 id 找 "call_2" → not found
+// 回退到 part.index===index → undefined===undefined → 找到 Turn 1 的 part!
+// → 覆盖！Turn 1 工具卡片变 Turn 2 的</code></pre>
+
+    <p style="margin-top:var(--space-4);"><strong>修复（streamingParts.ts:96）：</strong></p>
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;"><code>// ✅ 新代码：index == null 时绝不回退
+if (index == null) return -1;  // 找不到就是找不到
+return parts.findIndex(part => part.type === "tool_call" && part.index === index);</code></pre>
+  </div>
+</div>
+
+<!-- SCREEN 4: Potential Race Condition -->
+<div class="screen animate-in">
+  <h2 class="section-title">潜伏隐患：triggerWakeupResume 的 race condition</h2>
+
+  <div class="bug-challenge">
+    <h3 class="section-title" style="font-size:var(--text-lg);">场景</h3>
+    <p>Run 进行中，后台任务完成 → WakeupScheduler 触发 wakeup-fired 事件 → 前端 triggerWakeupResume 调用 injectUserMessage。但如果此时 Run 刚好结束（race condition），injected 返回 false → 回落走 sendUserMessage → <strong>新建 slot，旧 slot 的 streaming 全部丢失</strong>。</p>
+
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;margin-top:var(--space-4);"><code>// useStore.ts:1581 — triggerWakeupResume 的回落路径
+if (isForeground) {
+    // ⚠️ 当 injectUserMessage 返回 injected=false 或抛异常时
+    // 直接调 sendUserMessage —— 这会创建新 slot，替换旧 slot
+    await get().sendUserMessage(wakeupXml, [], meta, { skipOptimisticUser: true });
+}</code></pre>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">触发条件</h3>
+    <p>需要同时满足：① Run 正在进行中（slot 存在）② 后台任务完成触发 wakeup ③ injectUserMessage 返回 false（通常是因为 Run 刚好在 inject 和 backend 处理之间结束了）。这个窗口极小，但在高频率工具调用中可能被撞到。</p>
+
+    <h3 class="section-title" style="font-size:var(--text-lg);margin-top:var(--space-6);">最干净修法</h3>
+    <p>sendUserMessage 创建新 slot 前，应该先检查旧 slot 的 streaming 是否非空。如果非空，先把 streaming 冻结到 liveTimeline 再替换——或者直接用 <code>waitForRequestRelease</code> 等待旧 run 彻底结束再发新 run。</p>
+  </div>
+</div>
+
+<!-- SCREEN 5: Debugging Toolkit -->
+<div class="screen animate-in">
+  <h2 class="section-title">调试工具箱</h2>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📋</div>
+      <div class="pattern-card-body">
+        <h3>heb CLI 复现</h3>
+        <p>最快的 agent 行为复现方式。一行命令起 session，用 NDJSON 事件流看每一步的状态变化。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">heb new --provider=anthropic --workdir /tmp/repro</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🔍</div>
+      <div class="pattern-card-body">
+        <h3>model_io.jsonl</h3>
+        <p>看后端实际发给模型什么、模型返了什么。排查「模型行为不对」类问题首选。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">~/.hebbian/sessions/{sid}/model_io.jsonl</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📝</div>
+      <div class="pattern-card-body">
+        <h3>session.jsonl</h3>
+        <p>对话历史的唯一真相。看 message 落盘情况、check partial 是否被正确恢复。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">~/.hebbian/sessions/{sid}/session.jsonl</code>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🧪</div>
+      <div class="pattern-card-body">
+        <h3>单元测试</h3>
+        <p>streamingParts.test.ts 固化了 Bug A 和 B 的回归——把模拟事件流喂给状态机，断言结果。新增此类 bug 先写测试复现，再修。</p>
+        <code style="font-size:var(--text-xs);display:block;margin-top:var(--space-2);">node --experimental-strip-types streamingParts.test.ts</code>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Spot the Bug Challenge -->
+<div class="screen animate-in">
+  <h2 class="section-title">来找茬：这段代码有什么问题？</h2>
+
+  <div class="bug-challenge" style="margin-top:var(--space-4);">
+    <p>下面的代码模拟了非流式路径下，一个包含 2 轮 Turn 的 Run。找找看哪里有问题：</p>
+
+    <pre style="background:var(--color-bg-code);color:#CDD6F4;padding:var(--space-4);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:var(--text-sm);overflow-x:hidden;white-space:pre-wrap;word-break:break-word;margin-top:var(--space-4);"><code>// Turn 1: 模型返回 ToolCalls（Read 工具）
+<span class="bug-line" data-explanation="这里 emit 的 text 是 Turn 1 的全文，没问题。" onclick="checkBugLine(this, false)" data-hint="这一行看起来是对的...">emit(TextDelta { text: "我来读一下代码。" });     // ← 行 1</span>
+<span class="bug-line" data-explanation="这里 index=0，由 tool_call_dispatch_offset 保证唯一，没问题。" onclick="checkBugLine(this, false)" data-hint="不是这一行">emit(ToolCallStarted { index: 0, id: "call_1" });  // ← 行 2</span>
+<span class="bug-line" data-explanation="没问题。" onclick="checkBugLine(this, false)" data-hint="也不是这一行">emit(ToolCallFinished { index: 0, result: "..." }); // ← 行 3</span>
+<span class="bug-line" data-explanation="Aha！TurnFinished 在 Turn 1 结束时 emit——但如果此时 liveTimeline 里已经有 user_injected 条目（用户插了话），前端会把当前 streaming 冻结并清空。这不一定是 bug，但如果 user_injected 是被错误分类的 system_notification，就会错误触发冻结。实际代码已修复：检查时排除 system_notification。" onclick="checkBugLine(this, false)" data-hint="close... 但这不是最根本的问题">emit(TurnFinished { ... });                           // ← 行 4</span>
+
+// Turn 2: 模型返回 Done
+<span class="bug-line" data-explanation="没错！这就是 Bug A。TextDone 的 fullText 只有 Turn 2 的文本，但前端 applyTextDone 需要用 streamingText.endsWith(fullText) 判断——旧代码用 fullText.endsWith(streamingText)，方向反了，会把 Turn 1 的文本覆盖掉。已修复。" onclick="checkBugLine(this, true)" data-hint="Hint: 想想 applyTextDone 里的字符串比较方向">emit(TextDone { full_text: "改好了！" });           // ← 行 5 ⚡</span>
+<span class="bug-line" data-explanation="没问题，Run 正常收尾。" onclick="checkBugLine(this, false)" data-hint="Try line 5 instead">emit(RunFinished { ... });                           // ← 行 6</span></code></pre>
+
+    <div class="bug-feedback" style="margin-top:var(--space-3);min-height:1.5em;"></div>
+  </div>
+
+  <p style="margin-top:var(--space-4);"><strong>答案</strong>：行 5 是问题所在。TextDone 到达时 fullText 只是 Turn 2 的文本，但旧代码错误地把累积文本覆盖成了它——Turn 1 的输出就消失了。</p>
+</div>
+
+<!-- SCREEN 7: Final Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">终极大考</h2>
+
+  <div class="quiz-container" id="quiz-module6">
+    <div class="quiz-question-block"
+         data-correct="turn_finished"
+         data-explanation-right="正解！TurnFinished 检查 liveTimeline 中是否有非 system_notification 的 user_injected。如果有，就冻结当前 streaming 为 assistant_frozen 快照。"
+         data-explanation-wrong="不是。TextDone 和 RunFinished 都不管 liveTimeline。冻结助手快照是 turn_finished 的职责。">
+      <h3 class="quiz-question">哪个事件触发 assistant_frozen 冻结？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="text_done" onclick="selectOption(this)">TextDone</button>
+        <button class="quiz-option" data-value="turn_finished" onclick="selectOption(this)">TurnFinished（有用户插队时）</button>
+        <button class="quiz-option" data-value="run_finished" onclick="selectOption(this)">RunFinished</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="streamingText"
+         data-explanation-right="streamingText 是前端 Run 进行中的累积文本。reload 后由 session.messages 里的 content 字段接管。"
+         data-explanation-wrong="再想想。Run 结束后 slot 被清掉，streamingText 清空。持久化的文本在 session.jsonl → session.messages[].content。">
+      <h3 class="quiz-question">Run 结束后，对话文本存在哪里？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="streamingText" onclick="selectOption(this)">前端 slot 的 streamingText</button>
+        <button class="quiz-option" data-value="session_jsonl" onclick="selectOption(this)">session.jsonl 的 messages 数组</button>
+        <button class="quiz-option" data-value="partial" onclick="selectOption(this)">partial/ 目录</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+  </div>
+</div>
+
+</section>

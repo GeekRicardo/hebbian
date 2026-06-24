@@ -1,0 +1,182 @@
+<section class="module" id="module-2">
+
+<!-- SCREEN 1: The metaphor -->
+<div class="screen animate-in">
+  <h2 class="section-title">机场的广播室</h2>
+
+  <p>想象一个国际机场。塔台内部用专业术语沟通——航班号、跑道编号、风速参数，密密麻麻、严格精确。但候机厅里的乘客听不懂这些。中间需要一个<strong>广播室</strong>，把塔台的专业信息翻译成"CA1234 航班现在 8 号登机口开始登机"这种人人都懂的话。</p>
+
+  <p>关键是：这个广播室<strong>只有一间</strong>。无论信息要送到中文显示屏、英文显示屏，还是手机推送，都先经过这同一间广播室翻译，再分发出去。三块屏幕收到的内容必然一致，因为它们都来自同一次翻译。</p>
+
+  <div class="callout callout-accent">
+    <div class="callout-icon">💡</div>
+    <div class="callout-content">
+      <strong class="callout-title">这正是 Hebbian 的解法</strong>
+      <p>塔台的专业术语 = agent 内部的<strong>领域模型</strong>（叫 <code>EventPayload</code>）。广播室翻译出的大白话 = <strong>线协议</strong>（叫 <code>WireEvent</code>）。而那"唯一的一间广播室" = 一个叫 <code>to_wire</code> 的函数。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: Two languages -->
+<div class="screen animate-in">
+  <h2 class="section-title">两种语言，一道边界</h2>
+
+  <p>程序里有两种"语言"，它们的形态天然不同，中间这层翻译是<strong>合理的边界</strong>，不该硬抹掉：</p>
+
+  <div class="pattern-cards">
+    <div class="pattern-card" style="border-top:3px solid var(--color-accent)">
+      <div class="pattern-icon" style="background:var(--color-accent)">🧠</div>
+      <h4 class="pattern-title">EventPayload（对内）</h4>
+      <p>领域模型。<span class="term" data-definition="嵌套枚举（nested enum）指一个数据类型里又套着另一个数据类型的多种可能。比如'权限请求'里又分'工具调用/文件访问/计划审批'好几种，每种带不同字段。嵌套深、表达力强，但外面不好直接消费。">嵌套枚举</span>、强类型，方便 Rust 内部逻辑精确处理。给程序自己用。</p>
+    </div>
+    <div class="pattern-card" style="border-top:3px solid var(--color-actor-3)">
+      <div class="pattern-icon" style="background:var(--color-actor-3)">📡</div>
+      <h4 class="pattern-title">WireEvent（对外）</h4>
+      <p>线协议 <span class="term" data-definition="DTO = Data Transfer Object（数据传输对象）。专门为'传出去'而设计的简化数据结构，字段拍平、好序列化，方便前端 JS 或脚本直接读。">DTO</span>。字段拍平、能被网页的 JavaScript 直接消费。给外面的壳用。</p>
+    </div>
+  </div>
+
+  <p><span class="term" data-definition="线协议（wire protocol）指数据在'线上'传输时的格式约定。这里特指 agent 发给各个壳的事件长什么样——字段名、结构、取值。一旦壳们依赖了它，就不能随便改。">线协议</span>这个词里的"线"，就是数据传输的那根线。WireEvent 就是规定"传出去的数据长什么样"的那份约定。</p>
+</div>
+
+<!-- SCREEN 3: The one translator (code) -->
+<div class="screen animate-in">
+  <h2 class="section-title">唯一的翻译函数：to_wire</h2>
+
+  <p>整个系统里，"内部事件 → 对外 WireEvent"的翻译，<strong>只有一个函数</strong>负责，叫 <code>to_wire</code>。它住在 <code>protocol</code> 这个所有人都依赖的共享地基里。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE · wire.rs</span>
+      <pre><code><span class="code-line"><span class="code-keyword">pub fn</span> <span class="code-function">to_wire</span>(event: &Event) -> Option&lt;WireEvent&gt; {</span>
+<span class="code-line">  <span class="code-keyword">match</span> &event.payload {</span>
+<span class="code-line">    EventPayload::TextDelta { text } =></span>
+<span class="code-line">      WireEvent::TextDelta { text: text.clone() },</span>
+<span class="code-line">    EventPayload::RunFailed { error } =></span>
+<span class="code-line">      WireEvent::Error { message: ... },</span>
+<span class="code-line">    <span class="code-comment">// ... 37 种事件，每种一条翻译规则</span></span>
+<span class="code-line">  }</span>
+<span class="code-line">}</span></code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">大白话</span>
+      <div class="translation-lines">
+        <p class="tl">定义一个公开函数 <code>to_wire</code>，吃进一个内部事件，吐出一个对外的 WireEvent。</p>
+        <p class="tl"><code>match</code> 就是"看看这是哪种事件"，挨个对照。</p>
+        <p class="tl">如果是"模型吐了一段文字"，就翻成对外的"文字增量"。</p>
+        <p class="tl">如果是"这一轮失败了"，就翻成对外的"错误"。</p>
+        <p class="tl">一共 37 种事件，每种都在这里、且只在这里，规定怎么翻。</p>
+        <p class="tl">从此整个系统翻译事件，都来这一个地方——再没有第二份。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-icon">🔒</div>
+    <div class="callout-content">
+      <strong class="callout-title">"无损"是关键设计</strong>
+      <p>WireEvent 带<strong>全部</strong>字段，翻译时不做任何精简。各个壳想怎么省略、怎么截断，是各壳自己渲染时的事，不在这层动手。这样翻译层永远只有"完整版"一种产出，不会因为"桌面想省这个、命令行想省那个"又分叉成多份。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: The flow -->
+<div class="screen animate-in">
+  <h2 class="section-title">收口后，事件这样流动</h2>
+
+  <div class="hero-visual">
+    <div class="flow-animation" data-steps='[
+      {"label":"agent 大脑里发生一件事（EventPayload）","highlight":"flow-actor-1"},
+      {"label":"先经过唯一的广播室 to_wire，翻成 WireEvent","highlight":"flow-actor-2","packet":true,"from":"actor-1","to":"actor-2"},
+      {"label":"同一份 WireEvent 发给桌面——前端直接渲染","highlight":"flow-actor-3","packet":true,"from":"actor-2","to":"actor-3"},
+      {"label":"同一份 WireEvent 发给网页——共用前端代码，一样渲染","highlight":"flow-actor-4","packet":true,"from":"actor-2","to":"actor-4"},
+      {"label":"三个壳收到的是同一次翻译的结果，永远一致","highlight":"flow-actor-2"}
+    ]'>
+      <div class="flow-actors">
+        <div class="flow-actor" id="flow-actor-1">
+          <div class="flow-actor-icon" style="background:var(--color-accent)">🧠</div>
+          <span>EventPayload</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-2">
+          <div class="flow-actor-icon" style="background:var(--color-actor-4)">📡</div>
+          <span>to_wire</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-3">
+          <div class="flow-actor-icon" style="background:var(--color-actor-1)">🖥️</div>
+          <span>桌面</span>
+        </div>
+        <div class="flow-actor" id="flow-actor-4">
+          <div class="flow-actor-icon" style="background:var(--color-actor-3)">🌐</div>
+          <span>网页</span>
+        </div>
+      </div>
+      <div class="flow-packet" id="flow-packet"></div>
+      <div class="flow-step-label" id="flow-label">点击 "Next Step" 看收口后的流动</div>
+      <div class="flow-controls">
+        <button class="btn flow-next-btn">Next Step</button>
+        <button class="btn flow-reset-btn">Restart</button>
+        <span class="flow-progress"></span>
+      </div>
+    </div>
+  </div>
+
+  <p>注意中间那个 <code>to_wire</code> 节点——所有事件都得过它。这就是"唯一权威来源"的物理体现：想改翻译规则，全世界只有这一个地方能改。</p>
+</div>
+
+<!-- SCREEN 5: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">想一想</h2>
+
+  <div class="quiz-container" id="quiz-module2">
+    <div class="quiz-question-block"
+         data-correct="opt-b"
+         data-explanation-right="对。这正是'合理的边界'——内部要强类型方便逻辑处理，外部要拍平方便壳消费。两者形态不同是天然的，所以保留一层翻译，但只保留一份。"
+         data-explanation-wrong="不太对。如果内外用完全一样的格式，要么内部逻辑被迫用难处理的拍平结构，要么前端被迫解析复杂的嵌套类型。两边各有各的需要，中间这层翻译是有价值的。">
+      <h3 class="quiz-question">既然要统一，为什么不干脆让内部和外部用<strong>完全一样</strong>的数据格式，连翻译都省了？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为程序员喜欢多写代码</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>内部要强类型方便处理、外部要拍平方便消费，形态天然不同——翻译是合理边界，只是不该写多份</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>因为前端不支持 Rust</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question-block"
+         data-correct="opt-a"
+         data-explanation-right="正确。'无损'意味着翻译层产出唯一的完整版，绝不在这里做'桌面省这个、命令行省那个'的分叉。各壳的省略放到各自的渲染层，翻译层就永远只有一种产出。"
+         data-explanation-wrong="再想想。如果翻译时就替桌面省一点、替命令行省另一点，翻译层就又会分叉成多份——正好回到我们要消除的问题。">
+      <h3 class="quiz-question">WireEvent 坚持"无损"（带全部字段、翻译时不精简），最重要的好处是？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="opt-a" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>翻译层永远只产出"完整版"一种结果，不会因为各壳的省略需求又分叉成多份</span>
+        </button>
+        <button class="quiz-option" data-value="opt-b" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>数据传得更快</span>
+        </button>
+        <button class="quiz-option" data-value="opt-c" onclick="selectOption(this)">
+          <div class="quiz-option-radio"></div>
+          <span>前端代码可以更短</span>
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module2')">看看答对没</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module2')">再试一次</button>
+  </div>
+
+  <p style="margin-top:var(--space-8);color:var(--color-text-secondary)">下一站：理论有了，怎么把三个壳真的搬过来——而且不弄坏任何东西。</p>
+</div>
+
+</section>

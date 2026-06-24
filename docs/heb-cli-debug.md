@@ -32,7 +32,7 @@ tail -f /tmp/heb.log
 {"event":"run_started"}
 {"event":"text_delta","text":"我"}
 {"event":"tool_start","id":"call_…","name":"Write","input":{"file_path":"…","new_string":"hi"}}
-{"event":"permission_requested","request_id":"perm_…","kind":"tool_call","tool_name":"Write","risk":"Medium"}
+{"event":"permission_requested","request_id":"perm_…","kind":"tool_call","tool_name":"Write","risk":"medium"}
 ```
 
 看到 `permission_requested` 就在终端 B 回应：
@@ -112,15 +112,15 @@ daemon stdout 是 **NDJSON 流**——每行一个 JSON 对象，字段 `event` 
 | `run_finished` | `input_tokens, output_tokens, cache_read_tokens, duration_ms` | 一轮正常结束 |
 | `run_failed` | `error` | 一轮失败（provider 4xx / 网络 / panic） |
 | `run_cancelled` | — | `heb stop` 触发 |
-| `run_suspended` | `reason` | 等待 HITL 决策（权限 / 提问）时挂起 |
-| `run_resumed` | `cause` | HITL 决策到位后恢复 |
+| `run_suspended` | `reason` | 等待 HITL 决策（权限 / 提问）时挂起。`reason` ∈ background_task/cron/manual（小写规范形态，三 surface 一致） |
+| `run_resumed` | `cause` | HITL 决策到位后恢复。`cause` 如 `bg_task_finished:<id>` / `cron_fired:<reason>` / `user_message_arrived` / `manual_resume` |
 | `text_delta` | `text` | 流式文本片段（按 token 增量） |
 | `text_done` | `full_text` | 一段连续文本结束的全文 |
 | `reasoning` | `text` | 思考链（部分模型有） |
 | `tool_start` | `id, name, input` | 工具开始执行（input 是 JSON 对象） |
 | `tool_done` | `id, result, duration_ms` | 工具执行完，`result` 是字符串结果（含错误信息） |
-| `permission_requested` | `request_id, kind, tool_name, summary, risk` | 等待审批 |
-| `permission_resolved` | `request_id, decision` | 审批结果（含自动审批） |
+| `permission_requested` | `request_id, kind, tool_name, summary, risk` | 等待审批。`risk` ∈ critical/high/medium/low（小写规范形态，三 surface 一致） |
+| `permission_resolved` | `request_id, decision` | 审批结果（含自动审批）。`decision` ∈ allow_once/allow_and_remember/deny/deny_with_feedback（snake_case 规范形态） |
 | `question_requested` | `request_id, question, options[{label,description}], multi` | agent 用 `AskFollowup` 工具问问题 |
 | `question_answered` | `request_id` | 问题被回答（不重复回答内容） |
 | `run_mode_changed` | `from, to` | mode 切换 |

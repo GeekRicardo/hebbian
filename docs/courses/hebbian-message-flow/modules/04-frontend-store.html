@@ -1,0 +1,219 @@
+<section class="module" id="module-4">
+
+<!-- SCREEN 1: Opening -->
+<div class="screen animate-in">
+  <h1 class="module-title">前端状态机</h1>
+  <p class="module-subtitle">useStore 里的 <code>applyEventToSlot</code> 是前端最核心的纯函数。它把每一个后端事件「折叠」进 slot 状态，驱动整个 UI 的变化。</p>
+
+  <div class="callout-box accent">
+    <span class="callout-icon">🎯</span>
+    <div class="callout-text">
+      <strong>比喻：就像快递分拣中心</strong>
+      <p>后端往传送带上放包裹（事件），每个包裹上贴着标签（event.type）。分拣员（applyEventToSlot）看一眼标签，然后把它放到正确的架子上：TextDelta 放 streamingText 架子，ToolCallStarted 放 streamingParts 架子，TurnFinished 检查要不要冻结当前架子的内容……</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: SessionStream -->
+<div class="screen animate-in">
+  <h2 class="section-title">SessionStream：每个 Run 的状态槽</h2>
+
+  <p>每次 <code>sendUserMessage</code> 被调用，前端创建一个新的 <code>SessionStream</code> slot。它包含 Run 进行中的所有实时状态：</p>
+
+  <div class="pattern-cards stagger-children">
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📝</div>
+      <div class="pattern-card-body">
+        <h3>streamingText</h3>
+        <p>当前 Run 累积的所有文本。每次 TextDelta 就追加。Run 结束 reload 后，由 session.jsonl 接管。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">🧩</div>
+      <div class="pattern-card-body">
+        <h3>streamingParts</h3>
+        <p>结构化的输出段：文本、推理、工具调用卡片（按真实发生顺序穿插）。MessageBubble 直接吃这个结构渲染。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📋</div>
+      <div class="pattern-card-body">
+        <h3>liveTimeline</h3>
+        <p>Run 内的时间线：冻结的 assistant 快照 + 用户插队消息。Run 结束清空，由 session.messages 接管渲染。</p>
+      </div>
+    </div>
+    <div class="pattern-card">
+      <div class="pattern-card-icon">📍</div>
+      <div class="pattern-card-body">
+        <h3>assistantInsertPos</h3>
+        <p>游标：当前 streaming 在 liveTimeline 里的插入位置。冻结后游标推进到末尾。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: applyEventToSlot -->
+<div class="screen animate-in">
+  <h2 class="section-title">applyEventToSlot：事件分发核心</h2>
+
+  <p>每个后端事件的 type 决定走哪个分支。这是纯函数——接收旧 slot + 事件，返回新 slot。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — useStore.ts:341</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">function</span> <span class="code-function">applyEventToSlot</span>(</span>
+<span class="code-line">  slot: SessionStream,</span>
+<span class="code-line">  e: EngineEvent</span>
+<span class="code-line">): SessionStream {</span>
+<span class="code-line">  <span class="code-keyword">if</span> (e.type === <span class="code-string">"text_delta"</span>) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { ...slot,</span>
+<span class="code-line">      streamingText: slot.streamingText + e.text,</span>
+<span class="code-line">      streamingParts: applyTextDelta(slot.streamingParts, e.text)</span>
+<span class="code-line">    };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-keyword">if</span> (e.type === <span class="code-string">"text_done"</span>) {</span>
+<span class="code-line">    <span class="code-keyword">const</span> r = <span class="code-function">applyTextDone</span>(</span>
+<span class="code-line">      slot.streamingText, slot.streamingParts, e.full_text);</span>
+<span class="code-line">    <span class="code-keyword">return</span> { ...slot, ...r };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-comment">// ... tool_start, tool_done, turn_finished ...</span></span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">核心的事件处理函数——纯函数，接收旧状态+事件，返回新状态</p>
+        <p class="tl">SessionStream：当前 Run 的所有实时状态</p>
+        <p class="tl">EngineEvent：后端发来的结构化事件</p>
+        <p class="tl">返回新的 SessionStream（不可变更新）</p>
+        <p class="tl">TextDelta：把新文本追加到 streamingText 末尾...</p>
+        <p class="tl">并用 applyTextDelta 更新结构化 parts（贴到最后一个 text 段后面）</p>
+        <p class="tl">TextDone：用 applyTextDone 判定是否需要追加全文</p>
+        <p class="tl">  参数：当前累积文本、当前 parts、后端给的 fullText</p>
+        <p class="tl">把 applyTextDone 的结果合并回 slot</p>
+        <p class="tl">还有 tool_start、tool_done、turn_finished 等十几种分支</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 4: applyTextDone - The Critical Function -->
+<div class="screen animate-in">
+  <h2 class="section-title">applyTextDone：最容易出 Bug 的函数</h2>
+
+  <p>这是前端流式累积的核心逻辑，也是上一轮 Bug 修复的关键。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — streamingParts.ts:66</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">export function</span> <span class="code-function">applyTextDone</span>(</span>
+<span class="code-line">  streamingText: string,</span>
+<span class="code-line">  parts: StreamingAssistantPart[],</span>
+<span class="code-line">  fullText: string</span>
+<span class="code-line">) {</span>
+<span class="code-line">  <span class="code-keyword">if</span> (!fullText</span>
+<span class="code-line">      || streamingText.<span class="code-function">endsWith</span>(fullText)) {</span>
+<span class="code-line">    <span class="code-keyword">return</span> { streamingText, streamingParts: parts };</span>
+<span class="code-line">  }</span>
+<span class="code-line">  <span class="code-keyword">return</span> {</span>
+<span class="code-line">    streamingText: streamingText + fullText,</span>
+<span class="code-line">    streamingParts: <span class="code-function">applyTextDelta</span>(parts, fullText),</span>
+<span class="code-line">  };</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">TextDone 处理函数——一轮 ModelStep 文本结束</p>
+        <p class="tl">当前累积的所有文本（跨多轮 Turn）</p>
+        <p class="tl">当前累积的结构化 parts</p>
+        <p class="tl">本轮（最后一轮）的完整文本</p>
+        <p class="tl">如果 fullText 为空，或累积文本已经以 fullText 结尾...</p>
+        <p class="tl">（说明本轮文本已由 TextDelta 逐段到达），不重复</p>
+        <p class="tl">返回原样的 streamingText 和 parts——不追加</p>
+        <p class="tl">否则（非流式路径、Done 分支的全文还没追加）...</p>
+        <p class="tl">把 fullText 追加到 streamingText 末尾</p>
+        <p class="tl">同时把 fullText 作为新文本段追加到 parts 末尾</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout-box warning">
+    <span class="callout-icon">🐛</span>
+    <div class="callout-text">
+      <strong>Bug 根因（已修复）</strong>
+      <p>旧代码用 <code>fullText.endsWith(streamingText)</code> 判定——这是反的！多轮 Run 中 streamingText（全 Run 累积）远长于单轮 fullText，所以 <code>"短短的单轮文本".endsWith("多轮累积的长文本")</code> 永远 false → 每轮 TextDone 都把 streamingText <strong>覆盖成</strong> 最新单轮的 fullText → 前面轮次的输出全部消失。</p>
+      <p style="margin-top:var(--space-2);">修复：改成 <code>streamingText.endsWith(fullText)</code>——「累积文本的末尾是否是本轮全文」。</p>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 5: toolPartIndex Fix -->
+<div class="screen animate-in">
+  <h2 class="section-title">toolPartIndex：另一个潜伏 Bug</h2>
+
+  <p>非流式路径下，工具事件的 index 字段可能是 undefined。旧代码在 index 匹配失败时回退到 <code>part.index === index</code>——当两者的 index 都是 undefined 时，会错误地匹配到上一轮的工具卡片。</p>
+
+  <div class="translation-block">
+    <div class="translation-code">
+      <span class="translation-label">CODE — streamingParts.ts:96</span>
+      <pre><code>
+<span class="code-line"><span class="code-keyword">function</span> <span class="code-function">toolPartIndex</span>(</span>
+<span class="code-line">  parts: StreamingAssistantPart[],</span>
+<span class="code-line">  index: number | null | undefined,</span>
+<span class="code-line">  id?: string | null</span>
+<span class="code-line">) {</span>
+<span class="code-line">  <span class="code-comment">// 有 id：优先按 id 匹配</span></span>
+<span class="code-line">  <span class="code-keyword">if</span> (id) { ... }</span>
+<span class="code-line">  <span class="code-comment">// ⚠️ index == null 时不回退!</span></span>
+<span class="code-line">  <span class="code-keyword">if</span> (index == null) <span class="code-keyword">return</span> -1;</span>
+<span class="code-line">  <span class="code-keyword">return</span> parts.<span class="code-function">findIndex</span>(</span>
+<span class="code-line">    part => part.type === <span class="code-string">"tool_call"</span></span>
+<span class="code-line">         && part.index === index);</span>
+<span class="code-line">}</span>
+      </code></pre>
+    </div>
+    <div class="translation-english">
+      <span class="translation-label">PLAIN ENGLISH</span>
+      <div class="translation-lines">
+        <p class="tl">在 parts 数组里找到对应工具卡片的位置</p>
+        <p class="tl">当前累积的所有 part 项</p>
+        <p class="tl">工具调用的序号（流式路径有值，非流式可能是 undefined）</p>
+        <p class="tl">工具调用的唯一 id（最可靠的匹配方式）</p>
+        <p class="tl">如果有 id，用它匹配——id 是唯一标识</p>
+        <p class="tl">如果没有 id 且 index 也是 null/undefined → 无法定位</p>
+        <p class="tl">返回 -1 表示「这是个新工具，需要创建新卡片」</p>
+        <p class="tl">有有效 index → 按 index 去 parts 数组里找</p>
+        <p class="tl">找 type 是 tool_call 且 index 值相同的项</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 6: Quiz -->
+<div class="screen animate-in">
+  <h2 class="section-title">小测</h2>
+
+  <div class="quiz-container" id="quiz-module4">
+    <div class="quiz-question-block"
+         data-correct="streamingText.endsWith"
+         data-explanation-right="正确！多轮 Run 中 streamingText 是全 Run 累积，fullText 是单轮文本。必须用 '累积文本的末尾是否已是本轮全文' 来判断，反过来会恒 false。"
+         data-explanation-wrong="反过来就错了。streamingText 在第二轮 Turn 时已经是 'Turn1文本Turn2文本'，而 fullText 只是 'Turn2文本'——用 fullText.endsWith(streamingText) 永远返回 false，会把累积文本覆盖成单轮文本。">
+      <h3 class="quiz-question">applyTextDone 中，正确的去重判定是？</h3>
+      <div class="quiz-options">
+        <button class="quiz-option" data-value="fullText.endsWith" onclick="selectOption(this)">fullText.endsWith(streamingText)</button>
+        <button class="quiz-option" data-value="streamingText.endsWith" onclick="selectOption(this)">streamingText.endsWith(fullText)</button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">Check Answers</button>
+    <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">Try Again</button>
+  </div>
+</div>
+
+</section>

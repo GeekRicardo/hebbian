@@ -12,10 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use agent_core::storage::sessions::ChannelForwardKind;
 use channel_core::bridge::RemoteHitlResolver;
-use protocol::{ApprovalDecision, QuestionOption, UserAnswer};
+use protocol::{ApprovalDecision, AskQuestion, QuestionOption, UserAnswer, WireEvent};
 use tauri::{AppHandle, Manager};
 
-use crate::engine::{AskQuestionDto, EngineEvent, QuestionOptionDto};
 use crate::hitl::HitlState;
 use crate::wechat::WeChatState;
 
@@ -101,7 +100,7 @@ impl RemoteHitlResolver for DesktopHitlResolver {
 /// 转发时在 session.jsonl 落一条 `ChannelForward` Pending marker（即写即落）；机主回复后
 /// 由 resolver 原地更新为 Resolved。`PermissionResolved` / `UserQuestionAnswered` 到达时
 /// 撤销渠道待办（已在本地处理），并把仍 Pending 的痕迹标成「已在电脑处理」。
-pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &EngineEvent) {
+pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &WireEvent) {
     let Some(wechat) = app.try_state::<Arc<WeChatState>>() else {
         return;
     };
@@ -110,7 +109,7 @@ pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &EngineEvent) {
     };
 
     match event {
-        EngineEvent::PermissionRequested {
+        WireEvent::PermissionRequested {
             request_id,
             kind,
             tool_name,
@@ -144,7 +143,7 @@ pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &EngineEvent) {
             );
             bridge.forward_approval(request_id, &text, resolver);
         }
-        EngineEvent::UserQuestionRequested {
+        WireEvent::UserQuestionRequested {
             request_id,
             question,
             options,
@@ -171,7 +170,7 @@ pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &EngineEvent) {
             });
             // 渠道只支持单层选项；多题场景退化为铺开展示、收自由文本。
             let (body, opts, is_multi) = if questions.is_empty() {
-                (question.clone(), to_proto_options(options), *multi)
+                (question.clone(), options.clone(), *multi)
             } else {
                 (render_multi_questions(questions), Vec::new(), false)
             };
@@ -182,8 +181,8 @@ pub fn maybe_forward(app: &AppHandle, session_id: &str, event: &EngineEvent) {
             );
             bridge.forward_question(request_id, &text, opts, is_multi, resolver);
         }
-        EngineEvent::PermissionResolved { request_id, .. }
-        | EngineEvent::UserQuestionAnswered { request_id, .. } => {
+        WireEvent::PermissionResolved { request_id, .. }
+        | WireEvent::UserQuestionAnswered { request_id, .. } => {
             bridge.cancel_forwarded(request_id);
             settle_locally(app, request_id);
         }
@@ -300,17 +299,7 @@ fn render_choices(options: &[QuestionOption], multi: bool) -> String {
     lines
 }
 
-fn to_proto_options(options: &[QuestionOptionDto]) -> Vec<QuestionOption> {
-    options
-        .iter()
-        .map(|option| QuestionOption {
-            label: option.label.clone(),
-            description: option.description.clone(),
-        })
-        .collect()
-}
-
-fn render_multi_questions(questions: &[AskQuestionDto]) -> String {
+fn render_multi_questions(questions: &[AskQuestion]) -> String {
     questions
         .iter()
         .map(|q| {

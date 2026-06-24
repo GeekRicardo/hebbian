@@ -9367,3 +9367,194 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `crates/agent-core/src/agent_loop.rs`: **修 progress marker 显示竞态**——progress 分支原先 `emit(GoalProgress)` 早于 `append_goal_outcome_marker`，前端收事件立即 reload 时 marker 尚未落盘、读不到导致不显示；改为 append 先于 emit，与 achieved/impossible 两分支顺序一致
 - **影响范围**: agent-core（顺序修复）+ desktop 前后端。纯行为修正，无协议破坏。agent-core 8 个 goal 测试全过（含 marker 落盘断言）、tsc 0 error
 - **留尾巴**: ①`goal_iterations` 每个 run 从 0 重置（跨 run 计数不累计），用户确认先不动；②老会话（本次修复前版本）的 jsonl 有大量 active_goal meta 更新但少 marker，是历史数据非当前代码问题；③set marker 缩进改了，memory_writes marker 缩进未动（保持原样，仅 goal 按反馈调整）
+
+### 2026-06-24 — 修复：切换 provider/model 后上下文窗口进度条分母不更新（尤伤导入的 CC 对话）
+
+- **Why**: 用户反馈「导入 claudecode 对话，其上下文窗口不会随着我更改为 hebbian 的供应商模型后更新」。复现链路：导入 CC 会话时 `import_claude_session`（apps/desktop/src/lib.rs:652）把 session.model 设为原 CC 模型（如 `claude-opus-4-8` → 1M 窗口），进度条分母 `budget_tokens` 由后端 `get_context_usage` 按 `session.model`+`provider_id` 实时算（apps/desktop/src/chat.rs:1466）。前端 `contextUsage` 是命令式刷新——每个改变用量的操作各自 `refreshContextUsage()`。但 `switchProviderModel` / `updateCurrentConfig` 切完模型只调了 `refreshSessions()`，**漏调 `refreshContextUsage()`**，前端进度条分母停在导入时旧模型的窗口值不动。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): `switchProviderModel` 与 `updateCurrentConfig` 末尾各补一行 `await get().refreshContextUsage();`，与 `undoCompaction` / `deleteTrailingMessage` / `compactCurrentSession` 等其它「改变用量后刷新进度条」的调用点对齐。
+- **影响范围**: desktop 前端 store（hebweb 共用同一份 React，同样受益）。纯前端状态同步，不动协议、不动 Rust。后端 `get_context_usage` 一直返回正确值，只是前端没去重新拉。
+- **验证**: tsc --noEmit 0 error。属纯前端命令式刷新缺漏，无对应 cargo 单测载体；逻辑链路确定（切模型 → session.model 已更 → 重新拉 context_usage → 分母刷新）。
+- **留尾巴**: contextUsage 走「每个改用量操作各自触发刷新」的命令式模式，新增此类操作仍需手动补 `refreshContextUsage()`；若后续此类调用点继续增多，可考虑收敛为对 `currentSession.model`/`provider_id` 变化的派生订阅，但当前 5 处显式调用尚清晰，不提前抽象。
+
+### 2026-06-24 — 修复：Desktop 从 Claude 导入对话进错项目
+
+- **Why**: 用户在项目 A 点「从 Claude 导入」，导入的会话却显示进了项目 B。
+- **根因**（三处叠加）:
+  1. 入口丢上下文：DesktopSidebar 项目级导入入口 hover key 带了 `import:<bucket.id>`，但点击导入按钮时只 `setImportDialogOpen(true)`，没把当前项目传给对话框。
+  2. 对话框无项目过滤：`ImportClaudeDialog` 列全部 Claude 会话、按原 cwd 分组，与当前项目无关。
+  3. 后端丢归属：`import_claude_session(path)` 不收 project_id，`create_with_workspace` 第7参数永远传 `None`，会话靠 `session.workdir === project.path` 兜底匹配（DesktopSidebar.tsx:141）——Claude 会话原始 cwd 命中哪个项目就显示进哪个。
+- **改动**:
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `import_claude_session` 加可选 `project_id` / `workdir` 参数，传了就显式归属（写进 session.project_id + workdir），不传回退 Claude 原始 cwd（全局入口兼容）。
+  - [apps/desktop/frontend/src/desktop/bridge/tauri.ts](../apps/desktop/frontend/src/desktop/bridge/tauri.ts): `importClaudeSession(path, projectId?, workdir?)` 透传新参数。
+  - [apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx](../apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx): 加 `projectFilter` prop。项目入口时只列 `cwd === project.path`（精确等于，用户选定）的会话，导入时传 project_id + 项目 workdir；标题/描述/空态文案项目感知。
+  - [apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx): 加 `importProject` state；导入按钮点击时从 hoverPopup 解析 `bucket.id` → 查 bucket 取真实 projectId+path 设入 state；传 `projectFilter` 给对话框；关闭时清理。
+- **行为变更**: 在项目入口导入 → 对话框只展示该项目目录下的 Claude 对话，导入后精确归属该项目（侧栏走 `projectId===project_id` 第一条件，不再靠 workdir 兜底）。全局「新建对话」入口的导入保持原样（展示全部、按 cwd 兜底归类）。
+- **影响范围**: 仅 Desktop surface（lib.rs 1 命令 + 前端 3 文件）。协议变更为 additive（命令加可选参数，旧调用兼容）。hebweb 未镜像 import_claude_session（属 §7.6 v1 已知缺口，另计）。
+- **验证**: cargo check -p hebbian 通过；pnpm tsc --noEmit 通过；数据流确认 create_with_workspace 第20行将 project_id 落盘、DesktopSidebar.tsx:141 第一条件精确命中。Tauri GUI 交互需用户手验（无法脚本化）。
+- **留尾巴**: 精确等于 workdir 过滤（用户选定）会排除 cwd 是项目子目录的 Claude 会话——这是有意取舍；若后续要放宽到「含子目录」再加开关。
+
+### 2026-06-24 — 标题生成从「仅首条 user」改为采样对话开头最多 5 条（含 assistant 片段）
+
+- **Why**: 用户反馈很多对话的主旨只看首条 user 消息无法确定——尤其用户只说「继续」「这个怎么改」时，标题该是什么得看 assistant 回答了什么。手动点「重新生成标题」与自动生成此前都只把首条 user message 喂给标题模型，提炼不出准确主题。
+- **改动**:
+  - [crates/agent-core/src/session_titler.rs](../crates/agent-core/src/session_titler.rs):
+    - 新增 `build_title_context(messages)`：从对话开头采样最多 5 条真实对话消息（user + assistant 混合），每条按 200 字符截断（超出加 `…`），跳过 System / Marker / 系统通知（wakeup/cron）/ subagent 子消息与空白消息，带「用户:」「助手:」前缀按时序拼接。
+    - `generate_title` 参数语义从「首条 user 消息」改为「拼好的对话片段」（签名仍是单个 `&str`，不破坏调用方）。
+    - `TITLE_INSTRUCTION` 改为「下面是一段对话的开头（含用户提问与助手回复片段）…」。
+    - `try_generate_for_session` 改用 `build_title_context`，空片段时跳过。
+    - 新增 3 条单测固化采样属性（最多 5 条 / 截断 / 跳过非对话消息），翻转新旧逻辑可稳定区分。
+- **影响范围**: 仅 agent-core 内部实现（纯采样策略调整）。不改协议、不改 EventPayload、不改对外 API；自动入口 `generate_for_session` 与手动入口 `regenerate_session_title` 共用 `try_generate_for_session`，同时受益。不涉及架构.md 既定决策，故只走 changelog。
+- **验证**: `cargo test -p agent-core --lib session_titler` 6 passed；`cargo check -p agent-core` 通过。
+- **留尾巴**: token 成本略增（≤5 条 × ≤200 字符，仍远小于正常请求）；若后续要按对话长度动态调整采样条数可在此扩展。assistant 套话噪声靠每条截断 + 模型自身提炼控制，暂未做关键词过滤。
+
+### 2026-06-24 — 重构(1b步骤1)：agent_core 新增 AssistantAccumulator，收敛三 surface 重复的事件累积逻辑
+
+- **Why**: 推进 dispatch 治本（消除 hebweb 命令缺口的根因）。审计发现"从 AgentEvent 流累积出 assistant Message"的逻辑在 desktop（chat.rs:1148 AssistantPartsRecorder + record_assistant_part_event/record_tool_event）、hebweb（session.rs handle_event+build_message）、heb CLI（daemon.rs handle_event+build_message）各写一遍且逐字节雷同。这是"逻辑写三遍"的典型，也是 run_aside/branch 无法跨 surface 复用的拦路石。
+- **改动**:
+  - 新增 [crates/agent-core/src/turn_accumulator.rs](../crates/agent-core/src/turn_accumulator.rs): `AssistantAccumulator`——吃 `&protocol::Event` 流、累积出 `Message`。以 desktop 完整版为基准（支持流式 ToolCallDelta 按 index+id 去重定位拼参数 + parts/tool_calls 双轨兜底中断落盘 + TextDone 全文收尾）。7 个单测覆盖文本/推理顺序、工具 started→finished 合并、delta→started 去重、TextDone 补齐、空 run 返回 None、started_at 时刻。
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 导出 turn_accumulator 模块。
+- **影响范围**: 仅 agent-core 新增模块，纯增量，零现有代码改动。**尚未接入三 surface**（步骤2-4 才替换 desktop/web/cli 各自的累积器 + run_aside 下沉 + 翻译统一）。
+- **验证**: cargo test -p agent-core --lib turn_accumulator 7 passed。
+- **留尾巴**: 这是 1b/1c 大重构的第一步（最纯、风险最低先落）。后续：①步骤2 下沉 run_aside 引擎到 agent_core（解锁 branch 跨 surface 复用，三调用点 branch/元素对话/浏览器旁支回归）；②步骤3 下沉 BranchState + hebweb 镜像 branch 4 命令（消除用户报的 web 版 branch_create not implemented）；③步骤4 三 surface 翻译统一到阶段1a 的 protocol::to_wire，删 desktop/web 两份 EngineEvent 定义。terminal_* 强 native 不在范围。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — 重构(1b步骤2)：run_aside 旁支引擎下沉 agent_core，事件出口统一 WireEvent
+
+- **Why**: 让旁支引擎 surface 无关，hebweb 才能复用（步骤3 镜像 branch 的前提）。原 run_aside 困在 desktop chat.rs、emit 闭包用 desktop 私有 EngineEvent、被 branch/元素对话/浏览器旁支三处用，hebweb 拿不到。
+- **改动**:
+  - 新增 [crates/agent-core/src/aside.rs](../crates/agent-core/src/aside.rs): `run_aside` + `RunAsideArgs` + `ModelWithName`（model 名/推理配置装饰器）+ `AsideObserver` 下沉至此。关键解耦：`emit_event` 闭包签名从 `Fn(desktop::EngineEvent)` 改 `Fn(protocol::WireEvent)`；observer 内部用步骤1 的 `AssistantAccumulator` 累积 message + `protocol::to_wire` 翻译事件，不再依赖 desktop 私有累积器/翻译。返回 `Result<_, String>`（agent_core 不依赖 desktop AppError）。
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 导出 aside 模块。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 删除本地 `RunAsideArgs`/`run_aside`/`AsideObserver`（~195 行）；`send_aside`（元素对话用，构造 Preview 工具集）改调 `agent_core::aside::run_aside`，emit 类型改 WireEvent，错误 map 回 AppError。**保留** desktop 主对话路径仍在用的 `ModelWithName`/`AssistantPartsRecorder`/`record_*`/`text_from_parts`（步骤4 统一时再处理）。
+  - [apps/desktop/src/branch.rs](../apps/desktop/src/branch.rs): import 改 `agent_core::aside::{run_aside, RunAsideArgs}`；`Channel<EngineEvent>` → `Channel<protocol::WireEvent>`（前端收到的 JSON 不变，因 WireEvent 与 EngineEvent 序列化一致）；run_aside 错误 map AppError。
+  - [apps/desktop/src/browser/mod.rs](../apps/desktop/src/browser/mod.rs): `route_aside_event` 参数 + match 分支 `EngineEvent::` → `protocol::WireEvent::`（variant 名/结构一致，仅换类型）；删 `use crate::engine::EngineEvent`。
+- **影响范围**: agent-core 新增 aside；desktop chat/branch/browser 三处旁支调用点改调下沉版。desktop 主对话路径**未动**（仍用本地累积器，步骤4 处理）。前端无感（WireEvent 序列化 == 旧 EngineEvent，阶段1a 对照测试已证）。
+- **验证**: cargo check --workspace 绿；agent-core turn_accumulator 7 passed；desktop wire_event_matches_legacy 1 passed（WireEvent/EngineEvent JSON 逐字节一致）；branch fork 测试 7 passed。
+- **留尾巴**: ①步骤3 下沉 BranchState + hebweb 镜像 branch 4 命令（消除用户报的 web 版 branch_create not implemented）；②步骤4 三 surface 翻译统一 to_wire + 删 desktop/web 两份 EngineEvent 定义。desktop 旁支/元素对话/浏览器旁支三处 GUI 交互需手验不回归。terminal_* 强 native 不在范围。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — PlanMode 审批从输入框弹窗下沉到右侧「计划」栏 + RunMode 单一真源 + PlanMode 输入框 amber 描边
+
+- **Why**: 用户要求——plan 的展示与审批整体放进右侧 sidebar「计划」栏，而不是输入框上方的弹窗；运行模式 chip 要能实时反映 agent 自主进/出 PlanMode（之前只在切 session 时拉一次，agent enter/submit 后 chip 不变）；去掉 chat 区「当前模式：xxx」文本提示，改用「进入 PlanMode 时输入框边框变琥珀色、退出恢复」做更轻量的状态标识。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/PlanTab.tsx): 新增 `PlanApprovalBar` 内嵌审批条——plan 待审批时（`pendingApproval.kind==="plan"`）在评论区上方出三按钮（通过，开干 / 重新规划带反馈 / 拒绝），AutoMode 下 10s 倒计时自动通过。plan 内容本就由 `PlanReady` 事件实时渲染在主区，审批条只补决策入口。
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): 删掉整个 `PlanApprovalPopup` 弹窗组件（~286 行）；`kind==="plan"` 时直接 `return null` 不在输入框上方弹窗；清理只被它用的 import（ClipboardList/Maximize2/Minimize2/Pencil/MarkdownRenderer）。
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 待审批 plan 出现时自动展开 sidebar + 切到「计划」tab（仿 todos 自动聚焦，但无视 autoSwitchBlocked——plan 审批阻塞性更强）。
+  - [apps/desktop/frontend/src/desktop/ui/store/useStore.ts](../apps/desktop/frontend/src/desktop/ui/store/useStore.ts): 新增 `setSessionRunMode` setter；openSession 时 `getRunMode` 拉初值写进 slot——把 `store.currentRunMode`（slot-scoped）确立为 RunMode 唯一真源。
+  - [apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx](../apps/desktop/frontend/src/desktop/ui/components/RunModeChip.tsx): 改读 `store.currentRunMode`（删本地 mode state 与 getRunMode useEffect），pick 后写 store；删掉无人用的 `runModeLabel` 导出函数。
+  - [apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx](../apps/desktop/frontend/src/desktop/ui/components/chatInput/index.tsx): 订阅 `currentRunMode`，PlanMode 时输入框边框换 `border-amber-400/70`，退出自动恢复。
+  - [apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx](../apps/desktop/frontend/src/desktop/ui/components/ChatView.tsx): 删 chat 区「当前模式：xxx」悬浮文本 + 对应 `currentRunMode` 解构 + `runModeLabel` import。
+  - [docs/架构.md](架构.md) §4.4.5: 改写「退出审批」「AutoMode 倒计时」「一图」三处描述，新增「RunMode 单一真源」「修改 plan 走评论流」段。
+- **影响范围**: 纯前端 + 文档。**后端零改动**——`run_plan_submit` 的 HITL 闸口（open_approval / await 决策 / 通过切回 pre_plan_mode / AutoMode auto_handled）原样保留，仅审批 UI 的承载位置从弹窗迁到计划栏。`PermissionKind::Plan` 协议、chat.rs 两处翻译、`PlanPermissionDto` 全部不动，不破兼容。
+- **去掉的能力**: 原弹窗的「编辑后通过」（直接改 plan markdown 再通过）按用户要求移除——要改 plan 改走「重新规划填反馈」或「计划栏选段加评论」，两条都让 transcript 留痕，比静默改写 .md 更可追溯。
+- **留尾巴**: 仅过了 tsc + cargo check，未在 hebweb/desktop 跑真实 PlanMode 复现验证审批搬迁后事件流与自动弹栏。后续需手验：① agent 调 PlanMode(enter) 时 chip 实时翻 + 边框变 amber；② submit 后计划栏自动弹开 + 审批条出现；③ AutoMode 10s 倒计时自动通过；④ 通过后切回原 mode 边框恢复。
+
+### 2026-06-24 — 重构(1b步骤3)：branch 下沉 agent_core + hebweb 镜像 branch 4 命令（web 对齐 desktop）
+
+- **Why**: 用户报 web 版 `branch_create / terminal_open not implemented in hebweb`。branch 是 agent_core 业务（旁支对话），治本路线下沉到 agent_core 让 desktop/hebweb 共用，消除缺口。terminal_* 是强 native（portable_pty + WebviewWindow）不在范围。
+- **改动**:
+  - 新增 [crates/agent-core/src/branch.rs](../crates/agent-core/src/branch.rs): `BranchState`（多条旁支内存历史 + cancel flag）+ `BranchEngine`（surface 无关的 create/discard/cancel/send）+ `fork_history`/`flatten_tool_calls`（纯函数，6 单测搬进来）。send 复用步骤2 下沉的 `aside::run_aside`，emit `WireEvent` 闭包由 surface 注入；构造只读工具集（Read/Grep/WebSearch/Fetch/ReadMemory）+ MCP 发现 + workspace + system prompt 全在这里。新增 `bound_session_of`（surface 路由旁支事件到主对话通道用）。
+  - [apps/desktop/src/branch.rs](../apps/desktop/src/branch.rs): 从 196 行业务逻辑瘦身成 76 行 Tauri 壳——4 command 调 `BranchEngine`，managed state 改 `Arc<agent_core::branch::BranchState>`。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): managed state + delete_session 的 drop_for_session 类型同步改 `Arc<BranchState>`。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): ServerState 加 `branches: Arc<BranchState>`；dispatch 加 branch_create/branch_send/branch_discard/branch_cancel 4 路由；4 个 cmd_branch_* 函数——事件经绑定主对话的 WS broadcast 推送（`bound_session_of` 路由）。
+- **影响范围**: agent-core 新增 branch；desktop branch/lib 瘦身；hebweb 新增 4 命令。**web 现在能开旁支对话**，与 desktop 行为一致（共用同一份 BranchEngine）。
+- **验证（端到端实测，非仅编译）**: hebweb 浏览器 WS 全流程跑通——create_session → send_message(主，记住42) → branch_create(OK, inherited=2 继承主对话历史) → branch_send(问"记住的数字") → 旁支 agent 回"好的老大，是 42。"。证明旁支真正继承上下文 + 跑通 agent。cargo check --workspace 绿；agent-core branch 6 + accumulator 7 单测过；desktop wire 对照测试过；tsc 过。
+- **留尾巴**: 步骤4（三 surface 翻译统一 to_wire + 删 desktop/web 两份 EngineEvent 定义）。desktop 旁支 GUI 需手验不回归。terminal_* 强 native 仍未镜像（web 端该功能降级提示）。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — parity：hebweb 批量镜像 36+ 命令，web 全面对齐 desktop（90→123 命令）
+
+- **Why**: 用户报 web 版多命令 `not implemented in hebweb`。目标是 web 与 desktop 功能对齐（parity），非单修 branch。系统审计：desktop 172 命令 vs hebweb 90，缺口 ~80（含 ~50 native）。
+- **改动**（hebweb [apps/web-server/src/server.rs](../apps/web-server/src/server.rs)）:
+  - **[A] CoreClient 已有方法薄路由（20个）**：list/get/save/delete_subagent、set_subagent_enabled、load_subagent_run、get/save_mcp_config、discover_mcp_tools、get/save_hooks_raw、list/delete_skill_collection、plugin_marketplace_add/list/list_plugins/remove、plugin_install/uninstall/list。全委托 `state.core`（与 desktop 共用 LocalCoreClient facade）。
+  - **[B] storage 纯函数转发（16个）**：list_todos、get/set/clear_active_goal、list_session_plans、read/update_plan_markdown、list/add_plan_comment、list_claude_sessions、import_claude_session、import_vscode_project、undo_compaction、refresh_models_catalog 等。与 desktop lib.rs 同名命令同实现，入口换成 WS dispatch。
+  - **[C] native 降级** [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 浏览器/终端 tab 改 `nativeTabsAvailable = isTauri() && !isEmbeddedPreview()` 控制——web surface 不显示（这两个是 Tauri 原生窗口能力），避免点了触发 not implemented。
+- **影响范围**: hebweb 命令 90→123；前端 RightSidebar web 模式隐藏 native tab。desktop 行为不变（isTauri()=true）。
+- **验证（端到端实测）**: 浏览器 WS 实调——[A] list_subagents OK array[16] / get_mcp_config OK / get_hooks_raw OK / list_skill_collections OK array[8] / plugin_list OK / list_claude_sessions OK array[152] / discover_mcp_tools OK array[2]；[B] list_todos OK array[5] / get_active_goal OK / list_session_plans OK array[3] / list_session_model_io OK array[873]。全部从 "not implemented" 变真实返回。浏览器加载 console 无 not implemented / ErrorBoundary 报错；终端/浏览器 tab 按钮数=0（已隐藏）。cargo check --workspace + agent-core branch 6 测试 + tsc 全绿。
+- **留尾巴**: 剩余未镜像非 native 命令（逻辑复杂/依赖 desktop 私有，按需补）：switch_provider_model（含模型系列锁定 100+行）、export_session_to_claude（落盘 ~/.claude）、fetch_provider_usage（异步 OAuth 用量）、preview_session_payload（依赖 desktop chat）、read_skill_md、import_project_file、attach_path/drop_paths、approve_path_access、discover_all_rules。native 类（browser_*/terminal_*/wechat*/oauth_*/log）web 端不镜像、UI 已降级隐藏。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — parity 收尾：补 read_skill_md/import_project_file/add_plan_comment + 完整对照表 + 终端降级决策
+
+- **Why**: parity 审计要求完整证据 + 终端降级需明确决策（不能"偷懒隐藏"）。
+- **改动**:
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): 再补 3 命令——read_skill_md（纯文件读，仅 SKILL.md）/ import_project_file（调 core.save_project）/ add_plan_comment（plan_comments::append_comment）。hebweb 命令数 123→126，与 desktop 对齐 111。
+  - 新增 [docs/hebweb-parity.md](hebweb-parity.md): desktop 172 vs hebweb 126 完整命令对照表——逐条列已对齐 111 / native 不镜像 50（带原因）/ 非 native 剩余 8（带逐条理由）。
+  - 终端降级决策（用户拍板）：PTY 后端技术上可在 hebweb 实现，但有意保持降级——web 暴露本机 shell 安全风险高（127.0.0.1 无鉴权）+ web 端以跑 agent 为主本地终端价值低。明确边界决策，非能力缺失。写入 parity 文档。
+- **影响范围**: hebweb +3 命令；新增 parity 文档。
+- **验证（实测）**: WS 实调 read_skill_md OK str(9582)（真实读到 playwright-cli/SKILL.md）+ list_subagents array[16]/get_hooks_raw str(2170)/list_skill_collections array[8]/plugin_marketplace_list/get_mcp_config 全 OK。workspace check 绿；agent-core branch 6 + turn_accumulator 7 单测过；tsc 绿。（注：bash::run_in_background_returns_immediately / dispatch::remember_first_compound_bash 两个计时断言测试在高负载下偶发 flaky，单独重跑全过，与本次改动无关。）
+- **留尾巴**: 非 native 剩余 8 命令（approve_path_access 依赖 desktop HitlState 待按 web 审批机制适配、switch_provider_model 100+行、export_session_to_claude 本地落盘、fetch_provider_usage 异步 OAuth、preview_session_payload 依赖 desktop chat、attach_path/drop_paths desktop 拖拽辅助、discover_all_rules）见 parity 文档。架构重构步骤4（三 surface 翻译统一 to_wire）未做。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — parity 第二轮：补齐本可对齐的 6 命令，非native缺口 8→4（均硬约束）
+
+- **Why**: parity 审计指出「8 非 native 缺口含本可对齐却未对齐项」。逐个攻——能补的全补，真不能补的给技术硬约束。
+- **改动** [apps/web-server/src/server.rs](../apps/web-server/src/server.rs) 新增 5 命令（+上轮 read_skill_md/import_project_file 共 6 本可对齐项补齐）:
+  - switch_provider_model：sessions+providers+reasoning 纯逻辑（含模型系列锁定 + Switch marker），照搬 desktop 同实现。
+  - fetch_provider_usage：model_gateway::usage::fetch_claude_usage/fetch_deepseek_balance + ensure_fresh_provider_token——是 HTTP 调用非 native OAuth 窗口，hebweb 可调。
+  - export_session_to_claude：export_claude::build_claude_resume + 落盘 ~/.claude（hebweb 同机）。
+  - discover_all_rules：agent_core::rules::discover/default_global_rules 纯函数。
+  - （含 shell_quote_min helper）
+- **影响范围**: hebweb 命令 126→130，与 desktop 对齐 111→115。
+- **验证（WS 实测，真实执行）**: discover_all_rules OK array[3]；export_session_to_claude OK 真落盘 ~/.claude/projects/-Users-ri...；fetch_provider_usage OK 真拉到账户 email+用量；switch_provider_model 编译通过同 desktop 逻辑。workspace check 绿 / tsc 绿 / branch 6 单测过。
+- **剩余非 native 缺口（4，硬技术约束非"未做"）**: approve_path_access（依赖 desktop HitlState，hebweb 有独立审批机制语义已覆盖）/ preview_session_payload（依赖 desktop chat::build_preview_payload 私有逻辑，调试用）/ attach_path+drop_paths（web 拖拽走浏览器原生 File API，不该让 server 读本地路径——surface 语义边界）。详见 [docs/hebweb-parity.md](hebweb-parity.md)。
+- **留尾巴**: 上述 4 个有硬约束。架构重构步骤4（三 surface 翻译统一 to_wire）未做。进度见 proj 记忆 core-rpc-refactor-progress。
+
+### 2026-06-24 — hebweb 补齐最后 4 个非 native 命令（缺口归零，做法=逻辑下沉 agent_core 两 surface 共用）
+
+- **Why**: 前一条把 4 个命令记为「硬技术约束、不该镜像」，但 parity goal judge 要求**全量对齐 + 可复现证据**，不接受「有理由不做」。重新分析根因——这 4 个的核心逻辑都**误留在 desktop 私有层**（chat.rs / lib.rs），不是真正的 surface 边界。补丁式做法是把逻辑复制进 hebweb（~350 行重复，违反「拒绝补丁式修改」）；彻底做法是把纯逻辑下沉 agent_core，desktop / hebweb 共用同一份——延续阶段 1a/1b（run_aside / branch 下沉）的方向。
+- **改动**:
+  - [crates/agent-core/src/preview_payload.rs](../crates/agent-core/src/preview_payload.rs)（新）: `build_preview_payload` + 3 helper 从 desktop chat.rs 下沉。零 Tauri 依赖（只用 agent_core/common 类型），复刻 agent_loop 进模型前的拼装（工具集 + system prompt + transcript），不发请求不改 session。
+  - [crates/agent-core/src/attach.rs](../crates/agent-core/src/attach.rs)（新）: `attach_path` / `drop_paths` + 分流 helper + 2 单测从 desktop lib.rs 下沉。纯 fs 逻辑（探测路径形态、小图片/文本读附件、其余引用兜底）。
+  - [crates/agent-core/src/lib.rs](../crates/agent-core/src/lib.rs): 注册 `attach` / `preview_payload` 两模块。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 删 `build_preview_payload` + 3 helper（~310 行）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `preview_session_payload` / `attach_path` / `drop_paths` 三个 Tauri command 改薄壳委托 agent_core；删已下沉的 2 个测试与 ~190 行实现。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): 新增 `cmd_approve_path_access`（按 scope 落 storage：this_session→session.allowed_paths / global→settings / this_project,once→不持久化，再投 ApprovalDecision 回 run 的 `pending_approvals` oneshot，与 cmd_approve_permission 同链路）+ `cmd_attach_path` / `cmd_drop_paths` / `cmd_preview_session_payload`（全委托 agent_core）+ 4 条 dispatch 路由。
+  - [docs/hebweb-parity.md](hebweb-parity.md): 三节重写，非 native 缺口 4→0；数字 130→134 实现、115→119 对齐。
+- **验证（WS 实测，真实执行）**:
+  - attach_path: file→`{kind:file}` / dir→`{kind:dir}` / 缺失→`{kind:missing}`。
+  - drop_paths: md→`text_file`、png→`image`(base64)、目录→`reference`、缺失→`missing`。
+  - preview_session_payload: 真 session 202606230929 返回 `{model:claude-opus-4-8, messages:447, tools:57, _workspace:yes, firstRole:system}`。
+  - approve_path_access: 建临时 session→this_session scope→（无 pending 返回 unknown request_id，预期）→重载 `allowed_paths=["/tmp/approve-target-dir"]` 确认落盘→删临时 session 清理。
+  - cargo check --workspace 绿；`cargo test -p agent-core --lib attach` 2 单测过（含下沉的 attach_path_references_file_without_reading_content / drop_paths_classifies_by_type）。
+- **影响范围**: agent-core（+2 模块）、desktop（瘦身 ~500 行，行为不变）、hebweb（+4 命令）。无协议变更，无破坏兼容。desktop preview/attach/drop 走同一份下沉逻辑，与改前等价。
+- **留尾巴**: desktop 端 preview_session_payload / attach_path / drop_paths 的 Tauri command 行为不变但未在 desktop dev 手验（纯委托，逻辑已被 agent-core 单测 + hebweb WS 实测覆盖）。架构重构步骤4（三 surface 翻译统一 to_wire + AssistantAccumulator）仍未做。进度见 proj 记忆 core-rpc-refactor-progress。
+- **关联**: [docs/hebweb-parity.md](hebweb-parity.md)
+
+### 2026-06-24 — hebweb 补齐 OAuth 全链路 + deepseek + read_log_file（纠正「49 全 native」误判）
+
+- **Why**: parity goal judge 反复指出 hebweb 比 desktop 少 49 个命令未对齐。重新逐条核验源码后发现：上一条把 13 oauth + 1 deepseek + read_log_file 归类为「native 硬约束」是**误判**——它们的业务逻辑全在 `model_gateway::auth`（纯 reqwest，零 Tauri 依赖）+ fs，desktop 的 `oauth_*` command 只是不接 AppHandle 的薄壳（`use model_gateway::{auth as oauth}`）。desktop 借 Tauri shell 打开系统浏览器那层壳与登录逻辑无关，且浏览器 surface 里前端本就能直接跳授权页 + 回调拿 code，OAuth 反而更自然。hebweb 本就依赖 model_gateway crate，补这批只是加薄路由委托。
+- **改动**:
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs): 新增 16 个 cmd 函数（13 oauth: codex start/poll/refresh、openai start/exchange、claude start/exchange/refresh/code_import、gemini start/exchange/refresh/cli_import；deepseek_login；read_log_file）全部委托 `model_gateway::auth::*` / `observability::today_log_path`，参数 camelCase（deviceCode/refreshToken/sessionId/code/clientId/clientSecret）；+ 16 条 dispatch 路由。
+  - [docs/hebweb-parity.md](hebweb-parity.md): 重写——纠正 native 分类，已识别 119→134、未实现 49→34，新增「本轮补齐」节列 OAuth 实测授权 URL。
+  - [docs/core-rpc-verification-evidence.md](core-rpc-verification-evidence.md): 追加 §六——误判核验源码证据 + OAuth 功能实测原始返回 + 全量 probe 复跑 + 剩余 34 逐条核验。
+- **验证（运行中 hebweb 真实 WS 调用）**:
+  - oauth_claude_start → 真实 `auth_url=https://claude.ai/oauth/authorize?...`；openai → `auth.openai.com`；gemini → `accounts.google.com/o/oauth2`；codex → 真实 `device_code=deviceauth_6a3b...` expires_in=900。
+  - read_log_file → 真实今日日志 14.6MB。
+  - 全量 probe（desktop 168 命令逐个打 hebweb WS，按兜底 sentinel 分流）：**已识别 134 / 未实现 34**；未实现集 oauth=0 deepseek=0，仅剩 browser 18 + terminal 8 + wechat 5 + log独立窗口/推流 3。
+  - cargo check --workspace 绿。
+- **剩余 34 未实现逐条核验为 Tauri 原生容器依赖（非「未做」）**: browser_*（mod.rs 78 处 tauri，WebviewWindow/wry/CEF 嵌入）、terminal_*（mod.rs 23 处 tauri，本机 PTY，架构决策 web 不暴露 shell）、wechat_*（status/start/stop 依赖 app.try_state::<WeChatState>() 进程内渠道态，login_poll spawn_channel 进程内拉 ChannelBridge，架构 §7.5）、log（open_log_viewer_window/set_always_on_top 开独立 Tauri 窗口、subscribe_log_stream 走 Tauri Channel 推流）。
+- **影响范围**: 仅 hebweb（+16 命令）。desktop / agent-core 未动。无协议变更，无破坏兼容。前端经统一 invoke()，WS transport 透明转发，零改动。
+- **留尾巴**: wechat_login_start 本身无状态 HTTP 理论可补，但 poll→run 链断在 Desktop 进程内 WeChatState，整套搬进 hebweb 是独立架构工作（架构 §7.5 渠道载体 = Desktop 内嵌 + 托盘），非薄路由，本轮不做。subscribe_log_stream 可用 WS event 复刻但价值低（read_log_file 已覆盖历史），未做。browser/terminal 是真物理 native 容器，不可镜像。
+- **关联**: [docs/hebweb-parity.md](hebweb-parity.md), [docs/core-rpc-verification-evidence.md](core-rpc-verification-evidence.md) §六
+
+### 2026-06-24 — 重构步骤4：三 surface 事件翻译收口到 protocol::to_wire（消除三份重复 + 两份 EngineEvent 定义）
+
+- **Why**: 架构 §3.1.1 既定目标——事件「内部 EventPayload → 对外线 DTO」的转换历史上写了三遍且不一致（desktop chat.rs / web events.rs / cli daemon.rs），1a/1b 已铺好 `protocol::WireEvent` + `to_wire` 唯一转换 + AssistantAccumulator，步骤4 收口三 surface 全部改用它。
+- **改动**:
+  - **desktop** [chat.rs](../apps/desktop/src/chat.rs) / [channel_forward.rs](../apps/desktop/src/channel_forward.rs) / [lib.rs](../apps/desktop/src/lib.rs) / [engine/mod.rs](../apps/desktop/src/engine/mod.rs): 删 `agent_event_to_engine_event`（~280 行）+ `engine::EngineEvent` 定义（~285 行）+ 3 个死 Dto（PlanPermissionDto/QuestionOptionDto/AskQuestionDto）。`DesktopObserver` emit / `channel_forward::maybe_forward` / `push_engine_event_to_island` / `Channel<>` 全改 `protocol::to_wire` + `protocol::WireEvent`。channel_forward 的 `to_proto_options` 退化为 identity 删除（WireEvent 的 options 已是 protocol::QuestionOption）。保留 lib.rs command 仍用的 TodoItemDto/PlanCommentDto。删过时的 1a 对照测试（已完成使命）。
+  - **web** [server.rs](../apps/web-server/src/server.rs) / [session.rs](../apps/web-server/src/session.rs) / [main.rs](../apps/web-server/src/main.rs): 删整个 `events.rs`（events::EngineEvent + translate + 2 Dto）。WebObserver / emit_engine_event / Error 构造改 to_wire / WireEvent。
+  - **cli** [daemon.rs](../apps/cli/src/daemon.rs): DaemonEvent **保留**（NDJSON 协议契约超集：daemon 信令 Started + result 截断 500 + flat permission 字段，均有意设计）；但业务事件字段形态统一——risk/suspend reason/resume cause/decision 改用 `protocol::{risk_str,suspend_reason_str,resume_cause_str,approval_decision_str}`（从 wire.rs 提 pub），消除 cli 此前的 `format!("{:?}")` Debug 形态（"Critical"→"critical"、"Cron"→"cron"）。新增回归测试 `daemon_event_risk_and_reason_match_wire_canonical_form`。
+  - **protocol** [wire.rs](../crates/protocol/src/wire.rs) / [lib.rs](../crates/protocol/src/lib.rs): risk_str/suspend_reason_str/resume_cause_str/approval_decision_str 提为 `pub` 并 re-export（三 surface 单一来源）；to_wire 内联 risk 映射抽成 risk_str。
+  - **删 2 孤儿死文件**: engine/types.rs（无 mod 声明）、engine/context.rs（依赖已删 types.rs，僵尸）。
+  - 文档 [架构.md §3.1.1](架构.md) 追加落地状态；[heb-cli-debug.md](heb-cli-debug.md) 事件表标注 risk/reason/cause/decision 的规范小写形态。
+- **影响范围**: desktop/web/cli/protocol 四 crate。**前端无感**（WireEvent 与旧 desktop EngineEvent JSON 逐字节一致，1a 对照测试已证；web 换 to_wire 后多收 19 类事件——desktop 一直在发、前端共用同款 React 代码早已处理，纯增益让 web 向 desktop 看齐）。**cli NDJSON 形态变更**（risk 等字段值改规范小写），已同步文档；DaemonEvent 结构/截断/daemon 信令不变，旧脚本对字段值大小写不敏感的不受影响。
+- **验证**: cargo check --workspace 绿；protocol lib 8 单测过（to_wire）；cli translate_tests 1 过（形态统一回归）；agent-core turn_accumulator 7 过；desktop lib 35 过（排除 2 个**已证与本改动无关**的失败——anthropic_block_index 在干净 HEAD worktree 同样 fail [pre-existing]、pending_inputs 隔离单跑过 [load 34 下 flaky]）。
+- **留尾巴**: heb CLI 端到端实测因本地 provider(localhost:17785) 无响应未跑通（model_io 空、run 卡 run_started），改用单元层回归测试覆盖形态统一（CLAUDE.md「surface 复现不了用单测替代」）。desktop GUI 四处对话流 + hebweb WS + heb NDJSON 建议各手验一次事件渲染不回归。
+
+### 2026-06-24 — 文档同步步骤4 + 生成「一套核心，四个壳」交互课程
+
+- **Why**: 步骤4 收口后，README/CLAUDE.md 仍停留在远古版本（README 写"两个 surface"、指向不存在的 docs/architecture.md、platform 旧 crate 名、把 chat.rs AgentEvent→EngineEvent 当现状）；需同步。并应用户要求用 codebase-to-course skill 把本次重构设计做成可视化课程。
+- **改动**:
+  - [README.md](../README.md): 顶部改"一套核心、多 surface"+ 四 surface 描述 + WireEvent/to_wire 事件统一说明；协议事件流段把 Channel<EngineEvent> 改为 to_wire/WireEvent 三 surface 表；目录结构 chat.rs/engine 描述更新（DesktopObserver 经 to_wire 推 WireEvent / engine/mod.rs 现仅留 Dto）；架构文档链接 architecture.md→架构.md。
+  - [CLAUDE.md](../CLAUDE.md): 步骤4 验证段"桌面 dev（唯一 surface）"改三 surface 任选；"改 EventPayload 验证 chat.rs 翻译"改为"翻译已统一 to_wire，改协议同步 wire.rs + types.ts，任一 surface 跑通验证"。
+  - [docs/架构.md §3.1.1](架构.md): 上一条已加步骤4 落地状态（本条不重复改）。
+  - 修过时代码注释两处（lib.rs/server.rs 的 `EngineEvent::SessionTitleChanged` → `WireEvent::`）。
+  - 新增交互课程 [docs/courses/core-refactor/](courses/core-refactor/): 5 模块（同一件事写三遍 / WireEvent 唯一翻译 / 三壳收口 / CLI 为何例外 / 怎么证明没改坏），teal 配色，含 group chat + 2 flow 动画 + 5 quiz + 5 code↔大白话 + 13 tooltip。codebase-to-course skill sequential 路径，build.sh 组装 index.html，playwright 实测渲染+交互（flow/quiz/chat）正常。
+- **影响范围**: 纯文档 + 新增课程目录，无代码逻辑改动，不影响编译。
+- **留尾巴**: 无。

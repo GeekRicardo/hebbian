@@ -56,5 +56,15 @@ export default defineConfig(async () => ({
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
+    // dev 模式下把 /ws 与 hebweb 同步 API 代理到本地 hebweb，方便在未压缩源码下
+    // 调试 web transport（HEBWEB_PROXY=端口 时启用，不影响 tauri / build）。
+    proxy: process.env.HEBWEB_PROXY
+      ? {
+          "/ws": {
+            target: `ws://127.0.0.1:${process.env.HEBWEB_PROXY}`,
+            ws: true,
+          },
+        }
+      : undefined,
   },
 }));
