@@ -9711,3 +9711,14 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 新增 surface-session crate；hebweb 对话逻辑搬到 surface-session（行为不变）；hebcore 获得完整对话能力。desktop/cli 不受影响。
 - **验证**: `cargo check --workspace` 通过；hebweb 复用 surface-session 后真模型对话事件流（reasoning/text_delta/.../run_finished）+ 落盘行为完全不变；**hebcore 跨进程对话端到端**——一连接 subscribe 收到 subscribed + 完整事件流，另一连接 start_run 返回 accepted，事件经 broadcast 推回订阅者，落盘 user→assistant "好的老大，等于 2。" 正确。这是 §7.8.5 单写者+多观察者的实证。
 - **留尾巴**: hebcore ws transport（浏览器/远程）随步骤⑤；步骤④（heb 改客户端 --stdio/--connect）、⑤（hebweb 改连 hebcore）、⑥（desktop 对话链客户端化，最高风险）依次推进。控制 Op（approve/answer/interrupt）经 hebcore transport 转发待补（subscribe 已通，HITL 回流接入随步骤④⑤客户端化做）。
+
+### 2026-06-25 — heb connect：CLI 作为 hebcore 客户端跑对话（§7.8 步骤④完成）
+
+- **Why**: 完成 §7.8.6 步骤④——heb 不再只能内嵌 agent_core 跑 daemon，还能作为**客户端连常驻 hebcore**（§7.8.4 `--connect` 共享模式），看到与 desktop/hebweb 同一份活内存状态。
+- **改动**:
+  - [apps/cli/src/hebcore_client.rs](../apps/cli/src/hebcore_client.rs)（新）：连 `<data_dir>/hebcore.sock`，`Req`/`Resp` 与 hebcore 的 HebcoreRequest/Response 对应。`connect_run`：subscribe 连接（持续收事件流，先建立保证不漏早期事件）+ start_run 连接（投一次输入），事件 NDJSON 打 stdout 到 run 终态。`connect_rpc`：调同步 API（调试）。
+  - [apps/cli/src/main.rs](../apps/cli/src/main.rs): 加 `Connect { session_id, text, data_dir }` + `HebcoreRpc { method, data_dir }` 子命令 + 分发；`mod hebcore_client`。
+- **双模式落地（§7.8.4）**: `heb connect`（连常驻 hebcore，共享活状态）vs `heb new`（daemon 内嵌 agent_core，进程隔离=`--stdio` 语义）。两者并存，CI/无人值守用 daemon 隔离，多客户端协作用 connect。
+- **影响范围**: 纯 additive 加 heb 子命令；不动 daemon 模式；不动其它 surface。
+- **验证**: 起 hebcore（隔离 data_dir，session 用 hebweb 预建）；`heb connect <sid> "3+5"` 收完整事件流（reasoning×25/text_delta/text_done/turn_finished/run_finished/usage）；再 `heb connect <sid> "4的平方"` —— 落盘累积四条（user/assistant×2 轮，"等于 8" + "16"），证明**共享活状态**（同 session 二次 connect 看到历史）。
+- **留尾巴**: heb connect 的 HITL 控制（allow/deny/answer 经 hebcore 转发回 SessionRuntimeState 的 pending）随后补——subscribe/start_run 主链路已通；ws transport（步骤⑤）；desktop 客户端化（步骤⑥，最高风险）。
