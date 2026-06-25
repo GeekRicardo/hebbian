@@ -45,7 +45,8 @@ struct CoreState {
 }
 
 /// hebcore 的 unix-socket 入站消息（一行一个 JSON）。同步 API 走 `Rpc`，对话主链路走
-/// `StartRun` / `Subscribe`（架构 §3 双通路）。
+/// `StartRun` / `Subscribe`，运行时控制走 `Approve` / `Answer` / `Interrupt` / `Inject` /
+/// `SetRunMode`（架构 §3 双通路 + §7.8.5 控制 Op 路由到对应 runtime）。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum HebcoreRequest {
@@ -55,6 +56,24 @@ enum HebcoreRequest {
     StartRun { session_id: String, text: String },
     /// 订阅一个 session 的事件流：本连接转为只读事件流，持续推 [`protocol::WireEvent`]。
     Subscribe { session_id: String },
+    /// 结算一条审批（HITL）：把客户端的 [`ApprovalDecision`] 路由到对应 runtime 的待结算项。
+    Approve {
+        session_id: String,
+        request_id: String,
+        decision: protocol::ApprovalDecision,
+    },
+    /// 结算一条提问（HITL）。
+    Answer {
+        session_id: String,
+        request_id: String,
+        answer: protocol::UserAnswer,
+    },
+    /// 中断当前 run（拉 cancel flag + 放掉全部待结算 HITL）。
+    Interrupt { session_id: String },
+    /// 把一条 user 输入插进当前活 run 的队列（streaming 插队）。
+    Inject { session_id: String, text: String },
+    /// 即时切换 run mode。
+    SetRunMode { session_id: String, mode: String },
 }
 
 /// hebcore 的出站消息（一行一个 JSON）。
@@ -177,6 +196,84 @@ async fn handle_connection(stream: UnixStream, state: Arc<CoreState>) -> Result<
                     },
                     Err(e) => HebcoreResponse::Error {
                         message: e.to_string(),
+                    },
+                };
+                write_line(&mut write_half, &resp).await?;
+            }
+            Ok(HebcoreRequest::Approve {
+                session_id,
+                request_id,
+                decision,
+            }) => {
+                let resp = match state.runtimes.get(&session_id).await {
+                    Some(rt) if rt.state.resolve_approval(&request_id, decision) => {
+                        HebcoreResponse::Accepted
+                    }
+                    Some(_) => HebcoreResponse::Error {
+                        message: format!("未找到待结算审批 {request_id}"),
+                    },
+                    None => HebcoreResponse::Error {
+                        message: format!("session {session_id} 未激活"),
+                    },
+                };
+                write_line(&mut write_half, &resp).await?;
+            }
+            Ok(HebcoreRequest::Answer {
+                session_id,
+                request_id,
+                answer,
+            }) => {
+                let resp = match state.runtimes.get(&session_id).await {
+                    Some(rt) if rt.state.answer_question(&request_id, answer) => {
+                        HebcoreResponse::Accepted
+                    }
+                    Some(_) => HebcoreResponse::Error {
+                        message: format!("未找到待结算提问 {request_id}"),
+                    },
+                    None => HebcoreResponse::Error {
+                        message: format!("session {session_id} 未激活"),
+                    },
+                };
+                write_line(&mut write_half, &resp).await?;
+            }
+            Ok(HebcoreRequest::Interrupt { session_id }) => {
+                let resp = match state.runtimes.get(&session_id).await {
+                    Some(rt) => {
+                        rt.stop();
+                        HebcoreResponse::Accepted
+                    }
+                    None => HebcoreResponse::Error {
+                        message: format!("session {session_id} 未激活"),
+                    },
+                };
+                write_line(&mut write_half, &resp).await?;
+            }
+            Ok(HebcoreRequest::Inject { session_id, text }) => {
+                let resp = match state.runtimes.get(&session_id).await {
+                    Some(rt) if rt.inject(text) => HebcoreResponse::Accepted,
+                    Some(_) => HebcoreResponse::Error {
+                        message: "无活跃 run，无法注入".into(),
+                    },
+                    None => HebcoreResponse::Error {
+                        message: format!("session {session_id} 未激活"),
+                    },
+                };
+                write_line(&mut write_half, &resp).await?;
+            }
+            Ok(HebcoreRequest::SetRunMode { session_id, mode }) => {
+                let resp = match agent_core::run_mode::RunMode::parse(&mode) {
+                    Some(m) => match state.runtimes.get(&session_id).await {
+                        Some(rt) => {
+                            rt.state.set_run_mode(m);
+                            agent_core::run_mode::LiveRunModeRegistry::global().set(&session_id, m);
+                            HebcoreResponse::Accepted
+                        }
+                        None => HebcoreResponse::Error {
+                            message: format!("session {session_id} 未激活"),
+                        },
+                    },
+                    None => HebcoreResponse::Error {
+                        message: format!("非法 run mode: {mode}"),
                     },
                 };
                 write_line(&mut write_half, &resp).await?;

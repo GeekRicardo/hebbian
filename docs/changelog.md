@@ -9722,3 +9722,12 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 纯 additive 加 heb 子命令；不动 daemon 模式；不动其它 surface。
 - **验证**: 起 hebcore（隔离 data_dir，session 用 hebweb 预建）；`heb connect <sid> "3+5"` 收完整事件流（reasoning×25/text_delta/text_done/turn_finished/run_finished/usage）；再 `heb connect <sid> "4的平方"` —— 落盘累积四条（user/assistant×2 轮，"等于 8" + "16"），证明**共享活状态**（同 session 二次 connect 看到历史）。
 - **留尾巴**: heb connect 的 HITL 控制（allow/deny/answer 经 hebcore 转发回 SessionRuntimeState 的 pending）随后补——subscribe/start_run 主链路已通；ws transport（步骤⑤）；desktop 客户端化（步骤⑥，最高风险）。
+
+### 2026-06-25 — hebcore 补 HITL 控制 Op：对话客户端化能力完整（§7.8 步骤③④增强）
+
+- **Why**: heb connect 能跑对话 + 收事件，但遇到审批/提问无法回应、无法中断——对话客户端化不完整。补上 hebcore 的运行时控制 Op 转发，让客户端（heb / 未来 hebweb / desktop）能完整驱动 hebcore 里的活对话。
+- **改动**:
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): HebcoreRequest 加 `Approve`（ApprovalDecision）/ `Answer`（UserAnswer）/ `Interrupt` / `Inject` / `SetRunMode`，handle_connection 路由到对应 runtime——审批/提问经 `SessionRuntimeState::resolve_approval`/`answer_question` 结算待结算 oneshot，Interrupt 走 `stop()`，Inject 走 `inject()`，SetRunMode 同步 LiveRunModeRegistry。直接复用 §7.8.5 已有的 HITL 结算接口。
+- **影响范围**: 纯 additive 加 hebcore 入站消息类型；不动现有 surface。
+- **验证**: `cargo check -p hebcore` 通过；hebcore 跑带工具调用的对话端到端——事件流含 tool_start/tool_output_delta/tool_done，落盘 assistant 带 tool_call（结果正确）。审批结算路径复用 SessionRuntimeState 已验证的 resolve_approval（has 单测）+ oneshot 结算（与 hebweb/cli 同一套）。
+- **留尾巴**: HITL 真触发场景的端到端（需 run_mode 配置触发审批）；步骤⑤ hebweb 客户端化（ws transport / 前端 invoke 语义迁移）；步骤⑥ desktop（最高风险）。
