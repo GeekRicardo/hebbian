@@ -1365,33 +1365,17 @@ fn get_active_goal(
 #[tauri::command]
 fn set_active_goal(app: AppHandle, session_id: String, condition: String) -> AppResult<()> {
     let dd = data_dir(&app)?;
+    // 只写 active_goal（带 pending_set_marker），「目标已设」marker 由 agent_loop 在 run
+    // 启动时（Goal set user 消息已落盘后）落——保证 marker 物理排在 user 消息之后，且与
+    // 裁决 marker 同走 agent_core 串行落盘流，不靠前端抢落造成倒挂。
     let goal = agent_core::storage::sessions::ActiveGoal {
-        condition: condition.clone(),
+        condition,
         created_at: chrono::Utc::now().timestamp_millis(),
         iterations: 0,
         last_reason: None,
+        pending_set_marker: true,
     };
     sessions::set_active_goal(&dd, &session_id, Some(goal))?;
-    // 落一条 GoalOutcome{kind:"set"} marker，让消息流即时出现「目标已设」彩色竖线块
-    // （与 agent_loop 裁决落的 achieved/impossible/progress 同形态，统一渲染）。
-    let marker = sessions::Message {
-        id: sessions::new_id(),
-        role: sessions::Role::Marker,
-        content: String::new(),
-        attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: Some(sessions::MessageMeta::GoalOutcome {
-            kind: "set".to_string(),
-            condition,
-            reason: String::new(),
-            iteration: 0,
-        }),
-        subagent_call_id: None,
-        run_duration_ms: None,
-    };
-    sessions::append_message(&dd, &session_id, marker)?;
     Ok(())
 }
 

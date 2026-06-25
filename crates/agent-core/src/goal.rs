@@ -64,6 +64,9 @@ pub async fn judge_goal(
     condition: &str,
     recent_transcript: &[TranscriptEntry],
     cancel: common::CancelFlag,
+    dump: Option<&crate::model_io_dump::ModelIoDump>,
+    run_id: &str,
+    turn: u32,
 ) -> GoalVerdict {
     let prompt = format_judge_prompt(condition, recent_transcript);
     let request = ModelRequest {
@@ -74,7 +77,24 @@ pub async fn judge_goal(
         max_tokens: 400,
         reasoning: None,
     };
-    match client.complete(request, cancel).await {
+    // complete 会消费 request；要 dump 就先快照一份。
+    let dump_request = dump.map(|_| request.clone());
+    let started = std::time::Instant::now();
+    let result = client.complete(request, cancel).await;
+    // goal judge 的 LLM 请求记入 model_io.jsonl（kind="judge"，与 AutoMode 判官同标签）。
+    if let (Some(dump), Some(req)) = (dump, dump_request) {
+        dump.record(crate::model_io_dump::DumpEntry {
+            ts: crate::model_io_dump::iso_now(),
+            run_id: run_id.to_string(),
+            turn,
+            model: client.provider_id().to_string(),
+            request: crate::model_io_dump::request_to_json(&req, client.provider_id()),
+            response: crate::model_io_dump::response_to_json(&result),
+            duration_ms: started.elapsed().as_millis() as u64,
+            kind: "judge".to_string(),
+        });
+    }
+    match result {
         Ok(resp) => parse_verdict(&extract_text(&resp)),
         // judge 调用本身失败 / 被取消 → fail-safe NotYet（不误判达成，也不熔断）。
         // 真正的 cancel 由主 loop 的 CancelFlag 兜底停止续跑。

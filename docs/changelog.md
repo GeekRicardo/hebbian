@@ -9731,3 +9731,14 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 纯 additive 加 hebcore 入站消息类型；不动现有 surface。
 - **验证**: `cargo check -p hebcore` 通过；hebcore 跑带工具调用的对话端到端——事件流含 tool_start/tool_output_delta/tool_done，落盘 assistant 带 tool_call（结果正确）。审批结算路径复用 SessionRuntimeState 已验证的 resolve_approval（has 单测）+ oneshot 结算（与 hebweb/cli 同一套）。
 - **留尾巴**: HITL 真触发场景的端到端（需 run_mode 配置触发审批）；步骤⑤ hebweb 客户端化（ws transport / 前端 invoke 语义迁移）；步骤⑥ desktop（最高风险）。
+
+### 2026-06-25 — 修 goal marker 落盘顺序倒挂 + set marker 收归 agent_core + goal judge 进 model_io
+
+- **Why**: 用户反馈三点——①set marker「目标已设」排在了触发它的 `Goal set` user 消息之上（应在下方）；②中途裁决 marker（progress/achieved/impossible）排在该回应的 assistant 输出之上（应在下方）；③goal judge 的 LLM 请求没进 model_io.jsonl，调试时看不到。根因：goal marker 走 agent_core 直接 append，而 assistant 的物理落盘 `persister.finish()` 在 loop 外、太靠后 → marker 倒挂；set marker 更是前端 command 抢先落，脱离串行流。
+- **改动**:
+  - `crates/agent-core/src/agent_loop.rs`: ①裁决落 marker 前先 `persister.flush_segment(本run耗时)` 把累积的 assistant 段先落盘 → marker 物理排在 assistant 之后（flush 后累积器清空，run 收尾 finish 不重复落）；②run 启动时（`Goal set` user 消息已落盘后）检查 `active_goal.pending_set_marker`，为 true 则落 set marker 并清标志——set marker 与裁决 marker 同走 `append_goal_outcome_marker` 串行流，物理排在 user 消息之后；③judge_goal 调用传入 model_io_dump + run_id + turn
+  - `crates/agent-core/src/goal.rs`: judge_goal 加 dump/run_id/turn 参数，complete 前后 record 一条 `kind:"judge"` 的 DumpEntry（与 AutoMode 判官同标签，前端蓝标渲染）
+  - `apps/desktop/src/lib.rs`: set_active_goal command 不再抢先落 marker，只写带 `pending_set_marker:true` 的 active_goal（落 marker 交给 agent_loop）
+  - `crates/agent-core/src/storage/sessions.rs`（已先行提交）: ActiveGoal 加 `pending_set_marker` 一次性标志（同 PendingContinue 模式）
+- **影响范围**: agent-core（agent_loop/goal）+ desktop lib.rs。零新机制——所有 goal marker 统一走 agent_core 串行落盘流，顺序 = 发生序。agent-core 8 个 goal 测试全过、desktop 整包编译通过、tsc 0 error
+- **留尾巴**: `goal_iterations` 每 run 从 0 重置（跨 run 不累计「第 N 轮」），用户确认先不动；set marker 落盘依赖 surface 先落 `Goal set` user 消息（现状成立）

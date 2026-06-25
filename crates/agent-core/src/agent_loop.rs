@@ -496,6 +496,29 @@ pub async fn run_loop(
         }
     }
 
+    // 「目标已设」marker（架构 §4.8.3）：用户刚设目标时 set_active_goal 置了
+    // pending_set_marker，此刻触发 run 的 `Goal set` user 消息已落盘——落一条
+    // set marker（物理排在该 user 消息之后），并清标志避免重复落。与裁决 marker
+    // 同走 append_goal_outcome_marker 串行流。
+    if resume_from.is_none() {
+        if let (Some(dd), Some(sid)) = (data_dir.as_deref(), session_id.as_deref()) {
+            if let Ok(Some(goal)) = crate::storage::sessions::load(dd, sid).map(|s| s.active_goal) {
+                if goal.pending_set_marker {
+                    append_goal_outcome_marker(dd, sid, "set", &goal.condition, "", 0);
+                    let cleared = crate::storage::sessions::ActiveGoal {
+                        pending_set_marker: false,
+                        ..goal
+                    };
+                    if let Err(e) =
+                        crate::storage::sessions::set_active_goal(dd, sid, Some(cleared))
+                    {
+                        tracing::warn!(error = %e, "清 pending_set_marker 失败");
+                    }
+                }
+            }
+        }
+    }
+
     // 估算校准样本：最近一次请求的服务端真值 input_tokens 与其配对的本地估算。
     // 启动时从持久化 token_stats 播种——已加载的长会话首轮就能用上次真值校准，
     // 不必等本会话采到第一个样本（否则恢复一个已逼近上限的会话，首请求仍会 400）。
@@ -1068,6 +1091,12 @@ pub async fn run_loop(
                     })
                     .and_then(|(dd, sid, s)| s.active_goal.map(|g| (dd, sid, g)));
                 if let Some((dd, sid, goal)) = goal_ctx {
+                    // 裁决要落 goal marker——先把本轮累积的 assistant 段落盘（带本 run 耗时），
+                    // 保证 marker 物理排在它该回应的 assistant 之后，而非倒挂到前面。
+                    // flush 后累积器清空，下方 run 收尾的 finish() 不会重复落这段。
+                    if let Some(p) = persister.as_ref() {
+                        p.flush_segment(Some(run_start.elapsed().as_millis() as u64));
+                    }
                     match judge_client.as_ref() {
                         None => {
                             tracing::warn!(
@@ -1082,6 +1111,9 @@ pub async fn run_loop(
                                 &goal.condition,
                                 &transcript.entries,
                                 cancel.clone(),
+                                model_io_dump.as_ref(),
+                                &state.run_id.to_string(),
+                                turn_index,
                             )
                             .await;
                             match verdict {
@@ -1141,6 +1173,7 @@ pub async fn run_loop(
                                         created_at: goal.created_at,
                                         iterations: goal_iterations,
                                         last_reason: Some(reason.clone()),
+                                        pending_set_marker: false,
                                     };
                                     if let Err(e) = crate::storage::sessions::set_active_goal(
                                         dd,
@@ -2269,6 +2302,7 @@ mod tests {
                 created_at: 1,
                 iterations: 0,
                 last_reason: None,
+                pending_set_marker: false,
             }),
         )
         .unwrap();
