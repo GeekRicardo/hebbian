@@ -265,6 +265,7 @@ impl SubagentRunner {
             system_rules: None,
             subagent_ctx: None,
             subagent_bypass,
+            persister: None,
         };
 
         let output = agent_loop::run_loop(params, child_sink).await?;

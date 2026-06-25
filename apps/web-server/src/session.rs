@@ -144,6 +144,9 @@ struct TurnData {
     pending_tools: HashMap<String, (String, Value)>,
     /// 子 NestedRun 过程累积（架构 §4.4.11.8），build_message 落盘前同步进 tool_calls 的 nested。
     nested: NestedAccumulator,
+    /// 首个内容事件到达时刻（Unix ms）。build_message 用作 created_at——内容「真实产生时刻」，
+    /// 非落盘时刻（架构 §4.9.5 消息顺序契约），否则 assistant 会倒挂到 turn 末尾 marker 之后。
+    started_at: Option<i64>,
 }
 
 impl TurnData {
@@ -154,11 +157,24 @@ impl TurnData {
             parts: Vec::new(),
             pending_tools: HashMap::new(),
             nested: NestedAccumulator::default(),
+            started_at: None,
         }
     }
 
     fn handle_event(&mut self, payload: &protocol::EventPayload) {
         use protocol::EventPayload::*;
+        if self.started_at.is_none()
+            && matches!(
+                payload,
+                Reasoning { .. }
+                    | TextDelta { .. }
+                    | TextDone { .. }
+                    | ToolCallStarted { .. }
+                    | ToolCallFinished { .. }
+            )
+        {
+            self.started_at = Some(Utc::now().timestamp_millis());
+        }
         match payload {
             Reasoning { text } => {
                 self.parts
@@ -227,7 +243,9 @@ impl TurnData {
             attachments: Vec::new(),
             tool_calls: self.tool_calls,
             parts: self.parts,
-            created_at: Utc::now().timestamp_millis(),
+            created_at: self
+                .started_at
+                .unwrap_or_else(|| Utc::now().timestamp_millis()),
             meta: None,
             subagent_call_id: None,
             run_duration_ms: None,
@@ -538,37 +556,15 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     runtime.clear_active();
 
     // token_stats 由 agent_loop per-turn 落盘（sessions::bump_token_stats），不再 run-end 累加。
-
-    let consumed: Vec<_> = consumed_inputs.lock().unwrap().drain(..).collect();
+    // assistant 段 + 插队 user 的落盘已收归 agent_core（架构 §4.9.5）：agent_loop 在段边界 /
+    // drain 边界 / run 收尾单点串行 append，surface 不再落盘（避免双落）。consumed_inputs
+    // 仅 drain 清空避免 leak，不再据它补落 user。
+    consumed_inputs.lock().unwrap().clear();
 
     match summary.outcome {
-        // 架构 §4.12.1：Suspended 与 Done 走同一段落盘——transcript 从 jsonl 重建
-        // （§4.12.3），本轮 assistant 段和 pending drained 的 user message 都要持久化；
-        // 不发 Error event 让 web 前端正常显示挂起态，等 wakeup resume。
-        TurnOutcome::Done | TurnOutcome::Suspended => {
-            if let Some(mut msg) = observer.turn.build_message() {
-                msg.run_duration_ms = summary.duration_ms;
-                sessions::append_message(data_dir, session_id, msg)?;
-            }
-            for input in consumed {
-                sessions::append_message(
-                    data_dir,
-                    session_id,
-                    Message {
-                        id: sessions::new_id(),
-                        role: Role::User,
-                        content: input.content,
-                        attachments: input.attachments,
-                        tool_calls: Vec::new(),
-                        parts: Vec::new(),
-                        created_at: Utc::now().timestamp_millis(),
-                        meta: None,
-                        subagent_call_id: None,
-                        run_duration_ms: None,
-                    },
-                )?;
-            }
-        }
+        // 架构 §4.12.1：Suspended 与 Done 都由 agent_core 落盘；不发 Error 让 web 前端
+        // 正常显示挂起态，等 wakeup resume。
+        TurnOutcome::Done | TurnOutcome::Suspended => {}
         TurnOutcome::Cancelled => {
             runtime.emit_engine_event(protocol::WireEvent::Error {
                 message: "run 已取消".to_string(),

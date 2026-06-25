@@ -25,6 +25,9 @@ pub struct TurnRenderer {
     run_spinner: Option<ToolSpinner>,
     tool_spinners: HashMap<String, ToolSpinner>,
     output_lock: Arc<Mutex<()>>,
+    /// 首个内容事件到达时刻（Unix ms）。落盘用作 assistant created_at——内容「真实产生时刻」，
+    /// 非落盘时刻（架构 §4.9.5 消息顺序契约）。
+    started_at: Option<i64>,
 }
 
 impl TurnRenderer {
@@ -36,11 +39,30 @@ impl TurnRenderer {
             run_spinner: None,
             tool_spinners: HashMap::new(),
             output_lock: Arc::new(Mutex::new(())),
+            started_at: None,
         }
+    }
+
+    /// 首个内容事件时刻（Unix ms），无内容返回 `None`。
+    pub fn started_at(&self) -> Option<i64> {
+        self.started_at
     }
 
     /// 渲染一个事件。终止事件（RunFinished / Failed / Cancelled）也由这里渲染。
     pub fn on_event(&mut self, event: &Event) {
+        if self.started_at.is_none()
+            && matches!(
+                &event.payload,
+                EventPayload::TextDelta { .. }
+                    | EventPayload::Reasoning { .. }
+                    | EventPayload::TextDone { .. }
+                    | EventPayload::ToolCallDelta { .. }
+                    | EventPayload::ToolCallStarted { .. }
+                    | EventPayload::ToolCallFinished { .. }
+            )
+        {
+            self.started_at = Some(chrono::Utc::now().timestamp_millis());
+        }
         match &event.payload {
             EventPayload::RunStarted { .. } => self.start_run_spinner(),
             EventPayload::TurnStarted { turn, .. } => {

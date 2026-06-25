@@ -64,6 +64,9 @@ struct ActiveRun {
     streaming_reasoning: String,
     // 在 chat_view.blocks 里的 assistant block 索引（streaming 期间持续追加）。
     assistant_block_idx: Option<usize>,
+    /// 首个内容事件到达时刻（Unix ms）。落盘用作 assistant created_at——内容「真实产生时刻」，
+    /// 非落盘时刻（架构 §4.9.5 消息顺序契约）。
+    started_at: Option<i64>,
 }
 
 struct App {
@@ -288,6 +291,7 @@ impl App {
             streaming_text: String::new(),
             streaming_reasoning: String::new(),
             assistant_block_idx: Some(idx),
+            started_at: None,
         });
     }
 
@@ -296,6 +300,21 @@ impl App {
         event: AgentEvent,
         session: &mut Session,
     ) -> Result<()> {
+        if matches!(
+            &event.payload,
+            EventPayload::TextDelta { .. }
+                | EventPayload::Reasoning { .. }
+                | EventPayload::TextDone { .. }
+                | EventPayload::ToolCallDelta { .. }
+                | EventPayload::ToolCallStarted { .. }
+                | EventPayload::ToolCallFinished { .. }
+        ) {
+            if let Some(run) = &mut self.active_run {
+                if run.started_at.is_none() {
+                    run.started_at = Some(chrono::Utc::now().timestamp_millis());
+                }
+            }
+        }
         match &event.payload {
             EventPayload::TextDelta { text } => {
                 if let Some(run) = &mut self.active_run {
@@ -410,8 +429,9 @@ impl App {
                 if let Some(run) = self.active_run.as_mut() {
                     let final_text = std::mem::take(&mut run.streaming_text);
                     if !final_text.is_empty() {
+                        // 架构 §4.9.5：assistant 落盘已收归 agent_core。只 commit 更新内存
+                        // transcript 供下一轮续接，不再落盘（避免双落）。
                         session.commit_assistant(final_text.clone(), Vec::new());
-                        self.persist_assistant(&final_text);
                     }
                 }
                 self.status.used_tokens =
@@ -548,7 +568,7 @@ impl App {
         }
     }
 
-    fn persist_assistant(&self, content: &str) {
+    fn persist_assistant(&self, content: &str, created_at: i64) {
         if content.is_empty() {
             return;
         }
@@ -561,7 +581,7 @@ impl App {
                 attachments: Vec::new(),
                 tool_calls: Vec::new(),
                 parts: Vec::new(),
-                created_at: chrono::Utc::now().timestamp_millis(),
+                created_at,
                 meta: None,
             };
             let _ = sessions::append_message(&p.data_dir, &p.session_id, msg);

@@ -66,6 +66,12 @@ impl AssistantAccumulator {
         if content.is_empty() && self.tool_calls.is_empty() && self.parts.is_empty() {
             return None;
         }
+        // created_at = 该 message 内容「真实产生时刻」（首个内容事件到达时），
+        // 不是落盘时刻（架构 §4.9.5 消息顺序契约）。否则一段早就流式输出的 assistant，
+        // 落盘时刻晚于 turn 末尾的 goal marker / 流式途中插队的 user，sort 后倒挂。
+        let created_at = self
+            .started_at
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
         Some(Message {
             id: crate::storage::sessions::new_id(),
             role: Role::Assistant,
@@ -73,7 +79,7 @@ impl AssistantAccumulator {
             attachments: Vec::new(),
             tool_calls: self.tool_calls,
             parts: self.parts,
-            created_at: chrono::Utc::now().timestamp_millis(),
+            created_at,
             meta: None,
             subagent_call_id: None,
             run_duration_ms: None,
@@ -258,21 +264,29 @@ impl AssistantAccumulator {
 
     /// 找回（或新建）`index` / `id` 对应的 ToolCall part 位置。
     fn tool_position(&mut self, index: usize, id: Option<&str>, name: Option<&str>) -> usize {
-        if let Some(pos) = id
-            .filter(|v| !v.trim().is_empty())
-            .and_then(|v| self.by_id.get(v).copied())
-        {
+        let incoming_id = id.filter(|v| !v.trim().is_empty());
+
+        // call_id 是 tool_call 的稳定全局身份：见过同 id 直接复用那条 part。
+        if let Some(pos) = incoming_id.and_then(|v| self.by_id.get(v).copied()) {
             self.by_index.entry(index).or_insert(pos);
             return pos;
         }
+
+        // index 只是 id 到达前的 streaming fallback。命中的 part 若已绑定了另一个
+        // call_id，说明上游把不同 tool_call 的 index 撞到了一起，此时绝不能复用——
+        // 否则新 tool_call 会把旧的覆盖、旧 part 被静默丢失。
         if let Some(pos) = self.by_index.get(&index).copied() {
-            return pos;
+            let collides_with_other = incoming_id.is_some_and(|incoming| {
+                matches!(&self.parts[pos],
+                    MessagePart::ToolCall { id, .. } if !id.trim().is_empty() && id != incoming)
+            });
+            if !collides_with_other {
+                return pos;
+            }
         }
+
         let pos = self.parts.len();
-        let clean_id = id
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_default()
-            .to_string();
+        let clean_id = incoming_id.unwrap_or_default().to_string();
         self.parts.push(MessagePart::ToolCall {
             id: clean_id.clone(),
             name: name
@@ -432,6 +446,40 @@ mod tests {
     }
 
     #[test]
+    fn colliding_index_with_distinct_ids_keeps_both_tool_parts() {
+        // 上游（如 adapter 失误透传浮动 block index）把两个不同 call_id 的 tool_call
+        // 撞到同一个 index：by_index 命中旧 part 但 id 不同，必须新建独立 part，
+        // 不能复用旧 part 把它的 id 覆盖掉，否则旧 tool_call 被静默丢失。
+        let mut acc = AssistantAccumulator::new();
+        acc.on_event(&ev(EventPayload::ToolCallDelta {
+            index: 1,
+            id: Some("call_a".into()),
+            name: Some("tool_a".into()),
+            arguments_delta: Some("{}".into()),
+        }));
+        acc.on_event(&ev(EventPayload::ToolCallDelta {
+            index: 1,
+            id: Some("call_b".into()),
+            name: Some("tool_b".into()),
+            arguments_delta: Some("{}".into()),
+        }));
+        let msg = acc.build().unwrap();
+        let tool_names: Vec<&str> = msg
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                MessagePart::ToolCall { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_names,
+            vec!["tool_a", "tool_b"],
+            "撞 index 的不同 call_id 应各自落一条 part"
+        );
+    }
+
+    #[test]
     fn text_done_finalizes_when_stream_incomplete() {
         // 流式没吐任何 TextDelta，只有 TextDone 给全文：build 时用 final_text 补齐。
         let mut acc = AssistantAccumulator::new();
@@ -472,5 +520,28 @@ mod tests {
         assert!(acc.started_at().is_none());
         acc.on_event(&ev(EventPayload::TextDelta { text: "x".into() }));
         assert!(acc.started_at().is_some());
+    }
+
+    /// 回归（架构 §4.9.5 消息顺序契约）：build 出的 message.created_at 必须是「首个内容
+    /// 事件到达时刻」，不是「落盘/build 时刻」。否则一段早就流式输出的 assistant 会因
+    /// created_at 虚高，sort 后倒挂到 turn 末尾的 goal marker / 系统通知之后。
+    ///
+    /// A/B 翻转：build() 用 `started_at` 时本测试 pass；改回 `Utc::now()` 必 fail
+    /// （created_at 会等于 build 时刻，>= after_first_event）。
+    #[test]
+    fn created_at_is_first_content_time_not_build_time() {
+        let mut acc = AssistantAccumulator::new();
+        acc.on_event(&ev(EventPayload::TextDelta { text: "首".into() }));
+        let after_first_event = chrono::Utc::now().timestamp_millis();
+        // 拉开首事件与 build 的时间差：用了落盘时刻会显著大于 after_first_event。
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        acc.on_event(&ev(EventPayload::TextDelta { text: "尾".into() }));
+        let msg = acc.build().unwrap();
+        assert!(
+            msg.created_at <= after_first_event,
+            "created_at({}) 应锁定在首事件时刻(<= {})，而非 build 落盘时刻",
+            msg.created_at,
+            after_first_event
+        );
     }
 }

@@ -159,9 +159,22 @@ impl Harness {
         // 极短 task 等空位，避免生命周期 / HITL 事件丢失。
         let (run_tx, run_rx) = mpsc::channel::<Event>(1024);
         let recorder = params.recorder.clone();
+        // Run 落盘协调器（架构 §4.9.5）：data_dir + session_id 都给定时构造。本体随 run task
+        // 移进 LoopParams.persister 在 agent_loop 主体单点落盘；handle（sink 端 clone）插进
+        // core_sink，对每个 Event 做纯内存累积 + partial 写帧。`None` 时整条落盘链跳过。
+        let persister = match (&params.data_dir, &params.session_id) {
+            (Some(dd), Some(sid)) => {
+                Some(crate::run_persister::RunPersister::new(dd.clone(), sid.clone()))
+            }
+            _ => None,
+        };
+        let persister_handle = persister.as_ref().map(|p| p.handle());
         let core_sink: EventSink = Arc::new(move |event: Event| {
             if let Some(rec) = &recorder {
                 rec.write(&event);
+            }
+            if let Some(h) = &persister_handle {
+                h.observe(&event);
             }
             if let Err(e) = run_tx.try_send(event) {
                 let error_label = e.to_string();
@@ -342,6 +355,7 @@ impl Harness {
                 system_rules,
                 subagent_ctx,
                 subagent_bypass: false,
+                persister,
             };
             if let Err(e) = agent_loop::run_loop(params, sink).await {
                 warn!(error = %e, "run failed");

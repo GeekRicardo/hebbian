@@ -562,6 +562,15 @@ struct ClaudeSessionDto {
     modified_ms: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSessionPreviewDto {
+    title: String,
+    model: String,
+    cwd: String,
+    messages: Vec<Message>,
+}
+
 /// 列出用户 claude 目录下所有可导入会话（按目录分组交给前端，这里给扁平列表带 cwd）。
 #[tauri::command]
 fn list_claude_sessions() -> AppResult<Vec<ClaudeSessionDto>> {
@@ -611,6 +620,23 @@ fn import_claude_session(
     session.title = parsed.title;
     session.messages = parsed.messages;
     sessions::save(&data_dir, session)
+}
+
+/// 读取并解析一条 Claude 会话文件，返回预览数据（不保存，仅供前端预览）。
+#[tauri::command]
+fn read_claude_session_preview(path: String) -> AppResult<ClaudeSessionPreviewDto> {
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| AppError::msg(format!("读取失败：{e}")))?;
+    let parsed = agent_core::storage::import_claude::parse_claude_jsonl(&content)?;
+    Ok(ClaudeSessionPreviewDto {
+        title: parsed.title,
+        model: parsed.model,
+        cwd: parsed
+            .workdir
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        messages: parsed.messages,
+    })
 }
 
 #[tauri::command]
@@ -1083,7 +1109,6 @@ fn inject_user_message(
     meta: Option<agent_core::storage::sessions::MessageMeta>,
 ) -> AppResult<InjectUserMessageResult> {
     use agent_core::storage::sessions::{self, Message, Role};
-    let dd = data_dir(&app)?;
 
     let user_msg = Message {
         id: sessions::new_id(),
@@ -1098,11 +1123,10 @@ fn inject_user_message(
         run_duration_ms: None,
     };
 
-    // 1) 即写即落：jsonl 优先，cancel / 崩溃 / run 已结束都不丢
-    sessions::append_message(&dd, &session_id, user_msg.clone())?;
-
-    // 2) 推 in-memory 队列：让正在跑的 agent_loop 在下次 ModelStep 之前看到。
-    //    run 不活跃返回 false——不报错，消息已落盘，surface 后续 rebuild 自然可见。
+    // 插队 user message 落盘已收归 agent_core（架构 §4.9.5）：agent_loop 在 drain 边界
+    // 单点 append，desktop 不再即写即落（避免双落）。这里只推 in-memory pending 队列，
+    // 让正在跑的 agent_loop 在下次 ModelStep 之前 drain 出来 + 落盘。返回的 message 仅
+    // 供前端乐观渲染，run 结束 reload 时以 agent_core 落盘的为准。
     let injected = cancellation::inject_pending_input(
         &request_id,
         common::runtime::PendingUserInput {
@@ -1111,7 +1135,7 @@ fn inject_user_message(
         },
     );
     if !injected {
-        tracing::debug!(session_id, request_id, "inject: run 不活跃，仅落盘不入队");
+        tracing::debug!(session_id, request_id, "inject: run 不活跃，未入队");
     }
 
     Ok(InjectUserMessageResult {
@@ -2785,6 +2809,7 @@ pub fn run() {
             export_session_to_claude,
             list_claude_sessions,
             import_claude_session,
+            read_claude_session_preview,
             fork_session,
             branch::branch_create,
             branch::branch_send,

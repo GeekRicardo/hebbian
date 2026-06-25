@@ -22,6 +22,7 @@ pub mod read_state;
 pub mod recorder;
 pub mod rules;
 pub mod run_mode;
+pub mod run_persister;
 pub mod run_state;
 pub mod session;
 pub mod session_titler;

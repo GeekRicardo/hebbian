@@ -9558,3 +9558,51 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - 新增交互课程 [docs/courses/core-refactor/](courses/core-refactor/): 5 模块（同一件事写三遍 / WireEvent 唯一翻译 / 三壳收口 / CLI 为何例外 / 怎么证明没改坏），teal 配色，含 group chat + 2 flow 动画 + 5 quiz + 5 code↔大白话 + 13 tooltip。codebase-to-course skill sequential 路径，build.sh 组装 index.html，playwright 实测渲染+交互（flow/quiz/chat）正常。
 - **影响范围**: 纯文档 + 新增课程目录，无代码逻辑改动，不影响编译。
 - **留尾巴**: 无。
+
+### 2026-06-25 — 记录：工作区并发在途改动（非本会话所为，待其作者补权威说明）
+
+- **背景**：本会话（core-rpc 事件统一重构，已提交 5a2bf03）收尾时，Stop hook 检测到工作区另有一组**未提交的并发改动**，作者另有其人。本条仅作**客观登记**，让时间线不丢这段；其 Why / 权衡 / 留尾巴应由各自作者正式补充——我不是作者，不揣测其设计意图，只陈述 diff 可见的事实。
+- **观察到的改动（事实，非 why）**：
+  - **RunMode 单一真源**：`store.currentRunMode`（slot-scoped）成为 RunMode 唯一真源，由 `run_mode_changed` 事件 + openSession 拉初值共同维护；新增 `setRunMode`（useStore.ts）。`RunModeChip` / `PlanTab` / `chatInput` 输入框边框改为订阅它，使 agent 自主进/出 PlanMode 时 UI 实时联动。`ChatView.tsx` 移除旧的 runModeLabel 悬浮提示（-9 行）。涉及 ChatView.tsx / RunModeChip.tsx / PlanTab.tsx / useStore.ts / chatInput/index.tsx。
+  - **session_titler 标题生成**：从"仅用首条用户消息"改为"用对话开头若干条消息（含中间 assistant 回复片段）"提炼标题，每条按最大字符数截断控 token（+124/-18，crates/agent-core/src/session_titler.rs）。
+  - **PermissionApprovalPopup 精简**：大幅删减（+3/-297），疑似逻辑外提/重构，具体意图待作者说明。
+- **影响范围**：desktop 前端（RunMode 联动、审批弹窗、计划页）+ agent-core 标题生成。**与本会话 core-rpc 改动正交**，无交叉。
+- **留尾巴**：以上改动**未提交**，仍在工作区，等其作者收尾 + 补写权威 changelog（含 Why / 完整影响 / 回归点）。`chatInput/index.tsx` 因与本会话的 isTauri 白屏守卫同文件，已随 5a2bf03 整体提交（见该 commit 的 Note）。
+
+### 2026-06-25 — 修复：Anthropic 流式 tool_call 跨 turn 撞 index 导致落盘 parts 丢 ToolCall（recorder 层纵深防御）
+
+- **Why**：session `202606230809-7cc92695` 第 37 次请求那条 assistant message，渲染上 toolcall 丢失、两段正文黏在一起。根因是 tool_call 的 index 语义在两个体系间错配：Anthropic SSE 透传的是 **content block index**（把 thinking / text 块也计入，随响应是否含正文在 0/1/2 浮动），而上层 agent_loop 期望它是「本次响应内第几个 tool_use」（纯工具计数，与 OpenAI 一致），再叠加每 turn `+= calls.len()` 的 dispatch_offset 还原全局序号。两个语义相加 → 相邻 turn 的全局 index 撞号 → recorder 的 `by_index` 命中旧 part、新 tool_call 把旧的覆盖被静默丢，紧跟的 text 黏进上一段。
+- **改动**：
+  - adapter 层（`crates/model-gateway/src/providers/anthropic.rs`，已于 550774c 落地）：`stream()` 加 `block_to_ordinal` 映射，把透出的 `ToolCallStreamDelta.index` 从 block index 归一成「第几个 tool_use」（0 连续递增）。**治本**——纠正 index 语义契约。
+  - recorder 层（本次新增，纵深防御）：`AssistantPartsRecorder::tool_position`（apps/desktop/src/chat.rs）+ `AssistantAccumulator::tool_position`（crates/agent-core/src/turn_accumulator.rs）。把 `call_id` 作为 tool_call 的稳定全局身份，`index` 只作 id 未到达前的 streaming fallback：当 `by_index` 命中的 part 已绑定**另一个** call_id 时不复用、新建独立 part。即使将来任何上游再送来碰撞 index，也不会静默丢 part。两份累积器是大重构（5a2bf03 步骤4）期间并存的同一套逻辑，同步修复保持一致。
+  - 回归测试：`chat.rs::anthropic_block_index_does_not_drop_tool_parts`（550774c 已加，本次从 FAIL→PASS）+ 新增 `turn_accumulator.rs::colliding_index_with_distinct_ids_keeps_both_tool_parts`（同 index 不同 call_id 必须各自落一条 part）。
+- **影响范围**：desktop（chat.rs recorder）+ agent-core（turn_accumulator）+ model-gateway（anthropic adapter）。`MessagePart` / `ToolCallDelta` 结构未动，无协议变更、无前端 types.ts 改动、不破坏兼容。OpenAI 路径不受影响（其 `delta.index` 本就是纯工具下标）。
+- **留尾巴**：`chat.rs` 与 `turn_accumulator.rs` 两份累积器仍并存（大重构步骤4未把 desktop send 主路径完全收敛到共享的 `AssistantAccumulator`），是既有技术债，本次保持两份同步修复未做收敛。另：`cargo test -p hebbian --lib chat::` 并行跑时 `pending_input_does_not_split_every_followup_model_request` / `pending_inputs_not_double_written_on_run_end` 偶发 FAIL（段黏合），经 HEAD 对比 + `--test-threads=1` 串行验证为**既有 flaky**（测试共享进程级全局单例如 `WakeupScheduler::global()`，并行执行互扰），与本次修复无关；串行跑 15 个 chat 测试全绿。该测试隔离问题独立于本次 bug，未在本次处理。
+
+### 2026-06-25 — 改造从 Claude 导入：列表项点击弹出 MessageBubble 预览弹窗 + 支持 UUID 搜索
+
+- **Why**: 之前「导入 Claude」对话框直接点击就导入，用户无法先看对话内容再决策。且搜索只覆盖标题和目录路径，不支持 `claude --resume {uuid}` 的 UUID 查找
+- **改动**:
+  - 后端（`apps/desktop/src/lib.rs`）：新增 `read_claude_session_preview` Tauri 命令，读取并解析 Claude JSONL，返回完整消息列表供前端渲染（不保存，纯预览）
+  - 前端 API（`apps/desktop/frontend/src/desktop/bridge/tauri.ts`）：新增 `readClaudeSessionPreview` 调用 + `ClaudeSessionPreview` 类型
+  - 前端组件改造（`apps/desktop/frontend/src/desktop/ui/components/ImportClaudeDialog.tsx`）：
+    - 列表项点击 → 对话框切换到预览视图，用 `MessageBubble` 渲染整段对话（同主 ChatView 风格，支持 thinking / tool_call / markdown 等）
+    - 预览视图顶部有「返回列表」和「导入此对话」按钮
+    - 搜索扩展为同时匹配标题和 UUID
+    - 列表项新增 UUID 徽章显示
+  - 侧边栏（`apps/desktop/frontend/src/desktop/ui/components/DesktopSidebar.tsx`）：无改动（入口不变，仍是「从 Claude 导入」按钮）
+- **影响范围**: desktop 后端 lib.rs + 前端 tauri.ts / types / ImportClaudeDialog。不涉及 agent-core / 协议 / 其他 surface，不破坏兼容
+- **留尾巴**: 无
+- **影响范围**: desktop 后端 lib.rs + 前端 tauri.ts / types / ImportClaudeDialog。不涉及 agent-core / 协议 / 其他 surface，不破坏兼容
+
+- **留尾巴**: 无
+
+### 2026-06-25 — 落盘顺序收归 agent_core 单一串行流（阶段 A+B）
+
+- **Why**: goal_outcome marker 和 BgTaskFinished notification 倒挂。根因：assistant.created_at 被填成落盘时刻 `now()` 而非契约「首内容时刻」，且落盘被劈成两套时钟（三 surface 落 assistant/user + agent_core 落 marker）。
+- **阶段 A**：`AssistantAccumulator::build` created_at 改用 `started_at`；三 surface assistant created_at 改首内容时刻。回归测试 `created_at_is_first_content_time_not_build_time` 固化 A/B 翻转。
+- **阶段 B**：新建 `run_persister.rs`（RunPersister + PartialActor 异步 partial），agent_loop 加 persister 6 落盘点，harness sink 挂 observe。三 surface 退化（删 assistant 落盘 + 插队 user 即写即落 + PartialFileWriter + flush_segments_at_drain 双落路径）。首 user 暂留 surface。
+- **修复双落 bug**：desktop `flush_segments_at_drain` 在 TurnFinished 时仍调 `append_message`，与 agent_core 重复落盘→修复为只清累积器。
+- **验证**：heb CLI Done/cancel 端到端通过（不双落、created_at 正确、partial 清理）；`cargo check --workspace` 通过；desktop 34/34 测试通过；agent-core 580/581（1 flaky 无关）；tsc 通过。
+- **影响范围**：agent-core（turn_accumulator / run_persister / agent_loop / harness / subagent），三 surface（chat.rs / daemon.rs / session.rs / tui / web / lib.rs inject），架构.md §4.9.5 决策变更
+- **留尾巴**: desktop observer segment 机制待简化；partial 崩溃恢复回归测试待补；首 user 落盘后续收归

@@ -274,6 +274,11 @@ pub struct LoopParams<'a> {
     /// 不弹审批，仅危险红线仍拦。父 Run 恒 `false`；由 [`crate::subagent::SubagentRunner`]
     /// 按 `def.permission` 计算后传入。
     pub subagent_bypass: bool,
+    /// Run 落盘协调器（架构 §4.9.5）。`Some` 时 agent_loop 在段边界 / drain 边界 / run
+    /// 收尾把 assistant 段 + 插队 user 单点串行 append 到 session.jsonl；`None` 时全跳过
+    /// （CLI 单跑 / subagent / 单测路径不落盘）。由 Harness::spawn_run 用 data_dir +
+    /// session_id 构造后塞入。
+    pub persister: Option<crate::run_persister::RunPersister>,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -311,9 +316,16 @@ async fn commit_run_edits(
     }
 }
 
+fn has_pending(pending_inputs: Option<&PendingInputs>) -> bool {
+    pending_inputs
+        .map(|slot| !slot.lock().unwrap().is_empty())
+        .unwrap_or(false)
+}
+
 fn drain_pending_inputs(
     pending_inputs: Option<&PendingInputs>,
     consumed_pending_inputs: Option<&ConsumedPendingInputs>,
+    persister: Option<&crate::run_persister::RunPersister>,
     transcript: &mut Transcript,
 ) -> usize {
     let Some(slot) = pending_inputs else {
@@ -327,6 +339,11 @@ fn drain_pending_inputs(
     for input in drained {
         if let Some(consumed) = consumed_pending_inputs {
             consumed.lock().unwrap().push(input.clone());
+        }
+        // 插队 user 落盘收归 agent_core（架构 §4.9.5）：给定 persister 时由这里单点 append，
+        // surface 端不再即写即落（双落防护）。
+        if let Some(p) = persister {
+            p.append_user(input.content.clone(), input.attachments.clone(), None);
         }
         transcript.push_user(input.content, input.attachments);
     }
@@ -420,6 +437,7 @@ pub async fn run_loop(
         system_rules,
         subagent_ctx,
         subagent_bypass,
+        persister,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -542,6 +560,7 @@ pub async fn run_loop(
         drain_pending_inputs(
             pending_inputs.as_ref(),
             consumed_pending_inputs.as_ref(),
+            persister.as_ref(),
             transcript,
         );
 
@@ -969,6 +988,16 @@ pub async fn run_loop(
                     stop_reason: StopReason::EndTurn,
                 });
 
+                // 段边界落盘（架构 §4.9.5）：仅当有 pending 插队时才先落本段，再 drain——
+                // 保证 session.jsonl 里 assistant 段在插队 user 之前。无插队时不切段，
+                // 全 run 累积到 finish 一次性落 = 一条 assistant message（保持原有多 turn
+                // 无插队时「一个 run 一张卡片」的 UX）。
+                if has_pending(pending_inputs.as_ref()) {
+                    if let Some(p) = persister.as_ref() {
+                        p.flush_segment(None);
+                    }
+                }
+
                 // 续跑上限耗尽仍漏：残骸照常收尾（UI 留脏），但进 transcript / 返回上层的
                 // 文本仍清洗，杜绝残骸沉淀进历史继续污染。
                 transcript.push_assistant_with_reasoning(leak.text.clone(), reasoning, Vec::new());
@@ -978,6 +1007,7 @@ pub async fn run_loop(
                 if drain_pending_inputs(
                     pending_inputs.as_ref(),
                     consumed_pending_inputs.as_ref(),
+                    persister.as_ref(),
                     transcript,
                 ) > 0
                 {
@@ -1279,9 +1309,17 @@ pub async fn run_loop(
                     step_kind: protocol::StepKind::Tool,
                     step_index: tool_step_index,
                 });
+                // 段边界落盘（架构 §4.9.5）：仅当有 pending 插队时才先落 assistant 段，
+                // 再 drain 插队 user，保证物理序 = emit 序。无插队不切段。
+                if has_pending(pending_inputs.as_ref()) {
+                    if let Some(p) = persister.as_ref() {
+                        p.flush_segment(None);
+                    }
+                }
                 drain_pending_inputs(
                     pending_inputs.as_ref(),
                     consumed_pending_inputs.as_ref(),
+                    persister.as_ref(),
                     transcript,
                 );
 
@@ -1386,6 +1424,10 @@ pub async fn run_loop(
     match &result {
         Ok(_) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::DONE);
+            // run 收尾落盘（架构 §4.9.5）：补落最后一段 assistant + 删 partial。
+            if let Some(p) = persister.as_ref() {
+                p.finish(Some(duration_ms));
+            }
             emit(EventPayload::RunFinished {
                 total_input_tokens,
                 total_output_tokens,
@@ -1396,15 +1438,27 @@ pub async fn run_loop(
         }
         Err(ModelError::Cancelled) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::CANCELLED);
+            // cancel 收尾（架构 §4.9.5）：补落残留尾段 + Interrupted marker，删 partial。
+            if let Some(p) = persister.as_ref() {
+                p.finish_interrupted();
+            }
             emit(EventPayload::RunCancelled);
         }
         Err(ModelError::Suspended) => {
             // 挂起态：本 task 退出，但 Run 仍 Active。不发 RunFinished / RunCancelled——
             // RunSuspended 已在 break 前 emit；resume_run 时由 Harness 复活同一个 Run。
             run_span.record("hebbian.run.outcome", "suspended");
+            // 挂起也算一段达边界：补落本段 assistant + 删 partial（架构 §4.9.5）。
+            if let Some(p) = persister.as_ref() {
+                p.finish(Some(duration_ms));
+            }
         }
         Err(e) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::FAILED);
+            // fail 收尾（架构 §4.9.5）：补落残留尾段 + Interrupted marker，删 partial。
+            if let Some(p) = persister.as_ref() {
+                p.finish_interrupted();
+            }
             emit(EventPayload::RunFailed {
                 error: ErrorReport::other(e.to_string()),
             });
@@ -1763,6 +1817,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1825,6 +1880,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(|_| {}),
         )
@@ -1895,6 +1951,7 @@ mod tests {
                 system_rules: None,
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(|_| {}),
         )
@@ -1966,6 +2023,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -2094,6 +2152,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(|_| {}),
         )
@@ -2263,6 +2322,7 @@ mod tests {
 
                 subagent_ctx: None,
                 subagent_bypass: false,
+                persister: None,
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);

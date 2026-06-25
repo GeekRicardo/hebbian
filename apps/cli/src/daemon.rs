@@ -863,14 +863,9 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutco
     consumed_inputs.lock().unwrap().clear();
 
     match &summary.outcome {
-        // 架构 §4.12.1：Suspended 是 Run 的合法中间态，落 assistant 段跟 Done 一致——
-        // transcript 不进 checkpoint（§4.12.3），resume 时从 jsonl 重建本轮 assistant。
-        TurnOutcome::Done | TurnOutcome::Suspended => {
-            if let Some(mut msg) = observer.turn.build_message() {
-                msg.run_duration_ms = summary.duration_ms;
-                sessions::append_message(data_dir, session_id, msg)?;
-            }
-        }
+        // 架构 §4.9.5：assistant 段落盘已收归 agent_core（agent_loop 段边界 / run 收尾单点
+        // append）。daemon 不再落 assistant，避免双落。Suspended 同 Done 由 agent_core 落。
+        TurnOutcome::Done | TurnOutcome::Suspended => {}
         TurnOutcome::Cancelled => {
             state.emit(&DaemonEvent::Error {
                 message: "run 已取消".to_string(),

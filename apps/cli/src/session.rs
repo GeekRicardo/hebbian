@@ -122,7 +122,7 @@ impl CliSession {
         }
     }
 
-    fn persist_assistant(&self, content: &str, run_duration_ms: Option<u64>) {
+    fn persist_assistant(&self, content: &str, run_duration_ms: Option<u64>, created_at: i64) {
         if content.is_empty() {
             return;
         }
@@ -134,7 +134,7 @@ impl CliSession {
                 attachments: Vec::new(),
                 tool_calls: Vec::new(),
                 parts: Vec::new(),
-                created_at: chrono::Utc::now().timestamp_millis(),
+                created_at,
                 meta: None,
                 subagent_call_id: None,
                 run_duration_ms,
@@ -303,13 +303,12 @@ impl CliSession {
         let summary = handle.drive(&mut observer).await;
 
         match summary.outcome {
-            // 架构 §4.12.1：Suspended 与 Done 走同一段持久化——transcript 从 jsonl
-            // 重建（§4.12.3），本轮 assistant 必须落盘；不报错让 cli 静静等 wakeup。
+            // 架构 §4.9.5：assistant 落盘已收归 agent_core（agent_loop 收尾单点 append）。
+            // 这里只 commit_assistant 更新内存 transcript 供下一轮续接，不再落盘（避免双落）。
             TurnOutcome::Done | TurnOutcome::Suspended => {
                 let text = observer.renderer.take_final_text();
                 if !text.is_empty() {
                     self.inner.commit_assistant(text.clone(), Vec::new());
-                    self.persist_assistant(&text, summary.duration_ms);
                 }
                 Ok(())
             }

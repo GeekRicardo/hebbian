@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::hebisland_client::{HebislandClient, IslandCard, IslandOption, IslandQuestion};
 use crate::hitl::HitlState;
 use agent_core::storage::{
-    sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role, Session},
+    sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role},
     sessions_dir::{self as sessions_dir, PartialFragment},
     settings as global_settings,
 };
@@ -495,99 +495,35 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         mut segment_messages,
         flushed_segments,
         output_attachments,
-        partial_writer,
+        run_started_at,
         ..
     } = observer;
-    // pending / wakeup 插队消息已在 inject_user_message 即时落盘（架构 §4.12.5 修订），
-    // run 结束这里**不再二次落盘**，避免 jsonl 出现重复条目。
-    // 但仍需读 consumed_pending_inputs 判定本次 run 内是否真发生过插队 drain——
-    // 发生过：assistant 已按 pending 分界切成多段（segment_messages 非空且各段独立），落盘要分段写；
-    // 未发生：用全 run 的 parts 拼成单段 assistant（保持老行为，避免多 turn 但无插队
-    // 时被无谓拆成多段卡片）。
-    let had_pending_during_run = args
-        .consumed_pending_inputs
-        .as_ref()
-        .map(|slot| slot.lock().unwrap().len() > consumed_pending_seen_before_run)
-        .unwrap_or(false);
     if let Some(pending) = args.pending_inputs.as_ref() {
         pending.lock().unwrap().clear();
     }
 
+    // 架构 §4.9.5：session.jsonl 的 assistant 段 + 插队 user + partial sidecar 落盘
+    // 已全部收归 agent_core 的 RunPersister 串行 append。desktop 只构造返回值，不落盘。
     match summary.outcome {
-        // 架构 §4.12.1：Suspended 是 Run 的合法中间态，下面跟 Done 走同一段
-        // assistant 落盘逻辑——transcript 不进 checkpoint（§4.12.3），resume 时
-        // agent_loop 从 session.jsonl 重建，所以本轮模型已经说过的话必须落盘。
+        // Done / Suspended：agent_core 已落盘，这里只构造返回值。
         TurnOutcome::Done | TurnOutcome::Suspended => {}
-        // Cancelled / Failed：全程累积器在每次 drain 落盘后已被清零（见
-        // flush_segments_at_drain 的不变量），这里拿到的只是未落盘的尾段，
-        // 不会与 drain 边界已写入的 assistant 段重复。
+        // Cancelled / Failed：agent_core 的 finish_interrupted 已补落尾段 + Interrupted
+        // marker，desktop 不再落盘，直接返回错误。
         TurnOutcome::Cancelled => {
-            persist_interrupted_assistant_output(
-                data_dir,
-                &args.session_id,
-                &partial_output,
-                &parts.parts,
-                &tool_calls,
-            )?;
-            if let Some(pw) = partial_writer {
-                pw.delete();
-            }
             return Err(AppError::msg("请求已中断"));
         }
         TurnOutcome::Failed(error) => {
-            persist_failed_assistant_output(
-                data_dir,
-                &args.session_id,
-                &partial_output,
-                &parts.parts,
-                &tool_calls,
-                &error,
-            )?;
-            if let Some(pw) = partial_writer {
-                pw.delete();
-            }
             return Err(AppError::msg(error));
         }
     }
 
-    // Done：写 assistant 段。
-    // - had_pending_during_run=true：run 内发生过 PendingInputs drain，assistant 被切成多段；
-    //   非末段已在 drain 边界即时落盘（flush_segments_at_drain，物理位置紧跟插队 user），
-    //   这里只补写 flushed_segments 之后的尾段。
-    // - had_pending_during_run=false：用全 run 累积的 parts 拼成单段 assistant 落盘，
-    //   保持原有"一次 run = 一条 assistant message"语义（多 turn 但无插队的常态）。
-    // 本轮总耗时只写在本轮最后一条会落盘的 assistant 上（渲染层据此显示「· 1.8s」）。
+    // 构造返回值 assistant message（不落盘）：had_pending 时取最后一段，否则用全 run 累积。
     let run_duration_ms = summary.duration_ms;
-    let assistant_msg = if had_pending_during_run {
-        if segment_messages.is_empty() {
-            segment_messages.push(assistant_message_from_recorded_parts(
-                parts,
-                partial_output,
-                tool_calls,
-                Vec::new(),
-            ));
-        }
-        // 尾段通常未落盘（最后一次 drain 之后的输出由 run 结束前的
-        // finish_current_segment 切下）。极端情况全部段都已落盘且本轮还有
-        // output_attachments——补一条仅含附件的 assistant，不回写已落盘段。
-        if flushed_segments == segment_messages.len() {
-            if !output_attachments.is_empty() {
-                let mut m = empty_assistant_message();
-                m.attachments = output_attachments;
-                segment_messages.push(m);
-            }
-        } else if let Some(last) = segment_messages.last_mut() {
+    let assistant_msg = if !segment_messages.is_empty() {
+        let _ = flushed_segments;
+        if let Some(last) = segment_messages.last_mut() {
             last.attachments = output_attachments;
-        }
-        // 耗时落在最后一段（本轮最后落盘的 assistant）。若该段已在 drain 时落盘
-        // （flushed_segments == len 且无补段），耗时无处可写——极罕见，可接受丢失。
-        if flushed_segments < segment_messages.len() {
-            if let Some(last) = segment_messages.last_mut() {
-                last.run_duration_ms = run_duration_ms;
-            }
-        }
-        for assistant in segment_messages.iter().skip(flushed_segments) {
-            sessions::append_message(data_dir, &args.session_id, assistant.clone())?;
+            last.run_duration_ms = run_duration_ms;
         }
         segment_messages
             .last()
@@ -600,13 +536,12 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             tool_calls,
             output_attachments,
         );
+        if let Some(started_at) = run_started_at {
+            m.created_at = started_at;
+        }
         m.run_duration_ms = run_duration_ms;
-        sessions::append_message(data_dir, &args.session_id, m.clone())?;
         m
     };
-    if let Some(pw) = partial_writer {
-        pw.delete();
-    }
 
     Ok(assistant_msg)
 }
@@ -653,61 +588,11 @@ fn empty_assistant_message() -> Message {
     )
 }
 
-/// 流式增量写到 `partial/<msg_id>.partial.jsonl` 供崩溃/强退后恢复。
-///
-/// 每帧 delegate 到 [`sessions_dir::append_partial`]——后者经
-/// [`crate::storage::lock::append_jsonl`] 走「open → write → fsync」，每帧落实到
-/// 磁盘。不能用 `BufWriter` 包一层：进程被 SIGKILL / force-quit 时 Drop 根本不跑，
-/// 内存缓冲整段丢，partial 文件就成了空壳——这是中断恢复反复失效的真因。
-struct PartialFileWriter {
-    data_dir: PathBuf,
-    session_id: String,
-    msg_id: String,
-    wrote_text: bool,
-    /// run 存活期间排他持有的活性锁：恢复扫描据此识别「活 run 正在写」并跳过折叠
-    /// （架构 §4.9.3 恢复边界）。拿锁失败只降级警告——丢的是误折叠防护，不是数据。
-    _live: Option<sessions_dir::PartialLiveGuard>,
-}
-
-impl PartialFileWriter {
-    fn new(data_dir: &Path, session_id: &str, msg_id: String) -> Self {
-        let live = sessions_dir::PartialLiveGuard::acquire(data_dir, session_id, &msg_id)
-            .map_err(|e| tracing::warn!(error = %e, msg_id = %msg_id, "partial 活性锁获取失败"))
-            .ok();
-        Self {
-            data_dir: data_dir.to_path_buf(),
-            session_id: session_id.to_string(),
-            msg_id,
-            wrote_text: false,
-            _live: live,
-        }
-    }
-
-    fn append(&mut self, frag: &PartialFragment) {
-        if matches!(frag, PartialFragment::Text { .. }) {
-            self.wrote_text = true;
-        }
-        if let Err(e) =
-            sessions_dir::append_partial(&self.data_dir, &self.session_id, &self.msg_id, frag)
-        {
-            tracing::warn!(error = %e, msg_id = %self.msg_id, "append_partial 失败");
-        }
-    }
-
-    /// drain 边界已落盘段对应的中间态清零：之后崩溃恢复只折叠未落盘的尾段。
-    /// 活性锁保持持有，文件由下一帧 append 重建。
-    fn reset(&mut self) {
-        self.wrote_text = false;
-        let _ = sessions_dir::clear_partial(&self.data_dir, &self.session_id, &self.msg_id);
-    }
-
-    fn delete(self) {
-        let _ = sessions_dir::delete_partial(&self.data_dir, &self.session_id, &self.msg_id);
-    }
-}
-
 /// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
 /// 把每个事件翻译成 `protocol::WireEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
+///
+/// partial sidecar 已由 agent_core [`RunPersister`] 维护（架构 §4.9.5，2026-06-25），
+/// 此处不再持有 PartialFileWriter。
 struct DesktopObserver<'a> {
     parts: AssistantPartsRecorder,
     partial_output: String,
@@ -723,6 +608,10 @@ struct DesktopObserver<'a> {
     /// 一段早就流式输出的 assistant，drain 落盘时刻会晚于「流式途中插队的 user」，
     /// 时间戳倒挂会让加载排序把 assistant 排到插队 user 之后（架构 §4.9.5 消息顺序契约）。
     segment_started_at: Option<i64>,
+    /// 整个 run 的「首个内容事件时刻」（Unix ms）。无插队路径用全 run 累积的 parts 拼成
+    /// 单段 assistant 落盘，其 created_at 必须用这个首内容时刻而非落盘 now()——否则
+    /// assistant 会倒挂到 turn 末尾的 goal marker / run 末尾的系统通知之后（架构 §4.9.5）。
+    run_started_at: Option<i64>,
     consumed_pending_inputs: Option<ConsumedPendingInputs>,
     consumed_pending_seen: usize,
     output_attachments: Vec<MessageAttachment>,
@@ -731,7 +620,6 @@ struct DesktopObserver<'a> {
     data_dir: PathBuf,
     session_id: String,
     emit: &'a (dyn Fn(protocol::WireEvent) + Send + Sync),
-    partial_writer: Option<PartialFileWriter>,
     /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：按 subagent_call_id 累积子过程，
     /// 同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父 message 落**主** session.jsonl，
     /// 修复「子过程只活在内存事件流、run 一结束就蒸发」。与 CLI / hebweb 共用同一份累积逻辑。
@@ -748,8 +636,6 @@ impl<'a> DesktopObserver<'a> {
         consumed_pending_inputs: Option<ConsumedPendingInputs>,
         consumed_pending_seen: usize,
     ) -> Self {
-        let msg_id = sessions::new_id();
-        let partial_writer = Some(PartialFileWriter::new(data_dir, session_id, msg_id));
         Self {
             parts: AssistantPartsRecorder::default(),
             partial_output: String::new(),
@@ -760,6 +646,7 @@ impl<'a> DesktopObserver<'a> {
             segment_messages: Vec::new(),
             flushed_segments: 0,
             segment_started_at: None,
+            run_started_at: None,
             consumed_pending_inputs,
             consumed_pending_seen,
             output_attachments: Vec::new(),
@@ -768,7 +655,6 @@ impl<'a> DesktopObserver<'a> {
             data_dir: data_dir.to_path_buf(),
             session_id: session_id.to_string(),
             emit,
-            partial_writer,
             nested: agent_core::storage::nested::NestedAccumulator::default(),
         }
     }
@@ -820,29 +706,13 @@ impl<'a> DesktopObserver<'a> {
         self.flush_segments_at_drain();
     }
 
-    /// drain 边界：已切下的段立即落盘（架构 §4.9.5「流式 Done 后一次写」），
-    /// 物理位置紧跟触发插队的 user message——不等 run 结束才补写，长 run 的
-    /// session.jsonl 才能保持 user → assistant 段交替的真实顺序。
-    ///
-    /// 全部落盘成功后重置全程累积器与 partial sidecar。不变量：内存累积器 +
-    /// partial sidecar 永远只描述「尚未写入 session.jsonl」的内容——之后无论
-    /// cancel / fail / 崩溃恢复都不会与已落盘段重复。落盘失败则不重置，
-    /// 留待 run 结束按 flushed_segments 续写。
+    /// drain 边界：已切下的段不再由 desktop 落盘（架构 §4.9.5，落盘收归 agent_core
+    /// 的 persister 串行 append）。这里只清累积器供下一段使用，不写 session.jsonl。
     fn flush_segments_at_drain(&mut self) {
-        while self.flushed_segments < self.segment_messages.len() {
-            let msg = self.segment_messages[self.flushed_segments].clone();
-            if let Err(e) = sessions::append_message(&self.data_dir, &self.session_id, msg) {
-                tracing::warn!(error = %e, "drain 段落盘失败，留待 run 结束续写");
-                return;
-            }
-            self.flushed_segments += 1;
-        }
+        self.flushed_segments = self.segment_messages.len();
         self.parts = AssistantPartsRecorder::default();
         self.partial_output.clear();
         self.tool_calls.clear();
-        if let Some(pw) = &mut self.partial_writer {
-            pw.reset();
-        }
     }
 }
 
@@ -916,74 +786,16 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
         record_tool_event(&mut self.tool_calls, event);
         record_tool_event(&mut self.segment_tool_calls, event);
         self.mark_segment_start_if_needed();
+        // run 级首内容时刻：无插队落盘路径用它当 assistant created_at（架构 §4.9.5）。
+        if self.run_started_at.is_none() && self.segment_started_at.is_some() {
+            self.run_started_at = self.segment_started_at;
+        }
         if let Some(ev) = protocol::to_wire(event) {
             (self.emit)(ev);
         }
 
-        // 实时写 partial 文件，供进程崩溃/强退后的下次加载恢复。
-        if let Some(pw) = &mut self.partial_writer {
-            match &event.payload {
-                EventPayload::TextDelta { text } => {
-                    pw.append(&PartialFragment::Text { text: text.clone() });
-                }
-                // non-streaming 路径只发 TextDone，没有 TextDelta
-                EventPayload::TextDone { full_text } if !full_text.is_empty() && !pw.wrote_text => {
-                    pw.append(&PartialFragment::Text {
-                        text: full_text.clone(),
-                    });
-                }
-                EventPayload::Reasoning { text } => {
-                    pw.append(&PartialFragment::Reasoning { text: text.clone() });
-                }
-                EventPayload::ToolCallStarted {
-                    index, name, input, ..
-                } => {
-                    let args = serde_json::to_string(input)
-                        .ok()
-                        .filter(|s| s != "null")
-                        .unwrap_or_default();
-                    pw.append(&PartialFragment::ToolCall {
-                        index: *index as u32,
-                        name: Some(name.clone()),
-                        arguments_chunk: args,
-                    });
-                }
-                EventPayload::ToolCallDelta {
-                    index,
-                    name,
-                    arguments_delta,
-                    ..
-                } => {
-                    if let Some(chunk) = arguments_delta {
-                        pw.append(&PartialFragment::ToolCall {
-                            index: *index as u32,
-                            name: name.clone(),
-                            arguments_chunk: chunk.clone(),
-                        });
-                    }
-                }
-                EventPayload::ToolCallFinished {
-                    index,
-                    result,
-                    duration_ms,
-                    ..
-                } => {
-                    pw.append(&PartialFragment::ToolResult {
-                        index: *index as u32,
-                        result: result.clone(),
-                        duration_ms: *duration_ms,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        if matches!(
-            event.payload,
-            EventPayload::TurnFinished { .. } | EventPayload::TurnStarted { .. }
-        ) {
-            self.finish_segment_if_pending_was_consumed();
-        }
+        // 架构 §4.9.5：段切分与落盘已收归 agent_core persister。desktop observer 不再
+        // 监听 TurnFinished/TurnStarted 做 segment flush（避免双落）。
     }
 
     async fn on_permission_request(
@@ -1010,136 +822,6 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
             state.track(request_id.0.clone(), Arc::clone(&self.hitl));
         }
         None
-    }
-}
-
-fn persist_interrupted_assistant_output(
-    data_dir: &std::path::Path,
-    session_id: &str,
-    partial_output: &str,
-    parts: &[MessagePart],
-    tool_calls: &[MessageToolCall],
-) -> AppResult<Session> {
-    let mut session = sessions::load(data_dir, session_id)?;
-    if let Some(message) = assistant_message_from_partial(partial_output, parts, tool_calls) {
-        session.messages.push(message);
-    }
-    session.messages.push(Message {
-        id: sessions::new_id(),
-        role: Role::Marker,
-        content: String::new(),
-        attachments: Vec::new(),
-        tool_calls: Vec::new(),
-        parts: Vec::new(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: Some(MessageMeta::Interrupted),
-        subagent_call_id: None,
-        run_duration_ms: None,
-    });
-    sessions::save(data_dir, session)
-}
-
-fn persist_failed_assistant_output(
-    data_dir: &std::path::Path,
-    session_id: &str,
-    partial_output: &str,
-    parts: &[MessagePart],
-    tool_calls: &[MessageToolCall],
-    error: &str,
-) -> AppResult<Session> {
-    let mut session = sessions::load(data_dir, session_id)?;
-    session.messages.push(failed_assistant_message(
-        partial_output,
-        parts,
-        tool_calls,
-        error,
-    ));
-    sessions::save(data_dir, session)
-}
-
-fn assistant_message_from_partial(
-    partial_output: &str,
-    parts: &[MessagePart],
-    tool_calls: &[MessageToolCall],
-) -> Option<Message> {
-    let assistant_parts = normalized_partial_parts(partial_output, parts);
-    let assistant_content = text_from_parts(&assistant_parts)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| partial_output.to_string());
-
-    if assistant_content.is_empty() && assistant_parts.is_empty() && tool_calls.is_empty() {
-        return None;
-    }
-
-    Some(Message {
-        id: sessions::new_id(),
-        role: Role::Assistant,
-        content: assistant_content,
-        attachments: Vec::new(),
-        tool_calls: tool_calls.to_vec(),
-        parts: assistant_parts,
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
-        subagent_call_id: None,
-        run_duration_ms: None,
-    })
-}
-
-fn failed_assistant_message(
-    partial_output: &str,
-    parts: &[MessagePart],
-    tool_calls: &[MessageToolCall],
-    error: &str,
-) -> Message {
-    let mut assistant_parts = normalized_partial_parts(partial_output, parts);
-    let error_marker = format!("[请求失败：{}]", error.trim());
-    if !error_marker.trim().is_empty() {
-        if !assistant_parts.is_empty() {
-            assistant_parts.push(MessagePart::Text {
-                text: format!("\n\n{error_marker}"),
-            });
-        } else {
-            assistant_parts.push(MessagePart::Text { text: error_marker });
-        }
-    }
-    let assistant_content = text_from_parts(&assistant_parts)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| format_failed_assistant_content(partial_output, error));
-
-    Message {
-        id: sessions::new_id(),
-        role: Role::Assistant,
-        content: assistant_content,
-        attachments: Vec::new(),
-        tool_calls: tool_calls.to_vec(),
-        parts: assistant_parts,
-        created_at: chrono::Utc::now().timestamp_millis(),
-        meta: None,
-        subagent_call_id: None,
-        run_duration_ms: None,
-    }
-}
-
-fn normalized_partial_parts(partial_output: &str, parts: &[MessagePart]) -> Vec<MessagePart> {
-    if !parts.is_empty() {
-        return parts.to_vec();
-    }
-    if partial_output.is_empty() {
-        Vec::new()
-    } else {
-        vec![MessagePart::Text {
-            text: partial_output.to_string(),
-        }]
-    }
-}
-
-fn format_failed_assistant_content(partial_output: &str, error: &str) -> String {
-    let partial = partial_output.trim();
-    let error = error.trim();
-    if partial.is_empty() {
-        format!("请求失败：{error}")
-    } else {
-        format!("{partial}\n\n[请求失败：{error}]")
     }
 }
 
@@ -1268,23 +950,29 @@ impl AssistantPartsRecorder {
     }
 
     fn tool_position(&mut self, index: usize, id: Option<&str>, name: Option<&str>) -> usize {
-        if let Some(pos) = id
-            .filter(|value| !value.trim().is_empty())
-            .and_then(|value| self.by_id.get(value).copied())
-        {
+        let incoming_id = id.filter(|value| !value.trim().is_empty());
+
+        // call_id 是 tool_call 的稳定全局身份：见过同 id 直接复用那条 part。
+        if let Some(pos) = incoming_id.and_then(|value| self.by_id.get(value).copied()) {
             self.by_index.entry(index).or_insert(pos);
             return pos;
         }
 
+        // index 只是 id 到达前的 streaming fallback。命中的 part 若已绑定了另一个
+        // call_id，说明上游把不同 tool_call 的 index 撞到了一起，此时绝不能复用——
+        // 否则新 tool_call 会把旧的覆盖、旧 part 被静默丢失。
         if let Some(pos) = self.by_index.get(&index).copied() {
-            return pos;
+            let collides_with_other = incoming_id.is_some_and(|incoming| {
+                matches!(&self.parts[pos],
+                    MessagePart::ToolCall { id, .. } if !id.trim().is_empty() && id != incoming)
+            });
+            if !collides_with_other {
+                return pos;
+            }
         }
 
         let pos = self.parts.len();
-        let clean_id = id
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_default()
-            .to_string();
+        let clean_id = incoming_id.unwrap_or_default().to_string();
         self.parts.push(MessagePart::ToolCall {
             id: clean_id.clone(),
             name: name
@@ -1930,54 +1618,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// 回归测试：进程在流式写到一半被 SIGKILL / force-quit 时，PartialFileWriter
-    /// 的 Drop 不会跑。本测试用 `std::mem::forget` 跳过 Drop，模拟这一场景。
-    ///
-    /// 旧实现（BufWriter 包 File）：缓冲在进程内存里，Drop 不跑就丢，文件为空
-    /// → recover 不到内容。
-    /// 修复后：每帧 delegate 到 sessions_dir::append_partial（write + fsync），
-    /// Drop 不跑也不影响——内容已经在磁盘上 → recover 能拿回完整文本。
-    #[test]
-    fn partial_writer_survives_process_kill_without_drop() {
-        let dir = temp_data_dir();
-        let sid = "kill-test-session";
-        sessions_dir::ensure_session_dirs(&dir, sid).unwrap();
-
-        let mut pw = PartialFileWriter::new(&dir, sid, "msg-x".into());
-        pw.append(&PartialFragment::Text { text: "hel".into() });
-        pw.append(&PartialFragment::Text { text: "lo".into() });
-        pw.append(&PartialFragment::Reasoning {
-            text: "思考片段".into(),
-        });
-        pw.append(&PartialFragment::ToolCall {
-            index: 0,
-            name: Some("Bash".into()),
-            arguments_chunk: r#"{"cmd""#.into(),
-        });
-        pw.append(&PartialFragment::ToolCall {
-            index: 0,
-            name: None,
-            arguments_chunk: r#":"ls"}"#.into(),
-        });
-
-        // 模拟进程被 SIGKILL：Drop 不跑，writer 状态全部丢。
-        // 活性锁先单独释放——真实 SIGKILL 下锁由 OS 回收，同进程测试只能手动等价，
-        // 否则本进程仍持锁会让恢复扫描（正确地）把它当活 run 跳过。
-        pw._live = None;
-        std::mem::forget(pw);
-
-        // 此刻文件必须已经在磁盘上有完整内容——不依赖任何 flush
-        let recovered = sessions_dir::recover_interrupted_partials(&dir, sid).unwrap();
-        assert_eq!(recovered.len(), 1, "应恢复一个 partial 文件");
-        let r = &recovered[0];
-        assert_eq!(r.msg_id, "msg-x");
-        assert_eq!(r.text, "hello", "TextDelta 必须完整保留");
-        assert_eq!(r.reasoning, "思考片段");
-        let tc = r.tool_calls.get(&0).expect("tool_call 0 应在");
-        assert_eq!(tc.0.as_deref(), Some("Bash"));
-        assert_eq!(tc.1, r#"{"cmd":"ls"}"#, "ToolCallDelta 必须完整拼回");
     }
 
     fn save_test_provider(data_dir: &std::path::Path) {
@@ -2729,128 +2369,6 @@ mod tests {
     }
 
     #[test]
-    fn persist_interrupted_output_appends_partial_assistant_then_marker() {
-        let data_dir = temp_data_dir();
-        let session = sessions::create(
-            &data_dir,
-            "openai".to_string(),
-            "gpt-test".to_string(),
-            None,
-            None,
-        )
-        .unwrap();
-
-        persist_interrupted_assistant_output(&data_dir, &session.id, "partial answer", &[], &[])
-            .unwrap();
-
-        let saved = sessions::load(&data_dir, &session.id).unwrap();
-        assert_eq!(saved.messages.len(), 2);
-        assert_eq!(saved.messages[0].role, Role::Assistant);
-        assert_eq!(saved.messages[0].content, "partial answer");
-        assert_eq!(saved.messages[1].role, Role::Marker);
-        assert!(matches!(
-            saved.messages[1].meta,
-            Some(MessageMeta::Interrupted)
-        ));
-
-        std::fs::remove_dir_all(data_dir).unwrap();
-    }
-
-    #[test]
-    fn persist_failed_output_appends_assistant_error_message() {
-        let data_dir = temp_data_dir();
-        let session = sessions::create(
-            &data_dir,
-            "openai".to_string(),
-            "gpt-test".to_string(),
-            None,
-            None,
-        )
-        .unwrap();
-
-        persist_failed_assistant_output(
-            &data_dir,
-            &session.id,
-            "partial answer",
-            &[],
-            &[],
-            "HTTP 400: missing name",
-        )
-        .unwrap();
-
-        let saved = sessions::load(&data_dir, &session.id).unwrap();
-        assert_eq!(saved.messages.len(), 1);
-        assert_eq!(saved.messages[0].role, Role::Assistant);
-        assert!(saved.messages[0].content.contains("partial answer"));
-        assert!(saved.messages[0].content.contains("HTTP 400: missing name"));
-
-        std::fs::remove_dir_all(data_dir).unwrap();
-    }
-
-    #[test]
-    fn persist_failed_output_preserves_structured_parts_and_tool_calls() {
-        let data_dir = temp_data_dir();
-        let session = sessions::create(
-            &data_dir,
-            "openai".to_string(),
-            "gpt-test".to_string(),
-            None,
-            None,
-        )
-        .unwrap();
-        let parts = vec![
-            MessagePart::Text {
-                text: "准备执行".to_string(),
-            },
-            MessagePart::ToolCall {
-                id: "call_bash".to_string(),
-                name: "Bash".to_string(),
-                input: serde_json::json!({"command": "pwd"}),
-                arguments: "{\"command\":\"pwd\"}".to_string(),
-                result: Some("/tmp\n".to_string()),
-                duration_ms: Some(12),
-                is_error: false,
-            },
-        ];
-        let calls = vec![MessageToolCall {
-            id: "call_bash".to_string(),
-            name: "Bash".to_string(),
-            input: serde_json::json!({"command": "pwd"}),
-            result: Some("/tmp\n".to_string()),
-            duration_ms: Some(12),
-            is_error: false,
-            nested: Vec::new(),
-        }];
-
-        persist_failed_assistant_output(
-            &data_dir,
-            &session.id,
-            "准备执行",
-            &parts,
-            &calls,
-            "provider refused follow-up",
-        )
-        .unwrap();
-
-        let saved = sessions::load(&data_dir, &session.id).unwrap();
-        assert_eq!(saved.messages.len(), 1);
-        let message = &saved.messages[0];
-        assert_eq!(message.role, Role::Assistant);
-        assert_eq!(message.tool_calls.len(), 1);
-        assert_eq!(message.tool_calls[0].name, "Bash");
-        assert_eq!(message.parts.len(), 3);
-        assert!(matches!(
-            &message.parts[1],
-            MessagePart::ToolCall { name, result, .. }
-                if name == "Bash" && result.as_deref() == Some("/tmp\n")
-        ));
-        assert!(message.content.contains("准备执行"));
-        assert!(message.content.contains("provider refused follow-up"));
-
-        std::fs::remove_dir_all(data_dir).unwrap();
-    }
-
-    #[test]
     fn saves_assistant_parts_in_stream_arrival_order() {
         tauri::async_runtime::block_on(async {
             let data_dir = temp_data_dir();
@@ -3295,6 +2813,80 @@ mod tests {
         });
     }
 
+    /// 回归（架构 §4.9.5，2026-06-25）：无插队的多 ToolStep run 在 session.jsonl 里
+    /// 只落**一条** assistant message，而不是每个「模型请求 + 工具批次」一条。
+    ///
+    /// B 阶段把落盘收归 agent_core 后，若每个 ModelStep/ToolStep 都无条件 flush_segment，
+    /// 一个正常 run 会被拆成多张 assistant 卡片（run 进行中前端显示一整块、reload 后裂开）。
+    /// 修复：flush_segment 仅在有 pending 插队时调用，无插队时全 run 累积到 finish 一次落。
+    ///
+    /// A/B 翻转：flush 带 `has_pending` 守卫时本测试 pass；去掉守卫（每步都 flush）必 fail
+    /// （会落 3 条 assistant：tool_a 一条、tool_b 一条、第三段一条）。
+    #[test]
+    fn no_pending_multi_tool_run_persists_single_assistant() {
+        tauri::async_runtime::block_on(async {
+            let data_dir = temp_data_dir();
+            save_test_provider(&data_dir);
+            let session = sessions::create(
+                &data_dir,
+                "openai".to_string(),
+                "gpt-test".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+
+            send_and_save_in_data_dir_with_client_factory(
+                &data_dir,
+                SendArgs {
+                    continue_run: false,
+                    session_id: session.id.clone(),
+                    user_content: "run tools".to_string(),
+                    user_meta: None,
+                    attachments: Vec::new(),
+                    stream: true,
+                    enabled_tools: vec!["tool_a".to_string(), "tool_b".to_string()],
+                    cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    pending_inputs: None,
+                    consumed_pending_inputs: None,
+                    pending_inputs_accepting: None,
+                    hitl: None,
+                    permission_store: None,
+                    force_automode: false,
+                    request_id: None,
+                    restrict_tools: None,
+                },
+                |_| {},
+                None,
+                |_provider, _model, _reasoning| {
+                    Ok(Arc::new(AnthropicBlockIndexClient {
+                        calls: AtomicUsize::new(0),
+                    }) as Arc<dyn ModelClient>)
+                },
+            )
+            .await
+            .unwrap();
+
+            let saved = sessions::load(&data_dir, &session.id).unwrap();
+            let assistant_count = saved
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Assistant)
+                .count();
+            assert_eq!(
+                assistant_count, 1,
+                "无插队的多 ToolStep run 应只落一条 assistant，实际落了 {assistant_count} 条：{:?}",
+                saved
+                    .messages
+                    .iter()
+                    .map(|m| (m.role, m.content.chars().take(12).collect::<String>()))
+                    .collect::<Vec<_>>()
+            );
+
+            std::fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
     #[test]
     fn desktop_send_passes_session_model_to_automode_judge() {
         tauri::async_runtime::block_on(async {
@@ -3437,20 +3029,21 @@ mod tests {
             .await
             .unwrap();
 
-            assert_eq!(assistant.content, "后续回答");
+            // 架构 §4.9.5：agent_core persister 在 drain 边界落插队 user，所以 jsonl
+            // 里有插队条目；desktop 返回值含全部累积内容（用于前端乐观渲染）。
+            assert_eq!(assistant.content, "正在输出后续回答");
             let saved = sessions::load(&data_dir, &session.id).unwrap();
             let roles_and_content: Vec<(Role, String)> = saved
                 .messages
                 .iter()
                 .map(|m| (m.role, m.content.clone()))
                 .collect();
-            // 新设计：pending push 不自动落盘，jsonl 里没有未经 inject 的插队 user 条目。
-            // 但 assistant 仍按 model invoke 顺序被切成多段写入，证明 in-memory drain 正常工作。
             assert_eq!(
                 roles_and_content,
                 vec![
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "正在输出".to_string()),
+                    (Role::User, "插队消息".to_string()),
                     (Role::Assistant, "后续回答".to_string()),
                 ]
             );
@@ -3512,20 +3105,21 @@ mod tests {
             .await
             .unwrap();
 
-            assert_eq!(assistant.content, "第二段");
+            // 架构 §4.9.5：agent_core persister 在 drain 边界落插队 user + assistant 段。
+            // desktop 返回值含全部累积内容（"第一段"+"第二段"），jsonl 含插队条目。
+            assert_eq!(assistant.content, "第一段第二段");
             let saved = sessions::load(&data_dir, &session.id).unwrap();
             let roles_and_content: Vec<(Role, String)> = saved
                 .messages
                 .iter()
                 .map(|m| (m.role, m.content.clone()))
                 .collect();
-            // 新设计：pending push 路径不再自动落盘 user 插队条目。
-            // assistant 仍按 turn 切成两段写入——证 in-memory drain 让 model 在 turn 2 看到了插队。
             assert_eq!(
                 roles_and_content,
                 vec![
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "第一段".to_string()),
+                    (Role::User, "插队消息".to_string()),
                     (Role::Assistant, "第二段".to_string()),
                 ]
             );
@@ -3584,7 +3178,9 @@ mod tests {
             .await
             .unwrap();
 
-            assert_eq!(assistant.content, "通知后工具通知后结束");
+            // 架构 §4.9.5：返回值含全部累积内容（三段拼接），jsonl 由 agent_core persister
+            // 按段边界落盘：每次 ToolStep/Done flush 一段，drain 边界落插队 user。
+            assert_eq!(assistant.content, "通知前通知后工具通知后结束");
             let saved = sessions::load(&data_dir, &session.id).unwrap();
             let roles_and_content: Vec<(Role, String)> = saved
                 .messages
@@ -3596,6 +3192,7 @@ mod tests {
                 vec![
                     (Role::User, "第一条".to_string()),
                     (Role::Assistant, "通知前".to_string()),
+                    (Role::User, "后台通知".to_string()),
                     (Role::Assistant, "通知后工具通知后结束".to_string()),
                 ]
             );
