@@ -9754,5 +9754,5 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): 复用 surface_session::transport，删本地协议+handler。
   - [apps/web-server/src/{main.rs,server.rs}](../apps/web-server/src/main.rs) + Cargo.toml：ServerState 用 RuntimeRegistry；main 开 unix-socket transport；加 fs2 依赖。
 - **影响范围**: surface-session 加 transport 模块（additive）；hebcore 精简（行为不变）；hebweb 兼任 hebcore（浏览器路径行为不变，新增 unix-socket）。desktop/cli 不受影响。
-- **验证**: `cargo check --workspace` 通过；hebcore 精简后编译通过；hebweb 编译通过（兼 hebcore 模式）。运行时端到端（浏览器建对话 + heb 连 hebweb unix-socket 看同一活状态）待补跑。
-- **留尾巴**: 步骤⑤运行时端到端验证（浏览器+heb 同看一活对话）；步骤⑥ desktop 对话主链路客户端化（最高风险，60+ command 分流，按 §7.8.6 铁律最后做）；hebcore ws transport（浏览器直连远程 hebcore）。
+- **验证**: `cargo check --workspace` 通过；**运行时端到端验证通过**——起 hebweb（兼任 hebcore，日志确认 unix-socket 就绪 + hebcore.sock 创建），浏览器 ws 建 session，`heb connect <sid>` 连同一进程的 unix-socket 跑对话收完整事件流（reasoning/text_delta/text_done/run_finished）+ 落盘正确（"7乘8等于56"），`heb hebcore-rpc list_sessions` 查到同一活 session 表。证明**一进程同服务浏览器(ws)+CLI(unix-socket)、共享同一活对话状态**。
+- **留尾巴**: 步骤⑥ desktop 对话主链路客户端化（最高风险，60+ command 分流，按 §7.8.6 铁律最后做）；hebcore ws transport（浏览器直连远程 hebcore）。
