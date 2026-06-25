@@ -2224,6 +2224,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hebcore"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "anyhow",
+ "clap",
+ "core-rpc",
+ "dirs 5.0.1",
+ "fs2",
+ "hebbian-common",
+ "observability",
+ "protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

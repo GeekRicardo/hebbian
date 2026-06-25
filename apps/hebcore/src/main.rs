@@ -1,0 +1,135 @@
+//! hebcore — 常驻核心进程（架构 §7.8.1）。
+//!
+//! 持有唯一 dispatch（[`core_rpc::dispatch`]）+ 同步 API facade（[`LocalCoreClient`]）+
+//! 全部活 [`SessionHub`]，对外开 transport 让 desktop / heb / hebweb 作为客户端连入。
+//!
+//! 本期（步骤③）落地最小可用形态：
+//! - **单例锁**：`~/.hebbian/hebcore.lock` 排他锁，同一数据目录最多一个 hebcore 实例
+//!   （对标 hebisland daemon「能否拿锁判存活」范式，§7.8.1）。
+//! - **unix-socket transport**：`~/.hebbian/hebcore.sock`，每连接一行 JSON 收一个
+//!   [`core_rpc::CoreRequest`]，调 dispatch，回一行 JSON [`core_rpc::CoreResponse`]
+//!   （JSON-RPC 信封，§7.2）。
+//!
+//! 对话主链路（start_run/subscribe 的事件 broadcast）+ ws transport 在后续接入。
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use agent_core::core_client::LocalCoreClient;
+use agent_core::permissions::PermissionStore;
+use agent_core::session_hub::SessionHub;
+use anyhow::{Context, Result};
+use clap::Parser;
+use fs2::FileExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+use tracing::{error, info, warn};
+
+#[derive(Parser, Debug)]
+#[command(name = "hebcore", about = "Hebbian 常驻核心进程（§7.8）", version)]
+struct Args {
+    /// 数据目录（默认 ~/.hebbian）
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+}
+
+/// hebcore 进程的共享状态：同步 API facade + 活 session 枢纽。
+struct CoreState {
+    core: Arc<LocalCoreClient>,
+    #[allow(dead_code)] // 对话主链路接入后用
+    hub: Arc<SessionHub>,
+}
+
+fn data_dir(args: &Args) -> PathBuf {
+    args.data_dir.clone().unwrap_or_else(|| {
+        dirs::home_dir()
+            .expect("no home dir")
+            .join(".hebbian")
+    })
+}
+
+/// 单例锁：排他锁住 `<data_dir>/hebcore.lock`，进程存活期间持有。拿不到 = 已有实例在跑。
+/// 返回的 `File` 必须保活（drop 即释放锁），故由 main 持有到退出。
+fn acquire_singleton_lock(data_dir: &std::path::Path) -> Result<std::fs::File> {
+    let lock_path = data_dir.join("hebcore.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("打开单例锁文件 {lock_path:?}"))?;
+    file.try_lock_exclusive()
+        .map_err(|_| anyhow::anyhow!("已有 hebcore 实例在运行（{lock_path:?} 锁被占用）"))?;
+    Ok(file)
+}
+
+fn sock_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("hebcore.sock")
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    observability::init("info");
+    let args = Args::parse();
+    let data_dir = data_dir(&args);
+    std::fs::create_dir_all(&data_dir).ok();
+
+    // 单例：拿不到锁就退出（已有实例）。_lock 持有到 main 结束。
+    let _lock = acquire_singleton_lock(&data_dir)?;
+
+    let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
+    let core = Arc::new(LocalCoreClient::new(
+        None,
+        data_dir.clone(),
+        permission_store,
+    ));
+    let state = Arc::new(CoreState {
+        core,
+        hub: Arc::new(SessionHub::new()),
+    });
+
+    // unix-socket transport：清理旧 sock（上次异常退出残留），bind 新的。
+    let sock = sock_path(&data_dir);
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock)
+        .with_context(|| format!("bind hebcore socket {sock:?}"))?;
+    info!(socket = %sock.display(), data_dir = %data_dir.display(), "hebcore listening");
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                let state = state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection(stream, state).await {
+                        warn!(error = %e, "hebcore connection 处理失败");
+                    }
+                });
+            }
+            Err(e) => {
+                error!(error = %e, "hebcore accept 失败");
+            }
+        }
+    }
+}
+
+/// 单连接：逐行读 JSON CoreRequest，dispatch，回一行 JSON CoreResponse（JSON-RPC 信封）。
+async fn handle_connection(stream: UnixStream, state: Arc<CoreState>) -> Result<()> {
+    let (read_half, mut write_half) = stream.into_split();
+    let mut lines = BufReader::new(read_half).lines();
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let resp = match serde_json::from_str::<core_rpc::CoreRequest>(line) {
+            Ok(req) => core_rpc::dispatch(req, &*state.core).await,
+            Err(e) => core_rpc::CoreResponse::Error(format!("解析 CoreRequest 失败: {e}")),
+        };
+        let mut out = serde_json::to_string(&resp).unwrap_or_else(|e| {
+            format!("{{\"ok_type\":\"error\",\"data\":\"序列化响应失败: {e}\"}}")
+        });
+        out.push('\n');
+        write_half.write_all(out.as_bytes()).await?;
+        write_half.flush().await?;
+    }
+    Ok(())
+}

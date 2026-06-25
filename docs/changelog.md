@@ -9685,3 +9685,13 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**: `cargo check --workspace` 通过；`cargo test -p agent-core --lib session_hub`（4）+ `cargo test -p core-rpc`（3 serde round-trip）通过；hebweb 端到端——SessionHub 下沉后真模型跑一轮对话事件流（reasoning/text_delta/text_done/turn_finished/run_finished/usage）+ 落盘（user→assistant 内容正确）完全不变；dispatch 路径 list_tools 经 WS 返回 3 工具结构与直调一致。
 - **连带修复（非本任务，Note）**: hebweb server.rs:1668 `cmd_set_active_goal` 构造 `ActiveGoal` 缺别人在途改动新增的 `pending_set_marker` 字段导致编译断，补 `true`（对齐 desktop lib.rs:1376 set_active_goal 语义）。该字段是别人给 goal 加 model_io_dump 那批改动引入的，他们漏更新 hebweb 构造点。
 - **留尾巴**: 对话主链路 StartRun 完整接入（经 hub 跑 run + 事件 broadcast）随步骤③ hebcore 进程一起做；hebweb/desktop 同步命令全面改走 dispatch 在客户端化步骤④⑤⑥；CoreResponse 跨进程客户端侧强类型解析待步骤③。
+
+### 2026-06-25 — 建 hebcore 常驻进程：unix-socket transport + dispatch + 单例锁（§7.8 步骤③骨架）
+
+- **Why**: 推进 §7.8.6 步骤③「hebcore 进程 + 双 transport」。建常驻核心进程，让 desktop/heb/hebweb 后续作为客户端连入（§7.8.1）。
+- **改动**:
+  - [apps/hebcore/{Cargo.toml,src/main.rs}](../apps/hebcore/src/main.rs)（新）：常驻进程。单例锁 `fs2::try_lock_exclusive` 守 `~/.hebbian/hebcore.lock`（进程存活期持有，第二实例拿不到锁即退）；unix-socket `~/.hebbian/hebcore.sock` transport，每连接逐行读 JSON `CoreRequest` → `core_rpc::dispatch(req, &LocalCoreClient)` → 回一行 JSON `CoreResponse`（JSON-RPC 信封，§7.2）；持 `SessionHub`（对话主链路接入后用）。
+  - [Cargo.toml](../Cargo.toml): workspace members 加 apps/hebcore。
+- **影响范围**: 新增 hebcore 二进制；纯新增，不动现有 surface。
+- **验证**: `cargo check -p hebcore` 通过；起 hebcore（隔离 data_dir）端到端——unix-socket 发 `list_tools` 返回 3 工具、`list_providers` 成功、`get_provider(bad)` 返回 error "provider not found"、未知 method 返回解析错误；起第二实例被单例锁拒绝（"已有 hebcore 实例在运行"），第一实例继续跑。
+- **留尾巴**: 对话主链路 `StartRun` 经 hub 跑 run + 事件 broadcast + ws transport 待接入（复用 hebweb run_turn 逻辑，它已是 SessionHub + agent_loop + broadcast 的完整实现）；步骤④⑤⑥（heb/hebweb/desktop 客户端化）依赖此进程稳定后做，desktop（步骤⑥，60+ command 分流）按 §7.8.6 铁律必须最后做。
