@@ -9695,3 +9695,19 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 新增 hebcore 二进制；纯新增，不动现有 surface。
 - **验证**: `cargo check -p hebcore` 通过；起 hebcore（隔离 data_dir）端到端——unix-socket 发 `list_tools` 返回 3 工具、`list_providers` 成功、`get_provider(bad)` 返回 error "provider not found"、未知 method 返回解析错误；起第二实例被单例锁拒绝（"已有 hebcore 实例在运行"），第一实例继续跑。
 - **留尾巴**: 对话主链路 `StartRun` 经 hub 跑 run + 事件 broadcast + ws transport 待接入（复用 hebweb run_turn 逻辑，它已是 SessionHub + agent_loop + broadcast 的完整实现）；步骤④⑤⑥（heb/hebweb/desktop 客户端化）依赖此进程稳定后做，desktop（步骤⑥，60+ command 分流）按 §7.8.6 铁律必须最后做。
+
+### 2026-06-25 — hebcore 对话主链路 + surface-session 提取：跨进程对话端到端打通（§7.8 步骤③完成）
+
+- **Why**: 完成 §7.8.6 步骤③——hebcore 不只能转发同步 API，还要能**跑对话并把事件 broadcast 给客户端**（§7.8.5 单写者+多观察者），这是 hebcore 成为"核心"的关键。
+- **surface-session crate（消除重复）**: hebweb 的 `session.rs`（SessionRuntime / run_turn / WebObserver / NamedModelClient，206 行 run_turn 构造逻辑）本就只依赖 agent_core/model_gateway/protocol（无 hebweb 内部耦合），且 session.rs 注释早记了"v2 与 daemon 共享 surface_session 模块"。提取到 `crates/surface-session`：
+  - hebweb 删本地 session.rs，改 `use surface_session::{run_turn, SessionRuntime}`（行为零变化，真模型对话验证通过）。
+  - 新增 `RuntimeRegistry`（封装 ensure_runtime：构造 SessionRuntime + spawn input 循环串行跑 run_turn，事件经 SessionRuntimeState broadcast），hebweb 与 hebcore 共用。
+- **hebcore 对话主链路**: unix-socket wire 协议从"纯 CoreRequest"扩展为 `HebcoreRequest`（`Rpc` 同步 API / `StartRun` 投输入循环 / `Subscribe` 转事件流）+ `HebcoreResponse`（Rpc/Accepted/Subscribed/Event/Error）。Subscribe 把连接转为只读事件流，订阅 broadcast 逐 WireEvent 推（Lagged 跳过、通道关闭退出）。
+- **改动**:
+  - [crates/surface-session/{Cargo.toml,src/lib.rs}](../crates/surface-session/src/lib.rs)（新）：从 hebweb session.rs 提取 + RuntimeRegistry。
+  - [apps/web-server/src/server.rs](../apps/web-server/src/server.rs) + main.rs + Cargo.toml：删 session.rs，改用 surface-session。
+  - [apps/hebcore/{Cargo.toml,src/main.rs}](../apps/hebcore/src/main.rs): 加 surface-session 依赖；HebcoreRequest/Response + 对话主链路 handle_connection。
+  - [Cargo.toml](../Cargo.toml): workspace members 加 surface-session。
+- **影响范围**: 新增 surface-session crate；hebweb 对话逻辑搬到 surface-session（行为不变）；hebcore 获得完整对话能力。desktop/cli 不受影响。
+- **验证**: `cargo check --workspace` 通过；hebweb 复用 surface-session 后真模型对话事件流（reasoning/text_delta/.../run_finished）+ 落盘行为完全不变；**hebcore 跨进程对话端到端**——一连接 subscribe 收到 subscribed + 完整事件流，另一连接 start_run 返回 accepted，事件经 broadcast 推回订阅者，落盘 user→assistant "好的老大，等于 2。" 正确。这是 §7.8.5 单写者+多观察者的实证。
+- **留尾巴**: hebcore ws transport（浏览器/远程）随步骤⑤；步骤④（heb 改客户端 --stdio/--connect）、⑤（hebweb 改连 hebcore）、⑥（desktop 对话链客户端化，最高风险）依次推进。控制 Op（approve/answer/interrupt）经 hebcore transport 转发待补（subscribe 已通，HITL 回流接入随步骤④⑤客户端化做）。

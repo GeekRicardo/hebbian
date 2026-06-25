@@ -1,0 +1,17 @@
+[package]
+name = "surface-session"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent-core = { path = "../agent-core" }
+model-gateway = { path = "../model-gateway" }
+protocol = { path = "../protocol" }
+common = { package = "hebbian-common", path = "../common" }
+
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+dirs = "5"

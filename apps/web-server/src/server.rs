@@ -40,7 +40,7 @@ use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
 use crate::protocol::{WsClientMessage, WsServerMessage};
-use crate::session::{run_turn, SessionRuntime};
+use surface_session::{run_turn, SessionRuntime};
 
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const EVENT_CHANNEL_CAPACITY: usize = 1024;

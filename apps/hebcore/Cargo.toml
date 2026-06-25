@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 agent-core = { path = "../../crates/agent-core" }
 core-rpc = { path = "../../crates/core-rpc" }
+surface-session = { path = "../../crates/surface-session" }
 common = { package = "hebbian-common", path = "../../crates/common" }
 protocol = { path = "../../crates/protocol" }
 observability = { path = "../../crates/observability" }

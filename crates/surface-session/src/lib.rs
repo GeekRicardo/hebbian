@@ -1,14 +1,11 @@
-//! 多 session 运行时：每个 SessionRuntime 独立持有 HITL 通道、cancel flag、
-//! pending inputs、broadcast 通道。多个 WS 连接可以同时订阅不同 SessionRuntime，
-//! 互不阻塞——这是 hebweb "多 AI 各看各的对话"的核心保证。
+//! Surface 对话运行时（架构 §7.8.5 / §7.8.6 步骤③）：每个 session 一份的运行时状态
+//! ([`SessionRuntime`]) + 跑一个 turn 的完整逻辑 ([`run_turn`])。
 //!
-//! 与 [`apps/cli/src/daemon.rs`] 对照：daemon 把事件 print 到 stdout，
-//! 这里改为通过 `tokio::sync::broadcast::Sender<WsServerMessage>` 推给 WS 订阅者。
-//! 其余 run_turn 逻辑（构建 model client、Workspace、ReadStateTracker、EditsWorktree、
-//! HookManager、CoreSession、HITL oneshot、token stats 累加、partial 持久化）一致。
-//!
-//! v2 计划：与 daemon.rs 共享同一个 surface_session 模块，消除重复。
-
+//! 通用运行时（事件 broadcast / HITL pending / cancel / pending inputs / run_mode）由
+//! agent_core 的 [`agent_core::session_hub::SessionRuntimeState`] 承载；本 crate 在其上补齐
+//! 「构建 model client / Workspace / tools / CoreSession，驱动 agent_loop，把 WireEvent 推
+//! broadcast」的 surface 侧运行逻辑。hebcore 常驻进程与 hebweb 共用同一份——消除重复
+//! （session.rs 注释里早记的 "v2 与 daemon 共享 surface_session 模块" 落地）。
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
@@ -32,6 +29,8 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use common::runtime::PendingInputs;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
 use model_gateway::{
     client::{DynModelClient, ModelClient},
     config as providers,
@@ -88,6 +87,86 @@ impl SessionRuntime {
     /// [`WsServerMessage`] 发给浏览器。
     pub fn emit_engine_event(&self, ev: protocol::WireEvent) {
         self.state.emit(ev);
+    }
+}
+
+/// broadcast 通道容量（慢订阅者落后会丢早帧）。
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// 活 session 运行时表（架构 §7.8.5）：`session_id → SessionRuntime`，多 surface 共享
+/// 同一进程内的同一份活状态。hebweb 的 ServerState 与 hebcore 进程都用它管理对话 session。
+#[derive(Default, Clone)]
+pub struct RuntimeRegistry {
+    sessions: Arc<RwLock<HashMap<String, Arc<SessionRuntime>>>>,
+}
+
+impl RuntimeRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 当前已 attach 的 session id 列表。
+    pub async fn session_ids(&self) -> Vec<String> {
+        self.sessions.read().await.keys().cloned().collect()
+    }
+
+    /// 取已 attach 的 runtime（不自动创建）。
+    pub async fn get(&self, session_id: &str) -> Option<Arc<SessionRuntime>> {
+        self.sessions.read().await.get(session_id).cloned()
+    }
+
+    /// 移除一个 runtime（session 关闭）。
+    pub async fn remove(&self, session_id: &str) -> Option<Arc<SessionRuntime>> {
+        self.sessions.write().await.remove(session_id)
+    }
+
+    /// 取或按 `session.json` 自动 attach 一个 runtime（§7.8.5）。attach 时 spawn 一条
+    /// input 循环：从 `input_tx` 收 user 文本，依次 [`run_turn`]——同一 session 串行跑 turn，
+    /// 事件经 [`SessionRuntimeState`] 的 broadcast 推给全部订阅者。失败 emit `Error` 事件。
+    pub async fn ensure(
+        &self,
+        data_dir: &std::path::Path,
+        permission_store: Option<Arc<PermissionStore>>,
+        session_id: &str,
+    ) -> Result<Arc<SessionRuntime>> {
+        if let Some(rt) = self.sessions.read().await.get(session_id).cloned() {
+            return Ok(rt);
+        }
+        let mut guard = self.sessions.write().await;
+        if let Some(rt) = guard.get(session_id).cloned() {
+            return Ok(rt);
+        }
+
+        let session = sessions::load(data_dir, session_id)
+            .map_err(|e| anyhow!("session {session_id} 不存在：{e}"))?;
+        sessions_dir::ensure_session_dirs(data_dir, session_id)?;
+
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let state = SessionRuntimeState::new(session_id, EVENT_CHANNEL_CAPACITY, session.run_mode);
+        let runtime = Arc::new(SessionRuntime {
+            session_id: session_id.to_string(),
+            data_dir: data_dir.to_path_buf(),
+            provider_id: session.provider_id.clone(),
+            model: session.model.clone(),
+            reasoning: None,
+            input_tx,
+            permission_store,
+            state,
+        });
+
+        let rt_for_loop = runtime.clone();
+        tokio::spawn(async move {
+            while let Some(text) = input_rx.recv().await {
+                if let Err(e) = run_turn(rt_for_loop.clone(), text).await {
+                    rt_for_loop.emit_engine_event(protocol::WireEvent::Error {
+                        message: e.to_string(),
+                    });
+                }
+            }
+        });
+
+        guard.insert(session_id.to_string(), runtime.clone());
+        Ok(runtime)
     }
 }
 

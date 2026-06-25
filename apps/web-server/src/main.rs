@@ -26,7 +26,6 @@ use tracing::info;
 mod chat_helpers;
 mod protocol;
 mod server;
-mod session;
 
 #[derive(Parser, Debug)]
 #[command(
