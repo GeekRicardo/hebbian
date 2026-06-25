@@ -1,15 +1,14 @@
 //! hebcore — 常驻核心进程（架构 §7.8.1）。
 //!
-//! 持有唯一 dispatch（[`core_rpc::dispatch`]）+ 同步 API facade（[`LocalCoreClient`]）+
-//! 全部活对话 session（[`RuntimeRegistry`]），对外开 transport 让 desktop / heb / hebweb
-//! 作为客户端连入。
+//! 持有唯一 dispatch（[`core_rpc::dispatch`]）+ 同步 API facade（`LocalCoreClient`）+
+//! 全部活对话 session（`RuntimeRegistry`），对外开 unix-socket transport 让 desktop / heb /
+//! hebweb 作为客户端连入。连接处理逻辑在 [`surface_session::transport`]（hebcore 进程与
+//! hebweb 升格时共用同一份，消除重复）。
 //!
 //! - **单例锁**：`~/.hebbian/hebcore.lock` 排他锁，同一数据目录最多一个 hebcore 实例
 //!   （对标 hebisland daemon「能否拿锁判存活」范式，§7.8.1）。
-//! - **unix-socket transport**：`~/.hebbian/hebcore.sock`，每连接逐行 JSON。
-//!   - 同步 API（`Rpc`）→ [`core_rpc::dispatch`]，回一行响应。
-//!   - 对话主链路：`StartRun` 投进 session 输入循环（异步跑），`Subscribe` 把本连接转为
-//!     事件流逐 [`protocol::WireEvent`] 推（§7.8.5 单写者 + 多观察者 broadcast）。
+//! - **unix-socket transport**：`~/.hebbian/hebcore.sock`，每连接逐行 JSON
+//!   （Rpc / StartRun / Subscribe / Approve / Answer / Interrupt / Inject / SetRunMode）。
 //!
 //! ws transport（浏览器 / 远程）在步骤⑤接入。
 
@@ -21,10 +20,9 @@ use agent_core::permissions::PermissionStore;
 use anyhow::{Context, Result};
 use clap::Parser;
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
+use surface_session::transport::{handle_connection, TransportCtx};
 use surface_session::RuntimeRegistry;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
@@ -35,69 +33,10 @@ struct Args {
     data_dir: Option<PathBuf>,
 }
 
-/// hebcore 进程的共享状态：同步 API facade + 活 session 枢纽。
-struct CoreState {
-    data_dir: PathBuf,
-    core: Arc<LocalCoreClient>,
-    permission_store: Option<Arc<PermissionStore>>,
-    /// 活对话 session 表（§7.8.5 单写者 + 多观察者）。
-    runtimes: RuntimeRegistry,
-}
-
-/// hebcore 的 unix-socket 入站消息（一行一个 JSON）。同步 API 走 `Rpc`，对话主链路走
-/// `StartRun` / `Subscribe`，运行时控制走 `Approve` / `Answer` / `Interrupt` / `Inject` /
-/// `SetRunMode`（架构 §3 双通路 + §7.8.5 控制 Op 路由到对应 runtime）。
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum HebcoreRequest {
-    /// 同步 API：内嵌一个 [`core_rpc::CoreRequest`]，走 dispatch。
-    Rpc { req: core_rpc::CoreRequest },
-    /// 启动一个对话 turn：把 user 文本投进 session 输入循环（异步跑，事件走 broadcast）。
-    StartRun { session_id: String, text: String },
-    /// 订阅一个 session 的事件流：本连接转为只读事件流，持续推 [`protocol::WireEvent`]。
-    Subscribe { session_id: String },
-    /// 结算一条审批（HITL）：把客户端的 [`ApprovalDecision`] 路由到对应 runtime 的待结算项。
-    Approve {
-        session_id: String,
-        request_id: String,
-        decision: protocol::ApprovalDecision,
-    },
-    /// 结算一条提问（HITL）。
-    Answer {
-        session_id: String,
-        request_id: String,
-        answer: protocol::UserAnswer,
-    },
-    /// 中断当前 run（拉 cancel flag + 放掉全部待结算 HITL）。
-    Interrupt { session_id: String },
-    /// 把一条 user 输入插进当前活 run 的队列（streaming 插队）。
-    Inject { session_id: String, text: String },
-    /// 即时切换 run mode。
-    SetRunMode { session_id: String, mode: String },
-}
-
-/// hebcore 的出站消息（一行一个 JSON）。
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum HebcoreResponse<'a> {
-    /// 同步 API 的响应。
-    Rpc { resp: &'a core_rpc::CoreResponse },
-    /// StartRun 已受理（异步跑，事件后续走 broadcast）。
-    Accepted,
-    /// 订阅已建立。
-    Subscribed { session_id: String },
-    /// broadcast 推来的一个对话事件。
-    Event { event: protocol::WireEvent },
-    /// 出错。
-    Error { message: String },
-}
-
-fn data_dir(args: &Args) -> PathBuf {
-    args.data_dir.clone().unwrap_or_else(|| {
-        dirs::home_dir()
-            .expect("no home dir")
-            .join(".hebbian")
-    })
+fn resolve_data_dir(args: &Args) -> PathBuf {
+    args.data_dir
+        .clone()
+        .unwrap_or_else(|| dirs::home_dir().expect("no home dir").join(".hebbian"))
 }
 
 /// 单例锁：排他锁住 `<data_dir>/hebcore.lock`，进程存活期间持有。拿不到 = 已有实例在跑。
@@ -122,7 +61,7 @@ fn sock_path(data_dir: &std::path::Path) -> PathBuf {
 async fn main() -> Result<()> {
     observability::init("info");
     let args = Args::parse();
-    let data_dir = data_dir(&args);
+    let data_dir = resolve_data_dir(&args);
     std::fs::create_dir_all(&data_dir).ok();
 
     // 单例：拿不到锁就退出（已有实例）。_lock 持有到 main 结束。
@@ -134,7 +73,7 @@ async fn main() -> Result<()> {
         data_dir.clone(),
         permission_store.clone(),
     ));
-    let state = Arc::new(CoreState {
+    let ctx = Arc::new(TransportCtx {
         data_dir: data_dir.clone(),
         core,
         permission_store,
@@ -144,16 +83,16 @@ async fn main() -> Result<()> {
     // unix-socket transport：清理旧 sock（上次异常退出残留），bind 新的。
     let sock = sock_path(&data_dir);
     let _ = std::fs::remove_file(&sock);
-    let listener = UnixListener::bind(&sock)
-        .with_context(|| format!("bind hebcore socket {sock:?}"))?;
+    let listener =
+        UnixListener::bind(&sock).with_context(|| format!("bind hebcore socket {sock:?}"))?;
     info!(socket = %sock.display(), data_dir = %data_dir.display(), "hebcore listening");
 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                let state = state.clone();
+                let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, state).await {
+                    if let Err(e) = handle_connection(stream, ctx).await {
                         warn!(error = %e, "hebcore connection 处理失败");
                     }
                 });
@@ -163,189 +102,4 @@ async fn main() -> Result<()> {
             }
         }
     }
-}
-
-/// 单连接：逐行读 JSON [`HebcoreRequest`]。
-/// - `Rpc` → dispatch，回一行 `HebcoreResponse::Rpc`。
-/// - `StartRun` → 投进 session 输入循环，回 `Accepted`（事件异步走 broadcast）。
-/// - `Subscribe` → 本连接转为事件流，持续推 `Event`，直到连接断开。
-async fn handle_connection(stream: UnixStream, state: Arc<CoreState>) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<HebcoreRequest>(line) {
-            Ok(HebcoreRequest::Rpc { req }) => {
-                let resp = core_rpc::dispatch(req, &*state.core).await;
-                write_line(&mut write_half, &HebcoreResponse::Rpc { resp: &resp }).await?;
-            }
-            Ok(HebcoreRequest::StartRun { session_id, text }) => {
-                let resp = match state
-                    .runtimes
-                    .ensure(&state.data_dir, state.permission_store.clone(), &session_id)
-                    .await
-                {
-                    Ok(rt) => match rt.input_tx.send(text) {
-                        Ok(()) => HebcoreResponse::Accepted,
-                        Err(_) => HebcoreResponse::Error {
-                            message: "session 输入循环已关闭".into(),
-                        },
-                    },
-                    Err(e) => HebcoreResponse::Error {
-                        message: e.to_string(),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::Approve {
-                session_id,
-                request_id,
-                decision,
-            }) => {
-                let resp = match state.runtimes.get(&session_id).await {
-                    Some(rt) if rt.state.resolve_approval(&request_id, decision) => {
-                        HebcoreResponse::Accepted
-                    }
-                    Some(_) => HebcoreResponse::Error {
-                        message: format!("未找到待结算审批 {request_id}"),
-                    },
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::Answer {
-                session_id,
-                request_id,
-                answer,
-            }) => {
-                let resp = match state.runtimes.get(&session_id).await {
-                    Some(rt) if rt.state.answer_question(&request_id, answer) => {
-                        HebcoreResponse::Accepted
-                    }
-                    Some(_) => HebcoreResponse::Error {
-                        message: format!("未找到待结算提问 {request_id}"),
-                    },
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::Interrupt { session_id }) => {
-                let resp = match state.runtimes.get(&session_id).await {
-                    Some(rt) => {
-                        rt.stop();
-                        HebcoreResponse::Accepted
-                    }
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::Inject { session_id, text }) => {
-                let resp = match state.runtimes.get(&session_id).await {
-                    Some(rt) if rt.inject(text) => HebcoreResponse::Accepted,
-                    Some(_) => HebcoreResponse::Error {
-                        message: "无活跃 run，无法注入".into(),
-                    },
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::SetRunMode { session_id, mode }) => {
-                let resp = match agent_core::run_mode::RunMode::parse(&mode) {
-                    Some(m) => match state.runtimes.get(&session_id).await {
-                        Some(rt) => {
-                            rt.state.set_run_mode(m);
-                            agent_core::run_mode::LiveRunModeRegistry::global().set(&session_id, m);
-                            HebcoreResponse::Accepted
-                        }
-                        None => HebcoreResponse::Error {
-                            message: format!("session {session_id} 未激活"),
-                        },
-                    },
-                    None => HebcoreResponse::Error {
-                        message: format!("非法 run mode: {mode}"),
-                    },
-                };
-                write_line(&mut write_half, &resp).await?;
-            }
-            Ok(HebcoreRequest::Subscribe { session_id }) => {
-                match state
-                    .runtimes
-                    .ensure(&state.data_dir, state.permission_store.clone(), &session_id)
-                    .await
-                {
-                    Ok(rt) => {
-                        write_line(
-                            &mut write_half,
-                            &HebcoreResponse::Subscribed {
-                                session_id: session_id.clone(),
-                            },
-                        )
-                        .await?;
-                        // 本连接转为事件流：逐 WireEvent 推到客户端，直到断开 / 通道关闭。
-                        let mut rx = rt.state.subscribe();
-                        loop {
-                            match rx.recv().await {
-                                Ok(event) => {
-                                    if write_line(
-                                        &mut write_half,
-                                        &HebcoreResponse::Event { event },
-                                    )
-                                    .await
-                                    .is_err()
-                                    {
-                                        return Ok(());
-                                    }
-                                }
-                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        write_line(
-                            &mut write_half,
-                            &HebcoreResponse::Error {
-                                message: e.to_string(),
-                            },
-                        )
-                        .await?;
-                    }
-                }
-            }
-            Err(e) => {
-                write_line(
-                    &mut write_half,
-                    &HebcoreResponse::Error {
-                        message: format!("解析请求失败: {e}"),
-                    },
-                )
-                .await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 写一行 JSON（带换行）。客户端断开时返回 Err，调用方据此结束订阅循环。
-async fn write_line(
-    w: &mut (impl AsyncWriteExt + Unpin),
-    msg: &HebcoreResponse<'_>,
-) -> Result<()> {
-    let mut out = serde_json::to_string(msg)
-        .unwrap_or_else(|e| format!("{{\"kind\":\"error\",\"message\":\"序列化失败: {e}\"}}"));
-    out.push('\n');
-    w.write_all(out.as_bytes()).await?;
-    w.flush().await?;
-    Ok(())
 }

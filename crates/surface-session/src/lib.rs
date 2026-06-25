@@ -6,6 +6,9 @@
 //! 「构建 model client / Workspace / tools / CoreSession，驱动 agent_loop，把 WireEvent 推
 //! broadcast」的 surface 侧运行逻辑。hebcore 常驻进程与 hebweb 共用同一份——消除重复
 //! （session.rs 注释里早记的 "v2 与 daemon 共享 surface_session 模块" 落地）。
+
+pub mod transport;
+
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 

@@ -9742,3 +9742,17 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - `crates/agent-core/src/storage/sessions.rs`（已先行提交）: ActiveGoal 加 `pending_set_marker` 一次性标志（同 PendingContinue 模式）
 - **影响范围**: agent-core（agent_loop/goal）+ desktop lib.rs。零新机制——所有 goal marker 统一走 agent_core 串行落盘流，顺序 = 发生序。agent-core 8 个 goal 测试全过、desktop 整包编译通过、tsc 0 error
 - **留尾巴**: `goal_iterations` 每 run 从 0 重置（跨 run 不累计「第 N 轮」），用户确认先不动；set marker 落盘依赖 surface 先落 `Goal set` user 消息（现状成立）
+
+### 2026-06-25 — hebweb 升格 hebcore：unix-socket transport 提取共用 + ServerState 统一 RuntimeRegistry（§7.8 步骤⑤）
+
+- **Why**: 完成 §7.8.6 步骤⑤——让 hebweb 进程兼任 hebcore：除浏览器 ws/HTTP 外，额外开 hebcore unix-socket transport，desktop/heb 连进来看同一份活对话状态。架构.md 给的"hebweb 升格"选项落地。
+- **transport 提取共用**: hebcore 的 unix-socket 连接处理（HebcoreRequest/Response + handle_connection，含 Rpc/StartRun/Subscribe/Approve/Answer/Interrupt/Inject/SetRunMode 全套）从 hebcore 二进制提取到 `crates/surface-session/src/transport.rs`，参数化为 `TransportCtx`（data_dir + core + permission_store + RuntimeRegistry）。hebcore 进程与 hebweb 共用同一份 handler——hebcore main.rs 从 ~280 行精简到 105 行薄壳。
+- **hebweb 统一 RuntimeRegistry**: ServerState.sessions（自建 `Arc<RwLock<HashMap>>` + ensure_runtime 200 行）替换为共享 `surface_session::RuntimeRegistry`，ensure_runtime 委托 `RuntimeRegistry::ensure`（与 hebcore 同一份逻辑）。这让浏览器与 unix-socket 客户端共享同一活 session 表。
+- **hebweb main 开 unix-socket**: `spawn_hebcore_transport`——尝试拿 hebcore 单例锁（fs2 排他锁守 hebcore.lock），拿到则 bind hebcore.sock + spawn accept 循环（锁句柄 move 进 task 常驻持有）；拿不到（已有独立 hebcore 在跑）则静默跳过、只服务浏览器。
+- **改动**:
+  - [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs)（新）+ lib.rs 加 `pub mod transport`；Cargo.toml 加 core-rpc/serde 依赖。
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): 复用 surface_session::transport，删本地协议+handler。
+  - [apps/web-server/src/{main.rs,server.rs}](../apps/web-server/src/main.rs) + Cargo.toml：ServerState 用 RuntimeRegistry；main 开 unix-socket transport；加 fs2 依赖。
+- **影响范围**: surface-session 加 transport 模块（additive）；hebcore 精简（行为不变）；hebweb 兼任 hebcore（浏览器路径行为不变，新增 unix-socket）。desktop/cli 不受影响。
+- **验证**: `cargo check --workspace` 通过；hebcore 精简后编译通过；hebweb 编译通过（兼 hebcore 模式）。运行时端到端（浏览器建对话 + heb 连 hebweb unix-socket 看同一活状态）待补跑。
+- **留尾巴**: 步骤⑤运行时端到端验证（浏览器+heb 同看一活对话）；步骤⑥ desktop 对话主链路客户端化（最高风险，60+ command 分流，按 §7.8.6 铁律最后做）；hebcore ws transport（浏览器直连远程 hebcore）。

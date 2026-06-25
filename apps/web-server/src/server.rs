@@ -8,7 +8,6 @@
 //! 命令派发：每条 `Invoke` WS 消息 → 查 cmd 名字 → 调对应 handler → 回 InvokeResponse。
 //! 事件流：handler 通过 `runtime.emit_engine_event(...)` 广播到所有订阅本 session 的 WS。
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
 
@@ -35,7 +34,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use protocol::{ApprovalDecision, PermissionScope, UserAnswer};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
@@ -50,8 +49,9 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 #[derive(Clone)]
 pub struct ServerState {
     pub data_dir: PathBuf,
-    /// session_id → SessionRuntime（多 session 共享同一进程）
-    pub sessions: Arc<RwLock<HashMap<String, Arc<SessionRuntime>>>>,
+    /// 活对话 session 表（架构 §7.8.5）：与 hebcore 进程共用同一份 `RuntimeRegistry`
+    /// 类型——hebweb 升格为 hebcore 时浏览器（ws）与 desktop/heb（unix-socket）看同一活状态。
+    pub runtimes: surface_session::RuntimeRegistry,
     pub permission_store: Option<Arc<PermissionStore>>,
     /// 复用 desktop 同一个业务 facade。CoreClient trait 暴露的 25+ 方法
     /// 直接可用——无需 hebweb 自己再 wrap 一遍 storage / model_gateway API。
@@ -72,62 +72,19 @@ impl ServerState {
         ));
         Self {
             data_dir,
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            runtimes: surface_session::RuntimeRegistry::new(),
             permission_store,
             core,
             branches: Arc::new(agent_core::branch::BranchState::new()),
         }
     }
 
-    /// 取已 attach 的 SessionRuntime；若不存在则按 session.json 自动 attach 一个。
-    /// attach 失败（session 不存在 / 缺 provider）返回 Err。
+    /// 取已 attach 的 SessionRuntime；若不存在则按 session.json 自动 attach 一个
+    /// （委托共享的 [`surface_session::RuntimeRegistry`]，与 hebcore 进程同一份逻辑）。
     pub async fn ensure_runtime(&self, session_id: &str) -> Result<Arc<SessionRuntime>> {
-        if let Some(rt) = self.sessions.read().await.get(session_id).cloned() {
-            return Ok(rt);
-        }
-        // 加锁后再检查一次，避免并发重复 attach
-        let mut guard = self.sessions.write().await;
-        if let Some(rt) = guard.get(session_id).cloned() {
-            return Ok(rt);
-        }
-
-        let session = sessions_store::load(&self.data_dir, session_id)
-            .map_err(|e| anyhow!("session {session_id} 不存在：{e}"))?;
-        sessions_dir::ensure_session_dirs(&self.data_dir, session_id)?;
-
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<String>();
-        let run_mode = session.run_mode;
-
-        let state_rt = agent_core::session_hub::SessionRuntimeState::new(
-            session_id,
-            EVENT_CHANNEL_CAPACITY,
-            run_mode,
-        );
-        let runtime = Arc::new(SessionRuntime {
-            session_id: session_id.to_string(),
-            data_dir: self.data_dir.clone(),
-            provider_id: session.provider_id.clone(),
-            model: session.model.clone(),
-            reasoning: None,
-            input_tx,
-            permission_store: self.permission_store.clone(),
-            state: state_rt,
-        });
-
-        // 启动 turn 主循环：依次处理 input_rx 的每条输入
-        let rt_for_loop = runtime.clone();
-        tokio::spawn(async move {
-            while let Some(text) = input_rx.recv().await {
-                if let Err(e) = run_turn(rt_for_loop.clone(), text).await {
-                    rt_for_loop.emit_engine_event(protocol::WireEvent::Error {
-                        message: e.to_string(),
-                    });
-                }
-            }
-        });
-
-        guard.insert(session_id.to_string(), runtime.clone());
-        Ok(runtime)
+        self.runtimes
+            .ensure(&self.data_dir, self.permission_store.clone(), session_id)
+            .await
     }
 }
 
@@ -153,7 +110,7 @@ pub fn build_router(state: ServerState, static_dir: Option<PathBuf>) -> Router {
 }
 
 async fn healthz(State(state): State<ServerState>) -> impl IntoResponse {
-    let active: Vec<String> = state.sessions.read().await.keys().cloned().collect();
+    let active: Vec<String> = state.runtimes.session_ids().await;
     Json(json!({
         "ok": true,
         "version": SERVER_VERSION,
@@ -1009,7 +966,7 @@ async fn cmd_delete_session(state: &ServerState, args: Value) -> Result<()> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing `id`"))?;
     // 同时从内存里移除 SessionRuntime
-    state.sessions.write().await.remove(id);
+    state.runtimes.remove(id).await;
     sessions_store::delete(&state.data_dir, id).map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }

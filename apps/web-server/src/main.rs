@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::info;
+use tracing::{info, warn};
 
 mod chat_helpers;
 mod protocol;
@@ -65,6 +65,13 @@ async fn main() -> Result<()> {
     let static_dir = args.static_dir.clone().or_else(autodetect_static_dir);
 
     let state = server::ServerState::new(data_dir.clone());
+
+    // hebweb 升格为 hebcore（架构 §7.8.6 步骤⑤）：除浏览器 ws/HTTP 外，额外开 hebcore
+    // unix-socket transport，让 desktop / heb 作为客户端连入、看同一份活对话状态。用 hebcore
+    // 单例锁守 sock——拿到锁 = 本进程当 hebcore；拿不到（已有独立 hebcore 在跑）则跳过，
+    // 只服务浏览器。锁 + listener 句柄 spawn 到后台常驻。
+    spawn_hebcore_transport(&data_dir, &state);
+
     let app = server::build_router(state, static_dir.clone());
 
     // 解析监听地址
@@ -87,6 +94,66 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// 尝试以 hebcore 身份开 unix-socket transport（§7.8.6 步骤⑤）。拿到单例锁则 bind
+/// `<data_dir>/hebcore.sock`、spawn accept 循环；拿不到锁（已有独立 hebcore）则静默跳过。
+fn spawn_hebcore_transport(data_dir: &std::path::Path, state: &server::ServerState) {
+    use fs2::FileExt;
+
+    let lock_path = data_dir.join("hebcore.lock");
+    let lock = match std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            warn!(error = %e, "打开 hebcore 单例锁失败，跳过 unix-socket transport");
+            return;
+        }
+    };
+    if lock.try_lock_exclusive().is_err() {
+        info!("已有 hebcore 实例占用单例锁，hebweb 只服务浏览器（不开 unix-socket）");
+        return;
+    }
+
+    let sock = data_dir.join("hebcore.sock");
+    let _ = std::fs::remove_file(&sock);
+    let ctx = std::sync::Arc::new(surface_session::transport::TransportCtx {
+        data_dir: data_dir.to_path_buf(),
+        core: state.core.clone(),
+        permission_store: state.permission_store.clone(),
+        runtimes: state.runtimes.clone(),
+    });
+    let sock_for_log = sock.clone();
+    tokio::spawn(async move {
+        // 锁句柄 move 进 task 常驻持有（task 活着 = 锁不释放）。
+        let _lock = lock;
+        let listener = match tokio::net::UnixListener::bind(&sock) {
+            Ok(l) => l,
+            Err(e) => {
+                warn!(error = %e, "bind hebcore.sock 失败，unix-socket transport 未启动");
+                return;
+            }
+        };
+        info!(socket = %sock_for_log.display(), "hebweb 兼任 hebcore：unix-socket transport 就绪");
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            surface_session::transport::handle_connection(stream, ctx).await
+                        {
+                            warn!(error = %e, "hebcore connection 处理失败");
+                        }
+                    });
+                }
+                Err(e) => warn!(error = %e, "hebcore accept 失败"),
+            }
+        }
+    });
 }
 
 /// 探测前端 dist 目录。优先 cwd 下 `apps/desktop/frontend/dist`，
