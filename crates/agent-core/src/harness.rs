@@ -169,6 +169,10 @@ impl Harness {
             _ => None,
         };
         let persister_handle = persister.as_ref().map(|p| p.handle());
+        let last_message_handle = persister
+            .as_ref()
+            .map(|p| p.last_message_handle())
+            .unwrap_or_default();
         let core_sink: EventSink = Arc::new(move |event: Event| {
             if let Some(rec) = &recorder {
                 rec.write(&event);
@@ -371,6 +375,7 @@ impl Harness {
             events: run_rx,
             hitl: hitl_for_handle,
             cancel: cancel_for_handle,
+            last_message: last_message_handle,
         }
     }
 
@@ -397,6 +402,9 @@ pub struct RunHandle {
     events: mpsc::Receiver<Event>,
     hitl: Arc<HitlGate>,
     cancel: CancelFlag,
+    /// 本 run 最后落盘 assistant message 的只读句柄（架构 §7.8.3）。`drive` 在收到
+    /// `RunFinished` 时读出填进 [`TurnSummary::last_message`]，surface 不再自行累积。
+    last_message: crate::run_persister::LastMessageHandle,
 }
 
 impl RunHandle {
@@ -509,6 +517,9 @@ impl RunHandle {
                             cache_creation: *total_cache_creation_tokens,
                         }),
                         duration_ms: Some(*duration_ms),
+                        // RunFinished emit 于 agent_loop 收尾 persister.finish() 之后（同 task
+                        // 先 finish 落盘再 emit），故此刻最后落盘段已就绪可读（架构 §7.8.3）。
+                        last_message: self.last_message.get(),
                     };
                 }
                 EventPayload::RunFailed { error } => {
@@ -519,6 +530,7 @@ impl RunHandle {
                         outcome: TurnOutcome::Cancelled,
                         usage: None,
                         duration_ms: None,
+                        last_message: None,
                     };
                 }
                 // 架构 §4.12.1 / §4.12.5：Suspended 是 Run 的合法中间态——agent_loop
@@ -534,6 +546,7 @@ impl RunHandle {
                         outcome: TurnOutcome::Suspended,
                         usage: None,
                         duration_ms: None,
+                        last_message: None,
                     };
                 }
                 _ => {}
@@ -625,6 +638,10 @@ pub struct TurnSummary {
     /// 本 Run 总耗时（毫秒），取自 `RunFinished`。surface 落盘时写进本轮最后一条
     /// assistant message 的 `run_duration_ms`。仅 `Done` 有值；其它 outcome 为 `None`。
     pub duration_ms: Option<u64>,
+    /// 本 Run 最后落盘的 assistant message（架构 §7.8.3）：assistant 累积 + 落盘已
+    /// 收归 agent_core 唯一一份，surface 不再自行累积，收尾返回值直接取此。仅 `Done`
+    /// 时由 `drive` 从 [`RunHandle::last_message`] 读出；其它 outcome 为 `None`。
+    pub last_message: Option<crate::storage::sessions::Message>,
 }
 
 #[derive(Debug, Clone)]
@@ -653,6 +670,7 @@ impl TurnSummary {
             outcome: TurnOutcome::Failed(msg.to_string()),
             usage: None,
             duration_ms: None,
+            last_message: None,
         }
     }
 }
@@ -861,6 +879,7 @@ mod tests {
             events,
             hitl,
             cancel: Arc::new(AtomicBool::new(false)),
+            last_message: crate::run_persister::LastMessageHandle::default(),
         }
     }
 

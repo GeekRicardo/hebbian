@@ -1,0 +1,16 @@
+[package]
+name = "core-rpc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent-core = { path = "../agent-core" }
+model-gateway = { path = "../model-gateway" }
+protocol = { path = "../protocol" }
+common = { package = "hebbian-common", path = "../common" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

@@ -28,7 +28,7 @@ const MAX_SKILL_BYTES: u64 = 200 * 1024;
 const MAX_DESC_PREVIEW: usize = 200;
 
 /// 一个加载好的 skill
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
     /// 目录名——`<skills_dir>/<name>/SKILL.md` 拼路径用，永远存在。
     pub name: String,

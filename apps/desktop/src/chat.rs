@@ -2,8 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::hebisland_client::{HebislandClient, IslandCard, IslandOption, IslandQuestion};
 use crate::hitl::HitlState;
 use agent_core::storage::{
-    sessions::{self, Message, MessageMeta, MessagePart, MessageToolCall, Role},
-    sessions_dir::{self as sessions_dir, PartialFragment},
+    sessions::{self, Message, MessageMeta, Role},
     settings as global_settings,
 };
 use agent_core::{
@@ -14,7 +13,7 @@ use agent_core::{
     permissions::PermissionStore,
     read_state::ReadStateTracker,
     tools::{hitl::HitlGate, skill::default_skill_dirs},
-    types::{AgentEvent, AgentEventPayload},
+    types::AgentEvent,
     workspace::Workspace,
     Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
@@ -30,7 +29,6 @@ use protocol::{
     UserAnswer,
 };
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -434,12 +432,6 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             )
         });
 
-    let consumed_pending_seen_before_run = args
-        .consumed_pending_inputs
-        .as_ref()
-        .map(|slot| slot.lock().unwrap().len())
-        .unwrap_or(0);
-
     let mut handle = match resume_state {
         Some(rs) => core_session.resume_with_runtime_inputs(
             args.cancel_flag.clone(),
@@ -467,8 +459,6 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
         &emit_event,
         data_dir,
         &args.session_id,
-        args.consumed_pending_inputs.clone(),
-        consumed_pending_seen_before_run,
     );
     let summary = handle.drive(&mut observer).await;
     if let Some(request_id) = args.request_id.as_deref() {
@@ -487,91 +477,34 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
     // - 本轮 AllowAndRemember 审批新增的目录此时仍在 pending，下一条 user message 会通知模型
     persist_workspace_runtime_dirs(data_dir, &args.session_id, &workspace);
 
-    observer.finish_current_segment();
-    let DesktopObserver {
-        parts,
-        partial_output,
-        tool_calls,
-        mut segment_messages,
-        flushed_segments,
-        output_attachments,
-        run_started_at,
-        ..
-    } = observer;
     if let Some(pending) = args.pending_inputs.as_ref() {
         pending.lock().unwrap().clear();
     }
 
-    // 架构 §4.9.5：session.jsonl 的 assistant 段 + 插队 user + partial sidecar 落盘
-    // 已全部收归 agent_core 的 RunPersister 串行 append。desktop 只构造返回值，不落盘。
+    // 架构 §4.9.5 / §7.8.3：assistant 段 + 插队 user + partial sidecar 落盘全部收归
+    // agent_core 的 RunPersister 串行 append，assistant message 也只在那一处累积。
+    // desktop 不再自行重建 message，返回值直接取 RunPersister 落盘的最后一段（透传）。
     match summary.outcome {
-        // Done / Suspended：agent_core 已落盘，这里只构造返回值。
-        TurnOutcome::Done | TurnOutcome::Suspended => {}
+        // Done / Suspended：agent_core 已落盘，返回最后落盘段（前端不消费此值，只为
+        // 保持 send_message Tauri 命令的 Message 返回签名；无内容则回退空消息）。
+        TurnOutcome::Done | TurnOutcome::Suspended => {
+            Ok(summary.last_message.unwrap_or_else(empty_assistant_message))
+        }
         // Cancelled / Failed：agent_core 的 finish_interrupted 已补落尾段 + Interrupted
         // marker，desktop 不再落盘，直接返回错误。
-        TurnOutcome::Cancelled => {
-            return Err(AppError::msg("请求已中断"));
-        }
-        TurnOutcome::Failed(error) => {
-            return Err(AppError::msg(error));
-        }
+        TurnOutcome::Cancelled => Err(AppError::msg("请求已中断")),
+        TurnOutcome::Failed(error) => Err(AppError::msg(error)),
     }
-
-    // 构造返回值 assistant message（不落盘）：had_pending 时取最后一段，否则用全 run 累积。
-    let run_duration_ms = summary.duration_ms;
-    let assistant_msg = if !segment_messages.is_empty() {
-        let _ = flushed_segments;
-        if let Some(last) = segment_messages.last_mut() {
-            last.attachments = output_attachments;
-            last.run_duration_ms = run_duration_ms;
-        }
-        segment_messages
-            .last()
-            .cloned()
-            .unwrap_or_else(empty_assistant_message)
-    } else {
-        let mut m = assistant_message_from_recorded_parts(
-            parts,
-            partial_output,
-            tool_calls,
-            output_attachments,
-        );
-        if let Some(started_at) = run_started_at {
-            m.created_at = started_at;
-        }
-        m.run_duration_ms = run_duration_ms;
-        m
-    };
-
-    Ok(assistant_msg)
 }
 
-fn assistant_message_from_recorded_parts(
-    mut parts: AssistantPartsRecorder,
-    partial_output: String,
-    tool_calls: Vec<MessageToolCall>,
-    attachments: Vec<MessageAttachment>,
-) -> Message {
-    let final_text = parts.last_text_snapshot();
-    parts.append_final_text_if_missing(&final_text);
-    let assistant_parts = parts.parts.clone();
-    let assistant_content = text_from_parts(&assistant_parts)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| {
-            if final_text.is_empty() {
-                partial_output
-            } else {
-                final_text
-            }
-        });
-
+fn empty_assistant_message() -> Message {
     Message {
         id: sessions::new_id(),
         role: Role::Assistant,
-        content: assistant_content,
-        attachments,
-        tool_calls,
-        parts: assistant_parts,
+        content: String::new(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
         created_at: chrono::Utc::now().timestamp_millis(),
         meta: None,
         subagent_call_id: None,
@@ -579,51 +512,18 @@ fn assistant_message_from_recorded_parts(
     }
 }
 
-fn empty_assistant_message() -> Message {
-    assistant_message_from_recorded_parts(
-        AssistantPartsRecorder::default(),
-        String::new(),
-        Vec::new(),
-        Vec::new(),
-    )
-}
-
-/// Desktop 端 [`TurnObserver`] 实现：累积 assistant parts / tool_calls / partial_output，
-/// 把每个事件翻译成 `protocol::WireEvent` 推送给 React，并把 HITL pending 注册到全局桥接。
+/// Desktop 端 [`TurnObserver`] 实现：把每个事件翻译成 `protocol::WireEvent` 推送给
+/// React 渲染，并把 HITL pending 注册到全局桥接。
 ///
-/// partial sidecar 已由 agent_core [`RunPersister`] 维护（架构 §4.9.5，2026-06-25），
-/// 此处不再持有 PartialFileWriter。
+/// assistant 累积 + 落盘已收归 agent_core 唯一一份（架构 §7.8.3）：observer 不再重建
+/// message，`send_message` 的返回值由 [`crate::chat::send_and_save`] 从 `TurnSummary`
+/// 透传 RunPersister 落盘的最后一段。partial sidecar 同样由 RunPersister 维护。
 struct DesktopObserver<'a> {
-    parts: AssistantPartsRecorder,
-    partial_output: String,
-    tool_calls: Vec<MessageToolCall>,
-    segment_parts: AssistantPartsRecorder,
-    segment_partial_output: String,
-    segment_tool_calls: Vec<MessageToolCall>,
-    segment_messages: Vec<Message>,
-    /// segment_messages 中已在 drain 边界即时落盘的前缀长度；run 结束只补写其余。
-    flushed_segments: usize,
-    /// 当前正在累积的 segment 的「真实产出起始时刻」（首个内容事件到达时间）。
-    /// finish_current_segment 用它做 Message.created_at——**不能用落盘时的 now()**：
-    /// 一段早就流式输出的 assistant，drain 落盘时刻会晚于「流式途中插队的 user」，
-    /// 时间戳倒挂会让加载排序把 assistant 排到插队 user 之后（架构 §4.9.5 消息顺序契约）。
-    segment_started_at: Option<i64>,
-    /// 整个 run 的「首个内容事件时刻」（Unix ms）。无插队路径用全 run 累积的 parts 拼成
-    /// 单段 assistant 落盘，其 created_at 必须用这个首内容时刻而非落盘 now()——否则
-    /// assistant 会倒挂到 turn 末尾的 goal marker / run 末尾的系统通知之后（架构 §4.9.5）。
-    run_started_at: Option<i64>,
-    consumed_pending_inputs: Option<ConsumedPendingInputs>,
-    consumed_pending_seen: usize,
-    output_attachments: Vec<MessageAttachment>,
     hitl_state: Option<Arc<HitlState>>,
     hitl: Arc<HitlGate>,
     data_dir: PathBuf,
     session_id: String,
     emit: &'a (dyn Fn(protocol::WireEvent) + Send + Sync),
-    /// 子 NestedRun（subagent）过程累积（架构 §4.4.11.8）：按 subagent_call_id 累积子过程，
-    /// 同步进 tool_calls 里对应 Task call 的 `nested`，run 结束随父 message 落**主** session.jsonl，
-    /// 修复「子过程只活在内存事件流、run 一结束就蒸发」。与 CLI / hebweb 共用同一份累积逻辑。
-    nested: agent_core::storage::nested::NestedAccumulator,
 }
 
 impl<'a> DesktopObserver<'a> {
@@ -633,106 +533,22 @@ impl<'a> DesktopObserver<'a> {
         emit: &'a (dyn Fn(protocol::WireEvent) + Send + Sync),
         data_dir: &Path,
         session_id: &str,
-        consumed_pending_inputs: Option<ConsumedPendingInputs>,
-        consumed_pending_seen: usize,
     ) -> Self {
         Self {
-            parts: AssistantPartsRecorder::default(),
-            partial_output: String::new(),
-            tool_calls: Vec::new(),
-            segment_parts: AssistantPartsRecorder::default(),
-            segment_partial_output: String::new(),
-            segment_tool_calls: Vec::new(),
-            segment_messages: Vec::new(),
-            flushed_segments: 0,
-            segment_started_at: None,
-            run_started_at: None,
-            consumed_pending_inputs,
-            consumed_pending_seen,
-            output_attachments: Vec::new(),
             hitl_state,
             hitl,
             data_dir: data_dir.to_path_buf(),
             session_id: session_id.to_string(),
             emit,
-            nested: agent_core::storage::nested::NestedAccumulator::default(),
         }
-    }
-
-    fn finish_current_segment(&mut self) {
-        if self.segment_parts.parts.is_empty()
-            && self.segment_partial_output.is_empty()
-            && self.segment_tool_calls.is_empty()
-        {
-            return;
-        }
-        let parts = std::mem::take(&mut self.segment_parts);
-        let partial_output = std::mem::take(&mut self.segment_partial_output);
-        let tool_calls = std::mem::take(&mut self.segment_tool_calls);
-        let mut msg =
-            assistant_message_from_recorded_parts(parts, partial_output, tool_calls, Vec::new());
-        // created_at 用段的「真实产出起始时刻」覆盖默认的落盘时刻（架构 §4.9.5 消息顺序契约）。
-        // 段落盘发生在下一个 drain 边界，晚于流式途中插队的 user；不覆盖就会时间戳倒挂。
-        if let Some(started_at) = self.segment_started_at.take() {
-            msg.created_at = started_at;
-        }
-        self.segment_messages.push(msg);
-    }
-
-    /// 段一旦累积到首个内容，记下产出起始时刻。finish_current_segment 据此设
-    /// Message.created_at（架构 §4.9.5）。已记录则不动——保留首事件时刻。
-    fn mark_segment_start_if_needed(&mut self) {
-        if self.segment_started_at.is_some() {
-            return;
-        }
-        let has_content = !self.segment_parts.parts.is_empty()
-            || !self.segment_partial_output.is_empty()
-            || !self.segment_tool_calls.is_empty();
-        if has_content {
-            self.segment_started_at = Some(chrono::Utc::now().timestamp_millis());
-        }
-    }
-
-    fn finish_segment_if_pending_was_consumed(&mut self) {
-        let Some(consumed) = self.consumed_pending_inputs.as_ref() else {
-            return;
-        };
-        let consumed_len = consumed.lock().unwrap().len();
-        if consumed_len <= self.consumed_pending_seen {
-            return;
-        }
-        self.consumed_pending_seen = consumed_len;
-        self.finish_current_segment();
-        self.flush_segments_at_drain();
-    }
-
-    /// drain 边界：已切下的段不再由 desktop 落盘（架构 §4.9.5，落盘收归 agent_core
-    /// 的 persister 串行 append）。这里只清累积器供下一段使用，不写 session.jsonl。
-    fn flush_segments_at_drain(&mut self) {
-        self.flushed_segments = self.segment_messages.len();
-        self.parts = AssistantPartsRecorder::default();
-        self.partial_output.clear();
-        self.tool_calls.clear();
     }
 }
 
 #[async_trait]
 impl<'a> TurnObserver for DesktopObserver<'a> {
     fn on_event(&mut self, event: &AgentEvent) {
-        // 子 NestedRun 事件（架构 §4.4.11.8）：装饰器已把 run_id 重写为父 RunId、带 subagent_call_id。
-        // 累积进对应 Task call 的 nested（顶层 + 当前 segment 两份 tool_calls 都同步，落盘走哪条
-        // 路径都带上），随父 message 落**主** session.jsonl——修复「子过程只活在内存事件流、run 一
-        // 结束就蒸发」。子事件仍转发 UI 做 streaming 嵌套渲染。与 CLI / hebweb 共用同一份累积逻辑。
-        if let Some(call_id) = event.subagent_call_id.as_deref() {
-            self.nested.record(call_id, &event.payload);
-            self.nested.sync_into(&mut self.tool_calls);
-            self.nested.sync_into(&mut self.segment_tool_calls);
-            if let Some(ev) = protocol::to_wire(event) {
-                (self.emit)(ev);
-            }
-            return;
-        }
-
+        // 审批拒绝事件单独落 session.jsonl（独立审计副作用，非 assistant 累积）：
+        // automode 自动拒 / 用户手动拒都要在历史里留痕，供加载时重建审批结果块。
         match &event.payload {
             EventPayload::PermissionAutoJudged { decision, .. } if decision == "deny" => {
                 if let Err(err) = sessions::append_event(&self.data_dir, &self.session_id, event) {
@@ -752,50 +568,12 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
             _ => {}
         }
 
-        if let EventPayload::TextDelta { text } = &event.payload {
-            self.partial_output.push_str(text);
-            self.segment_partial_output.push_str(text);
-        }
-        if let EventPayload::TextDone { full_text } = &event.payload {
-            // complete 路径只发 TextDone 不发 TextDelta；补一次 append 避免落盘空文本。
-            if !full_text.is_empty() {
-                if !self
-                    .parts
-                    .last_text_snapshot()
-                    .ends_with(full_text.as_str())
-                {
-                    self.parts.append_text(full_text);
-                }
-                if !self
-                    .segment_parts
-                    .last_text_snapshot()
-                    .ends_with(full_text.as_str())
-                {
-                    self.segment_parts.append_text(full_text);
-                }
-                if self.partial_output.is_empty() {
-                    self.partial_output.push_str(full_text);
-                }
-                if self.segment_partial_output.is_empty() {
-                    self.segment_partial_output.push_str(full_text);
-                }
-            }
-        }
-        record_assistant_part_event(&mut self.parts, event);
-        record_assistant_part_event(&mut self.segment_parts, event);
-        record_tool_event(&mut self.tool_calls, event);
-        record_tool_event(&mut self.segment_tool_calls, event);
-        self.mark_segment_start_if_needed();
-        // run 级首内容时刻：无插队落盘路径用它当 assistant created_at（架构 §4.9.5）。
-        if self.run_started_at.is_none() && self.segment_started_at.is_some() {
-            self.run_started_at = self.segment_started_at;
-        }
+        // 渲染：所有事件（含子 NestedRun 的 subagent_call_id 事件）统一翻译成 WireEvent
+        // 推给前端做流式 / 嵌套渲染。assistant message 的累积与落盘由 agent_core 的
+        // RunPersister 一手负责（架构 §7.8.3），observer 不再触碰。
         if let Some(ev) = protocol::to_wire(event) {
             (self.emit)(ev);
         }
-
-        // 架构 §4.9.5：段切分与落盘已收归 agent_core persister。desktop observer 不再
-        // 监听 TurnFinished/TurnStarted 做 segment flush（避免双落）。
     }
 
     async fn on_permission_request(
@@ -822,292 +600,6 @@ impl<'a> TurnObserver for DesktopObserver<'a> {
             state.track(request_id.0.clone(), Arc::clone(&self.hitl));
         }
         None
-    }
-}
-
-#[derive(Default)]
-struct AssistantPartsRecorder {
-    parts: Vec<MessagePart>,
-    by_index: HashMap<usize, usize>,
-    by_id: HashMap<String, usize>,
-}
-
-impl AssistantPartsRecorder {
-    fn append_text(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-
-        match self.parts.last_mut() {
-            Some(MessagePart::Text { text: existing }) => existing.push_str(text),
-            _ => self.parts.push(MessagePart::Text {
-                text: text.to_string(),
-            }),
-        }
-    }
-
-    fn append_reasoning(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        match self.parts.last_mut() {
-            Some(MessagePart::Reasoning { text: existing }) => existing.push_str(text),
-            _ => self.parts.push(MessagePart::Reasoning {
-                text: text.to_string(),
-            }),
-        }
-    }
-
-    fn append_final_text_if_missing(&mut self, final_text: &str) {
-        if final_text.is_empty() {
-            return;
-        }
-
-        let current = text_from_parts(&self.parts).unwrap_or_default();
-        if !current.ends_with(final_text) {
-            self.append_text(final_text);
-        }
-    }
-
-    /// 当前已累积文本（仅 Text part 的拼接）
-    fn last_text_snapshot(&self) -> String {
-        text_from_parts(&self.parts).unwrap_or_default()
-    }
-
-    fn apply_tool_delta(
-        &mut self,
-        index: usize,
-        id: Option<&str>,
-        name: Option<&str>,
-        arguments_delta: Option<&str>,
-    ) {
-        let pos = self.tool_position(index, id, name);
-        let MessagePart::ToolCall {
-            id: existing_id,
-            name: existing_name,
-            arguments,
-            ..
-        } = &mut self.parts[pos]
-        else {
-            return;
-        };
-
-        if let Some(next_id) = id.filter(|value| !value.trim().is_empty()) {
-            *existing_id = next_id.to_string();
-            self.by_id.insert(next_id.to_string(), pos);
-        }
-        if let Some(next_name) = name.filter(|value| !value.trim().is_empty()) {
-            *existing_name = next_name.to_string();
-        }
-        if let Some(delta) = arguments_delta.filter(|value| !value.is_empty()) {
-            arguments.push_str(delta);
-        }
-    }
-
-    fn start_tool(&mut self, index: usize, call_id: &str, name: &str, input: serde_json::Value) {
-        let pos = self.tool_position(index, Some(call_id), Some(name));
-        if let MessagePart::ToolCall {
-            id,
-            name: existing_name,
-            input: existing_input,
-            arguments,
-            ..
-        } = &mut self.parts[pos]
-        {
-            *id = call_id.to_string();
-            *existing_name = name.to_string();
-            *existing_input = input.clone();
-            if arguments.is_empty() {
-                *arguments = input.to_string();
-            }
-            self.by_id.insert(call_id.to_string(), pos);
-        }
-    }
-
-    fn finish_tool(
-        &mut self,
-        index: usize,
-        call_id: &str,
-        result: &str,
-        duration_ms: u64,
-        is_error: bool,
-    ) {
-        let pos = self.tool_position(index, Some(call_id), None);
-        if let MessagePart::ToolCall {
-            id,
-            result: existing_result,
-            duration_ms: existing_duration_ms,
-            is_error: existing_is_error,
-            ..
-        } = &mut self.parts[pos]
-        {
-            *id = call_id.to_string();
-            *existing_result = Some(result.to_string());
-            *existing_duration_ms = Some(duration_ms);
-            *existing_is_error = is_error;
-            self.by_id.insert(call_id.to_string(), pos);
-        }
-    }
-
-    fn tool_position(&mut self, index: usize, id: Option<&str>, name: Option<&str>) -> usize {
-        let incoming_id = id.filter(|value| !value.trim().is_empty());
-
-        // call_id 是 tool_call 的稳定全局身份：见过同 id 直接复用那条 part。
-        if let Some(pos) = incoming_id.and_then(|value| self.by_id.get(value).copied()) {
-            self.by_index.entry(index).or_insert(pos);
-            return pos;
-        }
-
-        // index 只是 id 到达前的 streaming fallback。命中的 part 若已绑定了另一个
-        // call_id，说明上游把不同 tool_call 的 index 撞到了一起，此时绝不能复用——
-        // 否则新 tool_call 会把旧的覆盖、旧 part 被静默丢失。
-        if let Some(pos) = self.by_index.get(&index).copied() {
-            let collides_with_other = incoming_id.is_some_and(|incoming| {
-                matches!(&self.parts[pos],
-                    MessagePart::ToolCall { id, .. } if !id.trim().is_empty() && id != incoming)
-            });
-            if !collides_with_other {
-                return pos;
-            }
-        }
-
-        let pos = self.parts.len();
-        let clean_id = incoming_id.unwrap_or_default().to_string();
-        self.parts.push(MessagePart::ToolCall {
-            id: clean_id.clone(),
-            name: name
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_default()
-                .to_string(),
-            input: serde_json::json!({}),
-            arguments: String::new(),
-            result: None,
-            duration_ms: None,
-            is_error: false,
-        });
-        self.by_index.insert(index, pos);
-        if !clean_id.is_empty() {
-            self.by_id.insert(clean_id, pos);
-        }
-        pos
-    }
-}
-
-fn record_assistant_part_event(parts: &mut AssistantPartsRecorder, event: &AgentEvent) {
-    match &event.payload {
-        AgentEventPayload::TextDelta { text } => parts.append_text(text),
-        AgentEventPayload::Reasoning { text } => parts.append_reasoning(text),
-        AgentEventPayload::ToolCallDelta {
-            index,
-            id,
-            name,
-            arguments_delta,
-        } => parts.apply_tool_delta(
-            *index,
-            id.as_deref(),
-            name.as_deref(),
-            arguments_delta.as_deref(),
-        ),
-        AgentEventPayload::ToolCallStarted {
-            index,
-            call_id,
-            name,
-            input,
-        } => parts.start_tool(*index, call_id, name, input.clone()),
-        AgentEventPayload::ToolCallFinished {
-            index,
-            call_id,
-            result,
-            duration_ms,
-            is_error,
-            ..
-        } => parts.finish_tool(*index, call_id, result, *duration_ms, *is_error),
-        _ => {}
-    }
-}
-
-fn text_from_parts(parts: &[MessagePart]) -> Option<String> {
-    let mut out = String::new();
-    for part in parts {
-        if let MessagePart::Text { text } = part {
-            out.push_str(text);
-        }
-    }
-    Some(out)
-}
-
-fn record_tool_event(tool_calls: &mut Vec<MessageToolCall>, event: &AgentEvent) {
-    match &event.payload {
-        AgentEventPayload::ToolCallDelta {
-            index, id, name, ..
-        } => {
-            // 流式传输中填充 tool_calls 字段，确保中断时 tool calls 能落盘。
-            if tool_calls.len() <= *index {
-                tool_calls.resize_with(*index + 1, empty_tool_call);
-            }
-            let call = &mut tool_calls[*index];
-            if let Some(id) = id {
-                call.id.clone_from(id);
-            }
-            if let Some(name) = name {
-                call.name.clone_from(name);
-            }
-        }
-        AgentEventPayload::ToolCallStarted {
-            index,
-            call_id,
-            name,
-            input,
-        } => {
-            upsert_tool_call(tool_calls, *index, call_id, name, input.clone());
-        }
-        AgentEventPayload::ToolCallFinished {
-            index,
-            call_id,
-            result,
-            duration_ms,
-            is_error,
-            ..
-        } => {
-            if tool_calls.len() <= *index {
-                tool_calls.resize_with(*index + 1, empty_tool_call);
-            }
-            let call = &mut tool_calls[*index];
-            call.id = call_id.clone();
-            call.result = Some(result.clone());
-            call.duration_ms = Some(*duration_ms);
-            call.is_error = *is_error;
-        }
-        _ => {}
-    }
-}
-
-fn upsert_tool_call(
-    calls: &mut Vec<MessageToolCall>,
-    index: usize,
-    call_id: &str,
-    name: &str,
-    input: serde_json::Value,
-) {
-    if calls.len() <= index {
-        calls.resize_with(index + 1, empty_tool_call);
-    }
-
-    let call = &mut calls[index];
-    call.id = call_id.to_string();
-    call.name = name.to_string();
-    call.input = input;
-}
-
-fn empty_tool_call() -> MessageToolCall {
-    MessageToolCall {
-        id: String::new(),
-        name: String::new(),
-        input: serde_json::json!({}),
-        result: None,
-        duration_ms: None,
-        is_error: false,
-        nested: Vec::new(),
     }
 }
 

@@ -407,6 +407,12 @@ pub struct ActiveGoal {
     /// judge 上次判定「还差什么」；首次设目标时为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reason: Option<String>,
+    /// 刚设目标待落「目标已设」marker 的一次性标志（同 [`PendingContinue`] 的一次性模式）。
+    /// set_active_goal 设目标时置 true；agent_loop run 启动时（`Goal set` user 消息已落盘后）
+    /// 落一条 `GoalOutcome{kind:"set"}` marker 并清回 false——保证 set marker 物理排在
+    /// 触发它的 user 消息之后，且与裁决 marker 走同一条 agent_core 串行落盘流，不靠前端抢落。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending_set_marker: bool,
 }
 
 /// 一次「非正常结束」留下的续作入口（架构 §4.3 / §7.3）。落在 session 状态里，
@@ -452,7 +458,7 @@ pub fn continue_kind_str(kind: ContinueKind) -> &'static str {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
@@ -476,7 +482,7 @@ pub struct SessionMeta {
     pub path: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {
     #[serde(flatten)]
     pub meta: SessionMeta,
@@ -2706,6 +2712,7 @@ mod tests {
             created_at: 1,
             iterations: 0,
             last_reason: None,
+            pending_set_marker: false,
         };
         let s = set_active_goal(&dir, &id, Some(goal.clone())).unwrap();
         assert_eq!(s.active_goal.as_ref().unwrap().condition, "所有测试通过");
@@ -2719,6 +2726,7 @@ mod tests {
             created_at: 2,
             iterations: 3,
             last_reason: Some("还差 review 通过".to_string()),
+            pending_set_marker: false,
         };
         let _ = set_active_goal(&dir, &id, Some(goal_b.clone())).unwrap();
         assert_eq!(load(&dir, &id).unwrap().active_goal, Some(goal_b));

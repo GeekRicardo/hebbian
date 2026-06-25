@@ -10,10 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use agent_core::{
     core_client::{CoreClient, LocalCoreClient},
@@ -38,7 +35,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use protocol::{ApprovalDecision, PermissionScope, UserAnswer};
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
@@ -99,25 +96,22 @@ impl ServerState {
         sessions_dir::ensure_session_dirs(&self.data_dir, session_id)?;
 
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<String>();
-        let (event_tx, _) = broadcast::channel::<WsServerMessage>(EVENT_CHANNEL_CAPACITY);
         let run_mode = session.run_mode;
 
+        let state_rt = agent_core::session_hub::SessionRuntimeState::new(
+            session_id,
+            EVENT_CHANNEL_CAPACITY,
+            run_mode,
+        );
         let runtime = Arc::new(SessionRuntime {
             session_id: session_id.to_string(),
             data_dir: self.data_dir.clone(),
             provider_id: session.provider_id.clone(),
             model: session.model.clone(),
             reasoning: None,
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_questions: Mutex::new(HashMap::new()),
-            active_run: AtomicBool::new(false),
-            cancel_flag: Mutex::new(None),
-            pending_inputs: Mutex::new(None),
-            run_mode: Mutex::new(run_mode),
-            force_automode: AtomicBool::new(false),
             input_tx,
-            event_tx,
             permission_store: self.permission_store.clone(),
+            state: state_rt,
         });
 
         // 启动 turn 主循环：依次处理 input_rx 的每条输入
@@ -223,12 +217,23 @@ async fn handle_ws(socket: WebSocket, state: ServerState) {
                 }
                 match state.ensure_runtime(&session_id).await {
                     Ok(runtime) => {
-                        let mut rx = runtime.event_tx.subscribe();
+                        let mut rx = runtime.state.subscribe();
                         let tx = out_tx.clone();
                         let sid = session_id.clone();
                         event_task = Some(tokio::spawn(async move {
+                            // broadcast 通道走通用 WireEvent（§7.8.5）；WS 层在这里包成
+                            // 浏览器协议 WsServerMessage::Event（engine-event）。
                             while let Ok(ev) = rx.recv().await {
-                                if tx.send(ev).is_err() {
+                                let payload = match serde_json::to_value(&ev) {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                };
+                                let msg = WsServerMessage::Event {
+                                    session_id: sid.clone(),
+                                    name: "engine-event".to_string(),
+                                    payload,
+                                };
+                                if tx.send(msg).is_err() {
                                     break;
                                 }
                             }
@@ -627,13 +632,7 @@ async fn cmd_branch_send(state: &ServerState, args: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("这条旁支对话已经关掉了"))?;
     let runtime = state.ensure_runtime(&bound_session_id).await?;
     let emit = move |wire: protocol::WireEvent| {
-        if let Ok(payload) = serde_json::to_value(&wire) {
-            runtime.broadcast(crate::protocol::WsServerMessage::Event {
-                session_id: bound_session_id.clone(),
-                name: "engine-event".to_string(),
-                payload,
-            });
-        }
+        runtime.emit_engine_event(wire);
     };
 
     let assistant = branch_engine(state)
@@ -760,6 +759,7 @@ async fn cmd_approve_permission(
 
     let runtime = state.ensure_runtime(&sid).await?;
     let tx = runtime
+        .state
         .pending_approvals
         .lock()
         .unwrap()
@@ -855,6 +855,7 @@ async fn cmd_answer_question(
 
     let runtime = state.ensure_runtime(&sid).await?;
     let tx = runtime
+        .state
         .pending_questions
         .lock()
         .unwrap()
@@ -1146,7 +1147,7 @@ async fn cmd_delete_project(state: &ServerState, args: Value) -> Result<()> {
 async fn cmd_get_run_mode(state: &ServerState, session_id: Option<String>) -> Result<Value> {
     let sid = need_session(session_id)?;
     let runtime = state.ensure_runtime(&sid).await?;
-    let mode = *runtime.run_mode.lock().unwrap();
+    let mode = runtime.state.run_mode();
     Ok(Value::String(mode.as_str().to_string()))
 }
 
@@ -1163,7 +1164,7 @@ async fn cmd_set_run_mode(
     let mode = agent_core::run_mode::RunMode::parse(mode_str)
         .ok_or_else(|| anyhow!("invalid mode: {mode_str}"))?;
     let runtime = state.ensure_runtime(&sid).await?;
-    *runtime.run_mode.lock().unwrap() = mode;
+    runtime.state.set_run_mode(mode);
     // 同步持久化到 session.json
     sessions_store::set_run_mode(&state.data_dir, &sid, mode).map_err(|e| anyhow!("{e}"))?;
     // 同时更新运行中的 agent_loop
@@ -1174,7 +1175,9 @@ async fn cmd_set_run_mode(
 async fn cmd_get_force_automode(state: &ServerState, session_id: Option<String>) -> Result<Value> {
     let sid = need_session(session_id)?;
     let runtime = state.ensure_runtime(&sid).await?;
-    Ok(Value::Bool(runtime.force_automode.load(Ordering::SeqCst)))
+    Ok(Value::Bool(
+        runtime.state.force_automode.load(Ordering::SeqCst),
+    ))
 }
 
 async fn cmd_set_force_automode(
@@ -1190,7 +1193,7 @@ async fn cmd_set_force_automode(
         .and_then(|v| v.as_bool())
         .ok_or_else(|| anyhow!("missing `enabled`"))?;
     let runtime = state.ensure_runtime(&sid).await?;
-    runtime.force_automode.store(enabled, Ordering::SeqCst);
+    runtime.state.force_automode.store(enabled, Ordering::SeqCst);
     Ok(())
 }
 
@@ -1242,7 +1245,13 @@ async fn cmd_core_test_provider_model(state: &ServerState, args: Value) -> Resul
 }
 
 async fn cmd_core_list_tools(state: &ServerState) -> Result<Value> {
-    Ok(serde_json::to_value(state.core.list_tools())?)
+    // 走 dispatch 唯一入口（架构 §7.1）：surface 把请求表达成 CoreRequest 交给
+    // 同一个 dispatch，core 业务只走一条路径。其余同步命令在客户端化（步骤④⑤⑥连
+    // hebcore）时统一切换；此处先验证 dispatch + LocalCoreClient facade 端到端通。
+    core_rpc::dispatch(core_rpc::CoreRequest::ListTools, &*state.core)
+        .await
+        .into_json()
+        .map_err(|e| anyhow!("{e}"))
 }
 
 fn parse_scope(s: &str) -> PermissionScope {
@@ -1667,6 +1676,7 @@ async fn cmd_set_active_goal(state: &ServerState, args: Value) -> Result<()> {
         created_at: chrono::Utc::now().timestamp_millis(),
         iterations: 0,
         last_reason: None,
+        pending_set_marker: true,
     };
     sessions_store::set_active_goal(&state.data_dir, &sid, Some(goal)).map_err(|e| anyhow!("{e}"))?;
     let marker = sessions_store::Message {
@@ -2127,6 +2137,7 @@ async fn cmd_approve_path_access(
     );
     let runtime = state.ensure_runtime(&sid).await?;
     let tx = runtime
+        .state
         .pending_approvals
         .lock()
         .unwrap()

@@ -11,7 +11,7 @@ use crate::{
 const PROBE_PROMPT: &str = "hi";
 const PROBE_MAX_TOKENS: u32 = 32;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ProviderModelTestResult {
     pub model: String,
     pub prompt: String,

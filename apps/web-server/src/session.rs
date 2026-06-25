@@ -9,12 +9,8 @@
 //!
 //! v2 计划：与 daemon.rs 共享同一个 surface_session 模块，消除重复。
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use agent_core::{
     context::transcript::Transcript,
@@ -23,10 +19,9 @@ use agent_core::{
     hooks::HookManager,
     permissions::PermissionStore,
     read_state::ReadStateTracker,
-    run_mode::RunMode,
+    session_hub::SessionRuntimeState,
     storage::{
-        nested::NestedAccumulator,
-        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role},
+        sessions::{self as sessions, Message, Role},
         sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
@@ -36,7 +31,7 @@ use agent_core::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::runtime::{PendingInputs, PendingUserInput};
+use common::runtime::PendingInputs;
 use model_gateway::{
     client::{DynModelClient, ModelClient},
     config as providers,
@@ -46,12 +41,13 @@ use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
     UserAnswer,
 };
-use serde_json::Value;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
-use crate::protocol::WsServerMessage;
-
-/// 每个 session 一份的运行时状态
+/// 每个 session 一份的运行时状态。
+///
+/// 通用运行时（事件 broadcast / HITL pending / cancel / pending inputs / run_mode）下沉到
+/// agent_core 的 [`SessionRuntimeState`]（架构 §7.8.5），hebweb 这层只保留 surface 特有
+/// 部分（provider/model、输入驱动 input_tx、WS 协议包装 emit_engine_event）。
 pub struct SessionRuntime {
     pub session_id: String,
     pub data_dir: PathBuf,
@@ -59,197 +55,39 @@ pub struct SessionRuntime {
     pub model: String,
     pub reasoning: Option<common::ReasoningConfig>,
 
-    pub pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
-    pub pending_questions: Mutex<HashMap<String, oneshot::Sender<UserAnswer>>>,
-
-    pub active_run: AtomicBool,
-    pub cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
-    pub pending_inputs: Mutex<Option<PendingInputs>>,
-
-    pub run_mode: Mutex<RunMode>,
-    /// 强制 auto-mode 开关（in-memory，重启回 false，对齐 desktop ForceAutomodeState 语义）
-    pub force_automode: AtomicBool,
-
     pub input_tx: mpsc::UnboundedSender<String>,
-    pub event_tx: broadcast::Sender<WsServerMessage>,
-
     pub permission_store: Option<Arc<PermissionStore>>,
+
+    /// 下沉到 agent_core 的通用运行时状态（§7.8.5「单写者 + 多观察者」）。
+    pub state: Arc<SessionRuntimeState>,
 }
 
 impl SessionRuntime {
     pub fn is_active(&self) -> bool {
-        self.active_run.load(Ordering::SeqCst)
+        self.state.is_active()
     }
 
     pub fn set_active(&self, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
-        *self.cancel_flag.lock().unwrap() = Some(cancel);
-        *self.pending_inputs.lock().unwrap() = Some(inputs);
-        self.active_run.store(true, Ordering::SeqCst);
+        self.state.set_active(cancel, inputs);
     }
 
     pub fn clear_active(&self) {
-        *self.cancel_flag.lock().unwrap() = None;
-        *self.pending_inputs.lock().unwrap() = None;
-        self.active_run.store(false, Ordering::SeqCst);
+        self.state.clear_active();
     }
 
     pub fn inject(&self, text: String) -> bool {
-        if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
-            inputs.lock().unwrap().push(PendingUserInput {
-                content: text,
-                attachments: Vec::new(),
-            });
-            true
-        } else {
-            false
-        }
+        self.state.inject(text)
     }
 
     pub fn stop(&self) {
-        if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
-            flag.store(true, Ordering::SeqCst);
-        }
-        for (_id, tx) in self.pending_approvals.lock().unwrap().drain() {
-            let _ = tx.send(ApprovalDecision::Deny);
-        }
-        for (_id, tx) in self.pending_questions.lock().unwrap().drain() {
-            let _ = tx.send(UserAnswer::Cancelled);
-        }
+        self.state.stop();
     }
 
-    pub fn broadcast(&self, msg: WsServerMessage) {
-        // 没有订阅者时 send 会失败，忽略——事件流是 fire-and-forget
-        let _ = self.event_tx.send(msg);
-    }
-
+    /// 把 [`WireEvent`] 广播给所有订阅本 session 的观察者（§7.8.5）。事件流统一在
+    /// agent_core 的 broadcast 通道里走 WireEvent；WS 层（handle_ws）订阅后再包成
+    /// [`WsServerMessage`] 发给浏览器。
     pub fn emit_engine_event(&self, ev: protocol::WireEvent) {
-        let payload = match serde_json::to_value(&ev) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-        self.broadcast(WsServerMessage::Event {
-            session_id: self.session_id.clone(),
-            name: "engine-event".to_string(),
-            payload,
-        });
-    }
-}
-
-// ─── per-turn 数据 ─────────────────────────────────────────────────────────
-
-struct TurnData {
-    full_text: String,
-    tool_calls: Vec<MessageToolCall>,
-    parts: Vec<MessagePart>,
-    pending_tools: HashMap<String, (String, Value)>,
-    /// 子 NestedRun 过程累积（架构 §4.4.11.8），build_message 落盘前同步进 tool_calls 的 nested。
-    nested: NestedAccumulator,
-    /// 首个内容事件到达时刻（Unix ms）。build_message 用作 created_at——内容「真实产生时刻」，
-    /// 非落盘时刻（架构 §4.9.5 消息顺序契约），否则 assistant 会倒挂到 turn 末尾 marker 之后。
-    started_at: Option<i64>,
-}
-
-impl TurnData {
-    fn new() -> Self {
-        Self {
-            full_text: String::new(),
-            tool_calls: Vec::new(),
-            parts: Vec::new(),
-            pending_tools: HashMap::new(),
-            nested: NestedAccumulator::default(),
-            started_at: None,
-        }
-    }
-
-    fn handle_event(&mut self, payload: &protocol::EventPayload) {
-        use protocol::EventPayload::*;
-        if self.started_at.is_none()
-            && matches!(
-                payload,
-                Reasoning { .. }
-                    | TextDelta { .. }
-                    | TextDone { .. }
-                    | ToolCallStarted { .. }
-                    | ToolCallFinished { .. }
-            )
-        {
-            self.started_at = Some(Utc::now().timestamp_millis());
-        }
-        match payload {
-            Reasoning { text } => {
-                self.parts
-                    .push(MessagePart::Reasoning { text: text.clone() });
-            }
-            TextDone { full_text } => {
-                self.full_text = full_text.clone();
-                self.parts
-                    .retain(|p| !matches!(p, MessagePart::Text { .. }));
-                self.parts.push(MessagePart::Text {
-                    text: full_text.clone(),
-                });
-            }
-            ToolCallStarted {
-                call_id,
-                name,
-                input,
-                ..
-            } => {
-                self.pending_tools
-                    .insert(call_id.clone(), (name.clone(), input.clone()));
-            }
-            ToolCallFinished {
-                call_id,
-                result,
-                duration_ms,
-                is_error,
-                ..
-            } => {
-                if let Some((name, input)) = self.pending_tools.remove(call_id) {
-                    let tc = MessageToolCall {
-                        id: call_id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                        result: Some(result.clone()),
-                        duration_ms: Some(*duration_ms),
-                        is_error: *is_error,
-                        nested: Vec::new(),
-                    };
-                    self.tool_calls.push(tc.clone());
-                    self.parts.push(MessagePart::ToolCall {
-                        id: call_id.clone(),
-                        name,
-                        input,
-                        arguments: String::new(),
-                        result: Some(result.clone()),
-                        duration_ms: Some(*duration_ms),
-                        is_error: *is_error,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn build_message(mut self) -> Option<Message> {
-        if self.full_text.is_empty() && self.tool_calls.is_empty() {
-            return None;
-        }
-        // 落盘前把累积的子过程同步进对应 Task call 的 nested（架构 §4.4.11.8）。
-        self.nested.sync_into(&mut self.tool_calls);
-        Some(Message {
-            id: sessions::new_id(),
-            role: Role::Assistant,
-            content: self.full_text,
-            attachments: Vec::new(),
-            tool_calls: self.tool_calls,
-            parts: self.parts,
-            created_at: self
-                .started_at
-                .unwrap_or_else(|| Utc::now().timestamp_millis()),
-            meta: None,
-            subagent_call_id: None,
-            run_duration_ms: None,
-        })
+        self.state.emit(ev);
     }
 }
 
@@ -257,24 +95,14 @@ impl TurnData {
 
 struct WebObserver {
     runtime: Arc<SessionRuntime>,
-    turn: TurnData,
 }
 
 #[async_trait]
 impl TurnObserver for WebObserver {
     fn on_event(&mut self, event: &AgentEvent) {
-        // 子 subagent NestedRun 事件不进父 turn 聚合（架构 §4.4.11.8），仅推到 WS 让前端
-        // 按 subagent_call_id 嵌套渲染。子事件落到子 session.jsonl 由 P3.1c 单独接上。
-        if let Some(call_id) = event.subagent_call_id.as_deref() {
-            // 子 NestedRun 过程累积进对应 Task call 的 nested，随父 message 落主 session.jsonl
-            // （架构 §4.4.11.8）。子事件仍推 WS 供前端嵌套渲染。
-            self.turn.nested.record(call_id, &event.payload);
-            if let Some(ev) = protocol::to_wire(event) {
-                self.runtime.emit_engine_event(ev);
-            }
-            return;
-        }
-        self.turn.handle_event(&event.payload);
+        // assistant 累积 + 落盘已收归 agent_core 唯一一份（架构 §7.8.3）：observer 只把
+        // 事件翻译成 WireEvent 推到 WS 做渲染，不再自行重建 message。子 subagent NestedRun
+        // 事件同样只推 WS 嵌套渲染（架构 §4.4.11.8），父过程累积由 agent_core persister 负责。
         if let Some(ev) = protocol::to_wire(event) {
             self.runtime.emit_engine_event(ev);
         }
@@ -288,6 +116,7 @@ impl TurnObserver for WebObserver {
     ) -> Option<ApprovalDecision> {
         let (tx, rx) = oneshot::channel();
         self.runtime
+            .state
             .pending_approvals
             .lock()
             .unwrap()
@@ -305,6 +134,7 @@ impl TurnObserver for WebObserver {
     ) -> Option<UserAnswer> {
         let (tx, rx) = oneshot::channel();
         self.runtime
+            .state
             .pending_questions
             .lock()
             .unwrap()
@@ -488,7 +318,7 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
         store.ensure_session_view(session_id);
     }
 
-    let run_mode = *runtime.run_mode.lock().unwrap();
+    let run_mode = runtime.state.run_mode();
     let enabled_tools = {
         let s = prior.enabled_tools.clone().unwrap_or_default();
         if s.is_empty() {
@@ -549,7 +379,6 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
 
     let mut observer = WebObserver {
         runtime: runtime.clone(),
-        turn: TurnData::new(),
     };
     let summary = handle.drive(&mut observer).await;
 

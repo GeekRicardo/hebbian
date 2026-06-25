@@ -107,17 +107,43 @@ impl PartialActor {
 /// [`finish`]: RunPersister::finish
 pub struct RunPersister {
     inner: Arc<Mutex<PersistState>>,
+    /// 本 run 最后一条成功落盘的 assistant message。surface 不再自行累积返回值，
+    /// 收尾时从这里取（架构 §7.8.3 事件累积归一）——assistant message 的产出点
+    /// 收敛到 agent_core 唯一一份，desktop `send_message` 的 `Message` 返回值即取自此。
+    last_message: Arc<Mutex<Option<Message>>>,
 }
 
 struct PersistState {
     data_dir: PathBuf,
     session_id: String,
-    /// 当前正在累积的 assistant 段。
+    /// 当前正在累积的 assistant 段（drain / step 边界 flush 后 reset）。
     seg: AssistantAccumulator,
     /// 子 NestedRun 过程累积（架构 §4.4.11.8），落盘前 sync 进段的 tool_calls.nested。
     nested: NestedAccumulator,
+    /// 全 run 累加器（不随段 reset）：finish 时 build 出「本 run 完整 assistant」写进
+    /// [`RunPersister::last_message`] 给 surface 返回值用。与分段落盘 `seg` 并行——jsonl
+    /// 要分段（插队 user 插在段间，§4.9.5），但 surface 返回值要完整的一轮 assistant
+    /// （§7.8.3）。等价复刻 desktop 历史「全 run parts + 分段 segment_parts」两份累加器。
+    full: AssistantAccumulator,
+    full_nested: NestedAccumulator,
     /// partial sidecar actor（实时落每帧增量，崩溃兜底）。
     partial: PartialActor,
+    /// 共享给 [`RunPersister::last_message`] 的句柄：finish 时写 full.build()。
+    last_message: Arc<Mutex<Option<Message>>>,
+}
+
+/// 只读句柄：surface 收尾时读取本 run 最后落盘的 assistant message（[`RunPersister`]
+/// 在段边界 / run 收尾写入）。clone 进 [`crate::harness::RunHandle`] 随事件流带出。
+#[derive(Clone, Default)]
+pub struct LastMessageHandle {
+    inner: Arc<Mutex<Option<Message>>>,
+}
+
+impl LastMessageHandle {
+    /// 取出当前记录的最后落盘 message（clone）。run 无内容产出时为 `None`。
+    pub fn get(&self) -> Option<Message> {
+        self.inner.lock().unwrap().clone()
+    }
 }
 
 impl RunPersister {
@@ -125,14 +151,26 @@ impl RunPersister {
     pub fn new(data_dir: PathBuf, session_id: String) -> Self {
         let msg_id = sessions::new_id();
         let partial = PartialActor::spawn(data_dir.clone(), session_id.clone(), msg_id);
+        let last_message: Arc<Mutex<Option<Message>>> = Arc::new(Mutex::new(None));
         Self {
             inner: Arc::new(Mutex::new(PersistState {
                 data_dir,
                 session_id,
                 seg: AssistantAccumulator::new(),
                 nested: NestedAccumulator::default(),
+                full: AssistantAccumulator::new(),
+                full_nested: NestedAccumulator::default(),
                 partial,
+                last_message: last_message.clone(),
             })),
+            last_message,
+        }
+    }
+
+    /// surface 收尾读「本 run 完整 assistant message」的只读句柄（架构 §7.8.3）。
+    pub fn last_message_handle(&self) -> LastMessageHandle {
+        LastMessageHandle {
+            inner: self.last_message.clone(),
         }
     }
 
@@ -178,10 +216,12 @@ impl RunPersister {
         st.flush_locked(run_duration_ms)
     }
 
-    /// run 收尾（Done/Suspended）：补落最后一段，落盘后删除 partial 文件。
+    /// run 收尾（Done/Suspended）：补落最后一段，build 完整一轮 assistant 供 surface
+    /// 返回值（架构 §7.8.3），删除 partial 文件。
     pub fn finish(&self, run_duration_ms: Option<u64>) -> Option<Message> {
         let mut st = self.inner.lock().unwrap();
         let msg = st.flush_locked(run_duration_ms);
+        st.capture_full_message(run_duration_ms);
         st.partial.delete();
         msg
     }
@@ -230,6 +270,18 @@ impl PersistState {
         self.partial.reset();
         Some(msg)
     }
+
+    /// run 收尾把全 run 累加器 build 成「完整一轮 assistant」写进 last_message，供 surface
+    /// 返回值用（架构 §7.8.3）。分段落盘走 `seg`（jsonl 插队分段），完整产出走 `full`。
+    fn capture_full_message(&mut self, run_duration_ms: Option<u64>) {
+        let full = std::mem::replace(&mut self.full, AssistantAccumulator::new());
+        let full_nested = std::mem::take(&mut self.full_nested);
+        if let Some(mut msg) = full.build() {
+            full_nested.sync_into(&mut msg.tool_calls);
+            msg.run_duration_ms = run_duration_ms;
+            *self.last_message.lock().unwrap() = Some(msg);
+        }
+    }
 }
 
 /// sink 端的累积句柄（clone 自 [`RunPersister::handle`]）。
@@ -242,12 +294,15 @@ impl RunPersisterHandle {
     /// 在 sink 闭包里被每个 Event 喂：纯内存累积 + partial fire-and-forget 写帧。
     pub fn observe(&self, event: &Event) {
         let mut st = self.inner.lock().unwrap();
-        // 子 NestedRun 事件单独累积（架构 §4.4.11.8）。
+        // 子 NestedRun 事件单独累积（架构 §4.4.11.8）：分段 `nested` 与全 run `full_nested`
+        // 各喂一份——前者随段落盘进 jsonl，后者随 finish 进 surface 返回值。
         if let Some(call_id) = event.subagent_call_id.as_deref() {
             st.nested.record(call_id, &event.payload);
+            st.full_nested.record(call_id, &event.payload);
             return;
         }
         st.seg.on_event(event);
+        st.full.on_event(event);
         // partial 写帧（actor，异步 fsync）。
         if let Some(frag) = partial_fragment_of(&event.payload) {
             st.partial.append(frag);

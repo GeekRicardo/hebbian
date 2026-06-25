@@ -9606,3 +9606,82 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**：heb CLI Done/cancel 端到端通过（不双落、created_at 正确、partial 清理）；`cargo check --workspace` 通过；desktop 34/34 测试通过；agent-core 580/581（1 flaky 无关）；tsc 通过。
 - **影响范围**：agent-core（turn_accumulator / run_persister / agent_loop / harness / subagent），三 surface（chat.rs / daemon.rs / session.rs / tui / web / lib.rs inject），架构.md §4.9.5 决策变更
 - **留尾巴**: desktop observer segment 机制待简化；partial 崩溃恢复回归测试待补；首 user 落盘后续收归
+
+### 2026-06-25 — 登记：工作区并发在途改动（非本会话所为，落盘收归任务收尾时 Stop hook 检出）
+
+- **背景**：本会话（落盘顺序收归 agent_core，已提交 0100dfd）收尾时 Stop hook 在工作区检出一组**未提交且非本会话**的改动，作者另有其人。本条仅客观登记保住时间线，不揣测设计意图——Why/权衡/回归点应由各自作者补写。前一条同类登记（9562 行）已覆盖部分文件，本条补齐其余。
+- **观察到的改动（diff 可见事实）**：
+  - Claude 导入预览：tauri.ts 新增 readClaudeSessionPreview API；ImportClaudeDialog.tsx 列表项改 MessageBubble 预览 + UUID 搜索。
+  - RunMode 单一真源 / session_titler 标题 / PermissionApprovalPopup 精简：见 9562 行登记条，文件含 ChatView.tsx / RunModeChip.tsx / PlanTab.tsx / useStore.ts / session_titler.rs / PermissionApprovalPopup.tsx，状态不变（仍未提交）。
+- **影响范围**：desktop 前端 + agent-core 标题生成。与本会话落盘收归改动正交，无文件交叉。
+- **留尾巴**：以上改动未提交，原样留在工作区，等其作者收尾 + 补写权威 changelog。本会话一行未碰（CLAUDE.md 红线：不动他人未完成改动）。
+
+### 2026-06-25 — 架构 spec：§7.8 hebcore 单核心进程（最终目标态，照此实施）
+
+- **Why**: 几轮对话对标 codex app-server（含 v0.117 把 TUI 从"内嵌核心特例"改"连 app-server 普通客户端"），用户确认 Hebbian 收敛到"单 hebcore 核心进程 + 多客户端"作为最终目标态，后续按此 spec 实施。
+- **改动**:
+  - [docs/架构.md §7.8](架构.md)（新增）: hebcore 单核心进程完整 spec——进程拓扑（7.8.1）/ 三客户端连接形态（7.8.2）/ 事件累积归一（7.8.3，解决步骤4 留尾）/ heb 双模式 stdio隔离+connect共享（7.8.4）/ 同步靠"单写者+多观察者"（7.8.5）/ 六步渐进实施顺序（7.8.6）。明确标注是 §7.1–7.7 过渡形态的目标态修订。
+  - [docs/架构.md §13](架构.md): 决策表追加编号 7.8 一行，记录三项拍板决策（单核心进程 / desktop 对话链也连核心 / heb 双模式）+ why + 代价 + 实施顺序。
+- **三项拍板决策**（用户多选确认）:
+  1. 核心进程模型 = **单 hebcore 核心进程**（非三 surface 各内嵌 dispatch）
+  2. desktop 归宿 = **对话主链路也连核心**（仅 native 能力保留进程内自理，消灭"desktop 特例"）
+  3. heb CLI = **双模式**（`--stdio` spawn 独立核心隔离 / `--connect` 连常驻 hebcore 共享活状态）
+- **核心收益**: 累积只在 hebcore 一份（删 desktop AssistantPartsRecorder / web TurnData / cli TurnData，统一 agent_core::AssistantAccumulator）→ 根治"同输入→不同落盘"；同步问题自动消失（多客户端连同一 SessionRuntime 的 broadcast）。
+- **影响范围**: 纯文档（架构 spec + 决策记录），无代码改动。实施是后续工程，六步渐进、每步独立 PR + 逐字节一致证据；desktop（步骤6）最高风险最后做。
+- **留尾巴**: 实施未开始。首个硬骨头是 §7.8.3 的 segment 语义下沉（AssistantAccumulator 需先覆盖 desktop 的 segment 分段才能删本地累积器）。
+
+### 2026-06-25 — 删除三 surface 本地事件累积器，assistant message 产出收归 agent_core 唯一一份（§7.8 步骤①）
+
+- **Why**: 推进 §7.8.6 实施顺序步骤①「事件累积归一」。原 spec（§7.8.3，写于 2026-06-25「落盘收归 agent_core」之前）预判"segment 语义要先下沉再删本地累积器、是首个硬骨头"。实地勘查发现现状已更进一步——segment 分段落盘语义早已收归 `RunPersister`（内部用唯一 `AssistantAccumulator` 按 drain 边界切段 append），三处本地累积器实为**收口后没清干净的残留**：
+  - web / cli 的 `TurnData::build_message` **早已零调用点 = 纯死代码**（observer 仍 `handle_event` 空转喂它）；
+  - desktop `AssistantPartsRecorder` + segment 还活着，但唯一产物 `send_message` 返回值**前端不消费**（前端 `getSession()` 从 jsonl 重载），且 `finish_segment_if_pending_was_consumed` 无调用点、segment 实质半死；`output_attachments` 是恒空死字段。
+- **根因 + 彻底解法**: assistant message 的产出点收敛到 agent_core 唯一一处。难点在 desktop 返回值语义（「整轮完整 assistant」给前端乐观渲染）≠ jsonl 分段落盘语义（插队 user 插在段间）。解法是 `RunPersister` 并行维护两份累加器——
+  - `seg`（分段，drain/step 边界 flush 后 reset）→ 落 jsonl，插队 user 插在段间（§4.9.5）；
+  - `full`（全 run，不随段 reset）→ `finish` 时 build「完整一轮 assistant」写 `last_message`，经 `TurnSummary.last_message` 透传给 desktop `send_message` 返回值。
+  这两份等价复刻 desktop 历史「全 run parts + 分段 segment_parts」，但收归 agent_core 一处。
+- **改动**:
+  - [crates/agent-core/src/run_persister.rs](../crates/agent-core/src/run_persister.rs): `PersistState` 加 `full` / `full_nested` 全 run 累加器 + `last_message` 共享 slot；`observe` 同步喂 `full`；新增 `capture_full_message`（finish 时 build full 写 last_message）；新增 `LastMessageHandle` 只读句柄。
+  - [crates/agent-core/src/harness.rs](../crates/agent-core/src/harness.rs): `RunHandle` 持 `LastMessageHandle`；`TurnSummary` 加 `last_message: Option<Message>`，`drive` 在 `RunFinished` 分支读出（finish 在 emit RunFinished 之前执行，时序成立）。
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): 删 `TurnData`（115 行死代码）+ `DaemonObserver.turn` 字段，observer 只 emit 渲染；清孤儿 import。
+  - [apps/web-server/src/session.rs](../apps/web-server/src/session.rs): 删 `TurnData`（同上）+ `WebObserver.turn`；清孤儿 import。
+  - [apps/desktop/src/chat.rs](../apps/desktop/src/chat.rs): 删 `AssistantPartsRecorder` + segment 全套（`finish_current_segment`/`mark_segment_start_if_needed`/`finish_segment_if_pending_was_consumed`/`flush_segments_at_drain`）+ 4 个 helper（`assistant_message_from_recorded_parts`/`record_assistant_part_event`/`record_tool_event`/`text_from_parts`/`upsert_tool_call`/`empty_tool_call`）+ 死字段（`output_attachments`/`run_started_at`/`consumed_pending_*`）；`DesktopObserver` 精简为 emit + 审批 denial 落盘 + HITL track；返回值改用 `summary.last_message`。
+  - [docs/架构.md §7.8.3 / §7.8.6](架构.md): 标注步骤①落地 + 修订"segment 早已下沉、本步实为删收口残留"的事实。
+- **影响范围**: agent-core（run_persister / harness 加 last_message 透传，纯 additive）；三 surface observer（删本地累积器）。`TurnSummary` 加字段不破坏 cli/web（忽略即可）；`send_message` 仍返回 `Message`，前端类型不变。
+- **验证（§7.8.6 铁律：逐字节一致证据）**:
+  - `desktop_main_chat_event_stream_fingerprint` 三场景指纹一致（事件翻译没动，护栏）；
+  - `pending_inputs_not_double_written_on_run_end` / `pending_inputs_between_assistant_turns_not_double_written` / `pending_input_does_not_split_every_followup_model_request` 三个插队回归 pass（验证 full 累加器返回完整全文、seg 分段落盘正确）——这三个测试在初版"只透传最后一段"方案下 fail，暴露了语义缺陷后改成双累加器才修正；
+  - desktop chat 12/12、agent-core 580/581（1 个 `run_in_background_returns_immediately` 高负载 flaky，隔离单线程 pass）、cli/web bin 测试、tsc 全通过；
+  - heb 真模型（deepseek-v4-flash）端到端：纯文本轮 + 工具调用轮，落盘 assistant message 的 parts（reasoning/tool_call/text 序列）+ tool_calls（Bash + result）完整。
+- **留尾巴**: §7.8 步骤②（dispatch 落地）起未开始。本步删除后，"surface 不触碰 message 构造"成编译期事实，为步骤⑥ desktop 客户端化扫清障碍。
+
+### 2026-06-26 — 重构：移除 Bash/PowerShell 串行链，统一进并发池
+
+- **Why**: 原设计中 Bash 走独立串行链（`shell_chain`），两个理由——"共享 cwd 不并发"和"审批记忆顺序"。经与 CC 对照研究发现：
+  - "共享 cwd"是伪命题：每个 Bash 命令都是 `Command::new("bash").arg("-lc")` 独立子进程，cwd 由 `.current_dir()` 逐命令设置，天然隔离。CC 同理——独立子进程 + cwd probe（事后检测并警告模型"别依赖跨命令 cwd 传递"）。
+  - "审批记忆顺序"已被 HITL 层解决：`resolve_matching_pending_after_remember` 在 AllowAndRemember 落盘后自动遍历其他 pending 审批、匹配新规则的补发 AllowOnce——这个机制从一开始就为并发场景设计。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `run_calls` 删 `shell_indices` 分流 + `shell_chain` 串行链 + `join` 双链；Bash/PowerShell 与普通工具统一走 `spawn_tool` → `concurrent`（`buffer_unordered(MAX_PARALLEL_TOOLS=8)`）。模块注释同步更新。
+  - [docs/架构.md §4.13.4 / §16.2](架构.md): 并发策略描述改为"全工具并发，上限 8"；删 Bash 全串行相关描述。
+- **影响范围**: agent-core dispatch 层核心路径变更。Bash 工具本身无改动（已是独立子进程）。审批记忆行为不变（HITL 层保障）。架构文档并发策略描述更新。
+- **验证**: `cargo check -p agent-core` 通过；`cargo test -p agent-core --lib` 585 passed / 0 failed。
+- **留尾巴**: 无。并发池上限 8 对所有工具类型统一，未来如需 Bash 专用并发上限再拆。
+- **Note**: 编译依赖 `core-rpc/src/lib.rs`（空 stub）和 4 处 `ActiveGoal { pending_set_marker: false }` 填补——属他人未完成工作的编译断点修复，与本次重构正交。
+
+### 2026-06-25 — 建 core-rpc + SessionHub 下沉：dispatch 唯一入口基础就位（§7.8 步骤②）
+
+- **Why**: 推进 §7.8.6 步骤②「dispatch 落地」。对标 codex app-server 的 message_processor，把 agent-core 业务能力收进唯一 `dispatch` 大 match——三 surface 都把请求表达成 `CoreRequest` 交给同一入口，业务逻辑只写一遍，并为步骤③跨进程 transport（序列化 CoreRequest 走 unix-socket/ws）打地基。
+- **核心设计 SessionHub（§7.8.5 单写者+多观察者）**: hebweb 的 `SessionRuntime`（event_tx broadcast + pending_approvals/questions + cancel + active + pending_inputs + run_mode + force_automode）本就是「单写者+多观察者」的完整雏形。把这部分**与 surface 无关的运行时状态**下沉成 agent_core 通用件 `session_hub::{SessionRuntimeState, SessionHub}`，broadcast 通道类型从 hebweb 专属 `WsServerMessage` 改为通用 `protocol::WireEvent`；hebweb `SessionRuntime` 改为内嵌 `Arc<SessionRuntimeState>` + 保留 surface 特有字段（provider/model/input_tx/permission_store），WS 层订阅 WireEvent broadcast 后再包成 WsServerMessage 发浏览器。这是步骤③ hebcore 进程的核心数据结构。
+- **core-rpc crate（强类型全覆盖）**:
+  - `CoreRequest` enum：61 个同步 API variant（借用参数改 owned 以可序列化）+ 对话主链路 `Submit`/`Subscribe`（`StartRun` 留步骤③），`#[serde(tag=method,content=params)]` JSON-RPC 友好。
+  - `CoreResponse` enum：每方法一返回 variant + `Unit`/`Error`，只 `Serialize`（响应方向不强求 Deserialize——含 `&'static` 预设的 ProviderPreset 本就不可反序列化）；`into_json()` 出口让 surface 一行拆包。
+  - `dispatch(req, &dyn CoreClient)` async 大 match：同步 API 纯转发到 CoreClient，对话链路走 hub。
+  - 为让 CoreRequest 参数 / CoreResponse 返回类型可序列化，给 ProvidersFile/PromptsFile/SessionMeta/SearchHit 补 Clone，给 FetchedModel/ProviderModelTestResult/McpToolReport/SearchHit/Skill/ToolInfo 补 Deserialize（纯数据结构补 derive，零风险）。
+- **改动**:
+  - [crates/agent-core/src/session_hub.rs](../crates/agent-core/src/session_hub.rs)（新）+ lib.rs 导出：SessionRuntimeState/SessionHub + 4 单测。
+  - [crates/core-rpc/{Cargo.toml,src/lib.rs}](../crates/core-rpc/src/lib.rs)（新）：CoreRequest/CoreResponse/dispatch + 3 单测；Cargo.toml workspace members 加 core-rpc。
+  - [apps/web-server/src/{session.rs,server.rs}](../apps/web-server/src/server.rs) + Cargo.toml：SessionRuntime 改用下沉的 state；WS 订阅 WireEvent→WsServerMessage 包装；`cmd_core_list_tools` 改走 dispatch 作集成验证。
+  - 多个 agent-core/model-gateway 类型补 derive（见上）。
+- **影响范围**: 新增 core-rpc crate；agent-core 加 session_hub 模块（additive）；hebweb 主链路改用 SessionHub（broadcast 类型换 WireEvent）；多类型补 derive（向后兼容）。desktop/cli 不受影响（dispatch 化留步骤④⑥）。
+- **验证**: `cargo check --workspace` 通过；`cargo test -p agent-core --lib session_hub`（4）+ `cargo test -p core-rpc`（3 serde round-trip）通过；hebweb 端到端——SessionHub 下沉后真模型跑一轮对话事件流（reasoning/text_delta/text_done/turn_finished/run_finished/usage）+ 落盘（user→assistant 内容正确）完全不变；dispatch 路径 list_tools 经 WS 返回 3 工具结构与直调一致。
+- **连带修复（非本任务，Note）**: hebweb server.rs:1668 `cmd_set_active_goal` 构造 `ActiveGoal` 缺别人在途改动新增的 `pending_set_marker` 字段导致编译断，补 `true`（对齐 desktop lib.rs:1376 set_active_goal 语义）。该字段是别人给 goal 加 model_io_dump 那批改动引入的，他们漏更新 hebweb 构造点。
+- **留尾巴**: 对话主链路 StartRun 完整接入（经 hub 跑 run + 事件 broadcast）随步骤③ hebcore 进程一起做；hebweb/desktop 同步命令全面改走 dispatch 在客户端化步骤④⑤⑥；CoreResponse 跨进程客户端侧强类型解析待步骤③。

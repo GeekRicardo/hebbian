@@ -87,7 +87,7 @@ pub struct Provider {
     pub claude_code_compat: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ProvidersFile {
     #[serde(default)]
     pub providers: Vec<Provider>,

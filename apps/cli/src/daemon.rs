@@ -20,8 +20,7 @@ use agent_core::{
     read_state::ReadStateTracker,
     run_mode::RunMode,
     storage::{
-        nested::NestedAccumulator,
-        sessions::{self as sessions, Message, MessagePart, MessageToolCall, Role},
+        sessions::{self as sessions, Message, Role},
         sessions_dir, settings as settings_store,
     },
     tools::{background, skill::default_skill_dirs},
@@ -41,7 +40,6 @@ use protocol::{
     ApprovalDecision, Event as AgentEvent, EventPayload, PermissionKind, PermissionRequestId,
     PermissionScope, QuestionOption, UserAnswer,
 };
-use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
@@ -161,156 +159,22 @@ impl DaemonState {
 
 // ─── Observer ──────────────────────────────────────────────────────────────
 
-/// turn 级数据（每次 run_turn 新建）——追踪 assistant 输出以便落盘
-struct TurnData {
-    full_text: String,
-    tool_calls: Vec<MessageToolCall>,
-    parts: Vec<MessagePart>,
-    // 当前正在收集的工具调用（call_id → (name, input)）
-    pending_tools: HashMap<String, (String, Value)>,
-    /// 子 NestedRun 过程累积（架构 §4.4.11.8），build_message 落盘前同步进 tool_calls 的 nested。
-    nested: NestedAccumulator,
-    /// assistant 内容的「真实产出起始时刻」（首个内容事件到达时间）。build_message
-    /// 用它做 created_at——**不能用落盘时的 now()**：run 结束才落盘的 assistant，时刻会
-    /// 晚于 `heb input` / wakeup 流式途中即写即落的插队 user，时间戳倒挂会让加载排序错位
-    /// （架构 §4.9.5 消息顺序契约）。
-    started_at: Option<i64>,
-}
-
-impl TurnData {
-    fn new() -> Self {
-        Self {
-            full_text: String::new(),
-            tool_calls: Vec::new(),
-            parts: Vec::new(),
-            pending_tools: HashMap::new(),
-            nested: NestedAccumulator::default(),
-            started_at: None,
-        }
-    }
-
-    fn handle_event(&mut self, payload: &EventPayload) {
-        // 首个内容事件到达即记产出起始时刻（架构 §4.9.5）。Reasoning / TextDelta /
-        // TextDone / ToolCall 任一到来都算内容产出。
-        if self.started_at.is_none()
-            && matches!(
-                payload,
-                EventPayload::Reasoning { .. }
-                    | EventPayload::TextDelta { .. }
-                    | EventPayload::TextDone { .. }
-                    | EventPayload::ToolCallStarted { .. }
-                    | EventPayload::ToolCallFinished { .. }
-            )
-        {
-            self.started_at = Some(Utc::now().timestamp_millis());
-        }
-        match payload {
-            EventPayload::Reasoning { text } => {
-                self.parts
-                    .push(MessagePart::Reasoning { text: text.clone() });
-            }
-            EventPayload::TextDone { full_text } => {
-                self.full_text = full_text.clone();
-                // 把最终文字同步进 parts
-                self.parts
-                    .retain(|p| !matches!(p, MessagePart::Text { .. }));
-                self.parts.push(MessagePart::Text {
-                    text: full_text.clone(),
-                });
-            }
-            EventPayload::ToolCallStarted {
-                call_id,
-                name,
-                input,
-                ..
-            } => {
-                self.pending_tools
-                    .insert(call_id.clone(), (name.clone(), input.clone()));
-            }
-            EventPayload::ToolCallFinished {
-                call_id,
-                result,
-                duration_ms,
-                is_error,
-                ..
-            } => {
-                if let Some((name, input)) = self.pending_tools.remove(call_id) {
-                    let tc = MessageToolCall {
-                        id: call_id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                        result: Some(result.clone()),
-                        duration_ms: Some(*duration_ms),
-                        is_error: *is_error,
-                        nested: Vec::new(),
-                    };
-                    self.tool_calls.push(tc.clone());
-                    self.parts.push(MessagePart::ToolCall {
-                        id: call_id.clone(),
-                        name,
-                        input,
-                        arguments: String::new(),
-                        result: Some(result.clone()),
-                        duration_ms: Some(*duration_ms),
-                        is_error: *is_error,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn build_message(mut self) -> Option<Message> {
-        if self.full_text.is_empty() && self.tool_calls.is_empty() {
-            return None;
-        }
-        // 落盘前把累积的子过程同步进对应 Task call 的 nested（架构 §4.4.11.8）。
-        self.nested.sync_into(&mut self.tool_calls);
-        Some(Message {
-            id: sessions::new_id(),
-            role: Role::Assistant,
-            content: self.full_text,
-            attachments: Vec::new(),
-            tool_calls: self.tool_calls,
-            parts: self.parts,
-            created_at: self.started_at.unwrap_or_else(|| Utc::now().timestamp_millis()),
-            meta: None,
-            subagent_call_id: None,
-            run_duration_ms: None,
-        })
-    }
-}
-
 struct DaemonObserver {
     state: Arc<DaemonState>,
-    turn: TurnData,
 }
 
 impl DaemonObserver {
     fn new(state: Arc<DaemonState>) -> Self {
-        Self {
-            state,
-            turn: TurnData::new(),
-        }
+        Self { state }
     }
 }
 
 #[async_trait]
 impl TurnObserver for DaemonObserver {
     fn on_event(&mut self, event: &AgentEvent) {
-        // 子 subagent NestedRun 事件不进父 turn 聚合，仅转发到 daemon stdout 让 UI 嵌套渲染
-        // （架构 §4.4.11.8）。父 transcript / 父 jsonl 不被串入子内容；子事件落到子 session.jsonl
-        // 由 P3.1c 单独接上。
-        if let Some(call_id) = event.subagent_call_id.as_deref() {
-            // 子 NestedRun 过程累积进对应 Task call 的 nested，随父 message 落主 session.jsonl
-            // （架构 §4.4.11.8）。子事件仍转发 stdout 供 UI 嵌套渲染。
-            self.turn.nested.record(call_id, &event.payload);
-            if let Some(ev) = translate_event(event) {
-                self.state.emit(&ev);
-            }
-            return;
-        }
-        self.turn.handle_event(&event.payload);
+        // assistant 累积 + 落盘已收归 agent_core 唯一一份（架构 §7.8.3）：observer 只把
+        // 事件翻译成 NDJSON 推到 stdout 做渲染，不再自行重建 message。子 subagent NestedRun
+        // 事件同样只转发渲染（架构 §4.4.11.8），父过程累积由 agent_core persister 负责。
         if let Some(ev) = translate_event(event) {
             self.state.emit(&ev);
         }

@@ -92,7 +92,7 @@ pub async fn discover_tools(config: &crate::mcp::config::McpConfig) -> Vec<Box<d
     out
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpToolReport {
     pub server_name: String,
     pub transport: crate::mcp::config::McpTransport,

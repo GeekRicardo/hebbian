@@ -5,6 +5,7 @@ members = [
     "apps/web-server",
     "apps/eval",
     "crates/agent-core",
+    "crates/core-rpc",
     "crates/model-gateway",
     "crates/observability",
     "crates/common",

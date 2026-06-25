@@ -467,7 +467,7 @@ fn ask_option_schema() -> serde_json::Value {
     })
 }
 
-#[derive(Debug, serde::Serialize, Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct ToolInfo {
     pub name: String,
     pub description: String,

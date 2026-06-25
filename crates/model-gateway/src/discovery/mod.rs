@@ -3,7 +3,7 @@ use common::AppError;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct FetchedModel {
     pub id: String,
     #[serde(default)]
