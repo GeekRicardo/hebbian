@@ -390,6 +390,61 @@ fn append_goal_outcome_marker(
     }
 }
 
+/// 把一次 Stop hook 执行结果作为 `Role::Marker` append 到 session.jsonl（架构 §4.8.3）。
+/// 让消息流显示「跑了哪个 verify、过没过」，与裁决 marker 同走串行落盘流。
+fn append_hook_outcome_marker(
+    data_dir: &std::path::Path,
+    session_id: &str,
+    event: &str,
+    status: &str,
+    detail: &str,
+) {
+    use crate::storage::sessions::{self as sess_store, Message, MessageMeta, Role};
+    let marker = Message {
+        id: sess_store::new_id(),
+        role: Role::Marker,
+        content: String::new(),
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
+        parts: Vec::new(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        meta: Some(MessageMeta::HookOutcome {
+            event: event.to_string(),
+            status: status.to_string(),
+            detail: detail.to_string(),
+        }),
+        subagent_call_id: None,
+        run_duration_ms: None,
+    };
+    if let Err(e) = sess_store::append_message(data_dir, session_id, marker) {
+        tracing::warn!(error = %e, status, "Stop hook marker 落盘失败，仅事件态可见");
+    }
+}
+
+/// 「目标已设」marker（架构 §4.8.3）：用户刚设目标时 set_active_goal 置了
+/// pending_set_marker。在触发它的 `Goal set` user 消息已落盘后（run 启动 / 插队 drain）
+/// 落一条 set marker（物理排在该 user 消息之后），并清标志避免重复落。两条 user 落盘
+/// 路径（首条开新 run / 插队进当前 run）都调一次，set marker 始终紧跟它的 user 消息。
+fn maybe_emit_pending_set_marker(data_dir: Option<&std::path::Path>, session_id: Option<&str>) {
+    let (Some(dd), Some(sid)) = (data_dir, session_id) else {
+        return;
+    };
+    let Ok(Some(goal)) = crate::storage::sessions::load(dd, sid).map(|s| s.active_goal) else {
+        return;
+    };
+    if !goal.pending_set_marker {
+        return;
+    }
+    append_goal_outcome_marker(dd, sid, "set", &goal.condition, "", 0);
+    let cleared = crate::storage::sessions::ActiveGoal {
+        pending_set_marker: false,
+        ..goal
+    };
+    if let Err(e) = crate::storage::sessions::set_active_goal(dd, sid, Some(cleared)) {
+        tracing::warn!(error = %e, "清 pending_set_marker 失败");
+    }
+}
+
 #[tracing::instrument(
     name = "run",
     level = "info",
@@ -496,27 +551,9 @@ pub async fn run_loop(
         }
     }
 
-    // 「目标已设」marker（架构 §4.8.3）：用户刚设目标时 set_active_goal 置了
-    // pending_set_marker，此刻触发 run 的 `Goal set` user 消息已落盘——落一条
-    // set marker（物理排在该 user 消息之后），并清标志避免重复落。与裁决 marker
-    // 同走 append_goal_outcome_marker 串行流。
+    // 「目标已设」marker：首条 user（开新 run）已落盘，落 set marker（若有 pending）。
     if resume_from.is_none() {
-        if let (Some(dd), Some(sid)) = (data_dir.as_deref(), session_id.as_deref()) {
-            if let Ok(Some(goal)) = crate::storage::sessions::load(dd, sid).map(|s| s.active_goal) {
-                if goal.pending_set_marker {
-                    append_goal_outcome_marker(dd, sid, "set", &goal.condition, "", 0);
-                    let cleared = crate::storage::sessions::ActiveGoal {
-                        pending_set_marker: false,
-                        ..goal
-                    };
-                    if let Err(e) =
-                        crate::storage::sessions::set_active_goal(dd, sid, Some(cleared))
-                    {
-                        tracing::warn!(error = %e, "清 pending_set_marker 失败");
-                    }
-                }
-            }
-        }
+        maybe_emit_pending_set_marker(data_dir.as_deref(), session_id.as_deref());
     }
 
     // 估算校准样本：最近一次请求的服务端真值 input_tokens 与其配对的本地估算。
@@ -586,6 +623,8 @@ pub async fn run_loop(
             persister.as_ref(),
             transcript,
         );
+        // 插队的 `Goal set` 已落盘 → 落 set marker（若 run 跑时设了 goal）。
+        maybe_emit_pending_set_marker(data_dir.as_deref(), session_id.as_deref());
 
         // Microcompact：每轮模型请求前先把超阈值的老 tool_result 压缩为占位符。
         // 不消耗模型调用，只改 transcript entries，幂等。
@@ -1055,6 +1094,21 @@ pub async fn run_loop(
                             workdir: Some(wd),
                         })
                         .await;
+                    // hook 跑了就落一条 marker（通过/注入都显示）——先 flush assistant 段，
+                    // 保证 marker 物理排在它该回应的 assistant 之后。
+                    if let (Some(dd), Some(sid)) = (data_dir.as_deref(), session_id.as_deref()) {
+                        if let Some(p) = persister.as_ref() {
+                            p.flush_segment(Some(run_start.elapsed().as_millis() as u64));
+                        }
+                        let (status, detail) = match &outcome {
+                            HookOutcome::InjectFollowup(r) if !r.trim().is_empty() => {
+                                ("injected", r.trim())
+                            }
+                            HookOutcome::Block(r) => ("blocked", r.as_str()),
+                            _ => ("passed", ""),
+                        };
+                        append_hook_outcome_marker(dd, sid, "Stop", status, detail);
+                    }
                     if let HookOutcome::InjectFollowup(reminder) = outcome {
                         let trimmed = reminder.trim();
                         if !trimmed.is_empty() {

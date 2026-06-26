@@ -68,6 +68,7 @@ import { openLink } from "@/desktop/ui/lib/openLink";
 import { AttachmentPreviewStrip } from "@/desktop/ui/components/AttachmentPreviewStrip";
 import { MemoryWriteSummary } from "@/desktop/ui/components/MemoryWriteSummary";
 import { GoalResultSummary } from "@/desktop/ui/components/GoalResultSummary";
+import { HookOutcomeSummary } from "@/desktop/ui/components/HookOutcomeSummary";
 import { AvatarPreview } from "@/desktop/ui/components/AvatarField";
 import {
   DiffViewer,
@@ -2228,7 +2229,7 @@ export const MessageBubble = memo(function MessageBubble({
   if (message.role === "marker" && message.meta?.type === "switch") {
     const { from_provider, from_model, to_provider, to_model } = message.meta;
     return (
-      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+      <div className="px-6 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
         <div className="flex-1 h-px bg-border" />
         <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
           <ArrowRightLeft className="w-3 h-3" />
@@ -2247,7 +2248,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   if (message.role === "marker" && message.meta?.type === "interrupted") {
     return (
-      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+      <div className="px-6 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
         <div className="flex-1 h-px bg-border" />
         <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
           <Ban className="w-3 h-3 text-destructive" />
@@ -2263,7 +2264,7 @@ export const MessageBubble = memo(function MessageBubble({
   if (message.role === "marker" && message.meta?.type === "reasoning_switch") {
     const { from, to } = message.meta;
     return (
-      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+      <div className="px-6 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
         <div className="flex-1 h-px bg-border" />
         <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
           <ArrowRightLeft className="w-3 h-3" />
@@ -2282,7 +2283,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   if (message.role === "marker" && message.meta?.type === "memory_writes") {
     return (
-      <div className="px-6 py-1 select-none">
+      <div className="px-6 select-none">
         <MemoryWriteSummary items={message.meta.items} />
       </div>
     );
@@ -2291,15 +2292,24 @@ export const MessageBubble = memo(function MessageBubble({
   if (message.role === "marker" && message.meta?.type === "goal_outcome") {
     const { kind, condition, reason, iteration } = message.meta;
     // 左 padding 68px = px-6(24) + 头像 w-8(32) + gap-3(12)，让 goal 块左缘
-    // 对齐消息正文，而非贴在头像左缘。
+    // 对齐消息正文，而非贴在头像左缘。无上下 padding 省空间。
     return (
-      <div className="py-1 pl-[68px] pr-6 select-none">
+      <div className="pl-[68px] pr-6 select-none">
         <GoalResultSummary
           kind={kind}
           condition={condition}
           reason={reason}
           iteration={iteration}
         />
+      </div>
+    );
+  }
+
+  if (message.role === "marker" && message.meta?.type === "hook_outcome") {
+    const { event, status, detail } = message.meta;
+    return (
+      <div className="pl-[68px] pr-6 select-none">
+        <HookOutcomeSummary event={event} status={status} detail={detail} />
       </div>
     );
   }
@@ -2312,7 +2322,7 @@ export const MessageBubble = memo(function MessageBubble({
         ? `${what}已转发到微信 · ${status.outcome}`
         : `${what}已转发到微信，等待回复`;
     return (
-      <div className="px-6 py-3 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
+      <div className="px-6 flex items-center gap-3 text-[11px] text-muted-foreground select-none">
         <div className="flex-1 h-px bg-border" />
         <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1">
           <Smartphone className="w-3 h-3" />

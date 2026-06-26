@@ -198,6 +198,17 @@ export type MessageMeta =
       /** 续跑轮次（progress 有意义）。 */
       iteration: number;
     }
+  // 架构 §4.8.3：一次 Stop hook（cargo check / tsc 等 verify）执行结果。让消息流显示
+  // 跑了哪个 verify、过没过。
+  | {
+      type: "hook_outcome";
+      /** hook 点位名（当前恒为 Stop）。 */
+      event: string;
+      /** passed=verify 通过 / injected=失败已注入续跑修复 / blocked=hook 阻断。 */
+      status: "passed" | "injected" | "blocked";
+      /** 失败 / 阻断时的提示文本（passed 时为空）。 */
+      detail: string;
+    }
   // 架构 §7.5.1：机主不活跃时，这条审批/问题被转发到了聊天渠道（微信）。落一条 marker，
   // 让机主回到电脑能看到「当时转发出去了、在渠道侧的结论是什么」。
   | {
