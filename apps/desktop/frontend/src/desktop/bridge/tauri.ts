@@ -118,6 +118,8 @@ export const api = {
     }),
   listClaudeSessions: () =>
     invoke<ClaudeSessionInfo[]>("list_claude_sessions"),
+  readClaudeSessionPreview: (path: string) =>
+    invoke<ClaudeSessionPreview>("read_claude_session_preview", { path }),
   importClaudeSession: (
     path: string,
     projectId?: string | null,
@@ -792,6 +794,14 @@ export interface ClaudeSessionInfo {
   cwd: string;
   message_count: number;
   modified_ms: number;
+}
+
+/** 一条 Claude 会话的完整预览数据（含消息列表供渲染）。 */
+export interface ClaudeSessionPreview {
+  title: string;
+  model: string;
+  cwd: string;
+  messages: Message[];
 }
 
 export interface DeepseekLoginInput {
