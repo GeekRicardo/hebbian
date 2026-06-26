@@ -9807,3 +9807,11 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: release bundle 体积 +17MB（hebcore 二进制）。dev 模式不变。
 - **验证**: `cargo build --release -p hebcore`（17MB 产物）；手动拷 hebcore 进现有 bundle 的 Contents/Resources，从该路径拉起 hebcore——sock ~900ms 就绪；路径逻辑与 release 能工作的 HebIsland.app（同走 resource_dir.join）一致。
 - **留尾巴**: tauri build 流程建议在 beforeBuildCommand 或 CI 脚本里加 `cargo build --release -p hebcore` 确保 bundle 时二进制已存在（当前需手动先编）。
+
+### 2026-06-25 — 复核登记：Stop hook 再次检出的 10 在途文件经 mtime 核验确非本轮所改
+
+- **Why**: Stop hook 第三次因同一批 10 文件触发（前端 8 + dispatch.rs + session_titler.rs），机械判定「有改动但无 changelog」。本轮（修 release bundle 打包 hebcore，已提交 3c89518）对这 10 文件**一行未碰**。
+- **核验证据**: `stat` 看 mtime——这 10 文件最后修改均为数小时前（13:33 / 15:17 / 16:31 / 17:14），而本轮提交时间 10:34（次日上午），时间上不可能是本轮所改；git 确认其最近 commit 均非本会话。是 goal/RunMode/Claude导入那批的他人静止在途改动（详见上方 3 条登记）。
+- **hook 局限**: 它比对 working-tree 全部 M 文件，无法区分「本轮 git 实际新增」与「他人长期未提交」——故同一批文件每轮结束都会触发。根治需调 hook 逻辑（只比对本轮 diff）或清掉这批改动（其作者收尾）。
+- **影响范围**: 纯文档。这 10 文件按 CLAUDE.md 红线原样保留，不 add、不替写权威 changelog。
+- **留尾巴**: 无。本会话自身全部改动（§7.8 六步 + sock 拉起 + release bundle）逐次提交且每条带 changelog。
