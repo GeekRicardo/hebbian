@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, MessageSquarePlus, History, FileText, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  MessageSquarePlus,
+  History,
+  FileText,
+  Loader2,
+  Check,
+  X,
+  MessageSquareWarning,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/desktop/bridge/tauri";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -242,6 +251,9 @@ export function PlanTab() {
         )}
       </div>
 
+      {/* plan 待审批操作条（架构 §4.4.5）：HITL 决策从输入框上方弹窗下沉到此处 */}
+      <PlanApprovalBar selectedPlanId={selectedPlanId} />
+
       {/* 评论区 */}
       <div className="shrink-0 border-t border-border bg-muted/30">
         <div className="flex items-center justify-between px-3 py-1.5 text-xs">
@@ -375,5 +387,188 @@ function CommentRow({ comment }: { comment: PlanComment }) {
       </div>
       <p className="mt-0.5 whitespace-pre-wrap">{comment.body}</p>
     </li>
+  );
+}
+
+/**
+ * plan 待审批操作条（架构 §4.4.5）。
+ *
+ * 与普通 tool_call 审批共用底层 HITL 通路（`resolveApproval`），但展示位置从输入框
+ * 上方弹窗迁到右侧「计划」栏——plan 内容本就在主区实时渲染，这里只补三个决策按钮：
+ * 通过 / 重新规划（带反馈）/ 拒绝。AutoMode 下挂 10s 自动通过倒计时；用户进入反馈
+ * 或点任一按钮即取消倒计时。
+ */
+function PlanApprovalBar({ selectedPlanId }: { selectedPlanId: string | null }) {
+  const pending = useStore((s) => s.pendingApproval);
+  const resolveApproval = useStore((s) => s.resolveApproval);
+  const currentRunMode = useStore((s) => s.currentRunMode);
+
+  const isAuto = currentRunMode === "AutoMode" || currentRunMode === "auto";
+  const planInfo = pending?.kind === "plan" ? pending.plan ?? null : null;
+
+  const [feedbackMode, setFeedbackMode] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [autoCancelled, setAutoCancelled] = useState(false);
+
+  // 切换不同 plan / 审批出现时重置局部状态与倒计时
+  useEffect(() => {
+    setFeedbackMode(false);
+    setFeedback("");
+    setAutoCancelled(false);
+    setRemaining(planInfo && isAuto ? 10 : null);
+  }, [planInfo?.plan_id, isAuto]);
+
+  const approve = useCallback(async () => {
+    setSubmitting(true);
+    try {
+      await resolveApproval({ kind: "allow_once" });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [resolveApproval]);
+
+  // 倒计时：归零自动通过；进入反馈模式或用户取消即停。
+  useEffect(() => {
+    if (remaining === null || autoCancelled || feedbackMode) return;
+    if (remaining <= 0) {
+      void approve();
+      return;
+    }
+    const t = setTimeout(() => setRemaining((r) => (r === null ? null : r - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [remaining, autoCancelled, feedbackMode, approve]);
+
+  if (!planInfo) return null;
+
+  const reject = async () => {
+    setSubmitting(true);
+    try {
+      await resolveApproval({ kind: "deny" });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const rejectWithFeedback = async () => {
+    if (!feedback.trim()) {
+      toast.error("请描述要修改的点");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await resolveApproval({ kind: "deny_with_feedback", feedback: feedback.trim() });
+    } catch (e: any) {
+      toast.error(e?.message ?? "审批失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancelCountdown = () => {
+    setAutoCancelled(true);
+    setRemaining(null);
+  };
+
+  // 用户正看着别的历史 plan，提示一下待审批的是哪份
+  const viewingOther = selectedPlanId !== null && selectedPlanId !== planInfo.plan_id;
+
+  return (
+    <div className="shrink-0 border-t border-amber-400/50 bg-amber-500/10">
+      <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+        <span className="font-medium">AI 提交了一份计划，等你审批</span>
+        {planInfo.summary && (
+          <span className="truncate text-[11px] opacity-80">{planInfo.summary}</span>
+        )}
+      </div>
+      {viewingOther && (
+        <div className="px-3 pb-1 text-[11px] text-muted-foreground">
+          你正在看另一份计划，待审批的是「{planInfo.summary || "最新计划"}」。
+        </div>
+      )}
+      {feedbackMode ? (
+        <div className="px-3 pb-2">
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                if (!submitting && feedback.trim()) void rejectWithFeedback();
+              }
+            }}
+            placeholder="告诉 AI 想怎么改这份计划（⌘/Ctrl+Enter 提交，会作为下一轮消息发给 AI）"
+            rows={3}
+            className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+          />
+          <div className="mt-1 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setFeedbackMode(false);
+                setFeedback("");
+              }}
+              disabled={submitting}
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={rejectWithFeedback}
+              disabled={submitting || !feedback.trim()}
+              className="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+            >
+              提交反馈让 AI 重做
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 px-3 pb-2">
+          <button
+            type="button"
+            onClick={approve}
+            disabled={submitting}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            <Check className="h-3.5 w-3.5" />
+            通过，开干
+            {remaining !== null && !autoCancelled && (
+              <span className="ml-0.5 text-[10px] opacity-80">({remaining}s)</span>
+            )}
+          </button>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => {
+              cancelCountdown();
+              setFeedbackMode(true);
+            }}
+            disabled={submitting}
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+          >
+            <MessageSquareWarning className="h-3.5 w-3.5" />
+            重新规划
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              cancelCountdown();
+              void reject();
+            }}
+            disabled={submitting}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-destructive/10 px-2.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          >
+            <X className="h-3.5 w-3.5" />
+            拒绝
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
