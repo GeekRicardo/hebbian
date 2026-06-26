@@ -6,12 +6,12 @@
 //! - 提问通路（`ask` 工具）→ emit `UserQuestionRequested` + await
 //! - 工具执行（含超时输出截断）+ emit `ToolCallStarted` / `ToolCallFinished`
 //!
-//! 并发策略（架构 §4.4.3）：只读 / 并发安全工具立即进后台并发池（同批最多
-//! [`MAX_PARALLEL_TOOLS`] 个同时 poll，避免一次上百个 tool_call 打满 worker / 句柄）；
-//! 会写 shell（Bash/PowerShell）走独立串行链，shell 之间严格按 call 顺序（共享 cwd
-//! 不并发 + 审批记忆顺序）。两条链 join 同时驱动——**会写 shell 卡在审批时，只读池
-//! 照常并发执行**，不再"一个审批卡住整批冻住"。同一文件的 Edit 由 edits-worktree 的
-//! per-path 锁（架构 §4.13.4）天然串行，无需派发器额外处理。
+//! 并发策略（架构 §4.4.3）：所有工具（含 Bash/PowerShell）统一进并发池，同批最多
+//! [`MAX_PARALLEL_TOOLS`] 个同时 poll（避免上百个 tool_call 打满 worker / 句柄）。
+//! Bash 命令都是独立 `bash -lc` 子进程，cwd 天然隔离；审批记忆由 HITL 的
+//! `resolve_matching_pending_after_remember` 保障（AllowAndRemember 落盘后自动
+//! 遍历其他 pending 审批、匹配新规则的补发 AllowOnce）。同一文件的 Edit 由
+//! edits-worktree per-path 锁（架构 §4.13.4）天然串行，无需派发器额外处理。
 //!
 //! [`agent_loop`]: super::agent_loop
 
@@ -265,19 +265,18 @@ fn yolo_decision(
 impl ToolDispatcher {
     /// 派发整组 tool call。返回按 call_index 排序的 ToolResult。
     /// `dispatch_offset` 是这一轮在整个 run 内的全局起始 index。
+    // 并发执行（架构 §4.4.3）：所有工具（含 Bash/PowerShell）统一进并发池。
+    // 每个 Bash 命令是独立 `bash -lc` 子进程，cwd 天然隔离，不存在"共享 cwd"冲突。
+    // 审批记忆：HITL 的 `resolve_matching_pending_after_remember` 在 AllowAndRemember
+    // 落盘后自动遍历其他 pending 审批、匹配新规则的补发 AllowOnce——同批并发 shell
+    // 不会重复弹审批。
     pub async fn run_calls(
         &self,
         calls: &[ToolCall],
         dispatch_offset: usize,
     ) -> Result<Vec<ToolResult>, ModelError> {
-        // 分流（架构 §4.4.3）：只读 / 并发安全工具立刻 spawn 进后台并发池；会写
-        // shell（Bash/PowerShell）收集索引走串行链。两者用 join 同时驱动——会写
-        // shell 卡在审批时，只读池照常并发执行，不再"一个审批卡住整批冻住"。
-        // shell 串行链顺序 spawn（而非一次性预创建 pending）保证：用户对上一条选
-        // AllowAndRemember 后，同批后续 shell 先命中记忆规则，不重复弹审批。
-        let mut concurrent: Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>> =
+        let mut futures: Vec<BoxFuture<'static, Result<(usize, ToolResult), ModelError>>> =
             Vec::with_capacity(calls.len());
-        let mut shell_indices: Vec<usize> = Vec::new();
 
         for (call_index, call) in calls.iter().enumerate() {
             if cancellation::is_cancelled(&self.cancel) {
@@ -285,10 +284,6 @@ impl ToolDispatcher {
                 break;
             }
             let dispatch_index = dispatch_offset + call_index;
-            if matches!(call.name.as_str(), "Bash" | "PowerShell") {
-                shell_indices.push(call_index);
-                continue;
-            }
             let task = if call.name == ASK_TOOL_NAME {
                 self.spawn_ask(call.clone(), call_index, dispatch_index)
             } else if call.name == TODO_WRITE_TOOL_NAME {
@@ -300,49 +295,29 @@ impl ToolDispatcher {
             } else {
                 self.spawn_tool(call.clone(), call_index, dispatch_index)
             };
-            concurrent.push(task);
+            futures.push(task);
         }
 
-        // 会写 shell 串行链：顺序 spawn + await，shell 之间严格按 call 顺序（共享 cwd
-        // 不并发 + 审批记忆顺序）。审批 await 期间让出，下面的并发池继续推进。
-        let shell_chain = async {
-            let mut out: Vec<(usize, ToolResult)> = Vec::new();
-            for &call_index in &shell_indices {
-                if cancellation::is_cancelled(&self.cancel) {
-                    self.hitl.cancel_all_pending();
-                    break;
-                }
-                let dispatch_index = dispatch_offset + call_index;
-                let task = self.spawn_tool(calls[call_index].clone(), call_index, dispatch_index);
-                out.push(task.await?);
+        // 最多 MAX_PARALLEL_TOOLS 个同时 poll；单个工具报错不 cancel 同批其他。
+        // Edit 同文件由 edits-worktree per-path 锁串行，不同文件并发；Bash 独立
+        // 子进程无需额外串行化。
+        let mut out: Vec<(usize, ToolResult)> = Vec::new();
+        let mut stream = stream::iter(futures).buffer_unordered(MAX_PARALLEL_TOOLS);
+        let mut first_err: Option<ModelError> = None;
+        while let Some(outcome) = stream.next().await {
+            match outcome {
+                Ok(result) => out.push(result),
+                Err(e) if first_err.is_none() => first_err = Some(e),
+                Err(_) => {}
             }
-            Ok::<Vec<(usize, ToolResult)>, ModelError>(out)
-        };
-
-        // 并发池：最多 MAX_PARALLEL_TOOLS 个同时 poll；单个工具报错不 cancel 同批其他。
-        let concurrent_drain = async {
-            let mut out: Vec<(usize, ToolResult)> = Vec::new();
-            let mut stream = stream::iter(concurrent).buffer_unordered(MAX_PARALLEL_TOOLS);
-            let mut first_err: Option<ModelError> = None;
-            while let Some(outcome) = stream.next().await {
-                match outcome {
-                    Ok(result) => out.push(result),
-                    Err(e) if first_err.is_none() => first_err = Some(e),
-                    Err(_) => {}
-                }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => {
+                out.sort_by_key(|(index, _)| *index);
+                Ok(out.into_iter().map(|(_, r)| r).collect())
             }
-            match first_err {
-                Some(e) => Err(e),
-                None => Ok(out),
-            }
-        };
-
-        let (shell_out, concurrent_out) =
-            futures_util::future::join(shell_chain, concurrent_drain).await;
-        let mut results = shell_out?;
-        results.extend(concurrent_out?);
-        results.sort_by_key(|(index, _)| *index);
-        Ok(results.into_iter().map(|(_, r)| r).collect())
+        }
     }
 
     /// 普通工具派发：路径审批 → 工具审批 → 执行。
@@ -3931,6 +3906,118 @@ mod tests {
             suspicious_allowed.is_empty(),
             "发现 {} 条免审路径落在 .hebbian/.ssh/etc，策略有漏洞",
             suspicious_allowed.len()
+        );
+    }
+
+    /// 会 sleep 的 Bash 桩工具：name="Bash"，execute 里 sleep 给定毫秒。
+    /// 用于验证同批多个 Bash 是否真并发——并发则总耗时 ≈ 单次，串行则 ≈ N 倍。
+    struct SleepyBashTool {
+        sleep_ms: u64,
+    }
+
+    #[async_trait]
+    impl crate::tools::Tool for SleepyBashTool {
+        fn name(&self) -> &str {
+            "Bash"
+        }
+
+        fn description(&self) -> &str {
+            "sleepy test bash"
+        }
+
+        fn parameters_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: Value) -> AppResult<String> {
+            tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
+            Ok("slept".to_string())
+        }
+    }
+
+    /// 架构 §4.4.3 / §4.13.4：同一 ToolStep 内的多个 Bash 必须并发执行。
+    ///
+    /// **必须挂真实 `edits_worktree`** 才能复现真凶——根因是 effects.paths 无条件含
+    /// cwd，dispatch 执行前对每个 allows 的 path 拿 edits-worktree per-path 锁且持有到
+    /// execute 结束；两个 Bash 都触达同一 workdir(cwd) → 抢同一把锁 → 串行。
+    /// `edits_worktree=None` 的版本测不出此 bug（会假并发）。
+    ///
+    /// 复现：两个各 sleep 300ms 的 Bash，并发总耗时应 < 500ms，串行则 ≈ 600ms。
+    /// 修前（cwd 进快照锁循环）此断言必 fail。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn multiple_bash_calls_run_concurrently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let edits_wt = Arc::new(crate::edits::EditsWorktree::new(
+            data_dir.path(),
+            "sid-concurrent",
+            &workspace,
+        ));
+        if !edits_wt.enabled().await {
+            eprintln!("git 不可用，跳过 edits-worktree 并发测试");
+            return;
+        }
+        let run_id = "run-concurrent";
+        edits_wt.begin_run(run_id).await;
+
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(SleepyBashTool { sleep_ms: 300 }) as Box<dyn crate::tools::Tool>,
+        ]));
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl: Arc::new(crate::tools::hitl::HitlGate::default()),
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            // Yolo：界内非危险命令自动放行，不卡审批，纯测执行并发性。
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::Yolo)),
+            model_id: None,
+            judge_client: None,
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: Some(edits_wt),
+            current_run_id: Some(run_id.to_string()),
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+            subagent_bypass: false,
+        };
+
+        let calls = vec![
+            ToolCall {
+                id: "bash_a".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "echo a" }),
+            },
+            ToolCall {
+                id: "bash_b".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "echo b" }),
+            },
+        ];
+
+        let started = Instant::now();
+        let results = dispatcher
+            .run_calls(&calls, 0)
+            .await
+            .expect("dispatch 不应报错");
+        let elapsed = started.elapsed();
+
+        assert_eq!(results.len(), 2);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "两个各 300ms 的 Bash 并发总耗时应 < 500ms，实测 {elapsed:?}——\
+             说明 edits-worktree cwd 锁把它们串行化了"
         );
     }
 }
