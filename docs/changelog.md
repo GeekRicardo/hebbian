@@ -9771,3 +9771,22 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**: `cargo check --workspace` + desktop fingerprint 测试 + surface-session 编译通过；**协议侧端到端**——hebcore Approve 回流 accepted（强类型 ApprovalDecision::Deny→`{"type":"deny"}`→resolve_approval 命中，时序重试修复后稳定）；对话主链路与 heb connect 同协议（步骤④已验证）。
 - **待真机验证（TCC 堵死自动截图，需用户点一遍）**: Tauri GUI——发消息流式渲染、审批弹窗点批准/拒绝回流、立即发送插队、中断按钮、切 run mode。验证清单见交付说明。
 - **留尾巴**: desktop 读类命令（get_session/fork/compact/branch/goal/plan/truncate）仍进程内，与 hebcore 写同 jsonl 的并发收敛留后续（彻底消除 §7.6 风险需全部命令走 hebcore）；hebcore ws transport（远程）。
+
+### 2026-06-25 — 登记：工作区并发在途改动（非本会话所为，§7.8 步骤⑥收尾时 Stop hook 检出）
+
+- **背景**：本会话（§7.8 hebcore 单核心进程改造，①~⑥已提交至 bd3a03d）收尾时 Stop hook 在工作区检出一组**未提交且非本会话**的改动，作者另有其人（与前面多条「登记在途改动」同源——goal marker / RunMode 单一真源 / Claude 导入预览那批）。本条仅客观登记保住时间线，不揣测设计意图——Why / 权衡 / 回归点应由各自作者补写。
+- **观察到的改动（diff 可见事实）**：
+  - 前端（8 文件）：`bridge/tauri.ts`、`ChatView.tsx`、`ImportClaudeDialog.tsx`、`PermissionApprovalPopup.tsx`、`PlanTab.tsx`、`RunModeChip.tsx`、`chatInput/index.tsx`、`store/useStore.ts`——RunMode 单一真源重构 + Claude 导入预览 + 审批弹窗精简那批的前端部分。
+  - agent-core：`dispatch.rs`（工具派发器并发策略调整——所有工具统一进并发池的注释/逻辑）、`session_titler.rs`（标题生成调整）。
+- **影响范围**：desktop 前端 + agent-core 工具派发 / 标题生成。与本会话 §7.8 改造正交——本会话 desktop 侧只改了 `lib.rs`/`hitl.rs`/`chat.rs`/`hebcore_client.rs`（对话主链路客户端化），未碰上述前端文件与 dispatch.rs/session_titler.rs。
+- **留尾巴**：以上改动未提交，原样留在工作区，等其作者收尾 + 补写权威 changelog。本会话一行未碰（CLAUDE.md 红线：不动他人未完成改动，不替他人写 changelog 的 Why/取舍）。
+
+### 2026-06-25 — 修 desktop 启动不拉起 hebcore：surface 启动时 ensure_running（§7.8.1）
+
+- **Why**: 用户报「启动 desktop 但没启动 daemon，发消息提示找不到 ~/.hebbian/hebcore.sock」。根因：步骤⑥ desktop 的 hebcore 拉起是「发消息时 lazy 触发」，但正确范式是**任何 surface 启动时就确保 core 在跑**（§7.8.1 谁先启动谁拉 core）——否则首次发消息要等冷启动、或路径/时序问题直接报 sock 不存在。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): 新增 `ensure_running(app, data_dir)`——connect_or_spawn 确保 hebcore 就绪（连得上=已有实例，连不上拉起内嵌/dev 二进制）；connect_or_spawn 轮询窗口从 3s 放宽到 5s（53MB 二进制冷启动留足）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): setup 阶段后台线程调 `ensure_running`（不阻塞 UI 启动），App 一起来 core 就绪。
+- **影响范围**: desktop 启动期；纯加固——发消息时的 connect_or_spawn 兜底仍在（单例锁保证重复拉起安全）。heb/hebweb 不受影响（hebweb 已在 main 开 unix-socket 兼任 hebcore）。
+- **验证**: `cargo check --workspace` 通过；冷启动拉起验证——删 sock 后拉起 hebcore，sock 在 ~100ms（2×50ms）就绪，远在 5s 窗口内。
+- **留尾巴（已知缺口，非本次）**: StartRun 协议只传 text，**附件输入丢失**——但这是 surface-session::run_turn 提取时就有的限制（hebweb/heb 同样不支持附件输入，append_user 落 `attachments: Vec::new()`），非步骤⑥ desktop 切换新增。附件经协议承载是跨 surface 的独立增强项。

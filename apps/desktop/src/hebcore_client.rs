@@ -83,14 +83,25 @@ fn connect_or_spawn(app: &AppHandle, sock: &Path) -> std::io::Result<UnixStream>
         return Ok(s);
     }
     spawn_bundled_hebcore(app);
-    // 轮询等 hebcore 把 socket listen 起来，最多 ~3s。
-    for _ in 0..60 {
+    // 轮询等 hebcore 把 socket listen 起来，最多 ~5s（53MB 二进制冷启动需留足时间）。
+    for _ in 0..100 {
         if let Ok(s) = UnixStream::connect(sock) {
             return Ok(s);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     UnixStream::connect(sock)
+}
+
+/// 启动期确保常驻 hebcore 在跑（架构 §7.8.1：任何 surface 启动时都拉起 core，谁先启动
+/// 谁负责）。连得上 = 已有 hebcore（可能是另一 surface 拉的）；连不上就拉起内嵌二进制，
+/// hebcore 自带单例锁，重复拉起安全。`data_dir` 决定 `hebcore.sock` 位置。
+pub fn ensure_running(app: &AppHandle, data_dir: &Path) {
+    let sock = hebcore_sock(data_dir);
+    match connect_or_spawn(app, &sock) {
+        Ok(_) => tracing::info!(socket = %sock.display(), "hebcore 就绪"),
+        Err(e) => tracing::warn!(socket = %sock.display(), error = %e, "hebcore 未就绪（发消息时会重试拉起）"),
+    }
 }
 
 /// 拉起 hebcore 进程：release 用 `resource_dir` 内嵌的 hebcore，dev 用 `target/debug/hebcore`。

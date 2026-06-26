@@ -2814,6 +2814,18 @@ pub fn run() {
         .manage(permission_store)
         .manage(core_client)
         .setup(|app| {
+            // 架构 §7.8.1：任何 surface 启动时确保常驻 hebcore 在跑（谁先启动谁拉 core）。
+            // 后台线程拉起避免阻塞 UI——hebcore 二进制冷启动需若干百 ms，setup 不能等。
+            // hebcore 自带单例锁，已有实例时只 connect 不重复拉。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    hebcore_client::ensure_running(
+                        &handle,
+                        &agent_core::storage::default_data_dir(),
+                    );
+                });
+            }
             // CEF 泵改在 .run 的 RunEvent 回调里（主线程直接泵，见 pump_on_run_event），
             // 不在 setup 起后台 run_on_main_thread 循环——那条投递队列在主线程没消费时不执行。
             // hebisland socket client 初始化（独立 Tauri 二进制，不持有 agent_core）
