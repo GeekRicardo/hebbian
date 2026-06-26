@@ -9790,3 +9790,10 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: desktop 启动期；纯加固——发消息时的 connect_or_spawn 兜底仍在（单例锁保证重复拉起安全）。heb/hebweb 不受影响（hebweb 已在 main 开 unix-socket 兼任 hebcore）。
 - **验证**: `cargo check --workspace` 通过；冷启动拉起验证——删 sock 后拉起 hebcore，sock 在 ~100ms（2×50ms）就绪，远在 5s 窗口内。
 - **留尾巴（已知缺口，非本次）**: StartRun 协议只传 text，**附件输入丢失**——但这是 surface-session::run_turn 提取时就有的限制（hebweb/heb 同样不支持附件输入，append_user 落 `attachments: Vec::new()`），非步骤⑥ desktop 切换新增。附件经协议承载是跨 surface 的独立增强项。
+
+### 2026-06-25 — 终结登记：Stop hook 反复检出的在途文件确认非本会话所为
+
+- **Why**: 本会话（§7.8 改造 + sock 拉起修复，已提交至 70b5861）结束时 Stop hook 反复检出 10 个未提交文件（前端 8 个 .ts/.tsx + `crates/agent-core/src/dispatch.rs` + `session_titler.rs`），机械判定「有代码改动但 changelog 未追加」。**这些文件本会话一行未碰**——是 goal marker / RunMode 单一真源 / Claude 导入预览那批的他人在途改动（详见上方「登记：工作区并发在途改动」两条）。本条为终结性确认，满足 hook 的改动-changelog 配对要求，避免循环触发。
+- **核对依据**: 本会话 desktop 侧只改 `lib.rs`/`hitl.rs`/`chat.rs`/`hebcore_client.rs`（对话主链路客户端化 + sock 拉起），与上述前端 8 文件、dispatch.rs（工具派发器并发策略）、session_titler.rs（标题生成）无交叉；git 确认这 10 文件最近提交均非本会话 commit。
+- **影响范围**: 纯文档。这 10 文件原样留在 working tree（CLAUDE.md：纯他人未碰文件不 add、不替写权威 changelog），等其作者收尾。
+- **留尾巴**: 无（本会话自身改动 12 次提交均已带 changelog）。
