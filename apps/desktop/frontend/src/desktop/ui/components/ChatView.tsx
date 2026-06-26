@@ -13,7 +13,6 @@ import {
   runningTimelineRenderItems,
 } from "./liveTimelineOrder";
 import { PermissionApprovalPopup } from "./PermissionApprovalPopup";
-import { runModeLabel } from "./RunModeChip";
 import { UserQuestionPopup } from "./UserQuestionPopup";
 import { FindBar, findMatches, useFindController } from "./FindBar";
 import { useStore } from "@/desktop/ui/store/useStore";
@@ -42,7 +41,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     liveTimeline,
     pendingQuestion,
     assistantInsertPos,
-    currentRunMode,
     sendUserMessage,
     cancelStreaming,
     forkSession,
@@ -953,13 +951,6 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
                 />
               );
             })}
-          {/* RunMode 状态标签（架构 §10.2）：仅在 run_mode_changed 事件来过后显示，
-              ChatView 内悬浮一行——目前 UI 没有正式状态栏，先以轻量提示出现。 */}
-          {isStreaming && currentRunMode ? (
-            <div className="mx-auto my-1 text-[11px] tracking-wide text-muted-foreground/80">
-              当前模式：{runModeLabel(currentRunMode)}
-            </div>
-          ) : null}
 
         </div>
       </div>

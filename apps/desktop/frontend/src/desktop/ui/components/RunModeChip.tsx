@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { useStore } from "@/desktop/ui/store/useStore";
 import { HoverHint } from "@/desktop/ui/components/HoverHint";
 import { COMPACT_TOOLBAR_BUTTON_CLASS } from "@/desktop/ui/lib/toolbarStyles";
 
@@ -42,11 +43,6 @@ const MODE_OPTIONS: {
   },
 ];
 
-/** 把后端 RunMode 字符串映射成展示给用户的中文 label。 */
-export function runModeLabel(mode: string): string {
-  return MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
-}
-
 function optionOf(mode: RunMode) {
   return MODE_OPTIONS.find((o) => o.value === mode) ?? MODE_OPTIONS[0];
 }
@@ -60,14 +56,17 @@ interface Props {
 /**
  * 工具栏 chip：显示当前 [`RunMode`]，点击弹出下拉切换。
  *
- * 状态走后端 `RunModeState` 进程级 in-memory 表（架构 §4.4.3 / §8），重启回归
- * `Default`。本 chip 不订阅 session 变更，每次 sessionId 切换时拉一次最新值。
+ * RunMode 单一真源在 `store.currentRunMode`（slot-scoped，由 `run_mode_changed` 事件
+ * 与 openSession 拉初值共同维护）。chip 订阅它，所以 agent 自主进/出 PlanMode 时
+ * chip 实时翻面、输入框边框实时变色。
  *
  * 跑 run 中也允许切换：后端派发器实时读 `run_mode`，下一次模型请求即生效，所以
  * compact 态只缩小视觉占位，不禁用交互。
  */
 export function RunModeChip({ sessionId, compact }: Props) {
-  const [mode, setMode] = useState<RunMode>("Default");
+  const storeRunMode = useStore((s) => s.currentRunMode);
+  const setSessionRunMode = useStore((s) => s.setSessionRunMode);
+  const mode = (storeRunMode ?? "Default") as RunMode;
   const [handsOff, setHandsOff] = useState(false);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -75,16 +74,9 @@ export function RunModeChip({ sessionId, compact }: Props) {
   useEffect(() => {
     let cancelled = false;
     if (!sessionId) {
-      setMode("Default");
       setHandsOff(false);
       return;
     }
-    api
-      .getRunMode(sessionId)
-      .then((value) => {
-        if (!cancelled) setMode(value as RunMode);
-      })
-      .catch(() => {});
     api
       .getForceAutomode(sessionId)
       .then((value) => {
@@ -120,7 +112,7 @@ export function RunModeChip({ sessionId, compact }: Props) {
     if (next === mode) return;
     try {
       const applied = await api.setRunMode(sessionId, next);
-      setMode(applied as RunMode);
+      setSessionRunMode(sessionId, applied);
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }

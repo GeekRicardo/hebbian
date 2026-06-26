@@ -591,6 +591,12 @@ interface AppState {
   // ── Todo / Plan（架构 §4.4.5 / §4.4.6）──
   /** 用整列表覆盖指定 session slot 的 todos——TodoTab 拉初值 / 修复重连时用。 */
   replaceSessionStreamTodos: (sessionId: string, todos: TodoItem[]) => void;
+  /**
+   * 设定指定 session 的 RunMode 字符串（单一真源）。手动切换、openSession 拉初值
+   * 都写它；`run_mode_changed` 事件由 slotReducer 直接写 slot。RunModeChip 与输入框
+   * 边框都订阅它，agent 自主进/出 PlanMode 时实时联动。
+   */
+  setSessionRunMode: (sessionId: string, mode: string) => void;
   /** 设定指定 session 的"活跃 plan"快照——PlanTab 切换历史 plan 时用。 */
   setSessionActivePlan: (
     sessionId: string,
@@ -1062,6 +1068,9 @@ export const useStore = create<AppState>((set, get) => ({
   // 共用 patchSlot：拿 slot snapshot → 写回 → 若是 currentSession 同步镜像
   replaceSessionStreamTodos(sessionId: string, todos: TodoItem[]) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, todos }));
+  },
+  setSessionRunMode(sessionId: string, mode: string) {
+    patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, currentRunMode: mode }));
   },
   setSessionActivePlan(sessionId, plan) {
     patchSessionSlot(set, get, sessionId, (slot) => ({ ...slot, activePlan: plan }));
@@ -1642,6 +1651,12 @@ export const useStore = create<AppState>((set, get) => ({
       const plan = activePlanFromPath(s.active_plan);
       if (plan) get().setSessionActivePlan(id, plan);
     }
+    // RunMode 初值：进程级 in-memory 表（架构 §4.4.3），重启回归 Default。拉一次写进
+    // slot，让 RunModeChip 与输入框边框订阅同一真源——切对话立即显示该会话当前模式。
+    api
+      .getRunMode(id)
+      .then((mode) => get().setSessionRunMode(id, mode))
+      .catch(() => {});
     get().refreshContextUsage();
     get().refreshEdits();
   },
@@ -2308,6 +2323,8 @@ export const useStore = create<AppState>((set, get) => ({
     });
     set({ currentSession: s, pendingPromptId: s.prompt_id ?? "" });
     await get().refreshSessions();
+    // 换 provider/model/system_prompt 都会改变上下文窗口分母或已用量，刷新进度条。
+    await get().refreshContextUsage();
   },
 
   async setReasoning(reasoning) {
@@ -2325,6 +2342,8 @@ export const useStore = create<AppState>((set, get) => ({
     });
     set({ currentSession: s, pendingPromptId: s.prompt_id ?? "" });
     await get().refreshSessions();
+    // 切换模型 → 上下文窗口上限随之变（导入的 CC 对话尤其明显），刷新进度条分母。
+    await get().refreshContextUsage();
   },
 
   openAppSettingsAt(tab) {
