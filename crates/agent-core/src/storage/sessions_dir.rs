@@ -51,6 +51,11 @@ fn partial_live_path(data_dir: &Path, session_id: &str, msg_id: &str) -> PathBuf
     partial_dir(data_dir, session_id).join(format!("{msg_id}.partial.jsonl.live"))
 }
 
+/// session 级「活 run 单写者」跨进程锁文件：`<session_dir>/run.lock`。
+fn session_run_lock_path(data_dir: &Path, session_id: &str) -> PathBuf {
+    session_dir(data_dir, session_id).join("run.lock")
+}
+
 /// 架构 §4.12.3：后台 Bash 进程的输出日志目录。
 /// 每个 BackgroundShell 在这里落一份 `<task_id>.log`，与内存 tail buffer 双轨。
 pub fn bg_dir(data_dir: &Path, session_id: &str) -> PathBuf {
@@ -213,7 +218,35 @@ impl PartialLiveGuard {
     }
 }
 
-/// 写入方是否仍持有该 partial 的活性锁。open 失败按「不存活」处理——
+/// session 级「一 session 一活 run」跨进程互斥锁（架构 §7.8.5 单写者不变量）。
+///
+/// run 启动时排他 try-lock `<session_dir>/run.lock`，持有整个 run 周期（drop 即释放）。
+/// 抢不到 = 同一 session 已有活 run（本进程另一通路 / 另一 surface 进程）——run_turn 应
+/// 直接拒绝，不要起第二个并发 run，否则两个 run 各自 append user / persist assistant 到
+/// 同一 session.jsonl 造成 transcript 交错、HITL/cancel 句柄互相覆盖。文件锁同时覆盖
+/// 进程内（同进程两条 run_turn 通路）与跨进程（多 surface 共享数据目录）。进程崩溃时
+/// 锁由 OS 自动释放，不留死锁。
+pub struct SessionRunGuard {
+    _file: std::fs::File,
+}
+
+impl SessionRunGuard {
+    /// 非阻塞抢 session run 锁：抢到返回 `Some`（持锁到 drop），抢不到（已有活 run）返回
+    /// `None`。open 失败（目录缺失等）也返回 `None`，调用方按「无法保证单写者」拒绝起 run。
+    pub fn try_acquire(data_dir: &Path, session_id: &str) -> Option<Self> {
+        std::fs::create_dir_all(session_dir(data_dir, session_id)).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(session_run_lock_path(data_dir, session_id))
+            .ok()?;
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Some(Self { _file: file }),
+            Err(_) => None,
+        }
+    }
+}
 /// 老 partial（修复前产生）没有 `.live` 文件，open 会新建后立刻拿到锁。
 fn partial_writer_alive(data_dir: &Path, session_id: &str, msg_id: &str) -> bool {
     let Ok(file) = std::fs::OpenOptions::new()
@@ -370,6 +403,36 @@ mod tests {
         let d = std::env::temp_dir().join(format!("hebbian-sd-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// 回归（#9 跨进程/跨通路单写者）：同一 session 的 run 锁同时只能被一个持有者抢到，
+    /// 第二个 try_acquire 必须返回 None（拒绝并发起 run）；持有者 drop 释放后又能重新抢到。
+    #[test]
+    fn session_run_guard_is_mutually_exclusive() {
+        let dir = tmp("run-guard");
+        let sid = "s-run-guard";
+
+        let g1 = SessionRunGuard::try_acquire(&dir, sid);
+        assert!(g1.is_some(), "首个 run 应抢到锁");
+
+        // 同一 session 第二次抢锁应失败（已有活 run）。
+        assert!(
+            SessionRunGuard::try_acquire(&dir, sid).is_none(),
+            "已有活 run 时第二个 run_turn 应被拒绝（#9 单写者）"
+        );
+
+        // 不同 session 互不影响。
+        assert!(
+            SessionRunGuard::try_acquire(&dir, "s-other").is_some(),
+            "不同 session 的 run 锁互相独立"
+        );
+
+        // 释放后可重新抢到（run 结束 → 下一个 run 正常起）。
+        drop(g1);
+        assert!(
+            SessionRunGuard::try_acquire(&dir, sid).is_some(),
+            "前一个 run 结束释放锁后，新 run 应能抢到"
+        );
     }
 
     #[test]

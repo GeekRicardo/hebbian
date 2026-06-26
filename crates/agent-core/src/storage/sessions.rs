@@ -2107,6 +2107,32 @@ pub fn resolve_channel_forward_marker(
     Ok(())
 }
 
+/// 回填某条已落盘 assistant 段的 `run_duration_ms`（run 收尾耗时徽章）。
+/// 用于「末段在 run 收尾前已被预落」的情形（goal/Stop-hook 续跑判定要先 flush 让 marker
+/// 排在 assistant 之后）：收尾时该段已在盘上、无新内容可 flush，故按 id 回填耗时，保证
+/// run 耗时徽章只盖在本 run 真正的最后一段上（RunPersister::finish 调用）。
+/// 找不到该 id（被压缩归档 / fork 截断）时静默返回 Ok。
+pub fn set_message_run_duration(
+    data_dir: &Path,
+    id: &str,
+    msg_id: &str,
+    run_duration_ms: u64,
+) -> AppResult<()> {
+    let mut session = load(data_dir, id)?;
+    let mut changed = false;
+    for message in &mut session.messages {
+        if message.id == msg_id {
+            message.run_duration_ms = Some(run_duration_ms);
+            changed = true;
+            break;
+        }
+    }
+    if changed {
+        save(data_dir, session)?;
+    }
+    Ok(())
+}
+
 /// 推理参数切换的 marker（thinking on/off / effort / 1M context）。
 /// 仅当 `from != to` 才该调用——上层负责对比并决定是否插入。
 pub fn insert_reasoning_switch_marker(

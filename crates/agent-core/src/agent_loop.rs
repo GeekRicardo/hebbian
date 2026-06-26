@@ -1056,7 +1056,7 @@ pub async fn run_loop(
                 // 无插队时「一个 run 一张卡片」的 UX）。
                 if has_pending(pending_inputs.as_ref()) {
                     if let Some(p) = persister.as_ref() {
-                        p.flush_segment(None);
+                        p.flush_segment().await;
                     }
                 }
 
@@ -1098,7 +1098,7 @@ pub async fn run_loop(
                     // 保证 marker 物理排在它该回应的 assistant 之后。
                     if let (Some(dd), Some(sid)) = (data_dir.as_deref(), session_id.as_deref()) {
                         if let Some(p) = persister.as_ref() {
-                            p.flush_segment(Some(run_start.elapsed().as_millis() as u64));
+                            p.flush_segment().await;
                         }
                         let (status, detail) = match &outcome {
                             HookOutcome::InjectFollowup(r) if !r.trim().is_empty() => {
@@ -1145,11 +1145,12 @@ pub async fn run_loop(
                     })
                     .and_then(|(dd, sid, s)| s.active_goal.map(|g| (dd, sid, g)));
                 if let Some((dd, sid, goal)) = goal_ctx {
-                    // 裁决要落 goal marker——先把本轮累积的 assistant 段落盘（带本 run 耗时），
-                    // 保证 marker 物理排在它该回应的 assistant 之后，而非倒挂到前面。
-                    // flush 后累积器清空，下方 run 收尾的 finish() 不会重复落这段。
+                    // 裁决要落 goal marker——先把本轮累积的 assistant 段落盘（不盖 run 耗时，
+                    // 续跑时这是中间段；run 耗时由收尾 finish 只盖末段），保证 marker 物理排在
+                    // 它该回应的 assistant 之后，而非倒挂到前面。flush 后累积器清空，下方 run
+                    // 收尾的 finish() 不会重复落这段（无新段时回填耗时到这条已落盘的末段）。
                     if let Some(p) = persister.as_ref() {
-                        p.flush_segment(Some(run_start.elapsed().as_millis() as u64));
+                        p.flush_segment().await;
                     }
                     match judge_client.as_ref() {
                         None => {
@@ -1400,7 +1401,7 @@ pub async fn run_loop(
                 // 再 drain 插队 user，保证物理序 = emit 序。无插队不切段。
                 if has_pending(pending_inputs.as_ref()) {
                     if let Some(p) = persister.as_ref() {
-                        p.flush_segment(None);
+                        p.flush_segment().await;
                     }
                 }
                 drain_pending_inputs(
@@ -1513,7 +1514,7 @@ pub async fn run_loop(
             run_span.record("hebbian.run.outcome", attr::run_outcome::DONE);
             // run 收尾落盘（架构 §4.9.5）：补落最后一段 assistant + 删 partial。
             if let Some(p) = persister.as_ref() {
-                p.finish(Some(duration_ms));
+                p.finish(duration_ms).await;
             }
             emit(EventPayload::RunFinished {
                 total_input_tokens,
@@ -1527,7 +1528,7 @@ pub async fn run_loop(
             run_span.record("hebbian.run.outcome", attr::run_outcome::CANCELLED);
             // cancel 收尾（架构 §4.9.5）：补落残留尾段 + Interrupted marker，删 partial。
             if let Some(p) = persister.as_ref() {
-                p.finish_interrupted();
+                p.finish_interrupted().await;
             }
             emit(EventPayload::RunCancelled);
         }
@@ -1537,14 +1538,14 @@ pub async fn run_loop(
             run_span.record("hebbian.run.outcome", "suspended");
             // 挂起也算一段达边界：补落本段 assistant + 删 partial（架构 §4.9.5）。
             if let Some(p) = persister.as_ref() {
-                p.finish(Some(duration_ms));
+                p.finish(duration_ms).await;
             }
         }
         Err(e) => {
             run_span.record("hebbian.run.outcome", attr::run_outcome::FAILED);
             // fail 收尾（架构 §4.9.5）：补落残留尾段 + Interrupted marker，删 partial。
             if let Some(p) = persister.as_ref() {
-                p.finish_interrupted();
+                p.finish_interrupted().await;
             }
             emit(EventPayload::RunFailed {
                 error: ErrorReport::other(e.to_string()),

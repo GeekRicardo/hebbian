@@ -568,6 +568,13 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutco
     let data_dir = &state.data_dir;
     let session_id = &state.session_id;
 
+    // 单写者闸口（架构 §7.8.5，#9）：抢 session 级 run 锁，持有到本函数返回。抢不到 = 同一
+    // session 已有活 run（另一 surface 进程 / hebcore 共享数据目录）——拒绝并发起 run，避免
+    // 两个 run 双写 session.jsonl 造成 transcript 交错。daemon 内部 input 循环本就串行，这层
+    // 主要兜跨进程。
+    let _run_guard = sessions_dir::SessionRunGuard::try_acquire(data_dir, session_id)
+        .ok_or_else(|| anyhow!("session {session_id} 已有活跃 run，拒绝并发启动"))?;
+
     // 加载 session（transcript 从 jsonl 重建）。
     // 走带 partial 恢复的入口：把上次进程中断时残留在 partial sidecar 里的流式输出
     // 折叠成 Assistant + Interrupted marker 落进 jsonl，再读最终视图。

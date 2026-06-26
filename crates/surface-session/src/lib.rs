@@ -329,6 +329,17 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let data_dir = &runtime.data_dir;
     let session_id = &runtime.session_id;
 
+    // 单写者闸口（架构 §7.8.5）：抢 session 级 run 锁，持有到本函数返回（_run_guard 在栈上）。
+    // 抢不到 = 同一 session 已有活 run（本进程另一通路 / 另一 surface 进程共享数据目录）——
+    // 直接拒绝，绝不起第二个并发 run，否则两个 run 各自 append user / persist assistant 到同一
+    // session.jsonl 造成 transcript 交错、HITL/cancel 句柄互相覆盖（#9）。有活 run 时「发消息」
+    // 应走 inject 插队（transport 的 Inject），而非再起 run_turn。
+    let Some(_run_guard) = sessions_dir::SessionRunGuard::try_acquire(data_dir, session_id) else {
+        return Err(anyhow!(
+            "session {session_id} 已有活跃 run，拒绝并发启动（请用插队 / 等当前 run 结束）"
+        ));
+    };
+
     // send 入口：先把上次中断残留的 partial 折叠进 jsonl 再读历史（同 chat::send_and_save）。
     let prior = sessions::load_with_partial_recovery(data_dir, session_id)?;
 

@@ -9889,3 +9889,15 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - **[#9 未修] 跨进程「一 session 一活 run」无锁**：两 surface 并发驱动同一 session 会 transcript 交错 + set_active 互相覆盖。属 §7.8.6 步骤③（合并常驻单例）范畴，非单点可修。
   - 审计有 4 个验证 agent 因 schema 重试超限挂掉、其 finding 被丢；已手工补验最关键的 CLI observer 死锁（HIGH），可能仍有 1-2 条低优先项漏网。
 - **关联**: 架构审计工作流；judge 卡死修复见上一条。
+
+### 2026-06-26 — 收尾架构审计 3 个留尾巴（#13 耗时徽章 / #5 partial 崩溃窗口 / #9 单写者锁）
+
+- **Why**: 上一条 changelog 留的 3 个未修项，本条全部彻底修复 + 回归测试固化。
+- **改动**（按缺陷）:
+  - **[#13] 续跑中间段误带 run_duration_ms 耗时徽章**（[run_persister.rs](../crates/agent-core/src/run_persister.rs) + [storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs) + [agent_loop.rs](../crates/agent-core/src/agent_loop.rs)）：goal/Stop-hook 续跑时 1101/1152 的中间 flush 传 `Some(累计耗时)` → 每个中间段都盖耗时徽章（违反「仅末段带耗时」契约）。**彻底修法**：`flush_segment` **去掉 run_duration_ms 参数**（段落盘只记 `last_segment_id`，从类型层面杜绝中间 flush 误盖）；run 耗时统一由 `finish(duration)` 盖到本 run 末段——收尾有新段则盖新段，无新段（末段已被中间 flush 预落，如 goal achieved）则用新增 `sessions::set_message_run_duration` 按 id **回填**到已落盘的 `last_segment_id`，不丢不误盖。
+  - **[#5] partial 段落盘后异步删的崩溃窗口**（[run_persister.rs](../crates/agent-core/src/run_persister.rs)）：`flush_locked`/`finish` 同步 append jsonl 后，partial 的 reset/delete 只投进 actor channel 就返回，无 happens-before。崩溃 / orderly shutdown（tokio drop 未排空 actor task）窗口里 partial 残**整段**在盘，下次 load 把已落盘段重复折成 Interrupted（设计注释原称「窗口仅瞬时帧」与实现不符）。**彻底修法**：`PartialCmd::Reset/Delete` 带 oneshot ack，`flush_segment`/`finish`/`finish_interrupted` 改 **async**、锁外 await ack——actor 串行保证 clear 排在该段所有 Append 之后，await 保证返回前 partial 已物理清理，建立「jsonl 段已落 + partial 已清」的 happens-before。Append 仍 fire-and-forget 不阻塞热路径。
+  - **[#9] 跨进程「一 session 一活 run」无锁**（[storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs) + [surface-session/lib.rs](../crates/surface-session/src/lib.rs) + [cli/daemon.rs](../apps/cli/src/daemon.rs)）：两条 run_turn 通路（浏览器直跑 vs socket 串行循环）/ 两 surface 进程共享数据目录，并发跑同一 session → 各自 append user / persist assistant 双写 session.jsonl、set_active 互相覆盖 HitlGate/cancel。**修法**：新增 `SessionRunGuard`（`<session_dir>/run.lock` 跨进程 fs2 排他锁，仿 PartialLiveGuard），run_turn（surface-session + cli daemon）**开头**非阻塞 try_acquire、持有整个 run 周期，抢不到直接拒绝起 run（有活 run 时发消息应走 inject 插队）。文件锁同时覆盖进程内 + 跨进程；进程崩溃锁由 OS 释放。串行 input 循环场景下 run A 完全返回（guard drop）才起 run B，不误伤连续发消息；撞锁只发生在并发/跨进程通路（正是要拒绝的）。跨进程「常驻单例」彻底收敛仍属 §7.8.6 步骤③，但单写者数据损坏路径已被此锁兜死。
+- **影响范围**: agent-core（run_persister / storage）+ surface-session + cli daemon。`RunPersister::flush_segment`/`finish`/`finish_interrupted` 改 async（仅 agent_loop 调用，均在 async 上下文）；`flush_segment` 去掉参数、`finish` 参数 `Option<u64>`→`u64`。新增 storage `set_message_run_duration` + sessions_dir `SessionRunGuard`。无对外协议变更、前端无改动。
+- **验证**: 新增 4 个回归测试全过——`run_persister::{run_duration_only_on_last_segment, run_duration_backfilled_when_last_segment_preflushed, finish_deletes_partial_before_returning}`、`sessions_dir::session_run_guard_is_mutually_exclusive`；`cargo test -p agent-core --lib` 全量 **594 passed / 0 failed**（含上轮的 2 个 flaky 这次也稳定通过）；`cargo check --workspace` + `-p hebbian-cli` 通过；前端 tsc exit 0。
+- **留尾巴**: 无（上一条的 3 个留尾巴本条全部 close）。跨进程常驻单例化（§7.8.6 步骤③）是独立路线推进项，非缺陷。
+- **关联**: 接上一条架构审计 changelog。

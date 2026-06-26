@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use protocol::{Event, EventPayload};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::storage::nested::NestedAccumulator;
@@ -31,12 +31,12 @@ use crate::turn_accumulator::AssistantAccumulator;
 
 /// partial 写入 actor 的命令。
 enum PartialCmd {
-    /// 追加一帧增量。
+    /// 追加一帧增量（fire-and-forget，热路径不等 ack）。
     Append(PartialFragment),
-    /// drain 边界：已落盘段对应的中间态清零（保留活性锁，下一帧重建文件）。
-    Reset,
-    /// run 收尾：删除 partial 文件 + 哨兵。
-    Delete,
+    /// drain 边界：已落盘段对应的中间态清零（保留活性锁，下一帧重建文件）。处理完 ack。
+    Reset(oneshot::Sender<()>),
+    /// run 收尾：删除 partial 文件 + 哨兵。处理完 ack。
+    Delete(oneshot::Sender<()>),
 }
 
 /// partial sidecar 的 actor 句柄。sink 端 clone 它做 fire-and-forget 写入。
@@ -67,12 +67,18 @@ impl PartialActor {
                             warn!(error = %e, msg_id = %msg_id, "append_partial 失败");
                         }
                     }
-                    PartialCmd::Reset => {
+                    // Reset/Delete 排在该段所有 Append 之后串行处理——处理完才 ack，调用方
+                    // （flush_segment/finish）锁外 await 这个 ack，由此「jsonl 段已落 + partial
+                    // 已清理」建立 happens-before：进程随后退出 / 下次 load 时 partial 不会残留
+                    // 整段被重复折成 Interrupted（§4.9.5 修订，#5）。
+                    PartialCmd::Reset(ack) => {
                         wrote_text = false;
                         let _ = sessions_dir::clear_partial(&data_dir, &session_id, &msg_id);
+                        let _ = ack.send(());
                     }
-                    PartialCmd::Delete => {
+                    PartialCmd::Delete(ack) => {
                         let _ = sessions_dir::delete_partial(&data_dir, &session_id, &msg_id);
+                        let _ = ack.send(());
                     }
                 }
             }
@@ -85,12 +91,19 @@ impl PartialActor {
         let _ = self.tx.send(PartialCmd::Append(frag));
     }
 
-    fn reset(&self) {
-        let _ = self.tx.send(PartialCmd::Reset);
+    /// 投 Reset 命令，返回 ack receiver。actor 清完 partial 中间态后 ack；send 失败
+    /// （actor 已退）时 receiver 立即 Err，调用方 await 不阻塞、降级继续。
+    fn reset(&self) -> oneshot::Receiver<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let _ = self.tx.send(PartialCmd::Reset(ack_tx));
+        ack_rx
     }
 
-    fn delete(&self) {
-        let _ = self.tx.send(PartialCmd::Delete);
+    /// 投 Delete 命令，返回 ack receiver（语义同 [`reset`](Self::reset)）。
+    fn delete(&self) -> oneshot::Receiver<()> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let _ = self.tx.send(PartialCmd::Delete(ack_tx));
+        ack_rx
     }
 }
 
@@ -128,6 +141,11 @@ struct PersistState {
     full_nested: NestedAccumulator,
     /// partial sidecar actor（实时落每帧增量，崩溃兜底）。
     partial: PartialActor,
+    /// 本 run 最后一条成功落盘的 assistant 段 id。run 收尾耗时徽章只盖本 run 末段——
+    /// 但末段可能在收尾前已被中间 flush 预落（goal/Stop-hook 续跑判定要先 flush 让 marker
+    /// 排在 assistant 之后），此时收尾 flush 无新内容，[`RunPersister::finish`] 据此 id
+    /// 回填耗时，避免徽章丢失或误盖到中间段（中间 flush 一律不带耗时）。
+    last_segment_id: Option<String>,
     /// 共享给 [`RunPersister::last_message`] 的句柄：finish 时写 full.build()。
     last_message: Arc<Mutex<Option<Message>>>,
 }
@@ -161,6 +179,7 @@ impl RunPersister {
                 full: AssistantAccumulator::new(),
                 full_nested: NestedAccumulator::default(),
                 partial,
+                last_segment_id: None,
                 last_message: last_message.clone(),
             })),
             last_message,
@@ -210,65 +229,126 @@ impl RunPersister {
     }
 
     /// 段边界：把当前累积段落成一条 assistant message 落盘（无内容则跳过），重置累积器
-    /// + partial 中间态。`run_duration_ms` 仅在该段是本 run 最后落盘段时传 `Some`。
-    pub fn flush_segment(&self, run_duration_ms: Option<u64>) -> Option<Message> {
-        let mut st = self.inner.lock().unwrap();
-        st.flush_locked(run_duration_ms)
-    }
-
-    /// run 收尾（Done/Suspended）：补落最后一段，build 完整一轮 assistant 供 surface
-    /// 返回值（架构 §7.8.3），删除 partial 文件。
-    pub fn finish(&self, run_duration_ms: Option<u64>) -> Option<Message> {
-        let mut st = self.inner.lock().unwrap();
-        let msg = st.flush_locked(run_duration_ms);
-        st.capture_full_message(run_duration_ms);
-        st.partial.delete();
+    /// + partial 中间态。**不盖 run 耗时**——run 耗时徽章只该出现在本 run 最后一段，由
+    /// [`finish`] 统一负责（§4.9.5）。段落盘只记录 `last_segment_id` 供 finish 回填。
+    ///
+    /// async：落 jsonl 后 await partial Reset 的 ack，建立「段已落 + partial 已清」的
+    /// happens-before（#5），避免进程随后退出时 partial 残整段被重复折成 Interrupted。
+    ///
+    /// [`finish`]: RunPersister::finish
+    pub async fn flush_segment(&self) -> Option<Message> {
+        let (msg, ack) = {
+            let mut st = self.inner.lock().unwrap();
+            st.flush_locked()
+        };
+        // 锁外等 actor 清完 partial 中间态（actor 退出则立即 Err，降级继续）。
+        let _ = ack.await;
         msg
     }
 
-    /// cancel/fail 收尾：补落残留尾段 + 紧跟一条 `Interrupted` marker，删 partial。
-    pub fn finish_interrupted(&self) {
-        let mut st = self.inner.lock().unwrap();
-        st.flush_locked(None);
-        let marker = Message {
-            id: sessions::new_id(),
-            role: Role::Marker,
-            content: String::new(),
-            attachments: Vec::new(),
-            tool_calls: Vec::new(),
-            parts: Vec::new(),
-            created_at: chrono::Utc::now().timestamp_millis(),
-            meta: Some(MessageMeta::Interrupted),
-            subagent_call_id: None,
-            run_duration_ms: None,
+    /// run 收尾（Done/Suspended）：补落最后一段，build 完整一轮 assistant 供 surface
+    /// 返回值（架构 §7.8.3），删除 partial 文件。`run_duration_ms` 盖到本 run 最后一段：
+    /// 收尾 flush 有新内容则盖新段；无新内容（末段已被中间 flush 预落）则按 `last_segment_id`
+    /// 回填那条已落盘段——保证耗时徽章只在末段、不丢不误盖（§4.9.5）。
+    ///
+    /// async：await partial Delete 的 ack，建立「段已落 + partial 已删」的 happens-before（#5）。
+    pub async fn finish(&self, run_duration_ms: u64) -> Option<Message> {
+        let (msg, reset_ack, delete_ack) = {
+            let mut st = self.inner.lock().unwrap();
+            let (msg, reset_ack) = st.flush_locked();
+            match &msg {
+                // 收尾 flush 落了新末段：直接回填它。
+                Some(m) => {
+                    if let Err(e) = sessions::set_message_run_duration(
+                        &st.data_dir,
+                        &st.session_id,
+                        &m.id,
+                        run_duration_ms,
+                    ) {
+                        warn!(error = %e, "run 耗时回填新末段失败");
+                    }
+                }
+                // 收尾无新段（末段已预落）：回填已落盘的 last_segment_id。
+                None => {
+                    if let Some(seg_id) = st.last_segment_id.clone() {
+                        if let Err(e) = sessions::set_message_run_duration(
+                            &st.data_dir,
+                            &st.session_id,
+                            &seg_id,
+                            run_duration_ms,
+                        ) {
+                            warn!(error = %e, "run 耗时回填末段失败");
+                        }
+                    }
+                }
+            }
+            st.capture_full_message(Some(run_duration_ms));
+            let delete_ack = st.partial.delete();
+            (msg, reset_ack, delete_ack)
         };
-        if let Err(e) = sessions::append_message(&st.data_dir, &st.session_id, marker) {
-            warn!(error = %e, "Interrupted marker 落盘失败");
-        }
-        st.partial.delete();
+        // 锁外等 actor 串行处理完 Reset（flush_locked 投的）再处理 Delete——两个 ack
+        // 都到，保证返回前 partial 已彻底删除（#5 happens-before）。
+        let _ = reset_ack.await;
+        let _ = delete_ack.await;
+        // 返回值带上耗时（surface 透传用）：build 时 flush_locked 不盖，这里补上。
+        msg.map(|mut m| {
+            m.run_duration_ms = Some(run_duration_ms);
+            m
+        })
+    }
+
+    /// cancel/fail 收尾：补落残留尾段 + 紧跟一条 `Interrupted` marker，删 partial。
+    /// async：await partial Delete 的 ack（#5 happens-before，避免残 partial 二次折叠）。
+    pub async fn finish_interrupted(&self) {
+        let (reset_ack, delete_ack) = {
+            let mut st = self.inner.lock().unwrap();
+            let (_msg, reset_ack) = st.flush_locked();
+            let marker = Message {
+                id: sessions::new_id(),
+                role: Role::Marker,
+                content: String::new(),
+                attachments: Vec::new(),
+                tool_calls: Vec::new(),
+                parts: Vec::new(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                meta: Some(MessageMeta::Interrupted),
+                subagent_call_id: None,
+                run_duration_ms: None,
+            };
+            if let Err(e) = sessions::append_message(&st.data_dir, &st.session_id, marker) {
+                warn!(error = %e, "Interrupted marker 落盘失败");
+            }
+            let delete_ack = st.partial.delete();
+            (reset_ack, delete_ack)
+        };
+        let _ = reset_ack.await;
+        let _ = delete_ack.await;
     }
 }
 
 impl PersistState {
     /// 持锁落当前段：accumulator build 出 message（created_at = 段首内容时刻），append，
-    /// 重置段 + partial。无内容返回 None（不落空段）。
-    fn flush_locked(&mut self, run_duration_ms: Option<u64>) -> Option<Message> {
+    /// 重置段 + partial。无内容返回 `(None, ack)`（不落空段，仍清 partial 中间态）。**不盖
+    /// run 耗时**——记录本段 id 到 `last_segment_id`，由 [`RunPersister::finish`] 统一把 run
+    /// 耗时回填到本 run 末段。返回 partial Reset 的 ack receiver，调用方锁外 await 它建立
+    /// 「jsonl 段已落 + partial 已清」的 happens-before（#5）。
+    fn flush_locked(&mut self) -> (Option<Message>, oneshot::Receiver<()>) {
         let seg = std::mem::replace(&mut self.seg, AssistantAccumulator::new());
         let nested = std::mem::take(&mut self.nested);
         let mut msg = match seg.build() {
             Some(m) => m,
             None => {
-                self.partial.reset();
-                return None;
+                let ack = self.partial.reset();
+                return (None, ack);
             }
         };
         nested.sync_into(&mut msg.tool_calls);
-        msg.run_duration_ms = run_duration_ms;
         if let Err(e) = sessions::append_message(&self.data_dir, &self.session_id, msg.clone()) {
             warn!(error = %e, "assistant 段落盘失败");
         }
-        self.partial.reset();
-        Some(msg)
+        self.last_segment_id = Some(msg.id.clone());
+        let ack = self.partial.reset();
+        (Some(msg), ack)
     }
 
     /// run 收尾把全 run 累加器 build 成「完整一轮 assistant」写进 last_message，供 surface
@@ -353,5 +433,145 @@ fn partial_fragment_of(payload: &EventPayload) -> Option<PartialFragment> {
             duration_ms: *duration_ms,
         }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run_state::RunState;
+    use crate::storage::sessions;
+    use protocol::RunId;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("heb-persister-{name}-{}", sessions::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 回归（#13 续跑中间段误带耗时徽章）：goal/Stop-hook 续跑场景——段1 中间 flush、
+    /// 段2 收尾 finish。run 耗时徽章（run_duration_ms）必须**只**盖在末段（段2），中间段
+    /// （段1）不带。修前 flush_segment(Some(elapsed)) 给每个中间段都盖累计耗时。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_duration_only_on_last_segment() {
+        let dir = temp_dir("dur-last-seg");
+        let session = sessions::create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let sid = session.id.clone();
+
+        let persister = RunPersister::new(dir.clone(), sid.clone());
+        let handle = persister.handle();
+        let state = RunState::new(RunId::new());
+
+        // 段1：模型产出一段文本 → 中间 flush（模拟 goal NotYet 续跑前先落段排 marker）。
+        handle.observe(&state.event(EventPayload::TextDelta { text: "第一轮".into() }));
+        let seg1 = persister.flush_segment().await.expect("段1 应落盘");
+
+        // 段2：续跑后再产出一段 → run 收尾 finish 盖耗时。
+        handle.observe(&state.event(EventPayload::TextDelta { text: "第二轮".into() }));
+        let seg2 = persister.finish(1234).await.expect("段2 应落盘");
+
+        // finish 返回的末段带耗时（surface 透传）。
+        assert_eq!(seg2.run_duration_ms, Some(1234), "finish 返回的末段应带耗时");
+
+        // 落盘 jsonl 的事实校验：段1 无耗时，段2 有。
+        let loaded = sessions::load(&dir, &sid).unwrap();
+        let m1 = loaded
+            .messages
+            .iter()
+            .find(|m| m.id == seg1.id)
+            .expect("段1 应在 jsonl");
+        let m2 = loaded
+            .messages
+            .iter()
+            .find(|m| m.id == seg2.id)
+            .expect("段2 应在 jsonl");
+        assert_eq!(m1.content, "第一轮");
+        assert_eq!(m2.content, "第二轮");
+        assert_eq!(m1.run_duration_ms, None, "中间段不该带 run 耗时徽章（#13）");
+        assert_eq!(m2.run_duration_ms, Some(1234), "末段应带 run 耗时徽章");
+    }
+
+    /// 回归（#13 边界）：goal achieved/impossible 不续跑——末段在裁决前已被中间 flush 预落，
+    /// 收尾 finish 此刻无新内容可 flush。耗时必须按 last_segment_id **回填**到那条已落盘的
+    /// 末段，而不是丢失。修前 finish 的 flush_locked 返回 None → 末段永远拿不到耗时。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_duration_backfilled_when_last_segment_preflushed() {
+        let dir = temp_dir("dur-backfill");
+        let session = sessions::create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let sid = session.id.clone();
+
+        let persister = RunPersister::new(dir.clone(), sid.clone());
+        let handle = persister.handle();
+        let state = RunState::new(RunId::new());
+
+        // 唯一一段文本 → flush（模拟 goal achieved：裁决前先 flush 让 marker 排其后）。
+        handle.observe(&state.event(EventPayload::TextDelta { text: "唯一段".into() }));
+        let seg = persister.flush_segment().await.expect("段应落盘");
+
+        // 收尾 finish：累积器已空，无新段——耗时应回填到已落盘的 seg。
+        let finished = persister.finish(999).await;
+        assert!(finished.is_none(), "收尾无新段时 finish 返回 None");
+
+        let loaded = sessions::load(&dir, &sid).unwrap();
+        let m = loaded
+            .messages
+            .iter()
+            .find(|m| m.id == seg.id)
+            .expect("段应在 jsonl");
+        assert_eq!(
+            m.run_duration_ms,
+            Some(999),
+            "末段已预落时，run 耗时应回填到它（#13 边界，不丢徽章）"
+        );
+    }
+
+    /// 当前 session 的 partial 目录下还残留几个 `.partial.jsonl` 文件（不含 `.live`/`.lock` 哨兵）。
+    fn count_partial_files(dir: &std::path::Path, sid: &str) -> usize {
+        let pdir = crate::storage::sessions_dir::partial_dir(dir, sid);
+        let Ok(entries) = std::fs::read_dir(&pdir) else {
+            return 0;
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .ends_with(".partial.jsonl")
+            })
+            .count()
+    }
+
+    /// 回归（#5 段落盘后异步删 partial 的崩溃窗口）：finish 返回后 partial 文件必须已被
+    /// 物理删除——await Delete 的 ack 建立了 happens-before。修前 finish 只把 Delete 投进
+    /// actor channel 就返回，进程随后退出 / 下次 load 时 partial 残整段被重复折成 Interrupted。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn finish_deletes_partial_before_returning() {
+        let dir = temp_dir("finish-del-partial");
+        let session = sessions::create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let sid = session.id.clone();
+
+        let persister = RunPersister::new(dir.clone(), sid.clone());
+        let handle = persister.handle();
+        let state = RunState::new(RunId::new());
+
+        // 产出内容并实时写 partial（actor append）。
+        handle.observe(&state.event(EventPayload::TextDelta {
+            text: "流式内容".into(),
+        }));
+        // 给 actor 一点时间把 append 落盘（partial 文件确实建起来）。
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            count_partial_files(&dir, &sid),
+            1,
+            "run 进行中应有一个活 partial 文件"
+        );
+
+        // 收尾：finish 必须 await Delete ack，返回时 partial 已删（happens-before）。
+        let _ = persister.finish(100).await;
+        assert_eq!(
+            count_partial_files(&dir, &sid),
+            0,
+            "finish 返回后 partial 必须已物理删除（#5 happens-before，否则会被二次折叠）"
+        );
     }
 }
