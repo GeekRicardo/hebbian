@@ -9815,3 +9815,11 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **hook 局限**: 它比对 working-tree 全部 M 文件，无法区分「本轮 git 实际新增」与「他人长期未提交」——故同一批文件每轮结束都会触发。根治需调 hook 逻辑（只比对本轮 diff）或清掉这批改动（其作者收尾）。
 - **影响范围**: 纯文档。这 10 文件按 CLAUDE.md 红线原样保留，不 add、不替写权威 changelog。
 - **留尾巴**: 无。本会话自身全部改动（§7.8 六步 + sock 拉起 + release bundle）逐次提交且每条带 changelog。
+
+### 2026-06-25 — 新增 hebcore 架构图（分层交互式 HTML）
+
+- **Why**: §7.8 六步改造落地后，需要一份从宏观到微观逐层下钻的可视化，帮后续 agent / 人快速建立对「单核心多客户端」终态的整体认知。
+- **改动**:
+  - [docs/架构图-hebcore.html](架构图-hebcore.html)（新）：单页交互式架构图，五层递进——① 进程拓扑（hebcore 核心 + 三客户端 + native 边界）② Crate 依赖 DAG（core-rpc/surface-session/hebcore 新增，单向依赖 agent-core）③ hebcore 内三条通路（同步 API / 对话主链路 / 运行时控制）④ 四个关键机制（累积归一 seg+full / 单写者多观察者 broadcast / dispatch 唯一入口 / connect_or_spawn 单例）⑤ 一次对话的 13 步端到端旅程。sticky 导航 + 滚动高亮。所有标识符与代码核对一致。
+- **影响范围**: 纯文档，零代码改动。
+- **留尾巴**: 无。
