@@ -35,35 +35,48 @@ pnpm --dir apps/desktop tauri dev     # 首次 Rust 编译约 3–5 分钟
 pnpm --dir apps/desktop tauri build   # 产出在 target/release/bundle/
 ```
 
-### CLI / TUI 模式
+### heb CLI（脚本化 surface）
+
+`heb` 是 daemon 模式的命令行 surface：`heb new` 起一个常驻 session，把对话事件以 **NDJSON** 流式打到 stdout，其余子命令通过 unix-socket 控制它——给 AI 脚本化自主调试用（完整手册见 [docs/heb-cli-debug.md](docs/heb-cli-debug.md)）。
 
 ```bash
-cargo build -p hebbian-cli
-CLI=./target/debug/hebbian-cli
+cargo build -p hebbian-cli           # 产出 ./target/debug/heb
+HEB=./target/debug/heb
 
-# 1) 交互 loop（默认）：rustyline readline，多 turn 上下文累积
-$CLI                              # Ctrl+D 或 /exit 退出
+# 1) 起 daemon：新建 session，stdout 持续输出 NDJSON 事件流（首行含 session_id）
+$HEB new --provider <id> --workdir /path/to/project > /tmp/heb.log 2>&1 &
+SID=$(jq -r .session_id < <(head -n1 /tmp/heb.log))
 
-# 2) 单次 query：发起一次请求，流式输出后退出
-$CLI "用一句话介绍 Hebbian 学习规则"
-$CLI "搜一下 wikipedia" --tools web_search,web_fetch
-$CLI "用 ask 工具问我想去哪玩"                 # ask 是内置工具，无需 --tools 启用
+# 2) 发消息（有活跃 run 自动注入，无则开新 run）；事件流在后台 log 里实时看
+$HEB input "$SID" "src 下有哪些 rust 文件？"
 
-# 3) JSON 多轮上下文：吃下完整对话历史，跑最后一条 user message
-$CLI --json '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"嗨"},{"role":"user","content":"刚才我说啥"}]}'
-$CLI --json -                     # 从 stdin 读 JSON
+# 3) HITL：事件流出现 permission_requested / question_requested 时回应
+$HEB allow  "$SID" <request_id>                # 批准（--scope session|project|global 可记忆）
+$HEB deny   "$SID" <request_id>
+$HEB answer "$SID" <request_id> --kind selected --value "选项A"
 
-# 共享选项
---provider <id>                   # 默认用 desktop 里配过的 default provider
--m / --model <name>
--s / --system <text>
---tools web_search,web_fetch     # 用户可选工具（菜单里列出）；ask 等内置工具默认开启
---mock                            # 不调真实模型，输出固定假回复
---data-dir <path>                 # 默认与 desktop 共享 ~/Library/Application Support/dev.ricardo.hebbian/
+$HEB stop "$SID"                               # 中断当前 run
+$HEB list-sessions                             # 列已有 session
+
+# 一次性无人值守跑完即退出（评测 / 脚本用：审批自动拒、提问自动取消，结尾可 --json 打结构化结果）
+$HEB run "把 README 翻译成英文" --yolo --json
 ```
 
-终端中流式逐字输出文本、工具调用以彩色 `🔧 web_search(...)` 显示、stderr 输出耗时 / token 用量。
-管道（`| jq`、`| less`）时自动禁用 ANSI 颜色（依赖 `colored` crate 的 tty 检测）。
+`heb new` 常用参数：`--provider <id|name/model>`、`-m/--model <m>`、`--workdir <dir>`、`--mode default|plan-mode|auto-mode|yolo`、`--session-id <id>`（连已有 session）、`--data-dir <path>`。
+
+### hebweb（浏览器 surface）
+
+`hebweb` 是 HTTP + WebSocket server，跑与 Desktop **同一份 React 代码**（前端运行时探测走 WS 而非 Tauri），适合远程访问 / 多人各开一个端口调试。
+
+```bash
+pnpm --dir apps/desktop build              # 首次 / 前端改动后：产出 apps/desktop/frontend/dist
+cargo build -p hebbian-web-server          # 产出 ./target/debug/hebweb
+./target/debug/hebweb --port 38080         # 然后浏览器打开 http://127.0.0.1:38080
+```
+
+参数：`--port <n>`（默认 3030）、`--static-dir <dir>`（默认自动探测 `apps/desktop/frontend/dist`）、`--data-dir <path>`。
+
+> **hebcore（常驻核心进程）**：run 现在跑在独立的 `hebcore` 进程里（持唯一 dispatch + 全部活 session，架构 §7.8），三 surface 都作为客户端连入 `~/.hebbian/hebcore.sock` 看同一份活对话状态。**无需手动启动**——Desktop / hebweb 启动时会自动拉起，首个拿到 `~/.hebbian/hebcore.lock` 单例锁的进程即充当 hebcore。
 
 ### 单项检查
 

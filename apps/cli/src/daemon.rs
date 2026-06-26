@@ -3,7 +3,6 @@
 //! 事件输出：全部以 NDJSON 行写到 stdout，AI 调试工具可直接 tail 读取。
 //! IPC 通信：每条连接读一行 JSON → 执行 → 回一行 JSON → 断开。
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,7 +22,7 @@ use agent_core::{
         sessions::{self as sessions, Message, Role},
         sessions_dir, settings as settings_store,
     },
-    tools::{background, skill::default_skill_dirs},
+    tools::{background, hitl::HitlGate, skill::default_skill_dirs},
     workspace::Workspace,
     Harness, Session as CoreSession, SessionConfig, TurnObserver, TurnOutcome,
 };
@@ -42,7 +41,7 @@ use protocol::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::client::socket_path;
 use crate::ipc::{DaemonEvent, IpcCommand, IpcResponse};
@@ -77,15 +76,19 @@ struct DaemonState {
     model: String,
     reasoning: Option<common::ReasoningConfig>,
 
-    // HITL 挂起审批：request_id → oneshot Sender
-    pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
-    // HITL 挂起提问：request_id → oneshot Sender
-    pending_questions: Mutex<HashMap<String, oneshot::Sender<UserAnswer>>>,
+    /// 当前活 run 的 HITL 闸门（审批 / 提问唯一结算点，§7.8.5）。run 启动 set_active 挂上
+    /// agent_loop 持有的真 HitlGate；observer 不再自造 oneshot 阻塞 drive loop（那会让
+    /// AutoMode judge 后发的 PermissionAutoJudged pump 不出去而死锁）。heb allow/answer
+    /// 命令经 resolve_approval / answer_question 直接戳它。
+    hitl: Mutex<Option<Arc<HitlGate>>>,
 
     // 当前 run 的控制点
     active_run: AtomicBool,
     cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
     pending_inputs: Mutex<Option<PendingInputs>>,
+    /// 是否还接受插队输入（agent_loop 末次 drain / run 收尾置 false）。inject 据此在收尾
+    /// 窗口拒绝晚到注入，让 Send 回落起新 run 而不是丢消息（§4.2.3）。
+    pending_inputs_accepting: Mutex<Option<Arc<AtomicBool>>>,
 
     // 当前 run mode（每次 run_turn 读取，heb mode 命令更新）
     run_mode: Mutex<RunMode>,
@@ -120,19 +123,40 @@ impl DaemonState {
         self.active_run.load(Ordering::SeqCst)
     }
 
-    fn set_active(&self, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
+    fn set_active(
+        &self,
+        hitl: Arc<HitlGate>,
+        cancel: Arc<AtomicBool>,
+        inputs: PendingInputs,
+        accepting: Arc<AtomicBool>,
+    ) {
+        *self.hitl.lock().unwrap() = Some(hitl);
         *self.cancel_flag.lock().unwrap() = Some(cancel);
         *self.pending_inputs.lock().unwrap() = Some(inputs);
+        *self.pending_inputs_accepting.lock().unwrap() = Some(accepting);
         self.active_run.store(true, Ordering::SeqCst);
     }
 
     fn clear_active(&self) {
+        *self.hitl.lock().unwrap() = None;
         *self.cancel_flag.lock().unwrap() = None;
         *self.pending_inputs.lock().unwrap() = None;
+        *self.pending_inputs_accepting.lock().unwrap() = None;
         self.active_run.store(false, Ordering::SeqCst);
     }
 
     fn inject(&self, text: String) -> bool {
+        // run 收尾窗口（agent_loop 末次 drain 后置 accepting=false）拒绝晚到注入，让 Send
+        // 回落起新 run 而不是 push 进死队列静默丢失（§4.2.3）。
+        let accepting = self
+            .pending_inputs_accepting
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst));
+        if !accepting {
+            return false;
+        }
         if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
             inputs.lock().unwrap().push(PendingUserInput {
                 content: text,
@@ -148,11 +172,32 @@ impl DaemonState {
         if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
             flag.store(true, Ordering::SeqCst);
         }
-        for (_id, tx) in self.pending_approvals.lock().unwrap().drain() {
-            let _ = tx.send(ApprovalDecision::Deny);
+        if let Some(hitl) = &*self.hitl.lock().unwrap() {
+            hitl.cancel_all_pending();
         }
-        for (_id, tx) in self.pending_questions.lock().unwrap().drain() {
-            let _ = tx.send(UserAnswer::Cancelled);
+    }
+
+    /// 结算一条审批（heb allow/deny 命令）：直接戳活 run 的 HitlGate。返回是否命中 pending。
+    fn resolve_approval(&self, request_id: &str, decision: ApprovalDecision) -> bool {
+        let request_id = PermissionRequestId::from_raw(request_id);
+        match &*self.hitl.lock().unwrap() {
+            Some(hitl) if hitl.is_pending(&request_id) => {
+                hitl.resolve(&request_id, decision);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 结算一条提问（heb answer 命令）：直接戳活 run 的 HitlGate。返回是否命中 pending。
+    fn answer_question(&self, request_id: &str, answer: UserAnswer) -> bool {
+        let request_id = PermissionRequestId::from_raw(request_id);
+        match &*self.hitl.lock().unwrap() {
+            Some(hitl) if hitl.is_pending(&request_id) => {
+                hitl.answer(&request_id, answer);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -199,14 +244,12 @@ impl TurnObserver for DaemonObserver {
                     .to_string(),
             });
         }
-        let (tx, rx) = oneshot::channel();
-        self.state
-            .pending_approvals
-            .lock()
-            .unwrap()
-            .insert(request_id.as_str().to_string(), tx);
-        // PermissionRequested event 已由 on_event 推到 stdout，这里只等待回应
-        rx.await.ok()
+        // 交互 daemon：不在 drive loop 里阻塞等审批（那会让 AutoMode judge 后发的
+        // PermissionAutoJudged pump 不出去而死锁，§7.8.5）。审批通道是活 run 的 HitlGate
+        // （set_active 已挂），heb allow/deny 命令经 resolve_approval 直接戳它。返回 None
+        // 让 drive 立即继续 recv。
+        let _ = request_id;
+        None
     }
 
     async fn on_question(
@@ -224,13 +267,10 @@ impl TurnObserver for DaemonObserver {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Some(UserAnswer::Cancelled);
         }
-        let (tx, rx) = oneshot::channel();
-        self.state
-            .pending_questions
-            .lock()
-            .unwrap()
-            .insert(request_id.as_str().to_string(), tx);
-        rx.await.ok()
+        // 同 on_permission_request：不阻塞 drive loop，提问回应经 heb answer →
+        // answer_question 直接戳活 run 的 HitlGate。
+        let _ = request_id;
+        None
     }
 }
 
@@ -308,7 +348,8 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
             kind,
             summary,
             risk,
-            ..
+            auto_handled,
+            call_id,
         } => {
             let (tool_name, kind_str, fingerprint, command_segments, input, paths) = match kind {
                 PermissionKind::ToolCall {
@@ -360,6 +401,8 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
                 command_segments,
                 input,
                 paths,
+                auto_handled: *auto_handled,
+                call_id: call_id.clone(),
             })
         }
         EventPayload::PermissionResolved {
@@ -368,6 +411,19 @@ fn translate_event(event: &AgentEvent) -> Option<DaemonEvent> {
         } => Some(DaemonEvent::PermissionResolved {
             request_id: request_id.as_str().to_string(),
             decision: protocol::approval_decision_str(decision).to_string(),
+        }),
+        EventPayload::PermissionAutoJudged {
+            request_id,
+            tool_name,
+            decision,
+            reason,
+            requires_human,
+        } => Some(DaemonEvent::PermissionAutoJudged {
+            request_id: request_id.as_ref().map(|r| r.as_str().to_string()),
+            tool_name: tool_name.clone(),
+            decision: decision.clone(),
+            reason: reason.clone(),
+            requires_human: *requires_human,
         }),
         EventPayload::UserQuestionRequested {
             request_id,
@@ -704,14 +760,21 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutco
     // 运行时控制点
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+    let pending_inputs_accepting = Arc::new(AtomicBool::new(true));
     let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
-    state.set_active(cancel_flag.clone(), pending_inputs.clone());
-
     let mut handle = core_session.run_with_runtime_inputs(
-        cancel_flag,
-        Some(pending_inputs),
+        cancel_flag.clone(),
+        Some(pending_inputs.clone()),
         Some(consumed_inputs.clone()),
-        None,
+        Some(pending_inputs_accepting.clone()),
+    );
+    // 把活 run 的真 HitlGate 挂进 DaemonState：heb allow/answer 经 resolve_approval 直接
+    // 戳它（§7.8.5），observer 不再自造 oneshot gate 阻塞 drive loop。
+    state.set_active(
+        handle.hitl().clone(),
+        cancel_flag,
+        pending_inputs,
+        pending_inputs_accepting,
     );
 
     let mut observer = DaemonObserver::new(state.clone());
@@ -750,20 +813,14 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutco
 async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse {
     match cmd {
         IpcCommand::Send { text } => {
-            if state.is_active() {
-                // 注入当前 run
-                if state.inject(text) {
-                    IpcResponse::ok()
-                } else {
-                    IpcResponse::err("注入失败：无活跃 pending_inputs")
-                }
+            // 活 run 在跑 → 优先注入当前 run；但 run 收尾窗口 inject 会拒（accepting=false），
+            // 此时回落到「起新 run」而不是报错丢消息（§4.2.3）。
+            if state.is_active() && state.inject(text.clone()) {
+                IpcResponse::ok()
+            } else if state.input_tx.send(TurnInput::User(text)).is_ok() {
+                IpcResponse::ok()
             } else {
-                // 发给输入 channel，启动新 run
-                if state.input_tx.send(TurnInput::User(text)).is_ok() {
-                    IpcResponse::ok()
-                } else {
-                    IpcResponse::err("daemon 输入通道已关闭")
-                }
+                IpcResponse::err("daemon 输入通道已关闭")
             }
         }
         IpcCommand::Inject { text } => {
@@ -779,54 +836,45 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
             pattern,
             extra_patterns,
         } => {
-            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
-            match tx {
-                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
-                Some(tx) => {
-                    let decision = match scope.as_str() {
-                        "session" => ApprovalDecision::AllowAndRemember {
-                            scope: PermissionScope::Session,
-                            pattern,
-                            extra_patterns,
-                        },
-                        "project" => ApprovalDecision::AllowAndRemember {
-                            scope: PermissionScope::Project,
-                            pattern,
-                            extra_patterns,
-                        },
-                        "global" => ApprovalDecision::AllowAndRemember {
-                            scope: PermissionScope::Global,
-                            pattern,
-                            extra_patterns,
-                        },
-                        _ => ApprovalDecision::AllowOnce,
-                    };
-                    let _ = tx.send(decision);
-                    IpcResponse::ok()
-                }
+            let decision = match scope.as_str() {
+                "session" => ApprovalDecision::AllowAndRemember {
+                    scope: PermissionScope::Session,
+                    pattern,
+                    extra_patterns,
+                },
+                "project" => ApprovalDecision::AllowAndRemember {
+                    scope: PermissionScope::Project,
+                    pattern,
+                    extra_patterns,
+                },
+                "global" => ApprovalDecision::AllowAndRemember {
+                    scope: PermissionScope::Global,
+                    pattern,
+                    extra_patterns,
+                },
+                _ => ApprovalDecision::AllowOnce,
+            };
+            if state.resolve_approval(&request_id, decision) {
+                IpcResponse::ok()
+            } else {
+                IpcResponse::err(format!("未找到 request_id: {request_id}"))
             }
         }
         IpcCommand::Deny { request_id } => {
-            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
-            match tx {
-                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
-                Some(tx) => {
-                    let _ = tx.send(ApprovalDecision::Deny);
-                    IpcResponse::ok()
-                }
+            if state.resolve_approval(&request_id, ApprovalDecision::Deny) {
+                IpcResponse::ok()
+            } else {
+                IpcResponse::err(format!("未找到 request_id: {request_id}"))
             }
         }
         IpcCommand::DenyWithFeedback {
             request_id,
             feedback,
         } => {
-            let tx = state.pending_approvals.lock().unwrap().remove(&request_id);
-            match tx {
-                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
-                Some(tx) => {
-                    let _ = tx.send(ApprovalDecision::DenyWithFeedback { feedback });
-                    IpcResponse::ok()
-                }
+            if state.resolve_approval(&request_id, ApprovalDecision::DenyWithFeedback { feedback }) {
+                IpcResponse::ok()
+            } else {
+                IpcResponse::err(format!("未找到 request_id: {request_id}"))
             }
         }
         IpcCommand::Answer {
@@ -834,18 +882,15 @@ async fn handle_command(state: Arc<DaemonState>, cmd: IpcCommand) -> IpcResponse
             kind,
             value,
         } => {
-            let tx = state.pending_questions.lock().unwrap().remove(&request_id);
-            match tx {
-                None => IpcResponse::err(format!("未找到 request_id: {request_id}")),
-                Some(tx) => {
-                    let answer = match kind.as_str() {
-                        "cancelled" => UserAnswer::Cancelled,
-                        "custom" => UserAnswer::Custom { text: value },
-                        _ => UserAnswer::Selected { label: value },
-                    };
-                    let _ = tx.send(answer);
-                    IpcResponse::ok()
-                }
+            let answer = match kind.as_str() {
+                "cancelled" => UserAnswer::Cancelled,
+                "custom" => UserAnswer::Custom { text: value },
+                _ => UserAnswer::Selected { label: value },
+            };
+            if state.answer_question(&request_id, answer) {
+                IpcResponse::ok()
+            } else {
+                IpcResponse::err(format!("未找到 request_id: {request_id}"))
             }
         }
         IpcCommand::Stop => {
@@ -1008,11 +1053,11 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         provider_id,
         model,
         reasoning: None,
-        pending_approvals: Mutex::new(HashMap::new()),
-        pending_questions: Mutex::new(HashMap::new()),
+        hitl: Mutex::new(None),
         active_run: AtomicBool::new(false),
         cancel_flag: Mutex::new(None),
         pending_inputs: Mutex::new(None),
+        pending_inputs_accepting: Mutex::new(None),
         run_mode: Mutex::new(run_mode),
         input_tx,
         permission_store,
@@ -1159,11 +1204,11 @@ pub async fn run_once(args: RunOnceArgs) -> Result<i32> {
         provider_id: prepared.provider_id,
         model: prepared.model.clone(),
         reasoning: None,
-        pending_approvals: Mutex::new(HashMap::new()),
-        pending_questions: Mutex::new(HashMap::new()),
+        hitl: Mutex::new(None),
         active_run: AtomicBool::new(false),
         cancel_flag: Mutex::new(None),
         pending_inputs: Mutex::new(None),
+        pending_inputs_accepting: Mutex::new(None),
         run_mode: Mutex::new(prepared.run_mode),
         input_tx,
         permission_store,

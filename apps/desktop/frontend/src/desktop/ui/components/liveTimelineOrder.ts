@@ -148,9 +148,17 @@ export function filterMessagesDuplicatedInLiveTimeline<T extends { id: string }>
   messages: T[],
   liveTimelineMessages: Array<{ id: string }>
 ): T[] {
-  if (liveTimelineMessages.length === 0) return messages;
   const liveIds = new Set(liveTimelineMessages.map((message) => message.id));
-  return messages.filter((message) => !liveIds.has(message.id));
+  // 剔除两类与 streaming / liveTimeline 同源、不剔会双份渲染的持久 message（本函数只在
+  // isStreaming 时被调）：
+  // ① liveTimeline 里已冻结的项（如插队后冻结的 assistant 段 / user_injected）；
+  // ② 后端「活 partial 读出」塞进 messages 的 id=`live-<msg_id>` assistant——run 进行中
+  //    当前段由底部 streaming bubble 独占渲染，getSession 返回的活 partial 与之内容同源
+  //    （架构 §7.8.5）。run 收尾后 reload 用正式段顶替它、isStreaming=false 不再走本过滤，
+  //    正式段正常显示，故这里安全剔除。
+  return messages.filter(
+    (message) => !liveIds.has(message.id) && !message.id.startsWith("live-")
+  );
 }
 
 /**

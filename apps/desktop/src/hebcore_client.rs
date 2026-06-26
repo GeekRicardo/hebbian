@@ -199,6 +199,13 @@ pub fn run_conversation(
                     &event,
                     protocol::WireEvent::RunFinished { .. }
                         | protocol::WireEvent::Error { .. }
+                        // RunSuspended 是合法终态（run 转入后台等 wakeup，§4.12.1）：必须 break。
+                        // 否则订阅 for 循环在 per-session broadcast 上永久阻塞——run task 已退出、
+                        // 不再有新事件、channel 又不关——导致 send_message 的 spawn_blocking 永挂、
+                        // cancellation::unregister 永不执行、阻塞线程泄漏。前端已通过 sink 收到
+                        // RunSuspended 渲染挂起态；wakeup resume 后的续跑事件靠 reload getSession
+                        // 读落盘（实时重订阅是 §7.8 后续步骤）。
+                        | protocol::WireEvent::RunSuspended { .. }
                 );
                 sink.on_event(event);
                 if terminal {

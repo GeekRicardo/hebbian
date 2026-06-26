@@ -41,9 +41,16 @@ impl HitlState {
         self.remote.lock().unwrap().insert(request_id, session_id);
     }
 
-    /// 取并移除某 request_id 对应的远端 session（approve / answer 经 hebcore 代理时用）。
+    /// 查某 request_id 对应的远端 session（approve / answer 经 hebcore 代理时用）。**只读**
+    /// 不消费——代理成功后才由 [`forget_remote`](Self::forget_remote) 移除，否则一次瞬时
+    /// IPC 失败会让映射被消费、用户重试时找不到、请求在 hebcore 侧 gate 永挂（§7.8.6）。
     pub fn remote_session_of(&self, request_id: &str) -> Option<String> {
-        self.remote.lock().unwrap().remove(request_id)
+        self.remote.lock().unwrap().get(request_id).cloned()
+    }
+
+    /// 移除一条远端 HITL 映射（代理结算成功后调）。auto_handled 的请求由 sink 端不 track 规避。
+    pub fn forget_remote(&self, request_id: &str) {
+        self.remote.lock().unwrap().remove(request_id);
     }
 
     pub fn cancel_run(&self, request_id: &str) -> bool {

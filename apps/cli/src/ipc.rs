@@ -179,10 +179,30 @@ pub enum DaemonEvent {
         /// PathAccess 越界路径列表
         #[serde(skip_serializing_if = "Vec::is_empty", default)]
         paths: Vec<String>,
+        /// 这条审批是否会被 AutoMode judge 接管（§4.4.4）。`true` 时脚本**不应**抢着
+        /// `heb allow/deny`——judge 会异步出结果（随后 emit PermissionAutoJudged），抢答会
+        /// 旁路判官决策；`false` 才是真正需要人工的审批。
+        #[serde(default)]
+        auto_handled: bool,
+        /// 触发本次审批的工具调用 id（ToolCall 审批填，其余为空串），便于脚本关联工具卡。
+        #[serde(skip_serializing_if = "String::is_empty", default)]
+        call_id: String,
     },
     PermissionResolved {
         request_id: String,
         decision: String,
+    },
+    /// AutoMode judge 对一条审批的裁决（§4.4.4）。脚本据此知道「agent 替我自动判了什么」；
+    /// `requires_human=true` 表示这条仍需 `heb allow/deny` 人工拍板（ASK / 命令类 DENY）。
+    PermissionAutoJudged {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        request_id: Option<String>,
+        tool_name: String,
+        /// `allow` / `deny` / `ask`
+        decision: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reason: Option<String>,
+        requires_human: bool,
     },
     QuestionRequested {
         request_id: String,

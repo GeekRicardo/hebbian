@@ -192,6 +192,25 @@ impl PartialLiveGuard {
             .map_err(|e| common::AppError::msg(format!("acquire partial live lock: {e}")))?;
         Ok(Self { _file: file })
     }
+
+    /// 非阻塞抢锁：抢到返回 `Some`（持锁直到 drop），抢不到（写者还活、或别的恢复者正在
+    /// 折叠这条死 partial）返回 `None`。用于中断恢复折盘——保证「同一死 partial 跨进程只被
+    /// 一个恢复者折叠一次」，避免两 surface 并发打开同一崩溃 session 时把 Interrupted 段
+    /// 重复折两份进 jsonl（§7.8.5）。
+    pub fn try_acquire(data_dir: &Path, session_id: &str, msg_id: &str) -> Option<Self> {
+        let dir = partial_dir(data_dir, session_id);
+        std::fs::create_dir_all(&dir).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(partial_live_path(data_dir, session_id, msg_id))
+            .ok()?;
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Some(Self { _file: file }),
+            Err(_) => None,
+        }
+    }
 }
 
 /// 写入方是否仍持有该 partial 的活性锁。open 失败按「不存活」处理——

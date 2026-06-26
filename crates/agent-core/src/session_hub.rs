@@ -44,6 +44,12 @@ pub struct SessionRuntimeState {
     pub cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
     /// 当前活 run 的插队输入队列（inject 用）。
     pub pending_inputs: Mutex<Option<PendingInputs>>,
+    /// 是否还接受插队输入。agent_loop 在 drain 边界维护：run 开始 / 续跑时 true，run 收尾、
+    /// 末次 drain 之后置 false（[`crate::agent_loop`] 的 `set_pending_inputs_accepting`）。
+    /// inject 据此在 run 收尾窗口拒绝晚到注入（返回 false），让 surface 回落「起新 run」而不是
+    /// push 进一个再也不会被 drain 的队列——否则消息既不进 transcript 也不落盘，客户端却收到
+    /// Accepted，静默丢失（§4.2.3）。
+    pub pending_inputs_accepting: Mutex<Option<Arc<AtomicBool>>>,
 
     /// 运行时 RunMode（surface 的 set_run_mode 即时改值）。
     pub run_mode: Mutex<RunMode>,
@@ -65,6 +71,7 @@ impl SessionRuntimeState {
             active_run: AtomicBool::new(false),
             cancel_flag: Mutex::new(None),
             pending_inputs: Mutex::new(None),
+            pending_inputs_accepting: Mutex::new(None),
             run_mode: Mutex::new(run_mode),
             force_automode: AtomicBool::new(false),
             event_tx,
@@ -86,24 +93,44 @@ impl SessionRuntimeState {
     }
 
     /// run 开始：登记 HITL 闸门 + cancel 句柄 + 插队队列，置活。
-    pub fn set_active(&self, hitl: Arc<HitlGate>, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
+    pub fn set_active(
+        &self,
+        hitl: Arc<HitlGate>,
+        cancel: Arc<AtomicBool>,
+        inputs: PendingInputs,
+        accepting: Arc<AtomicBool>,
+    ) {
         *self.hitl.lock().unwrap() = Some(hitl);
         *self.cancel_flag.lock().unwrap() = Some(cancel);
         *self.pending_inputs.lock().unwrap() = Some(inputs);
+        *self.pending_inputs_accepting.lock().unwrap() = Some(accepting);
         self.active_run.store(true, Ordering::SeqCst);
     }
 
-    /// run 结束：清 HITL 闸门 + cancel 句柄 + 插队队列，置闲。
+    /// run 结束：清 HITL 闸门 + cancel 句柄 + 插队队列 + accepting 标志，置闲。
     pub fn clear_active(&self) {
         *self.hitl.lock().unwrap() = None;
         *self.cancel_flag.lock().unwrap() = None;
         *self.pending_inputs.lock().unwrap() = None;
+        *self.pending_inputs_accepting.lock().unwrap() = None;
         self.active_run.store(false, Ordering::SeqCst);
     }
 
     /// 把一条 user 输入插进当前活 run 的队列（agent_loop 下个 drain 边界消费）。
-    /// 无活 run 返回 `false`。
+    /// 无活 run、或 run 已过末次 drain（accepting=false 的收尾窗口）返回 `false`，
+    /// 让 surface 回落到「起新 run」，避免消息 push 进再也不会被 drain 的队列而静默丢失。
     pub fn inject(&self, content: String) -> bool {
+        // run 收尾窗口（agent_loop 末次 drain 后置 accepting=false）拒绝晚到注入；
+        // accepting 缺失（未接线）也按拒绝处理（§4.2.3）。
+        let accepting = self
+            .pending_inputs_accepting
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst));
+        if !accepting {
+            return false;
+        }
         if let Some(inputs) = &*self.pending_inputs.lock().unwrap() {
             inputs.lock().unwrap().push(PendingUserInput {
                 content,
@@ -246,9 +273,34 @@ mod tests {
             Arc::new(HitlGate::default()),
             Arc::new(AtomicBool::new(false)),
             inputs.clone(),
+            Arc::new(AtomicBool::new(true)),
         );
         assert!(rt.inject("hi".into()));
         assert_eq!(inputs.lock().unwrap().len(), 1);
+    }
+
+    /// 回归（#8 late-inject 静默丢消息）：run 收尾窗口（agent_loop 末次 drain 后置
+    /// accepting=false）的注入必须被拒绝（返回 false），让 surface 回落起新 run，而不是
+    /// push 进一个再也不会被 drain 的队列。
+    #[test]
+    fn inject_rejected_after_accepting_cleared() {
+        let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
+        let inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+        let accepting = Arc::new(AtomicBool::new(true));
+        rt.set_active(
+            Arc::new(HitlGate::default()),
+            Arc::new(AtomicBool::new(false)),
+            inputs.clone(),
+            accepting.clone(),
+        );
+        assert!(rt.inject("a".into()), "accepting=true 时应接受注入");
+        // 模拟 agent_loop 末次 drain 后置 accepting=false（run 收尾窗口）。
+        accepting.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            !rt.inject("b".into()),
+            "accepting=false 时应拒绝注入（防 §4.2.3 消息静默丢失）"
+        );
+        assert_eq!(inputs.lock().unwrap().len(), 1, "被拒注入不该 push 进队列");
     }
 
     /// 回归（bug B 死锁根因）：审批结算直接戳活 run 的真 HitlGate，无第二层 oneshot
@@ -265,6 +317,7 @@ mod tests {
             gate.clone(),
             Arc::new(AtomicBool::new(false)),
             Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicBool::new(true)),
         );
 
         // 未知 request_id 不命中，活 run 也返回 false。

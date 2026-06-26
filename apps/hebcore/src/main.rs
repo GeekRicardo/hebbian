@@ -80,6 +80,10 @@ async fn main() -> Result<()> {
         runtimes: RuntimeRegistry::new(),
     });
 
+    // wakeup resume handler 必须在 run 所在进程（= hebcore）注册：后台任务 / cron 唤醒
+    // 在本进程的 WakeupScheduler 触发，没有 handler 会被丢弃、挂起 run 永不 resume（§4.12.5）。
+    surface_session::register_wakeup_resume_handler(ctx.clone());
+
     // unix-socket transport：清理旧 sock（上次异常退出残留），bind 新的。
     let sock = sock_path(&data_dir);
     let _ = std::fs::remove_file(&sock);

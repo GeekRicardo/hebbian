@@ -87,6 +87,11 @@ pub struct EditsWorktree {
     git_available: Mutex<Option<bool>>,
     per_path_locks: PerPathLocks,
     active_run: AsyncMutex<Option<ActiveRun>>,
+    /// 串行化对共享 `.git/index` 的写（add/commit）。per-path 锁只保同一文件串行，
+    /// 但并发快照**不同**文件会各拿不同 per-path 锁、同时跑 git add/commit 撞同一个
+    /// `.git/index.lock`——git 对它 fail-fast 不重试，一方持锁另一方直接报错。dispatch
+    /// 把 Bash 并入并发池后，并发快照是常态，故这把 repo 级锁兜住整个 git 写序列。
+    git_index_lock: AsyncMutex<()>,
 }
 
 impl EditsWorktree {
@@ -97,6 +102,7 @@ impl EditsWorktree {
             git_available: Mutex::new(None),
             per_path_locks: AsyncMutex::new(HashMap::new()),
             active_run: AsyncMutex::new(None),
+            git_index_lock: AsyncMutex::new(()),
         }
     }
 
@@ -534,9 +540,14 @@ impl EditsWorktree {
     }
 
     async fn snapshot_file(&self, message: &str, real_path: &Path) -> AppResult<Snapshot> {
+        // mirror 写的是 worktree 内各自独立的镜像文件，不碰 index，可在锁外并发。
         self.mirror_file(real_path).await?;
-        self.git_add(real_path).await?;
-        let sha = self.git_commit(message).await?;
+        // add→commit 整段持 index 锁：避免并发快照不同文件时争 `.git/index.lock` 失败。
+        let sha = {
+            let _index = self.git_index_lock.lock().await;
+            self.git_add(real_path).await?;
+            self.git_commit(message).await?
+        };
         let file_bytes = self.file_size(real_path).await;
         Ok(Snapshot { sha, file_bytes })
     }

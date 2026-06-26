@@ -2065,41 +2065,76 @@ struct AutoModeJudgeRequest<'a> {
 /// 返回 judge 的最终决策（已按 `force_automode` 折叠 Ask→Deny）。调用方据此决定
 /// resolve 还是保留人工弹框——ToolCall 与 PathAccess 的差异只在这一步，判定本身一致。
 /// 判官 client / model 由 [`resolve_judge_for_call`] 决定（架构 §4.4.4 判官模型选择）。
+/// AutoMode 判官单次判定的 wall-clock 超时上限。判官是审批的辅助快速决策（本应秒级
+/// 返回）；provider 抖动 / DeepSeek 同 chat session 并发挂起时，判官两次 LLM 调用
+/// （Classifier A 段前缀 + judge 决策）即便各自有 client read_timeout 兜底，也可能
+/// 累计卡上几分钟，让整条 AutoMode 工具链「黄呼吸」卡死、run 永不前进。超过这个上限
+/// 就降级 Ask（转人工审批），把"无限卡死"变成"超时后弹框让用户拍板"。用户中断
+/// （cancel）仍随时立即生效，这是中断之外的自动兜底（架构 §4.4.4）。
+#[cfg(not(test))]
+fn judge_decision_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(25)
+}
+#[cfg(test)]
+fn judge_decision_timeout() -> std::time::Duration {
+    // 远大于任何 mock judge（纯返回 / 多段 classify）的真实耗时——避免全量并发高负载下
+    // 误触发、把正常测试的 Allow 误降级成 Ask；又远小于 HangingJudge 的挂起时长，复现
+    // 测试仍能区分超时路径。
+    std::time::Duration::from_secs(3)
+}
+
 async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecision {
     // judge 必须看到 hebbian 静态分析的全量 effects（segments / write_targets /
     // dangerous_kinds），不重复解析 shell。Bash 段前缀分类只对命令类生效。
     let judge_start = Instant::now();
-    let prefix_outcome = crate::automode::classify_bash_prefixes_for_automode(
-        req.judge_client,
-        req.model_id,
-        req.tool_name,
-        req.tool_input,
-        req.effects,
-        req.cancel.clone(),
-    )
-    .await;
-    let judge_effects = prefix_outcome.effects;
-    // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官让它对「用户先前
-    // 已批准过」的命令放心 ALLOW（架构 §4.4.4）。
-    let whitelisted_fingerprints: Vec<String> = req
-        .hitl
-        .approval_segments(req.tool_name, &judge_effects)
-        .into_iter()
-        .filter(|s| matches!(s.status, protocol::ApprovalSegmentStatus::Whitelisted))
-        .map(|s| s.fingerprint)
-        .collect();
-    let raw_decision = crate::automode::judge_auto_mode(
-        req.judge_client,
-        req.model_id,
-        req.tool_name,
-        req.tool_input,
-        &judge_effects,
-        req.transcript,
-        &whitelisted_fingerprints,
-        req.language,
-        req.cancel.clone(),
-    )
-    .await;
+    // 判官两次 LLM 调用（Classifier A 段前缀 + judge 决策）整体包 wall-clock 超时：
+    // 抖动 / 同 session 并发挂起时即便各有 read_timeout 也可能累计卡死工具链，超时
+    // 降级 Ask 转人工（架构 §4.4.4）。判官内部仍透传 cancel，用户中断随时立即生效。
+    let judge_eval = async {
+        let prefix_outcome = crate::automode::classify_bash_prefixes_for_automode(
+            req.judge_client,
+            req.model_id,
+            req.tool_name,
+            req.tool_input,
+            req.effects,
+            req.cancel.clone(),
+        )
+        .await;
+        let judge_effects = prefix_outcome.effects;
+        // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官让它对「用户先前
+        // 已批准过」的命令放心 ALLOW（架构 §4.4.4）。
+        let whitelisted_fingerprints: Vec<String> = req
+            .hitl
+            .approval_segments(req.tool_name, &judge_effects)
+            .into_iter()
+            .filter(|s| matches!(s.status, protocol::ApprovalSegmentStatus::Whitelisted))
+            .map(|s| s.fingerprint)
+            .collect();
+        crate::automode::judge_auto_mode(
+            req.judge_client,
+            req.model_id,
+            req.tool_name,
+            req.tool_input,
+            &judge_effects,
+            req.transcript,
+            &whitelisted_fingerprints,
+            req.language,
+            req.cancel.clone(),
+        )
+        .await
+    };
+    let raw_decision = match tokio::time::timeout(judge_decision_timeout(), judge_eval).await {
+        Ok(decision) => decision,
+        Err(_) => {
+            warn!(
+                target: "permission",
+                tool = %req.tool_name,
+                timeout_ms = judge_decision_timeout().as_millis() as u64,
+                "[AutoMode] 判官超时未返回（provider 可能抖动），降级 Ask 转人工审批"
+            );
+            AutoModeDecision::Ask("AutoMode 判官响应超时（模型可能在抖动），已转人工审批".to_string())
+        }
+    };
     let judge_duration_ms = judge_start.elapsed().as_millis() as u64;
     let raw_label = raw_decision.as_label();
     // force_automode 子开关：把 ASK 收紧为 Deny；普通 AutoMode 保留 ASK 走人工审批。
@@ -2468,6 +2503,45 @@ mod tests {
             // 模拟用户在 judge 运行期间点了中断：置位真实 cancel 并报取消。
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             Err(model_gateway::types::ModelError::Cancelled)
+        }
+
+        async fn stream(
+            &self,
+            req: ModelRequest,
+            cancel: common::CancelFlag,
+            _on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            self.complete(req, cancel).await
+        }
+    }
+
+    /// 判官 mock：LLM 调用 sleep 远超判官超时（模拟 provider 抖动 / DeepSeek 同
+    /// chat session 并发挂起导致 SSE 迟迟不来）。用于复现「判官迟迟不返回 →
+    /// AutoMode 工具链无限黄呼吸卡死」。future 被判官超时 drop 时 sleep 随之取消。
+    struct HangingJudge;
+
+    #[async_trait]
+    impl model_gateway::client::ModelClient for HangingJudge {
+        fn provider_id(&self) -> &str {
+            "test"
+        }
+
+        async fn complete(
+            &self,
+            _req: ModelRequest,
+            _cancel: common::CancelFlag,
+        ) -> Result<ModelResponse, model_gateway::types::ModelError> {
+            // sleep 远超判官超时 + 测试外层超时：模拟判官永久挂起（hang），不会"sleep
+            // 完就放行"而漏掉复现。future 被判官超时 drop 时 sleep 随之取消，干净退出。
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(ModelResponse::Done {
+                finish: model_gateway::types::FinishReason::Stop,
+                text: "ALLOW".to_string(),
+                reasoning: String::new(),
+                attachments: Vec::new(),
+                usage: Usage::default(),
+                reasoning_signature: String::new(),
+            })
         }
 
         async fn stream(
@@ -4019,5 +4093,90 @@ mod tests {
             "两个各 300ms 的 Bash 并发总耗时应 < 500ms，实测 {elapsed:?}——\
              说明 edits-worktree cwd 锁把它们串行化了"
         );
+    }
+
+    /// 回归（判官超时兜底，架构 §4.4.4）：AutoMode 下判官 LLM 迟迟不返回（provider
+    /// 抖动 / DeepSeek 同 chat session 并发挂起）时，dispatch 必须在判官超时后降级
+    /// Ask、emit `PermissionAutoJudged { requires_human: true }` 把审批转人工，而不是
+    /// 让工具卡在判官 LLM 上无限黄呼吸、run 永不前进。
+    ///
+    /// A/B：修前（判官两次 LLM await 裸调、无 wall-clock 超时）→ run_calls 一直等
+    /// `HangingJudge`（hang），外层 6s 超时触发、测试 fail。修后（judge_decision_timeout
+    /// 兜底，test 档 3s）→ 判官超时转人工 → surface 批准 → 工具执行。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn judge_timeout_falls_back_to_human_instead_of_hanging() {
+        use protocol::EventPayload;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(tmp.path(), Vec::new());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Box::new(DestructiveNoopTool) as Box<dyn crate::tools::Tool>,
+        ]));
+        let hitl = Arc::new(crate::tools::hitl::HitlGate::default());
+        let run_state = Arc::new(RunState::new(RunId::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+        let sink: crate::agent_loop::EventSink = Arc::new(move |event| {
+            let _ = tx.try_send(event);
+        });
+        // surface：判官超时转人工后，收到 requires_human=true 的 AutoJudged → 批准放行。
+        // 修前判官永不出 AutoJudged，这个 resolve 永不触发，run_calls 卡到外层超时。
+        let hitl_for_surface = hitl.clone();
+        let surface = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let EventPayload::PermissionAutoJudged {
+                    request_id: Some(rid),
+                    requires_human: true,
+                    ..
+                } = &event.payload
+                {
+                    hitl_for_surface.resolve(rid, ApprovalDecision::AllowOnce);
+                    break;
+                }
+            }
+        });
+        let dispatcher = ToolDispatcher {
+            registry,
+            hitl,
+            workspace,
+            state: run_state,
+            sink,
+            cancel: Arc::new(AtomicBool::new(false)),
+            run_mode: Arc::new(std::sync::Mutex::new(crate::run_mode::RunMode::AutoMode)),
+            model_id: Some("claude-opus-4.7".to_string()),
+            judge_client: Some(Arc::new(HangingJudge)),
+            force_automode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            hooks: Arc::new(crate::hooks::HookManager::empty()),
+            session_id_for_hooks: None,
+            data_dir_for_artifacts: None,
+            permission_store: None,
+            edits_worktree: None,
+            current_run_id: None,
+            subagent_ctx: None,
+            parent_transcript_snapshot: None,
+            model_io_dump: None,
+            subagent_bypass: false,
+        };
+
+        let call = ToolCall {
+            id: "call_judge_timeout".into(),
+            // 界内会写命令：走 AutoMode judge（界内编辑已免判官，只命令类进判官）；
+            // cwd 界内避免先卡 PathAccess。
+            input: serde_json::json!({ "command": "git push --force origin main", "cwd": tmp.path() }),
+            name: "Bash".into(),
+        };
+
+        // 判官超时(test=3s) + resolve + 执行应在 6s 内；修前判官 hang(sleep 30s) → run_calls
+        // 卡到外层 6s 超时 fail。超时阈值远大于 mock judge 正常耗时，不会误触发误降级。
+        let result = tokio::time::timeout(Duration::from_secs(6), dispatcher.run_calls(&[call], 0))
+            .await
+            .expect("判官超时应转人工放行，run_calls 不该卡在判官 LLM 上")
+            .expect("dispatch 不应返回错误");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].content, "executed",
+            "判官超时转人工、用户批准后工具应执行"
+        );
+        surface.await.unwrap();
     }
 }

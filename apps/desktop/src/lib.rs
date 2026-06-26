@@ -1119,8 +1119,19 @@ impl hebcore_client::RunEventSink for DesktopHebcoreSink {
         // HITL pending 登记：审批 / 提问到达时记下 request_id → session，让 approve_permission /
         // answer_question 命令能按 request_id 经 hebcore 代理回结算（§7.8.6 控制 Op）。
         match &event {
-            protocol::WireEvent::PermissionRequested { request_id, .. }
-            | protocol::WireEvent::UserQuestionRequested { request_id, .. } => {
+            // auto_handled 的审批由 hebcore 内 AutoMode judge 直接结算，desktop 永不代理它
+            // （用户不点）——track 了只会让 remote 表只增不减（§7.8.6 泄漏）。故跳过。
+            protocol::WireEvent::PermissionRequested {
+                request_id,
+                auto_handled,
+                ..
+            } => {
+                if !auto_handled {
+                    self.hitl
+                        .track_remote(request_id.clone(), self.session_id.clone());
+                }
+            }
+            protocol::WireEvent::UserQuestionRequested { request_id, .. } => {
                 self.hitl
                     .track_remote(request_id.clone(), self.session_id.clone());
             }
@@ -1330,8 +1341,13 @@ fn approve_permission(
     // 找不到则回退本地 gate（兼容尚未迁移的进程内 run，如 branch 旁支）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
         let dd = data_dir(&app)?;
-        return hebcore_client::approve(&dd, &session_id, &request_id, decision)
+        let result = hebcore_client::approve(&dd, &session_id, &request_id, decision)
             .map_err(AppError::msg);
+        // 代理成功才消费映射——失败保留，用户可重试（§7.8.6 不可重试 bug 修复）。
+        if result.is_ok() {
+            hitl.forget_remote(&request_id);
+        }
+        return result;
     }
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
@@ -1413,7 +1429,12 @@ fn answer_question(
     // 架构 §7.8.6：经 hebcore 的 Answer 协议代理结算（run 在 hebcore 进程）。
     if let Some(session_id) = hitl.remote_session_of(&request_id) {
         let dd = data_dir(&app)?;
-        return hebcore_client::answer(&dd, &session_id, &request_id, answer).map_err(AppError::msg);
+        let result =
+            hebcore_client::answer(&dd, &session_id, &request_id, answer).map_err(AppError::msg);
+        if result.is_ok() {
+            hitl.forget_remote(&request_id);
+        }
+        return result;
     }
     hitl.answer_question(&request_id, answer)
         .map_err(AppError::msg)

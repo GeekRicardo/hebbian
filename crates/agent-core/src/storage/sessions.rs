@@ -1596,6 +1596,18 @@ pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> App
         if p.alive {
             continue;
         }
+        // 跨进程独占折盘（§7.8.5）：抢该死 partial 的 `.live` 锁。抢不到 = 别的恢复者
+        // 正在折它（或写者刚复活）→ 跳过，避免两 surface 并发打开同一崩溃 session 把同一段
+        // 重复折两份进 jsonl。持锁跨越 append + delete，结束（drop）才释放。
+        let Some(_guard) =
+            super::sessions_dir::PartialLiveGuard::try_acquire(data_dir, id, &p.msg_id)
+        else {
+            continue;
+        };
+        // 持锁后复查 partial 还在——别的恢复者可能在我抢到锁前已折盘 + 删（幂等兜底）。
+        if !super::sessions_dir::partial_path(data_dir, id, &p.msg_id).exists() {
+            continue;
+        }
         if let Some(msg) = partial_to_interrupted_message(p) {
             append_line(&path, &RolloutLine::Message(msg))?;
             append_line(

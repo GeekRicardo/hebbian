@@ -74,8 +74,9 @@ impl SessionRuntime {
         hitl: Arc<agent_core::tools::hitl::HitlGate>,
         cancel: Arc<AtomicBool>,
         inputs: PendingInputs,
+        accepting: Arc<AtomicBool>,
     ) {
-        self.state.set_active(hitl, cancel, inputs);
+        self.state.set_active(hitl, cancel, inputs, accepting);
     }
 
     pub fn clear_active(&self) {
@@ -176,6 +177,50 @@ impl RuntimeRegistry {
         guard.insert(session_id.to_string(), runtime.clone());
         Ok(runtime)
     }
+}
+
+/// 注册 wakeup resume handler（架构 §4.12.5 / §7.8）：run 移到 hebcore 进程后，后台任务
+/// 完成 / cron 到点的 wakeup 事件在**本进程**的 [`agent_core::wakeup::WakeupScheduler`]
+/// 触发（`run_turn` 里 `register_session_shells` 也在本进程登记），故 resume handler 必须
+/// 在同进程注册——否则挂起的 run 永远收不到 resume（被 wakeup dispatcher 当「无 handler」
+/// 丢弃），后台任务 / cron 驱动的续跑整类静默失效（这是 run 移 hebcore 引入的回归：旧
+/// desktop 进程内跑 run + 进程内 handler 时能 work）。
+///
+/// 回调按 `event.session_id()` 找对应 session 运行时：
+/// - 活 run 在跑 → [`SessionRuntime::inject`] 进 PendingInputs，agent_loop 下个 ModelStep 前 drain；
+/// - 无活 run → `input_tx` 触发新 run（input 循环的 `run_turn` 会 append_user 落 wakeup_xml）。
+///   两条路径都只落一次，**不预落**避免与 run_turn 重复。
+///
+/// hebcore 二进制与 hebweb 升格为 hebcore 时各自在启动处调一次（一个进程一个 global handler）。
+pub fn register_wakeup_resume_handler(ctx: Arc<crate::transport::TransportCtx>) {
+    agent_core::wakeup::WakeupScheduler::global().set_resume_handler(Arc::new(move |event| {
+        let ctx = ctx.clone();
+        // ResumeHandler 是同步闭包，而按 session 取运行时是 async（RwLock）——spawn 一条
+        // 短 task 完成注入。handler 在 WakeupDispatcher 的 tokio task 里被调，spawn 安全。
+        tokio::spawn(async move {
+            let sid = event.session_id().to_string();
+            let rt = match ctx.runtimes.get(&sid).await {
+                Some(rt) => rt,
+                None => match ctx
+                    .runtimes
+                    .ensure(&ctx.data_dir, ctx.permission_store.clone(), &sid)
+                    .await
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::warn!(session = %sid, error = %e, "wakeup resume: attach session 失败");
+                        return;
+                    }
+                },
+            };
+            let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
+            if !rt.inject(wakeup_xml.clone()) {
+                if let Err(e) = rt.input_tx.send(wakeup_xml) {
+                    tracing::warn!(session = %sid, error = %e, "wakeup resume: input_tx 已关闭");
+                }
+            }
+        });
+    }));
 }
 
 // ─── Observer ──────────────────────────────────────────────────────────────
@@ -447,18 +492,26 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
+    // accepting=true 起步；agent_loop 在末次 drain / run 收尾置 false，inject 据此在收尾
+    // 窗口拒绝晚到注入（§4.2.3），让 surface 回落「起新 run」而不是把消息丢进死队列。
+    let pending_inputs_accepting = Arc::new(AtomicBool::new(true));
     let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
 
     let mut handle = core_session.run_with_runtime_inputs(
         cancel_flag.clone(),
         Some(pending_inputs.clone()),
         Some(consumed_inputs.clone()),
-        None,
+        Some(pending_inputs_accepting.clone()),
     );
 
     // 把活 run 的真 HitlGate 挂进运行时状态：surface 的审批 / 提问回应经 transport
     // 直接戳它（§7.8.5），observer 不再自造 oneshot gate 阻塞 drive loop。
-    runtime.set_active(handle.hitl().clone(), cancel_flag, pending_inputs);
+    runtime.set_active(
+        handle.hitl().clone(),
+        cancel_flag,
+        pending_inputs,
+        pending_inputs_accepting,
+    );
 
     let mut observer = WebObserver {
         runtime: runtime.clone(),
