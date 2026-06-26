@@ -83,7 +83,7 @@ impl SendArgs {
     }
 }
 
-fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
+pub fn data_dir(_app: &AppHandle) -> AppResult<std::path::PathBuf> {
     // 架构 §6.1 / 决策 D10：CLI 与 Desktop 共享 ~/.hebbian/。
     // 不要走 Tauri 的 `app_data_dir`（macOS 下指向 ~/Library/Application Support/...），
     // 否则 send_message 会与 lib.rs::data_dir 写盘路径错位，create_session 写到
@@ -955,7 +955,7 @@ impl ModelClient for ModelWithName {
 // ── hebisland 通知桥接 ──
 
 /// 将 agent_core protocol::WireEvent 翻译为 hebisland 推送/撤销通知。
-fn push_engine_event_to_island(client: &HebislandClient, event: &protocol::WireEvent) {
+pub fn push_engine_event_to_island(client: &HebislandClient, event: &protocol::WireEvent) {
     match event {
         protocol::WireEvent::PermissionRequested {
             request_id,

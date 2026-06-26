@@ -9756,3 +9756,18 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: surface-session 加 transport 模块（additive）；hebcore 精简（行为不变）；hebweb 兼任 hebcore（浏览器路径行为不变，新增 unix-socket）。desktop/cli 不受影响。
 - **验证**: `cargo check --workspace` 通过；**运行时端到端验证通过**——起 hebweb（兼任 hebcore，日志确认 unix-socket 就绪 + hebcore.sock 创建），浏览器 ws 建 session，`heb connect <sid>` 连同一进程的 unix-socket 跑对话收完整事件流（reasoning/text_delta/text_done/run_finished）+ 落盘正确（"7乘8等于56"），`heb hebcore-rpc list_sessions` 查到同一活 session 表。证明**一进程同服务浏览器(ws)+CLI(unix-socket)、共享同一活对话状态**。
 - **留尾巴**: 步骤⑥ desktop 对话主链路客户端化（最高风险，60+ command 分流，按 §7.8.6 铁律最后做）；hebcore ws transport（浏览器直连远程 hebcore）。
+
+### 2026-06-25 — desktop 对话主链路改 hebcore 客户端（§7.8 步骤⑥核心落地）
+
+- **Why**: 完成 §7.8.6 步骤⑥（架构明示最高风险项）——desktop 对话主链路退化为 hebcore 客户端，消灭"desktop 特例"，让 desktop/heb/hebweb 走完全相同的 hebcore 协议 + 同一份累积器。native 能力（CDP 浏览器/终端/托盘/灵动岛/微信/快捷键）仍进程内自理（§7.2.1）。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs)（新）：desktop 的 hebcore 客户端。connect_or_spawn（连不上拉起内嵌/dev hebcore 二进制，单例锁安全）；`run_conversation`（StartRun + Subscribe 两连接，事件经 RunEventSink 转发）；`approve`/`answer`/`interrupt`/`inject`/`set_run_mode` 控制 Op 代理。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `send_message` 不再调 `chat::send_and_save`（内嵌跑 run），改 `tokio::spawn_blocking(hebcore_client::run_conversation)`，事件经 DesktopHebcoreSink 转发到灵动岛/微信转发/前端 Channel，并 track_remote 登记 HITL pending；`approve_permission`/`answer_question`/`cancel_message`/`inject_user_message`/`set_run_mode` 改经 hebcore（找不到 remote session 时回退本地 gate，兼容进程内 branch 旁支）。
+  - [apps/desktop/src/hitl.rs](../apps/desktop/src/hitl.rs): HitlState 加 `remote` 表（request_id→session_id）+ track_remote/remote_session_of——run 在 hebcore 进程后本地 gate 够不到，改记 session 经协议代理。
+  - [crates/common/src/runtime.rs](../crates/common/src/runtime.rs): 加 `session_for_request`（cancel/inject 经 hebcore 代理时反查 session）。
+  - [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs): Approve/Answer 加时序容忍重试（~500ms）——客户端收 PermissionRequested 事件后可能比 agent_loop 注册 gate 更快发来 Approve（事件 broadcast 与 gate 注册无全局顺序保证），重试等 gate 就绪。
+- **影响范围**: desktop 对话主链路 + 控制命令改 hebcore 协议；HitlState/runtime 加路由能力（additive）；transport 加重试。`chat::send_and_save` 保留（测试 + branch 旁支仍用）。heb/hebweb 不受影响。
+- **数据安全（§7.6 风险，用户确认接受）**: desktop 自身 LocalCoreClient 与 hebcore 进程会写同一批 session.jsonl——本步只切对话主链路 + 控制命令，其余读类命令（get_session/fork/compact...）仍走 desktop 进程内。用户明确接受双进程写风险直接全切。
+- **验证**: `cargo check --workspace` + desktop fingerprint 测试 + surface-session 编译通过；**协议侧端到端**——hebcore Approve 回流 accepted（强类型 ApprovalDecision::Deny→`{"type":"deny"}`→resolve_approval 命中，时序重试修复后稳定）；对话主链路与 heb connect 同协议（步骤④已验证）。
+- **待真机验证（TCC 堵死自动截图，需用户点一遍）**: Tauri GUI——发消息流式渲染、审批弹窗点批准/拒绝回流、立即发送插队、中断按钮、切 run mode。验证清单见交付说明。
+- **留尾巴**: desktop 读类命令（get_session/fork/compact/branch/goal/plan/truncate）仍进程内，与 hebcore 写同 jsonl 的并发收敛留后续（彻底消除 §7.6 风险需全部命令走 hebcore）；hebcore ws transport（远程）。

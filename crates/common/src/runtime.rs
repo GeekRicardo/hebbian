@@ -93,6 +93,16 @@ pub fn has_active_run_for_session(request_id: &str, session_id: &str) -> bool {
         .is_some_and(|handle| handle.session_id.as_deref() == Some(session_id))
 }
 
+/// 反查某 request_id 当前关联的 session_id（架构 §7.8.6：cancel / inject 经 hebcore
+/// 代理时需要 session 路由）。
+pub fn session_for_request(request_id: &str) -> Option<String> {
+    registry()
+        .lock()
+        .unwrap()
+        .get(request_id)
+        .and_then(|handle| handle.session_id.clone())
+}
+
 /// 把一条 pending input 推入指定 request_id 的运行时队列。
 /// 返回 `false` 表示 request_id 已经不存在（run 结束 / 还没注册）。
 pub fn inject_pending_input(request_id: &str, input: PendingUserInput) -> bool {

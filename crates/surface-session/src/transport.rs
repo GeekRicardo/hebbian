@@ -107,13 +107,19 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                 request_id,
                 decision,
             }) => {
+                // 时序容忍（架构 §7.8.6）：客户端收到 PermissionRequested 事件后可能比
+                // agent_loop 注册 gate 更快发来 Approve（事件 broadcast 与 gate 注册无全局
+                // 顺序保证）。短重试等 gate 就绪——同进程注册是微秒级，几次必命中。
                 let resp = match ctx.runtimes.get(&session_id).await {
-                    Some(rt) if rt.state.resolve_approval(&request_id, decision) => {
-                        HebcoreResponse::Accepted
+                    Some(rt) => {
+                        if resolve_approval_with_retry(&rt.state, &request_id, decision).await {
+                            HebcoreResponse::Accepted
+                        } else {
+                            HebcoreResponse::Error {
+                                message: format!("未找到待结算审批 {request_id}"),
+                            }
+                        }
                     }
-                    Some(_) => HebcoreResponse::Error {
-                        message: format!("未找到待结算审批 {request_id}"),
-                    },
                     None => HebcoreResponse::Error {
                         message: format!("session {session_id} 未激活"),
                     },
@@ -126,12 +132,15 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                 answer,
             }) => {
                 let resp = match ctx.runtimes.get(&session_id).await {
-                    Some(rt) if rt.state.answer_question(&request_id, answer) => {
-                        HebcoreResponse::Accepted
+                    Some(rt) => {
+                        if answer_question_with_retry(&rt.state, &request_id, answer).await {
+                            HebcoreResponse::Accepted
+                        } else {
+                            HebcoreResponse::Error {
+                                message: format!("未找到待结算提问 {request_id}"),
+                            }
+                        }
                     }
-                    Some(_) => HebcoreResponse::Error {
-                        message: format!("未找到待结算提问 {request_id}"),
-                    },
                     None => HebcoreResponse::Error {
                         message: format!("session {session_id} 未激活"),
                     },
@@ -246,4 +255,35 @@ async fn write_line(
     w.write_all(out.as_bytes()).await?;
     w.flush().await?;
     Ok(())
+}
+
+/// 审批结算的时序容忍重试（§7.8.6）：gate 由 agent_loop 在 emit 事件后紧接着注册，
+/// 客户端的 Approve 可能抢先到达。重试 ~500ms（每 10ms 一次）等 gate 就绪。
+async fn resolve_approval_with_retry(
+    rt: &agent_core::session_hub::SessionRuntimeState,
+    request_id: &str,
+    decision: protocol::ApprovalDecision,
+) -> bool {
+    for _ in 0..50 {
+        if rt.resolve_approval(request_id, decision.clone()) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    false
+}
+
+/// 提问结算的时序容忍重试（同 [`resolve_approval_with_retry`]）。
+async fn answer_question_with_retry(
+    rt: &agent_core::session_hub::SessionRuntimeState,
+    request_id: &str,
+    answer: protocol::UserAnswer,
+) -> bool {
+    for _ in 0..50 {
+        if rt.answer_question(request_id, answer.clone()) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    false
 }

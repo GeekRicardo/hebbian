@@ -19,6 +19,10 @@ use common::runtime::CancelFlag;
 pub struct HitlState {
     pending: Mutex<HashMap<String, Arc<HitlGate>>>,
     runs: Mutex<HashMap<String, (CancelFlag, Arc<HitlGate>)>>,
+    /// 架构 §7.8.6 步骤⑥：run 移到 hebcore 进程后，HITL gate 在 hebcore 进程里，desktop
+    /// 够不到本地 gate——改记 `request_id → session_id`，approve / answer 命令据此经
+    /// hebcore 的 Approve / Answer 协议代理结算（见 [`HitlState::remote_session_of`]）。
+    remote: Mutex<HashMap<String, String>>,
 }
 
 impl HitlState {
@@ -30,6 +34,16 @@ impl HitlState {
     /// 关联 `request_id` 到当前 run 的 HitlGate。
     pub fn track(&self, request_id: String, gate: Arc<HitlGate>) {
         self.pending.lock().unwrap().insert(request_id, gate);
+    }
+
+    /// 登记一条远端（hebcore）待结算 HITL：`request_id → session_id`（§7.8.6）。
+    pub fn track_remote(&self, request_id: String, session_id: String) {
+        self.remote.lock().unwrap().insert(request_id, session_id);
+    }
+
+    /// 取并移除某 request_id 对应的远端 session（approve / answer 经 hebcore 代理时用）。
+    pub fn remote_session_of(&self, request_id: &str) -> Option<String> {
+        self.remote.lock().unwrap().remove(request_id)
     }
 
     pub fn cancel_run(&self, request_id: &str) -> bool {
