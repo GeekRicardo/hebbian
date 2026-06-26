@@ -351,12 +351,11 @@ fn load_session_for_view(
     id: &str,
     active_request_id: Option<&str>,
 ) -> AppResult<Session> {
-    // 切回仍在跑的会话时，partial sidecar 是活跃流式状态，不是崩溃残留。
-    if active_request_id
-        .is_some_and(|request_id| cancellation::has_active_run_for_session(request_id, id))
-    {
-        return sessions::load(data_dir, id);
-    }
+    // 架构 §7.8.5 步骤⑥：统一走带 partial 恢复的加载。run 进行中（活 partial 持 `.live`
+    // 锁）时 load_with_partial_recovery 会把流式内容读出来渲染、不折盘（旧逻辑这里用纯
+    // load 跳过 partial，是为「本地进程内活 run」写的特例——run 移到 hebcore 后该特例
+    // 既看不到流式、判活又用错了进程的 registry，故删除）。
+    let _ = (data_dir, active_request_id);
     core.load_session(id).map_err(map_core_err)
 }
 

@@ -110,6 +110,19 @@ pub enum MessageMeta {
         /// 续跑轮次（仅 `progress` 有意义；终态恒为已累计的最终轮数）。
         iteration: u32,
     },
+    /// Stop hook（cargo check / tsc 等后置 verify）一次执行的结果（架构 §4.8.3）。
+    /// turn 自然结束跑 Stop hook 后，把结果作为 `Role::Marker` append——让消息流显示
+    /// 「跑了哪个 verify、过没过」。transcript rebuild 对 `Role::Marker` 走 `_ => {}` 跳过，
+    /// 模型看不到它（verify 失败的修复提示走单独的 `<hook-feedback>` user 消息）。
+    HookOutcome {
+        /// hook 点位名（当前恒为 `Stop`）。
+        event: String,
+        /// 执行结论：`passed`（verify 通过）/ `injected`（verify 失败，已注入续跑修复）/
+        /// `blocked`（hook 阻断）。
+        status: String,
+        /// verify 失败 / 阻断时的提示文本（passed 时为空）。
+        detail: String,
+    },
     /// 机主不活跃时，主对话的某条 HITL（审批 / 提问）被转发到聊天渠道（微信等）的痕迹
     /// （架构 §7.5.1，2026-06-20）。物理 `Role::Marker`，不进 model transcript，仅供
     /// surface 渲染一条「已转发到微信」分隔线小条，让机主回到电脑后知道这条审批/问题
@@ -1523,11 +1536,40 @@ pub fn load_token_stats(data_dir: &Path, id: &str) -> Option<TokenStats> {
 
 /// Surface 入口语义：恢复 partial 残留后再加载 session。
 /// 桌面 / CLI / hebweb 在用户打开会话历史 / 发送新消息前应走这条路径。
+///
+/// 两类 partial 区别对待（架构 §7.8.5 步骤⑥）：
+/// - **死 partial**（写者已退，真中断）→ `recover_and_append_interrupted_partials` 折成
+///   `Assistant + Interrupted marker` 落进 jsonl，随 `load` 读出。
+/// - **活 partial**（写者还在跑，hebcore run 进行中）→ **不落盘**，加载后把已累积的流式
+///   内容拼成一条进行中的 assistant message 追加到返回的 Session（内存态）——让用户切到
+///   正在跑的对话能看到流式内容；run 收尾 hebcore 落正式 message，下次加载读正式的。
 pub fn load_with_partial_recovery(data_dir: &Path, id: &str) -> AppResult<Session> {
     if let Err(e) = recover_and_append_interrupted_partials(data_dir, id) {
         tracing::warn!(session = %id, error = %e, "恢复 partial 失败");
     }
-    load(data_dir, id)
+    let mut session = load(data_dir, id)?;
+    append_live_partials(data_dir, id, &mut session);
+    Ok(session)
+}
+
+/// 把活 partial 的已累积流式内容拼进 session（内存态、不落盘）。死 partial 已被
+/// `recover_and_append_interrupted_partials` 处理掉，这里只剩活的。
+fn append_live_partials(data_dir: &Path, id: &str, session: &mut Session) {
+    let partials = match super::sessions_dir::recover_interrupted_partials(data_dir, id) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(session = %id, error = %e, "扫描活 partial 失败");
+            return;
+        }
+    };
+    for p in &partials {
+        if !p.alive {
+            continue;
+        }
+        if let Some(msg) = partial_to_live_message(p) {
+            session.messages.push(msg);
+        }
+    }
 }
 
 /// 中断恢复时追加在残片末尾的话术。同时进 `MessagePart::Text` 与 `content`，
@@ -1549,6 +1591,11 @@ pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> App
     };
     let mut appended = 0usize;
     for p in &partials {
+        // 活 partial（写者还在跑）只在加载时内存渲染（见 load_with_partial_recovery），
+        // **不落盘、不删**——hebcore run 收尾会把这段正式落进 jsonl，折盘会重复两份。
+        if p.alive {
+            continue;
+        }
         if let Some(msg) = partial_to_interrupted_message(p) {
             append_line(&path, &RolloutLine::Message(msg))?;
             append_line(
@@ -1584,6 +1631,33 @@ pub fn recover_and_append_interrupted_partials(data_dir: &Path, id: &str) -> App
 /// - text / reasoning / 有名 tool_call 全空时返回 None（无内容无需保存）
 fn partial_to_interrupted_message(
     partial: &super::sessions_dir::RecoveredPartial,
+) -> Option<Message> {
+    partial_to_message(partial, false)
+}
+
+/// 把活 partial（写者还在跑）组装成一条**进行中的流式** assistant message——只读出来
+/// 渲染，**不加中断话术、不落盘**（架构 §7.8.5 步骤⑥）。surface 加载会话历史时把它
+/// 拼进返回的 Session，让用户看到正在跑的 run 的已累积内容；hebcore run 收尾会把这段
+/// 正式落进 jsonl，下次加载 partial 已删、读正式的。
+fn partial_to_live_message(
+    partial: &super::sessions_dir::RecoveredPartial,
+) -> Option<Message> {
+    partial_to_message(partial, true)
+}
+
+/// 把 partial 折叠结果翻译成 assistant 消息。`live=true` 时是进行中的流式渲染
+/// （不追中断话术、id 按 msg_id 稳定，避免每次 load 生成新 id 让前端重复渲染）；
+/// `live=false` 时是中断恢复（末尾追加 [`INTERRUPTED_TAIL_NOTICE`]）。
+///
+/// 规则：
+/// - 无 `name` 的 tool_call 直接丢——name 缺失意味着流式 delta 首帧没透过来，
+///   只剩残缺 arguments，模型读不出工具身份、UI 也无法渲染，留下只是噪声
+/// - 有 `name` 的保留，arguments 即便不是合法 JSON 也保留原文（input 落 Null），
+///   让模型在下一轮自行判断"这次工具调用没走完"
+/// - text / reasoning / 有名 tool_call 全空时返回 None（无内容无需保存）
+fn partial_to_message(
+    partial: &super::sessions_dir::RecoveredPartial,
+    live: bool,
 ) -> Option<Message> {
     let named_tool_calls: Vec<(u32, String, String)> = partial
         .tool_calls
@@ -1626,15 +1700,20 @@ fn partial_to_interrupted_message(
             is_error: false,
         });
     }
-    parts.push(MessagePart::Text {
-        text: INTERRUPTED_TAIL_NOTICE.to_string(),
-    });
+    // 中断恢复才追加「输出中断」话术；活流式不加（它还在跑）。
+    if !live {
+        parts.push(MessagePart::Text {
+            text: INTERRUPTED_TAIL_NOTICE.to_string(),
+        });
+    }
 
     let mut content = partial.text.clone();
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
+    if !live {
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(INTERRUPTED_TAIL_NOTICE);
     }
-    content.push_str(INTERRUPTED_TAIL_NOTICE);
 
     let tool_calls: Vec<MessageToolCall> = named_tool_calls
         .iter()
@@ -1657,7 +1736,13 @@ fn partial_to_interrupted_message(
         .collect();
 
     Some(Message {
-        id: new_id(),
+        // 活流式用按 msg_id 稳定的 id：多次 load 同一活 partial 返回同一 id，
+        // 前端按 id 去重不会重复渲染。中断恢复落盘走 new_id（一次性）。
+        id: if live {
+            format!("live-{}", partial.msg_id)
+        } else {
+            new_id()
+        },
         role: Role::Assistant,
         content,
         attachments: Vec::new(),
@@ -3451,5 +3536,78 @@ mod tests {
         }
         // 不应新增消息——是原地更新而非追加。
         assert_eq!(after_forward.messages.len(), reloaded.messages.len());
+    }
+
+    /// 流式可见性（架构 §7.8.5 步骤⑥）：run 进行中（partial 写者持 `.live` 锁）时，
+    /// `load_with_partial_recovery` 应把活 partial 的已累积内容读出来拼进 Session
+    /// （进行中渲染，**不加「输出中断」话术、不折盘、不删 partial**）。
+    ///
+    /// A/B：旧逻辑「活 partial 直接跳过」→ load 看不到流式内容（messages 不含它）。
+    /// 新逻辑 → messages 末尾出现一条含流式文本、不带中断话术的 assistant。
+    #[test]
+    fn live_partial_is_rendered_not_folded() {
+        use super::super::sessions_dir::{self, PartialFragment, PartialLiveGuard};
+
+        let dir = temp_data_dir("live-partial-render");
+        let session = create(&dir, "openai".into(), "gpt-x".into(), None, None).unwrap();
+        let sid = session.id.clone();
+        let msg_id = "live-msg-1";
+
+        // 模拟 hebcore run 进行中：持活性锁 + 写两帧流式 text。
+        let _guard = PartialLiveGuard::acquire(&dir, &sid, msg_id).unwrap();
+        sessions_dir::append_partial(
+            &dir,
+            &sid,
+            msg_id,
+            &PartialFragment::Text {
+                text: "正在流式".into(),
+            },
+        )
+        .unwrap();
+        sessions_dir::append_partial(
+            &dir,
+            &sid,
+            msg_id,
+            &PartialFragment::Text {
+                text: "输出中".into(),
+            },
+        )
+        .unwrap();
+
+        // surface 加载会话：应看到活 partial 的流式内容。
+        let loaded = load_with_partial_recovery(&dir, &sid).unwrap();
+        let live = loaded
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("活 partial 应被读出渲染成 assistant message");
+        assert_eq!(live.content, "正在流式输出中", "活 partial 流式文本应完整读出");
+        assert!(
+            !live.content.contains(INTERRUPTED_TAIL_NOTICE),
+            "活 partial 不该带「输出中断」话术（它还在跑）"
+        );
+
+        // 不该落盘：纯读 jsonl（不含 partial 恢复）应仍无这条 assistant。
+        let raw = load(&dir, &sid).unwrap();
+        assert!(
+            !raw.messages.iter().any(|m| m.role == Role::Assistant),
+            "活 partial 不该被折盘进 jsonl（hebcore run 收尾会正式落盘，折盘会重复）"
+        );
+
+        // partial 文件仍在（没被删）。
+        assert!(
+            sessions_dir::partial_path(&dir, &sid, msg_id).exists(),
+            "活 partial 文件不该被删除"
+        );
+
+        // 多次 load 同一活 partial 返回稳定 id（前端按 id 去重不重复渲染）。
+        let loaded2 = load_with_partial_recovery(&dir, &sid).unwrap();
+        let id2 = loaded2
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .map(|m| m.id.clone())
+            .unwrap();
+        assert_eq!(live.id, id2, "同一活 partial 多次 load 应返回稳定 id");
     }
 }

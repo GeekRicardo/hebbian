@@ -9823,3 +9823,36 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [docs/架构图-hebcore.html](架构图-hebcore.html)（新）：单页交互式架构图，五层递进——① 进程拓扑（hebcore 核心 + 三客户端 + native 边界）② Crate 依赖 DAG（core-rpc/surface-session/hebcore 新增，单向依赖 agent-core）③ hebcore 内三条通路（同步 API / 对话主链路 / 运行时控制）④ 四个关键机制（累积归一 seg+full / 单写者多观察者 broadcast / dispatch 唯一入口 / connect_or_spawn 单例）⑤ 一次对话的 13 步端到端旅程。sticky 导航 + 滚动高亮。所有标识符与代码核对一致。
 - **影响范围**: 纯文档，零代码改动。
 - **留尾巴**: 无。
+
+### 2026-06-26 — 调整输出风格 prompt：干活前必先复述用户意图、多问题逐条确认
+
+- **Why**: 用户反馈（参考对话 202606230929-34feb87c 末尾）——agent 在用户一轮里提了多个问题/诉求时，常常不拆清楚就埋头改代码，只动手处理最后一点（如「partial 读取语义」那次只改了第 4 点没确认前 3 点）。用户希望每次「明确要干活 / 要思考」之前，先把用户意图提炼出来、把多轮多问题逐条列清并确认听懂，再动手。
+- **改动**:
+  - [crates/agent-core/prompts/base_system.md](../crates/agent-core/prompts/base_system.md) `# Cadence` 第一条：从「Open by setting direction」强化为「Open by restating intent, then set direction」——要求开场先用自己的话复述用户真正想要什么 + success 长什么样，多个诉求时逐行 enumerate 并确认，禁止只默默修最后一项，再说怎么做。
+  - 同文件 `# Communicating` 第二条：把原「No restating the user's words back」收窄为「no parroting the user's words back verbatim」，并补一句「干活前要用自己的话复述意图——提炼确认 ≠ 机械复述」，消除两条规则打架。
+- **影响范围**: 仅改 STABLE 段 prompt 文本（`base_system.md`，三 surface 共用、`include_str!` 编译进二进制），不动 segment 结构 / 对外 API / 架构.md §9。会一次性击穿 prompt cache（改 STABLE 段的固有成本，可接受）。`cargo check -p agent-core` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-25 — Stop hook 执行落 marker + 所有 marker 去上下边距 + 插队消息也解析 //goal
+
+- **Why**: 用户三点——①Stop hook（cargo check/tsc 等 verify）跑了要在消息流显示一个 marker（过没过一目了然）；②所有 marker 上下空白边距去掉，省空间；③run 在跑时发 `//goal` 被当普通文本插队、不注册目标——插队路径绕过了命令解析。
+- **改动**:
+  - `crates/agent-core/src/storage/sessions.rs`: MessageMeta 加 `HookOutcome{event,status,detail}`（status: passed/injected/blocked）
+  - `crates/agent-core/src/agent_loop.rs`: ①Stop hook trigger 后落 HookOutcome marker（通过/注入/阻断都落，先 flush assistant 段保证排在其后）；②抽 `maybe_emit_pending_set_marker` helper，在 run 启动点 + 插队 drain 点都调——插队设的 goal 也能落 set marker；新增 `append_hook_outcome_marker`
+  - `apps/desktop/frontend/src/desktop/ui/components/HookOutcomeSummary.tsx`（新建）: hook 结果一行摘要（绿勾通过/橙警告已修复/红阻断，失败可展开详情）
+  - `types.ts`: 加 `hook_outcome` MessageMeta；`MessageBubble.tsx`: 加 hook_outcome 渲染分支 + 去掉 goal/memory/switch/interrupted/reasoning_switch/channel 共 6 类 marker 的上下 padding（py-1/py-3 → 无）
+  - `chatInput/index.tsx`: submit 的 isStreaming 分支先解析 `//` 命令（命中则 sendPrompt 走 enqueueInput 插队、不开新 run），让 run 在跑时 //goal 也能注册目标
+- **影响范围**: agent-core（agent_loop/sessions）+ desktop 前端。零新机制——hook marker 与 goal marker 同走 append_*_marker 串行落盘流。agent-core 8 个 goal 测试全过、desktop 整包编译通过、tsc 0 error
+- **留尾巴**: 插队 set marker 在每轮 drain 点检查 pending_set_marker（有 load 开销但 drain 不频繁）；未真机验证 hook marker 渲染与插队 goal 端到端
+
+### 2026-06-25 — 修流式输出跨 surface / 重启不可见：活 partial 读出渲染不折盘（§7.8.5 步骤⑥）
+
+- **Why**: 用户报新 build（run 在 hebcore 进程）的流式输出，老 build 切到该对话看不到、进程重启后已输出内容也不见。根因：run 进行中 agent-core 实时把每帧流式 chunk 写进活 partial（带 `.live` 锁），但加载逻辑「看到 `.live` 锁就完全跳过 partial」（怕把活 run 误折成中断），于是 session.jsonl 里没有当前段、partial 又被跳过 → 切对话/重启都看不到。**数据没丢（在 partial 文件里），丢的是读出来的路**。
+- **用户给的设计修正**: 读取时按 `.live` 区分——有 `.live`（写者还在跑）→ 读出来渲染成进行中流式、**不标断开**；没有 `.live`（写者死了）→ 才折叠 + 标 Interrupted。
+- **改动**:
+  - [crates/agent-core/src/storage/sessions_dir.rs](../crates/agent-core/src/storage/sessions_dir.rs): `RecoveredPartial` 加 `alive` 字段；`recover_interrupted_partials` 不再跳过活 partial，活的也读出来标 `alive=true`。
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `partial_to_message(partial, live)` 参数化——活的不追「输出中断」话术、id 按 msg_id 稳定（`live-<msg_id>`，前端按 id 去重不重复渲染）；`recover_and_append_interrupted_partials` 跳过活 partial（不落盘——hebcore run 收尾会正式落，折盘会重复两份）；`load_with_partial_recovery` 加载后把活 partial 拼成进行中 assistant message 追加进返回 Session（内存态、不落盘、不删 partial）。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `load_session_for_view` 删除「本地有活 run 就用纯 load 跳过 partial」的特例——那是为进程内活 run 写的，run 移到 hebcore 后该特例既看不到流式、判活又用错了进程的 cancellation registry。统一走 `core.load_session`（带 partial 恢复）。
+- **影响范围**: agent-core partial 加载语义（活 partial 从「跳过」改「读出渲染」）；desktop 加载路径。cli/web/desktop 的 load_session 都走 load_with_partial_recovery，自动获益。死 partial 中断折叠路径不变。
+- **验证**: `cargo check --workspace` + agent-core storage::sessions 33 测试通过；新增 `live_partial_is_rendered_not_folded`（活 partial 读出渲染、不带中断话术、不落盘、不删、稳定 id）；更新 `recover_skips_partial_while_writer_alive`（活 partial 返回标 alive=true，写者退出后 alive=false）。
+- **留尾巴**: 这解决了「切对话/重启加载一次能看到当前流式」。**实时增量**（切过去后 run 继续产出的新 chunk 自动刷新）需 desktop 切对话时 subscribe 进行中 run 的事件流，是独立下一步；automode judge 卡死是另一个独立 bug 待定位。

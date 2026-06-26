@@ -251,6 +251,10 @@ pub struct RecoveredPartial {
     pub tool_calls: std::collections::BTreeMap<u32, (Option<String>, String)>,
     /// 按 index 聚合的 tool 执行结果（result, duration_ms）。
     pub tool_results: std::collections::BTreeMap<u32, (String, u64)>,
+    /// 写入方是否仍存活（`.live` 锁仍被持有 = run 还在跑）。`true` = 活流式内容，
+    /// 调用方应**只读出来渲染、不折盘、不标中断**（hebcore run 收尾会正式落盘，
+    /// 折盘会重复两份）；`false` = 真·中断残留，按老路径折成 Interrupted message。
+    pub alive: bool,
 }
 
 /// 扫描 partial 目录，把每个残留文件聚合并返回。返回后调用方负责把内容写到
@@ -275,13 +279,11 @@ pub fn recover_interrupted_partials(
         let Some(msg_id) = name.strip_suffix(".partial.jsonl") else {
             continue;
         };
-        // 活性检测：写入方（本进程或共享数据目录的其他 surface 进程）还在流式写
-        // 这个 partial 时绝不折叠——否则活 run 会被错标「输出中断」落进 session.jsonl，
-        // run 结束正常落盘后同一段内容就重复两份。
-        if partial_writer_alive(data_dir, session_id, msg_id) {
-            tracing::debug!(msg_id, "partial 写入方仍存活，跳过中断恢复");
-            continue;
-        }
+        // 活性检测：写入方仍在流式写这个 partial（`.live` 锁被持有）= run 还在跑。
+        // **不再跳过**——活的也读出来返回（标 alive），让 surface 加载会话时能渲染
+        // 进行中的流式内容；调用方按 alive 区分处理：活的只渲染不折盘（hebcore run
+        // 收尾会正式落盘，折盘会重复两份），死的才折成 Interrupted message 落盘。
+        let alive = partial_writer_alive(data_dir, session_id, msg_id);
         let bytes = match lock::read_locked(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -292,6 +294,7 @@ pub fn recover_interrupted_partials(
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let mut recovered = RecoveredPartial {
             msg_id: msg_id.to_string(),
+            alive,
             ..Default::default()
         };
         for line in text.lines() {
@@ -414,9 +417,10 @@ mod tests {
         assert_eq!(tc.1, r#"{"command":"ls"}"#);
     }
 
-    /// 回归：活 run 的 partial 不得被中断恢复折叠（架构 §4.9.3 恢复边界）。
-    /// 修复前 recover 无条件折叠——长 run 期间任何 surface 加载历史都会把
-    /// 正在写的 partial 错标「输出中断」，run 结束正常落盘后内容重复两份。
+    /// 回归（架构 §7.8.5 步骤⑥）：活 run 的 partial 现在**返回但标 `alive=true`**——
+    /// 不再无条件跳过，让 surface 加载时能读出流式内容渲染；上层据 alive 决定不折盘
+    /// （见 sessions::recover_and_append_interrupted_partials / load_with_partial_recovery）。
+    /// 写者退出后同一 partial 标 `alive=false`，按中断残留折叠。
     #[test]
     fn recover_skips_partial_while_writer_alive() {
         let dir = tmp("partial-live");
@@ -434,15 +438,18 @@ mod tests {
         )
         .unwrap();
 
-        // 写入方存活（锁被持有）：恢复扫描必须跳过，partial 文件保持原样
+        // 写入方存活（锁被持有）：返回但标 alive=true，文件保持原样（上层不折盘）。
         let recovered = recover_interrupted_partials(&dir, sid).unwrap();
-        assert!(recovered.is_empty(), "活 partial 被折叠了");
+        assert_eq!(recovered.len(), 1, "活 partial 应被读出返回");
+        assert!(recovered[0].alive, "活 partial 应标 alive=true");
+        assert_eq!(recovered[0].text, "streaming...");
         assert!(partial_path(&dir, sid, "msg1").exists());
 
-        // 写入方退出（锁释放，等价进程崩溃后 OS 释放）：按残留正常恢复
+        // 写入方退出（锁释放，等价进程崩溃后 OS 释放）：标 alive=false，按残留恢复。
         drop(guard);
         let recovered = recover_interrupted_partials(&dir, sid).unwrap();
         assert_eq!(recovered.len(), 1);
+        assert!(!recovered[0].alive, "写者退出后应标 alive=false");
         assert_eq!(recovered[0].text, "streaming...");
     }
 
