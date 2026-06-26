@@ -1,7 +1,9 @@
 //! Session 标题自动生成（utility 短调用）。
 //!
-//! 用一次「无工具、关思考、短输出」的 LLM 调用，把用户首条消息提炼成一个对话标题。
-//! 不进 agent loop，也不进 transcript——纯辅助。
+//! 用一次「无工具、关思考、短输出」的 LLM 调用，把对话开头的若干条消息（用户提问 +
+//! 中间 assistant 回复片段）提炼成一个对话标题。带上 assistant 一侧，是因为很多对话的
+//! 主旨要看回答才能确定（用户只说「继续」「这个怎么改」时尤甚）。不进 agent loop，
+//! 也不进 transcript——纯辅助。
 //!
 //! 关键点：
 //! - `ReasoningConfig.enabled = Some(false)`。对 DeepSeek thinking 模型，这会让
@@ -24,11 +26,15 @@ use model_gateway::types::{ModelError, ModelRequest, ModelResponse, TranscriptEn
 use crate::storage::sessions::{self, Message, Role, Session};
 
 const TITLE_INSTRUCTION: &str =
-    "为以下用户消息生成一个 4-12 字的中文对话主题作为标题，只输出标题本身，\
-     不要引号、标点、解释或前后缀。\n\n用户消息：\n";
+    "下面是一段对话的开头（含用户提问与助手回复片段），为它生成一个 4-12 字的中文对话\
+     主题作为标题，只输出标题本身，不要引号、标点、解释或前后缀。\n\n对话：\n";
 
 const TITLE_MAX_TOKENS: u32 = 128;
 const TITLE_MAX_CHARS: usize = 32;
+/// 采样进标题上下文的消息条数上限（从对话开头取，user + assistant 混合）。
+const TITLE_CONTEXT_MAX_MESSAGES: usize = 5;
+/// 每条消息截入上下文的最大字符数——assistant 回复往往很长，截断既省 token 又够提炼主旨。
+const TITLE_CONTEXT_PER_MESSAGE_CHARS: usize = 200;
 const TITLE_TRIM_CHARS: &[char] = &[
     ' ', '\t', '\n', '"', '\'', '`', '「', '」', '“', '”', '【', '】', '(', ')', '（', '）',
 ];
@@ -38,18 +44,19 @@ const TITLE_TRIM_CHARS: &[char] = &[
 const FALLBACK_LIMIT_CJK: usize = 10;
 const FALLBACK_LIMIT_LATIN: usize = 15;
 
-/// 用「关思考」的 utility 短调用让模型从用户首条消息提炼对话标题。
+/// 用「关思考」的 utility 短调用让模型从一段对话片段提炼对话标题。
+/// `conversation` 是调用方用 [`build_title_context`] 拼好的多条消息片段。
 /// 调用方负责把返回值写入 `Session.title`（建议先 trim 检查非空再写）。
 pub async fn generate_title(
     client: &dyn ModelClient,
     model: &str,
-    user_message: &str,
+    conversation: &str,
 ) -> Result<String, ModelError> {
-    let trimmed_user = user_message.trim();
-    if trimmed_user.is_empty() {
+    let trimmed = conversation.trim();
+    if trimmed.is_empty() {
         return Ok(String::new());
     }
-    let prompt = format!("{TITLE_INSTRUCTION}{trimmed_user}");
+    let prompt = format!("{TITLE_INSTRUCTION}{trimmed}");
     let req = ModelRequest {
         model: model.into(),
         system: None,
@@ -81,14 +88,9 @@ async fn try_generate_for_session(
     session_id: &str,
     session: &Session,
 ) -> TitleOutcome {
-    let first_user = session
-        .messages
-        .iter()
-        .find(|m| matches!(m.role, Role::User))
-        .map(|m| m.content.trim().to_string())
-        .unwrap_or_default();
-    if first_user.is_empty() {
-        tracing::warn!(session_id, "标题生成跳过：session 无 user 消息");
+    let conversation = build_title_context(&session.messages);
+    if conversation.is_empty() {
+        tracing::warn!(session_id, "标题生成跳过：session 无可用对话消息");
         return TitleOutcome::Skipped;
     }
 
@@ -143,7 +145,7 @@ async fn try_generate_for_session(
         }
     };
 
-    let title = match generate_title(client.as_ref(), &model, &first_user).await {
+    let title = match generate_title(client.as_ref(), &model, &conversation).await {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(session_id, model = %model, error = %e, "标题生成失败：模型调用出错");
@@ -213,6 +215,48 @@ pub async fn regenerate_session_title(data_dir: &Path, session_id: &str) -> AppR
         }
     };
     sessions::rename(data_dir, session_id, title)
+}
+
+/// 从对话开头采样最多 [`TITLE_CONTEXT_MAX_MESSAGES`] 条真实对话消息，拼成喂给标题模型的片段。
+///
+/// 规则：
+/// - 只取 `User` / `Assistant`，跳过 `System` / `Marker`、系统通知（wakeup/cron）、subagent 子消息；
+/// - 每条按 [`TITLE_CONTEXT_PER_MESSAGE_CHARS`] 截断（超出加 `…`），内容空白的消息跳过；
+/// - 带 `用户:` / `助手:` 角色前缀，按时序拼接，便于模型理解对话走向。
+///
+/// 全空时返回空串，调用方据此判定「无可用消息」跳过。
+pub fn build_title_context(messages: &[Message]) -> String {
+    let mut lines = Vec::new();
+    for msg in messages {
+        let role_label = match msg.role {
+            Role::User if !msg.is_system_notification() => "用户",
+            Role::Assistant => "助手",
+            _ => continue,
+        };
+        let text = msg.content.trim();
+        if text.is_empty() {
+            continue;
+        }
+        lines.push(format!(
+            "{role_label}: {}",
+            truncate_chars(text, TITLE_CONTEXT_PER_MESSAGE_CHARS)
+        ));
+        if lines.len() >= TITLE_CONTEXT_MAX_MESSAGES {
+            break;
+        }
+    }
+    lines.join("\n")
+}
+
+/// 按字符数截断，超出追加 `…`。
+fn truncate_chars(s: &str, limit: usize) -> String {
+    let mut chars = s.chars();
+    let head: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 /// 模型调用失败时的兜底标题：截 session 首条 user message 开头若干字符。
@@ -346,5 +390,67 @@ mod tests {
         let long: String = std::iter::repeat('字').take(40).collect();
         let cut = sanitize_title(&long);
         assert_eq!(cut.chars().count(), 32);
+    }
+
+    fn msg(role: Role, content: &str) -> Message {
+        Message {
+            id: String::new(),
+            role,
+            content: content.into(),
+            attachments: vec![],
+            tool_calls: vec![],
+            parts: vec![],
+            created_at: 0,
+            meta: None,
+            subagent_call_id: None,
+            run_duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn build_context_mixes_user_and_assistant_and_caps_count() {
+        let messages = vec![
+            msg(Role::System, "系统提示不该进上下文"),
+            msg(Role::User, "第一问"),
+            msg(Role::Assistant, "第一答"),
+            msg(Role::Marker, "压缩标记不该进"),
+            msg(Role::User, "第二问"),
+            msg(Role::Assistant, "第二答"),
+            msg(Role::User, "第三问"),
+            msg(Role::Assistant, "第六条应被截断"),
+        ];
+        let ctx = build_title_context(&messages);
+        assert_eq!(
+            ctx,
+            "用户: 第一问\n助手: 第一答\n用户: 第二问\n助手: 第二答\n用户: 第三问"
+        );
+        // 只取前 5 条真实对话消息
+        assert_eq!(ctx.lines().count(), TITLE_CONTEXT_MAX_MESSAGES);
+        assert!(!ctx.contains("第六条"));
+        assert!(!ctx.contains("系统提示"));
+        assert!(!ctx.contains("压缩标记"));
+    }
+
+    #[test]
+    fn build_context_truncates_long_message() {
+        let long_answer: String = std::iter::repeat('啊').take(500).collect();
+        let messages = vec![msg(Role::User, "问"), msg(Role::Assistant, &long_answer)];
+        let ctx = build_title_context(&messages);
+        let assistant_line = ctx.lines().nth(1).unwrap();
+        // "助手: " 前缀 + 截断内容 + "…"
+        assert!(assistant_line.ends_with('…'));
+        let body = assistant_line.trim_start_matches("助手: ");
+        assert_eq!(
+            body.chars().filter(|&c| c == '啊').count(),
+            TITLE_CONTEXT_PER_MESSAGE_CHARS
+        );
+    }
+
+    #[test]
+    fn build_context_empty_when_no_dialogue() {
+        assert!(build_title_context(&[]).is_empty());
+        assert!(build_title_context(&[msg(Role::System, "x"), msg(Role::Marker, "y")]).is_empty());
+        // 内容全空白的消息也跳过
+        assert!(build_title_context(&[msg(Role::User, "   ")]).is_empty());
     }
 }
