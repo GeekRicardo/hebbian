@@ -43,7 +43,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../island-mac/dist/HebIsland.app/": "HebIsland.app/"
+      "../island-mac/dist/HebIsland.app/": "HebIsland.app/",
+      "../../target/release/hebcore": "hebcore"
     }
   }
 }

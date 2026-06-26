@@ -9797,3 +9797,13 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **核对依据**: 本会话 desktop 侧只改 `lib.rs`/`hitl.rs`/`chat.rs`/`hebcore_client.rs`（对话主链路客户端化 + sock 拉起），与上述前端 8 文件、dispatch.rs（工具派发器并发策略）、session_titler.rs（标题生成）无交叉；git 确认这 10 文件最近提交均非本会话 commit。
 - **影响范围**: 纯文档。这 10 文件原样留在 working tree（CLAUDE.md：纯他人未碰文件不 add、不替写权威 changelog），等其作者收尾。
 - **留尾巴**: 无（本会话自身改动 12 次提交均已带 changelog）。
+
+### 2026-06-25 — 修 release bundle 不含 hebcore 二进制：tauri.conf.json 打包 hebcore（§7.8.6 收尾）
+
+- **Why**: 用户报「release build 的 Hebbian.app 启动后发不了消息」。根因：步骤⑥ desktop 的 `bundled_hebcore_paths` release 路径走 `resource_dir/hebcore`，但 **tauri.conf.json 没把 hebcore 二进制打包进 bundle**——`Contents/Resources/` 只有 HebIsland.app + 图标，没有 hebcore。release 模式下 `spawn_bundled_hebcore` 找不到二进制 → hebcore 起不来 → 发消息找不到 hebcore.sock。dev 模式不受影响（`current_exe` 旁的 `target/debug/hebcore` 存在）。
+- **改动**:
+  - [apps/desktop/tauri.conf.json](../apps/desktop/tauri.conf.json): bundle.resources 加 `"../../target/release/hebcore": "hebcore"`——与 HebIsland.app 同款 resources 映射机制，把 hebcore 二进制放进 `Contents/Resources/hebcore`，正对 `bundled_hebcore_paths` 的 `resource_dir.join("hebcore")`。
+- **前置依赖**: `tauri build` 前须先 `cargo build --release -p hebcore`（hebcore 是独立 workspace member，desktop build 不会自动编它，resources 映射要求文件已存在）。
+- **影响范围**: release bundle 体积 +17MB（hebcore 二进制）。dev 模式不变。
+- **验证**: `cargo build --release -p hebcore`（17MB 产物）；手动拷 hebcore 进现有 bundle 的 Contents/Resources，从该路径拉起 hebcore——sock ~900ms 就绪；路径逻辑与 release 能工作的 HebIsland.app（同走 resource_dir.join）一致。
+- **留尾巴**: tauri build 流程建议在 beforeBuildCommand 或 CI 脚本里加 `cargo build --release -p hebcore` 确保 bundle 时二进制已存在（当前需手动先编）。
