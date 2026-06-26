@@ -220,6 +220,27 @@ function ChatInputInner({
     const v = text.trim();
     if ((!v && attachments.length === 0 && !editorSelectionRef) || sending) return;
     if (isStreaming) {
+      // run 在跑时也要解析 `//` 命令（否则 //goal 被当普通文本插队、不注册目标）。
+      // 命中命令：sendPrompt 改走插队（enqueueInput 进当前 run），不开新 run。
+      if (v.startsWith("//")) {
+        const result = await dispatchSlashCommand(
+          v,
+          {
+            sessionId: currentSession?.id ?? null,
+            toast,
+            sendPrompt: async (sendText) => {
+              enqueueInput(sendText, attachments, "tail");
+              setAttachments([]);
+            },
+          },
+          skills
+        );
+        if (result.handled) {
+          if (result.error) toast.error(result.error);
+          else clearEditor();
+          return;
+        }
+      }
       await enqueueAndClear("tail");
       return;
     }
@@ -658,9 +679,11 @@ function ChatInputInner({
     };
   }, []);
 
-  const inputDisabled = !!disabled;
+  // 压缩耗时数秒到数十秒、期间禁止任何输入与二次压缩：把压缩态并入唯一的禁用判定，
+  // 输入框、底部按钮、发送条件全部随之锁住（compacting 已按会话隔离，切走的会话不受影响）。
+  const inputDisabled = !!disabled || compacting;
   const canSubmit =
-    isStreaming || (!disabled && !sending && (!isEmpty || attachments.length > 0));
+    isStreaming || (!inputDisabled && !sending && (!isEmpty || attachments.length > 0));
 
   return (
     <div className={cn("pl-2 pr-4 pt-0 pb-3 text-sm", isStreaming && "chat-input-streaming")}>
