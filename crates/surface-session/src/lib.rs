@@ -43,7 +43,7 @@ use protocol::{
     ApprovalDecision, Event as AgentEvent, PermissionKind, PermissionRequestId, QuestionOption,
     UserAnswer,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 /// 每个 session 一份的运行时状态。
 ///
@@ -69,8 +69,13 @@ impl SessionRuntime {
         self.state.is_active()
     }
 
-    pub fn set_active(&self, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
-        self.state.set_active(cancel, inputs);
+    pub fn set_active(
+        &self,
+        hitl: Arc<agent_core::tools::hitl::HitlGate>,
+        cancel: Arc<AtomicBool>,
+        inputs: PendingInputs,
+    ) {
+        self.state.set_active(hitl, cancel, inputs);
     }
 
     pub fn clear_active(&self) {
@@ -192,36 +197,29 @@ impl TurnObserver for WebObserver {
 
     async fn on_permission_request(
         &mut self,
-        request_id: &PermissionRequestId,
+        _request_id: &PermissionRequestId,
         _kind: &PermissionKind,
         _summary: &str,
     ) -> Option<ApprovalDecision> {
-        let (tx, rx) = oneshot::channel();
-        self.runtime
-            .state
-            .pending_approvals
-            .lock()
-            .unwrap()
-            .insert(request_id.as_str().to_string(), tx);
-        rx.await.ok()
+        // 不在 drive loop 里等审批结果（那会阻塞单线程 recv，让 AutoMode judge 后发的
+        // PermissionAutoJudged pump 不出去而死锁）。审批通道是 agent_loop 持有的真
+        // HitlGate（run 启动时已 set_active 挂到 SessionRuntimeState），surface 的回应经
+        // transport 的 Approve → state.resolve_approval 直接戳它。这里返回 None 让 drive
+        // 立即继续 recv。
+        None
     }
 
     async fn on_question(
         &mut self,
-        request_id: &PermissionRequestId,
+        _request_id: &PermissionRequestId,
         _question: &str,
         _options: &[QuestionOption],
         _multi: bool,
         _questions: &[protocol::AskQuestion],
     ) -> Option<UserAnswer> {
-        let (tx, rx) = oneshot::channel();
-        self.runtime
-            .state
-            .pending_questions
-            .lock()
-            .unwrap()
-            .insert(request_id.as_str().to_string(), tx);
-        rx.await.ok()
+        // 同 on_permission_request：不阻塞 drive loop，提问回应经 transport 的 Answer →
+        // state.answer_question 直接戳活 run 的 HitlGate。
+        None
     }
 }
 
@@ -450,14 +448,17 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let pending_inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
     let consumed_inputs = Arc::new(Mutex::new(Vec::new()));
-    runtime.set_active(cancel_flag.clone(), pending_inputs.clone());
 
     let mut handle = core_session.run_with_runtime_inputs(
-        cancel_flag,
-        Some(pending_inputs),
+        cancel_flag.clone(),
+        Some(pending_inputs.clone()),
         Some(consumed_inputs.clone()),
         None,
     );
+
+    // 把活 run 的真 HitlGate 挂进运行时状态：surface 的审批 / 提问回应经 transport
+    // 直接戳它（§7.8.5），observer 不再自造 oneshot gate 阻塞 drive loop。
+    runtime.set_active(handle.hitl().clone(), cancel_flag, pending_inputs);
 
     let mut observer = WebObserver {
         runtime: runtime.clone(),

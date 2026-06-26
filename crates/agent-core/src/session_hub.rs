@@ -13,10 +13,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use protocol::{ApprovalDecision, UserAnswer, WireEvent};
-use tokio::sync::{broadcast, oneshot};
+use protocol::{ApprovalDecision, PermissionRequestId, UserAnswer, WireEvent};
+use tokio::sync::broadcast;
 
 use crate::run_mode::RunMode;
+use crate::tools::hitl::HitlGate;
 use common::runtime::{PendingInputs, PendingUserInput};
 
 /// 单个 session 的运行时状态（架构 §7.8.5）。
@@ -27,9 +28,15 @@ use common::runtime::{PendingInputs, PendingUserInput};
 pub struct SessionRuntimeState {
     pub session_id: String,
 
-    /// HITL 待结算通道：审批 / 提问 emit 后挂在这里，等 surface 回应。
-    pub pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
-    pub pending_questions: Mutex<HashMap<String, oneshot::Sender<UserAnswer>>>,
+    /// 当前活 run 的 HITL 闸门（审批 / 提问的唯一结算点）。run 启动时 [`set_active`]
+    /// 挂上 agent_loop 持有的真 [`HitlGate`]，surface 的审批回应经 [`resolve_approval`] /
+    /// [`answer_question`] 直接戳它——不再自造第二层 oneshot gate（那会在 drive loop 里
+    /// 阻塞 recv，让 AutoMode judge 后发的 `PermissionAutoJudged` pump 不出去而死锁）。
+    ///
+    /// [`set_active`]: SessionRuntimeState::set_active
+    /// [`resolve_approval`]: SessionRuntimeState::resolve_approval
+    /// [`answer_question`]: SessionRuntimeState::answer_question
+    pub hitl: Mutex<Option<Arc<HitlGate>>>,
 
     /// 是否有 run 正在跑（活写者存在）。
     pub active_run: AtomicBool,
@@ -54,8 +61,7 @@ impl SessionRuntimeState {
         let (event_tx, _) = broadcast::channel(capacity);
         Arc::new(Self {
             session_id: session_id.into(),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_questions: Mutex::new(HashMap::new()),
+            hitl: Mutex::new(None),
             active_run: AtomicBool::new(false),
             cancel_flag: Mutex::new(None),
             pending_inputs: Mutex::new(None),
@@ -79,15 +85,17 @@ impl SessionRuntimeState {
         self.active_run.load(Ordering::SeqCst)
     }
 
-    /// run 开始：登记 cancel 句柄 + 插队队列，置活。
-    pub fn set_active(&self, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
+    /// run 开始：登记 HITL 闸门 + cancel 句柄 + 插队队列，置活。
+    pub fn set_active(&self, hitl: Arc<HitlGate>, cancel: Arc<AtomicBool>, inputs: PendingInputs) {
+        *self.hitl.lock().unwrap() = Some(hitl);
         *self.cancel_flag.lock().unwrap() = Some(cancel);
         *self.pending_inputs.lock().unwrap() = Some(inputs);
         self.active_run.store(true, Ordering::SeqCst);
     }
 
-    /// run 结束：清 cancel 句柄 + 插队队列，置闲。
+    /// run 结束：清 HITL 闸门 + cancel 句柄 + 插队队列，置闲。
     pub fn clear_active(&self) {
+        *self.hitl.lock().unwrap() = None;
         *self.cancel_flag.lock().unwrap() = None;
         *self.pending_inputs.lock().unwrap() = None;
         self.active_run.store(false, Ordering::SeqCst);
@@ -112,29 +120,34 @@ impl SessionRuntimeState {
         if let Some(flag) = &*self.cancel_flag.lock().unwrap() {
             flag.store(true, Ordering::SeqCst);
         }
-        for (_id, tx) in self.pending_approvals.lock().unwrap().drain() {
-            let _ = tx.send(ApprovalDecision::Deny);
-        }
-        for (_id, tx) in self.pending_questions.lock().unwrap().drain() {
-            let _ = tx.send(UserAnswer::Cancelled);
+        if let Some(hitl) = &*self.hitl.lock().unwrap() {
+            hitl.cancel_all_pending();
         }
     }
 
     /// 结算一条审批（surface 回应到达时）。返回是否命中一个待结算项。
     pub fn resolve_approval(&self, request_id: &str, decision: ApprovalDecision) -> bool {
-        if let Some(tx) = self.pending_approvals.lock().unwrap().remove(request_id) {
-            tx.send(decision).is_ok()
-        } else {
-            false
+        let request_id = PermissionRequestId::from_raw(request_id);
+        let guard = self.hitl.lock().unwrap();
+        match &*guard {
+            Some(hitl) if hitl.is_pending(&request_id) => {
+                hitl.resolve(&request_id, decision);
+                true
+            }
+            _ => false,
         }
     }
 
     /// 结算一条提问。返回是否命中一个待结算项。
     pub fn answer_question(&self, request_id: &str, answer: UserAnswer) -> bool {
-        if let Some(tx) = self.pending_questions.lock().unwrap().remove(request_id) {
-            tx.send(answer).is_ok()
-        } else {
-            false
+        let request_id = PermissionRequestId::from_raw(request_id);
+        let guard = self.hitl.lock().unwrap();
+        match &*guard {
+            Some(hitl) if hitl.is_pending(&request_id) => {
+                hitl.answer(&request_id, answer);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -229,9 +242,39 @@ mod tests {
         let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
         assert!(!rt.inject("hi".into()), "无活 run 时 inject 应失败");
         let inputs: PendingInputs = Arc::new(Mutex::new(Vec::new()));
-        rt.set_active(Arc::new(AtomicBool::new(false)), inputs.clone());
+        rt.set_active(
+            Arc::new(HitlGate::default()),
+            Arc::new(AtomicBool::new(false)),
+            inputs.clone(),
+        );
         assert!(rt.inject("hi".into()));
         assert_eq!(inputs.lock().unwrap().len(), 1);
+    }
+
+    /// 回归（bug B 死锁根因）：审批结算直接戳活 run 的真 HitlGate，无第二层 oneshot
+    /// 中转。无活 run 时返回 false，pending 命中时唤醒 agent_loop 侧 waiter 并返回 true。
+    #[tokio::test]
+    async fn resolve_approval_hits_live_hitl_gate() {
+        let rt = SessionRuntimeState::new("s1", 16, RunMode::Default);
+        // 无活 run：结算应失败（没有可命中的 gate）。
+        assert!(!rt.resolve_approval("nope", ApprovalDecision::AllowOnce));
+
+        let gate = Arc::new(HitlGate::default());
+        let (request_id, waiter) = gate.open_approval(Some("Bash"), None);
+        rt.set_active(
+            gate.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        // 未知 request_id 不命中，活 run 也返回 false。
+        assert!(!rt.resolve_approval("unknown", ApprovalDecision::AllowOnce));
+        // 命中真实 pending：返回 true 并唤醒 agent_loop 侧 waiter。
+        assert!(rt.resolve_approval(request_id.as_str(), ApprovalDecision::AllowOnce));
+        assert!(matches!(
+            waiter.await,
+            Ok(ApprovalDecision::AllowOnce)
+        ));
     }
 
     #[test]

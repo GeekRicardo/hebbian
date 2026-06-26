@@ -715,18 +715,12 @@ async fn cmd_approve_permission(
     );
 
     let runtime = state.ensure_runtime(&sid).await?;
-    let tx = runtime
-        .state
-        .pending_approvals
-        .lock()
-        .unwrap()
-        .remove(&request_id);
-    match tx {
-        Some(tx) => {
-            let _ = tx.send(decision);
-            Ok(())
-        }
-        None => Err(anyhow!("unknown request_id: {request_id}")),
+    // 直接戳活 run 的 HitlGate（§7.8.5）：审批结算无第二层 oneshot 中转，与 transport
+    // 的 Approve 同链路。不命中视为未知 request_id。
+    if runtime.state.resolve_approval(&request_id, decision) {
+        Ok(())
+    } else {
+        Err(anyhow!("unknown request_id: {request_id}"))
     }
 }
 
@@ -811,18 +805,11 @@ async fn cmd_answer_question(
     };
 
     let runtime = state.ensure_runtime(&sid).await?;
-    let tx = runtime
-        .state
-        .pending_questions
-        .lock()
-        .unwrap()
-        .remove(&request_id);
-    match tx {
-        Some(tx) => {
-            let _ = tx.send(answer);
-            Ok(())
-        }
-        None => Err(anyhow!("unknown request_id: {request_id}")),
+    // 直接戳活 run 的 HitlGate（§7.8.5）：提问结算无第二层 oneshot 中转。
+    if runtime.state.answer_question(&request_id, answer) {
+        Ok(())
+    } else {
+        Err(anyhow!("unknown request_id: {request_id}"))
     }
 }
 
@@ -2011,7 +1998,7 @@ async fn cmd_discover_all_rules(_state: &ServerState, args: Value) -> Result<Val
 
 /// 路径访问审批：按 scope 落 storage（this_session→session.allowed_paths /
 /// global→settings.conversation.allowed_paths / this_project,once→不持久化），
-/// 再把 ApprovalDecision 投回 run 的 pending_approvals oneshot（与 cmd_approve_permission 同链路）。
+/// 再把 ApprovalDecision 戳进活 run 的 HitlGate（与 cmd_approve_permission 同链路）。
 async fn cmd_approve_path_access(
     state: &ServerState,
     args: Value,
@@ -2093,18 +2080,11 @@ async fn cmd_approve_path_access(
         "permission.approval: web backend received path approval"
     );
     let runtime = state.ensure_runtime(&sid).await?;
-    let tx = runtime
-        .state
-        .pending_approvals
-        .lock()
-        .unwrap()
-        .remove(&request_id);
-    match tx {
-        Some(tx) => {
-            let _ = tx.send(decision);
-            Ok(())
-        }
-        None => Err(anyhow!("unknown request_id: {request_id}")),
+    // 直接戳活 run 的 HitlGate（§7.8.5），与 cmd_approve_permission 同链路。
+    if runtime.state.resolve_approval(&request_id, decision) {
+        Ok(())
+    } else {
+        Err(anyhow!("unknown request_id: {request_id}"))
     }
 }
 
