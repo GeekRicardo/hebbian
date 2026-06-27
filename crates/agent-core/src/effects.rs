@@ -58,6 +58,13 @@ pub struct SegmentEffect {
     /// 该段是否"不可记忆"（[`safe_commands::is_never_remember`]，如 `rm` / `dd`）。
     /// 命中时整条审批强制 refuse_remember，且该段永远不被记忆放行——每次确认（架构 §4.4.2.3）。
     pub unmemorable: bool,
+    /// 该段是否「安全会写」（[`safe_commands::is_safe_write`]，如 `mkdir` / `touch`）。
+    /// 纯创建文件系统条目、不跑代码，目标已采进 [`write_targets`](Self::write_targets) 由路径闸
+    /// 兜越界 → 连首次都免审/免判官（架构 §4.4.2.3 safe 档）。
+    pub safe_write: bool,
+    /// 该段是否「外泄 / 远端副作用」（[`safe_commands::is_egress`]，如 `git push` / `npm install`
+    /// / `curl`）。这类**永不被 Allow 自动沉淀**——worktree 兜不住，每次重判/重问（架构 §4.4.4）。
+    pub egress: bool,
 }
 
 /// 单次工具调用解析出来的 effects。
@@ -298,6 +305,8 @@ fn analyze_shell(input: &Value) -> Effects {
                     write_targets: cmd.write_targets.clone(),
                     is_readonly: safe_commands::is_safe(cmd),
                     unmemorable: safe_commands::is_never_remember(cmd),
+                    safe_write: safe_commands::is_safe_write(cmd),
+                    egress: safe_commands::is_egress(cmd),
                 });
             }
             for k in &p.dangerous_kinds {

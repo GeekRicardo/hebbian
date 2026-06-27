@@ -9901,3 +9901,141 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**: 新增 4 个回归测试全过——`run_persister::{run_duration_only_on_last_segment, run_duration_backfilled_when_last_segment_preflushed, finish_deletes_partial_before_returning}`、`sessions_dir::session_run_guard_is_mutually_exclusive`；`cargo test -p agent-core --lib` 全量 **594 passed / 0 failed**（含上轮的 2 个 flaky 这次也稳定通过）；`cargo check --workspace` + `-p hebbian-cli` 通过；前端 tsc exit 0。
 - **留尾巴**: 无（上一条的 3 个留尾巴本条全部 close）。跨进程常驻单例化（§7.8.6 步骤③）是独立路线推进项，非缺陷。
 - **关联**: 接上一条架构审计 changelog。
+
+### 2026-06-26 — agent-core 对外通信点统一日志：模型调用下沉 model-gateway 自动打 [model]（带 session/message/tag）
+
+- **Why**: 用户要 agent-core 所有对外通信点都有日志、按功能分前缀、带 session_id + message_id，便于排查「哪个会话的哪条消息在跟谁通信」。
+- **改动**:
+  - **`ModelRequest.meta`**（[model-gateway/types.rs](../crates/model-gateway/src/types.rs)）：新增 `ModelCallMeta { session_id, run_id, turn, message_id, tag }` + `ModelCallTag` 枚举（Main / Judge / Classifier / Aside / Compaction / Title / Goal / Memory / Vision）。**纯内部用、不发 provider**（各 provider build_body 只读 model/system/entries/tools/max_tokens/reasoning，天然不外泄）。让 model-gateway 层统一打日志 / 落 model_io，不管哪个调用点发起。ModelRequest 补 `Default`；71 处构造点加 meta（生产 ~12 处手填 tag、测试/provider 协议层 ~59 处脚本批量加 default）。
+  - **`[model]` 日志**（[model-gateway/instrument.rs](../crates/model-gateway/src/instrument.rs) `InstrumentedClient`）：所有模型调用（complete/stream）发起 + 响应**自动**打 `target:"model"` 日志，带 session_id / message_id / tag / run_id / turn + model / outcome / duration / token。一处覆盖全部 ~12 个散落调用点。
+  - **tag 填充**：主 chat（agent_loop）tag=Main + 全字段（session/run/turn/assistant-msg-id；msg-id 来自新增的 `RunPersister::msg_id` getter）；judge / classifier / compaction / title / goal / memory / vision 各自源头填 tag；旁支（aside，model_io main_kind=aside）标 Aside。
+  - **`[tool]` 日志**（[dispatch.rs](../crates/agent-core/src/dispatch.rs)）：工具执行边界 `[Tool:Exec]` / `[Tool:Done]`，带 session_id / run_id / call_id / tool / outcome / duration / result_bytes。
+  - **`[hook]` 日志**（[hooks/mod.rs](../crates/agent-core/src/hooks/mod.rs)）：外部 hook（cargo check 等子进程）返回非 Continue（拦截 / 注入 / 改写）时打 `target:"hook"`。
+  - **`[storage]` 日志**（[storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs) `append_message`，统一落盘入口）：所有 user/assistant/marker 落盘打 `target:"storage"`，带 session_id / message_id / role / bytes。
+  - **`[wakeup]` 日志**（[surface-session/lib.rs](../crates/surface-session/src/lib.rs) resume handler）：后台任务 / cron 唤醒续跑时打 `target:"wakeup"`，带 session_id / 是否活 run。
+  - **`[run]` 日志**（[agent_loop.rs](../crates/agent-core/src/agent_loop.rs)）：run 入口（RunStarted / RunResumed）打 `target:"run"`，带 session_id / run_id / model——标记 agent-core 开始 / 恢复向 surface 发事件流。
+- **影响范围**: model-gateway（types / instrument）、agent-core（agent_loop / dispatch / hooks / run_persister + 9 个模型调用源头）、71 处 ModelRequest 构造点加 meta（无破坏性，meta 不发 provider）。前缀规范沿用既有 `[permission]` 风格：`[model]` / `[tool]` / `[hook]`。
+- **验证**: `cargo check --workspace` + model-gateway 117 测试 + agent-core 593 测试通过（1 个已知 flaky `run_in_background`，bash 后台时序、与本次无关）。
+- **留尾巴**: ① 子调用（judge / title / goal 等）的 `meta.session_id` 暂为 None（这些函数无 session_id 参数），日志 tag 已区分、session 关联待后续传参补全。② `[storage]`（落盘）/ `[wakeup]`（唤醒）/ `[run]`（run 生命周期入口）已补全；event 逐条（高频流式 TextDelta 等）刻意不打——事件流本身是 NDJSON/WS 产品数据、已可见，只在 run 边界用 `[run]` 标记。③ aside tag 暂靠 model_io main_kind 判断，待任务2 model_io 重构后改用 meta。
+- **关联**: 任务2（model_io 落盘下沉 model-gateway，请求/响应分两条 + call_id 关联）复用本条建立的 `ModelCallMeta` + `InstrumentedClient` 落点，下一步做。
+
+### 2026-06-27 — model_io 落盘下沉 model-gateway：请求 / 响应两条 + call_id 关联，按 tag 自动区分
+
+- **Why**: 用户要 model_io 重构——与 model-gateway 放一起，只要开启就由 model-gateway 落盘，分「请求落盘 + 响应落盘」，区分 tag（主 chat 不标记 / judge / 旁支等）。原来散在 agent-core 各调用点手动 `record`（4 处：judge/compaction/main/goal），漏一处就丢 IO，且一条式在 complete 返回后才落、崩溃丢请求。
+- **改动**:
+  - **新模块 [model-gateway/model_io.rs](../crates/model-gateway/src/model_io.rs)**：per-session 落盘 actor（懒建全局 registry，fire-and-forget 不阻塞模型调用热路径）+ 两条式（`{phase:request, call_id, session_id, tag, run_id, turn, message_id, model, request}` 发起即落 + `{phase:response, call_id, duration_ms, response}` 响应到达落）+ `tag=main` 的 messages 前缀去重（actor 内 per-session 状态）。json 序列化从 agent-core `model_io_dump` 迁移。
+  - **InstrumentedClient 自动落盘**（[instrument.rs](../crates/model-gateway/src/instrument.rs)）：complete/stream 发起即 `record_request`（拿 call_id，req move 前——崩溃 / 取消也留请求痕迹）→ inner → `record_response`。data_dir 由 `build_client_with_data_dir` 传入；不管哪个调用点发起都自动落、自动按 `req.meta.tag` 区分。
+  - **旧落盘停用**（[model_io_dump.rs](../crates/agent-core/src/model_io_dump.rs)）：`open_for_session_*` 返回 None，避免与新两条式双落污染同一文件。`ModelIoDump`/`DumpEntry`/`record` 暂留死代码（`#![allow(dead_code)]`）。
+  - **读取适配**（[storage/model_io.rs](../crates/agent-core/src/storage/model_io.rs)）：按 `call_id` 把请求 / 响应两行合并成一条（保持 request 顺序、response 回填、崩溃只留 request）；`tag→kind` 映射前端不必改；兼容旧一条式。
+  - **前端**（ModelIoInspector.tsx）：`KIND_BADGE` 映射表替换 4 个重复 span，覆盖全部 9 个 tag（judge/分类/压缩/标题/目标/记忆/视觉/aside/subagent），main 不标记。
+- **影响范围**: model-gateway（新 model_io 模块 + instrument + lib `build_client`）、agent-core（model_io_dump 停用 + storage/model_io 读取重写）、desktop 前端 ModelIoInspector。落盘文件从一条式变两条式（读侧兼容旧）。
+- **验证**: model-gateway `model_io` 2 单测（dedup 前缀去重 + 两条 actor 落盘 + call_id 关联）；`storage::model_io` 4 单测（两条合并 + 增量重建 + 崩溃留 request + 旧一条式兼容）；`cargo check --workspace` 0 error；agent-core 597 测试通过（1 flaky `run_in_background` 无关）；前端 `tsc` 0 error。
+- **留尾巴**: ① 旧 `ModelIoDump`/`DumpEntry`/`record` + ~113 处字段传递（SessionConfig/LoopParams/ToolDispatcher 字段链）为死代码，待编译驱动彻底清理 + 删 model_io_dump.rs。② aside / subagent 的 tag 退化为 Main（旧靠 model_io `main_kind` 判断，停用后 agent_loop 那段恒 Main）——待用 `ModelCallMeta` 经 LoopParams 显式传 tag 替代。③ 端到端 heb 实测需重启 hebcore（会干扰在用 surface），核心落盘逻辑已由单测固化。
+
+### 2026-06-27 — AutoMode 判官放行自动沉淀到 session（P0-1）+ egress 黑名单（P1-2）
+
+- **Why**: 用户报「AutoMode 下每条 bash 都走一遍 LLM judge，太重」。根因不在判定顺序（架构早已是「先规则匹配、不过才判官」，dispatch.rs:565 `hitl.check` 返回 NeedsApproval 才在 :769 触发判官）——而在**判官放行只 `AllowOnce` 不累积**（dispatch.rs:800）+ `learned` 每 Run 清零（session.rs:482）+ session 规则不落盘 + 导入不迁移 CC allow，于是每条会写命令每个 Run 都重判一次。复现实测：单 run 内 `printf > note.txt` 被判两次、`cargo --version` 判官烧 15s。这是「记住还审 / 每条都判」一系列体验问题的同一根因第一刀（完整方案见架构 §4.4.4「判官放行自动沉淀」+ §13）。
+- **改动**:
+  - [crates/agent-core/src/tools/safe_commands.rs](../crates/agent-core/src/tools/safe_commands.rs): 新增 `is_egress`（push/pull/fetch/clone、各 install/publish、curl/wget/scp/ssh/rsync）与 `is_safe_write`（mkdir/touch/mkfifo，供后续 P1-1 用）+ 单测
+  - [crates/agent-core/src/effects.rs](../crates/agent-core/src/effects.rs): `SegmentEffect` 加 `egress` / `safe_write` 段级标记，在唯一构造点赋值
+  - [crates/agent-core/src/tools/hitl.rs](../crates/agent-core/src/tools/hitl.rs): 新增 `segments_to_auto_persist`（= `unapproved_memorable_writable_segments` 再排除 egress）与 `persist_judge_allowed_segments`（判官 Allow 后把会写段沉淀到 session 作用域 PermissionStore）
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): 判官 `Allow` 分支在 resolve 前调 `persist_judge_allowed_segments`
+  - [docs/架构.md](架构.md): §4.4.4 新增「判官放行自动沉淀」整段（含 egress/不可记忆/危险复合三类不沉淀边界、人工 AllowOnce 不沾此沉淀的语义说明）；§13 加一行决策
+- **影响范围**: 仅 agent-core 内部（无新协议字段、无 surface 改动）；三 surface 共享 agent_core 主路径，行为对称。沉淀作用域是 PermissionStore 进程内 session view（不写盘，重启清零，与 §4.5 Session scope 语义一致）。向后兼容：老 session/jsonl/permissions.json 加载不受影响。
+- **验证**:
+  - 单元 A/B（真实路径，非 mock）：`hitl::tests::allow_once_persists_writable_segment_to_session_across_run_rebuild`——两个共享 store 的 gate 模拟 Run 重建后 learned 清零，第二 Run 同 fingerprint 命令命中 session 沉淀直接 Approved（修前该处 NeedsApproval）；`allow_once_does_not_persist_egress_command`——`git push` 放行后不沉淀、第二 Run 仍 NeedsApproval；`safe_commands::tests::{safe_write_covers_only_pure_creators,egress_covers_remote_and_install}`
+  - 全量：`cargo test -p agent-core --lib` 597 通过（仅 `run_in_background_returns_immediately` 全量并发下 flaky，隔离单跑 1.07s 通过、`git diff` 证未碰 bash.rs，与本次无关）
+  - heb 端到端 A/B（AutoMode + deepseek-flash 真实判官，session 202606262300-156626aa）：单 run 内 agent 跑了 3 次 `cargo build`，`permission_auto_judged` 仅 1 次——第 1 次判官放行→沉淀，第 2/3 次直接 tool_done 无 permission 事件。基线（HEAD）下应为 3 次判官。
+- **留尾巴**:
+  - **P0-3（解析器精度）未做**：`git commit -m "$(cat <<'EOF'…)"`（项目强制的 heredoc commit 形态）因 `$()` 被标 ast-too-complex、在 hitl.rs:305 危险模式短路强制审批+refuse_remember，绕过 allow 匹配也不沉淀——「记住的 git commit 还在审」仍存在。需把「`$()`/heredoc 内部命令全为只读时不标 ast-too-complex」做进 shell_parse（`ast_node_contains_complex`/`collect_ast_commands`），含 `cat <<EOF` 的 heredoc 边界（is_safe 当前因 `has_heredoc` 判 cat 不安全，需在替换内部判定时忽略）。**不可按「外层段已 Whitelisted 就放行」做**——`$(curl evil)` 与 `$(cat msg)` 静态同形，会成 RCE 洞。
+  - **P1-1（mkdir/touch 安全写档）未接线**：`is_safe_write` / `SegmentEffect.safe_write` 已加但 hitl.check 尚未据此免审，且 shell_parse 还没把 mkdir/touch 位置参数采进 write_targets（免审与越界把关强绑定，必须同批落地）。
+  - **Default「同命令整对话只问一次」未做**：需把审批弹窗默认记忆档设为「本对话」（surface 层，三端对称），走既有 `AllowAndRemember(Session)`，不污染人工 AllowOnce 语义。
+  - **P1-4（Classifier A 折进判官单次 LLM）未做**：纯延迟优化，与权限正确性正交，单独立项。
+  - **暂不迁移 CC `permissions.allow`**（用户决策）：导入的会话起点 allow 仍为空，靠 P0-1 在对话内逐步累积。
+
+### 2026-06-27 — model_io tag 显式传：aside / subagent 经 LoopParams.call_tag 标记（替代失效的 main_kind）
+
+- **Why**: 任务2 停用旧 model_io 落盘后，agent_loop 原靠 `model_io_dump.main_kind()` 判 aside / subagent 的逻辑恒为 Main（dump 返 None），这两类旁支的模型调用 tag 退化。用户要求显式传。
+- **改动**:
+  - `ModelCallTag` 加 `Subagent` variant（types.rs，as_str `"subagent"`）。
+  - 新增传递通道 `SessionConfig.call_tag → Session → RunParams → LoopParams.call_tag → agent_loop meta.tag`（默认 Main）。agent_loop 用 `call_tag` 替代已失效的 main_kind 推断。
+  - 构造点显式传：aside=Aside、subagent runner=Subagent、surface（cli / desktop / channel-core / surface-session）=Main。
+- **影响范围**: model-gateway types、agent-core（agent_loop / session / harness / subagent / aside）、apps（cli / desktop）、channel-core / surface-session。
+- **验证**: `cargo check --workspace` 0 error；agent-core 597 测试通过（1 flaky `run_in_background` 无关）；前端 tsc 0。
+- **⚠️ 事故 + 恢复**: 批量给测试 LoopParams 加 call_tag 的 python 脚本 brace-match 有 bug，把 agent_loop.rs 从 2499 行毁成 755 行（run_loop 主体 + 大部分测试丢失）。**从 HEAD 恢复完整文件 + 重应用本会话 Phase 4 的 agent_loop 改动**（call_tag struct / 解构、run 入口 `[Run:Started]`/`[Run:Resumed]` 日志、主 chat `meta`、测试 6 处 call_tag）。恢复后 diff 验证幸存区 1-458 == HEAD（无他人改动丢失），597 测试通过确认功能完整。**教训**：brace-balanced 文本脚本改 struct literal 风险高，应优先编译驱动 + 逐个 Edit；万不得已用脚本必须先 dry-run 验证替换 count（本次安全的测试加 call_tag 就是先 `assert count==6` 才写）。
+- **关联**: close 任务2 changelog 的留尾巴②。
+
+### 2026-06-27 — 危险复合两处误报消解：heredoc commit 不再卡判官（P0-3 + cd-git 收窄）
+
+- **Why**: 用户报 session `202606261401-c8843586`（AutoMode）卡在 `cd /Users/ricardo/code/ricardo/rust/hebbian; git commit -m "$(cat <<'EOF'…)"` 的「判官评估中」黄框不灭。根因：这条**项目强制的 heredoc commit 形态**同时踩两个过宽的危险红线——`$()` 触发 `ast-too-complex`、`cd <workdir>; git` 触发 `cd-git-compound`——被强制走判官（`check_without_policy` step3 危险模式短路在 allow 匹配之前），判官卡住时黄框不消。两个红线对「agent 在自己工作区里 `cd <workdir>; git commit`」都是误报。
+- **改动**:
+  - [crates/agent-core/src/tools/safe_commands.rs](../crates/agent-core/src/tools/safe_commands.rs): 新增 `is_readonly_data_command`（= `is_safe` 但容忍 heredoc——`cat <<EOF` 把 heredoc 当 stdin 数据读仍只读）
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): 新增 `substitution_is_readonly`（剥 `$()`/反引号外壳→同解析器递归解析内部→要求全只读且无嵌套危险）+ `strip_substitution_delimiters` + `cd_targets`；`ast_node_contains_complex` / `collect_ast_commands` 对命令替换改为「内部非只读才标 ast-too-complex」（subshell/compound/后台&/注释注入照旧拦）。更新旧测试 `command_substitution_is_dangerous`（`echo $(whoami)` 从危险改判良性，符合新语义）
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `analyze_effects` 后消解 `cd-git-compound`——cd 目标（`cd_targets`）全部 `Workspace::allows` 时移除；任一越界则保留
+  - [docs/架构.md](架构.md): §4.4.2.2 加「两处误报消解」整段；§13 加一行
+- **影响范围**: agent-core 内部。**红线收窄但 fail-safe**：替换内部判定失败/含会写网络/嵌套一律仍危险（`$(curl evil)`/`$(rm)`/`python -c` 照拦）；cd-git 只对工作区内 cd 放宽（`cd /tmp/evil && git commit` 仍拦，effects 层不变、effects.rs:558 测试不受影响）；subshell/后台/注释注入/敏感env 照旧。
+- **验证**: `cargo test -p agent-core --lib` **601 通过 0 失败 0 回归**。新增/更新单测：`readonly_command_substitution_not_dangerous`（whoami/date/git rev-parse/反引号）、`heredoc_commit_message_substitution_not_dangerous`（`git commit -m "$(cat <<EOF)"` 不标 ast-too-complex 且 git commit 段被抽出——确认 tree-sitter 行为符合预期）、`command_substitution_with_nonreadonly_inner_is_dangerous`（curl/rm/嵌套仍危险）、`cd_targets_extracts_cd_dirs`、`safe_commands::{safe_write_covers_only_pure_creators,egress_covers_remote_and_install}`。逻辑层：用户那条命令修复后 dangerous_kinds 清空 → cd 段命中 `Bash(cd)`、git commit 段命中 `Bash(git commit)`（用户已有）→ 全段 allow 直接放行、不进判官。
+- **留尾巴**:
+  - **判官卡死本身（黄框不灭）未直接修**：本次让该命令不进判官从而绕开；若判官在其它命令仍卡，是独立的 surface 事件冻结（首个 `permission_requested` 后事件流停止 emit，judge 内部已完成但 `permission_auto_judged` 没到 surface）。已清空 `~/.hebbian/logs/hebbian.log.*` 供 re-run 抓新日志定位
+  - P0-1 沉淀（前序 changelog）、P1-1 safe-write 接线、Default 弹窗默认档、P1-4 见前序留尾巴
+
+### 2026-06-27 — 安全会写档 P1-1（mkdir/touch 免审）+ Bash 相对路径越界判定修复 + Default「整对话只问一次」
+
+- **Why**: 收尾 bash 权限重设计。① P1-1：`mkdir`/`touch`/`mkfifo` 是纯创建命令、不跑代码、目标可被路径闸兜越界，没必要审/判官；之前落「会写」要审/烧判官。② 实现 P1-1 时暴露一个**潜在 bug**：Bash 写/删目标的相对路径（`mkdir build` / `touch a.txt` / `echo > out` / `rm x`）被 `Workspace::allows` 用 `canonicalize_lossy` 按**派发器进程 CWD** 解析，把工作区内的相对目标误判越界 → 触发多余 PathAccess。③ Default「问一次」：Default 无判官，用户首次审批后同类命令仍每次问，太烦——把弹窗「本对话」记忆档设为推荐主按钮，一键记住、整对话不再问。
+- **改动**:
+  - [crates/agent-core/src/tools/shell_parse.rs](../crates/agent-core/src/tools/shell_parse.rs): `collect_argv_write_targets` 新增 mkdir/touch/mkfifo 分支——位置参数采进 write_targets（跳过 -m/-r/-d/-t 带参 flag）。强绑定免审与越界把关
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): ① 新增 pure fn `bash_safe_write_allowed`（仿 `edit_auto_allowed`，持 paths_in_bounds）——每个会写段都 safe_write+界内+非危险+无不可记忆段 → 免审；接入审批决策链。② **相对路径修复**：Bash 的 `effects.paths` 相对项按 `Workspace::resolve_cwd`（Bash cwd）解析为绝对路径再交路径闸，effects 层仍纯静态（不知 cwd），解析在 dispatch 持 Workspace 上下文处做
+  - [apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx](../apps/desktop/frontend/src/desktop/ui/components/PermissionApprovalPopup.tsx): `scopeBtn` 加 `recommended` 参数，「本对话」设为 primary 样式 + 文案「同类命令整段对话内不再问（推荐）」
+  - 测试更新：`dispatch::tests` 三处 + `chat::tests` 一处把「需审批/判官」用例的 `touch`/`mkdir` 换成 `chmod`（真·会写、非 safe-write），保留原测试意图（touch/mkdir 现归 safe-write 自动放行，不再适合做"需审批"探针）
+  - [docs/架构.md](架构.md): §4.4.2.3 加「安全会写档」整段；§13 加两行（P1-1 + Default 问一次）
+- **影响范围**: agent-core（shell_parse / dispatch / effects）+ desktop 前端弹窗样式。**safe-write 受控放宽**：只收 mkdir/touch/mkfifo（不跑代码），坚决排除 cargo/git/make（跑 build.rs/hooks）/mv/cp（覆盖既有文件）；越界目标仍被路径闸拦（强绑定 + 相对路径修复后判定才准）。**相对路径修复**是正确性修复（同时让 rm/重定向的相对目标也判得准），fail-safe 方向（更准、不放宽）。Default 问一次走既有 AllowAndRemember(Session)，不改人工 AllowOnce 语义。
+- **验证**: `cargo test -p agent-core --lib` **603 通过 0 失败**；desktop `chat::tests` 12 通过。新增单测 `mkdir_touch_targets_collected_as_write_targets`（含带参 flag 跳过）、`bash_safe_write_allowed_only_for_in_bounds_pure_create`（mkdir+touch 界内放行 / 越界不放 / 混 cargo 不放 / 混 rm 不放 / 纯只读不归此档 / mkdir+ls 放行）。⚠️ 实现 P1-1 时 3+1 个旧测试因 touch 改判 safe-write 而 fail（含一个相对路径 hang），逐一定位修复——印证了「safe-write 必须配相对路径正确解析」。
+- **留尾巴**:
+  - **P1-4（Classifier A 折进判官单次 LLM）不做**：纯延迟优化，且 P0-1 沉淀后判官触发频率已大降、收益缩水；合并 prefix 提取与判官决策的 prompt 极易同时拖累两边准确度，无真实 LLM 测试不可验证——贸然做是引入判官回归的高风险。留作独立 careful 任务。
+  - **判官卡死/事件冻结根因未直接修**：核查后端（judge 早于 worktree 锁、25s 超时、PermissionAutoJudged 无条件 emit）+ 前端（permission_auto_judged/permission_resolved 任一清黄框）两端均 robust；卡死只可能在事件投递层（复现 agent 在 heb NDJSON 见过），属间歇问题，改投递/时序逻辑易引入新 bug，不做投机修复。用户报的 heredoc 命令已由 P0-3 根治不进判官；其它命令若再卡，已清空 ~/.hebbian/logs/ 供抓新日志精确定位。
+
+### 2026-06-27 — 停用 Classifier A 逐段前缀分类：AutoMode 判官从 N+1 次 LLM 降到 1 次（修「判官卡住」）
+
+- **Why**: 用户报 session `202606270532-11ffe96a`（AutoMode）「执行第二个 bash 的 judge 就卡住」。**日志实锤**：那条命令是 7 段 kubectl 循环（`echo | kubectl get | grep | awk | kubectl logs | grep | echo`，ast-too-complex），判官阶段从 05:32:45 到 05:33:15 打了 **8 次串行 sonnet 调用**——7 次 Classifier A 逐段前缀分类（max_tokens=32）+ 1 次判官决策（max_tokens=300），每次 ~3-4s，累计 ~30s。这就是「卡住」。**是后端延迟，不是前后端不同步**：判官 30s 后真的出了 allow，run 正常推进 turn 0→1→2，前端黄框只是忠实显示这 30s。根因：`classify_bash_prefixes_for_automode`（automode.rs:223）对每个 AST 段各调一次 LLM 且**串行** for 循环。
+- **改动**:
+  - [crates/agent-core/src/dispatch.rs](../crates/agent-core/src/dispatch.rs): `judge_automode_request` 的 `judge_eval` 去掉 `classify_bash_prefixes_for_automode` 调用，判官直接用静态 `req.effects` + 完整命令文本做**单次** LLM 决策；`whitelisted_fingerprints` 改用静态 fingerprint（与 PermissionStore 静态匹配口径一致）。更新超时注释（不再是「两次 LLM」）
+  - [docs/架构.md](架构.md): §4.4.4 Classifier A 段改写为「已停用」+ 缺陷说明；§13 加一行
+- **影响范围**: agent-core dispatch（判官输入）。**判官行为基本不变**：静态 tree-sitter 已给出 `kubectl get`/`git commit` 级 fingerprint，判官还拿完整命令文本，逐段 LLM 精修（识别 `gg`=git 别名）收益微薄；命令注入由静态 `ast-too-complex` 兜底（`$()`/heredoc/subshell/循环静态都识别）。Default/静态 PermissionStore 本就零 LLM，不受影响。`classify_bash_prefixes_for_automode` 函数保留（dispatch 不再调），待清理。
+- **验证**: `cargo test -p agent-core --lib` **603 通过 0 失败**（无测试依赖 judge 路径里的 classify）。判官 LLM 调用数 N+1 → 1，7 段命令 ~30s → ~4s。
+- **留尾巴**:
+  - **⚠️ 用户运行的是旧二进制**：该 session 的 25s 判官超时（2026-06-26 加）**没生效**（判官在 25s 后还在打第 7 段），说明用户 desktop 跑的 agent-core 是 06-26 之前编译的——本轮所有修复（heredoc/cd-git/P1-1/P0-1 沉淀/本次 Classifier A 停用）都需**重新 build + 重启 desktop** 才进运行二进制。
+  - **并行判官**：单 session 串行 turn 未触发；但「每命令 N+1 次 LLM」本身已是元凶，本次根治。多 Bash 并行判官（同 deepseek session 不支持并发）仍由 25s 超时兜底降级 Ask。
+  - `classify_bash_prefixes_for_automode` + `bash_prefix` 模块现为死代码，待编译驱动清理。
+
+### 2026-06-27 — hebcore 版本协商：旧版自动检测→弹窗→换新（§7.8.7）
+
+- **Why**: 用户发现 hebcore 是常驻 daemon（最后一个客户端退出也不退、无连接计数），`pnpm tauri build` 出新 binary 后 desktop 的 connect_or_spawn「连得上就复用」会连到仍跑**旧 binary** 的旧进程——本会话所有判官/权限修复在旧 hebcore 上根本不生效（实测 25s 判官超时没生效就是连到旧 hebcore）。用户要：每次 build 出一个版本号、connect_or_spawn 检查、不一致弹窗显示「当前/运行中」版本、确认后 kill 旧起新。
+- **改动**:
+  - [crates/surface-session/src/transport.rs](../crates/surface-session/src/transport.rs): `HebcoreRequest` 加 `GetVersion`/`Shutdown`，`HebcoreResponse` 加 `Version{build_version,bin_name,pid,has_active_run}`，`TransportCtx` 加 `build_version`/`bin_name`，handle_connection 加两分支（Shutdown 无活跃 run 才 process::exit）
+  - [crates/surface-session/src/lib.rs](../crates/surface-session/src/lib.rs): `RuntimeRegistry::has_active_run()`（复用 `SessionRuntime::is_active`）
+  - [apps/hebcore/build.rs](../apps/hebcore/build.rs) / [apps/web-server/build.rs](../apps/web-server/build.rs) / [apps/desktop/build.rs](../apps/desktop/build.rs)（新建/改）: 生成 `HEBBIAN_BUILD_VERSION = v{pkg}-{git_short}[-dirty]-{build_id}`，build_id 来自 `HEBBIAN_BUILD_ID` env
+  - hebcore/web-server main: TransportCtx 传 `build_version: env!("HEBBIAN_BUILD_VERSION")` + `bin_name`（hebcore/hebweb）
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): Req/Resp 镜像 + `negotiate_version`（GetVersion 对比自身版本 → 旧版 native 弹窗 → Shutdown → 轮询等旧死 → spawn 新 → 重连），在 `run_conversation`（发消息，非主线程）开头调
+  - [apps/desktop/scripts/build-with-id.mjs](../apps/desktop/scripts/build-with-id.mjs) + package.json `app:build`/`app:dev`: 生成共享 build_id 同时喂 hebcore + desktop 编译
+  - [docs/架构.md](架构.md): §7.8.7 整节 + §13 决策行
+- **版本号机制**: 用 env 注入共享 build_id（而非 binary content-hash）——desktop 与 hebcore 同次 build 注入相同 build_id，desktop 用**自己编译进的**版本号当基准对比运行中 hebcore 报告的，纯字符串比较，无需 hash 53MB binary。各 bin 一份 build.rs + main 用 `env!`（不能放 surface-session lib：lib 产物会缓存、env! 读旧值）。
+- **四道安全闸**: ① `has_active_run` 为真时 Shutdown 拒绝（护 §4.9.2 partial 落盘，无活跃 run 时 process::exit 才安全）② `bin_name` 区分不误杀 hebweb 兼任 ③ 旧 hebcore 不认 GetVersion → 回 Error → desktop 当 stale（向后兼容 + 完美信号）④ Shutdown 后轮询 connect 失败确认旧死再 spawn（防单例锁竞争秒退）。弹窗只在发消息线程（非主线程，native dialog blocking_show 安全；启动 ensure_running 主线程不弹）。
+- **影响范围**: surface-session 协议（additive variant，旧 heb/hebweb 客户端无感）+ 3 个 build.rs + hebcore/web-server/desktop main + 构建脚本。无破坏兼容。
+- **验证**: `cargo check --workspace` **全绿**（含 3 个 build.rs 生成版本号 + `env!` 注入 + tauri-plugin-dialog API + 协议两端镜像 exhaustive match）。分步验证 surface-session / hebcore / web-server / desktop(hebbian) 各自编译通过。
+- **留尾巴**:
+  - **端到端 UX 未跑**：真实「起旧 hebcore → `pnpm app:build` 出新版 → 重启 desktop → 弹窗 → 确认 → kill+respawn → 新版生效」需 GUI 真机交互 + tauri build 出包，本环境（无 GUI + Bash 工具链不稳）跑不了。逻辑完整 + 编译全绿 + 所有安全坑有解，端到端交互待用户真机点一遍。
+  - **出包命令变更**：要让共享 build_id 生效，出包用 `pnpm app:build`（替代 `pnpm tauri build`）、开发用 `pnpm app:dev`（替代 `pnpm tauri dev`）。直接 `pnpm tauri build` 不注入 HEBBIAN_BUILD_ID → build_id 回落 `dev` → 同 commit 不同 build 区分不了（git hash 仍能区分跨 commit）。
+  - **dev 热重载局限**：`pnpm app:dev` 热重载不重跑前置脚本，同一 dev session 内 build_id 固定；改了 hebcore 代码要重新 `pnpm app:dev`（重生成 id + rebuild hebcore），否则 desktop 热重载仍连旧 hebcore。`pnpm app:build` 每次新 id，可靠。
+
+### 2026-06-28 — 修日志面板不刷新：hebcore 经 IPC 把日志转发给 surface（多进程日志聚合）
+
+- **根因**: run 移 hebcore 独立进程后，agent_loop 的所有日志（含本轮新增的 `[model]`/`[tool]`/`[storage]` 等 + 原有 agent_core 日志）都进 hebcore 进程的 observability `LOG_TX`，而 desktop 日志面板（`subscribe_log_stream`）订阅的是 **desktop 自己进程**的 `LOG_TX`——两进程隔离，hebcore 日志从没转发过来，面板自然看不到、不刷新。这是 run 移 hebcore 的架构遗留（日志面板没适配多进程），不是日志改动本身引入。
+- **改动**（方案 A：hebcore→surface IPC 推送）:
+  - **协议**（[transport.rs](../crates/surface-session/src/transport.rs)）：`HebcoreRequest::SubscribeLogs`（连接级、跨 session，不带 session_id）+ `HebcoreResponse::Log { line: LogLine }`；handler 订阅 `observability::log_sender()` 逐条 push（Lagged 跳过、断连退出）。
+  - **LogLine 加 `Deserialize`**（[observability/lib.rs](../crates/observability/src/lib.rs)）：跨 IPC 反序列化。
+  - **desktop**（[hebcore_client.rs](../apps/desktop/src/hebcore_client.rs)）：`spawn_log_forwarder` 后台线程连 hebcore 发 SubscribeLogs，把收到的每条 Log 帧 `observability::log_sender().send()` 注入 **desktop 本地 `LOG_TX`**——复用现有 `subscribe_log_stream`→前端链路自动显示。断连每 2s 重连（扛 hebcore 重启 / 换版）。desktop 启动（[lib.rs](../apps/desktop/src/lib.rs) setup，`observability::init` 后）起这条线程。
+  - surface-session 加 observability 依赖。
+- **影响范围**: surface-session（transport + Cargo dev/deps）、observability（LogLine derive）、apps/desktop（hebcore_client + lib + 镜像 `Req`/`Resp` 加 SubscribeLogs/Log + control_request match 补 Log arm）。纯 additive IPC variant，旧客户端无感。
+- **验证**: surface-session wire 格式单测 `subscribe_logs_and_log_frame_wire_format`——钉死 transport 与 desktop 两套镜像 enum 的 serde tag/字段兼容、防漂移（手写镜像类型最易漂的点）；workspace `cargo check` 0 error。端到端（desktop 面板实时显示 hebcore 的 `[model]`/`[tool]` 日志）需重启 hebcore + desktop GUI——转发链路复用 desktop 现有 working 的 `LOG_TX`→面板链路，只是源头多接一路 hebcore 注入。
+- **留尾巴**: ① hebweb 自己跑 run（升格 hebcore），日志在本进程，不需此转发；若 hebweb 前端也要日志面板可后续接同款。② desktop 进程 init directive 不必加新 target——新日志在 hebcore（`"info"` 全放行），desktop 只接收注入、不经自己 EnvFilter。
+- **关联**: §4.10 Observability 多进程延伸；§7.8 transport 协议 additive variant。

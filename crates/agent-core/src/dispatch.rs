@@ -216,6 +216,28 @@ pub(crate) fn edit_auto_allowed(
         && !touches_git_meta
 }
 
+/// Bash/PowerShell「安全会写」自动放行（架构 §4.4.2.3 safe 档）：命令的每个会写段都是纯创建
+/// 命令（mkdir/touch/mkfifo，[`SegmentEffect::safe_write`]），且界内、非危险复合 → 连首次都
+/// 免审/免判官。与 [`edit_auto_allowed`] 同源：创建目标已采进 `effects.paths` 由路径闸兜越界
+/// （`paths_in_bounds`），这里只管「命令本身不跑代码、可回退」。任一会写段既非只读也非
+/// safe_write（含 rm 等不可记忆段）、或越界、或危险复合 → 不放行，走原审批链。mode 无关
+/// （纯创建始终安全，与 ReadOnly 同档）；PlanMode 已在更上层过滤掉 Bash。
+pub(crate) fn bash_safe_write_allowed(
+    tool_name: &str,
+    effects: &Effects,
+    paths_in_bounds: bool,
+) -> bool {
+    matches!(tool_name, "Bash" | "PowerShell")
+        && paths_in_bounds
+        && !effects.has_dangerous_pattern()
+        && !effects.segments.is_empty()
+        && effects.segments.iter().any(|s| s.safe_write)
+        && effects
+            .segments
+            .iter()
+            .all(|s| s.is_readonly || s.safe_write)
+}
+
 /// Yolo 模式（架构 §4.4.3）的工具决策：界内 + 非危险 → 放行；命中红线 → 自动拒。
 ///
 /// Yolo 是无人值守模式，红线**不弹审批等人**（现场没人点批准），而是直接拒 + reason
@@ -334,8 +356,54 @@ impl ToolDispatcher {
         // 对 Bash/PowerShell 这类 cwd 不一定显式给的工具，按 workspace.workdir 兜底，
         // 让越界检查命中正确的工作目录。
         let mut effects = analyze_effects(&call.name, &call.input);
-        if matches!(call.name.as_str(), "Bash" | "PowerShell") && effects.paths.is_empty() {
-            effects.paths.push(self.workspace.workdir().to_path_buf());
+        if matches!(call.name.as_str(), "Bash" | "PowerShell") {
+            // Bash 写/删目标的相对路径按 **Bash cwd** 解析，再交路径闸把关——否则
+            // `Workspace::allows` 用 `canonicalize_lossy` 按派发器进程 CWD 解析，会把工作区内的
+            // `mkdir build` / `touch a.txt` / `echo > out` / `rm x` 误判越界（架构 §4.4.2）。
+            // effects 层是纯静态分析（不知 cwd），解析只能在 dispatch 持 Workspace 上下文处做。
+            let cwd_raw = self
+                .workspace
+                .resolve_cwd(call.input.get("cwd").and_then(|v| v.as_str()));
+            let cwd = if cwd_raw.is_relative() {
+                self.workspace.workdir().join(&cwd_raw)
+            } else {
+                cwd_raw
+            };
+            for p in effects.paths.iter_mut() {
+                if p.is_relative() {
+                    *p = cwd.join(&*p);
+                }
+            }
+            if effects.paths.is_empty() {
+                effects.paths.push(cwd);
+            }
+        }
+
+        // cd-git-compound 误报消解（架构 §4.4.2.2）：`cd <在工作区内的目录>; git commit` 是
+        // agent 在自己工作区里的常规操作（项目强制的 heredoc commit 形态就长这样），cd 目标
+        // 已受信，不存在「cd 到不可信目录跑其 .git/hooks」风险——移除该 dangerous_kind 让命令
+        // 落回正常 allow 匹配（命中用户已存的 Bash(git commit) 规则即放行，不再强制审批/判官）。
+        // cd 目标有任一在工作区外则保留危险判定（真有越界跑 hooks 风险）。
+        if matches!(call.name.as_str(), "Bash" | "PowerShell")
+            && effects.dangerous_kinds.iter().any(|k| k == "cd-git-compound")
+        {
+            if let Some(cmd_str) = call.input.get("command").and_then(|v| v.as_str()) {
+                if let Ok(parsed) = crate::tools::shell_parse::parse(cmd_str) {
+                    let targets = crate::tools::shell_parse::cd_targets(&parsed.commands);
+                    let all_in_ws = !targets.is_empty()
+                        && targets.iter().all(|t| {
+                            let p = if std::path::Path::new(t).is_absolute() {
+                                std::path::PathBuf::from(t)
+                            } else {
+                                self.workspace.workdir().join(t)
+                            };
+                            self.workspace.allows(&p)
+                        });
+                    if all_in_ws {
+                        effects.dangerous_kinds.retain(|k| k != "cd-git-compound");
+                    }
+                }
+            }
         }
         let class_label = effect_class_label(effects.class);
         let fingerprint = effects.command_fingerprint.clone();
@@ -526,6 +594,7 @@ impl ToolDispatcher {
             paths_in_bounds,
             touches_git_meta,
         );
+        let bash_safe_write = bash_safe_write_allowed(&call.name, &effects, paths_in_bounds);
 
         // 工具审批
         let permission = if let Some(decision) = yolo {
@@ -549,6 +618,13 @@ impl ToolDispatcher {
                 tool = %call.name,
                 call_id = %call.id,
                 "[Permission:ToolCall] in-workspace file edit auto-allowed (worktree-backed)"
+            );
+            PermissionDecision::Approved
+        } else if bash_safe_write {
+            info!(
+                tool = %call.name,
+                call_id = %call.id,
+                "[Permission:ToolCall] in-workspace safe-write auto-allowed (mkdir/touch/mkfifo，路径闸已兜越界)"
             );
             PermissionDecision::Approved
         } else if self.subagent_bypass && !effects.has_dangerous_pattern() {
@@ -796,6 +872,14 @@ impl ToolDispatcher {
                             .await;
                             match decision {
                                 AutoModeDecision::Allow => {
+                                    // P0-1（架构 §4.4.4）：判官放行的会写段沉淀到 session，
+                                    // 让「判一次」覆盖整个对话——下条同 fingerprint 命令命中
+                                    // session 规则直接放行，不再烧判官 LLM。egress / 不可记忆
+                                    // / 已白名单段不沉淀（见 persist_judge_allowed_segments）。
+                                    hitl_for_future.persist_judge_allowed_segments(
+                                        &call_name_for_judge,
+                                        &effects_for_judge,
+                                    );
                                     hitl_for_future
                                         .resolve(request_id, ApprovalDecision::AllowOnce);
                                 }
@@ -914,12 +998,14 @@ impl ToolDispatcher {
                     }
                 }
 
-                // 执行
+                // 执行（对外通信：Bash 子进程 / web 网络 / Edit 文件等都从这里出，§4.4）
                 info!(
+                    target: "tool",
+                    session_id = session_id_for_hooks.as_deref().unwrap_or("-"),
+                    run_id = %state.run_id,
                     tool = %call.name,
                     call_id = %call.id,
-                    input = %effective_input,
-                    "[Permission:ToolCall] executing"
+                    "[Tool:Exec] 执行工具"
                 );
                 sink(state.event(EventPayload::ToolCallStarted {
                     index: dispatch_index,
@@ -960,6 +1046,16 @@ impl ToolDispatcher {
                 // 语义失败的输出仍是正常工具产物，照常落 artifact、走 PostToolUse。
                 let is_error = exec_failed || semantic_failed;
                 let duration_ms = started.elapsed().as_millis() as u64;
+                info!(
+                    target: "tool",
+                    session_id = session_id_for_hooks.as_deref().unwrap_or("-"),
+                    tool = %call.name,
+                    call_id = %call.id,
+                    outcome = if is_error { "error" } else { "ok" },
+                    duration_ms,
+                    result_bytes = raw.len(),
+                    "[Tool:Done] 工具执行完成"
+                );
 
                 // Run 级 edits-worktree 在 RunFinished 前统一拍 after；这里不写 per-Edit metadata。
 
@@ -2087,25 +2183,22 @@ async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecisi
     // judge 必须看到 hebbian 静态分析的全量 effects（segments / write_targets /
     // dangerous_kinds），不重复解析 shell。Bash 段前缀分类只对命令类生效。
     let judge_start = Instant::now();
-    // 判官两次 LLM 调用（Classifier A 段前缀 + judge 决策）整体包 wall-clock 超时：
-    // 抖动 / 同 session 并发挂起时即便各有 read_timeout 也可能累计卡死工具链，超时
-    // 降级 Ask 转人工（架构 §4.4.4）。判官内部仍透传 cancel，用户中断随时立即生效。
+    // 判官单次 LLM 决策调用包一个 wall-clock 超时：provider 抖动 / 同 session 并发挂起时即便
+    // client 有 read_timeout 也可能卡住工具链，超时降级 Ask 转人工（架构 §4.4.4）。判官内部
+    // 仍透传 cancel，用户中断随时立即生效。（Classifier A 逐段前缀分类已停用，见下方注释。）
     let judge_eval = async {
-        let prefix_outcome = crate::automode::classify_bash_prefixes_for_automode(
-            req.judge_client,
-            req.model_id,
-            req.tool_name,
-            req.tool_input,
-            req.effects,
-            req.cancel.clone(),
-        )
-        .await;
-        let judge_effects = prefix_outcome.effects;
+        // Classifier A（每个 AST 段各打一次 LLM 做前缀分类）**已停用**（2026-06-27）：它对
+        // N 段命令**串行**打 N 次 LLM——实测 session 202606270532 一条 7 段 kubectl 循环判官
+        // 阶段打了 8 次串行 sonnet 调用 ≈ 30s，是 AutoMode 判官「卡住」的根因。静态 tree-sitter
+        // effects 已给出 `kubectl get` / `git commit` 级别的段 fingerprint，判官还拿到完整命令
+        // 文本，逐段 LLM 精修（识别 `gg`=git 这类别名）收益微薄却烧 N 次；命令注入由静态层
+        // 的 ast-too-complex 兜底（架构 §4.4.4）。判官改为只用静态 effects、单次 LLM 调用。
+        let judge_effects = req.effects;
         // 标注哪些段已被用户 allow 规则 / session 记忆覆盖，喂给判官让它对「用户先前
         // 已批准过」的命令放心 ALLOW（架构 §4.4.4）。
         let whitelisted_fingerprints: Vec<String> = req
             .hitl
-            .approval_segments(req.tool_name, &judge_effects)
+            .approval_segments(req.tool_name, judge_effects)
             .into_iter()
             .filter(|s| matches!(s.status, protocol::ApprovalSegmentStatus::Whitelisted))
             .map(|s| s.fingerprint)
@@ -2115,7 +2208,7 @@ async fn judge_automode_request(req: AutoModeJudgeRequest<'_>) -> AutoModeDecisi
             req.model_id,
             req.tool_name,
             req.tool_input,
-            &judge_effects,
+            judge_effects,
             req.transcript,
             &whitelisted_fingerprints,
             req.language,
@@ -2415,6 +2508,30 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn bash_safe_write_allowed_only_for_in_bounds_pure_create() {
+        use crate::effects::analyze_effects;
+        // 纯创建 + 界内 → 放行
+        let e = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && touch a.txt"}));
+        assert!(bash_safe_write_allowed("Bash", &e, true));
+        // 同命令但越界（paths_in_bounds=false）→ 不放行（路径闸接管）
+        assert!(!bash_safe_write_allowed("Bash", &e, false));
+        // 混入会跑代码的命令（cargo build）→ 不放行
+        let e2 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && cargo build"}));
+        assert!(!bash_safe_write_allowed("Bash", &e2, true));
+        // 混入 rm（不可记忆，非 safe_write）→ 不放行
+        let e3 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && rm -rf old"}));
+        assert!(!bash_safe_write_allowed("Bash", &e3, true));
+        // 纯只读 → 不放行（没有 safe_write 段，交 ReadOnly 短路处理，不归 safe-write 档）
+        let e4 = analyze_effects("Bash", &serde_json::json!({"command": "ls -la"}));
+        assert!(!bash_safe_write_allowed("Bash", &e4, true));
+        // mkdir + 只读 ls → 放行（会写段全是 safe_write，只读段免匹配）
+        let e5 = analyze_effects("Bash", &serde_json::json!({"command": "mkdir build && ls build"}));
+        assert!(bash_safe_write_allowed("Bash", &e5, true));
+        // 非命令工具 → 不放行
+        assert!(!bash_safe_write_allowed("Edit", &e, true));
+    }
 
     struct StaticAllowJudge;
 
@@ -3162,7 +3279,9 @@ mod tests {
         let call = ToolCall {
             id: "call_1".into(),
             name: "Bash".into(),
-            input: serde_json::json!({ "command": "echo hi && touch a.txt", "cwd": tmp.path() }),
+            // chmod 是真·会写命令（非 safe-write），仍需审批——验证审批后正常 resolve。
+            // （touch/mkdir 现归 safe-write 档自动放行，§4.4.2.3，不再适合做"需审批"用例。）
+            input: serde_json::json!({ "command": "echo hi && chmod 755 a.txt", "cwd": tmp.path() }),
         };
 
         // 模拟 surface：等到 PermissionRequested 事件到达后，调 hitl.resolve(AllowOnce)
@@ -3228,7 +3347,9 @@ mod tests {
         let call = ToolCall {
             id: "call_automode".into(),
             name: "Bash".into(),
-            input: serde_json::json!({ "command": "touch automode-ok" }),
+            // chmod 是真·会写命令（非 safe-write），AutoMode 下仍交判官——验证判官 allow 后
+            // 无需人工即放行。（touch/mkdir 现归 safe-write 档自动放行不进判官，§4.4.2.3。）
+            input: serde_json::json!({ "command": "chmod 755 automode-ok" }),
         };
 
         let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&[call], 0))
@@ -3379,7 +3500,8 @@ mod tests {
         let call = ToolCall {
             id: "call_cancel".into(),
             // 界内会写命令：judge 仍接管命令类（界内编辑已免判官）；cwd 界内避免先卡 PathAccess。
-            input: serde_json::json!({ "command": "touch cancel-probe", "cwd": tmp.path() }),
+            // 用 chmod（真·会写、非 safe-write）——touch/mkdir 现归 safe-write 自动放行不进判官。
+            input: serde_json::json!({ "command": "chmod 755 cancel-probe", "cwd": tmp.path() }),
             name: "Bash".into(),
         };
 
@@ -3458,7 +3580,14 @@ mod tests {
 
         let hitl_for_surface = hitl.clone();
         let surface = tokio::spawn(async move {
-            let mut requests = Vec::new();
+            // 只人工批**第一条**审批（AllowAndRemember cd/grep/cat）。第二条结构相同的命令
+            // 靠 remember 自动放行——worker_threads=2 并发 race 下它可能抢在 remember 前已 emit
+            // PermissionRequested 并短暂 pending，但会被 resolve_matching_pending_after_remember
+            // 自动 resolve，不需要人再批。验证「人工只批 1 次 + 两条都执行成功」比验证「只
+            // emit 1 个事件」健壮——后者依赖 call_2 是否抢在 remember 前 check 的并发时序，本就
+            // flaky（若 remember 真没生效，call_2 永挂 → dispatch 5s timeout → fail，仍抓得住）。
+            let mut first_segments: Option<Vec<String>> = None;
+            let mut human_approvals = 0;
             while let Some(event) = rx.recv().await {
                 if let EventPayload::PermissionRequested {
                     request_id, kind, ..
@@ -3468,38 +3597,39 @@ mod tests {
                         command_segments, ..
                     } = kind
                     {
-                        requests.push(command_segments.clone());
-                    }
-                    if requests.len() == 1 {
-                        hitl_for_surface.resolve(
-                            request_id,
-                            ApprovalDecision::AllowAndRemember {
-                                scope: PermissionScope::Session,
-                                pattern: Some("cd".into()),
-                                extra_patterns: vec!["grep".into(), "cat".into()],
-                            },
-                        );
-                    } else if requests.len() > 1 {
-                        panic!("second matching Bash approval should be auto-resolved");
+                        if human_approvals == 0 {
+                            first_segments = Some(command_segments.clone());
+                            human_approvals += 1;
+                            hitl_for_surface.resolve(
+                                request_id,
+                                ApprovalDecision::AllowAndRemember {
+                                    scope: PermissionScope::Session,
+                                    pattern: Some("cd".into()),
+                                    extra_patterns: vec!["grep".into(), "cat".into()],
+                                },
+                            );
+                        }
                     }
                 }
             }
-            requests
+            (first_segments, human_approvals)
         });
 
         let result = tokio::time::timeout(Duration::from_secs(5), dispatcher.run_calls(&calls, 0))
             .await
             .expect("dispatch should complete after first approval");
         let results = result.expect("dispatch should not return errors");
+        // 两条都执行成功 = 第二条靠 remember 自动放行（核心断言：remember 跨 call 生效）。
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.name == "Bash"));
 
         drop(dispatcher);
-        let requests = surface.await.unwrap();
-        assert_eq!(requests.len(), 1);
+        let (first_segments, human_approvals) = surface.await.unwrap();
+        // 人工只批 1 次——第二条同结构命令不再打扰用户。
+        assert_eq!(human_approvals, 1);
         // command_segments 只含「会写可记忆」段：grep / cat 是只读段，已被过滤
         // （架构 §4.4.2）——UI 记忆勾选区不该出现它们。
-        assert_eq!(requests[0], vec!["cd crates", "cd agent-core"]);
+        assert_eq!(first_segments.unwrap(), vec!["cd crates", "cd agent-core"]);
     }
 
     /// 回归测试：spawn_todo_write short-circuit 真的把 todos 落盘到 jsonl 的

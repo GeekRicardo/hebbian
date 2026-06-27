@@ -1,7 +1,9 @@
-//! 注入 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）+ 标准 tauri build。
-//! 与 apps/hebcore/build.rs、apps/web-server/build.rs 同逻辑：同次 build 的 desktop /
-//! hebcore / hebweb 注入相同 `HEBBIAN_BUILD_ID`（前置脚本喂的环境变量）→ 版本号字符串一致，
-//! desktop 据自身版本号判断运行中 hebcore 是否 stale。
+//! 生成 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）：`v{pkg}-{git_short}[-dirty]-{build_id}`。
+//!
+//! `build_id` 来自环境变量 `HEBBIAN_BUILD_ID`——`pnpm tauri build` / `tauri dev` 的前置脚本
+//! 每次生成一个新值并同时喂给 desktop + hebcore + hebweb 的编译，使**同一次 build 的多个
+//! binary 注入相同版本号**。desktop 用自己编译进的版本号当基准、对比运行中 hebcore 报告的，
+//! 字符串相等即同版本。未设 `HEBBIAN_BUILD_ID` 时回落 `dev`（纯 `cargo build`，dev 场景）。
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {
@@ -19,8 +21,7 @@ fn main() {
     let build_id = std::env::var("HEBBIAN_BUILD_ID").unwrap_or_else(|_| "dev".into());
     let version = format!("v{pkg}-{short}{}-{build_id}", if dirty { "-dirty" } else { "" });
     println!("cargo:rustc-env=HEBBIAN_BUILD_VERSION={version}");
+    // build_id 变（每次 pnpm build）或 commit 移动时重算版本号。
     println!("cargo:rerun-if-env-changed=HEBBIAN_BUILD_ID");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-
-    tauri_build::build()
 }

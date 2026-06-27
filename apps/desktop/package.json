@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "app:build": "node scripts/build-with-id.mjs build",
+    "app:dev": "node scripts/build-with-id.mjs dev"
   },
   "dependencies": {
     "@lexical/react": "0.45.0",

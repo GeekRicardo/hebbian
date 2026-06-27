@@ -401,6 +401,8 @@ pub async fn send_and_save_in_data_dir_with_client_factory(
             rules_files: used_rules_files,
             edits_worktree: Some(edits_worktree),
             derived_sink,
+            // surface 主对话：tag=Main（前端不额外标记，§4.11）。
+            call_tag: model_gateway::types::ModelCallTag::Main,
         },
     );
     if is_system_notification {
@@ -872,6 +874,7 @@ pub async fn send_once(
         tools: Vec::new(),
         max_tokens: 4096,
         reasoning: None,
+            meta: Default::default(),
     };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     match client
@@ -1426,7 +1429,7 @@ mod tests {
                         index: 0,
                         id: Some("call_bash".to_string()),
                         name: Some("Bash".to_string()),
-                        arguments_delta: Some("{\"command\":\"touch automode-ok\"}".to_string()),
+                        arguments_delta: Some("{\"command\":\"chmod 755 automode-ok\"}".to_string()),
                     }));
                     Ok(ModelResponse::ToolCalls {
                         text: String::new(),
@@ -1435,7 +1438,7 @@ mod tests {
                         calls: vec![ToolCall {
                             id: "call_bash".to_string(),
                             name: "Bash".to_string(),
-                            input: serde_json::json!({"command": "touch automode-ok"}),
+                            input: serde_json::json!({"command": "chmod 755 automode-ok"}),
                         }],
                         attachments: Vec::new(),
                         usage: Usage::default(),

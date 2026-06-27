@@ -900,6 +900,7 @@ function MemoryRecallPanel({
     text: string,
     icon: ReactNode,
     hint: string,
+    recommended = false,
   ) => (
     <button
       type="button"
@@ -909,7 +910,12 @@ function MemoryRecallPanel({
       title={hint}
       className={cn(
         "h-7 px-2.5 rounded-md text-[12px] inline-flex items-center gap-1.5 transition-colors",
-        "bg-muted hover:bg-primary/15 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+        recommended
+          ? // 「本对话」= 同类命令整对话只问一次：设为视觉推荐主档，让 Default 下用户
+            // 首次审批顺手记住、后续不再被同命令打断（架构 §4.4.4）。
+            "bg-primary text-primary-foreground hover:bg-primary/90"
+          : "bg-muted hover:bg-primary/15 hover:text-primary",
       )}
     >
       {icon}
@@ -992,7 +998,8 @@ function MemoryRecallPanel({
           "session",
           "本对话",
           <FolderOpen className="w-3.5 h-3.5" />,
-          "写到当前对话的 in-memory 规则",
+          "记住到本对话：同类命令整段对话内不再问（推荐）",
+          true,
         )}
         {scopeBtn(
           "project",

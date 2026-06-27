@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 /// hebcore 的 unix-socket 路径（与 hebcore 进程 / hebweb 兼任时一致）。
 fn hebcore_sock(data_dir: &Path) -> PathBuf {
@@ -53,6 +54,12 @@ enum Req<'a> {
         session_id: &'a str,
         mode: &'a str,
     },
+    /// 查询运行中 hebcore 的版本身份（§7.8.7 版本协商）。
+    GetVersion,
+    /// 请求运行中 hebcore 优雅关停（换版前；有活跃 run 会被拒）。
+    Shutdown,
+    /// 订阅 hebcore 全局日志流（§4.10）：把 hebcore 进程日志注入本进程 LOG_TX 喂日志面板。
+    SubscribeLogs,
 }
 
 /// 入站消息（对应 surface_session::transport::HebcoreResponse）。
@@ -74,6 +81,18 @@ enum Resp {
     Error {
         message: String,
     },
+    /// GetVersion 应答（§7.8.7）。
+    Version {
+        build_version: String,
+        bin_name: String,
+        #[allow(dead_code)]
+        pid: u32,
+        has_active_run: bool,
+    },
+    /// hebcore 转发来的一条日志行（应 SubscribeLogs，§4.10）。
+    Log {
+        line: observability::LogLine,
+    },
 }
 
 /// 连常驻 hebcore；连不上则拉起内嵌 hebcore 二进制后重试（connect_or_spawn 范式，
@@ -91,6 +110,138 @@ fn connect_or_spawn(app: &AppHandle, sock: &Path) -> std::io::Result<UnixStream>
         std::thread::sleep(Duration::from_millis(50));
     }
     UnixStream::connect(sock)
+}
+
+/// 起一条常驻后台线程订阅 hebcore 全局日志流，把每条注入本进程 LOG_TX（§4.10 多进程
+/// 日志聚合）：run 移 hebcore 后 agent_loop 的日志都在 hebcore 进程，desktop 日志面板靠
+/// 这条流才看得到、才实时刷新。断连（hebcore 重启 / 换版）后每 2s 自动重连。
+pub fn spawn_log_forwarder(data_dir: std::path::PathBuf) {
+    std::thread::spawn(move || loop {
+        let sock = hebcore_sock(&data_dir);
+        if let Ok(mut conn) = UnixStream::connect(&sock) {
+            if write_req(&mut conn, &Req::SubscribeLogs).is_ok() {
+                if let Ok(read) = conn.try_clone() {
+                    for line in BufReader::new(read).lines() {
+                        let Ok(line) = line else { break };
+                        if let Ok(Resp::Log { line: log }) = serde_json::from_str::<Resp>(&line) {
+                            if let Some(tx) = observability::log_sender() {
+                                let _ = tx.send(log);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2)); // 断连 / 连不上：等会儿重连
+    });
+}
+
+/// 运行中 hebcore 的版本身份（§7.8.7）。
+struct RunningVersion {
+    build_version: String,
+    bin_name: String,
+    has_active_run: bool,
+}
+
+/// 向已连上的 hebcore 问一次版本。旧 hebcore 不认识 GetVersion → 回 Error/EOF →
+/// 返回 `None`，调用方视作"旧到没有版本协议 = 必然 stale"（这是个完美信号）。
+fn query_version(sock: &Path) -> Option<RunningVersion> {
+    let mut conn = UnixStream::connect(sock).ok()?;
+    write_req(&mut conn, &Req::GetVersion).ok()?;
+    let mut lines = BufReader::new(conn.try_clone().ok()?).lines();
+    let line = lines.next()?.ok()?;
+    match serde_json::from_str::<Resp>(&line).ok()? {
+        Resp::Version {
+            build_version,
+            bin_name,
+            has_active_run,
+            ..
+        } => Some(RunningVersion {
+            build_version,
+            bin_name,
+            has_active_run,
+        }),
+        _ => None,
+    }
+}
+
+/// 版本协商（§7.8.7）：连上 hebcore 后核对它的版本是否 = 当前磁盘 binary 版本，旧版则弹窗
+/// 让用户确认换版（kill 旧 + 起新）。**只在发消息路径调用**（非主线程，native dialog 的
+/// blocking_show 安全；启动 setup 在主线程不能 blocking）。返回后保证连的是当前版本的
+/// hebcore，或用户明确选择沿用旧版。连不上 hebcore 时直接返回——后续 connect_or_spawn 会
+/// 拉起当前版本的新进程。
+fn negotiate_version(app: &AppHandle, sock: &Path) {
+    let current = env!("HEBBIAN_BUILD_VERSION");
+    let Ok(_probe) = UnixStream::connect(sock) else {
+        return; // 没有 hebcore 在跑，无需协商
+    };
+    drop(_probe);
+
+    let running = query_version(sock);
+    let (running_ver, bin_name, has_active_run) = match running {
+        Some(v) => (v.build_version, v.bin_name, v.has_active_run),
+        // 旧 hebcore 不认 GetVersion → 必然 stale。
+        None => ("（旧版本，无版本协议）".to_string(), "hebcore".to_string(), false),
+    };
+
+    if running_ver == current {
+        return; // 同版本，正常
+    }
+    // hebweb 兼任 hebcore：它是另一个服务，版本本就不同，不该被当 stale 误杀（§7.8.7 trap B）。
+    if bin_name == "hebweb" {
+        tracing::info!(running = %running_ver, "运行中核心是 hebweb 兼任，跳过 hebcore 版本协商");
+        return;
+    }
+    if has_active_run {
+        app.dialog()
+            .message("有对话正在运行，没法切换到最新版核心。等这轮对话跑完再重启 App。")
+            .title("核心是旧版本")
+            .blocking_show();
+        return;
+    }
+
+    let confirmed = app
+        .dialog()
+        .message(format!(
+            "检测到正在运行的核心是旧版本，要关掉它、换成最新版吗？\n\n运行中：{running_ver}\n最新：{current}"
+        ))
+        .title("核心是旧版本")
+        .buttons(MessageDialogButtons::OkCancel)
+        .blocking_show();
+    if !confirmed {
+        return; // 用户选择沿用旧版
+    }
+
+    // 发 Shutdown 让旧 hebcore 优雅退（已确认无活跃 run，它会 Accepted 后 exit）。
+    if let Ok(mut conn) = UnixStream::connect(sock) {
+        let _ = write_req(&mut conn, &Req::Shutdown);
+        if let Some(Ok(line)) = BufReader::new(conn.try_clone().unwrap_or_else(|_| conn.try_clone().unwrap()))
+            .lines()
+            .next()
+        {
+            if let Ok(Resp::Error { message }) = serde_json::from_str::<Resp>(&line) {
+                // 理论上不会（前面已查 has_active_run=false），但竞态下仍可能被拒。
+                tracing::warn!(%message, "hebcore 拒绝关停，沿用旧版");
+                return;
+            }
+        }
+    }
+    // 等旧进程真死：connect 失败 = 单例锁 + sock 已由 OS 释放。最多 ~5s。
+    for _ in 0..100 {
+        if UnixStream::connect(sock).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // 拉起当前版本的新 hebcore（自带单例锁，重复拉起安全）。
+    spawn_bundled_hebcore(app);
+    for _ in 0..100 {
+        if UnixStream::connect(sock).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    tracing::info!(from = %running_ver, to = %current, "hebcore 已换到当前版本");
 }
 
 /// 启动期确保常驻 hebcore 在跑（架构 §7.8.1：任何 surface 启动时都拉起 core，谁先启动
@@ -154,6 +305,10 @@ pub fn run_conversation(
     sink: &dyn RunEventSink,
 ) -> Result<(), String> {
     let sock = hebcore_sock(data_dir);
+
+    // 版本协商（§7.8.7）：发消息前核对 hebcore 版本，旧版弹窗换新。本函数在非主线程
+    // （spawn_blocking）跑，native dialog blocking_show 安全。
+    negotiate_version(app, &sock);
 
     // 订阅连接：先建立，保证不漏 run 早期事件。
     let sub = connect_or_spawn(app, &sock)
@@ -234,7 +389,7 @@ fn control_request(data_dir: &Path, req: &Req) -> Result<(), String> {
         match serde_json::from_str::<Resp>(&line).map_err(|e| e.to_string())? {
             Resp::Accepted | Resp::Rpc { .. } | Resp::Subscribed { .. } => Ok(()),
             Resp::Error { message } => Err(message),
-            Resp::Event { .. } => Ok(()),
+            Resp::Event { .. } | Resp::Version { .. } | Resp::Log { .. } => Ok(()),
         }
     } else {
         Err("hebcore 无响应".into())

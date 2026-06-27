@@ -27,6 +27,13 @@ pub struct TransportCtx {
     pub core: Arc<LocalCoreClient>,
     pub permission_store: Option<Arc<PermissionStore>>,
     pub runtimes: RuntimeRegistry,
+    /// 本进程 binary 的版本号字符串（§7.8.7 版本协商）。**由各 bin 的 main 用
+    /// `env!("HEBBIAN_BUILD_VERSION")` 传入**，不能在本 lib 里 `env!`——lib 编译产物会被
+    /// 缓存（bin 重编了 lib 未必重编），lib 里的 `env!` 会固化成旧值。
+    pub build_version: String,
+    /// 本进程 binary 名（`"hebcore"` / `"hebweb"`）。desktop 据此识别"运行中的核心是不是
+    /// hebweb 兼任"，避免把正常的 hebweb 当 stale hebcore 误杀。
+    pub bin_name: String,
 }
 
 /// hebcore unix-socket 入站消息（一行一个 JSON）。
@@ -57,6 +64,17 @@ pub enum HebcoreRequest {
     Inject { session_id: String, text: String },
     /// 即时切换 run mode。
     SetRunMode { session_id: String, mode: String },
+    /// 报告本 hebcore 进程的版本身份（desktop connect 后做版本协商，§7.8.7）。
+    /// 连接级请求：要读 ctx.build_version + ctx.runtimes 判活跃 run，dispatch 拿不到这俩，
+    /// 故走 HebcoreRequest 而非 core_rpc::CoreRequest。
+    GetVersion,
+    /// 优雅关停本进程（desktop 检测磁盘 binary 已更新后换版）。有活跃 run 时拒绝——
+    /// 避免杀掉正在写 partial 的 run（§4.9.2）。
+    Shutdown,
+    /// 订阅本 hebcore 进程的全局日志流（§4.10）：run 移 hebcore 后 agent_loop 的日志都在
+    /// 本进程，surface 连过来订阅、把每条 LogLine 注入自己的 LOG_TX 喂日志面板。连接级、
+    /// 跨 session（不带 session_id）。
+    SubscribeLogs,
 }
 
 /// hebcore unix-socket 出站消息（一行一个 JSON）。
@@ -68,6 +86,17 @@ pub enum HebcoreResponse<'a> {
     Subscribed { session_id: String },
     Event { event: protocol::WireEvent },
     Error { message: String },
+    /// GetVersion 应答（§7.8.7）。`build_version` 跨进程比对（同次 build 的两 binary 注入
+    /// 相同 `HEBBIAN_BUILD_VERSION`，字符串相等 = 同版本）；`bin_name` 区分 hebcore /
+    /// hebweb 兼任（不误杀 hebweb）；`has_active_run` 门控 Shutdown。
+    Version {
+        build_version: String,
+        bin_name: String,
+        pid: u32,
+        has_active_run: bool,
+    },
+    /// 一条转发给 surface 的日志行（应 [`HebcoreRequest::SubscribeLogs`]，§4.10）。
+    Log { line: observability::LogLine },
 }
 
 /// 处理一条 unix-socket 连接：逐行读 [`HebcoreRequest`]，按通路分派。
@@ -230,6 +259,72 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                     }
                 }
             }
+            Ok(HebcoreRequest::SubscribeLogs) => {
+                // 订阅本进程全局日志，逐行推给 surface（§4.10 多进程日志聚合）。run 移
+                // hebcore 后 agent_loop 日志都在这进程，desktop 面板靠这条流才看得到。
+                match observability::log_sender() {
+                    Some(tx) => {
+                        let mut rx = tx.subscribe();
+                        loop {
+                            match rx.recv().await {
+                                Ok(line) => {
+                                    if write_line(&mut write_half, &HebcoreResponse::Log { line })
+                                        .await
+                                        .is_err()
+                                    {
+                                        return Ok(());
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    None => {
+                        write_line(
+                            &mut write_half,
+                            &HebcoreResponse::Error {
+                                message: "日志系统未初始化".to_string(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Ok(HebcoreRequest::GetVersion) => {
+                let has_active_run = ctx.runtimes.has_active_run().await;
+                write_line(
+                    &mut write_half,
+                    &HebcoreResponse::Version {
+                        build_version: ctx.build_version.clone(),
+                        bin_name: ctx.bin_name.clone(),
+                        pid: std::process::id(),
+                        has_active_run,
+                    },
+                )
+                .await?;
+            }
+            Ok(HebcoreRequest::Shutdown) => {
+                // 有活跃 run 拒绝关停——避免杀掉正在写 partial 的 run（§4.9.2 happens-before）。
+                if ctx.runtimes.has_active_run().await {
+                    write_line(
+                        &mut write_half,
+                        &HebcoreResponse::Error {
+                            message: "有对话正在运行，拒绝关停".into(),
+                        },
+                    )
+                    .await?;
+                } else {
+                    // 已确认无活跃 run → 无 partial 在写，process::exit 跳过 Drop 是安全的
+                    // （§4.9.2）。OS 在进程死时释放单例锁；残留 sock 由下个 hebcore 启动 remove
+                    // （hebcore main 的 bind 前 remove_file）。先 flush 应答 + 短暂 drain 到 peer
+                    // 再退，让 desktop 确认收到 Accepted。
+                    write_line(&mut write_half, &HebcoreResponse::Accepted).await?;
+                    let _ = write_half.flush().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                    std::process::exit(0);
+                }
+            }
             Err(e) => {
                 write_line(
                     &mut write_half,
@@ -286,4 +381,32 @@ async fn answer_question_with_retry(
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `SubscribeLogs` 请求 + `Log` 响应的 wire 格式：desktop 侧 `Req`/`Resp` 是独立定义的
+    /// 镜像 enum，靠 serde tag 对齐，这测试钉死格式防两边漂移（§4.10 多进程日志聚合）。
+    #[test]
+    fn subscribe_logs_and_log_frame_wire_format() {
+        // desktop 发 {"kind":"subscribe_logs"} → hebcore 反序列化成 SubscribeLogs
+        let req: HebcoreRequest = serde_json::from_str(r#"{"kind":"subscribe_logs"}"#).unwrap();
+        assert!(matches!(req, HebcoreRequest::SubscribeLogs));
+
+        // hebcore 发 Log 帧 → desktop Resp::Log 按同 tag / 字段反序列化
+        let line = observability::LogLine {
+            level: "INFO".to_string(),
+            target: "model".to_string(),
+            message: "[Model:Request] 发起模型请求".to_string(),
+            ts: "12:00:00.000".to_string(),
+        };
+        let json = serde_json::to_string(&HebcoreResponse::Log { line }).unwrap();
+        assert!(json.contains(r#""kind":"log""#), "tag 应为 log: {json}");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["line"]["target"], "model");
+        assert_eq!(v["line"]["level"], "INFO");
+        assert_eq!(v["line"]["message"], "[Model:Request] 发起模型请求");
+    }
 }

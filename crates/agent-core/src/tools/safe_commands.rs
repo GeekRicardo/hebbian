@@ -271,6 +271,96 @@ pub fn is_never_remember(cmd: &ParsedCommand) -> bool {
     NEVER_REMEMBER_ROOTS.contains(&root) || root.starts_with("mkfs")
 }
 
+/// 内置「安全会写」命令根：只创建文件系统条目、不执行任意代码。其写目标即位置参数，
+/// 由 [`crate::tools::shell_parse::collect_argv_write_targets`] 采进 `write_targets`，
+/// 交路径闸做越界把关。命中这些且目标全部界内 → 连首次都免审/免判官（架构 §4.4.2.3
+/// safe 档）。**严格只收纯创建命令**：`mkdir` / `touch` / `mkfifo`。`cargo` / `git` /
+/// `make` / `mv` / `cp` 要么跑脚本（build.rs / hooks）要么 argument-blind 覆盖既有文件，
+/// 一律不进——它们走「判一次 / 问一次再 session 复用」，不享内置免审。
+const SAFE_WRITE_ROOTS: &[&str] = &["mkdir", "touch", "mkfifo"];
+
+/// 判断一段命令是否「安全会写」（纯创建文件系统条目，无代码执行）。命中 [`SAFE_WRITE_ROOTS`]
+/// 且不含 heredoc。安全性由「命令本身不跑代码」+「写目标进 write_targets 由路径闸兜越界」共同保证。
+pub fn is_safe_write(cmd: &ParsedCommand) -> bool {
+    SAFE_WRITE_ROOTS.contains(&cmd.root.as_str()) && !cmd.has_heredoc
+}
+
+/// 外泄 / 远端副作用命令根：出网下载 / 远端传输。worktree 兜不住其副作用。
+const EGRESS_ROOTS: &[&str] = &[
+    "curl", "wget", "scp", "sftp", "rsync", "nc", "ncat", "telnet", "ftp",
+];
+
+/// 外泄 `(root, sub)` 子命令：推远端 / 装包 / 发布。这些**永不被 session 沉淀静默累积**
+/// （架构 §4.4.4）——即便用户/判官放行过一次，同对话再次出现仍每次重判 / 重问。
+const EGRESS_SUBCOMMANDS: &[(&str, &str)] = &[
+    ("git", "push"),
+    ("git", "pull"),
+    ("git", "fetch"),
+    ("git", "clone"),
+    ("git", "remote"),
+    ("npm", "install"),
+    ("npm", "i"),
+    ("npm", "ci"),
+    ("npm", "publish"),
+    ("npm", "update"),
+    ("pnpm", "install"),
+    ("pnpm", "i"),
+    ("pnpm", "add"),
+    ("pnpm", "update"),
+    ("pnpm", "publish"),
+    ("yarn", "install"),
+    ("yarn", "add"),
+    ("yarn", "up"),
+    ("pip", "install"),
+    ("pip3", "install"),
+    ("cargo", "install"),
+    ("cargo", "publish"),
+    ("gem", "install"),
+    ("go", "install"),
+    ("go", "get"),
+    ("brew", "install"),
+    ("brew", "upgrade"),
+    ("apt", "install"),
+    ("apt-get", "install"),
+];
+
+/// 判断一段命令是否「外泄 / 远端副作用」（出网 / 推远端 / 装包 / 发布）。命中
+/// [`EGRESS_ROOTS`] 或 [`EGRESS_SUBCOMMANDS`]。用于把这类命令排除在「Allow 自动沉淀」
+/// 之外——worktree 兜不住，不该被一次放行静默累积成整对话免审（架构 §4.4.4）。
+pub fn is_egress(cmd: &ParsedCommand) -> bool {
+    let root = cmd.root.as_str();
+    if EGRESS_ROOTS.contains(&root) {
+        return true;
+    }
+    if let Some(first_pos) = cmd.positional().first() {
+        if EGRESS_SUBCOMMANDS
+            .iter()
+            .any(|(r, s)| *r == root && *s == *first_pos)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 判断一段命令是否「只读数据生产者」——专用于命令替换 `$(...)` / 反引号内部的良性判定
+/// （架构 §4.4.2.2）。与 [`is_safe`] 的唯一区别：**容忍 heredoc**。`$(cat <<'EOF' … EOF)`
+/// 里的 `cat` 把 heredoc body 当 stdin 数据读，整体只读；而 [`is_safe`] 对 heredoc 一律保守
+/// 判不安全（因为顶层 `cat <<EOF > file` 这类会写，且解释器 heredoc 会跑代码）。这里只在
+/// 「已确认是替换内部、且 root 命中只读名单」的前提下放宽 heredoc，安全：解释器（python/sh）
+/// 的 root 本就不在只读名单，`python <<EOF` 仍判不安全。
+pub fn is_readonly_data_command(cmd: &ParsedCommand) -> bool {
+    if cmd.has_heredoc {
+        let probe = ParsedCommand {
+            has_heredoc: false,
+            ..cmd.clone()
+        };
+        is_safe(&probe)
+    } else {
+        is_safe(cmd)
+    }
+}
+
 /// 判断单条命令是否安全（只读、无副作用）。
 pub fn is_safe(cmd: &ParsedCommand) -> bool {
     let root = cmd.root.as_str();
@@ -423,6 +513,56 @@ mod tests {
     fn never_remember_excludes_ordinary_writes() {
         for cmd in ["cp a b", "touch x", "mkdir d", "mv a b"] {
             assert!(!is_never_remember(&first(cmd)), "{cmd} 不应判不可记忆");
+        }
+    }
+
+    #[test]
+    fn safe_write_covers_only_pure_creators() {
+        for cmd in ["mkdir build", "mkdir -p a/b/c", "touch x.txt", "mkfifo p"] {
+            assert!(is_safe_write(&first(cmd)), "{cmd} 应判安全会写");
+        }
+        // 跑脚本 / argument-blind 覆盖 / 删除的命令一律不进 safe-write 档。
+        for cmd in [
+            "cargo build",
+            "git commit -m x",
+            "make",
+            "mv a b",
+            "cp a b",
+            "rm -rf x",
+            "ls",
+        ] {
+            assert!(!is_safe_write(&first(cmd)), "{cmd} 不应判安全会写");
+        }
+    }
+
+    #[test]
+    fn egress_covers_remote_and_install() {
+        for cmd in [
+            "git push origin main",
+            "git pull",
+            "git clone https://x",
+            "npm install",
+            "pnpm add lodash",
+            "pip install requests",
+            "cargo install ripgrep",
+            "cargo publish",
+            "curl http://example.com",
+            "wget http://x",
+            "scp a b:c",
+        ] {
+            assert!(is_egress(&first(cmd)), "{cmd} 应判 egress");
+        }
+        // 本地、可回退、纯查询的命令不是 egress——它们可被 session 沉淀。
+        for cmd in [
+            "cargo build",
+            "cargo test",
+            "git commit -m x",
+            "git status",
+            "npm run build",
+            "mkdir d",
+            "ls",
+        ] {
+            assert!(!is_egress(&first(cmd)), "{cmd} 不应判 egress");
         }
     }
 }

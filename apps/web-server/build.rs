@@ -1,7 +1,6 @@
-//! 注入 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）+ 标准 tauri build。
-//! 与 apps/hebcore/build.rs、apps/web-server/build.rs 同逻辑：同次 build 的 desktop /
-//! hebcore / hebweb 注入相同 `HEBBIAN_BUILD_ID`（前置脚本喂的环境变量）→ 版本号字符串一致，
-//! desktop 据自身版本号判断运行中 hebcore 是否 stale。
+//! 生成 `HEBBIAN_BUILD_VERSION`（§7.8.7 版本协商）。与 apps/hebcore/build.rs 同逻辑：
+//! `v{pkg}-{git_short}[-dirty]-{build_id}`，`build_id` 来自 `HEBBIAN_BUILD_ID` 环境变量
+//! （同次 build 的多 binary 共享同一值）。hebweb 兼任 hebcore 时也要报告版本。
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {
@@ -21,6 +20,4 @@ fn main() {
     println!("cargo:rustc-env=HEBBIAN_BUILD_VERSION={version}");
     println!("cargo:rerun-if-env-changed=HEBBIAN_BUILD_ID");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-
-    tauri_build::build()
 }

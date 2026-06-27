@@ -125,6 +125,9 @@ fn spawn_hebcore_transport(data_dir: &std::path::Path, state: &server::ServerSta
         core: state.core.clone(),
         permission_store: state.permission_store.clone(),
         runtimes: state.runtimes.clone(),
+        // §7.8.7：bin_name="hebweb" 让 desktop 识别"运行中核心是 hebweb 兼任"，不误杀。
+        build_version: env!("HEBBIAN_BUILD_VERSION").to_string(),
+        bin_name: "hebweb".to_string(),
     });
     let sock_for_log = sock.clone();
     tokio::spawn(async move {

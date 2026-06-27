@@ -124,6 +124,12 @@ impl RuntimeRegistry {
         self.sessions.read().await.get(session_id).cloned()
     }
 
+    /// 是否有任一 session 正在跑活跃 run（§7.8.7 Shutdown 前的安全闸：有 run 不许关停，
+    /// 护住 §4.9.2 partial 落盘）。
+    pub async fn has_active_run(&self) -> bool {
+        self.sessions.read().await.values().any(|rt| rt.is_active())
+    }
+
     /// 移除一个 runtime（session 关闭）。
     pub async fn remove(&self, session_id: &str) -> Option<Arc<SessionRuntime>> {
         self.sessions.write().await.remove(session_id)
@@ -214,6 +220,12 @@ pub fn register_wakeup_resume_handler(ctx: Arc<crate::transport::TransportCtx>) 
                 },
             };
             let wakeup_xml = agent_core::wakeup::wakeup_xml(&event);
+            tracing::info!(
+                target: "wakeup",
+                session_id = %sid,
+                active = rt.is_active(),
+                "[Wakeup:Resume] 后台任务 / cron 唤醒续跑"
+            );
             if !rt.inject(wakeup_xml.clone()) {
                 if let Err(e) = rt.input_tx.send(wakeup_xml) {
                     tracing::warn!(session = %sid, error = %e, "wakeup resume: input_tx 已关闭");
@@ -491,6 +503,8 @@ pub async fn run_turn(runtime: Arc<SessionRuntime>, user_text: String) -> Result
             run_mode,
             model_id: Some(runtime.model.clone()),
             force_automode: false,
+            // surface 主对话：tag=Main（前端不额外标记，§4.11）。
+            call_tag: model_gateway::types::ModelCallTag::Main,
             data_dir: Some(data_dir.to_path_buf()),
             phase: Some(phase),
             global_rules,

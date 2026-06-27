@@ -78,6 +78,10 @@ async fn main() -> Result<()> {
         core,
         permission_store,
         runtimes: RuntimeRegistry::new(),
+        // 版本号在 hebcore bin 编译期由 build.rs 固化（§7.8.7）；不在 surface-session lib 里
+        // env! —— lib 产物会被缓存，env! 会读到旧值。
+        build_version: env!("HEBBIAN_BUILD_VERSION").to_string(),
+        bin_name: "hebcore".to_string(),
     });
 
     // wakeup resume handler 必须在 run 所在进程（= hebcore）注册：后台任务 / cron 唤醒

@@ -560,6 +560,41 @@ impl HitlGate {
         out
     }
 
+    /// 一次 Allow（判官自动 / 人工审批）后应**自动沉淀到 session** 的会写段 fingerprint
+    /// （架构 §4.4.4）。在 [`unapproved_memorable_writable_segments`](Self::unapproved_memorable_writable_segments)
+    /// 基础上再排除 **egress** 段（push / install / curl 等外泄命令 worktree 兜不住，不该被
+    /// 一次放行静默累积成整对话免审）。让「判一次 / 问一次」覆盖整个对话，egress、不可记忆
+    /// （rm/dd）、危险复合（refuse_remember）仍每次过闸。
+    pub fn segments_to_auto_persist(&self, tool_name: &str, effects: &Effects) -> Vec<String> {
+        let egress_fps: std::collections::HashSet<&str> = effects
+            .segments
+            .iter()
+            .filter(|s| s.egress)
+            .map(|s| s.fingerprint.as_str())
+            .collect();
+        self.unapproved_memorable_writable_segments(tool_name, effects)
+            .into_iter()
+            .filter(|fp| !egress_fps.contains(fp.as_str()))
+            .collect()
+    }
+
+    /// 判官自动 Allow 后把会写段沉淀到 **session** 作用域（架构 §4.4.4 P0-1）：让 AutoMode
+    /// 下「判一次」覆盖整个对话——下个 Run / 下条同 fingerprint 命令命中 session 规则直接
+    /// 放行，不再烧判官 LLM（复现里 `printf > note.txt` 一个 run 内被判两次正是缺这步）。
+    /// 排除 egress / 不可记忆 / 已白名单段（见 [`segments_to_auto_persist`](Self::segments_to_auto_persist)）。
+    /// 只对命令类工具（Bash/PowerShell）有段、生效；其它工具 no-op。
+    ///
+    /// **只挂判官路径，不挂人工 `AllowOnce`**：人工「允许一次」保持「真的只一次」语义
+    /// （Default「同命令整对话只问一次」由审批弹窗默认记忆档=本对话承载，不污染 Once）。
+    pub fn persist_judge_allowed_segments(&self, tool_name: &str, effects: &Effects) {
+        if !matches!(tool_name, "Bash" | "PowerShell") {
+            return;
+        }
+        for fp in self.segments_to_auto_persist(tool_name, effects) {
+            self.remember(PermissionScope::Session, tool_name, Some(&fp), None);
+        }
+    }
+
     /// 复合命令逐段的白名单状态（架构 §4.4.2.3）。供审批弹窗逐段展示：已白名单段标
     /// ✓ 跳过、rm 段红色禁选、待审段可勾选。**每次调用都实时查 learned + store**（store
     /// 内部按 mtime 刷新 global/project、session 内存实时），所以上一次审批刚写的规则这次立刻可见。
@@ -1389,6 +1424,87 @@ mod tests {
             other => {
                 panic!("expected remembered benign compound command to approve, got {other:?}")
             }
+        }
+    }
+
+    #[test]
+    fn allow_once_persists_writable_segment_to_session_across_run_rebuild() {
+        // P0-1（架构 §4.4.4）：判官 / 人工 Allow（含 AllowOnce）后，会写段自动沉淀到 session
+        // 作用域。HitlGate 每 Run 重建（learned 清零），但共享同一 PermissionStore + session_id，
+        // 所以下一个 Run 对同 fingerprint 命令直接 Approved——「判一次 / 问一次」覆盖整对话。
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-hitl-persist-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(PermissionStore::open(&dir).unwrap());
+        let wd = PathBuf::from("/Users/x/proj");
+
+        // Run 1 的 gate：首次 cargo build 需审批，放行后沉淀。
+        let gate1 = HitlGate::new(PermissionPolicy::default()).with_store(
+            Arc::clone(&store),
+            "sess-persist",
+            Some(wd.clone()),
+        );
+        let build =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build --release"}));
+        // 首次需审批，判官放行 → P0-1 沉淀 "cargo build" 到 session。
+        match gate1.check("Bash", &build) {
+            PermissionDecision::NeedsApproval { .. } => {}
+            other => panic!("expected first cargo build to need approval, got {other:?}"),
+        };
+        gate1.persist_judge_allowed_segments("Bash", &build);
+
+        // Run 2 的全新 gate（learned 已随上一 Run 销毁），共享 store + session_id：
+        // 同类 cargo build 命中 session 沉淀 → 直接 Approved，不再审批/判官。
+        let gate2 = HitlGate::new(PermissionPolicy::default()).with_store(
+            Arc::clone(&store),
+            "sess-persist",
+            Some(wd),
+        );
+        let build2 =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "cargo build --workspace"}));
+        match gate2.check("Bash", &build2) {
+            PermissionDecision::Approved => {}
+            other => panic!(
+                "expected second cargo build auto-approved after session persist, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn allow_once_does_not_persist_egress_command() {
+        // P0-1 + P1-2（架构 §4.4.4）：egress 命令（git push）即便放行过一次，也**不**沉淀——
+        // worktree 兜不住外泄副作用，同对话再次出现仍每次重判 / 重问。
+        let dir =
+            std::env::temp_dir().join(format!("hebbian-hitl-egress-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(PermissionStore::open(&dir).unwrap());
+        let wd = PathBuf::from("/Users/x/proj");
+        let gate1 = HitlGate::new(PermissionPolicy::default()).with_store(
+            Arc::clone(&store),
+            "sess-egress",
+            Some(wd.clone()),
+        );
+        let push =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "git push origin main"}));
+        match gate1.check("Bash", &push) {
+            PermissionDecision::NeedsApproval { .. } => {}
+            other => panic!("expected git push to need approval, got {other:?}"),
+        };
+        // 判官放行 egress 命令也不沉淀（segments_to_auto_persist 排除 egress）。
+        gate1.persist_judge_allowed_segments("Bash", &push);
+
+        let gate2 = HitlGate::new(PermissionPolicy::default()).with_store(
+            Arc::clone(&store),
+            "sess-egress",
+            Some(wd),
+        );
+        let push2 =
+            crate::effects::analyze_effects("Bash", &serde_json::json!({"command": "git push origin main"}));
+        match gate2.check("Bash", &push2) {
+            PermissionDecision::NeedsApproval { .. } => {}
+            other => panic!(
+                "expected git push to STILL need approval (egress not persisted), got {other:?}"
+            ),
         }
     }
 
