@@ -279,6 +279,10 @@ pub struct LoopParams<'a> {
     /// （CLI 单跑 / subagent / 单测路径不落盘）。由 Harness::spawn_run 用 data_dir +
     /// session_id 构造后塞入。
     pub persister: Option<crate::run_persister::RunPersister>,
+    /// 本 run 的模型调用 tag（架构 §4.11）。主对话 = Main；aside / subagent / nested run 由
+    /// 创建方显式传入，让 `[model]` 日志 + model_io 落盘据此区分（替代已停用的 model_io
+    /// main_kind 推断）。
+    pub call_tag: model_gateway::types::ModelCallTag,
 }
 
 /// 把 [`compose_system_prompt`] 重新导出为旧名字，方便其它 crate 沿用。
@@ -493,6 +497,7 @@ pub async fn run_loop(
         subagent_ctx,
         subagent_bypass,
         persister,
+        call_tag,
     } = params;
 
     let emit = |payload: EventPayload| on_event(state.event(payload));
@@ -519,7 +524,13 @@ pub async fn run_loop(
         mut total_cache_read_tokens,
         mut total_cache_creation_tokens,
     ) = if let Some(ref rs) = resume_from {
-        info!(?rs.cause, "run resumed");
+        info!(
+            target: "run",
+            session_id = session_id.as_deref().unwrap_or("-"),
+            run_id = %state.run_id,
+            cause = ?rs.cause,
+            "[Run:Resumed] run 从 checkpoint 恢复，继续向 surface 发事件流"
+        );
         emit(EventPayload::RunResumed {
             cause: rs.cause.clone(),
         });
@@ -534,7 +545,13 @@ pub async fn run_loop(
             rs.total_cache_creation_tokens,
         )
     } else {
-        info!("run started");
+        info!(
+            target: "run",
+            session_id = session_id.as_deref().unwrap_or("-"),
+            run_id = %state.run_id,
+            model = model_id.as_deref().unwrap_or("-"),
+            "[Run:Started] run 开始，向 surface 发事件流"
+        );
         emit(EventPayload::RunStarted {
             agent: agent.clone(),
             parent,
@@ -854,6 +871,15 @@ pub async fn run_loop(
             tools: tool_defs,
             max_tokens: 8192,
             reasoning: None,
+            // 主 chat：tag 由创建方显式传入（call_tag），主对话 = Main（前端不额外标记）；
+            // 带 session/run/turn/assistant-msg-id，让 `[model]` 日志 + model_io 串起来。
+            meta: model_gateway::types::ModelCallMeta {
+                session_id: session_id.clone(),
+                run_id: Some(state.run_id.to_string()),
+                turn: turn_index as u32,
+                message_id: persister.as_ref().map(|p| p.msg_id().to_string()),
+                tag: call_tag,
+            },
         };
 
         // 与本轮请求配对的本地估算值（surface `context_usage` 同款口径）。采样点紧贴
@@ -1906,6 +1932,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);
@@ -1969,6 +1996,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(|_| {}),
         )
@@ -2040,6 +2068,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(|_| {}),
         )
@@ -2112,6 +2141,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(move |event| {
                 if matches!(event.payload, EventPayload::TurnFinished { .. })
@@ -2241,6 +2271,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(|_| {}),
         )
@@ -2412,6 +2443,7 @@ mod tests {
                 subagent_ctx: None,
                 subagent_bypass: false,
                 persister: None,
+                call_tag: Default::default(),
             },
             Arc::new(move |event| {
                 events_for_sink.lock().unwrap().push(event.payload);

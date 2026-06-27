@@ -121,6 +121,10 @@ pub fn build_compaction_request(
         tools: Vec::new(),
         max_tokens: 4096,
         reasoning: None,
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Compaction,
+            ..Default::default()
+        },
     };
     (before_tokens, req)
 }

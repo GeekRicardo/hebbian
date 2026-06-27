@@ -340,6 +340,10 @@ async fn call_model(
             effort: None,
             long_context: None,
         }),
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Memory,
+            ..Default::default()
+        },
     };
     let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
     match client.complete(req, cancel).await? {

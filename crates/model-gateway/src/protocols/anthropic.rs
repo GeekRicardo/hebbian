@@ -898,6 +898,7 @@ mod tests {
                 tools: vec![],
                 max_tokens: 1024,
                 reasoning: None,
+                            meta: Default::default(),
             };
             let body = build_body(&req, false, false, None).unwrap();
             let tool_use = &body["messages"][1]["content"][0];
@@ -941,6 +942,7 @@ mod tests {
             tools: vec![],
             max_tokens: 4096,
             reasoning: None,
+                    meta: Default::default(),
         };
 
         let body = build_body(&req, false, false, None).unwrap();
@@ -984,6 +986,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1016,6 +1019,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1032,6 +1036,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         let msgs = body["messages"].as_array().unwrap();
@@ -1048,6 +1053,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
 
         let body = build_body(&req, false, true, None).unwrap();
@@ -1068,6 +1074,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
 
         let body = build_body(&req, false, true, None).unwrap();
@@ -1087,6 +1094,7 @@ mod tests {
             tools: vec![],
             max_tokens: 1024,
             reasoning: None,
+                    meta: Default::default(),
         };
 
         let body = build_body(&req, false, false, None).unwrap();
@@ -1120,6 +1128,7 @@ mod tests {
                 effort: Some(ReasoningEffort::Extra),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         assert_eq!(
@@ -1144,6 +1153,7 @@ mod tests {
                 effort: Some(ReasoningEffort::High),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -1172,6 +1182,7 @@ mod tests {
                     effort: Some(e),
                     long_context: None,
                 }),
+                            meta: Default::default(),
             };
             build_body(&req, false, true, None).unwrap()
         };
@@ -1238,6 +1249,7 @@ mod tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, true, Some("acct-123")).unwrap();
 
@@ -1303,6 +1315,7 @@ mod tests {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning: None,
+                            meta: Default::default(),
             };
             let body = build_body(&req, false, true, Some("acct-123")).unwrap();
             assert!(
@@ -1353,6 +1366,7 @@ mod tests {
             tools: vec![],
             max_tokens,
             reasoning,
+                    meta: Default::default(),
         }
     }
 
@@ -1458,6 +1472,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         assert!(body.get("thinking").is_none());
@@ -1479,6 +1494,7 @@ mod tests {
             tools: vec![],
             max_tokens: 8192,
             reasoning: Some(cfg),
+                    meta: Default::default(),
         };
         let body = build_body(&req, false, false, None).unwrap();
         // claude-sonnet-4-5 走 LegacyEnabled：thinking.type=enabled + budget_tokens

@@ -2805,6 +2805,9 @@ pub fn run() {
     // 注入到每个 Session（架构 §4.6.2）。打开失败时打 warn，等同未挂 store——
     // AllowAndRemember(Global) 会兜底为 AllowOnce。
     let data_dir_for_core = agent_core::storage::default_data_dir();
+    // 起 hebcore 日志转发（§4.10）：run 移 hebcore 后 agent_loop 的日志都在 hebcore 进程，
+    // 这条后台流把它们注入本进程 LOG_TX，喂设置里的日志面板（subscribe_log_stream）。
+    hebcore_client::spawn_log_forwarder(data_dir_for_core.clone());
     let permission_store = match PermissionStore::open(&data_dir_for_core) {
         Ok(s) => Some(Arc::new(s)),
         Err(e) => {

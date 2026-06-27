@@ -741,6 +741,8 @@ async fn run_turn(state: Arc<DaemonState>, input: TurnInput) -> Result<TurnOutco
             run_mode,
             model_id: Some(state.model.clone()),
             force_automode: false,
+            // surface 主对话：tag=Main（前端不额外标记，§4.11）。
+            call_tag: model_gateway::types::ModelCallTag::Main,
             data_dir: Some(data_dir.to_path_buf()),
             phase: Some(phase),
             global_rules,

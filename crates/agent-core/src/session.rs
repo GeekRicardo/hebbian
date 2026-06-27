@@ -64,6 +64,8 @@ pub struct SessionConfig {
     /// 可选模型 IO dump：每次 model 请求完整 request / response 写入 jsonl。
     /// 由环境变量 [`crate::model_io_dump::ENV_VAR`] 触发，由 surface 决定路径。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 本 run 模型调用 tag（§4.11）。主对话 Main；aside 设 Aside（显式区分，不再靠 main_kind）。
+    pub call_tag: model_gateway::types::ModelCallTag,
     /// 持久化权限规则的共享 store。挂上后 HitlGate 在 AllowAndRemember 时直接写盘
     /// （架构 §4.6）。surface 可在启动时 [`PermissionStore::open`] 一次共享给所有
     /// session。
@@ -111,6 +113,7 @@ pub struct Session {
     enabled_tools: Vec<String>,
     recorder: Option<Recorder>,
     model_io_dump: Option<ModelIoDump>,
+    call_tag: model_gateway::types::ModelCallTag,
     permission_store: Option<Arc<PermissionStore>>,
     session_id: Option<String>,
     run_mode: RunMode,
@@ -140,6 +143,7 @@ impl Session {
             enabled_tools: config.enabled_tools,
             recorder: config.recorder,
             model_io_dump: config.model_io_dump,
+            call_tag: config.call_tag,
             permission_store: config.permission_store,
             session_id: config.session_id,
             run_mode: config.run_mode,
@@ -502,6 +506,7 @@ impl Session {
                 parent: None,
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
+                call_tag: self.call_tag,
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,
@@ -567,6 +572,7 @@ impl Session {
                 parent: None,
                 recorder: self.recorder.clone(),
                 model_io_dump: self.model_io_dump.clone(),
+                call_tag: self.call_tag,
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,

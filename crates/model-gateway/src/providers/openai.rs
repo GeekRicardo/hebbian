@@ -952,6 +952,7 @@ mod tests {
             }],
             max_tokens: 8192,
             reasoning: None,
+                    meta: Default::default(),
         };
 
         assert!(client.should_use_responses(&req));

@@ -204,6 +204,7 @@ async fn all_providers_thinking_stream() {
                 tools: vec![],
                 max_tokens: 8192,
                 reasoning,
+                            meta: Default::default(),
             };
 
             let collector = StreamCollector::new();
@@ -325,6 +326,7 @@ async fn tool_call_with_thinking() {
                 effort: Some(effort),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
 
         let collector = StreamCollector::new();
@@ -408,6 +410,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = op::build_body(&req, false).unwrap();
         let val = body["reasoning_effort"].as_str().unwrap_or("(none)");
@@ -430,6 +433,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = op::build_body(&req, false).unwrap();
         let val = body["reasoning_effort"].as_str().unwrap_or("(none)");
@@ -453,6 +457,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = ap::build_body(&req, false, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -477,6 +482,7 @@ fn effort_parameter_correctness() {
                     effort: Some(*effort),
                     long_context: None,
                 }),
+                            meta: Default::default(),
             };
             let body = ap::build_body(&req, false, false).unwrap();
             assert_eq!(body["thinking"]["type"], "enabled");
@@ -501,6 +507,7 @@ fn effort_parameter_correctness() {
                 effort: Some(*effort),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
         let body = ap::build_body(&req, false, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -613,6 +620,7 @@ async fn focused_deepseek_thinking() {
                 effort: Some(ReasoningEffort::High),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
 
         let collector = StreamCollector::new();
@@ -713,6 +721,7 @@ async fn focused_claude_thinking() {
                     effort: Some(ReasoningEffort::Medium),
                     long_context: None,
                 }),
+                            meta: Default::default(),
             };
 
             let collector = StreamCollector::new();
@@ -806,6 +815,7 @@ fn debug_claude_request_bodies() {
                 effort: Some(ReasoningEffort::Medium),
                 long_context: None,
             }),
+                    meta: Default::default(),
         };
 
         let body = ap::build_body(&req, true, false).unwrap();

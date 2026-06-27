@@ -76,6 +76,10 @@ pub async fn judge_goal(
         tools: Vec::new(),
         max_tokens: 400,
         reasoning: None,
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Goal,
+            ..Default::default()
+        },
     };
     // complete 会消费 request；要 dump 就先快照一份。
     let dump_request = dump.map(|_| request.clone());

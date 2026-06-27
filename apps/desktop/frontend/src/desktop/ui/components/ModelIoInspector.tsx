@@ -45,19 +45,39 @@ import { isLocalFindShortcut } from "@/desktop/ui/lib/keyboardShortcuts";
  * - 右：选中请求的 messages + response（diff 模式：本次新增的 message 默认展开，
  *   carried-over 默认折叠 —— 翻 30 次请求也只看你需要看的那块）
  *
- * 数据源：后端 `~/.hebbian/sessions/<sid>/model_io.jsonl`，由 `model_io_dump`
- * 在每次模型调用结束后异步落盘。**默认开启**（环境变量 `HEBBIAN_DUMP_MODEL_IO=0`
- * 才禁用），所以新 session 通常都能直接看到数据；老 session 无数据时显示空提示。
+ * 数据源：后端 `~/.hebbian/sessions/<sid>/model_io.jsonl`，由 model-gateway 的
+ * InstrumentedClient 在每次模型调用边界自动落盘（请求 / 响应两条 + call_id，读侧按
+ * call_id 合并成一条）。**默认开启**（环境变量 `HEBBIAN_DUMP_MODEL_IO=0` 才禁用），新
+ * session 通常都能直接看到数据；老 session 无数据时显示空提示。
  *
  * **两侧分离加载**：model_io.jsonl 可能几百 MB（每请求含全套历史 messages），
  * 一次性拉全量会炸页面。左侧列表只拉摘要（几十 KB），选中某行才按需拉完整 entry。
  */
+/**
+ * model_io tag → 列表标签样式。`main`（主对话）不在表里 = 不额外标记。覆盖任务2 的
+ * `ModelCallTag`（judge / classifier / compaction / title / goal / memory / vision / aside），
+ * 外加旧的 subagent。
+ */
+const KIND_BADGE: Record<string, { label: string; cls: string }> = {
+  judge: { label: "judge", cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400" },
+  classifier: { label: "分类", cls: "bg-slate-500/15 text-slate-600 dark:text-slate-400" },
+  compaction: { label: "压缩", cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
+  title: { label: "标题", cls: "bg-pink-500/15 text-pink-600 dark:text-pink-400" },
+  goal: { label: "目标", cls: "bg-green-500/15 text-green-600 dark:text-green-400" },
+  memory: { label: "记忆", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  vision: { label: "视觉", cls: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400" },
+  aside: { label: "aside", cls: "bg-purple-500/15 text-purple-600 dark:text-purple-400" },
+  subagent: { label: "subagent", cls: "bg-teal-500/15 text-teal-600 dark:text-teal-400" },
+};
+
 interface ModelIoSummary {
   ts: string;
   run_id: string;
   turn: number;
   model: string;
   kind?: string;
+  /** 任务2：本次模型调用的唯一 id（请求 / 响应两条 jsonl 行用它关联合并）。 */
+  call_id?: string;
   duration_ms: number;
   response: {
     type: string;
@@ -699,24 +719,14 @@ function RequestRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium">#{index + 1}</span>
-          {summary.kind === "judge" && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
-              judge
-            </span>
-          )}
-          {summary.kind === "compaction" && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
-              压缩
-            </span>
-          )}
-          {summary.kind === "aside" && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-400">
-              aside
-            </span>
-          )}
-          {summary.kind === "subagent" && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-teal-500/15 text-teal-600 dark:text-teal-400">
-              subagent
+          {summary.kind && KIND_BADGE[summary.kind] && (
+            <span
+              className={cn(
+                "text-[10px] px-1 py-0.5 rounded",
+                KIND_BADGE[summary.kind].cls
+              )}
+            >
+              {KIND_BADGE[summary.kind].label}
             </span>
           )}
           {matchCount > 0 ? (

@@ -9,6 +9,7 @@ core-rpc = { path = "../core-rpc" }
 model-gateway = { path = "../model-gateway" }
 protocol = { path = "../protocol" }
 common = { package = "hebbian-common", path = "../common" }
+observability = { path = "../observability" }
 
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"

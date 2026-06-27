@@ -124,6 +124,9 @@ pub struct RunPersister {
     /// 收尾时从这里取（架构 §7.8.3 事件累积归一）——assistant message 的产出点
     /// 收敛到 agent_core 唯一一份，desktop `send_message` 的 `Message` 返回值即取自此。
     last_message: Arc<Mutex<Option<Message>>>,
+    /// 本 run 的 assistant message id（= partial 文件名）。模型调用 meta.message_id 用它，
+    /// 让 `[model]` 日志 / model_io 把每次模型调用关联到它将产出的那条 assistant 消息。
+    msg_id: String,
 }
 
 struct PersistState {
@@ -168,7 +171,8 @@ impl RunPersister {
     /// 起一个落盘协调器。`msg_id` 是本 run 的 partial 文件名（恢复时折叠成 assistant）。
     pub fn new(data_dir: PathBuf, session_id: String) -> Self {
         let msg_id = sessions::new_id();
-        let partial = PartialActor::spawn(data_dir.clone(), session_id.clone(), msg_id);
+        let partial =
+            PartialActor::spawn(data_dir.clone(), session_id.clone(), msg_id.clone());
         let last_message: Arc<Mutex<Option<Message>>> = Arc::new(Mutex::new(None));
         Self {
             inner: Arc::new(Mutex::new(PersistState {
@@ -183,7 +187,13 @@ impl RunPersister {
                 last_message: last_message.clone(),
             })),
             last_message,
+            msg_id,
         }
+    }
+
+    /// 本 run 的 assistant message id（partial 文件名）。供模型调用 meta.message_id 关联。
+    pub fn msg_id(&self) -> &str {
+        &self.msg_id
     }
 
     /// surface 收尾读「本 run 完整 assistant message」的只读句柄（架构 §7.8.3）。

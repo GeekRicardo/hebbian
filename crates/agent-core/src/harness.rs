@@ -58,6 +58,9 @@ pub struct RunParams {
     /// 可选的模型 IO dump：每次 model 调用前后写一条 `{request, response}` 到 jsonl。
     /// 由环境变量 `HEBBIAN_DUMP_MODEL_IO` 触发，surface 决定路径。
     pub model_io_dump: Option<ModelIoDump>,
+    /// 本 run 的模型调用 tag（§4.11）。主对话 Main；aside / subagent 由创建方显式传，
+    /// 让 `[model]` 日志 + model_io 落盘据此区分。
+    pub call_tag: model_gateway::types::ModelCallTag,
     /// 运行时输入注入队列：surface 在 streaming 中「立即发送」时把 user message 推进来，
     /// agent_loop 每次 model.request 之前 drain 出来加入 transcript。`None` 表示禁用。
     pub pending_inputs: Option<PendingInputs>,
@@ -296,6 +299,7 @@ impl Harness {
             parent,
             recorder: _,
             model_io_dump,
+            call_tag,
             pending_inputs,
             consumed_pending_inputs,
             pending_inputs_accepting,
@@ -343,6 +347,7 @@ impl Harness {
                 agent,
                 parent,
                 model_io_dump,
+            call_tag,
                 pending_inputs,
                 consumed_pending_inputs,
                 pending_inputs_accepting,

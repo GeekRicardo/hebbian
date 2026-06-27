@@ -68,6 +68,10 @@ pub async fn generate_title(
             effort: None,
             long_context: None,
         }),
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Title,
+            ..Default::default()
+        },
     };
     let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
     let raw_text = match client.complete(req, cancel).await? {

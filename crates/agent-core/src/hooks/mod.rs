@@ -36,6 +36,13 @@ impl HookManager {
         for hook in &self.hooks {
             let outcome = hook.invoke(point).await;
             if !matches!(outcome, HookOutcome::Continue) {
+                // 外部 hook（cargo check 等子进程）改变了流程：拦截 / 注入续跑 / 改写入参。
+                // passed（Continue）的外部调用日志由各 hook 实现内部打（最贴近子进程命令）。
+                tracing::info!(
+                    target: "hook",
+                    hook = hook.name(),
+                    "[Hook] 外部 hook 返回非 Continue（拦截 / 注入 / 改写）"
+                );
                 return outcome;
             }
         }

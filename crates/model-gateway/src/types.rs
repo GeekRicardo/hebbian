@@ -119,8 +119,77 @@ pub struct ToolDefinition {
 
 // ── 请求 / 响应 ───────────────────────────────────────────────────────────────
 
+/// 一次模型调用的**内部上下文**（落盘 model_io / 打日志用，**不发往 provider**——各
+/// provider 的 build_body 只读 model/system/entries/tools/max_tokens/reasoning，天然不会
+/// 把 meta 外泄）。让 model-gateway 层能统一打 `[model]` 日志、按 tag 落 model_io，而不管是
+/// 哪个调用点（主 chat / judge / 压缩 / 旁支…）发起的（架构 §4.11）。
+#[derive(Debug, Clone, Default)]
+pub struct ModelCallMeta {
+    /// 所属会话 id（跨 surface 共享的对话标识）。
+    pub session_id: Option<String>,
+    /// 所属 run id。
+    pub run_id: Option<String>,
+    /// 轮次（同一 run 内多次模型调用递增）。
+    pub turn: u32,
+    /// 触发本次调用的 assistant message id（主 chat 有；judge / 旁支 / 派生调用为 None）。
+    pub message_id: Option<String>,
+    /// 调用类别——区分主 chat / judge / 压缩 / 标题 / 旁支等，落盘与日志据此打 tag。
+    pub tag: ModelCallTag,
+}
+
+/// 模型调用的类别标签（架构 §4.11）。主 chat 不额外标记（`Main`），其余子调用各自成 tag，
+/// 让 model_io / 日志能区分「agent 替我跑的各类模型调用」。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ModelCallTag {
+    /// 主对话（前端 ModelIoInspector 约定：tag=main 不打额外标签）。
+    #[default]
+    Main,
+    /// AutoMode 判官。
+    Judge,
+    /// Bash 段前缀分类器（Classifier A）。
+    Classifier,
+    /// 内置浏览器旁支会话。
+    Aside,
+    /// 上下文压缩摘要。
+    Compaction,
+    /// 会话标题生成。
+    Title,
+    /// //goal 完成度裁决。
+    Goal,
+    /// 记忆抽取。
+    Memory,
+    /// 视觉桥接（图像理解 / 转描述）。
+    Vision,
+    /// Task 工具派生的子 agent（NestedRun，架构 §4.4.11）。
+    Subagent,
+}
+
+impl ModelCallTag {
+    /// 落盘 / 日志用的短标签。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Judge => "judge",
+            Self::Classifier => "classifier",
+            Self::Aside => "aside",
+            Self::Compaction => "compaction",
+            Self::Title => "title",
+            Self::Goal => "goal",
+            Self::Memory => "memory",
+            Self::Vision => "vision",
+            Self::Subagent => "subagent",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelCallTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 发送给模型的统一请求
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ModelRequest {
     pub model: String,
     pub system: Option<String>,
@@ -130,6 +199,8 @@ pub struct ModelRequest {
     /// 推理 / thinking 行为。`None` = 沿用模型默认（多数模型默认关闭）。
     /// 由 surface 层（[`ModelWithName`] 等 wrapper）按 session 配置注入。
     pub reasoning: Option<ReasoningConfig>,
+    /// 内部调用上下文（落盘 / 日志用，不发往 provider）。见 [`ModelCallMeta`]。
+    pub meta: ModelCallMeta,
 }
 
 /// 模型「非工具调用结束」的归一原因（架构 §4.11.4）。各 provider 把原始

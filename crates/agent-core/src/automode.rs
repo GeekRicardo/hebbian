@@ -153,6 +153,10 @@ pub async fn judge_auto_mode(
         // ASK reason 要按段拆解，原 200 不够；保守留 300 token 上限。
         max_tokens: 300,
         reasoning: None,
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Judge,
+            ..Default::default()
+        },
     };
 
     // 必须传 dispatcher 的真实 cancel——用户点中断时这个 judge LLM 请求要能立即停，

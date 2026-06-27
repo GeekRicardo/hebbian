@@ -532,6 +532,8 @@ impl ChannelBridge {
                 run_mode,
                 model_id: Some(model.clone()),
                 force_automode: false,
+                // surface 主对话：tag=Main（前端不额外标记，§4.11）。
+                call_tag: model_gateway::types::ModelCallTag::Main,
                 data_dir: Some(self.data_dir.clone()),
                 phase: Some(phase),
                 global_rules,

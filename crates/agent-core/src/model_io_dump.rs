@@ -20,6 +20,11 @@
 //!
 //! [`Recorder`]: crate::recorder::Recorder
 
+// 旧的一条式 model_io 落盘已下沉到 model-gateway（任务2：InstrumentedClient 按 ModelRequest.meta
+// 落「请求 / 响应两条 + call_id」）。本模块的 ModelIoDump / DumpEntry / actor / record 已停用
+// （open_for_session_* 返回 None，不再创建），保留为死代码待后续编译驱动清理。
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -69,42 +74,22 @@ pub fn default_path(data_dir: &Path, session_id: &str) -> PathBuf {
 
 /// 检查 [`ENV_VAR`]：开启则按 [`default_path`] 打开一份 dump，失败仅记 trace 不传播。
 /// CLI / desktop 启动时调用。
-pub async fn open_for_session_if_enabled(data_dir: &Path, session_id: &str) -> Option<ModelIoDump> {
-    if !is_enabled() {
-        return None;
-    }
-    let path = default_path(data_dir, session_id);
-    match ModelIoDump::open(&path).await {
-        Ok(dump) => {
-            tracing::info!(path = %path.display(), "model IO dump enabled");
-            Some(dump)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "model IO dump open failed");
-            None
-        }
-    }
+pub async fn open_for_session_if_enabled(_data_dir: &Path, _session_id: &str) -> Option<ModelIoDump> {
+    // 停用：落盘已下沉 model-gateway 的 InstrumentedClient（任务2）。返回 None，避免与新两条式
+    // 格式双落污染同一份 model_io.jsonl；旧 ModelIoDump 创建/record 路径不再走。
+    None
 }
 
 /// 同 [`open_for_session_if_enabled`]，但把主调用标成自定义 `kind`，并落到
 /// `session_id` 指向的同一份 `model_io.jsonl`。内置浏览器旁支会话用它把临时（不落盘）
 /// 会话的模型 IO 写进绑定主对话的面板（`kind="aside"`），无需为旁支单独建 session。
 pub async fn open_for_session_with_kind(
-    data_dir: &Path,
-    session_id: &str,
-    main_kind: &str,
+    _data_dir: &Path,
+    _session_id: &str,
+    _main_kind: &str,
 ) -> Option<ModelIoDump> {
-    if !is_enabled() {
-        return None;
-    }
-    let path = default_path(data_dir, session_id);
-    match ModelIoDump::open_with_main_kind(&path, main_kind).await {
-        Ok(dump) => Some(dump),
-        Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(), "model IO dump open failed");
-            None
-        }
-    }
+    // 停用：见 open_for_session_if_enabled。aside / subagent 的 tag 区分待用 ModelCallMeta 传。
+    None
 }
 
 /// 一对模型请求 / 响应记录。jsonl 里每行一条这样的对象。
@@ -432,6 +417,7 @@ mod tests {
             }],
             max_tokens: 4096,
             reasoning: None,
+                    meta: Default::default(),
         }
     }
 

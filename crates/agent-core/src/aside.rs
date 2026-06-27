@@ -196,6 +196,8 @@ pub async fn run_aside<F: Fn(WireEvent) + Send + Sync>(
             rules_files: None,
             edits_worktree: None,
             derived_sink: None,
+            // 旁支会话：模型调用标 Aside，与主 chat 区分（§4.11 显式传 tag）。
+            call_tag: model_gateway::types::ModelCallTag::Aside,
         },
     );
 

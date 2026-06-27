@@ -14,7 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 const BROADCAST_CAP: usize = 2048;
 
 /// 结构化日志行，Tauri Channel 序列化后推给前端。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogLine {
     /// "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE"
     pub level: String,

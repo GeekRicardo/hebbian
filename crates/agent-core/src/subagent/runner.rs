@@ -266,6 +266,8 @@ impl SubagentRunner {
             subagent_ctx: None,
             subagent_bypass,
             persister: None,
+            // NestedRun：模型调用标 Subagent，与主 chat / aside 区分（§4.11 显式传 tag）。
+            call_tag: model_gateway::types::ModelCallTag::Subagent,
         };
 
         let output = agent_loop::run_loop(params, child_sink).await?;

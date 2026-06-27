@@ -5,6 +5,7 @@ pub mod context_window;
 pub mod discovery;
 pub mod health;
 pub mod instrument;
+pub mod model_io;
 pub mod protocols;
 pub mod providers;
 pub mod types;
@@ -42,7 +43,8 @@ fn build_client_inner(
         ProviderKind::Anthropic => (
             "anthropic",
             Arc::new(providers::anthropic::AnthropicClient::with_data_dir(
-                provider, data_dir,
+                provider,
+                data_dir.clone(),
             )?),
         ),
         ProviderKind::Gemini => (
@@ -54,5 +56,5 @@ fn build_client_inner(
             Arc::new(providers::deepseek::DeepseekClient::new(provider)?),
         ),
     };
-    Ok(Arc::new(InstrumentedClient::new(inner, system)))
+    Ok(Arc::new(InstrumentedClient::new(inner, system, data_dir)))
 }

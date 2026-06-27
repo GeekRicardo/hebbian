@@ -2025,6 +2025,15 @@ pub fn append_event(data_dir: &Path, id: &str, event: &protocol::Event) -> AppRe
 
 pub fn append_message(data_dir: &Path, id: &str, msg: Message) -> AppResult<Session> {
     let path = ensure_jsonl(data_dir, id)?;
+    // 落盘是 agent-core 对外（文件系统）的统一出口：所有 user/assistant/marker 都经这里。
+    tracing::info!(
+        target: "storage",
+        session_id = id,
+        message_id = %msg.id,
+        role = ?msg.role,
+        bytes = msg.content.len(),
+        "[Storage:Append] 落盘 message"
+    );
     append_line(&path, &RolloutLine::Message(msg))?;
     load(data_dir, id)
 }

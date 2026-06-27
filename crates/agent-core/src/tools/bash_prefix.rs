@@ -81,6 +81,10 @@ pub async fn classify_prefix(
         tools: Vec::new(),
         max_tokens: 32,
         reasoning: None,
+            meta: model_gateway::types::ModelCallMeta {
+            tag: model_gateway::types::ModelCallTag::Classifier,
+            ..Default::default()
+        },
     };
 
     // 传 dispatcher 真实 cancel：中断时这个 prefix 分类 LLM 调用要能立即停。
