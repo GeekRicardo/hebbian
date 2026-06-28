@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-/// hebcore 的 unix-socket 路径（与 hebcore 进程 / hebweb 兼任时一致）。
+/// hebcore 的 unix-socket 路径（全局共享，§7.8.1）。版本区分靠 §7.8.7 版本协商——sock 固定，
+/// hebcore 报告 build_version，desktop **启动时**核对、旧版提示后杀掉换新；不再按 app 派生
+/// per-app sock（§7.8.8 已回退：冷启动 + 版本耦合摩擦过大，且与旧 hebcore 不兼容）。
 fn hebcore_sock(data_dir: &Path) -> PathBuf {
     data_dir.join("hebcore.sock")
 }
@@ -102,8 +104,11 @@ fn connect_or_spawn(app: &AppHandle, sock: &Path) -> std::io::Result<UnixStream>
         return Ok(s);
     }
     spawn_bundled_hebcore(app);
-    // 轮询等 hebcore 把 socket listen 起来，最多 ~5s（53MB 二进制冷启动需留足时间）。
-    for _ in 0..100 {
+    // 轮询等 hebcore 把 socket listen 起来，最多 ~20s。release 53MB 二进制**首次**冷启动
+    // （磁盘 cache 冷 + per-app sock 是全新的、没有常驻进程可复用）可能要十几秒；5s 太短会
+    // 让启动后第一个操作（如打开老对话发消息）撞冷启动窗口失败 No such file（§7.8.8 回归）。
+    // 正常情况（hebcore 已 ready）首个 connect 立即成功，不受此上限影响。
+    for _ in 0..400 {
         if let Ok(s) = UnixStream::connect(sock) {
             return Ok(s);
         }
@@ -212,26 +217,35 @@ fn negotiate_version(app: &AppHandle, sock: &Path) {
         return; // 用户选择沿用旧版
     }
 
-    // 发 Shutdown 让旧 hebcore 优雅退（已确认无活跃 run，它会 Accepted 后 exit）。
+    // 发 Shutdown 让 hebcore 优雅退（新版认协议、Accepted 后 exit；已确认无活跃 run）。
+    // 旧版**不认** Shutdown（回 Error、不退）——靠下面「等死超时 → pkill」兜底强杀。
     if let Ok(mut conn) = UnixStream::connect(sock) {
         let _ = write_req(&mut conn, &Req::Shutdown);
-        if let Some(Ok(line)) = BufReader::new(conn.try_clone().unwrap_or_else(|_| conn.try_clone().unwrap()))
+        let _ = BufReader::new(conn.try_clone().unwrap_or_else(|_| conn.try_clone().unwrap()))
             .lines()
-            .next()
-        {
-            if let Ok(Resp::Error { message }) = serde_json::from_str::<Resp>(&line) {
-                // 理论上不会（前面已查 has_active_run=false），但竞态下仍可能被拒。
-                tracing::warn!(%message, "hebcore 拒绝关停，沿用旧版");
-                return;
-            }
-        }
+            .next();
     }
-    // 等旧进程真死：connect 失败 = 单例锁 + sock 已由 OS 释放。最多 ~5s。
-    for _ in 0..100 {
+    // 等旧进程真死（~3s）。connect 失败 = 已退（单例锁 + sock 由 OS 释放）。
+    let mut died = false;
+    for _ in 0..60 {
         if UnixStream::connect(sock).is_err() {
+            died = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+    // 没死 = 旧版不认 Shutdown → pkill 强杀兜底（`-x` 精确进程名 hebcore，不误伤别的）+
+    // 清残留 sock。这让「杀旧版换新」对**没有版本协议的旧 hebcore**（首次升级场景）也生效。
+    if !died {
+        tracing::warn!("hebcore 未响应 Shutdown（可能是旧版不认协议），pkill 强杀");
+        let _ = std::process::Command::new("pkill").arg("-x").arg("hebcore").status();
+        let _ = std::fs::remove_file(sock);
+        for _ in 0..60 {
+            if UnixStream::connect(sock).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     // 拉起当前版本的新 hebcore（自带单例锁，重复拉起安全）。
     spawn_bundled_hebcore(app);
@@ -245,10 +259,17 @@ fn negotiate_version(app: &AppHandle, sock: &Path) {
 }
 
 /// 启动期确保常驻 hebcore 在跑（架构 §7.8.1：任何 surface 启动时都拉起 core，谁先启动
-/// 谁负责）。连得上 = 已有 hebcore（可能是另一 surface 拉的）；连不上就拉起内嵌二进制，
-/// hebcore 自带单例锁，重复拉起安全。`data_dir` 决定 `hebcore.sock` 位置。
+/// 谁负责）。先做版本协商（§7.8.7）：连上现有 hebcore 核对版本，旧版提示后杀掉换新；再
+/// connect_or_spawn 确保当前版本 hebcore 在跑。**版本检查在启动时做**（本函数在 setup 的
+/// 后台线程跑，native dialog blocking_show 安全），发消息时不再检查、不卡。
 pub fn ensure_running(app: &AppHandle, data_dir: &Path) {
     let sock = hebcore_sock(data_dir);
+    // 等 app event loop 起来再做版本协商——negotiate_version 可能弹 native dialog，dialog 要
+    // 主线程 event loop 在跑才能显示；本函数在 setup 的后台线程，太早弹会卡（dialog 往主线程
+    // 的投递没人处理）。等一下让 app.run 起来。
+    std::thread::sleep(Duration::from_millis(800));
+    // 启动时版本协商：现有 hebcore 是旧版 → 弹窗提示 → Shutdown / pkill 杀掉 → 起当前版本。
+    negotiate_version(app, &sock);
     match connect_or_spawn(app, &sock) {
         Ok(_) => tracing::info!(socket = %sock.display(), "hebcore 就绪"),
         Err(e) => tracing::warn!(socket = %sock.display(), error = %e, "hebcore 未就绪（发消息时会重试拉起）"),
@@ -256,7 +277,8 @@ pub fn ensure_running(app: &AppHandle, data_dir: &Path) {
 }
 
 /// 拉起 hebcore 进程：release 用 `resource_dir` 内嵌的 hebcore，dev 用 `target/debug/hebcore`。
-/// hebcore 自带单例锁，重复拉起安全。
+/// hebcore 自带单例锁，重复拉起安全。不传额外参数——hebcore 用默认全局 sock（`<data_dir>/
+/// hebcore.sock`），兼容旧版 hebcore（§7.8.8 回退后不再传 `--sock-path`）。
 fn spawn_bundled_hebcore(app: &AppHandle) {
     let candidates = bundled_hebcore_paths(app);
     for bin in candidates {
@@ -306,9 +328,8 @@ pub fn run_conversation(
 ) -> Result<(), String> {
     let sock = hebcore_sock(data_dir);
 
-    // 版本协商（§7.8.7）：发消息前核对 hebcore 版本，旧版弹窗换新。本函数在非主线程
-    // （spawn_blocking）跑，native dialog blocking_show 安全。
-    negotiate_version(app, &sock);
+    // 版本协商已移到 `ensure_running`（desktop 启动时做，§7.8.7）——发消息不再做版本检查，
+    // 避免每次发消息卡在协商上；启动时已确保连的是当前版本的 hebcore。
 
     // 订阅连接：先建立，保证不漏 run 早期事件。
     let sub = connect_or_spawn(app, &sock)
@@ -378,6 +399,9 @@ pub fn run_conversation(
 }
 
 /// 一次性发一个控制请求到 hebcore（审批 / 提问 / 中断 / 插队 / 切 mode），读一行响应。
+/// **直接 connect、不轮询等待**——这些命令在 hebcore 没起时本就无意义（inject / setRunMode /
+/// interrupt 的调用方会吞掉失败、不打扰用户），加轮询反而让切对话等控制操作卡顿（§7.8.8）。
+/// hebcore 已 ready 时（绝大多数情况）connect 立即成功。
 fn control_request(data_dir: &Path, req: &Req) -> Result<(), String> {
     let sock = hebcore_sock(data_dir);
     let mut conn = UnixStream::connect(&sock)

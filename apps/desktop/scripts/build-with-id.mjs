@@ -9,6 +9,7 @@
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..') // apps/desktop
@@ -16,10 +17,13 @@ const repoRoot = path.resolve(desktopDir, '../..') // workspace root
 
 const mode = process.argv[2] === 'dev' ? 'dev' : 'build'
 
-// 紧凑时间戳，如 260627t1430（年后两位 月 日 t 时 分）。每次构建唯一。
+// 紧凑时间戳 + 随机后缀，如 260627t1430-a3f9：时间戳可读，**末尾随机**保证同一分钟内多次
+// 构建也得到不同版本号（否则同分钟 rebuild build_id 相同 → 版本号不变 → 版本协商认成同版本、
+// 检测不到新构建）。
 const d = new Date()
 const p = (n) => String(n).padStart(2, '0')
-const id = `${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}t${p(d.getHours())}${p(d.getMinutes())}`
+const rand = randomBytes(2).toString('hex')
+const id = `${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}t${p(d.getHours())}${p(d.getMinutes())}-${rand}`
 const env = { ...process.env, HEBBIAN_BUILD_ID: id }
 console.log(`[build-with-id] HEBBIAN_BUILD_ID=${id} mode=${mode}`)
 

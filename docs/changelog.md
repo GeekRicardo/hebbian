@@ -10039,3 +10039,38 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **验证**: surface-session wire 格式单测 `subscribe_logs_and_log_frame_wire_format`——钉死 transport 与 desktop 两套镜像 enum 的 serde tag/字段兼容、防漂移（手写镜像类型最易漂的点）；workspace `cargo check` 0 error。端到端（desktop 面板实时显示 hebcore 的 `[model]`/`[tool]` 日志）需重启 hebcore + desktop GUI——转发链路复用 desktop 现有 working 的 `LOG_TX`→面板链路，只是源头多接一路 hebcore 注入。
 - **留尾巴**: ① hebweb 自己跑 run（升格 hebcore），日志在本进程，不需此转发；若 hebweb 前端也要日志面板可后续接同款。② desktop 进程 init directive 不必加新 target——新日志在 hebcore（`"info"` 全放行），desktop 只接收注入、不经自己 EnvFilter。
 - **关联**: §4.10 Observability 多进程延伸；§7.8 transport 协议 additive variant。
+
+### 2026-06-28 — per-app sock：不同 build 的 app 可同时运行（§7.8.8）
+
+- **Why**: 用户要同时跑两个不同 build 的 app 做对比。但 §7.8.1 的「同一数据目录最多一个 hebcore」单例（共用 ~/.hebbian/hebcore.sock + hebcore.lock）让两个 build 抢同一 sock，版本协商会 kill 掉一个。用户要「每个 build 的 daemon sock 放各自 app 目录下」让它们并存。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): 新增 `app_install_dir`（current_exe 向上找 .app bundle / 回落父目录）+ `app_key`（DefaultHasher 派生稳定 key + 可读名前缀，OnceLock 缓存）；`hebcore_sock` 改为 `<data_dir>/run/<app_key>.sock`；`spawn_bundled_hebcore` 加 sock 参数，建父目录 + 用 `--sock-path` 传给 hebcore；connect_or_spawn / negotiate_version 两个 spawn 调用点传 sock
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): Args 加 `--sock-path`（默认回落 `<data_dir>/hebcore.sock`）；`acquire_singleton_lock` 改接 lock 路径；单例锁落在 sock 同名 `.lock`；启动建 sock 父目录
+  - [docs/架构.md](架构.md): §7.8.8 整节 + §13 决策行
+- **设计**: 按 app 安装位置区分（用户选）：不同位置 .app → 不同 app_key → 不同 sock → 并存；同位置覆盖升级 → 同 sock → 走版本协商 kill 换新（互补，不累积孤儿）。数据共享 ~/.hebbian（用户选），靠 SessionRunGuard 防同对话双跑。不真放 .app 内（release bundle 只读），用 app 位置派生 key 放可写的 ~/.hebbian/run/。app_key 只 desktop 算、`--sock-path` 传 hebcore，天然一致。
+- **影响范围**: desktop + hebcore。放松 §7.8.1 单例（per-data-dir → per-app）；hebweb 独立启动用默认 sock，正交不受影响；hebcore 不传 --sock-path 时回落默认（向后兼容）。
+- **验证**: `cargo check -p hebcore -p hebbian` 编译通过。
+- **留尾巴**: ① 端到端「两个不同位置 build 并存」需 GUI 真机验，逻辑+编译 done。② 迁移期一次性：旧 ~/.hebbian/hebcore.sock 上的常驻进程不再被 desktop 复用，首次升级后成孤儿，pkill 一次即可。③ dev 同 checkout 复用同一 sock，两个不同 checkout 才并存。
+
+### 2026-06-28 — 修 per-app sock 冷启动窗口回归（§7.8.8）
+
+- **Why**: per-app sock 改造后用户报「连接 hebcore 失败（`run/Hebbian.app-xxx.sock`）No such file，老对话不行新对话可以」。根因：per-app sock 是全新 sock（改造前 hebcore 常驻在全局 `hebcore.sock`、不冷启动），desktop 启动后台 `ensure_running` 拉起 release 53MB hebcore 需冷启动十几秒；启动后**第一个**操作（打开老对话发消息）撞冷启动窗口，而 `connect_or_spawn` 只轮询 5s 等不到 sock → No such file。新对话是几秒后 hebcore 已 ready → 秒连成功，故「老对话不行新对话可以」。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): `connect_or_spawn` 轮询 5s→20s（400×50ms，扛 release 首次冷启动）；`control_request` 新增 `connect_with_retry`（2s 短轮询——控制命令路径无 AppHandle 不能自己 spawn，但 desktop 启动已后台 ensure_running 拉起 hebcore，补它刚 ready 的竞态窗口）。hebcore 已 ready 时首个 connect 立即返回，不受上限影响、不卡。
+- **影响范围**: desktop（hebcore_client）。纯等待时长调整 + 控制命令加短重试，无逻辑变更。
+- **验证**: `cargo check -p hebbian` 通过。端到端：启动后立即打开老对话发消息不再 No such file（待真机验）。
+- **留尾巴**: 治本是 `ensure_running` 改成 desktop 可交互前确保 hebcore ready（阻塞启动），或对话主链路改连共享常驻 hebcore——但当前加长轮询已覆盖首次冷启动窗口，够用。
+
+### 2026-06-28 — 回退 per-app sock，版本协商移到启动时 + pkill 兜底（§7.8.7/§7.8.8）
+
+- **Why**: per-app sock（§7.8.8）摩擦过大：① 每个 build 冷启动自己的 hebcore，发消息卡 ~5s 且无反馈；② desktop 传 `--sock-path` 与**旧版 hebcore 不兼容**——旧 hebcore 收到未知参数 clap 报错退出 → sock 没 bind → 「连接 hebcore 失败 No such file，启动不了」。用户改方案：回**全局一个 sock**，版本号每构建变，desktop **启动时**检查现有 hebcore 版本、旧版提示并杀掉、起自己版本。
+- **改动**:
+  - [apps/desktop/src/hebcore_client.rs](../apps/desktop/src/hebcore_client.rs): 删 `app_install_dir`/`app_key`，`hebcore_sock` 回 `<data_dir>/hebcore.sock`（全局）；`spawn_bundled_hebcore` 去掉 `--sock-path`（hebcore 用默认 sock，**兼容旧 hebcore**）；`negotiate_version` 从 `run_conversation`（发消息）移到 `ensure_running`（启动），开头 `sleep(800ms)` 等 app event loop 起来再弹 native dialog（setup 后台线程太早弹会卡）；杀旧版加 `pkill -x hebcore` 兜底——旧 hebcore 不认 `Shutdown`（回 Error 不退），等死超时后强杀 + 删残留 sock，让「杀旧换新」对**没有版本协议的旧 hebcore**也生效。
+  - [apps/hebcore/src/main.rs](../apps/hebcore/src/main.rs): `--sock-path` 保留为可选（默认 `<data_dir>/hebcore.sock`），desktop 不传时回落，向后兼容。
+  - [docs/架构.md](架构.md): §7.8.8 标「已回退」；§7.8.7 版本协商改为「启动时做」。
+- **影响范围**: desktop + hebcore。回退 per-app（放弃默认并存，真要并存用启动 `--data-dir` 指定隔离实例）。**兼容旧 hebcore**（不传 `--sock-path` → 旧 hebcore 用默认 sock 正常起）。版本协商需新 hebcore（认 `GetVersion` + 有 `build_version`）才生效；旧 hebcore 被判 stale、`Shutdown` 失败靠 `pkill` 兜底强杀。
+- **验证**: `cargo check --workspace` 通过。
+- **留尾巴**:
+  - **必须 `pnpm app:build` / `app:dev` 打包新 hebcore**（含版本协商）才能用上「版本检查换新」；否则打包旧 hebcore 会被每次启动判 stale、反复弹窗杀起。当前用户 .app 里的 hebcore 是旧版，首次需先 `pkill -x hebcore` 清掉残留 + 用 app:build 重打包。
+  - `negotiate_version` 在 setup 后台线程弹 dialog 的时机靠 800ms sleep 保险，待真机验证（若仍偶发不弹/卡，改用 app.run 后再触发）。
+  - `pkill -x hebcore` 杀所有 hebcore 进程（全局场景本就一个，含 per-app 残留孤儿一并清）。

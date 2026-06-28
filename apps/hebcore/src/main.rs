@@ -31,6 +31,11 @@ struct Args {
     /// 数据目录（默认 ~/.hebbian）
     #[arg(long)]
     data_dir: Option<PathBuf>,
+    /// unix-socket 路径（§7.8.8 per-app sock）。desktop 按 app 安装位置派生后用
+    /// `--sock-path` 传入，让不同 build 各自 sock、可并存；单例锁落在同名 `.lock`。
+    /// 不传则回落 `<data_dir>/hebcore.sock`（向后兼容 / 独立启动）。
+    #[arg(long)]
+    sock_path: Option<PathBuf>,
 }
 
 fn resolve_data_dir(args: &Args) -> PathBuf {
@@ -39,22 +44,24 @@ fn resolve_data_dir(args: &Args) -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().expect("no home dir").join(".hebbian"))
 }
 
-/// 单例锁：排他锁住 `<data_dir>/hebcore.lock`，进程存活期间持有。拿不到 = 已有实例在跑。
+/// 单例锁：排他锁住给定 `.lock` 文件，进程存活期间持有。拿不到 = 已有实例在跑。
 /// 返回的 `File` 必须保活（drop 即释放锁），故由 main 持有到退出。
-fn acquire_singleton_lock(data_dir: &std::path::Path) -> Result<std::fs::File> {
-    let lock_path = data_dir.join("hebcore.lock");
+fn acquire_singleton_lock(lock_path: &std::path::Path) -> Result<std::fs::File> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .open(&lock_path)
+        .open(lock_path)
         .with_context(|| format!("打开单例锁文件 {lock_path:?}"))?;
     file.try_lock_exclusive()
         .map_err(|_| anyhow::anyhow!("已有 hebcore 实例在运行（{lock_path:?} 锁被占用）"))?;
     Ok(file)
 }
 
-fn sock_path(data_dir: &std::path::Path) -> PathBuf {
-    data_dir.join("hebcore.sock")
+/// sock 路径：优先 `--sock-path`（per-app，§7.8.8），否则 `<data_dir>/hebcore.sock`。
+fn sock_path(args: &Args, data_dir: &std::path::Path) -> PathBuf {
+    args.sock_path
+        .clone()
+        .unwrap_or_else(|| data_dir.join("hebcore.sock"))
 }
 
 #[tokio::main]
@@ -64,8 +71,17 @@ async fn main() -> Result<()> {
     let data_dir = resolve_data_dir(&args);
     std::fs::create_dir_all(&data_dir).ok();
 
-    // 单例：拿不到锁就退出（已有实例）。_lock 持有到 main 结束。
-    let _lock = acquire_singleton_lock(&data_dir)?;
+    // sock + 单例锁按 per-app sock 路径走（§7.8.8）：sock 的父目录（如 <data_dir>/run）
+    // 可能还不存在，先建好。单例锁落在 sock 同名 `.lock`——不同 build 各自 sock/lock，
+    // 可并存（数据目录仍共享）。
+    let sock = sock_path(&args, &data_dir);
+    if let Some(parent) = sock.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let lock_path = sock.with_extension("lock");
+
+    // 单例：拿不到锁就退出（已有同一 sock 的实例）。_lock 持有到 main 结束。
+    let _lock = acquire_singleton_lock(&lock_path)?;
 
     let permission_store = PermissionStore::open(&data_dir).ok().map(Arc::new);
     let core = Arc::new(LocalCoreClient::new(
@@ -89,7 +105,6 @@ async fn main() -> Result<()> {
     surface_session::register_wakeup_resume_handler(ctx.clone());
 
     // unix-socket transport：清理旧 sock（上次异常退出残留），bind 新的。
-    let sock = sock_path(&data_dir);
     let _ = std::fs::remove_file(&sock);
     let listener =
         UnixListener::bind(&sock).with_context(|| format!("bind hebcore socket {sock:?}"))?;

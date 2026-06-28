@@ -55,6 +55,7 @@ image/
 
 .hebbian/
 .hebbian
+.hebbian-build-id
 .playwright-cli/
 .codegraph/
 apps/island-mac/.build/

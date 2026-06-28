@@ -6,7 +6,7 @@
   "mainBinaryName": "hebbian",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "bash ../island-mac/build-app.sh release && pnpm build",
+    "beforeBuildCommand": "node scripts/gen-build-id.mjs && cargo build --release -p hebcore && bash ../island-mac/build-app.sh release && pnpm build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "dist"
   },
