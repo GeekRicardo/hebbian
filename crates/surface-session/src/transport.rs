@@ -144,14 +144,21 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                         if resolve_approval_with_retry(&rt.state, &request_id, decision).await {
                             HebcoreResponse::Accepted
                         } else {
+                            // 失败必须留痕：此前只回 Error 不打日志，导致「审批回应失败」在
+                            // 服务端零日志、无从排查（用户实测痛点）。gate 无此 pending 多因
+                            // run 已结束 / judge 已自动结算 / request_id 不匹配。
+                            tracing::warn!(%session_id, %request_id, "Approve 失败：gate 无此待结算审批");
                             HebcoreResponse::Error {
                                 message: format!("未找到待结算审批 {request_id}"),
                             }
                         }
                     }
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
+                    None => {
+                        tracing::warn!(%session_id, %request_id, "Approve 失败：session 未激活");
+                        HebcoreResponse::Error {
+                            message: format!("session {session_id} 未激活"),
+                        }
+                    }
                 };
                 write_line(&mut write_half, &resp).await?;
             }
@@ -165,14 +172,18 @@ pub async fn handle_connection(stream: UnixStream, ctx: Arc<TransportCtx>) -> Re
                         if answer_question_with_retry(&rt.state, &request_id, answer).await {
                             HebcoreResponse::Accepted
                         } else {
+                            tracing::warn!(%session_id, %request_id, "Answer 失败：gate 无此待结算提问");
                             HebcoreResponse::Error {
                                 message: format!("未找到待结算提问 {request_id}"),
                             }
                         }
                     }
-                    None => HebcoreResponse::Error {
-                        message: format!("session {session_id} 未激活"),
-                    },
+                    None => {
+                        tracing::warn!(%session_id, %request_id, "Answer 失败：session 未激活");
+                        HebcoreResponse::Error {
+                            message: format!("session {session_id} 未激活"),
+                        }
+                    }
                 };
                 write_line(&mut write_half, &resp).await?;
             }

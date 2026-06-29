@@ -183,6 +183,22 @@ pub fn resolve_hitl_from_island(
             return;
         }
     };
+    // 架构 §7.8.6：run 在 hebcore 进程，HITL gate 也在那——先经 hebcore 的 Approve 协议代理
+    // 结算（与主窗 approve_permission 同路径）；找不到远端映射才回退本地 gate。此前 island
+    // 只走本地 resolve_approval、漏了 remote 分支，导致 run 移 hebcore 后 island 审批必然
+    // 「找不到 request_id」（日志 island_approve: failed to resolve）。
+    if let Some(session_id) = state.remote_session_of(request_id) {
+        match crate::data_dir(app) {
+            Ok(dd) => {
+                match crate::hebcore_client::approve(&dd, &session_id, request_id, decision) {
+                    Ok(()) => state.forget_remote(request_id),
+                    Err(e) => tracing::warn!(error = %e, "island_approve: hebcore 代理结算失败"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "island_approve: data_dir 不可用"),
+        }
+        return;
+    }
     if let Err(e) = state.resolve_approval(request_id, decision) {
         tracing::warn!(error = %e, "island_approve: failed to resolve");
     }
@@ -212,6 +228,19 @@ pub fn answer_question_from_island(
             return;
         }
     };
+    // 架构 §7.8.6：同 island_approve——先经 hebcore 的 Answer 协议代理，回退本地 gate。
+    if let Some(session_id) = state.remote_session_of(request_id) {
+        match crate::data_dir(app) {
+            Ok(dd) => {
+                match crate::hebcore_client::answer(&dd, &session_id, request_id, answer) {
+                    Ok(()) => state.forget_remote(request_id),
+                    Err(e) => tracing::warn!(error = %e, "island_answer: hebcore 代理结算失败"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "island_answer: data_dir 不可用"),
+        }
+        return;
+    }
     if let Err(e) = state.answer_question(request_id, answer) {
         tracing::warn!(error = %e, "island_answer: failed to answer");
     }
