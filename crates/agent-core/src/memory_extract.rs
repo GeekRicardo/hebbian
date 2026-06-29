@@ -329,12 +329,15 @@ async fn run_fallback_chain(
     Err(ExtractError::AllModelsFailed(last_err))
 }
 
-/// 一次模型调用：取 provider → 刷新 token → build_client → complete。
-async fn call_model(
+/// 一次记忆相关的模型调用：取 provider → 刷新 token → build_client → complete。
+/// 浅睡抽取与深睡整合共用——`system` 各自传不同的指令，`max_tokens` 各自控量。
+pub(crate) async fn call_memory_model(
     data_dir: &Path,
     provider_id: &str,
     model: &str,
+    system: &str,
     prompt: &str,
+    max_tokens: u32,
 ) -> Result<String, ModelError> {
     let provider = model_gateway::config::get(data_dir, provider_id)
         .map_err(|e| ModelError::Other(format!("provider 不存在: {e}")))?;
@@ -345,10 +348,10 @@ async fn call_model(
 
     let req = ModelRequest {
         model: model.into(),
-        system: Some(EXTRACT_SYSTEM.into()),
+        system: Some(system.into()),
         entries: vec![TranscriptEntry::User(UserEntry::text(prompt))],
         tools: vec![],
-        max_tokens: EXTRACT_MAX_TOKENS,
+        max_tokens,
         reasoning: Some(ReasoningConfig {
             enabled: Some(false),
             effort: None,
@@ -363,6 +366,24 @@ async fn call_model(
     match client.complete(req, cancel).await? {
         ModelResponse::Done { text, .. } | ModelResponse::ToolCalls { text, .. } => Ok(text),
     }
+}
+
+/// 一次模型调用（浅睡抽取专用，固定 EXTRACT_SYSTEM + EXTRACT_MAX_TOKENS）。
+async fn call_model(
+    data_dir: &Path,
+    provider_id: &str,
+    model: &str,
+    prompt: &str,
+) -> Result<String, ModelError> {
+    call_memory_model(
+        data_dir,
+        provider_id,
+        model,
+        EXTRACT_SYSTEM,
+        prompt,
+        EXTRACT_MAX_TOKENS,
+    )
+    .await
 }
 
 // ── prompt ───────────────────────────────────────────────────────────────────

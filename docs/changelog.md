@@ -10110,3 +10110,24 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: consolidate_for_session 当前是骨架（只记「该深睡了」日志），批4 填 N 趟整合实现；
   idle 触发的端到端 A/B 复现（heb 起 session → 等 T → 看深睡日志）待批4 整合逻辑就位后一起做。
 
+
+### 2026-06-23 — 记忆系统演进（批4）：深睡联结建边（产出 links.jsonl）
+
+- **Why**: 批3 的 consolidate_for_session 是骨架（只记日志）。本批填实核心一趟——联结建边：
+  让便宜模型扫一个作用域的全部记忆，找出语义相关的两两关系（症状↔根因、决策↔它解决的问题、
+  同子系统），产出带权关联边落盘 links.jsonl。这是批5 激活扩散注入的关键输入，形成闭环。
+  原型阶段（Python consolidate.py）已验证此逻辑能从 11 条记忆建出 8 条边并识别因果链。
+- **改动**:
+  - memory_consolidate.rs: consolidate_for_session 填实——按 decide_sleep_depth 算深度后，
+    对 global + 当前 project 各跑 consolidate_scope（list_l0 → 模型建边 → save_links）。
+    parse_links 容错解析 + 过滤（自环/越界 weight/不存在端点/无向去重）。单趟记忆数上限 80。
+  - memory_extract.rs: 抽出 call_memory_model（pub(crate)，加 system+max_tokens 参数），
+    浅睡 call_model 与深睡 run_chain 共用同一份「provider→刷 token→build_client→complete」，
+    不重写模型调用。
+- **影响范围**: agent-core（memory_consolidate 实现 + memory_extract 重构出共享调用）。
+  纯新增能力，不改对外 API。全 workspace check 通过，agent-core 612 测试全过，新增单测 2 条
+  （parse_links 过滤无效边 / garbage 容错）。
+- **留尾巴**: ① tag 归一趟（需回写记忆文件的 tags，独立一批）；② 升华 / 遗忘趟（Full 深度才跑）
+  暂未实现，当前所有深度都只跑建边；③ 真实模型的端到端 A/B（深睡建边 → 注入读边）留批5 闭环
+  时一次性验证，避免重复搭环境。
+
