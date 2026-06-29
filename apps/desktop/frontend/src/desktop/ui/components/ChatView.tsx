@@ -30,29 +30,27 @@ import type { MessageAttachment } from "@/desktop/ui/types";
 const PINNED_USER_MESSAGE_VISIBLE = false;
 
 /**
- * 采样滚动容器内「视口最后一条可见消息」作锚点：返回它的 data-message-id 与顶边
- * 相对容器视口顶的偏移。供 sidebar 展开/收起 / 中间编辑区出现导致宽度重排时把内容钉回原位。
+ * 采样滚动容器内「视口顶部第一条可见消息」作锚点：返回它的 data-message-id 与顶边相对
+ * 容器视口**顶部**的偏移。供 sidebar 展开/收起 / 中间编辑区出现导致宽度重排时把这条消息的
+ * 顶边钉回原视觉位置。
  *
- * 用「最后一条可见」而非「第一条可见」：用户注意力在底部最新内容上，宽度变化导致长文本
- * 重新换行时，应让用户当下盯着的最后那条稳在原位，而不是钉住顶部、放任底部跳动。
+ * 用「第一条可见 + 锚顶边」而非底边：行业标准 scroll anchoring（浏览器原生、VSCode 都这么做）。
+ * 对超长消息也正确——保持视口顶部那条内容不动，用户视线落点稳定；底边锚定对「比视口还高的
+ * 长消息」会把消息底部拉到固定位、反而让用户正看的中部内容跳走。
  * 找不到任何带 data-message-id 的可见消息 → null（空对话 / 尚未渲染）。
  */
-function sampleBottomAnchor(el: HTMLElement): ScrollAnchor | null {
-  const rect = el.getBoundingClientRect();
-  const containerTop = rect.top;
-  const containerBottom = rect.bottom;
+function sampleTopAnchor(el: HTMLElement): ScrollAnchor | null {
+  const containerTop = el.getBoundingClientRect().top;
   const nodes = el.querySelectorAll<HTMLElement>("[data-message-id]");
-  let chosen: HTMLElement | null = null;
   for (const node of nodes) {
     const r = node.getBoundingClientRect();
-    // 至少部分可见：顶边在容器底之上，且底边在容器顶之下。消息按序排列，取最后一条即视口底部那条。
-    if (r.top < containerBottom && r.bottom > containerTop) chosen = node;
+    // 第一条「底边已落到容器视口顶之下」的消息 = 视口顶部那条（含被顶边裁切的）。
+    if (r.bottom > containerTop) {
+      const messageId = node.getAttribute("data-message-id");
+      if (messageId) return { messageId, offsetFromTop: r.top - containerTop };
+    }
   }
-  if (!chosen) return null;
-  const messageId = chosen.getAttribute("data-message-id");
-  if (!messageId) return null;
-  const offsetFromTop = chosen.getBoundingClientRect().top - containerTop;
-  return { messageId, offsetFromTop };
+  return null;
 }
 
 interface ChatViewProps {
@@ -119,8 +117,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   const anchorRef = useRef<{ userId: string } | null>(null);
   // 追踪滚动方向：死区只在向下滚动时生效，向上滚动跳过死区让上一条自然浮动。
   const lastScrollTopRef = useRef(0);
-  // 滚动锚点：用户最后看的「视口顶部第一条可见消息 + 偏移」。每次滚动持续更新，
-  // 供 sidebar 展开/收起导致宽度重排时把当前内容钉回原位（scroll anchoring）。
+  // 滚动锚点：用户最后看的「视口最后一条可见消息 + 底边距视口底距离」。每次滚动持续更新，
+  // 供 sidebar 展开/收起 / 编辑区出现导致宽度重排时把当前内容钉回原位（scroll anchoring）。
   const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
   // 程序化滚动标志：scrollToPinnedMessage / scrollToPrevUserMessage 触发 scrollTo 时
   // handleScroll 会跟着触发，此时不应清除 anchor。
@@ -248,41 +246,73 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     el.scrollTop = el.scrollHeight;
   }, [currentSession?.messages.length, streamingText, streamingParts]);
 
-  // 右侧工作台展开/收起会改变 chat 宽度，长文本重新换行后 scrollHeight 变大。
-  // 如果用户原本贴底，应在这次重排后仍贴底；如果用户在看历史，则锚定当前视口顶部
-  // 第一条可见消息，重排后把它钉回原视觉位置——否则宽度变化导致重新换行、元素
-  // offsetTop 漂移，浏览器按 scrollTop 不变保留，当前看的内容就跳到上面去了。
+  // 右侧工作台展开/收起、中间编辑区出现/消失会改变 chat 宽度，长文本重新换行后元素高度变化。
+  // 如果用户原本贴底，重排后仍贴底；如果用户在看历史，则把「视口最后一条可见消息」的底边
+  // 钉回原视觉位置——否则宽度变化导致重新换行、元素高度漂移，浏览器按 scrollTop 不变保留，
+  // 当前盯着的内容就跳走（表现为"展开后往上滚很多"）。
+  //
+  // 关键 1：sidebar 宽度走 500ms CSS transition，过渡期间布局连续变。必须在过渡**开始那一刻
+  // 锁定一个锚点**，整段过渡都用它恢复；绝不能每帧重采样——中间态重采会把已部分恢复的位置当
+  // 成新基线，累积偏差。
+  // 关键 2：宽度过渡结束后，markdown / 代码高亮 / 字体加载等**异步渲染**还会继续改上方消息高度、
+  // 推动锚点 offsetTop 漂移，而这不触发容器的 ResizeObserver。所以单次恢复不够。解法：锁定期开
+  // 一个 rAF 重对齐循环，整段时间窗内每帧都用最新 offsetTop 把锚点顶边钉回。窗口 800ms 覆盖
+  // transition + 异步渲染尾巴。
+  // 关键 3（最隐蔽）：本 effect 依赖 currentSession?.id 而非 []——组件首挂载时没选会话会 early
+  // return、滚动容器还没渲染，scrollRef.current 为 null 装不上 observer；必须会话出现后重跑才挂上。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    let frame = 0;
+    let lastWidth = el.clientWidth;
+    let lockedAnchor: ScrollAnchor | null = null;
+    let raf = 0;
+    let deadline = 0;
+
+    const restoreOnce = () => {
+      if (stickToBottomRef.current) {
+        el.scrollTop = stickyBottomScrollTop(el);
+        return;
+      }
+      if (!lockedAnchor) return;
+      const node = el.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(lockedAnchor.messageId)}"]`,
+      );
+      if (node) el.scrollTop = anchorScrollTop(lockedAnchor, node.offsetTop, el);
+    };
+
+    const alignLoop = () => {
+      restoreOnce();
+      if (performance.now() < deadline) {
+        raf = requestAnimationFrame(alignLoop);
+      } else {
+        raf = 0;
+        lockedAnchor = null;
+        if (!stickToBottomRef.current) scrollAnchorRef.current = sampleTopAnchor(el);
+      }
+    };
+
     const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (stickToBottomRef.current) {
-          el.scrollTop = stickyBottomScrollTop(el);
-          return;
-        }
-        // 非贴底：用上次保存的锚点把当前内容钉回原位（scroll anchoring）。
-        const anchor = scrollAnchorRef.current;
-        if (anchor) {
-          const node = el.querySelector<HTMLElement>(
-            `[data-message-id="${CSS.escape(anchor.messageId)}"]`,
-          );
-          if (node) {
-            el.scrollTop = anchorScrollTop(anchor, node.offsetTop, el);
-          }
-        }
-        // 恢复后重新采样当前底部锚点，供下一次重排使用。
-        scrollAnchorRef.current = sampleBottomAnchor(el);
-      });
+      const width = el.clientWidth;
+      if (width === lastWidth) return; // 仅高度变化（新消息/流式 / 异步渲染）不在此处理
+      const isTransitionStart = lockedAnchor === null;
+      lastWidth = width;
+
+      // 过渡开始：锁定过渡前用户所在锚点（onScroll 持续维护；没滚过则当场采一次兜底）。贴底态不锚。
+      if (isTransitionStart && !stickToBottomRef.current) {
+        lockedAnchor = scrollAnchorRef.current ?? sampleTopAnchor(el);
+      }
+      // 每次宽度变都把窗口续命到「本次变化 + 800ms」，覆盖 500ms transition + 异步渲染尾巴。
+      deadline = performance.now() + 800;
+      restoreOnce();
+      if (!raf) raf = requestAnimationFrame(alignLoop);
     });
     observer.observe(el);
     return () => {
-      cancelAnimationFrame(frame);
+      if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.id]);
 
   // 监听滚动：贴底检测 + 浮动副本几何判定 + 死区保护
   const BOTTOM_SLACK_PX = 80;
@@ -305,9 +335,9 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
 
-    // 持续更新滚动锚点：记下当前视口底部最后一条可见消息，供 sidebar 展开/收起 /
+    // 持续更新滚动锚点：记下当前视口顶部第一条可见消息，供 sidebar 展开/收起 /
     // 编辑区出现重排时把内容钉回原位。贴底时清掉锚点（重排走贴底分支，不需要锚定）。
-    scrollAnchorRef.current = stickToBottomRef.current ? null : sampleBottomAnchor(el);
+    scrollAnchorRef.current = stickToBottomRef.current ? null : sampleTopAnchor(el);
 
     // 滚动方向：死区只在向下滚动时生效，向上滚动跳过死区。
     const scrollingDown = el.scrollTop > lastScrollTopRef.current;
@@ -909,6 +939,9 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
       <div
         ref={scrollRef}
         className="absolute inset-0 overflow-y-auto"
+        // 关掉浏览器原生 CSS scroll anchoring：它会在内容高度变化时自行调 scrollTop，
+        // 与下面 ResizeObserver 的 JS 锚定叠加导致过冲。锚定统一由 JS 一套逻辑负责。
+        style={{ overflowAnchor: "none" }}
         onScroll={handleScroll}
       >
         {isNewConversationLayout && (

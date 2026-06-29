@@ -22,10 +22,11 @@ expectEqual(
   0,
 );
 
-// ── anchorScrollTop：sidebar 重排时把锚点钉回原视觉位置 ──
-// 锚点原本距容器顶 100px；重排后元素 offsetTop 从 500 漂到 800 → scrollTop 应为 800-100=700。
+// ── anchorScrollTop：宽度重排时把锚点消息的「顶边」钉回距视口顶原偏移 ──
+// 公式：scrollTop = offsetTop - offsetFromTop
+// 锚点顶边原本距视口顶 100px；重排后 offsetTop 从 500 漂到 800 → 800-100 = 700。
 expectEqual(
-  "锚点钉回原位（元素下移）",
+  "顶边钉回原位（上方内容变高、锚点下移）",
   anchorScrollTop(
     { messageId: "m1", offsetFromTop: 100 },
     800,
@@ -33,9 +34,9 @@ expectEqual(
   ),
   700,
 );
-// 锚点略滚出上方（offsetFromTop 负）：新 offsetTop=300 → 300-(-50)=350。
+// 顶边略滚出视口上方（offsetFromTop 负）：offsetTop=300 → 300-(-50) = 350。
 expectEqual(
-  "锚点略滚出上方仍正确",
+  "顶边略滚出视口上方仍正确",
   anchorScrollTop(
     { messageId: "m2", offsetFromTop: -50 },
     300,

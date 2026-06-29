@@ -10316,3 +10316,42 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: common / agent-core / model-gateway / desktop / cli 五个 crate。不改协议字段、EventPayload、storage 文件格式——纯 additive（build_body 加参数为内部 API），向后兼容。老 session（reasoning=null）靠缺陷 2/3 的 OAuth 兜底救回（build_body 无条件注入 adaptive，stream 无条件回退）；新 session 走缺陷 1 的默认值。三 surface 行为对称。
 - **验证（heb CLI A/B 复现）**: 修复前请求 `reasoning:null`、thinking 无 display；修复后请求 `reasoning:{enabled,extra}`、`thinking={"display":"summarized","type":"adaptive"}`、`output_config:{effort:xhigh}`，且日志确认走 `complete_then_emit`（stream=false）。`cargo check --workspace` 通过、`cargo test -p agent-core --lib`（626 passed）、model-gateway cc_compat（3 passed）、common default_reasoning（1 passed）全过。
 - **留尾巴**: 该测试账号实测请求体已正确带 display，但响应仍 `reasoning_len:0`（含难题）。开头日志有 `invalid_grant: Refresh token not found or invalid` → 回退「本地 Claude Code 凭据恢复」，疑似账号/凭据问题（与本次代码修复无关），待用户用 refresh token 未失效的 OAuth 账号或 Desktop 复测确认 thinking 文本能正常返回。`thinking_integration.rs` 仍是手动调试型测试（含真实 API key 跳过逻辑），未纳入 CI。
+
+### 2026-06-29 — 强化输出风格 prompt：text / tool_calls 互斥 + 消灭 silent middle 与 lead-in 规则的矛盾
+
+- **Why**: 用户反馈最近几个对话输出信息密度太低——模型在调查/实施阶段每条 tool_calls 前都写"let me check X / now I'll read Y"，大量无用旁白。之前 06-26 改过一次 Cadence（加"干活前复述意图"），但模型仍在中段持续输出文字。根因有二：① Cadence「Stay silent through the middle」写成软建议（"don't narrate"），模型天然倾向每步解释，软约束压不住；② Communicating「Never write a colon before a tool call. End the lead-in with a period instead」暗示每条 tool_calls 前都该写 lead-in（只是不用冒号用句号），与 silent middle 直接矛盾。
+- **改动**:
+  - [crates/agent-core/prompts/base_system.md](../crates/agent-core/prompts/base_system.md) `# Cadence`「Stay silent through the middle」: 从软建议升级为硬规则——"every message is EITHER text OR tool calls — never both. A message that contains `<tool_calls>` must have ZERO text content… This is a hard rule, not a suggestion."
+  - 同上「Break silence only at an inflection point」: 明确 inflection 消息是 text-only（无 tool_calls），四类拐点各限一句；说完立马回到纯 tool_calls 消息
+  - 同上 `# Communicating` colon 规则: 删掉"End the lead-in with a period instead"（lead-in 暗示），改为"When text accompanies tool calls in the opening message (the only place Cadence allows it), end it with a period"
+- **影响范围**: 仅改 STABLE 段 prompt 文本，三 surface 共享 `include_str!`，不改对外 API / 协议。会一次性击穿 prompt cache（改 STABLE 段固有成本）。`cargo check -p agent-core` 通过。
+- **留尾巴**: 硬规则实际效果需跑真实对话验证——看模型是否真的做到 tool_calls 消息零文字、inflection 消息纯文字。如果效果仍不够，下一步方向是给 tool_calls 消息加 XML schema 约束让模型连 `<text>` 都写不出来。
+
+### 2026-06-29 — 彻底修复展开 sidebar 时 chat 内容跳位（锚定 effect 从未挂载 + 原生 anchoring 打架）
+
+- **Why**: 上一条「顶部锚定改底部锚定」治标没治本——用户反馈展开 sidebar 内容仍往上滚一大截。
+  深挖（hebweb + scrollTop 写入探针）发现三个叠加根因：
+  1. **锚定 effect 从未挂载**（最致命）：ResizeObserver 的 `useLayoutEffect` deps 是 `[]`，只在
+     组件首挂载跑一次。但应用启动时 `currentSession` 为 null → ChatView 走 early return →
+     `ref={scrollRef}` 的滚动容器根本没渲染 → effect 跑时 `scrollRef.current===null` 直接 return，
+     observer 永不创建。之后打开会话也不会重跑（deps `[]`）。**所以此前所有"锚定"版本（顶/底边）
+     都没运行过，用户看到的全是浏览器原生 scroll anchoring 的行为。**
+  2. **原生 anchoring 与 JS 抢方向盘**：滚动容器默认 `overflow-anchor: auto`，浏览器自带的 scroll
+     anchoring 在内容高度变化时自调 scrollTop，与（修好挂载后的）JS 锚定叠加 → 过冲。
+  3. **底边锚定不适配超长消息**：消息常比视口还高，钉"底边距视口底"会把长消息底部拉到固定位、
+     反而让用户正看的中部抖。
+- **改动**:
+  - ChatView.tsx: ① effect deps `[]` → `[currentSession?.id]`，会话出现后重跑、observer 才真正挂上；
+    ② 滚动容器加 `overflow-anchor: none` 关原生 anchoring，锚定统一由 JS 一套负责；③ 锚定语义从
+    底边改回**顶边锚定**（视口顶部第一条可见消息 + 顶边距视口顶偏移，行业标准，对超长消息也对）；
+    ④ 锁定期 rAF 重对齐循环（800ms 窗口）每帧用最新 offsetTop 把锚点钉回，覆盖 500ms CSS transition
+    + markdown/字体异步渲染推动上方消息高度变化导致的锚点 offsetTop 漂移
+  - chatScrollPosition.ts: ScrollAnchor 改回 `offsetFromTop`（顶边）；anchorScrollTop 改回 `offsetTop
+    - offsetFromTop`，去掉 offsetHeight 参数
+  - chatScrollPosition.test.mjs: 4 条断言改回顶边锚定语义
+- **影响范围**: 纯前端（apps/desktop/frontend），仅 ChatView + scroll 工具。单测通过、tsc 通过。
+- **验证（hebweb 真实复现 + scrollTop 探针量化）**: 打开 747 条消息长会话，折叠/滚到非贴底中部，
+  记录视口顶部第一条可见消息的顶边距视口顶；展开 sidebar 后再量同一条。**三组场景（两个位置展开
+  + 一次反向折叠）topDrift 全部 = 0px**，scrollTop 自动从 9600→10460 / 3000→3114（反向 3114→3000
+  完美对称）。修前探针显示 JS 写入 scrollTop 次数为 0（证实 effect 没挂），修后 98 次/帧且收敛精确。
+- **留尾巴**: 无。
