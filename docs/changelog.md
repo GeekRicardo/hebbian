@@ -10131,3 +10131,32 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   暂未实现，当前所有深度都只跑建边；③ 真实模型的端到端 A/B（深睡建边 → 注入读边）留批5 闭环
   时一次性验证，避免重复搭环境。
 
+
+### 2026-06-23 — 记忆系统演进（批5）：自动联想注入（门控器，三级成本分层）
+
+- **Why**: 用户要的不是「对话 agent 自己调 ReadMemory」，而是一个独立门控器在注入层自动判断
+  「该不该联想」，且不能每次都掏成本——经济权衡。落地三级成本分层：① 零成本触发器（每轮分词
+  查倒排表，零命中直接不联想，挡掉绝大多数轮次）② 激活扩散（命中才沿 links.jsonl 边点亮邻居，
+  本地图遍历零模型）③ LLM 精排（本批不做，留后置）。把现状「首条塞全量 L0 + 指望模型自己读」
+  改成「提到 A 自动浮现关联的 B」。
+- **改动**:
+  - memory_recall.rs（新建）: tokenize（中英文混合，ASCII 词 + CJK bigram）；activate（倒排种子
+    激活 → 沿 load_links 扩散，邻居强度=种子×边权×衰减 → 按强度分 L0/L1/L2 档）；topic_drifted
+    漂移检测。倒排表从 list_l0 现场建，不单独落盘（零一致性风险，不过度设计）。
+  - system_prompt.rs: MemoryRecallItem + prepend_memory_recall（分级渲染 <memory-index>，L2 带
+    详情缩进 / L1 概览 / L0 摘要；空返回原文）。
+  - session.rs: append_user 注入改造——off 档走现状 environment 内置全量（逐字节兼容），auto/always
+    档走 inject_memory_recall（每轮按当前消息激活，零命中不留痕）。捕获 prepend 前的原始 query。
+  - settings.rs: MemorySettings 加 recall_mode（auto 默认 / off / always）。
+- **影响范围**: agent-core（新模块 + session/system_prompt/settings）。off 档逐字节等同现状（回归
+  保护）。全 workspace check 通过，agent-core 620 测试全过，新增单测 8 条（tokenize/激活扩散/
+  漂移检测/分级渲染/空回归）。
+- **验证（真实 A/B）**: 隔离 data-dir 写 2 条记忆（A 含 partial sidecar、B 含 bufwriter 但不含查询
+  词）+ 0.9 关联边 + recall_mode=auto。heb 发「partial sidecar 怎么实现的」→ 日志 [Memory:Recall]
+  激活 2 条，model_io 首条注入 <memory-index> 含 A（种子）+ B（**靠边联想点亮，不含查询词**），
+  模型随后 Read 这两条。off 档对照：仅 [Memory:Inject] 现状全量、文案「要详情用 ReadMemory」、无
+  Recall——两档行为清晰区分。
+- **留尾巴**: ① 第3级 LLM 精排 + 配套的漂移缓存/后台预热（本批判定为精排配套，纯本地激活阶段做
+  是过度设计，留到加精排时一起）；② 强化回写 importance/last_active 归入深睡批量做，前台注入保持
+  纯读零副作用；③ 设置页 recall_mode UI 留前端批；④ 架构.md §4.14 改写 + §13 待批7 统一同步。
+

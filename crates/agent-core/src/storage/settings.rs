@@ -221,6 +221,22 @@ pub struct MemorySettings {
     /// 70.9% < 5min 是连续工作，10min 能精准避开、只抓真正的停顿。
     #[serde(default = "default_idle_consolidate_minutes")]
     pub idle_consolidate_minutes: u32,
+    /// 联想注入模式（架构 §4.14 / 批5）。控制 `<memory-index>` 怎么选记忆注入。
+    #[serde(default)]
+    pub recall_mode: RecallMode,
+}
+
+/// 联想注入模式（架构 §4.14 / 批5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RecallMode {
+    /// 门控器：每轮分词查倒排表，命中 + 话题漂移才激活扩散注入（经济权衡，默认）。
+    #[default]
+    Auto,
+    /// 关闭联想：退回现状——仅首条 user message 注入全量 L0 清单。
+    Off,
+    /// 每轮强制激活，不走漂移缓存（长对话 / 强上下文依赖；最费）。
+    Always,
 }
 
 fn default_idle_consolidate_minutes() -> u32 {

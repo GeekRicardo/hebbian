@@ -194,6 +194,39 @@ pub fn prepend_plan_comments(text: String, comments: &[protocol::todo::PlanComme
     s
 }
 
+/// 联想激活后的一条注入项（架构 §4.14 / 批5）。`detail` 按激活档位填：
+/// L2 = 全文详情、L1 = 概览段、L0 = None（只摘要）。由 [`crate::session`] 从
+/// `memory_recall::ActivatedMemory` 转好后传入，避免 system_prompt 反向依赖 recall 模块。
+#[derive(Debug, Clone)]
+pub struct MemoryRecallItem {
+    pub id: String,
+    pub summary: String,
+    pub detail: Option<String>,
+}
+
+/// 把激活的记忆渲染成分级 `<memory-index>` 块前置到 user content（架构 §4.14 / 批5）。
+/// 与 `prepend_background_tasks` 同款「每轮可注入」模式——auto/always 档每轮按当前消息
+/// 激活后调它。空 vec 时返回原文（gate 判定不联想时不留痕）。
+pub fn prepend_memory_recall(text: String, items: &[MemoryRecallItem]) -> String {
+    if items.is_empty() {
+        return text;
+    }
+    let mut s = String::from("<memory-index>\n");
+    s.push_str("和当前消息相关、自动联想到的记忆（要更多详情用 ReadMemory(id)）：\n");
+    for it in items {
+        s.push_str(&format!("  - [{}] {}\n", it.id, it.summary));
+        if let Some(d) = &it.detail {
+            // 详情缩进一层，和摘要区分；压平多余空行避免膨胀。
+            for line in d.lines().filter(|l| !l.trim().is_empty()) {
+                s.push_str(&format!("      {line}\n"));
+            }
+        }
+    }
+    s.push_str("</memory-index>\n\n");
+    s.push_str(&text);
+    s
+}
+
 fn render_environment_xml(
     workdir: &Path,
     allowed_paths: &[PathBuf],
@@ -247,6 +280,39 @@ mod tests {
     fn compose_without_persona_returns_base() {
         let s = compose_system_prompt(None);
         assert_eq!(s, BASE_SYSTEM_PROMPT);
+    }
+
+    /// 回归保护（批5）：空激活 → 原文逐字节不变（off 档 / 零命中不留任何痕迹）。
+    #[test]
+    fn prepend_memory_recall_empty_is_noop() {
+        let out = prepend_memory_recall("用户消息".into(), &[]);
+        assert_eq!(out, "用户消息", "空激活必须返回原文，不加任何块");
+    }
+
+    /// 分级渲染（批5）：L2 带详情缩进、L0 只摘要，块包裹正确，正文在末尾。
+    #[test]
+    fn prepend_memory_recall_renders_levels() {
+        let items = vec![
+            MemoryRecallItem {
+                id: "proj/arch".into(),
+                summary: "agent-core 是大脑".into(),
+                detail: Some("## 详情\n分层 DAG\n\n改协议看 §3".into()),
+            },
+            MemoryRecallItem {
+                id: "global/pref".into(),
+                summary: "用户要中文".into(),
+                detail: None,
+            },
+        ];
+        let out = prepend_memory_recall("正文".into(), &items);
+        assert!(out.starts_with("<memory-index>"));
+        assert!(out.contains("[proj/arch] agent-core 是大脑"));
+        assert!(out.contains("分层 DAG"), "L2 详情应渲染");
+        assert!(out.contains("[global/pref] 用户要中文"));
+        assert!(out.contains("</memory-index>"));
+        assert!(out.ends_with("正文"), "正文在末尾");
+        // 空行被压平，不膨胀
+        assert!(!out.contains("\n\n      \n"));
     }
 
     #[test]

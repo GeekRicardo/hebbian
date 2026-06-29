@@ -238,6 +238,9 @@ impl Session {
             .entries
             .iter()
             .any(|e| matches!(e, TranscriptEntry::User(_)));
+        // 记忆激活用的原始查询——在各种 prepend 改写 text 之前捕获，保证激活看到的是
+        // 用户真实输入，不含 <workspace-update>/<environment> 等注入噪声。
+        let query = text.clone();
         let pending = self.workspace.take_pending_announcement();
         let mut final_text = prepend_workspace_update(text, &pending);
 
@@ -275,22 +278,32 @@ impl Session {
                 .map(|s| s.effective_paths(Some(self.workspace.workdir())))
                 .unwrap_or_default();
 
-            // 架构 §4.14：首条 user message 注入记忆 L0 清单——global + 当前项目（若绑定）。
-            // data_dir 缺失（CLI 单跑 / 单测）时跳过；scan 失败 warn 不阻塞主路径。
-            let memory_index = match self.data_dir.as_deref() {
-                Some(dd) => collect_memory_index(dd, self.workspace.workdir()),
-                None => Vec::new(),
+            // 架构 §4.14：记忆注入分两条路（recall_mode 门控，见 inject_memory_recall）。
+            // off 档走 environment 内置的全量 L0 清单（现状，逐字节兼容）；auto/always 档
+            // 走激活扩散，environment 不带 memory_index（避免双重渲染）。
+            let off_mode_index = match self.data_dir.as_deref() {
+                Some(dd) if memory_recall_mode(dd) == crate::storage::settings::RecallMode::Off => {
+                    collect_memory_index(dd, self.workspace.workdir())
+                }
+                _ => Vec::new(),
             };
 
             let snapshot = EnvironmentSnapshot::from_workspace(&self.workspace)
                 .with_run_mode(self.run_mode)
                 .with_background_tasks(bg_summaries.clone())
                 .with_extra_paths(extra_paths)
-                .with_memory_index(memory_index);
+                .with_memory_index(off_mode_index);
             final_text = prepend_environment(final_text, &snapshot);
-        } else if !bg_summaries.is_empty() {
-            // 非首条 user message：单独前置 `<background_tasks>` 块
-            final_text = crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
+            // auto/always 档：按当前消息激活相关记忆，分级前置 <memory-index>。
+            final_text = self.inject_memory_recall(final_text, &query);
+        } else {
+            if !bg_summaries.is_empty() {
+                // 非首条 user message：单独前置 `<background_tasks>` 块
+                final_text =
+                    crate::system_prompt::prepend_background_tasks(final_text, &bg_summaries);
+            }
+            // auto/always 档：每轮都按当前消息激活注入（off 档内部直接返回原文）。
+            final_text = self.inject_memory_recall(final_text, &query);
         }
 
         // 架构 §4.4.5：当前 active_plan 存在 unconsumed comments 时把它们包成
@@ -642,6 +655,71 @@ fn collect_memory_index(
     }
     mem_log!("Inject", "memory-index：{} 条", out.len());
     out
+}
+
+/// 读当前 recall_mode（架构 §4.14 / 批5）。记忆系统未启用 → 一律当 Off（不联想）。
+fn memory_recall_mode(data_dir: &std::path::Path) -> crate::storage::settings::RecallMode {
+    let s = crate::storage::settings::load(data_dir);
+    if !s.memory.active() {
+        return crate::storage::settings::RecallMode::Off;
+    }
+    s.memory.recall_mode
+}
+
+impl Session {
+    /// auto/always 档的记忆注入（架构 §4.14 / 批5）：按当前 user 消息激活相关记忆，
+    /// 沿 links 扩散，分级（L2 详情 / L1 概览 / L0 摘要）前置 `<memory-index>`。
+    /// off 档 / 无 data_dir / 零命中 → 原文返回（不留痕）。
+    ///
+    /// 这是「门控器」前台路径：第1级倒排查表零命中直接返回（挡掉多数轮次），命中才
+    /// 走第2级激活扩散。纯本地、零模型调用。
+    fn inject_memory_recall(&self, text: String, query: &str) -> String {
+        use crate::storage::settings::RecallMode;
+        let Some(dd) = self.data_dir.as_deref() else {
+            return text;
+        };
+        let mode = memory_recall_mode(dd);
+        if mode == RecallMode::Off {
+            return text;
+        }
+        let project_wd = crate::tools::memory_project_workdir(self.workspace.workdir());
+        let params = crate::memory_recall::RecallParams::default();
+        let act = crate::memory_recall::activate(dd, project_wd.as_deref(), query, &params);
+        if act.activated.is_empty() {
+            return text; // gate：零命中，不联想
+        }
+        // ActivatedMemory → MemoryRecallItem：按档位读详情（L2 全文 / L1 概览 / L0 无）。
+        let items: Vec<crate::system_prompt::MemoryRecallItem> = act
+            .activated
+            .iter()
+            .map(|a| {
+                use crate::memory_recall::RecallLevel;
+                use crate::storage::memory::{read, MemoryLevel};
+                let detail = match a.level {
+                    RecallLevel::L0 => None,
+                    RecallLevel::L1 => {
+                        read(dd, project_wd.as_deref(), &a.l0.id, MemoryLevel::Overview).ok()
+                    }
+                    RecallLevel::L2 => {
+                        read(dd, project_wd.as_deref(), &a.l0.id, MemoryLevel::Full).ok()
+                    }
+                };
+                crate::system_prompt::MemoryRecallItem {
+                    id: a.l0.id.clone(),
+                    summary: a.l0.summary.clone(),
+                    detail,
+                }
+            })
+            .collect();
+        tracing::info!(
+            target: "memory",
+            "[Memory:Recall] 激活 {} 条注入（mode={:?} query_len={}）",
+            items.len(),
+            mode,
+            query.len()
+        );
+        crate::system_prompt::prepend_memory_recall(text, &items)
+    }
 }
 
 #[cfg(test)]

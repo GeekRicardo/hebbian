@@ -15,6 +15,7 @@ pub mod hooks;
 pub mod mcp;
 pub mod memory_consolidate;
 pub mod memory_extract;
+pub mod memory_recall;
 pub mod model_io_dump;
 pub mod permissions;
 pub mod preview_bridge;
