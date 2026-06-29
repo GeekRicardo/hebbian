@@ -10215,3 +10215,72 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **留尾巴**: 真实 hebweb + Playwright 复现验证（开长对话→看历史→展开 sidebar 看是否锚定）
   待跑——当前靠 helper 纯函数单测 + tsc 覆盖核心计算，DOM 几何采样部分需真机手验。
 
+
+### 2026-06-29 — 修复右侧栏/编辑区展开收起时 chat 内容上跳（顶部锚定改底部锚定）
+
+- **Why**: 用户反馈右侧 sidebar 展开时，chat 区域内容直接滚到上面去，看的地方丢了。根因：sidebar/编辑区是 grid 列，展开挤窄 chat → 长文本重新换行 → scrollHeight 变 → 浏览器保 scrollTop 不变 → 视觉上跳。ChatView 本有 ResizeObserver 锚定，但非贴底分支用 `sampleTopAnchor`（锚定视口**顶部**第一条），而用户注意力在底部最新内容，顶部钉住时底部仍跳。
+- **改动**:
+  - ChatView.tsx: `sampleTopAnchor` → `sampleBottomAnchor`（采样视口**最后一条可见消息**作锚点）；handleScroll + ResizeObserver 两处采样点同步切换。`anchorScrollTop` 数学不变（仍保「锚点元素距容器顶 offsetFromTop 不变」），只换采样的那条消息。
+- **影响范围**: 纯前端（apps/desktop/frontend），仅 ChatView。贴底 / 切对话分支不动，回归面小。tsc 通过。
+- **留尾巴**: 手测待跑（滚到历史中部 → 展开/收起 sidebar、开/关编辑区列 → 最后看的内容稳在原位）。
+
+### 2026-06-29 — 新增 VSCode 风格 Git 源代码管理栏（按项目分组 / 编辑区开 git diff / stage·unstage·discard·commit）
+
+- **Why**: 用户要在右侧再加一个 VSCode「源代码管理」栏，按项目看真实 git 改动、点文件在编辑区看 diff、带基础 git 写操作。与已有「修改文件」栏互补：那栏是 AI 单次 Run 的 edits 快照、可整 Run 回退；本栏是项目本身的 git 状态（用户手改 + AI 改混在一起，相对 HEAD/index）。
+- **改动**:
+  - crates/agent-core/src/git_scm/mod.rs（新建）: git 状态/diff/stage/unstage/discard/commit 纯函数封装（`git status --porcelain=v1 -z -uall` 解析 + show 取 index/HEAD 文本 + 工作区读盘）；`ensure_within` 校验路径落在 root 下防越界；5 条单测（status 分类 / unstaged diff / stage-unstage 往返 / discard 还原 tracked+删 untracked / 越界拒绝）。lib.rs 注册 `pub mod git_scm`
+  - apps/desktop/src/lib.rs + apps/web-server/src/server.rs: 6 个命令双镜像（git_status/git_diff_file/git_stage/git_unstage/git_discard/git_commit），逻辑全在 agent_core::git_scm，surface 只翻译参数
+  - useStore.ts: EditorTab 加 `gitDiff` 变体 + `openGitDiff` action + `gitDiffTabId`
+  - EditorPane.tsx: DiffBody 参数化（接 `fetcher` 注入数据源），Run edits 走 diffCache、git diff 走 `api.gitDiffFile`；tab 图标/标签加 gitDiff 分支
+  - GitPanel.tsx（新建）: 按项目 section 分组 → Staged/Changes 两段 → 文件行（状态角标 + hover stage/unstage/discard）；项目顶 commit message 输入；discard 行内二次确认
+  - RightSidebar.tsx: 加 `git` tab（GitBranch 图标，排「修改文件」后）
+  - tauri.ts + types.ts: gitStatus/gitDiffFile/gitStage/gitUnstage/gitDiscard/gitCommit + GitFileStatus/GitProjectStatus
+  - docs/架构.md: 新增 §4.12.13（Git 栏 + 与修改文件栏分工 + 写操作安全边界 + 后端命令表）
+- **安全边界**: discard/commit 不可逆、动用户真实仓库、不在 edits-worktree 保护内。已用「discard 行内二次确认 + 范围限单文件 + 后端 ensure_within 路径校验 + commit 不带 -a/不 push + 不做 push/pull/rebase/merge/删分支」兜住。
+- **影响范围**: agent-core（新模块）+ desktop/hebweb（6 命令双镜像）+ 前端。不动 protocol/WireEvent（纯 surface 能力 §7.3）。git 逻辑在 agent-core 共享模块，两 surface 行为对称。cargo check 两 surface 通过、git_scm 5 单测全过、tsc 通过。
+- **留尾巴**: ① hebweb / desktop 手测待跑（造改动 → 分组正确、开 diff、stage/unstage/commit 生效、discard 二次确认还原）；② CLI surface 未加 UI（heb 是脚本调试 surface，无需）；③ 不支持 push/pull/分支/stash/冲突解决（本期定位看改动+基础提交）；④ gitDiff tab 的行内/分屏布局不持久化（与列宽一致）。
+
+### 2026-06-29 — 修审批回应失败：补齐 run 移 hebcore 后漏改的 HITL 结算路径（§7.8.6 + §4.4.4）
+
+- **Why**: 用户多次报「审批回应失败」/「越界路径审批失败」/「AutoMode 弹审批点不了，island 也没用」。日志实证（昨日 `island_approve: failed to resolve 找不到 request_id`）+ 代码核对锁定三个根因，均为 §7.8.6「run 迁移 hebcore 进程」时漏改的 HITL 结算/登记路径（主 `approve_permission` 改了走 remote 代理，旁路没跟上）。run + HitlGate 在 hebcore 进程，desktop 本地 `pending` 表为空，凡走本地 `resolve_approval` 的路径必然找不到 request_id。
+- **三根因 + 改动**:
+  - **A 路径越界审批无 remote 代理**: [lib.rs](../apps/desktop/src/lib.rs) `approve_path_access` 末尾是 `hitl.resolve_approval`（本地）→ desktop 点目录审批必失败（用户只能去 island）。改为先 `remote_session_of` → `hebcore_client::approve` 代理，找不到才回退本地；`session.allowed_paths`/`settings` 持久化保留（与 gate 结算正交）。
+  - **B AutoMode 转人工审批无法结算**: [lib.rs](../apps/desktop/src/lib.rs) `DesktopHebcoreSink::on_event` 原 `if !auto_handled` 跳过 `track_remote`——但 judge 超时/失败转人工（`AutoModeDecision::Ask`，dispatch:905 只保留原审批、不补登记）时用户要点，却没 remote 映射 → desktop/island 都失败（截图症状，provider 非 Claude judge 易超时）。改为**无条件 track_remote** + 新增 `PermissionResolved` 分支 `forget_remote`（judge 自动 Allow/Deny 后清，转人工的 Ask 不 emit Resolved 故保留，不泄漏）。
+  - **C 失败无日志**: [transport.rs](../crates/surface-session/src/transport.rs) `Approve`/`Answer` 的 gate-miss / session-未激活分支只回 Error 不打 tracing → 服务端零日志无从排查（用户「日志写入也有问题」）。两分支各补 `tracing::warn!(%session_id, %request_id, ...)`。
+  - **island 两入口**（上一条 commit 已改）: `resolve_hitl_from_island` / `answer_question_from_island` 同样补 remote 代理。
+- **影响范围**: apps/desktop（lib.rs sink + approve_path_access）+ surface-session（transport 日志）。纯补齐既有 remote 代理模式，不改协议、不改架构设计。
+- **验证**: `cargo check -p surface-session -p hebbian` 通过。**端到端需重新 build + GUI 真机**：① AutoMode（非 Claude provider）下 judge 超时转人工 → 主窗点审批成功 ② 越界路径 bash → 主窗点目录审批成功 ③ 失败时 hebcore 日志有 warn。用户当前跑旧 binary，本会话所有 HITL 修复都要 build 才生效。
+- **留尾巴**: 「ask 久等连接断开重连」（用户更早提的需求）未做——本次修的是结算路径，连接韧性（断开后重订阅 + 回放 pending）是独立的 §7.8 后续步骤。
+
+### 2026-06-29 — 调整 Stop hook 结果摘要的渲染位置：提进 assistant 气泡、排在分叉/重新生成之前
+
+- **Why**: 用户反馈 hook 结果摘要（passed / injected / blocked）原来作为独立一行 marker 渲染在 assistant 气泡下方，视觉上落在「分叉 / 重新生成」操作行之后，希望它排在这组按钮之前、紧贴正文。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 抽出 `HookOutcome` 接口，marker meta 的 `hook_outcome` 改为复用它，避免字段两处重复
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx): 复用既有 `memory_writes` 的「marker 提进所属 assistant」范式，把 `hook_outcome` marker 一并归集到 assistant 气泡（同一遍扫描，往前找最近 assistant；同一 run 多次 Stop hook 按顺序累积），归集后的 marker 加入 hidden 集不再独立渲染
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 新增 `hookOutcomes` prop，在 footer（分叉 / 重新生成）之前、记忆摘要相邻处渲染；找不到所属 assistant 的兜底独立 marker 分支保留（与 memory_writes 对称）
+- **影响范围**: 仅 desktop 前端渲染层（hebweb 共用同一份 React 代码，效果一致）。不改协议、不改后端 marker 落盘格式（仍是独立一条 `Role::Marker`，仅前端渲染时"提"位）；老 session 的 hook_outcome marker 同样按新位置渲染。
+- **验证**: `tsc --noEmit` 通过。视觉效果由用户本地 dev 跑确认。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 编辑区 diff 收尾：修改文件栏收窄 / 关 diff tab 报错修复 / VSCode 默认字体字号
+
+- **Why**: 用户验收 Git 栏与编辑区 diff 后提的几点：① 修改文件栏 diff 已挪进编辑区，640px 默认宽度过宽，应与文件树一致；② 点 diff 预览后关闭 tab 抛 `TextModel got disposed before DiffEditorWidget model got reset`；③ 编辑区字体字号要对齐 VSCode 默认。
+- **改动**:
+  - RightSidebar.tsx: `TAB_DEFAULT_WIDTH.edits` 640 → 250（diff 不再在栏内展开，与文件树同宽）
+  - EditorPane.tsx（DiffBody）: DiffEditor 加 `keepCurrentOriginalModel` / `keepCurrentModifiedModel`。根因：`@monaco-editor/react` 卸载时 cleanup 先 dispose TextModel、再 dispose widget，而 widget 内部还在异步 reset model，两者抢跑抛错。加这俩 prop 让它卸载时跳过 model dispose（widget 仍正常 dispose），避开抢跑。我们没传 modelPath，model path 为空串会被复用、不会反复新建泄漏
+  - EditorPane.tsx: 抽 `VSCODE_FONT_FAMILY`（Menlo/Monaco/Consolas/Droid Sans Mono... monospace 兜底）+ `VSCODE_FONT_SIZE=14`，file 编辑器与 diff 编辑器统一用。配色本就是 Monaco 内置 vs/vs-dark（= VSCode Light+/Dark+），跟随 hebbian 明暗主题，无需改
+- **影响范围**: 纯前端（apps/desktop/frontend）。tsc 通过。
+- **验证（hebweb 真实复现）**: 造 git 仓库 + 绑 workdir 的 session → 点文件开 diff → 关 tab。修前：console 抛 TextModel disposed；修后：连续开关 3 次 console errors=0。字体核查 `.view-lines` 实际渲染 `Menlo, Monaco, ...` 14px，确认生效。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 调整 //goal 裁决摘要的渲染位置：set 提进 user 气泡、progress/达成/不可达提进 assistant 气泡（Stop 之后、分叉/重新生成之前）
+
+- **Why**: 接上一条 hook 摘要提位。用户要 goal marker 同样不单独占行——「目标已设」紧贴触发它的那条 user 消息下方；续跑（progress）/ 达成 / 不可达的裁决结果紧贴对应 assistant 输出，排在 Stop hook 摘要之后、「分叉 / 重新生成」操作行之前。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/types.ts](../apps/desktop/frontend/src/desktop/ui/types.ts): 抽出 `GoalOutcome` 接口，marker meta 的 `goal_outcome` 改为复用它（与 `HookOutcome` 同款）
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageList.tsx): 把 marker 归集 helper 泛化为 `attachToPrev(i, role, ...)`（支持挂 user / assistant）；goal `set` 挂前面最近 user、`progress/achieved/impossible` 挂前面最近 assistant，归集后 marker 加入 hidden 集不再独立渲染
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 新增 `goalOutcomes` prop，在气泡内 Stop hook 摘要之后、记忆摘要之前渲染（user 气泡只会有 set，自然落在正文下、操作行上）；找不到相邻消息的兜底独立 marker 分支保留
+- **影响范围**: 仅 desktop 前端渲染层（hebweb 共用同一份 React 代码）。不改协议、不改后端 goal marker 落盘格式（仍是独立 `Role::Marker`，set 紧跟 user、其余在 Stop hook 后落盘，前端按相邻关系"提"位）；老 session 一致生效。
+- **验证**: `tsc --noEmit` 通过。视觉效果由用户本地 dev 跑确认。
+- **留尾巴**: 无。

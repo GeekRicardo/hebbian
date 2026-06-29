@@ -52,6 +52,8 @@ import type {
   QuestionOption,
   AskQuestion,
   MemoryWriteItem,
+  HookOutcome,
+  GoalOutcome,
 } from "@/desktop/ui/types";
 
 // 稳定空数组引用：zustand selector 用浅比较，每次返回新 `[]` 会触发无限重渲染。
@@ -145,6 +147,13 @@ interface Props {
   /** 本轮后台抽取写入的记忆（架构 §4.14）。由 MessageList 把紧跟其后的 memory_writes
    *  marker"提"进所属 assistant 气泡，渲染在正文下方、操作行上方。 */
   memoryWrites?: MemoryWriteItem[];
+  /** 本轮 Stop hook 结果（架构 §4.8.3）。由 MessageList 把紧跟其后的 hook_outcome
+   *  marker"提"进所属 assistant 气泡，渲染在正文下方、操作行上方（同一 run 可多次）。 */
+  hookOutcomes?: HookOutcome[];
+  /** //goal 裁决结果（架构 §4.8.3）。由 MessageList 把 goal_outcome marker"提"进相邻
+   *  气泡：set 进触发它的 user 气泡，progress/achieved/impossible 进所属 assistant 气泡
+   *  （Stop hook 之后、操作行上方）。 */
+  goalOutcomes?: GoalOutcome[];
 }
 
 interface ToolCallItem {
@@ -2163,6 +2172,8 @@ export const MessageBubble = memo(function MessageBubble({
   onUndoCompaction,
   appSettings,
   memoryWrites,
+  hookOutcomes,
+  goalOutcomes,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
@@ -2649,6 +2660,31 @@ export const MessageBubble = memo(function MessageBubble({
           variant={isUser ? "compact" : "gallery"}
           className="mt-2"
         />
+        {!streaming && !editing && hookOutcomes && hookOutcomes.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {hookOutcomes.map((h, idx) => (
+              <HookOutcomeSummary
+                key={`${h.event}-${idx}`}
+                event={h.event}
+                status={h.status}
+                detail={h.detail}
+              />
+            ))}
+          </div>
+        )}
+        {!streaming && !editing && goalOutcomes && goalOutcomes.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {goalOutcomes.map((g, idx) => (
+              <GoalResultSummary
+                key={`${g.kind}-${idx}`}
+                kind={g.kind}
+                condition={g.condition}
+                reason={g.reason}
+                iteration={g.iteration}
+              />
+            ))}
+          </div>
+        )}
         {!streaming && !editing && memoryWrites && memoryWrites.length > 0 && (
           <div className="mt-2">
             <MemoryWriteSummary items={memoryWrites} />

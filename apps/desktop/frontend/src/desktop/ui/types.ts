@@ -186,29 +186,16 @@ export type MessageMeta =
       items: MemoryWriteItem[];
     }
   // 架构 §4.8.3：一次 //goal 裁决结果。goal judge 在 turn 收尾判 transcript 是否达成后
-  // 落一条 marker，渲染成带彩色竖线的结果块。落在记忆摘要之前。
-  | {
+  // 落一条 marker，渲染成带彩色竖线的结果块。渲染时"提"进相邻消息气泡：set 进触发它的
+  // user 气泡，progress/achieved/impossible 进所属 assistant 气泡（Stop hook 之后、操作行上方）。
+  | ({
       type: "goal_outcome";
-      /** set=刚设目标 / achieved=达成 / impossible=判不可达 / progress=续跑一轮。 */
-      kind: "set" | "achieved" | "impossible" | "progress";
-      /** 该目标的完成条件原文，UI 标明是哪个 goal。 */
-      condition: string;
-      /** judge 给出的理由 / 还差什么（set 时为空）。 */
-      reason: string;
-      /** 续跑轮次（progress 有意义）。 */
-      iteration: number;
-    }
+    } & GoalOutcome)
   // 架构 §4.8.3：一次 Stop hook（cargo check / tsc 等 verify）执行结果。让消息流显示
-  // 跑了哪个 verify、过没过。
-  | {
+  // 跑了哪个 verify、过没过。渲染时"提"进所属 assistant 气泡（正文下方、操作行上方）。
+  | ({
       type: "hook_outcome";
-      /** hook 点位名（当前恒为 Stop）。 */
-      event: string;
-      /** passed=verify 通过 / injected=失败已注入续跑修复 / blocked=hook 阻断。 */
-      status: "passed" | "injected" | "blocked";
-      /** 失败 / 阻断时的提示文本（passed 时为空）。 */
-      detail: string;
-    }
+    } & HookOutcome)
   // 架构 §7.5.1：机主不活跃时，这条审批/问题被转发到了聊天渠道（微信）。落一条 marker，
   // 让机主回到电脑能看到「当时转发出去了、在渠道侧的结论是什么」。
   | {
@@ -931,6 +918,28 @@ export interface MemoryWriteItem {
   scope: string;
 }
 
+/** 一次 Stop hook（cargo check / tsc 等 verify）执行结果。marker meta 与气泡内渲染共用。 */
+export interface HookOutcome {
+  /** hook 点位名（当前恒为 Stop）。 */
+  event: string;
+  /** passed=verify 通过 / injected=失败已注入续跑修复 / blocked=hook 阻断。 */
+  status: "passed" | "injected" | "blocked";
+  /** 失败 / 阻断时的提示文本（passed 时为空）。 */
+  detail: string;
+}
+
+/** 一次 //goal 裁决结果（架构 §4.8.3）。marker meta 与气泡内渲染共用。 */
+export interface GoalOutcome {
+  /** set=刚设目标 / achieved=达成 / impossible=判不可达 / progress=续跑一轮。 */
+  kind: "set" | "achieved" | "impossible" | "progress";
+  /** 该目标的完成条件原文，UI 标明是哪个 goal。 */
+  condition: string;
+  /** judge 给出的理由 / 还差什么（set 时为空）。 */
+  reason: string;
+  /** 续跑轮次（progress 有意义）。 */
+  iteration: number;
+}
+
 /** 一条记忆的 L0（注入初筛 + 设置页清单用，架构 §4.14）。id 前缀 global/ 或 proj/ 即作用域。 */
 export interface MemoryL0 {
   id: string;
@@ -1219,6 +1228,32 @@ export interface DirEntry {
   name: string;
   path: string;
   is_dir: boolean;
+}
+
+/** Git 栏：一个文件的 git 状态（后端 git_status 返回）。 */
+export interface GitFileStatus {
+  /** 相对项目根的路径。 */
+  path: string;
+  /** 绝对路径。 */
+  abs_path: string;
+  /** index 态字符（X）。 */
+  x: string;
+  /** worktree 态字符（Y）。 */
+  y: string;
+  /** index 侧有改动（在暂存区）。 */
+  staged: boolean;
+  /** worktree 侧有改动（未暂存 / 未跟踪）。 */
+  unstaged: boolean;
+  /** 是否未跟踪文件。 */
+  untracked: boolean;
+}
+
+/** Git 栏：一个项目（git 仓库根）的状态。 */
+export interface GitProjectStatus {
+  root: string;
+  name: string;
+  branch: string;
+  files: GitFileStatus[];
 }
 
 export interface RevertResult {

@@ -16,7 +16,7 @@
 import { memo, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { reorderForWakeupView } from "./liveTimelineOrder";
-import type { Message, Prompt, MemoryWriteItem } from "@/desktop/ui/types";
+import type { Message, Prompt, MemoryWriteItem, HookOutcome, GoalOutcome } from "@/desktop/ui/types";
 
 interface FindCtx {
   query: string;
@@ -105,26 +105,62 @@ export const MessageList = memo(function MessageList({
   // find activeLocation / matchBase）仍按原 i 取值，**仅渲染顺序**调整。
   const viewOrder = useMemo(() => reorderForWakeupView(messages), [messages]);
 
-  // 记忆汇总 marker（架构 §4.14）落盘时是独立一条 Role::Marker，但渲染要"提"回它
-  // 所属的那条 assistant 气泡里（正文下方、操作行上方），不单独占行。这里建
-  // 「assistant 消息 id → 紧跟其后的 memory_writes marker items」映射，并收集需在
-  // 渲染时跳过的 marker id（避免它再独立渲染一行）。
-  const { memoryWritesByAssistant, hiddenMemoryMarkerIds } = useMemo(() => {
-    const byAssistant: Record<string, MemoryWriteItem[]> = {};
+  // 记忆汇总 marker（架构 §4.14）、Stop hook 结果 marker、//goal 裁决 marker（架构 §4.8.3）
+  // 落盘时都是独立一条 Role::Marker，但渲染要"提"回它相邻的消息气泡里（正文下方、操作行
+  // 上方），不单独占行。这里一遍扫描建「消息 id → 紧邻的 marker 内容」映射，并收集需在渲染
+  // 时跳过的 marker id（避免它再独立渲染一行）。
+  // - memory / hook / goal 的 progress·achieved·impossible：挂到前面最近的 assistant
+  // - goal 的 set（刚设目标）：挂到前面最近的 user（它由那条 user 触发，紧跟其后落盘）
+  const {
+    memoryWritesByAssistant,
+    hookOutcomesByAssistant,
+    goalOutcomesByMessage,
+    hiddenMarkerIds,
+  } = useMemo(() => {
+    const memoryByAssistant: Record<string, MemoryWriteItem[]> = {};
+    const hookByAssistant: Record<string, HookOutcome[]> = {};
+    const goalByMessage: Record<string, GoalOutcome[]> = {};
     const hidden = new Set<string>();
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      if (m.role !== "marker" || m.meta?.type !== "memory_writes") continue;
-      // 往前找最近一条 assistant 挂上去；找不到就保留 marker 独立渲染兜底。
+    const attachToPrev = (
+      i: number,
+      role: "assistant" | "user",
+      attach: (id: string) => void
+    ) => {
+      // 往前找最近一条指定 role 的消息挂上去；找不到就保留 marker 独立渲染兜底。
       for (let j = i - 1; j >= 0; j--) {
-        if (messages[j].role === "assistant") {
-          byAssistant[messages[j].id] = m.meta.items;
-          hidden.add(m.id);
-          break;
+        if (messages[j].role === role) {
+          attach(messages[j].id);
+          hidden.add(messages[i].id);
+          return;
         }
       }
+    };
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== "marker") continue;
+      if (m.meta?.type === "memory_writes") {
+        const items = m.meta.items;
+        attachToPrev(i, "assistant", (id) => (memoryByAssistant[id] = items));
+      } else if (m.meta?.type === "hook_outcome") {
+        const { event, status, detail } = m.meta;
+        // 同一 assistant 可能跑多次 Stop hook（注入续跑），按发生顺序累积。
+        attachToPrev(i, "assistant", (id) => {
+          (hookByAssistant[id] ??= []).push({ event, status, detail });
+        });
+      } else if (m.meta?.type === "goal_outcome") {
+        const { kind, condition, reason, iteration } = m.meta;
+        const targetRole = kind === "set" ? "user" : "assistant";
+        attachToPrev(i, targetRole, (id) => {
+          (goalByMessage[id] ??= []).push({ kind, condition, reason, iteration });
+        });
+      }
     }
-    return { memoryWritesByAssistant: byAssistant, hiddenMemoryMarkerIds: hidden };
+    return {
+      memoryWritesByAssistant: memoryByAssistant,
+      hookOutcomesByAssistant: hookByAssistant,
+      goalOutcomesByMessage: goalByMessage,
+      hiddenMarkerIds: hidden,
+    };
   }, [messages]);
 
   // 可删消息集合（删除只允许从后往前）：
@@ -157,8 +193,8 @@ export const MessageList = memo(function MessageList({
     <div>
       {viewOrder.map((i) => {
         const m = messages[i];
-        // 被"提"进 assistant 气泡的记忆 marker 不再独立渲染（见 memoryWritesByAssistant）。
-        if (hiddenMemoryMarkerIds.has(m.id)) return null;
+        // 被"提"进 assistant 气泡的 marker（记忆 / hook 结果）不再独立渲染一行。
+        if (hiddenMarkerIds.has(m.id)) return null;
         const isBoundary = m.meta?.type === "compact_boundary";
         if (!isBoundary) {
           const owner = ownerBoundaryByIndex[i];
@@ -198,6 +234,8 @@ export const MessageList = memo(function MessageList({
             canUndoCompaction={isBoundary && undoableCompactionIds?.has(m.id)}
             onUndoCompaction={isBoundary ? onUndoCompaction : undefined}
             memoryWrites={memoryWritesByAssistant[m.id]}
+            hookOutcomes={hookOutcomesByAssistant[m.id]}
+            goalOutcomes={goalOutcomesByMessage[m.id]}
             find={
               find
                 ? {
