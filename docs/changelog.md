@@ -10074,3 +10074,17 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - **必须 `pnpm app:build` / `app:dev` 打包新 hebcore**（含版本协商）才能用上「版本检查换新」；否则打包旧 hebcore 会被每次启动判 stale、反复弹窗杀起。当前用户 .app 里的 hebcore 是旧版，首次需先 `pkill -x hebcore` 清掉残留 + 用 app:build 重打包。
   - `negotiate_version` 在 setup 后台线程弹 dialog 的时机靠 800ms sleep 保险，待真机验证（若仍偶发不弹/卡，改用 app.run 后再触发）。
   - `pkill -x hebcore` 杀所有 hebcore 进程（全局场景本就一个，含 per-app 残留孤儿一并清）。
+
+### 2026-06-23 — 记忆系统演进（批1+2）：kind 二分 + 自由 tag + 关联网络落盘
+
+- **Why**: 联想记忆系统设计（docs/记忆系统-联想演进设计.md）落地第一阶段。现行记忆只有自由 `category` 单维分类，探索阶段一度膨胀到六类（语义/情景/程序/地图/哲学/品味），评审收敛为「kind 二分（stable/episode）+ scope + 自由 tag」——分类是作者视角，记忆好不好用取决于读者视角；类目边界必然打架（一条「edits-worktree 让某模式失去意义」既是 rationale 又是 episode）；分类应服务检索，而检索靠关联边不靠类目树。结论「少分类，重连接」，正合 Hebbian 名字本意（价值在边不在节点标签）。真实数据验证：34 条记忆 kind 二分几乎零归错；tag 会长尾发散（48 个 tag 30 个仅 1 次），故深睡需 tag 归一兜底。
+- **改动**:
+  - `storage/memory.rs`: 新增 `MemoryKind`（stable/episode）枚举；`MemoryRecord`/`MemoryL0` 加 `kind`/`tags`/`importance`/`last_active` 字段；frontmatter render/parse 同步（老记忆缺字段走默认 stable/空 tags/0.5/updated_at，向后兼容）；`write` 签名加 `kind`+`tags` 参数，importance/last_active 由系统管理（upsert 保留已强化的 importance，不清零）；新增 `MemoryLink` + `load_links`/`save_links`（关联网络 links.jsonl，深睡重算整体覆盖落盘）。
+  - `tools/write_memory.rs`: schema 加 `kind`（可选 enum）+ `tags`（可选数组）；category 改为可选（有 tags 后不强制）；description 说明 stable/episode 区分。
+  - `memory_extract.rs`: `Candidate` 加 `kind`/`tags`（serde default 容错）；抽取 prompt 改为 kind 二分 + 自由 tag + 领域提示（「这是软件代码项目，留意模块职责/设计决策/坑」）。
+  - 新增单测 5 条：kind/tags roundtrip、老记忆默认 stable、upsert 保留 importance、links roundtrip。
+- **影响范围**: agent-core（storage::memory / memory_extract / tools::write_memory / system_prompt 测试 / session 测试）。`MemoryL0` 加字段对 desktop/cli surface 向后兼容（不解构新字段不受影响）。落盘格式向后兼容（老 .md 缺字段照常解析）。cargo check --workspace 通过，agent-core memory 单测 22 passed。
+- **留尾巴**:
+  - 批3：WakeupScheduler 加 idle 哨兵触发深睡（RunFinished 后排 fire_at=now+T，新输入取消重排）+ 深睡整合（去重/tag 归一/联结建边/升华/遗忘）。
+  - 批4：激活扩散注入（符号粗筛+LLM 精排+分级注入+强化回写）+ on/on_drift/every_turn 开关。
+  - 架构.md §4.14 改写 + §13 决策追加（kind 二分 / 砍多类目 / 关联网络邻接表）尚未同步——批3/4 完成后统一更新。

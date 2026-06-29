@@ -51,7 +51,14 @@ pub struct MemoryWrite {
 struct Candidate {
     /// "project" | "global"
     scope: String,
+    /// "stable" | "episode"——时效性二分（架构 §4.14）。缺省 stable。
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
     category: String,
+    /// 自由主题标签（架构 §4.14）。
+    #[serde(default)]
+    tags: Vec<String>,
     /// 稳定标识；同 key 覆盖更新。
     key: String,
     summary: String,
@@ -239,12 +246,19 @@ fn persist_candidates(
         } else {
             (MemoryScope::Global, None)
         };
+        let kind = if c.kind.eq_ignore_ascii_case("episode") {
+            memory::MemoryKind::Episode
+        } else {
+            memory::MemoryKind::Stable
+        };
         match memory::write(
             data_dir,
             workdir,
             scope,
             &c.key,
+            kind,
             &c.category,
+            &c.tags,
             &c.summary,
             &c.content,
         ) {
@@ -355,19 +369,24 @@ async fn call_model(
 
 const EXTRACT_SYSTEM: &str = "你是一个记忆抽取器。从对话里提炼「值得跨会话长期记住」的事实，\
     只输出一个 JSON 数组，不要任何解释 / markdown 代码围栏。每项形如：\
-    {\"scope\":\"project|global\",\"category\":\"\",\"key\":\"\",\"summary\":\"\",\"content\":\"\"}。\
-    没有值得记的就输出 []。";
+    {\"scope\":\"project|global\",\"kind\":\"stable|episode\",\"tags\":[\"\"],\"key\":\"\",\"summary\":\"\",\"content\":\"\"}。\
+    kind 二选一：stable=跨会话稳定的事实（X在哪 / 为什么这么设计 / 红线 / 长期偏好）；\
+    episode=发生过的具体事件（修了什么 bug、做了什么决策、根因是什么，带时间，未来类似场景可复用）。\
+    tags=自由主题标签，0~N 个，你自己起最贴切的（如 architecture/rationale/pitfall/preference/navigation），\
+    不要硬塞固定枚举。没有值得记的就输出 []。";
 
 fn build_extract_prompt(existing: &[MemoryL0], transcript: &str, has_project: bool) -> String {
     let mut s = String::new();
     s.push_str(
-        "从下面这段对话里抽取值得长期记住的事实。判定标准：跨会话仍成立的项目结构 / \
-         架构 / 命名约定 / 踩过的坑 / 用户长期偏好。**不要**记当前 session 的临时状态、\
+        "从下面这段对话里抽取值得长期记住的事实，并判定 kind、打 tags。\
+         判定标准：跨会话仍成立的项目结构 / 架构 / 命名约定 / 踩过的坑 / 用户长期偏好（stable），\
+         或值得复用的具体事件 / 根因（episode）。**不要**记当前 session 的临时状态、\
          正在调试的中间结论、一次性的具体数值。\n\n",
     );
     if has_project {
         s.push_str(
-            "scope 规则：项目特定的事实用 \"project\"；跨项目通用的用户偏好用 \"global\"。\n\n",
+            "当前语境是一个软件代码项目的开发对话，留意模块职责、设计决策、踩过的坑。\
+             scope 规则：项目特定的事实用 \"project\"；跨项目通用的用户偏好用 \"global\"。\n\n",
         );
     } else {
         s.push_str("当前对话未绑定项目，所有记忆一律用 scope=\"global\"。\n\n");

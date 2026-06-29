@@ -61,6 +61,36 @@ impl MemoryScope {
     }
 }
 
+/// 记忆时效性二分（架构 §4.14）。决定要不要遗忘衰减。
+///
+/// 这一刀几乎无歧义（有没有「发生时间」）；更细的主题分类全交给 [`MemoryL0::tags`]
+/// 自由标签，不做硬类目——避免「一条记忆强行归到某个桶」的边界争议。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryKind {
+    /// 跨会话稳定的事实——X 在哪、为什么这么设计、红线、用户长期偏好。注入主力。
+    #[default]
+    Stable,
+    /// 发生过的具体事件，带时间——「2026-06 修好 partial sidecar，根因 BufWriter」。会衰减。
+    Episode,
+}
+
+impl MemoryKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            MemoryKind::Stable => "stable",
+            MemoryKind::Episode => "episode",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s.trim() {
+            "episode" => MemoryKind::Episode,
+            _ => MemoryKind::Stable,
+        }
+    }
+}
+
 /// 读取层级（架构 §4.14 的 L1/L0L2）。`Overview` 只回正文「## 概览」段，
 /// `Full` 回整篇正文。短记忆没有概览段时 `Overview` 回退为整篇。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +105,12 @@ pub struct MemoryL0 {
     pub id: String,
     pub summary: String,
     pub category: String,
+    /// 时效性二分（架构 §4.14）。老记忆缺字段默认 `stable`。
+    #[serde(default)]
+    pub kind: MemoryKind,
+    /// 自由主题标签（架构 §4.14）。服务激活扩散的检索/聚类，不做硬桶。
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// `.memory_log.jsonl` 的一行：后台抽取 / 主动写入的审计记录（只增）。
@@ -144,12 +180,17 @@ pub fn parse_id(id: &str) -> Option<(MemoryScope, String)> {
 
 /// upsert 一条记忆。`slug` 是稳定身份——同 slug 重复写即覆盖更新（让调用方控制
 /// 「更新已有」还是「新建」的粒度）。返回该条的 L0 供事件 / 注入使用。
+///
+/// `importance` / `last_active` 由系统管理（写入时取默认 / now），不暴露给调用方——
+/// 它们是激活强化 / 遗忘的派生状态，由深睡重算，不该让抽取器或工具直接设定。
 pub fn write(
     data_dir: &Path,
     workdir: Option<&Path>,
     scope: MemoryScope,
     slug: &str,
+    kind: MemoryKind,
     category: &str,
+    tags: &[String],
     summary: &str,
     body: &str,
 ) -> AppResult<MemoryL0> {
@@ -159,23 +200,38 @@ pub fn write(
     }
     let category = sanitize_inline(category);
     let summary = sanitize_inline(summary);
+    let tags: Vec<String> = tags
+        .iter()
+        .map(|t| sanitize_inline(t))
+        .filter(|t| !t.is_empty())
+        .collect();
     let id = make_id(scope, &slug);
 
     let root = memory_root(data_dir, workdir, scope)?;
     let path = record_path(&root, &slug);
+    let now = chrono::Utc::now().to_rfc3339();
+    // upsert：保留已有记忆的 importance（激活强化的成果不能被重写清零）；新记忆取默认。
+    let importance = read_existing(&path)
+        .map(|r| r.importance)
+        .unwrap_or(DEFAULT_IMPORTANCE);
     let rec = MemoryRecord {
         id: id.clone(),
         scope,
         category: category.clone(),
         summary: summary.clone(),
-        updated_at: chrono::Utc::now().to_rfc3339(),
+        kind,
+        tags: tags.clone(),
+        importance,
+        last_active: now.clone(),
+        updated_at: now,
         body: body.trim().to_string(),
     };
     lock::write_atomic(&path, render_md(&rec).as_bytes())?;
-    // L0 预览（id + category + summary）+ 落盘绝对路径，便于直接定位刚写的文件。
+    // L0 预览（id + kind + category + summary）+ 落盘绝对路径，便于直接定位刚写的文件。
     mem_log!(
         "Write",
-        "{id} category={category} L0={summary:?} → {}",
+        "{id} kind={} category={category} L0={summary:?} → {}",
+        kind.as_str(),
         path.display()
     );
 
@@ -183,7 +239,15 @@ pub fn write(
         id,
         summary,
         category,
+        kind,
+        tags,
     })
+}
+
+/// 读已存在的记忆文件（不存在 / 解析失败 → None）。供 `write` 的 upsert 保留 importance。
+fn read_existing(path: &Path) -> Option<MemoryRecord> {
+    let bytes = lock::read_locked(path).ok()?;
+    parse_md(&String::from_utf8_lossy(&bytes))
 }
 
 /// 列某作用域的全部 L0。目录不存在 → 空 vec（不是错误：新项目还没记忆很正常）。
@@ -216,6 +280,8 @@ pub fn list_l0(
                 id: rec.id,
                 summary: rec.summary,
                 category: rec.category,
+                kind: rec.kind,
+                tags: rec.tags,
             });
         }
     }
@@ -257,6 +323,64 @@ pub fn append_log(
     lock::append_jsonl(&path, &line)
 }
 
+// ── 关联网络 links.jsonl（架构 §4.14）────────────────────────────────────────
+//
+// Hebbian 边：两条记忆的关联强度。共现 → 加权（fire together, wire together），
+// 长期不共现 → 深睡衰减、归零删除。单机几百条记忆用邻接表足够，不上图数据库。
+// 整张表深睡时重算后整体覆盖落盘（`save_links`），平时只读（`load_links`）供激活扩散。
+
+/// 一条关联边。`weight ∈ [0,1]`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryLink {
+    pub from: String,
+    pub to: String,
+    pub weight: f32,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+fn links_path(root: &Path) -> PathBuf {
+    root.join("links.jsonl")
+}
+
+/// 读某作用域的全部关联边。文件不存在 → 空 vec。坏行跳过（容错）。
+pub fn load_links(
+    data_dir: &Path,
+    workdir: Option<&Path>,
+    scope: MemoryScope,
+) -> AppResult<Vec<MemoryLink>> {
+    let root = memory_root(data_dir, workdir, scope)?;
+    let bytes = match lock::read_locked(&links_path(&root)) {
+        Ok(b) => b,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let links = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<MemoryLink>(l).ok())
+        .collect();
+    Ok(links)
+}
+
+/// 整体覆盖落盘关联网络（深睡重算后调用）。原子写：`weight<=0` 的边在调用方剔除后传入。
+pub fn save_links(
+    data_dir: &Path,
+    workdir: Option<&Path>,
+    scope: MemoryScope,
+    links: &[MemoryLink],
+) -> AppResult<()> {
+    let root = memory_root(data_dir, workdir, scope)?;
+    let mut buf = String::new();
+    for l in links {
+        buf.push_str(&serde_json::to_string(l)?);
+        buf.push('\n');
+    }
+    lock::write_atomic(&links_path(&root), buf.as_bytes())?;
+    mem_log!("Link", "{} 作用域 {} 条边落盘", scope.prefix(), links.len());
+    Ok(())
+}
+
 // ── 抽取游标（架构 §4.14）────────────────────────────────────────────────────
 //
 // 「上一次成功抽取覆盖到的 message id」。后台抽取成功 → 推进；失败 → 不动，下次从同一
@@ -294,23 +418,39 @@ struct MemoryRecord {
     scope: MemoryScope,
     category: String,
     summary: String,
+    /// 时效性二分（架构 §4.14）。
+    kind: MemoryKind,
+    /// 自由主题标签（架构 §4.14）。
+    tags: Vec<String>,
+    /// 激活强化 / 时间衰减后的当前重要度 [0,1]。深睡重算。
+    importance: f32,
+    /// 上次被激活的时刻（RFC3339）。遗忘判据。
+    last_active: String,
     updated_at: String,
     body: String,
 }
 
+/// 默认重要度——新记忆中性起点，深睡按联结度 / 激活频率重算。
+const DEFAULT_IMPORTANCE: f32 = 0.5;
+
 fn render_md(rec: &MemoryRecord) -> String {
     format!(
-        "---\nid: {}\nscope: {}\ncategory: {}\nsummary: {}\nupdated_at: {}\n---\n{}\n",
+        "---\nid: {}\nscope: {}\nkind: {}\ncategory: {}\ntags: {}\nsummary: {}\nimportance: {}\nlast_active: {}\nupdated_at: {}\n---\n{}\n",
         rec.id,
         rec.scope.prefix(),
+        rec.kind.as_str(),
         rec.category,
+        rec.tags.join(", "),
         rec.summary,
+        rec.importance,
+        rec.last_active,
         rec.updated_at,
         rec.body,
     )
 }
 
 /// 解析 frontmatter + 正文。不以 `---` 开头视为无 frontmatter（整篇是 body，其余字段空）。
+/// 新增字段（kind/tags/importance/last_active）对老记忆缺失时走默认值——向后兼容。
 fn parse_md(text: &str) -> Option<MemoryRecord> {
     let rest = text.strip_prefix("---\n")?;
     let end = rest.find("\n---\n")?;
@@ -321,6 +461,10 @@ fn parse_md(text: &str) -> Option<MemoryRecord> {
     let mut scope = MemoryScope::Global;
     let mut category = String::new();
     let mut summary = String::new();
+    let mut kind = MemoryKind::Stable;
+    let mut tags: Vec<String> = Vec::new();
+    let mut importance = DEFAULT_IMPORTANCE;
+    let mut last_active = String::new();
     let mut updated_at = String::new();
     for line in header.lines() {
         let Some((k, v)) = line.split_once(": ") else {
@@ -330,8 +474,18 @@ fn parse_md(text: &str) -> Option<MemoryRecord> {
         match k.trim() {
             "id" => id = v.to_string(),
             "scope" => scope = MemoryScope::from_prefix(v).unwrap_or(MemoryScope::Global),
+            "kind" => kind = MemoryKind::from_str(v),
             "category" => category = v.to_string(),
+            "tags" => {
+                tags = v
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            }
             "summary" => summary = v.to_string(),
+            "importance" => importance = v.parse().unwrap_or(DEFAULT_IMPORTANCE),
+            "last_active" => last_active = v.to_string(),
             "updated_at" => updated_at = v.to_string(),
             _ => {}
         }
@@ -339,11 +493,19 @@ fn parse_md(text: &str) -> Option<MemoryRecord> {
     if id.is_empty() {
         return None;
     }
+    // 老记忆没有 last_active → 退回 updated_at（首次激活前以更新时间为准）。
+    if last_active.is_empty() {
+        last_active = updated_at.clone();
+    }
     Some(MemoryRecord {
         id,
         scope,
         category,
         summary,
+        kind,
+        tags,
+        importance,
+        last_active,
         updated_at,
         body: body.trim().to_string(),
     })
@@ -392,10 +554,33 @@ mod tests {
         d
     }
 
+    /// 测试辅助：用默认 kind=stable + 空 tags 写一条（收口旧签名调用点）。
+    fn w(
+        dd: &Path,
+        wd: Option<&Path>,
+        scope: MemoryScope,
+        slug: &str,
+        category: &str,
+        summary: &str,
+        body: &str,
+    ) -> AppResult<MemoryL0> {
+        write(
+            dd,
+            wd,
+            scope,
+            slug,
+            MemoryKind::Stable,
+            category,
+            &[],
+            summary,
+            body,
+        )
+    }
+
     #[test]
     fn write_then_list_l0_roundtrips_summary() {
         let dd = tmp_dir();
-        write(
+        w(
             &dd,
             None,
             MemoryScope::Global,
@@ -416,8 +601,8 @@ mod tests {
     #[test]
     fn write_same_slug_upserts() {
         let dd = tmp_dir();
-        write(&dd, None, MemoryScope::Global, "k", "c", "v1", "b1").unwrap();
-        write(&dd, None, MemoryScope::Global, "k", "c", "v2", "b2").unwrap();
+        w(&dd, None, MemoryScope::Global, "k", "c", "v1", "b1").unwrap();
+        w(&dd, None, MemoryScope::Global, "k", "c", "v2", "b2").unwrap();
         let l0 = list_l0(&dd, None, MemoryScope::Global).unwrap();
         assert_eq!(l0.len(), 1, "同 slug 应覆盖而非新增");
         assert_eq!(l0[0].summary, "v2");
@@ -426,7 +611,7 @@ mod tests {
     #[test]
     fn read_overview_vs_full() {
         let dd = tmp_dir();
-        write(
+        w(
             &dd,
             None,
             MemoryScope::Global,
@@ -446,7 +631,7 @@ mod tests {
     #[test]
     fn read_overview_falls_back_to_full_when_no_overview() {
         let dd = tmp_dir();
-        write(
+        w(
             &dd,
             None,
             MemoryScope::Global,
@@ -471,7 +656,7 @@ mod tests {
     fn project_scope_uses_workdir_dir() {
         let dd = tmp_dir();
         let wd = Path::new("/tmp/some/project");
-        write(
+        w(
             &dd,
             Some(wd),
             MemoryScope::Project,
@@ -491,14 +676,14 @@ mod tests {
     #[test]
     fn project_scope_without_workdir_errs() {
         let dd = tmp_dir();
-        let r = write(&dd, None, MemoryScope::Project, "k", "c", "s", "b");
+        let r = w(&dd, None, MemoryScope::Project, "k", "c", "s", "b");
         assert!(r.is_err());
     }
 
     #[test]
     fn summary_newlines_flattened() {
         let dd = tmp_dir();
-        write(
+        w(
             &dd,
             None,
             MemoryScope::Global,
@@ -547,5 +732,86 @@ mod tests {
         // 推进覆盖
         write_cursor(&dd, "sess-1", "msg-99").unwrap();
         assert_eq!(read_cursor(&dd, "sess-1").as_deref(), Some("msg-99"));
+    }
+
+    // ── 新字段（架构 §4.14 演进）回归测试 ──
+
+    #[test]
+    fn kind_and_tags_roundtrip() {
+        let dd = tmp_dir();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "fix-x",
+            MemoryKind::Episode,
+            "bug",
+            &["pitfall".into(), "provider".into()],
+            "修好了 X",
+            "## 详情\n根因是 Y。",
+        )
+        .unwrap();
+        let l0 = list_l0(&dd, None, MemoryScope::Global).unwrap();
+        assert_eq!(l0[0].kind, MemoryKind::Episode);
+        assert_eq!(l0[0].tags, vec!["pitfall".to_string(), "provider".to_string()]);
+    }
+
+    #[test]
+    fn old_record_without_new_fields_defaults_to_stable() {
+        // 模拟老格式记忆文件（无 kind/tags/importance/last_active）。
+        let dd = tmp_dir();
+        let root = dd.join("memory");
+        std::fs::create_dir_all(&root).unwrap();
+        let old = "---\nid: global/legacy\nscope: global\ncategory: arch\nsummary: 老记忆\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n## 详情\n正文。";
+        std::fs::write(root.join("legacy.md"), old).unwrap();
+        let l0 = list_l0(&dd, None, MemoryScope::Global).unwrap();
+        assert_eq!(l0[0].kind, MemoryKind::Stable, "老记忆缺 kind 默认 stable");
+        assert!(l0[0].tags.is_empty(), "老记忆缺 tags 默认空");
+    }
+
+    #[test]
+    fn upsert_preserves_importance() {
+        // importance 是激活强化的成果，upsert（同 slug 重写）不能清零。
+        let dd = tmp_dir();
+        let slug = "imp-keep";
+        w(&dd, None, MemoryScope::Global, slug, "c", "v1", "b1").unwrap();
+        // 手动把 importance 抬到 0.9（模拟激活强化）
+        let path = dd.join("memory").join(format!("{slug}.md"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let bumped = raw.replace("importance: 0.5", "importance: 0.9");
+        std::fs::write(&path, bumped).unwrap();
+        // 再 upsert（更新内容）
+        w(&dd, None, MemoryScope::Global, slug, "c", "v2", "b2").unwrap();
+        let rec = read_existing(&path).unwrap();
+        assert_eq!(rec.importance, 0.9, "upsert 应保留已强化的 importance");
+        assert_eq!(rec.summary, "v2", "内容应已更新");
+    }
+
+    #[test]
+    fn links_roundtrip_and_empty_when_absent() {
+        let dd = tmp_dir();
+        // 不存在 → 空
+        assert!(load_links(&dd, None, MemoryScope::Global).unwrap().is_empty());
+        // 先建 memory 目录（save_links 需要 root 存在）
+        w(&dd, None, MemoryScope::Global, "a", "c", "sa", "ba").unwrap();
+        let links = vec![
+            MemoryLink {
+                from: "global/a".into(),
+                to: "global/b".into(),
+                weight: 0.6,
+                updated_at: "2026-06-23T00:00:00+00:00".into(),
+            },
+            MemoryLink {
+                from: "global/a".into(),
+                to: "global/c".into(),
+                weight: 0.3,
+                updated_at: "2026-06-23T00:00:00+00:00".into(),
+            },
+        ];
+        save_links(&dd, None, MemoryScope::Global, &links).unwrap();
+        let got = load_links(&dd, None, MemoryScope::Global).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].from, "global/a");
+        assert_eq!(got[0].weight, 0.6);
     }
 }

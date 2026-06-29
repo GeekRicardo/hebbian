@@ -670,13 +670,24 @@ mod tests {
     /// 显式开启 + 配模型后应注入到那条记忆。
     #[test]
     fn collect_memory_index_gated_by_active() {
-        use crate::storage::memory::{write, MemoryScope};
+        use crate::storage::memory::{write, MemoryKind, MemoryScope};
         use crate::storage::settings::{self, MemoryModelRef};
 
         let dd =
             std::env::temp_dir().join(format!("heb-sess-mem-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dd).unwrap();
-        write(&dd, None, MemoryScope::Global, "k", "c", "记得这件事", "正文").unwrap();
+        write(
+            &dd,
+            None,
+            MemoryScope::Global,
+            "k",
+            MemoryKind::Stable,
+            "c",
+            &[],
+            "记得这件事",
+            "正文",
+        )
+        .unwrap();
 
         // 关闭（默认 enabled=false）→ 不注入。
         let workdir = std::path::Path::new("/");

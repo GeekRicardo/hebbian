@@ -363,11 +363,15 @@ mod tests {
                     id: "global/lang".into(),
                     summary: "用户要求始终用中文".into(),
                     category: "preferences".into(),
+                    kind: Default::default(),
+                    tags: Vec::new(),
                 },
                 MemoryL0 {
                     id: "proj/architecture".into(),
                     summary: "agent-core 是大脑".into(),
                     category: "architecture".into(),
+                    kind: Default::default(),
+                    tags: Vec::new(),
                 },
             ],
         };

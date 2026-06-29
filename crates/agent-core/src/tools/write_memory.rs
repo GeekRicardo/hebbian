@@ -38,23 +38,35 @@ impl Tool for WriteMemoryTool {
 
     fn description(&self) -> &str {
         "把一条值得以后复用的事实写入长期记忆。scope=project 记到当前项目（结构 / 架构 / \
-         约定 / 坑），global 记到跨项目全局（用户偏好等）。key 是这条记忆的稳定标识，\
-         用同一个 key 再写会更新它。summary 是一句话摘要（会出现在以后对话的记忆清单里）。"
+         约定 / 坑），global 记到跨项目全局（用户偏好等）。kind 区分 stable（稳定事实：X在哪 / \
+         为什么这么设计 / 红线 / 偏好）与 episode（发生过的具体事件：修了什么 bug / 根因）。\
+         key 是这条记忆的稳定标识，用同一个 key 再写会更新它。summary 是一句话摘要（会出现在\
+         以后对话的记忆清单里）。tags 是自由主题标签，便于以后联想检索。"
     }
 
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
-            "required": ["scope", "category", "key", "summary", "content"],
+            "required": ["scope", "key", "summary", "content"],
             "properties": {
                 "scope": {
                     "type": "string",
                     "enum": ["project", "global"],
                     "description": "project=当前项目；global=跨项目全局"
                 },
+                "kind": {
+                    "type": "string",
+                    "enum": ["stable", "episode"],
+                    "description": "stable=跨会话稳定的事实（默认）；episode=发生过的具体事件，带时间，会随时间淡化"
+                },
                 "category": {
                     "type": "string",
                     "description": "分类，如 structure / architecture / conventions / pitfalls / preferences"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "自由主题标签（如 architecture / pitfall / preference），便于以后联想检索"
                 },
                 "key": {
                     "type": "string",
@@ -80,10 +92,24 @@ impl Tool for WriteMemoryTool {
 
         let get = |k: &str| input.get(k).and_then(|v| v.as_str());
         let requested = get("scope").unwrap_or("global");
-        let category = get("category").ok_or_else(|| AppError::msg("缺少参数 category"))?;
+        // category 可空（有 tags 后不强制）；缺省空串。
+        let category = get("category").unwrap_or("");
         let key = get("key").ok_or_else(|| AppError::msg("缺少参数 key"))?;
         let summary = get("summary").ok_or_else(|| AppError::msg("缺少参数 summary"))?;
         let content = get("content").ok_or_else(|| AppError::msg("缺少参数 content"))?;
+        let kind = match get("kind") {
+            Some("episode") => memory::MemoryKind::Episode,
+            _ => memory::MemoryKind::Stable,
+        };
+        let tags: Vec<String> = input
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // scope 解析 + project 降级：未绑定项目时 project → global。
         let (scope, note) = match requested {
@@ -96,7 +122,9 @@ impl Tool for WriteMemoryTool {
             MemoryScope::Global => None,
         };
 
-        let l0 = memory::write(data_dir, workdir, scope, key, category, summary, content)?;
+        let l0 = memory::write(
+            data_dir, workdir, scope, key, kind, category, &tags, summary, content,
+        )?;
         let _ = memory::append_log(
             data_dir,
             workdir,
