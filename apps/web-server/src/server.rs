@@ -14,6 +14,7 @@ use std::sync::{atomic::Ordering, Arc};
 use agent_core::{
     core_client::{CoreClient, LocalCoreClient},
     edits::{self, EditsWorktree},
+    git_scm,
     permissions::PermissionStore,
     storage::{
         projects as projects_store, prompts as prompts_store, sessions as sessions_store,
@@ -425,6 +426,13 @@ async fn dispatch_invoke(
         "write_text_file" => cmd_write_text_file(args).await.map(|_| None),
         "revert_edit" => cmd_revert_edit(state, args).await.map(Some),
         "edits_worktree_status" => cmd_edits_worktree_status(state, args).await.map(Some),
+        // Git 源代码管理（架构 §4.12.13）
+        "git_status" => cmd_git_status(args).await.map(Some),
+        "git_diff_file" => cmd_git_diff_file(args).await.map(Some),
+        "git_stage" => cmd_git_stage(args).await.map(|_| None),
+        "git_unstage" => cmd_git_unstage(args).await.map(|_| None),
+        "git_discard" => cmd_git_discard(args).await.map(|_| None),
+        "git_commit" => cmd_git_commit(args).await.map(Some),
         // 其余 desktop Tauri command（OAuth 14 / preview_payload / file dialog / ...）
         // 在 hebweb 浏览器 surface 尚未镜像；需要时按 Round 1 模式照搬 desktop 实现
         other => Err(anyhow!(
@@ -2863,4 +2871,67 @@ async fn cmd_edits_worktree_status(state: &ServerState, args: Value) -> Result<V
         "enabled": enabled,
         "entry_count": entry_count,
     }))
+}
+
+// ─── Git 源代码管理（语义同 desktop git_* 命令；逻辑在 agent_core::git_scm）───
+
+async fn cmd_git_status(args: Value) -> Result<Value> {
+    let roots = args
+        .get("roots")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("missing `roots`"))?;
+    let mut out = Vec::new();
+    for r in roots {
+        let Some(root) = r.as_str() else { continue };
+        let path = std::path::PathBuf::from(root);
+        if !git_scm::is_git_repo(&path) {
+            continue;
+        }
+        out.push(git_scm::status(&path).map_err(|e| anyhow!("{e}"))?);
+    }
+    Ok(serde_json::to_value(out)?)
+}
+
+async fn cmd_git_diff_file(args: Value) -> Result<Value> {
+    let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let staged = args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    let (before_text, after_text) =
+        git_scm::diff_file(&std::path::PathBuf::from(&root), &path, staged)
+            .map_err(|e| anyhow!("{e}"))?;
+    Ok(json!({
+        "before_text": before_text,
+        "after_text": after_text,
+        "before_sha": "",
+        "after_sha": "",
+        "file_path": path,
+        "action": if staged { "staged" } else { "unstaged" },
+    }))
+}
+
+async fn cmd_git_stage(args: Value) -> Result<()> {
+    let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    git_scm::stage(&std::path::PathBuf::from(&root), &path).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_git_unstage(args: Value) -> Result<()> {
+    let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    git_scm::unstage(&std::path::PathBuf::from(&root), &path).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_git_discard(args: Value) -> Result<()> {
+    let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
+    let path = arg_str(&args, &["path"]).ok_or_else(|| anyhow!("missing `path`"))?;
+    let untracked = args.get("untracked").and_then(|v| v.as_bool()).unwrap_or(false);
+    git_scm::discard(&std::path::PathBuf::from(&root), &path, untracked).map_err(|e| anyhow!("{e}"))
+}
+
+async fn cmd_git_commit(args: Value) -> Result<Value> {
+    let root = arg_str(&args, &["root"]).ok_or_else(|| anyhow!("missing `root`"))?;
+    let message = arg_str(&args, &["message"]).ok_or_else(|| anyhow!("missing `message`"))?;
+    let sha = git_scm::commit(&std::path::PathBuf::from(&root), &message)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(Value::String(sha))
 }

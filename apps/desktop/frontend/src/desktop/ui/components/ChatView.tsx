@@ -30,22 +30,29 @@ import type { MessageAttachment } from "@/desktop/ui/types";
 const PINNED_USER_MESSAGE_VISIBLE = false;
 
 /**
- * 采样滚动容器内「视口顶部第一条可见消息」作锚点：返回它的 data-message-id 与顶边
- * 相对容器视口顶的偏移。供 sidebar 展开/收起导致宽度重排时把内容钉回原位。
- * 找不到任何带 data-message-id 的消息 → null（空对话 / 尚未渲染）。
+ * 采样滚动容器内「视口最后一条可见消息」作锚点：返回它的 data-message-id 与顶边
+ * 相对容器视口顶的偏移。供 sidebar 展开/收起 / 中间编辑区出现导致宽度重排时把内容钉回原位。
+ *
+ * 用「最后一条可见」而非「第一条可见」：用户注意力在底部最新内容上，宽度变化导致长文本
+ * 重新换行时，应让用户当下盯着的最后那条稳在原位，而不是钉住顶部、放任底部跳动。
+ * 找不到任何带 data-message-id 的可见消息 → null（空对话 / 尚未渲染）。
  */
-function sampleTopAnchor(el: HTMLElement): ScrollAnchor | null {
-  const containerTop = el.getBoundingClientRect().top;
+function sampleBottomAnchor(el: HTMLElement): ScrollAnchor | null {
+  const rect = el.getBoundingClientRect();
+  const containerTop = rect.top;
+  const containerBottom = rect.bottom;
   const nodes = el.querySelectorAll<HTMLElement>("[data-message-id]");
+  let chosen: HTMLElement | null = null;
   for (const node of nodes) {
-    const offsetFromTop = node.getBoundingClientRect().top - containerTop;
-    // 第一条底边尚未滚出视口上方的消息（即当前可见区顶部那条）。
-    if (offsetFromTop + node.offsetHeight > 0) {
-      const messageId = node.getAttribute("data-message-id");
-      if (messageId) return { messageId, offsetFromTop };
-    }
+    const r = node.getBoundingClientRect();
+    // 至少部分可见：顶边在容器底之上，且底边在容器顶之下。消息按序排列，取最后一条即视口底部那条。
+    if (r.top < containerBottom && r.bottom > containerTop) chosen = node;
   }
-  return null;
+  if (!chosen) return null;
+  const messageId = chosen.getAttribute("data-message-id");
+  if (!messageId) return null;
+  const offsetFromTop = chosen.getBoundingClientRect().top - containerTop;
+  return { messageId, offsetFromTop };
 }
 
 interface ChatViewProps {
@@ -266,8 +273,8 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
             el.scrollTop = anchorScrollTop(anchor, node.offsetTop, el);
           }
         }
-        // 恢复后重新采样当前顶部锚点，供下一次重排使用。
-        scrollAnchorRef.current = sampleTopAnchor(el);
+        // 恢复后重新采样当前底部锚点，供下一次重排使用。
+        scrollAnchorRef.current = sampleBottomAnchor(el);
       });
     });
     observer.observe(el);
@@ -298,9 +305,9 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
 
-    // 持续更新滚动锚点：记下当前视口顶部第一条可见消息，供 sidebar 展开/收起重排时
-    // 把内容钉回原位。贴底时清掉锚点（重排走贴底分支，不需要锚定）。
-    scrollAnchorRef.current = stickToBottomRef.current ? null : sampleTopAnchor(el);
+    // 持续更新滚动锚点：记下当前视口底部最后一条可见消息，供 sidebar 展开/收起 /
+    // 编辑区出现重排时把内容钉回原位。贴底时清掉锚点（重排走贴底分支，不需要锚定）。
+    scrollAnchorRef.current = stickToBottomRef.current ? null : sampleBottomAnchor(el);
 
     // 滚动方向：死区只在向下滚动时生效，向上滚动跳过死区。
     const scrollingDown = el.scrollTop > lastScrollTopRef.current;

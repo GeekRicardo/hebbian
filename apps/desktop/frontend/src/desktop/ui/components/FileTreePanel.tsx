@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, RotateCcw } from "lucide-react";
-import { useStore, selectCurrentActiveFile } from "@/desktop/ui/store/useStore";
+import { useStore, selectCurrentActiveFilePath } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
 import type { DirEntry } from "@/desktop/ui/types";
@@ -159,7 +159,7 @@ function DirNode({
 
 function FileNode({ path, name, depth }: { path: string; name: string; depth: number }) {
   const openFile = useStore((s) => s.openFile);
-  const active = useStore((s) => selectCurrentActiveFile(s) === path);
+  const active = useStore((s) => selectCurrentActiveFilePath(s) === path);
   return (
     <Row
       depth={depth}

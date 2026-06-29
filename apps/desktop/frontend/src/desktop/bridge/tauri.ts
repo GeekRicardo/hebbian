@@ -10,6 +10,7 @@ import type {
   DeviceCodeInfo,
   DiffPayload,
   DirEntry,
+  GitProjectStatus,
   RunEditEntry,
   EditsWorktreeStatus,
   EngineEvent,
@@ -642,6 +643,31 @@ export const api = {
   /** 回退整个 Run 的 Edit。返回 `{ success, error? }`。 */
   revertEdit: (sessionId: string, runId: string) =>
     invoke<RevertResult>("revert_edit", { sessionId, runId }),
+
+  // ── Git 源代码管理（架构 §4.12.13）──
+  /** 列多个项目根的 git 状态（非 git 仓库的根自动跳过）。 */
+  gitStatus: (roots: string[]) =>
+    invoke<GitProjectStatus[]>("git_status", { roots }),
+
+  /** 取某文件相对 git 的 diff 两侧文本。staged=true：HEAD vs index；false：index/HEAD vs 工作区。 */
+  gitDiffFile: (root: string, path: string, staged: boolean) =>
+    invoke<DiffPayload>("git_diff_file", { root, path, staged }),
+
+  /** 暂存单个文件（git add）。 */
+  gitStage: (root: string, path: string) =>
+    invoke<void>("git_stage", { root, path }),
+
+  /** 取消暂存单个文件（git reset HEAD）。 */
+  gitUnstage: (root: string, path: string) =>
+    invoke<void>("git_unstage", { root, path }),
+
+  /** 丢弃单个文件工作区改动（不可逆）。tracked → checkout 还原；untracked → 删文件。 */
+  gitDiscard: (root: string, path: string, untracked: boolean) =>
+    invoke<void>("git_discard", { root, path, untracked }),
+
+  /** 提交已暂存内容（不带 -a / 不 push）。返回新 commit 短 sha。 */
+  gitCommit: (root: string, message: string) =>
+    invoke<string>("git_commit", { root, message }),
 
   /** 查询 edits-worktree 状态（git 是否可用 + 已累积条目数）。 */
   editsWorktreeStatus: (sessionId: string) =>

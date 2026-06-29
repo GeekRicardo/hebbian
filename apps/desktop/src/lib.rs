@@ -22,6 +22,7 @@ use std::sync::Arc;
 use agent_core::core_client::{CoreClient, LocalCoreClient};
 use agent_core::edits;
 use agent_core::edits::metadata::RunEditEntry;
+use agent_core::git_scm;
 use agent_core::permissions::PermissionStore;
 use agent_core::rules::{RuleFileInfo, RuleFileState};
 use agent_core::storage::{
@@ -896,6 +897,59 @@ async fn edits_worktree_status(
     })
 }
 
+// ─── Git 源代码管理（架构 §4.12.13）。纯 surface 能力，逻辑在 agent_core::git_scm ───
+
+/// 列多个项目根的 git 状态（非 git 仓库的根跳过，不报错）。
+#[tauri::command]
+fn git_status(roots: Vec<String>) -> AppResult<Vec<git_scm::GitProjectStatus>> {
+    let mut out = Vec::new();
+    for root in roots {
+        let path = std::path::PathBuf::from(&root);
+        if !git_scm::is_git_repo(&path) {
+            continue;
+        }
+        out.push(git_scm::status(&path)?);
+    }
+    Ok(out)
+}
+
+/// 取某文件相对 git 的 diff 两侧文本（staged=true：HEAD vs index；false：index/HEAD vs 工作区）。
+#[tauri::command]
+fn git_diff_file(root: String, path: String, staged: bool) -> AppResult<DiffPayload> {
+    let root_path = std::path::PathBuf::from(&root);
+    let (before_text, after_text) = git_scm::diff_file(&root_path, &path, staged)?;
+    Ok(DiffPayload {
+        before_text,
+        after_text,
+        before_sha: String::new(),
+        after_sha: String::new(),
+        file_path: path,
+        action: if staged { "staged".into() } else { "unstaged".into() },
+    })
+}
+
+#[tauri::command]
+fn git_stage(root: String, path: String) -> AppResult<()> {
+    git_scm::stage(&std::path::PathBuf::from(&root), &path)
+}
+
+#[tauri::command]
+fn git_unstage(root: String, path: String) -> AppResult<()> {
+    git_scm::unstage(&std::path::PathBuf::from(&root), &path)
+}
+
+/// 丢弃单文件工作区改动（不可逆）：tracked → checkout 还原；untracked → 删文件。
+#[tauri::command]
+fn git_discard(root: String, path: String, untracked: bool) -> AppResult<()> {
+    git_scm::discard(&std::path::PathBuf::from(&root), &path, untracked)
+}
+
+/// 提交已暂存内容（不带 -a / 不 push）。返回新 commit 短 sha。
+#[tauri::command]
+fn git_commit(root: String, message: String) -> AppResult<String> {
+    git_scm::commit(&std::path::PathBuf::from(&root), &message)
+}
+
 #[tauri::command]
 fn update_session_config(
     app: AppHandle,
@@ -1119,21 +1173,23 @@ impl hebcore_client::RunEventSink for DesktopHebcoreSink {
         // HITL pending 登记：审批 / 提问到达时记下 request_id → session，让 approve_permission /
         // answer_question 命令能按 request_id 经 hebcore 代理回结算（§7.8.6 控制 Op）。
         match &event {
-            // auto_handled 的审批由 hebcore 内 AutoMode judge 直接结算，desktop 永不代理它
-            // （用户不点）——track 了只会让 remote 表只增不减（§7.8.6 泄漏）。故跳过。
-            protocol::WireEvent::PermissionRequested {
-                request_id,
-                auto_handled,
-                ..
-            } => {
-                if !auto_handled {
-                    self.hitl
-                        .track_remote(request_id.clone(), self.session_id.clone());
-                }
+            // 无条件登记 request_id → session。**此前 auto_handled 时跳过是 bug**：AutoMode
+            // judge 超时 / 失败会转人工（AutoModeDecision::Ask），那时用户**要**点审批，但
+            // 没 track 就代理不到 hebcore，desktop / island 审批都「找不到 request_id」失败
+            // （§4.4.4 + §7.8.6）。登记本身无副作用（用户不点的自动审批不会触发代理）；judge
+            // 自动 Allow/Deny 后由下面 PermissionResolved 分支 forget，不泄漏。
+            protocol::WireEvent::PermissionRequested { request_id, .. } => {
+                self.hitl
+                    .track_remote(request_id.clone(), self.session_id.clone());
             }
             protocol::WireEvent::UserQuestionRequested { request_id, .. } => {
                 self.hitl
                     .track_remote(request_id.clone(), self.session_id.clone());
+            }
+            // 审批已结算（含 judge 自动 Allow/Deny）→ 清映射，防 remote 表只增不减。转人工的
+            // Ask 不 emit PermissionResolved，映射保留到用户点审批结算后由 approve 命令清。
+            protocol::WireEvent::PermissionResolved { request_id, .. } => {
+                self.hitl.forget_remote(request_id);
             }
             _ => {}
         }
@@ -2501,6 +2557,18 @@ fn approve_path_access(
             .join(","),
         "permission.approval: desktop backend received path approval"
     );
+    // §7.8.6：run + gate 在 hebcore 进程，先经 Approve 协议代理结算；找不到远端映射才回退
+    // 本地 gate（兼容进程内 run）。**此前 path_access 漏了 remote 分支**，run 移 hebcore 后
+    // desktop 点越界路径审批必然「找不到 request_id」失败（用户只能去 island，§4.4.3）。
+    // 上面的 session.allowed_paths / settings 持久化保留——那是给下次加载用，与 gate 结算正交。
+    if let Some(sid) = hitl.remote_session_of(&request_id) {
+        let result =
+            hebcore_client::approve(&dd, &sid, &request_id, decision).map_err(AppError::msg);
+        if result.is_ok() {
+            hitl.forget_remote(&request_id);
+        }
+        return result;
+    }
     hitl.resolve_approval(&request_id, decision)
         .map_err(AppError::msg)
 }
@@ -3035,6 +3103,12 @@ pub fn run() {
             write_text_file,
             revert_edit,
             edits_worktree_status,
+            git_status,
+            git_diff_file,
+            git_stage,
+            git_unstage,
+            git_discard,
+            git_commit,
             oauth_codex_start,
             oauth_codex_poll,
             oauth_codex_refresh,

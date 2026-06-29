@@ -9,6 +9,7 @@ pub mod definition;
 pub mod dispatch;
 pub mod edits;
 pub mod effects;
+pub mod git_scm;
 pub mod goal;
 pub mod harness;
 pub mod hooks;

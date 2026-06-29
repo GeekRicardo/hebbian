@@ -445,33 +445,43 @@ function appendUserInjectedMessage(
   };
 }
 
-/** 文件查看器里一个打开的文件：路径 + 是否固定。 */
-export interface OpenFileEntry {
-  path: string;
-  pinned: boolean;
-}
+/**
+ * 中间编辑区的一个标签页。VSCode 风格的异构 tab：文件 / diff / plan 混在同一条页签栏。
+ * `id` 是稳定唯一键（同一目标重复打开只激活不新增）；`pinned` 控制切对话是否保留。
+ */
+export type EditorTab =
+  | { kind: "file"; id: string; path: string; pinned: boolean }
+  | { kind: "diff"; id: string; runId: string; path: string; pinned: boolean }
+  | { kind: "plan"; id: string; planId: string; title: string; pinned: boolean }
+  | { kind: "gitDiff"; id: string; root: string; path: string; staged: boolean; pinned: boolean };
+
+export const fileTabId = (path: string) => `file:${path}`;
+export const diffTabId = (runId: string, path: string) => `diff:${runId}:${path}`;
+export const planTabId = (planId: string) => `plan:${planId}`;
+export const gitDiffTabId = (root: string, path: string, staged: boolean) =>
+  `gitdiff:${staged ? "s" : "w"}:${root}:${path}`;
 
 /**
- * 离开某对话时清理它的未固定文件：只留 pinned 的；若激活项被清掉，落到剩余首个。
- * 返回新的 (openFilesBySession, activeFileBySession)，无变化则原样返回以免触发重渲染。
+ * 离开某对话时清理它的未固定 tab：只留 pinned 的；若激活项被清掉，落到剩余首个。
+ * 返回新的 (editorTabsBySession, activeTabBySession)，无变化则原样返回以免触发重渲染。
  */
-function pruneUnpinnedFiles(
-  openFilesBySession: Record<string, OpenFileEntry[]>,
-  activeFileBySession: Record<string, string | null>,
+function pruneUnpinnedTabs(
+  editorTabsBySession: Record<string, EditorTab[]>,
+  activeTabBySession: Record<string, string | null>,
   sid: string,
 ): {
-  openFilesBySession: Record<string, OpenFileEntry[]>;
-  activeFileBySession: Record<string, string | null>;
+  editorTabsBySession: Record<string, EditorTab[]>;
+  activeTabBySession: Record<string, string | null>;
 } {
-  const list = openFilesBySession[sid];
-  if (!list || list.length === 0) return { openFilesBySession, activeFileBySession };
+  const list = editorTabsBySession[sid];
+  if (!list || list.length === 0) return { editorTabsBySession, activeTabBySession };
   const kept = list.filter((e) => e.pinned);
-  if (kept.length === list.length) return { openFilesBySession, activeFileBySession };
-  const active = activeFileBySession[sid] ?? null;
-  const nextActive = kept.some((e) => e.path === active) ? active : (kept[0]?.path ?? null);
+  if (kept.length === list.length) return { editorTabsBySession, activeTabBySession };
+  const active = activeTabBySession[sid] ?? null;
+  const nextActive = kept.some((e) => e.id === active) ? active : (kept[0]?.id ?? null);
   return {
-    openFilesBySession: { ...openFilesBySession, [sid]: kept },
-    activeFileBySession: { ...activeFileBySession, [sid]: nextActive },
+    editorTabsBySession: { ...editorTabsBySession, [sid]: kept },
+    activeTabBySession: { ...activeTabBySession, [sid]: nextActive },
   };
 }
 
@@ -788,22 +798,30 @@ interface AppState {
   requestBrowserNavigate: (url: string) => void;
 
   /**
-   * 文件查看器（中间列）：按对话隔离的打开文件。纯 UI 态，不持久化（重启清空）。
+   * 中间编辑区（VSCode 风格）：按对话隔离的标签页，承载文件 / diff / plan 三类。
+   * 纯 UI 态，不持久化（重启清空）。
    *
-   * - 文件默认绑定打开它的那个对话；切到别的对话 → 该对话**未固定**的文件被清掉
-   * - 「固定」（pinned）的文件在本对话内常驻：切走再切回仍在
-   * - 渲染用 `currentOpenFiles` / `currentActiveFilePath` selector 取当前对话的视图
+   * - tab 默认绑定打开它的那个对话；切到别的对话 → 该对话**未固定**的 tab 被清掉
+   * - 「固定」（pinned）的 tab 在本对话内常驻：切走再切回仍在
+   * - 渲染用 `selectCurrentEditorTabs` / `selectCurrentActiveTab` selector 取当前对话视图
    */
-  openFilesBySession: Record<string, OpenFileEntry[]>;
-  activeFileBySession: Record<string, string | null>;
-  /** 在当前对话的查看器里打开一个文件（已打开则只激活）。 */
+  editorTabsBySession: Record<string, EditorTab[]>;
+  /** 各对话当前激活的 tab id。 */
+  activeTabBySession: Record<string, string | null>;
+  /** 在当前对话的编辑区打开一个文件（已打开则只激活）。 */
   openFile: (path: string) => void;
-  /** 关闭当前对话的一个文件 tab；关掉激活项时落到相邻 tab。 */
-  closeFile: (path: string) => void;
-  /** 切换当前对话激活的文件 tab。 */
-  setActiveFile: (path: string) => void;
-  /** 翻转某文件的固定态（固定后切走再回来仍保留）。 */
-  toggleFilePin: (path: string) => void;
+  /** 在当前对话的编辑区打开某次 Run 的某文件 diff（已打开则只激活）。 */
+  openDiff: (runId: string, path: string) => void;
+  /** 在当前对话的编辑区打开某份 plan 详情（已打开则只激活）。 */
+  openPlan: (planId: string, title: string) => void;
+  /** 在当前对话的编辑区打开某项目某文件的 git diff（已打开则只激活）。 */
+  openGitDiff: (root: string, path: string, staged: boolean) => void;
+  /** 关闭当前对话的一个 tab；关掉激活项时落到相邻 tab。 */
+  closeTab: (id: string) => void;
+  /** 切换当前对话激活的 tab。 */
+  setActiveTab: (id: string) => void;
+  /** 翻转某 tab 的固定态（固定后切走再回来仍保留）。 */
+  toggleTabPin: (id: string) => void;
   /**
    * 编辑器实时选区引用：用户在文件查看器里选中一段文本时写入，取消选中置 null。
    * ChatInput 订阅它在引用区渲染一条 `path:line` 引用，发送时并入。
@@ -878,18 +896,26 @@ function applyTheme(t: "light" | "dark") {
 
 const LOG_CAPACITY = 5000;
 
-const EMPTY_OPEN_FILES: OpenFileEntry[] = [];
+const EMPTY_EDITOR_TABS: EditorTab[] = [];
 
-/** 当前对话打开的文件列表（引用稳定：仅该对话的列表变化时才变）。 */
-export function selectCurrentOpenFiles(s: AppState): OpenFileEntry[] {
+/** 当前对话编辑区的 tab 列表（引用稳定：仅该对话的列表变化时才变）。 */
+export function selectCurrentEditorTabs(s: AppState): EditorTab[] {
   const sid = s.currentSession?.id;
-  return (sid ? s.openFilesBySession[sid] : undefined) ?? EMPTY_OPEN_FILES;
+  return (sid ? s.editorTabsBySession[sid] : undefined) ?? EMPTY_EDITOR_TABS;
 }
 
-/** 当前对话激活的文件路径。 */
-export function selectCurrentActiveFile(s: AppState): string | null {
+/** 当前对话激活的 tab id。 */
+export function selectCurrentActiveTab(s: AppState): string | null {
   const sid = s.currentSession?.id;
-  return (sid ? s.activeFileBySession[sid] : undefined) ?? null;
+  return (sid ? s.activeTabBySession[sid] : undefined) ?? null;
+}
+
+/** 当前对话激活的文件路径（仅当激活 tab 是文件 tab；供文件树高亮 / 选区引用用）。 */
+export function selectCurrentActiveFilePath(s: AppState): string | null {
+  const activeId = selectCurrentActiveTab(s);
+  if (!activeId) return null;
+  const tab = selectCurrentEditorTabs(s).find((t) => t.id === activeId);
+  return tab?.kind === "file" ? tab.path : null;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -1610,14 +1636,14 @@ export const useStore = create<AppState>((set, get) => ({
     const pendingWakeup = get().pendingWakeups[id];
     set((state) => {
       const { [id]: _drop, ...rest } = state.pendingWakeups;
-      // 离开旧对话：清掉它未固定的文件（pinned 的保留，切回还在）。
+      // 离开旧对话：清掉它未固定的 tab（pinned 的保留，切回还在）。
       const prevSid = state.currentSession?.id;
       const pruned =
         prevSid && prevSid !== id
-          ? pruneUnpinnedFiles(state.openFilesBySession, state.activeFileBySession, prevSid)
+          ? pruneUnpinnedTabs(state.editorTabsBySession, state.activeTabBySession, prevSid)
           : {
-              openFilesBySession: state.openFilesBySession,
-              activeFileBySession: state.activeFileBySession,
+              editorTabsBySession: state.editorTabsBySession,
+              activeTabBySession: state.activeTabBySession,
             };
       return {
         currentSession: s,
@@ -1627,8 +1653,8 @@ export const useStore = create<AppState>((set, get) => ({
         unreadFinishedSessions: removeFromSet(state.unreadFinishedSessions, id),
         currentInputQueue: state.inputQueues[id] ?? [],
         pendingWakeups: rest,
-        openFilesBySession: pruned.openFilesBySession,
-        activeFileBySession: pruned.activeFileBySession,
+        editorTabsBySession: pruned.editorTabsBySession,
+        activeTabBySession: pruned.activeTabBySession,
         editorSelectionRef: null,
         ...mirrorFromSlot(state.sessionStreams[id]),
       };
@@ -2366,58 +2392,104 @@ export const useStore = create<AppState>((set, get) => ({
   requestBrowserNavigate(url) {
     set((s) => ({ browserNavigateRequest: { url, tick: s.browserNavigateRequest.tick + 1 } }));
   },
-  openFilesBySession: {},
-  activeFileBySession: {},
+  editorTabsBySession: {},
+  activeTabBySession: {},
   editorSelectionRef: null,
   openFile(path) {
     const sid = get().currentSession?.id;
     if (!sid) return;
+    const id = fileTabId(path);
     set((s) => {
-      const list = s.openFilesBySession[sid] ?? [];
-      const nextList = list.some((e) => e.path === path)
+      const list = s.editorTabsBySession[sid] ?? [];
+      const nextList = list.some((e) => e.id === id)
         ? list
-        : [...list, { path, pinned: false }];
+        : [...list, { kind: "file" as const, id, path, pinned: false }];
       return {
-        openFilesBySession: { ...s.openFilesBySession, [sid]: nextList },
-        activeFileBySession: { ...s.activeFileBySession, [sid]: path },
+        editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList },
+        activeTabBySession: { ...s.activeTabBySession, [sid]: id },
       };
     });
   },
-  closeFile(path) {
+  openDiff(runId, path) {
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    const id = diffTabId(runId, path);
+    set((s) => {
+      const list = s.editorTabsBySession[sid] ?? [];
+      const nextList = list.some((e) => e.id === id)
+        ? list
+        : [...list, { kind: "diff" as const, id, runId, path, pinned: false }];
+      return {
+        editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList },
+        activeTabBySession: { ...s.activeTabBySession, [sid]: id },
+      };
+    });
+  },
+  openPlan(planId, title) {
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    const id = planTabId(planId);
+    set((s) => {
+      const list = s.editorTabsBySession[sid] ?? [];
+      const nextList = list.some((e) => e.id === id)
+        ? list
+        : [...list, { kind: "plan" as const, id, planId, title, pinned: false }];
+      return {
+        editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList },
+        activeTabBySession: { ...s.activeTabBySession, [sid]: id },
+      };
+    });
+  },
+  openGitDiff(root, path, staged) {
+    const sid = get().currentSession?.id;
+    if (!sid) return;
+    const id = gitDiffTabId(root, path, staged);
+    set((s) => {
+      const list = s.editorTabsBySession[sid] ?? [];
+      const nextList = list.some((e) => e.id === id)
+        ? list
+        : [...list, { kind: "gitDiff" as const, id, root, path, staged, pinned: false }];
+      return {
+        editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList },
+        activeTabBySession: { ...s.activeTabBySession, [sid]: id },
+      };
+    });
+  },
+  closeTab(id) {
     const sid = get().currentSession?.id;
     if (!sid) return;
     set((s) => {
-      const list = s.openFilesBySession[sid] ?? [];
-      const idx = list.findIndex((e) => e.path === path);
+      const list = s.editorTabsBySession[sid] ?? [];
+      const idx = list.findIndex((e) => e.id === id);
       if (idx === -1) return s;
-      const nextList = list.filter((e) => e.path !== path);
-      let active = s.activeFileBySession[sid] ?? null;
-      if (active === path) {
-        // 关掉激活项 → 落到右邻，没有再落到左邻，全空则 null（查看器列消失）
-        active = nextList[idx]?.path ?? nextList[idx - 1]?.path ?? null;
+      const nextList = list.filter((e) => e.id !== id);
+      let active = s.activeTabBySession[sid] ?? null;
+      if (active === id) {
+        // 关掉激活项 → 落到右邻，没有再落到左邻，全空则 null（编辑区列消失）
+        active = nextList[idx]?.id ?? nextList[idx - 1]?.id ?? null;
       }
       return {
-        openFilesBySession: { ...s.openFilesBySession, [sid]: nextList },
-        activeFileBySession: { ...s.activeFileBySession, [sid]: active },
+        editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList },
+        activeTabBySession: { ...s.activeTabBySession, [sid]: active },
       };
     });
   },
-  setActiveFile(path) {
+  setActiveTab(id) {
     const sid = get().currentSession?.id;
     if (!sid) return;
     set((s) => ({
-      activeFileBySession: { ...s.activeFileBySession, [sid]: path },
+      activeTabBySession: { ...s.activeTabBySession, [sid]: id },
     }));
   },
-  toggleFilePin(path) {
+  toggleTabPin(id) {
     const sid = get().currentSession?.id;
     if (!sid) return;
     set((s) => {
-      const list = s.openFilesBySession[sid] ?? [];
+      const list = s.editorTabsBySession[sid] ?? [];
       const nextList = list.map((e) =>
-        e.path === path ? { ...e, pinned: !e.pinned } : e,
+        e.id === id ? { ...e, pinned: !e.pinned } : e,
       );
-      return { openFilesBySession: { ...s.openFilesBySession, [sid]: nextList } };
+      return { editorTabsBySession: { ...s.editorTabsBySession, [sid]: nextList } };
     });
   },
   setEditorSelectionRef(ref) {

@@ -4,9 +4,10 @@ import { ChevronDown, ChevronRight, FilePenLine, RotateCcw } from "lucide-react"
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn, formatTime } from "@/desktop/ui/lib/utils";
-import { DiffModeButton, DiffStatsBadge, DiffViewer, type DiffMode } from "./DiffPanel";
+import { DiffStatsBadge } from "./DiffPanel";
+import { fetchEditDiff } from "@/desktop/ui/lib/diffCache";
 import { calculateDiffStats, type DiffStats } from "@/desktop/ui/lib/diffStats";
-import type { DiffPayload, RunEditEntry, TurnFileChange } from "@/desktop/ui/types";
+import type { RunEditEntry, TurnFileChange } from "@/desktop/ui/types";
 
 const EMPTY_RUNS: RunEditEntry[] = [];
 
@@ -148,15 +149,9 @@ function RunGroup({
         )}
       </div>
       {expanded && (
-        <div className="space-y-2 bg-muted/10 p-2">
-          {files.map((file, idx) => (
-            <RunFileCard
-              key={file.real_path}
-              sessionId={sessionId}
-              runId={run.run_id}
-              file={file}
-              defaultExpanded={idx === 0}
-            />
+        <div className="space-y-1 bg-muted/10 p-1.5">
+          {files.map((file) => (
+            <RunFileRow key={file.real_path} sessionId={sessionId} runId={run.run_id} file={file} />
           ))}
         </div>
       )}
@@ -165,102 +160,60 @@ function RunGroup({
 }
 
 /**
- * 单个文件的可折叠子卡片：标题行（action 角标 + 文件名 + 大小变化 + 折叠箭头）
- * 点击切换展开/折叠 diff。删除类不渲染 diff，仅展示标题。
+ * 单个文件行：action 角标 + 文件名 + +/- diff 数。点击 → 在中间编辑区打开 Monaco DiffEditor。
+ * 删除类不开 diff（无 after 内容）。+/- 数与编辑区 diff 共用 diffCache 同一次请求。
  */
-function RunFileCard({
+function RunFileRow({
   sessionId,
   runId,
   file,
-  defaultExpanded,
 }: {
   sessionId: string;
   runId: string;
   file: TurnFileChange;
-  defaultExpanded: boolean;
 }) {
+  const openDiff = useStore((s) => s.openDiff);
+  const activeTabId = useStore((s) => s.activeTabBySession[sessionId] ?? null);
   const isDelete = file.action === "delete";
-  const [expanded, setExpanded] = useState(defaultExpanded && !isDelete);
-  const [payload, setPayload] = useState<DiffPayload | null>(null);
-  const [mode, setMode] = useState<DiffMode>("inline");
+  const tabId = `diff:${runId}:${file.real_path}`;
+  const isActive = activeTabId === tabId;
+  const [stats, setStats] = useState<DiffStats | null>(null);
 
-  // 仅展开且非删除时才拉 diff——折叠的文件不发请求，省网络。
+  // 拉一次 diff 算 +/- 数（删除类无 diff）。命中缓存则与编辑区共用同一请求。
   useEffect(() => {
-    if (!expanded || isDelete || payload) return;
+    if (isDelete) return;
     let cancelled = false;
-    api.diffEdit(sessionId, runId, file.real_path)
-      .then((p) => { if (!cancelled) setPayload(p); })
-      .catch((e) => {
-        if (!cancelled) toast.error(e?.message ?? String(e));
-      });
-    return () => { cancelled = true; };
-  }, [expanded, isDelete, payload, sessionId, runId, file.real_path]);
-
-  const diffStats = useMemo<DiffStats | null>(() => {
-    if (!payload) return null;
-    return calculateDiffStats(payload.before_text, payload.after_text);
-  }, [payload]);
-  const canCycleMode = !!payload && !(payload.before_text === "" && payload.after_text !== "");
+    fetchEditDiff(sessionId, runId, file.real_path)
+      .then((p) => {
+        if (!cancelled) setStats(calculateDiffStats(p.before_text, p.after_text));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isDelete, sessionId, runId, file.real_path]);
 
   return (
-    <div className="overflow-hidden rounded border border-border/50 bg-background">
-      <div
-        className={cn(
-          "flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[10px]",
-          !isDelete && "hover:bg-accent/30",
-        )}
-      >
-        <button
-          type="button"
-          onClick={() => !isDelete && setExpanded((v) => !v)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          {isDelete ? (
-            <span className="w-3 shrink-0" />
-          ) : expanded ? (
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
-          <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
-            {actionLabel(file.action)}
-          </span>
-          <span className="min-w-0 truncate font-mono">{pathLeaf(file.real_path)}</span>
-          {diffStats && <DiffStatsBadge {...diffStats} />}
-          <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">
-            {file.before_bytes}→{file.after_bytes}B
-          </span>
-        </button>
-        {expanded && !isDelete && canCycleMode && (
-          <DiffModeButton
-            mode={mode}
-            onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
-            className="px-1.5 py-0.5"
-          />
-        )}
-      </div>
-      {expanded && !isDelete && (
-        payload ? (
-          <DiffViewer
-            beforeText={payload.before_text}
-            afterText={payload.after_text}
-            filePath={file.real_path}
-            actionLabel={actionLabel(file.action)}
-            mode={mode}
-            onCycleMode={() => setMode((m) => (m === "inline" ? "split" : "inline"))}
-            badge="本次净变化"
-            hideHeaderMeta
-            maxRows={80}
-            collapseContext={3}
-            className="rounded-none border-0 border-t border-border/40"
-          />
-        ) : (
-          <div className="border-t border-border/40 px-2 py-1.5 text-[10px] text-muted-foreground">
-            正在加载修改…
-          </div>
-        )
+    <button
+      type="button"
+      onClick={() => !isDelete && openDiff(runId, file.real_path)}
+      disabled={isDelete}
+      title={file.real_path}
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[10px]",
+        isActive ? "bg-accent text-foreground" : "hover:bg-accent/40",
+        isDelete && "cursor-default opacity-70",
       )}
-    </div>
+    >
+      <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
+        {actionLabel(file.action)}
+      </span>
+      <span className="min-w-0 truncate font-mono">{pathLeaf(file.real_path)}</span>
+      {stats && <DiffStatsBadge {...stats} />}
+      <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">
+        {file.before_bytes}→{file.after_bytes}B
+      </span>
+    </button>
   );
 }
 

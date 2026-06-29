@@ -11,6 +11,7 @@ import {
   ListChecks,
   ClipboardList,
   SquareTerminal,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { isEmbeddedPreview, isTauri } from "@/desktop/bridge/transport";
@@ -18,6 +19,7 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
 import { FileTreeTab } from "./FileTreePanel";
+import { GitPanel } from "./GitPanel";
 import { ModelIoInspector } from "./ModelIoInspector";
 import { TodoTab } from "./TodoTab";
 import { PlanTab } from "./PlanTab";
@@ -38,9 +40,9 @@ import { BranchChatTab } from "./BranchChatTab";
  * 内容数据全部走对应 tab 组件自己 fetch；sidebar 不持有业务数据，仅管布局。
  */
 
-type TabId = "files" | "tasks" | "edits" | "todos" | "plans" | "branches" | "browser" | "terminal";
+type TabId = "files" | "tasks" | "edits" | "git" | "todos" | "plans" | "branches" | "browser" | "terminal";
 
-const TAB_IDS: TabId[] = ["files", "tasks", "edits", "todos", "plans", "branches", "browser", "terminal"];
+const TAB_IDS: TabId[] = ["files", "tasks", "edits", "git", "todos", "plans", "branches", "browser", "terminal"];
 
 const STORAGE_PREFIX = "hebbian.rightSidebar";
 
@@ -54,7 +56,8 @@ const COLLAPSED_WIDTH = 36;
 const TAB_DEFAULT_WIDTH: Record<TabId, number> = {
   files: 250,
   tasks: 250,
-  edits: 640,
+  edits: 250,
+  git: 320,
   todos: 250,
   plans: 250,
   branches: 500,
@@ -232,6 +235,10 @@ export function RightSidebar({
   const pendingPlanId = useStore((s) =>
     s.pendingApproval?.kind === "plan" ? s.pendingApproval.plan?.plan_id ?? null : null,
   );
+  const pendingPlanSummary = useStore((s) =>
+    s.pendingApproval?.kind === "plan" ? s.pendingApproval.plan?.summary ?? "" : "",
+  );
+  const openPlan = useStore((s) => s.openPlan);
   const prevPendingPlanIdRef = useRef<string | null>(null);
   useEffect(() => {
     const isPlanPending = pendingApprovalKind === "plan" && pendingPlanId !== null;
@@ -239,9 +246,11 @@ export function RightSidebar({
       prevPendingPlanIdRef.current = pendingPlanId;
       setCollapsed(false);
       setTab("plans");
+      // 同时在中间编辑区开 plan tab：审批条 + 正文都在编辑区里，用户直接看到决策入口
+      openPlan(pendingPlanId, pendingPlanSummary || "待审批计划");
     }
     if (!isPlanPending) prevPendingPlanIdRef.current = null;
-  }, [pendingApprovalKind, pendingPlanId]);
+  }, [pendingApprovalKind, pendingPlanId, pendingPlanSummary, openPlan]);
 
   // 点链接选了「内置浏览器」打开（架构 §8.5）→ 切到 browser tab 并展开。实际导航由
   // BrowserPanel 监听同一信号执行；这里只负责把 tab 露出来，否则用户看不到打开了哪。
@@ -339,6 +348,15 @@ export function RightSidebar({
           setCollapsed(false);
         }}
         active={tab === "edits"}
+      />
+      <SidebarIconButton
+        icon={<GitBranch className="h-4 w-4" />}
+        label="源代码管理"
+        onClick={() => {
+          setTab("git");
+          setCollapsed(false);
+        }}
+        active={tab === "git"}
       />
       <SidebarIconButton
         icon={<ListChecks className="h-4 w-4" />}
@@ -459,6 +477,13 @@ export function RightSidebar({
                   label="修改文件"
                 />
                 <SidebarTab
+                  id="git"
+                  current={tab}
+                  onClick={setTab}
+                  icon={<GitBranch className="h-3.5 w-3.5" />}
+                  label="源代码管理"
+                />
+                <SidebarTab
                   id="todos"
                   current={tab}
                   onClick={setTab}
@@ -530,6 +555,7 @@ export function RightSidebar({
                 {tab === "files" && <FileTreeTab />}
                 {tab === "tasks" && <BackgroundTaskTab />}
                 {tab === "edits" && <EditTreeTab />}
+                {tab === "git" && <GitPanel />}
                 {tab === "todos" && <TodoTab />}
                 {tab === "plans" && <PlanTab />}
                 {tab === "branches" && <BranchChatTab />}
