@@ -10160,3 +10160,58 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   是过度设计，留到加精排时一起）；② 强化回写 importance/last_active 归入深睡批量做，前台注入保持
   纯读零副作用；③ 设置页 recall_mode UI 留前端批；④ 架构.md §4.14 改写 + §13 待批7 统一同步。
 
+
+### 2026-06-29 — 右侧文件树/修改文件/计划三栏瘦成列表，详情统一进中间 Monaco 编辑区
+
+- **Why**: 用户要参考 Cloudflare Worker 编辑页那种「点目录树在编辑区开文件、点修改文件看
+  diff、点 plan 看详情」的统一 VSCode 体验。用户原话以为那是嵌完整 code-server，实际它就是
+  Monaco（VSCode 编辑器内核）。hebbian 中间列 `FileViewer` 本就是 Monaco 多 tab 编辑器，真嵌
+  code-server 要起独立 Node 进程 + iframe + postMessage 桥接（几百 MB、破坏三 surface 对称），
+  是严重过度设计。故走「复用现有 Monaco，把编辑区从只认文件泛化成认 file/diff/plan 三类 tab」。
+- **改动**:
+  - useStore.ts: `OpenFileEntry` → 联合类型 `EditorTab`（file/diff/plan，带稳定 id）；
+    `openFilesBySession`/`activeFileBySession` → `editorTabsBySession`/`activeTabBySession`（值改为
+    tab id）；actions `openFile`/`openDiff`/`openPlan`/`closeTab`/`setActiveTab`/`toggleTabPin`；
+    selectors `selectCurrentEditorTabs`/`selectCurrentActiveTab`/`selectCurrentActiveFilePath`；
+    `pruneUnpinnedFiles` → `pruneUnpinnedTabs`
+  - FileViewer.tsx → 重命名 EditorPane.tsx: 页签栏混排三类 tab（按 kind 给图标），正文按
+    kind 分派——file 走原 Monaco Editor（语法高亮 + md 预览 + Ctrl/Cmd+S + 选区引用）、diff 走
+    Monaco `DiffEditor`（只读、左右分屏/行内可切）、plan 走从 PlanTab 迁来的 markdown + 选区评论
+    + 评论列表 + `PlanApprovalBar`
+  - EditTreePanel.tsx: 修改文件栏瘦成列表——每个文件行只剩 action 角标 + 文件名 + +/- diff 数，
+    移除内嵌 DiffViewer；点行 → `openDiff(runId, path)`
+  - PlanTab.tsx: 计划栏瘦成纯标题列表（活跃标「当前」+ 刷新），点标题 → `openPlan(planId, title)`；
+    markdown/评论/审批全部迁到 EditorPane
+  - lib/diffCache.ts（新建）: 按 `sid:runId:path` memo 化 diff Promise，让列表 +/- 徽章与编辑区
+    DiffEditor 共用同一次请求，避免双拉
+  - DesktopShell.tsx: `FileViewerColumn` → `EditorColumn`，gating 改读 `selectCurrentEditorTabs`
+  - FileTreePanel.tsx: 高亮改读 `selectCurrentActiveFilePath`
+  - RightSidebar.tsx: plan 待审批 effect 追加 `openPlan`，审批条直接在编辑区露出
+  - docs/架构.md: §4.12.12「文件查看器」泛化为「工作区编辑区（file/diff/plan 三类 tab）」；
+    §4.4.5 plan 审批展示位从 PlanTab 内嵌改为编辑区 plan tab
+- **影响范围**: 纯前端重构（apps/desktop/frontend），零协议 / 零后端 / 零 agent-core 改动。所有
+  数据接口（readDir/readTextFile/writeTextFile/diffEdit/listSessionPlans/readPlanMarkdown/
+  listPlanComments/addPlanComment/revertEdit）后端早有且 hebweb 已镜像，三 surface 自动对称。
+  `DiffViewer`/`DiffPanel` 仍服务 chat 内流式 diff / 审批预览，不删（各司其职）。tsc 零报错。
+- **留尾巴**: ① pnpm tauri dev / hebweb 双 surface 手测待跑（点三栏 → 编辑区开 tab、plan 待审批
+  审批条可操作、切对话清未固定 tab）；② diff tab 的行内/分屏布局只在本次运行内按 tab id 记忆，
+  与列宽一样不持久化。
+
+### 2026-06-29 — 修右侧 sidebar 展开时 chat 滚动跳位（scroll anchoring）
+
+- **Why**: 用户反馈——右侧 sidebar 展开时，chat 区域没锚定当前看的最后一条内容，一展开
+  chat 就滚到上面去了。根因：ChatView 的 ResizeObserver（处理 sidebar 展开/收起改 chat
+  宽度）只处理「贴底」情况，用户在看历史（非贴底）时直接 return 不管；而宽度变化导致长
+  文本重新换行、元素 offsetTop 漂移，浏览器按 scrollTop 不变保留，当前看的内容就跳走。
+- **改动**:
+  - lib/chatScrollPosition.ts: 新增 ScrollAnchor 类型 + anchorScrollTop 纯函数（给定重排前
+    锚点偏移 + 重排后锚点元素新 offsetTop，算出钉回原视觉位置的 scrollTop，clamp 边界）。
+  - components/ChatView.tsx: 新增 sampleTopAnchor（采样视口顶部第一条可见消息作锚点）；
+    handleScroll 持续更新 scrollAnchorRef（贴底时清空）；ResizeObserver 非贴底分支不再
+    躺平 return，而是用锚点把内容钉回原位。
+  - lib/chatScrollPosition.test.mjs: 加 anchorScrollTop 4 个断言（下移/负偏移/越界夹顶底）。
+- **影响范围**: desktop 前端 ChatView 滚动逻辑。纯前端交互修复，不动协议/后端。贴底场景
+  行为不变（仍重新贴底）；只新增「非贴底时锚定」分支。tsc --noEmit 通过，helper 单测通过。
+- **留尾巴**: 真实 hebweb + Playwright 复现验证（开长对话→看历史→展开 sidebar 看是否锚定）
+  待跑——当前靠 helper 纯函数单测 + tsc 覆盖核心计算，DOM 几何采样部分需真机手验。
+

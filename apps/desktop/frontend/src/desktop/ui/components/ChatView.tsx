@@ -19,11 +19,34 @@ import { useStore } from "@/desktop/ui/store/useStore";
 import { Button } from "@/desktop/ui/components/ui/button";
 import { cn, hasSessionStarted, ipcConfirm } from "@/desktop/ui/lib/utils";
 import { isLocalFindShortcut, isTerminalFocusTarget } from "@/desktop/ui/lib/keyboardShortcuts";
-import { stickyBottomScrollTop } from "@/desktop/ui/lib/chatScrollPosition";
+import {
+  stickyBottomScrollTop,
+  anchorScrollTop,
+  type ScrollAnchor,
+} from "@/desktop/ui/lib/chatScrollPosition";
 import { shouldUseNewConversationInputLayout } from "@/desktop/ui/newConversationLayout";
 import type { MessageAttachment } from "@/desktop/ui/types";
 
 const PINNED_USER_MESSAGE_VISIBLE = false;
+
+/**
+ * 采样滚动容器内「视口顶部第一条可见消息」作锚点：返回它的 data-message-id 与顶边
+ * 相对容器视口顶的偏移。供 sidebar 展开/收起导致宽度重排时把内容钉回原位。
+ * 找不到任何带 data-message-id 的消息 → null（空对话 / 尚未渲染）。
+ */
+function sampleTopAnchor(el: HTMLElement): ScrollAnchor | null {
+  const containerTop = el.getBoundingClientRect().top;
+  const nodes = el.querySelectorAll<HTMLElement>("[data-message-id]");
+  for (const node of nodes) {
+    const offsetFromTop = node.getBoundingClientRect().top - containerTop;
+    // 第一条底边尚未滚出视口上方的消息（即当前可见区顶部那条）。
+    if (offsetFromTop + node.offsetHeight > 0) {
+      const messageId = node.getAttribute("data-message-id");
+      if (messageId) return { messageId, offsetFromTop };
+    }
+  }
+  return null;
+}
 
 interface ChatViewProps {
   emptyState?: ReactNode;
@@ -89,6 +112,9 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   const anchorRef = useRef<{ userId: string } | null>(null);
   // 追踪滚动方向：死区只在向下滚动时生效，向上滚动跳过死区让上一条自然浮动。
   const lastScrollTopRef = useRef(0);
+  // 滚动锚点：用户最后看的「视口顶部第一条可见消息 + 偏移」。每次滚动持续更新，
+  // 供 sidebar 展开/收起导致宽度重排时把当前内容钉回原位（scroll anchoring）。
+  const scrollAnchorRef = useRef<ScrollAnchor | null>(null);
   // 程序化滚动标志：scrollToPinnedMessage / scrollToPrevUserMessage 触发 scrollTo 时
   // handleScroll 会跟着触发，此时不应清除 anchor。
   const isProgrammaticScrollRef = useRef(false);
@@ -216,16 +242,32 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
   }, [currentSession?.messages.length, streamingText, streamingParts]);
 
   // 右侧工作台展开/收起会改变 chat 宽度，长文本重新换行后 scrollHeight 变大。
-  // 如果用户原本贴底，应在这次重排后仍贴底；如果用户在看历史，则保持原位置不抢滚动。
+  // 如果用户原本贴底，应在这次重排后仍贴底；如果用户在看历史，则锚定当前视口顶部
+  // 第一条可见消息，重排后把它钉回原视觉位置——否则宽度变化导致重新换行、元素
+  // offsetTop 漂移，浏览器按 scrollTop 不变保留，当前看的内容就跳到上面去了。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     let frame = 0;
     const observer = new ResizeObserver(() => {
-      if (!stickToBottomRef.current) return;
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        el.scrollTop = stickyBottomScrollTop(el);
+        if (stickToBottomRef.current) {
+          el.scrollTop = stickyBottomScrollTop(el);
+          return;
+        }
+        // 非贴底：用上次保存的锚点把当前内容钉回原位（scroll anchoring）。
+        const anchor = scrollAnchorRef.current;
+        if (anchor) {
+          const node = el.querySelector<HTMLElement>(
+            `[data-message-id="${CSS.escape(anchor.messageId)}"]`,
+          );
+          if (node) {
+            el.scrollTop = anchorScrollTop(anchor, node.offsetTop, el);
+          }
+        }
+        // 恢复后重新采样当前顶部锚点，供下一次重排使用。
+        scrollAnchorRef.current = sampleTopAnchor(el);
       });
     });
     observer.observe(el);
@@ -255,6 +297,10 @@ export function ChatView({ emptyState }: ChatViewProps = {}) {
     // 贴底检测
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= BOTTOM_SLACK_PX;
+
+    // 持续更新滚动锚点：记下当前视口顶部第一条可见消息，供 sidebar 展开/收起重排时
+    // 把内容钉回原位。贴底时清掉锚点（重排走贴底分支，不需要锚定）。
+    scrollAnchorRef.current = stickToBottomRef.current ? null : sampleTopAnchor(el);
 
     // 滚动方向：死区只在向下滚动时生效，向上滚动跳过死区。
     const scrollingDown = el.scrollTop > lastScrollTopRef.current;
