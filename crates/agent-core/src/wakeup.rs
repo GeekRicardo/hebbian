@@ -255,7 +255,11 @@ impl WakeupScheduler {
             // 按 session 路由：找到该 session 的 BgTaskRegistry，再按 task_id 查。
             // 找不到 registry（session 已销毁）或找不到 task（被 GC）→ 当 done 兜底。
             let registry = session_shells.get(&w.session_id);
-            let (done, exit_code, duration_ms) = match registry {
+            // killed：该终态是 agent 主动 KillShell 触发的（ShellState::Killed 全局只产生于
+            // BgTaskRegistry::kill）。主动 kill 时 KillShell 工具已把 status=killed 作为
+            // tool result 返回当前 turn，模型已知情——再投递 BgTaskFinished 是噪音，
+            // 故静默摘除 watch 不通知。subagent / 找不到条目的兜底路径无主动 kill 语义，killed=false。
+            let (done, killed, exit_code, duration_ms) = match registry {
                 Some(reg) => {
                     if w.task_id.starts_with("subagent-") {
                         // 后台 subagent 任务：按 BgSubagentTask 检查终态
@@ -267,37 +271,41 @@ impl WakeupScheduler {
                                 } else {
                                     None
                                 };
-                                (done, code, t.elapsed_ms())
+                                (done, false, code, t.elapsed_ms())
                             }
-                            None => (true, None, 0),
+                            None => (true, false, None, 0),
                         }
                     } else {
                         // Bash 后台 shell：按 BackgroundShell 检查终态
                         match reg.get(&w.task_id) {
                             Some(s) => {
-                                let terminal = s.state().is_terminal();
-                                let code = match s.state() {
-                                    crate::tools::background::ShellState::Exited { code } => code,
+                                let st = s.state();
+                                let killed =
+                                    matches!(st, crate::tools::background::ShellState::Killed);
+                                let code = match &st {
+                                    crate::tools::background::ShellState::Exited { code } => *code,
                                     _ => None,
                                 };
                                 let dur = s.started_at.elapsed().as_millis() as u64;
-                                (terminal, code, dur)
+                                (st.is_terminal(), killed, code, dur)
                             }
-                            None => (true, None, 0),
+                            None => (true, false, None, 0),
                         }
                     }
                 }
-                None => (true, None, 0),
+                None => (true, false, None, 0),
             };
             if done {
-                let _ = self.tx.send(WakeupEvent::BgTaskFinished {
-                    session_id: w.session_id,
-                    run_id: w.run_id,
-                    task_id: w.task_id,
-                    tool_use_id: w.tool_use_id,
-                    exit_code,
-                    duration_ms,
-                });
+                if !killed {
+                    let _ = self.tx.send(WakeupEvent::BgTaskFinished {
+                        session_id: w.session_id,
+                        run_id: w.run_id,
+                        task_id: w.task_id,
+                        tool_use_id: w.tool_use_id,
+                        exit_code,
+                        duration_ms,
+                    });
+                }
             } else {
                 still.push(w);
             }
@@ -676,5 +684,60 @@ mod tests {
             }
             other => panic!("expected BgTaskFinished, got {other:?}"),
         }
+    }
+
+    /// agent 主动 KillShell 终止的后台任务不发 BgTaskFinished：ShellState::Killed
+    /// 只产生于主动 kill，KillShell 工具已把 status=killed 返回当前 turn，模型已知情，
+    /// 再投递通知是噪音。scan_bg 应静默摘除该 watch。对照组：自然退出的任务照常通知。
+    #[tokio::test]
+    async fn killed_task_does_not_notify_but_exited_does() {
+        use tokio::sync::mpsc;
+        let (tx, mut rx) = mpsc::unbounded_channel::<WakeupEvent>();
+        let scheduler = WakeupScheduler {
+            inner: Mutex::new(SchedulerInner::default()),
+            tx,
+        };
+        let shells = crate::tools::background::BgTaskRegistry::new();
+        scheduler.register_session_shells("sess".into(), shells.clone());
+
+        let spawn_bg = |cmd: &str| {
+            tokio::process::Command::new("bash")
+                .arg("-c")
+                .arg(cmd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+
+        // 主动 kill 的任务：arm watch 后 kill，scan_bg 不应投递事件。
+        let killed = shells.register("sleep 30".into(), "/".into(), true, None, spawn_bg("sleep 30"));
+        scheduler.arm_bg_task("sess".into(), "run".into(), killed.task_id.clone(), None);
+        shells.kill(&killed.task_id).await;
+        assert!(matches!(
+            killed.state(),
+            crate::tools::background::ShellState::Killed
+        ));
+
+        // 自然退出的任务：arm watch 后等终态，scan_bg 应投递 BgTaskFinished。
+        let exited = shells.register("true".into(), "/".into(), true, None, spawn_bg("true"));
+        scheduler.arm_bg_task("sess".into(), "run".into(), exited.task_id.clone(), None);
+        exited.wait_terminal().await;
+
+        scheduler.scan_bg();
+
+        // 只应收到 exited 那一条；killed 被静默摘除。
+        let evt = rx.try_recv().expect("exited task should notify");
+        match evt {
+            WakeupEvent::BgTaskFinished { task_id, .. } => assert_eq!(task_id, exited.task_id),
+            other => panic!("expected BgTaskFinished for exited task, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "killed task must not produce a BgTaskFinished event"
+        );
+        // 两条 watch 都已是终态，均被摘除。
+        assert_eq!(scheduler.inner.lock().unwrap().bg_watches.len(), 0);
     }
 }
