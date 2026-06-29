@@ -5,6 +5,7 @@ import App from "./App";
 import LogViewerApp from "./desktop/ui/components/LogViewerApp";
 import { TerminalSurface } from "./desktop/ui/components/TerminalSurface";
 import { ErrorBoundary } from "./desktop/ui/components/ErrorBoundary";
+import "@vscode/codicons/dist/codicon.css";
 import "./index.css";
 
 const params = new URLSearchParams(window.location.search);

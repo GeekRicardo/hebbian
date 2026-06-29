@@ -50,7 +50,7 @@ export function TodoTab() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 space-y-2 overflow-auto px-2 py-2">
+      <div className="min-h-0 flex-1 space-y-1 overflow-auto px-2 py-2 [scrollbar-color:#424242_transparent] [scrollbar-width:thin]">
         {blocks.map((block, idx) => (
           <TodoBlock key={block.key} block={block} defaultOpen={idx === 0} />
         ))}
@@ -69,24 +69,14 @@ function TodoBlock({ block, defaultOpen }: { block: Block; defaultOpen: boolean 
   const ratio = total > 0 ? Math.round((completed / total) * 100) : 0;
   const [open, setOpen] = useState(defaultOpen);
 
-  // 配色：全部完成淡绿，否则淡黄
   const headerCls = allDone
-    ? "bg-emerald-500/10 text-emerald-800 hover:bg-emerald-500/15 dark:text-emerald-200"
-    : "bg-amber-500/10 text-amber-800 hover:bg-amber-500/15 dark:text-amber-200";
-  const barTrackCls = allDone ? "bg-emerald-500/15" : "bg-amber-500/15";
-  const barFillCls = allDone ? "bg-emerald-500/70" : "bg-amber-500/70";
+    ? "text-[#89d185] hover:bg-[#2a2d2e]"
+    : "text-[#cca700] hover:bg-[#2a2d2e]";
+  const barTrackCls = "bg-[#3c3c3c]";
+  const barFillCls = allDone ? "bg-[#89d185]" : "bg-[#cca700]";
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-lg border border-border/60 bg-card transition-shadow",
-        // 大卡片：左偏的普通模糊阴影，hover 时颜色加深
-        "shadow-[-6px_4px_14px_-4px_rgba(0,0,0,0.14),-2px_1px_4px_-2px_rgba(0,0,0,0.08)]",
-        "dark:shadow-[-6px_4px_14px_-4px_rgba(0,0,0,0.5),-2px_1px_4px_-2px_rgba(0,0,0,0.35)]",
-        "hover:shadow-[-6px_4px_14px_-4px_rgba(0,0,0,0.22),-2px_1px_4px_-2px_rgba(0,0,0,0.14)]",
-        "dark:hover:shadow-[-6px_4px_14px_-4px_rgba(0,0,0,0.65),-2px_1px_4px_-2px_rgba(0,0,0,0.45)]",
-      )}
-    >
+    <div className="overflow-hidden rounded-sm border border-[#2b2b2b] bg-[#252526]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -117,27 +107,21 @@ function TodoBlock({ block, defaultOpen }: { block: Block; defaultOpen: boolean 
         </span>
         {inProgress > 0 && !allDone && (
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#cca700]"
             title={`${inProgress} 进行中`}
           />
         )}
       </button>
       {open && (
-        <ul className="space-y-1.5 border-t border-border/40 bg-muted/20 px-2 py-2">
+        <ul className="space-y-0.5 border-t border-[#2b2b2b] bg-[#1e1e1e] px-1 py-1">
           {block.todos.map((it, i) => (
             <li
               key={it.id ?? `${block.key}-${i}`}
               className={cn(
-                "group/item flex items-start gap-2 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-sm leading-snug transition-all",
-                // 默认：与大卡片同款的左偏模糊散开阴影（轻量版）
-                "shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.10),-1px_1px_2px_-1px_rgba(0,0,0,0.06)]",
-                "dark:shadow-[-3px_2px_8px_-2px_rgba(0,0,0,0.45),-1px_1px_2px_-1px_rgba(0,0,0,0.3)]",
-                // hover：切换成 neobrutalism 左下错位硬阴影 + 卡片右上微抬
-                "hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.50),-18px_21px_14px_-1px_rgba(0,0,0,0.16)] dark:hover:shadow-[-6px_8px_4px_1px_rgba(0,0,0,0.75),-18px_21px_14px_-1px_rgba(0,0,0,0.40)]",
-                "hover:translate-x-px hover:-translate-y-px hover:border-border",
+                "group/item flex items-start gap-2 rounded-sm px-2 py-1.5 text-xs leading-snug transition-colors hover:bg-[#2a2d2e]",
                 it.status === "completed"
-                  ? "bg-emerald-50/60 text-emerald-900 dark:bg-emerald-500/[0.08] dark:text-emerald-100"
-                  : "bg-amber-50/60 text-amber-900 dark:bg-amber-500/[0.08] dark:text-amber-100",
+                  ? "text-[#cccccc]"
+                  : "text-[#d4d4d4]",
               )}
             >
               <StatusIndicator status={it.status} />
@@ -157,7 +141,7 @@ function StatusIndicator({ status }: { status: TodoStatus }) {
     return (
       <span
         aria-label="已完成"
-        className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] text-white"
+        className="mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm bg-[#3fb950] text-[10px] text-[#0d1117]"
       >
         ✓
       </span>
@@ -167,13 +151,13 @@ function StatusIndicator({ status }: { status: TodoStatus }) {
     return (
       <span
         aria-label="进行中"
-        className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-amber-500"
+        className="mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border border-[#cca700]"
       >
-        <span className="h-0.5 w-2 bg-amber-500" />
+        <span className="h-0.5 w-2 bg-[#cca700]" />
       </span>
     );
   }
-  return <Circle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500/70" />;
+  return <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#cca700]" />;
 }
 
 /**

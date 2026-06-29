@@ -2,23 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { toast } from "sonner";
-import {
-  X,
-  Circle,
-  Pin,
-  Eye,
-  Code2,
-  FileText,
-  GitCompare,
-  ClipboardList,
-  Columns2,
-  Rows3,
-  MessageSquarePlus,
-  History,
-  Loader2,
-  Check,
-  MessageSquareWarning,
-} from "lucide-react";
+import { X, Circle, MessageSquarePlus, History, Loader2, Check, MessageSquareWarning } from "lucide-react";
 import {
   useStore,
   selectCurrentEditorTabs,
@@ -30,6 +14,7 @@ import { cn } from "@/desktop/ui/lib/utils";
 import { detectLanguage, fileName } from "@/desktop/ui/lib/fileLanguage";
 import { fetchEditDiff } from "@/desktop/ui/lib/diffCache";
 import { MarkdownRenderer } from "@/desktop/ui/components/MarkdownRenderer";
+import { Codicon } from "./Codicon";
 import type { DiffPayload, PlanComment } from "@/desktop/ui/types";
 import "@/desktop/ui/lib/monacoSetup";
 
@@ -53,9 +38,6 @@ interface FileState {
   error: string | null;
 }
 
-/** 暗色调色盘预设 id（其余预设都按亮色编辑器渲染）。 */
-const DARK_PRESETS = new Set(["abyss"]);
-
 /**
  * Monaco 编辑器公共选项：VSCode 默认配色（vs / vs-dark）+ 默认等宽字体栈 + 默认字号。
  * 字体栈对齐 VSCode 的 `editor.fontFamily` 默认值（mac 用 Menlo、win 用 Consolas、
@@ -70,16 +52,11 @@ const VSCODE_FONT_SIZE = 14;
  * 读 `.dsp-shell` 上的 `data-dsp-theme` 属性，用 MutationObserver 响应切换。
  */
 function useEditorTheme(): "vs" | "vs-dark" {
-  const read = () => {
-    const id = document.querySelector("[data-dsp-theme]")?.getAttribute("data-dsp-theme") ?? "";
-    return DARK_PRESETS.has(id) ? "vs-dark" : "vs";
-  };
+  const read = () => (document.documentElement.classList.contains("dark") ? "vs-dark" : "vs");
   const [theme, setTheme] = useState<"vs" | "vs-dark">(read);
   useEffect(() => {
-    const el = document.querySelector("[data-dsp-theme]");
-    if (!el) return;
     const obs = new MutationObserver(() => setTheme(read()));
-    obs.observe(el, { attributes: true, attributeFilter: ["data-dsp-theme"] });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     return () => obs.disconnect();
   }, []);
   return theme;
@@ -90,10 +67,10 @@ function isMarkdown(path: string): boolean {
 }
 
 function tabIcon(kind: EditorTab["kind"]) {
-  if (kind === "diff") return <GitCompare className="h-3 w-3 shrink-0 opacity-70" />;
-  if (kind === "gitDiff") return <GitCompare className="h-3 w-3 shrink-0 opacity-70" />;
-  if (kind === "plan") return <ClipboardList className="h-3 w-3 shrink-0 opacity-70" />;
-  return <FileText className="h-3 w-3 shrink-0 opacity-70" />;
+  if (kind === "diff") return <Codicon name="diff" className="shrink-0 text-[13px] opacity-70" />;
+  if (kind === "gitDiff") return <Codicon name="git-compare" className="shrink-0 text-[13px] opacity-70" />;
+  if (kind === "plan") return <Codicon name="checklist" className="shrink-0 text-[13px] opacity-70" />;
+  return <Codicon name="file" className="shrink-0 text-[13px] opacity-70" />;
 }
 
 function tabLabel(tab: EditorTab): string {
@@ -251,84 +228,75 @@ export default function EditorPane() {
   if (tabs.length === 0 || !activeTab) return null;
 
   return (
-    <div className="flex h-full min-w-0 flex-col border-l border-border bg-background">
+    <div className="flex h-full min-w-0 flex-col border-l border-border bg-background text-foreground">
       {/* 页签栏：file / diff / plan 三类混排 */}
-      <div className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border bg-muted/40 [scrollbar-width:thin]">
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
-          const isDirty =
-            tab.kind === "file" && files[tab.path]
-              ? files[tab.path].draft !== files[tab.path].diskText
-              : false;
-          return (
-            <div
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              title={tab.kind === "plan" ? tab.title : tab.path}
-              className={cn(
-                "group/tab flex max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 text-[12px]",
-                isActive ? "bg-background text-foreground" : "text-muted-foreground hover:bg-accent/40",
-              )}
-            >
-              {tab.pinned ? (
-                <Pin className="h-3 w-3 shrink-0 fill-current text-primary" />
-              ) : (
-                tabIcon(tab.kind)
-              )}
-              <span className="truncate">{tabLabel(tab)}</span>
-              {isDirty ? (
-                <Circle className="h-2 w-2 shrink-0 fill-current text-amber-500 group-hover/tab:hidden" />
-              ) : null}
+      <div className="flex h-[35px] shrink-0 items-stretch justify-between border-b border-border bg-muted/40">
+        <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:thin]">
+          {tabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            const isDirty =
+              tab.kind === "file" && files[tab.path]
+                ? files[tab.path].draft !== files[tab.path].diskText
+                : false;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                title="关闭"
-                aria-label="关闭"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.id);
-                }}
+                onClick={() => setActiveTab(tab.id)}
+                title={tab.kind === "plan" ? tab.title : tab.path}
                 className={cn(
-                  "grid h-4 w-4 shrink-0 place-items-center rounded hover:bg-accent",
-                  isDirty ? "hidden group-hover/tab:grid" : "opacity-0 group-hover/tab:opacity-100",
+                  "group/tab relative flex max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 text-left text-[12px]",
+                  isActive
+                    ? "bg-background text-foreground before:absolute before:left-0 before:right-0 before:top-0 before:h-0.5 before:bg-primary"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
               >
-                <X className="h-3 w-3" />
+                <span className="relative grid h-4 w-4 shrink-0 place-items-center">
+                  {tabIcon(tab.kind)}
+                  {tab.pinned ? (
+                    <Codicon
+                      name="pinned"
+                      className="absolute -right-1 -top-1 text-[10px] text-primary"
+                    />
+                  ) : null}
+                </span>
+                <span className="truncate">{tabLabel(tab)}</span>
+                {isDirty ? <Circle className="h-2 w-2 shrink-0 fill-current text-amber-500" /> : null}
               </button>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
 
-      {/* 工具栏：固定（所有 tab）+ markdown 预览（文件）+ diff 布局切换（diff） */}
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-muted/20 px-2">
-        <ToolbarButton
-          active={activePinned}
-          title={activePinned ? "取消固定（切换对话后不再保留）" : "固定（切换对话后仍保留）"}
-          onClick={() => toggleTabPin(activeTab.id)}
-        >
-          <Pin className={cn("h-3.5 w-3.5", activePinned && "fill-current")} />
-          <span>{activePinned ? "已固定" : "固定"}</span>
-        </ToolbarButton>
-        {activeTab.kind === "file" && isMarkdown(activeTab.path) && (
-          <ToolbarButton active={showPreview} title="源码 / 预览切换" onClick={togglePreview}>
-            {showPreview ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            <span>{showPreview ? "源码" : "预览"}</span>
-          </ToolbarButton>
-        )}
-        {(activeTab.kind === "diff" || activeTab.kind === "gitDiff") && (
+        <div className="flex shrink-0 items-center gap-0.5 border-l border-border bg-background/70 px-1">
           <ToolbarButton
-            active={false}
-            title="左右分屏 / 行内切换"
-            onClick={() => toggleDiffInline(activeTab.id)}
+            active={activePinned}
+            title={activePinned ? "取消固定" : "固定"}
+            onClick={() => toggleTabPin(activeTab.id)}
           >
-            {diffInline.has(activeTab.id) ? (
-              <Columns2 className="h-3.5 w-3.5" />
-            ) : (
-              <Rows3 className="h-3.5 w-3.5" />
-            )}
-            <span>{diffInline.has(activeTab.id) ? "分屏" : "行内"}</span>
+            <Codicon name={activePinned ? "pinned-dirty" : "pin"} className="text-[14px]" />
           </ToolbarButton>
-        )}
+          {activeTab.kind === "file" && isMarkdown(activeTab.path) && (
+            <ToolbarButton active={showPreview} title={showPreview ? "打开 Markdown 源码" : "打开 Markdown 预览"} onClick={togglePreview}>
+              <Codicon name={showPreview ? "code" : "markdown"} className="text-[14px]" />
+            </ToolbarButton>
+          )}
+          {(activeTab.kind === "diff" || activeTab.kind === "gitDiff") && (
+            <ToolbarButton
+              active={diffInline.has(activeTab.id)}
+              title={diffInline.has(activeTab.id) ? "切换到左右分屏" : "切换到行内视图"}
+              onClick={() => toggleDiffInline(activeTab.id)}
+            >
+              {diffInline.has(activeTab.id) ? (
+                <Codicon name="split-horizontal" className="text-[14px]" />
+              ) : (
+                <Codicon name="list-flat" className="text-[14px]" />
+              )}
+            </ToolbarButton>
+          )}
+          <ToolbarButton title="关闭" onClick={() => closeTab(activeTab.id)}>
+            <Codicon name="close" className="text-[14px]" />
+          </ToolbarButton>
+        </div>
       </div>
 
       {/* 正文：按 kind 分派 */}
@@ -366,7 +334,7 @@ export default function EditorPane() {
 
       {/* 底栏：文件 / diff tab 显示文件路径 + 脏标记 */}
       {activeTab.kind !== "plan" && (
-        <div className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-muted/40 px-3 text-[11px] text-muted-foreground">
+        <div className="flex h-[22px] shrink-0 items-center justify-between border-t border-border bg-muted/40 px-3 text-[11px] text-muted-foreground">
           <span className="truncate">{activeTab.path}</span>
           {activeTab.kind === "file" && dirty && (
             <span className="shrink-0 text-amber-500">● 未保存 · ⌘/Ctrl+S</span>
@@ -431,6 +399,7 @@ function FileBody({
         tabSize: 2,
         renderWhitespace: "selection",
         lineNumbersMinChars: 3,
+        padding: { top: 4, bottom: 4 },
       }}
     />
   );
@@ -511,18 +480,19 @@ function DiffBody({
         scrollBeyondLastLine: false,
         automaticLayout: true,
         lineNumbersMinChars: 3,
+        padding: { top: 4, bottom: 4 },
       }}
     />
   );
 }
 
 function ToolbarButton({
-  active,
+  active = false,
   title,
   onClick,
   children,
 }: {
-  active: boolean;
+  active?: boolean;
   title: string;
   onClick: () => void;
   children: React.ReactNode;
@@ -531,9 +501,10 @@ function ToolbarButton({
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded px-2 text-[12px] transition-colors",
+        "grid h-6 w-6 place-items-center rounded-sm text-[12px] transition-colors",
         active
           ? "bg-primary/10 text-primary"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",

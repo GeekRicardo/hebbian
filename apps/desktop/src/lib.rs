@@ -767,10 +767,11 @@ fn read_dir(path: PathBuf) -> AppResult<Vec<DirEntry>> {
     let mut entries: Vec<DirEntry> = std::fs::read_dir(&path)?
         .filter_map(|e| e.ok())
         .map(|e| {
-            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let path = e.path();
+            let is_dir = path.metadata().map(|m| m.is_dir()).unwrap_or(false);
             DirEntry {
                 name: e.file_name().to_string_lossy().into_owned(),
-                path: e.path().to_string_lossy().into_owned(),
+                path: path.to_string_lossy().into_owned(),
                 is_dir,
             }
         })

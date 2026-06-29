@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  GitBranch,
-  RotateCcw,
-  Plus,
-  Minus,
-  Undo2,
-  Check,
-  Loader2,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useStore } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { Codicon } from "./Codicon";
 import { gitDiffTabId } from "@/desktop/ui/store/useStore";
 import type { GitFileStatus, GitProjectStatus } from "@/desktop/ui/types";
 
@@ -74,10 +67,10 @@ export function GitPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
+    <div className="flex h-full flex-col bg-background text-foreground">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-muted/40 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         <span className="flex items-center gap-1.5">
-          <GitBranch className="h-3.5 w-3.5" />
+          <Codicon name="source-control" className="text-[14px]" />
           源代码管理
         </span>
         <button
@@ -85,9 +78,9 @@ export function GitPanel() {
           onClick={refresh}
           title="刷新"
           aria-label="刷新"
-          className="grid h-5 w-5 place-items-center rounded hover:bg-accent hover:text-foreground"
+          className="grid h-6 w-6 place-items-center rounded-sm hover:bg-accent hover:text-foreground"
         >
-          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Codicon name="refresh" className="text-[13px]" />}
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
@@ -115,6 +108,7 @@ function ProjectSection({
 }) {
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [open, setOpen] = useState(true);
 
   const staged = project.files.filter((f) => f.staged);
   const changes = project.files.filter((f) => !f.staged);
@@ -135,65 +129,80 @@ function ProjectSection({
   };
 
   return (
-    <section className="border-b border-border/60">
-      <div className="flex items-center gap-1.5 bg-muted/30 px-3 py-1.5 text-[12px]">
-        <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+    <section className="border-b border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-[22px] w-full items-center gap-1.5 px-3 text-left text-[12px] hover:bg-accent/70"
+        aria-expanded={open}
+        title={open ? "折叠项目" : "展开项目"}
+      >
+        {open ? (
+          <Codicon name="chevron-down" className="shrink-0 text-[13px] text-muted-foreground" />
+        ) : (
+          <Codicon name="chevron-right" className="shrink-0 text-[13px] text-muted-foreground" />
+        )}
+        <Codicon name="repo" className="shrink-0 text-[13px] text-muted-foreground" />
         <span className="truncate font-medium">{project.name}</span>
         {project.branch && (
-          <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+          <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">
             {project.branch}
           </span>
         )}
         <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
           {project.files.length} 项改动
         </span>
-      </div>
+      </button>
 
-      {/* commit 区：有暂存才显示输入 */}
-      <div className="px-2 py-1.5">
-        <div className="flex items-center gap-1">
-          <input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                void commit();
-              }
-            }}
-            placeholder={staged.length === 0 ? "先暂存改动再提交" : "提交信息（⌘/Ctrl+Enter）"}
-            disabled={staged.length === 0}
-            className="h-7 min-w-0 flex-1 rounded border border-border bg-background px-2 text-xs disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={commit}
-            disabled={committing || staged.length === 0 || !message.trim()}
-            title="提交已暂存内容"
-            className="inline-flex h-7 shrink-0 items-center gap-1 rounded bg-primary px-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-          >
-            {committing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-            提交
-          </button>
-        </div>
-      </div>
+      {open && (
+        <>
+          {/* commit 区：有暂存才显示输入 */}
+          <div className="border-t border-border/60 px-2 py-1.5">
+            <div className="flex items-center gap-1">
+              <input
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void commit();
+                  }
+                }}
+                placeholder={staged.length === 0 ? "先暂存改动再提交" : "提交信息（⌘/Ctrl+Enter）"}
+                disabled={staged.length === 0}
+                className="h-7 min-w-0 flex-1 border border-border bg-background px-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={commit}
+                disabled={committing || staged.length === 0 || !message.trim()}
+                title="提交已暂存内容"
+                className="inline-flex h-7 shrink-0 items-center gap-1 bg-primary px-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+              >
+                {committing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Codicon name="check" className="text-[13px]" />}
+                提交
+              </button>
+            </div>
+          </div>
 
-      {staged.length > 0 && (
-        <Group title="暂存的更改" count={staged.length}>
-          {staged.map((f) => (
-            <FileRow key={`s:${f.path}`} root={project.root} file={f} staged onChanged={onChanged} />
-          ))}
-        </Group>
-      )}
-      {changes.length > 0 && (
-        <Group title="更改" count={changes.length}>
-          {changes.map((f) => (
-            <FileRow key={`w:${f.path}`} root={project.root} file={f} staged={false} onChanged={onChanged} />
-          ))}
-        </Group>
-      )}
-      {project.files.length === 0 && (
-        <div className="px-3 py-2 text-[11px] text-muted-foreground">工作区干净，无改动。</div>
+          {staged.length > 0 && (
+            <Group title="暂存的更改" count={staged.length}>
+              {staged.map((f) => (
+                <FileRow key={`s:${f.path}`} root={project.root} file={f} staged onChanged={onChanged} />
+              ))}
+            </Group>
+          )}
+          {changes.length > 0 && (
+            <Group title="更改" count={changes.length}>
+              {changes.map((f) => (
+                <FileRow key={`w:${f.path}`} root={project.root} file={f} staged={false} onChanged={onChanged} />
+              ))}
+            </Group>
+          )}
+          {project.files.length === 0 && (
+            <div className="px-3 py-2 text-[11px] text-muted-foreground">工作区干净，无改动。</div>
+          )}
+        </>
       )}
     </section>
   );
@@ -202,7 +211,7 @@ function ProjectSection({
 function Group({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
   return (
     <div className="pb-1">
-      <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         {title} · {count}
       </div>
       {children}
@@ -247,8 +256,8 @@ function FileRow({
   return (
     <div
       className={cn(
-        "group/git flex h-7 items-center gap-1.5 px-3 text-[12px]",
-        isActive ? "bg-accent text-foreground" : "hover:bg-accent/40",
+        "group/git flex h-[22px] items-center gap-1.5 px-3 text-[12px]",
+        isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
       )}
     >
       <button
@@ -271,7 +280,7 @@ function FileRow({
             onClick={() => act(() => api.gitDiscard(root, file.path, file.untracked), "丢弃")}
             disabled={busy}
             title="确认丢弃（不可恢复）"
-            className="inline-flex h-5 items-center rounded bg-destructive px-1.5 text-[10px] font-medium text-destructive-foreground"
+            className="inline-flex h-5 items-center bg-destructive px-1.5 text-[10px] font-medium text-destructive-foreground"
           >
             确认丢弃
           </button>
@@ -281,7 +290,7 @@ function FileRow({
             onClick={() => act(() => api.gitUnstage(root, file.path), "取消暂存")}
             disabled={busy}
           >
-            <Minus className="h-3 w-3" />
+            <Codicon name="remove" className="text-[13px]" />
           </IconBtn>
         ) : (
           <>
@@ -291,14 +300,14 @@ function FileRow({
               disabled={busy}
               danger
             >
-              <Undo2 className="h-3 w-3" />
+              <Codicon name="discard" className="text-[13px]" />
             </IconBtn>
             <IconBtn
               title="暂存"
               onClick={() => act(() => api.gitStage(root, file.path), "暂存")}
               disabled={busy}
             >
-              <Plus className="h-3 w-3" />
+              <Codicon name="add" className="text-[13px]" />
             </IconBtn>
           </>
         )}
@@ -328,7 +337,7 @@ function IconBtn({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40",
+        "grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40",
         danger && "hover:bg-destructive/10 hover:text-destructive",
       )}
     >

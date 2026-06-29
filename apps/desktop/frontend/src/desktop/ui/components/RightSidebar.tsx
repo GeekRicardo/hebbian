@@ -1,21 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  ChevronsRight,
-  ChevronsLeft,
-  FolderTree,
-  Terminal,
-  FilePenLine,
-  FileJson,
-  Globe2,
-  MessagesSquare,
-  ListChecks,
-  ClipboardList,
-  SquareTerminal,
-  GitBranch,
-} from "lucide-react";
 import { cn } from "@/desktop/ui/lib/utils";
 import { isEmbeddedPreview, isTauri } from "@/desktop/bridge/transport";
 import { useStore } from "@/desktop/ui/store/useStore";
+import { Codicon } from "./Codicon";
 import { BackgroundTaskTab } from "./BackgroundTaskPanel";
 import { EditTreeTab } from "./EditTreePanel";
 import { FileTreeTab } from "./FileTreePanel";
@@ -49,7 +36,8 @@ const STORAGE_PREFIX = "hebbian.rightSidebar";
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 720;
-const COLLAPSED_WIDTH = 36;
+const ACTIVITY_BAR_WIDTH = 40;
+const COLLAPSED_WIDTH = ACTIVITY_BAR_WIDTH;
 
 // 各 tab 打开时的默认宽度（px）。注意：实际生效值会被外部传入的 [minWidth, maxWidth]
 // clamp——DesktopShell 传 minWidth=200，故这里所有值需 ≥200 才能原样生效。
@@ -310,108 +298,52 @@ export function RightSidebar({
     [collapsed, width, tab, clampWidthForTab]
   );
 
-  // 折叠态图标列（折叠后展示，可点图标直接展开到对应 tab）。
-  const collapsedIcons = (
-    <div className="flex h-full w-9 shrink-0 flex-col">
+  const tabs = [
+    { id: "files", icon: <Codicon name="files" className="text-[16px]" />, label: "文件目录" },
+    { id: "tasks", icon: <Codicon name="server-process" className="text-[16px]" />, label: "后台任务" },
+    { id: "edits", icon: <Codicon name="diff-modified" className="text-[16px]" />, label: "修改文件" },
+    { id: "git", icon: <Codicon name="source-control" className="text-[16px]" />, label: "源代码管理" },
+    { id: "todos", icon: <Codicon name="checklist" className="text-[16px]" />, label: "任务清单" },
+    { id: "plans", icon: <Codicon name="list-tree" className="text-[16px]" />, label: "计划" },
+    { id: "branches", icon: <Codicon name="comment-discussion" className="text-[16px]" />, label: "旁支对话" },
+    ...(nativeTabsAvailable
+      ? [
+          { id: "browser" as const, icon: <Codicon name="globe" className="text-[16px]" />, label: "浏览器" },
+          { id: "terminal" as const, icon: <Codicon name="terminal" className="text-[16px]" />, label: "终端" },
+        ]
+      : []),
+  ] satisfies Array<{ id: TabId; icon: ReactNode; label: string }>;
+  const currentTabLabel = tabs.find((item) => item.id === tab)?.label ?? "工作台";
+
+  const activityBar = (
+    <div className="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 border-l border-border bg-muted/60 p-1 text-muted-foreground">
       <button
         type="button"
-        onClick={() => setCollapsed(false)}
-        className="grid h-9 w-full place-items-center border-b border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-        title="展开工作台"
-        aria-label="展开工作台"
+        onClick={() => setCollapsed((v) => !v)}
+        className="relative grid h-7 w-7 min-w-7 self-center place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title={collapsed ? "展开工作台" : "折叠工作台"}
+        aria-label={collapsed ? "展开工作台" : "折叠工作台"}
       >
-        <ChevronsLeft className="h-4 w-4" />
+        {collapsed ? <Codicon name="chevron-left" className="text-[14px]" /> : <Codicon name="chevron-right" className="text-[14px]" />}
       </button>
-      <SidebarIconButton
-        icon={<FolderTree className="h-4 w-4" />}
-        label="文件目录"
-        onClick={() => {
-          setTab("files");
-          setCollapsed(false);
-        }}
-        active={tab === "files"}
-      />
-      <SidebarIconButton
-        icon={<Terminal className="h-4 w-4" />}
-        label="后台任务"
-        onClick={() => {
-          setTab("tasks");
-          setCollapsed(false);
-        }}
-        active={tab === "tasks"}
-      />
-      <SidebarIconButton
-        icon={<FilePenLine className="h-4 w-4" />}
-        label="修改文件"
-        onClick={() => {
-          setTab("edits");
-          setCollapsed(false);
-        }}
-        active={tab === "edits"}
-      />
-      <SidebarIconButton
-        icon={<GitBranch className="h-4 w-4" />}
-        label="源代码管理"
-        onClick={() => {
-          setTab("git");
-          setCollapsed(false);
-        }}
-        active={tab === "git"}
-      />
-      <SidebarIconButton
-        icon={<ListChecks className="h-4 w-4" />}
-        label="任务清单"
-        onClick={() => {
-          setTab("todos");
-          setCollapsed(false);
-        }}
-        active={tab === "todos"}
-      />
-      <SidebarIconButton
-        icon={<ClipboardList className="h-4 w-4" />}
-        label="计划"
-        onClick={() => {
-          setTab("plans");
-          setCollapsed(false);
-        }}
-        active={tab === "plans"}
-      />
-      <SidebarIconButton
-        icon={<MessagesSquare className="h-4 w-4" />}
-        label="旁支对话"
-        onClick={() => {
-          setTab("branches");
-          setCollapsed(false);
-        }}
-        active={tab === "branches"}
-      />
-      {/* 浏览器 / 终端是 Tauri 原生窗口专属功能：web surface（hebweb）无此能力、自举
-         （本前端被内置浏览器嵌套加载）时套娃，两种情况都隐藏，避免触发命令报错 / ACL 报错。 */}
-      {nativeTabsAvailable && (
-        <>
+      <div className="h-px w-7 bg-border" />
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto [scrollbar-width:none]">
+        {tabs.map((item) => (
           <SidebarIconButton
-            icon={<Globe2 className="h-4 w-4" />}
-            label="内置浏览器"
+            key={item.id}
+            icon={item.icon}
+            label={item.label}
             onClick={() => {
-              setTab("browser");
+              setTab(item.id);
               setCollapsed(false);
             }}
-            active={tab === "browser"}
+            active={tab === item.id}
           />
-          <SidebarIconButton
-            icon={<SquareTerminal className="h-4 w-4" />}
-            label="终端"
-            onClick={() => {
-              setTab("terminal");
-              setCollapsed(false);
-            }}
-            active={tab === "terminal"}
-          />
-        </>
-      )}
+        ))}
+      </div>
       {debugEnabled && sessionId && (
         <SidebarIconButton
-          icon={<FileJson className="h-4 w-4" />}
+          icon={<Codicon name="json" className="text-[16px]" />}
           label="Model I/O"
           onClick={() => setModelIoOpen(true)}
           active={false}
@@ -429,126 +361,61 @@ export function RightSidebar({
       */}
       <aside
         className={cn(
-          "relative flex h-full shrink-0 justify-self-end flex-col overflow-hidden border-l border-border bg-muted/40",
+          "relative flex h-full shrink-0 justify-self-end overflow-hidden border-l border-border bg-background text-foreground shadow-[-12px_0_24px_-22px_rgba(0,0,0,0.22)] dark:shadow-[-12px_0_24px_-22px_rgba(0,0,0,0.7)]",
           resizing ? "" : "transition-[width] duration-500 ease-in-out"
         )}
         style={{ width: `${collapsed ? COLLAPSED_WIDTH : width}px` }}
       >
-        {collapsed ? (
-          collapsedIcons
-        ) : (
+        {!collapsed && (
           <div
-            className="flex h-full flex-col"
-            style={{ width: `${width}px` }}
+            className="flex h-full min-w-0 flex-1 flex-col bg-background"
+            style={{ width: `${Math.max(0, width - ACTIVITY_BAR_WIDTH)}px` }}
           >
             {/* 拖拽抓手：左边缘 4px 透明区域，hover 时显示一条细线 */}
             <div
               onMouseDown={onDragStart}
-              className="absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize hover:bg-primary/30"
+              className={cn(
+                "absolute left-0 top-0 z-10 h-full w-1 cursor-ew-resize transition-colors hover:bg-primary/70",
+                resizing && "bg-primary/70"
+              )}
               title="拖动改宽度"
               aria-label="调整工作台宽度"
             />
 
-            {/* 顶栏：tab 切换 + 折叠按钮。
-               - tab 列表始终显示完整中文标签（不缩成图标）
-               - 容器宽度不够时整条横向滚动
-               - 鼠标在 tab 区上下滚动会被 onWheel 转成横向滚动，免按 Shift */}
-            <div className="flex h-9 shrink-0 items-stretch border-b border-border bg-background/50">
-              <TabScroller>
-                <SidebarTab
-                  id="files"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<FolderTree className="h-3.5 w-3.5" />}
-                  label="文件目录"
-                />
-                <SidebarTab
-                  id="tasks"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<Terminal className="h-3.5 w-3.5" />}
-                  label="后台任务"
-                />
-                <SidebarTab
-                  id="edits"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<FilePenLine className="h-3.5 w-3.5" />}
-                  label="修改文件"
-                />
-                <SidebarTab
-                  id="git"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<GitBranch className="h-3.5 w-3.5" />}
-                  label="源代码管理"
-                />
-                <SidebarTab
-                  id="todos"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<ListChecks className="h-3.5 w-3.5" />}
-                  label="任务清单"
-                />
-                <SidebarTab
-                  id="plans"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<ClipboardList className="h-3.5 w-3.5" />}
-                  label="计划"
-                />
-                <SidebarTab
-                  id="branches"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<MessagesSquare className="h-3.5 w-3.5" />}
-                  label="旁支对话"
-                />
-                <SidebarTab
-                  id="browser"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<Globe2 className="h-3.5 w-3.5" />}
-                  label="浏览器"
-                />
-                <SidebarTab
-                  id="terminal"
-                  current={tab}
-                  onClick={setTab}
-                  icon={<SquareTerminal className="h-3.5 w-3.5" />}
-                  label="终端"
-                />
-              </TabScroller>
-              <div className="flex shrink-0 items-center gap-0.5 border-l border-border/40 bg-background/50 pl-1 pr-1">
+            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-muted/40 pl-3 pr-1.5">
+              <div className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {currentTabLabel}
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
                 {debugEnabled && sessionId && (
                   <button
                     type="button"
                     onClick={() => setModelIoOpen(true)}
-                    className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="grid h-7 w-7 min-w-7 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     title="Model I/O"
                     aria-label="Model I/O"
                   >
-                    <FileJson className="h-3.5 w-3.5" />
+                    <Codicon name="json" className="text-[14px]" />
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => setCollapsed(true)}
-                  className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="grid h-6 w-6 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   title="折叠工作台"
                   aria-label="折叠工作台"
                 >
-                  <ChevronsRight className="h-3.5 w-3.5" />
+                  <Codicon name="chevron-right" className="text-[14px]" />
                 </button>
               </div>
             </div>
 
             {/* tab 内容区。浏览器 tab 例外：常驻挂载、切走只隐藏（hidden）不卸载——
                原生子 webview 重建代价大且会丢页面/登录态。其余 tab 是纯 React，条件渲染即可。 */}
-            <div className="relative min-h-0 flex-1">
+            <div className="relative min-h-0 flex-1 bg-background text-foreground">
               <div
                 className={cn(
-                  "h-full overflow-auto",
+                  "h-full overflow-auto [scrollbar-width:thin]",
                   (tab === "browser" || tab === "terminal") && "hidden",
                 )}
               >
@@ -577,6 +444,7 @@ export function RightSidebar({
             </div>
           </div>
         )}
+        {activityBar}
       </aside>
       {sessionId && (
         <ModelIoInspector
@@ -586,83 +454,6 @@ export function RightSidebar({
         />
       )}
     </>
-  );
-}
-
-function SidebarTab({
-  id,
-  current,
-  onClick,
-  icon,
-  label,
-}: {
-  id: TabId;
-  current: TabId;
-  onClick: (id: TabId) => void;
-  icon: ReactNode;
-  label: string;
-}) {
-  const active = id === current;
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(id)}
-      title={label}
-      aria-label={label}
-      className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 text-[12px] transition-colors",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-      )}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-/**
- * Tab 列表的横向滚动容器。
- *
- * - 不够宽时整条 tab 横向滚动；不裁切文字
- * - 滚动条做隐式（仅 hover 出现，靠 [data-tab-scroller] 全局样式控制）
- * - 鼠标滚轮（垂直）→ 横向滚动：让用户在窄 sidebar 里不必按 Shift 也能切 tab
- */
-function TabScroller({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      // 只把垂直滚动转横向；用户主动按 shift 已经天然是横向，不重复处理
-      if (e.shiftKey) return;
-      // 如果横向 delta 已经不为 0（触摸板横滑 / 横向滚轮），交给浏览器原生处理
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-      if (e.deltaY === 0) return;
-      // 滚到尽头时让事件冒泡（页面继续滚），避免在边界吞掉用户输入
-      const maxScroll = el.scrollWidth - el.clientWidth;
-      const next = el.scrollLeft + e.deltaY;
-      if ((e.deltaY > 0 && el.scrollLeft >= maxScroll) ||
-          (e.deltaY < 0 && el.scrollLeft <= 0)) {
-        return;
-      }
-      e.preventDefault();
-      el.scrollLeft = Math.max(0, Math.min(maxScroll, next));
-    };
-    // passive: false 才能 preventDefault
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
-  return (
-    <div
-      ref={ref}
-      className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1.5 [scrollbar-width:thin]"
-    >
-      {children}
-    </div>
   );
 }
 
@@ -682,8 +473,8 @@ function SidebarIconButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "grid h-9 w-full place-items-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-        active && "bg-accent/40 text-foreground"
+        "relative grid h-7 w-7 min-w-7 self-center place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        active && "bg-accent text-foreground before:absolute before:right-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary"
       )}
       title={label}
       aria-label={label}

@@ -10355,3 +10355,111 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   + 一次反向折叠）topDrift 全部 = 0px**，scrollTop 自动从 9600→10460 / 3000→3114（反向 3114→3000
   完美对称）。修前探针显示 JS 写入 scrollTop 次数为 0（证实 effect 没挂），修后 98 次/帧且收敛精确。
 - **留尾巴**: 无。
+
+### 2026-06-29 — 修复内置终端 vim 打开文件报 `ReferenceError: Can't find variable: n`：根因实为 esbuild minifySyntax 破坏 xterm 6.0.0 `requestMode` 变量声明
+
+- **Why**: 用户反馈内置终端 vim 打开文件仍然报「未捕获错误: ReferenceError: Can't find variable: n」。2026-06-22 的修复（弃 WebGL 改用 DOM renderer）方向错误——根因不是 WebGL 渲染器崩溃。
+- **真实根因**: xterm.js 6.0.0 的 `InputHandler.requestMode` 方法用了 `let n; (n ||= {})` 的模式，Vite 生产构建时 esbuild 的 `minifySyntax` 把 `let n; (n ||= ...)` 错误降级为 `void 0 || (n = {})`，丢掉了 `let n` 声明。vim 启动时发送 DECRQM（`CSI ? 1016 $ p` 等）查询终端能力，命中 `requestMode` 路径，JavaScriptCore 在 `(n ||= {})` 处抛 `ReferenceError: Can't find variable: n`（`n` 是 minify 后的变量名）。详见 xtermjs/xtermjs#5800。
+- **改动**: [apps/desktop/vite.config.ts](../apps/desktop/vite.config.ts) build 配置追加 `target: "es2021"`（WKWebView 原生支持 es2021），防止 esbuild 把 `let n; (n ||= {})` 降级成有问题的 `void 0 || (n = {})`。不新增依赖、不增 bundle 体积。
+- **替代方案评估**:
+  - `build.target: 'es2021'`（选用）: 最干净，保持 esbuild minify，无新依赖
+  - `build.minify: 'terser'`（备选）: works 但需新增 terser 依赖
+  - `esbuild: { minifySyntax: false }`（备选）: works 但关闭 minifySyntax 影响面太大
+- **验证**: `pnpm build` + `pnpm exec tsc --noEmit` 全通过；bundle 内 `requestMode` 方法体已正确保留 `let n;` 声明 + `(n||={})` 安全赋值模式。需 Desktop dev 模式确认 vim 不再触发 ReferenceError toast。
+- **影响范围**: 仅 apps/desktop 构建配置。非破坏性。dev 模式不走 esbuild minify 不受影响；生产 build 后桌面 app 内终端输入 `vim 任意文件` 不应再弹 ReferenceError toast。
+- **留尾巴**: 如果 esbuild 后续修复此 bug，可考虑移除 `target` 约束回退默认。当前不追。
+
+### 2026-06-29 — 调整右侧工作台为 VS Code 风格 Activity Bar + 侧栏面板
+
+- **Why**: 用户反馈今天改过的右侧 sidebar 视觉上离 VS Code 风格很远、当前观感很丑。仅替换颜色仍会保留网页式横向 tab 和卡片阴影，识别度不够；本次改成 VS Code 更核心的 activity bar + panel header 结构。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 展开态也保留窄 activity bar，移除顶部横向滚动 tab；新增深色侧栏背景、面板标题栏、低对比分隔线、蓝色 active 指示条和紧凑工具按钮。
+  - [apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/TodoTab.tsx): 去掉夸张卡片阴影和 neobrutalism hover，改为更接近 VS Code 侧栏列表的紧凑块、细边框、低对比 hover 与状态色。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI 视觉层；不改协议、不改 core、不改持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit` 在仓库根目录失败（根 package 未暴露 tsc）；在正确包目录 `apps/desktop` 执行 `pnpm exec tsc --noEmit` 通过。
+- **留尾巴**: 这次先收敛右侧工作台骨架和任务列表；其他 tab 内部若仍有局部卡片感，可后续逐个按同一视觉语言细化。
+
+### 2026-06-29 — 微调右侧 Activity Bar 选中态并让源代码管理项目可折叠
+
+- **Why**: 用户在内置浏览器预览中标注右侧栏图标选中高亮条“长高条块太丑”，且不希望指示条放在按钮右侧；同时希望“源代码管理”里每个项目可以点击折叠。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 在 `SidebarIconButton` 共享组件中把 active 指示条改为左侧居中的短胶囊线，所有同构侧栏按钮统一生效，不给单个按钮加特例。
+  - [apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx): 项目标题行改为可点击按钮，新增展开/折叠状态与箭头；折叠时不渲染提交区和文件分组，展开时恢复显示。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改协议、不改 core、不改持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（在 `apps/desktop`）通过。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 修正右侧工作台图标栏位置与按钮密度
+
+- **Why**: 用户指出右侧栏图标栏应放在 sidebar 最右侧，而不是面板左侧；同时图标按钮高度过高，影响识别与观感。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 调整 `aside` 内渲染顺序，让内容面板在左、activity bar 在最右；图标尺寸从 20px 降到 16px，按钮高度从 44px 降到 32px；active 指示条移到最右边缘以贴合图标栏位置。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改协议、不改 core、不改持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（在 `apps/desktop`）通过。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 调整工作台关键区域为跟随主题的 VS Code 结构风格
+
+- **Why**: 用户指出“像 VS Code”不是把界面刷成黑色，而是亮色主题仍亮、暗色主题仍暗；主要差距在目录树、源代码管理 / git diff、文件编辑器这些工作台区域的结构密度与交互观感。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 移除上一版固定黑色硬编码，改用现有 `background` / `muted` / `accent` / `border` / `foreground` 主题 token，右侧 activity bar 继续保持最右侧布局但跟随亮暗主题。
+  - [apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx): 目录树改为更接近 VS Code explorer 的 22px 行高、8px 缩进、扁平 hover/active 行、主题色文件夹/文件图标。
+  - [apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx): 源代码管理面板改为扁平 header、22px 项目/文件行、扁平输入和按钮、主题 token hover/active，保留每项目展开/折叠。
+  - [apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx): 编辑器 tab bar / toolbar / status bar 调整为 VS Code 工作台密度；Monaco 主题改为跟随全局 `.dark` 类选择 `vs` / `vs-dark`，不再只按单个 preset 判断。
+- **影响范围**: 仅 Desktop/hebweb 共享前端 UI；不改协议、不改 core、不改持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（在 `apps/desktop`）通过；`git diff --check` 通过。
+- **留尾巴**: 这版先统一关键工作台区域的结构与主题跟随；若还要更贴 VS Code，可继续细化图标类型、文件装饰颜色、Monaco 自定义 token theme。
+
+### 2026-06-29 — 集成 VS Code 官方 Codicons 到工作台区域
+
+- **Why**: 用户明确要求不要继续手搓“像 VS Code”的图标和样式，而是集成真实 VS Code 代码/资源。VS Code Workbench 不是可直接导入的 React 组件库，但 Monaco 编辑器已是 VS Code 编辑器核心；本次进一步接入 Microsoft 官方 `@vscode/codicons` 图标字体，替换关键工作台区域的自绘 lucide 图标。
+- **改动**:
+  - [apps/desktop/package.json](../apps/desktop/package.json) / pnpm lockfile: 新增 `@vscode/codicons` 依赖。
+  - [apps/desktop/frontend/src/main.tsx](../apps/desktop/frontend/src/main.tsx): 全局导入 `@vscode/codicons/dist/codicon.css`。
+  - [apps/desktop/frontend/src/desktop/ui/components/Codicon.tsx](../apps/desktop/frontend/src/desktop/ui/components/Codicon.tsx): 新增统一 codicon 渲染组件，避免各处散落 class 拼接。
+  - [RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx) / [FileTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx) / [GitPanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/GitPanel.tsx) / [EditorPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx): 右侧 activity bar、Explorer、SCM、编辑器 tab/toolbar 改用 VS Code 官方 codicons。
+- **影响范围**: Desktop/hebweb 前端资源与 UI；不改协议、不改 core、不改持久化。新增前端依赖会影响安装/打包产物。
+- **验证**: `pnpm add @vscode/codicons` 成功；`pnpm exec tsc --noEmit`（在 `apps/desktop`）通过。
+- **留尾巴**: Workbench Explorer/SCM 本体仍不是可直接复用组件；若要继续“真实 VS Code”，下一步应评估 `@codingame/monaco-vscode-*` service override 路线或直接嵌入 VS Code web workbench，这会是架构级改造。
+
+### 2026-06-29 — 调整编辑器 tab 操作区为 VS Code 风格图标布局
+
+- **Why**: 用户指出固定与行内切换不应做成 tab/工具栏里的文字按钮；编辑器顶部要更接近 VS Code：固定态出现在文件 tab 上，行内/预览等操作集中在右侧图标区，并补上 Markdown 预览图标。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx): tab 行拆成左侧页签滚动区 + 右侧图标操作区；固定标记叠在 tab 文件图标上；关闭、固定、Markdown 预览、diff 行内/分屏切换改为右侧纯图标按钮；Markdown 预览使用 Codicons 的 `markdown` 图标。
+- **影响范围**: Desktop/hebweb 前端编辑器渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 调整右侧窄工具栏按钮 hover 留白
+
+- **Why**: 用户在内置浏览器预览里标注右侧窄工具栏的按钮 hover/active 背景贴着外层边框，期望“里面的条不要贴着外面条，中间要有可见空白”。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 窄工具栏外层改为四边 padding 与小间距；折叠按钮、共享 `SidebarIconButton`、分隔线统一收敛到 28px 宽，避免 hover/active 背景撑满整条窄栏。
+- **影响范围**: Desktop/hebweb 前端右侧工作台渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 修正右侧窄工具栏按钮为方形 hover 区域
+
+- **Why**: 用户反馈右侧窄工具栏按钮虽然已有左右留白，但 hover 区域仍是高长宽窄的长方形；期望接近方形并保留一点圆角。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 折叠按钮与共享 `SidebarIconButton` 统一改为 28×28，并加轻微圆角，让 hover/active 背景呈方形。
+- **影响范围**: Desktop/hebweb 前端右侧工作台渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 统一右侧工作台标题栏 Model I/O 按钮尺寸
+
+- **Why**: 用户继续指出 Model I/O 按钮也应跟右侧窄工具栏按钮一致，使用方形 hover 区域。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 将展开态标题栏里的 Model I/O 按钮从 24×24 调整为 28×28，与右侧窄工具栏按钮的方形 hover 区域保持一致。
+- **影响范围**: Desktop/hebweb 前端右侧工作台渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 让文件树记住展开层级并支持软链目录
+
+- **Why**: 用户希望右侧文件树能记住目录打开到哪个层级，并且软链目录也能像普通目录一样展开。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx](../apps/desktop/frontend/src/desktop/ui/components/FileTreePanel.tsx): 将目录展开状态从单个节点本地状态提升到文件树级别，并按 session 写入 `localStorage`，切 tab / 重新挂载后恢复已展开路径。
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `read_dir` 枚举子项时改用跟随软链的 `metadata()` 判断 `is_dir`，让指向目录的软链在文件树里按目录渲染并可继续展开。
+- **影响范围**: Desktop/hebweb 文件树 UI 与 Desktop Tauri 文件枚举边界；不改 agent-core、协议、会话持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（apps/desktop）通过；`cargo check -p hebbian --lib` 通过（保留既有 unused warning）；`git diff --check` 通过。
+- **留尾巴**: 无。

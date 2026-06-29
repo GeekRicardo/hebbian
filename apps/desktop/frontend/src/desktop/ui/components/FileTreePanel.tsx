@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, RotateCcw } from "lucide-react";
 import { useStore, selectCurrentActiveFilePath } from "@/desktop/ui/store/useStore";
 import { api } from "@/desktop/bridge/tauri";
 import { cn } from "@/desktop/ui/lib/utils";
+import { Codicon } from "./Codicon";
 import type { DirEntry } from "@/desktop/ui/types";
 
 /**
@@ -18,6 +18,9 @@ export function FileTreeTab() {
   const workdir = useStore((s) => s.currentSession?.workdir ?? null);
   const allowedPaths = useStore((s) => s.currentSession?.allowed_paths ?? null);
   const runtimePaths = useStore((s) => s.currentSession?.runtime_allowed_paths ?? null);
+  const storageKey = sessionId ? `hebbian.fileTree.expanded.${sessionId}` : null;
+  const loadedStorageKeyRef = useRef<string | null>(null);
+  const [expandedByPath, setExpandedByPath] = useState<Record<string, boolean>>({});
 
   const roots = useMemo(() => {
     const list: string[] = [];
@@ -30,15 +33,45 @@ export function FileTreeTab() {
     return list;
   }, [workdir, allowedPaths, runtimePaths]);
 
+  useEffect(() => {
+    if (!storageKey) {
+      loadedStorageKeyRef.current = null;
+      setExpandedByPath({});
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(storageKey);
+      setExpandedByPath(raw ? JSON.parse(raw) : {});
+    } catch {
+      setExpandedByPath({});
+    }
+    loadedStorageKeyRef.current = storageKey;
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!storageKey || loadedStorageKeyRef.current !== storageKey) return;
+    localStorage.setItem(storageKey, JSON.stringify(expandedByPath));
+  }, [storageKey, expandedByPath]);
+
+  const setNodeExpanded = useCallback((path: string, expanded: boolean) => {
+    setExpandedByPath((prev) => ({ ...prev, [path]: expanded }));
+  }, []);
+
   if (!sessionId) return <EmptyState text="当前没打开对话" />;
   if (roots.length === 0) {
     return <EmptyState text="这个对话还没绑定工作目录" hint="在对话设置里选一个目录后，文件会出现在这里。" />;
   }
 
   return (
-    <div className="py-1 text-[13px]">
+    <div className="py-1 font-[var(--font-sans)] text-[13px] text-foreground">
       {roots.map((root) => (
-        <RootNode key={root} path={root} multiRoot={roots.length > 1} />
+        <RootNode
+          key={root}
+          path={root}
+          multiRoot={roots.length > 1}
+          expandedByPath={expandedByPath}
+          setNodeExpanded={setNodeExpanded}
+        />
       ))}
     </div>
   );
@@ -50,7 +83,17 @@ function rootLabel(path: string): string {
 }
 
 /** 顶层根：默认展开，展示根目录名（多根时）。 */
-function RootNode({ path, multiRoot }: { path: string; multiRoot: boolean }) {
+function RootNode({
+  path,
+  multiRoot,
+  expandedByPath,
+  setNodeExpanded,
+}: {
+  path: string;
+  multiRoot: boolean;
+  expandedByPath: Record<string, boolean>;
+  setNodeExpanded: (path: string, expanded: boolean) => void;
+}) {
   return (
     <DirNode
       path={path}
@@ -58,6 +101,8 @@ function RootNode({ path, multiRoot }: { path: string; multiRoot: boolean }) {
       depth={0}
       defaultExpanded={!multiRoot}
       isRoot
+      expandedByPath={expandedByPath}
+      setNodeExpanded={setNodeExpanded}
     />
   );
 }
@@ -68,14 +113,18 @@ function DirNode({
   depth,
   defaultExpanded = false,
   isRoot = false,
+  expandedByPath,
+  setNodeExpanded,
 }: {
   path: string;
   name: string;
   depth: number;
   defaultExpanded?: boolean;
   isRoot?: boolean;
+  expandedByPath: Record<string, boolean>;
+  setNodeExpanded: (path: string, expanded: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const expanded = expandedByPath[path] ?? defaultExpanded;
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,18 +151,18 @@ function DirNode({
       <Row
         depth={depth}
         active={false}
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => setNodeExpanded(path, !expanded)}
         icon={
           <>
             {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <Codicon name="chevron-down" className="shrink-0 text-[14px] text-muted-foreground" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <Codicon name="chevron-right" className="shrink-0 text-[14px] text-muted-foreground" />
             )}
             {expanded ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <Codicon name="folder-opened" className="shrink-0 text-[16px] text-muted-foreground" />
             ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <Codicon name="folder" className="shrink-0 text-[16px] text-muted-foreground" />
             )}
           </>
         }
@@ -130,9 +179,9 @@ function DirNode({
                 setEntries(null);
                 if (expanded) void load();
               }}
-              className="grid h-5 w-5 place-items-center rounded text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/row:opacity-100"
+              className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/row:opacity-100"
             >
-              <RotateCcw className="h-3 w-3" />
+              <Codicon name="refresh" className="text-[13px]" />
             </button>
           ) : null
         }
@@ -146,7 +195,14 @@ function DirNode({
           {entries?.length === 0 && <Hint depth={depth + 1} text="（空目录）" />}
           {entries?.map((entry) =>
             entry.is_dir ? (
-              <DirNode key={entry.path} path={entry.path} name={entry.name} depth={depth + 1} />
+              <DirNode
+                key={entry.path}
+                path={entry.path}
+                name={entry.name}
+                depth={depth + 1}
+                expandedByPath={expandedByPath}
+                setNodeExpanded={setNodeExpanded}
+              />
             ) : (
               <FileNode key={entry.path} path={entry.path} name={entry.name} depth={depth + 1} />
             ),
@@ -168,7 +224,7 @@ function FileNode({ path, name, depth }: { path: string; name: string; depth: nu
       icon={
         <>
           <span className="w-3.5 shrink-0" />
-          <FileIcon className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          <Codicon name="file" className="shrink-0 text-[16px] text-muted-foreground" />
         </>
       }
       label={name}
@@ -176,7 +232,7 @@ function FileNode({ path, name, depth }: { path: string; name: string; depth: nu
   );
 }
 
-const INDENT = 12;
+const INDENT = 8;
 
 function Row({
   depth,
@@ -198,10 +254,10 @@ function Row({
   return (
     <div
       className={cn(
-        "group/row flex h-7 cursor-pointer items-center gap-1 rounded-sm pr-1 transition-colors",
-        active ? "bg-accent text-foreground" : "hover:bg-accent/50",
+        "group/row flex h-[22px] cursor-pointer items-center gap-1 pr-1 text-[13px] leading-none transition-colors",
+        active ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
       )}
-      style={{ paddingLeft: `${6 + depth * INDENT}px` }}
+      style={{ paddingLeft: `${4 + depth * INDENT}px` }}
       onClick={onClick}
     >
       {icon}
@@ -214,8 +270,8 @@ function Row({
 function Hint({ depth, text, danger = false }: { depth: number; text: string; danger?: boolean }) {
   return (
     <div
-      className={cn("flex h-6 items-center truncate text-[12px]", danger ? "text-destructive" : "text-muted-foreground")}
-      style={{ paddingLeft: `${6 + depth * INDENT}px` }}
+      className={cn("flex h-[22px] items-center truncate text-[12px]", danger ? "text-destructive" : "text-muted-foreground")}
+      style={{ paddingLeft: `${4 + depth * INDENT}px` }}
     >
       {text}
     </div>
