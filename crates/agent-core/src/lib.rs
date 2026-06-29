@@ -13,6 +13,7 @@ pub mod goal;
 pub mod harness;
 pub mod hooks;
 pub mod mcp;
+pub mod memory_consolidate;
 pub mod memory_extract;
 pub mod model_io_dump;
 pub mod permissions;

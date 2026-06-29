@@ -216,6 +216,15 @@ pub struct MemorySettings {
     /// 抽取模型 fallback 链；空 = 没配，等同 `enabled=false` 的抽取行为。
     #[serde(default)]
     pub models: Vec<MemoryModelRef>,
+    /// 空闲触发深睡的分钟数（架构 §3.1）。一个 Run 跑完后空闲超过它就整理记忆。
+    /// `0` = 关闭 idle 深睡（仍可手动 / 显式触发）。默认 10min——本项目真实间隔分布
+    /// 70.9% < 5min 是连续工作，10min 能精准避开、只抓真正的停顿。
+    #[serde(default = "default_idle_consolidate_minutes")]
+    pub idle_consolidate_minutes: u32,
+}
+
+fn default_idle_consolidate_minutes() -> u32 {
+    10
 }
 
 impl MemorySettings {

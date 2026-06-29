@@ -153,6 +153,9 @@ impl Harness {
         if let Some(sid) = &params.session_id {
             crate::run_mode::LiveRunModeRegistry::global()
                 .register(sid.clone(), run_mode_shared.clone());
+            // 新 Run 启动 = 用户有动作，取消该 session 待触发的 idle 深睡哨兵（架构 §3.1：
+            // 「计时器重置」）。本 Run 结束后浅睡抽取再重新 arm。
+            crate::wakeup::WakeupScheduler::global().cancel_idle(sid);
         }
 
         // 双路 sink：本 run 独享 mpsc + 可选 jsonl 持久化。
@@ -267,6 +270,10 @@ impl Harness {
                 let task_sink = mem_sink.clone();
                 tokio::spawn(async move {
                     emit_memory_extraction(&dd, &sid, &task_state, &task_sink).await;
+                    // 浅睡抽完后挂 idle 哨兵（架构 §3.1）：空闲 T 分钟没新输入就深睡整理。
+                    // 覆盖式 arm——同 session 上一个哨兵被清，实现「每次 Run 结束重排计时器」，
+                    // 连续干活永不触发。T 来自设置（idle_consolidate_minutes，默认 10，0=关）。
+                    arm_idle_after_run(&dd, &sid);
                 });
             }
         });
@@ -855,6 +862,48 @@ async fn emit_memory_extraction(
             tracing::warn!(error = %e, "记忆抽取失败（非模型链原因）");
         }
     }
+}
+
+/// 浅睡抽取后挂 idle 哨兵（架构 §3.1）。读设置拿 T 分钟与 last_msg_id，覆盖式 arm
+/// 到 `WakeupScheduler`：空闲 T 分钟无新输入则触发深睡 [`consolidate_for_session`]。
+/// 记忆系统未启用 / T=0 → 不挂（等同关闭 idle 深睡）。idle_handler 幂等注册一次。
+fn arm_idle_after_run(data_dir: &std::path::Path, session_id: &str) {
+    let app_settings = crate::storage::settings::load(data_dir);
+    if !app_settings.memory.active() {
+        return;
+    }
+    let t_min = app_settings.memory.idle_consolidate_minutes;
+    if t_min == 0 {
+        return; // 关闭 idle 深睡
+    }
+    let scheduler = crate::wakeup::WakeupScheduler::global();
+    // idle_handler 覆盖式注册：到点在 scheduler 自己的 runtime 里跑深睡（不 resume 对话）。
+    // data_dir 随闭包捕获——多 session 共享同一 data_dir，注册一次即可。
+    let handler_dd = data_dir.to_path_buf();
+    scheduler.set_idle_handler(Arc::new(move |ev: crate::wakeup::IdleElapsed| {
+        let dd = handler_dd.clone();
+        let threshold = {
+            // 到点时重读设置——用户中途可能改了 T；关了就当没配（深度判 None 会跳过）。
+            let s = crate::storage::settings::load(&dd);
+            s.memory.idle_consolidate_minutes as f64
+        };
+        tokio::spawn(async move {
+            crate::memory_consolidate::consolidate_for_session(
+                &dd,
+                &ev.session_id,
+                ev.idle_minutes,
+                threshold,
+            )
+            .await;
+        });
+    }));
+    let last_msg_id = crate::storage::memory::read_cursor(data_dir, session_id);
+    scheduler.arm_idle(
+        session_id.to_string(),
+        last_msg_id,
+        (t_min as i64) * 60_000,
+    );
+    tracing::info!(target: "memory", "[Memory:Sleep] 已挂 idle 哨兵 session={session_id} T={t_min}min");
 }
 
 #[cfg(test)]

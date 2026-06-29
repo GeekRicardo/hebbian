@@ -104,6 +104,33 @@ struct Cron {
     reason: String,
 }
 
+/// 空闲哨兵（架构 §4.14 / §3.1）：一个 Run 跑完后登记，到 `fire_at_ms`（= 结束时刻
+/// + T 分钟）若仍未被新输入取消，就触发该 session 的深睡整合。与 cron 的本质区别：
+/// **不 resume Run、不进 transcript、用户无感**——纯后台记忆整理。故不走
+/// `ResumeHandler` 通道，而是到点直接调 [`IdleHandler`]。
+struct IdleSentinel {
+    fire_at_ms: i64,
+    /// 登记时刻——到点时 `now - armed_at_ms` 即真实空闲时长，喂 `decide_sleep_depth`。
+    armed_at_ms: i64,
+    session_id: String,
+    /// 登记时该 session 最后一条 message id——深睡内部据此判断「这段空闲期间确实没新输入」
+    /// 的额外校验（哨兵取消是主路径，这是兜底）。
+    last_msg_id: Option<String>,
+}
+
+/// 空闲到点回调：scheduler 在自己的 runtime 里调用它跑深睡整合。由 agent-core 注册
+/// （不是 surface）——深睡是纯派生任务，和 `ResumeHandler`（resume 对话）解耦。
+pub type IdleHandler = Arc<dyn Fn(IdleElapsed) + Send + Sync + 'static>;
+
+/// 空闲到点事件，传给 [`IdleHandler`]。
+#[derive(Debug, Clone)]
+pub struct IdleElapsed {
+    pub session_id: String,
+    /// 实际空闲时长（分钟）——喂给 `decide_sleep_depth` 决定睡多深（§3.1）。
+    pub idle_minutes: f64,
+    pub last_msg_id: Option<String>,
+}
+
 #[derive(Clone)]
 struct BgWatch {
     task_id: String,
@@ -122,6 +149,11 @@ struct SchedulerInner {
     /// session-scoped BgTaskRegistry 引用（架构 §4.12.2 修订）。BgFinishHook
     /// 用 BgWatch.session_id 反查，找不到说明该 session 已被销毁——直接当 done。
     session_shells: std::collections::HashMap<String, BgTaskRegistry>,
+    /// 空闲哨兵表（架构 §4.14 / §3.1）。每个 session 至多一个——`arm_idle` 覆盖式登记，
+    /// 实现「每次 Run 结束重排计时器」：连续干活永远不触发，只有真停下来 T 分钟才睡。
+    idle_sentinels: Vec<IdleSentinel>,
+    /// 空闲到点回调（深睡入口），由 agent-core 注册。
+    idle_handler: Option<IdleHandler>,
 }
 
 pub struct WakeupScheduler {
@@ -171,6 +203,7 @@ impl WakeupScheduler {
                         loop {
                             tick.tick().await;
                             s_cron.scan_cron();
+                            s_cron.scan_idle();
                         }
                     });
                     tokio::spawn(async move {
@@ -272,6 +305,34 @@ impl WakeupScheduler {
         self.inner.lock().unwrap().bg_watches = still;
     }
 
+    /// 扫空闲哨兵（架构 §4.14 / §3.1）：到点的哨兵摘下、调 idle_handler 跑深睡。
+    /// 与 `scan_cron` 并列由每秒 tick 驱动。到点不投 mpsc（那是 resume 通道），而是
+    /// 直接回调——深睡不 resume 对话。
+    fn scan_idle(&self) {
+        let now = Utc::now().timestamp_millis();
+        let (fired, handler): (Vec<IdleSentinel>, Option<IdleHandler>) = {
+            let mut inner = self.inner.lock().unwrap();
+            let (fire, keep): (Vec<_>, Vec<_>) = inner
+                .idle_sentinels
+                .drain(..)
+                .partition(|s| s.fire_at_ms <= now);
+            inner.idle_sentinels = keep;
+            (fire, inner.idle_handler.clone())
+        };
+        let Some(handler) = handler else {
+            return; // 没注册 idle_handler（surface 未接入记忆深睡）→ 静默丢弃
+        };
+        for s in fired {
+            let idle_minutes = ((now - s.armed_at_ms).max(0) as f64) / 60_000.0;
+            handler(IdleElapsed {
+                session_id: s.session_id,
+                idle_minutes,
+                last_msg_id: s.last_msg_id,
+            });
+        }
+    }
+
+
     /// 在 cron 表里登记一条；到 `fire_at_ms` 时投递事件。
     pub fn arm_cron(&self, session_id: String, run_id: String, fire_at_ms: i64, reason: String) {
         self.inner.lock().unwrap().crons.push(Cron {
@@ -319,6 +380,52 @@ impl WakeupScheduler {
     /// App 层注册 resume 回调。回调拿 [`WakeupEvent`] 自己去 spawn_run。
     pub fn set_resume_handler(&self, handler: ResumeHandler) {
         self.inner.lock().unwrap().handler = Some(handler);
+    }
+
+    /// 注册空闲到点回调（深睡入口，架构 §4.14）。由 agent-core 在挂 harness 时注册一次。
+    pub fn set_idle_handler(&self, handler: IdleHandler) {
+        self.inner.lock().unwrap().idle_handler = Some(handler);
+    }
+
+    /// 登记 / 重置某 session 的空闲哨兵（架构 §3.1）：`delay_ms` 后若未被 `cancel_idle`
+    /// 取消，触发深睡。**覆盖式**——同 session 已有哨兵先清掉，实现「每次 Run 结束重排
+    /// 计时器」：连续干活永远不触发，只有真停下来 T 分钟才睡。`delay_ms == 0` 视为关闭
+    /// （清掉哨兵，不再睡）。
+    pub fn arm_idle(&self, session_id: String, last_msg_id: Option<String>, delay_ms: i64) {
+        let now = Utc::now().timestamp_millis();
+        let mut inner = self.inner.lock().unwrap();
+        inner.idle_sentinels.retain(|s| s.session_id != session_id);
+        if delay_ms <= 0 {
+            return;
+        }
+        inner.idle_sentinels.push(IdleSentinel {
+            fire_at_ms: now + delay_ms,
+            armed_at_ms: now,
+            session_id,
+            last_msg_id,
+        });
+    }
+
+    /// 取消某 session 的空闲哨兵（架构 §3.1）：新用户输入到来 / Run 开始时调用——
+    /// 用户还在，别睡。
+    pub fn cancel_idle(&self, session_id: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .idle_sentinels
+            .retain(|s| s.session_id != session_id);
+    }
+
+    /// 测试辅助：某 session 当前待触发的 idle 哨兵数（覆盖式 arm 应恒为 0 或 1）。
+    #[cfg(test)]
+    pub(crate) fn idle_pending_count(&self, session_id: &str) -> usize {
+        self.inner
+            .lock()
+            .unwrap()
+            .idle_sentinels
+            .iter()
+            .filter(|s| s.session_id == session_id)
+            .count()
     }
 
     /// session 被 cancel / Finished 时调用，清理未消费的 watch / cron。
@@ -418,6 +525,44 @@ pub fn wakeup_xml(event: &WakeupEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 裸 scheduler（不启动后台线程）：只测 arm/cancel 对哨兵表的状态逻辑。
+    fn bare_scheduler() -> WakeupScheduler {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        WakeupScheduler {
+            inner: Mutex::new(SchedulerInner::default()),
+            tx,
+        }
+    }
+
+    /// idle 哨兵核心行为（架构 §3.1）：arm 增、cancel 清、覆盖式 arm 恒留一个
+    /// （「每次 Run 结束重排计时器」），delay=0 视为关闭。
+    #[test]
+    fn idle_sentinel_arm_cancel_and_reset() {
+        let s = bare_scheduler();
+        assert_eq!(s.idle_pending_count("sess"), 0, "初始无哨兵");
+
+        s.arm_idle("sess".into(), Some("m1".into()), 600_000);
+        assert_eq!(s.idle_pending_count("sess"), 1, "arm 后有一个哨兵");
+
+        // 覆盖式重排：再 arm 同 session 仍只有一个（不累积）。
+        s.arm_idle("sess".into(), Some("m2".into()), 600_000);
+        assert_eq!(s.idle_pending_count("sess"), 1, "重排应覆盖而非累积");
+
+        // 另一个 session 独立计数。
+        s.arm_idle("other".into(), None, 600_000);
+        assert_eq!(s.idle_pending_count("sess"), 1);
+        assert_eq!(s.idle_pending_count("other"), 1);
+
+        // cancel 只清目标 session。
+        s.cancel_idle("sess");
+        assert_eq!(s.idle_pending_count("sess"), 0, "cancel 后清空");
+        assert_eq!(s.idle_pending_count("other"), 1, "不影响别的 session");
+
+        // delay<=0 视为关闭：arm 后立即无哨兵。
+        s.arm_idle("other".into(), None, 0);
+        assert_eq!(s.idle_pending_count("other"), 0, "delay=0 等同关闭");
+    }
 
     /// 协议加固（架构 §4.12.5 修订）：所有 wakeup XML 都必须带
     /// `[SYSTEM NOTIFICATION - NOT USER INPUT]` 头部，否则模型可能把

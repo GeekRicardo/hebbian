@@ -10088,3 +10088,25 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - 批3：WakeupScheduler 加 idle 哨兵触发深睡（RunFinished 后排 fire_at=now+T，新输入取消重排）+ 深睡整合（去重/tag 归一/联结建边/升华/遗忘）。
   - 批4：激活扩散注入（符号粗筛+LLM 精排+分级注入+强化回写）+ on/on_drift/every_turn 开关。
   - 架构.md §4.14 改写 + §13 决策追加（kind 二分 / 砍多类目 / 关联网络邻接表）尚未同步——批3/4 完成后统一更新。
+
+### 2026-06-23 — 记忆系统演进（批3）：session 空闲触发深睡（idle 哨兵）
+
+- **Why**: 用户提出「一个 Run 完成后若过了十几分钟/一小时没新输入，就该像人睡觉一样整理记忆」。
+  之前深睡只有「空闲触发」的概念但没有空闲检测机制。本批落地：复用现有 WakeupScheduler 的
+  1 秒 tick 调度加一个 idle 哨兵——RunFinished 后排 fire_at=now+T，到点没新输入就触发深睡；
+  新输入/新 Run 取消重排（计时器重置，连续干活永不触发）。
+- **改动**:
+  - wakeup.rs: 新增 IdleSentinel/IdleElapsed/IdleHandler；SchedulerInner 加 idle_sentinels +
+    idle_handler；scan_idle（与 scan_cron 并列接进 1s tick，到点直接调 handler 不走 mpsc——
+    深睡不 resume 对话）；arm_idle（覆盖式，delay=0 关闭）/ cancel_idle / set_idle_handler。
+  - memory_consolidate.rs（新建）: SleepDepth 枚举 + decide_sleep_depth（空闲分钟→深度，实时
+    idle 与离线回填共用同一函数）；consolidate_for_session 骨架（算深度+记日志，N 趟整合留批4）。
+  - harness.rs: spawn_run 入口 cancel_idle（新 Run=用户有动作）；浅睡抽取 spawn 后 arm_idle_after_run
+    （读设置拿 T、幂等注册 idle_handler、挂哨兵）。
+  - settings.rs: MemorySettings 加 idle_consolidate_minutes（默认 10，0=关）。
+- **影响范围**: agent-core（wakeup/harness/settings/lib + 新模块）。idle 是纯附加——未启用记忆
+  或 T=0 时完全不挂哨兵，行为与之前一致。全 workspace cargo check 通过，agent-core 610 测试全过。
+  新增单测 3 条（decide_sleep_depth 分档 + idle 哨兵 arm/cancel/覆盖式重排）。
+- **留尾巴**: consolidate_for_session 当前是骨架（只记「该深睡了」日志），批4 填 N 趟整合实现；
+  idle 触发的端到端 A/B 复现（heb 起 session → 等 T → 看深睡日志）待批4 整合逻辑就位后一起做。
+
