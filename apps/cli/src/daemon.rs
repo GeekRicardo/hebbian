@@ -963,6 +963,7 @@ struct PreparedSession {
     model: String,
     session_id: String,
     run_mode: RunMode,
+    reasoning: Option<common::ReasoningConfig>,
 }
 
 /// 解析 data_dir / provider / model，建新 session 或连已有 session（架构 §7 CoreClient）。
@@ -1024,12 +1025,19 @@ fn prepare_session(args: &DaemonArgs) -> Result<PreparedSession> {
 
     let run_mode = RunMode::parse(&args.run_mode).unwrap_or(RunMode::Default);
 
+    // reasoning 以 session 为准（与 Desktop chat.rs 对称）：新 session 在 create 时按模型
+    // 写好默认（thinking 模型 = 开启 + Extra），连已有 session 则沿用其落盘值。
+    let reasoning = sessions::load(&data_dir, &session_id)
+        .ok()
+        .and_then(|s| s.reasoning);
+
     Ok(PreparedSession {
         data_dir,
         provider_id,
         model,
         session_id,
         run_mode,
+        reasoning,
     })
 }
 
@@ -1040,6 +1048,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         model,
         session_id,
         run_mode,
+        reasoning,
     } = prepare_session(&args)?;
 
     // ── permission store ──
@@ -1061,7 +1070,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         data_dir: data_dir.clone(),
         provider_id,
         model,
-        reasoning: None,
+        reasoning,
         hitl: Mutex::new(None),
         active_run: AtomicBool::new(false),
         cancel_flag: Mutex::new(None),
@@ -1212,7 +1221,7 @@ pub async fn run_once(args: RunOnceArgs) -> Result<i32> {
         data_dir: data_dir.clone(),
         provider_id: prepared.provider_id,
         model: prepared.model.clone(),
-        reasoning: None,
+        reasoning: prepared.reasoning,
         hitl: Mutex::new(None),
         active_run: AtomicBool::new(false),
         cancel_flag: Mutex::new(None),

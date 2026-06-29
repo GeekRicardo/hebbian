@@ -1940,6 +1940,7 @@ pub fn create_with_source(
     source: String,
 ) -> AppResult<Session> {
     let now_ts = now();
+    let default_reasoning = common::reasoning::default_reasoning_for_model(&model);
     let mut session = Session {
         id: new_id(),
         title: "新对话".into(),
@@ -1955,7 +1956,7 @@ pub fn create_with_source(
         pending_runtime_allowed_paths: Vec::new(),
         enabled_tools: None,
         skill_dirs: None,
-        reasoning: None,
+        reasoning: default_reasoning,
         token_stats: None,
         source: Some(source.clone()),
         project_id: None,

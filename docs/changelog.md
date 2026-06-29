@@ -10284,3 +10284,35 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: 仅 desktop 前端渲染层（hebweb 共用同一份 React 代码）。不改协议、不改后端 goal marker 落盘格式（仍是独立 `Role::Marker`，set 紧跟 user、其余在 Stop hook 后落盘，前端按相邻关系"提"位）；老 session 一致生效。
 - **验证**: `tsc --noEmit` 通过。视觉效果由用户本地 dev 跑确认。
 - **留尾巴**: 无。
+
+### 2026-06-29 — 修复：agent 主动 KillShell 终止的后台任务不再发 BgTaskFinished 通知
+
+- **Why**: 后台 Bash 任务（`run_in_background=true` 或超时转后台）启动时会 arm 一个 WakeupScheduler watch，task 进终态时投递 `BgTaskFinished` 唤醒通知。但当 agent 自己调用 `KillShell` 主动干掉任务时，`KillShell` 工具已经把 `status=killed` 作为 tool result 返回当前 turn，模型已经知情；scan_bg 再投一条 wakeup notification 纯属噪音，还可能触发不必要的 resume / 开新 run。
+- **根因**: `wakeup.rs::scan_bg` 只判断 `is_terminal()` 就投递通知，不区分终态是"自然完成 / 异常退出"还是"被主动 kill"。而 `ShellState::Killed` 在全代码库里只产生于 `BgTaskRegistry::kill()` 触发的 `spawn_waiter` kill_rx 分支——`Killed` 态 ⟺ 有人主动 kill，这个铁不变量让"在 scan_bg 里识别 Killed 并跳过通知"语义完全成立。
+- **方案权衡**: 取最小且最干净的方案——在 scan_bg 里把 Killed 单拎出来静默摘除 watch、不投事件。备选方案是在 KillShell/kill() 里显式撤销 watch，但 `KillShellTool::execute` / `BgTaskRegistry::kill` 都拿不到 session_id（无 ctx），按 task_id 跨 session 摘 watch 有同名风险，成本和风险更高。验证过零副作用：用户取消的是**前台命令**（`bash.rs:227`，未 arm，本就不在 bg_watches 里），subagent 路径无主动 kill 语义（killed 恒 false）。
+- **改动**:
+  - [crates/agent-core/src/wakeup.rs](../crates/agent-core/src/wakeup.rs): `scan_bg` 的元组多带一个 `killed` 标志，Bash shell 分支按 `ShellState::Killed` 判定；`done && !killed` 才投递 `BgTaskFinished`，killed 静默摘除 watch。新增回归测试 `killed_task_does_not_notify_but_exited_does`：主动 kill 的任务 + 自然退出的任务同跑一轮 scan_bg，断言只收到 exited 那条；A/B 翻转（去掉 `!killed` 守卫）确认会 fail。
+- **影响范围**: 仅 agent-core 内部实现细节，不改协议字段 / 对外 API / WakeupEvent 形态，三 surface 行为对称。不需更新架构.md（§4.12.6 触发源描述仍准确，只是补齐"主动 kill 不通知"这一隐含语义）。
+- **验证**: `cargo test -p agent-core --lib wakeup::`（6 passed）+ `background::`（7 passed）+ `cargo check -p agent-core` 通过；新测试 A/B 翻转可稳定复现。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 修复：OAuth 直连官方请求 Opus 拿不到 thinking（reasoning 默认值没落地 + 缺 display:summarized）
+
+- **Why**: 用户报「hebbian 用 OAuth 请求 Opus 没 thinking」。UI 上明明开了 thinking、选了 effort（low/medium/high/xhigh/max），但抓 model_io.jsonl 发现每条请求 `reasoning:null`、响应 `reasoning_len:0`。
+- **根因（三个叠加缺陷，缺一都不会表现成"完全没 thinking"）**:
+  1. **UI 假象（主因）**: session 创建时 `reasoning=None`（`sessions.rs:create_with_source` 写死），前端 `ReasoningEffortPill` 用 `session.reasoning ?? DEFAULT_REASONING` 兜底显示成「开启+extra」，但这只是显示，从不写回 session——除非用户主动点一个"不同的" effort 才触发 `setReasoning` 落盘。于是真实请求 `reasoning=None`。
+  2. **display 缺失（次因）**: `build_body` 的 OAuth/CC 分支为兼容「sub2api 等第三方代理不接受 display 字段（400 unknown_messages_shape）」而统一不发 `display`。但直连官方 `api.anthropic.com` 的 opus-4.7/4.8 adaptive 默认 `display=omitted`——思考照常计费，却既不发 stream thinking_delta、complete 响应里也无 thinking block。
+  3. **stream 回退条件漏 OAuth**: `stream()` 对 opus47 + thinking 会回退到 `complete_then_emit`（opus 在 stream 下不发 thinking_delta），但回退条件只看 `reasoning.is_enabled()`；OAuth 路径 build_body 无条件注入 adaptive thinking，回退条件却没对齐，导致 `reasoning=None` 的会话走纯 stream 拿不到 thinking。
+  4. **heb CLI 连带 bug**: `DaemonState.reasoning` 初始化写死 `None`，从不读 session——heb 上 OAuth opus 同样永远没 thinking（与 Desktop chat.rs 从 session 读 reasoning 的行为不对称）。
+- **方案**: reasoning 默认值收敛到唯一来源 `common::reasoning::default_reasoning_for_model(model)`（thinking/reasoning 模型→开启+Extra，否则 None）；session 创建与 desktop 切模型共用，杜绝两处判定漂移。display 按 base_url 区分（`is_direct_anthropic`）：直连官方注入 `display:summarized`，第三方代理不注入。
+- **改动**:
+  - [crates/common/src/reasoning.rs](../crates/common/src/reasoning.rs): 新增 `default_reasoning_for_model` helper + 回归测试
+  - [crates/agent-core/src/storage/sessions.rs](../crates/agent-core/src/storage/sessions.rs): `create_with_source` 按模型初始化 reasoning 默认值
+  - [apps/desktop/src/lib.rs](../apps/desktop/src/lib.rs): `switch_provider_model` 复用 helper（去掉重复判定）
+  - [crates/model-gateway/src/protocols/anthropic.rs](../crates/model-gateway/src/protocols/anthropic.rs): `build_body` 加 `direct_anthropic` 参数，OAuth/CC 直连官方时给 adaptive thinking 补 `display:summarized`；新增 `is_direct_anthropic`；`cc_compat_effort_follows_user_and_model_scale` 测试加 direct=true/false 对照断言
+  - [crates/model-gateway/src/providers/anthropic.rs](../crates/model-gateway/src/providers/anthropic.rs): 两处 build_body 调用传 `direct`；`stream()` 回退条件改为「OAuth/CC 无条件 OR reasoning.is_enabled()」，与 build_body 注入逻辑对齐
+  - [apps/cli/src/daemon.rs](../apps/cli/src/daemon.rs): `PreparedSession` 带 reasoning，从 session 读回注入 DaemonState（heb 与 Desktop 对称）
+  - 集成测试 [crates/model-gateway/tests/thinking_integration.rs](../crates/model-gateway/tests/thinking_integration.rs): 同步 build_body 新签名 + 补 match 漏的 `ReasoningSignature` 分支（HEAD 上已编译不过的过时测试，本次顺带修复使其能编译）
+- **影响范围**: common / agent-core / model-gateway / desktop / cli 五个 crate。不改协议字段、EventPayload、storage 文件格式——纯 additive（build_body 加参数为内部 API），向后兼容。老 session（reasoning=null）靠缺陷 2/3 的 OAuth 兜底救回（build_body 无条件注入 adaptive，stream 无条件回退）；新 session 走缺陷 1 的默认值。三 surface 行为对称。
+- **验证（heb CLI A/B 复现）**: 修复前请求 `reasoning:null`、thinking 无 display；修复后请求 `reasoning:{enabled,extra}`、`thinking={"display":"summarized","type":"adaptive"}`、`output_config:{effort:xhigh}`，且日志确认走 `complete_then_emit`（stream=false）。`cargo check --workspace` 通过、`cargo test -p agent-core --lib`（626 passed）、model-gateway cc_compat（3 passed）、common default_reasoning（1 passed）全过。
+- **留尾巴**: 该测试账号实测请求体已正确带 display，但响应仍 `reasoning_len:0`（含难题）。开头日志有 `invalid_grant: Refresh token not found or invalid` → 回退「本地 Claude Code 凭据恢复」，疑似账号/凭据问题（与本次代码修复无关），待用户用 refresh token 未失效的 OAuth 账号或 Desktop 复测确认 thinking 文本能正常返回。`thinking_integration.rs` 仍是手动调试型测试（含真实 API key 跳过逻辑），未纳入 CI。

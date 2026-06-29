@@ -1058,16 +1058,11 @@ fn switch_provider_model(
     let mut updated = sessions::load(&dd, &id)?;
     updated.provider_id = new_provider_id;
     updated.model = new_model;
-    let supports = common::reasoning::anthropic_supports_thinking(&updated.model)
-        || common::reasoning::openai_supports_reasoning(&updated.model);
-    if supports {
+    let model_default = common::reasoning::default_reasoning_for_model(&updated.model);
+    if model_default.is_some() {
         // 首次切到支持推理的模型：默认 thinking on + extra effort（用户可在 UI 改）
         if updated.reasoning.is_none() {
-            updated.reasoning = Some(common::ReasoningConfig {
-                enabled: Some(true),
-                effort: Some(common::ReasoningEffort::Extra),
-                long_context: None,
-            });
+            updated.reasoning = model_default;
         }
     } else {
         // 切到不支持的模型：丢掉旧 reasoning，避免遗留 thinking 字段被 server 拒。

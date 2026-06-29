@@ -145,6 +145,25 @@ impl ReasoningConfig {
     }
 }
 
+/// 新建会话 / 切换到该模型时的 reasoning 初值。
+///
+/// 支持 thinking / reasoning 的模型默认「开启 + Extra」（对齐 Claude Code「默认想清楚」）；
+/// 不支持的模型返回 `None`——带 reasoning 字段会被这些 server 拒。
+///
+/// 这是 reasoning 默认值的唯一来源：session 创建（storage）与 UI 切模型（desktop）共用，
+/// 避免两处各写一份判定逻辑跑偏。
+pub fn default_reasoning_for_model(model: &str) -> Option<ReasoningConfig> {
+    if anthropic_supports_thinking(model) || openai_supports_reasoning(model) {
+        Some(ReasoningConfig {
+            enabled: Some(true),
+            effort: Some(ReasoningEffort::Extra),
+            long_context: None,
+        })
+    } else {
+        None
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Anthropic 模型家族判定
 // ──────────────────────────────────────────────────────────────────────────────
@@ -297,6 +316,27 @@ pub fn openai_supports_reasoning(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_reasoning_on_for_thinking_models_off_otherwise() {
+        // thinking / reasoning 模型：默认开启 + Extra。
+        for m in [
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-3-7-sonnet-latest",
+            "gpt-5.5",
+            "o3",
+        ] {
+            let cfg = default_reasoning_for_model(m).unwrap_or_else(|| panic!("{m} 应有默认"));
+            assert_eq!(cfg.enabled, Some(true), "{m}");
+            assert_eq!(cfg.effort, Some(ReasoningEffort::Extra), "{m}");
+        }
+        // 不支持的模型：None（带 reasoning 字段会被 server 拒）。
+        for m in ["claude-3-5-sonnet", "gpt-4o", "o1-mini", "deepseek-chat"] {
+            assert!(default_reasoning_for_model(m).is_none(), "{m} 不该有默认");
+        }
+    }
 
     #[test]
     fn anthropic_mode_detection() {

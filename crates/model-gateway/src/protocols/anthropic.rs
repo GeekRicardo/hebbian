@@ -50,11 +50,22 @@ fn is_deepseek_v4_anthropic_dialect(model: &str) -> bool {
     m.starts_with("deepseek-v4")
 }
 
+/// 是否直连 Anthropic 官方端点（`api.anthropic.com`）。
+///
+/// 官方端点对 opus-4.7/4.8 的 adaptive thinking 默认 `display=omitted`——思考照常计费但
+/// 不外显（既不发 stream thinking_delta，complete 响应里也无 thinking block），必须显式
+/// `display:"summarized"` 才拿得到推理摘要。sub2api 等第三方代理不接受 display 字段
+/// （400 unknown_messages_shape），所以注入 display 前先用本判定区分直连与代理。
+pub fn is_direct_anthropic(base_url: &str) -> bool {
+    base_url.contains("api.anthropic.com")
+}
+
 pub fn build_body(
     req: &ModelRequest,
     stream: bool,
     claude_code_oauth: bool,
     account_uuid: Option<&str>,
+    direct_anthropic: bool,
 ) -> Result<Value, ModelError> {
     let dialect_deepseek = is_deepseek_v4_anthropic_dialect(&req.model);
     let mut messages: Vec<Value> = req
@@ -186,12 +197,12 @@ pub fn build_body(
     // 不再写死 high——否则思考强度选择对所有走 CC 兼容 / OAuth 的 provider 完全失效。
     // reasoning 未设时用 ReasoningEffort 默认（Extra → 4.8 走 xhigh），符合「默认想清楚」。
     //
-    // display 字段：不同代理行为不同。
-    // - 直连 Anthropic API（OAuth）：4.7/4.8 的 adaptive 默认 display=omitted，思考会计费但
-    //   不发 stream thinking_delta，必须加 `"display": "summarized"` 才外显推理摘要。
+    // display 字段：不同上游行为不同，按 base_url 区分。
+    // - 直连 Anthropic 官方（api.anthropic.com）：4.7/4.8 的 adaptive 默认 display=omitted，
+    //   思考会计费但既不发 stream thinking_delta、complete 响应里也无 thinking block，
+    //   必须显式 `display:"summarized"` 才外显推理摘要。
     // - sub2api 等第三方代理：不接受 display 字段（400 unknown_messages_shape），
-    //   且代理服务端可能自行决定是否返回 thinking_delta。
-    // 这里统一不加 display，各代理按各自默认行为处理。
+    //   且代理服务端自行决定是否返回 thinking_delta，所以不注入。
     if claude_code_oauth {
         let effort = req
             .reasoning
@@ -199,7 +210,11 @@ pub fn build_body(
             .map(|c| c.effective_effort())
             .unwrap_or_default()
             .anthropic_adaptive_effort_for_model(&req.model);
-        thinking_block = Some(json!({ "type": "adaptive" }));
+        let mut block = json!({ "type": "adaptive" });
+        if direct_anthropic {
+            block["display"] = json!("summarized");
+        }
+        thinking_block = Some(block);
         output_config = Some(json!({ "effort": effort }));
     }
 
@@ -900,7 +915,7 @@ mod tests {
                 reasoning: None,
                             meta: Default::default(),
             };
-            let body = build_body(&req, false, false, None).unwrap();
+            let body = build_body(&req, false, false, None, false).unwrap();
             let tool_use = &body["messages"][1]["content"][0];
             assert_eq!(tool_use["type"], "tool_use");
             assert_eq!(tool_use["input"], expected, "input={input}");
@@ -945,7 +960,7 @@ mod tests {
                     meta: Default::default(),
         };
 
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         let content = body["messages"][0]["content"].as_array().unwrap();
 
         assert_eq!(content[0], json!({"type": "text", "text": "what changed?"}));
@@ -988,7 +1003,7 @@ mod tests {
             reasoning: None,
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         let last = msgs.last().unwrap();
         assert_eq!(last["role"], "user", "末尾必须补成 user");
@@ -1021,7 +1036,7 @@ mod tests {
             reasoning: None,
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.last().unwrap()["role"], "user");
     }
@@ -1038,7 +1053,7 @@ mod tests {
             reasoning: None,
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 1, "不该多补 user");
         assert!(message_text(&msgs[0]).contains("hi"));
@@ -1056,7 +1071,7 @@ mod tests {
                     meta: Default::default(),
         };
 
-        let body = build_body(&req, false, true, None).unwrap();
+        let body = build_body(&req, false, true, None, false).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
         // CC 兼容：banner block + 用户 system 正文 block（无 billing block）。
@@ -1077,7 +1092,7 @@ mod tests {
                     meta: Default::default(),
         };
 
-        let body = build_body(&req, false, true, None).unwrap();
+        let body = build_body(&req, false, true, None, false).unwrap();
         let system = body["system"].as_array().expect("system must be an array");
 
         // 无用户 system 时只发 banner block。
@@ -1097,7 +1112,7 @@ mod tests {
                     meta: Default::default(),
         };
 
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         // apply_cache_control 会把字符串 system 升格为带 cache_control 的 block 数组。
         let arr = body["system"]
             .as_array()
@@ -1130,7 +1145,7 @@ mod tests {
             }),
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         assert_eq!(
             body["thinking"]["display"], "summarized",
             "dot variant of opus-4-7 must walk Opus47Adaptive branch (has display:summarized), body={body}"
@@ -1155,7 +1170,7 @@ mod tests {
             }),
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert!(body["thinking"]["budget_tokens"].is_number());
         // LegacyEnabled 不该带 display
@@ -1184,7 +1199,7 @@ mod tests {
                 }),
                             meta: Default::default(),
             };
-            build_body(&req, false, true, None).unwrap()
+            build_body(&req, false, true, None, false).unwrap()
         };
 
         // 4.8：Extra → xhigh，Low → low
@@ -1221,14 +1236,36 @@ mod tests {
             "adaptive"
         );
 
-        // CC 兼容的 adaptive thinking 一律不带 display（与 c.json 真 CC 实测一致）：
-        // 直连默认 display=omitted，sub2api 等第三方代理不接受 display 字段，统一不发。
+        // adaptive thinking 的 display 按上游区分（本次修复的回归点）：
+        // - 第三方代理（direct=false）：不带 display——sub2api 等不接受该字段（400）。
+        // - 直连官方 api.anthropic.com（direct=true）：必须带 display:"summarized"，
+        //   否则 4.7/4.8 默认 display=omitted，思考计费却不外显（既无 stream thinking_delta，
+        //   complete 响应里也无 thinking block）。这是「OAuth opus 没 thinking」的根因之一。
+        let build_direct = |model: &str| {
+            let req = ModelRequest {
+                model: model.into(),
+                system: None,
+                entries: vec![TranscriptEntry::User(UserEntry::text("hi"))],
+                tools: vec![],
+                max_tokens: 8192,
+                reasoning: None,
+                meta: Default::default(),
+            };
+            build_body(&req, false, true, None, true).unwrap()
+        };
         for m in ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"] {
-            let b = build(m, None);
+            let proxied = build(m, None);
             assert!(
-                b["thinking"].get("display").is_none(),
-                "{m} 不该带 display: {b}"
+                proxied["thinking"].get("display").is_none(),
+                "{m} 经代理不该带 display: {proxied}"
             );
+            let direct = build_direct(m);
+            assert_eq!(
+                direct["thinking"]["display"], "summarized",
+                "{m} 直连官方必须带 display:summarized: {direct}"
+            );
+            // reasoning=None 也照常注入 adaptive thinking（救「UI 假装开着、实际没落盘」的老会话）。
+            assert_eq!(direct["thinking"]["type"], "adaptive", "{m}: {direct}");
         }
     }
 
@@ -1251,7 +1288,7 @@ mod tests {
             reasoning: None,
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, true, Some("acct-123")).unwrap();
+        let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
 
         // system：[banner, 用户正文]，绝不含 billing header block。
         let system = body["system"].as_array().unwrap();
@@ -1297,7 +1334,7 @@ mod tests {
         );
 
         // session_id 同会话稳定：同 entries 再 build 得到同一个 id。
-        let body2 = build_body(&req, false, true, Some("acct-123")).unwrap();
+        let body2 = build_body(&req, false, true, Some("acct-123"), false).unwrap();
         let uid2 = body2["metadata"]["user_id"].as_str().unwrap();
         let parsed2: Value = serde_json::from_str(uid2).unwrap();
         assert_eq!(parsed["session_id"], parsed2["session_id"]);
@@ -1317,7 +1354,7 @@ mod tests {
                 reasoning: None,
                             meta: Default::default(),
             };
-            let body = build_body(&req, false, true, Some("acct-123")).unwrap();
+            let body = build_body(&req, false, true, Some("acct-123"), false).unwrap();
             assert!(
                 body.get("fallbacks").is_none(),
                 "{model} 不该发 fallbacks: {body}"
@@ -1382,6 +1419,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -1399,6 +1437,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -1417,6 +1456,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(body["thinking"]["type"], "disabled");
@@ -1431,7 +1471,7 @@ mod tests {
             long_context: None,
         };
         let req = req_for_deepseek_anthropic(Some(cfg), "", true, 8192);
-        let err = build_body(&req, false, false, None).unwrap_err();
+        let err = build_body(&req, false, false, None, false).unwrap_err();
         let crate::types::ModelError::Other(msg) = err else {
             panic!("expected ModelError::Other");
         };
@@ -1446,7 +1486,7 @@ mod tests {
             long_context: None,
         };
         let req = req_for_deepseek_anthropic(Some(cfg), "之前的思考", true, 8192);
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         let assistant = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
         let content = assistant["content"].as_array().unwrap();
@@ -1474,7 +1514,7 @@ mod tests {
             reasoning: Some(cfg),
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         assert!(body.get("thinking").is_none());
         assert!(body.get("output_config").is_none());
     }
@@ -1496,7 +1536,7 @@ mod tests {
             reasoning: Some(cfg),
                     meta: Default::default(),
         };
-        let body = build_body(&req, false, false, None).unwrap();
+        let body = build_body(&req, false, false, None, false).unwrap();
         // claude-sonnet-4-5 走 LegacyEnabled：thinking.type=enabled + budget_tokens
         assert_eq!(body["thinking"]["type"], "enabled");
         assert!(body["thinking"]["budget_tokens"].is_number());

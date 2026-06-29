@@ -114,6 +114,7 @@ impl StreamCollector {
             ModelStreamEvent::ToolCallDelta(delta) => {
                 self.tool_call_deltas.lock().unwrap().push(delta);
             }
+            ModelStreamEvent::ReasoningSignature { .. } => {}
         }
     }
 
@@ -459,7 +460,7 @@ fn effort_parameter_correctness() {
             }),
                     meta: Default::default(),
         };
-        let body = ap::build_body(&req, false, false).unwrap();
+        let body = ap::build_body(&req, false, false, None, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["thinking"]["display"], "summarized");
         let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
@@ -484,7 +485,7 @@ fn effort_parameter_correctness() {
                 }),
                             meta: Default::default(),
             };
-            let body = ap::build_body(&req, false, false).unwrap();
+            let body = ap::build_body(&req, false, false, None, false).unwrap();
             assert_eq!(body["thinking"]["type"], "enabled");
             assert!(body["thinking"].get("display").is_none());
             let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
@@ -509,7 +510,7 @@ fn effort_parameter_correctness() {
             }),
                     meta: Default::default(),
         };
-        let body = ap::build_body(&req, false, false).unwrap();
+        let body = ap::build_body(&req, false, false, None, false).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         let eff = body["output_config"]["effort"].as_str().unwrap();
         assert_eq!(eff, effort.deepseek_effort());
@@ -818,7 +819,7 @@ fn debug_claude_request_bodies() {
                     meta: Default::default(),
         };
 
-        let body = ap::build_body(&req, true, false).unwrap();
+        let body = ap::build_body(&req, true, false, None, false).unwrap();
 
         eprintln!("-- {model} --");
         eprintln!(

@@ -142,9 +142,16 @@ impl AnthropicClient {
     ) -> Result<reqwest::Response, ModelError> {
         let attach_long = needs_long_context_beta(req);
         let oauth = self.is_claude_code_oauth();
+        let direct = proto::is_direct_anthropic(&self.provider.base_url);
         let url = self.messages_url();
 
-        let body = proto::build_body(req, stream, oauth, self.provider.account_id.as_deref())?;
+        let body = proto::build_body(
+            req,
+            stream,
+            oauth,
+            self.provider.account_id.as_deref(),
+            direct,
+        )?;
         // 诊断「模型请求串账号」：每次请求打出实际用的 provider / account / token 末 4 位。
         // 复现「切换后才串」时 grep 这行——切到 B 后若仍出现 A 的 provider_id/account，即串。
         let key = &self.provider.api_key;
@@ -179,7 +186,7 @@ impl AnthropicClient {
                 }
             };
         tracing::info!("模型请求收到 401，已强制刷新 OAuth token，用新凭证重试");
-        let body2 = proto::build_body(req, stream, oauth, fresh.account_id.as_deref())?;
+        let body2 = proto::build_body(req, stream, oauth, fresh.account_id.as_deref(), direct)?;
         post_messages(&self.http, &url, &fresh, &body2, attach_long, cancel).await
     }
 }
@@ -239,18 +246,25 @@ impl ModelClient for AnthropicClient {
         cancel: CancelFlag,
         on_event: &(dyn Fn(ModelStreamEvent) + Send + Sync),
     ) -> Result<ModelResponse, ModelError> {
-        // Opus 4.7 在 stream 模式下不发 thinking_delta（实测：只有 signature_delta），
-        // 即使显式 display:"summarized" 也没用。要拿到 thinking 文本只能走 complete()。
-        // 这里检查到「4.7 + thinking 启用」就回退到 complete，保证 thinking 能落地；
-        // 拿到完整 reasoning 后一次性 emit ReasoningDelta，再分别 emit text 和 tool_use。
+        // Opus 4.7/4.8 在 stream 模式下不发 thinking_delta（实测：只有 signature_delta），
+        // 即使显式 display:"summarized" 也没用。要拿到 thinking 文本只能走 complete()——
+        // 非流式响应的 content 里带完整 thinking block。这里检查到「4.7 模式 + 请求体会带
+        // thinking」就回退到 complete，拿到 reasoning 后一次性 emit ReasoningDelta，再分别
+        // emit text 和 tool_use。
+        //
+        // 「请求体会带 thinking」的判定必须与 build_body 一致：OAuth / CC 路径**无条件**注入
+        // adaptive thinking（与 reasoning.enabled 无关），所以这里也要无条件回退；其余路径
+        // 只在 reasoning 显式开启时才带 thinking。漏掉 OAuth 分支会让 reasoning=None 的
+        // 会话走纯 stream → opus 不发 thinking_delta → 拿不到推理摘要。
         if matches!(
             common::reasoning::anthropic_thinking_mode(&req.model),
             Some(common::reasoning::AnthropicThinkingMode::Opus47Adaptive)
-        ) && req
-            .reasoning
-            .as_ref()
-            .map(|r| r.is_enabled())
-            .unwrap_or(false)
+        ) && (self.is_claude_code_oauth()
+            || req
+                .reasoning
+                .as_ref()
+                .map(|r| r.is_enabled())
+                .unwrap_or(false))
         {
             return self.complete_then_emit(req, cancel, on_event).await;
         }
