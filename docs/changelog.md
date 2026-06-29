@@ -10463,3 +10463,113 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
 - **影响范围**: Desktop/hebweb 文件树 UI 与 Desktop Tauri 文件枚举边界；不改 agent-core、协议、会话持久化，不破坏兼容。
 - **验证**: `pnpm exec tsc --noEmit`（apps/desktop）通过；`cargo check -p hebbian --lib` 通过（保留既有 unused warning）；`git diff --check` 通过。
 - **留尾巴**: 无。
+
+### 2026-06-29 — 将右侧 Markdown 预览切到 VS Code 风格 markdown-it 渲染
+
+- **Why**: 用户反馈右侧编辑器 Markdown 预览和 plan 预览排版很挤，不像主 chat 区顺眼，并希望先看更接近 VS Code 原生 Markdown 预览的效果。
+- **改动**:
+  - [apps/desktop/package.json](../apps/desktop/package.json) / pnpm lockfile: 新增 `markdown-it` 与类型依赖，采用 VS Code Markdown 预览同源的 Markdown 渲染管线。
+  - [apps/desktop/frontend/src/desktop/ui/components/VsCodeMarkdownPreview.tsx](../apps/desktop/frontend/src/desktop/ui/components/VsCodeMarkdownPreview.tsx): 新增右侧预览专用渲染组件，负责 markdown-it 渲染和链接点击拦截。
+  - [apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx](../apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx): 将文件 Markdown 预览和 plan 预览切到 `VsCodeMarkdownPreview`，不再分别使用 `markdown-body` / `prose-sm`。
+  - [apps/desktop/frontend/src/index.css](../apps/desktop/frontend/src/index.css): 增加 `.vscode-markdown-preview` 排版样式，按 VS Code preview 的正文宽度、标题间距、代码块、表格、引用块风格调校。
+- **影响范围**: Desktop/hebweb 前端右侧编辑器/plan 预览；不改 core、协议、持久化。新增前端依赖会影响安装/打包产物。
+- **验证**: `pnpm exec tsc --noEmit`（apps/desktop）通过；`git diff --check` 通过。
+- **留尾巴**: 这不是完整嵌入 VS Code Markdown Preview webview 扩展；若要 1:1 原生预览，需要后续评估 VS Code webview/service override 路线。
+
+### 2026-06-29 — OAuth opus thinking 改走流式 + 落盘思考用时，删过时的非流式回退
+
+- **Why**: 用户报「hebbian OAuth 调 claude opus 看不到 thinking 内容」。按修 bug 流程逐层抓证据（heb CLI + RUST_LOG + curl 官方 API）定位三件事：
+  1. **请求 wire 一直是对的**：OAuth 直连官方 opus-4-8 实发 `thinking={"type":"adaptive","display":"summarized"}` + `output_config={"effort":"xhigh"}` + `effort-2025-11-24` beta，服务端 200，effort 生效（output_tokens 随 low/high/xhigh/max 单调升）。
+  2. **拿不到 thinking 文本是 Anthropic 官方策略，非 hebbian bug**：curl 直连官方拆 thinking block，`keys=["signature","thinking","type"]` 但 `thinking=""`（空），只回 2508 字符 signature。流式/非流式都一样。对比 2026-05-30 那条「经 sub2api 代理能拿到 thinking_delta」——那是**代理服务端自己填充摘要**，官方直连这条路没有。
+  3. **真正的代码债**：`providers/anthropic.rs::stream` 因一条**已被 2026-05-30 实测推翻的过时注释**（「Opus 4.7/4.8 stream 不发 thinking_delta」），把 OAuth/CC 的 Opus47Adaptive 无条件踢去非流式 `complete_then_emit`。这条回退在官方直连语境下：① 救不回 thinking 文本（本来就空）；② 反而埋掉了正文逐字流 + thinking 墙钟时长——而时长是这条路上唯一还能展示给用户的思考信号。
+- **改动**:
+  - `crates/model-gateway/src/protocols/anthropic.rs`: `AnthropicStreamEvent` 新增 `ThinkingStart{index}` / `BlockStop{index}`；`parse_stream_event` 解析 `content_block_stop`（此前完全没解析）、把 `content_block_start` 的 thinking 分支产出 `ThinkingStart`。新增回归 `thinking_block_boundaries_parsed_for_duration`。
+  - `crates/model-gateway/src/providers/anthropic.rs`: 删掉 `Opus47Adaptive && (oauth||enabled)` → `complete_then_emit` 的强制非流式回退（及 `complete_then_emit` 方法本体，已无调用方）；`stream` 循环里按 block index 记 thinking 起始墙钟时刻，收到对应 `BlockStop` 时算时长、emit 一次 `ReasoningDuration`。
+  - `crates/model-gateway/src/types.rs`: `ModelStreamEvent` 新增 `ReasoningDuration{ms}`。
+  - `crates/protocol/src/{event,wire}.rs`: `EventPayload` 新增 `ReasoningDuration{ms}`；`to_wire` 归入「纯内部不对外」（与 `ReasoningSignature` 同列）——时长不走实时 wire，随落盘的 Reasoning part.duration_ms 到前端即可。
+  - `crates/agent-core/src/agent_loop.rs`: stream_cb 映射 `ModelStreamEvent::ReasoningDuration` → `EventPayload::ReasoningDuration`。
+  - `crates/agent-core/src/turn_accumulator.rs`: `record_part` 处理 `ReasoningDuration`——写进当前 Reasoning part 的 duration_ms；**若最后一段不是 Reasoning（OAuth 场景 thinking 文本被清空、没有任何 reasoning delta），补一个空文本 Reasoning part 承载时长**。新增回归 `reasoning_duration_attaches_to_thinking_part` + `reasoning_duration_without_text_creates_empty_part`。
+  - `crates/agent-core/src/storage/sessions.rs`: `MessagePart::Reasoning` 加 `duration_ms: Option<u64>`（`skip_serializing_if=Option::is_none`，老 jsonl 向下兼容）。其余所有构造 / 解构 `MessagePart::Reasoning` 的点（transcript / import_claude / export_claude / nested / preview_payload / channel-core bridge）同步补字段。
+  - 前端：**零改动**——`MessagePart.reasoning.duration_ms?` + `MessageBubble.tsx` 的 `formatCompactDuration(shownDuration)` 早就留好了坑（流式跑本地秒表、结束用落盘 duration_ms 定格），这次只是后端第一次把值填上。
+- **影响范围**: model-gateway（流解析 + provider）/ protocol（加 EventPayload 变体 + to_wire）/ agent-core（accumulator + 落盘结构）。协议层 additive，老 jsonl 兼容。无破坏性变更。代理路径（sub2api 等）不受影响——实测代理走 stream 同样拿得到 thinking_delta，删回退反而让代理也享受逐字流。
+- **验证**:
+  - 阶段 A 复现（修前）：OAuth opus 复杂逻辑题，model_io `reasoning_len=0`、走 `complete_then_emit`（stream=false），无任何时长。
+  - 阶段 B 验证（修后）：同一触发输入重跑，`complete_then_emit` 出现 0 次、`stream=true`，session.jsonl 落 `{"type":"reasoning","text":"","duration_ms":5121}`——空文本 + 思考用时 5.1s，正是 OAuth 场景预期形态。
+  - `cargo check --workspace` 通过；`cargo test -p model-gateway --lib`（120 passed）；`cargo test -p agent-core --lib`（新增 3 条回归全过；唯一失败的 `run_in_background_returns_immediately` 是既有 flaky 时序测试，单跑即过，与本次无关）。
+- **留尾巴**:
+  - thinking **文本**官方对 OAuth 流量不外显，无解（除非走会填充摘要的代理）。本次只解决「思考用时」展示。
+  - 非流式 `complete()` 路径（如 anthropic 带工具但 provider 不支持流式工具的 turn）拿不到 block 边界 → 无时长，降级为不显示，不报错。
+  - `interleaved-thinking` 多 thinking block 场景下，当前按 block index 各自计时、最后一个 `BlockStop` 覆盖前面的 part duration——多块交错的累计时长展示待后续按需细化。
+  - **未提交**：本条改动尚未 commit。工作区同时含他人未完成改动 `apps/desktop/frontend/src/desktop/ui/components/EditorPane.tsx` / `apps/desktop/vite.config.ts` / `VsCodeMarkdownPreview.tsx`（对应上一条 VS Code Markdown Preview），提交时只 add 本次 14 个 `.rs` + 本文件 + `docs/架构.md`，不碰前端那三个文件。
+
+### 2026-06-29 — 重构聊天区工具调用时间线的折叠展示
+
+- **Why**: 用户在内置浏览器预览里标注 ToolCallTimeline 过于占空间：运行中的工具不应展开完整卡片，多工具调用只需显示 tool name；工具完成且后续已有 assistant 正文后，应折叠为一行“已运行 X、Y 工具”，点击后再展开当前详细列表。Ask 作为人机交互问题不应进入该折叠组。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `AssistantParts` 向 `ToolCallTimeline` 传入后续是否已有正文；非 Ask 工具组运行中改为极简 tool name 列表；完成且后续有正文时默认折叠为 summary，点击展开后仍复用原 ToolCallRow 详情与单个 tool 展开逻辑；Ask 保持完整时间线展示。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 将 assistant 正文段落加上灰色内容底，工具时间线自身取消灰底容器，让视觉重心落在 content 区域。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（apps/desktop）通过；`git diff --check` 通过。
+- **留尾巴**: 嵌套子 agent 内部 timeline 暂保持原完整展示，避免把父层压缩规则误套到子过程细节。
+
+### 2026-06-29 — 收紧工具调用折叠摘要与详情列表间距
+
+- **Why**: 用户在内置浏览器预览里标注 ToolCallTimeline 仍偏松：多条“已运行 X 工具”摘要之间、展开后的工具卡片之间都要更紧凑；同时展开后 summary 按钮必须留在原位，点击同一个按钮能再次折叠。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 将 `AssistantParts` 父级间距从 `space-y-2` 收紧到 `space-y-1`；运行中极简工具列表、summary wrapper、详情列表顶部间距收紧到 `mt-0.5`；详情列表项间距改为 `space-y-px`。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 可折叠工具组展开后继续渲染同一个 summary 按钮，并用同一个 `groupKey` 走 `onToggle`，点击后可折叠回 summary-only 状态。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **验证**: `pnpm exec tsc --noEmit`（apps/desktop）通过；`git diff --check` 通过。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 对齐工具调用折叠入口到正文起始线
+
+- **Why**: 用户在内置浏览器预览里标注“已运行 X 工具”折叠入口比上方 markdown 正文第一字更靠左约 12px；折叠入口应跟正文内容首字对齐，同时展开后的工具条目仍保持紧凑。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 给可折叠 summary 行增加与 markdown 正文 `px-3` 一致的左侧缩进；详情列表继续保持 `space-y-px`，避免展开内容重新变松。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 对齐工具调用详情并收紧行距与状态点距离
+
+- **Why**: 用户在内置浏览器预览里继续标注两处间距问题：展开后的工具调用详情列表应跟“已运行 X 工具”摘要对齐；工具行之间的垂直距离仍偏大，且左侧状态点离工具图标太远。这里要收紧的是“状态点 ↔ 工具图标”和“工具行 ↔ 工具行”，不是“工具图标 ↔ 描述文字”。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 将可折叠工具组的 `pl-3` 提升到 summary 与详情列表共同外层，让详情列表与摘要处在同一缩进上下文。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 在 `ToolCallRow` 共享 title class 中保留工具图标与文字原有间距，改为把行高从 `min-h-8` 收到 `min-h-6`、垂直 padding 收到 `py-0.5`；同时把状态点和连接线向工具图标侧收紧，所有工具调用行统一生效。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 对齐 thinking 行并统一工具点距
+
+- **Why**: 用户继续指出 thinking 行也应跟正文/工具摘要同一左边界对齐；同时 tool 块里“状态点 ↔ 工具图标”的距离要跟“工具图标 ↔ 后续描述”的距离一致。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 给 `ReasoningBlock` 外层增加与正文/summary 一致的 `pl-3`，让 thinking 入口跟聊天内容起始线对齐。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 保持 `ToolCallRow` 的 `gap-2` 作为图标到描述的基准间距，并把状态点/竖线位置调回与该 8px 间距匹配。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 对齐右侧工作台顶部线条并移除标题折叠按钮
+
+- **Why**: 用户在内置浏览器预览里标注右侧工作台标题栏与竖向工具栏顶部线条高度不齐，同时标题栏右侧已有重复的 chevron 折叠按钮，应直接移除。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 将 activity bar 顶部折叠按钮放进独立 `h-8 border-b` 顶部槽，与左侧标题栏 `h-8 border-b` 对齐；删除原先额外 `h-px` 分隔线。
+  - [apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx](../apps/desktop/frontend/src/desktop/ui/components/RightSidebar.tsx): 移除标题栏右侧的 chevron-right 按钮 JSX，保留 activity bar 顶部折叠入口作为唯一折叠控制。
+- **影响范围**: Desktop/hebweb 前端右侧工作台渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 修复旁支对话标签文字拥挤重叠
+
+- **Why**: 用户在内置浏览器预览里标注旁支对话 tab 区域多个文字按钮挤在一起，“新旁支”等标题容易互相叠字；分支标签需要在窄侧栏里稳定截断，而不是横向撑爆。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx): 调整 `BranchSubTab` 共享布局，给标签外层增加 `min-w-0`、`max-w-[132px]` 和可收缩能力；标题按钮与文本区域增加 `min-w-0` / `overflow-hidden` / `truncate`，关闭按钮固定 `shrink-0`。
+- **影响范围**: Desktop/hebweb 前端右侧工作台旁支对话 UI；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
+
+### 2026-06-29 — 收紧旁支 tab 胶囊并移除底部输入区
+
+- **Why**: 用户继续标注旁支 tab 内文字和关闭按钮仍拥挤重叠，且底部“问点什么（旁支只读，不改文件）”输入提示区域不需要保留；希望 tab 本体统一承担 hover/active 胶囊效果，X 放在胶囊内部右侧。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx): 将 `BranchSubTab` 外层改为 `min-w-[96px] max-w-[132px] flex-[1_1_96px]` 的相对定位胶囊，统一承载 hover/active 背景；标题按钮设为 `w-0 min-w-0 flex-[1_1_auto] overflow-hidden`，文本块保持省略，关闭按钮绝对定位到右侧胶囊内部且不再有独立 hover 背景。
+  - [apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx): 删除旁支底部 `AsideComposer` 输入区以及随之无用的旁支模型选择器代码；消息列表保留 `pb-3`，避免底部留白异常。
+- **影响范围**: Desktop/hebweb 前端右侧工作台旁支对话 UI；不改 core、协议、持久化。不破坏数据兼容，但旁支面板底部不再提供继续输入入口。
+- **留尾巴**: 无。

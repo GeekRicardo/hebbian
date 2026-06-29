@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
-  ChevronDown,
   Loader2,
   MessageSquarePlus,
   MessagesSquare,
@@ -13,9 +12,7 @@ import {
   type Branch,
 } from "@/desktop/ui/store/useBranchStore";
 import { MessageBubble } from "./MessageBubble";
-import { AsideComposer } from "./AsideComposer";
 import { cn } from "@/desktop/ui/lib/utils";
-import type { MessageAttachment, Provider } from "@/desktop/ui/types";
 
 /**
  * 右侧工作台「旁支对话」tab（架构 §8.5 QuickChat）。
@@ -23,9 +20,8 @@ import type { MessageAttachment, Provider } from "@/desktop/ui/types";
  * 旁支 = 从主对话 fork 出来的临时只读讨论：继承主对话此刻的聊天记录作上下文，只挂
  * Read / Grep，能读代码、查实现、解释调用，但改不了任何文件。后端纯内存、不落盘、关掉即消失。
  *
- * 体验对齐主对话：输入框走和主对话同一套 IME 合成判断（输入法回车只上屏、不提交），
- * 右下角带模型选择器（默认继承主对话，可临时切换，不影响主对话）。一个主对话下可开多条旁支，
- * 顶部子 tab 横条切换 / 新建 / 关闭。
+ * 一个主对话下可开多条旁支，顶部子 tab 横条切换 / 新建 / 关闭；
+ * 当前面板只展示旁支内容，不在底部放输入区。
  */
 export function BranchChatTab() {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
@@ -37,11 +33,6 @@ export function BranchChatTab() {
   const createBranch = useBranchStore((s) => s.createBranch);
   const selectBranch = useBranchStore((s) => s.selectBranch);
   const discardBranch = useBranchStore((s) => s.discardBranch);
-  const setBranchInput = useBranchStore((s) => s.setBranchInput);
-  const setBranchAttachments = useBranchStore((s) => s.setBranchAttachments);
-  const setBranchModel = useBranchStore((s) => s.setBranchModel);
-  const sendBranchMessage = useBranchStore((s) => s.sendBranchMessage);
-  const cancelBranch = useBranchStore((s) => s.cancelBranch);
 
   const sessionBranches = useMemo(
     () =>
@@ -100,17 +91,7 @@ export function BranchChatTab() {
       </div>
 
       {active ? (
-        <BranchConversation
-          key={active.branchId}
-          branch={active}
-          onInput={(v) => setBranchInput(active.branchId, v)}
-          onAttachments={(a) => setBranchAttachments(active.branchId, a)}
-          onPickModel={(pid, m) => setBranchModel(active.branchId, pid, m)}
-          onSend={(text, atts) =>
-            void sendBranchMessage(active.branchId, text, atts)
-          }
-          onStop={() => void cancelBranch(active.branchId)}
-        />
+        <BranchConversation key={active.branchId} branch={active} />
       ) : (
         <EmptyHint
           icon={<MessagesSquare className="h-5 w-5 opacity-60" />}
@@ -145,20 +126,20 @@ function BranchSubTab({
   return (
     <div
       className={cn(
-        "group inline-flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[12px] transition-colors",
+        "group relative box-border inline-flex h-6 min-w-[96px] max-w-[132px] flex-[1_1_96px] items-center gap-0 overflow-hidden rounded px-2 pr-[13px] text-[12px] transition-colors",
         active
           ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
       )}
     >
       <button
         type="button"
         onClick={onSelect}
-        className="inline-flex items-center gap-1"
+        className="inline-flex w-0 min-w-0 flex-[1_1_auto] items-center gap-1 overflow-hidden bg-transparent pr-1"
         title={branch.title}
       >
         <MessagesSquare className="h-3 w-3 shrink-0" />
-        <span className="max-w-[88px] truncate">{branch.title}</span>
+        <span className="block min-w-0 flex-1 truncate text-left">{branch.title}</span>
         {branch.busy ? (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
         ) : null}
@@ -166,7 +147,7 @@ function BranchSubTab({
       <button
         type="button"
         onClick={onClose}
-        className="grid h-4 w-4 place-items-center rounded text-muted-foreground/60 opacity-0 transition hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100"
+        className="absolute right-px top-1/2 z-[1] grid h-[14px] w-[14px] shrink-0 -translate-y-1/2 place-items-center rounded-[3px] bg-transparent text-inherit opacity-0 transition group-hover:opacity-100"
         title="关闭这条旁支"
         aria-label="关闭这条旁支"
       >
@@ -176,21 +157,7 @@ function BranchSubTab({
   );
 }
 
-function BranchConversation({
-  branch,
-  onInput,
-  onAttachments,
-  onPickModel,
-  onSend,
-  onStop,
-}: {
-  branch: Branch;
-  onInput: (value: string) => void;
-  onAttachments: (attachments: MessageAttachment[]) => void;
-  onPickModel: (providerId: string, model: string) => void;
-  onSend: (text: string, attachments: MessageAttachment[]) => void;
-  onStop: () => void;
-}) {
+function BranchConversation({ branch }: { branch: Branch }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -215,11 +182,11 @@ function BranchConversation({
         基于主对话 {branch.inheritedCount} 条记录 · 只读（不改文件、不跑命令）
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 pb-3">
         {empty ? (
           <EmptyHint
             icon={<MessagesSquare className="h-5 w-5 opacity-60" />}
-            text="问点什么——比如「这个函数在哪调用」「解释下这段实现」"
+            text="这条旁支还没有消息"
           />
         ) : null}
 
@@ -249,143 +216,6 @@ function BranchConversation({
           </div>
         ) : null}
       </div>
-
-      <AsideComposer
-        value={branch.input}
-        onChange={onInput}
-        attachments={branch.attachments}
-        onAttachmentsChange={onAttachments}
-        busy={branch.busy}
-        onSend={onSend}
-        onStop={onStop}
-        placeholder="问点什么（旁支只读，不改文件）"
-        leftSlot={
-          <BranchModelPicker
-            providerId={branch.providerId}
-            model={branch.model}
-            onPick={onPickModel}
-          />
-        }
-      />
-    </div>
-  );
-}
-
-/**
- * 旁支专用的轻量模型选择器：受控（值存在 branch store），只切本旁支的模型，
- * 不碰主对话。不复用 ModelPickerButton——那个绑定 currentSession、点选即改主对话，
- * 语义不符。
- */
-function BranchModelPicker({
-  providerId,
-  model,
-  onPick,
-}: {
-  providerId: string | null;
-  model: string | null;
-  onPick: (providerId: string, model: string) => void;
-}) {
-  const providers = useStore((s) => s.providersFile.providers);
-  const [open, setOpen] = useState(false);
-
-  const enabled = useMemo(
-    () => providers.filter((p) => p.enabled !== false),
-    [providers]
-  );
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = () => setOpen(false);
-    window.addEventListener("click", onClick);
-    return () => window.removeEventListener("click", onClick);
-  }, [open]);
-
-  const label = model ?? "选择模型";
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        aria-expanded={open}
-        className="inline-flex max-w-[180px] items-center gap-1 rounded-full px-2 py-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        title={label}
-      >
-        <span className="truncate">{label}</span>
-        <ChevronDown className="h-3 w-3 opacity-60" />
-      </button>
-      {open ? (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="absolute bottom-full left-0 z-[90] mb-1 max-h-[320px] w-64 overflow-y-auto rounded-lg border border-border bg-card py-1 shadow-lg"
-        >
-          {enabled.length === 0 ? (
-            <div className="px-3 py-2 text-[12px] text-muted-foreground">
-              先在设置里启用一个供应商
-            </div>
-          ) : (
-            enabled.map((p) => (
-              <BranchProviderModels
-                key={p.id}
-                provider={p}
-                currentProviderId={providerId}
-                currentModel={model}
-                onPick={(m) => {
-                  onPick(p.id, m);
-                  setOpen(false);
-                }}
-              />
-            ))
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function BranchProviderModels({
-  provider,
-  currentProviderId,
-  currentModel,
-  onPick,
-}: {
-  provider: Provider;
-  currentProviderId: string | null;
-  currentModel: string | null;
-  onPick: (model: string) => void;
-}) {
-  const models =
-    provider.models.length > 0
-      ? provider.models
-      : provider.default_model
-      ? [provider.default_model]
-      : [];
-  if (models.length === 0) return null;
-  return (
-    <div className="py-0.5">
-      <div className="px-3 py-1 text-[10px] font-semibold uppercase text-muted-foreground/70">
-        {provider.name}
-      </div>
-      {models.map((m) => {
-        const active = provider.id === currentProviderId && m === currentModel;
-        return (
-          <button
-            key={`${provider.id}-${m}`}
-            type="button"
-            onClick={() => onPick(m)}
-            className={cn(
-              "flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-accent",
-              active && "bg-primary/10 text-primary"
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{m}</span>
-            {active ? <span className="shrink-0 text-[11px]">✓</span> : null}
-          </button>
-        );
-      })}
     </div>
   );
 }
