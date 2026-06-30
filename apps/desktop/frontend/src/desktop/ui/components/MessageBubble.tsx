@@ -195,10 +195,14 @@ type ReasoningRenderPart = {
   durationMs?: number | null;
 };
 
+type ToolActivityItem =
+  | ReasoningRenderPart
+  | { type: "tool_call"; key: string; call: ToolCallItem };
+
 type AssistantRenderPart =
   | { type: "text"; key: string; text: string }
   | ReasoningRenderPart
-  | { type: "tool_group"; key: string; calls: ToolCallItem[]; reasonings?: ReasoningRenderPart[] };
+  | { type: "tool_group"; key: string; calls: ToolCallItem[]; activityItems: ToolActivityItem[] };
 
 function formatJsonLike(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -320,31 +324,30 @@ function normalizeLegacyToolCall(
 
 function pushPendingReasonings(
   out: AssistantRenderPart[],
-  pendingReasonings: ReasoningRenderPart[]
+  pendingReasonings: ToolActivityItem[]
 ) {
   if (pendingReasonings.length === 0) return;
-  out.push(...pendingReasonings);
+  out.push(...pendingReasonings.filter((item): item is ReasoningRenderPart => item.type === "reasoning"));
   pendingReasonings.length = 0;
 }
 
 function pushToolGroup(
   out: AssistantRenderPart[],
   pendingTools: ToolCallItem[],
-  pendingReasonings: ReasoningRenderPart[] = []
+  pendingActivityItems: ToolActivityItem[] = []
 ) {
   if (pendingTools.length === 0) {
-    pushPendingReasonings(out, pendingReasonings);
+    pushPendingReasonings(out, pendingActivityItems);
     return;
   }
-  const reasonings = pendingReasonings.length > 0 ? [...pendingReasonings] : undefined;
   out.push({
     type: "tool_group",
     key: `tool-group-${out.length}-${pendingTools[0].key}`,
     calls: [...pendingTools],
-    reasonings,
+    activityItems: [...pendingActivityItems],
   });
   pendingTools.length = 0;
-  pendingReasonings.length = 0;
+  pendingActivityItems.length = 0;
 }
 
 function buildAssistantRenderParts(
@@ -354,18 +357,16 @@ function buildAssistantRenderParts(
 ): AssistantRenderPart[] {
   const out: AssistantRenderPart[] = [];
   const pendingTools: ToolCallItem[] = [];
-  const pendingReasonings: ReasoningRenderPart[] = [];
+  const pendingActivityItems: ToolActivityItem[] = [];
 
   if (streamingParts?.length) {
     streamingParts.forEach((part, index) => {
       if (part.type === "text") {
-        pushToolGroup(out, pendingTools, pendingReasonings);
+        pushToolGroup(out, pendingTools, pendingActivityItems);
         out.push({ type: "text", key: `stream-text-${index}`, text: part.text });
       } else if (part.type === "reasoning") {
-        // thinking 先挂起：后面若紧邻 tool_call，就随 tool_group 一起折叠；
-        // 若直到 content 才出现，则作为独立 thinking 块显示。
         const isLast = index === streamingParts.length - 1;
-        pendingReasonings.push({
+        pendingActivityItems.push({
           type: "reasoning",
           key: `stream-reasoning-${index}`,
           text: part.text,
@@ -373,10 +374,12 @@ function buildAssistantRenderParts(
           durationMs: part.duration_ms,
         });
       } else {
-        pendingTools.push(normalizeStreamingToolPart(part, index));
+        const call = normalizeStreamingToolPart(part, index);
+        pendingTools.push(call);
+        pendingActivityItems.push({ type: "tool_call", key: call.key, call });
       }
     });
-    pushToolGroup(out, pendingTools, pendingReasonings);
+    pushToolGroup(out, pendingTools, pendingActivityItems);
     return out;
   }
 
@@ -389,10 +392,10 @@ function buildAssistantRenderParts(
     }
     message.parts.forEach((part, index) => {
       if (part.type === "text") {
-        pushToolGroup(out, pendingTools, pendingReasonings);
+        pushToolGroup(out, pendingTools, pendingActivityItems);
         out.push({ type: "text", key: `saved-text-${index}`, text: part.text });
       } else if (part.type === "reasoning") {
-        pendingReasonings.push({
+        pendingActivityItems.push({
           type: "reasoning",
           key: `saved-reasoning-${index}`,
           text: part.text,
@@ -400,10 +403,12 @@ function buildAssistantRenderParts(
           durationMs: part.duration_ms,
         });
       } else {
-        pendingTools.push(normalizeSavedToolPart(part, index, nestedByCallId));
+        const call = normalizeSavedToolPart(part, index, nestedByCallId);
+        pendingTools.push(call);
+        pendingActivityItems.push({ type: "tool_call", key: call.key, call });
       }
     });
-    pushToolGroup(out, pendingTools, pendingReasonings);
+    pushToolGroup(out, pendingTools, pendingActivityItems);
     return out;
   }
 
@@ -412,7 +417,12 @@ function buildAssistantRenderParts(
   }
   const legacyCalls = (message.tool_calls ?? []).map(normalizeLegacyToolCall);
   if (legacyCalls.length > 0) {
-    out.push({ type: "tool_group", key: "legacy-tools", calls: legacyCalls });
+    out.push({
+      type: "tool_group",
+      key: "legacy-tools",
+      calls: legacyCalls,
+      activityItems: legacyCalls.map((call) => ({ type: "tool_call", key: call.key, call })),
+    });
   }
   return out;
 }
@@ -1626,18 +1636,20 @@ function ToolCallDetail({
 function buildNestedRenderParts(parts: StreamingAssistantPart[]): AssistantRenderPart[] {
   const out: AssistantRenderPart[] = [];
   const pendingTools: ToolCallItem[] = [];
-  const pendingReasonings: ReasoningRenderPart[] = [];
+  const pendingActivityItems: ToolActivityItem[] = [];
   parts.forEach((part, index) => {
     if (part.type === "text") {
-      pushToolGroup(out, pendingTools, pendingReasonings);
+      pushToolGroup(out, pendingTools, pendingActivityItems);
       out.push({ type: "text", key: `nested-text-${index}`, text: part.text });
     } else if (part.type === "reasoning") {
-      pendingReasonings.push({ type: "reasoning", key: `nested-reasoning-${index}`, text: part.text, streaming: false });
+      pendingActivityItems.push({ type: "reasoning", key: `nested-reasoning-${index}`, text: part.text, streaming: false });
     } else {
-      pendingTools.push(normalizeStreamingToolPart(part, index));
+      const call = normalizeStreamingToolPart(part, index);
+      pendingTools.push(call);
+      pendingActivityItems.push({ type: "tool_call", key: call.key, call });
     }
   });
-  pushToolGroup(out, pendingTools, pendingReasonings);
+  pushToolGroup(out, pendingTools, pendingActivityItems);
   return out;
 }
 
@@ -1686,7 +1698,9 @@ function NestedTaskContent({
             <ToolCallTimeline
               key={part.key}
               calls={part.calls}
-              reasonings={part.reasonings}
+              reasonings={part.activityItems.filter((item): item is ReasoningRenderPart => item.type === "reasoning")}
+              activityItems={part.activityItems}
+              assistantStreaming={false}
               expandedKeys={expandedKeys}
               onToggle={onToggle}
               appSettings={appSettings}
@@ -1707,14 +1721,51 @@ function toolDisplayName(call: ToolCallItem): string {
 
 function formatToolSummary(calls: ToolCallItem[], reasonings: ReasoningRenderPart[] = []): string {
   const names = Array.from(new Set(calls.map(toolDisplayName)));
-  if (reasonings.length > 0) names.unshift("thinking");
-  if (names.length <= 3) return names.join("、");
-  return `${names.slice(0, 3).join("、")} 等 ${names.length} 个`;
+  const hasThinking = reasonings.length > 0;
+  if (names.length === 0) return hasThinking ? "thinking" : "工具";
+  if (names.length <= 2) return `${hasThinking ? "thinking、" : ""}${names.join("、")}`;
+  return `${hasThinking ? "thinking、" : ""}${names.slice(0, 2).join("、")} 等 ${calls.length} 个工具`;
+}
+
+function RunningActivityBlock({
+  items,
+  expanded,
+  onToggle,
+}: {
+  items: ToolActivityItem[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="mt-0.5 block max-h-[14lh] w-full overflow-y-auto rounded-md bg-muted/60 px-3 py-1.5 text-left text-[12px] leading-[1.25] text-muted-foreground hover:bg-muted/80"
+      title={expanded ? "收起运行详情" : "展开运行详情"}
+    >
+      <div className="space-y-0.5">
+        {items.map((item) => (
+          <div key={item.key} className="flex min-w-0 items-center gap-1.5">
+            {item.type === "reasoning" ? (
+              <Brain className="h-3 w-3 shrink-0" />
+            ) : (
+              <ToolIcon name={item.call.name} />
+            )}
+            <span className="min-w-0 truncate font-medium text-foreground/80">
+              {item.type === "reasoning" ? "thinking" : toolDisplayName(item.call)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </button>
+  );
 }
 
 function ToolCallTimeline({
   calls,
   reasonings = [],
+  activityItems,
+  assistantStreaming = false,
   collapseAfterContent = false,
   expandedKeys,
   onToggle,
@@ -1723,6 +1774,8 @@ function ToolCallTimeline({
 }: {
   calls: ToolCallItem[];
   reasonings?: ReasoningRenderPart[];
+  activityItems: ToolActivityItem[];
+  assistantStreaming?: boolean;
   collapseAfterContent?: boolean;
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
@@ -1756,66 +1809,79 @@ function ToolCallTimeline({
   const allDone = calls.every((call) => call.status === "done") && reasonings.every((part) => !part.streaming);
   const groupKey = `group:${[...reasonings.map((part) => part.key), ...calls.map((call) => call.key)].join("|")}`;
   const groupExpanded = expandedKeys.has(groupKey);
-  const collapsibleSummary = !hasAsk && allDone && collapseAfterContent;
-  const showRunningMinimal = !hasAsk && !allDone;
+  const collapsibleSummary = !hasAsk && (allDone || (assistantStreaming && collapseAfterContent));
+  const showRunningMinimal = !hasAsk && assistantStreaming && !collapseAfterContent;
 
   if (calls.length === 0) return null;
 
+  const detailList = (() => {
+    let toolIndex = 0;
+    return (
+      <div className="relative mt-px space-y-0 py-0 pl-6 pr-2">
+        {activityItems.map((item) => {
+          if (item.type === "reasoning") {
+            return (
+              <div key={item.key} className="-ml-6 pl-0">
+                <ReasoningBlock
+                  text={item.text}
+                  streaming={item.streaming}
+                  durationMs={item.durationMs}
+                  compact
+                />
+              </div>
+            );
+          }
+          const call = item.call;
+          const index = toolIndex++;
+          const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
+          const autoExpand = !READ_LIKE.has(call.name ?? "");
+          const defaultExpanded = autoExpand && call.status !== "done";
+          const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
+          return (
+            <ToolCallRow
+              key={call.key}
+              call={call}
+              index={index}
+              total={calls.length}
+              active={active}
+              showConnector={allDone || collapseAfterContent}
+              onToggle={onToggle}
+              workdir={workdir}
+              allowedPaths={allowedPaths}
+              appSettings={appSettings}
+              sessionId={sessionId}
+            />
+          );
+        })}
+      </div>
+    );
+  })();
+
   if (showRunningMinimal) {
     return (
-      <div className="mt-0.5 space-y-px text-[13px] leading-[1.35] text-muted-foreground">
-        {reasonings.map((part) => (
-          <ReasoningBlock
-            key={part.key}
-            text={part.text}
-            streaming={part.streaming}
-            durationMs={part.durationMs}
-            compact
+      <div className="mt-0.5 pl-3">
+        {groupExpanded ? (
+          <>
+            <button
+              type="button"
+              onClick={() => onToggle(groupKey)}
+              className="mb-px inline-flex cursor-pointer items-center text-left text-[12px] leading-[1.25] text-muted-foreground hover:text-foreground"
+              title="收起运行详情"
+            >
+              已运行 {formatToolSummary(calls, reasonings)}
+            </button>
+            {detailList}
+          </>
+        ) : (
+          <RunningActivityBlock
+            items={activityItems}
+            expanded={groupExpanded}
+            onToggle={() => onToggle(groupKey)}
           />
-        ))}
-        {calls.map((call) => (
-          <div key={call.key} data-tool-call-id={call.id ?? undefined} className="inline-flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-breathe" />
-            <span>{toolDisplayName(call)}</span>
-          </div>
-        ))}
+        )}
       </div>
     );
   }
-
-  const detailList = (
-    <div className="relative mt-0.5 space-y-px py-0.5 pl-6 pr-2">
-      {reasonings.map((part) => (
-        <ReasoningBlock
-          key={part.key}
-          text={part.text}
-          streaming={part.streaming}
-          durationMs={part.durationMs}
-          compact
-        />
-      ))}
-      {calls.map((call, index) => {
-        const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
-        const autoExpand = !READ_LIKE.has(call.name ?? "");
-        const defaultExpanded = autoExpand && call.status !== "done";
-        const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
-        return (
-          <ToolCallRow
-            key={call.key}
-            call={call}
-            index={index}
-            total={calls.length}
-            active={active}
-            onToggle={onToggle}
-            workdir={workdir}
-            allowedPaths={allowedPaths}
-            appSettings={appSettings}
-            sessionId={sessionId}
-          />
-        );
-      })}
-    </div>
-  );
 
   if (collapsibleSummary) {
     return (
@@ -1841,6 +1907,7 @@ function ToolCallRow({
   index,
   total,
   active,
+  showConnector = true,
   onToggle,
   workdir,
   allowedPaths,
@@ -1851,6 +1918,7 @@ function ToolCallRow({
   index: number;
   total: number;
   active: boolean;
+  showConnector?: boolean;
   onToggle: (key: string) => void;
   workdir: string | null;
   allowedPaths: string[];
@@ -1886,7 +1954,7 @@ function ToolCallRow({
         : "bg-muted-foreground/40";
 
   const titleClass = cn(
-    "grid min-h-6 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-0.5 text-left",
+    "grid min-h-5 w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)] items-center gap-1.5 px-1 py-0 text-left",
     // 分隔线用 inset 阴影而非 border-b：border 会参与盒模型；inset 阴影零布局影响，
     // 收紧行高后仍能避免展开/折叠时文本因 border 参与盒模型而抖动。
     active && "bg-muted/30 shadow-[inset_0_-1px_0_0_hsl(var(--border))]",
@@ -1908,15 +1976,15 @@ function ToolCallRow({
       {/* 竖线从本行点中心(12px)向下连到下一行点中心：行高 24 + space-y-px 1 + 12 = 37，
           相对本 wrapper 即 top-[12px] 到 bottom-[-13px]（24-37）。展开时 wrapper 变高也成立——
           两端都相对各自 wrapper 定位，间距恒为 space-y-px。最后一行不画线。 */}
-      {index !== total - 1 && (
-        <div className="absolute -left-[7px] top-[12px] bottom-[-13px] w-px bg-border" />
+      {showConnector && index !== total - 1 && (
+        <div className="absolute -left-[7px] top-[10px] bottom-[-10px] w-px bg-border" />
       )}
       <button
         type="button"
         onClick={() => onToggle(call.key)}
         aria-label={active ? "折叠工具调用" : "展开工具调用"}
         className={cn(
-          "absolute -left-[10px] top-[9px] h-1.5 w-1.5 cursor-pointer rounded-full",
+          "absolute -left-[10px] top-[7px] h-1.5 w-1.5 cursor-pointer rounded-full",
           statusDot,
         )}
       />
@@ -1947,14 +2015,14 @@ function ToolCallRow({
               const displayWithRange = range ? `${display}:#${range}` : display;
               return (
                 <>
-                  <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
-                    <ScrollText className="h-3.5 w-3.5" />
+                  <span className="grid h-4 w-4 place-items-center text-muted-foreground">
+                    <ScrollText className="h-3 w-3" />
                   </span>
                   <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
-                    <span className="mr-[2ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
+                    <span className="mr-[1.5ch] min-w-0 shrink-0 whitespace-nowrap font-semibold text-foreground">
                       Read
                     </span>
-                    <span className="mr-[2ch] shrink-0">读取文件</span>
+                    <span className="mr-[1.5ch] shrink-0">读取文件</span>
                     <code className="min-w-0 truncate font-mono text-[11px] text-foreground">
                       {displayWithRange}
                     </code>
@@ -1965,7 +2033,7 @@ function ToolCallRow({
           </button>
         ) : (
           <button type="button" onClick={() => onToggle(call.key)} className={titleClass}>
-            <span className="grid h-[18px] w-[18px] place-items-center text-muted-foreground">
+            <span className="grid h-4 w-4 place-items-center text-muted-foreground">
               <ToolIcon name={call.name} />
             </span>
             <span className="flex min-w-0 items-center text-[12px] text-muted-foreground">
@@ -2221,7 +2289,9 @@ function AssistantParts({
           <ToolCallTimeline
             key={part.key}
             calls={part.calls}
-            reasonings={part.reasonings}
+            reasonings={part.activityItems.filter((item): item is ReasoningRenderPart => item.type === "reasoning")}
+            activityItems={part.activityItems}
+            assistantStreaming={streaming}
             collapseAfterContent={hasContentAfter}
             expandedKeys={expandedKeys}
             onToggle={onToggle}

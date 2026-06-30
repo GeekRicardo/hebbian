@@ -205,23 +205,19 @@ function RunFileRow({
         isDelete && "cursor-default opacity-70",
       )}
     >
-      <span className={cn("shrink-0 rounded px-1 font-medium", actionBadgeClass(file.action))}>
+      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded text-[10px] font-semibold", actionBadgeClass(file.action))}>
         {actionLabel(file.action)}
       </span>
       <span className="min-w-0 truncate font-mono">{pathLeaf(file.real_path)}</span>
       {stats && <DiffStatsBadge {...stats} />}
-      <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">
-        {file.before_bytes}→{file.after_bytes}B
-      </span>
     </button>
   );
 }
 
 function actionLabel(action: TurnFileChange["action"]): string {
-  if (action === "create") return "创建";
-  if (action === "overwrite") return "覆盖";
-  if (action === "delete") return "删除";
-  return "修改";
+  if (action === "create") return "U";
+  if (action === "delete") return "D";
+  return "M";
 }
 
 function actionBadgeClass(action: TurnFileChange["action"]): string {
