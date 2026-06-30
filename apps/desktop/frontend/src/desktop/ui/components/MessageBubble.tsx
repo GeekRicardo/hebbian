@@ -187,16 +187,18 @@ interface ToolCallItem {
   isJudging?: boolean;
 }
 
+type ReasoningRenderPart = {
+  type: "reasoning";
+  key: string;
+  text: string;
+  streaming: boolean;
+  durationMs?: number | null;
+};
+
 type AssistantRenderPart =
   | { type: "text"; key: string; text: string }
-  | {
-      type: "reasoning";
-      key: string;
-      text: string;
-      streaming: boolean;
-      durationMs?: number | null;
-    }
-  | { type: "tool_group"; key: string; calls: ToolCallItem[] };
+  | ReasoningRenderPart
+  | { type: "tool_group"; key: string; calls: ToolCallItem[]; reasonings?: ReasoningRenderPart[] };
 
 function formatJsonLike(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -316,17 +318,33 @@ function normalizeLegacyToolCall(
   };
 }
 
+function pushPendingReasonings(
+  out: AssistantRenderPart[],
+  pendingReasonings: ReasoningRenderPart[]
+) {
+  if (pendingReasonings.length === 0) return;
+  out.push(...pendingReasonings);
+  pendingReasonings.length = 0;
+}
+
 function pushToolGroup(
   out: AssistantRenderPart[],
-  pendingTools: ToolCallItem[]
+  pendingTools: ToolCallItem[],
+  pendingReasonings: ReasoningRenderPart[] = []
 ) {
-  if (pendingTools.length === 0) return;
+  if (pendingTools.length === 0) {
+    pushPendingReasonings(out, pendingReasonings);
+    return;
+  }
+  const reasonings = pendingReasonings.length > 0 ? [...pendingReasonings] : undefined;
   out.push({
     type: "tool_group",
     key: `tool-group-${out.length}-${pendingTools[0].key}`,
     calls: [...pendingTools],
+    reasonings,
   });
   pendingTools.length = 0;
+  pendingReasonings.length = 0;
 }
 
 function buildAssistantRenderParts(
@@ -336,18 +354,18 @@ function buildAssistantRenderParts(
 ): AssistantRenderPart[] {
   const out: AssistantRenderPart[] = [];
   const pendingTools: ToolCallItem[] = [];
+  const pendingReasonings: ReasoningRenderPart[] = [];
 
   if (streamingParts?.length) {
     streamingParts.forEach((part, index) => {
       if (part.type === "text") {
-        pushToolGroup(out, pendingTools);
+        pushToolGroup(out, pendingTools, pendingReasonings);
         out.push({ type: "text", key: `stream-text-${index}`, text: part.text });
       } else if (part.type === "reasoning") {
-        pushToolGroup(out, pendingTools);
-        // 流式时如果末尾就是这一段 reasoning，认为还在写入；
-        // 一旦后面有 text/tool 段，就视为已完成、默认折叠。
+        // thinking 先挂起：后面若紧邻 tool_call，就随 tool_group 一起折叠；
+        // 若直到 content 才出现，则作为独立 thinking 块显示。
         const isLast = index === streamingParts.length - 1;
-        out.push({
+        pendingReasonings.push({
           type: "reasoning",
           key: `stream-reasoning-${index}`,
           text: part.text,
@@ -358,7 +376,7 @@ function buildAssistantRenderParts(
         pendingTools.push(normalizeStreamingToolPart(part, index));
       }
     });
-    pushToolGroup(out, pendingTools);
+    pushToolGroup(out, pendingTools, pendingReasonings);
     return out;
   }
 
@@ -371,11 +389,10 @@ function buildAssistantRenderParts(
     }
     message.parts.forEach((part, index) => {
       if (part.type === "text") {
-        pushToolGroup(out, pendingTools);
+        pushToolGroup(out, pendingTools, pendingReasonings);
         out.push({ type: "text", key: `saved-text-${index}`, text: part.text });
       } else if (part.type === "reasoning") {
-        pushToolGroup(out, pendingTools);
-        out.push({
+        pendingReasonings.push({
           type: "reasoning",
           key: `saved-reasoning-${index}`,
           text: part.text,
@@ -386,7 +403,7 @@ function buildAssistantRenderParts(
         pendingTools.push(normalizeSavedToolPart(part, index, nestedByCallId));
       }
     });
-    pushToolGroup(out, pendingTools);
+    pushToolGroup(out, pendingTools, pendingReasonings);
     return out;
   }
 
@@ -1609,18 +1626,18 @@ function ToolCallDetail({
 function buildNestedRenderParts(parts: StreamingAssistantPart[]): AssistantRenderPart[] {
   const out: AssistantRenderPart[] = [];
   const pendingTools: ToolCallItem[] = [];
+  const pendingReasonings: ReasoningRenderPart[] = [];
   parts.forEach((part, index) => {
     if (part.type === "text") {
-      pushToolGroup(out, pendingTools);
+      pushToolGroup(out, pendingTools, pendingReasonings);
       out.push({ type: "text", key: `nested-text-${index}`, text: part.text });
     } else if (part.type === "reasoning") {
-      pushToolGroup(out, pendingTools);
-      out.push({ type: "reasoning", key: `nested-reasoning-${index}`, text: part.text, streaming: false });
+      pendingReasonings.push({ type: "reasoning", key: `nested-reasoning-${index}`, text: part.text, streaming: false });
     } else {
       pendingTools.push(normalizeStreamingToolPart(part, index));
     }
   });
-  pushToolGroup(out, pendingTools);
+  pushToolGroup(out, pendingTools, pendingReasonings);
   return out;
 }
 
@@ -1669,6 +1686,7 @@ function NestedTaskContent({
             <ToolCallTimeline
               key={part.key}
               calls={part.calls}
+              reasonings={part.reasonings}
               expandedKeys={expandedKeys}
               onToggle={onToggle}
               appSettings={appSettings}
@@ -1682,14 +1700,30 @@ function NestedTaskContent({
   );
 }
 
+function toolDisplayName(call: ToolCallItem): string {
+  if (call.name === "Task" && call.subagentType) return call.subagentType;
+  return call.name || "工具调用";
+}
+
+function formatToolSummary(calls: ToolCallItem[], reasonings: ReasoningRenderPart[] = []): string {
+  const names = Array.from(new Set(calls.map(toolDisplayName)));
+  if (reasonings.length > 0) names.unshift("thinking");
+  if (names.length <= 3) return names.join("、");
+  return `${names.slice(0, 3).join("、")} 等 ${names.length} 个`;
+}
+
 function ToolCallTimeline({
   calls,
+  reasonings = [],
+  collapseAfterContent = false,
   expandedKeys,
   onToggle,
   appSettings,
   sessionId,
 }: {
   calls: ToolCallItem[];
+  reasonings?: ReasoningRenderPart[];
+  collapseAfterContent?: boolean;
   expandedKeys: Set<string>;
   onToggle: (key: string) => void;
   appSettings?: AppSettings;
@@ -1718,21 +1752,51 @@ function ToolCallTimeline({
     return () => window.removeEventListener(FOCUS_TOOL_CALL_EVENT, handler);
   }, [calls, expandedKeys, onToggle]);
 
+  const hasAsk = calls.some((call) => call.name === "Ask");
+  const allDone = calls.every((call) => call.status === "done") && reasonings.every((part) => !part.streaming);
+  const groupKey = `group:${[...reasonings.map((part) => part.key), ...calls.map((call) => call.key)].join("|")}`;
+  const groupExpanded = expandedKeys.has(groupKey);
+  const collapsibleSummary = !hasAsk && allDone && collapseAfterContent;
+  const showRunningMinimal = !hasAsk && !allDone;
+
   if (calls.length === 0) return null;
-  return (
-    <div className="relative mt-1.5 space-y-1 rounded-md bg-muted/70 py-0.5 pl-6 pr-2">
+
+  if (showRunningMinimal) {
+    return (
+      <div className="mt-0.5 space-y-px text-[13px] leading-[1.35] text-muted-foreground">
+        {reasonings.map((part) => (
+          <ReasoningBlock
+            key={part.key}
+            text={part.text}
+            streaming={part.streaming}
+            durationMs={part.durationMs}
+            compact
+          />
+        ))}
+        {calls.map((call) => (
+          <div key={call.key} data-tool-call-id={call.id ?? undefined} className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-breathe" />
+            <span>{toolDisplayName(call)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const detailList = (
+    <div className="relative mt-0.5 space-y-px py-0.5 pl-6 pr-2">
+      {reasonings.map((part) => (
+        <ReasoningBlock
+          key={part.key}
+          text={part.text}
+          streaming={part.streaming}
+          durationMs={part.durationMs}
+          compact
+        />
+      ))}
       {calls.map((call, index) => {
-        // 未 done 时（streaming / running / failed）默认展开，让运行中的 tool
-        // 边输出边看；done 后折叠（带退场动画，见 ToolCallRow），靠用户手动 toggle 展开看 detail。
-        // 这跟 ReasoningBlock 的"流完折叠"是一致语义。
-        //
-        // 例外：Read / Grep / Glob / Ask 等「查询类」工具运行中默认不展开——
-        // 输出量大但用户多半不关心实时进度（Read 输出文件全文滚屏、Grep 输出大堆
-        // 匹配行），自动展开反而把消息流挤到底。继续靠用户手动 toggle。
         const READ_LIKE = new Set(["Read", "Grep", "Glob", "Ask"]);
         const autoExpand = !READ_LIKE.has(call.name ?? "");
-        // `expandedKeys` 语义 = 「相对默认值的显式翻转」。默认展开的 running tool
-        // 点击 → 命中 expandedKeys → 折叠成功；再点击 → 移出 expandedKeys → 回到默认。
         const defaultExpanded = autoExpand && call.status !== "done";
         const active = expandedKeys.has(call.key) ? !defaultExpanded : defaultExpanded;
         return (
@@ -1752,6 +1816,24 @@ function ToolCallTimeline({
       })}
     </div>
   );
+
+  if (collapsibleSummary) {
+    return (
+      <div className="mt-0.5 pl-3">
+        <button
+          type="button"
+          onClick={() => onToggle(groupKey)}
+          className="inline-flex cursor-pointer items-center text-left text-[13px] leading-[1.35] text-muted-foreground hover:text-foreground"
+          title={groupExpanded ? "折叠工具调用详情" : "展开工具调用详情"}
+        >
+          已运行 {formatToolSummary(calls, reasonings)}
+        </button>
+        {groupExpanded && detailList}
+      </div>
+    );
+  }
+
+  return detailList;
 }
 
 function ToolCallRow({
@@ -1804,10 +1886,9 @@ function ToolCallRow({
         : "bg-muted-foreground/40";
 
   const titleClass = cn(
-    "grid min-h-8 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-1 text-left",
-    // 分隔线用 inset 阴影而非 border-b：border 会参与盒模型，在 min-h-8
-    // 锁死外高 32px 时把内容盒压成 31px，items-center 重新居中导致文本上跳；
-    // inset 阴影零布局影响，展开/折叠文本不再抖动。
+    "grid min-h-6 w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-center gap-2 px-1 py-0.5 text-left",
+    // 分隔线用 inset 阴影而非 border-b：border 会参与盒模型；inset 阴影零布局影响，
+    // 收紧行高后仍能避免展开/折叠时文本因 border 参与盒模型而抖动。
     active && "bg-muted/30 shadow-[inset_0_-1px_0_0_hsl(var(--border))]",
   );
 
@@ -1824,21 +1905,18 @@ function ToolCallRow({
         call.isJudging && "judge-breathe",
       )}
     >
-      {/* 竖线从本行点中心(16px)向下连到下一行点中心：行高 32 + space-y-1 4 + 16 = 52，
-          相对本 wrapper 即 top-[16px] 到 bottom-[-20px]（32-52）。展开时 wrapper 变高也成立——
-          两端都相对各自 wrapper 定位，间距恒为 space-y-1。最后一行不画线。 */}
+      {/* 竖线从本行点中心(12px)向下连到下一行点中心：行高 24 + space-y-px 1 + 12 = 37，
+          相对本 wrapper 即 top-[12px] 到 bottom-[-13px]（24-37）。展开时 wrapper 变高也成立——
+          两端都相对各自 wrapper 定位，间距恒为 space-y-px。最后一行不画线。 */}
       {index !== total - 1 && (
-        <div className="absolute -left-[15px] top-[16px] bottom-[-20px] w-px bg-border" />
+        <div className="absolute -left-[7px] top-[12px] bottom-[-13px] w-px bg-border" />
       )}
       <button
         type="button"
         onClick={() => onToggle(call.key)}
         aria-label={active ? "折叠工具调用" : "展开工具调用"}
-        // 竖线在 -left-[15px] w-px，中心 -14.5；让 button 本身就是圆点，
-        // 中心 = -17.5 + 3 = -14.5，精确对齐竖线。top-[13px]+半径3 = 16，
-        // 让圆点中心落在内容行(min-h-8=32px)的垂直中心。
         className={cn(
-          "absolute -left-[17.5px] top-[13px] h-1.5 w-1.5 cursor-pointer rounded-full",
+          "absolute -left-[10px] top-[9px] h-1.5 w-1.5 cursor-pointer rounded-full",
           statusDot,
         )}
       />
@@ -1977,10 +2055,12 @@ function ReasoningBlock({
   text,
   streaming,
   durationMs,
+  compact = false,
 }: {
   text: string;
   streaming: boolean;
   durationMs?: number | null;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(streaming);
   const prevStreamingRef = useRef(streaming);
@@ -2010,7 +2090,7 @@ function ReasoningBlock({
   if (!trimmed && !streaming) return null;
 
   return (
-    <div className="space-y-px">
+    <div className={cn("space-y-px", !compact && "pl-3")}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -2099,8 +2179,11 @@ function AssistantParts({
   }
 
   return (
-    <div className="space-y-2">
-      {parts.map((part) => {
+    <div className="space-y-1">
+      {parts.map((part, index) => {
+        const hasContentAfter = parts.slice(index + 1).some(
+          (next) => next.type === "text" && stripToolXmlLeak(splitFailureMarker(next.text).body).trim().length > 0,
+        );
         if (part.type === "text") {
           // 先拆末尾错误 marker（它在所有内容之后），正文再去掉工具 XML 残骸。
           // marker 单独走纯文本折行块，杜绝 markdown <p> 里的逐字竖排；
@@ -2111,7 +2194,7 @@ function AssistantParts({
           return (
             <div key={part.key}>
               {(clean || streaming) && (
-                <div className="markdown-segment">
+                <div className="markdown-segment rounded-md bg-muted/70 px-3 py-2">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={markdownComponents}
@@ -2138,6 +2221,8 @@ function AssistantParts({
           <ToolCallTimeline
             key={part.key}
             calls={part.calls}
+            reasonings={part.reasonings}
+            collapseAfterContent={hasContentAfter}
             expandedKeys={expandedKeys}
             onToggle={onToggle}
             appSettings={appSettings}

@@ -10573,3 +10573,13 @@ Note：本次工作区混入他人未完成的 branch（旁支对话）改动—
   - [apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx](../apps/desktop/frontend/src/desktop/ui/components/BranchChatTab.tsx): 删除旁支底部 `AsideComposer` 输入区以及随之无用的旁支模型选择器代码；消息列表保留 `pb-3`，避免底部留白异常。
 - **影响范围**: Desktop/hebweb 前端右侧工作台旁支对话 UI；不改 core、协议、持久化。不破坏数据兼容，但旁支面板底部不再提供继续输入入口。
 - **留尾巴**: 无。
+
+
+### 2026-06-30 — 让 thinking 随相邻工具调用一起折叠
+
+- **Why**: 用户希望 thinking 不再总是独立占一行：当 thinking 附近有 tool call 时，应随工具调用组一起折叠；只有 thinking 附近是正文 content、没有相邻工具时，才单独显示。
+- **改动**:
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): 在 `buildAssistantRenderParts` / `buildNestedRenderParts` 阶段挂起 reasoning，遇到相邻 tool call 时并入同一个 `tool_group`；遇到正文时再作为独立 `ReasoningBlock` 输出。
+  - [apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx](../apps/desktop/frontend/src/desktop/ui/components/MessageBubble.tsx): `ToolCallTimeline` 支持携带 reasoning，折叠摘要显示 `thinking`，展开详情里先显示紧凑版 thinking，再显示工具调用列表。
+- **影响范围**: Desktop/hebweb 前端聊天消息渲染层；不改 core、协议、持久化，不破坏兼容。
+- **留尾巴**: 无。
